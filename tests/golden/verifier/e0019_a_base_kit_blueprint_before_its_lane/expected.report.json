@@ -1,0 +1,19 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0019",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/interface/rows/0/add_build_target/target/blueprint_id",
+      "message": "a Build target names `autocannon`, one of S2's base kit, which has no effect until S2's base kit lands; it is refused rather than ignored.",
+      "beginner": "Autocannons, mortars and walls cannot be built in this build yet."
+    }
+  ],
+  "report_hash": "H7TRAJocE1I=",
+  "rules_hash": "gCjUE4Tm3i8=",
+  "plan_fingerprint": "dDLQOITWNok=",
+  "verifier_version": "0.1.0-s2",
+  "size_units": 2,
+  "size_budget": 128
+}
+

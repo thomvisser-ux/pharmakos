@@ -1266,3 +1266,106 @@ fn the_limits_are_the_rules_table_and_not_constants() {
     let matched = message.r#match.as_ref().expect("the match block");
     assert_eq!(limits.decision_tick_ms(), matched.decision_tick_ms);
 }
+
+// ---------------------------------------------------------------------------
+// S2's wire (task `con4`)
+// ---------------------------------------------------------------------------
+
+/// Defend's and Attack's settings arrived with S2's wire and are refused as a
+/// whole until S2's `dfnd` and `atk` lanes (`E0012`, `E0013`), as the sim
+/// refuses them at the seal. Their leaves are walked like any others, so the
+/// checks that hold everywhere hold under them too: a name the seat does not
+/// know, a voxel off the map, an area inside out, an enum number this build
+/// does not name. A selector under them is not judged as a refusal, because
+/// the sim refuses the arm before it reads one.
+#[test]
+fn s2s_settings_are_refused_and_their_leaves_are_still_checked() {
+    let scope = fixture_scope();
+    let snapshot = fixture_snapshot();
+
+    let defend = concat!(
+        "{\"set_mandate_settings\":{\"defend\":{\"protect\":[",
+        "{\"beacon\":{\"beacon_id\":\"b_77\"}},",
+        "{\"beacon\":{\"most_threatened\":{}}},",
+        "{\"my_commander\":{}}],",
+        "\"engagement_radius_pct\":80,\"pursue\":9}}}"
+    );
+    let codes = codes_of(&one_visit("b_01", defend), &scope, &snapshot);
+    for wanted in ["E0012", "E0401", "E0018"] {
+        assert!(
+            codes.iter().any(|code| code == wanted),
+            "{wanted}: {codes:?}"
+        );
+    }
+    assert!(
+        !codes.iter().any(|code| code == "E0014"),
+        "a selector in a refused Defend arm is judged as a refusal of its own: {codes:?}"
+    );
+
+    let attack = concat!(
+        "{\"set_mandate_settings\":{\"attack\":{",
+        "\"target\":{\"voxel\":{\"x\":9999,\"y\":1,\"z\":1}},",
+        "\"retarget\":\"NEAREST_KNOWN\",\"staging\":{\"x\":-5,\"y\":1,\"z\":1},",
+        "\"launch\":{\"force_size\":4},",
+        "\"after_action\":7,",
+        "\"avoid_areas\":[{\"min\":{\"x\":9,\"y\":9,\"z\":9},\"max\":{\"x\":1,\"y\":1,\"z\":1}}],",
+        "\"waves\":1}}}"
+    );
+    let codes = codes_of(&one_visit("b_01", attack), &scope, &snapshot);
+    for wanted in ["E0013", "E0402", "E0406", "E0018"] {
+        assert!(
+            codes.iter().any(|code| code == wanted),
+            "{wanted}: {codes:?}"
+        );
+    }
+    assert_eq!(
+        codes.iter().filter(|code| *code == "E0402").count(),
+        2,
+        "the target's voxel and the staging point are both off the map: {codes:?}"
+    );
+
+    // A switch to an S2 writ with nothing in its arm stays legal, as before.
+    let codes = codes_of(
+        &one_visit("b_01", "{\"set_mandate\":{\"defend\":{}}}"),
+        &scope,
+        &snapshot,
+    );
+    assert!(!codes.iter().any(|code| code == "E0012"), "{codes:?}");
+}
+
+/// A `wall` target is refused for its blueprint until S2's `site` lane
+/// (`E0019`, the base kit's refusal); a box on any other target is `E0509` whatever the stage, and the
+/// box is an area like any other.
+#[test]
+fn a_wall_box_is_an_area_and_belongs_to_a_wall() {
+    let scope = fixture_scope();
+    let snapshot = fixture_snapshot();
+    let target = |blueprint: &str, wall_box: &str| {
+        format!(
+            "{{\"add_build_target\":{{\"target\":{{\"blueprint_id\":\"{blueprint}\",\
+             \"anchor\":{{\"voxel\":{{\"x\":96,\"y\":11,\"z\":60}}}},\"wall_box\":{wall_box}}}}}}}"
+        )
+    };
+    let inside_out = "{\"min\":{\"x\":98,\"y\":11,\"z\":60},\"max\":{\"x\":96,\"y\":11,\"z\":62}}";
+    let upright = "{\"min\":{\"x\":96,\"y\":11,\"z\":60},\"max\":{\"x\":98,\"y\":11,\"z\":62}}";
+
+    let codes = codes_of(
+        &one_visit("b_00", &target("wall", inside_out)),
+        &scope,
+        &snapshot,
+    );
+    assert!(codes.iter().any(|code| code == "E0019"), "{codes:?}");
+    assert!(codes.iter().any(|code| code == "E0406"), "{codes:?}");
+    assert!(!codes.iter().any(|code| code == "E0509"), "{codes:?}");
+
+    let codes = codes_of(
+        &one_visit("b_00", &target("generator", upright)),
+        &scope,
+        &snapshot,
+    );
+    assert!(codes.iter().any(|code| code == "E0509"), "{codes:?}");
+    assert!(
+        !codes.iter().any(|code| code == "E0010" || code == "E0019"),
+        "{codes:?}"
+    );
+}

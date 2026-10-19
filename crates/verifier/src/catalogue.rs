@@ -31,7 +31,10 @@
 //! per construct the sim refuses at the seal ([`crate::refusals`]), `E0018`
 //! (an enum number this build does not name, [`crate::enums`]), `E0508`
 //! (a `scout_count` past a beacon's byte) and `E0603` (a seal the Ledger
-//! cannot price).
+//! cannot price). S2's wire (task `con4`) adds `E0019`, a Build target naming
+//! one of S2's base kit before S2's `site` lane builds it, at the end of the
+//! decode family, and `E0509`, a `wall_box` on a target that is not a `wall`,
+//! at the end of the settings family.
 //!
 //! The label an unemitted row prints, `none at the skeleton (…)`, is kept as
 //! it was spelt when the table shipped, because `gamectl docs` quotes it; the
@@ -356,6 +359,14 @@ pub const CATALOGUE: &[Entry] = &[
         severity: Severity::Error,
         emitter: Emitter::Stage(Stage::Decode),
     },
+    // S2's wire (task `con4`): a Build target naming one of S2's base kit,
+    // which the sim refuses until S2's `site` lane ([`crate::refusals`]).
+    Entry {
+        code: "E0019",
+        family: Family::DecodeAndVersion,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Structure),
+    },
     // --- E01xx: limits and required blocks -----------------------------------
     Entry {
         code: "E0101",
@@ -653,6 +664,14 @@ pub const CATALOGUE: &[Entry] = &[
         family: Family::SettingsAndRecycle,
         severity: Severity::Error,
         emitter: Emitter::Stage(Stage::Semantics),
+    },
+    // S2's wire (task `con4`): a `wall_box` on a target that is not a `wall`.
+    // A question about the file alone, so the structure stage's.
+    Entry {
+        code: "E0509",
+        family: Family::SettingsAndRecycle,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Structure),
     },
     // A warning in the settings family, spelt with the `W` the spec gives a
     // family's warnings, as `W06xx` beside `E06xx`. Decisions-log item 127 (9)

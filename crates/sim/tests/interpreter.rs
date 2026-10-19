@@ -1734,6 +1734,13 @@ fn the_refusal_table_and_the_arms_agree() {
         (
             "build_target_blueprint",
             interface(
+                r#"{"add_build_target": {"target": {"blueprint_id": "relay_pylon", "anchor": {"voxel": {"x": 10, "y": 10, "z": 10}}}}}"#,
+            ),
+            String::new(),
+        ),
+        (
+            "build_target_base_kit",
+            interface(
                 r#"{"add_build_target": {"target": {"blueprint_id": "mortar", "anchor": {"voxel": {"x": 10, "y": 10, "z": 10}}}}}"#,
             ),
             String::new(),
@@ -1856,6 +1863,7 @@ fn the_refusal_table_and_the_arms_agree() {
     for constant in [
         "REFUSE_QUEUE_STRUCTURE",
         "REFUSE_BUILD_BLUEPRINT",
+        "REFUSE_BUILD_BASE_KIT",
         "REFUSE_BUILD_BEACON_ANCHOR",
         "REFUSE_DEFEND_SETTINGS",
         "REFUSE_ATTACK_SETTINGS",
@@ -1870,6 +1878,72 @@ fn the_refusal_table_and_the_arms_agree() {
             "{constant} is in the table and no arm refuses with it"
         );
     }
+}
+
+/// S2's wire (task `con4`): each new construct is refused at the seal with
+/// its own entry, whatever it holds, until the lane that gives it an effect.
+/// Defend's and Attack's arms are refused whole however many of their new
+/// fields they write; every base-kit blueprint is the base kit's refusal, not
+/// S4's; and the arm-less switch stays legal.
+#[test]
+fn s2s_wire_is_refused_construct_by_construct() {
+    let interface = |row: &str| {
+        format!(
+            r#"{{"label": "q", "interface": {{"beacon": {{"safest": {{}}}}, "rows": [{row}]}}}}"#
+        )
+    };
+    let refused = |row: &str| {
+        let error = compile(&refusal_case(&interface(row), "")).unwrap_err();
+        pharmakos_sim::interpreter::Refusal::of(&error).map(|refusal| refusal.name)
+    };
+    for row in [
+        r#"{"set_mandate_settings": {"defend": {"protect": [{"my_commander": {}}], "engagement_radius_pct": 80, "pursue": "SPHERE_EDGE", "picket_scouts": 2}}}"#,
+        r#"{"set_mandate": {"defend": {"pursue": "NEVER"}}}"#,
+    ] {
+        assert_eq!(refused(row), Some("defend_settings"), "{row}");
+    }
+    for row in [
+        r#"{"set_mandate_settings": {"attack": {"target": {"enemy_commander": {}}, "retarget": "NEAREST_KNOWN", "staging": {"x": 10, "y": 10, "z": 10}, "launch": {"force_size": 4}, "after_action": "RETURN_HOME", "breach_allowed": true, "waves": 1}}}"#,
+        r#"{"set_mandate": {"attack": {"waves": 1}}}"#,
+    ] {
+        assert_eq!(refused(row), Some("attack_settings"), "{row}");
+    }
+    for blueprint in ["autocannon", "mortar", "wall"] {
+        let row = format!(
+            r#"{{"add_build_target": {{"target": {{"blueprint_id": "{blueprint}", "anchor": {{"voxel": {{"x": 10, "y": 10, "z": 10}}}}}}}}}}"#
+        );
+        assert_eq!(refused(&row), Some("build_target_base_kit"), "{blueprint}");
+    }
+    // A switch to an S2 writ with nothing in its arm writes nothing to refuse.
+    for row in [
+        r#"{"set_mandate": {"defend": {}}}"#,
+        r#"{"set_mandate": {"attack": {}}}"#,
+    ] {
+        assert!(compile(&refusal_case(&interface(row), "")).is_ok(), "{row}");
+    }
+}
+
+/// A `wall_box` belongs to a `wall` target alone: on any other it is refused
+/// with a typed error, never dropped (the verifier's E0509), and on a wall
+/// the base kit's refusal answers first.
+#[test]
+fn a_wall_box_on_another_target_is_refused_not_dropped() {
+    let row = |blueprint: &str| {
+        format!(
+            r#"{{"label": "q", "interface": {{"beacon": {{"safest": {{}}}}, "rows": [{{"add_build_target": {{"target": {{"blueprint_id": "{blueprint}", "anchor": {{"voxel": {{"x": 10, "y": 10, "z": 10}}}}, "wall_box": {{"min": {{"x": 10, "y": 10, "z": 10}}, "max": {{"x": 12, "y": 10, "z": 11}}}}}}}}}}]}}}}"#
+        )
+    };
+    assert_eq!(
+        compile(&refusal_case(&row("generator"), "")).unwrap_err(),
+        PlanError::WallBoxOffAWall {
+            blueprint: "generator".to_owned()
+        }
+    );
+    let wall = compile(&refusal_case(&row("wall"), "")).unwrap_err();
+    assert_eq!(
+        pharmakos_sim::interpreter::Refusal::of(&wall).map(|refusal| refusal.name),
+        Some("build_target_base_kit")
+    );
 }
 
 /// Every `NotAtThisStage { .. }` in `text` whose body spells a construct of

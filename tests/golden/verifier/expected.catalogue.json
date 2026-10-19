@@ -76,8 +76,8 @@
     "family": "decode and version",
     "severity": "ERROR",
     "emitter": "structure",
-    "message": "a Build target names `{id}`; only `generator` can be built until S4, with the capability catalogue and its licences.",
-    "beginner": "Generators are the only buildings a Build beacon can make for now."
+    "message": "a Build target names `{id}`; beside `generator` and S2's base kit, nothing can be built until S4, with the capability catalogue and its licences.",
+    "beginner": "This building cannot be made by a Build beacon in this build."
   },
   {
     "code": "E0011",
@@ -142,6 +142,14 @@
     "emitter": "decode",
     "message": "`{field}` carries {value}, which is not a value this build names; it is refused rather than read as a default.",
     "beginner": "This setting holds a number the game does not know. Nothing is guessed for you: write one of the setting's names instead."
+  },
+  {
+    "code": "E0019",
+    "family": "decode and version",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "a Build target names `{id}`, one of S2's base kit, which has no effect until S2's base kit lands; it is refused rather than ignored.",
+    "beginner": "Autocannons, mortars and walls cannot be built in this build yet."
   },
   {
     "code": "E0101",
@@ -518,6 +526,14 @@
     "emitter": "semantics",
     "message": "`scout_count` is {found}; a beacon holds at most {most} scouts.",
     "beginner": "A Survey beacon can field only so many scouts. Ask for fewer."
+  },
+  {
+    "code": "E0509",
+    "family": "settings and recycle",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "a `{id}` target carries a `wall_box`; only a `wall` target fills a box, and every other structure's footprint is its blueprint's.",
+    "beginner": "Only a wall is built as a box of voxels. Leave the box out, or make this target a wall."
   },
   {
     "code": "W0501",

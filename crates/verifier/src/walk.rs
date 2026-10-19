@@ -18,9 +18,10 @@
 //! in, and therefore part of what `report_hash` covers.
 
 use pharmakos_proto::gp::v1::{
-    Area, BeaconFilter, BeaconRef, BuildTarget, Condition, FeatureRef, InterfaceStep, Location,
-    MandateSettings, Playbook, Step, beacon_ref, broadcast_step, condition, fallback,
-    interface_row, location, mandate_settings, step,
+    Area, AttackSettings, BeaconFilter, BeaconRef, BuildTarget, Condition, DefendSettings,
+    FeatureRef, InterfaceStep, Location, MandateSettings, Playbook, Step, attack_target,
+    beacon_ref, broadcast_step, condition, fallback, interface_row, location, mandate_settings,
+    protected_asset, step,
 };
 
 use crate::pointer;
@@ -304,7 +305,57 @@ fn walk_mandate(
                 walk_area(area, &pointer::at(&areas_at, index), visitor);
             }
         }
-        _ => {}
+        Some(mandate_settings::Mandate::Defend(defend)) => {
+            walk_defend(defend, &pointer::child(at, "defend"), visitor);
+        }
+        Some(mandate_settings::Mandate::Attack(attack)) => {
+            walk_attack(attack, &pointer::child(at, "attack"), visitor);
+        }
+        Some(mandate_settings::Mandate::Mine(_)) | None => {}
+    }
+}
+
+/// S2's Defend settings (`con4`): the beacons on the protect list.
+///
+/// The sim refuses the whole arm until S2's `dfnd` lane (`E0012`), so a stage
+/// that judges what the sim refuses ([`crate::refusals`]) skips what stands
+/// under it; the leaves are walked so that every other stage's checks reach
+/// them now, as they reach the same leaves anywhere else.
+fn walk_defend(defend: &DefendSettings, at: &str, visitor: &mut dyn Visit) {
+    let protect_at = pointer::child(at, "protect");
+    for (index, entry) in defend.protect.iter().enumerate() {
+        if let Some(protected_asset::Asset::Beacon(beacon)) = entry.asset.as_ref() {
+            walk_beacon(
+                beacon,
+                &pointer::child(&pointer::at(&protect_at, index), "beacon"),
+                visitor,
+            );
+        }
+    }
+}
+
+/// S2's Attack settings (`con4`): the target, the staging point and the avoid
+/// areas. Refused as a whole until S2's `atk` lane (`E0013`), and walked for
+/// the reason [`walk_defend`] gives.
+fn walk_attack(attack: &AttackSettings, at: &str, visitor: &mut dyn Visit) {
+    if let Some(target) = attack.target.as_ref() {
+        let target_at = pointer::child(at, "target");
+        match target.target.as_ref() {
+            Some(attack_target::Target::Beacon(beacon)) => {
+                walk_beacon(beacon, &pointer::child(&target_at, "beacon"), visitor);
+            }
+            Some(attack_target::Target::Voxel(voxel)) => {
+                visitor.voxel(&pointer::child(&target_at, "voxel"), voxel);
+            }
+            Some(attack_target::Target::EnemyCommander(_)) | None => {}
+        }
+    }
+    if let Some(staging) = attack.staging.as_ref() {
+        visitor.voxel(&pointer::child(at, "staging"), staging);
+    }
+    let areas_at = pointer::child(at, "avoid_areas");
+    for (index, area) in attack.avoid_areas.iter().enumerate() {
+        walk_area(area, &pointer::at(&areas_at, index), visitor);
     }
 }
 
@@ -322,6 +373,10 @@ fn walk_build_target(
             Slot::BuildAnchor { deploy },
             visitor,
         );
+    }
+    // A `wall` target's box (S2's plan, task `con4`), an area like any other.
+    if let Some(wall_box) = target.wall_box.as_ref() {
+        walk_area(wall_box, &pointer::child(at, "wall_box"), visitor);
     }
 }
 

@@ -417,12 +417,31 @@ pub fn count(settings: &MandateSettings) -> Counted {
                 0,
             )
         }
-        // Defend and Attack hold their field numbers until S2 and have no
-        // field to write yet; the patterns name the empty messages so that
-        // the day they gain one, this match stops compiling.
+        // Defend's and Attack's fields arrived with S2's wire (`con4`), and an
+        // arm that writes any of them is refused, by the sim at the seal and
+        // here by E0012 and E0013, until S2's `dfnd` and `atk` give them an
+        // effect: no playbook that qualifies writes one, so there is nothing
+        // to price yet, and an empty arm writes nothing. Their pricing, one
+        // field per changed element, is S2's `vfy2`'s. The patterns name every
+        // field so that the day another arrives, this match stops compiling.
         Some(
-            mandate_settings::Mandate::Defend(DefendSettings {})
-            | mandate_settings::Mandate::Attack(AttackSettings {}),
+            mandate_settings::Mandate::Defend(DefendSettings {
+                protect: _,
+                engagement_radius_pct: _,
+                pursue: _,
+                picket_scouts: _,
+            })
+            | mandate_settings::Mandate::Attack(AttackSettings {
+                target: _,
+                retarget: _,
+                staging: _,
+                launch: _,
+                retreat: _,
+                after_action: _,
+                avoid_areas: _,
+                breach_allowed: _,
+                waves: _,
+            }),
         )
         | None => (0, 0),
     };
@@ -607,6 +626,7 @@ mod tests {
             anchor: None,
             order: 0,
             rotation_quarter_turns: 0,
+            wall_box: None,
         };
         let settings = MandateSettings {
             roe: 0,

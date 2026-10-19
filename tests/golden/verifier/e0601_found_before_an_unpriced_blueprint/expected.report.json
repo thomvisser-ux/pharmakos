@@ -19,8 +19,8 @@
       "code": "E0010",
       "severity": "ERROR",
       "path": "/declarative/route/1/place_beacon/initial/mandate/build/targets/0/blueprint_id",
-      "message": "a Build target names `death_ray`; only `generator` can be built until S4, with the capability catalogue and its licences.",
-      "beginner": "Generators are the only buildings a Build beacon can make for now."
+      "message": "a Build target names `death_ray`; beside `generator` and S2's base kit, nothing can be built until S4, with the capability catalogue and its licences.",
+      "beginner": "This building cannot be made by a Build beacon in this build."
     },
     {
       "code": "E0601",

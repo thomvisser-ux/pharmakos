@@ -1,0 +1,40 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/0/place_beacon/initial/mandate/build/terraform",
+      "message": "`terraform` is omitted and reads as NONE.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/place_beacon/initial/mandate/build/terraform\",\"value\":\"NONE\"}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "E0509",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/place_beacon/initial/mandate/build/targets/0/wall_box",
+      "message": "a `generator` target carries a `wall_box`; only a `wall` target fills a box, and every other structure's footprint is its blueprint's.",
+      "beginner": "Only a wall is built as a box of voxels. Leave the box out, or make this target a wall.",
+      "suggestions": [
+        {
+          "title": "Leave the box out",
+          "json_patch": "[{\"op\":\"remove\",\"path\":\"/declarative/route/0/place_beacon/initial/mandate/build/targets/0/wall_box\"}]",
+          "applicability": "MAYBE_INCORRECT"
+        }
+      ]
+    }
+  ],
+  "report_hash": "dtWp52Q0ZLw=",
+  "rules_hash": "gCjUE4Tm3i8=",
+  "plan_fingerprint": "NUNf/5IBerc=",
+  "verifier_version": "0.1.0-s2",
+  "size_units": 2,
+  "size_budget": 128
+}
+

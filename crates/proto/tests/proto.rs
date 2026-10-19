@@ -383,13 +383,41 @@ fn canonicalise_agrees_with_decode_then_encode() {
 /// Where the rule stops: the cases that **have presence** in proto3 survive
 /// canonicalisation even when they hold their own zero.
 ///
-/// Two of the three `codec::is_proto3_default` names are testable here. The
-/// third -- a proto3 `optional` field -- has no instance to test: neither
-/// `gp.v1` nor `gp.api.v1` declares one today, and the exclusion is written
-/// where it is because `optional` compiles to a synthetic one-field oneof and
-/// is covered by the same arm as the first case.
+/// All three of `codec::is_proto3_default`'s cases. The third, a proto3
+/// `optional` field, compiles to a synthetic one-field oneof and is covered by
+/// the same arm as the first; `gp.v1` declares one from S2 (`AttackLaunch`,
+/// `con4`), where a written 0 is a condition and an absent one is none.
 #[test]
 fn a_value_with_presence_survives_canonicalisation() {
+    // An `optional` scalar holding its own zero.
+    let launch_at_once = r#"{"force_size": 0}"#;
+    let canonical =
+        json::canonicalise("gp.v1.AttackLaunch", launch_at_once).expect("canonicalises");
+    assert!(
+        canonical.contains("\"force_size\""),
+        "an optional field's written 0 disappeared:\n{canonical}"
+    );
+    // The same for the two edit-row settings that must be able to write
+    // their zero (S2's wire, the reviews of con4).
+    for (message, member, spelled) in [
+        (
+            "gp.v1.DefendSettings",
+            "picket_scouts",
+            r#"{"picket_scouts": 0}"#,
+        ),
+        (
+            "gp.v1.AttackSettings",
+            "breach_allowed",
+            r#"{"breach_allowed": false}"#,
+        ),
+    ] {
+        let canonical = json::canonicalise(message, spelled).expect("canonicalises");
+        assert!(
+            canonical.contains(&format!("\"{member}\"")),
+            "{message}.{member}'s written zero disappeared:\n{canonical}"
+        );
+    }
+
     // A oneof arm holding its own zero. `BeaconRef.beacon_id` set to the empty
     // string is not the same message as a `BeaconRef` with no arm set at all:
     // dropping it would delete the arm, not a value.
@@ -1696,6 +1724,8 @@ fn the_s1_economy_wire_round_trips_in_its_documented_spellings() {
                 kw: 6,
                 beacon_ids: vec!["b_03".to_owned()],
             }),
+            tally: None,
+            seat_tallies: Vec::new(),
         },
         concat!(
             r#"{"prose":"Round 1 settled.","settlement":{"bmi_dollars":105,"band_rank":2,"#,
@@ -1749,6 +1779,352 @@ fn the_forecasts_next_bmi_and_committed_spend_carry_presence() {
         json::decode(r#"{"treasury_now":200,"bmi_next_dollars":95}"#).expect("it decodes");
     assert_eq!(in_a_push.committed_dollars, None, "absent is not 0");
     assert_eq!(in_a_push.bmi_next_dollars, Some(95));
+}
+
+#[test]
+fn s2s_defend_settings_round_trip_in_their_documented_spellings() {
+    // S2-13 (S2's plan, task con4): Defend's and Attack's settings, each field
+    // spelt as `playbook.proto` documents it, inside the mandate arm a player
+    // writes them in.
+    use gp_v1::defend_settings::Pursue;
+    use gp_v1::{
+        BeaconRef, DefendSettings, MandateSettings, MyCommander, ProtectedAsset, beacon_ref,
+        mandate_settings, protected_asset,
+    };
+
+    round_trips(
+        &MandateSettings {
+            roe: mandate_settings::Roe::ReturnFire.into(),
+            retreat_hp_pct: 30,
+            mandate: Some(mandate_settings::Mandate::Defend(DefendSettings {
+                protect: vec![
+                    ProtectedAsset {
+                        asset: Some(protected_asset::Asset::MyCommander(MyCommander {})),
+                    },
+                    ProtectedAsset {
+                        asset: Some(protected_asset::Asset::Beacon(BeaconRef {
+                            r#ref: Some(beacon_ref::Ref::BeaconId("b_00".to_owned())),
+                        })),
+                    },
+                ],
+                engagement_radius_pct: 80,
+                pursue: Pursue::SphereEdge.into(),
+                picket_scouts: Some(2),
+            })),
+        },
+        concat!(
+            r#"{"roe":"RETURN_FIRE","retreat_hp_pct":30,"defend":{"protect":["#,
+            r#"{"my_commander":{}},{"beacon":{"beacon_id":"b_00"}}],"#,
+            r#""engagement_radius_pct":80,"pursue":"SPHERE_EDGE","picket_scouts":2}}"#
+        ),
+        &[
+            "defend",
+            "protect",
+            "my_commander",
+            "engagement_radius_pct",
+            "pursue",
+            "picket_scouts",
+        ],
+    );
+    for (pursue, name) in [
+        (Pursue::Never, "NEVER"),
+        (Pursue::WhileInReach, "WHILE_IN_REACH"),
+    ] {
+        round_trips(
+            &DefendSettings {
+                pursue: pursue.into(),
+                ..DefendSettings::default()
+            },
+            &format!(r#"{{"pursue":"{name}"}}"#),
+            &["pursue"],
+        );
+    }
+}
+
+#[test]
+fn s2s_attack_settings_round_trip_in_their_documented_spellings() {
+    use gp_v1::attack_settings::{AfterAction, Retarget};
+    use gp_v1::{
+        Area, AttackLaunch, AttackRetreat, AttackSettings, AttackTarget, BeaconRef, EnemyCommander,
+        MandateSettings, Voxel, attack_target, beacon_ref, mandate_settings,
+    };
+
+    let voxel = |x, y, z| Some(Voxel { x, y, z });
+    round_trips(
+        &MandateSettings {
+            roe: mandate_settings::Roe::FreeFire.into(),
+            retreat_hp_pct: 0,
+            mandate: Some(mandate_settings::Mandate::Attack(AttackSettings {
+                target: Some(AttackTarget {
+                    target: Some(attack_target::Target::Beacon(BeaconRef {
+                        r#ref: Some(beacon_ref::Ref::BeaconId("e_01".to_owned())),
+                    })),
+                }),
+                retarget: Retarget::NearestKnown.into(),
+                staging: voxel(40, 12, 3),
+                launch: Some(AttackLaunch {
+                    force_size: Some(6),
+                    segment_ms: Some(240_000),
+                }),
+                retreat: Some(AttackRetreat {
+                    force_below_pct: Some(25),
+                    after_launch_ms: None,
+                }),
+                after_action: AfterAction::RegroupAtStaging.into(),
+                avoid_areas: vec![Area {
+                    min: voxel(50, 50, 0),
+                    max: voxel(60, 60, 9),
+                }],
+                breach_allowed: Some(true),
+                waves: 1,
+            })),
+        },
+        concat!(
+            r#"{"roe":"FREE_FIRE","attack":{"target":{"beacon":{"beacon_id":"e_01"}},"#,
+            r#""retarget":"NEAREST_KNOWN","staging":{"x":40,"y":12,"z":3},"#,
+            r#""launch":{"force_size":6,"segment_ms":240000},"#,
+            r#""retreat":{"force_below_pct":25},"after_action":"REGROUP_AT_STAGING","#,
+            r#""avoid_areas":[{"min":{"x":50,"y":50},"max":{"x":60,"y":60,"z":9}}],"#,
+            r#""breach_allowed":true,"waves":1}}"#
+        ),
+        &[
+            "attack",
+            "target",
+            "retarget",
+            "staging",
+            "launch",
+            "force_size",
+            "segment_ms",
+            "retreat",
+            "force_below_pct",
+            "after_action",
+            "avoid_areas",
+            "breach_allowed",
+            "waves",
+        ],
+    );
+
+    // The two other target arms, and the other enum values.
+    round_trips(
+        &AttackSettings {
+            target: Some(AttackTarget {
+                target: Some(attack_target::Target::EnemyCommander(EnemyCommander {})),
+            }),
+            retarget: Retarget::None.into(),
+            retreat: Some(AttackRetreat {
+                force_below_pct: None,
+                after_launch_ms: Some(60_000),
+            }),
+            after_action: AfterAction::ReturnHome.into(),
+            ..AttackSettings::default()
+        },
+        concat!(
+            r#"{"target":{"enemy_commander":{}},"retarget":"NONE","#,
+            r#""retreat":{"after_launch_ms":60000},"after_action":"RETURN_HOME"}"#
+        ),
+        &["enemy_commander", "after_launch_ms"],
+    );
+    round_trips(
+        &AttackTarget {
+            target: Some(attack_target::Target::Voxel(Voxel { x: 7, y: 8, z: 1 })),
+        },
+        r#"{"voxel":{"x":7,"y":8,"z":1}}"#,
+        &["voxel"],
+    );
+}
+
+#[test]
+fn s2s_unspecified_values_keep_their_full_prefix() {
+    // The zero of every new enum is a sentinel, spelt in full, so that a file
+    // writing it reads as the error it is rather than as a word a player meant
+    // (the header's rule; only `roe` among S2's reads as a default).
+    for (enum_name, zero) in [
+        ("gp.v1.DefendSettings.Pursue", "PURSUE_UNSPECIFIED"),
+        ("gp.v1.AttackSettings.Retarget", "RETARGET_UNSPECIFIED"),
+        (
+            "gp.v1.AttackSettings.AfterAction",
+            "AFTER_ACTION_UNSPECIFIED",
+        ),
+    ] {
+        let declared = schema()
+            .enumeration(enum_name)
+            .unwrap_or_else(|| panic!("{enum_name} is in the schema"));
+        assert_eq!(
+            declared.value_by_name(zero).map(|value| value.number),
+            Some(0),
+            "{enum_name}'s zero is {zero}"
+        );
+    }
+    // And a field holding its zero is the default, so it is not written.
+    let canonical =
+        json::canonicalise("gp.v1.DefendSettings", r#"{"pursue":"PURSUE_UNSPECIFIED"}"#)
+            .expect("canonicalises");
+    assert_eq!(canonical.trim_end(), "{}");
+}
+
+#[test]
+fn a_wall_target_round_trips_with_its_box() {
+    // S2's base kit (S2's plan, task con4; decisions 10 and 40): a `wall`
+    // target carries the box it fills.
+    use gp_v1::{Area, BuildTarget, Location, Voxel, location};
+
+    round_trips(
+        &BuildTarget {
+            blueprint_id: "wall".to_owned(),
+            anchor: Some(Location {
+                place: Some(location::Place::Voxel(Voxel { x: 30, y: 40, z: 5 })),
+            }),
+            rotation_quarter_turns: 0,
+            order: 2,
+            wall_box: Some(Area {
+                min: Some(Voxel { x: 30, y: 40, z: 5 }),
+                max: Some(Voxel { x: 38, y: 40, z: 7 }),
+            }),
+        },
+        concat!(
+            r#"{"blueprint_id":"wall","anchor":{"voxel":{"x":30,"y":40,"z":5}},"order":2,"#,
+            r#""wall_box":{"min":{"x":30,"y":40,"z":5},"max":{"x":38,"y":40,"z":7}}}"#
+        ),
+        &["wall_box"],
+    );
+}
+
+#[test]
+fn the_s2_gateway_wire_round_trips_in_its_documented_spellings() {
+    // S2-11 (decision 5): what a seat sees of its own and another seat's
+    // assets.
+    use gp_api::view_entity::Kind;
+    use gp_api::{BeaconSummary, ViewEntity};
+    use gp_v1::Voxel;
+
+    // An enemy beacon from memory: its position and the sighting's age, and
+    // no HP.
+    round_trips(
+        &BeaconSummary {
+            beacon_id: "e_01".to_owned(),
+            at: Some(Voxel {
+                x: 200,
+                y: 90,
+                z: 6,
+            }),
+            owner: "seat.1".to_owned(),
+            sighting_age_ms: Some(45_000),
+            ..BeaconSummary::default()
+        },
+        concat!(
+            r#"{"beacon_id":"e_01","at":{"x":200,"y":90,"z":6},"owner":"seat.1","#,
+            r#""sighting_age_ms":45000}"#
+        ),
+        &["sighting_age_ms"],
+    );
+    // In live vision: its HP, and an age of 0, which is written out because
+    // the field has presence.
+    round_trips(
+        &BeaconSummary {
+            beacon_id: "e_01".to_owned(),
+            owner: "seat.1".to_owned(),
+            hp: Some(310),
+            max_hp: Some(400),
+            sighting_age_ms: Some(0),
+            ..BeaconSummary::default()
+        },
+        r#"{"beacon_id":"e_01","owner":"seat.1","hp":310,"max_hp":400,"sighting_age_ms":0}"#,
+        &["hp", "max_hp", "sighting_age_ms"],
+    );
+
+    // A unit with its HP and heading, and the three new kinds.
+    round_trips(
+        &ViewEntity {
+            id: "u_3".to_owned(),
+            kind: Kind::Unit.into(),
+            subtype: "raider".to_owned(),
+            owner: "seat.0".to_owned(),
+            at: Some(Voxel { x: 10, y: 11, z: 4 }),
+            hp: Some(0),
+            max_hp: Some(60),
+            heading: Some(16_384),
+        },
+        concat!(
+            r#"{"id":"u_3","kind":"UNIT","subtype":"raider","owner":"seat.0","#,
+            r#""at":{"x":10,"y":11,"z":4},"hp":0,"max_hp":60,"heading":16384}"#
+        ),
+        &["hp", "max_hp", "heading"],
+    );
+    for (kind, name) in [
+        (Kind::Shell, "SHELL"),
+        (Kind::Wreck, "WRECK"),
+        (Kind::Ruin, "RUIN"),
+    ] {
+        round_trips(
+            &ViewEntity {
+                id: "s_1".to_owned(),
+                kind: kind.into(),
+                ..ViewEntity::default()
+            },
+            &format!(r#"{{"id":"s_1","kind":"{name}"}}"#),
+            &["kind"],
+        );
+    }
+}
+
+#[test]
+fn the_s2_recap_tallies_round_trip_in_their_documented_spellings() {
+    // E15: the calling seat's tally at every recap; decisions-log item 145:
+    // every seat's once the match has ended.
+    use gp_api::{GetRecapResponse, SeatTally, Tally};
+
+    round_trips(
+        &GetRecapResponse {
+            prose: "Round 2 settled.".to_owned(),
+            tally: Some(Tally {
+                kills: 4,
+                shared_kills: 1,
+                losses: 2,
+                value_destroyed_dollars: 185,
+            }),
+            ..GetRecapResponse::default()
+        },
+        concat!(
+            r#"{"prose":"Round 2 settled.","tally":{"kills":4,"shared_kills":1,"losses":2,"#,
+            r#""value_destroyed_dollars":185}}"#
+        ),
+        &[
+            "tally",
+            "kills",
+            "shared_kills",
+            "losses",
+            "value_destroyed_dollars",
+        ],
+    );
+
+    // Once the match has ended, every seat's tally (decisions-log item 145).
+    let tally = |kills| {
+        Some(Tally {
+            kills,
+            ..Tally::default()
+        })
+    };
+    round_trips(
+        &GetRecapResponse {
+            tally: tally(4),
+            seat_tallies: vec![
+                SeatTally {
+                    seat: "seat.0".to_owned(),
+                    tally: tally(4),
+                },
+                SeatTally {
+                    seat: "seat.1".to_owned(),
+                    tally: tally(0),
+                },
+            ],
+            ..GetRecapResponse::default()
+        },
+        concat!(
+            r#"{"tally":{"kills":4},"seat_tallies":[{"seat":"seat.0","tally":{"kills":4}},"#,
+            r#"{"seat":"seat.1","tally":{}}]}"#
+        ),
+        &["seat_tallies", "seat"],
+    );
 }
 
 #[test]
