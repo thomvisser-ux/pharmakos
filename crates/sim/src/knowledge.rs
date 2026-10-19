@@ -29,7 +29,10 @@
 //!
 //! The catalogue grows with the stages that produce it. T5 resolved the first
 //! half of it: beacons, structures and wrecks exist as tables and [`AssetId`]
-//! carries a kind tag for them. T14 built the next: a seat's own economy
+//! carries a kind tag for them. Since S2's `ids` lane an id names an asset
+//! rather than a row: a table's row is reused once the asset in it has died,
+//! under the next generation, so a sighting of an asset stays a sighting of
+//! that asset after another takes its row ([`AssetId`]; S2's plan, E1). T14 built the next: a seat's own economy
 //! ([`SeatEconomy`]: its treasury, supply and draw) and Survey-lite's
 //! sightings ([`Sighting`], one row per thing a seat has seen, with the tick it
 //! was seen at). What is still open is what a seat learns from kill credit,
@@ -131,35 +134,66 @@ impl Position {
 /// (AGENTS.md §4.6). So identity is part of the type, from the first day the
 /// type exists.
 ///
-/// # The id space, widened additively at T5
+/// # The id space: a kind tag over a generational id
 ///
-/// The world now holds four kinds of thing a seat can see, and their ids are
-/// four independent dense sequences: a unit `7`, a beacon `7`, a structure `7`
-/// and a wreck `7` all exist at once. So an `AssetId` is a **kind tag in the
-/// top four bits and an index in the low 28**:
+/// The world holds four kinds of thing a seat can see, and their ids are four
+/// independent sequences: a unit, a beacon, a structure and a wreck in row 7
+/// all exist at once. So an `AssetId` is a **kind tag in the top four bits**
+/// over the kind's own id in the low 28, which since S2's `ids` lane is a
+/// **row and a generation** (`tag (4) | generation (16) | row (12)`,
+/// [`crate::ids`]):
 ///
-/// | Tag | Range | What |
-/// |---|---|---|
-/// | 0 | `0x0000_0000 ..= 0x0FFF_FFFF` | a unit |
-/// | 1 | `0x1000_0000 ..= 0x1FFF_FFFF` | a beacon |
-/// | 2 | `0x2000_0000 ..= 0x2FFF_FFFF` | a structure |
-/// | 3 | `0x3000_0000 ..= 0x3FFF_FFFF` | a wreck |
+/// | Tag | What |
+/// |---|---|
+/// | 0 | a unit |
+/// | 1 | a beacon |
+/// | 2 | a structure |
+/// | 3 | a wreck |
 ///
-/// Units keep tag zero on purpose: [`AssetId::of_unit`] is the same function it
-/// was before T5 and every id it has ever produced still means the same thing,
-/// so the widening is additive rather than a renumbering. Tags 4 to 15 are
-/// unallocated and take the next kinds. The world total is 300 units and 40
-/// beacons (item 63), so 2^28 per kind is not a limit anybody will meet; it is
-/// chosen because four bits is the smallest tag that leaves the index
-/// comfortably wide.
+/// A row is reused once the asset in it has died and its death has settled,
+/// under the next generation, so the same row under two generations is two
+/// assets: a stale kill-credit slot, sighting or event subject names the asset
+/// that was there, never the one that took its row. Every id minted before rows
+/// were reused has generation 0 and so decodes as itself. Units keep tag zero,
+/// so [`AssetId::of_unit`] of a generation-0 unit is the unit's own raw id.
+/// Tags 4 to 15 are unallocated and take the next kinds.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
 pub struct AssetId(u32);
+
+/// Which of the four id spaces an [`AssetId`] is in: its kind tag.
+///
+/// An enum rather than a byte, so [`AssetId::tagged`] cannot be handed a tag
+/// wider than its four bits.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum AssetTag {
+    /// A unit, tag 0.
+    Unit,
+    /// A beacon, tag 1.
+    Beacon,
+    /// A structure, tag 2.
+    Structure,
+    /// A wreck, tag 3.
+    Wreck,
+}
+
+impl AssetTag {
+    /// The tag's four bits. Additive only.
+    #[must_use]
+    pub const fn id(self) -> u8 {
+        match self {
+            AssetTag::Unit => AssetId::TAG_UNIT,
+            AssetTag::Beacon => AssetId::TAG_BEACON,
+            AssetTag::Structure => AssetId::TAG_STRUCTURE,
+            AssetTag::Wreck => AssetId::TAG_WRECK,
+        }
+    }
+}
 
 impl AssetId {
     /// How far the kind tag is shifted.
     const TAG_SHIFT: u32 = 28;
 
-    /// The low bits an index occupies.
+    /// The low bits a kind's own id occupies.
     const INDEX_MASK: u32 = (1 << AssetId::TAG_SHIFT) - 1;
 
     /// The tag of a unit — zero, so [`AssetId::of_unit`] is unchanged.
@@ -171,44 +205,70 @@ impl AssetId {
     /// The tag of a wreck.
     pub const TAG_WRECK: u8 = 3;
 
-    /// Build from a raw id.
+    /// Build from a raw id, as the canonical encoder and a snapshot carry it.
     #[must_use]
     pub const fn new(raw: u32) -> AssetId {
         AssetId(raw)
     }
 
-    /// Build from a kind tag and an index within that kind.
-    ///
-    /// An index that does not fit the low 28 bits is truncated to them, which
-    /// cannot happen at any world size v1 allows and is a deterministic answer
-    /// rather than a panic inside a tick if it ever does.
+    /// Build from a kind tag, a row and a generation. Cannot truncate: every
+    /// part is bounded by its type.
     #[must_use]
-    pub fn tagged(tag: u8, index: u32) -> AssetId {
-        AssetId((u32::from(tag) << AssetId::TAG_SHIFT) | (index & AssetId::INDEX_MASK))
+    pub const fn tagged(
+        tag: AssetTag,
+        row: crate::ids::Row,
+        generation: crate::ids::Generation,
+    ) -> AssetId {
+        let [byte] = tag.id().to_le_bytes();
+        let tag = u32::from_le_bytes([byte, 0, 0, 0]);
+        AssetId((tag << AssetId::TAG_SHIFT) | crate::ids::pack(row, generation))
+    }
+
+    /// Tag a kind's own raw id, refusing a sentinel and anything outside the
+    /// layout rather than masking it.
+    const fn of_raw(tag: AssetTag, raw: u32) -> Result<AssetId, crate::ids::IdError> {
+        match crate::ids::unpack(raw) {
+            Ok((row, generation)) => Ok(AssetId::tagged(tag, row, generation)),
+            Err(error) => Err(error),
+        }
     }
 
     /// The id of a unit, seen.
-    #[must_use]
-    pub fn of_unit(unit: UnitId) -> AssetId {
-        AssetId::tagged(AssetId::TAG_UNIT, unit.raw())
+    ///
+    /// # Errors
+    ///
+    /// [`crate::ids::IdError::Sentinel`] for [`UnitId::NONE`], which names no
+    /// unit, and [`crate::ids::IdError::OutOfLayout`] for a raw value no unit
+    /// id holds.
+    pub const fn of_unit(unit: UnitId) -> Result<AssetId, crate::ids::IdError> {
+        AssetId::of_raw(AssetTag::Unit, unit.raw())
     }
 
     /// The id of a beacon, seen.
-    #[must_use]
-    pub fn of_beacon(beacon: BeaconId) -> AssetId {
-        AssetId::tagged(AssetId::TAG_BEACON, beacon.raw())
+    ///
+    /// # Errors
+    ///
+    /// As [`AssetId::of_unit`], for [`BeaconId::NONE`].
+    pub const fn of_beacon(beacon: BeaconId) -> Result<AssetId, crate::ids::IdError> {
+        AssetId::of_raw(AssetTag::Beacon, beacon.raw())
     }
 
     /// The id of a structure, seen.
-    #[must_use]
-    pub fn of_structure(structure: StructureId) -> AssetId {
-        AssetId::tagged(AssetId::TAG_STRUCTURE, structure.raw())
+    ///
+    /// # Errors
+    ///
+    /// As [`AssetId::of_unit`], for [`StructureId::NONE`].
+    pub const fn of_structure(structure: StructureId) -> Result<AssetId, crate::ids::IdError> {
+        AssetId::of_raw(AssetTag::Structure, structure.raw())
     }
 
     /// The id of a wreck, seen.
-    #[must_use]
-    pub fn of_wreck(wreck: WreckId) -> AssetId {
-        AssetId::tagged(AssetId::TAG_WRECK, wreck.raw())
+    ///
+    /// # Errors
+    ///
+    /// As [`AssetId::of_unit`].
+    pub const fn of_wreck(wreck: WreckId) -> Result<AssetId, crate::ids::IdError> {
+        AssetId::of_raw(AssetTag::Wreck, wreck.raw())
     }
 
     /// Which kind this id belongs to.
@@ -219,10 +279,35 @@ impl AssetId {
         low
     }
 
-    /// The index within the kind.
+    /// The kind's own raw id: the generation and the row, under the tag.
     #[must_use]
     pub const fn index(self) -> u32 {
         self.0 & AssetId::INDEX_MASK
+    }
+
+    /// The row the asset lives in, in its kind's table.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::ids::IdError::OutOfLayout`] for a row past
+    /// [`crate::ids::Row::MAX`], which no id this sim mints holds.
+    pub const fn row(self) -> Result<crate::ids::Row, crate::ids::IdError> {
+        match crate::ids::unpack(self.index()) {
+            Ok((row, _)) => Ok(row),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// The generation of the row the asset lived in when the id was minted.
+    ///
+    /// # Errors
+    ///
+    /// As [`AssetId::row`].
+    pub const fn generation(self) -> Result<crate::ids::Generation, crate::ids::IdError> {
+        match crate::ids::unpack(self.index()) {
+            Ok((_, generation)) => Ok(generation),
+            Err(error) => Err(error),
+        }
     }
 
     /// The raw id, for sort keys and the canonical encoder.

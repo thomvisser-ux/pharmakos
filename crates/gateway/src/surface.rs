@@ -2087,6 +2087,9 @@ impl Surface {
             | EventKind::FinalAudit => Ok(Audience::Public),
             EventKind::BeaconDestroyed
             | EventKind::StructureRuined
+            // A ruin is nobody's, and its burial is a world line like its
+            // ruination: an opponent with eyes on the place sees it go.
+            | EventKind::RuinBuried
             | EventKind::CommanderDied
             | EventKind::CommanderRespawned
             | EventKind::UnitSealedIn

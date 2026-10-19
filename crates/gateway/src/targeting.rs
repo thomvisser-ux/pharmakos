@@ -130,11 +130,10 @@ pub fn scratch_for(world: &World) -> Result<Scratch, Error> {
 /// `commander_at`, read the same way).
 #[must_use]
 pub fn commander_point(world: &World, seat: SeatId) -> Option<[Fx; 3]> {
-    let commander = world.commander_of(seat);
-    if !commander.is_some() {
-        return None;
-    }
-    let index = usize::try_from(commander.raw()).ok()?;
+    let commander = world.commander_of(seat)?;
+    // The commander's row, read through its id and checked by generation
+    // (S2's plan, E1).
+    let index = world.units().row_of(commander).ok()?.index();
     let alive = world
         .units()
         .hit_points()
@@ -1136,12 +1135,10 @@ fn interface_beacon(
     Some((id, beacon_point(reader.world, id)?))
 }
 
-/// Where a beacon stands, by id (a beacon's id is its row in the table).
+/// Where a beacon stands, by id: its row, read through the id and checked by
+/// generation (S2's plan, E1), so an id whose row has since been reused names
+/// no place.
 fn beacon_point(world: &World, id: BeaconId) -> Option<[Fx; 3]> {
-    let row = usize::try_from(id.raw()).ok()?;
-    let beacons = world.beacons();
-    if beacons.ids().get(row).copied() != Some(id.raw()) {
-        return None;
-    }
-    beacons.positions().get(row).copied()
+    let row = world.beacons().row_of(id).ok()?.index();
+    world.beacons().positions().get(row).copied()
 }

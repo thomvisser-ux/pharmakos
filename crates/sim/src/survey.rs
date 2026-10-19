@@ -4,23 +4,31 @@
 //! Survey-lite: what a seat sees, and how stale the memory of it is (spec
 //! section 6, "Vision and sightings").
 //!
-//! # What "reach" is at the skeleton, said plainly
+//! # What "reach" is, said plainly
 //!
 //! The spec's reach is "your spheres, the live vision of your own units and
-//! structures, and Sensor Spire reveals". Two of those three exist here:
+//! structures, and Sensor Spire reveals". Since S2's `ids` lane the first two
+//! come through the one sensor interface ([`crate::sight::Sensor`]; S2's plan,
+//! E10), the knowledge store's output of it:
 //!
-//! * every **live beacon**'s sphere (`beacon.sphere_radius_voxels`), which is
-//!   the passive vision every seat has from the first tick; and
-//! * every living **scout**'s own vision
-//!   ([`crate::programs::UNIT_VISION_RADIUS_VOXELS`]), which is what a Survey
-//!   mandate buys by fielding scouts and sending them to its probe areas.
+//! * every **live beacon**'s sphere (`beacon.sphere_radius_voxels`), the
+//!   passive vision every seat has from the first tick;
+//! * every living **unit**'s own vision, its kind's `vision_radius_voxels`
+//!   row (the commander's `commander.vision_radius_voxels`), which is what a
+//!   Survey mandate buys by fielding scouts and sending them to its probe
+//!   areas; and
+//! * every finished **structure** a seat owns, its kind's
+//!   `vision_radius_voxels` row.
 //!
-//! Deliberately **not** here: vision from every unit and every structure. That
-//! is the other half of the same sentence, and it belongs to the stage that
-//! makes reach matter — Defend's engagement radius and Attack's freshness test
-//! are both S2's, and adding it now would be a per-tick cost with nothing
-//! reading it. Sensor Spire reveals are S3's. Both are additive: the viewer
-//! list below grows, and nothing else changes.
+//! Each sees everything within its radius, with no line of sight (item 144
+//! (4)); the line-of-sight model is the interface's seam
+//! ([`crate::sight::LineOfSight`]). Sensor Spire reveals are S4's, and they
+//! join as one more sensor.
+//!
+//! A unit is found through the broadphase grid, padded by the most a unit
+//! moves in a tick and tested at its current position ([`World::units_within`];
+//! E11), so a unit that walked into range since the grid was built is seen.
+//! The beacon and structure tables are small and walked whole.
 //!
 //! # The age accrues on match game time
 //!
@@ -35,140 +43,116 @@
 //!
 //! Recording runs once per `match.decision_tick_ms` rather than every tick: a
 //! sighting is read by a decision, so a sighting taken between two decisions
-//! could never be acted on any sooner, and the scan is quadratic in the number
-//! of assets. The cadence is game time, identical on every machine, and it is
-//! the same cadence the interpreter's own decisions run on.
+//! could never be acted on any sooner. The cadence is game time, identical on
+//! every machine, and it is the same cadence the interpreter's own decisions run
+//! on.
+//!
+//! # A sighting names the asset it saw
+//!
+//! A sighting's asset is an [`AssetId`] with its row's generation (S2's plan,
+//! E1), so a memory of a unit whose row has since been reused stays a memory of
+//! that unit, and the unit that took the row is a new sighting of its own.
 
+use crate::ids::Row;
 use crate::knowledge::{AssetId, AssetKind};
-use crate::math::fixed::{Fx, Sq};
-use crate::tables::SeatId;
+use crate::math::fixed::Sq;
+use crate::sight::{RadiusOnly, Sensor};
+use crate::tables::{BeaconId, SeatId, StructureId, UnitId, UnitKind};
 use crate::world::World;
 
 /// Record what every seat can see, right now.
 ///
-/// Walked seat by seat in ascending id, and within a seat viewer by viewer in
-/// ascending row, so the order sightings are written in is a total order
-/// (AGENTS.md §4.6) — which matters because a full table forgets its stalest
-/// row to make space, and *which* row that is has to be the same everywhere.
+/// Walked seat by seat in ascending id, and within a seat sensor by sensor in
+/// the interface's order ([`World::sensor_at`]), so the order sightings are
+/// written in is a total order (AGENTS.md §4.6) — which matters because a full
+/// table forgets its stalest row to make space, and *which* row that is has to
+/// be the same everywhere.
 pub(crate) fn record_sightings(world: &mut World) {
     let tick = world.tick().raw();
-    let sphere = world.sphere_radius();
-    let scout_vision = Fx::from_voxels(crate::programs::UNIT_VISION_RADIUS_VOXELS);
+    let mut found = core::mem::take(world.sight_rows_mut());
     let seats = crate::math::index::row(world.seats().len());
     let mut index: usize = 0;
     while index < seats {
-        if !world.seats().is_alive(index) {
-            index = index.saturating_add(1);
-            continue;
-        }
-        // E7: cannot miss: `index` walks the seat table's own rows
-        let raw = world.seats().seats().get(index).copied().unwrap_or(0);
-        let seat = SeatId::new(raw);
-        look_from_beacons(world, seat, sphere, tick);
-        look_from_scouts(world, seat, scout_vision, tick);
+        let seat = world.seats().seats().get(index).copied().map(SeatId::new);
+        let alive = world.seats().is_alive(index);
         index = index.saturating_add(1);
-    }
-}
-
-/// Every live beacon's sphere is a pair of eyes.
-fn look_from_beacons(world: &mut World, seat: SeatId, radius: Fx, tick: u32) {
-    let count = world.beacons().len();
-    let mut row: u32 = 0;
-    while row < count {
-        let at = crate::math::index::row(row);
-        let mine = world.beacons().seats().get(at).copied() == Some(seat.raw());
-        let live = crate::power::beacon_is_live(world, crate::tables::BeaconId::new(row));
-        if mine
-            && live
-            && let Some(centre) = world.beacons().positions().get(at).copied()
-        {
-            look_around(world, seat, centre, radius, tick);
+        let Some(seat) = seat.filter(|_| alive) else {
+            continue;
+        };
+        // One walk over every sensor, whose order is seat-blind, keeping this
+        // seat's.
+        let mut at: usize = 0;
+        while let Some((sensor, next)) = world.sensor_at(at) {
+            at = next;
+            if sensor.seat == seat {
+                look_around(world, &sensor, tick, &mut found);
+            }
         }
-        row = row.saturating_add(1);
     }
+    found.clear();
+    *world.sight_rows_mut() = found;
 }
 
-/// Every living scout's own vision.
-fn look_from_scouts(world: &mut World, seat: SeatId, radius: Fx, tick: u32) {
-    let count = world.units().len();
-    let mut row: u32 = 0;
-    while row < count {
-        let at = crate::math::index::row(row);
-        let mine = world.units().seats().get(at).copied() == Some(seat.raw());
-        let scout =
-            world.units().kinds().get(at).copied() == Some(crate::tables::UnitKind::Scout.id());
-        let alive = world
-            .units()
-            .hit_points()
-            .get(at)
-            .is_some_and(|hp| hp.is_alive());
-        if mine
-            && scout
-            && alive
-            && let Some(centre) = world.units().positions().get(at).copied()
-        {
-            look_around(world, seat, centre, radius, tick);
-        }
-        row = row.saturating_add(1);
-    }
-}
-
-/// Everything of another seat's within `radius` of `centre` becomes a sighting.
+/// Everything of another seat's that `sensor` sees becomes a sighting.
 ///
 /// Only **another** seat's: a seat does not remember seeing its own things,
 /// because it knows where they are. That is not an optimisation — it is what
 /// keeps a sighting a memory of somebody else rather than a duplicate of the
 /// unit table.
-fn look_around(world: &mut World, seat: SeatId, centre: [Fx; 3], radius: Fx, tick: u32) {
-    let limit = Sq::of_radius(radius);
-    let units = world.units().len();
-    let mut row: u32 = 0;
-    while row < units {
-        let at = crate::math::index::row(row);
-        // E7: cannot miss: `row` walks the unit table's own rows
-        let owner = world.units().seats().get(at).copied().unwrap_or(0);
-        let alive = world
-            .units()
-            .hit_points()
-            .get(at)
-            .is_some_and(|hp| hp.is_alive());
-        if owner != seat.raw()
-            && SeatId::new(owner).is_some()
-            && alive
-            && let Some(place) = world.units().positions().get(at).copied()
-            && Sq::between(place, centre) <= limit
+fn look_around(world: &mut World, sensor: &Sensor, tick: u32, found: &mut Vec<Row>) {
+    let seat = sensor.seat;
+    let limit = Sq::of_radius(sensor.radius);
+    world.units_within(sensor.centre, sensor.radius, found);
+    for row in found.iter() {
+        let units = world.units();
+        let at = row.index();
+        let (Some(owner), Some(hp), Some(kind), Some(place), Some(id)) = (
+            units.seats().get(at).copied(),
+            units.hit_points().get(at).copied(),
+            units.kinds().get(at).copied(),
+            units.positions().get(at).copied(),
+            units.ids().get(at).copied(),
+        ) else {
+            continue;
+        };
+        if owner == seat.raw()
+            || !SeatId::new(owner).is_some()
+            || !hp.is_alive()
+            || !sensor.sees(&RadiusOnly, place)
         {
-            let kind = if world.units().kinds().get(at).copied()
-                == Some(crate::tables::UnitKind::Commander.id())
-            {
-                AssetKind::Commander
-            } else {
-                AssetKind::Unit
-            };
-            let id = AssetId::of_unit(crate::tables::UnitId::new(row));
+            continue;
+        }
+        let kind = if kind == UnitKind::Commander.id() {
+            AssetKind::Commander
+        } else {
+            AssetKind::Unit
+        };
+        if let Ok(id) = AssetId::of_unit(UnitId::new(id)) {
             world.see(seat, id, SeatId::new(owner), kind.id(), place, tick);
         }
-        row = row.saturating_add(1);
     }
 
     let beacons = world.beacons().len();
     let mut row: u32 = 0;
     while row < beacons {
         let at = crate::math::index::row(row);
-        // E7: cannot miss: `row` walks the beacon table's own rows
-        let owner = world.beacons().seats().get(at).copied().unwrap_or(0);
-        let alive = world
-            .beacons()
-            .hit_points()
-            .get(at)
-            .is_some_and(|hp| hp.is_alive());
+        row = row.saturating_add(1);
+        let b = world.beacons();
+        let (Some(owner), Some(hp), Some(place), Some(id)) = (
+            b.seats().get(at).copied(),
+            b.hit_points().get(at).copied(),
+            b.positions().get(at).copied(),
+            b.ids().get(at).copied(),
+        ) else {
+            continue;
+        };
         if owner != seat.raw()
             && SeatId::new(owner).is_some()
-            && alive
-            && let Some(place) = world.beacons().positions().get(at).copied()
-            && Sq::between(place, centre) <= limit
+            && hp.is_alive()
+            && Sq::between(place, sensor.centre) <= limit
+            && sensor.sees(&RadiusOnly, place)
+            && let Ok(id) = AssetId::of_beacon(BeaconId::new(id))
         {
-            let id = AssetId::of_beacon(crate::tables::BeaconId::new(row));
             world.see(
                 seat,
                 id,
@@ -178,27 +162,29 @@ fn look_around(world: &mut World, seat: SeatId, centre: [Fx; 3], radius: Fx, tic
                 tick,
             );
         }
-        row = row.saturating_add(1);
     }
 
     let structures = world.structures().len();
     let mut row: u32 = 0;
     while row < structures {
         let at = crate::math::index::row(row);
-        // E7: cannot miss: `row` walks the structure table's own rows
-        let owner = world.structures().seats().get(at).copied().unwrap_or(0);
-        let alive = world
-            .structures()
-            .hit_points()
-            .get(at)
-            .is_some_and(|hp| hp.is_alive());
+        row = row.saturating_add(1);
+        let s = world.structures();
+        let (Some(owner), Some(hp), Some(place), Some(id)) = (
+            s.seats().get(at).copied(),
+            s.hit_points().get(at).copied(),
+            s.positions().get(at).copied(),
+            s.ids().get(at).copied(),
+        ) else {
+            continue;
+        };
         if owner != seat.raw()
             && SeatId::new(owner).is_some()
-            && alive
-            && let Some(place) = world.structures().positions().get(at).copied()
-            && Sq::between(place, centre) <= limit
+            && hp.is_alive()
+            && Sq::between(place, sensor.centre) <= limit
+            && sensor.sees(&RadiusOnly, place)
+            && let Ok(id) = AssetId::of_structure(StructureId::new(id))
         {
-            let id = AssetId::of_structure(crate::tables::StructureId::new(row));
             world.see(
                 seat,
                 id,
@@ -208,6 +194,5 @@ fn look_around(world: &mut World, seat: SeatId, centre: [Fx; 3], radius: Fx, tic
                 tick,
             );
         }
-        row = row.saturating_add(1);
     }
 }

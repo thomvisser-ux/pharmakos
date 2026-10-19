@@ -234,7 +234,10 @@ fn an_aborted_deploy_refunds_the_beacon_in_full() {
             "a dead commander deploys nothing"
         );
         if tick == 100 && !killed {
-            let commander = runner.world().commander_of(SeatId::new(SEAT));
+            let commander = runner
+                .world()
+                .commander_of(SeatId::new(SEAT))
+                .expect("an occupied seat has a commander");
             assert!(
                 runner
                     .world_mut()

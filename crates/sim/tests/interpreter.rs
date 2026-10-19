@@ -170,7 +170,10 @@ fn transcript(case: &str) -> String {
     for tick in 0..case_ticks(case) {
         for (at, amount) in damage {
             if *at == tick {
-                let commander = runner.world().commander_of(SeatId::new(CASE_SEAT));
+                let commander = runner
+                    .world()
+                    .commander_of(SeatId::new(CASE_SEAT))
+                    .expect("an occupied seat has a commander");
                 assert!(
                     runner
                         .world_mut()
@@ -701,7 +704,10 @@ fn rows_of_the_visit_case(damage: &[(u32, i32)]) -> Vec<u32> {
     for tick in 0..300 {
         for (at, amount) in damage {
             if *at == tick {
-                let commander = runner.world().commander_of(SeatId::new(CASE_SEAT));
+                let commander = runner
+                    .world()
+                    .commander_of(SeatId::new(CASE_SEAT))
+                    .expect("an occupied seat has a commander");
                 assert!(
                     runner
                         .world_mut()
@@ -745,7 +751,9 @@ fn a_move_to_a_voxel_arrives_on_the_ground_under_it() {
     // The step below names a column three voxels away and a `z` of 63, the top
     // of the map. It completes because the ground under it is the answer.
     let world = fresh_world();
-    let commander = world.commander_of(SeatId::new(CASE_SEAT));
+    let commander = world
+        .commander_of(SeatId::new(CASE_SEAT))
+        .expect("an occupied seat has a commander");
     let index = usize::try_from(commander.raw()).expect("a unit index");
     let at = world.units().positions()[index];
     let (x, y) = (at[0].floor_voxels() + 3, at[1].floor_voxels());
@@ -866,7 +874,9 @@ fn a_move_a_commander_cannot_walk_fails_with_no_path() {
 /// The columns stay walkable; every step out of the middle one becomes a
 /// five-voxel climb, which the one-voxel rule refuses.
 fn wall_in_the_commander(world: &mut World) {
-    let commander = world.commander_of(SeatId::new(CASE_SEAT));
+    let commander = world
+        .commander_of(SeatId::new(CASE_SEAT))
+        .expect("an occupied seat has a commander");
     let index = usize::try_from(commander.raw()).expect("a unit index");
     let at = world.units().positions()[index];
     let x = at[0].floor_voxels();
@@ -1048,7 +1058,10 @@ fn a_seat_with_no_playbook_leaves_its_commander_where_it_stands() {
     // (T11), so a seat that sealed nothing is a seat whose commander is still
     // exactly where the generator put it.
     let mut runner = Runner::new(fresh_world());
-    let commander = runner.world().commander_of(SeatId::new(1));
+    let commander = runner
+        .world()
+        .commander_of(SeatId::new(1))
+        .expect("an occupied seat has a commander");
     let index = usize::try_from(commander.raw()).expect("a unit index");
     let before = runner.world().units().positions()[index];
     assert!(runner.begin_push());

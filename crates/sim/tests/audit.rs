@@ -21,7 +21,7 @@ use std::path::PathBuf;
 use pharmakos_sim::audit::{beacons_lost, final_audit};
 use pharmakos_sim::events::{Event, EventKind};
 use pharmakos_sim::math::fixed::Fx;
-use pharmakos_sim::math::quantity::{Hp, Money};
+use pharmakos_sim::math::quantity::Money;
 use pharmakos_sim::runner::{MatchEndReason, MatchSettings, Runner};
 use pharmakos_sim::seams::MandateKind;
 use pharmakos_sim::snapshot::Snapshot;
@@ -286,8 +286,10 @@ fn an_exact_tie_on_every_term_is_a_shared_win() {
     assert_eq!(ended.seat, None);
 }
 
+/// S2's plan, E1: a dead beacon's row is freed once its death settles, so the
+/// audit's third term is a per-seat hashed counter, and it survives a save.
 #[test]
-fn a_lost_beacons_row_survives_save_and_restore() {
+fn beacons_lost_survives_save_and_restore() {
     let mut base = world();
     let lost = extra_beacon(&mut base, seat(2));
     let mut runner = Runner::new(base);
@@ -297,10 +299,11 @@ fn a_lost_beacons_row_survives_save_and_restore() {
     while stepped < 5 && runner.step().unwrap().is_some() {
         stepped += 1;
     }
-    let row = usize::try_from(lost.raw()).unwrap();
+    let row = lost.row().unwrap().index();
     assert_eq!(
-        runner.world().beacons().hit_points().get(row),
-        Some(&Hp::ZERO)
+        runner.world().beacons().frees().get(row),
+        Some(&true),
+        "the dead beacon's row is free once its death settled"
     );
     assert_eq!(beacons_lost(runner.world(), seat(2)), 1);
 
@@ -308,15 +311,9 @@ fn a_lost_beacons_row_survives_save_and_restore() {
     let mut resumed = world();
     saved.restore_into(&mut resumed).expect("the save restores");
     assert_eq!(
-        resumed.beacons().ids().get(row).copied(),
-        Some(lost.raw()),
-        "a dead beacon keeps its row"
-    );
-    assert_eq!(resumed.beacons().hit_points().get(row), Some(&Hp::ZERO));
-    assert_eq!(
         beacons_lost(&resumed, seat(2)),
         1,
-        "so the audit's third term survives a save, with no column of its own"
+        "the audit's third term survives a save in its own column"
     );
     assert_eq!(resumed.state_hash(), runner.world().state_hash());
 }

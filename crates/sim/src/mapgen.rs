@@ -83,7 +83,7 @@ use crate::math::quantity::{Hp, Kw, Money};
 use crate::math::random::{Stream, StreamRng};
 use crate::rules::RulesTable;
 use crate::seams::{BeaconMandate, MandateKind, ProgramId};
-use crate::tables::{BeaconId, BeaconTable, SeatId, UnitKind};
+use crate::tables::{BeaconTable, SeatId, UnitKind};
 use crate::voxels::{Material, Richness, VoxelStore};
 use pharmakos_proto::gp;
 use serde::{Deserialize, Serialize};
@@ -279,6 +279,16 @@ pub enum MapError {
         /// What `locomotion.hpa_cluster_voxels` said.
         cluster_voxels: i32,
     },
+    /// A table's room, derived at load from the match configuration and the
+    /// world totals, would exceed [`crate::ids::ROOM_LIMIT`] rows: its rows
+    /// could not all be told apart by an id's 12-bit row (S2's plan, E1).
+    /// Refused at load rather than masked.
+    RoomTooLarge {
+        /// Which table.
+        table: &'static str,
+        /// The room it would need.
+        room: u32,
+    },
     /// A map file could not be encoded or decoded.
     Codec(String),
     /// A map file could not be read or written.
@@ -335,6 +345,11 @@ impl fmt::Display for MapError {
                 write!(f, "no legal position for {what} on this map")
             }
             MapError::Settings(error) => write!(f, "the match settings are refused: {error}"),
+            MapError::RoomTooLarge { table, room } => write!(
+                f,
+                "the {table} table would need {room} rows, past the {} an id's row can name",
+                crate::ids::ROOM_LIMIT
+            ),
             MapError::Unsized { queue } => write!(
                 f,
                 "the {queue} queue's room, derived from the world's table rooms, does not fit"
@@ -821,17 +836,25 @@ fn realise_zones(
             field: "seats",
             why: format!("seat {zone} is past the {} a seat id holds", u8::MAX),
         })?);
-        out.beacons.push(
-            BeaconId::new(zone),
-            seat,
-            voxel_point(core)?,
-            BeaconMandate {
-                kind: MandateKind::Build,
-                program_id: ProgramId::NONE,
-            },
-            numbers.rules.core_hp(),
-            false,
-        );
+        // A seat's core is its first beacon and the generator's first row
+        // for it: generation 0, never freed (S2's plan, E1). The table holds
+        // one row per occupied seat, far under its room, so the push is
+        // refused only past `ids::ROOM_LIMIT`, which a seat id cannot reach.
+        out.beacons
+            .push(
+                seat,
+                voxel_point(core)?,
+                BeaconMandate {
+                    kind: MandateKind::Build,
+                    program_id: ProgramId::NONE,
+                },
+                numbers.rules.core_hp(),
+                false,
+            )
+            .map_err(|full| MapError::RoomTooLarge {
+                table: "beacon",
+                room: full.room,
+            })?;
         numbers.push_starting_force(voxels, seat, core, &mut out.starting_units)?;
         out.seat_treasury.push(numbers.starting_treasury());
         out.seat_supply.push(Kw::new(core_surplus));

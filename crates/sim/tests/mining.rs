@@ -619,7 +619,7 @@ fn drone_of(world: &World, core: BeaconId) -> usize {
         .homes()
         .iter()
         .zip(units.kinds())
-        .position(|(home, kind)| *home == core.raw() && *kind == UnitKind::MiningDrone.id())
+        .position(|(home, kind)| *home == core && *kind == UnitKind::MiningDrone.id())
         .expect("the core has a mining drone")
 }
 

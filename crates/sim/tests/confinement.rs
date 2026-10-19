@@ -436,45 +436,13 @@ fn there_is_exactly_one_hash_seed_and_one_hash_function() {
 /// rule that makes the default right, or why the read cannot miss.
 const FALLBACK_MARKER: &str = "E7:";
 
-/// The files whose fallbacks S2's `base` lane did not sweep, each with the
-/// count it left and the reason, carried to the next owner of the sim (S2's
-/// plan, risk R14). The count may only fall: a new fallback in any of these
-/// files fails the test as surely as one anywhere else.
-const CARRIED: &[(&str, usize, &str)] = &[
-    (
-        "src/world.rs",
-        85,
-        "row reads of the unit, beacon, structure, seat and target columns, the state hash's \
-         walks among them, which `ids` retypes (E1: every row read through `row()`, typed id \
-         columns)",
-    ),
-    (
-        "src/tables.rs",
-        15,
-        "column reads inside the tables E1 retypes, carried to `ids`",
-    ),
-    (
-        "src/programs.rs",
-        21,
-        "per-unit row reads of the programs, carried to `ids` with E1's row reuse",
-    ),
-    (
-        "src/pathing/router.rs",
-        27,
-        "per-unit route columns, carried to `ids` with E1's reset of a reused row's walk state",
-    ),
-    (
-        "src/interpreter/state.rs",
-        37,
-        "per-seat and per-handler interpreter columns, carried to `ids`, the sim's next owner",
-    ),
-    (
-        "src/pathing/clusters.rs",
-        31,
-        "node-indexed arrays of the HPA* graph, sized at construction, carried to `ids`, the \
-         sim's next owner",
-    ),
-];
+/// The files whose fallbacks a lane did not sweep, each with the count it left
+/// and the reason, carried to the next owner of the sim (S2's plan, risk R14).
+/// The count may only fall: a new fallback in any of these files fails the
+/// test as surely as one anywhere else. S2's `ids` lane swept the 216 that
+/// `base` carried, so the list is empty and every fallback in the crate is
+/// either gone or names its rule.
+const CARRIED: &[(&str, usize, &str)] = &[];
 
 /// The file's shipped code: everything before its first `#[cfg(test)] mod`,
 /// because a unit test may fall back as it likes.
@@ -662,4 +630,89 @@ fn the_fallback_scan_finds_what_it_is_for() {
         fallbacks(elsewhere).is_empty(),
         "neither a bare option nor a test module is the scan's business"
     );
+}
+
+/// The reference columns that hold a typed id into another table: read as a
+/// row only through that table's `row_of`, which checks the generation (S2's
+/// plan, E1).
+const ID_HOLDERS: &[&str] = &[
+    "home",
+    "built",
+    "beacon",
+    "owner",
+    "id",
+    "asset",
+    "commander",
+];
+
+/// Every place `text`'s shipped code reads an id's raw value as a row, as line
+/// numbers: a `usize::try_from(..)` or an `index::row(..)` whose argument
+/// takes an id's `.raw()` or an asset's `.index()`, or dereferences a column
+/// entry named as an id (`*home`, `*built`, ...). The second pattern of S2's
+/// plan, E1, and the first.
+fn id_row_reads(text: &str) -> Vec<usize> {
+    let mut found = Vec::new();
+    for (number, line) in code_lines(shipped(text)) {
+        for needle in ["usize::try_from(", "index::row("] {
+            let mut from = 0;
+            while let Some(at) = line.get(from..).and_then(|rest| rest.find(needle)) {
+                let start = from.saturating_add(at).saturating_add(needle.len());
+                from = start;
+                let rest = line.get(start..).unwrap_or_default();
+                let mut depth: i32 = 0;
+                let mut end = rest.len();
+                for (index, c) in rest.char_indices() {
+                    match c {
+                        '(' => depth = depth.saturating_add(1),
+                        ')' if depth == 0 => {
+                            end = index;
+                            break;
+                        }
+                        ')' => depth = depth.saturating_sub(1),
+                        _ => {}
+                    }
+                }
+                let argument = rest.get(..end).unwrap_or_default().trim();
+                let raw_id = (argument.ends_with(".raw()") && !argument.starts_with("row."))
+                    || argument.ends_with(".index()");
+                let deref_id = argument
+                    .strip_prefix('*')
+                    .is_some_and(|name| ID_HOLDERS.contains(&name));
+                if raw_id || deref_id {
+                    found.push(number);
+                }
+            }
+        }
+    }
+    found
+}
+
+/// S2's plan, E1: every row read goes through `row()` -- an id's own row, or a
+/// table's `row_of`, which checks the generation -- never through the id's raw
+/// value, so a reference into a reused row cannot read the asset that took it.
+#[test]
+fn no_id_is_read_as_a_row() {
+    let mut findings: Vec<String> = Vec::new();
+    for path in sources() {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        for line in id_row_reads(&text) {
+            findings.push(format!("{}:{line}", path.display()));
+        }
+    }
+    assert!(
+        findings.is_empty(),
+        "an id's raw value read as a row (S2's plan, E1): read it through `row()` or the table's \
+         `row_of`:\n{}",
+        findings.join("\n")
+    );
+}
+
+#[test]
+fn the_row_read_scan_finds_what_it_is_for() {
+    let positive = "fn f(v: &[u8], beacon: BeaconId, home: &u32) {\n    let a = usize::try_from(beacon.raw());\n    let b = usize::try_from(*home);\n    let c = crate::math::index::row(id.index());\n}\n";
+    assert_eq!(id_row_reads(positive), vec![2, 3, 4]);
+    let negative = "fn f(row: Row, n: u32) {\n    let a = usize::try_from(n);\n    let b = crate::math::index::row(row.raw());\n    let c = row.index();\n}\n";
+    assert!(id_row_reads(negative).is_empty());
 }

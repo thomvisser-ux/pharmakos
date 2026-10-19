@@ -524,7 +524,9 @@ pub fn quote(text: &str) -> String {
 pub fn commander_voxel(surface: &Surface, seat: u8) -> [i32; 3] {
     let host = surface.host().expect("a hosted match");
     let world = host.world();
-    let commander = world.commander_of(SeatId::new(seat));
+    let commander = world
+        .commander_of(SeatId::new(seat))
+        .expect("an occupied seat has a commander");
     let row = world
         .units()
         .ids()

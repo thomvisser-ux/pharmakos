@@ -187,7 +187,7 @@ fn sealed_in_lines(world: &World) -> Vec<(u32, AssetId, Option<[Fx; 3]>)> {
         .map(|event| {
             (
                 event.tick.raw(),
-                event.subject.unwrap_or(AssetId::of_unit(UnitId::NONE)),
+                event.subject.unwrap_or_default(),
                 event.at.map(Position::to_array),
             )
         })
@@ -1217,7 +1217,7 @@ fn a_sealed_in_walker_parks_and_is_re_armed_when_the_graph_changes() {
     assert_eq!(
         (reported[0].1, reported[0].2),
         (
-            AssetId::of_unit(UnitId::new(unit)),
+            AssetId::of_unit(UnitId::new(unit)).expect("a unit id"),
             Some(world.units().positions()[1])
         ),
         "the line names the unit that parked and where it stopped — which is what the gateway's \

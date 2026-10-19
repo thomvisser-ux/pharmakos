@@ -260,14 +260,17 @@ impl Ground<'_> {
             .zip(self.targets.kinds())
             .zip(self.targets.anchors())
             .any(|((beacon, kind), at)| {
-                if except.is_some_and(|skip| skip.raw() == *beacon) || *kind != build {
+                if except.is_some_and(|skip| skip == *beacon) || *kind != build {
                     return false;
                 }
-                // A beacon's id is its row (rows are never removed); an id
-                // that names no row is no beacon of this seat's.
-                let owned = usize::try_from(*beacon)
+                // The target's beacon, read through its id's row and checked
+                // by generation (S2's plan, E1): an id that names no row the
+                // table still holds is no beacon of this seat's.
+                let owned = self
+                    .beacons
+                    .row_of(*beacon)
                     .ok()
-                    .and_then(|row| self.beacons.seats().get(row).copied())
+                    .and_then(|row| self.beacons.seats().get(row.index()).copied())
                     == Some(seat.raw());
                 owned && same_column(*at, x, y)
             })
@@ -954,8 +957,8 @@ mod tests {
                 footprint,
             ));
         }
-        let surface =
-            Surface::new(&voxels, StepCosts::new(10, 14, 4)).unwrap_or_else(|| panic!("a surface"));
+        let surface = Surface::new(&voxels, StepCosts::new(10, 14, 4, 2))
+            .unwrap_or_else(|| panic!("a surface"));
         let mut scratch = Scratch::for_map(&surface, 32).unwrap_or_else(|| panic!("a scratch"));
         let clusters =
             Clusters::new(&surface, 32, &mut scratch).unwrap_or_else(|| panic!("clusters"));

@@ -664,7 +664,9 @@ fn a_dormant_beacon_powers_down_everything_homed_to_it() {
     // and interface on site, so a commander that went dark with the grid
     // would make a brownout a lockout. What a priority raise then does is
     // item 127 (7)'s: `a_raise_relights_a_dark_beacon_when_a_lower_shed_covers_it`.
-    let commander = world.commander_of(seat);
+    let commander = world
+        .commander_of(seat)
+        .expect("an occupied seat has a commander");
     let mut parked = 0;
     for unit in 0..world.units().len() {
         let index = usize::try_from(unit).unwrap_or(usize::MAX);
@@ -1633,7 +1635,10 @@ fn the_commander_walks_through_a_blackout_drawing_nothing() {
         .get(usize::try_from(core.raw()).unwrap_or(0))
         .copied()
         .unwrap_or_default();
-    let commander = runner.world().commander_of(seat);
+    let commander = runner
+        .world()
+        .commander_of(seat)
+        .expect("an occupied seat has a commander");
     assert!(runner.begin_push(), "the Push begins");
     runner
         .world_mut()
@@ -2204,7 +2209,7 @@ fn no_beacon_starves_another_within_a_band() {
     let mut runner = Runner::new(world);
     assert!(runner.begin_push(), "the Push begins");
     runner.clear_events();
-    let mut served: Vec<u32> = Vec::new();
+    let mut served: Vec<pharmakos_sim::tables::BeaconId> = Vec::new();
     let mut cursors: Vec<u32> = Vec::new();
     for _ in 0..60 {
         runner.world_mut().set_treasury(seat, price);
@@ -2215,7 +2220,9 @@ fn no_beacon_starves_another_within_a_band() {
             if event.kind == EventKind::StructureQueued
                 && let Some(subject) = event.subject
             {
-                let row = usize::try_from(subject.index()).unwrap_or(usize::MAX);
+                let row = subject
+                    .row()
+                    .map_or(usize::MAX, pharmakos_sim::ids::Row::index);
                 if let Some(home) = runner.world().structures().homes().get(row).copied() {
                     served.push(home);
                     cursors.push(
@@ -2241,7 +2248,7 @@ fn no_beacon_starves_another_within_a_band() {
         "a starved band still fills an order a tick: {served:?}"
     );
     assert!(
-        served.contains(&core.raw()) && served.contains(&second.raw()),
+        served.contains(&core) && served.contains(&second),
         "the round robin reached both beacons: {served:?}"
     );
     for pair in served.windows(2) {
@@ -2257,7 +2264,11 @@ fn no_beacon_starves_another_within_a_band() {
     // the beacon that was served, or the alternation above would be a
     // coincidence of the id tie-break.
     assert_eq!(
-        cursors, served,
+        cursors,
+        served
+            .iter()
+            .map(|beacon| beacon.raw())
+            .collect::<Vec<u32>>(),
         "the Quartermaster cursor follows the beacon it just paid"
     );
 }
@@ -2628,7 +2639,7 @@ fn living_scouts(world: &World, beacon: BeaconId) -> u32 {
     let units = world.units();
     let mut total: u32 = 0;
     for row in 0..usize::try_from(units.len()).unwrap_or(0) {
-        if units.homes().get(row).copied() == Some(beacon.raw())
+        if units.homes().get(row).copied() == Some(beacon)
             && units.kinds().get(row).copied() == Some(UnitKind::Scout.id())
             && units.hit_points().get(row).is_some_and(|hp| hp.is_alive())
         {

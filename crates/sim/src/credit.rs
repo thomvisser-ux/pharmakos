@@ -30,6 +30,13 @@
 //! held value, which item 18 scales ([`crate::economy::value_of`] says why the
 //! two are not in tension).
 //!
+//! # The counters name an asset, not a row
+//!
+//! A counter is keyed by the asset's [`AssetId`], which carries its row's
+//! generation (S2's plan, E1): a dead asset's row is freed only once its death
+//! has settled here, so nobody's credit outlives it, and a counter that meets a
+//! reused row anyway is stale and credits nobody ([`asset_state`]).
+//!
 //! The split is **emitted and not accumulated**. Each seat's share rides the
 //! event bus as [`crate::events::EventKind::KillCredited`] and no per-seat
 //! total is kept, for exactly the reason [`crate::seams::WorkCounter`] is not
@@ -190,8 +197,31 @@ struct AssetState {
 
 /// Look up an asset's condition, price and place, or `None` when this build
 /// cannot find it.
+///
+/// The asset's row is read through its id and **checked by generation** (S2's
+/// plan, E1): a counter against an asset whose row has since been freed or
+/// reused is stale, counted under [`crate::ids::StaleRef::CreditSlot`], and
+/// answers nothing, so its row is dropped and credits nobody -- never booked
+/// against whatever took the row.
 fn asset_state(world: &World, id: AssetId) -> Option<AssetState> {
-    let row = usize::try_from(id.index()).ok()?;
+    let found = match id.tag() {
+        AssetId::TAG_UNIT => world.units().row_of(crate::tables::UnitId::new(id.index())),
+        AssetId::TAG_BEACON => world
+            .beacons()
+            .row_of(crate::tables::BeaconId::new(id.index())),
+        AssetId::TAG_STRUCTURE => world
+            .structures()
+            .row_of(crate::tables::StructureId::new(id.index())),
+        _ => return None,
+    };
+    let row = match found {
+        Ok(row) => row.index(),
+        Err(crate::ids::RefError::Stale) => {
+            world.stale_refs().stale(crate::ids::StaleRef::CreditSlot);
+            return None;
+        }
+        Err(crate::ids::RefError::Id(_) | crate::ids::RefError::NoSuchRow) => return None,
+    };
     match id.tag() {
         AssetId::TAG_UNIT => {
             let kind = world

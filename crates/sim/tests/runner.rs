@@ -471,6 +471,13 @@ fn a_seat_with_no_beacons_is_eliminated_and_its_units_disband() {
     assert!(world.seats().is_alive(0) && world.seats().is_alive(1));
 
     for (index, seat) in world.units().seats().iter().enumerate() {
+        // A disbanded unit's row is freed once its death settles (S2's plan,
+        // E1): nobody's, with no hit points. The commander's row is never
+        // freed, so it stays seat 2's, dead.
+        if world.units().frees()[index] {
+            assert!(!world.units().hit_points()[index].is_alive());
+            continue;
+        }
         if *seat == 2 {
             assert!(
                 !world.units().hit_points()[index].is_alive(),
@@ -589,6 +596,11 @@ fn a_beacon_death_ruins_the_structures_homed_to_it() {
     saved.structure_building.push(0);
     // S1's Build settings: a structure's rotation, here none.
     saved.structure_rotation.push(0);
+    // S2's ids: not a ruin, and not a free row.
+    saved
+        .structure_ruined_at
+        .push(pharmakos_sim::tables::NOT_RUINED);
+    saved.structure_free.push(0);
     runner
         .restore(&saved)
         .expect("the edited snapshot restores");
@@ -626,7 +638,10 @@ fn a_pending_respawn_always_completes_by_segment_end() {
     assert!(runner.begin_push());
     play(&mut runner, 5);
 
-    let commander = runner.world().commander_of(SeatId::new(0));
+    let commander = runner
+        .world()
+        .commander_of(SeatId::new(0))
+        .expect("an occupied seat has a commander");
     assert!(commander.is_some(), "an occupied seat has a commander");
     destroy(&mut runner, DamageTarget::Unit(commander));
     runner.step().unwrap().expect("the tick runs");
@@ -666,7 +681,10 @@ fn a_pending_respawn_always_completes_by_segment_end() {
 fn the_respawn_delay_grows_with_each_death_in_the_same_push() {
     let mut runner = runner(2, &[600_000]);
     assert!(runner.begin_push());
-    let commander = runner.world().commander_of(SeatId::new(0));
+    let commander = runner
+        .world()
+        .commander_of(SeatId::new(0))
+        .expect("an occupied seat has a commander");
 
     let mut delays: Vec<u32> = Vec::new();
     for _ in 0..3_u32 {
@@ -690,7 +708,10 @@ fn the_respawn_delay_grows_with_each_death_in_the_same_push() {
 fn a_new_push_resets_the_per_push_death_counter() {
     let mut runner = runner(2, &[SHORT_MS, SHORT_MS]);
     assert!(runner.begin_push());
-    let commander = runner.world().commander_of(SeatId::new(0));
+    let commander = runner
+        .world()
+        .commander_of(SeatId::new(0))
+        .expect("an occupied seat has a commander");
     destroy(&mut runner, DamageTarget::Unit(commander));
     runner.step().unwrap().expect("the tick runs");
     assert_eq!(runner.world().seats().commander_deaths()[0], 1);

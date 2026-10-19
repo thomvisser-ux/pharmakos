@@ -52,10 +52,9 @@
 //!    directions once it is not, so the owner rules on it at S2, with the
 //!    kill-credit split.
 //! 2. **Enemy value destroyed.** See [`destroyed_value`]: zero until S2.
-//! 3. **Fewer beacons lost**: [`beacons_lost`], read from the beacon table,
-//!    which keeps a dead beacon's row for the whole match at zero hit points —
-//!    a recycled one included, because recycling books a death exactly as
-//!    destruction does (item 18).
+//! 3. **Fewer beacons lost**: [`beacons_lost`], the per-seat counter, which
+//!    counts every beacon that died — a recycled one included, because
+//!    recycling books a death exactly as destruction does (item 18).
 //! 4. **A shared win**: every seat tied on all three.
 
 use crate::math::quantity::Money;
@@ -260,31 +259,21 @@ pub const fn destroyed_value(_world: &World, _seat: SeatId) -> Money {
     Money::ZERO
 }
 
-/// How many of `seat`'s beacons have died this match: its rows in the beacon
-/// table at zero hit points.
+/// How many of `seat`'s beacons have died this match (item 18: recycling
+/// books a death exactly as destruction does).
 ///
-/// A beacon's row is never removed — a destroyed or recycled beacon keeps it
-/// for the whole match at zero hit points (item 18: recycling books a death
-/// exactly as destruction does) — so this is a count over hashed, snapshotted
-/// state and needs no column of its own.
+/// A per-seat hashed, snapshotted counter since S2's `ids` lane
+/// ([`crate::tables::SeatTable::beacons_lost`]; S2's plan, E1): a dead
+/// beacon's row is freed once its death settles and may hold another beacon
+/// after that, so the count can no longer be read off the beacon table. A seat
+/// the world has not got has lost none.
 #[must_use]
 pub fn beacons_lost(world: &World, seat: SeatId) -> u32 {
-    let beacons = world.beacons();
-    let count = crate::math::index::row(beacons.len());
-    let mut lost: u32 = 0;
-    let mut row: usize = 0;
-    while row < count {
-        if beacons.seats().get(row).copied() == Some(seat.raw())
-            && !beacons
-                .hit_points()
-                .get(row)
-                .is_some_and(|hp| hp.is_alive())
-        {
-            lost = lost.saturating_add(1);
-        }
-        row = row.saturating_add(1);
-    }
-    lost
+    world
+        .seat_row(seat)
+        .and_then(|index| world.seats().beacons_lost().get(index).copied())
+        // E7: rule: a seat this world has not got has lost no beacon
+        .unwrap_or(0)
 }
 
 fn seat_count(world: &World) -> usize {

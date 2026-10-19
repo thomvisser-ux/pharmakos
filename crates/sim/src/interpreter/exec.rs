@@ -1798,26 +1798,28 @@ fn site_is_legal(world: &World, seat: SeatId, site: [Fx; 3]) -> bool {
 /// Send the commander somewhere. The route itself is the router's (T7): this
 /// writes the destination and asks for a repath.
 fn walk_commander(world: &mut World, seat: SeatId, to: [Fx; 3]) {
-    let commander = world.commander_of(seat);
-    if commander.is_some() {
-        world.set_unit_destination(commander.raw(), to);
+    if let Some(row) = commander_row(world, seat) {
+        world.set_unit_destination(row.raw(), to);
     }
+}
+
+/// The row of the seat's commander, or `None` for a seat with none. A
+/// commander's row is never freed (S2's plan, E1).
+fn commander_row(world: &World, seat: SeatId) -> Option<crate::ids::Row> {
+    let commander = world.commander_of(seat)?;
+    world.units().row_of(commander).ok()
 }
 
 /// Whether the commander has been parked as sealed in — no route exists (item
 /// 60's "park and report").
 fn sealed_in(world: &World, seat: SeatId) -> bool {
-    let commander = world.commander_of(seat);
-    commander.is_some()
-        && world.router().state(commander.raw()) == crate::pathing::router::WalkState::Sealed
+    commander_row(world, seat).is_some_and(|row| {
+        world.router().state(row.raw()) == crate::pathing::router::WalkState::Sealed
+    })
 }
 
 fn commander_at(world: &World, seat: SeatId) -> Option<[Fx; 3]> {
-    let commander = world.commander_of(seat);
-    if !commander.is_some() {
-        return None;
-    }
-    let index = usize::try_from(commander.raw()).ok()?;
+    let index = commander_row(world, seat)?.index();
     let alive = world
         .units()
         .hit_points()
@@ -1834,14 +1836,10 @@ fn beacon_at(world: &World, beacon: BeaconId) -> Option<[Fx; 3]> {
     world.beacons().positions().get(row).copied()
 }
 
+/// The row of a beacon the step holds, checked by generation: one since freed
+/// or reused is gone, and the step answers `beacon_gone` (S2's plan, E1).
 fn world_beacon_row(world: &World, beacon: BeaconId) -> Option<usize> {
-    let beacons = world.beacons();
-    let index = usize::try_from(beacon.raw()).ok()?;
-    if beacons.ids().get(index).copied() == Some(beacon.raw()) {
-        return Some(index);
-    }
-    let count = crate::math::index::row(beacons.len());
-    (0..count).find(|row| beacons.ids().get(*row).copied() == Some(beacon.raw()))
+    crate::interpreter::cond::pinned_row(world, beacon)
 }
 
 fn complete(world: &mut World, seat: SeatId, index: u32) {
@@ -1868,7 +1866,7 @@ fn emit(
 ) {
     let mut emission = Emission::of(kind).seat(seat).value(value);
     if let Some(beacon) = subject {
-        emission = emission.subject(AssetId::of_beacon(beacon));
+        emission = emission.subject_of(AssetId::of_beacon(beacon));
     }
     if let Some(point) = at {
         emission = emission.at(Position::from_array(point));
