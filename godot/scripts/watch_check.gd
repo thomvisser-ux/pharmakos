@@ -189,6 +189,7 @@ var _resumed := false
 
 
 func _ready() -> void:
+	_rounds_cases()
 	Engine.physics_jitter_fix = 0
 	_resumed = Engine.has_meta(CARRY)
 	vista.my_seat = HostLink.my_seat()
@@ -225,6 +226,41 @@ func _ready() -> void:
 		_run_resumed()
 	else:
 		_run()
+
+
+## THE `--rounds` READER'S TABLE (S2's `rnds`, decisions-log item 143 (5)): host_link.gd's
+## `rounds_arg` run on fixed argument lists, before anything else, so its behaviour is
+## checked and not only its source. Each row is the arguments, then the `given`, `text` and
+## `refusal` it must answer; any mismatch is a failure of the whole check. The value's
+## meaning is the gateway's, so `0` and an empty `--rounds=` pass through as text.
+func _rounds_cases() -> void:
+	var none := HostLink.RoundsRefusal.NONE
+	var no_value := HostLink.RoundsRefusal.NO_VALUE
+	var repeated := HostLink.RoundsRefusal.REPEATED
+	var breaks := HostLink.RoundsRefusal.BREAKS_LINE
+	var cases := [
+		[[], false, "", none],
+		[["--gamectl=x", "--root=y"], false, "", none],
+		[["--rounds", "6"], true, "6", none],
+		[["--rounds=6"], true, "6", none],
+		[["--rounds", "0"], true, "0", none],
+		[["--rounds="], true, "", none],
+		[["--rounds"], true, "", no_value],
+		[["--rounds", "--gamectl=x"], true, "", no_value],
+		[["--rounds=4", "--rounds=4"], true, "", repeated],
+		[["--rounds", "4", "--rounds", "5"], true, "", repeated],
+		[["--rounds", "--rounds=4"], true, "", repeated],
+		[["--rounds=4\t5"], true, "", breaks],
+		[["--rounds", "4\n"], true, "", breaks],
+		[["--rounds=4\r"], true, "", breaks],
+	]
+	for case in cases:
+		var args := PackedStringArray(case[0])
+		var got: Dictionary = HostLink.rounds_arg(args)
+		var want := {"given": case[1], "text": case[2], "refusal": case[3]}
+		if got["given"] != want["given"] or String(got["text"]) != String(want["text"]) or int(got["refusal"]) != int(want["refusal"]):
+			_failures.append("rounds_arg(%s) answered %s, not %s" % [JSON.stringify(case[0]), JSON.stringify(got), JSON.stringify(want)])
+	print("[watch-check] the --rounds reader's table: %d case(s)" % cases.size())
 
 
 func _process(_delta: float) -> void:

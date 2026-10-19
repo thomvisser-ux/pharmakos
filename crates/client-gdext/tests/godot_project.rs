@@ -951,21 +951,42 @@ fn the_rounds_option_writes_its_text_and_refuses_only_the_lines_framing() {
         .map(|row| row.trim())
         .filter(|row| !row.is_empty() && !row.starts_with('#'))
         .collect();
-    for needle in [
-        "elif arg == ROUNDS_ARG:",
-        "elif arg.begins_with(ROUNDS_ARG + \"=\"):",
-        "text = arg.trim_prefix(ROUNDS_ARG + \"=\")",
-        "return {\"given\": true, \"text\": \"\", \"refusal\": RoundsRefusal.REPEATED}",
-        "if text.contains(\"\\t\") or text.contains(\"\\n\") or text.contains(\"\\r\"):",
-        "return {\"given\": true, \"text\": \"\", \"refusal\": RoundsRefusal.BREAKS_LINE}",
-        "found = {\"given\": true, \"text\": text, \"refusal\": RoundsRefusal.NONE}",
-        "return {\"given\": true, \"text\": \"\", \"refusal\": RoundsRefusal.NO_VALUE}",
-    ] {
-        assert!(
-            code.contains(&needle),
-            "the reader has `{needle}`: {reader:?}"
-        );
-    }
+    let repeated = "return {\"given\": true, \"text\": \"\", \"refusal\": RoundsRefusal.REPEATED}";
+    let no_value = "return {\"given\": true, \"text\": \"\", \"refusal\": RoundsRefusal.NO_VALUE}";
+    assert_eq!(
+        code,
+        [
+            "static func rounds_arg(args: PackedStringArray) -> Dictionary:",
+            "var found := {\"given\": false, \"text\": \"\", \"refusal\": RoundsRefusal.NONE}",
+            "var expecting := false",
+            "for arg in args:",
+            "var text := \"\"",
+            "if expecting and (arg == ROUNDS_ARG or arg.begins_with(ROUNDS_ARG + \"=\")):",
+            repeated,
+            "elif expecting and arg.begins_with(\"--\"):",
+            no_value,
+            "elif expecting:",
+            "expecting = false",
+            "text = arg",
+            "elif arg == ROUNDS_ARG:",
+            "expecting = true",
+            "continue",
+            "elif arg.begins_with(ROUNDS_ARG + \"=\"):",
+            "text = arg.trim_prefix(ROUNDS_ARG + \"=\")",
+            "else:",
+            "continue",
+            "if found[\"given\"]:",
+            repeated,
+            "if text.contains(\"\\t\") or text.contains(\"\\n\") or text.contains(\"\\r\"):",
+            "return {\"given\": true, \"text\": \"\", \"refusal\": RoundsRefusal.BREAKS_LINE}",
+            "found = {\"given\": true, \"text\": text, \"refusal\": RoundsRefusal.NONE}",
+            "if expecting:",
+            no_value,
+            "return found",
+        ],
+        "the reader's lines, in order: an option where a value belongs is NO_VALUE, \
+         `--rounds` there is REPEATED, and nothing else is judged: {reader:?}"
+    );
     // The client parses and bounds nothing: no number is read from the text, and nothing
     // compares it with a bound.
     for parse in [
@@ -1021,6 +1042,35 @@ fn the_rounds_option_writes_its_text_and_refuses_only_the_lines_framing() {
         assert!(
             !read(script).contains("--rounds") && !read(script).contains("ROUNDS_ARG"),
             "{script} neither shows nor reads `--rounds`"
+        );
+    }
+}
+
+/// **The `--rounds` reader is checked by its behaviour too** (S2's `rnds`): `watch_check.gd`
+/// runs a table of argument lists through `host_link.gd`'s `rounds_arg` before anything
+/// else and fails the check on any mismatch (ci.yml's `client extension` jobs).
+#[test]
+fn the_watch_check_runs_the_rounds_readers_table_first() {
+    let check = read("scripts/watch_check.gd");
+    let ready = gd_function(&check, "_ready");
+    assert_eq!(
+        ready.get(1).map(|row| row.trim()),
+        Some("_rounds_cases()"),
+        "the watch check runs the reader's table first: {ready:?}"
+    );
+    let table = gd_function(&check, "_rounds_cases");
+    for row in [
+        "[[\"--rounds\", \"--gamectl=x\"], true, \"\", no_value],",
+        "[[\"--rounds\", \"--rounds=4\"], true, \"\", repeated],",
+        "[[\"--rounds=4\", \"--rounds=4\"], true, \"\", repeated],",
+        "[[\"--rounds=\"], true, \"\", none],",
+        "[[\"--rounds=4\\r\"], true, \"\", breaks],",
+        "_failures.append(\"rounds_arg(%s) answered %s, not %s\" % [JSON.stringify(case[0]), \
+         JSON.stringify(got), JSON.stringify(want)])",
+    ] {
+        assert!(
+            table.iter().any(|line| line.trim() == row),
+            "the reader's table has `{row}`: {table:?}"
         );
     }
 }

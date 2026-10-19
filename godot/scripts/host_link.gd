@@ -89,7 +89,9 @@ const ROUNDS_ARG := "--rounds"
 enum RoundsRefusal {
 	## Nothing stops it: absent, or a value whose text keeps the line one line of fields.
 	NONE,
-	## `--rounds` was the last argument, so it names no value.
+	## `--rounds` was the last argument, or the next argument is another option (it begins
+	## with `--`), so it names no value. That is the command line's shape, not a rule
+	## about the number.
 	NO_VALUE,
 	## `--rounds` was given more than once, so which one to write is a guess.
 	REPEATED,
@@ -171,7 +173,11 @@ static func rounds_arg(args: PackedStringArray) -> Dictionary:
 	var expecting := false
 	for arg in args:
 		var text := ""
-		if expecting:
+		if expecting and (arg == ROUNDS_ARG or arg.begins_with(ROUNDS_ARG + "=")):
+			return {"given": true, "text": "", "refusal": RoundsRefusal.REPEATED}
+		elif expecting and arg.begins_with("--"):
+			return {"given": true, "text": "", "refusal": RoundsRefusal.NO_VALUE}
+		elif expecting:
 			expecting = false
 			text = arg
 		elif arg == ROUNDS_ARG:
@@ -240,9 +246,11 @@ static func my_seat() -> String:
 ## `gamectl` is the path of the binary, `root` the repository root it reads the rules
 ## table from, and `config_line` the one line `pharmakos_gateway::serve::Config` reads.
 ##
-## A launch whose `--rounds` cannot go on a line (`rounds_refusal()`) starts no host, for a
-## resumed match as for a new one: the command line is wrong either way, and the words say
-## how. Those are the only refusals of `--rounds` the client makes; its value is the gateway's.
+## `--rounds` sets only a new match's line (`config_line`); a Resume repeats the remembered
+## line, round limit and all (decisions-log item 112 (8)). A launch whose `--rounds`
+## cannot go on a line (`rounds_refusal()`) still starts no host, for a Resume as for a new
+## match: the command line is malformed either way, and the words say how. Those are the
+## only refusals of `--rounds` the client makes; its value is the gateway's.
 func start(gamectl: String, root: String, config_line: String) -> bool:
 	if bridge == null:
 		failed.emit("the host link has no bridge")
