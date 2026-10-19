@@ -67,13 +67,13 @@ use crate::ids::Row;
 use crate::math::fixed::Fx;
 use crate::math::quantity::Hp;
 use crate::programs::within;
-use crate::tables::{SeatId, StructureKind, UnitKind};
+use crate::tables::{BeaconId, SeatId, StructureKind, UnitKind};
 use crate::world::World;
 
 /// What a sensor is: the source its radius comes from.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SensorKind {
-    /// A living, awake beacon's sphere, `beacon.sphere_radius_voxels`.
+    /// A living beacon's sphere, dormant or not, `beacon.sphere_radius_voxels`.
     Sphere,
     /// A living unit's own vision, its kind's `vision_radius_voxels`.
     Unit(UnitKind),
@@ -251,11 +251,13 @@ impl World {
         }
     }
 
-    /// The beacon in `row` as a sensor: its sphere, while it is alive and
-    /// awake.
+    /// The beacon in `row` as a sensor: its sphere, while it is alive,
+    /// dormant or not. A dormant beacon keeps its seal and its sphere powered
+    /// off the key-core (item 10), so its sphere still sees, as
+    /// [`World::spheres`] has it (decisions-log item 146).
     fn beacon_sensor(&self, row: usize) -> Option<Sensor> {
-        let id = self.beacons().id_of(Row::of_index(row)?)?;
-        if !crate::power::beacon_is_live(self, id) {
+        self.beacons().id_of(Row::of_index(row)?)?;
+        if !self.beacons().hit_points().get(row)?.is_alive() {
             return None;
         }
         let seat = SeatId::new(self.beacons().seats().get(row).copied()?);
@@ -268,7 +270,9 @@ impl World {
     }
 
     /// The unit in `row` as a sensor: its kind's vision radius, while it is
-    /// alive.
+    /// alive and its home beacon is not dormant. A dormant beacon's units are
+    /// powered down and see nothing (decisions-log item 146); the commander is
+    /// homed to no grid's dormancy and keeps its own sight.
     fn unit_sensor(&self, row: usize) -> Option<Sensor> {
         let units = self.units();
         if !units.hit_points().get(row)?.is_alive() {
@@ -276,6 +280,9 @@ impl World {
         }
         let seat = SeatId::new(units.seats().get(row).copied()?);
         let kind = UnitKind::from_id(units.kinds().get(row).copied()?)?;
+        if kind != UnitKind::Commander && self.home_is_dark(*units.homes().get(row)?) {
+            return None;
+        }
         Some(Sensor {
             seat: seat.is_some().then_some(seat)?,
             centre: units.positions().get(row).copied()?,
@@ -288,9 +295,15 @@ impl World {
     /// seat owns it, it stands and it is finished. A ruin is nobody's, and a
     /// structure going up has no capability until it is finished (spec
     /// section 7).
+    ///
+    /// A structure homed to a dormant beacon is powered down and sees nothing
+    /// (decisions-log item 146).
     fn structure_sensor(&self, row: usize) -> Option<Sensor> {
         let structures = self.structures();
-        if !structures.hit_points().get(row)?.is_alive() || *structures.building().get(row)? {
+        if !structures.hit_points().get(row)?.is_alive()
+            || *structures.building().get(row)?
+            || self.home_is_dark(*structures.homes().get(row)?)
+        {
             return None;
         }
         let seat = SeatId::new(structures.seats().get(row).copied()?);
@@ -301,6 +314,17 @@ impl World {
             radius: Fx::from_voxels(self.rules().structure(kind)?.vision_radius_voxels),
             kind: SensorKind::Structure(kind),
         })
+    }
+
+    /// Whether `home` is a beacon this world still holds and it is dormant: the
+    /// one thing that powers a unit's or a structure's sight down. No home, or
+    /// a home since freed, is no grid and no dormancy.
+    fn home_is_dark(&self, home: BeaconId) -> bool {
+        self.beacons()
+            .row_of(home)
+            .ok()
+            .and_then(|row| self.beacons().dormant().get(row.index()).copied())
+            == Some(true)
     }
 
     /// The live view's output of the sensor interface: every sensor, owned

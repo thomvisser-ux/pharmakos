@@ -277,7 +277,8 @@ fn row_of_in(
 
 /// Whether every row's id names that row, as a restore checks: a file whose
 /// ids disagree with their places describes no table this sim builds.
-fn ids_name_their_rows(ids: &[u32]) -> bool {
+#[must_use]
+pub fn ids_name_their_rows(ids: &[u32]) -> bool {
     ids.iter()
         .enumerate()
         .all(|(index, id)| crate::ids::unpack(*id).is_ok_and(|(row, _)| row.index() == index))

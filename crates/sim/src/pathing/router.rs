@@ -713,9 +713,15 @@ impl Router {
                     self.next_node(id, cursor),
                 );
             }
+            // A route that ends, or is asked again, banks nothing for the next
+            // one: the accumulator starts the next route at zero, which is what
+            // bounds a tick's walk to the broadphase pad (S2's plan, E11;
+            // `RulesTable::query_pad_voxels`).
             if ask_again {
                 self.set_state(id, WalkState::Waiting);
+                self.set_accumulator(id, 0);
             } else if crate::math::index::row(cursor) >= route_len.saturating_sub(1) {
+                self.set_accumulator(id, 0);
                 if self.route_partial(id) {
                     self.set_state(id, WalkState::Waiting);
                 } else {

@@ -1019,10 +1019,17 @@ impl Surface {
                 _ => format!("{at} is a beacon of this seat's, and none answers its selector"),
             }));
         };
-        let row = snapshot
-            .beacon_id
-            .iter()
-            .position(|held| *held == beacon.raw())
+        // The resolved beacon's row, read through its id (S2's plan, E1): the
+        // snapshot's id column at that row must hold the same id, and the row
+        // must not be free.
+        let row = beacon
+            .row()
+            .ok()
+            .map(pharmakos_sim::ids::Row::index)
+            .filter(|row| {
+                snapshot.beacon_id.get(*row) == Some(&beacon.raw())
+                    && snapshot.beacon_free.get(*row) == Some(&0)
+            })
             .ok_or_else(|| Error::internal(format!("{at}: the resolved beacon has no row")))?;
         let axis = |offset: usize| {
             row.checked_mul(3)
@@ -1128,7 +1135,7 @@ impl Surface {
             return Json::Object(entries);
         };
         let beacons = host.world().beacons();
-        if row >= beacons.ids().len() {
+        if beacons.frees().get(row) != Some(&false) {
             return Json::Object(entries);
         }
         let id = beacons.ids().get(row).copied().unwrap_or(u32::MAX);
@@ -1173,6 +1180,11 @@ impl Surface {
         let filter = FogFilter::new(&self.fog, vision);
         let mut found: Vec<(bool, usize, Voxel)> = Vec::new();
         for row in 0..beacons.ids().len() {
+            // A freed row is no beacon at all (S2's plan, E1): listed, it
+            // would be a phantom beacon of seat 255's.
+            if beacons.frees().get(row) != Some(&false) {
+                continue;
+            }
             let owner = beacons.seats().get(row).copied().unwrap_or_default();
             let at = beacons
                 .positions()

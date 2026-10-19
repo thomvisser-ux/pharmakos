@@ -461,6 +461,8 @@ pub(crate) struct Emission {
     subject: Option<AssetId>,
     at: Option<Position>,
     value: i64,
+    /// Whether [`Emission::subject_of`] was handed an id that names nothing.
+    subject_refused: bool,
 }
 
 impl Emission {
@@ -472,7 +474,14 @@ impl Emission {
             subject: None,
             at: None,
             value: 0,
+            subject_refused: false,
         }
+    }
+
+    /// Whether the event was meant to name an asset and was handed an id that
+    /// names none ([`Emission::subject_of`]).
+    pub(crate) const fn subject_refused(&self) -> bool {
+        self.subject_refused
     }
 
     /// Whose it is.
@@ -497,8 +506,10 @@ impl Emission {
         mut self,
         subject: Result<AssetId, crate::ids::IdError>,
     ) -> Emission {
-        if let Ok(subject) = subject {
-            self.subject = Some(subject);
+        match subject {
+            Ok(subject) => self.subject = Some(subject),
+            // Counted when the world emits it (`World::emit`), never silent.
+            Err(_) => self.subject_refused = true,
         }
         self
     }

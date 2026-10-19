@@ -647,7 +647,12 @@ impl ViewFeed {
                 let wanted = pharmakos_sim::tables::foreign_beacon_name(number);
                 let state = self.viewers.iter().find(|state| state.viewer == viewer)?;
                 let (id, _) = state.beacons.iter().find(|(_, held)| *held == wanted)?;
-                beacons.ids().iter().position(|held| held == id)
+                // Through the id's own row, checked by generation (S2's plan,
+                // E1): a beacon since freed, or its row reused, names nothing.
+                beacons
+                    .row_of(pharmakos_sim::tables::BeaconId::new(*id))
+                    .ok()
+                    .map(pharmakos_sim::ids::Row::index)
             }
         }
     }

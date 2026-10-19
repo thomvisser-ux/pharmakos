@@ -1029,6 +1029,7 @@ impl Snapshot {
 
         let match_state = self.restore_match()?;
         self.check_codes()?;
+        self.check_rows()?;
 
         // E7: rule: a capacity only; the unit table's restore checks the columns it is handed
         let mut units = UnitTable::with_capacity(u32::try_from(self.unit_id.len()).unwrap_or(0));
@@ -1416,6 +1417,159 @@ impl Snapshot {
             Some((column, _)) => Err(SnapshotError::OutOfRange(column)),
             None => Ok(()),
         }
+    }
+
+    /// Every row is a row this sim writes (S2's plan, E1), beside
+    /// [`Snapshot::check_codes`], each refusal naming its column:
+    ///
+    /// * every id names its own row (`unit_id`, `beacon_id`, `structure_id`,
+    ///   `wreck_id`), and a seat's ordinals are unique among the beacons it
+    ///   holds (`beacon_ordinal`);
+    /// * a free row is nobody's, with no hit points and no home, and a free
+    ///   structure is no ruin (`unit_free`, `beacon_free`, `structure_free`,
+    ///   `wreck_free`); a live unit or beacon belongs to a real seat
+    ///   (`unit_seat`, `beacon_seat`);
+    /// * a live structure is nobody's exactly when it is a ruin, exactly when
+    ///   its ruined-at tick is set, and that tick is not after the snapshot's
+    ///   (`structure_ruined_at`);
+    /// * no commander's row is free (`unit_free`), and every seat that has
+    ///   placed a beacon still holds its core, ordinal 0 (`beacon_free`);
+    /// * the ruins fit the reserve, and the structure and wreck tables their
+    ///   rooms (`structure_ruined_at`, `structure_id`, `wreck_id`);
+    /// * each seat has lost no more beacons than it placed, and its placement
+    ///   counter has a next value (`seat_beacons_lost`, `seat_placed`).
+    ///
+    /// # Errors
+    ///
+    /// [`SnapshotError::OutOfRange`], naming the column.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one check per rule of the row layout, every one before anything is written; split, the list would be spread over functions that each hold a piece of it"
+    )]
+    fn check_rows(&self) -> Result<(), SnapshotError> {
+        use crate::tables::{NOT_RUINED, UnitKind, ids_name_their_rows};
+        let refuse = |column: &'static str| Err(SnapshotError::OutOfRange(column));
+        let nobody = SeatId::NEUTRAL.raw();
+        let none = BeaconId::NONE.raw();
+        let seats = self.seat_id.len();
+        let a_seat = |seat: u8| usize::from(seat) < seats;
+        for (column, ids) in [
+            ("unit_id", &self.unit_id),
+            ("beacon_id", &self.beacon_id),
+            ("structure_id", &self.structure_id),
+            ("wreck_id", &self.wreck_id),
+        ] {
+            if !ids_name_their_rows(ids) {
+                return refuse(column);
+            }
+        }
+        let mut held: std::collections::BTreeSet<(u8, u32)> = std::collections::BTreeSet::new();
+        for ((seat, ordinal), free) in self
+            .beacon_seat
+            .iter()
+            .zip(&self.beacon_ordinal)
+            .zip(&self.beacon_free)
+        {
+            if *free == 0 && !held.insert((*seat, *ordinal)) {
+                return refuse("beacon_ordinal");
+            }
+        }
+        // Units: a free row is nobody's, with no hit points and no home; a
+        // live one is a real seat's; a commander's row is never free.
+        for ((((seat, hp), home), kind), free) in self
+            .unit_seat
+            .iter()
+            .zip(&self.unit_hp)
+            .zip(&self.unit_home)
+            .zip(&self.unit_kind)
+            .zip(&self.unit_free)
+        {
+            if *free != 0 {
+                if *kind == UnitKind::Commander.id() {
+                    return refuse("unit_free");
+                }
+                if *seat != nobody || *hp != 0 || *home != none {
+                    return refuse("unit_free");
+                }
+            } else if !a_seat(*seat) {
+                return refuse("unit_seat");
+            }
+        }
+        for ((seat, hp), free) in self
+            .beacon_seat
+            .iter()
+            .zip(&self.beacon_hp)
+            .zip(&self.beacon_free)
+        {
+            if *free != 0 {
+                if *seat != nobody || *hp != 0 {
+                    return refuse("beacon_free");
+                }
+            } else if !a_seat(*seat) {
+                return refuse("beacon_seat");
+            }
+        }
+        // Every seat that has placed a beacon still holds its core.
+        for (index, placed) in self.seat_placed.iter().enumerate() {
+            let Ok(seat) = u8::try_from(index) else {
+                return refuse("seat_placed");
+            };
+            if *placed > 0 && !held.contains(&(seat, 0)) {
+                return refuse("beacon_free");
+            }
+        }
+        let mut ruins: u32 = 0;
+        for ((((seat, hp), home), ruined), free) in self
+            .structure_seat
+            .iter()
+            .zip(&self.structure_hp)
+            .zip(&self.structure_home)
+            .zip(&self.structure_ruined_at)
+            .zip(&self.structure_free)
+        {
+            if *free != 0 {
+                if *seat != nobody || *hp != 0 || *home != none || *ruined != NOT_RUINED {
+                    return refuse("structure_free");
+                }
+                continue;
+            }
+            let ruin = *seat == nobody;
+            if ruin != (*ruined != NOT_RUINED) || (ruin && *ruined > self.tick) {
+                return refuse("structure_ruined_at");
+            }
+            if ruin {
+                ruins = ruins.saturating_add(1);
+            } else if !a_seat(*seat) {
+                return refuse("structure_seat");
+            }
+        }
+        if ruins > crate::world::RUIN_RESERVE {
+            return refuse("structure_ruined_at");
+        }
+        if u32::try_from(self.structure_id.len())
+            .map_or(true, |rows| rows > crate::world::STRUCTURE_ROWS)
+        {
+            return refuse("structure_id");
+        }
+        if u32::try_from(self.wreck_id.len())
+            .map_or(true, |rows| rows > crate::world::WRECK_TABLE_ROOM)
+        {
+            return refuse("wreck_id");
+        }
+        for (salvage, free) in self.wreck_salvage.iter().zip(&self.wreck_free) {
+            if *free != 0 && *salvage != 0 {
+                return refuse("wreck_free");
+            }
+        }
+        for (placed, lost) in self.seat_placed.iter().zip(&self.seat_beacons_lost) {
+            if *placed == u32::MAX {
+                return refuse("seat_placed");
+            }
+            if lost > placed {
+                return refuse("seat_beacons_lost");
+            }
+        }
+        Ok(())
     }
 
     /// The match state, refused at the door when its phase or end reason is

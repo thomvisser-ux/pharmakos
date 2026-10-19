@@ -1156,7 +1156,10 @@ fn run_deploy(
         if !site_is_legal(world, seat, site) {
             return Outcome::Failed(StepFailure::IllegalSite);
         }
-        let Some(placed) = world.place_beacon(seat, site, mandate) else {
+        // Every refusal is the seat's want of room as the step reports it: a
+        // seat in the match always has a seat row, and the counter cannot be
+        // spent at the beacon room.
+        let Ok(placed) = world.place_beacon(seat, site, mandate) else {
             return Outcome::Failed(StepFailure::NoBeaconRoom);
         };
         state.visit_beacon = placed.raw();

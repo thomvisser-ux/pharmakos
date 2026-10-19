@@ -262,13 +262,29 @@ impl StaleRef {
     }
 }
 
-/// Why a freed row was not handed out again (S2's plan, E1). Counted, never
-/// hashed.
+/// Why the id bookkeeping did less than it was asked (S2's plan, E1). Counted,
+/// never hashed: each is a fact a test or a host can read, never a silent
+/// skip.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum IdDrop {
     /// The row's generation is at `u16::MAX`: reusing it would wrap, so the
     /// row is retired and stays free for the rest of the match.
     Retired,
+    /// The ruin reserve was full and held no ruin to bury: a reserve of zero
+    /// rows, which no table this sim builds holds.
+    NothingToBury,
+    /// An event was emitted about an id that names no asset (a sentinel), so
+    /// it carries no subject.
+    SubjectRefused,
+}
+
+impl IdDrop {
+    /// Every reason.
+    pub const ALL: [IdDrop; 3] = [
+        IdDrop::Retired,
+        IdDrop::NothingToBury,
+        IdDrop::SubjectRefused,
+    ];
 }
 
 /// How many stale references were met and rows retired, by reason, since the
@@ -286,6 +302,8 @@ pub struct RefCounts {
     credit_slot: Counter,
     pinned_beacon: Counter,
     retired: Counter,
+    nothing_to_bury: Counter,
+    subject_refused: Counter,
 }
 
 /// One interior-mutable count.
@@ -326,9 +344,22 @@ impl RefCounts {
         self.counter(reason).bump();
     }
 
+    const fn drop_counter(&self, reason: IdDrop) -> &Counter {
+        match reason {
+            IdDrop::Retired => &self.retired,
+            IdDrop::NothingToBury => &self.nothing_to_bury,
+            IdDrop::SubjectRefused => &self.subject_refused,
+        }
+    }
+
     /// Count one retired row.
     pub fn retired(&self) {
         self.retired.bump();
+    }
+
+    /// Count one drop under `reason`.
+    pub fn drop(&self, reason: IdDrop) {
+        self.drop_counter(reason).bump();
     }
 
     /// How many stale references were met for `reason`.
@@ -337,12 +368,10 @@ impl RefCounts {
         self.counter(reason).get()
     }
 
-    /// How many rows were retired for `reason`.
+    /// How many drops were counted for `reason`.
     #[must_use]
     pub fn dropped(&self, reason: IdDrop) -> u64 {
-        match reason {
-            IdDrop::Retired => self.retired.get(),
-        }
+        self.drop_counter(reason).get()
     }
 
     /// Every stale reference, all reasons together.
@@ -360,7 +389,9 @@ impl Clone for RefCounts {
         for reason in StaleRef::ALL {
             counts.counter(reason).set(self.of(reason));
         }
-        counts.retired.set(self.dropped(IdDrop::Retired));
+        for reason in IdDrop::ALL {
+            counts.drop_counter(reason).set(self.dropped(reason));
+        }
         counts
     }
 }

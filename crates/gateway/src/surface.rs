@@ -1391,10 +1391,11 @@ impl Surface {
     ///
     /// As [`Surface::host`], plus [`crate::error::Code::Internal`] when a
     /// filed safe playbook will not compile or the runner refuses a seal, and
-    /// while a phased tick is open ([`Surface::phased_step`]): the runner's
-    /// `false` for that case becomes a typed refusal here, so a control
-    /// handler never reads it as "not in a Lull", and an audit line with no
-    /// subject (`open push`).
+    /// while a phased tick is open ([`Surface::phased_step`]): refused here
+    /// before the runner is asked, with an audit line with no subject (`open
+    /// push`), and the runner's own typed `MidTick` refusal behind it
+    /// (decisions-log item 145), so a control handler never reads it as "not
+    /// in a Lull".
     pub fn begin_push(&mut self) -> Result<bool, Error> {
         self.refuse_mid_tick("open push", "open a Push")?;
         self.seal_and_open_push()
@@ -2559,6 +2560,8 @@ impl Surface {
         let mut scope = VerifierScope::new(seat, economy);
 
         let beacons = world.beacons();
+        // A freed row is nobody's (S2's plan, E1), so the seat filter leaves it
+        // out with no test of its own.
         let mut own: Vec<usize> = (0..beacons.ids().len())
             .filter(|index| beacons.seats().get(*index).copied() == Some(seat.raw()))
             .collect();
@@ -2587,6 +2590,35 @@ impl Surface {
                     .map(crate::view::voxel_of)
                     .unwrap_or_default(),
                 is_core: core == Some(id),
+            });
+        }
+        // **A gone `b_NN` stays a name the seat placed** (S2's plan, E1): its
+        // row is freed once its death settles and may hold another asset, but
+        // the placement counter keeps the ordinal from being handed out again,
+        // so a playbook naming it qualifies as it did when the dead row stayed,
+        // and the step fails at run time. The verifier is told the name with
+        // no writ and the core's site: the gone beacon's own place is not kept
+        // anywhere, and the core's sphere is in the scope already, so no
+        // sphere test answers differently for it.
+        let placed = seats.placed().get(row).copied().unwrap_or_default();
+        let core_at = core.and_then(|id| {
+            let at = beacons
+                .row_of(pharmakos_sim::tables::BeaconId::new(id))
+                .ok()?;
+            beacons.positions().get(at.index()).copied()
+        });
+        for ordinal in 0..placed {
+            if beacons.ordinal(seat, ordinal, placed) != pharmakos_sim::tables::Ordinal::Gone {
+                continue;
+            }
+            scope.push_beacon(pharmakos_verifier::KnownBeacon {
+                beacon_id: pharmakos_sim::tables::own_beacon_name(ordinal),
+                owner: seat,
+                side: pharmakos_verifier::Ownership::Own,
+                mandate: crate::view::mandate_of(pharmakos_sim::seams::MandateKind::None),
+                tags: Vec::new(),
+                at: core_at.map(crate::view::voxel_of).unwrap_or_default(),
+                is_core: false,
             });
         }
 
@@ -4015,6 +4047,120 @@ mod tests {
             "the commander stands in the opening Lull"
         );
         assert_eq!(scope.commander(), commander);
+    }
+
+    /// S2's plan, E1, the fix pass: a destroyed beacon's freed row is no
+    /// beacon at all -- no phantom of nobody's is listed -- and the seat's
+    /// `b_NN` for it stays a name the seat placed, gone, which the verifier's
+    /// view still knows.
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one match laid out, played and read through two doors; split, the helpers would hand the match to each other"
+    )]
+    fn a_freed_beacon_is_no_phantom_and_its_name_stays_gone() {
+        use pharmakos_sim::runner::{Layout, LayoutBeacon, MatchSettings};
+        use pharmakos_sim::world::{DamageOrder, DamageTarget, WorldConfig};
+        struct Everywhere;
+        impl crate::fog::Vision for Everywhere {
+            fn sees(&self, _seat: SeatId, _at: &pharmakos_proto::gp::v1::Voxel) -> bool {
+                true
+            }
+        }
+        let seed = 0x0000_0000_ca5c_aded;
+        let mut surface = Surface::new(
+            "m-0001",
+            seed,
+            rules(),
+            FogPolicy::fogged(),
+            &[SeatId::new(0), SeatId::new(1)],
+        )
+        .expect("a match id");
+        let mut host = crate::host::Host::open(
+            &WorldConfig {
+                match_seed: seed,
+                seats: 2,
+                units_per_seat: 0,
+                rules: rules(),
+                match_settings: MatchSettings {
+                    segment_lengths_ms: vec![60_000],
+                    round_limit: 3,
+                },
+            },
+            None,
+        )
+        .expect("a match");
+        let core = host
+            .world()
+            .beacons()
+            .positions()
+            .first()
+            .copied()
+            .expect("seat 0's core");
+        host.seed_layout(&Layout {
+            beacons: vec![LayoutBeacon {
+                seat: SeatId::new(0),
+                column: [core[0].floor_voxels() + 4, core[1].floor_voxels()],
+                mandate: pharmakos_sim::seams::MandateKind::Build,
+                units: Vec::new(),
+            }],
+        })
+        .expect("the layout places an outpost");
+        surface.attach(host).expect("attached");
+        surface.set_phase_remaining_ms(Ms::new(300_000));
+        surface.open_lull().expect("the opening Lull");
+        assert!(surface.begin_push().expect("the Push begins"));
+        let outpost = {
+            let beacons = surface.host().expect("hosted").world().beacons();
+            let row = beacons
+                .row_of_ordinal(SeatId::new(0), 1)
+                .expect("the outpost is b_01");
+            pharmakos_sim::tables::BeaconId::new(*beacons.ids().get(row).expect("its id"))
+        };
+        surface
+            .host_mut()
+            .expect("hosted")
+            .file_damage(DamageOrder {
+                target: DamageTarget::Beacon(outpost),
+                amount: pharmakos_sim::math::quantity::Damage::new(1_000_000).expect("damage"),
+                by: SeatId::NEUTRAL,
+                source: None,
+            })
+            .expect("filed");
+        for _ in 0..3 {
+            surface.step().expect("a tick");
+        }
+        let row = outpost.row().expect("a row").index();
+        assert_eq!(
+            surface
+                .host()
+                .expect("hosted")
+                .world()
+                .beacons()
+                .frees()
+                .get(row),
+            Some(&true),
+            "the outpost's row is free"
+        );
+        let token = seat_token(&mut surface, 0);
+        let response = surface.call(Some(&token), &request("list_beacons", "{}"), &Everywhere);
+        assert_eq!(code(&response), "<no error>", "{response:?}");
+        let listed = result(&response);
+        let text = format!("{listed:?}");
+        assert!(
+            !text.contains("b_01"),
+            "the gone beacon is not listed: {text}"
+        );
+        assert!(!text.contains("seat.255"), "no phantom of nobody's: {text}");
+        assert!(text.contains("b_00"), "the core is: {text}");
+        let scope = surface.verifier_scope(SeatId::new(0)).expect("a scope");
+        assert!(
+            scope
+                .beacons()
+                .iter()
+                .any(|beacon| beacon.beacon_id == "b_01"),
+            "the seat's gone `b_01` is still a name it placed"
+        );
     }
 
     /// `resolve_refs`' own phase gate, reached without the dispatcher: the
