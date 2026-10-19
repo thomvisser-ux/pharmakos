@@ -19,7 +19,7 @@
             {
               "add_build_target": {
                 "target": {
-                  "blueprint_id": "autocannon",
+                  "blueprint_id": "relay_pylon",
                   "anchor": {
                     "voxel": {
                       "x": 82,

@@ -80,6 +80,10 @@ pub const REFUSED_CONSTRUCTS: &[(&str, &str)] = &[
     ("selector filter `side: ENEMY_KNOWN`", "E0015"),
     ("selector filter `tags`", "E0016"),
     ("predicate `beacon_under_attack`", "E0017"),
+    (
+        "a Build target naming a blueprint of S2's base kit (`autocannon`, `mortar` or `wall`)",
+        "E0019",
+    ),
 ];
 
 /// The code this crate refuses a construct by, keyed by the sim's name for it,
@@ -95,6 +99,11 @@ pub fn code_for_construct(construct: &str) -> Option<&'static str> {
 /// The one blueprint a Build target may name before S4's capability catalogue:
 /// the sim's `compile_build_target` accepts `generator` and refuses the rest.
 const BUILDABLE: &str = "generator";
+
+/// S2's base kit beside the generator (`playbook.proto`'s `BuildTarget`), which
+/// the sim refuses under a construct of its own until S2's `site` lane builds
+/// it (`E0019`); every other id is S4's (`E0010`).
+const BASE_KIT: [&str; 3] = ["autocannon", "mortar", "wall"];
 
 /// Run the check.
 pub(crate) fn run(playbook: &Playbook, out: &mut Builder) {
@@ -155,8 +164,13 @@ impl Visit for Refusals<'_> {
             );
             return;
         }
+        let code = if BASE_KIT.contains(&target.blueprint_id.as_str()) {
+            "E0019"
+        } else {
+            "E0010"
+        };
         self.out.emit(
-            Diag::new("E0010", pointer::child(at, "blueprint_id")).arg("id", &target.blueprint_id),
+            Diag::new(code, pointer::child(at, "blueprint_id")).arg("id", &target.blueprint_id),
         );
     }
 

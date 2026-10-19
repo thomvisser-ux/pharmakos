@@ -1334,7 +1334,7 @@ fn s2s_settings_are_refused_and_their_leaves_are_still_checked() {
 }
 
 /// A `wall` target is refused for its blueprint until S2's `site` lane
-/// (`E0010`); a box on any other target is `E0509` whatever the stage, and the
+/// (`E0019`, the base kit's refusal); a box on any other target is `E0509` whatever the stage, and the
 /// box is an area like any other.
 #[test]
 fn a_wall_box_is_an_area_and_belongs_to_a_wall() {
@@ -1354,7 +1354,7 @@ fn a_wall_box_is_an_area_and_belongs_to_a_wall() {
         &scope,
         &snapshot,
     );
-    assert!(codes.iter().any(|code| code == "E0010"), "{codes:?}");
+    assert!(codes.iter().any(|code| code == "E0019"), "{codes:?}");
     assert!(codes.iter().any(|code| code == "E0406"), "{codes:?}");
     assert!(!codes.iter().any(|code| code == "E0509"), "{codes:?}");
 
@@ -1364,5 +1364,8 @@ fn a_wall_box_is_an_area_and_belongs_to_a_wall() {
         &snapshot,
     );
     assert!(codes.iter().any(|code| code == "E0509"), "{codes:?}");
-    assert!(!codes.iter().any(|code| code == "E0010"), "{codes:?}");
+    assert!(
+        !codes.iter().any(|code| code == "E0010" || code == "E0019"),
+        "{codes:?}"
+    );
 }

@@ -60,7 +60,8 @@
 //! other blueprint (`E0509`): a structure's footprint is its blueprint's, and a
 //! box written on a `generator` would otherwise be read by nothing, which is a
 //! silent strip. A `wall` target itself is refused for its blueprint
-//! (`E0010`) until S2's `site` lane builds walls.
+//! (`E0019`, with the rest of S2's base kit) until S2's `site` lane builds
+//! walls.
 
 use pharmakos_proto::gp::api::v1::patch_suggestion::Applicability;
 use pharmakos_proto::gp::v1::build_settings::Terraform;

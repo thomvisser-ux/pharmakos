@@ -810,7 +810,7 @@ gp.v1.Playbook.Kind
 
 ## Diagnostics
 
-84 codes. A code is language-neutral, append-only and never
+85 codes. A code is language-neutral, append-only and never
 reused; only an ERROR stops a playbook qualifying. `none at the skeleton` names the
 task that owes the emitter, which is honesty about coverage rather than a gap.
 
@@ -852,8 +852,8 @@ E0009  ERROR  decode and version  raised at: structure
   Queuing a capability building comes later in the game. Nothing you wrote is dropped: take the row out yourself.
 
 E0010  ERROR  decode and version  raised at: structure
-  a Build target names `{id}`; only `generator` can be built until S4, with the capability catalogue and its licences.
-  Generators are the only buildings a Build beacon can make for now.
+  a Build target names `{id}`; beside `generator` and S2's base kit, nothing can be built until S4, with the capability catalogue and its licences.
+  This building cannot be made by a Build beacon in this build.
 
 E0011  ERROR  decode and version  raised at: structure
   a Build target is anchored on `{arm}`; until S3 a target stands on a voxel or `on` a vent.
@@ -886,6 +886,10 @@ E0017  ERROR  decode and version  raised at: structure
 E0018  ERROR  decode and version  raised at: decode
   `{field}` carries {value}, which is not a value this build names; it is refused rather than read as a default.
   This setting holds a number the game does not know. Nothing is guessed for you: write one of the setting's names instead.
+
+E0019  ERROR  decode and version  raised at: structure
+  a Build target names `{id}`, one of S2's base kit; it is refused until the base kit's lane builds it, rather than ignored.
+  Autocannons, mortars and walls cannot be built in this build yet.
 
 E0101  ERROR  limits and required blocks  raised at: structure
   {what} is required and is missing.

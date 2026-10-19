@@ -110,9 +110,9 @@ pub const VERIFIER_STRINGS: &[Text] = &[
     },
     Text {
         code: "E0010",
-        message: "a Build target names `{id}`; only `generator` can be built until S4, with the \
-                  capability catalogue and its licences.",
-        beginner: "Generators are the only buildings a Build beacon can make for now.",
+        message: "a Build target names `{id}`; beside `generator` and S2's base kit, nothing can \
+                  be built until S4, with the capability catalogue and its licences.",
+        beginner: "This building cannot be made by a Build beacon in this build.",
     },
     Text {
         code: "E0011",
@@ -166,6 +166,12 @@ pub const VERIFIER_STRINGS: &[Text] = &[
                   rather than read as a default.",
         beginner: "This setting holds a number the game does not know. Nothing is guessed for \
                    you: write one of the setting's names instead.",
+    },
+    Text {
+        code: "E0019",
+        message: "a Build target names `{id}`, one of S2's base kit; it is refused until the \
+                  base kit's lane builds it, rather than ignored.",
+        beginner: "Autocannons, mortars and walls cannot be built in this build yet.",
     },
     // --- E01xx: limits and required blocks -----------------------------------
     Text {

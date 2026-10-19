@@ -1274,10 +1274,12 @@ message BeaconFilter {
 // The five mandates and their settings are spec section 6's contract, which
 // grows with the stages (Defend and Attack at S2, below).
 //
-// PLACEHOLDER: the move to gp/v1/mandate.proto — owner, the next proto PR
-// that adds a mandate field (the register's M-14). Not in S1 (decisions-log
-// item 128, S1's plan's decision 11): the move changes no wire or JSON name,
-// because the package stays gp.v1, and nothing in S1 needs it.
+// PLACEHOLDER: the move to gp/v1/mandate.proto — owner, S3, the next proto PR after S2's.
+// The register's M-14. Not in S1 (decisions-log item 128, S1's plan's
+// decision 11) and not in S2's wire (S2's plan, task `con4`, which added
+// Defend's and Attack's fields here; the main session's ruling on that pull
+// request): the move changes no wire or JSON name, because the package stays
+// gp.v1, and nothing in S1 or S2 needs it.
 //
 // Only the fields the spec's expand_east example uses are filled in. The
 // mandate oneof numbers (10-14) and the five names are safe: they are the
