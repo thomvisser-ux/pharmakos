@@ -520,6 +520,14 @@
     "beginner": "A Survey beacon can field only so many scouts. Ask for fewer."
   },
   {
+    "code": "E0509",
+    "family": "settings and recycle",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "a `{id}` target carries a `wall_box`; only a `wall` target fills a box, and every other structure's footprint is its blueprint's.",
+    "beginner": "Only a wall is built as a box of voxels. Leave the box out, or make this target a wall."
+  },
+  {
     "code": "W0501",
     "family": "settings and recycle",
     "severity": "WARNING",

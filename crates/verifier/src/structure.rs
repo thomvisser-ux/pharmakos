@@ -53,6 +53,14 @@
 //! An omitted `MoveStep.pace`, `MineSettings.seam_choice`,
 //! `MineSettings.pillar_spacing` and `BuildSettings.terraform` read as named
 //! defaults, each with an `I0003` note; see [`walk_action`].
+//!
+//! # A wall's box (S2's wire, task `con4`)
+//!
+//! `BuildTarget.wall_box` is a `wall` target's voxels and is refused on any
+//! other blueprint (`E0509`): a structure's footprint is its blueprint's, and a
+//! box written on a `generator` would otherwise be read by nothing, which is a
+//! silent strip. A `wall` target itself is refused for its blueprint
+//! (`E0010`) until S2's `site` lane builds walls.
 
 use pharmakos_proto::gp::api::v1::patch_suggestion::Applicability;
 use pharmakos_proto::gp::v1::build_settings::Terraform;
@@ -62,8 +70,9 @@ use pharmakos_proto::gp::v1::mine_settings::SeamChoice;
 use pharmakos_proto::gp::v1::move_step::Pace;
 use pharmakos_proto::gp::v1::on_death::OnRespawn;
 use pharmakos_proto::gp::v1::{
-    BeaconRef, Condition, FeatureRef, Handler, IntCompare, Location, MandateSettings, Playbook,
-    Step, condition, fallback, int_compare, interface_row, location, mandate_settings, step,
+    BeaconRef, BuildTarget, Condition, FeatureRef, Handler, IntCompare, Location, MandateSettings,
+    Playbook, Step, condition, fallback, int_compare, interface_row, location, mandate_settings,
+    step,
 };
 use pharmakos_proto::json::Json;
 
@@ -75,6 +84,9 @@ use crate::strings;
 use crate::walk::{self, Carrier, List, Slot, Visit};
 
 use std::collections::BTreeMap;
+
+/// The one blueprint that fills a box (`BuildTarget.wall_box`).
+const WALL: &str = "wall";
 
 /// Run the stage.
 pub(crate) fn run(playbook: &Playbook, limits: &Limits, out: &mut Builder) {
@@ -436,6 +448,28 @@ impl Visit for Sites<'_> {
             }
             _ => {}
         }
+    }
+
+    fn build_target(&mut self, at: &str, target: &BuildTarget) {
+        // An empty blueprint id is `E0101`'s (the refusals' check), and a box
+        // under it would say nothing more.
+        if target.wall_box.is_none()
+            || target.blueprint_id == WALL
+            || target.blueprint_id.is_empty()
+        {
+            return;
+        }
+        let here = pointer::child(at, "wall_box");
+        self.out.emit(
+            Diag::new("E0509", here.clone())
+                .arg("id", &target.blueprint_id)
+                .fix(
+                    strings::FIX_DROP_WALL_BOX,
+                    patch_remove(&here),
+                    // The author may have meant a wall rather than no box.
+                    Applicability::MaybeIncorrect,
+                ),
+        );
     }
 
     fn mandate(&mut self, at: &str, settings: &MandateSettings, carrier: Carrier) {
