@@ -987,7 +987,9 @@ item 145 (1), (2) and (4)).**
   changes move, the preamble's named places, and named places in `crates/gateway`:
   `src/targeting.rs`' two row reads (~137, ~1141) and any other gateway line that reads an id's raw
   value as a row, granted because `con4`'s gateway places are the `ViewEntity` and `BeaconSummary`
-  literals and no gateway lane runs. **Branch** `feat/sim-s2-ids`, worktree `../pharmakos-ids`,
+  literals and no gateway lane runs; and, for the typed mid-tick refusal (decisions-log item 145
+  (4)), `Host::begin_push` and `end_recap` in `src/host.rs` and `Surface::begin_push` and
+  `end_recap` in `src/surface.rs`. **Branch** `feat/sim-s2-ids`, worktree `../pharmakos-ids`,
   target `D:/build/ids`.
 - **Builds:**
   - **E1** in full: the additive id layout, `Row` and `Generation`, the load-time refusal of a room
@@ -1515,7 +1517,10 @@ rename (below) stands.
 - **Owns:** `crates/sim` except `fall`'s named places (listed in `fall`'s Owns line), every golden
   it moves, the preamble's named places, its scenarios' entries, and, only if section 4.5's cut 2
   is taken at its start, the verifier's refill note with its case and catalogue row and its
-  sentence in `rules/README.md` as named places. **Branch** `feat/sim-build-s2`,
+  sentence in `rules/README.md` as named places; and `con4` #120's E0019 (its
+  `crates/verifier/src/refusals.rs` entry, its case, its catalogue row and their goldens) as named
+  places, for the lift below, since no verifier lane runs beside it (decisions-log item 145 (5)).
+  **Branch** `feat/sim-build-s2`,
   worktree `../pharmakos-site`, target `D:/build/site`.
 - **Builds:**
   - **The base kit's blueprints:** `autocannon`, `mortar` and `wall` as Build targets, the wall a
@@ -1815,7 +1820,9 @@ rename (below) stands.
   (`compile_settings_row`) while an empty Defend arm in a `set_mandate` is legal
   (`compile_switch_settings`), and spec §5 makes the mandate type a free choice at deploy. This lane,
   which makes Defend's settings real, accepts an empty Defend arm in `initial` too, and the
-  verifier follows the sim (the main session's call, open to the owner's veto).
+  verifier follows the sim (the main session's call, open to the owner's veto). The verifier mirrors
+  the sim there and no verifier lane runs in wave 4, so this lane is granted
+  `crates/verifier/src/refusals.rs`' E0012 entry, with its case and goldens, as named places.
 - **Implements:** items 104, 138 (4) (c) (pickets); spec §6's Defend row, §4's bodyguard, §10's
   reflex; register S2-02 (the sim's half), S2-04. **Needs:** `site` and `fall` merged; the ruled
   decisions 6, 12, 13 and 21. **Acceptance:**
@@ -2258,7 +2265,7 @@ with new names, their ids taken at the merge of `main` (E17, E33).
 | 3 | `base` | determinism code: the tick loop's per-phase form and its `MidTick` refusal (E30); the event vocabulary (`StepFailure` `targets_unwritten`) |
 | 4 | `con4` | `playbook.proto` (the header's defaults list, decision 4), `gateway.proto`, `proto/buf.yaml`'s scoped `ignore_only`, the generated tree, the schema and docs goldens |
 | 5 | `night` | `xtask/src/scenario.rs` (what the `scenario` step checks), `xtask/src/package.rs`'s replay list (a named place: `collect_played`, so the package never replays an arm), `.github/workflows/nightly-scenarios.yml`, the nightly result golden (a new golden format) |
-| — | the harness PR (main session, after this plan's item 145 docs PR) | AGENTS.md §6 (the merge-only rule in place of "rebase on `main`", and `tests/golden/scenarios/nightly-result/` in the list of tests that pin the operator's output), CLAUDE.md (~76, the local-verify path), `scripts/merge-train.sh` (~19–21, ~53, ~188: it rebase-merges, rebases the next lane with `--force-with-lease`, and refuses a branch with merge commits), `.claude/workflows/wave-lanes.js` (~106), and the workspace `[lints]`: `arithmetic_side_effects` and `panic` denied in the crates that parse untrusted input (decisions-log item 145 (3), (5) and (7)). Until it merges, `scripts/merge-train.sh --local-verify` cannot be used |
+| — | the harness PR (main session, after this plan's item 145 docs PR) | AGENTS.md §6 (the merge-only rule in place of "rebase on `main`", and `tests/golden/scenarios/nightly-result/` in the list of tests that pin the operator's output), CLAUDE.md (~76, the local-verify path), `scripts/merge-train.sh` (~19–21, ~53, ~188: it rebase-merges, rebases the next lane with `--force-with-lease`, and refuses a branch with merge commits), `.claude/workflows/wave-lanes.js` (~106), and the workspace `[lints]`: `arithmetic_side_effects` and `panic` denied in the crates that parse untrusted input, and `todo` and `unimplemented` at the integration gate (decisions-log item 145 (3), (5) and (7)). Until it merges, `scripts/merge-train.sh` is out of use as a whole (its default mode rebase-merges and rebases and force-pushes the next lane; `--local-verify` refuses merge commits), and the main session merges each PR by a merge commit |
 | — | the firewall-runner PR (main session) | `.github/workflows/claude.yml`'s `runs-on` (item 142 (3)), in the gap between `night` and `g3h`, once the owner's first triggered `claude.yml` run has happened |
 | 6 | `ids` | determinism code: ids and generations, the typed id columns, the placement counter, the beacons-lost column, the ruin reserve, `SNAPSHOT_VERSION` 10; the event vocabulary (`ruin_buried`) |
 | 7 | `vfy2` | `report_hash`'s `Scope` encoding |
