@@ -1188,7 +1188,7 @@ mod tests {
             );
         }
         let mut runner = Runner::new(world);
-        assert!(runner.begin_push(), "a match opens in a Lull");
+        assert_eq!(runner.begin_push(), Ok(true), "a match opens in a Lull");
         for _ in 0..20 {
             assert!(matches!(runner.step(), Ok(Some(_))), "the Push runs");
         }

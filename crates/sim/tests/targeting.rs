@@ -109,7 +109,7 @@ fn open(world: World, route: &str) -> Runner {
     runner
         .seal_playbook(SeatId::new(SEAT), plan)
         .expect("a Lull takes a seal");
-    assert!(runner.begin_push(), "a match opens in a Lull");
+    assert!(runner.begin_push().unwrap(), "a match opens in a Lull");
     runner
 }
 
@@ -493,7 +493,7 @@ fn a_seats_structure_share_counts_its_live_structures_not_its_ruins() {
         );
     }
     let mut runner = Runner::new(world);
-    assert!(runner.begin_push(), "a match opens in a Lull");
+    assert!(runner.begin_push().unwrap(), "a match opens in a Lull");
     let events = play_all(&mut runner, 200);
     assert_eq!(
         count(&events, EventKind::StructureRuined),
@@ -539,7 +539,7 @@ fn one_structure_per_voxel_holds_across_seats() {
     let purse = |world: &World| world.seats().treasuries().get(1).expect("seat 1").raw();
     let before = purse(&world);
     let mut runner = Runner::new(world);
-    assert!(runner.begin_push(), "a match opens in a Lull");
+    assert!(runner.begin_push().unwrap(), "a match opens in a Lull");
     let events = play_all(&mut runner, 200);
     assert_eq!(
         queued_by(&events, one),
@@ -572,10 +572,10 @@ fn a_carried_covering_step_has_no_legal_site_after_round_one_on_the_golden_seed(
     let mut rounds: Vec<Vec<Event>> = Vec::new();
     loop {
         rounds.push(play(&mut runner, u32::MAX, |_, _| {}));
-        if runner.phase() != MatchPhase::Recap || !runner.end_recap() {
+        if runner.phase() != MatchPhase::Recap || !runner.end_recap().unwrap() {
             break;
         }
-        if !runner.begin_push() {
+        if !runner.begin_push().unwrap() {
             break;
         }
     }
@@ -1062,7 +1062,7 @@ fn the_decision_tick_counts_its_evaluation_units() {
         let plan = Plan::compile(&book, &rules()).expect("compiles");
         let mut runner = Runner::new(world_at(SEED, 2, &[180_000]));
         runner.seal_playbook(SeatId::new(SEAT), plan).unwrap();
-        assert!(runner.begin_push());
+        assert!(runner.begin_push().unwrap());
         let _ = play(&mut runner, 6, |_, _| {});
         (
             runner.world().decision_work(0).expect("seat 0").spent(),

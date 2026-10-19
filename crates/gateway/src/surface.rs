@@ -1438,7 +1438,7 @@ impl Surface {
         self.announce_filings(round)?;
         let plans = self.plans_for_round();
         self.host_mut()?.seal_plans(plans)?;
-        let started = self.host_mut()?.begin_push();
+        let started = self.host_mut()?.begin_push()?;
         if started {
             self.close_phase();
             self.views.bump();
@@ -1675,7 +1675,7 @@ impl Surface {
     /// phased tick is open, as [`Surface::begin_push`], audited the same way.
     pub fn end_recap(&mut self) -> Result<bool, Error> {
         self.refuse_mid_tick("end recap", "end its recap")?;
-        let ended = self.host_mut()?.end_recap();
+        let ended = self.host_mut()?.end_recap()?;
         if ended && self.host()?.runner().phase() == MatchPhase::Ended {
             // Spec section 12 unlocks the fog at match end. Since S1's `fixs`
             // lane the round limit is decided at the last round's final tick

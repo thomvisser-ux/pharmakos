@@ -143,7 +143,7 @@ fn finish(runner: &mut Runner) -> Vec<Event> {
     assert!(report.segment_ended && report.match_ended, "{report:?}");
     let events = runner.events().to_vec();
     runner.clear_events();
-    assert!(runner.end_recap(), "the match is in its recap");
+    assert!(runner.end_recap().unwrap(), "the match is in its recap");
     assert!(
         !runner
             .events()
@@ -183,7 +183,7 @@ fn hold(world: &mut World, targets: [i64; 3]) {
 #[test]
 fn a_round_limit_end_names_the_final_audits_winner() {
     let mut runner = Runner::new(world());
-    assert!(runner.begin_push());
+    assert!(runner.begin_push().unwrap());
     play_to_the_last_tick(&mut runner);
     hold(runner.world_mut(), [1_000, 1_500, 900]);
     let events = finish(&mut runner);
@@ -239,7 +239,7 @@ fn a_net_worth_tie_goes_to_fewer_beacons_lost() {
     let mut base = world();
     let lost = extra_beacon(&mut base, seat(0));
     let mut runner = Runner::new(base);
-    assert!(runner.begin_push());
+    assert!(runner.begin_push().unwrap());
     destroy(&mut runner, lost);
     play_to_the_last_tick(&mut runner);
     assert_eq!(beacons_lost(runner.world(), seat(0)), 1);
@@ -261,7 +261,7 @@ fn a_net_worth_tie_goes_to_fewer_beacons_lost() {
 #[test]
 fn an_exact_tie_on_every_term_is_a_shared_win() {
     let mut runner = Runner::new(world());
-    assert!(runner.begin_push());
+    assert!(runner.begin_push().unwrap());
     play_to_the_last_tick(&mut runner);
     hold(runner.world_mut(), [3_000, 3_000, 2_999]);
     let events = finish(&mut runner);
@@ -293,7 +293,7 @@ fn beacons_lost_survives_save_and_restore() {
     let mut base = world();
     let lost = extra_beacon(&mut base, seat(2));
     let mut runner = Runner::new(base);
-    assert!(runner.begin_push());
+    assert!(runner.begin_push().unwrap());
     destroy(&mut runner, lost);
     let mut stepped = 0;
     while stepped < 5 && runner.step().unwrap().is_some() {
@@ -353,7 +353,7 @@ fn a_seat_that_was_never_placed_is_not_audited_at_the_round_limit() {
     );
     base.set_treasury(seat(3), Money::new(1_000_000));
     let mut runner = Runner::new(base);
-    assert!(runner.begin_push());
+    assert!(runner.begin_push().unwrap());
     play_to_the_last_tick(&mut runner);
     hold(runner.world_mut(), [1_000, 1_500, 900]);
     let _ = finish(&mut runner);
@@ -383,7 +383,7 @@ fn a_seat_that_was_never_placed_does_not_survive_a_no_survivor_end() {
         core_of(&base, seat(2)),
     ];
     let mut runner = Runner::new(base);
-    assert!(runner.begin_push());
+    assert!(runner.begin_push().unwrap());
     for core in cores {
         destroy(&mut runner, core);
     }

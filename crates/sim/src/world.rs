@@ -5849,7 +5849,7 @@ mod tests {
         world.set_writ(core, crate::seams::MandateKind::Mine);
         world.set_mine_settings(core, crate::mining::MineSettings::default());
         let mut runner = crate::runner::Runner::new(world);
-        assert!(runner.begin_push());
+        assert_eq!(runner.begin_push(), Ok(true));
         let mut found: Vec<Option<SeatId>> = Vec::new();
         for _ in 0..4_000 {
             let world = runner.world_mut();
@@ -6408,7 +6408,7 @@ mod ids_tests {
         let plan = crate::interpreter::Plan::compile(&playbook, world.rules()).must("compiles");
         assert!(world.seal_playbook(SEAT, plan));
         let mut runner = Runner::new(world);
-        assert!(runner.begin_push());
+        assert_eq!(runner.begin_push(), Ok(true));
         // Tick 1 is the first decision: the visit to b_01 begins.
         assert!(runner.step().must("a value").is_some());
         assert!(

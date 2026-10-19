@@ -127,7 +127,7 @@ fn play(world: World, route: &str, ticks: u32) -> (Runner, Vec<u32>, bool) {
     runner
         .seal_playbook(SEAT, plan)
         .expect("a Lull takes a seal");
-    assert!(runner.begin_push());
+    assert!(runner.begin_push().unwrap());
     let mut queued = Vec::new();
     let mut failed = false;
     for _ in 0..ticks {
@@ -821,7 +821,7 @@ fn a_build_list_that_cannot_be_written_whole_writes_nothing() {
     runner
         .seal_playbook(SEAT, plan)
         .expect("a Lull takes a seal");
-    assert!(runner.begin_push());
+    assert!(runner.begin_push().unwrap());
     let mut reasons = Vec::new();
     for _ in 0..400 {
         if runner.step().unwrap().is_none() {

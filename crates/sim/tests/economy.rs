@@ -206,7 +206,7 @@ fn dormant(world: &World, beacon: BeaconId) -> bool {
 
 /// Run a Push to its end, collecting every event it reported.
 fn play_segment(runner: &mut Runner, feed: &mut Vec<Event>) {
-    assert!(runner.begin_push(), "the Push begins");
+    assert_eq!(runner.begin_push(), Ok(true), "the Push begins");
     feed.extend_from_slice(runner.events());
     runner.clear_events();
     while runner
@@ -265,7 +265,11 @@ fn a_starting_seam_yields_more_than_its_exposed_rim() {
                 .filter(|event| event.kind == EventKind::OreDelivered && event.seat == Some(seat))
                 .count(),
         );
-        assert!(runner.end_recap(), "the recap closes into the next Lull");
+        assert_eq!(
+            runner.end_recap(),
+            Ok(true),
+            "the recap closes into the next Lull"
+        );
     }
     assert!(
         delivered.iter().all(|count| *count > 0),
@@ -511,7 +515,7 @@ fn paid_means_yours_survives_a_mid_build_death() {
 
     let mut runner = Runner::new(world);
     let mut feed: Vec<Event> = Vec::new();
-    assert!(runner.begin_push(), "the Push begins");
+    assert_eq!(runner.begin_push(), Ok(true), "the Push begins");
     // Step until the Quartermaster has paid for the target.
     let mut queued: Option<StructureId> = None;
     for _ in 0..200 {
@@ -626,7 +630,7 @@ fn a_dormant_beacon_powers_down_everything_homed_to_it() {
     let seat = SeatId::new(0);
     let core = core_of(runner.world(), seat);
 
-    assert!(runner.begin_push(), "the Push begins");
+    assert_eq!(runner.begin_push(), Ok(true), "the Push begins");
     // Give the units somewhere to be, so "parked" is a visible change.
     let away = [Fx::from_voxels(200), Fx::from_voxels(200), Fx::ZERO];
     for unit in 0..runner.world().units().len() {
@@ -756,7 +760,7 @@ fn the_brownout_order_is_priority_then_distance_then_the_core_last() {
          two for the order to be readable: {grid:?}"
     );
 
-    assert!(runner.begin_push(), "the Push begins");
+    assert_eq!(runner.begin_push(), Ok(true), "the Push begins");
     runner.play_tick();
     let world = runner.world();
 
@@ -816,7 +820,7 @@ fn a_placed_beacon_adds_no_draw() {
         .place_beacon_directly(seat, offset(at, 8), MandateKind::None, PRIORITY_NORMAL)
         .unwrap_or_else(|| panic!("room for a beacon"));
     assert!(
-        plain.begin_push() && placed.begin_push(),
+        plain.begin_push().unwrap() && placed.begin_push().unwrap(),
         "the Pushes begin"
     );
     for tick in 0..40 {
@@ -845,7 +849,7 @@ fn a_placed_beacon_adds_no_draw() {
         .place_beacon_directly(seat, offset(at, 8), MandateKind::None, PRIORITY_LOW)
         .unwrap_or_else(|| panic!("room for a beacon"));
     let mut feed: Vec<Event> = Vec::new();
-    assert!(runner.begin_push(), "the Push begins");
+    assert_eq!(runner.begin_push(), Ok(true), "the Push begins");
     for _ in 0..40 {
         runner.play_tick();
         feed.extend_from_slice(runner.events());
@@ -917,7 +921,7 @@ fn a_shed_core_revives_once_its_load_leaves_the_margin_spare() {
     }
 
     let mut feed: Vec<Event> = Vec::new();
-    assert!(runner.begin_push(), "the Push begins");
+    assert_eq!(runner.begin_push(), Ok(true), "the Push begins");
     runner.play_tick();
     feed.extend_from_slice(runner.events());
     runner.clear_events();
@@ -1035,7 +1039,7 @@ fn a_beacon_whose_shed_relieves_nothing_is_skipped_and_stays_lit() {
         voxels = voxels.saturating_add(1);
     }
     let mut feed: Vec<Event> = Vec::new();
-    assert!(runner.begin_push(), "the Push begins");
+    assert_eq!(runner.begin_push(), Ok(true), "the Push begins");
     for _ in 0..20 {
         runner.play_tick();
         feed.extend_from_slice(runner.events());
@@ -1081,7 +1085,7 @@ fn a_beacon_whose_shed_relieves_nothing_is_skipped_and_stays_lit() {
         voxels = voxels.saturating_add(1);
     }
     let mut feed: Vec<Event> = Vec::new();
-    assert!(runner.begin_push(), "the Push begins");
+    assert_eq!(runner.begin_push(), Ok(true), "the Push begins");
     for _ in 0..20 {
         runner.play_tick();
         feed.extend_from_slice(runner.events());
@@ -1154,7 +1158,7 @@ fn a_beacon_whose_shed_would_deepen_the_deficit_is_skipped() {
         voxels = voxels.saturating_sub(1);
     }
     let mut feed: Vec<Event> = Vec::new();
-    assert!(runner.begin_push(), "the Push begins");
+    assert_eq!(runner.begin_push(), Ok(true), "the Push begins");
     for tick in 0..20 {
         runner.play_tick();
         feed.extend_from_slice(runner.events());
@@ -1247,7 +1251,7 @@ fn raise_fixture(raised_posts: i32, other_posts: i32) -> Raise {
     runner
         .seal_playbook(seat, plan)
         .unwrap_or_else(|error| panic!("a Lull takes a seal: {error:?}"));
-    assert!(runner.begin_push(), "the Push begins");
+    assert_eq!(runner.begin_push(), Ok(true), "the Push begins");
     let mut feed: Vec<Event> = Vec::new();
     feed.extend_from_slice(runner.events());
     runner.clear_events();
@@ -1414,7 +1418,7 @@ fn raise_posts(world: &mut World, beacon: BeaconId, at: [Fx; 3], posts: i32, vox
 /// runner and that settle's events.
 fn settle_once_with_dark(world: World, dark: &[BeaconId]) -> (Runner, Vec<Event>) {
     let mut runner = Runner::new(world);
-    assert!(runner.begin_push(), "the Push begins");
+    assert_eq!(runner.begin_push(), Ok(true), "the Push begins");
     for beacon in dark {
         runner.world_mut().set_dormant(*beacon, true);
     }
@@ -1615,7 +1619,7 @@ fn the_commander_walks_through_a_blackout_drawing_nothing() {
 
     // Lit: the commander is in the draw.
     let mut lit = Runner::new(world_with(varied(), &[20_000]));
-    assert!(lit.begin_push(), "the Push begins");
+    assert_eq!(lit.begin_push(), Ok(true), "the Push begins");
     lit.play_tick();
     let (_, draw) = supply_and_draw(lit.world(), seat);
     assert_eq!(
@@ -1639,7 +1643,7 @@ fn the_commander_walks_through_a_blackout_drawing_nothing() {
         .world()
         .commander_of(seat)
         .expect("an occupied seat has a commander");
-    assert!(runner.begin_push(), "the Push begins");
+    assert_eq!(runner.begin_push(), Ok(true), "the Push begins");
     runner
         .world_mut()
         .send_unit_directly(commander.raw(), offset(at, 12));
@@ -1699,7 +1703,7 @@ fn a_beacons_key_core_supplies_exactly_its_base() {
     // tick by tick: `a_placed_beacon_adds_no_draw`.
     let grid = Grid::of(&rules);
     let mut runner = Runner::new(world(&[20_000]));
-    assert!(runner.begin_push(), "the Push begins");
+    assert_eq!(runner.begin_push(), Ok(true), "the Push begins");
     runner.play_tick();
     assert_eq!(
         supply_and_draw(runner.world(), SeatId::new(0)),
@@ -1744,7 +1748,7 @@ fn the_dark_load_is_what_the_brownout_took_off_the_grid() {
         voxels = voxels.saturating_sub(1);
         placed.push(beacon);
     }
-    assert!(runner.begin_push(), "the Push begins");
+    assert_eq!(runner.begin_push(), Ok(true), "the Push begins");
     runner.play_tick();
     let world = runner.world();
     let dark = placed
@@ -1791,7 +1795,7 @@ fn the_dark_load_is_what_the_brownout_took_off_the_grid() {
         &[20_000],
     ));
     let core = core_of(runner.world(), seat);
-    assert!(runner.begin_push(), "the Push begins");
+    assert_eq!(runner.begin_push(), Ok(true), "the Push begins");
     runner.world_mut().set_dormant(core, true);
     runner.play_tick();
     let world = runner.world();
@@ -1826,7 +1830,7 @@ fn the_autocannon_is_never_shed() {
     // An autocannon on the core, finished. It runs off the deep bore, outside
     // the grid: it adds nothing to the draw, so it can never be the thing that
     // browns a grid out, and nothing ever powers it down.
-    assert!(runner.begin_push(), "the Push begins");
+    assert_eq!(runner.begin_push(), Ok(true), "the Push begins");
     runner.play_tick();
     let (_, before) = supply_and_draw(runner.world(), seat);
     runner
@@ -1864,7 +1868,7 @@ fn only_one_generator_per_vent_adds_to_the_supply() {
         .unwrap_or_default();
     let (first, second) = vent_stands(runner.world(), at);
 
-    assert!(runner.begin_push(), "the Push begins");
+    assert_eq!(runner.begin_push(), Ok(true), "the Push begins");
     runner.play_tick();
     let (bare, _) = supply_and_draw(runner.world(), seat);
 
@@ -1970,7 +1974,7 @@ fn a_generator_on_a_tapped_vent_does_not_buy_its_beacon_a_revival() {
     );
 
     let mut feed: Vec<Event> = Vec::new();
-    assert!(runner.begin_push(), "the Push begins");
+    assert_eq!(runner.begin_push(), Ok(true), "the Push begins");
     for tick in 0..20 {
         runner.play_tick();
         feed.extend_from_slice(runner.events());
@@ -2207,7 +2211,7 @@ fn no_beacon_starves_another_within_a_band() {
     // served next" the only thing that decides, and the answer has to
     // alternate.
     let mut runner = Runner::new(world);
-    assert!(runner.begin_push(), "the Push begins");
+    assert_eq!(runner.begin_push(), Ok(true), "the Push begins");
     runner.clear_events();
     let mut served: Vec<pharmakos_sim::tables::BeaconId> = Vec::new();
     let mut cursors: Vec<u32> = Vec::new();
@@ -2416,7 +2420,7 @@ impl HeldOrder {
         let is_seat = |event: &Event, kind: EventKind, value: u8| {
             event.kind == kind && event.seat == Some(seat) && event.value == i64::from(value)
         };
-        assert!(self.runner.begin_push(), "the Push begins");
+        assert_eq!(self.runner.begin_push(), Ok(true), "the Push begins");
         self.runner.clear_events();
         let mut watched = Watched {
             held: 0,
@@ -2621,7 +2625,11 @@ fn a_sighting_stores_the_tick_it_was_taken_at_so_the_lull_adds_nothing() {
     // Freeze the clock: the recap and the Lull are states, not durations.
     let before_tick = runner.tick().raw();
     let before = seen.clone();
-    assert!(runner.end_recap(), "the recap closes into the next Lull");
+    assert_eq!(
+        runner.end_recap(),
+        Ok(true),
+        "the recap closes into the next Lull"
+    );
     assert_eq!(
         runner.tick().raw(),
         before_tick,
@@ -2863,7 +2871,7 @@ fn the_settlement_ledger_matches_its_golden() {
             )
             .unwrap_or_else(|error| panic!("writing the ledger: {error}"));
         }
-        if !runner.end_recap() {
+        if !runner.end_recap().unwrap() {
             break;
         }
     }

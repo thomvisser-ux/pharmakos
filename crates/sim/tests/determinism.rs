@@ -135,8 +135,10 @@ fn chain(world: World, ticks: u32) -> String {
             loop {
                 match runner.phase() {
                     MatchPhase::Push | MatchPhase::Ended => break,
-                    MatchPhase::Lull => assert!(runner.begin_push(), "a Lull opens a Push"),
-                    MatchPhase::Recap => assert!(runner.end_recap(), "a recap closes"),
+                    MatchPhase::Lull => {
+                        assert!(runner.begin_push().unwrap(), "a Lull opens a Push");
+                    }
+                    MatchPhase::Recap => assert!(runner.end_recap().unwrap(), "a recap closes"),
                 }
             }
             match runner.step().unwrap() {

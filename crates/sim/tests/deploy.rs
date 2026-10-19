@@ -105,7 +105,7 @@ fn open_with(segment_ms: i32, prepare: impl FnOnce(&mut World)) -> Runner {
     runner
         .seal_playbook(SeatId::new(SEAT), plan)
         .expect("a Lull takes a seal");
-    assert!(runner.begin_push(), "a match opens in a Lull");
+    assert!(runner.begin_push().unwrap(), "a match opens in a Lull");
     runner.clear_events();
     runner
 }

@@ -964,16 +964,22 @@ impl Runner {
 
     /// Open the Push: every seat is ready, or the Lull's timer ran out.
     ///
-    /// `false` when the match is not in a Lull, which is the honest answer to a
-    /// host that asked twice. Resets the per-Push state item 21 makes per-Push:
-    /// the commander death counters and any pending respawn.
+    /// `Ok(false)` when the match is not in a Lull, which is the honest answer
+    /// to a host that asked twice. Resets the per-Push state item 21 makes
+    /// per-Push: the commander death counters and any pending respawn.
     ///
-    /// `false` too while a [`PhasedTick`] left a tick open
+    /// # Errors
+    ///
+    /// [`TickError::MidTick`] while a [`PhasedTick`] left a tick open
     /// ([`Runner::tick_is_open`]): the match's phase is then half a tick's
-    /// (S2's plan, E30).
-    pub fn begin_push(&mut self) -> bool {
-        if self.world.tick_is_open() || self.phase() != MatchPhase::Lull {
-            return false;
+    /// (S2's plan, E30; decisions-log item 145), a refusal the host is told
+    /// rather than a `false` it cannot tell from the wrong phase.
+    pub fn begin_push(&mut self) -> Result<bool, TickError> {
+        if self.world.tick_is_open() {
+            return Err(TickError::MidTick);
+        }
+        if self.phase() != MatchPhase::Lull {
+            return Ok(false);
         }
         let tick = self.world.tick();
         self.world.open_push(tick);
@@ -982,7 +988,7 @@ impl Runner {
             tick,
             Emission::of(EventKind::PushStarted).value(length.into()),
         );
-        true
+        Ok(true)
     }
 
     /// Advance one tick, and return what it did.
@@ -1058,7 +1064,7 @@ impl Runner {
 
     /// Close the recap: the next round's Lull, or the end of the match.
     ///
-    /// `false` when the match is not in a recap.
+    /// `Ok(false)` when the match is not in a recap.
     ///
     /// The recap's **settlement** is not done here, and that is the design
     /// rather than a gap: item 19's Ledger settles **inside the tick that opens
@@ -1068,13 +1074,18 @@ impl Runner {
     /// at the last round's recap is the round limit's end, whose winner the
     /// final audit names ([`crate::audit`]).
     ///
-    /// `false` too while a [`PhasedTick`] left a tick open: a tick dropped after
-    /// its Match phase on a segment's last tick reports the recap before its
-    /// hash has run, and closing that recap would leave the tick half done
-    /// (S2's plan, E30).
-    pub fn end_recap(&mut self) -> bool {
-        if self.world.tick_is_open() || self.phase() != MatchPhase::Recap {
-            return false;
+    /// # Errors
+    ///
+    /// [`TickError::MidTick`] while a [`PhasedTick`] left a tick open: a tick
+    /// dropped after its Match phase on a segment's last tick reports the recap
+    /// before its hash has run, and closing that recap would leave the tick
+    /// half done (S2's plan, E30; decisions-log item 145).
+    pub fn end_recap(&mut self) -> Result<bool, TickError> {
+        if self.world.tick_is_open() {
+            return Err(TickError::MidTick);
+        }
+        if self.phase() != MatchPhase::Recap {
+            return Ok(false);
         }
         let tick = self.world.tick();
         // A match the one-tick rule already decided announced itself at the
@@ -1098,7 +1109,7 @@ impl Runner {
             }
             self.world.emit(tick, emission);
         }
-        true
+        Ok(true)
     }
 
     /// Place a lobby layout ([`Layout`]): once, in the lobby, before the first

@@ -137,9 +137,9 @@ fn play(runner: &mut Runner, ticks: u32) {
 /// Play every segment of the match to its end.
 fn play_match(runner: &mut Runner) {
     loop {
-        assert!(runner.begin_push(), "the Push begins");
+        assert!(runner.begin_push().unwrap(), "the Push begins");
         play(runner, u32::MAX);
-        if !runner.end_recap() {
+        if !runner.end_recap().unwrap() {
             break;
         }
         if runner.phase() != MatchPhase::Lull {
@@ -161,7 +161,7 @@ fn mining_core(segments: &[i32], settings: MineSettings) -> (World, BeaconId) {
 /// decision.
 fn starting_seam(fixture: &World, core: BeaconId) -> usize {
     let mut runner = Runner::new(fixture.clone());
-    assert!(runner.begin_push());
+    assert!(runner.begin_push().unwrap());
     play(&mut runner, 1);
     let seam = runner
         .world()
@@ -343,7 +343,7 @@ fn midpoint(choice: SeamChoice, carved: &[(&str, Option<usize>)]) -> (Runner, Be
     .expect("the rules table describes a map");
     fixture.set_treasury(SEAT, Money::ZERO);
     let mut runner = Runner::new(fixture);
-    assert!(runner.begin_push());
+    assert!(runner.begin_push().unwrap());
     for (name, count) in carved {
         let (seam, _) = seam_named(runner.world(), name);
         carve(&mut runner, seam, *count);
@@ -562,7 +562,7 @@ fn a_seam_choice_counts_its_estimates_and_a_held_seam_costs_none() {
     let fixture = world(&[180_000]);
     let features = u32::try_from(fixture.features().len()).expect("a few");
     let mut runner = Runner::new(fixture);
-    assert!(runner.begin_push());
+    assert!(runner.begin_push().unwrap());
     play(&mut runner, 1);
     let first = runner.world().decision_work(0).expect("seat 0").spent();
     assert_eq!(
@@ -587,7 +587,7 @@ fn a_spent_beacon_charges_no_ranking() {
     let core = core(&fixture);
     let seam = starting_seam(&fixture, core);
     let mut runner = Runner::new(fixture);
-    assert!(runner.begin_push());
+    assert!(runner.begin_push().unwrap());
     play(&mut runner, 1);
     carve(&mut runner, seam, None);
     play(&mut runner, 5);
@@ -631,7 +631,7 @@ fn a_second_dig_in_one_seam_box_waits_for_the_first_to_land() {
     // and is judged with that edit taken out.
     let (fixture, core) = mining_core(&[180_000], MineSettings::default());
     let mut runner = Runner::new(fixture);
-    assert!(runner.begin_push());
+    assert!(runner.begin_push().unwrap());
     let drone = drone_of(runner.world(), core);
     // Play until the drone is one tick from finishing a dig.
     let mut guard = 0;
@@ -753,7 +753,7 @@ fn visit(route: &str) -> World {
     runner
         .seal_playbook(SEAT, plan)
         .expect("a Lull takes a seal");
-    assert!(runner.begin_push());
+    assert!(runner.begin_push().unwrap());
     let mut ended = false;
     let mut ticks: u32 = 0;
     while !ended && ticks < 3_000 {
@@ -893,7 +893,7 @@ fn a_held_seam_survives_save_and_restore_and_a_vent_is_refused() {
         },
     );
     let mut runner = Runner::new(fixture);
-    assert!(runner.begin_push());
+    assert!(runner.begin_push().unwrap());
     play(&mut runner, 600);
     let saved = Snapshot::capture(runner.world());
     let mut resumed = world(&[180_000]);
