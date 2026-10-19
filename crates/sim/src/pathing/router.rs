@@ -1028,3 +1028,124 @@ fn place(
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Router, WalkState};
+    use crate::math::fixed::{Angle, Fx};
+    use crate::math::quantity::Hp;
+    use crate::pathing::clusters::Clusters;
+    use crate::pathing::search::Scratch;
+    use crate::pathing::surface::{StepCosts, Surface};
+    use crate::rules::RulesTable;
+    use crate::tables::UnitKind;
+    use crate::voxels::{Material, VoxelStore};
+
+    /// The map edge, in voxels: two 32-voxel clusters a side.
+    const EDGE: i32 = 64;
+
+    /// The ground height, in solid voxels.
+    const GROUND: i32 = 12;
+
+    fn rules() -> RulesTable {
+        RulesTable::load(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("..")
+                .join("rules")
+                .join("rules.v1.json"),
+        )
+        .unwrap_or_else(|error| panic!("the committed rules table loads: {error}"))
+    }
+
+    /// Flat ground, with a wall too tall to step standing on every column
+    /// `wall` names.
+    fn ground(wall: impl Fn(i32, i32) -> bool) -> VoxelStore {
+        let size = u32::try_from(EDGE).unwrap_or_else(|error| panic!("a small edge: {error}"));
+        let mut voxels =
+            VoxelStore::new([size, size, 32]).unwrap_or_else(|| panic!("a whole number of chunks"));
+        let mut heights: Vec<i32> = Vec::new();
+        for y in 0..EDGE {
+            for x in 0..EDGE {
+                heights.push(if wall(x, y) { 28 } else { GROUND });
+            }
+        }
+        voxels.fill_from_heightmap(&heights, 3, Material::DIRT, Material::STONE);
+        voxels
+    }
+
+    fn at(x: i16, y: i16) -> [Fx; 3] {
+        [Fx::from_voxels(x), Fx::from_voxels(y), Fx::from_voxels(12)]
+    }
+
+    /// S2's plan, E11, the fix pass: the router banks no step across routes.
+    /// A walker's accumulator is zero once its route ends, and once a step
+    /// the ground no longer allows asks for the route again.
+    #[test]
+    fn the_accumulator_is_zero_after_a_route_ends_and_after_a_repath() {
+        let rules = rules();
+        let costs = StepCosts::from_rules(&rules);
+        let flat = ground(|_, _| false);
+        let surface = Surface::new(&flat, costs).unwrap_or_else(|| panic!("a surface"));
+        let mut scratch = Scratch::for_map(&surface, 32).unwrap_or_else(|| panic!("a scratch"));
+        let clusters =
+            Clusters::new(&surface, 32, &mut scratch).unwrap_or_else(|| panic!("clusters"));
+        let mut router = Router::new(1, &rules);
+        let kinds = [UnitKind::Commander.id()];
+        let hit_points = [Hp::new(100)];
+        let mut positions = [at(4, 4)];
+        let mut headings = [Angle::from_raw(0)];
+
+        // A short walk, to its end.
+        router.request(0);
+        router.serve(
+            &surface,
+            &clusters,
+            &mut scratch,
+            &positions,
+            &[at(20, 4)],
+            1,
+        );
+        assert_eq!(router.state(0), WalkState::Walking);
+        let mut banked = false;
+        for _ in 0..2_000 {
+            router.advance(&surface, &kinds, &hit_points, &mut positions, &mut headings);
+            banked |= router.accumulator(0) > 0;
+            if router.state(0) != WalkState::Walking {
+                break;
+            }
+        }
+        assert!(banked, "the walk carried part of a step between ticks");
+        assert_eq!(router.state(0), WalkState::Idle, "the walk arrives");
+        assert_eq!(
+            router.accumulator(0),
+            0,
+            "nothing carried past a route's end"
+        );
+
+        // A longer walk, and a wall raised across it after its first tick.
+        router.request(0);
+        router.serve(
+            &surface,
+            &clusters,
+            &mut scratch,
+            &positions,
+            &[at(60, 4)],
+            1,
+        );
+        assert_eq!(router.state(0), WalkState::Walking);
+        router.advance(&surface, &kinds, &hit_points, &mut positions, &mut headings);
+        assert_eq!(router.state(0), WalkState::Walking);
+        let here = positions[0][0].floor_voxels();
+        let walled = ground(|x, _| x == here + 1 || x == here + 2);
+        let moved = Surface::new(&walled, costs).unwrap_or_else(|| panic!("a surface"));
+        router.set_accumulator(0, 1_000_000);
+        router.advance(&moved, &kinds, &hit_points, &mut positions, &mut headings);
+        assert_eq!(
+            router.state(0),
+            WalkState::Waiting,
+            "the route is asked again"
+        );
+        assert_eq!(router.accumulator(0), 0, "nothing carried into the repath");
+    }
+}

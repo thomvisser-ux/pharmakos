@@ -223,7 +223,7 @@ impl World {
     /// The sensor at position `at` of the walk over every sensor, and the
     /// position after it, or `None` once the walk is done (S2's plan, E10).
     ///
-    /// The walk is a total order: every living, awake beacon by row, then every
+    /// The walk is a total order: every living beacon by row, then every
     /// living unit by row, then every finished structure a seat owns by row.
     /// Positions that hold no sensor are skipped, so a caller walks with
     /// `while let Some((sensor, next)) = world.sensor_at(at)` and allocates

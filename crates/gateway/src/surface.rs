@@ -2600,7 +2600,12 @@ impl Surface {
         // no writ and the core's site: the gone beacon's own place is not kept
         // anywhere, and the core's sphere is in the scope already, so no
         // sphere test answers differently for it.
-        let placed = seats.placed().get(row).copied().unwrap_or_default();
+        let placed = seats.placed().get(row).copied().ok_or_else(|| {
+            Error::internal(format!(
+                "seat {} has no placement counter beside its seat row",
+                seat.raw()
+            ))
+        })?;
         let core_at = core.and_then(|id| {
             let at = beacons
                 .row_of(pharmakos_sim::tables::BeaconId::new(id))

@@ -918,7 +918,11 @@ fn query_pad_of(
     let climb = i64::from(locomotion.climb_surcharge);
     if cardinal == 0 || diagonal == 0 {
         return Err(refused(
-            "locomotion.step_cost_cardinal",
+            if cardinal == 0 {
+                "locomotion.step_cost_cardinal"
+            } else {
+                "locomotion.step_cost_diagonal"
+            },
             format!(
                 "{cardinal} cardinal, {diagonal} diagonal; a step that costs nothing lets a walker \
                  cross the map in a tick"

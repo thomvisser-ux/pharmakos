@@ -551,6 +551,9 @@ pub enum PlaceRefused {
     /// The seat's placement counter is at its last value: a name past it
     /// cannot be handed out, which no match reaches at the beacon room.
     CounterSpent,
+    /// The table answered an id that names no row (a sentinel, or one outside
+    /// the layout), which no table this sim builds hands out.
+    NoRow,
 }
 
 /// What a damage order hits.
@@ -1426,7 +1429,7 @@ impl World {
                 },
             )
             .map_err(|_| PlaceRefused::TableFull)?;
-        let row = placed.id.row().map_err(|_| PlaceRefused::TableFull)?;
+        let row = placed.id.row().map_err(|_| PlaceRefused::NoRow)?;
         match self.beacon_alive.get_mut(row.index()) {
             Some(slot) => *slot = hp.is_alive(),
             None => self.beacon_alive.push(hp.is_alive()),
