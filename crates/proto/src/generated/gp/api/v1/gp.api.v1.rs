@@ -481,7 +481,7 @@ impl ::prost::Name for GetRecapRequest {
 const NAME: &'static str = "GetRecapRequest";
 const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.GetRecapRequest".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.GetRecapRequest".into() }}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetRecapResponse {
     #[prost(string, tag="1")]
     pub prose: ::prost::alloc::string::String,
@@ -494,14 +494,36 @@ pub struct GetRecapResponse {
     #[prost(message, optional, tag="3")]
     pub shortfall: ::core::option::Option<Shortfall>,
     /// The calling seat's kills and losses, S2's (spec section 3: "The recap
-    /// shows 'shared kill'"). The seat's OWN, as the settlement is.
+    /// shows 'shared kill'"). The seat's OWN, as the settlement is, at every
+    /// recap.
     #[prost(message, optional, tag="4")]
     pub tally: ::core::option::Option<Tally>,
+    /// Every seat's tally, in ascending seat order, the calling seat's among
+    /// them: EMPTY at every recap between rounds, and filled for every seat
+    /// once the match has ended (the owner's ruling, decisions-log item 145).
+    /// Between rounds a seat learns only its own tally, above.
+    #[prost(message, repeated, tag="5")]
+    pub seat_tallies: ::prost::alloc::vec::Vec<SeatTally>,
 }
 impl ::prost::Name for GetRecapResponse {
 const NAME: &'static str = "GetRecapResponse";
 const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.GetRecapResponse".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.GetRecapResponse".into() }}
+/// One seat's tally, named by its seat, for the recap after the match has
+/// ended (GetRecapResponse.seat_tallies).
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SeatTally {
+    /// The seat, spelt as ViewEntity.owner spells a seat: `seat.0`.
+    #[prost(string, tag="1")]
+    pub seat: ::prost::alloc::string::String,
+    /// Its counts, read as GetRecapResponse.tally's are.
+    #[prost(message, optional, tag="2")]
+    pub tally: ::core::option::Option<Tally>,
+}
+impl ::prost::Name for SeatTally {
+const NAME: &'static str = "SeatTally";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.SeatTally".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.SeatTally".into() }}
 /// One seat's tally for the match so far, as the sim's hashed per-seat
 /// counters hold it at this recap (S2's plan, E15), never as the feed's events
 /// add up: the event bus drops past its capacity and a tally may not. Assets

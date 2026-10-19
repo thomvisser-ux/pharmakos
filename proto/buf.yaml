@@ -96,8 +96,9 @@ breaking:
     #     progress and sub-voxel position. 6-8 take the HP, the maximum HP and
     #     the heading; 9-15 stay held for the rest.
     #   * `GetRecapResponse`: 4-15 were held for "the rest of the recap". 4
-    #     takes the kill and loss tally (E15); 5-15 stay held for the awards
-    #     (S4) and the highlights (S7).
+    #     takes the calling seat's kill and loss tally (E15) and 5 every seat's
+    #     tally once the match has ended (decisions-log item 145); 6-15 stay
+    #     held for the awards (S4) and the highlights (S7).
     #
     # buf sees each old range go away and cannot tell a discharge from an
     # un-reservation; tests/golden/proto/expected.reserved.txt shows each

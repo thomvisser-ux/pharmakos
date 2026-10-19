@@ -25,7 +25,7 @@ gp.api.v1.GetMapSummaryResponse
   numbers: 6-15
 
 gp.api.v1.GetRecapResponse
-  numbers: 5-15
+  numbers: 6-15
 
 gp.api.v1.ViewChunk
   numbers: 3-15

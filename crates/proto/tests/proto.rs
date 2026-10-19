@@ -1725,6 +1725,7 @@ fn the_s1_economy_wire_round_trips_in_its_documented_spellings() {
                 beacon_ids: vec!["b_03".to_owned()],
             }),
             tally: None,
+            seat_tallies: Vec::new(),
         },
         concat!(
             r#"{"prose":"Round 1 settled.","settlement":{"bmi_dollars":105,"band_rank":2,"#,
@@ -1991,9 +1992,9 @@ fn a_wall_target_round_trips_with_its_box() {
 #[test]
 fn the_s2_gateway_wire_round_trips_in_its_documented_spellings() {
     // S2-11 (decision 5): what a seat sees of its own and another seat's
-    // assets; E15: the recap's tally.
+    // assets.
     use gp_api::view_entity::Kind;
-    use gp_api::{BeaconSummary, GetRecapResponse, Tally, ViewEntity};
+    use gp_api::{BeaconSummary, ViewEntity};
     use gp_v1::Voxel;
 
     // An enemy beacon from memory: its position and the sighting's age, and
@@ -2064,6 +2065,13 @@ fn the_s2_gateway_wire_round_trips_in_its_documented_spellings() {
             &["kind"],
         );
     }
+}
+
+#[test]
+fn the_s2_recap_tallies_round_trip_in_their_documented_spellings() {
+    // E15: the calling seat's tally at every recap; decisions-log item 145:
+    // every seat's once the match has ended.
+    use gp_api::{GetRecapResponse, SeatTally, Tally};
 
     round_trips(
         &GetRecapResponse {
@@ -2087,6 +2095,35 @@ fn the_s2_gateway_wire_round_trips_in_its_documented_spellings() {
             "losses",
             "value_destroyed_dollars",
         ],
+    );
+
+    // Once the match has ended, every seat's tally (decisions-log item 145).
+    let tally = |kills| {
+        Some(Tally {
+            kills,
+            ..Tally::default()
+        })
+    };
+    round_trips(
+        &GetRecapResponse {
+            tally: tally(4),
+            seat_tallies: vec![
+                SeatTally {
+                    seat: "seat.0".to_owned(),
+                    tally: tally(4),
+                },
+                SeatTally {
+                    seat: "seat.1".to_owned(),
+                    tally: tally(0),
+                },
+            ],
+            ..GetRecapResponse::default()
+        },
+        concat!(
+            r#"{"tally":{"kills":4},"seat_tallies":[{"seat":"seat.0","tally":{"kills":4}},"#,
+            r#"{"seat":"seat.1","tally":{}}]}"#
+        ),
+        &["seat_tallies", "seat"],
     );
 }
 

@@ -612,12 +612,29 @@ message GetRecapResponse {
   Shortfall shortfall = 3;
 
   // The calling seat's kills and losses, S2's (spec section 3: "The recap
-  // shows 'shared kill'"). The seat's OWN, as the settlement is.
+  // shows 'shared kill'"). The seat's OWN, as the settlement is, at every
+  // recap.
   Tally tally = 4;
+
+  // Every seat's tally, in ascending seat order, the calling seat's among
+  // them: EMPTY at every recap between rounds, and filled for every seat
+  // once the match has ended (the owner's ruling, decisions-log item 145).
+  // Between rounds a seat learns only its own tally, above.
+  repeated SeatTally seat_tallies = 5;
 
   // RESERVED — the rest of the recap: awards (S4, with the award catalogue)
   // and highlights (S7, with recordings).
-  reserved 5 to 15;
+  reserved 6 to 15;
+}
+
+// One seat's tally, named by its seat, for the recap after the match has
+// ended (GetRecapResponse.seat_tallies).
+message SeatTally {
+  // The seat, spelt as ViewEntity.owner spells a seat: `seat.0`.
+  string seat = 1;
+
+  // Its counts, read as GetRecapResponse.tally's are.
+  Tally tally = 2;
 }
 
 // One seat's tally for the match so far, as the sim's hashed per-seat
