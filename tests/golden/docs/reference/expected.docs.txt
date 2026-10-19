@@ -37,7 +37,7 @@ host                      serve one match to the game client over this process's
 
 ## The playbook vocabulary (gp.v1)
 
-100 messages. A field's name is the one the canonical form writes, which is
+106 messages. A field's name is the one the canonical form writes, which is
 the .proto spelling and not lowerCamelCase. A reserved number is one held on
 purpose: field numbers are added, never renumbered or reused.
 
@@ -54,8 +54,34 @@ gp.v1.Area
   min                          1   gp.v1.Voxel
   max                          2   gp.v1.Voxel
 
+gp.v1.AttackLaunch
+  oneof: _force_size, _segment_ms
+  force_size                   1   uint32
+  segment_ms                   2   int32
+  reserved 3
+  reserved broadcast_received
+
+gp.v1.AttackRetreat
+  oneof: _force_below_pct, _after_launch_ms
+  force_below_pct              1   uint32
+  after_launch_ms              2   int32
+
 gp.v1.AttackSettings
-  reserved 1 to 15
+  target                       1   gp.v1.AttackTarget
+  retarget                     2   gp.v1.AttackSettings.Retarget
+  staging                      3   gp.v1.Voxel
+  launch                       4   gp.v1.AttackLaunch
+  retreat                      5   gp.v1.AttackRetreat
+  after_action                 6   gp.v1.AttackSettings.AfterAction
+  avoid_areas                  7   repeated gp.v1.Area
+  breach_allowed               8   bool
+  waves                        9   uint32
+
+gp.v1.AttackTarget
+  oneof: target
+  beacon                       1   gp.v1.BeaconRef
+  voxel                        2   gp.v1.Voxel
+  enemy_commander              3   gp.v1.EnemyCommander
 
 gp.v1.BeaconFilter
   side                         1   gp.v1.BeaconFilter.Side
@@ -105,6 +131,7 @@ gp.v1.BuildTarget
   anchor                       2   gp.v1.Location
   rotation_quarter_turns       3   uint32
   order                        4   uint32
+  wall_box                     5   gp.v1.Area
 
 gp.v1.BuiltinMandate
   builtin_id                   1   string
@@ -171,7 +198,15 @@ gp.v1.Declarative
   options                      3   gp.v1.Options
 
 gp.v1.DefendSettings
-  reserved 1 to 15
+  protect                      1   repeated gp.v1.ProtectedAsset
+  engagement_radius_pct        2   uint32
+  pursue                       3   gp.v1.DefendSettings.Pursue
+  picket_scouts                4   uint32
+  reserved 5
+  reserved 6
+  reserved auto_fortify, unit_mix
+
+gp.v1.EnemyCommander
 
 gp.v1.Fallback
   oneof: posture
@@ -292,6 +327,8 @@ gp.v1.MoveStep
   to                           1   gp.v1.Location
   pace                         2   gp.v1.MoveStep.Pace
 
+gp.v1.MyCommander
+
 gp.v1.Nearest
   filter                       1   gp.v1.BeaconFilter
 
@@ -335,6 +372,11 @@ gp.v1.Program
   oneof: kind
   builtin                      1   gp.v1.BuiltinProgram
   script                       2   gp.v1.ScriptProgram
+
+gp.v1.ProtectedAsset
+  oneof: asset
+  beacon                       1   gp.v1.BeaconRef
+  my_commander                 2   gp.v1.MyCommander
 
 gp.v1.QueueStructureRow
   blueprint_id                 1   string
@@ -636,8 +678,18 @@ gp.v1.Weakest
 
 ## The enumerations (gp.v1)
 
-18 of them. JSON spells an enum by value name.
+21 of them. JSON spells an enum by value name.
 
+
+gp.v1.AttackSettings.AfterAction
+  AFTER_ACTION_UNSPECIFIED         0
+  REGROUP_AT_STAGING               1
+  RETURN_HOME                      2
+
+gp.v1.AttackSettings.Retarget
+  RETARGET_UNSPECIFIED             0
+  NONE                             1
+  NEAREST_KNOWN                    2
 
 gp.v1.BeaconFilter.MandateKind
   MANDATE_KIND_UNSPECIFIED         0
@@ -673,6 +725,12 @@ gp.v1.CmdrHpPct.Cmp
   NE                               4
   GE                               5
   GT                               6
+
+gp.v1.DefendSettings.Pursue
+  PURSUE_UNSPECIFIED               0
+  NEVER                            1
+  SPHERE_EDGE                      2
+  WHILE_IN_REACH                   3
 
 gp.v1.FeatureRef.Coverage
   COVERAGE_UNSPECIFIED             0
@@ -752,7 +810,7 @@ gp.v1.Playbook.Kind
 
 ## Diagnostics
 
-83 codes. A code is language-neutral, append-only and never
+84 codes. A code is language-neutral, append-only and never
 reused; only an ERROR stops a playbook qualifying. `none at the skeleton` names the
 task that owes the emitter, which is honesty about coverage rather than a gap.
 
@@ -1016,6 +1074,10 @@ E0507  ERROR  settings and recycle  raised at: none at the skeleton (S4, with li
 E0508  ERROR  settings and recycle  raised at: semantics
   `scout_count` is {found}; a beacon holds at most {most} scouts.
   A Survey beacon can field only so many scouts. Ask for fewer.
+
+E0509  ERROR  settings and recycle  raised at: structure
+  a `{id}` target carries a `wall_box`; only a `wall` target fills a box, and every other structure's footprint is its blueprint's.
+  Only a wall is built as a box of voxels. Leave the box out, or make this target a wall.
 
 W0501  WARNING  settings and recycle  raised at: semantics
   `seam_choice` SAFEST reads as NEAREST until S2's threat model arrives.

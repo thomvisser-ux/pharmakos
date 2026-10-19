@@ -25,6 +25,15 @@
         }
       }
     },
+    "AfterAction": {
+      "type": "string",
+      "description": "`gp.v1.AttackSettings.AfterAction`. A playbook on disk carries the value name verbatim.",
+      "enum": [
+        "AFTER_ACTION_UNSPECIFIED",
+        "REGROUP_AT_STAGING",
+        "RETURN_HOME"
+      ]
+    },
     "All": {
       "type": "object",
       "description": "gp.v1.All",
@@ -64,11 +73,110 @@
         }
       }
     },
+    "AttackLaunch": {
+      "type": "object",
+      "description": "gp.v1.AttackLaunch",
+      "additionalProperties": false,
+      "properties": {
+        "force_size": {
+          "type": "integer"
+        },
+        "segment_ms": {
+          "type": "integer"
+        }
+      }
+    },
+    "AttackRetreat": {
+      "type": "object",
+      "description": "gp.v1.AttackRetreat",
+      "additionalProperties": false,
+      "properties": {
+        "force_below_pct": {
+          "type": "integer"
+        },
+        "after_launch_ms": {
+          "type": "integer"
+        }
+      }
+    },
     "AttackSettings": {
       "type": "object",
       "description": "gp.v1.AttackSettings",
       "additionalProperties": false,
-      "properties": {}
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/AttackTarget"
+        },
+        "retarget": {
+          "$ref": "#/$defs/Retarget"
+        },
+        "staging": {
+          "$ref": "#/$defs/Voxel"
+        },
+        "launch": {
+          "$ref": "#/$defs/AttackLaunch"
+        },
+        "retreat": {
+          "$ref": "#/$defs/AttackRetreat"
+        },
+        "after_action": {
+          "$ref": "#/$defs/AfterAction"
+        },
+        "avoid_areas": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Area"
+          }
+        },
+        "breach_allowed": {
+          "type": "boolean"
+        },
+        "waves": {
+          "type": "integer"
+        }
+      }
+    },
+    "AttackTarget": {
+      "type": "object",
+      "description": "gp.v1.AttackTarget",
+      "additionalProperties": false,
+      "properties": {
+        "beacon": {
+          "$ref": "#/$defs/BeaconRef"
+        },
+        "voxel": {
+          "$ref": "#/$defs/Voxel"
+        },
+        "enemy_commander": {
+          "$ref": "#/$defs/EnemyCommander"
+        }
+      },
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "beacon",
+              "voxel"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon",
+              "enemy_commander"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "voxel",
+              "enemy_commander"
+            ]
+          }
+        }
+      ]
     },
     "AuthorKind": {
       "type": "string",
@@ -355,6 +463,9 @@
         },
         "order": {
           "type": "integer"
+        },
+        "wall_box": {
+          "$ref": "#/$defs/Area"
         }
       }
     },
@@ -1224,6 +1335,28 @@
       "type": "object",
       "description": "gp.v1.DefendSettings",
       "additionalProperties": false,
+      "properties": {
+        "protect": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProtectedAsset"
+          }
+        },
+        "engagement_radius_pct": {
+          "type": "integer"
+        },
+        "pursue": {
+          "$ref": "#/$defs/Pursue"
+        },
+        "picket_scouts": {
+          "type": "integer"
+        }
+      }
+    },
+    "EnemyCommander": {
+      "type": "object",
+      "description": "gp.v1.EnemyCommander",
+      "additionalProperties": false,
       "properties": {}
     },
     "Fallback": {
@@ -1988,6 +2121,12 @@
         }
       }
     },
+    "MyCommander": {
+      "type": "object",
+      "description": "gp.v1.MyCommander",
+      "additionalProperties": false,
+      "properties": {}
+    },
     "Nearest": {
       "type": "object",
       "description": "gp.v1.Nearest",
@@ -2118,6 +2257,39 @@
         }
       }
     },
+    "ProtectedAsset": {
+      "type": "object",
+      "description": "gp.v1.ProtectedAsset",
+      "additionalProperties": false,
+      "properties": {
+        "beacon": {
+          "$ref": "#/$defs/BeaconRef"
+        },
+        "my_commander": {
+          "$ref": "#/$defs/MyCommander"
+        }
+      },
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "beacon",
+              "my_commander"
+            ]
+          }
+        }
+      ]
+    },
+    "Pursue": {
+      "type": "string",
+      "description": "`gp.v1.DefendSettings.Pursue`. A playbook on disk carries the value name verbatim.",
+      "enum": [
+        "PURSUE_UNSPECIFIED",
+        "NEVER",
+        "SPHERE_EDGE",
+        "WHILE_IN_REACH"
+      ]
+    },
     "QuartermasterPriority": {
       "type": "string",
       "description": "`gp.v1.InterfaceRow.QuartermasterPriority`. A playbook on disk carries the value name verbatim.",
@@ -2181,6 +2353,15 @@
         "SKIP_STEP",
         "JUMP_FORWARD",
         "END_ROUTE"
+      ]
+    },
+    "Retarget": {
+      "type": "string",
+      "description": "`gp.v1.AttackSettings.Retarget`. A playbook on disk carries the value name verbatim.",
+      "enum": [
+        "RETARGET_UNSPECIFIED",
+        "NONE",
+        "NEAREST_KNOWN"
       ]
     },
     "Roe": {
