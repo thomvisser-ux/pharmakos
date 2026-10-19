@@ -2165,7 +2165,7 @@ second option, not taken, would have taken about 8.
 Plan units are not calendar days. S1's 71.5-ad plan ran from its adoption on 2026-09-29 to its close
 on 2026-10-16. Its stops — the Windows CI leg, serial contract PRs, `MATRIX_ONLY`'s second matrix
 for every lane touching `crates/sim/`, `crates/client-gdext/`, `godot/`, `crates/mesher/`,
-`library/`, `rules/`, `.github/` or the chain goldens (`scripts/merge-train.sh` ~151) — set the
+`library/`, `rules/`, `.github/` or the chain goldens (`scripts/merge-train.sh`'s `MATRIX_ONLY`) — set the
 calendar again: about 20 of S2's 27 PRs pay it, and up to 23 if `vfy1`, `vfy2` and `wgw` move a
 fixture under `godot/`.
 

@@ -84,9 +84,9 @@ the owner, who says then whether it runs on into S3:
   the two reviews read the release notes and the diff between the two SHAs, and for a Cargo
   security update the advisory and the crate's diff; a comment names the contract paths and the
   head the reviews read, the merge is pinned to that head, and the main session asks
-  `@dependabot rebase` rather than rebasing or merging into the branch itself (the branch is
-  Dependabot's, which rewrites it, so this is the one rebase AGENTS.md §6's merge-only rule leaves
-  standing). Sub-agents still open a PR and stop.
+  `@dependabot rebase` rather than rebasing or merging into the branch itself: Dependabot rebases
+  its own branch, which nobody else pushes to, while AGENTS.md §6's merge-only rule governs the
+  branches we push, so the request asks for no rebase by us. Sub-agents still open a PR and stop.
 - The owner accepts **bypass-permissions mode** in that same session and in the sub-agents and
   workflow agents it launches, which inherit the mode (decisions-log item 116 (9)). Sub-agents still
   open a PR and stop; for them the contract-file rule is held by the lane's brief, the two adversarial

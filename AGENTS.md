@@ -593,7 +593,8 @@ machine can run.
   branch whose pushed history is never rewritten, and the DCO walk checks merge commits as it
   checks every other. A pull request merges into `main` by a merge commit, pinned to the head
   whose checks passed, never by a rebase or a squash; `scripts/merge-train.sh` does both halves
-  (decisions-log item 145 (3)). Never force-push `main`.
+  (decisions-log item 145 (3)). Never force-push `main`. The remedy for an unsigned commit, which
+  never rewrites a pushed branch, is in §8.
 - State in the PR which crates you touched, so the next agent can pick a disjoint set.
 - Agents iterate until CI is green on their own branch; the owner reviews the stage demo, not the
   intermediate commits.
@@ -640,14 +641,19 @@ of that premise.
   Types: `feat`, `fix`, `docs`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`.
   Scope is the crate or area: `feat(sim):`, `fix(verifier):`, `docs(design):`, `ci(determinism):`.
   A breaking contract change carries `!` and a `BREAKING CHANGE:` footer — and still needs §5
-  approval.
+  approval. A merge commit is exempt from the subject rule: it reads
+  `Merge main (<sha>) into <branch>` (§6), or GitHub's own subject for a pull request's merge.
 - **DCO sign-off on every commit.** `git commit -s` adds
   `Signed-off-by: Name <email>`; keep it as the last line. The `dco` job in
   `.github/workflows/ci.yml` walks every commit in the pull request and fails without it. No
   sign-off, no merge. Dependabot's own commits carry its sign-off line,
   `dependabot[bot] <support@github.com>`, which is accepted for them in place of a person's
   (decisions-log items 119 (4), 120 and 122 (4)); a commit anyone else adds to its branch still
-  needs its own.
+  needs its own. An unsigned commit that has not been pushed is fixed in place: `git commit --amend
+  -s` for the last commit, or `git rebase --signoff <base>` for several. Once it has been pushed,
+  the branch is not rewritten (§6): the commits are made again, signed, on a new branch, which
+  opens a new pull request in place of the old one. The one force-push item 145 (3) records was
+  the main session's, of a merge commit no review had read, and it is not a lane's remedy.
 - **SPDX headers on every file**, REUSE-style, with `REUSE.toml` as the manifest and a `LICENSE`
   pointer at the root, in each top-level directory outside the game code's tier other than
   `LICENSES/` (`assets/`, `docs/`, `examples/`, `library/`, `packaging/`, `proto/`, `rules/`), and
