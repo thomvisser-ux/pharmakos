@@ -135,10 +135,11 @@ presses Ready to end a Lull rather than waiting it out.
    them neutral, and until the art pass the client still draws them in Easy's colour, E14), its
    units retreat and re-home to Easy's nearest beacon, and the owner's repair drones salvage the
    ruins inside their own sphere.
-8. **The recap** shows the owner's own kills and losses, a "shared kill" where another seat's
-   damage helped finish an asset, and the value the owner's seat destroyed. The tally is the calling
-   seat's own, as its settlement is, so Easy's is on no wire (decision 5; decisions-log item 145
-   (4)); the headless balance report gives every seat's.
+8. **The recap** shows, between rounds, the owner's own kills and losses, a "shared kill" where
+   another seat's damage helped finish an asset, and the value the owner's seat destroyed; at match
+   end it shows every seat's. Between rounds Easy's tally is on no wire (the owner's ruling,
+   decisions-log item 145 (7), amending spec §3's fog-policy line: `GetRecapResponse.tally` is the
+   calling seat's own, and `seat_tallies` is filled only once the match has ended).
 9. **The end.** The match ends on the first tick Easy has no beacon left (`last_seat_standing`), or
    at round 6's limit, where the final audit names the winner and its destroyed-value term is now
    not zero (X-08).
@@ -1006,6 +1007,11 @@ item 145 (1), (2) and (4)).**
     `world.rs` (85), `interpreter/state.rs` (37), `pathing/clusters.rs` (31), `pathing/router.rs`
     (27), `programs.rs` (21) and `tables.rs` (15), each file capped at its count by
     `no_silent_fallback_is_left`, so the counts only fall; the PR says how many remain.
+  - **A typed refusal for a transition mid-tick** (decisions-log item 145 (4)): `Runner::begin_push`
+    and `Runner::end_recap` answer a typed refusal with a `MidTick` cause, as the filing seams,
+    capture and save do, in place of `base`'s bare `false`; `Host::begin_push` and `end_recap`
+    (`crates/gateway/src/host.rs`) pass it on, and `Surface::begin_push` and `end_recap` keep
+    turning it into the audited `INTERNAL` refusal, all three as named places.
 - **Implements:** items 138 (4) (c), 139 (1) ruling 7, 144 (4); register S1-34 (sim), S1-37 (live
   counts), S2-05.
 - **Needs:** `base` and `con3` merged; **no decision**. **Acceptance:**
@@ -1241,8 +1247,9 @@ rename (below) stands.
   play the arms, which carry no golden chain, as if they were committed scenarios; it calls the
   played set instead (below). It also re-blesses `tests/golden/docs/reference/expected.docs.txt` for
   its new flags, since `gamectl docs` prints the CLI's usage lines: that golden is `con3`'s and then
-  `con4`'s while they are open, so this lane, which merges after both, re-blesses it after its
-  merge of `main` (E33). **Branch** `feat/gamectl-nightly`, worktree `../pharmakos-night`, target
+  `con4`'s while they are open. **As merged** (decisions-log item 145 (1)): this lane merged after
+  `con3` but before `con4`, so it re-blessed the golden after its merge of `con3`, and `con4`, the
+  second to merge, re-blesses it again after its merge of `main` (E33). **Branch** `feat/gamectl-nightly`, worktree `../pharmakos-night`, target
   `D:/build/night`.
 - **Builds:**
   - **`gamectl scenario run <file> [--operator easy] [--seeds <file>] [--format json] [--out
@@ -1425,8 +1432,10 @@ rename (below) stands.
 - **Also (decisions-log item 145 (5)):** the silent fallbacks `con3` found on `main`,
   `viewfeed.rs:716` (a chunk that fails to decode drawn as zeros, air) and `schema.rs:242`
   (`i32::MAX` for an index that does not fit), each a typed error; `con4`'s new `ViewEntity` and
-  `BeaconSummary` fields (`hp`, `max_hp`, `heading`, `sighting_age_ms`) and the recap's `Tally`
-  filled under the fog filter, the tally the calling seat's own; `Money` and `Hp` converted to the
+  `BeaconSummary` fields (`hp`, `max_hp`, `heading`, `sighting_age_ms`) filled under the fog
+  filter; the recap's `tally`, the calling seat's own, and its `seat_tallies`, every seat's, filled
+  only once the match has ended and absent before (the owner's ruling, decisions-log item 145 (7);
+  `con4` #120 adds the field), with a test that a recap between rounds carries no other seat's; `Money` and `Hp` converted to the
   wire's integers by `try_from`, with a typed error; and the stale comments: `surface/planning.rs`
   (~760) and `surface/knowledge.rs` (~738, ~810), which say a qualifying FULL report may fail to
   price (E0603 ended that; the door stays as defence in depth), and `surface/knowledge.rs` (~1112),
@@ -1805,7 +1814,8 @@ rename (below) stands.
 - **Also (decisions-log item 145 (5)):** `initial.mandate {defend: {}}` is refused
   (`compile_settings_row`) while an empty Defend arm in a `set_mandate` is legal
   (`compile_switch_settings`), and spec §5 makes the mandate type a free choice at deploy. This lane,
-  which makes Defend's settings real, reads the two the same way, and the verifier follows.
+  which makes Defend's settings real, accepts an empty Defend arm in `initial` too, and the
+  verifier follows the sim (the main session's call, open to the owner's veto).
 - **Implements:** items 104, 138 (4) (c) (pickets); spec §6's Defend row, §4's bodyguard, §10's
   reflex; register S2-02 (the sim's half), S2-04. **Needs:** `site` and `fall` merged; the ruled
   decisions 6, 12, 13 and 21. **Acceptance:**
@@ -2163,7 +2173,8 @@ fixture under `godot/`.
   rulings its Needs line names.
 - **The main session's docs PRs** carry, beside the rulings: spec §3's "terrain … credits nobody" amended by item 144 (2) and decision 37; spec
   §6's Build row (terraform's meaning, the base kit's blueprints, repair drones on work in hand,
-  decision 38's threshold), §6's Common row (decision 4's unset `roe`), §7 (decision 43's repair
+  decision 38's threshold), §3's fog-policy line (per-seat detail at match end only, the owner's
+  ruling of decisions-log item 145 (7)), §6's Common row (decision 4's unset `roe`), §7 (decision 43's repair
   price under the Repair band), §9 (the support rule, materials and terrain's blast levels by
   material, decision 10, bedrock, walls at least two high and filled to the ground and the charge's
   cut, decisions 39 to 42, the demolition charge's carrier, and that a collapse carrying an asset
@@ -2229,8 +2240,8 @@ Beyond the second cut, any further cut is the owner's (decision 32, section 7).
 
 ### 4.6 The contract pull requests, in merge order
 
-Eighteen of S2's PRs touch an AGENTS.md §5 path: seventeen lanes' and the main session's
-firewall-runner PR. The main session's docs PRs (section 4.4), which touch AGENTS.md and
+Nineteen of S2's PRs touch an AGENTS.md §5 path: seventeen lanes' and the main session's
+harness and firewall-runner PRs. The main session's docs PRs (section 4.4), which touch AGENTS.md and
 `docs/design/`, contract paths too, are counted apart: they are the record's own PRs, take the
 docs-only fast path and queue on no lane. Each body names its paths; each new hashed field goes into
 the state hash, the snapshot round-trip and the goldens in the same PR (§4.8); each snapshot change
@@ -2247,6 +2258,7 @@ with new names, their ids taken at the merge of `main` (E17, E33).
 | 3 | `base` | determinism code: the tick loop's per-phase form and its `MidTick` refusal (E30); the event vocabulary (`StepFailure` `targets_unwritten`) |
 | 4 | `con4` | `playbook.proto` (the header's defaults list, decision 4), `gateway.proto`, `proto/buf.yaml`'s scoped `ignore_only`, the generated tree, the schema and docs goldens |
 | 5 | `night` | `xtask/src/scenario.rs` (what the `scenario` step checks), `xtask/src/package.rs`'s replay list (a named place: `collect_played`, so the package never replays an arm), `.github/workflows/nightly-scenarios.yml`, the nightly result golden (a new golden format) |
+| — | the harness PR (main session, after this plan's item 145 docs PR) | AGENTS.md §6 (the merge-only rule in place of "rebase on `main`", and `tests/golden/scenarios/nightly-result/` in the list of tests that pin the operator's output), CLAUDE.md (~76, the local-verify path), `scripts/merge-train.sh` (~19–21, ~53, ~188: it rebase-merges, rebases the next lane with `--force-with-lease`, and refuses a branch with merge commits), `.claude/workflows/wave-lanes.js` (~106), and the workspace `[lints]`: `arithmetic_side_effects` and `panic` denied in the crates that parse untrusted input (decisions-log item 145 (3), (5) and (7)). Until it merges, `scripts/merge-train.sh --local-verify` cannot be used |
 | — | the firewall-runner PR (main session) | `.github/workflows/claude.yml`'s `runs-on` (item 142 (3)), in the gap between `night` and `g3h`, once the owner's first triggered `claude.yml` run has happened |
 | 6 | `ids` | determinism code: ids and generations, the typed id columns, the placement counter, the beacons-lost column, the ruin reserve, `SNAPSHOT_VERSION` 10; the event vocabulary (`ruin_buried`) |
 | 7 | `vfy2` | `report_hash`'s `Scope` encoding |
