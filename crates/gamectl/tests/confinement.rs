@@ -34,7 +34,9 @@ const SOURCES: &[&str] = &[
     "src/main.rs",
     "src/rules.rs",
     "src/scenario.rs",
+    "src/scenario/nightly.rs",
     "src/scenario/run.rs",
+    "src/scenario/seeds.rs",
     "src/schema.rs",
     "src/seat.rs",
     "src/strings.rs",
@@ -89,14 +91,18 @@ fn every_module_is_checked() {
 ///
 /// # What this does *not* forbid, since a review asked
 ///
-/// The crate reads the runner: `crate::scenario::run` calls `Host::runner()`
-/// for the tick a Lull is standing on, the phase a refused `begin_push` was in,
-/// and the round a seal belongs to. `.runner()` is deliberately **not** a
+/// The crate reads the runner and the world: `crate::scenario::run` calls
+/// `Host::runner()` for the tick a Lull is standing on (`tick()`), the phase a
+/// refused `begin_push` was in and whether a match played to its end has ended
+/// (`phase()`), the round a seal belongs to, a refusal is named in and a
+/// nightly match reached (`round()`) and how the match ended (`outcome()`),
+/// and `Host::world()` for the final audit's tied seats on a shared win
+/// (`audit::final_audit`, a pure read). `.runner()` is deliberately **not** a
 /// needle, because the guard is against *driving* a `Runner`, not against
-/// naming one — and `Host::runner` hands out a `&Runner` whose every stepping
-/// method needs `&mut`, so the reach cannot grow into a second way to play a
-/// match. If T16a gives `Surface` accessors for those three values, the runner
-/// takes them and `.runner()` joins the list below.
+/// naming one — and `Host::runner` hands out a `&Runner` and `Host::world` a
+/// `&World`, whose every stepping method needs `&mut`, so the reach cannot
+/// grow into a second way to play a match. If `Surface` gains accessors for
+/// those values, the runner takes them and `.runner()` joins the list below.
 #[test]
 fn nothing_here_drives_a_match_except_through_the_gateway() {
     const FORBIDDEN: &[(&str, &str)] = &[
@@ -265,9 +271,10 @@ fn nothing_here_writes_a_committed_golden() {
     }
     assert_eq!(
         writers,
-        vec!["src/scenario/run.rs"],
-        "one module writes a file, and it writes the fresh chain the `golden` step compares. A \
-         second writer is a second place a golden could be written from"
+        vec!["src/scenario/nightly.rs", "src/scenario/run.rs"],
+        "two modules write a file: `run.rs` the fresh chain the `golden` step compares, and \
+         `nightly.rs` the result a run over a seed file writes to `--out`. A third writer is a \
+         third place a golden could be written from"
     );
     assert!(
         source("src/lib.rs").contains("strip_prefix(\"expected.\")"),
@@ -309,5 +316,178 @@ fn the_crate_takes_the_sim_with_default_features_off() {
     assert!(
         workspace.contains("pharmakos-sim       = { path = \"crates/sim\", version = \"0\", default-features = false }"),
         "and that entry still has default-features off"
+    );
+}
+
+/// The fallbacks that stay, each with the rule that makes its answer exact
+/// (S2's plan, engineering call E7, swept for this crate by task `night`).
+///
+/// `(file, the line's code, why)`. The scan below finds **every** fallback
+/// call in the shipped code (`unwrap_or`, `unwrap_or_default`,
+/// `unwrap_or_else`, `map_or`, `map_or_else`), as the verifier's twin of this
+/// test does, so each default this crate reads in place of a value is either
+/// rewritten or written down here with its reason.
+///
+/// **Its limit:** it reads method calls, so a default written as a `match`
+/// arm (`_ => Vec::new()`) is invisible to it. The sweep read those by hand:
+/// the `report_hash`, a diagnostic's code and its path in `scenario/run.rs`
+/// now refuse what is missing or misshapen (an absent path is proto3's empty
+/// root pointer, by the wire's rule); `message_of`'s `_` arm renders the
+/// whole error rather than defaulting; and the readers' `_ => None` and
+/// `_ => problems.at(..)` arms each record a problem or name a refusal. Rewritten in the sweep:
+/// the operands split with `split_first` rather than read past a checked
+/// first, the segment's ticks read through the sim's own `Ms::to_ticks_floor`,
+/// the seat and segment indices compared as `usize`, a seat past a `u8` not
+/// read, the chain's reservation computed in `u64` below its cap, the first
+/// `builtin` seat's index and a feed shorter than what was read each an
+/// internal error, a `report_hash` that is not base64 refused (the site
+/// `vfy1` found), the doctor's comment count a failed check when the document
+/// does not parse, and an unreadable working directory an input error.
+const KEPT_FALLBACKS: &[(&str, &str, &str)] = &[
+    (
+        "cli.rs",
+        "let root = root.unwrap_or_else(|| cwd.to_path_buf());",
+        "the documented default: without `--root` every path is read against the working \
+         directory (`OPTIONS`' row says so)",
+    ),
+    (
+        "cli.rs",
+        "depth: depth.unwrap_or(Depth::Full),",
+        "the documented default: FULL, which is what `submit_plan` runs (spec section 11)",
+    ),
+    (
+        "cli.rs",
+        "part: part.unwrap_or_default(),",
+        "the documented default: no `--part` is the whole playbook, which `schema::run` reads \
+         as the empty name",
+    ),
+    (
+        "scenario.rs",
+        "let name = string_at(json, \"name\", \"/name\", problems).unwrap_or_default();",
+        "never read: a missing name is a problem recorded by `string_at`, and `load` returns no \
+         scenario while any problem stands",
+    ),
+    (
+        "scenario.rs",
+        "(units_per_seat, round_limit.unwrap_or(default_limit))",
+        "never read: an absent key is already the default, and a bad one is a problem \
+         recorded above, so `load` returns no scenario",
+    ),
+    (
+        "nightly.rs",
+        "let operator = options.operator.unwrap_or(Operator::Easy);",
+        "the documented default: a `builtin` seat plays Easy, the one operator this build has",
+    ),
+    (
+        "nightly.rs",
+        "let rendered = match options.format.unwrap_or(Format::Text) {",
+        "the documented default: `--format text`",
+    ),
+    (
+        "run.rs",
+        ".unwrap_or_else(|| expected.len().min(actual.len()));",
+        "exact: with no differing line in the common prefix, the first difference is where the \
+         shorter chain ends",
+    ),
+    (
+        "run.rs",
+        "expected.get(at).copied().unwrap_or(\"<end of file>\"),",
+        "a message's words: the committed chain has no line at the first difference because it \
+         ended there",
+    ),
+    (
+        "run.rs",
+        "actual.get(at).copied().unwrap_or(\"<end of run>\"),",
+        "as above, for the run's side",
+    ),
+];
+
+/// The file's shipped code: comment-only lines removed, and everything from
+/// the first `#[cfg(test)]` on, because a unit test may fall back as it likes.
+fn code_lines(text: &str) -> Vec<String> {
+    let shipped = match text.find("#[cfg(test)]") {
+        Some(index) => text.get(..index).unwrap_or(text),
+        None => text,
+    };
+    shipped
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Every fallback call in the crate's shipped code, as `(file name, line)`.
+fn fallbacks() -> Vec<(String, String)> {
+    let mut found = Vec::new();
+    for relative in SOURCES {
+        let name = Path::new(relative)
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        for line in code_lines(&source(relative)) {
+            if line.contains("unwrap_or")
+                || line.contains("map_or(")
+                || line.contains("map_or_else(")
+            {
+                found.push((name.clone(), line.trim().to_owned()));
+            }
+        }
+    }
+    found
+}
+
+/// S2's plan, E7: no silent fallback is left in `gamectl`. A predictable
+/// failure returns a typed error, a conversion or a read that cannot fail is
+/// written so its failure cannot be written, and a default that is a rule is
+/// listed in [`KEPT_FALLBACKS`] with the rule.
+#[test]
+fn no_silent_fallback_is_left() {
+    let found = fallbacks();
+    let unexplained: Vec<String> = found
+        .iter()
+        .filter(|(file, line)| {
+            !KEPT_FALLBACKS
+                .iter()
+                .any(|(kept, code, _)| kept == file && line.contains(code))
+        })
+        .map(|(file, line)| format!("{file}: {line}"))
+        .collect();
+    assert!(
+        unexplained.is_empty(),
+        "a value falls back to a default instead of saying what went wrong. Return a typed \
+         error, make the failure unrepresentable, or, where the default is a rule that leaves \
+         the answer exact, add the line to KEPT_FALLBACKS with that rule:\n{}",
+        unexplained.join("\n")
+    );
+    for (file, code, why) in KEPT_FALLBACKS {
+        let count = found
+            .iter()
+            .filter(|(found_file, line)| found_file == file && line.contains(code))
+            .count();
+        assert_eq!(
+            count, 1,
+            "KEPT_FALLBACKS' entry in {file} (`{code}`, kept because {why}) matches {count} \
+             lines; an entry that matches nothing is stale, and one that matches two hides one"
+        );
+    }
+}
+
+#[test]
+fn the_fallback_scan_finds_what_it_looks_for() {
+    assert_eq!(
+        fallbacks().len(),
+        KEPT_FALLBACKS.len(),
+        "the scan sees as many fallbacks as the list keeps"
+    );
+    let probe = "fn f(v: &[u8]) -> u8 {\n    // v.first().copied().unwrap_or(0)\n    v.first().copied().unwrap_or(0)\n}\n#[cfg(test)]\nmod tests { fn g() { None::<u8>.unwrap_or(1); } }\n";
+    let lines: Vec<String> = code_lines(probe)
+        .into_iter()
+        .filter(|line| line.contains("unwrap_or"))
+        .collect();
+    assert_eq!(
+        lines.len(),
+        1,
+        "the code line is seen; the comment and the test are not"
     );
 }

@@ -1,27 +1,35 @@
 # SPDX-FileCopyrightText: 2026 Pharmakos contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Nightly adversarial scenarios — Rusher, Turtle, Hunter.
+# Nightly adversarial scenarios — Rusher, Turtle, Hunter — and G4's ten matches.
 #
-# ENABLED FROM S2 (destruction and combat). This file is a stub until then: the job is
-# gated on the repository variable NIGHTLY_SCENARIOS_ENABLED, which stays unset until
-# `gamectl scenario run`, the three playbooks and the seed set all exist. A manual run can
-# force it on with the `force` input.
+# Every job here but the last is gated on the repository variable
+# NIGHTLY_SCENARIOS_ENABLED, which only the owner sets: once S2's `arms` lane has
+# merged and its forced run is attached (S2's plan, decision 30). Until then the
+# three arms are placeholders (scenarios/nightly/README.md). A manual run forces
+# every job on with the `force` input.
 #
-# What it does once enabled (spec section 15, "Adversarial scenarios"; AGENTS.md section 9):
+# What it does (spec section 15, "Adversarial scenarios"; AGENTS.md sections 9 and 10
+# item 5; S2's plan, task `night`):
 #
-#   * three fixed, hand-written playbooks run against the Balanced built-in operator on a
-#     fixed seed set, one matrix leg each;
-#   * each arm has a written alarm band: an arm winning more than about 65% of seeds opens
-#     a tuning task. The band is an alarm, not a gate — a red nightly means "look at the
-#     balance", and the job says so in its summary rather than blocking a merge;
-#   * results are uploaded as JSON so a tuning task can diff nights.
-#
-# The nightly fuzzer (10 000 generated playbooks, no panic; AGENTS.md section 9, "Nightly")
-# is the `fuzz` job below: crates/verifier/tests/fuzz.rs's ignored target, whose generator
-# exists and runs a small slice on every ordinary `cargo test`. It sits behind the same
-# variable gate as the scenarios (decisions-log item 116 (6)(j)), so it runs nightly from
-# the day NIGHTLY_SCENARIOS_ENABLED is set, or on a manual run with `force`.
+#   * `scenarios`: each arm, one matrix leg each, plays against Easy (which carries the
+#     Balanced weighting; decisions-log item 144 (6)) over the fixed seed set
+#     scenarios/nightly/seeds.txt with `gamectl scenario run --seeds`, every match to
+#     its end, the arm alternating seats by the seed's position (decision 29), and
+#     writes a JSON result (`pharmakos.nightly-result.v1`). An arm whose playbook
+#     `submit_plan` refuses on a seed fails its leg: that is a broken arm, not a result;
+#   * the band step reads the result's integer `win_rate_percent` (the arm the sole
+#     winner, times 100, over the seeds, rounded down; M-01) and warns above 65 %
+#     (decision 18). The band is an alarm, not a gate: a breach is a tuning task, so the
+#     step warns and fails nothing. Each result is uploaded so a tuning task can diff
+#     nights;
+#   * `fuzz`: the verifier's 10 000 generated playbooks, no panic (AGENTS.md section 9,
+#     "Nightly"; decisions-log item 116 (6)(j));
+#   * `g4` and `g4-compare`: G4's bar, ten seeded matches of 9 600 ticks on each of the
+#     three operating systems, and a byte comparison of the three legs' chains, which
+#     `xtask/src/main.rs` (`DETERMINISM_TICKS`) leaves to this workflow. Unlike the band,
+#     a chain that differs between two operating systems is a determinism hole, so the
+#     compare job fails.
 #
 # Every `uses:` is pinned to a full commit SHA with its ref in a trailing comment
 # (decisions-log item 116 (6)(o)); a ref marked `(branch)` has no tag of that name. The
@@ -40,25 +48,36 @@ on:
         type: boolean
         default: false
       seeds:
-        description: "Seed set file to run"
+        description: "Seed set file to run (a path in the checkout)"
         type: string
-        default: "scenarios/seeds/nightly.txt"
+        default: "scenarios/nightly/seeds.txt"
 
 permissions:
   contents: read
+
+# On `main` each commit has a group of its own (the sha), so runs share a group only on the
+# same commit there, and none is cancelled in progress; elsewhere a newer run on a branch
+# cancels the stale one. GitHub keeps one running and one pending run per group, so a third
+# run queued on the same commit can still cancel the pending one (ci.yml's header).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   CARGO_INCREMENTAL: "0"
-  # Tuning value, spec section 15: an arm winning more than about 65% of seeds opens a
-  # tuning task. Integer percent — no floats anywhere in this project, CI included.
+  # Tuning value, spec section 15 and S2's plan, decision 18: an arm that is the sole
+  # winner in more than 65 % of the seeds opens a tuning task. Integer percent — no
+  # floats anywhere in this project, CI included.
   ALARM_BAND_PERCENT: "65"
+  # The seed set: the dispatch input's file, or the committed set on a schedule. Read
+  # through the environment, never spliced into a script, so a dispatch input is data.
+  SEED_FILE: ${{ inputs.seeds || 'scenarios/nightly/seeds.txt' }}
 
 jobs:
   scenarios:
-    name: ${{ matrix.scenario }} vs Balanced
-    # Enabled from S2: set the repository variable NIGHTLY_SCENARIOS_ENABLED to "true".
+    name: ${{ matrix.scenario }} vs Easy
     if: ${{ vars.NIGHTLY_SCENARIOS_ENABLED == 'true' || inputs.force }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -80,61 +99,55 @@ jobs:
           key: nightly-scenarios
 
       - name: Build gamectl
-        run: cargo build --release --package pharmakos-gamectl --bin gamectl
+        run: cargo build --locked --release --package pharmakos-gamectl --bin gamectl
 
-      - name: Run the scenario over the seed set
-        # PLACEHOLDER: the flags below, which do not exist — owner, S2, when the nightly
-        # scenarios are enabled (decisions-log item 116 (6)(j)). T15 built `gamectl
-        # scenario run <file>` with no options (crates/gamectl/src/cli.rs), and the seed
-        # set, the Balanced operator's selection and the machine-readable result are S2's.
-        # What the command must do is settled: take a scenario file (map seed + playbooks +
-        # assertions on events and hashes), run it against the Balanced built-in operator
-        # over a fixed seed set, and write a machine-readable result.
+      - name: Play the arm over the seed set
+        env:
+          ARM: ${{ matrix.scenario }}
         run: |
           set -euo pipefail
           mkdir -p target/scenario
           ./target/release/gamectl scenario run \
-            "scenarios/${{ matrix.scenario }}.jsonc" \
-            --operator balanced \
-            --seeds "${{ inputs.seeds || 'scenarios/seeds/nightly.txt' }}" \
+            "scenarios/nightly/${ARM}.scenario.jsonc" \
+            --operator easy \
+            --seeds "$SEED_FILE" \
             --format json \
-            --out "target/scenario/${{ matrix.scenario }}.json"
+            --out "target/scenario/${ARM}.json"
 
       - name: Check the alarm band
-        # The scenario run itself fails on a broken assertion (an event that did not
-        # happen, a hash that did not match). This step only reads the win rate and
-        # reports it: a band breach is a tuning task, not a broken build.
+        # The run above fails on a broken arm (a playbook `submit_plan` refused). This step
+        # only reads the win rate and reports it: a band breach is a tuning task, not a
+        # broken build. Both greps are non-fatal and `tail` replaces `head`: under
+        # `pipefail` a grep that matches nothing exits 1, and `head` closing the pipe early
+        # can SIGPIPE the upstream grep (exit 141) on a large result file. A missing or
+        # non-numeric field is a warning here, not a build failure.
+        env:
+          ARM: ${{ matrix.scenario }}
         run: |
           set -euo pipefail
-          result="target/scenario/${{ matrix.scenario }}.json"
-          # PLACEHOLDER: `win_rate_percent` as an integer field — owner, S2, with S2-01.
-          # Both greps are made non-fatal and `tail` replaces `head`: under `pipefail`
-          # a grep that matches nothing exits 1 and would fail this step with no
-          # message, and `head` closing the pipe early can SIGPIPE the upstream grep
-          # (exit 141) on a large result file. A missing or non-numeric field is a
-          # warning here, not a build failure — this band is an alarm, not a gate.
+          result="target/scenario/${ARM}.json"
           field='"win_rate_percent"[[:space:]]*:[[:space:]]*[0-9][0-9]*'
           match=$( { grep -o "$field" "$result" || true; } | tail -n 1 )
           rate=$( { printf '%s' "$match" | grep -o '[0-9][0-9]*$' || true; } | tail -n 1 )
           if ! [ "${rate:-x}" -ge 0 ] 2>/dev/null; then
             echo "::warning::no integer win_rate_percent in ${result} — the band was not checked"
             {
-              echo "### ${{ matrix.scenario }} vs Balanced"
+              echo "### ${ARM} vs Easy"
               echo
               echo "No \`win_rate_percent\` in the result file, so the alarm band was not checked."
             } >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          echo "${{ matrix.scenario }} win rate: ${rate}% (alarm band ${ALARM_BAND_PERCENT}%)"
+          echo "${ARM} win rate: ${rate}% (alarm band ${ALARM_BAND_PERCENT}%)"
           {
-            echo "### ${{ matrix.scenario }} vs Balanced"
+            echo "### ${ARM} vs Easy"
             echo
-            echo "Win rate: **${rate}%** — alarm band ${ALARM_BAND_PERCENT}%."
+            echo "Win rate: **${rate}%**, the arm the sole winner; alarm band ${ALARM_BAND_PERCENT}%."
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "$rate" -gt "$ALARM_BAND_PERCENT" ]; then
-            echo "::warning::${{ matrix.scenario }} won ${rate}% of seeds, above the ${ALARM_BAND_PERCENT}% alarm band — open a tuning task"
+            echo "::warning::${ARM} won ${rate}% of seeds, above the ${ALARM_BAND_PERCENT}% alarm band — open a tuning task"
             echo >> "$GITHUB_STEP_SUMMARY"
-            echo "⚠️ Above the band. Open a tuning task; do not tune in this PR." >> "$GITHUB_STEP_SUMMARY"
+            echo "Above the band. Open a tuning task; do not tune in this PR." >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Upload the scenario result
@@ -171,6 +184,140 @@ jobs:
       - name: Ten thousand generated playbooks come back as reports
         run: cargo test --locked -p pharmakos-verifier --test fuzz -- --ignored --nocapture
 
+  g4:
+    name: G4 chains (${{ matrix.os }})
+    # G4's bar (spec section 16): ten seeded matches of 9 600 ticks, on each of the three
+    # operating systems. The `determinism` binary plays each, every seat sealing the
+    # determinism harness's playbook, in the profile the `determinism` step uses
+    # (release optimisation with debug assertions on), and writes its chain. The seeds
+    # are the seed file's first ten.
+    if: ${{ vars.NIGHTLY_SCENARIOS_ENABLED == 'true' || inputs.force }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (branch)
+        with:
+          toolchain: 1.98.1
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: nightly-g4-${{ matrix.os }}
+
+      - name: Build the determinism binary
+        run: cargo build --locked --profile release-checked --package pharmakos-sim --bin determinism
+
+      - name: Play ten seeded matches of 9 600 ticks
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/g4
+          # The seed file's format (scenarios/nightly/README.md), held as strictly as
+          # gamectl's typed decoder holds it, so a file the decoder refuses fails here too:
+          # a `#` starts a comment, spaces around a seed and blank lines are skipped, every
+          # other line is `0x` and exactly sixteen lowercase hex digits (a carriage return
+          # fails the match), and no seed is listed twice.
+          all=$(sed -e 's/#.*//' -e 's/^ *//' -e 's/ *$//' "$SEED_FILE" | grep -v '^$' || true)
+          bad=$(printf '%s\n' "$all" | grep -v '^$' | grep -Ev '^0x[0-9a-f]{16}$' || true)
+          if [ -n "$bad" ]; then
+            echo "::error::${SEED_FILE} holds a line that is not a seed: $(printf '%s' "$bad" | head -n 1)"
+            exit 1
+          fi
+          repeated=$(printf '%s\n' "$all" | grep -v '^$' | sort | uniq -d || true)
+          if [ -n "$repeated" ]; then
+            echo "::error::${SEED_FILE} lists a seed twice: $(printf '%s' "$repeated" | head -n 1)"
+            exit 1
+          fi
+          seeds=$(printf '%s\n' "$all" | grep -v '^$' | head -n 10 || true)
+          count=$(printf '%s\n' "$seeds" | grep -c . || true)
+          if [ "$count" -ne 10 ]; then
+            echo "::error::G4 plays ten seeds and ${SEED_FILE} lists ${count}"
+            exit 1
+          fi
+          for seed in $seeds; do
+            cargo run --locked --quiet --profile release-checked --package pharmakos-sim \
+              --bin determinism -- --ticks 9600 --seed "$seed" --out "target/g4/${seed}.hashes.txt"
+            lines=$(wc -l < "target/g4/${seed}.hashes.txt" | tr -d ' ')
+            # A match that ended early writes a shorter chain, which is not G4's bar.
+            [ "$lines" -eq 9600 ] || { echo "::error::${seed} wrote ${lines} ticks, not 9600"; exit 1; }
+            echo "${seed}: ${lines} ticks"
+          done
+
+      - name: Upload the chains
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: g4-${{ matrix.os }}
+          path: target/g4/
+          if-no-files-found: error
+          retention-days: 30
+
+  g4-compare:
+    name: G4 cross-OS compare
+    needs: g4
+    if: ${{ !cancelled() && (vars.NIGHTLY_SCENARIOS_ENABLED == 'true' || inputs.force) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download the three legs' chains
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: g4-*
+          path: g4
+
+      - name: Byte-compare every chain across the three operating systems
+        run: |
+          set -euo pipefail
+          summary="$GITHUB_STEP_SUMMARY"
+          { echo "### G4: ten seeded matches of 9 600 ticks, three operating systems"; echo; } >> "$summary"
+          failed=0
+          for os in ubuntu-latest windows-latest macos-latest; do
+            if [ ! -d "g4/g4-${os}" ]; then
+              echo "::error::no chains from ${os}"
+              failed=1
+            fi
+          done
+          [ "$failed" -eq 0 ] || exit 1
+          chains=$(cd g4/g4-ubuntu-latest && ls -1 *.hashes.txt)
+          compared=0
+          for chain in $chains; do
+            for os in windows-latest macos-latest; do
+              other="g4/g4-${os}/${chain}"
+              if [ ! -f "$other" ]; then
+                echo "::error::${chain} is missing from ${os}"
+                failed=1
+              elif ! cmp -s "g4/g4-ubuntu-latest/${chain}" "$other"; then
+                line=$(cmp "g4/g4-ubuntu-latest/${chain}" "$other" 2>&1 | grep -o 'line [0-9]*' | head -n 1 || true)
+                echo "::error::${chain} differs between ubuntu-latest and ${os} (${line:-at its end})"
+                failed=1
+              fi
+            done
+            compared=$((compared + 1))
+          done
+          for os in windows-latest macos-latest; do
+            extra=$(cd "g4/g4-${os}" && ls -1 *.hashes.txt | wc -l | tr -d ' ')
+            if [ "$extra" -ne "$compared" ]; then
+              echo "::error::${os} wrote ${extra} chains and ubuntu-latest ${compared}"
+              failed=1
+            fi
+          done
+          if [ "$compared" -ne 10 ]; then
+            echo "::error::G4 compares ten chains and found ${compared}"
+            failed=1
+          fi
+          if [ "$failed" -ne 0 ]; then
+            echo "A chain that differs is a determinism hole: bisect by tick from its first differing line." >> "$summary"
+            exit 1
+          fi
+          echo "All ${compared} chains are byte-identical on ubuntu-latest, windows-latest and macos-latest." >> "$summary"
+
   not-yet-enabled:
     name: nightly scenarios (not yet enabled)
     if: ${{ vars.NIGHTLY_SCENARIOS_ENABLED != 'true' && !inputs.force }}
@@ -181,9 +328,9 @@ jobs:
           {
             echo "### Nightly adversarial scenarios"
             echo
-            echo "Not enabled yet. They start at **S2 (destruction and combat)**, once"
-            echo "\`gamectl scenario run\`, the Rusher/Turtle/Hunter playbooks and the seed"
-            echo "set exist. The 10 000-playbook verifier fuzz job waits behind the same"
-            echo "gate. To enable both: set the repository variable"
-            echo "\`NIGHTLY_SCENARIOS_ENABLED\` to \`true\`."
+            echo "Not enabled yet. The owner sets the repository variable"
+            echo "\`NIGHTLY_SCENARIOS_ENABLED\` to \`true\` once S2's \`arms\` lane has merged"
+            echo "and its forced run is attached (S2's plan, decision 30). Until then the three"
+            echo "arms are placeholders. The verifier fuzz job and G4's ten matches wait behind"
+            echo "the same gate; a manual run with \`force\` runs everything now."
           } >> "$GITHUB_STEP_SUMMARY"

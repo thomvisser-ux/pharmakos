@@ -1,0 +1,13 @@
+{
+  "format": "pharmakos.nightly-result.v1",
+  "scenario": "nightly-result",
+  "source": "scenarios/nightly/fixture/result-golden.scenario.jsonc",
+  "seed_file": "scenarios/nightly/fixture/two.seeds.txt",
+  "operator": "easy",
+  "rules_hash": "8028d41384e6de2f",
+  "seeds": [
+    {"seed": "0x0102030405060708", "arm_seat": 0, "winners": [1], "end_reason": "round_limit", "end_tick": 2400, "rounds": 2, "arm": "loss"},
+    {"seed": "0x00000000ca5caded", "arm_seat": 1, "winners": [0, 1], "end_reason": "round_limit", "end_tick": 2400, "rounds": 2, "arm": "shared"}
+  ],
+  "summary": {"seeds": 2, "arm_wins": 0, "shared": 1, "losses": 1, "win_rate_percent": 0}
+}

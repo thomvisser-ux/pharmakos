@@ -249,26 +249,38 @@ fn check_plan_core(
             // would rewrite a file it had just written.
             let again = pharmakos_plan_core::canonicalise_text(&canonical.text)
                 .is_ok_and(|second| second.text == canonical.text);
-            if again {
-                note(
+            // The comment count is read from the document, and a document
+            // that does not parse here fails the check by saying so, rather
+            // than reporting "0 comments kept" (S2's sweep, E7).
+            let comments = pharmakos_plan_core::Document::parse(safe)
+                .map(|document| document.comments().len());
+            match (again, comments) {
+                (true, Ok(comments)) => note(
                     lines,
                     State::Ok,
                     "plan-core",
                     &format!(
-                        "JSONC round trip is a fixed point, {} comments kept, {} canonical bytes",
-                        pharmakos_plan_core::Document::parse(safe)
-                            .map_or(0, |document| document.comments().len()),
+                        "JSONC round trip is a fixed point, {comments} comments kept, {} canonical \
+                         bytes",
                         canonical.json.len()
                     ),
-                );
-            } else {
-                note(
+                ),
+                (true, Err(error)) => note(
+                    lines,
+                    State::Fail,
+                    "plan-core",
+                    &format!(
+                        "the safe playbook canonicalises and its comments do not parse: {}",
+                        error.message
+                    ),
+                ),
+                (false, _) => note(
                     lines,
                     State::Fail,
                     "plan-core",
                     "canonicalising the canonical form changed it, so a file saved twice is two \
                      different files",
-                );
+                ),
             }
         }
         Err(error) => note(lines, State::Fail, "plan-core", &error.to_string()),

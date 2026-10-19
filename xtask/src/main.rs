@@ -423,9 +423,9 @@ const DETERMINISM_BIN: &str = "determinism";
 /// 1 200, a one-minute smoke run of a harness playbook over short harness
 /// segments, until S1's `tune` lane. The chain covers a real playbook's walk,
 /// deploy, Build target, fabrication and build, where the harness covered
-/// fifty walkers a seat; G4's bar (10 matches of 9 600 ticks) and G3'-real's
-/// load stay with the nightly workflow and S2. `crates/sim/tests/determinism.rs`'s
-/// `GOLDEN_TICKS` holds the same number.
+/// fifty walkers a seat. G4's bar (10 matches of 9 600 ticks) is the nightly
+/// workflow's `g4` job (S2's `night`), and G3'-real's load is S2's.
+/// `crates/sim/tests/determinism.rs`'s `GOLDEN_TICKS` holds the same number.
 const DETERMINISM_TICKS: &str = "3600";
 
 /// The profile the determinism run uses: release optimisation with debug
@@ -1956,7 +1956,20 @@ fn step_scenario(ctx: &Ctx) -> Result<Outcome, String> {
         ));
     }
 
-    for item in &valid {
+    // The nightly arms are validated above and never played here: they carry
+    // no chain, and `.github/workflows/nightly-scenarios.yml` plays them over
+    // the seed set (S2's plan, E20). `collect_played` is the list this step
+    // and `cargo xtask package`'s replay both play.
+    let played = scenario::collect_played(&ctx.root)?;
+    let arms = valid.iter().filter(|item| item.nightly).count();
+    for item in valid.iter().filter(|item| !item.nightly) {
+        if !played.iter().any(|path| path.ends_with(&item.relative)) {
+            return Err(format!(
+                "{checked}; {} is validated and not in the played list, which is the step and \
+                 `collect_played` disagreeing",
+                item.relative.display()
+            ));
+        }
         // Forward slashes: the path goes on a command line that is quoted in
         // workflow files and in scenario logs on three operating systems.
         let relative = item.relative.to_string_lossy().replace('\\', "/");
@@ -1966,8 +1979,9 @@ fn step_scenario(ctx: &Ctx) -> Result<Outcome, String> {
     }
 
     Ok(Outcome::Done(format!(
-        "{} scenario(s) pass on their event and hash assertions",
-        valid.len()
+        "{} scenario(s) pass on their event and hash assertions; {arms} nightly arm(s) valid, \
+         played by the nightly workflow and not here",
+        valid.len().saturating_sub(arms)
     )))
 }
 

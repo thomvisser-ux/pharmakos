@@ -27,7 +27,27 @@ tests/golden/scenarios/<name>/expected.hashes.txt   the per-tick chain
 tests/golden/scenarios/<name>/expected.events.txt   the event log its producing
                                                     test writes (expand-east-
                                                     segment only)
+tests/golden/scenarios/nightly-result/expected.result.json
+                                                    the nightly result's shape
+                                                    (S2's `night`; below)
 ```
+
+**S2's `night` added `nightly-result/expected.result.json`**, the one golden
+here that is not a chain: the JSON result (`pharmakos.nightly-result.v1`) that
+`gamectl scenario run <arm> --seeds <file> --format json` writes, for a
+two-seed run of `scenarios/nightly/fixture/result-golden.scenario.jsonc` over
+`scenarios/nightly/fixture/two.seeds.txt`. `crates/gamectl/tests/nightly.rs`
+produces it and compares it in the same test. Per seed it holds the seed, the
+arm's seat (seat 0 for the first seed and seat 1 for the second, S2's plan,
+decision 29), the winners, the end reason, the end tick, the rounds and the
+arm's outcome (`win` only as the sole winner); then the summary, whose
+`win_rate_percent` is `arm_wins x 100 / seeds` rounded down (M-01). One seed
+per line, so a diff reads seed by seed. **It moves** when the format moves
+(a contract change, AGENTS.md section 5), or when either match ends
+differently: the placeholder playbook, Easy (`crates/operator`), the template
+library, the rules table (whose hash it carries) or the seeds. The nightly
+arms themselves carry no golden (S2's plan, E20); the workflow uploads each
+night's result as an artifact instead.
 
 The chain is the half a scenario file names, in its `hash_chain_equals`
 assertion, and every scenario has one. **The event log is optional and only

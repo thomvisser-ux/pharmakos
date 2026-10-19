@@ -1,0 +1,59 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// The Rusher arm of the nightly adversarial scenarios (AGENTS.md section 10
+// item 5; spec section 15): a hand-written playbook that rushes Easy's nearest
+// structure, played against Easy over scenarios/nightly/seeds.txt by
+// .github/workflows/nightly-scenarios.yml, with the alarm band of S2's plan,
+// decision 18: the arm the sole winner in more than 13 of the 20 seeds (65 %)
+// opens a tuning task.
+//
+// A PLACEHOLDER ARM. S2's `night` lane built the harness and left this file
+// for S2's `arms` lane, which writes the arm's own playbook in place of the
+// shared one below. Until then it seals
+// scenarios/nightly/placeholder.playbook.jsonc, which attacks nobody, so its
+// win rate says nothing about balance; NIGHTLY_SCENARIOS_ENABLED stays unset
+// until `arms` has merged (decision 30).
+//
+// PLACEHOLDER: the Rusher arm's playbook — arms, S2, when the nightly arms are written
+//
+// An arm, not a committed scenario (scenarios/nightly/README.md; S2's plan,
+// E20): it carries no hash_chain_equals, `cargo xtask ci`'s scenario step
+// validates it and plays nothing of it, and crates/gamectl/tests/nightly.rs
+// verifies its playbook and plays one round of it on its own seed. A run over
+// a seed file replaces map.seed, plays the match to its end, alternates the
+// arm between the two seats and checks none of the assertions below.
+{
+  "format": "pharmakos.scenario.v1",
+  "name": "rusher",
+  "summary": "The Rusher arm against Easy, a placeholder until S2's arms lane: seat 0 seals the nightly placeholder playbook, which covers the nearest vent and attacks nobody, and seat 1 is Easy.",
+
+  "map": {
+    "seed": "0x00000000ca5caded",
+    "generator": "skeleton"
+  },
+
+  "rules": "rules/rules.v1.json",
+
+  "seats": [
+    { "seat": 0, "kind": "playbook", "playbook": "scenarios/nightly/placeholder.playbook.jsonc" },
+    { "seat": 1, "kind": "builtin" }
+  ],
+
+  // The rules table's own 3 / 5 / 8 ladder: rounds past the third play the
+  // last length, and the match ends at the default round limit of six.
+  "segments": [
+    { "index": 0, "length_ms": 180000, "note": "Round 1: 3 600 ticks." },
+    { "index": 1, "length_ms": 300000, "note": "Round 2: 6 000 ticks." },
+    { "index": 2, "length_ms": 480000, "note": "Round 3 and every round after it: 9 600 ticks." }
+  ],
+
+  // Checked when the file is played on its own seed (the per-PR test plays
+  // round 1 only); a run over a seed file checks none of them.
+  "assertions": [
+    { "assert": "event_fired", "event": "plan_sealed", "seat": 0, "by_tick": 1,
+      "note": "The arm's playbook went through submit_plan and was sealed." },
+    { "assert": "event_fired", "event": "plan_sealed", "seat": 1, "by_tick": 1,
+      "note": "Easy sealed its own." }
+  ]
+}
