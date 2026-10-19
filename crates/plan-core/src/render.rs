@@ -222,7 +222,8 @@ fn step_body(entry: &Step, rates: &Rates) -> String {
                 if let Some(settings) = initial.mandate.as_ref() {
                     let _ = write!(
                         sentence,
-                        ", on a {} mandate{}",
+                        ", on {} {} mandate{}",
+                        article(settings),
                         writ(settings),
                         settings_clause(settings)
                     );
@@ -287,8 +288,9 @@ fn row_sentence(row: &InterfaceRow) -> String {
         None => s::ROW_NOTHING.to_owned(),
         Some(interface_row::Row::SetMandate(settings)) => {
             format!(
-                "{} {} mandate{}",
+                "{} {} {} mandate{}",
                 s::ROW_SET_MANDATE,
+                article(settings),
                 writ(settings),
                 settings_clause(settings)
             )
@@ -482,6 +484,14 @@ fn attack_parts(attack: &AttackSettings) -> Vec<String> {
         parts.push(format!("{} {} {noun}", s::WAVES_IN, attack.waves));
     }
     parts
+}
+
+/// The article a writ's name takes: "an Attack", "a Build".
+fn article(settings: &MandateSettings) -> &'static str {
+    match settings.mandate.as_ref() {
+        Some(mandate_settings::Mandate::Attack(_)) => s::ARTICLE_AN,
+        _ => s::ARTICLE_A,
+    }
 }
 
 fn writ(settings: &MandateSettings) -> &'static str {

@@ -404,9 +404,9 @@ pub const VERIFIER_STRINGS: &[Text] = &[
     },
     Text {
         code: "E0416",
-        message: "the wall box's column ({x}, {y}) lies outside the sphere of the beacon whose \
-                  mandate holds the wall.",
-        beginner: "A beacon builds only inside its own sphere, and a wall is no exception.",
+        message: "{what} column ({x}, {y}) lies outside the sphere of the beacon whose mandate \
+                  holds the target.",
+        beginner: "A beacon builds only inside its own sphere.",
     },
     Text {
         code: "E0417",
@@ -493,6 +493,12 @@ pub const VERIFIER_STRINGS: &[Text] = &[
         message: "`seam_choice` SAFEST reads as NEAREST until S2's threat model arrives.",
         beginner: "\"Safest\" needs threats to weigh, and they come later. Until then this beacon \
                    digs the nearest seam.",
+    },
+    Text {
+        code: "W0502",
+        message: "`{name}` is on this protect list more than once; its guards escort it once, \
+                  and the repeat only adds a field to the edit.",
+        beginner: "This asset is already on the list. Naming it again changes nothing.",
     },
     // --- E06xx and W06xx: economy, power and messaging -----------------------
     Text {
@@ -682,11 +688,13 @@ pub const RANGE_ONE_OR_MORE: &str = "1 or more";
 pub const ANCHOR_OUTSIDE_BOX: &str = "this anchor is a voxel outside the box";
 /// E0417's `{found}` when the anchor is not a voxel at all.
 pub const ANCHOR_NOT_A_VOXEL: &str = "this anchor is not a voxel";
+/// E0416's `{what}` for a wall box's corner.
+pub const WALL_BOX_COLUMN: &str = "the wall box's";
+/// E0416's `{what}` for a Build target's anchor.
+pub const ANCHOR_COLUMN: &str = "the anchor's";
 /// E0418's `{what}`: no enemy commander has been sighted.
 pub const NO_COMMANDER_SIGHTED: &str = "the seat has no sighting of an enemy commander";
-/// E0105's `{scope}` for a protect list.
-pub const WITHIN_PROTECT: &str = "within a protect list";
-/// E0105's `{name}` for a repeated `my_commander`.
+/// W0502's `{name}` for a repeated `my_commander`.
 pub const MY_COMMANDER: &str = "my_commander";
 /// E0101's `{what}` for a launch with no condition.
 pub const A_LAUNCH_CONDITION: &str = "a launch condition (`force_size` or `segment_ms`)";

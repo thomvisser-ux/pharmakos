@@ -240,8 +240,16 @@ cargo xtask golden --bless              # accepts them
     `picket_scouts`), so `e0508_more_scouts_than_a_beacon_holds`'s message
     moved.
 
-  Fourteen cases are new, one per new code and two for old codes' new shapes
-  (`e0101_a_wall_without_its_box`, `e0105_a_protect_list_naming_one_asset_twice`).
+  Seventeen cases are new: one per new code (`w0502_a_protect_list_naming_one_asset_twice`
+  among them, a harmless repeat being advice and never a refusal), a second
+  `E0416` for a target's anchor outside its beacon's sphere, two `E0101`
+  shapes for a wall's box (none, and a corner missing), and
+  `e0003_a_go_code_launch`, which pins that `AttackLaunch`'s held go-code arm
+  (`broadcast_received`, S4's) is refused by name. Its message, "not part of
+  the v1 vocabulary", is decode's wording for every reserved name; for an S4
+  arm it says less than the truth, a wording question for the string table.
+  Every Build target with a voxel anchor and a named holder is now checked
+  against that beacon's sphere too (`E0416`, the column test).
   A Defend case also carries `E0012`, an Attack case `E0013` and a wall case
   `E0019`, because the sim refuses those arms and that blueprint whole until
   S2's `dfnd`, `atk` and `site` lanes; the case still isolates its own code.

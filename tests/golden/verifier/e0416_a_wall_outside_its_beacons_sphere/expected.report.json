@@ -12,20 +12,20 @@
       "code": "E0416",
       "severity": "ERROR",
       "path": "/declarative/route/0/place_beacon/initial/mandate/build/targets/0/wall_box",
-      "message": "the wall box's column (125, 11) lies outside the sphere of the beacon whose mandate holds the wall.",
-      "beginner": "A beacon builds only inside its own sphere, and a wall is no exception.",
+      "message": "the wall box's column (127, 11) lies outside the sphere of the beacon whose mandate holds the target.",
+      "beginner": "A beacon builds only inside its own sphere.",
       "map_refs": [
         {
-          "x": 125,
+          "x": 127,
           "y": 11,
           "z": 62
         }
       ]
     }
   ],
-  "report_hash": "rLeKYel86Sg=",
+  "report_hash": "2PzPiq28f/A=",
   "rules_hash": "gCjUE4Tm3i8=",
-  "plan_fingerprint": "XIc9cESXCsM=",
+  "plan_fingerprint": "vGqFMOm3Fes=",
   "verifier_version": "0.1.0-s2.2",
   "size_units": 2,
   "size_budget": 128

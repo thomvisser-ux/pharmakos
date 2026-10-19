@@ -362,7 +362,8 @@ const KEPT_FALLBACKS: &[(&str, &str, usize, &str)] = &[
         "library.rs",
         ".unwrap_or_default()",
         2,
-        "a template with no `meta` has no title to list (the verifier names the missing block), \n         and a note with no first line has no blurb",
+        "a template with no `meta` has no title to list (the verifier names the missing block), \
+         and a note with no first line has no blurb",
     ),
     (
         "patch.rs",

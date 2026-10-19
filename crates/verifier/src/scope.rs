@@ -383,17 +383,20 @@ impl Scope {
 
     /// Add a sighting, keeping the list in ascending [`Sighted`] order.
     ///
-    /// A sighting of something already in the list is **replaced**, for the
-    /// reason [`Scope::push_beacon`] gives: one sighting per thing seen, so
-    /// the order is total and the encoding does not depend on the order the
-    /// gateway added them in.
+    /// One sighting per thing seen, so the order is total. A second sighting
+    /// of something already in the list keeps **the freshest** of the two (the
+    /// smaller age, and on a tie the one already held): the seat's knowledge is
+    /// its latest look, and keeping the freshest is the only rule under which
+    /// the encoding does not depend on the order the gateway added them in.
     pub fn push_sighting(&mut self, sighting: Sighting) {
         match self
             .sightings
             .binary_search_by(|existing| existing.what.cmp(&sighting.what))
         {
             Ok(index) => {
-                if let Some(slot) = self.sightings.get_mut(index) {
+                if let Some(slot) = self.sightings.get_mut(index)
+                    && sighting.age_ms < slot.age_ms
+                {
                     *slot = sighting;
                 }
             }
@@ -422,11 +425,14 @@ impl Scope {
             .find(|sighting| matches!(&sighting.what, Sighted::Beacon(id) if id == beacon_id))
     }
 
-    /// The seat's sightings of other seats' commanders.
+    /// The seat's sightings of other seats' commanders. A sighting of the
+    /// seat's own commander, which a gateway should never put in the view, is
+    /// left out here, so it can never stand in for an enemy one.
     pub fn commander_sightings(&self) -> impl Iterator<Item = &Sighting> {
-        self.sightings
-            .iter()
-            .filter(|sighting| matches!(sighting.what, Sighted::Commander(_)))
+        let own = self.seat;
+        self.sightings.iter().filter(
+            move |sighting| matches!(sighting.what, Sighted::Commander(seat) if seat != own),
+        )
     }
 
     /// Append the view to the canonical encoding.
@@ -698,18 +704,33 @@ mod tests {
     }
 
     #[test]
-    fn a_sighting_of_the_same_thing_replaces_the_older_one() {
-        let scope = Scope::new(SeatId::new(0), SeatEconomy::default())
+    fn a_second_sighting_of_one_thing_keeps_the_freshest() {
+        let fresh_last = Scope::new(SeatId::new(0), SeatEconomy::default())
             .with_sighting(sighting(Sighted::Beacon("e_01".to_owned()), 900))
+            .with_sighting(sighting(Sighted::Beacon("e_01".to_owned()), 0));
+        let fresh_first = Scope::new(SeatId::new(0), SeatEconomy::default())
             .with_sighting(sighting(Sighted::Beacon("e_01".to_owned()), 0))
-            .with_sighting(sighting(Sighted::Commander(SeatId::new(2)), 40));
-        assert_eq!(scope.sightings().len(), 2);
+            .with_sighting(sighting(Sighted::Beacon("e_01".to_owned()), 900));
+        assert_eq!(
+            fresh_last, fresh_first,
+            "the order of arrival does not matter"
+        );
+        let scope = fresh_last
+            .with_sighting(sighting(Sighted::Commander(SeatId::new(2)), 40))
+            .with_sighting(sighting(Sighted::Commander(SeatId::new(0)), 1));
+        assert_eq!(scope.sightings().len(), 3);
         assert_eq!(
             scope.beacon_sighting("e_01").map(|found| found.age_ms),
             Some(0)
         );
         assert!(scope.beacon_sighting("e_0").is_none());
         assert_eq!(scope.commander_sightings().count(), 1);
+        assert!(
+            scope
+                .commander_sightings()
+                .all(|seen| seen.what != Sighted::Commander(SeatId::new(0))),
+            "the seat's own commander is never an enemy sighting"
+        );
     }
 
     #[test]

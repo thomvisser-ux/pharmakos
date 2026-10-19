@@ -109,7 +109,7 @@ pub const ON_FAIL_JUMP: &str = "On failure, jump forward to";
 // --- Interface rows ---------------------------------------------------------
 
 /// `set_mandate`.
-pub const ROW_SET_MANDATE: &str = "switch it to a";
+pub const ROW_SET_MANDATE: &str = "switch it to";
 /// `set_mandate_settings`.
 pub const ROW_SET_SETTINGS: &str = "change its mandate settings";
 /// `set_priority`.
@@ -358,3 +358,7 @@ pub const WAVE_ONE: &str = "wave";
 pub const WAVE_MANY: &str = "waves";
 /// Before the count of waves.
 pub const WAVES_IN: &str = "in";
+/// The article before a writ's name that begins with a consonant sound.
+pub const ARTICLE_A: &str = "a";
+/// The article before "Attack".
+pub const ARTICLE_AN: &str = "an";

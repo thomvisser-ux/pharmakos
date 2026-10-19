@@ -2,14 +2,14 @@
   "depth": "FULL",
   "diagnostics": [
     {
-      "code": "E0105",
-      "severity": "ERROR",
+      "code": "W0502",
+      "severity": "WARNING",
       "path": "/declarative/route/0/place_beacon/initial/mandate/defend/protect/2",
       "related_paths": [
         "/declarative/route/0/place_beacon/initial/mandate/defend/protect/0"
       ],
-      "message": "`my_commander` is used twice; a name is unique within a protect list.",
-      "beginner": "Two things share a name, so a reference to it would be ambiguous."
+      "message": "`my_commander` is on this protect list more than once; its guards escort it once, and the repeat only adds a field to the edit.",
+      "beginner": "This asset is already on the list. Naming it again changes nothing."
     },
     {
       "code": "E0012",

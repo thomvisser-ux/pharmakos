@@ -326,6 +326,7 @@ impl Visit for Semantics<'_> {
     }
 
     fn held_target(&mut self, at: &str, target: &BuildTarget, holder: Holder<'_>) {
+        self.anchor_sphere(at, target, holder);
         self.wall_sphere(at, target, holder);
     }
 
@@ -496,39 +497,88 @@ impl Semantics<'_> {
         if low.x > high.x || low.y > high.y || low.z > high.z {
             return;
         }
-        let centre = match holder {
-            Holder::Site(voxel) => *voxel,
-            Holder::Visited(beacon) => {
-                let Some(beacon_ref::Ref::BeaconId(id)) = beacon.r#ref.as_ref() else {
-                    return;
-                };
-                match self.scope.beacon(id) {
-                    Some(known) if known.side == Ownership::Own => known.at,
-                    // Unknown is `E0401`'s, and an enemy beacon is `E0405`'s.
-                    _ => return,
-                }
-            }
-            Holder::Unnamed => return,
+        let Some(centre) = self.holder_centre(holder) else {
+            return;
         };
-        let radius = i64::from(self.limits.beacon_sphere_radius_voxels());
-        let reach = radius.saturating_mul(radius);
         for (x, y) in [
             (low.x, low.y),
             (high.x, low.y),
             (low.x, high.y),
             (high.x, high.y),
         ] {
-            let column = Voxel { x, y, z: centre.z };
-            if squared_distance(&centre, &column) > reach {
+            if self.column_outside(&centre, x, y) {
                 self.out.emit(
                     Diag::new("E0416", pointer::child(at, "wall_box"))
+                        .arg("what", strings::WALL_BOX_COLUMN)
                         .arg("x", x)
                         .arg("y", y)
-                        .map_ref(column),
+                        .map_ref(Voxel { x, y, z: centre.z }),
                 );
                 return;
             }
         }
+    }
+
+    /// `E0416` for a Build target's voxel anchor, whatever its blueprint (the
+    /// Generator and S2's base kit alike): "Must lie inside one of your own
+    /// spheres: inside the sphere of the beacon whose mandate holds the
+    /// target" (`playbook.proto`'s `BuildTarget.anchor`). The same column
+    /// test as [`Semantics::wall_sphere`], for the same reason: the view
+    /// carries no ground, so the height half is the sim's at the site. An
+    /// anchor `on` a feature is placed by the sim inside the sphere by
+    /// construction, and an unnamed holder is not known until the Push.
+    fn anchor_sphere(&mut self, at: &str, target: &BuildTarget, holder: Holder<'_>) {
+        let Some(location::Place::Voxel(anchor)) = target
+            .anchor
+            .as_ref()
+            .and_then(|anchor| anchor.place.as_ref())
+        else {
+            return;
+        };
+        let Some(centre) = self.holder_centre(holder) else {
+            return;
+        };
+        if self.column_outside(&centre, anchor.x, anchor.y) {
+            self.out.emit(
+                Diag::new(
+                    "E0416",
+                    pointer::child(&pointer::child(at, "anchor"), "voxel"),
+                )
+                .arg("what", strings::ANCHOR_COLUMN)
+                .arg("x", anchor.x)
+                .arg("y", anchor.y)
+                .map_ref(*anchor),
+            );
+        }
+    }
+
+    /// Where the beacon holding a target stands, when the file names it: a
+    /// deploy's voxel site, or one of the seat's own beacons visited by its
+    /// handle. Anything else is not known before the Push.
+    fn holder_centre(&self, holder: Holder<'_>) -> Option<Voxel> {
+        match holder {
+            Holder::Site(voxel) => Some(*voxel),
+            Holder::Visited(beacon) => {
+                let Some(beacon_ref::Ref::BeaconId(id)) = beacon.r#ref.as_ref() else {
+                    return None;
+                };
+                // Unknown is `E0401`'s, and an enemy beacon is `E0405`'s.
+                self.scope
+                    .beacon(id)
+                    .filter(|known| known.side == Ownership::Own)
+                    .map(|known| known.at)
+            }
+            Holder::Unnamed => None,
+        }
+    }
+
+    /// Whether a column lies wholly outside the sphere about `centre`: its
+    /// distance in x and y alone is past the radius, so no voxel of it at any
+    /// height is inside.
+    fn column_outside(&self, centre: &Voxel, x: i32, y: i32) -> bool {
+        let radius = i64::from(self.limits.beacon_sphere_radius_voxels());
+        let column = Voxel { x, y, z: centre.z };
+        squared_distance(centre, &column) > radius.saturating_mul(radius)
     }
 
     /// "A jump only ever goes forward" — and it has to have somewhere to go.

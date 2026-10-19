@@ -818,7 +818,7 @@ gp.v1.Playbook.Kind
 
 ## Diagnostics
 
-95 codes. A code is language-neutral, append-only and never
+96 codes. A code is language-neutral, append-only and never
 reused; only an ERROR stops a playbook qualifying. `none at the skeleton` names the
 task that owes the emitter, which is honesty about coverage rather than a gap.
 
@@ -1068,8 +1068,8 @@ E0415  ERROR  references and placement  raised at: structure
   A Defend beacon protects your own beacons, and an Attack beacon attacks an enemy's, so a selector there has to look among the right side's beacons.
 
 E0416  ERROR  references and placement  raised at: semantics
-  the wall box's column ({x}, {y}) lies outside the sphere of the beacon whose mandate holds the wall.
-  A beacon builds only inside its own sphere, and a wall is no exception.
+  {what} column ({x}, {y}) lies outside the sphere of the beacon whose mandate holds the target.
+  A beacon builds only inside its own sphere.
 
 E0417  ERROR  references and placement  raised at: structure
   a wall's anchor names the wall and must be a voxel inside its box; {found}.
@@ -1130,6 +1130,10 @@ E0512  ERROR  settings and recycle  raised at: structure
 W0501  WARNING  settings and recycle  raised at: semantics
   `seam_choice` SAFEST reads as NEAREST until S2's threat model arrives.
   "Safest" needs threats to weigh, and they come later. Until then this beacon digs the nearest seam.
+
+W0502  WARNING  settings and recycle  raised at: structure
+  `{name}` is on this protect list more than once; its guards escort it once, and the repeat only adds a field to the edit.
+  This asset is already on the list. Naming it again changes nothing.
 
 E0601  ERROR  economy, power and messaging  raised at: estimate
   the playbook adds {found} kW of draw beyond supply; set `allow_dormant_beacons` to accept the shortfall instead.

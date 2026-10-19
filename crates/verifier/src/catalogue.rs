@@ -755,6 +755,14 @@ pub const CATALOGUE: &[Entry] = &[
         severity: Severity::Warning,
         emitter: Emitter::Stage(Stage::Semantics),
     },
+    // S2's `vfy2`: a protect list naming one asset twice. Harmless, so a
+    // warning: no rule refuses it.
+    Entry {
+        code: "W0502",
+        family: Family::SettingsAndRecycle,
+        severity: Severity::Warning,
+        emitter: Emitter::Stage(Stage::Structure),
+    },
     // --- E06xx and W06xx: economy, power and messaging -----------------------
     Entry {
         code: "E0601",

@@ -69,7 +69,8 @@
 //!
 //! # Defend and Attack (S2's `vfy2`)
 //!
-//! An empty arm is a choice of writ; an arm that writes anything in a deploy
+//! An empty arm requires nothing here (its refusal in a deploy's `initial` is
+//! `E0012` or `E0013`, as the sim's); an arm that writes anything in a deploy
 //! or a switch writes every required field; an edit writes what it changes,
 //! held to its range (`Sites::defend`, `Sites::attack`). An omitted `roe`
 //! reads as `RETURN_FIRE` with `I0003`, the fifth named default, and a Build
@@ -607,6 +608,20 @@ impl Sites<'_> {
                 .emit(Diag::new("E0101", pointer::child(at, "wall_box")).arg("what", "`wall_box`"));
             return;
         };
+        // A half-written box has no voxels to fill or to price, so each
+        // missing corner is required, as the seal's price door needs it.
+        let box_at = pointer::child(at, "wall_box");
+        for (present, corner) in [
+            (wall_box.min.is_some(), "min"),
+            (wall_box.max.is_some(), "max"),
+        ] {
+            if !present {
+                self.out.emit(
+                    Diag::new("E0101", pointer::child(&box_at, corner))
+                        .arg("what", format!("`wall_box.{corner}`")),
+                );
+            }
+        }
         let (Some(low), Some(high)) = (wall_box.min.as_ref(), wall_box.max.as_ref()) else {
             return;
         };
@@ -656,9 +671,14 @@ impl Sites<'_> {
     /// S2's Defend settings (`con4`; S2's plan, decision 13), as the file
     /// alone can judge them.
     ///
-    /// **Requiredness follows the carrier.** An empty arm is a choice of writ
-    /// and nothing more, legal in a deploy's `initial` and in a switch, as the
-    /// sim reads it (decisions-log item 145 (5), `dfnd`'s note). An arm that
+    /// **Requiredness follows the carrier.** An empty arm writes no field, so
+    /// nothing is required of it here. Whether it is legal is the sim's refusal
+    /// table's, which `crate::refusals` mirrors: an empty arm in a switch is a
+    /// choice of writ the sim accepts (`compile_switch_settings`), and an empty
+    /// arm in a deploy's `initial` the sim refuses today for both writs
+    /// (`E0012`, `E0013`). Only Defend's empty `initial` is ruled legal for
+    /// later (decisions-log item 145 (5), `dfnd` lifts it); Attack's is `atk`'s
+    /// to settle. An arm that
     /// writes anything in a deploy or a switch starts the beacon's settings
     /// from nothing, so it must write every required field. An edit
     /// (`set_mandate_settings`) writes only what it changes, so nothing is
@@ -689,7 +709,12 @@ impl Sites<'_> {
             );
         }
         let protect_at = pointer::child(at, "protect");
-        let mut seen: Vec<(&ProtectedAsset, usize)> = Vec::new();
+        // Keyed on the entry's structure, through its derived `Debug` text:
+        // two entries are the same exactly when they print the same, the lookup
+        // is logarithmic rather than a scan per entry, and the key cannot fail
+        // to build (the crate takes no `prost` dependency of its own, so the
+        // entry's wire encoding is not in reach).
+        let mut seen: BTreeMap<String, usize> = BTreeMap::new();
         for (index, entry) in defend.protect.iter().enumerate() {
             let here = pointer::at(&protect_at, index);
             match entry.asset.as_ref() {
@@ -715,14 +740,19 @@ impl Sites<'_> {
             if entry.asset.is_none() {
                 continue;
             }
-            match seen.iter().find(|(earlier, _)| *earlier == entry) {
-                Some((_, first)) => self.out.emit(
-                    Diag::new("E0105", here)
+            // A repeated entry is harmless (the guards escort it once), so it is
+            // advice, W0502, and never a refusal: no rule refuses it (AGENTS.md
+            // section 12, "don't invent rules").
+            let key = format!("{entry:?}");
+            match seen.get(&key) {
+                Some(first) => self.out.emit(
+                    Diag::new("W0502", here)
                         .arg("name", asset_name(entry))
-                        .arg("scope", strings::WITHIN_PROTECT)
                         .related(pointer::at(&protect_at, *first)),
                 ),
-                None => seen.push((entry, index)),
+                None => {
+                    seen.insert(key, index);
+                }
             }
         }
     }

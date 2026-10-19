@@ -172,6 +172,14 @@ impl Cost {
 /// in this type: an order too large for [`Cost`] is past every supply, and has
 /// to say so rather than fall silent.
 ///
+/// **A wall's term is the exception** (S2's `vfy2`): it is a price times its
+/// box's voxels, and three `i32` extents multiply to about 2^99, so the term
+/// alone can leave `i128`. It is therefore built checked and refused as
+/// [`ProjectionError::Overflow`] when it does, never saturated; a playbook
+/// with such a wall gets no figure for that step, and the estimate stage
+/// stops there as it does at an unpriced blueprint, while the seal's price
+/// check (`E0603`) refuses it.
+///
 /// The additions saturate, which by the argument above never happens; were it
 /// to, every term is non-negative, so a saturated figure would still exceed
 /// every room and treasury it is compared with, and the comparison would still
@@ -265,8 +273,9 @@ pub enum ProjectionError {
     /// refuse it rather than wrap. The estimate stage never meets it, because
     /// it sums in [`Tally`].
     Overflow,
-    /// A `wall` target with no box, or an inside-out one, has no voxels to
-    /// price. `E0101` and `E0406` name it, and the projection stops there as
+    /// A `wall` target with no box, a half-written one (a corner missing) or
+    /// an inside-out one has no voxels to price. `E0101` names the first two
+    /// and `E0406` the third, and the projection stops there as
     /// it does at a blueprint it does not price.
     UnpricedWall,
 }
@@ -288,7 +297,7 @@ impl core::fmt::Display for ProjectionError {
             }
             ProjectionError::UnpricedWall => write!(
                 formatter,
-                "a `wall` target with no box, or an inside-out one, has no voxels to price"
+                "a `wall` target with no whole box (none, a corner missing, or inside out) has no voxels to price"
             ),
         }
     }
@@ -451,9 +460,10 @@ pub fn step_cost(entry: &Step, prices: &Prices) -> Result<Cost, ProjectionError>
 ///
 /// # Errors
 ///
-/// As [`Prices::blueprint`]: a blueprint the rules table does not price. Never
-/// [`ProjectionError::Overflow`], because a [`Tally`] holds any playbook's
-/// orders.
+/// As [`Prices::blueprint`]: a blueprint the rules table does not price;
+/// [`ProjectionError::UnpricedWall`] for a wall with no whole box; and
+/// [`ProjectionError::Overflow`] only for a wall whose box's price leaves
+/// `i128` (see [`Tally`]). Every other order a [`Tally`] holds exactly.
 pub fn step_orders(
     entry: &Step,
     prices: &Prices,
@@ -585,11 +595,14 @@ fn settings_tally(settings: &MandateSettings, prices: &Prices) -> Result<Orders,
         // with `breach_allowed` loads one "when the breach needs it", which is
         // a fact about the Push. So one charge per launch is what the playbook
         // may spend, never what it certainly spends: it goes on the upper
-        // pile alone, and a further breach in one launch is not counted.
+        // pile alone, and a further breach in one launch is not counted. One
+        // launch is the floor: an edit that writes `breach_allowed` and no
+        // `waves` leaves the beacon's count, which is at least one, so the
+        // edit may spend one charge whatever it leaves out.
         Some(mandate_settings::Mandate::Attack(attack)) => Ok(Orders {
             adds: Tally::ZERO,
             at_most: if attack.breach_allowed == Some(true) {
-                Tally::times(prices.charge(), attack.waves)
+                Tally::times(prices.charge(), attack.waves.max(1))
             } else {
                 Tally::ZERO
             },
@@ -614,10 +627,13 @@ fn settings_tally(settings: &MandateSettings, prices: &Prices) -> Result<Orders,
 fn target_tally(target: &BuildTarget, prices: &Prices) -> Result<Tally, ProjectionError> {
     if target.blueprint_id == WALL {
         let voxels = wall_voxels(target).ok_or(ProjectionError::UnpricedWall)?;
-        return Ok(Tally {
-            spend: i128::from(prices.wall_voxel().raw()).saturating_mul(voxels),
-            draw: 0,
-        });
+        // Checked, never saturated: a box near the map's `i32` corners holds
+        // about 2^99 voxels, and at a 32-bit price the product can leave
+        // `i128`, which is past every treasury and is said as such.
+        let spend = i128::from(prices.wall_voxel().raw())
+            .checked_mul(voxels)
+            .ok_or(ProjectionError::Overflow)?;
+        return Ok(Tally { spend, draw: 0 });
     }
     prices.blueprint(&target.blueprint_id).map(Tally::of)
 }

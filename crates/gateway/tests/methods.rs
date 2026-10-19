@@ -2410,7 +2410,9 @@ fn two_door_cases() -> Vec<Case> {
 /// One gap, with the two fragments its refusal has to name.
 #[expect(
     dead_code,
-    reason = "no gap between the two doors is open since S2's `vfy2` (E0113); the next construct \n              the sim refuses before the verifier does takes its row through this, and the \n              expectation then fails, so this attribute goes with it"
+    reason = "no gap between the two doors is open since S2's `vfy2` (E0113); the next construct \
+              the sim refuses before the verifier does takes its row through this, and the \
+              expectation then fails, so this attribute goes with it"
 )]
 fn sim(what: &'static str, playbook: String, names: &'static str, stage: &'static str) -> Case {
     Case {
