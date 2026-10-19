@@ -264,3 +264,7 @@ else changed:
 | --- | --- | --- |
 | `e_01` | 300, 300, 40 | 240 000 ms, past the reach window's 180 000 |
 | seat 1's commander | 290, 295, 40 | 30 000 ms |
+* **Every `report_hash` moved again when this lane merged `main` after `ids`
+  (#123), and nothing else in any report did.** `ids` widened the snapshot to
+  `SNAPSHOT_VERSION` 10, and the fixture snapshot is input 2 of the five, so
+  each case's bytes moved (E33: the second lane to merge re-blesses).
