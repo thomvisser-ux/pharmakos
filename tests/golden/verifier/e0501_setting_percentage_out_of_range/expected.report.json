@@ -4,6 +4,20 @@
     {
       "code": "I0003",
       "severity": "INFO",
+      "path": "/declarative/route/0/place_beacon/initial/mandate/roe",
+      "message": "`roe` is omitted and reads as RETURN_FIRE.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/place_beacon/initial/mandate/roe\",\"value\":\"RETURN_FIRE\"}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
       "path": "/declarative/route/0/place_beacon/initial/mandate/mine/seam_choice",
       "message": "`seam_choice` is omitted and reads as NEAREST.",
       "beginner": "A setting left out takes its named default.",
@@ -37,10 +51,10 @@
       ]
     }
   ],
-  "report_hash": "PdOGr4mHgGw=",
+  "report_hash": "/mB8id+beXs=",
   "rules_hash": "gCjUE4Tm3i8=",
   "plan_fingerprint": "yLd+P9kns1s=",
-  "verifier_version": "0.1.0-s2",
+  "verifier_version": "0.1.0-s2.2",
   "size_units": 1,
   "size_budget": 128
 }

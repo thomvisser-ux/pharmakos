@@ -1,0 +1,33 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0510",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/place_beacon/initial/mandate/defend/engagement_radius_pct",
+      "message": "`engagement_radius_pct` is 150; it must be from 1 to 100.",
+      "beginner": "This setting has a range, and the value written is outside it.",
+      "suggestions": [
+        {
+          "title": "Set engagement_radius_pct to 100",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/place_beacon/initial/mandate/defend/engagement_radius_pct\",\"value\":100}]",
+          "applicability": "MAYBE_INCORRECT"
+        }
+      ]
+    },
+    {
+      "code": "E0012",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/place_beacon/initial/mandate/defend",
+      "message": "Defend mandate settings have no effect until S2's Defend mandate lands; they are refused rather than ignored.",
+      "beginner": "A Defend beacon cannot be given settings in this build yet."
+    }
+  ],
+  "report_hash": "H1ywuo0Ah3g=",
+  "rules_hash": "gCjUE4Tm3i8=",
+  "plan_fingerprint": "Sky7sBNiY2Q=",
+  "verifier_version": "0.1.0-s2.2",
+  "size_units": 1,
+  "size_budget": 128
+}
+

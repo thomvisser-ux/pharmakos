@@ -818,7 +818,7 @@ gp.v1.Playbook.Kind
 
 ## Diagnostics
 
-85 codes. A code is language-neutral, append-only and never
+95 codes. A code is language-neutral, append-only and never
 reused; only an ERROR stops a playbook qualifying. `none at the skeleton` names the
 task that owes the emitter, which is honesty about coverage rather than a gap.
 
@@ -947,6 +947,10 @@ E0112  ERROR  limits and required blocks  raised at: none at the skeleton (T9, t
   the notebook is {found} characters; the maximum is {max}.
   The notebook is longer than a seat may keep.
 
+E0113  ERROR  limits and required blocks  raised at: structure
+  the playbook has {found} handlers; this build compiles at most {max}.
+  A playbook can carry only so many rules, however small each one is. Take some out.
+
 E0201  ERROR  conditions  raised at: structure
   the comparison names no operator.
   Say how to compare: at most, equal to, more than, and so on.
@@ -1055,6 +1059,26 @@ E0413  ERROR  references and placement  raised at: semantics
   `on` stands a structure on a heat vent, and {what} names a scrap seam.
   Buildings stand on vents. A seam is dug, not built on.
 
+E0414  ERROR  references and placement  raised at: semantics
+  `{id}` is {side}; {role} names {wanted}.
+  A Defend beacon protects your own beacons, and an Attack beacon attacks an enemy's.
+
+E0415  ERROR  references and placement  raised at: structure
+  {role} is a selector that ranks {found}; it must rank {wanted}.
+  A Defend beacon protects your own beacons, and an Attack beacon attacks an enemy's, so a selector there has to look among the right side's beacons.
+
+E0416  ERROR  references and placement  raised at: semantics
+  the wall box's column ({x}, {y}) lies outside the sphere of the beacon whose mandate holds the wall.
+  A beacon builds only inside its own sphere, and a wall is no exception.
+
+E0417  ERROR  references and placement  raised at: structure
+  a wall's anchor names the wall and must be a voxel inside its box; {found}.
+  A wall is found by its anchor, so the anchor has to be one of the wall's own voxels.
+
+E0418  ERROR  references and placement  raised at: semantics
+  {what}; an Attack target must have been seen within the reach window, {max} ms, when the playbook is sealed.
+  An Attack beacon attacks what the seat has seen recently. Look again with a scout, or choose a target the seat has seen.
+
 E0501  ERROR  settings and recycle  raised at: semantics
   `{field}` is {found}; it must be between 0 and 100.
   A percentage runs from none of it to all of it.
@@ -1084,12 +1108,24 @@ E0507  ERROR  settings and recycle  raised at: none at the skeleton (S4, with li
   The seat has not earned the right to build this yet.
 
 E0508  ERROR  settings and recycle  raised at: semantics
-  `scout_count` is {found}; a beacon holds at most {most} scouts.
-  A Survey beacon can field only so many scouts. Ask for fewer.
+  `{field}` is {found}; a beacon holds at most {most} scouts.
+  A beacon can field only so many scouts. Ask for fewer.
 
 E0509  ERROR  settings and recycle  raised at: structure
   a `{id}` target carries a `wall_box`; only a `wall` target fills a box, and every other structure's footprint is its blueprint's.
   Only a wall is built as a box of voxels. Leave the box out, or make this target a wall.
+
+E0510  ERROR  settings and recycle  raised at: structure
+  `{field}` is {found}; it must be {range}.
+  This setting has a range, and the value written is outside it.
+
+E0511  ERROR  settings and recycle  raised at: structure
+  a wall is not turned: `rotation_quarter_turns` is {found}, and a wall's is 0.
+  A wall's box already says where every voxel goes, so it has no rotation.
+
+E0512  ERROR  settings and recycle  raised at: structure
+  the wall box is {found} voxels from `min.z` to `max.z`; a wall stands at least {min} voxels above the ground, and `min.z` lies at or below the ground, so this box cannot.
+  A wall lower than this is climbable and blocks nothing. Raise the top of the box.
 
 W0501  WARNING  settings and recycle  raised at: semantics
   `seam_choice` SAFEST reads as NEAREST until S2's threat model arrives.
@@ -1131,7 +1167,7 @@ W0702  WARNING  schedule, conflicts and staleness  raised at: none at the skelet
   `{id}` can never fire: `{winner}` is earlier and its condition is true first.
   An earlier rule always wins, so this one never gets a turn.
 
-W0703  WARNING  schedule, conflicts and staleness  raised at: none at the skeleton (S3, with the reach window)
+W0703  WARNING  schedule, conflicts and staleness  raised at: lint
   the sighting this rests on is {found} ms old; the reach window is {max} ms.
   What the seat remembers here may be too old to act on.
 
@@ -1162,3 +1198,7 @@ I0002  INFO  information  raised at: none at the skeleton (S3, the lint stage)
 I0003  INFO  information  raised at: structure
   `{field}` is omitted and reads as {value}.
   A setting left out takes its named default.
+
+I0004  INFO  information  raised at: structure
+  `repair_threshold_pct` is 0, so this Build beacon's drones never repair a structure; its units and the commander are still repaired.
+  A repair threshold of 0 means never. Write a percentage to have damaged structures repaired.

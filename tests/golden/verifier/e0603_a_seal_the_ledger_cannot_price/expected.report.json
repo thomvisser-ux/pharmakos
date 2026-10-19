@@ -6,7 +6,7 @@
       "severity": "ERROR",
       "path": "/declarative/route/0/interface/rows/0/set_mandate_settings/survey/scout_count",
       "message": "`scout_count` is 4294967295; a beacon holds at most 255 scouts.",
-      "beginner": "A Survey beacon can field only so many scouts. Ask for fewer.",
+      "beginner": "A beacon can field only so many scouts. Ask for fewer.",
       "suggestions": [
         {
           "title": "Ask for as many scouts as a beacon holds",
@@ -37,10 +37,10 @@
       "beginner": "This playbook asks for more than a seal can hold. The game would refuse it when you submit, so it is refused here first."
     }
   ],
-  "report_hash": "07PNwjwew2A=",
+  "report_hash": "nvqkrgld+KI=",
   "rules_hash": "gCjUE4Tm3i8=",
   "plan_fingerprint": "9yGFg3XivWc=",
-  "verifier_version": "0.1.0-s2",
+  "verifier_version": "0.1.0-s2.2",
   "size_units": 1,
   "size_budget": 128
 }

@@ -9,10 +9,10 @@
       "beginner": "Asking whether a beacon is under attack comes with combat. Until then the question has no answer, so it cannot be asked."
     }
   ],
-  "report_hash": "0e7gO1EvVSQ=",
+  "report_hash": "kQLM93IPgqA=",
   "rules_hash": "gCjUE4Tm3i8=",
   "plan_fingerprint": "uMJMQrYvGc0=",
-  "verifier_version": "0.1.0-s2",
+  "verifier_version": "0.1.0-s2.2",
   "size_units": 1,
   "size_budget": 128
 }

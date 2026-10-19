@@ -1,0 +1,38 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0512",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/place_beacon/initial/mandate/build/targets/0/wall_box",
+      "message": "the wall box is 1 voxels from `min.z` to `max.z`; a wall stands at least 2 voxels above the ground, and `min.z` lies at or below the ground, so this box cannot.",
+      "beginner": "A wall lower than this is climbable and blocks nothing. Raise the top of the box.",
+      "map_refs": [
+        {
+          "x": 100,
+          "y": 11,
+          "z": 60
+        },
+        {
+          "x": 102,
+          "y": 11,
+          "z": 61
+        }
+      ]
+    },
+    {
+      "code": "E0019",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/place_beacon/initial/mandate/build/targets/0/blueprint_id",
+      "message": "a Build target names `wall`, one of S2's base kit, which has no effect until S2's base kit lands; it is refused rather than ignored.",
+      "beginner": "Autocannons, mortars and walls cannot be built in this build yet."
+    }
+  ],
+  "report_hash": "cm5eWS65QEs=",
+  "rules_hash": "gCjUE4Tm3i8=",
+  "plan_fingerprint": "9ejSn138/gA=",
+  "verifier_version": "0.1.0-s2.2",
+  "size_units": 2,
+  "size_budget": 128
+}
+
