@@ -5,7 +5,7 @@
       "code": "E0019",
       "severity": "ERROR",
       "path": "/declarative/route/0/interface/rows/0/add_build_target/target/blueprint_id",
-      "message": "a Build target names `autocannon`, one of S2's base kit; it is refused until the base kit's lane builds it, rather than ignored.",
+      "message": "a Build target names `autocannon`, one of S2's base kit, which has no effect until S2's base kit lands; it is refused rather than ignored.",
       "beginner": "Autocannons, mortars and walls cannot be built in this build yet."
     }
   ],

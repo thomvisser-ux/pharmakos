@@ -110,12 +110,18 @@ const NAMES: &[&str] = &[
     "s0", "s1", "s2", "h1", "b_01", "b_02", "e_01", "nowhere", "",
 ];
 
-/// The codes for what the sim refuses at the seal (E0009 to E0017) and for an
-/// enum number this build does not name (E0018), in code order: the ten
-/// thousand runs reach every one.
-const REFUSALS: [&str; 10] = [
+/// The codes for what the sim refuses at the seal (E0009 to E0017, and S2's
+/// base kit, E0019), for an enum number this build does not name (E0018) and
+/// for a `wall_box` on a target that is not a wall (E0509), in code order: the
+/// ten thousand runs reach every one.
+const REFUSALS: [&str; 12] = [
     "E0009", "E0010", "E0011", "E0012", "E0013", "E0014", "E0015", "E0016", "E0017", "E0018",
+    "E0019", "E0509",
 ];
+
+/// The coordinates at the ends of the field, so the walk and the semantics
+/// stage meet the values no map holds (S2's wire, the reviews of con4).
+const EXTREMES: [i32; 4] = [i32::MIN, -1, 0, i32::MAX];
 
 /// Words `gp.v1` holds back, so the never-strip path is exercised.
 const HELD: &[&str] = &["set_flag", "branch", "repeat", "dispatch", "team_id"];
@@ -602,7 +608,15 @@ impl Shape {
         // mandates land, except an empty arm in a switch.
         if self.damage(6) {
             let arm = if self.rarely(2) { "defend" } else { "attack" };
-            return (arm.to_owned(), Json::Object(Vec::new()));
+            // Empty, or filled with S2's fields, damaged as a hand editor would.
+            let settings = if self.rarely(3) {
+                Json::Object(Vec::new())
+            } else if arm == "defend" {
+                self.defend()
+            } else {
+                self.attack()
+            };
+            return (arm.to_owned(), settings);
         }
         match self.below(3) {
             0 => ("mine".to_owned(), Json::Object(Vec::new())),
@@ -624,6 +638,97 @@ impl Shape {
                 )
             }
         }
+    }
+
+    /// A voxel anywhere in the `i32` field, the extremes included.
+    fn wild_voxel(&mut self) -> Json {
+        let axis = |shape: &mut Shape| {
+            if shape.rarely(2) {
+                let index = usize::try_from(shape.below(4)).unwrap_or(0);
+                Json::Number(EXTREMES.get(index).copied().unwrap_or(0).to_string())
+            } else {
+                shape.number(-40, 420)
+            }
+        };
+        Json::Object(vec![
+            ("x".to_owned(), axis(self)),
+            ("y".to_owned(), axis(self)),
+            ("z".to_owned(), axis(self)),
+        ])
+    }
+
+    /// An area: upright, inside out, or missing a corner.
+    fn wild_area(&mut self) -> Json {
+        let mut fields = Vec::new();
+        if !self.rarely(5) {
+            fields.push(("min".to_owned(), self.wild_voxel()));
+        }
+        if !self.rarely(5) {
+            fields.push(("max".to_owned(), self.wild_voxel()));
+        }
+        Json::Object(fields)
+    }
+
+    /// An enum value by one of its names, or by a number it may not name.
+    fn wild_enum(&mut self, names: &[&str]) -> Json {
+        if self.rarely(3) {
+            return self.number(-3, 40);
+        }
+        let index =
+            usize::try_from(self.below(i32::try_from(names.len()).unwrap_or(1))).unwrap_or(0);
+        Json::String(names.get(index).copied().unwrap_or("NEVER").to_owned())
+    }
+
+    /// A list of up to `most` items.
+    fn list(&mut self, most: i32, item: fn(&mut Shape) -> Json) -> Json {
+        let count = if self.rarely(4) { most } else { self.below(4) };
+        Json::Array((0..count).map(|_| item(self)).collect())
+    }
+
+    /// S2's Defend settings, with every field the wire gave them.
+    fn defend(&mut self) -> Json {
+        let protect = self.list(64, |shape| {
+            if shape.rarely(3) {
+                Json::Object(vec![("my_commander".to_owned(), Json::Object(Vec::new()))])
+            } else {
+                Json::Object(vec![("beacon".to_owned(), shape.beacon_ref())])
+            }
+        });
+        let pursue = self.wild_enum(&["NEVER", "SPHERE_EDGE", "WHILE_IN_REACH"]);
+        Json::Object(vec![
+            ("protect".to_owned(), protect),
+            ("engagement_radius_pct".to_owned(), self.number(0, 200)),
+            ("pursue".to_owned(), pursue),
+            ("picket_scouts".to_owned(), self.number(0, 300)),
+        ])
+    }
+
+    /// S2's Attack settings, with every field the wire gave them.
+    fn attack(&mut self) -> Json {
+        let target = match self.below(3) {
+            0 => Json::Object(vec![("beacon".to_owned(), self.beacon_ref())]),
+            1 => Json::Object(vec![("voxel".to_owned(), self.wild_voxel())]),
+            _ => Json::Object(vec![(
+                "enemy_commander".to_owned(),
+                Json::Object(Vec::new()),
+            )]),
+        };
+        let retarget = self.wild_enum(&["NONE", "NEAREST_KNOWN"]);
+        let after = self.wild_enum(&["REGROUP_AT_STAGING", "RETURN_HOME"]);
+        let launch = Json::Object(vec![
+            ("force_size".to_owned(), self.number(0, 50)),
+            ("segment_ms".to_owned(), self.duration(480_000)),
+        ]);
+        Json::Object(vec![
+            ("target".to_owned(), target),
+            ("retarget".to_owned(), retarget),
+            ("staging".to_owned(), self.wild_voxel()),
+            ("launch".to_owned(), launch),
+            ("after_action".to_owned(), after),
+            ("avoid_areas".to_owned(), self.list(64, Shape::wild_area)),
+            ("breach_allowed".to_owned(), Json::Bool(self.rarely(2))),
+            ("waves".to_owned(), self.number(0, 9)),
+        ])
     }
 
     /// A scout count over the whole `u32` field: a small one, the very top,
@@ -650,9 +755,15 @@ impl Shape {
         if self.clean {
             return Json::String("generator".to_owned());
         }
+        // S2's base kit (E0019) among them, the wall included.
+        let index = if self.rarely(4) {
+            self.below(2).saturating_add(3)
+        } else {
+            i32::try_from(index).unwrap_or(0)
+        };
         Json::String(
-            ["generator", "mortar", "survey_post"]
-                .get(index)
+            ["generator", "mortar", "survey_post", "autocannon", "wall"]
+                .get(usize::try_from(index).unwrap_or(0))
                 .copied()
                 .unwrap_or("generator")
                 .to_owned(),
@@ -667,10 +778,15 @@ impl Shape {
         } else {
             Json::Object(vec![("voxel".to_owned(), self.voxel())])
         };
-        Json::Object(vec![
+        let mut fields = vec![
             ("blueprint_id".to_owned(), blueprint),
             ("anchor".to_owned(), anchor),
-        ])
+        ];
+        // A box on whatever blueprint was drawn (E0509 unless it is a wall).
+        if self.damage(5) {
+            fields.push(("wall_box".to_owned(), self.wild_area()));
+        }
+        Json::Object(fields)
     }
 
     fn handler(&mut self) -> Json {

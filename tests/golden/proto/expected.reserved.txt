@@ -3,6 +3,9 @@
 # Ranges are inclusive at both ends. A reservation is a promise:
 # dropping one from this file is a WIRE_JSON break (AGENTS.md section 5).
 
+gp.api.v1.BeaconSummary
+  numbers: 10-15
+
 gp.api.v1.Event
   numbers: 5-15
 
@@ -37,6 +40,9 @@ gp.v1.AttackLaunch
   numbers: 3
   names:   broadcast_received
 
+gp.v1.AttackSettings
+  numbers: 10-15
+
 gp.v1.BeaconRef
   numbers: 13-49
 
@@ -49,7 +55,7 @@ gp.v1.Condition
   names:   flag_clear, flag_set, grid_island, jammed, link_up, satellite_pass
 
 gp.v1.DefendSettings
-  numbers: 5, 6
+  numbers: 5, 6, 7-15
   names:   auto_fortify, unit_mix
 
 gp.v1.Location

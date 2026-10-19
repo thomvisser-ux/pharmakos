@@ -1788,7 +1788,8 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.GetViewResponse".i
 ///     `materials.blast_levels` gives its kind, one to three; each blast short
 ///     of the last steps it down a level, so a terrain material has a cracked
 ///     value for each level beyond its first. Nothing restores a cracked
-///     voxel, and an ore or vent voxel keeps its grade when it cracks:
+///     terrain voxel (repair restores a seat's own cracked wall voxels only,
+///     S2's plan's decision 42), and an ore or vent voxel keeps its grade when it cracks:
 ///
 ///      17  dirt, cracked once                    25  scrap seam, rich, cracked once
 ///      18  dirt, cracked twice                   26  scrap seam, rich, cracked twice
@@ -1827,7 +1828,7 @@ impl ::prost::Name for ViewChunk {
 const NAME: &'static str = "ViewChunk";
 const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.ViewChunk".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.ViewChunk".into() }}
-/// / One thing standing on the terrain, as this viewer may see it.
+/// One thing standing on the terrain, as this viewer may see it.
 ///
 /// WHERE IT IS AND WHAT IT IS, and, from S2, its hit points and heading. What
 /// a seat sees of ANOTHER seat's asset is S2's plan's decision 5, ruled by

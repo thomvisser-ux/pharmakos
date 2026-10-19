@@ -397,6 +397,26 @@ fn a_value_with_presence_survives_canonicalisation() {
         canonical.contains("\"force_size\""),
         "an optional field's written 0 disappeared:\n{canonical}"
     );
+    // The same for the two edit-row settings that must be able to write
+    // their zero (S2's wire, the reviews of con4).
+    for (message, member, spelled) in [
+        (
+            "gp.v1.DefendSettings",
+            "picket_scouts",
+            r#"{"picket_scouts": 0}"#,
+        ),
+        (
+            "gp.v1.AttackSettings",
+            "breach_allowed",
+            r#"{"breach_allowed": false}"#,
+        ),
+    ] {
+        let canonical = json::canonicalise(message, spelled).expect("canonicalises");
+        assert!(
+            canonical.contains(&format!("\"{member}\"")),
+            "{message}.{member}'s written zero disappeared:\n{canonical}"
+        );
+    }
 
     // A oneof arm holding its own zero. `BeaconRef.beacon_id` set to the empty
     // string is not the same message as a `BeaconRef` with no arm set at all:
@@ -1788,7 +1808,7 @@ fn s2s_defend_settings_round_trip_in_their_documented_spellings() {
                 ],
                 engagement_radius_pct: 80,
                 pursue: Pursue::SphereEdge.into(),
-                picket_scouts: 2,
+                picket_scouts: Some(2),
             })),
         },
         concat!(
@@ -1854,7 +1874,7 @@ fn s2s_attack_settings_round_trip_in_their_documented_spellings() {
                     min: voxel(50, 50, 0),
                     max: voxel(60, 60, 9),
                 }],
-                breach_allowed: true,
+                breach_allowed: Some(true),
                 waves: 1,
             })),
         },

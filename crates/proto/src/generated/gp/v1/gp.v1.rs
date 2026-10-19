@@ -604,10 +604,14 @@ pub struct BuildTarget {
     /// A `wall` target's voxels: the box it fills, inclusive at both ends, each
     /// voxel at the rules table's `wall_cost_per_voxel` (S2's plan, decisions 10
     /// and 40, ruled by decisions-log item 144 (11)). Every column of the box is
-    /// filled from the ground's top up to the box's top, so no wall voxel has
-    /// air under it, and the box stands at least the rules table's
+    /// filled from the ground's top up to the box's top (`max.z`), so no wall
+    /// voxel has air under it, and the box stands at least the rules table's
     /// `materials.wall_min_height_voxels` above the ground in every column; a
-    /// lower one is a verifier error.
+    /// lower one is a verifier error. `min.z` says only that the box reaches the
+    /// ground: it lies at or below the ground's top in every column, and
+    /// nothing below the ground is filled. Every column of the box lies inside
+    /// the sphere of the beacon whose mandate holds the target, the sphere being
+    /// building's only range (decisions-log item 12).
     ///
     /// Required on a `wall` target and refused on any other: a structure's
     /// footprint is its blueprint's, never the author's. A wall's `anchor` still
@@ -622,7 +626,8 @@ const NAME: &'static str = "BuildTarget";
 const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.BuildTarget".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.BuildTarget".into() }}
 /// An axis-aligned box of voxels, inclusive at both ends. Protected areas,
-/// avoid areas and Survey probe areas are all of this shape.
+/// avoid areas, Survey probe areas and a wall target's `wall_box` are all of
+/// this shape.
 ///
 /// PLACEHOLDER: an area's shape, a box — owner, if a polygon or a sphere is wanted.
 /// The spec says "areas" without fixing their shape. A box
@@ -2017,10 +2022,11 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.BuildSettings".into() 
 pub struct DefendSettings {
     /// What the beacon protects: the seat's own beacons, by name or selector,
     /// and its own commander. Guards escort the commander and intercept threats
-    /// near it while it is inside this beacon's sphere (spec section 4). Empty,
-    /// the beacon protects itself and everything inside its sphere (the Defend
-    /// mandate's first draft, decisions-log section 1: "defaults to the beacon
-    /// and everything inside").
+    /// near it while it is inside this beacon's sphere (spec section 4). Every
+    /// Defend beacon holds its sphere whatever this list says (spec section 6:
+    /// "Hold the sphere and protect listed assets"); the list adds the assets
+    /// its guards escort first. Empty, it adds none, so an empty list is not a
+    /// default of its own.
     #[prost(message, repeated, tag="1")]
     pub protect: ::prost::alloc::vec::Vec<ProtectedAsset>,
     /// How far from the beacon its guards engage, as a whole percentage of the
@@ -2034,14 +2040,13 @@ pub struct DefendSettings {
     pub pursue: i32,
     /// How many scouts patrol just outside the sphere edge, at the rules table's
     /// `defend.picket_radius_voxels`, for early warning. 0 fields no picket.
-    #[prost(uint32, tag="4")]
-    pub picket_scouts: u32,
+    /// `optional`, so that a `set_mandate_settings` row can write 0 (stand the
+    /// picket down) and be told apart from a row that leaves the count alone.
+    #[prost(uint32, optional, tag="4")]
+    pub picket_scouts: ::core::option::Option<u32>,
 }
 /// Nested message and enum types in `DefendSettings`.
 pub mod defend_settings {
-    // Numbers 7-15 are free for a further Defend setting, in the one-byte tag
-    // range.
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Pursue {
@@ -2138,8 +2143,7 @@ pub struct AttackSettings {
     /// died. Required: an unset value is a verifier error.
     #[prost(enumeration="attack_settings::Retarget", tag="2")]
     pub retarget: i32,
-    /// Where the force gathers before it launches: a voxel inside the beacon's
-    /// sphere. Required.
+    /// Where the force gathers before it launches: a voxel. Required.
     #[prost(message, optional, tag="3")]
     pub staging: ::core::option::Option<Voxel>,
     /// When the force launches. Required.
@@ -2159,18 +2163,16 @@ pub struct AttackSettings {
     pub avoid_areas: ::prost::alloc::vec::Vec<Area>,
     /// Whether the attack may spend mortar or charge time digging or demolishing
     /// a way through walls instead of stopping (spec section 9; S2's plan's
-    /// decisions 9, 40 and 41).
-    #[prost(bool, tag="8")]
-    pub breach_allowed: bool,
+    /// decisions 9, 40 and 41). `optional`, so that an edit row can write false
+    /// and be told apart from a row that leaves it alone.
+    #[prost(bool, optional, tag="8")]
+    pub breach_allowed: ::core::option::Option<bool>,
     /// Launches per segment, at least 1. Required: 0 is a verifier error.
     #[prost(uint32, tag="9")]
     pub waves: u32,
 }
 /// Nested message and enum types in `AttackSettings`.
 pub mod attack_settings {
-    // Numbers 10-15 are free for a further Attack setting, in the one-byte tag
-    // range.
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Retarget {

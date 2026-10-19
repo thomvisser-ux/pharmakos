@@ -67,6 +67,7 @@ gp.v1.AttackRetreat
   after_launch_ms              2   int32
 
 gp.v1.AttackSettings
+  oneof: _breach_allowed
   target                       1   gp.v1.AttackTarget
   retarget                     2   gp.v1.AttackSettings.Retarget
   staging                      3   gp.v1.Voxel
@@ -76,6 +77,7 @@ gp.v1.AttackSettings
   avoid_areas                  7   repeated gp.v1.Area
   breach_allowed               8   bool
   waves                        9   uint32
+  reserved 10 to 15
 
 gp.v1.AttackTarget
   oneof: target
@@ -198,12 +200,14 @@ gp.v1.Declarative
   options                      3   gp.v1.Options
 
 gp.v1.DefendSettings
+  oneof: _picket_scouts
   protect                      1   repeated gp.v1.ProtectedAsset
   engagement_radius_pct        2   uint32
   pursue                       3   gp.v1.DefendSettings.Pursue
   picket_scouts                4   uint32
   reserved 5
   reserved 6
+  reserved 7 to 15
   reserved auto_fortify, unit_mix
 
 gp.v1.EnemyCommander
@@ -888,7 +892,7 @@ E0018  ERROR  decode and version  raised at: decode
   This setting holds a number the game does not know. Nothing is guessed for you: write one of the setting's names instead.
 
 E0019  ERROR  decode and version  raised at: structure
-  a Build target names `{id}`, one of S2's base kit; it is refused until the base kit's lane builds it, rather than ignored.
+  a Build target names `{id}`, one of S2's base kit, which has no effect until S2's base kit lands; it is refused rather than ignored.
   Autocannons, mortars and walls cannot be built in this build yet.
 
 E0101  ERROR  limits and required blocks  raised at: structure

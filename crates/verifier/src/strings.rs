@@ -169,8 +169,8 @@ pub const VERIFIER_STRINGS: &[Text] = &[
     },
     Text {
         code: "E0019",
-        message: "a Build target names `{id}`, one of S2's base kit; it is refused until the \
-                  base kit's lane builds it, rather than ignored.",
+        message: "a Build target names `{id}`, one of S2's base kit, which has no effect until \
+                  S2's base kit lands; it is refused rather than ignored.",
         beginner: "Autocannons, mortars and walls cannot be built in this build yet.",
     },
     // --- E01xx: limits and required blocks -----------------------------------

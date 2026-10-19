@@ -746,7 +746,8 @@ message BeaconSummary {
   // true age; unset on the seat's own beacons, which it never sights.
   optional int32 sighting_age_ms = 9;
 
-  // Numbers 10-15 are free for a further field.
+  // RESERVED — the rest of the tail, held for a further field.
+  reserved 10 to 15;
 }
 
 message GetBeaconRequest {
@@ -1553,7 +1554,8 @@ message GetViewResponse {
 //    `materials.blast_levels` gives its kind, one to three; each blast short
 //    of the last steps it down a level, so a terrain material has a cracked
 //    value for each level beyond its first. Nothing restores a cracked
-//    voxel, and an ore or vent voxel keeps its grade when it cracks:
+//    terrain voxel (repair restores a seat's own cracked wall voxels only,
+//    S2's plan's decision 42), and an ore or vent voxel keeps its grade when it cracks:
 //
 //     17  dirt, cracked once                    25  scrap seam, rich, cracked once
 //     18  dirt, cracked twice                   26  scrap seam, rich, cracked twice
@@ -1593,7 +1595,7 @@ message ViewChunk {
   reserved 3 to 15;
 }
 
-/// One thing standing on the terrain, as this viewer may see it.
+// One thing standing on the terrain, as this viewer may see it.
 //
 // WHERE IT IS AND WHAT IT IS, and, from S2, its hit points and heading. What
 // a seat sees of ANOTHER seat's asset is S2's plan's decision 5, ruled by
