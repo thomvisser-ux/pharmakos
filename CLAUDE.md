@@ -72,16 +72,21 @@ the owner, who says then whether it runs on into S3:
   contract PRs included,
   once CI's checks are green on the branch — or, for a lane that `scripts/merge-train.sh --local-verify` checks
   locally (its base moved by more than prose, and it touches none of the paths the script sends back
-  to the three-OS matrix), once CI's checks are green on its pre-rebase head and the script's
-  `cargo xtask ci --locked --require-tools --check` is green on its rebase onto `main`, with `main`'s
-  push run watched after the merge (decisions-log item 116 (2)) — and the two adversarial reviews
+  to the three-OS matrix), once CI's checks are green on its pushed head and the script's
+  `cargo xtask ci --locked --require-tools --check` is green on that head merged with `main` (a
+  merge the script makes locally without a commit, and undoes), with the merge pinned to that head
+  and `main`'s push run watched after it (decisions-log items 116 (2) and 145 (3)). A branch takes
+  `main` only by a signed merge and merges by a merge commit, never by a rebase or a force-push
+  (AGENTS.md §6) — and the two adversarial reviews
   have been applied; the owner reviews the stage demo (AGENTS.md §10 item 8) rather than each PR.
   Every merge is still a PR whose body names the contract paths it touches, except Dependabot's,
   which the main session merges the same way (decisions-log item 120): for an action pinned by SHA
   the two reviews read the release notes and the diff between the two SHAs, and for a Cargo
   security update the advisory and the crate's diff; a comment names the contract paths and the
   head the reviews read, the merge is pinned to that head, and the main session asks
-  `@dependabot rebase` rather than rebasing the branch itself. Sub-agents still open a PR and stop.
+  `@dependabot rebase` rather than rebasing or merging into the branch itself (the branch is
+  Dependabot's, which rewrites it, so this is the one rebase AGENTS.md §6's merge-only rule leaves
+  standing). Sub-agents still open a PR and stop.
 - The owner accepts **bypass-permissions mode** in that same session and in the sub-agents and
   workflow agents it launches, which inherit the mode (decisions-log item 116 (9)). Sub-agents still
   open a PR and stop; for them the contract-file rule is held by the lane's brief, the two adversarial

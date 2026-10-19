@@ -578,13 +578,22 @@ machine can run.
   the operator's behaviour or `library/` is granted, in its section of the stage plan, the tests and
   goldens that pin that output — the operator's hosted tests in `crates/gamectl/tests`
   (`operator.rs`, `operator_host.rs`, `wizard.rs`; §3 rule 3), `crates/gateway/tests/advice.rs`, the
-  client's wizard pins in `crates/client-gdext/tests/wizard.rs`, and the gateway's
-  `instantiate_suggested` golden with its byte copy `godot/fixtures/instantiate_suggested.json`. A
+  client's wizard pins in `crates/client-gdext/tests/wizard.rs`, the gateway's
+  `instantiate_suggested` golden with its byte copy `godot/fixtures/instantiate_suggested.json`,
+  and the nightly result golden `tests/golden/scenarios/nightly-result/`, which Easy's output and
+  the rules hash both move (decisions-log item 145 (7)). A
   crate another running lane owns is not granted this way: the change is sequenced, as this item's
   first rule says. An edit to an unowned crate that a lane finds it needs and was not granted is
   disclosed in its PR, and the main session rules on it at the merge (decisions-log item 136).
-- Rebase on `main` before opening a PR. Never force-push `main`, never rewrite a pushed branch
-  someone else is reviewing.
+- **Take `main` only by a signed merge, never by a rebase.** A branch brings in `main` with
+  `git fetch origin main`, then `git merge --no-ff --no-commit FETCH_HEAD`, then `git commit -s`
+  (a `Co-Authored-By:` trailer, where there is one, above the sign-off, §8), and pushes the merge
+  commit with a plain push. A pushed branch is never rebased and never force-pushed, and a merge
+  conflict is resolved inside that signed merge commit. The desktop app's Auto-fix needs a
+  branch whose pushed history is never rewritten, and the DCO walk checks merge commits as it
+  checks every other. A pull request merges into `main` by a merge commit, pinned to the head
+  whose checks passed, never by a rebase or a squash; `scripts/merge-train.sh` does both halves
+  (decisions-log item 145 (3)). Never force-push `main`.
 - State in the PR which crates you touched, so the next agent can pick a disjoint set.
 - Agents iterate until CI is green on their own branch; the owner reviews the stage demo, not the
   intermediate commits.
