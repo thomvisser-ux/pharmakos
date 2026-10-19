@@ -304,7 +304,7 @@ fn parse_file(bytes: &[u8], schema: &mut Schema) -> Result<(), WireError> {
         let (number, value) = reader.field()?;
         match (number, value) {
             // FileDescriptorProto.package = 2.
-            (2, Value::Delimited(payload)) => package = utf8(payload),
+            (2, Value::Delimited(payload)) => package = utf8(payload)?,
             // .message_type = 4, .enum_type = 5, .extension = 7.
             (4, Value::Delimited(payload)) => messages.push(payload),
             (5, Value::Delimited(payload)) => enums.push(payload),
@@ -343,17 +343,18 @@ fn parse_message(bytes: &[u8], scope: &str, schema: &mut Schema) -> Result<(), W
             // DescriptorProto: name = 1, field = 2, nested_type = 3,
             // enum_type = 4, oneof_decl = 8, reserved_range = 9,
             // reserved_name = 10.
-            (1, Value::Delimited(payload)) => name = utf8(payload),
+            (1, Value::Delimited(payload)) => name = utf8(payload)?,
             (2, Value::Delimited(payload)) => field_payloads.push(payload),
             (3, Value::Delimited(payload)) => nested.push(payload),
             (4, Value::Delimited(payload)) => enums.push(payload),
             (8, Value::Delimited(payload)) => message.oneofs.push(oneof_name(payload)?),
             (9, Value::Delimited(payload)) => {
                 // DescriptorProto.ReservedRange's end is EXCLUSIVE.
-                let (start, end) = range(payload)?;
-                message.reserved_ranges.push((start, end.saturating_sub(1)));
+                message
+                    .reserved_ranges
+                    .push(message_reserved_range(payload)?);
             }
-            (10, Value::Delimited(payload)) => message.reserved_names.push(utf8(payload)),
+            (10, Value::Delimited(payload)) => message.reserved_names.push(utf8(payload)?),
             _ => {}
         }
     }
@@ -393,21 +394,27 @@ fn parse_field(bytes: &[u8]) -> Result<Field, WireError> {
         match (field_number, value) {
             // FieldDescriptorProto: name = 1, number = 3, label = 4,
             // type = 5, type_name = 6, oneof_index = 9, json_name = 10.
-            (1, Value::Delimited(payload)) => name = utf8(payload),
-            (3, Value::Varint(raw)) => number = signed32(raw),
+            (1, Value::Delimited(payload)) => name = utf8(payload)?,
+            (3, Value::Varint(raw)) => number = signed32(raw)?,
             (4, Value::Varint(raw)) => label = raw,
             (5, Value::Varint(raw)) => {
                 kind = ScalarKind::from_number(raw).ok_or(WireError::BadWireType)?;
             }
             (6, Value::Delimited(payload)) => {
-                utf8(payload)
+                utf8(payload)?
                     .trim_start_matches('.')
                     .clone_into(&mut type_name);
             }
-            (9, Value::Varint(raw)) => oneof_index = Some(signed32(raw)),
-            (10, Value::Delimited(payload)) => json_name = utf8(payload),
+            (9, Value::Varint(raw)) => oneof_index = Some(signed32(raw)?),
+            (10, Value::Delimited(payload)) => json_name = utf8(payload)?,
             _ => {}
         }
+    }
+
+    // Protobuf field numbers run 1 to 536 870 911, and the codec's writer
+    // relies on it (`wire::Writer`'s `tag`).
+    if !(1..=536_870_911).contains(&number) {
+        return Err(WireError::BadFieldNumber);
     }
 
     Ok(Field {
@@ -433,13 +440,13 @@ fn parse_enum(bytes: &[u8], scope: &str) -> Result<Enum, WireError> {
         match (number, value) {
             // EnumDescriptorProto: name = 1, value = 2, reserved_range = 4,
             // reserved_name = 5.
-            (1, Value::Delimited(payload)) => name = utf8(payload),
+            (1, Value::Delimited(payload)) => name = utf8(payload)?,
             (2, Value::Delimited(payload)) => value_payloads.push(payload),
             (4, Value::Delimited(payload)) => {
                 // EnumReservedRange's end is INCLUSIVE, unlike a message's.
-                parsed.reserved_ranges.push(range(payload)?);
+                parsed.reserved_ranges.push(enum_reserved_range(payload)?);
             }
-            (5, Value::Delimited(payload)) => parsed.reserved_names.push(utf8(payload)),
+            (5, Value::Delimited(payload)) => parsed.reserved_names.push(utf8(payload)?),
             _ => {}
         }
     }
@@ -463,8 +470,8 @@ fn parse_enum_value(bytes: &[u8]) -> Result<EnumValue, WireError> {
         let (field_number, value) = reader.field()?;
         match (field_number, value) {
             // EnumValueDescriptorProto: name = 1, number = 2, options = 3.
-            (1, Value::Delimited(payload)) => name = utf8(payload),
-            (2, Value::Varint(raw)) => number = signed32(raw),
+            (1, Value::Delimited(payload)) => name = utf8(payload)?,
+            (2, Value::Varint(raw)) => number = signed32(raw)?,
             (3, Value::Delimited(payload)) => options = payload.to_vec(),
             _ => {}
         }
@@ -481,10 +488,35 @@ fn oneof_name(bytes: &[u8]) -> Result<String, WireError> {
     while !reader.is_done() {
         let (number, value) = reader.field()?;
         if let (1, Value::Delimited(payload)) = (number, value) {
-            return Ok(utf8(payload));
+            return utf8(payload);
         }
     }
     Ok(String::new())
+}
+
+/// A message's reserved range, as the inclusive pair the schema keeps.
+/// `DescriptorProto.ReservedRange`'s end is EXCLUSIVE; a range that ends
+/// before it starts, or holds no number, is a corrupt descriptor.
+fn message_reserved_range(bytes: &[u8]) -> Result<(i32, i32), WireError> {
+    let (start, end) = range(bytes)?;
+    let last = end.checked_sub(1).ok_or(WireError::OutOfRange)?;
+    ordered(start, last)
+}
+
+/// An enum's reserved range. `EnumReservedRange`'s end is INCLUSIVE, unlike
+/// a message's; one that ends before it starts is a corrupt descriptor.
+fn enum_reserved_range(bytes: &[u8]) -> Result<(i32, i32), WireError> {
+    let (start, end) = range(bytes)?;
+    ordered(start, end)
+}
+
+/// An inclusive range, refused when its start is past its end.
+const fn ordered(start: i32, last: i32) -> Result<(i32, i32), WireError> {
+    if start > last {
+        Err(WireError::OutOfRange)
+    } else {
+        Ok((start, last))
+    }
 }
 
 fn range(bytes: &[u8]) -> Result<(i32, i32), WireError> {
@@ -494,8 +526,8 @@ fn range(bytes: &[u8]) -> Result<(i32, i32), WireError> {
     while !reader.is_done() {
         let (number, value) = reader.field()?;
         match (number, value) {
-            (1, Value::Varint(raw)) => start = signed32(raw),
-            (2, Value::Varint(raw)) => end = signed32(raw),
+            (1, Value::Varint(raw)) => start = signed32(raw)?,
+            (2, Value::Varint(raw)) => end = signed32(raw)?,
             _ => {}
         }
     }
@@ -503,13 +535,18 @@ fn range(bytes: &[u8]) -> Result<(i32, i32), WireError> {
 }
 
 /// A descriptor `int32` arrives as a varint that was sign-extended to 64 bits.
-fn signed32(raw: u64) -> i32 {
+/// One that does not fit is a corrupt descriptor, refused rather than read as
+/// some other number.
+fn signed32(raw: u64) -> Result<i32, WireError> {
     let wide = crate::wire::u64_bits_to_i64(raw);
-    i32::try_from(wide).unwrap_or(0)
+    i32::try_from(wide).map_err(|_| WireError::OutOfRange)
 }
 
-fn utf8(payload: &[u8]) -> String {
-    String::from_utf8_lossy(payload).into_owned()
+/// A descriptor string. Protobuf strings are UTF-8, so one that is not is a
+/// corrupt descriptor, refused rather than repaired with replacement
+/// characters into a name nothing declared.
+fn utf8(payload: &[u8]) -> Result<String, WireError> {
+    String::from_utf8(payload.to_vec()).map_err(|_| WireError::NotUtf8)
 }
 
 fn join(scope: &str, name: &str) -> String {
@@ -521,5 +558,37 @@ fn join(scope: &str, name: &str) -> String {
         joined.push('.');
         joined.push_str(name);
         joined
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{WireError, enum_reserved_range, message_reserved_range};
+
+    /// A `ReservedRange` as wire bytes: `start` = 1 and `end` = 2, varints.
+    fn range_bytes(start: u8, end: u8) -> [u8; 4] {
+        [0x08, start, 0x10, end]
+    }
+
+    #[test]
+    fn a_reserved_range_that_ends_before_it_starts_is_refused() {
+        // A message's end is exclusive: 13..16 holds 13 to 15.
+        assert_eq!(message_reserved_range(&range_bytes(13, 16)), Ok((13, 15)));
+        assert_eq!(message_reserved_range(&range_bytes(7, 8)), Ok((7, 7)));
+        // An empty range (start == end, exclusive) and an inverted one.
+        assert_eq!(
+            message_reserved_range(&range_bytes(9, 9)),
+            Err(WireError::OutOfRange)
+        );
+        assert_eq!(
+            message_reserved_range(&range_bytes(12, 3)),
+            Err(WireError::OutOfRange)
+        );
+        // An enum's end is inclusive.
+        assert_eq!(enum_reserved_range(&range_bytes(4, 4)), Ok((4, 4)));
+        assert_eq!(
+            enum_reserved_range(&range_bytes(5, 4)),
+            Err(WireError::OutOfRange)
+        );
     }
 }

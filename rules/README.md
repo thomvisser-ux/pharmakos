@@ -76,16 +76,43 @@ what a seat can reach rather than from a price: after round 1 no uncovered
 feature lies within one beacon's reach, so Easy seals its safe playbook and
 nothing is left to buy (decisions-log item 136 (3) (q); S3's `toward` is the
 stepping stone). No seat ever failed to afford a Generator. The pull request
-carries the report; every economy row below stays the owner's at S1's demo
-with it. The same lane changed only the table's `note`, which states two grid
-rules no row holds (below), so `rules_hash` moved and no chain did.
+carried the report, and S1's demo kept every economy row for S1 with it
+(decisions-log item 139 (1) ruling 6): each is the owner's at S3 now, with the
+balance check re-run once `toward` lets Easy reach past one beacon, as the
+table below says row by row. The same lane changed only the table's `note`,
+which states two grid rules no row holds (below), so `rules_hash` moved and no
+chain did.
 
 Revision 4 (S1's first contract pull request; decisions-log items 127 (2) and
 128) sets the Lulls to the spec's lengths — `match.lull_ms` 180 000 → 300 000
 and the new `match.first_lull_ms` 600 000 — and adds
 `structures.build_hp_per_second` 60 and `economy.mining_carry_voxels` 16, the
 sim's two named constants given rows at their own values, so no chain moves
-until a lane changes one. Each is the owner's at S1's demo.
+until a lane changes one. S1's demo kept all four for S1 (item 139 (1) ruling
+6): the two Lull rows are the owner's at S2's demo, and the two constants'
+rows at S3, with the economy rows.
+
+Revision 5 (S2's rules rows, S2's plan task `con3`; decisions-log item 144)
+adds what S2's combat lanes read, so that no lane writes a number of its own:
+
+- **rows that replace a constant, at the constant's value:**
+  `locomotion.headroom_voxels` 2 (the sim's `HEADROOM_VOXELS`, register S2-05,
+  E26) and `vision_radius_voxels` 8 on every unit kind, every structure kind
+  and the commander (the scouts' `UNIT_VISION_RADIUS_VOXELS`, register S1-34).
+  The vision markers carry decision 17's proposals for `tune2` to apply (E26
+  keeps the headroom at 2; decision 17 proposes nothing for it), so no chain
+  moves until a lane reads a row;
+- **rows nothing reads yet, at the plan's proposals:** a `weapon` on
+  `units.raider`, `structures.autocannon` and `structures.mortar` (whose
+  `projectile` makes it indirect) and `beacon.core_weapon`; the `combat` block; the
+  `defend` block's picket radius (spec §19); the `collapse` block (decision
+  11); and the `materials` block, the terrain's blast levels (decision 10,
+  ruled per material by item 144 (11)), the wall's minimum height (decision
+  40) and the bedrock layers (E14).
+
+Each is a PLACEHOLDER, the owner's at S2's demo with `tune2`'s reports. The
+sim refuses a blast level outside 1 to 3 and zero bedrock layers at load, from
+the lane that reads the row (`fire`); until then nothing reads them.
 
 Revision 3 fills the table out: decisions-log **items 90, 91 and 94** fix every
 value the walking skeleton's three lanes need, in one sitting, so that no task
@@ -163,7 +190,7 @@ so it is the first place the omission is visible.
 | `economy.award_fund_percent_of_bmi` 50 | item 90 | **PLACEHOLDER** — tuning, owner, S4 |
 | `power.core_surplus_kw` 10, `generator_output_kw` 20/30/40, `revive_margin_kw` 2, `beacon_base_draw_kw` 2 | item 90, spec §7 | **PLACEHOLDER** — tuning, owner, at S3, with the balance check re-run once `toward` lets Easy reach past one beacon, unless S2's exit lowers `power.map_ceiling_kw` below the map's supply (mapgen's supply-fits-ceiling rule, item 91), when they move with it under `g3r`/`tune2` (item 139 (1) ruling 6: it stands for S1), after `tune`'s balance check report kept it at item 90's seed, because no flag of the check implicates it (S1's plan, decision 16). The two grid rules above ride with this block. `beacon_base_draw_kw` is restated as `structures.beacon.draw_kw`, and the restated half moves with it, in S2 when this row moves there (`crates/proto/tests/proto.rs`'s `the_restated_rows_agree`) |
 | `power.kw_per_unit` 1, `reserve_percent` 40, `map_ceiling_kw` 190 | item 91, inside item 65's budget | **PLACEHOLDER** — tuning, owner, at S2's exit. The three move **together**, and `map_ceiling_kw` is a *derived* number that is a row anyway, because two of its three inputs are measurements of the code rather than rules |
-| `commander.cost_per_second` 10, `arrive_radius_voxels` 2, `placement_range_voxels` 12, `interface_range_voxels` 4 | item 90, items 11 and 21, spec §4 | **PLACEHOLDER** — tuning, owner, at S2's demo, with `tune2`'s balance report (item 139 (1) ruling 6: each stands for S1, after each stood at the skeleton's demo, item 126 (2) (b), and at S1's). `cost_per_second` is the commander's speed the sim, the verifier's walking bound and decision 16's `expand_east` column read, and that column found the spec's `expand_east` cannot reach its first site in its 120 s at any speed inside spec section 4's range (see `locomotion.commander_cost_per_second` above, which restates this row and must move with it: `crates/proto/tests/proto.rs` holds the two equal). `placement_range_voxels` is **superseded by walk-in** (item 127 (12), amending item 11): `place_beacon` walks to its site, so the row stays only because deleting a field is a `buf breaking` failure, and the sim reads it until targeting's behaviour lane retires the check |
+| `commander.cost_per_second` 10, `arrive_radius_voxels` 2, `placement_range_voxels` 12, `interface_range_voxels` 4 | item 90, items 11 and 21, spec §4 | **PLACEHOLDER** — tuning, owner, at S2's demo, with `tune2`'s balance report (item 139 (1) ruling 6: each stands for S1, after each stood at the skeleton's demo, item 126 (2) (b), and at S1's). `cost_per_second` is the commander's speed the sim, the verifier's walking bound and decision 16's `expand_east` column read, and that column found the spec's `expand_east` cannot reach its first site in its 120 s at any speed inside spec section 4's range (see `locomotion.commander_cost_per_second` above, which restates this row and must move with it: `crates/proto/tests/proto.rs` holds the two equal). `placement_range_voxels` is **superseded by walk-in** (item 127 (12), amending item 11): `place_beacon` walks to its site, and since targeting's behaviour lane (`tgt`, #81) nothing reads the row (the deploy needs only the interface range, the sim's `site_is_legal`); it stays only because deleting a field is a `buf breaking` failure |
 | `commander.hp` 300, `respawn_base_ms` 30000, `respawn_growth_ms` 15000 | item 90 | **PLACEHOLDER** — tuning, owner, S2 |
 | `beacon.sphere_radius_voxels` 24 | item 90, item 11, spec §5 | **PLACEHOLDER** — tuning, owner, at S2's demo (item 139 (1) ruling 6: it stands for S1, after it stood at the skeleton's demo, item 126 (2) (b), and at S1's) |
 | `beacon.core_hp` 3000 | item 90 | **PLACEHOLDER** — tuning, owner, S2 |
@@ -180,6 +207,15 @@ so it is the first place the omission is visible.
 | `verifier.size_budget_units` 128 | item 94 | **PLACEHOLDER** — tuning, owner, at **S3's exit**; P1 sets the real number from the measured per-rule cost per decision tick. A unit is one route step, one handler, one step in a handler body, one build target, one protected area or one patrol waypoint; conditions and settings count nothing |
 | `verifier.handler_cooldown_min_ms` 5000, `max_fires_max` 8, `notebook_max_chars` 4000 | item 90, spec §§10, 11 | **PLACEHOLDER** — tuning, owner, S3 |
 | `verifier.reach_memory_ms` 180000 | item 90 | **PLACEHOLDER** — tuning, owner, S3 (item 90 marks it S2/S3) |
+| `locomotion.headroom_voxels` 2 | S2-05, S2's plan E26 | **PLACEHOLDER** — tuning, owner, at S2's demo, with `tune2`'s report. The sim's `HEADROOM_VOXELS` given a row at its own value (revision 5); S2's `ids` swaps the constant for the row. E26 keeps today's 2; decision 17 proposes nothing for it |
+| `units.*.vision_radius_voxels`, `structures.*.vision_radius_voxels`, `commander.vision_radius_voxels` 8 | S1-34, item 144 (4), S2's plan decisions 17 and 22 | **PLACEHOLDER** — tuning, owner, at S2's demo, with `tune2`'s report. Every kind holds the scouts' constant (`UNIT_VISION_RADIUS_VOXELS`), so the sim's answer is unchanged until S2's `ids` reads the rows. Decision 17 proposes scout 24, raider 12, commander 10, the drones 8, autocannon 20, mortar 12, Generator and survey post 8; none for a beacon, which sees by its sphere, or the resonance spire |
+| `units.raider.weapon` 4 / 8 / 500, `structures.autocannon.weapon` 20 / 12 / 250, `beacon.core_weapon` 24 / 12 / 250 (range voxels, HP, cooldown ms) | S2's plan decision 17 | **PLACEHOLDER** — tuning, owner, at S2's demo, with `tune2`'s duel report. Direct fire: no `projectile`, so the damage lands in the tick it is dealt (E2). Read from S2's `fire` |
+| `structures.mortar.weapon` 40 / 60 / 4000, projectile 8 voxels/s, splash 3, crater 2 | S2's plan decision 17 | **PLACEHOLDER** — tuning, owner, at S2's demo, with `tune2`'s duel report. The `projectile` (the shell) is what makes it indirect (E13); the splash has no falloff. Read from S2's `fire` |
+| `combat.under_attack_window_ms` 10000, `threat_step_cost_multiplier` 4, `charge_radius_voxels` 4, `charge_fuse_ms` 5000, `repair_hp_per_second` 20, `terraform_ms_per_voxel` 1000 | S2's plan decision 17 | **PLACEHOLDER** — tuning, owner, at S2's demo, with `tune2`'s reports. Nothing reads them until the S2 lane that builds each rule |
+| `defend.picket_radius_voxels` 6 | spec §19, S2's plan decision 17 | **PLACEHOLDER** — tuning, owner, at S2's demo, with `tune2`'s report. Beyond the sphere's edge; read from S2's `dfnd` |
+| `collapse.max_region_voxels` 4096, `fall_damage_hp` 100, `max_visits_per_tick` 16384 | item 138 (3), S2's plan decision 11 | **PLACEHOLDER** — tuning, owner, at S2's demo. Read from S2's `fall` |
+| `materials.blast_levels` dirt 1, stone 2, ore 1, vent 1 | item 144 (11), S2's plan decision 10 | **PLACEHOLDER** — tuning, owner, at S2's demo, with `tune2`'s duel report. Each from 1 to the catalogue's 3 (E14); the ore and vent grades share their kind's row; a wall's two levels are the ruling's, not a row. Read from S2's `fire` |
+| `materials.wall_min_height_voxels` 2, `bedrock_layers_voxels` 1 | S2's plan decision 40, E14 | **PLACEHOLDER** — tuning, owner, at S2's demo. Bedrock is never removed, and 0 layers is refused at load, because the support rule needs a floor. Read from S2's lanes: bedrock from `fire`, the wall's height from `site` and `vfy2` |
 
 ## Editing it
 

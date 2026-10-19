@@ -999,15 +999,17 @@ message Location {
     // (`feature_id`) only, in RemoveBuildTargetRow.anchor, which removes the
     // target standing on that feature. Anywhere else the verifier refuses it.
     //
-    // Refused in S1 until targeting's behaviour lands: the sim's compile
-    // answers NotAtThisStage and the verifier E0003 (S1's plan, task con2).
+    // Built in S1 by targeting's behaviour lane (`tgt`, #81; decisions-log
+    // item 131): the sim's compile accepts it where it is legal. Until then
+    // the sim answered NotAtThisStage and the verifier E0003 (S1's plan, task
+    // con2).
     FeatureRef on = 10;
 
     // "a site covering a vent": where a beacon stands so that its sphere
     // holds the feature. Legal only in PlaceBeaconStep.at, which says how the
     // site is chosen. Anywhere else the verifier refuses it.
     //
-    // Refused in S1 until targeting's behaviour lands, as `on` is.
+    // Built in S1 with `on`, by the same lane (`tgt`, #81; item 131).
     FeatureRef covering = 11;
   }
 
