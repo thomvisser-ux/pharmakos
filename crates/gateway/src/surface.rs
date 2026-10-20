@@ -4506,6 +4506,18 @@ mod tests {
             snapshot.structure_rotation.push(0);
             snapshot.structure_ruined_at.push(ruined_at);
             snapshot.structure_free.push(0);
+            // S2's `fire` (snapshot version 11): the combat memory, ready and
+            // attacked by nobody.
+            snapshot.structure_ready_at.push(0);
+            snapshot
+                .structure_attacker
+                .push(pharmakos_sim::tables::NO_ATTACKER);
+            snapshot
+                .structure_attacked_at
+                .push(pharmakos_sim::tables::NEVER_ATTACKED);
+            snapshot
+                .structure_engaged
+                .push(pharmakos_sim::tables::NO_ATTACKER);
         }
     }
 
