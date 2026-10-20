@@ -4783,6 +4783,221 @@ mod tests {
         );
     }
 
+    // -----------------------------------------------------------------------
+    // The recap's tally (S2's plan, E15; the owner's ruling, item 145 (7))
+    // -----------------------------------------------------------------------
+
+    /// A three-seat match of one-second segments and `rounds` rounds, in its
+    /// opening Lull.
+    fn three_seats(rounds: u32) -> Surface {
+        let seats = [SeatId::new(0), SeatId::new(1), SeatId::new(2)];
+        let mut surface = Surface::new(
+            "m-0001",
+            0x0000_0000_ca5c_aded,
+            rules(),
+            FogPolicy::fogged(),
+            &seats,
+        )
+        .expect("a match id");
+        let mut config = short_config();
+        config.seats = 3;
+        config.match_settings.round_limit = rounds;
+        surface
+            .attach(crate::host::Host::open(&config, None).expect("a match"))
+            .expect("attached");
+        surface.open_lull().expect("the opening Lull");
+        surface
+    }
+
+    /// Into the Push, where seats 0 and 1 both damage one of seat 2's drones
+    /// on the first tick, each order its whole hit points, and the Push then
+    /// plays out to its recap.
+    fn a_shared_kill(surface: &mut Surface) {
+        use pharmakos_sim::math::quantity::Damage;
+        use pharmakos_sim::tables::{UnitId, UnitKind};
+        use pharmakos_sim::world::{DamageOrder, DamageTarget};
+        assert!(surface.begin_push().expect("the Push begins"));
+        let (drone, hp) = {
+            let units = surface.host().expect("hosted").world().units();
+            let row = (0..units.ids().len())
+                .find(|row| {
+                    units.seats().get(*row) == Some(&2)
+                        && units.kinds().get(*row) != Some(&UnitKind::Commander.id())
+                })
+                .expect("one of seat 2's drones");
+            (
+                UnitId::new(*units.ids().get(row).expect("an id")),
+                units.hit_points().get(row).expect("its hit points").raw(),
+            )
+        };
+        // Equal orders, each enough on its own: the credit splits evenly, so
+        // each seat's share of the build cost is a kill of its own.
+        let host = surface.host_mut().expect("hosted");
+        for (by, amount) in [(0_u8, hp), (1, hp)] {
+            assert!(
+                host.file_damage(DamageOrder {
+                    target: DamageTarget::Unit(drone),
+                    amount: Damage::new(i64::from(amount)).expect("a positive amount"),
+                    by: SeatId::new(by),
+                    source: None,
+                })
+                .is_ok(),
+                "the damage queue took seat {by}'s order"
+            );
+        }
+        while surface.step().expect("a tick").is_some() {}
+    }
+
+    /// One field of a recap's `tally`, as a whole number.
+    fn tally_field(recap: &Json, field: &str) -> i64 {
+        match recap.get("tally").and_then(|tally| tally.get(field)) {
+            Some(Json::Number(text)) => text.parse().expect("a whole number"),
+            other => panic!("tally.{field}: {other:?} in {recap:?}"),
+        }
+    }
+
+    /// E15 and spec section 3's "shared kill": two seats each dealt part of
+    /// the damage that killed a third seat's drone, so the kill is a shared
+    /// one for both, and each recap names it -- in its tally, read from the
+    /// sim's counters, and in its prose. The victim counts a loss.
+    #[test]
+    fn the_recap_names_a_shared_kill() {
+        let mut surface = three_seats(3);
+        let tokens: Vec<Token> = (0..3).map(|seat| seat_token(&mut surface, seat)).collect();
+        a_shared_kill(&mut surface);
+        for (seat, token) in tokens.iter().enumerate().take(2) {
+            let recap = result(&surface.call(Some(token), &request("get_recap", "{}"), &Blind));
+            assert_eq!(tally_field(&recap, "kills"), 1, "seat {seat}: {recap:?}");
+            assert_eq!(tally_field(&recap, "shared_kills"), 1, "seat {seat}");
+            assert_eq!(tally_field(&recap, "losses"), 0, "seat {seat}");
+            let Some(Json::String(prose)) = recap.get("prose") else {
+                panic!("prose: {recap:?}");
+            };
+            assert!(
+                prose.contains("1 of them a shared kill"),
+                "seat {seat}: {prose}"
+            );
+        }
+        let victim = result(&surface.call(
+            Some(tokens.get(2).expect("seat 2")),
+            &request("get_recap", "{}"),
+            &Blind,
+        ));
+        assert_eq!(tally_field(&victim, "losses"), 1, "{victim:?}");
+        assert_eq!(tally_field(&victim, "kills"), 0);
+        // The split values sum to the drone's whole destroyed value, each seat
+        // its own share, as the sim's own counters hold them.
+        for seat in [0_u8, 1] {
+            let counted = surface
+                .host()
+                .expect("hosted")
+                .world()
+                .tally(SeatId::new(seat))
+                .expect("a tally");
+            let recap = result(&surface.call(
+                Some(tokens.get(usize::from(seat)).expect("a token")),
+                &request("get_recap", "{}"),
+                &Blind,
+            ));
+            assert_eq!(
+                tally_field(&recap, "value_destroyed_dollars"),
+                counted.destroyed.raw()
+            );
+        }
+        assert!(
+            victim.get("seat_tallies").is_none(),
+            "between rounds no seat reads another's: {victim:?}"
+        );
+    }
+
+    /// E15: the tally is the sim's hashed per-seat counters and never a sum of
+    /// the feed. A kill made in round 1 is still counted at round 2's recap,
+    /// whose segment feed holds no event of it, and the figures are the sim's
+    /// own. During a Push the tally is not told, since the counters have moved
+    /// past the round the recap describes.
+    #[test]
+    fn the_recap_tally_reads_the_counters_not_the_feed() {
+        let mut surface = three_seats(3);
+        let token = seat_token(&mut surface, 0);
+        a_shared_kill(&mut surface);
+        assert!(surface.end_recap().expect("the recap ends"));
+        surface.open_lull().expect("round 2's Lull");
+        assert!(surface.begin_push().expect("round 2's Push"));
+        let pushing = result(&surface.call(Some(&token), &request("get_recap", "{}"), &Blind));
+        assert!(
+            pushing.get("tally").is_none(),
+            "no tally in a Push: {pushing:?}"
+        );
+        while surface.step().expect("a tick").is_some() {}
+        let feed = format!("{:?}", surface.feed());
+        assert!(
+            !feed.contains("kill_credited") && !feed.contains("KillCredited"),
+            "round 2's feed holds nothing of round 1's kill"
+        );
+        let recap = result(&surface.call(Some(&token), &request("get_recap", "{}"), &Blind));
+        let counted = surface
+            .host()
+            .expect("hosted")
+            .world()
+            .tally(SeatId::new(0))
+            .expect("a tally");
+        assert_eq!(tally_field(&recap, "kills"), i64::from(counted.kills));
+        assert_eq!(
+            tally_field(&recap, "kills"),
+            1,
+            "round 1's kill, still counted"
+        );
+        assert_eq!(
+            tally_field(&recap, "shared_kills"),
+            i64::from(counted.shared_kills)
+        );
+        assert_eq!(tally_field(&recap, "losses"), i64::from(counted.losses));
+    }
+
+    /// The owner's ruling (decisions-log item 145 (7)): once the match has
+    /// ended the recap carries every seat's tally, ascending by seat, each the
+    /// sim's own counters, and the calling seat's own `tally` beside it.
+    #[test]
+    fn the_recap_at_match_end_carries_every_seats_tally() {
+        let mut surface = three_seats(1);
+        let token = seat_token(&mut surface, 0);
+        a_shared_kill(&mut surface);
+        let _ = surface.end_recap().expect("the recap ends");
+        assert_eq!(
+            surface.host().expect("hosted").runner().phase(),
+            pharmakos_sim::runner::MatchPhase::Ended
+        );
+        let recap = result(&surface.call(Some(&token), &request("get_recap", "{}"), &Blind));
+        let Some(Json::Array(all)) = recap.get("seat_tallies") else {
+            panic!("seat_tallies at match end: {recap:?}");
+        };
+        let seats: Vec<String> = all
+            .iter()
+            .map(|one| match one.get("seat") {
+                Some(Json::String(seat)) => seat.clone(),
+                other => panic!("seat: {other:?}"),
+            })
+            .collect();
+        assert_eq!(seats, ["seat.0", "seat.1", "seat.2"]);
+        let world = surface.host().expect("hosted").world();
+        for (raw, one) in all.iter().enumerate() {
+            let counted = world
+                .tally(SeatId::new(u8::try_from(raw).expect("a seat")))
+                .expect("a tally");
+            assert_eq!(
+                tally_field(one, "losses"),
+                i64::from(counted.losses),
+                "{one:?}"
+            );
+            assert_eq!(tally_field(one, "kills"), i64::from(counted.kills));
+        }
+        assert_eq!(
+            all.first().and_then(|one| one.get("tally")),
+            recap.get("tally"),
+            "the seat's own tally is its row of the list"
+        );
+    }
+
     /// One playbook placing a Survey beacon with `scouts` scouts, which the
     /// projection prices at the scout's cost each.
     fn many_scouts(scouts: u64) -> String {
