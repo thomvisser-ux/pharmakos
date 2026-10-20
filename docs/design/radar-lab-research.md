@@ -23,7 +23,7 @@ sim.
 The owner then added a later roadmap item, also recorded in decisions-log item 140 (2): *"future
 future roadmap addition of secondary illuminators of opportunity - receivable by the same passive
 receiver that is used for catching solar ioo. different antennae configurations but same relative
-location, height being variable by use of tower or tethered drone"*. It is roadmap, not committed
+location, height being variable by use of tower or tethered drone"*; the owner has since replaced the tethered drone with a tethered balloon (decisions-log item 147). It is roadmap, not committed
 scope (phase 6, section 9), but it binds the architecture now: the passive receiver is one site
 with a variable height, several antenna configurations and a set of illuminators (section 8.6), so
 the solar phase is built in a shape that takes a second illuminator without a rewrite.
@@ -977,14 +977,14 @@ owner question and is listed again in section 10.
 Decisions-log item 140 (2) puts secondary illuminators of opportunity on the roadmap, received
 "by the same passive receiver that is used for catching solar ioo", with "different antennae
 configurations but same relative location, height being variable by use of tower or tethered
-drone". The roadmap phase is later, but the shape is binding now: phases 4a, 4b and 5 build the
+drone", where a tethered balloon now stands for the drone (item 147). The roadmap phase is later, but the shape is binding now: phases 4a, 4b and 5 build the
 passive receiver this way, so that adding an illuminator is a new scenario entry, not a rewrite.
 
 - **One receiver site, with a geodetic anchor and a local frame.** The scenario gives the site's
   latitude, longitude and elevation, which SPA needs for the Sun's position
   (section 5.6), and the lab works in a local east-north-up frame centred on the site, in metres.
   Targets, terrestrial transmitters and the heightmap are placed in that frame.
-- **A height that is a free parameter**, standing for a tower or a tethered drone, measured above
+- **A height that is a free parameter**, standing for a tower or a tethered balloon, measured above
   the heightmap's surface at the site. Line of sight over the heightmap (section 2.5), the radar
   horizon (`d = √(2 k_e R_e h + h²)`; for example 22.6 km at 30 m and 41.2 km at 100 m, computed
   here) and the flat-earth multipath factor all take it as an input, so raising the receiver
@@ -1004,11 +1004,11 @@ passive receiver this way, so that adding an illuminator is a new scenario entry
   illuminator.
 - **No platform motion (ruled, item 140 (3) (d)).** The owner ruled: *"ignore drone wobble to
   simplify things - acknowledge this unrealism in comments"*. The receiver's position and height
-  are fixed for a run, whether a tower or a tethered drone sets the height. Drone wobble, the
+  are fixed for a run, whether a tower or a tethered balloon sets the height. Platform motion, the
   position wander and the Doppler it puts on the reference channel, is not modelled, so the
-  goldens of sections 7.6 and 7.8 apply unchanged.
+  goldens of sections 7.6 and 7.8 apply unchanged. The ruling named the drone; it carries over to the tethered balloon that replaced it (item 147), whose sway in the wind it covers the same way.
 - **Binding: the unrealism is stated in the code (the owner's ruling).** The code says plainly
-  that a real tethered drone wanders and Doppler-shifts the reference channel, and that the lab
+  that a real tethered balloon sways and Doppler-shifts the reference channel, and that the lab
   ignores this by the owner's choice (decisions-log item 140 (3) (d)).
 - **How that is enforced (engineering call; you can veto).** The comment is the doc of a
   `StaticReceiverSite` type whose fields are private. It is built once, from the decoded scenario,
@@ -1082,7 +1082,7 @@ are the owner's to merge unless the owner extends the delegation at S2's stage d
 Each is classed as **engineering: decide** (with the call this memo makes, which the owner may
 veto) or **operator: intent, priority, risk or policy** (the owner's). The line between them, where
 it is close: a choice that decides whether the lab can represent something the owner named goes to
-the owner (the tethered drone's motion, question 9); a default for a model that stays available and
+the owner (the tethered balloon's motion, question 9); a default for a model that stays available and
 leaves every published golden unchanged is engineering (multipath off by default, engineering
 call 8).
 
@@ -1129,11 +1129,11 @@ open.
    detect by a seeded draw against a tabulated `P_d` (chance on screen, still deterministic), or by
    a threshold on SNR (no chance)? This is a design-intent question with a determinism cost either
    way: a draw needs a new RNG stream (§4.7, additive).
-9. **Ruled 2026-10-14 (item 140 (3) (d)): no drone wobble.** "ignore drone wobble to simplify
+9. **Ruled 2026-10-14 (item 140 (3) (d)): no platform motion.** "ignore drone wobble to simplify
    things - acknowledge this unrealism in comments". The receiver's height is fixed for a run,
-   tower or tethered drone; the drone's position wander and the Doppler it puts on the reference
+   tower or tethered balloon; the balloon's sway and the Doppler it puts on the reference
    channel are not modelled, and the code says so wherever the receiver's height or position is
-   set or read (section 8.6).
+   set or read (section 8.6). The ruling named the drone and carries over to the tethered balloon (item 147).
 10. **When the secondary-illuminator phase runs.** Item 140 (2) is "future future" roadmap; phase 6
     is listed but not committed. Whether it runs straight after phase 5 or waits for a later ruling
     is the owner's.
@@ -1190,7 +1190,7 @@ open.
 14. **Numeric safety** (section 8.7): newtypes that cannot hold bad values, non-finite values as
     typed errors, one checked float-to-integer helper, derived counts capped before allocation, and
     an enumerated error enum that implements `std::error::Error`. Decided; you can veto.
-15. **The drone ruling enforced by a type**: `StaticReceiverSite`, with private fields and the
+15. **The no-motion ruling enforced by a type**: `StaticReceiverSite`, with private fields and the
     unrealism comment as its doc (section 8.6). Decided; you can veto.
 
 
