@@ -152,6 +152,7 @@ pub(crate) fn run_all(world: &mut World) {
             .and_then(UnitKind::from_id);
         if let Some(program) = kind.and_then(program_for)
             && is_drivable(world, row)
+            && !retreating(world, unit)
         {
             program.run(world, unit);
         }
@@ -160,6 +161,85 @@ pub(crate) fn run_all(world: &mut World) {
     if world.is_decision_tick() {
         crate::survey::record_sightings(world);
     }
+}
+
+/// A retreating unit walks to the beacon it retreats to instead of running
+/// its program (decision 4; S2's `fire`), and stops retreating once it is
+/// back at or above its home's `retreat_hp_pct` -- repaired -- or it has
+/// arrived at a refuge where no repair drone of its seat stands, or the beacon
+/// it walked to is gone and no refuge is left. `true` while the retreat holds
+/// the unit.
+///
+/// The retreat began in the combat phase that hurt the unit, and was
+/// announced there (`retreat_announced`).
+fn retreating(world: &mut World, unit: u32) -> bool {
+    let row = crate::math::index::row(unit);
+    let (Some(to), Some(kind), Some(hp), Some(home), Some(seat), Some(here)) = (
+        world.units().retreats().get(row).copied(),
+        world
+            .units()
+            .kinds()
+            .get(row)
+            .copied()
+            .and_then(UnitKind::from_id),
+        world.units().hit_points().get(row).copied(),
+        world.units().homes().get(row).copied(),
+        world.units().seats().get(row).copied(),
+        world.units().positions().get(row).copied(),
+    ) else {
+        return false;
+    };
+    if !to.is_some() {
+        return false;
+    }
+    let destination = world
+        .beacons()
+        .row_of(to)
+        .ok()
+        .filter(|beacon| {
+            world
+                .beacons()
+                .hit_points()
+                .get(beacon.index())
+                .is_some_and(|hp| hp.is_alive())
+        })
+        .and_then(|beacon| world.beacons().positions().get(beacon.index()).copied());
+    let still_hurt = world.below_retreat(kind, hp, home);
+    let refuge = match destination {
+        Some(at) if still_hurt => Some(at),
+        // The beacon walked to is gone: the next refuge, if the unit is
+        // still hurt and one stands.
+        None if still_hurt => world
+            .retreat_beacon(SeatId::new(seat), here, home)
+            .and_then(|beacon| {
+                world.set_retreat(unit, beacon);
+                world
+                    .beacons()
+                    .row_of(beacon)
+                    .ok()
+                    .and_then(|row| world.beacons().positions().get(row.index()).copied())
+            }),
+        _ => None,
+    };
+    let Some(at) = refuge else {
+        world.set_retreat(unit, BeaconId::NONE);
+        return false;
+    };
+    if !within(here, at, world.arrive_radius()) {
+        world.send_unit(unit, at);
+        return true;
+    }
+    // Arrived. A retreat waits to be repaired where a repair drone stands; at
+    // a refuge with none (home, when no beacon of the seat holds one), the
+    // walk was the whole retreat and the unit goes back to its work.
+    let retreat_to = world.units().retreats().get(row).copied();
+    let repaired_here =
+        retreat_to.is_some_and(|beacon| world.repairs_at(SeatId::new(seat), beacon));
+    if !repaired_here {
+        world.set_retreat(unit, BeaconId::NONE);
+        return false;
+    }
+    true
 }
 
 /// What a program reads of its own unit, read once: every column of the row

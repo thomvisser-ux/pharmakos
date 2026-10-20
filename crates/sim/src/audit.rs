@@ -40,22 +40,21 @@
 //!
 //! # The terms, in order
 //!
-//! 1. **Net worth at the final audit**: the audit score, held value
-//!    ([`World::held_value`], the same number the Ledger ranks on) plus enemy
-//!    value destroyed. "Unsmoothed" is the raw figure, not a displayed
-//!    standing.
+//! The score is held value ([`World::held_value`], the same number the Ledger
+//! ranks on) plus enemy value destroyed, and the score decides first. Among
+//! score-tied seats, spec section 3's tie-break, as S2's plan's decision 7
+//! reads it (decisions-log item 144 (11), register X-08):
 //!
-//!    PLACEHOLDER: "unsmoothed net worth" read as the audit score — owner, at S2, with the kill-credit split.
-//!    It is read as the audit score (held plus
-//!    destroyed) rather than as held value alone. The two readings agree while
-//!    [`destroyed_value`] is zero and rank score-tied seats in opposite
-//!    directions once it is not, so the owner rules on it at S2, with the
-//!    kill-credit split.
-//! 2. **Enemy value destroyed.** See [`destroyed_value`]: zero until S2.
+//! 1. **Unsmoothed net worth at the final audit**: held value alone, the
+//!    Ledger's raw figure without the destroyed term. "Unsmoothed" contrasts
+//!    with the Ledger's ranked standing, so among score-tied seats the one
+//!    holding more wins.
+//! 2. **Enemy value destroyed**: [`destroyed_value`], each seat's settled
+//!    share of the build cost of every enemy asset it killed (E15).
 //! 3. **Fewer beacons lost**: [`beacons_lost`], the per-seat counter, which
 //!    counts every beacon that died — a recycled one included, because
 //!    recycling books a death exactly as destruction does (item 18).
-//! 4. **A shared win**: every seat tied on all three.
+//! 4. **A shared win**: every seat tied on all of them.
 
 use crate::math::quantity::Money;
 use crate::tables::{NOT_ELIMINATED, SeatId};
@@ -80,8 +79,8 @@ pub struct AuditLine {
 
 /// A line's place in spec section 3's tie-break order, as one comparable
 /// value: **higher is better**, and two lines with equal keys are tied on every
-/// term. The terms, in order: the audit score, then enemy value destroyed,
-/// then fewer beacons lost.
+/// term. The terms, in order: the audit score, then held value (unsmoothed net
+/// worth, decision 7), then enemy value destroyed, then fewer beacons lost.
 ///
 /// Public so that a reader of the audit -- the gateway's displayed standing
 /// (the register's X-03) -- ranks by the sim's own order rather than a copy
@@ -89,6 +88,7 @@ pub struct AuditLine {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct AuditKey {
     score: i64,
+    held: i64,
     destroyed: i64,
     fewer_lost: Reverse<u32>,
 }
@@ -100,6 +100,7 @@ impl AuditLine {
     pub fn key(&self) -> AuditKey {
         AuditKey {
             score: self.score.raw(),
+            held: self.held.raw(),
             destroyed: self.destroyed.raw(),
             fewer_lost: Reverse(self.beacons_lost),
         }
@@ -246,17 +247,17 @@ pub fn line_of(world: &World, seat: SeatId) -> AuditLine {
     }
 }
 
-/// The build cost of the enemy assets `seat` destroyed.
-///
-/// PLACEHOLDER: the value a seat destroyed, always zero — owner, at S2, with the kill-credit split.
-/// Always zero. Destruction credit is apportioned by the
-/// kill-credit split (spec section 3, item 18), whose counters exist
-/// ([`crate::credit`]) but which nothing books a destroyed asset's value
-/// against until S2 brings combat; the value a seat destroyed is tracked
-/// nowhere yet. The owner settles it at S2, with the kill-credit split.
+/// The build cost of the enemy assets `seat` destroyed: its settled share of
+/// each, apportioned by the kill-credit split as integers by largest remainder
+/// (spec section 3, item 18), accumulated in the seat's hashed tally as each
+/// death settles ([`crate::tables::Tally::destroyed`]; S2's plan, E15 and
+/// decision 7). Recycling books destruction exactly as destruction does. A
+/// seat this world has not got destroyed nothing.
 #[must_use]
-pub const fn destroyed_value(_world: &World, _seat: SeatId) -> Money {
-    Money::ZERO
+pub fn destroyed_value(world: &World, seat: SeatId) -> Money {
+    world
+        .tally(seat)
+        .map_or(Money::ZERO, |tally| tally.destroyed)
 }
 
 /// How many of `seat`'s beacons have died this match (item 18: recycling

@@ -77,6 +77,7 @@
 //! one moves every seed at once and is a determinism change (AGENTS.md
 //! section 4.7).
 
+use crate::bore::{Bore, BoreColumn};
 use crate::features::{Feature as MapFeature, FeatureKind, FeatureTable, FootprintColumn};
 use crate::math::fixed::{Angle, Fx, cos, sin};
 use crate::math::quantity::{Hp, Kw, Money};
@@ -497,6 +498,9 @@ pub struct GeneratedMap {
     pub seat_draw: Vec<Kw>,
     /// Every vent and seam on the map, by name ([`crate::features`]).
     pub features: FeatureTable,
+    /// The core's bore, each occupied seat's ([`crate::bore`]; S2's plan,
+    /// E31): derived with the map and regenerated with it, never hashed.
+    pub bore: Bore,
     /// What the map turned out to be.
     pub report: MapReport,
 }
@@ -653,6 +657,7 @@ pub fn generate(seed: u64, rules: &RulesTable, seats: u32) -> Result<GeneratedMa
     smooth(&mut heights, width, depth);
     voxels.fill_from_heightmap(
         &heights,
+        i32::from(rules.bedrock_layers_voxels()),
         TERRAIN_SKIN_VOXELS,
         Material::DIRT,
         Material::STONE,
@@ -724,6 +729,9 @@ pub fn generate(seed: u64, rules: &RulesTable, seats: u32) -> Result<GeneratedMa
         placed.zones,
     );
 
+    // 10. The core's bore (S2's plan, E31).
+    let bore = bore_of(&voxels, &zones)?;
+
     let report = MapReport {
         seed,
         size,
@@ -751,8 +759,39 @@ pub fn generate(seed: u64, rules: &RulesTable, seats: u32) -> Result<GeneratedMa
         seat_supply,
         seat_draw,
         features,
+        bore,
         report,
     })
+}
+
+/// The core's bore (S2's plan, E31): each occupied core's anchor column, from
+/// the bedrock layer up to the surface the generator left under it. Read from
+/// the finished pristine store, so nothing stamped after the cores can leave
+/// the bore and the map disagreeing.
+///
+/// # Errors
+///
+/// [`MapError::OutOfRange`] for a core standing on a column with no floor,
+/// which no map this generator makes holds.
+fn bore_of(voxels: &VoxelStore, zones: &[ZoneReport]) -> Result<Bore, MapError> {
+    let mut columns: Vec<BoreColumn> = Vec::with_capacity(zones.len());
+    for zone in zones {
+        let Some(seat) = zone.seat else {
+            continue;
+        };
+        let [x, y, _] = zone.centre;
+        let top = voxels.top_solid_z(x, y).ok_or(MapError::OutOfRange {
+            field: "map",
+            why: format!("the core of seat {seat} stands on a column with no floor"),
+        })?;
+        columns.push(BoreColumn {
+            seat: SeatId::new(seat),
+            x,
+            y,
+            top,
+        });
+    }
+    Ok(Bore::new(columns))
 }
 
 /// Everything the occupied zones put on the map.

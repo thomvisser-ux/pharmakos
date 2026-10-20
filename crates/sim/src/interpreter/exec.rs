@@ -1356,6 +1356,8 @@ fn commit_row(
             probes,
             scouts,
             mine,
+            roe,
+            retreat_hp_pct,
             ..
         } => {
             // A settings edit **replaces** the lists it names, because spec
@@ -1412,6 +1414,9 @@ fn commit_row(
             if let Some(edit) = mine {
                 world.set_beacon_mine(row, *edit);
             }
+            // The Common settings the row names (S2's `fire`; decision 4), and
+            // nothing it is silent about.
+            world.set_beacon_common(row, *roe, *retreat_hp_pct);
         }
     }
     Ok(())

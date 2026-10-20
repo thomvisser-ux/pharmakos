@@ -239,6 +239,9 @@ pub struct RulesTable {
     /// answers zero for a missing row (decisions-log item 136 (5)): a table
     /// missing one is refused here, once.
     kinds: KindRows,
+    /// Combat's rows that are not a weapon's and the materials' rows, typed
+    /// at load ([`crate::arms::CombatRows`]; S2's `fire`).
+    combat: crate::arms::CombatRows,
 }
 
 /// One unit kind's row as the tick reads it: `units.<kind>.*`, or the
@@ -260,6 +263,10 @@ pub struct UnitRow {
     /// within it and no line of sight (item 144 (4); S1-34). Read through the
     /// one sensor interface ([`crate::sight::Sensor`]; S2's plan, E10).
     pub vision_radius_voxels: i16,
+    /// The kind's gun, `units.<kind>.weapon`, or `None` for an unarmed kind
+    /// (S2's `fire`; the raider's in S2). The commander has none: its block
+    /// carries no weapon.
+    pub weapon: Option<crate::arms::WeaponRow>,
 }
 
 /// One structure kind's row as the tick reads it: `structures.<kind>`.
@@ -273,6 +280,12 @@ pub struct StructureRow {
     /// unit's row reads ([`UnitRow::vision_radius_voxels`]). A placed beacon
     /// sees by its sphere and never reads its own.
     pub vision_radius_voxels: i16,
+    /// The structure's weapon, `structures.<kind>.weapon`, or `None` for an
+    /// unarmed kind (S2's `fire`: the autocannon's and the mortar's). A placed
+    /// beacon fires nothing: only a seat's core is armed, by
+    /// `beacon.core_weapon` ([`RulesTable::core_weapon`]), so
+    /// `structures.beacon.weapon` is not read.
+    pub weapon: Option<crate::arms::WeaponRow>,
 }
 
 /// Every kind row the tick reads, typed at load.
@@ -294,6 +307,9 @@ struct KindRows {
     /// A seat's core's hit points, `beacon.core_hp`; its price is the placed
     /// beacon's ([`crate::world::World::beacon_cost`]).
     core_hp: Hp,
+    /// The core's own autocannon, `beacon.core_weapon` (spec section 4; item
+    /// 123): required, because every core fires.
+    core_weapon: crate::arms::WeaponRow,
     /// One wall voxel's price, `structures.wall_cost_per_voxel`: a wall has no
     /// structure row by design (`rules.proto`), and is priced by the voxel.
     wall_cost_per_voxel: Money,
@@ -345,6 +361,7 @@ impl KindRows {
                 draw: Kw::new(signed(name, row.draw_kw)?),
                 cost_per_second: signed(name, row.cost_per_second)?,
                 vision_radius_voxels: voxel_length(name, row.vision_radius_voxels)?,
+                weapon: crate::arms::WeaponRow::read_optional(name, row.weapon.as_ref())?,
             })
         };
         let structure = |name: &'static str,
@@ -355,6 +372,7 @@ impl KindRows {
                 cost: Money::new(i64::from(row.cost_dollars)),
                 hp: hit_points(name, row.hp)?,
                 vision_radius_voxels: voxel_length(name, row.vision_radius_voxels)?,
+                weapon: crate::arms::WeaponRow::read_optional(name, row.weapon.as_ref())?,
             })
         };
         let respawn = |field: &'static str, value: i32| -> Result<i32, RulesError> {
@@ -376,6 +394,7 @@ impl KindRows {
                     "commander.vision_radius_voxels",
                     commander.vision_radius_voxels,
                 )?,
+                weapon: None,
             },
             build_drone: unit("units.build_drone", units.build_drone)?,
             mining_drone: unit("units.mining_drone", units.mining_drone)?,
@@ -389,6 +408,13 @@ impl KindRows {
             resonance_spire: structure("structures.resonance_spire", structures.resonance_spire)?,
             beacon: structure("structures.beacon", structures.beacon)?,
             core_hp: hit_points("beacon.core_hp", beacon.core_hp)?,
+            core_weapon: crate::arms::WeaponRow::read(
+                "beacon.core_weapon",
+                beacon
+                    .core_weapon
+                    .as_ref()
+                    .ok_or(RulesError::MissingBlock("beacon.core_weapon"))?,
+            )?,
             wall_cost_per_voxel: Money::new(i64::from(structures.wall_cost_per_voxel)),
             backlog_threshold_per_drone: economy.backlog_threshold_per_drone,
             mining_ms_per_voxel: economy.mining_ms_per_voxel,
@@ -691,6 +717,25 @@ impl RulesTable {
         self.kinds.core_hp
     }
 
+    /// The core's own autocannon, `beacon.core_weapon` (spec section 4).
+    #[must_use]
+    pub const fn core_weapon(&self) -> crate::arms::WeaponRow {
+        self.kinds.core_weapon
+    }
+
+    /// Combat's and the materials' rows ([`crate::arms::CombatRows`]).
+    #[must_use]
+    pub const fn combat(&self) -> crate::arms::CombatRows {
+        self.combat
+    }
+
+    /// The bottom layers of every column generation writes as bedrock,
+    /// `materials.bedrock_layers_voxels`: at least one.
+    #[must_use]
+    pub const fn bedrock_layers_voxels(&self) -> i16 {
+        self.combat.bedrock_layers_voxels
+    }
+
     /// One wall voxel's price, `structures.wall_cost_per_voxel`.
     #[must_use]
     pub const fn wall_cost_per_voxel(&self) -> Money {
@@ -767,6 +812,10 @@ impl RulesTable {
     /// canonical JSON — which is what `rules_hash` is over, so a table that
     /// cannot be rendered is a table that cannot be hashed and must not become
     /// a [`RulesTable`].
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one typed read per row the tick reads, every one refused before the table exists; split, the view's fields would be handed between functions as a parameter list as long as the body"
+    )]
     pub fn from_message(message: &gp::v1::RulesTable) -> Result<RulesTable, RulesError> {
         let locomotion = message
             .locomotion
@@ -806,6 +855,7 @@ impl RulesTable {
         let sphere_radius_voxels = sphere_radius_of(message)?;
         let typed = TypedRows::read(message, commander)?;
         let kinds = KindRows::read(message)?;
+        let combat = crate::arms::CombatRows::read(message)?;
 
         let segment_lengths_ms = segment_lengths_of(matched)?;
 
@@ -871,6 +921,7 @@ impl RulesTable {
             build_hp_per_tick: typed.build_hp_per_tick,
             power: typed.power,
             kinds,
+            combat,
         })
     }
 

@@ -979,3 +979,63 @@ fn a_duplicate_anchor_or_overlapping_footprints_is_a_map_error() {
         Err(mapgen::MapError::FeatureOverlap { .. })
     ));
 }
+
+/// One `expected.bore.txt` line: one seat's core bore column of one seed's
+/// map (S2's plan, E31).
+fn bore_line(seed: u64, column: &pharmakos_sim::bore::BoreColumn) -> String {
+    format!(
+        "0x{}\t{}\t{}\t{}\t0\t{}\n",
+        hex(seed),
+        column.seat.raw(),
+        column.x,
+        column.y,
+        column.top
+    )
+}
+
+#[test]
+fn the_bore_is_derived_and_pinned() {
+    // S2's `fire` (E31): the core's bore is the core anchor's column from the
+    // bedrock layer up to the generated surface, derived with the map, never
+    // hashed or carried, and pinned here as the feature table is (AGENTS.md
+    // section 4.8's derived-table rule). Every occupied seat has one column,
+    // under its core, and the column's voxels are the map's own.
+    let mut fresh = String::new();
+    for seed in SEEDS {
+        let map = generate(seed);
+        let columns = map.bore.columns();
+        assert_eq!(
+            columns.len(),
+            usize::try_from(GOLDEN_SEATS).expect("a few seats"),
+            "one bore a seat"
+        );
+        for (column, zone) in columns.iter().zip(&map.report.zones) {
+            assert_eq!([column.x, column.y], [zone.centre[0], zone.centre[1]]);
+            assert_eq!(map.voxels.top_solid_z(column.x, column.y), Some(column.top));
+            fresh.push_str(&bore_line(seed, column));
+        }
+    }
+    if let Some(target) = target_dir() {
+        let out = target.join("golden").join("mapgen");
+        std::fs::create_dir_all(&out).expect("creating the golden output directory");
+        std::fs::write(out.join("actual.bore.txt"), fresh.as_bytes())
+            .expect("writing actual.bore.txt");
+    }
+    let golden_path = repo_root()
+        .join("tests")
+        .join("golden")
+        .join("mapgen")
+        .join("expected.bore.txt");
+    let Ok(golden) = std::fs::read_to_string(&golden_path) else {
+        panic!(
+            "no committed golden at {}. Copy the fresh `actual.bore.txt` into place.",
+            golden_path.display()
+        );
+    };
+    assert_eq!(
+        golden,
+        fresh,
+        "the bore moved: {} differs from this run. A moved core is a moved bore.",
+        golden_path.display()
+    );
+}

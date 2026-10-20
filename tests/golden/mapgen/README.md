@@ -109,6 +109,36 @@ a map digest without a match behind it.** (Spelled with the marker because a
 review found a tree-wide `grep PLACEHOLDER` missing this one — AGENTS.md §12
 fixes the spelling.)
 
+### `expected.bore.txt` — the core's bore (S2)
+
+**Added by S2's `fire`** (S2's plan, E31; decisions-log item 144 (1)), a new
+golden in this area and so a golden-format change. The bore is the core
+anchor's footprint column, from the bedrock layer to the generated surface,
+which no blast cracks or removes: a table **derived** from the seed, the rules
+and the occupied seats, never hashed per tick and never carried in a snapshot,
+so it is pinned here as the feature table is (AGENTS.md §4.8's derived-table
+rule). One line per occupied seat of each seed's three-seat map, seeds in the
+order of `expected.digests.txt`, seats ascending. Six TAB-separated fields:
+
+```text
+0x<seed, 16 lowercase hex>  <seat>  <x>  <y>  <lowest z>  <highest z>
+```
+
+* **seat** — the seat whose core stands on the column.
+* **x**, **y** — the core's column, in whole voxels.
+* **lowest z** — always `0`: the bore runs down through the bedrock layer.
+* **highest z** — the column's top solid voxel at generation, the surface the
+  core stands on.
+
+The producing test is `the_bore_is_derived_and_pinned` in
+`crates/sim/tests/mapgen.rs`, which writes `<target>/golden/mapgen/actual.bore.txt`.
+A moved line is a moved core: a generator change, which moves
+`expected.digests.txt` too.
+
+**Bedrock** (S2's `fire`, E14) changed the bottom `materials.bedrock_layers_voxels`
+layers of every column from stone to bedrock, so every seed's store digest in
+`expected.digests.txt` moved once for it, and nothing else about the maps did.
+
 ## What a diff means
 
 * **The generator changed**, and every scenario and hash-chain golden built on

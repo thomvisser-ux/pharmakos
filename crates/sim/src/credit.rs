@@ -37,11 +37,12 @@
 //! has settled here, so nobody's credit outlives it, and a counter that meets a
 //! reused row anyway is stale and credits nobody ([`asset_state`]).
 //!
-//! The split is **emitted and not accumulated**. Each seat's share rides the
-//! event bus as [`crate::events::EventKind::KillCredited`] and no per-seat
-//! total is kept, for exactly the reason [`crate::seams::WorkCounter`] is not
-//! hashed: nothing in a tick reads such a total, and a field that affects
-//! nothing must not move a golden file.
+//! The split is **emitted and accumulated** (S2's plan, E15): each seat's
+//! share rides the event bus as [`crate::events::EventKind::KillCredited`],
+//! and is added to the seat's hashed tally ([`crate::tables::Tally`]): its
+//! enemy value destroyed, the final audit's second term (decision 7), and its
+//! kill and shared-kill counters, which the recap reads instead of the bus,
+//! because the bus drops past its capacity and a tally may not.
 //!
 //! PLACEHOLDER: the awards' per-seat totals as hashed state — owner, at S4, with the licences.
 //! The counters that *do* read the split are the awards — "awards
@@ -137,6 +138,79 @@ pub fn apportion(total: i64, shares: &[(u8, i32)], out: &mut Vec<(u8, i64)>) {
     }
 }
 
+/// Apportion `total` between any number of `shares` by **largest
+/// remainder**, ties to the lowest seat id, writing `(seat, share)` into `out`
+/// in the order of `shares`, which must be ascending by seat.
+///
+/// [`apportion`]'s rule over a list of any length: the combat phase's split
+/// of one tick's damage between every seat that dealt it, nobody's bucket
+/// among them (S2's plan, E32). `topped` is the caller's scratch, one flag a
+/// share, so nothing allocates once it has grown to the seat count. The
+/// shares sum to `total` whenever `total` is not negative and the amounts sum
+/// to more than zero.
+pub(crate) fn apportion_wide(
+    total: i64,
+    shares: &[(u8, i64)],
+    out: &mut Vec<(u8, i64)>,
+    topped: &mut Vec<bool>,
+) {
+    out.clear();
+    topped.clear();
+    if total <= 0 || shares.is_empty() {
+        return;
+    }
+    let dealt = shares
+        .iter()
+        .fold(0_i64, |sum, (_, amount)| sum.saturating_add(*amount));
+    if dealt <= 0 {
+        return;
+    }
+    let exact = |amount: i64| i128::from(total).saturating_mul(i128::from(amount));
+    let floor = |amount: i64| {
+        exact(amount)
+            .checked_div(i128::from(dealt))
+            .and_then(|share| i64::try_from(share).ok())
+    };
+    let mut handed: i64 = 0;
+    for (seat, amount) in shares {
+        let Some(share) = floor(*amount) else {
+            out.clear();
+            return;
+        };
+        handed = handed.saturating_add(share);
+        out.push((*seat, share));
+        topped.push(false);
+    }
+    // Each floor loses less than one unit, so the leftover is smaller than the
+    // list and no seat is topped up twice ([`apportion`]'s argument).
+    let mut left = total.saturating_sub(handed);
+    while left > 0 {
+        let mut best: Option<(i128, usize)> = None;
+        for (slot, ((_, amount), done)) in shares.iter().zip(topped.iter()).enumerate() {
+            if *done {
+                continue;
+            }
+            // E7: cannot miss: `dealt` is positive, so the remainder exists
+            let remainder = exact(*amount).checked_rem(i128::from(dealt)).unwrap_or(0);
+            // Largest remainder wins; the seats are ascending, so an equal
+            // remainder never displaces the lower seat already held.
+            if best.is_none_or(|(held, _)| remainder > held) {
+                best = Some((remainder, slot));
+            }
+        }
+        let Some((_, slot)) = best else {
+            break;
+        };
+        if let Some(flag) = topped.get_mut(slot) {
+            *flag = true;
+        }
+        if let Some((_, given)) = out.get_mut(slot) {
+            *given = given.saturating_add(1);
+        }
+        left = left.saturating_sub(1);
+    }
+}
+
 /// Settle every asset that died this tick and carries credit, and clear the
 /// counters of everything that is back to full hit points.
 ///
@@ -170,9 +244,32 @@ pub(crate) fn settle(world: &mut World, shares: &mut Vec<(u8, i32)>, split: &mut
         }
         world.credit().shares_of(asset, shares);
         apportion(state.cost.raw(), shares, split);
+        // The recap's kills read the credit, not the money (decisions-log
+        // item 145 (5)): a seat with hit points of credit against an asset it
+        // helped destroy has a kill, and a kill whose credit was split with
+        // another seat is a shared kill for each of them (spec section 3).
+        // The commander is no asset (spec section 4), so it is nobody's kill.
+        if state.asset {
+            let dealers = shares.iter().filter(|(_, dealt)| *dealt > 0).count();
+            for (seat, dealt) in shares.iter() {
+                if *dealt <= 0 {
+                    continue;
+                }
+                if let Some(tally) = world.tally_mut(SeatId::new(*seat)) {
+                    tally.kills = tally.kills.saturating_add(1);
+                    if dealers > 1 {
+                        tally.shared_kills = tally.shared_kills.saturating_add(1);
+                    }
+                }
+            }
+        }
         for (seat, share) in split.iter() {
             if *share <= 0 {
                 continue;
+            }
+            // E7: rule: a match's destroyed value is bounded by the build cost of every asset it fields, far inside an `i64` of `$`
+            if let Some(tally) = world.tally_mut(SeatId::new(*seat)) {
+                tally.destroyed = Money::new(tally.destroyed.raw().saturating_add(*share));
             }
             world.emit(
                 tick,
@@ -193,6 +290,8 @@ struct AssetState {
     max_hp: i32,
     cost: Money,
     at: [Fx; 3],
+    /// Whether it is an asset the recap counts: everything but a commander.
+    asset: bool,
 }
 
 /// Look up an asset's condition, price and place, or `None` when this build
@@ -235,6 +334,7 @@ fn asset_state(world: &World, id: AssetId) -> Option<AssetState> {
                 max_hp: world.unit_max_hp(kind).raw(),
                 cost: world.unit_cost(kind),
                 at: world.units().positions().get(row).copied()?,
+                asset: kind != crate::tables::UnitKind::Commander,
             })
         }
         AssetId::TAG_BEACON => Some(AssetState {
@@ -244,6 +344,7 @@ fn asset_state(world: &World, id: AssetId) -> Option<AssetState> {
                 .raw(),
             cost: world.beacon_cost(),
             at: world.beacons().positions().get(row).copied()?,
+            asset: true,
         }),
         AssetId::TAG_STRUCTURE => {
             let kind = world
@@ -258,6 +359,7 @@ fn asset_state(world: &World, id: AssetId) -> Option<AssetState> {
                 max_hp: world.structure_max_hp(kind)?.raw(),
                 cost: world.structure_cost(kind),
                 at: world.structures().positions().get(row).copied()?,
+                asset: true,
             })
         }
         _ => None,

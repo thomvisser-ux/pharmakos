@@ -41,12 +41,17 @@
 //! with a dirty flag on every write site in the sim, forever, on the
 //! determinism artefact itself.
 
+mod combat;
+
+pub use combat::{CombatCounts, CombatDrop, FireRefused, Roe};
+
+use crate::bore::Bore;
 use crate::chunks::ChunkDigests;
 use crate::economy::{Purchase, Quartermaster, SingleTreasury, SpendRequest};
 use crate::encoding::Enc;
 use crate::events::{EVENT_BUS_CAPACITY, Emission, Event, EventBus, EventKind};
 use crate::features::FeatureTable;
-use crate::ids::{RefCounts, RefError, Row};
+use crate::ids::{RefCounts, Row};
 use crate::interpreter::state::PlanParts;
 use crate::interpreter::{Interpreter, Plan};
 use crate::knowledge::{AssetId, Position};
@@ -64,9 +69,9 @@ use crate::runner::{Layout, LayoutRefused, MatchEndReason, MatchPhase, MatchSett
 use crate::seams::{BeaconMandate, MandateKind, ProgramId, WorkCounter};
 use crate::tables::{
     AreaKind, BeaconId, BeaconStart, BeaconTable, BuildOrder, ColumnBox, CreditTable, Csr,
-    MovementColumns, NO_RESPAWN, NOT_RUINED, QuarterTurns, SeatId, SeatTable, SightingTable,
-    StructureId, StructureKind, StructureTable, TargetKind, TargetTable, TargetsFull, UnitId,
-    UnitKind, UnitTable, WreckTable,
+    MovementColumns, NO_RESPAWN, NOT_RUINED, QuarterTurns, SeatId, SeatTable, ShellTable,
+    SightingTable, StructureId, StructureKind, StructureTable, TargetKind, TargetTable,
+    TargetsFull, UnitId, UnitKind, UnitTable, WreckTable,
 };
 use crate::targeting::{Ground, NO_FEATURE};
 use crate::voxels::{Material, VoxelEdit, VoxelStore};
@@ -240,13 +245,6 @@ pub const fn room_per_seat(total: u32, seats: u32) -> u32 {
     }
 }
 
-/// PLACEHOLDER: harness scaffolding, how many wrecks a match may hold at once — owner, at S2.
-///
-/// Nothing produces a wreck at the skeleton — destruction is S2 — so this is
-/// room for the day one exists, sized with the structure room it mirrors
-/// (owner, at S2).
-pub(crate) const WRECK_TABLE_ROOM: u32 = 120;
-
 /// PLACEHOLDER: harness scaffolding, how many list settings one beacon may carry — owner, at S3's exit.
 ///
 /// Build targets, protected areas and Survey probe areas together.
@@ -296,18 +294,6 @@ const SIGHTINGS_PER_SEAT: u32 = 64;
 pub(crate) const fn beacon_limit_of(seats: u32) -> u32 {
     seats.saturating_add(room_per_seat(BEACON_TABLE_ROOM, seats).saturating_mul(seats))
 }
-
-/// PLACEHOLDER: harness scaffolding, the largest broadphase query radius in voxels — owner, at S2.
-///
-/// S2's combat phase replaces it with a weapon's range out of the rules table.
-///
-/// In voxels because a query radius in cells would make the answer's membership
-/// depend on the cell edge, which the rules table declares a non-hashed tuning
-/// knob — see [`Csr::collect_in_radius`]. Item 67's sizing rule is the other
-/// direction of the same relation: the cell edge is chosen at least the largest
-/// query radius so a query touches at most 3 x 3 cells, and 16 voxels is the
-/// cell edge `rules/rules.v1.json` currently carries.
-pub const BROADPHASE_QUERY_RADIUS_VOXELS: Fx = Fx::from_voxels(16);
 
 /// How to build a world.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -375,6 +361,10 @@ pub struct World {
     /// combat lands at S2: a field that affects behaviour and is not hashed is
     /// a latent desync (AGENTS.md §4.8).
     credit: CreditTable,
+    /// The shells in flight (S2's plan, E13): hashed entities, encoded as a
+    /// block after every older table that writes nothing while the table is
+    /// empty (E29).
+    shells: ShellTable,
 
     chunks: ChunkDigests,
 
@@ -450,6 +440,43 @@ pub struct World {
     rooms: QueueRooms,
     /// What [`DamageDrop`] counted. Diagnostic; never hashed.
     damage_drops: DamageDrops,
+    /// The core's bore ([`crate::bore`]; S2's plan, E31): derived with the
+    /// map and regenerated on restore, never hashed or carried.
+    bore: Bore,
+    /// How many wreck rows the table may hold: the unit and structure rooms
+    /// together, so every live asset can leave one (decision 25). Derived and
+    /// kept by a restore, as [`World::unit_limit`] is.
+    wreck_limit: u32,
+    /// The most shells that can land on one tick (S2's plan, E13), which
+    /// sizes the queues' splash and blast rooms (E5). Derived from the rules
+    /// and the table rooms, and kept by a restore.
+    shell_landing: u32,
+    /// What the combat phase did, and what it could not file
+    /// ([`CombatCounts`]). Diagnostic; never hashed.
+    combat: CombatCounts,
+    /// The hit points each seat dealt each other seat's assets, `by * seats +
+    /// owner`, as credited (decision 36's kingmaking check, E15). Diagnostic;
+    /// never hashed, never snapshotted.
+    damage_dealt: Vec<u64>,
+    /// Scratch for the firing order, sized to every row that can fire.
+    fire_order: Vec<combat::Firer>,
+    /// Scratch for `RETURN_FIRE`'s attacker set, sized as above.
+    attackers: Vec<(u8, u32)>,
+    /// Scratch for a weapon's unit query, sized to the unit ceiling.
+    fire_rows: Vec<Row>,
+    /// Scratch for a splash's unit query, sized to the unit ceiling.
+    splash_rows: Vec<Row>,
+    /// Scratch for the damage queue's sorted index, sized to the queue.
+    damage_index: Vec<u32>,
+    /// Scratch for one target's dealers, one bucket a seat and nobody's.
+    dealers: Vec<(u8, i64)>,
+    /// Scratch for one target's split.
+    dealt_split: Vec<(u8, i64)>,
+    /// Scratch for the split's largest-remainder flags.
+    topped: Vec<bool>,
+    /// The units and structures the tick's damage killed, in target order,
+    /// drained by the settle function in the same tick (E2): never state.
+    deaths: Vec<DamageTarget>,
     /// The stale references met and the rows retired, by reason (S2's plan,
     /// E1). Diagnostic; never hashed, and equal to any other count.
     refs: RefCounts,
@@ -800,31 +827,43 @@ impl QueueRooms {
     ///
     /// **Damage.** The larger of two phases' bounds, because Combat's orders
     /// are applied before Voxels files any (E2): Combat files one direct order
-    /// per armed asset, at most one per unit and structure row, and `fire`
-    /// adds the shells that can land on one tick times the most assets a splash
-    /// disc holds (E13); Voxels files one fall-damage order per asset that can
-    /// stand on or under a falling region, at most one per unit, structure and
-    /// beacon row, the ruin reserve among the structure rows (`ids`, E1), and `fall` files
+    /// per armed asset, at most one per unit, structure and beacon row (a
+    /// core fires), and the splash of every shell that can land on one tick,
+    /// `landing` (E13), times the most assets a splash disc can hold, every
+    /// unit, structure and beacon row, since units can stand together;
+    /// Voxels files one fall-damage order per asset that can stand on or under
+    /// a falling region, at most one per unit, structure and beacon row, the
+    /// ruin reserve among the structure rows (`ids`, E1), and `fall` files
     /// them (E2).
     ///
     /// **Edits.** One edit per live asset -- a unit's dig, a drone's levelling
-    /// -- at most one per unit, structure and beacon row, and `fire` and `atk`
-    /// add one crater per landing shell or detonating charge.
+    /// -- at most one per unit, structure and beacon row, and one blast per
+    /// landing shell (`landing`), and `atk` adds one per detonating charge.
     ///
     /// # Errors
     ///
-    /// [`MapError::Unsized`] when a sum overflows.
-    pub fn of(units: u32, structures: u32, beacons: u32) -> Result<QueueRooms, MapError> {
+    /// [`MapError::Unsized`] when a sum or a product overflows.
+    pub fn of(
+        units: u32,
+        structures: u32,
+        beacons: u32,
+        landing: u32,
+    ) -> Result<QueueRooms, MapError> {
         let as_room = |value: u32, queue: &'static str| {
             usize::try_from(value).map_err(|_| MapError::Unsized { queue })
         };
-        let combat = units
+        let rows = units
             .checked_add(structures)
+            .and_then(|sum| sum.checked_add(beacons))
             .ok_or(MapError::Unsized { queue: "damage" })?;
-        let voxels = combat
-            .checked_add(beacons)
+        let combat = landing
+            .checked_mul(rows)
+            .and_then(|splash| splash.checked_add(rows))
             .ok_or(MapError::Unsized { queue: "damage" })?;
-        let edits = voxels;
+        let voxels = rows;
+        let edits = rows.checked_add(landing).ok_or(MapError::Unsized {
+            queue: "voxel edit",
+        })?;
         Ok(QueueRooms {
             damage: as_room(combat.max(voxels), "damage")?,
             edits: as_room(edits, "voxel edit")?,
@@ -854,11 +893,14 @@ pub(crate) struct RestoredTables {
     pub(crate) targets: TargetTable,
     pub(crate) sightings: SightingTable,
     pub(crate) credit: CreditTable,
+    pub(crate) shells: ShellTable,
     pub(crate) voxels: VoxelStore,
     pub(crate) chunks: ChunkDigests,
     /// The map's feature table, regenerated with the pristine map rather than
     /// carried in the file.
     pub(crate) features: FeatureTable,
+    /// The core's bore, regenerated with the pristine map (E31).
+    pub(crate) bore: Bore,
     pub(crate) router: crate::pathing::router::RestoredRouter,
     pub(crate) match_state: MatchState,
     pub(crate) plan: PlanParts,
@@ -930,10 +972,8 @@ impl World {
         if beacon_room > limit {
             return Err(too_large("beacon", beacon_room));
         }
-        for (table, room) in [("structure", STRUCTURE_ROWS), ("wreck", WRECK_TABLE_ROOM)] {
-            if u64::from(room) > limit {
-                return Err(too_large(table, u64::from(room)));
-            }
+        if u64::from(STRUCTURE_ROWS) > limit {
+            return Err(too_large("structure", u64::from(STRUCTURE_ROWS)));
         }
         // Both are at most `ids::ROOM_LIMIT` by the checks above.
         let unit_count = u32::try_from(unit_count).map_err(|_| too_large("unit", unit_count))?;
@@ -1018,12 +1058,26 @@ impl World {
             seats.set_placed(index, held);
         }
 
-        let rooms = QueueRooms::of(unit_ceiling, STRUCTURE_ROWS, beacon_limit)?;
+        let (shell_room, shell_landing) = shell_bounds(&config.rules, unit_ceiling, beacon_limit)?;
+        let rooms = QueueRooms::of(unit_ceiling, STRUCTURE_ROWS, beacon_limit, shell_landing)?;
+        let wreck_limit = unit_ceiling
+            .checked_add(STRUCTURE_TABLE_ROOM)
+            .ok_or_else(|| too_large("wreck", u64::from(u32::MAX)))?;
+        if u64::from(wreck_limit) > limit {
+            return Err(too_large("wreck", u64::from(wreck_limit)));
+        }
+        let armed_rows = crate::math::index::row(
+            unit_ceiling
+                .saturating_add(STRUCTURE_ROWS)
+                .saturating_add(beacon_limit),
+        );
+        let seat_rows = crate::math::index::row(config.seats);
 
         let mut structures = StructureTable::with_capacity(STRUCTURE_ROWS);
         structures.reserve(STRUCTURE_ROWS);
-        let mut wrecks = WreckTable::with_capacity(WRECK_TABLE_ROOM);
-        wrecks.reserve(WRECK_TABLE_ROOM);
+        let mut wrecks = WreckTable::with_capacity(wreck_limit);
+        wrecks.reserve(wreck_limit);
+        let damage_capacity = QueueRooms::capacity(rooms.damage, "damage")?;
 
         Ok(World {
             match_seed: config.match_seed,
@@ -1040,6 +1094,7 @@ impl World {
                     .saturating_add(beacon_limit)
                     .saturating_add(STRUCTURE_ROWS),
             ),
+            shells: ShellTable::with_room(shell_room),
             chunks,
             router,
             match_state: MatchState::new(&settings),
@@ -1067,6 +1122,20 @@ impl World {
             edits: Vec::with_capacity(QueueRooms::capacity(rooms.edits, "voxel edit")?),
             rooms,
             damage_drops: DamageDrops::default(),
+            bore: generated.bore,
+            wreck_limit,
+            shell_landing,
+            combat: CombatCounts::default(),
+            damage_dealt: vec![0; seat_rows.saturating_mul(seat_rows)],
+            fire_order: Vec::with_capacity(armed_rows),
+            attackers: Vec::with_capacity(armed_rows),
+            fire_rows: Vec::with_capacity(crate::math::index::row(unit_ceiling)),
+            splash_rows: Vec::with_capacity(crate::math::index::row(unit_ceiling)),
+            damage_index: Vec::with_capacity(damage_capacity),
+            dealers: Vec::with_capacity(seat_rows.saturating_add(1)),
+            dealt_split: Vec::with_capacity(seat_rows.saturating_add(1)),
+            topped: Vec::with_capacity(seat_rows.saturating_add(1)),
+            deaths: Vec::with_capacity(armed_rows),
             refs: RefCounts::default(),
             placed_since_broadphase: Vec::with_capacity(crate::math::index::row(unit_ceiling)),
             query_pad: query_pad_of(&config.rules),
@@ -1080,7 +1149,7 @@ impl World {
             // buffer that has to grow is an allocation inside a tick.
             touched: Vec::with_capacity(crate::math::index::row(chunk_total)),
             candidates: Vec::with_capacity(crate::math::index::row(unit_ceiling)),
-            damage: Vec::with_capacity(QueueRooms::capacity(rooms.damage, "damage")?),
+            damage: Vec::with_capacity(damage_capacity),
             requests: Vec::with_capacity(crate::math::index::row(beacon_limit)),
             power_order: Vec::with_capacity(crate::math::index::row(beacon_limit)),
             credit_shares: Vec::with_capacity(crate::tables::CREDIT_SLOTS),
@@ -1138,6 +1207,26 @@ impl World {
     #[must_use]
     pub const fn wrecks(&self) -> &WreckTable {
         &self.wrecks
+    }
+
+    /// How many wreck rows the table may hold (decision 25): the unit
+    /// ceiling and the structure room together.
+    #[must_use]
+    pub const fn wreck_limit(&self) -> u32 {
+        self.wreck_limit
+    }
+
+    /// The shells in flight (S2's plan, E13).
+    #[must_use]
+    pub const fn shells(&self) -> &ShellTable {
+        &self.shells
+    }
+
+    /// The core's bore ([`crate::bore`]; S2's plan, E31). Derived, never
+    /// hashed.
+    #[must_use]
+    pub const fn bore(&self) -> &Bore {
+        &self.bore
     }
 
     /// The chunk store's digests.
@@ -1426,6 +1515,8 @@ impl World {
                     hp,
                     dormant: false,
                     ordinal,
+                    // A placed beacon carries no weapon; only a core fires.
+                    ready_at: 0,
                 },
             )
             .map_err(|_| PlaceRefused::TableFull)?;
@@ -1458,6 +1549,12 @@ impl World {
             .set_mine_settings(row, crate::mining::MineSettings::default());
         if let Some(slot) = self.beacons.seams_mut().get_mut(row) {
             *slot = NO_FEATURE;
+        }
+        // The Common settings are the old mandate's settings too (spec
+        // section 5: switching clears the old settings); the switch's own row
+        // writes the new ones after this.
+        if let Some(slot) = self.beacons.commons_mut().get_mut(row) {
+            *slot = crate::tables::Common::DEFAULT;
         }
         if let Some(id) = id {
             self.targets.clear_beacon(BeaconId::new(id));
@@ -1924,9 +2021,10 @@ impl World {
             return None;
         }
         let hp = self.unit_max_hp(kind);
+        let ready_at = self.armed_ready_at(self.rules.unit(kind).weapon);
         let placed = self
             .units
-            .place(self.unit_limit, seat, kind, at, at, hp, beacon)
+            .place(self.unit_limit, seat, kind, at, at, hp, beacon, ready_at)
             .ok()?;
         let id = placed.id;
         let unit = id.row().ok()?;
@@ -2012,6 +2110,7 @@ impl World {
         if self.structures_held_by(seat) >= room_per_seat(STRUCTURE_TABLE_ROOM, self.seats.len()) {
             return false;
         }
+        let ready_at = self.armed_ready_at(self.structure_weapon(kind));
         let Ok(placed) = self.structures.place(
             STRUCTURE_ROWS,
             seat,
@@ -2021,6 +2120,7 @@ impl World {
             beacon,
             true,
             rotation,
+            ready_at,
         ) else {
             return false;
         };
@@ -2215,6 +2315,7 @@ impl World {
         at: [Fx; 3],
     ) -> Option<StructureId> {
         let hp = self.structure_max_hp(kind)?;
+        let ready_at = self.armed_ready_at(self.structure_weapon(kind));
         self.structures
             .place(
                 STRUCTURE_ROWS,
@@ -2225,9 +2326,90 @@ impl World {
                 home,
                 false,
                 QuarterTurns::NONE,
+                ready_at,
             )
             .ok()
             .map(|placed| placed.id)
+    }
+
+    /// Field one unit of `kind` for `seat`, homed to `home`, standing at
+    /// `at`: [`World::fabricate`] at the home beacon, then the unit put where
+    /// the test wants it, its destination with it.
+    ///
+    /// Fixture API; see the block comment above. `None` when the seat's share
+    /// is full or `home` names no beacon. S2's raiders are fielded by Defend
+    /// and Attack (`dfnd`, `atk`), so `fire`'s tests field them here.
+    pub fn field_unit(
+        &mut self,
+        seat: SeatId,
+        home: BeaconId,
+        kind: UnitKind,
+        at: [Fx; 3],
+    ) -> Option<UnitId> {
+        let id = self.fabricate(seat, home, kind)?;
+        let row = self.units.row_of(id).ok()?;
+        if let Some(slot) = self.units.positions_mut().get_mut(row.index()) {
+            *slot = at;
+        }
+        if let Some(slot) = self.units.destinations_mut().get_mut(row.index()) {
+            *slot = at;
+        }
+        self.router.clear(row.raw());
+        Some(id)
+    }
+
+    /// Write a beacon's Common settings directly: its rules of engagement and
+    /// its retreat threshold.
+    ///
+    /// Fixture API; see the block comment above. The settings normally arrive
+    /// as a committed settings row ([`World::set_beacon_common`]).
+    pub fn set_common(&mut self, beacon: BeaconId, common: crate::tables::Common) {
+        if let Ok(row) = self.beacons.row_of(beacon)
+            && let Some(slot) = self.beacons.commons_mut().get_mut(row.index())
+        {
+            *slot = common;
+        }
+    }
+
+    /// Write what a committed settings row says about a beacon's Common
+    /// settings: each field the row names (a non-zero wire value), and nothing
+    /// it is silent about, as [`World::set_beacon_mine`] does.
+    pub(crate) fn set_beacon_common(&mut self, row: usize, roe: u8, retreat_hp_pct: u8) {
+        if let Some(slot) = self.beacons.commons_mut().get_mut(row) {
+            if roe != 0 {
+                slot.roe = roe;
+            }
+            if retreat_hp_pct != 0 {
+                slot.retreat_hp_pct = retreat_hp_pct;
+            }
+        }
+    }
+
+    /// Write a unit's retreat: the beacon it retreats to, or
+    /// [`BeaconId::NONE`] to end it. The programs phase's.
+    pub(crate) fn set_retreat(&mut self, unit: u32, to: BeaconId) {
+        if let Some(slot) = self
+            .units
+            .retreats_mut()
+            .get_mut(crate::math::index::row(unit))
+        {
+            *slot = to;
+        }
+    }
+
+    /// The weapon of a structure kind, `None` for an unarmed one.
+    fn structure_weapon(&self, kind: StructureKind) -> Option<crate::arms::WeaponRow> {
+        self.rules.structure(kind).and_then(|row| row.weapon)
+    }
+
+    /// The first tick a row placed now may fire on: a cooldown after this
+    /// tick for an armed kind (so no row fires twice inside one cooldown, a
+    /// reused row included: the shell room's bound, E13), and zero for an
+    /// unarmed one.
+    fn armed_ready_at(&self, weapon: Option<crate::arms::WeaponRow>) -> u32 {
+        weapon.map_or(0, |weapon| {
+            self.tick.raw().saturating_add(weapon.cooldown_ticks())
+        })
     }
 
     /// Write a beacon's writ directly, clearing its settings as a visit would.
@@ -3358,123 +3540,7 @@ impl World {
     /// death cannot be written -- or tested -- against a world in which nothing
     /// can die.
     fn phase_combat(&mut self) {
-        self.apply_damage();
-    }
-
-    /// Apply every queued damage order in filing order, the orders filed while
-    /// it runs included, and empty the queue (E2).
-    ///
-    /// Kill credit is booked **before** the hit points are drained, because
-    /// item 17 clamps a seat's share to "hit points actually removed": after
-    /// the drain there is no longer anything to clamp against, and an overkill
-    /// of a thousand against a hundred-point drone would book a thousand. An
-    /// order that applies nothing is counted under its reason ([`DamageDrop`]).
-    ///
-    /// Walked by index rather than drained by `mem::take`, because a take
-    /// leaves `self.damage` a zero-capacity `Vec` and an order filed while it
-    /// ran would allocate inside a tick. The same function serves the Voxels
-    /// phase's fall damage (S2's `fall`).
-    fn apply_damage(&mut self) {
-        let mut at: usize = 0;
-        while let Some(order) = self.damage.get(at).copied() {
-            at = at.saturating_add(1);
-            match self.damage_slot(order.target) {
-                Err(reason) => self.damage_drops.count(reason),
-                Ok(alive) if !alive => self.damage_drops.count(DamageDrop::AlreadyDead),
-                Ok(_) => {
-                    self.book_credit(order);
-                    self.drain(order);
-                }
-            }
-        }
-        self.damage.clear();
-    }
-
-    /// Whether a damage order's target is alive, or why it names nothing.
-    fn damage_slot(&self, target: DamageTarget) -> Result<bool, DamageDrop> {
-        let row = self.target_row(target)?.index();
-        let hp = match target {
-            DamageTarget::Unit(_) => self.units.hit_points().get(row),
-            DamageTarget::Beacon(_) => self.beacons.hit_points().get(row),
-            DamageTarget::Structure(_) => self.structures.hit_points().get(row),
-        };
-        hp.map(|hp| hp.is_alive()).ok_or(DamageDrop::NoSuchRow)
-    }
-
-    /// The row a damage order's target lives in, checked by generation (S2's
-    /// plan, E1): an order against an asset whose row has since been freed or
-    /// reused is [`DamageDrop::StaleGeneration`], never a hit on whatever
-    /// took the row.
-    fn target_row(&self, target: DamageTarget) -> Result<Row, DamageDrop> {
-        let found = match target {
-            DamageTarget::Unit(unit) => self.units.row_of(unit),
-            DamageTarget::Beacon(beacon) => self.beacons.row_of(beacon),
-            DamageTarget::Structure(structure) => self.structures.row_of(structure),
-        };
-        found.map_err(|error| match error {
-            RefError::Stale => DamageDrop::StaleGeneration,
-            RefError::Id(_) | RefError::NoSuchRow => DamageDrop::NoSuchRow,
-        })
-    }
-
-    /// Take one order's damage off its target's hit points. The target's row
-    /// was found by [`World::damage_slot`].
-    fn drain(&mut self, order: DamageOrder) {
-        let Ok(row) = self.target_row(order.target) else {
-            return;
-        };
-        let row = row.index();
-        let slot = match order.target {
-            DamageTarget::Unit(_) => self.units.hit_points_mut().get_mut(row),
-            DamageTarget::Beacon(_) => self.beacons.hit_points_mut().get_mut(row),
-            DamageTarget::Structure(_) => self.structures.hit_points_mut().get_mut(row),
-        };
-        if let Some(slot) = slot {
-            *slot = slot.damaged_by(order.amount);
-        }
-    }
-
-    /// Book one damage order against the target's kill-credit counters
-    /// (item 17).
-    ///
-    /// Three tests, all of them the item's own words: the dealer must be a
-    /// seat, it must be a **different** seat from the owner — a seat never
-    /// credits itself, which is what makes "an asset lost with no enemy damage
-    /// credits nobody" true without a second rule — and the amount is clamped
-    /// to the hit points actually there to remove.
-    fn book_credit(&mut self, order: DamageOrder) {
-        if !order.by.is_some() {
-            return;
-        }
-        let Ok(row) = self.target_row(order.target) else {
-            return;
-        };
-        let row = row.index();
-        let (asset, owner, hp) = match order.target {
-            DamageTarget::Unit(unit) => (
-                AssetId::of_unit(unit),
-                self.units.seats().get(row).copied(),
-                self.units.hit_points().get(row).copied(),
-            ),
-            DamageTarget::Beacon(beacon) => (
-                AssetId::of_beacon(beacon),
-                self.beacons.seats().get(row).copied(),
-                self.beacons.hit_points().get(row).copied(),
-            ),
-            DamageTarget::Structure(structure) => (
-                AssetId::of_structure(structure),
-                self.structures.seats().get(row).copied(),
-                self.structures.hit_points().get(row).copied(),
-            ),
-        };
-        let (Ok(asset), Some(owner), Some(hp)) = (asset, owner, hp) else {
-            return;
-        };
-        if owner == order.by.raw() || !SeatId::new(owner).is_some() || !hp.is_alive() {
-            return;
-        }
-        let removed = order.amount.raw().min(hp.raw());
-        self.credit.credit(asset.raw(), order.by, removed);
+        self.run_combat();
     }
 
     /// Per-seat kill-credit counters, at most three per asset, apportioned by
@@ -3489,14 +3555,13 @@ impl World {
     /// fills them until S2 gives the world a way to deal damage: a field that
     /// affects behaviour and is not hashed is a latent desync (AGENTS.md
     /// §4.8), and CI would only catch it once two operating systems disagreed.
+    ///
+    /// Since S2 it runs the **settle function** (E2), the same one `fall`
+    /// runs after the voxel phase: the credit above, and every unit and
+    /// structure the tick killed counted, announced and left as a wreck
+    /// ([`combat`]).
     fn phase_kill_credit(&mut self) {
-        let mut shares = core::mem::take(&mut self.credit_shares);
-        let mut split = core::mem::take(&mut self.credit_split);
-        crate::credit::settle(self, &mut shares, &mut split);
-        shares.clear();
-        split.clear();
-        self.credit_shares = shares;
-        self.credit_split = split;
+        self.settle_deaths();
     }
 
     /// Supply, draw, the brownout order, dormancy and the revive margin
@@ -3863,7 +3928,9 @@ impl World {
                     self.voxels.set(at, material);
                 }
                 VoxelEdit::Crater { centre, radius, .. } => {
-                    self.voxels.crater(centre, radius, &mut touched);
+                    let levels = self.rules.combat().blast_levels;
+                    self.voxels
+                        .blast(centre, radius, levels, &self.bore, &mut touched);
                 }
             }
         }
@@ -4109,6 +4176,9 @@ impl World {
                 if let Some(seat_row) = self.seat_row(SeatId::new(seat)) {
                     self.seats.count_beacon_lost(seat_row);
                 }
+                // And the recap's loss (E15): a beacon destroyed or recycled
+                // is one of its seat's assets lost.
+                self.count_loss(SeatId::new(seat));
                 let at = self.beacons.positions().get(index).copied();
                 let mut emission = Emission::of(EventKind::BeaconDestroyed)
                     .seat(SeatId::new(seat))
@@ -4152,6 +4222,9 @@ impl World {
             .set_mine_settings(row, crate::mining::MineSettings::default());
         if let Some(slot) = self.beacons.seams_mut().get_mut(row) {
             *slot = NO_FEATURE;
+        }
+        if let Some(slot) = self.beacons.commons_mut().get_mut(row) {
+            *slot = crate::tables::Common::DEFAULT;
         }
         self.targets.clear_beacon(beacon);
     }
@@ -4238,7 +4311,21 @@ impl World {
             };
             let matches_home = home == Some(held_home);
             let matches_seat = seat.is_some_and(|id| owner == id.raw());
-            if SeatId::new(owner).is_some() && (matches_home || matches_seat) {
+            // A structure the tick's damage already destroyed is not ruined:
+            // it is dead, its loss counted and its wreck left (S2's `fire`).
+            let alive = self
+                .structures
+                .hit_points()
+                .get(index)
+                .is_some_and(|hp| hp.is_alive());
+            if alive && SeatId::new(owner).is_some() && (matches_home || matches_seat) {
+                // A structure left as a ruin is one of its seat's losses
+                // (decisions-log item 145 (5)), and an asset already a ruin
+                // credits nobody (item 17): its counters go with its owner.
+                self.count_loss(SeatId::new(owner));
+                if let Ok(asset) = AssetId::of_structure(StructureId::new(id)) {
+                    self.credit.clear_asset(asset.raw());
+                }
                 if self.ruins_held() >= RUIN_RESERVE {
                     self.bury_oldest_ruin();
                 }
@@ -4371,6 +4458,13 @@ impl World {
             if self.units.seats().get(index).copied() == Some(seat.raw()) {
                 if let Some(slot) = self.units.hit_points_mut().get_mut(index) {
                     *slot = Hp::ZERO;
+                }
+                // A unit disbanded on elimination credits nobody (item 17),
+                // whoever had damaged it.
+                if let Some(id) = self.units.ids().get(index).copied()
+                    && let Ok(asset) = AssetId::of_unit(UnitId::new(id))
+                {
+                    self.credit.clear_asset(asset.raw());
                 }
                 if let Ok(unit) = u32::try_from(index) {
                     self.router.clear(unit);
@@ -4939,6 +5033,14 @@ impl World {
         for free in self.units.frees() {
             enc.bool(*free);
         }
+        // S2's `fire` (snapshot version 11): each row's combat memory and its
+        // retreat, as blocks after the rows (E12).
+        for arms in self.units.arms() {
+            encode_arms(enc, arms);
+        }
+        for retreat in self.units.retreats() {
+            enc.u32(retreat.raw());
+        }
 
         enc.len(self.beacons.len());
         let rows = self
@@ -4988,6 +5090,15 @@ impl World {
         for free in self.beacons.frees() {
             enc.bool(*free);
         }
+        // S2's `fire`: each row's combat memory (a core's cooldown, every
+        // beacon's attacker) and its Common settings.
+        for arms in self.beacons.arms() {
+            encode_arms(enc, arms);
+        }
+        for common in self.beacons.commons() {
+            enc.u8(common.roe);
+            enc.u8(common.retreat_hp_pct);
+        }
 
         enc.len(self.structures.len());
         let structures = self
@@ -5024,6 +5135,10 @@ impl World {
         for free in self.structures.frees() {
             enc.bool(*free);
         }
+        // S2's `fire`: each row's combat memory.
+        for arms in self.structures.arms() {
+            encode_arms(enc, arms);
+        }
 
         enc.len(self.wrecks.len());
         let wrecks = self
@@ -5040,6 +5155,10 @@ impl World {
         for free in self.wrecks.frees() {
             enc.bool(*free);
         }
+        // S2's `fire`: the tick each wreck was left on (decision 25's oldest).
+        for left in self.wrecks.left_at() {
+            enc.u32(*left);
+        }
 
         self.encode_targets(enc);
         self.encode_sightings(enc);
@@ -5049,6 +5168,34 @@ impl World {
         self.router.encode(enc);
         self.match_state.encode(enc);
         self.interpreter.encode(enc);
+        self.encode_shells(enc);
+    }
+
+    /// The shell table (S2's plan, E13), as a block after every older table
+    /// that **writes nothing while it is empty** and, once it holds a shell,
+    /// writes its tag, its count and its rows in filing order (E29), so a
+    /// chain that never fires a shell does not move for the table.
+    fn encode_shells(&self, enc: &mut Enc) {
+        if self.shells.is_empty() {
+            return;
+        }
+        enc.u8(ShellTable::HASH_TAG);
+        enc.len(self.shells.count());
+        let rows = self
+            .shells
+            .aims()
+            .iter()
+            .zip(self.shells.lands_at())
+            .zip(self.shells.seats())
+            .zip(self.shells.firers())
+            .zip(self.shells.weapons());
+        for ((((aim, lands), seat), firer), weapon) in rows {
+            encode_point(enc, aim);
+            enc.u32(*lands);
+            enc.u8(*seat);
+            enc.u32(*firer);
+            enc.u8(*weapon);
+        }
     }
 
     /// The target block: every beacon's list settings, in `(beacon, kind)`
@@ -5182,6 +5329,20 @@ impl World {
             enc.u32(*placed);
             enc.u32(*lost);
         }
+        // S2's `fire` (snapshot version 11): each seat's tally, as a block
+        // after the rows (E15).
+        for tally in self.seats.tallies() {
+            enc.i64(tally.destroyed.raw());
+            enc.u32(tally.kills);
+            enc.u32(tally.shared_kills);
+            enc.u32(tally.losses);
+        }
+        // And each seat's memory of the last attack on its assets (decision
+        // 4: what `RETURN_FIRE` answers when the asset attacked died).
+        for attack in self.seats.attacks() {
+            enc.u32(attack.attacker);
+            enc.u32(attack.attacked_at);
+        }
     }
 
     /// The per-tick state hash, allocating its own encoder.
@@ -5265,6 +5426,10 @@ impl World {
     ///
     /// Crate-internal: [`crate::snapshot`] is the only caller, so a restore
     /// cannot skip the version check.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one block per table and per derived index, every check before the first write: a restore either applies in full or changes nothing, so the checks cannot be moved behind the writes"
+    )]
     pub(crate) fn restore_tables(&mut self, restored: RestoredTables) -> bool {
         let unit_count = restored.units.len();
         // A match never holds more units than its ceiling, and the ceiling is
@@ -5279,6 +5444,7 @@ impl World {
             self.unit_limit,
             STRUCTURE_ROWS,
             beacon_limit_of(restored.seats.len()),
+            self.shell_landing,
         ) else {
             return false;
         };
@@ -5355,10 +5521,12 @@ impl World {
             .reserve(STRUCTURE_ROWS.saturating_sub(self.structures.len()));
         self.wrecks = restored.wrecks;
         self.wrecks
-            .reserve(WRECK_TABLE_ROOM.saturating_sub(self.wrecks.len()));
+            .reserve(self.wreck_limit.saturating_sub(self.wrecks.len()));
         self.targets = restored.targets;
         self.sightings = restored.sightings;
         self.credit = restored.credit;
+        self.shells = restored.shells;
+        self.bore = restored.bore;
         self.voxels = restored.voxels;
         self.chunks = restored.chunks;
         self.features = restored.features;
@@ -5379,6 +5547,22 @@ impl World {
         self.rooms = rooms;
         self.edits = Vec::with_capacity(edit_capacity);
         self.damage = Vec::with_capacity(damage_capacity);
+        self.damage_index = Vec::with_capacity(damage_capacity);
+        let armed_rows = crate::math::index::row(
+            self.unit_limit
+                .saturating_add(STRUCTURE_ROWS)
+                .saturating_add(self.beacon_limit),
+        );
+        let seat_rows = crate::math::index::row(self.seats.len());
+        self.fire_order = Vec::with_capacity(armed_rows);
+        self.attackers = Vec::with_capacity(armed_rows);
+        self.deaths = Vec::with_capacity(armed_rows);
+        self.fire_rows = Vec::with_capacity(crate::math::index::row(self.unit_limit));
+        self.splash_rows = Vec::with_capacity(crate::math::index::row(self.unit_limit));
+        self.dealers = Vec::with_capacity(seat_rows.saturating_add(1));
+        self.dealt_split = Vec::with_capacity(seat_rows.saturating_add(1));
+        self.topped = Vec::with_capacity(seat_rows.saturating_add(1));
+        self.damage_dealt = vec![0; seat_rows.saturating_mul(seat_rows)];
         self.carry = Vec::with_capacity(crate::math::index::row(
             self.beacon_limit.saturating_mul(TARGETS_PER_BEACON),
         ));
@@ -5491,6 +5675,62 @@ fn held_by_seat(column: &[u8], seats: u32) -> Vec<u32> {
 /// moves one column across or diagonally and at most one voxel up or down, a
 /// distance under two voxels. So the pad is twice the step count, in whole
 /// voxels: generous, never short, and a cost the G3' measurement counts.
+/// The shell table's room and the most shells that can land on one tick (S2's
+/// plan, E13), from firings rather than from mortars.
+///
+/// A row fires at most once a cooldown: a shot sets its next ready tick a
+/// cooldown later, and a row placed or reused starts a cooldown after its
+/// placement ([`crate::tables::Arms::ready_at`]), so a dead mortar's last shell
+/// and its row's next mortar's first are a cooldown apart too. A shell flies at
+/// most `F` ticks, a shot at full range. So at most `ceil(F / C) + 1` of one
+/// row's shells are in flight at once and at most `ceil(F / C)` of them land
+/// on one tick, `C` the cooldown in ticks. Summed over every row whose kind has
+/// an indirect weapon, each class at its dearest ratio: unit rows to the unit
+/// ceiling, structure rows to the table's rows, and every beacon row for a
+/// core. Every sum and product is checked and refused at load when it
+/// overflows (E5).
+fn shell_bounds(rules: &RulesTable, units: u32, beacons: u32) -> Result<(u32, u32), MapError> {
+    let unsized_shells = MapError::Unsized { queue: "shell" };
+    let ratio = |weapon: Option<crate::arms::WeaponRow>| -> Result<u32, MapError> {
+        let Some(weapon) = weapon else {
+            return Ok(0);
+        };
+        let Some(flight) = weapon.longest_flight_ticks() else {
+            return Ok(0);
+        };
+        Ok(flight.div_ceil(weapon.cooldown_ticks()))
+    };
+    let mut unit_ratio: u32 = 0;
+    for kind in UnitKind::ALL {
+        unit_ratio = unit_ratio.max(ratio(rules.unit(kind).weapon)?);
+    }
+    let mut structure_ratio: u32 = 0;
+    for kind in StructureKind::ALL {
+        let weapon = rules.structure(kind).and_then(|row| row.weapon);
+        structure_ratio = structure_ratio.max(ratio(weapon)?);
+    }
+    let core_ratio = ratio(Some(rules.core_weapon()))?;
+    let mut room: u32 = 0;
+    let mut landing: u32 = 0;
+    for (rows, per) in [
+        (units, unit_ratio),
+        (STRUCTURE_ROWS, structure_ratio),
+        (beacons, core_ratio),
+    ] {
+        if per == 0 {
+            continue;
+        }
+        let in_flight = per
+            .checked_add(1)
+            .and_then(|each| each.checked_mul(rows))
+            .ok_or(unsized_shells.clone())?;
+        let lands = per.checked_mul(rows).ok_or(unsized_shells.clone())?;
+        room = room.checked_add(in_flight).ok_or(unsized_shells.clone())?;
+        landing = landing.checked_add(lands).ok_or(unsized_shells.clone())?;
+    }
+    Ok((room, landing))
+}
+
 fn query_pad_of(rules: &RulesTable) -> Fx {
     Fx::from_voxels(rules.query_pad_voxels())
 }
@@ -5652,6 +5892,15 @@ fn mark_chunk_clusters(
         }
         cy = cy.saturating_add(1);
     }
+}
+
+/// One row's combat memory, in its declared order: the ready tick, the
+/// attacker, the tick of the attack, the engagement.
+fn encode_arms(enc: &mut Enc, arms: &crate::tables::Arms) {
+    enc.u32(arms.ready_at);
+    enc.u32(arms.attacker);
+    enc.u32(arms.attacked_at);
+    enc.u32(arms.engaged);
 }
 
 fn encode_point(enc: &mut Enc, point: &[Fx; 3]) {
@@ -5844,6 +6093,12 @@ mod tests {
                 .is_ok()
         );
         assert!(world.request_damage(hit(0, 1_000_000)).is_ok());
+        // A second order against the same target on the same tick shares the
+        // tick's landing (S2's plan, E32) and is no drop; one filed after the
+        // target died is.
+        assert!(world.request_damage(hit(0, 1)).is_ok());
+        assert!(world.step(&mut enc).is_ok());
+        assert_eq!(world.dropped_damage().of(DamageDrop::AlreadyDead), 0);
         assert!(world.request_damage(hit(0, 1)).is_ok());
         assert!(world.step(&mut enc).is_ok());
         let drops = world.dropped_damage();
@@ -5855,7 +6110,7 @@ mod tests {
         assert_eq!(
             drops.of(DamageDrop::AlreadyDead),
             1,
-            "the second shot at a target the first killed"
+            "a shot at a target an earlier tick killed"
         );
         assert_eq!(drops.of(DamageDrop::StaleGeneration), 0);
         assert_eq!(drops.total(), 2);

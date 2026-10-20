@@ -1547,7 +1547,7 @@ fn which_missing_blocks_the_sim_refuses_first_is_measured() {
     }
     assert_eq!(
         verifier_refuses,
-        ["verifier", "materials", "interface_times"],
+        ["verifier", "interface_times"],
         "the blocks only the verifier reads, which only it can refuse"
     );
     assert_eq!(
@@ -1556,6 +1556,9 @@ fn which_missing_blocks_the_sim_refuses_first_is_measured() {
             "map",
             "beacon",
             "match",
+            // S2's `fire` reads `materials` at load (the blast levels and the
+            // bedrock layer), so the sim refuses its absence first.
+            "materials",
             "structures",
             "units",
             "power",

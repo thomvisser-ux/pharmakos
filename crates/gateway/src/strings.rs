@@ -33,6 +33,10 @@ use pharmakos_sim::tables::SeatId;
 /// each kind carries are documented on the kind itself; this is where they are
 /// spelled.
 #[must_use]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one arm per sim event kind, which is the point: a kind added to the bus fails to compile here (S2's plan, E17)"
+)]
 pub fn event_text(event: &Event) -> String {
     let seat = event.seat.map_or_else(
         || String::from("an unclaimed asset"),
@@ -145,6 +149,19 @@ pub fn event_text(event: &Event) -> String {
         }
         EventKind::FallbackEngaged => fallback_engaged(event.value),
         EventKind::FinalAudit => format!("The final audit scored {seat} at $ {}.", event.value),
+        // S2's `fire`: the combat lines (S2's plan, E17).
+        EventKind::UnitDestroyed => format!("A unit of {seat} was destroyed."),
+        EventKind::StructureDestroyed => match event.seat {
+            Some(owner) => format!("A structure of seat {} was destroyed.", owner.raw()),
+            None => String::from("A ruin was destroyed."),
+        },
+        EventKind::ShellLanded => format!("A shell from {seat} landed."),
+        EventKind::WreckLeft => format!("A wreck worth $ {} was left.", event.value),
+        EventKind::ReturnedFire => format!("An asset of {seat} returned fire."),
+        EventKind::RetreatAnnounced => format!("A unit of {seat} is retreating."),
+        EventKind::WreckBuried => {
+            String::from("The ash buried the oldest wreck to make room for a new one.")
+        }
     }
 }
 
@@ -692,6 +709,21 @@ mod tests {
             text,
             "The ash buried the oldest ruin to make room for a new one."
         );
+    }
+
+    /// S2's `fire`: a wreck is nobody's, so its lines name no seat, and a
+    /// unit's destruction names the seat it belonged to.
+    #[test]
+    fn a_wreck_names_nobody_and_a_destruction_names_its_seat() {
+        let text = event_text(&event(EventKind::WreckLeft, None, 7));
+        assert_eq!(text, "A wreck worth $ 7 was left.");
+        let text = event_text(&event(EventKind::WreckBuried, None, 0));
+        assert_eq!(
+            text,
+            "The ash buried the oldest wreck to make room for a new one."
+        );
+        let text = event_text(&event(EventKind::UnitDestroyed, Some(1), 5));
+        assert_eq!(text, "A unit of seat 1 was destroyed.");
     }
 
     #[test]

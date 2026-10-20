@@ -1409,7 +1409,7 @@ fn the_voxel_edit_queue_is_bounded_and_says_so() {
     // full queue reports rather than growing or dropping silently.
     let mut world = world_with(rules());
     let mut accepted: u32 = 0;
-    for _ in 0..1_000 {
+    for _ in 0..10_000 {
         if world
             .request_voxel_edit(VoxelEdit::Crater {
                 centre: [1, 1, 1],
@@ -1422,7 +1422,7 @@ fn the_voxel_edit_queue_is_bounded_and_says_so() {
         }
     }
     assert!(
-        accepted > 0 && accepted < 1_000,
+        accepted > 0 && accepted < 10_000,
         "the queue must be bounded"
     );
     assert_eq!(
@@ -1532,7 +1532,7 @@ fn the_wire_ids_of_the_new_enums_are_dense_and_unique() {
     let materials: Vec<u8> = Material::ALL.iter().map(|m| m.raw()).collect();
     assert_eq!(
         materials,
-        (0..9).collect::<Vec<u8>>(),
+        (0..34).collect::<Vec<u8>>(),
         "material ids are dense from air at zero"
     );
     assert!(Material::AIR.is_air() && !Material::AIR.is_solid());
