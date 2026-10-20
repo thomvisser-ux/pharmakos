@@ -534,14 +534,26 @@ pub fn map_summary(size: [u32; 3], seed: &str, seats: u32) -> String {
 #[must_use]
 pub fn recap_tally(kills: u32, shared: u32, value_dollars: i32, losses: u32) -> String {
     let lost = count(losses, "asset", "assets");
-    if kills == 0 {
-        return format!("This match so far you destroyed no enemy assets and lost {lost}.");
+    let destroyed = count(kills, "enemy asset", "enemy assets");
+    match (kills, shared) {
+        (0, _) => format!("This match so far you destroyed no enemy assets and lost {lost}."),
+        (_, 0) => format!(
+            "This match so far you destroyed {destroyed}, worth $ {value_dollars}, and lost \
+             {lost}."
+        ),
+        (1, _) => format!(
+            "This match so far you destroyed 1 enemy asset, a shared kill, worth $ \
+             {value_dollars}, and lost {lost}."
+        ),
+        (_, 1) => format!(
+            "This match so far you destroyed {destroyed}, 1 of them a shared kill, worth $ \
+             {value_dollars}, and lost {lost}."
+        ),
+        _ => format!(
+            "This match so far you destroyed {destroyed}, {shared} of them shared kills, worth \
+             $ {value_dollars}, and lost {lost}."
+        ),
     }
-    format!(
-        "This match so far you destroyed {}, {shared} of them a shared kill, worth $ \
-         {value_dollars}, and lost {lost}.",
-        count(kills, "enemy asset", "enemy assets"),
-    )
 }
 
 /// `get_beacon`'s prose for one of the seat's own beacons: its mandate and its
@@ -752,6 +764,20 @@ mod tests {
             super::recap_tally(2, 1, 35, 1),
             "This match so far you destroyed 2 enemy assets, 1 of them a shared kill, worth $ 35, \
              and lost 1 asset."
+        );
+        assert_eq!(
+            super::recap_tally(2, 0, 35, 0),
+            "This match so far you destroyed 2 enemy assets, worth $ 35, and lost no assets."
+        );
+        assert_eq!(
+            super::recap_tally(1, 1, 10, 0),
+            "This match so far you destroyed 1 enemy asset, a shared kill, worth $ 10, and lost \
+             no assets."
+        );
+        assert_eq!(
+            super::recap_tally(3, 2, 60, 2),
+            "This match so far you destroyed 3 enemy assets, 2 of them shared kills, worth $ 60, \
+             and lost 2 assets."
         );
     }
 

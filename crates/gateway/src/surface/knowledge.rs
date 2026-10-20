@@ -60,7 +60,7 @@ use crate::error::Error;
 use crate::fog::{Audience, FogFilter, Viewer, Vision};
 use crate::rpc::Request;
 use crate::strings;
-use crate::surface::{BandError, Surface};
+use crate::surface::{BandError, RecapFacts, Surface};
 use crate::view;
 
 /// How many beacons one page of `list_beacons` carries at each rung.
@@ -244,19 +244,17 @@ impl Surface {
     ///   none reachable" for a description that matched and reached nothing
     ///   (`docs/design/targeting.md`, "Surfaces").
     /// * **The tally** (S2's plan, E15): the seat's own kills, shared kills,
-    ///   losses and enemy value destroyed for the match so far, read from the
-    ///   sim's hashed per-seat counters ([`pharmakos_sim::tables::Tally`]) and
-    ///   never added up from the feed, whose bus drops past its capacity. It is
-    ///   the counters as the segment ended, so it is told wherever the world
-    ///   still stands at that end -- in the recap, the Lull after it and once
-    ///   the match has ended -- and not during a Push, where the counters have
-    ///   moved past the round the rest of this answer describes.
+    ///   losses and enemy value destroyed for the match so far, as the sim's
+    ///   hashed per-seat counters stood when the segment ended
+    ///   ([`RecapFacts::tallies`]), never added up from the feed, whose bus
+    ///   drops past its capacity. Like the settlement it is this recap's, so
+    ///   it is the same in the recap, the Lull and the Push that follow.
     /// * **Every seat's tally**, `seat_tallies`, ascending by seat, **only once
-    ///   the match has ended** (the owner's ruling, decisions-log item 145 (7)):
-    ///   between rounds a seat learns its own counts and nobody else's. At the
-    ///   end the fog has lifted for every seat (spec section 12), and the final
-    ///   audit that ranks on these counts is a public announcement, so every
-    ///   caller is told them, a spectator and the lobby included.
+    ///   the match is decided** -- from the final recap on, where the outcome
+    ///   is decided and the fog lifts -- (the owner's ruling, decisions-log item
+    ///   145 (7)): between rounds a seat learns its own counts and nobody
+    ///   else's. Told to a seat only, like everything in this block: the lobby
+    ///   and a spectator read no seat's knowledge (AGENTS.md section 7).
     pub(super) fn get_recap(
         &self,
         subject: crate::token::Subject,
@@ -314,9 +312,7 @@ impl Surface {
             {
                 entries.push((String::from("settlement"), settlement));
             }
-            if let Some(tally) = own_tally(host, seat, &mut prose)? {
-                entries.push((String::from("tally"), tally));
-            }
+            entries.push((String::from("tally"), own_tally(facts, seat, &mut prose)?));
             if let Some(dark) = facts.dark.iter().find(|dark| dark.seat == seat) {
                 let names: Vec<String> = dark
                     .ordinals
@@ -339,9 +335,9 @@ impl Surface {
                 ));
             }
             failure_lines(facts, seat, &mut prose)?;
-        }
-        if let Some(all) = seat_tallies(host)? {
-            entries.push((String::from("seat_tallies"), all));
+            if let Some(all) = seat_tallies(host, facts)? {
+                entries.push((String::from("seat_tallies"), all));
+            }
         }
         entries.insert(0, (String::from("prose"), Json::String(prose)));
         Ok(Json::Object(entries))
@@ -1999,87 +1995,70 @@ fn failure_lines(
     Ok(())
 }
 
-/// The calling seat's own tally for [`Surface::get_recap`], with its sentence
-/// pushed onto `prose`: the counters as the segment ended, so `None` during a
-/// Push, when they have moved past the round the recap describes.
+/// The calling seat's own tally for [`Surface::get_recap`], from the counters
+/// the recap's facts hold for it, with its sentence pushed onto `prose`.
 ///
 /// # Errors
 ///
-/// As [`tally_json`].
-fn own_tally(
-    host: &crate::host::Host,
-    seat: SeatId,
-    prose: &mut String,
-) -> Result<Option<Json>, Error> {
-    if host.runner().phase() == pharmakos_sim::runner::MatchPhase::Push {
-        return Ok(None);
-    }
-    let tally = host.world().tally(seat).ok_or_else(|| {
-        Error::internal(format!(
-            "the seat table holds no tally for seat {}",
-            seat.raw()
-        ))
-    })?;
+/// [`crate::error::Code::Internal`] for a seat the facts hold no tally for,
+/// and as [`tally_json`].
+fn own_tally(facts: &RecapFacts, seat: SeatId, prose: &mut String) -> Result<Json, Error> {
+    let tally = facts
+        .tallies
+        .iter()
+        .find(|(held, _)| *held == seat)
+        .map(|(_, tally)| *tally)
+        .ok_or_else(|| {
+            Error::internal(format!("the recap holds no tally for seat {}", seat.raw()))
+        })?;
+    let (json, destroyed) = tally_json(tally)?;
     prose.push(' ');
     prose.push_str(&strings::recap_tally(
         tally.kills,
         tally.shared_kills,
-        view::dollars_wire(tally.destroyed, "the enemy value a seat destroyed")?,
+        destroyed,
         tally.losses,
     ));
-    Ok(Some(tally_json(host.world(), seat)?))
+    Ok(json)
 }
 
 /// Every seat's tally, ascending by seat, for [`Surface::get_recap`]: `None`
-/// until the match has ended (the owner's ruling, decisions-log item 145 (7)).
+/// until the match is decided (the owner's ruling, decisions-log item 145
+/// (7)), and from the final recap on, since the outcome is decided on the
+/// final tick and the fog lifts there.
 ///
 /// # Errors
 ///
 /// As [`tally_json`].
-fn seat_tallies(host: &crate::host::Host) -> Result<Option<Json>, Error> {
-    if host.runner().phase() != pharmakos_sim::runner::MatchPhase::Ended {
+fn seat_tallies(host: &crate::host::Host, facts: &RecapFacts) -> Result<Option<Json>, Error> {
+    if host.runner().outcome().is_none() {
         return Ok(None);
     }
-    let world = host.world();
-    let mut seats: Vec<SeatId> = world
-        .seats()
-        .seats()
+    let all = facts
+        .tallies
         .iter()
-        .copied()
-        .map(SeatId::new)
-        .collect();
-    seats.sort_unstable_by_key(|seat| seat.raw());
-    let all = seats
-        .into_iter()
-        .map(|seat| {
+        .map(|(seat, tally)| {
             Ok(Json::Object(vec![
                 (
                     String::from("seat"),
-                    Json::String(crate::token::Subject::Seat(seat).render()),
+                    Json::String(crate::token::Subject::Seat(*seat).render()),
                 ),
-                (String::from("tally"), tally_json(world, seat)?),
+                (String::from("tally"), tally_json(*tally)?.0),
             ]))
         })
         .collect::<Result<Vec<Json>, Error>>()?;
     Ok(Some(Json::Array(all)))
 }
 
-/// One `gp.api.v1.Tally`: `seat`'s hashed per-seat counters as the sim holds
-/// them (S2's plan, E15), every field written, the zeros included.
+/// One `gp.api.v1.Tally`, every field written, the zeros included, and the
+/// value destroyed as the wire's whole dollars.
 ///
 /// # Errors
 ///
-/// [`crate::error::Code::Internal`] for a seat the world's seat table does not
-/// hold, and as [`view::dollars_wire`] for a value destroyed past `int32`.
-fn tally_json(world: &pharmakos_sim::world::World, seat: SeatId) -> Result<Json, Error> {
-    let tally = world.tally(seat).ok_or_else(|| {
-        Error::internal(format!(
-            "the seat table holds no tally for seat {}",
-            seat.raw()
-        ))
-    })?;
+/// As [`view::dollars_wire`], for a value destroyed past `int32`.
+fn tally_json(tally: pharmakos_sim::tables::Tally) -> Result<(Json, i32), Error> {
     let destroyed = view::dollars_wire(tally.destroyed, "the enemy value a seat destroyed")?;
-    Ok(Json::Object(vec![
+    let json = Json::Object(vec![
         (String::from("kills"), Json::Number(tally.kills.to_string())),
         (
             String::from("shared_kills"),
@@ -2093,7 +2072,8 @@ fn tally_json(world: &pharmakos_sim::world::World, seat: SeatId) -> Result<Json,
             String::from("value_destroyed_dollars"),
             Json::Number(destroyed.to_string()),
         ),
-    ]))
+    ]);
+    Ok((json, destroyed))
 }
 
 /// Why a seal does not price ([`Surface::seal_commitment`]).
