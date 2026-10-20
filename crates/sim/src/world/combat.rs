@@ -693,9 +693,14 @@ impl World {
     }
 
     /// Whether `point` lies in `seat`'s live vision this tick: some sensor of
-    /// the seat sees it under the sim's sensor seam ([`World::sensor_at`],
-    /// the line-of-sight model included), a dormant beacon's dark units and
-    /// structures excepted and a core's sphere kept (decisions-log item 146).
+    /// the seat ([`World::sensor_at`]) reaches it, under the radius-only
+    /// model ([`crate::sight::RadiusOnly`], item 144 (4)), which is the only
+    /// line-of-sight model today; a later model replaces the argument here.
+    /// A dormant beacon's dark units and structures are no sensors, and a
+    /// core's sphere still is (decisions-log item 146).
+    ///
+    /// It walks every sensor for each candidate target, so its cost is
+    /// targets times sensors per tick; G3'-real's tick-time gate measures it.
     ///
     /// **Every weapon chooses only what its seat sees** (the owner's answer
     /// of 2026-10-20): vision gates the choice of target, range is still the
