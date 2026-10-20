@@ -33,7 +33,8 @@
 //! (a `scout_count` past a beacon's byte) and `E0603` (a seal the Ledger
 //! cannot price). S2's wire (task `con4`) adds `E0019`, a Build target naming
 //! one of S2's base kit before S2's `site` lane builds it, at the end of the
-//! decode family, and `E0509`, a `wall_box` on a target that is not a `wall`,
+//! decode family (retired by `site`, which built the base kit: the row keeps its
+//! number and nothing raises it), and `E0509`, a `wall_box` on a target that is not a `wall`,
 //! at the end of the settings family. S2's second verifier lane (task `vfy2`)
 //! adds `E0113` (more handlers than the sim compiles), `E0414` to `E0418`
 //! (Defend's and Attack's references, a wall box's place, and an Attack
@@ -365,12 +366,13 @@ pub const CATALOGUE: &[Entry] = &[
         emitter: Emitter::Stage(Stage::Decode),
     },
     // S2's wire (task `con4`): a Build target naming one of S2's base kit,
-    // which the sim refuses until S2's `site` lane ([`crate::refusals`]).
+    // which the sim refused until S2's `site` lane built it ([`crate::refusals`];
+    // decisions-log item 145 (5)). The code keeps its number, raised by nothing.
     Entry {
         code: "E0019",
         family: Family::DecodeAndVersion,
         severity: Severity::Error,
-        emitter: Emitter::Stage(Stage::Structure),
+        emitter: Emitter::NoneYet("retired by S2's `site`, which built the base kit"),
     },
     // --- E01xx: limits and required blocks -----------------------------------
     Entry {
