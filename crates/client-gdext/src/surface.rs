@@ -346,17 +346,19 @@ impl SurfaceProbe {
     /// A one-line description for the engine log and for the self-check's report.
     #[must_use]
     pub fn describe(self) -> String {
-        let vertex = self
-            .vertex_stride
-            .map_or_else(|| "?".to_owned(), |stride| stride.to_string());
-        let attribute = self
-            .attribute_stride
-            .map_or_else(|| "?".to_owned(), |stride| stride.to_string());
+        let vertex = stride_text(self.vertex_stride);
+        let attribute = stride_text(self.attribute_stride);
         let quantisation = self
             .quantisation
             .map_or("none matched", ColourQuantisation::name);
         format!("strides {vertex}/{attribute}, colour {quantisation}")
     }
+}
+
+/// A stride as [`SurfaceProbe::describe`] writes it: its bytes, or `?` for one the probe
+/// did not learn.
+fn stride_text(stride: Option<usize>) -> String {
+    stride.map_or_else(|| "?".to_owned(), |stride| stride.to_string())
 }
 
 /// Whether `candidate` reproduces the engine's attribute bytes for every probed vertex.

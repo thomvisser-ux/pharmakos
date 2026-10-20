@@ -84,7 +84,7 @@ use crate::rig::{Answer, LullLengths, Rig};
 use crate::rules::{self, MesherRules};
 use crate::surface::{ColourQuantisation, Surface, SurfaceProbe};
 use crate::upload::{DEFAULT_UPLOAD_PATH, ResidentSurface, UploadCounters, UploadPath, Uploader};
-use crate::variant::json_to_variant;
+use crate::variant::{godot_int, json_to_variant, text_or_empty};
 use crate::view::{self, Applied, Entity, ViewModel};
 
 /// The bridge node. One per client; the scenes hold it and GDScript calls it.
@@ -177,7 +177,7 @@ impl PharmakosBridge {
     /// How many panics this bridge has caught at its own boundary. CI asserts zero.
     #[func]
     fn caught_panics(&self) -> i64 {
-        i64::try_from(self.panics.caught()).unwrap_or(i64::MAX)
+        godot_int(self.panics.caught())
     }
 
     /// The caught-panic count and the last message, as one line for the log.
@@ -203,6 +203,11 @@ impl PharmakosBridge {
     /// state to report rather than an error to raise — and `reason` says why not.
     #[func]
     fn configure(&mut self, chunks: i64, rules_json: GString) -> VarDictionary {
+        let Ok(count) = usize::try_from(chunks) else {
+            let reason = format!("{chunks} is not a chunk count");
+            godot_error!("[pharmakos] configure: {reason}");
+            return not_configured(&reason);
+        };
         let text = rules_json.to_string();
         let parsed = self.panics.guard("configure", || {
             rules::table_from_json(&text).and_then(|table| {
@@ -216,22 +221,13 @@ impl PharmakosBridge {
                 ))
             })
         });
-        let mut report = VarDictionary::new();
         let (parsed, lulls, extent) = match parsed {
             Some(Ok(parsed)) => parsed,
             Some(Err(error)) => {
                 godot_error!("[pharmakos] configure: {error}");
-                report.set(&"configured".to_variant(), &false.to_variant());
-                report.set(&"attached".to_variant(), &false.to_variant());
-                report.set(&"reason".to_variant(), &error.to_string().to_variant());
-                return report;
+                return not_configured(&error.to_string());
             }
-            None => {
-                report.set(&"configured".to_variant(), &false.to_variant());
-                report.set(&"attached".to_variant(), &false.to_variant());
-                report.set(&"reason".to_variant(), &"a panic was caught".to_variant());
-                return report;
-            }
+            None => return not_configured("a panic was caught"),
         };
 
         self.mesher = Some(Mesher::new(parsed.light));
@@ -239,8 +235,9 @@ impl PharmakosBridge {
         self.view = Some(ViewModel::new(parsed.light, parsed.budget, extent));
         self.lulls = lulls;
 
-        let attached = self.attach_renderer(usize::try_from(chunks).unwrap_or(0));
+        let attached = self.attach_renderer(count);
 
+        let mut report = VarDictionary::new();
         report.set(&"configured".to_variant(), &true.to_variant());
         report.set(&"attached".to_variant(), &attached.to_variant());
         report.set(
@@ -350,7 +347,7 @@ impl PharmakosBridge {
             return VarDictionary::new();
         };
         self.panics
-            .guard("upload_budget", || {
+            .guard_or("upload_budget", VarDictionary::new(), || {
                 let mut report = VarDictionary::new();
                 report.set(
                     &"surfaces_per_frame".to_variant(),
@@ -363,7 +360,6 @@ impl PharmakosBridge {
                 report.set(&"age_frames".to_variant(), &counter(budget.age_frames));
                 report
             })
-            .unwrap_or_default()
     }
 
     /// The upload counters: how often each of item 53's guards fired.
@@ -376,8 +372,9 @@ impl PharmakosBridge {
             return VarDictionary::new();
         };
         self.panics
-            .guard("upload_counters", || counters_of(renderer))
-            .unwrap_or_default()
+            .guard_or("upload_counters", VarDictionary::new(), || {
+                counters_of(renderer)
+            })
     }
 
     /// Rewrites one chunk's bytes from the sim's voxel order into the mesher's.
@@ -499,7 +496,7 @@ impl PharmakosBridge {
         };
         let mut buffers = std::mem::replace(&mut self.buffers, MeshBuffers::empty());
         let mut renderer = self.renderer.take();
-        let edge = f32::from(u16::try_from(pharmakos_mesher::CHUNK_EDGE).unwrap_or(32));
+        let edge = view::CHUNK_EDGE_F32;
         let camera_chunk = [
             (camera.x / edge).floor() as i32,
             (camera.y / edge).floor() as i32,
@@ -511,8 +508,11 @@ impl PharmakosBridge {
                 let corner = model.mesh(chunk, &mut mesher, &mut buffers)?;
                 let surface = Surface::from_mesh(&buffers)?;
                 if let Some(renderer) = renderer.as_mut() {
-                    let index = usize::try_from(chunk).unwrap_or(usize::MAX);
-                    renderer.upload(index, corner.map(|value| value as f32), &surface)?;
+                    renderer.upload(
+                        view::chunk_slot(chunk),
+                        corner.map(|value| value as f32),
+                        &surface,
+                    )?;
                 }
                 uploaded = uploaded.saturating_add(1);
             }
@@ -538,15 +538,13 @@ impl PharmakosBridge {
     /// The map's extent in voxels, in the MESHER's axes (y up); zero before a keyframe.
     #[func]
     fn view_extent(&mut self) -> Vector3i {
-        let grid = self.view.as_ref().and_then(ViewModel::grid);
-        self.panics
-            .guard("view_extent", || {
-                grid.map_or(Vector3i::ZERO, |grid| {
-                    let [x, y, z] = grid.voxels();
-                    Vector3i::new(x, y, z)
-                })
-            })
-            .unwrap_or(Vector3i::ZERO)
+        let Some(grid) = self.view.as_ref().and_then(ViewModel::grid) else {
+            return Vector3i::ZERO;
+        };
+        self.panics.guard_or("view_extent", Vector3i::ZERO, || {
+            let [x, y, z] = grid.voxels();
+            Vector3i::new(x, y, z)
+        })
     }
 
     /// Starts a fresh watch rig, with both connections closed, timing round 1's Lull by the
@@ -616,7 +614,7 @@ impl PharmakosBridge {
         report.set(&"events".to_variant(), &rows.to_variant());
         report.set(
             &"error".to_variant(),
-            &error.unwrap_or_default().to_variant(),
+            &text_or_empty(error.as_deref()).to_variant(),
         );
         if let Some(result) = view {
             // The rig has already moved its cursor past this page; a page the bridge
@@ -641,7 +639,9 @@ impl PharmakosBridge {
     fn watch_speeds(&self) -> PackedInt32Array {
         let mut speeds = PackedInt32Array::new();
         for speed in crate::pacer::SPEEDS {
-            speeds.push(i32::try_from(speed).unwrap_or(i32::MAX));
+            // Lossless: `all_fit_i32` proves every speed fits an `i32` at compile time, so
+            // reading its bits as signed keeps its value.
+            speeds.push(speed.cast_signed());
         }
         speeds
     }
@@ -655,8 +655,7 @@ impl PharmakosBridge {
         let now = self.wall.now_us();
         let frames = self
             .panics
-            .guard("watch_outbox", || rig.poll(now))
-            .unwrap_or_default();
+            .guard_or("watch_outbox", Vec::new(), || rig.poll(now));
         let mut out = VarArray::new();
         for frame in frames {
             let mut pair = VarArray::new();
@@ -676,7 +675,7 @@ impl PharmakosBridge {
         };
         let command = command.to_string();
         self.panics
-            .guard("watch_command", || match command.as_str() {
+            .guard_or("watch_command", false, || match command.as_str() {
                 "speed" => u32::try_from(value).is_ok_and(|speed| rig.set_speed(speed)),
                 "skip" => {
                     rig.skip();
@@ -696,7 +695,6 @@ impl PharmakosBridge {
                 }
                 _ => false,
             })
-            .unwrap_or(false)
     }
 
     /// What the lobby shows: `phase`, `round`, `timer` (empty while the footer is
@@ -710,8 +708,9 @@ impl PharmakosBridge {
         };
         let pending = self.view.as_ref().map_or(0, ViewModel::pending);
         self.panics
-            .guard("watch_state", || rig_state(rig, pending))
-            .unwrap_or_default()
+            .guard_or("watch_state", VarDictionary::new(), || {
+                rig_state(rig, pending)
+            })
     }
 
     // --- The editor (T19, pull requests 1 and 2) ---------------------------------------
@@ -740,9 +739,9 @@ impl PharmakosBridge {
         let Some(rig) = self.rig.as_mut() else {
             return false;
         };
-        self.panics
-            .guard("editor_load", || rig.editor_mut().load(bytes.as_slice()))
-            .unwrap_or(false)
+        self.panics.guard_or("editor_load", false, || {
+            rig.editor_mut().load(bytes.as_slice())
+        })
     }
 
     /// Load a playbook file's bytes, read from `path`: as `editor_load`, and once the editor
@@ -754,11 +753,9 @@ impl PharmakosBridge {
             return false;
         };
         let path = path.to_string();
-        self.panics
-            .guard("editor_load_file", || {
-                rig.editor_mut().open(bytes.as_slice(), Some(&path))
-            })
-            .unwrap_or(false)
+        self.panics.guard_or("editor_load_file", false, || {
+            rig.editor_mut().open(bytes.as_slice(), Some(&path))
+        })
     }
 
     /// The playbook on screen was written to `path`: from now on it is the text's file.
@@ -779,10 +776,9 @@ impl PharmakosBridge {
             return PackedByteArray::new();
         };
         self.panics
-            .guard("editor_bytes", || {
+            .guard_or("editor_bytes", PackedByteArray::new(), || {
                 PackedByteArray::from(rig.editor().bytes().as_slice())
             })
-            .unwrap_or_default()
     }
 
     /// The bytes the last accepted `submit_plan` sealed; empty before one.
@@ -792,10 +788,9 @@ impl PharmakosBridge {
             return PackedByteArray::new();
         };
         self.panics
-            .guard("editor_sealed_bytes", || {
+            .guard_or("editor_sealed_bytes", PackedByteArray::new(), || {
                 PackedByteArray::from(rig.editor().sealed_bytes().as_slice())
             })
-            .unwrap_or_default()
     }
 
     /// A map action: `go`, `visit_low`, `visit_normal`, `visit_high`, `recycle`, `place` or
@@ -808,14 +803,12 @@ impl PharmakosBridge {
             return false;
         };
         let action = action.to_string();
-        self.panics
-            .guard("editor_action", || {
-                match (Action::from_name(&action), target_of(&target)) {
-                    (Some(action), Some(target)) => rig.editor_mut().act(action, &target),
-                    _ => false,
-                }
-            })
-            .unwrap_or(false)
+        self.panics.guard_or("editor_action", false, || {
+            match (Action::from_name(&action), target_of(&target)) {
+                (Some(action), Some(target)) => rig.editor_mut().act(action, &target),
+                _ => false,
+            }
+        })
     }
 
     /// The placement ghost at `at` (sim axes): the QUICK verdict of the draft with a beacon
@@ -825,11 +818,9 @@ impl PharmakosBridge {
         let Some(rig) = self.rig.as_mut() else {
             return false;
         };
-        self.panics
-            .guard("editor_preview_place", || {
-                rig.editor_mut().preview_place([at.x, at.y, at.z])
-            })
-            .unwrap_or(false)
+        self.panics.guard_or("editor_preview_place", false, || {
+            rig.editor_mut().preview_place([at.x, at.y, at.z])
+        })
     }
 
     /// Apply the `fix`th Fix button of validation row `row`: the verifier's own patch,
@@ -844,8 +835,7 @@ impl PharmakosBridge {
             return false;
         };
         self.panics
-            .guard("editor_fix", || rig.editor_mut().fix(row, fix))
-            .unwrap_or(false)
+            .guard_or("editor_fix", false, || rig.editor_mut().fix(row, fix))
     }
 
     /// Undo the last edit with the inverse patch the gateway handed back for it.
@@ -855,8 +845,7 @@ impl PharmakosBridge {
             return false;
         };
         self.panics
-            .guard("editor_undo", || rig.editor_mut().undo())
-            .unwrap_or(false)
+            .guard_or("editor_undo", false, || rig.editor_mut().undo())
     }
 
     /// Submit the playbook on screen.
@@ -866,8 +855,7 @@ impl PharmakosBridge {
             return false;
         };
         self.panics
-            .guard("editor_submit", || rig.editor_mut().submit())
-            .unwrap_or(false)
+            .guard_or("editor_submit", false, || rig.editor_mut().submit())
     }
 
     /// Tick (`on`) or clear the `allow_dormant_beacons` checkbox E0601 shows: the verifier's
@@ -877,11 +865,9 @@ impl PharmakosBridge {
         let Some(rig) = self.rig.as_mut() else {
             return false;
         };
-        self.panics
-            .guard("editor_set_allow_dormant", || {
-                rig.editor_mut().set_allow_dormant(on)
-            })
-            .unwrap_or(false)
+        self.panics.guard_or("editor_set_allow_dormant", false, || {
+            rig.editor_mut().set_allow_dormant(on)
+        })
     }
 
     /// The features the map lists this Lull (`get_map_summary`), for the editor's vent
@@ -895,7 +881,7 @@ impl PharmakosBridge {
             return VarArray::new();
         };
         self.panics
-            .guard("editor_features", || {
+            .guard_or("editor_features", VarArray::new(), || {
                 let mut out = VarArray::new();
                 for feature in rig.editor().features() {
                     let Some(ground) = model.ground_at(feature.x, feature.y) else {
@@ -918,7 +904,6 @@ impl PharmakosBridge {
                 }
                 out
             })
-            .unwrap_or_default()
     }
 
     /// Save the notes box to the seat notebook.
@@ -939,9 +924,9 @@ impl PharmakosBridge {
             return false;
         };
         let label = label.to_string();
-        self.panics
-            .guard("editor_save_draft", || rig.editor_mut().save_draft(&label))
-            .unwrap_or(false)
+        self.panics.guard_or("editor_save_draft", false, || {
+            rig.editor_mut().save_draft(&label)
+        })
     }
 
     /// Ask the gateway about the beacon `id` (`b_NN`), for the map menu's heading.
@@ -964,8 +949,9 @@ impl PharmakosBridge {
             return VarDictionary::new();
         };
         self.panics
-            .guard("editor_state", || state_dictionary(rig.editor()))
-            .unwrap_or_default()
+            .guard_or("editor_state", VarDictionary::new(), || {
+                state_dictionary(rig.editor())
+            })
     }
 
     // --- The wizard, the rule list and the meter (T19, pull request 2) ----------------------
@@ -999,11 +985,9 @@ impl PharmakosBridge {
             return false;
         };
         let (pointer, text) = (pointer.to_string(), text.to_string());
-        self.panics
-            .guard("editor_wizard_set", || {
-                rig.editor_mut().wizard_set(&pointer, &text)
-            })
-            .unwrap_or(false)
+        self.panics.guard_or("editor_wizard_set", false, || {
+            rig.editor_mut().wizard_set(&pointer, &text)
+        })
     }
 
     /// Put the wizard's playbook into the editor, as one edit Undo takes back.
@@ -1013,8 +997,7 @@ impl PharmakosBridge {
             return false;
         };
         self.panics
-            .guard("editor_wizard_use", || rig.editor_mut().wizard_use())
-            .unwrap_or(false)
+            .guard_or("editor_wizard_use", false, || rig.editor_mut().wizard_use())
     }
 
     /// Close the wizard.
@@ -1055,8 +1038,9 @@ impl PharmakosBridge {
             return VarDictionary::new();
         };
         self.panics
-            .guard("watch_meter", || meter_dictionary(rig.meter()))
-            .unwrap_or_default()
+            .guard_or("watch_meter", VarDictionary::new(), || {
+                meter_dictionary(rig.meter())
+            })
     }
 
     /// The recap: `answers`, `round` and `prose`, as the gateway last wrote it, and
@@ -1068,8 +1052,9 @@ impl PharmakosBridge {
             return VarDictionary::new();
         };
         self.panics
-            .guard("watch_recap", || recap_dictionary(rig.recap()))
-            .unwrap_or_default()
+            .guard_or("watch_recap", VarDictionary::new(), || {
+                recap_dictionary(rig.recap())
+            })
     }
 
     /// Validation rows from a `gp.api.v1.VerifyReport` JSON text, with no gateway behind
@@ -1199,12 +1184,11 @@ impl PharmakosBridge {
                 return None;
             }
         };
-        if applied.grid_changed {
-            let count = model
-                .grid()
-                .and_then(|grid| usize::try_from(grid.chunk_count()).ok())
-                .unwrap_or(0);
-            self.attach_renderer(count);
+        // A page that changed the grid built it (`ViewModel::apply`), so the grid is there.
+        if applied.grid_changed
+            && let Some(grid) = model.grid()
+        {
+            self.attach_renderer(view::chunk_slot(grid.chunk_count()));
         }
         let mut report = VarDictionary::new();
         report.set(&"complete".to_variant(), &applied.complete.to_variant());
@@ -1249,22 +1233,18 @@ fn rig_state(rig: &Rig, pending: usize) -> VarDictionary {
     state.set(&"speed".to_variant(), &i64::from(rig.speed()).to_variant());
     state.set(&"skipping".to_variant(), &rig.skipping().to_variant());
     state.set(&"all_ready".to_variant(), &rig.all_ready().to_variant());
+    let [drops_admin, drops_seat] = rig.drops();
+    let [calls_admin, calls_seat] = rig.calls();
     state.set(
         &"drops_admin".to_variant(),
-        &i64::from(rig.drops(crate::rig::ADMIN)).to_variant(),
+        &i64::from(drops_admin).to_variant(),
     );
     state.set(
         &"drops_seat".to_variant(),
-        &i64::from(rig.drops(crate::rig::SEAT)).to_variant(),
+        &i64::from(drops_seat).to_variant(),
     );
-    state.set(
-        &"calls_admin".to_variant(),
-        &counter(rig.calls(crate::rig::ADMIN)),
-    );
-    state.set(
-        &"calls_seat".to_variant(),
-        &counter(rig.calls(crate::rig::SEAT)),
-    );
+    state.set(&"calls_admin".to_variant(), &counter(calls_admin));
+    state.set(&"calls_seat".to_variant(), &counter(calls_seat));
     state.set(
         &"view_settled".to_variant(),
         &rig.view_settled().to_variant(),
@@ -1280,7 +1260,7 @@ fn rig_state(rig: &Rig, pending: usize) -> VarDictionary {
     state.set(&"pending".to_variant(), &count_of(pending));
     state.set(
         &"last_error".to_variant(),
-        &rig.last_error().unwrap_or_default().to_variant(),
+        &text_or_empty(rig.last_error()).to_variant(),
     );
     state
 }
@@ -1357,13 +1337,39 @@ fn counters_of(renderer: &ChunkRenderer) -> VarDictionary {
 
 /// One counter as the `Variant` a dictionary holds.
 fn counter(value: u64) -> Variant {
-    i64::try_from(value).unwrap_or(i64::MAX).to_variant()
+    godot_int(value).to_variant()
 }
 
 /// One size as the `Variant` a dictionary holds.
 fn count_of(value: usize) -> Variant {
-    i64::try_from(value).unwrap_or(i64::MAX).to_variant()
+    godot_int(value).to_variant()
 }
+
+/// What `configure` answers when it configured nothing: `configured` and `attached` are
+/// false, and `reason` says why.
+fn not_configured(reason: &str) -> VarDictionary {
+    let mut report = VarDictionary::new();
+    report.set(&"configured".to_variant(), &false.to_variant());
+    report.set(&"attached".to_variant(), &false.to_variant());
+    report.set(&"reason".to_variant(), &reason.to_variant());
+    report
+}
+
+/// Whether every speed in `speeds` fits Godot's `PackedInt32Array`, for the compile-time
+/// proof below.
+const fn all_fit_i32(speeds: &[u32]) -> bool {
+    let mut rest = speeds;
+    while let [first, tail @ ..] = rest {
+        if *first > i32::MAX as u32 {
+            return false;
+        }
+        rest = tail;
+    }
+    true
+}
+
+/// `watch_speeds` hands each speed over as an `i32`, losslessly.
+const _: () = assert!(all_fit_i32(&crate::pacer::SPEEDS));
 
 /// The mesher's five parameters, as a dictionary GDScript can read.
 fn mesher_rules_dictionary(parsed: MesherRules) -> VarDictionary {
@@ -1378,15 +1384,11 @@ fn mesher_rules_dictionary(parsed: MesherRules) -> VarDictionary {
     );
     dictionary.set(
         &"bytes_per_frame".to_variant(),
-        &i64::try_from(parsed.budget.bytes_per_frame)
-            .unwrap_or(i64::MAX)
-            .to_variant(),
+        &counter(parsed.budget.bytes_per_frame),
     );
     dictionary.set(
         &"age_frames".to_variant(),
-        &i64::try_from(parsed.budget.age_frames)
-            .unwrap_or(i64::MAX)
-            .to_variant(),
+        &counter(parsed.budget.age_frames),
     );
     dictionary.set(
         &"light_max".to_variant(),
@@ -1486,12 +1488,7 @@ impl SelfCheck {
             &i64::from(self.rules_revision).to_variant(),
         );
         dictionary.set(&"chunks".to_variant(), &i64::from(self.chunks).to_variant());
-        dictionary.set(
-            &"vertices".to_variant(),
-            &i64::try_from(self.vertices)
-                .unwrap_or(i64::MAX)
-                .to_variant(),
-        );
+        dictionary.set(&"vertices".to_variant(), &counter(self.vertices));
         dictionary.set(
             &"geometry_identical".to_variant(),
             &self.geometry_identical.to_variant(),
@@ -1607,7 +1604,7 @@ pub fn self_check() -> SelfCheck {
 
     SelfCheck {
         rules_revision: parsed.revision,
-        chunks: u32::try_from(CASES).unwrap_or(u32::MAX),
+        chunks: CASES_U32,
         vertices,
         indices,
         geometry_identical,
@@ -1620,7 +1617,11 @@ pub fn self_check() -> SelfCheck {
 
 /// How many chunks the self-check meshes. Small on purpose: it runs inside a CI job that
 /// is about whether the extension loads, not about throughput.
-const CASES: usize = 4;
+const CASES_U32: u32 = 4;
+
+/// [`CASES_U32`] as a count of slots: a `u32` widens to a `usize` on every target the
+/// client builds for (`view::chunk_slot`'s proof).
+const CASES: usize = view::chunk_slot(CASES_U32);
 
 /// A probe that says the layout is the one an in-place write assumes.
 fn patchable_probe() -> SurfaceProbe {
@@ -1696,10 +1697,11 @@ fn mesh_case(
                 // A stepped floor whose height depends on the case, with a bite taken out
                 // of it on the second pass — enough to move quads between face directions
                 // and so to change the index array.
-                // `checked_div` rather than `/`: `integer_division` stays denied inside
-                // a walled crate too (AGENTS.md section 4.9), because being explicit
-                // about rounding is not a determinism concern that the wall lifts.
-                let step = x.checked_div(8).unwrap_or(0);
+                // A shift rather than `/`: `integer_division` stays denied inside a
+                // walled crate too (AGENTS.md section 4.9), because being explicit about
+                // rounding is not a determinism concern that the wall lifts. `x >> 3` is
+                // `x / 8` rounded down, and cannot fail.
+                let step = x >> 3;
                 let height = 8 + (case + step) % 6;
                 let bitten = pass == 1
                     && (12..20).contains(&x)
@@ -1707,7 +1709,9 @@ fn mesh_case(
                     && z.saturating_add(2) >= height;
                 let solid = z < height && !bitten;
                 if solid && let Some(slot) = sim_order.get_mut(chunks::sim_voxel_index(x, y, z)) {
-                    *slot = u8::try_from(1 + (case % 3)).unwrap_or(1);
+                    // `case % 3` is below 3, so the material id is 1 to 3 and the cast
+                    // cannot truncate.
+                    *slot = 1 + (case % 3) as u8;
                 }
             }
         }

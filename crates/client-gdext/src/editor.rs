@@ -75,6 +75,7 @@ use pharmakos_proto::json::{self, Json};
 use crate::enums;
 use crate::error::BridgeError;
 use crate::targeting::{self, Chip, Feature, FeatureKind};
+use crate::variant::text_or_empty;
 use crate::view::{Entity, EntityKind, split_footer};
 use crate::wizard::{self, Instance, TemplateRow, Wizard};
 
@@ -361,9 +362,10 @@ pub fn rows_of(report: &VerifyReport) -> Vec<Row> {
 }
 
 /// Which answer the rows on screen came from.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Verdict {
     /// Nothing has been checked.
+    #[default]
     None,
     /// Load refused the file; the rows say why, and the editor's text is unchanged.
     Refused,
@@ -862,7 +864,7 @@ pub struct Editor {
     owed: Owed,
     full_done: Option<u64>,
     rows: Vec<Row>,
-    verdict: Option<Verdict>,
+    verdict: Verdict,
     rows_revision: u64,
     qualifies: bool,
     route: Route,
@@ -979,19 +981,13 @@ impl Editor {
     /// The text the editor holds, as bytes: what Save writes. Empty with no text.
     #[must_use]
     pub fn bytes(&self) -> Vec<u8> {
-        self.text
-            .as_ref()
-            .map(|text| text.as_bytes().to_vec())
-            .unwrap_or_default()
+        text_or_empty(self.text.as_deref()).as_bytes().to_vec()
     }
 
     /// The text the last accepted submission sealed, as bytes; empty before one.
     #[must_use]
     pub fn sealed_bytes(&self) -> Vec<u8> {
-        self.sealed
-            .as_ref()
-            .map(|text| text.as_bytes().to_vec())
-            .unwrap_or_default()
+        text_or_empty(self.sealed.as_deref()).as_bytes().to_vec()
     }
 
     /// A map action. Returns whether it was taken: an action needs text to act on, and a
@@ -1063,7 +1059,7 @@ impl Editor {
             if let Some((rows, qualifies, dormant)) = preview.checked {
                 self.rows = rows;
                 self.dormant_patch = dormant;
-                self.verdict = Some(Verdict::Quick);
+                self.verdict = Verdict::Quick;
                 self.rows_revision = self.revision;
                 self.qualifies = qualifies;
                 self.owed.quick = false;
@@ -1750,14 +1746,13 @@ impl Editor {
     /// Which answer the rows came from.
     #[must_use]
     pub fn verdict(&self) -> Verdict {
-        self.verdict.unwrap_or(Verdict::None)
+        self.verdict
     }
 
     /// Whether the rows describe the text on screen.
     #[must_use]
     pub fn rows_current(&self) -> bool {
-        self.verdict
-            .is_some_and(|verdict| verdict != Verdict::Refused)
+        !matches!(self.verdict, Verdict::None | Verdict::Refused)
             && self.rows_revision == self.revision
     }
 
@@ -2229,13 +2224,13 @@ impl Editor {
             }
             Sent::Estimate { revision } => {
                 if revision == self.revision {
-                    self.take_route(result);
+                    self.take_route(result)?;
                 }
             }
             Sent::Submit { text, revision } => {
                 let response: SubmitPlanResponse =
                     json::decode_json(&body(result, "gp.api.v1.SubmitPlanResponse"))?;
-                self.settle_submit(text, revision, response);
+                self.settle_submit(text, revision, response)?;
             }
             Sent::Briefing => {
                 let response: GetBriefingResponse =
@@ -2360,7 +2355,7 @@ impl Editor {
         if let Some(refusal) = refusal {
             let detail = format!("{} {}", refusal.code, refusal.path);
             self.rows = rows_of(report);
-            self.verdict = Some(Verdict::Refused);
+            self.verdict = Verdict::Refused;
             self.say("load_refused", &detail);
         } else {
             self.undo.clear();
@@ -2389,8 +2384,13 @@ impl Editor {
         self.carry_forward();
     }
 
-    fn settle_submit(&mut self, text: String, revision: u64, response: SubmitPlanResponse) {
-        let report = response.report.unwrap_or_default();
+    fn settle_submit(
+        &mut self,
+        text: String,
+        revision: u64,
+        response: SubmitPlanResponse,
+    ) -> Result<(), BridgeError> {
+        let report = response.report.ok_or_else(|| no_report("submit_plan"))?;
         self.submitted = Some(Submitted {
             accepted: response.accepted,
             qualifies: report.qualifies,
@@ -2409,6 +2409,7 @@ impl Editor {
         } else {
             self.say("submit_refused", "");
         }
+        Ok(())
     }
 
     /// Draft continuity (spec section 13): "each Lull opens with last round's playbook
@@ -2461,7 +2462,7 @@ impl Editor {
         self.text = None;
         self.revision = self.revision.wrapping_add(1);
         self.rows.clear();
-        self.verdict = None;
+        self.verdict = Verdict::None;
         self.qualifies = false;
         self.route = Route::default();
         self.prose.clear();
@@ -2506,18 +2507,24 @@ impl Editor {
     fn take_rows(&mut self, report: &VerifyReport, verdict: Verdict) {
         self.rows = rows_of(report);
         self.dormant_patch = dormant_patch_of(report);
-        self.verdict = Some(verdict);
+        self.verdict = verdict;
         self.rows_revision = self.revision;
         self.qualifies = report.qualifies;
         self.touch();
     }
 
-    fn take_route(&mut self, result: &Json) {
+    /// Takes in an `estimate_route` answer.
+    ///
+    /// # Errors
+    ///
+    /// [`BridgeError::Rpc`] for a time or an axis that is present and not an integer (an
+    /// absent one is proto3's zero), or an axis outside an `i32`.
+    fn take_route(&mut self, result: &Json) -> Result<(), BridgeError> {
         let (answer, _) = split_footer(result);
         let reachable = matches!(answer.get("reachable"), Some(Json::Bool(true)));
         let mut route = Route {
             reachable,
-            whole: answer.get("ms").and_then(integer).unwrap_or(0),
+            whole: proto3_integer(&answer, "ms")?,
             current: true,
             readable: true,
             ..Route::default()
@@ -2527,9 +2534,7 @@ impl Editor {
         }
         if let Some(Json::Array(legs)) = answer.get("legs") {
             for leg in legs {
-                route
-                    .legs
-                    .push(leg.get("ms").and_then(integer).unwrap_or(0));
+                route.legs.push(proto3_integer(leg, "ms")?);
                 // `gp.api.v1.Leg.to` is a `gp.v1.Location`, `{"voxel":{..}}`; the gateway
                 // at `main` writes the bare voxel `{"x":..}` there instead. Both spellings
                 // name the same voxel, so both are read; the disagreement is the gateway's
@@ -2537,7 +2542,7 @@ impl Editor {
                 let to = leg.get("to");
                 let voxel = to.and_then(|to| to.get("voxel")).or(to);
                 match voxel {
-                    Some(voxel @ Json::Object(_)) => route.points.push(voxel_of(voxel)),
+                    Some(voxel @ Json::Object(_)) => route.points.push(voxel_of(voxel)?),
                     // A leg that names no end is not drawn to a point the gateway never
                     // named: the polyline goes, and the times stay.
                     _ => route.readable = false,
@@ -2549,6 +2554,7 @@ impl Editor {
         }
         self.route = route;
         self.touch();
+        Ok(())
     }
 
     fn refused(&mut self, sent: &Sent, code: &str, message: &str) -> Settled {
@@ -2799,9 +2805,21 @@ pub fn strip_comments(text: &str) -> String {
     out
 }
 
+/// The player's JSONC text as JSON, for the lax readers of the client's own file: the
+/// route's targets ([`route_waypoints`]), the E0601 option ([`dormant_key`]) and
+/// targeting's walks (`has_feature_refs`, `attack_targets`, `chips_of`'s form read).
+///
+/// They decide nothing, and the verdict on the file is the verifier's (AGENTS.md section 3
+/// rule 4), so a text that is not JSON once its comments are gone is no document here, and
+/// each reader answers what it documents for one: no route, no option set, no reference.
+/// The verifier, asked about the same text, names what is wrong with it.
+pub(crate) fn lax_document(text: &str) -> Option<Json> {
+    json::read(&strip_comments(text)).ok()
+}
+
 /// The route's steps, read laxly out of a JSONC text.
 fn route_steps(text: &str) -> Option<Vec<Json>> {
-    let document = json::read(&strip_comments(text)).ok()?;
+    let document = lax_document(text)?;
     match document
         .get("declarative")
         .and_then(|value| value.get("route"))
@@ -2860,7 +2878,7 @@ fn dormant_patch_of(report: &VerifyReport) -> Option<String> {
 /// in the spelling the text uses ([`DORMANT_KEYS`]), read laxly as the route is: a text
 /// this walk cannot read sets nothing, and the verifier has the last word.
 fn dormant_key(text: &str) -> Option<&'static str> {
-    let document = json::read(&strip_comments(text)).ok()?;
+    let document = lax_document(text)?;
     let options = document.get("declarative")?.get("options")?;
     DORMANT_KEYS
         .iter()
@@ -2872,7 +2890,13 @@ fn dormant_key(text: &str) -> Option<&'static str> {
 fn report_of(result: &Json) -> Result<VerifyReport, BridgeError> {
     let response: VerifyPlanResponse =
         json::decode_json(&body(result, "gp.api.v1.VerifyPlanResponse"))?;
-    Ok(response.report.unwrap_or_default())
+    response.report.ok_or_else(|| no_report("verify_plan"))
+}
+
+/// An answer that carries no report, which the gateway always writes: refused, never
+/// read as an empty report, which would show the text as clean.
+fn no_report(method: &str) -> BridgeError {
+    BridgeError::Rpc(format!("a {method} answer with no report"))
 }
 
 /// A `patch_plan` answer.
@@ -2918,15 +2942,27 @@ fn voxel_location(at: [i32; 3]) -> Json {
 }
 
 /// A `gp.v1.Voxel` object's three axes; an absent axis is zero, as proto3 JSON writes it.
-fn voxel_of(value: &Json) -> [i32; 3] {
+///
+/// # Errors
+///
+/// [`BridgeError::Rpc`] for an axis that is not an integer or does not fit an `i32`.
+fn voxel_of(value: &Json) -> Result<[i32; 3], BridgeError> {
     let axis = |name: &str| {
-        value
-            .get(name)
-            .and_then(integer)
-            .and_then(|found| i32::try_from(found).ok())
-            .unwrap_or(0)
+        let found = proto3_integer(value, name)?;
+        i32::try_from(found).map_err(|_| BridgeError::Rpc(format!("a voxel's `{name}` is {found}")))
     };
-    [axis("x"), axis("y"), axis("z")]
+    Ok([axis("x")?, axis("y")?, axis("z")?])
+}
+
+/// The integer field `name` of an answer: proto3's canonical JSON leaves a zero out, so
+/// an absent field is 0, and anything but an integer is refused.
+fn proto3_integer(answer: &Json, name: &str) -> Result<i64, BridgeError> {
+    match answer.get(name) {
+        None => Ok(0),
+        Some(value) => {
+            integer(value).ok_or_else(|| BridgeError::Rpc(format!("`{name}` is not an integer")))
+        }
+    }
 }
 
 fn integer(value: &Json) -> Option<i64> {

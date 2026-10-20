@@ -154,23 +154,25 @@ impl ChunkRenderer {
     ///
     /// # Errors
     ///
-    /// Whatever [`Uploader::plan`] refused.
+    /// [`BridgeError::Engine`] when the engine's surface-array slots are not indices,
+    /// before anything is planned or drawn, and whatever [`Uploader::plan`] refused.
     pub(crate) fn upload(
         &mut self,
         chunk: usize,
         origin: [f32; 3],
         surface: &Surface,
     ) -> Result<(), BridgeError> {
+        let slots = ArraySlots::of_engine()?;
         let op = self.uploader.plan(chunk, surface)?;
         match self.uploader.path() {
-            UploadPath::ArrayMesh => self.execute_path_a(chunk, origin, &op),
-            UploadPath::RenderingServerRids => self.execute_path_b(chunk, origin, &op),
+            UploadPath::ArrayMesh => self.execute_path_a(chunk, origin, &op, slots),
+            UploadPath::RenderingServerRids => self.execute_path_b(chunk, origin, &op, slots),
         }
         Ok(())
     }
 
     /// Path A: a fresh `ArrayMesh` on a `MeshInstance3D`.
-    fn execute_path_a(&mut self, chunk: usize, origin: [f32; 3], op: &UploadOp) {
+    fn execute_path_a(&mut self, chunk: usize, origin: [f32; 3], op: &UploadOp, slots: ArraySlots) {
         let surface = match op {
             UploadOp::Create { surface } | UploadOp::Rebuild { surface, .. } => surface,
             // Path A never patches; the uploader guarantees it, and a patch reaching here
@@ -185,7 +187,10 @@ impl ChunkRenderer {
         };
 
         let mut mesh = ArrayMesh::new_gd();
-        mesh.add_surface_from_arrays(MeshPrimitiveType::TRIANGLES, &surface_arrays(surface));
+        mesh.add_surface_from_arrays(
+            MeshPrimitiveType::TRIANGLES,
+            &surface_arrays(surface, slots),
+        );
         mesh.surface_set_material(0, self.material.handle());
         mesh.set_custom_aabb(chunk_aabb());
         self.resources_created = self.resources_created.saturating_add(1);
@@ -210,7 +215,7 @@ impl ChunkRenderer {
     }
 
     /// Path B: one mesh RID per chunk, patched in place where the guards allow.
-    fn execute_path_b(&mut self, chunk: usize, origin: [f32; 3], op: &UploadOp) {
+    fn execute_path_b(&mut self, chunk: usize, origin: [f32; 3], op: &UploadOp, slots: ArraySlots) {
         let mut server = RenderingServer::singleton();
         let existing = self
             .rids
@@ -227,7 +232,7 @@ impl ChunkRenderer {
                 server.mesh_add_surface_from_arrays(
                     mesh,
                     PrimitiveType::TRIANGLES,
-                    &surface_arrays(surface),
+                    &surface_arrays(surface, slots),
                 );
                 server.mesh_surface_set_material(mesh, 0, self.material.rid());
                 server.mesh_set_custom_aabb(mesh, chunk_aabb());
@@ -250,7 +255,7 @@ impl ChunkRenderer {
                 server.mesh_add_surface_from_arrays(
                     mesh,
                     PrimitiveType::TRIANGLES,
-                    &surface_arrays(surface),
+                    &surface_arrays(surface, slots),
                 );
                 server.mesh_surface_set_material(mesh, 0, self.material.rid());
                 server.mesh_set_custom_aabb(mesh, chunk_aabb());
@@ -309,12 +314,46 @@ impl ChunkRenderer {
     }
 }
 
+/// Where in a surface-arrays `Array` each array goes, and how long the `Array` is: the
+/// engine's own `Mesh.ArrayType` ordinals, read as indices.
+#[derive(Clone, Copy, Debug)]
+struct ArraySlots {
+    len: usize,
+    vertex: usize,
+    colour: usize,
+    index: usize,
+}
+
+impl ArraySlots {
+    /// The engine's slots.
+    ///
+    /// # Errors
+    ///
+    /// [`BridgeError::Engine`] for an ordinal that is not an index, which Godot's are not:
+    /// a binding that changed under the bridge, refused rather than drawn into slot 0.
+    fn of_engine() -> Result<Self, BridgeError> {
+        let slot = |what: &'static str, kind: ArrayType| {
+            let ord = kind.ord();
+            usize::try_from(ord).map_err(|_| BridgeError::Engine {
+                what,
+                value: i64::from(ord),
+            })
+        };
+        Ok(Self {
+            len: slot("ARRAY_MAX", ArrayType::MAX)?,
+            vertex: slot("ARRAY_VERTEX", ArrayType::VERTEX)?,
+            colour: slot("ARRAY_COLOR", ArrayType::COLOR)?,
+            index: slot("ARRAY_INDEX", ArrayType::INDEX)?,
+        })
+    }
+}
+
 /// The surface arrays both paths hand `add_surface_from_arrays`.
 ///
 /// Position and colour only — the format `crate::surface` documents. The colours go
 /// across as `Color`, which is what makes the quantisation the engine's and so makes the
 /// probe necessary.
-fn surface_arrays(surface: &Surface) -> VarArray {
+fn surface_arrays(surface: &Surface, slots: ArraySlots) -> VarArray {
     let vertices = surface.vertex_count();
 
     let mut positions = PackedVector3Array::new();
@@ -345,30 +384,24 @@ fn surface_arrays(surface: &Surface) -> VarArray {
     }
 
     let mut arrays = VarArray::new();
-    arrays.resize(
-        ArrayType::MAX.ord().try_into().unwrap_or(0),
-        &Variant::nil(),
-    );
-    let vertex_slot: usize = ArrayType::VERTEX.ord().try_into().unwrap_or(0);
-    let colour_slot: usize = ArrayType::COLOR.ord().try_into().unwrap_or(0);
-    let index_slot: usize = ArrayType::INDEX.ord().try_into().unwrap_or(0);
-    arrays.set(vertex_slot, &positions.to_variant());
-    arrays.set(colour_slot, &colours.to_variant());
-    arrays.set(index_slot, &indices.to_variant());
+    arrays.resize(slots.len, &Variant::nil());
+    arrays.set(slots.vertex, &positions.to_variant());
+    arrays.set(slots.colour, &colours.to_variant());
+    arrays.set(slots.index, &indices.to_variant());
     arrays
 }
 
 /// One chunk's bounding box, so the renderer does not compute one from the vertices.
 fn chunk_aabb() -> Aabb {
-    let edge = f32::from(u16::try_from(pharmakos_mesher::CHUNK_EDGE).unwrap_or(32));
-    Aabb::new(Vector3::ZERO, Vector3::splat(edge))
+    Aabb::new(Vector3::ZERO, Vector3::splat(crate::view::CHUNK_EDGE_F32))
 }
 
 /// Asks the engine what it built, and turns the answer into a [`SurfaceProbe`].
 ///
 /// Everything here is a read-back. A surface the engine did not build — the dummy
 /// renderer under `--headless` returns nothing — produces a probe that says "not
-/// patchable", which is the correct answer and not a failure.
+/// patchable", which is the correct answer and not a failure; so does a description
+/// missing any of the three values the probe compares, or holding one of another type.
 fn read_back_probe(server: &mut Gd<RenderingServer>, mesh: Rid, surface: &Surface) -> SurfaceProbe {
     let described = server.mesh_get_surface(mesh, 0);
     let vertex_data = described
@@ -380,11 +413,10 @@ fn read_back_probe(server: &mut Gd<RenderingServer>, mesh: Rid, surface: &Surfac
     let vertex_count = described
         .get("vertex_count")
         .and_then(|value| value.try_to::<i64>().ok())
-        .and_then(|count| usize::try_from(count).ok())
-        .unwrap_or(0);
+        .and_then(|count| usize::try_from(count).ok());
 
-    match (vertex_data, attribute_data) {
-        (Some(vertex_data), Some(attribute_data)) => SurfaceProbe::read_back(
+    match (vertex_data, attribute_data, vertex_count) {
+        (Some(vertex_data), Some(attribute_data), Some(vertex_count)) => SurfaceProbe::read_back(
             surface,
             vertex_data.as_slice(),
             attribute_data.as_slice(),

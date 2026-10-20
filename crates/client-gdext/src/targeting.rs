@@ -89,7 +89,8 @@ impl FeatureName {
         let x = parts.next()?;
         let y = parts.next()?;
         let digits = |part: &str| {
-            let unsigned = part.strip_prefix('-').unwrap_or(part);
+            // An optional leading `-`: one byte, so the split is on a boundary.
+            let (_, unsigned) = part.split_at(usize::from(part.starts_with('-')));
             !unsigned.is_empty() && unsigned.bytes().all(|byte| byte.is_ascii_digit())
         };
         if parts.next().is_some() || !digits(x) || !digits(y) {
@@ -256,7 +257,7 @@ pub fn chips_of(result: &Json, text: &str) -> Result<Vec<Chip>, BridgeError> {
     let (body, _) = split_footer(result);
     let response: ResolveRefsResponse =
         json::decode_json(&enums::canonical("gp.api.v1.ResolveRefsResponse", &body))?;
-    let document = json::read(&crate::editor::strip_comments(text)).ok();
+    let document = crate::editor::lax_document(text);
     Ok(response
         .refs
         .into_iter()
@@ -266,12 +267,11 @@ pub fn chips_of(result: &Json, text: &str) -> Result<Vec<Chip>, BridgeError> {
                 id: reference.feature_id.clone(),
                 travel_ms: reference.travel_ms,
             });
-            let after = reference
+            let pick = reference
                 .candidates
                 .iter()
-                .position(|candidate| candidate.feature_id == reference.feature_id)
-                .and_then(|index| index.checked_add(1))
-                .unwrap_or(0);
+                .position(|candidate| candidate.feature_id == reference.feature_id);
+            let after = pick.map_or(0, |index| index.saturating_add(1));
             let next = reference
                 .candidates
                 .get(after..)
@@ -318,7 +318,7 @@ pub fn has_feature_refs(text: &str) -> bool {
             _ => false,
         }
     }
-    json::read(&crate::editor::strip_comments(text)).is_ok_and(|document| walk(&document))
+    crate::editor::lax_document(text).is_some_and(|document| walk(&document))
 }
 
 /// What an Attack beacon's `target` names, as the player wrote it (`gp.v1.AttackTarget`).
@@ -413,7 +413,7 @@ pub fn attack_targets(text: &str) -> Vec<AttackMark> {
         }
     }
     let mut out = Vec::new();
-    if let Ok(document) = json::read(&crate::editor::strip_comments(text)) {
+    if let Some(document) = crate::editor::lax_document(text) {
         walk(&document, &mut String::new(), &mut out);
     }
     out
@@ -468,13 +468,11 @@ pub fn this_round_of(prose: &str) -> Option<String> {
 
 /// The route step a pointer is in, numbered from 1.
 fn step_of(pointer: &str) -> Option<usize> {
-    pointer
+    let token = pointer
         .strip_prefix("/declarative/route/")?
         .split('/')
-        .next()?
-        .parse::<usize>()
-        .ok()?
-        .checked_add(1)
+        .next()?;
+    token.parse::<usize>().ok()?.checked_add(1)
 }
 
 /// The site arm a pointer ends in.

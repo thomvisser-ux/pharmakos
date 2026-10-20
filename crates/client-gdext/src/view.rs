@@ -67,6 +67,23 @@ const CHUNK_EDGE_I32: i32 = 32;
 // The two spellings of the chunk edge cannot drift apart.
 const _: () = assert!(CHUNK_EDGE_I32 as usize == CHUNK_EDGE);
 
+/// [`CHUNK_EDGE`] as an `f32`, for the camera's chunk and a chunk's bounding box.
+pub(crate) const CHUNK_EDGE_F32: f32 = 32.0;
+
+// The float spelling is the same edge.
+const _: () = assert!(CHUNK_EDGE_F32 as usize == CHUNK_EDGE);
+
+/// A mesher chunk index as a slot in a per-chunk table.
+///
+/// Lossless: a `usize` holds every `u32` on every target the client builds for, which the
+/// assertion below proves at compile time, so the widening cannot fail.
+#[must_use]
+pub(crate) const fn chunk_slot(chunk: u32) -> usize {
+    chunk as usize
+}
+
+const _: () = assert!(usize::BITS >= u32::BITS);
+
 /// The mesher's palette id for a wire material byte.
 ///
 /// The wire's table is `ViewChunk`'s comment in `gateway.proto`: 0 air, 1 dirt, 2 stone,
@@ -573,7 +590,8 @@ impl ViewModel {
     /// says where to draw, never whether anything may stand there.
     #[must_use]
     pub fn ground_at(&self, x: i32, y: i32) -> Option<i32> {
-        let top = i32::try_from(self.extent.get(2).copied()?).ok()?;
+        let [_, _, top] = self.extent;
+        let top = i32::try_from(top).unwrap_or(i32::MAX);
         (0..top)
             .rev()
             .find(|up| self.solid_world([x, *up, y]))
@@ -676,8 +694,13 @@ impl ViewModel {
                 *slot = (*slot).max(value.saturating_add(1));
             }
         }
-        let dims = extent.map(|value| u32::try_from(value).unwrap_or(0));
-        let grid = ChunkGrid::new(dims[0], dims[1], dims[2])
+        let [x, y, z] = extent.map(u32::try_from);
+        let (Ok(x), Ok(y), Ok(z)) = (x, y, z) else {
+            return Err(BridgeError::View(format!(
+                "the chunks held span {extent:?} chunks, which is not a grid"
+            )));
+        };
+        let grid = ChunkGrid::new(x, y, z)
             .map_err(|error| BridgeError::View(format!("no chunk grid: {error}")))?;
         let mut materials = vec![AIR; grid.voxel_count()];
         for (origin, bytes) in &self.held {
@@ -693,7 +716,7 @@ impl ViewModel {
         for chunk in 0..grid.chunk_count() {
             queue.push(chunk, self.drains);
         }
-        let count = usize::try_from(grid.chunk_count()).unwrap_or(0);
+        let count = chunk_slot(grid.chunk_count());
         self.map = Some(MapState {
             grid,
             materials,
@@ -762,10 +785,7 @@ impl ViewModel {
         };
         let sizes = &map.sizes;
         map.queue.drain(drains, camera_chunk, |chunk| {
-            usize::try_from(chunk)
-                .ok()
-                .and_then(|at| sizes.get(at).copied())
-                .unwrap_or(0)
+            sizes.get(chunk_slot(chunk)).copied().unwrap_or(0)
         })
     }
 
@@ -800,10 +820,7 @@ impl ViewModel {
         );
         let view = chunk_view(&map.materials, &map.light, &map.borders, chunk)?;
         mesher.mesh_chunk_into(&view, buffers)?;
-        if let Some(size) = usize::try_from(chunk)
-            .ok()
-            .and_then(|at| map.sizes.get_mut(at))
-        {
+        if let Some(size) = map.sizes.get_mut(chunk_slot(chunk)) {
             *size = gpu_surface_bytes(buffers);
         }
         let edge = CHUNK_EDGE_I32;
@@ -854,7 +871,7 @@ fn index_of(grid: ChunkGrid, origin: [i32; 3]) -> Option<u32> {
 
 /// The slice of a chunk-major map that holds the chunk at `origin`.
 fn slice_of(grid: ChunkGrid, materials: &mut [u8], origin: [i32; 3]) -> Option<&mut [u8]> {
-    let index = usize::try_from(index_of(grid, origin)?).ok()?;
+    let index = chunk_slot(index_of(grid, origin)?);
     let from = index.checked_mul(CHUNK_VOLUME)?;
     materials.get_mut(from..from.checked_add(CHUNK_VOLUME)?)
 }

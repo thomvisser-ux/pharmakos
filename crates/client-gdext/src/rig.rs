@@ -669,8 +669,9 @@ impl Rig {
     ///
     /// # Errors
     ///
-    /// [`BridgeError::Rpc`] for a frame that is not a JSON-RPC answer at all, and
-    /// [`BridgeError::Schema`] for a result or footer the schema refuses. A refusal by the
+    /// [`BridgeError::Rpc`] for a frame that is not a JSON-RPC answer at all (an `error`
+    /// with no code or no message included) or a field that is not what its type says,
+    /// and [`BridgeError::Schema`] for a result or footer the schema refuses. A refusal by the
     /// gateway is not an error here: it is an [`Answer`] whose `error` says what it was.
     pub fn receive(&mut self, link: usize, text: &str) -> Result<Answer, BridgeError> {
         let frame = json::read(text)?;
@@ -692,17 +693,15 @@ impl Rig {
 
         let mut answer = Answer::default();
         if let Some(error) = frame.get("error") {
-            let code = error
-                .get("data")
-                .and_then(|data| data.get("code"))
-                .and_then(json_text)
-                .unwrap_or("ERROR")
-                .to_owned();
-            let message = error
-                .get("message")
-                .and_then(json_text)
-                .unwrap_or("")
-                .to_owned();
+            let Some((code, message)) = refusal_of(error) else {
+                // The call is settled either way: nothing is left waiting on it.
+                self.refused(purpose, "RPC");
+                return Err(BridgeError::Rpc(
+                    "a refusal with no code or no message, which JSON-RPC requires of every \
+                     error"
+                        .to_owned(),
+                ));
+            };
             if purpose == Purpose::Plan {
                 // A refusal is an answer: the editor settles the call and says what it was.
                 // Some are the gateway's answer to a question rather than a refused call
@@ -756,11 +755,7 @@ impl Rig {
         match purpose {
             Purpose::View => {
                 let complete = matches!(result.get("complete"), Some(Json::Bool(true)));
-                let next = result
-                    .get("next_cursor")
-                    .and_then(json_text)
-                    .unwrap_or("")
-                    .to_owned();
+                let next = proto3_text(result, "next_cursor")?.to_owned();
                 if complete {
                     self.due.keyframe = false;
                     self.view_paging = None;
@@ -776,7 +771,7 @@ impl Rig {
                     "gp.api.v1.GetSegmentFeedResponse",
                     &body,
                 ))?;
-                answer.events = event_rows(&feed);
+                answer.events = event_rows(&feed)?;
                 // The gateway filed this seat's safe playbook: a line in the seat's own feed
                 // (finding J). The editor says so, and that its text was not sealed.
                 if let Some(filed) = feed
@@ -791,11 +786,18 @@ impl Rig {
                 }
             }
             Purpose::Advance => {
-                let ran = result
-                    .get("advanced_ms")
-                    .and_then(json_integer)
-                    .and_then(|value| i32::try_from(value).ok())
-                    .unwrap_or(0);
+                let ran = match proto3_integer(result, "advanced_ms").and_then(|ran| {
+                    u32::try_from(ran).map_err(|_| {
+                        BridgeError::Rpc(format!("advance_push ran {ran} ms, which is no duration"))
+                    })
+                }) {
+                    Ok(ran) => ran,
+                    Err(error) => {
+                        // The ask is settled either way: carried whole, as a refused one is.
+                        self.timing.pacer.refused();
+                        return Err(error);
+                    }
+                };
                 self.timing.pacer.answered(ran);
                 if ran > 0 {
                     self.due.view = true;
@@ -834,9 +836,12 @@ impl Rig {
                 // Which phase the numbers are from: the answer's own footer, which says when
                 // the gateway served it. It labels the meter and moves nothing (only the
                 // admin connection's footers move the rig's phase).
+                // An answer with no footer is labelled with the phase the rig is in, as the
+                // recap's round is; a footer this build cannot read is refused.
                 let served = footer
                     .as_ref()
-                    .and_then(|footer| read_status(footer).ok())
+                    .map(read_status)
+                    .transpose()?
                     .map_or(self.phase, |status| Phase::of(status.phase));
                 // The next BMI and the committed spend are left out of an answer that has
                 // none (item 135 (2) (g)), and an absent field is not 0: the schema marks
@@ -1132,16 +1137,18 @@ impl Rig {
         &self.recap
     }
 
-    /// How many times connection `link` dropped while open.
+    /// How many times each connection dropped while open: [`ADMIN`]'s, then [`SEAT`]'s.
     #[must_use]
-    pub fn drops(&self, link: usize) -> u32 {
-        self.links.get(link).map_or(0, |state| state.drops)
+    pub const fn drops(&self) -> [u32; 2] {
+        let [admin, seat] = &self.links;
+        [admin.drops, seat.drops]
     }
 
-    /// How many calls connection `link` has sent.
+    /// How many calls each connection has sent: [`ADMIN`]'s, then [`SEAT`]'s.
     #[must_use]
-    pub fn calls(&self, link: usize) -> u64 {
-        self.links.get(link).map_or(0, |state| state.calls)
+    pub const fn calls(&self) -> [u64; 2] {
+        let [admin, seat] = &self.links;
+        [admin.calls, seat.calls]
     }
 
     /// The last refusal the gateway answered with, if any.
@@ -1182,15 +1189,68 @@ impl Rig {
 /// gateway wrote them. Nothing is added, merged, reworded or filtered: the event list shows
 /// what the feed said, which is what its golden
 /// (`tests/golden/vista/expected.events.txt`) holds the client to.
-#[must_use]
-pub fn event_rows(feed: &GetSegmentFeedResponse) -> Vec<String> {
+///
+/// # Errors
+///
+/// [`BridgeError::Rpc`] for an event at a negative time, which no gateway writes: the time
+/// is game milliseconds into the segment. The page is refused whole rather than shown with
+/// a row at a time it does not have.
+pub fn event_rows(feed: &GetSegmentFeedResponse) -> Result<Vec<String>, BridgeError> {
     feed.events
         .iter()
         .map(|event| {
-            let when = clock_text(u64::try_from(event.at_ms).unwrap_or(0));
-            format!("{when}  {}  {}", event.kind, event.text)
+            let at_ms = u64::try_from(event.at_ms).map_err(|_| {
+                BridgeError::Rpc(format!("an event at {} ms into the segment", event.at_ms))
+            })?;
+            Ok(format!(
+                "{}  {}  {}",
+                clock_text(at_ms),
+                event.kind,
+                event.text
+            ))
         })
         .collect()
+}
+
+/// A JSON-RPC `error` member's code and message.
+///
+/// The code is the gateway's name for the refusal, `data.code`; an error from anything
+/// that does not name one is named by the JSON-RPC number the standard requires of every
+/// error. `None` when the member carries no code or no message, which the standard
+/// requires too.
+fn refusal_of(error: &Json) -> Option<(String, String)> {
+    let named = error
+        .get("data")
+        .and_then(|data| data.get("code"))
+        .and_then(json_text)
+        .map(str::to_owned);
+    let code = match named {
+        Some(code) => code,
+        None => error.get("code").and_then(json_integer)?.to_string(),
+    };
+    let message = error.get("message").and_then(json_text)?.to_owned();
+    Some((code, message))
+}
+
+/// The string field `name` of an answer: proto3's canonical JSON leaves an empty string
+/// out, so an absent field is `""`, and anything but a string is refused.
+fn proto3_text<'a>(answer: &'a Json, name: &str) -> Result<&'a str, BridgeError> {
+    match answer.get(name) {
+        None => Ok(""),
+        Some(value) => {
+            json_text(value).ok_or_else(|| BridgeError::Rpc(format!("`{name}` is not a string")))
+        }
+    }
+}
+
+/// The integer field `name` of an answer: proto3's canonical JSON leaves a zero out, so an
+/// absent field is 0, and anything but an integer is refused.
+fn proto3_integer(answer: &Json, name: &str) -> Result<i64, BridgeError> {
+    match answer.get(name) {
+        None => Ok(0),
+        Some(value) => json_integer(value)
+            .ok_or_else(|| BridgeError::Rpc(format!("`{name}` is not an integer"))),
+    }
 }
 
 fn object(entries: Vec<(&str, Json)>) -> Json {
@@ -1438,7 +1498,8 @@ mod tests {
             "{sent:?}"
         );
         rig.dropped(SEAT);
-        assert_eq!(rig.drops(SEAT), 1);
+        let [_, seat_drops] = rig.drops();
+        assert_eq!(seat_drops, 1);
         rig.opened(SEAT);
         assert!(!rig.view_settled(), "a reconnect starts from a keyframe");
     }

@@ -73,6 +73,16 @@ impl PanicCounter {
         }
     }
 
+    /// Runs `body` as [`PanicCounter::guard`] does, answering `caught` when it panicked.
+    ///
+    /// `caught` is the `#[func]`'s documented answer for a call that did not complete
+    /// (`false`, an empty dictionary or array). It is not a silent default: the panic has
+    /// been counted and named here, `caught_panics` and `panic_report` report it, and CI
+    /// fails on a count that is not zero. One helper, so the rule is written once.
+    pub fn guard_or<T>(&mut self, what: &str, caught: T, body: impl FnOnce() -> T) -> T {
+        self.guard(what, body).unwrap_or(caught)
+    }
+
     /// A one-line report for the engine log and the CI leg.
     #[must_use]
     pub fn describe(&self) -> String {

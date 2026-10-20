@@ -19,6 +19,7 @@ use crate::editor::{Check, Editor, Route, Row, Selector, Target, Unchecked, rows
 use crate::error::BridgeError;
 use crate::rig::{Meter, Recap};
 use crate::targeting::{AttackAim, AttackMark, Chip, ChipFeature, FeatureKind, FeatureName};
+use crate::variant::{godot_int, text_or_empty};
 use crate::wizard::{Instance, Wizard};
 
 /// The menu's target, from the dictionary GDScript builds: `voxel` (a `Vector3i` in the
@@ -158,11 +159,12 @@ pub(crate) fn state_dictionary(editor: &Editor) -> VarDictionary {
     put("drafts", drafts.to_variant());
     put("drafts_known", editor.drafts_known().to_variant());
 
-    let (submitted, accepted) = editor
-        .submitted()
-        .map_or((false, false), |outcome| (true, outcome.accepted));
-    put("submitted", submitted.to_variant());
-    put("accepted", accepted.to_variant());
+    let submitted = editor.submitted();
+    put("submitted", submitted.is_some().to_variant());
+    put(
+        "accepted",
+        submitted.is_some_and(|done| done.accepted).to_variant(),
+    );
     put("beacon_prose", editor.beacon_prose().to_variant());
     put("status_key", editor.status().key.to_variant());
     put("status_detail", editor.status().detail.to_variant());
@@ -194,7 +196,7 @@ pub(crate) fn state_dictionary(editor: &Editor) -> VarDictionary {
     );
     put(
         "this_round",
-        editor.this_round().unwrap_or_default().to_variant(),
+        text_or_empty(editor.this_round()).to_variant(),
     );
     put("door", editor.door().name().to_variant());
     // Why each check will not come, by its line: `{"rows": {"key", "detail"}, ...}`, the
@@ -214,7 +216,7 @@ pub(crate) fn state_dictionary(editor: &Editor) -> VarDictionary {
     put("unchecked", unchecked.to_variant());
     put("seal", editor.seal_line().name().to_variant());
     put("filed", editor.filed().to_variant());
-    put("file", editor.file().unwrap_or_default().to_variant());
+    put("file", text_or_empty(editor.file()).to_variant());
     let dormant = editor.dormant();
     let mut option = VarDictionary::new();
     option.set(&"shown".to_variant(), &dormant.shown.to_variant());
@@ -335,11 +337,12 @@ pub(crate) fn wizard_dictionary(wizard: Option<&Wizard>) -> VarDictionary {
     let Some(wizard) = wizard else {
         return VarDictionary::new();
     };
-    let mut out = wizard
-        .instance
-        .as_ref()
-        .map(instance_dictionary)
-        .unwrap_or_default();
+    // Before the gateway's first answer there is no instance to draw: the wizard's own
+    // keys below say so (`answered` false), on a dictionary holding nothing else.
+    let mut out = match wizard.instance.as_ref() {
+        Some(instance) => instance_dictionary(instance),
+        None => VarDictionary::new(),
+    };
     out.set(
         &"template_id".to_variant(),
         &wizard.template_id.to_variant(),
@@ -351,7 +354,7 @@ pub(crate) fn wizard_dictionary(wizard: Option<&Wizard>) -> VarDictionary {
     );
     out.set(
         &"refusal".to_variant(),
-        &wizard.refusal.clone().unwrap_or_default().to_variant(),
+        &text_or_empty(wizard.refusal.as_deref()).to_variant(),
     );
     out
 }
@@ -418,11 +421,11 @@ pub(crate) fn meter_dictionary(meter: Meter) -> VarDictionary {
 }
 
 fn counter(value: u64) -> Variant {
-    i64::try_from(value).unwrap_or(i64::MAX).to_variant()
+    godot_int(value).to_variant()
 }
 
 fn count(value: usize) -> Variant {
-    i64::try_from(value).unwrap_or(i64::MAX).to_variant()
+    godot_int(value).to_variant()
 }
 
 /// A route step numbered from 1 as GDScript reads it, 0 for none: the panel's own

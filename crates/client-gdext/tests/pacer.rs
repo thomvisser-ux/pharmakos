@@ -39,7 +39,7 @@ fn drive(pacer: &mut Pacer, walls: &[u64], run: impl Fn(i32) -> i32) -> Vec<Opti
         pacer.elapse(*wall);
         let ask = pacer.next_ask();
         if let Some(asked) = ask {
-            pacer.answered(run(asked));
+            pacer.answered(run(asked).unsigned_abs());
         }
         asks.push(ask);
     }
@@ -134,7 +134,7 @@ fn the_pacer_never_has_two_advances_in_flight() {
         assert_eq!(pacer.next_ask(), None, "one advance in flight at a time");
         assert!(pacer.in_flight());
     }
-    pacer.answered(first.expect("asked"));
+    pacer.answered(first.expect("asked").unsigned_abs());
     assert!(!pacer.in_flight());
     assert!(
         pacer.next_ask().is_some(),

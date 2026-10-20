@@ -48,6 +48,7 @@
 //! Godot's own heartbeat closes a connection whose pong is late, and a pong is late behind
 //! a long `advance_push` on the one thread that owns the match.
 
+use std::num::NonZeroU64;
 use std::time::Instant;
 
 /// The speeds the watch rig offers: 1x, 2x and 4x.
@@ -68,6 +69,9 @@ pub const PACER_PERIOD_US: u64 = 100_000;
 /// The most one `advance_push` may ask for: the gateway's `MAX_ADVANCE_MS`, a wire bound
 /// that the gateway refuses above rather than clamps.
 pub const MAX_ADVANCE_MS: i32 = 60_000;
+
+// An ask is a positive number of milliseconds, so the bound is one.
+const _: () = assert!(MAX_ADVANCE_MS > 0);
 
 /// How much owed game time the pacer carries before it drops the rest: 5 seconds.
 ///
@@ -104,7 +108,40 @@ pub const KEEPALIVE_US: u64 = 5_000_000;
 pub const FULL_AFTER_IDLE_US: u64 = 600_000;
 
 /// Microseconds in a millisecond.
-const US_PER_MS: u64 = 1_000;
+const US_PER_MS: NonZeroU64 = non_zero(1_000);
+
+/// Milliseconds in a second, for [`clock_text`].
+const MS_PER_SECOND: NonZeroU64 = non_zero(1_000);
+
+/// Seconds in a minute, for [`clock_text`].
+const SECONDS_PER_MINUTE: NonZeroU64 = non_zero(60);
+
+/// A unit that is not zero, checked when the constant is built: a zero is a compile error,
+/// never a division at run time.
+const fn non_zero(value: u64) -> NonZeroU64 {
+    match NonZeroU64::new(value) {
+        Some(unit) => unit,
+        None => panic!("a unit of time is not zero"),
+    }
+}
+
+/// `value` in whole `unit`s, rounded down: the one division the timers make, by a unit
+/// that cannot be zero, so it cannot fail. (Named rather than written `/`, because
+/// `integer_division` asks for the rounding to be said.)
+fn floor_div(value: u64, unit: NonZeroU64) -> u64 {
+    value.div_euclid(unit.get())
+}
+
+/// A duration in milliseconds as `report_host_clock`'s `int32` fields carry it.
+///
+/// A phase longer than `i32::MAX` milliseconds (24.8 days of wall time in one Lull, recap
+/// or ended match) is reported at that bound: the wire cannot say more, and a report that
+/// stays at the bound is a step of zero, which moves the gateway's clock no further rather
+/// than wrapping it backwards, which the gateway would refuse. A countdown never reaches
+/// the bound, because a Lull's length is a positive `int32` of the rules table.
+fn wire_ms(ms: u64) -> i32 {
+    i32::try_from(ms).unwrap_or(i32::MAX)
+}
 
 /// The one wall clock the client reads.
 #[derive(Clone, Copy, Debug)]
@@ -227,7 +264,7 @@ impl Pacer {
     /// Game milliseconds owed and not yet asked for.
     #[must_use]
     pub fn owed_ms(&self) -> u64 {
-        self.owed_us.checked_div(US_PER_MS).unwrap_or(0)
+        floor_div(self.owed_us, US_PER_MS)
     }
 
     /// Game milliseconds dropped at the backlog bound so far.
@@ -261,31 +298,36 @@ impl Pacer {
         if self.since_ask_us < PACER_PERIOD_US {
             return None;
         }
-        let limit = u64::try_from(MAX_ADVANCE_MS).unwrap_or(0);
-        let due_ms = self.owed_ms().min(limit);
-        if due_ms == 0 {
+        let ask = match i32::try_from(self.owed_ms()) {
+            Ok(owed) => owed.min(MAX_ADVANCE_MS),
+            // More milliseconds owed than an `i32` holds is more than one ask may carry.
+            Err(_) => MAX_ADVANCE_MS,
+        };
+        if ask == 0 {
             return None;
         }
-        let ask = i32::try_from(due_ms).unwrap_or(MAX_ADVANCE_MS);
-        self.owed_us = self
-            .owed_us
-            .saturating_sub(due_ms.saturating_mul(US_PER_MS));
+        let due_us = u64::from(ask.unsigned_abs()).saturating_mul(US_PER_MS.get());
+        self.owed_us = self.owed_us.saturating_sub(due_us);
         self.since_ask_us = 0;
         self.in_flight = Some(ask);
         Some(ask)
     }
 
     /// The gateway ran `advanced_ms` of the ask in flight. What was asked and not run is
-    /// carried into the next ask.
-    pub fn answered(&mut self, advanced_ms: i32) {
+    /// carried into the next ask; the gateway floors an advance to what it could run, so
+    /// it never runs more than it was asked, and an answer that says it did leaves
+    /// nothing unrun.
+    pub fn answered(&mut self, advanced_ms: u32) {
         let Some(asked) = self.in_flight.take() else {
             return;
         };
         if !self.active || self.skipping {
             return;
         }
-        let unrun = u64::try_from(asked.saturating_sub(advanced_ms).max(0)).unwrap_or(0);
-        let owed = self.owed_us.saturating_add(unrun.saturating_mul(US_PER_MS));
+        let unrun = asked.unsigned_abs().saturating_sub(advanced_ms);
+        let owed = self
+            .owed_us
+            .saturating_add(u64::from(unrun).saturating_mul(US_PER_MS.get()));
         self.owed_us = self.bounded(owed);
     }
 
@@ -296,12 +338,9 @@ impl Pacer {
 
     /// `owed` with everything above the backlog bound dropped, and counted.
     fn bounded(&mut self, owed: u64) -> u64 {
-        let bound = BACKLOG_BOUND_MS.saturating_mul(US_PER_MS);
+        let bound = BACKLOG_BOUND_MS.saturating_mul(US_PER_MS.get());
         if owed > bound {
-            let over = owed
-                .saturating_sub(bound)
-                .checked_div(US_PER_MS)
-                .unwrap_or(0);
+            let over = floor_div(owed.saturating_sub(bound), US_PER_MS);
             self.dropped_ms = self.dropped_ms.saturating_add(over);
             bound
         } else {
@@ -408,10 +447,7 @@ impl HostClock {
         };
         self.pending_ms = Some(report);
         self.since_report_us = 0;
-        Some((
-            i32::try_from(report).unwrap_or(i32::MAX),
-            countdown.map(|left| i32::try_from(left).unwrap_or(i32::MAX)),
-        ))
+        Some((wire_ms(report), countdown.map(wire_ms)))
     }
 
     /// The report in flight was accepted.
@@ -454,16 +490,16 @@ impl HostClock {
 
     /// Whole milliseconds spent in this phase.
     fn spent_ms(&self) -> u64 {
-        self.spent_us.checked_div(US_PER_MS).unwrap_or(0)
+        floor_div(self.spent_us, US_PER_MS)
     }
 }
 
 /// Game or wall milliseconds as `m:ss`, rounded down to the second.
 #[must_use]
 pub fn clock_text(ms: u64) -> String {
-    let seconds = ms.checked_div(1_000).unwrap_or(0);
-    let minutes = seconds.checked_div(60).unwrap_or(0);
-    let rest = seconds.checked_rem(60).unwrap_or(0);
+    let seconds = floor_div(ms, MS_PER_SECOND);
+    let minutes = floor_div(seconds, SECONDS_PER_MINUTE);
+    let rest = seconds % SECONDS_PER_MINUTE;
     format!("{minutes}:{rest:02}")
 }
 
@@ -508,7 +544,10 @@ impl IdleTimer {
 /// Everything the watch rig times, advanced together from one reading of [`WallClock`].
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct Timing {
-    last_us: Option<u64>,
+    /// Whether [`Timing::advance`] has been given a reading yet.
+    started: bool,
+    /// The latest reading; zero before the first.
+    last_us: u64,
     /// The Push's pacer.
     pub pacer: Pacer,
     /// The host clock outside a Push.
@@ -523,8 +562,14 @@ impl Timing {
     /// Brings every timer up to `now_us`, a [`WallClock`] reading. A reading earlier than
     /// the last one moves nothing.
     pub fn advance(&mut self, now_us: u64) {
-        let gone = self.last_us.map_or(0, |last| now_us.saturating_sub(last));
-        self.last_us = Some(now_us.max(self.last_us.unwrap_or(0)));
+        // The first reading starts the timers, so no time went by before it.
+        let gone = if self.started {
+            now_us.saturating_sub(self.last_us)
+        } else {
+            0
+        };
+        self.started = true;
+        self.last_us = now_us.max(self.last_us);
         self.pacer.elapse(gone);
         self.clock.elapse(gone);
         self.idle.elapse(gone);
@@ -556,8 +601,8 @@ impl Timing {
 
     /// The latest [`WallClock`] reading [`Timing::advance`] was given; zero before any.
     #[must_use]
-    pub fn now_us(&self) -> u64 {
-        self.last_us.unwrap_or(0)
+    pub const fn now_us(&self) -> u64 {
+        self.last_us
     }
 }
 
@@ -601,7 +646,7 @@ mod tests {
         pacer.skip();
         assert_eq!(pacer.next_ask(), Some(MAX_ADVANCE_MS));
         assert_eq!(pacer.next_ask(), None, "one in flight");
-        pacer.answered(MAX_ADVANCE_MS);
+        pacer.answered(MAX_ADVANCE_MS.unsigned_abs());
         assert_eq!(pacer.next_ask(), Some(MAX_ADVANCE_MS), "no period between");
         pacer.answered(20_000);
         pacer.stop();
