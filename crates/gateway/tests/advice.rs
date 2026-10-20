@@ -1250,12 +1250,26 @@ impl Vision for Everywhere {
 
 /// Another seat's beacon in sight carries its owner and what S2's plan's
 /// decision 5 shows in live vision -- its exact hit points with their maximum,
-/// and a sighting age of 0 -- and nothing more, under both fog policies,
-/// through both methods; the seat's own carries core, priority, power state
-/// and its hit points.
+/// and a sighting age of 0 -- and nothing more, through both methods; the
+/// seat's own carries core, priority, power state and its hit points. A
+/// seat's `e_NN` is minted only where a Lull opens (the main session's ruling
+/// R1 on #128's reviews), so under fog, where seat 1's core is out of sight
+/// then, no listing names it whatever vision the call is handed.
 #[test]
 fn another_seats_beacon_carries_its_owner_and_what_decision_5_shows() {
-    for policy in [FogPolicy::fogged(), FogPolicy::casual()] {
+    let mut fogged = match_with(FogPolicy::fogged());
+    let token: Token = support::seat_token(&mut fogged, 0);
+    let listed = result(
+        &fogged.call(Some(&token), &request("list_beacons", "{}"), &Everywhere),
+        "list_beacons",
+    );
+    assert!(
+        support::array_of(&listed, "beacons")
+            .iter()
+            .all(|row| text_of(row, "owner") == "seat.0"),
+        "fogged, the other seat's core was never named: {listed:?}"
+    );
+    for policy in [FogPolicy::casual()] {
         let mut surface = match_with(policy.clone());
         let token: Token = support::seat_token(&mut surface, 0);
         let listed = result(
@@ -1300,7 +1314,8 @@ fn another_seats_beacon_carries_its_owner_and_what_decision_5_shows() {
                         "max_hp",
                         "sighting_age_ms"
                     ],
-                    "{policy:?}: another seat's beacon in sight carries its owner, its hit points                      and an age of 0, and nothing of its mandate, power or priority"
+                    "{policy:?}: another seat's beacon in sight carries its owner, its hit points \
+                     and an age of 0, and nothing of its mandate, power or priority"
                 );
                 assert_eq!(
                     row.get("sighting_age_ms"),

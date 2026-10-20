@@ -223,10 +223,11 @@ struct Condition {
 /// A destroyed asset is not listed: a thing with no hit points left is gone.
 /// A listed asset carries its kind, its place, its hit points with their
 /// maximum, and a unit its heading, whoever owns it, because the list is live
-/// vision and decision 5 shows exactly that in live vision. **A structure
-/// still going up carries no hit points unless it is the viewer's own**: its
-/// hit points rise as it is built (`structures.build_hp_per_second`), so
-/// another seat's would be its build progress, which decision 5 never shows.
+/// vision and decision 5 shows exactly that in live vision -- exact HP on
+/// everything that has them, a structure still going up included, as
+/// `gateway.proto`'s `ViewEntity.hp` says (the main session's ruling R2 on
+/// the reviews of #128). A ruin is nobody's and shows none; a wall has none of
+/// its own.
 ///
 /// # Errors
 ///
@@ -263,7 +264,7 @@ fn visible_beacons<V: Vision>(
     let beacons = world.beacons();
     for row in 0..beacons.ids().len() {
         let hp = column(beacons.hit_points().get(row), "beacon", "hit-point")?;
-        if beacons.frees().get(row) != Some(&false) || !hp.is_alive() {
+        if column(beacons.frees().get(row), "beacon", "free")? || !hp.is_alive() {
             continue;
         }
         let owner = column(beacons.seats().get(row), "beacon", "seat")?;
@@ -300,7 +301,7 @@ fn visible_units<V: Vision>(
     let units = world.units();
     for row in 0..units.ids().len() {
         let hp = column(units.hit_points().get(row), "unit", "hit-point")?;
-        if units.frees().get(row) != Some(&false) || !hp.is_alive() {
+        if column(units.frees().get(row), "unit", "free")? || !hp.is_alive() {
             continue;
         }
         let owner = column(units.seats().get(row), "unit", "seat")?;
@@ -351,7 +352,7 @@ fn visible_structures<V: Vision>(
     let structures = world.structures();
     for row in 0..structures.ids().len() {
         let hp = column(structures.hit_points().get(row), "structure", "hit-point")?;
-        if structures.frees().get(row) != Some(&false) || !hp.is_alive() {
+        if column(structures.frees().get(row), "structure", "free")? || !hp.is_alive() {
             continue;
         }
         let raw_owner = column(structures.seats().get(row), "structure", "seat")?;
@@ -373,14 +374,9 @@ fn visible_structures<V: Vision>(
                 "a structure row holds kind {raw_kind}, which this build does not name"
             ))
         })?;
-        let building = column(structures.building().get(row), "structure", "building")?;
-        let own = owner.is_some_and(|seat| viewer == Viewer::Seat(SeatId::new(seat)));
         let hp = match world.structure_max_hp(kind) {
-            Some(max) if owner.is_some() && (own || !building) => {
-                Some((view::hp_wire(hp)?, view::hp_wire(max)?))
-            }
-            // A wall has no hit points of its own, a ruin shows none, and
-            // another seat's structure going up would show its progress.
+            Some(max) if owner.is_some() => Some((view::hp_wire(hp)?, view::hp_wire(max)?)),
+            // A wall has no hit points of its own, and a ruin shows none.
             _ => None,
         };
         let condition = Condition { hp, heading: None };

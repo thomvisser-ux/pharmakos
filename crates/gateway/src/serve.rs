@@ -714,7 +714,7 @@ pub fn run_in<C: Read, A: Write>(
         // log's last sequence number, so that nothing the dead process served
         // is read as this one's, and the resumed tick starts no lower than the
         // log's last.
-        let continuation = cache.continuation();
+        let continuation = cache.continuation()?;
         let (surface, seats) = resume_surface(
             &setup.rules_json,
             setup.library,
@@ -738,7 +738,7 @@ pub fn run_in<C: Read, A: Write>(
         let (surface, seats) = open_surface(&setup.rules_json, setup.library, &config)?;
         (cache, surface, seats)
     };
-    surface.audit().continue_after(cache.last_audit_seq());
+    surface.audit().continue_after(cache.last_audit_seq()?);
     if line.resume {
         let tick = surface.time().tick;
         surface

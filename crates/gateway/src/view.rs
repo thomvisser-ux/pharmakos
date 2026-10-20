@@ -61,7 +61,8 @@ pub fn hp_wire(hp: Hp) -> Result<u32, Error> {
     let raw = hp.raw();
     u32::try_from(raw).map_err(|_| {
         Error::internal(format!(
-            "the sim holds {raw} hit points, below the zero it clamps at, so the wire's whole HP              cannot carry them"
+            "the sim holds {raw} hit points, below the zero it clamps at, so the wire's whole HP \
+             cannot carry them"
         ))
     })
 }
@@ -195,8 +196,40 @@ pub fn seed_text(seed: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        mandate_from_id, mandate_name, mandate_of, seed_text, voxel_of, voxel_of_position,
+        dollars_wire, hp_wire, mandate_from_id, mandate_name, mandate_of, seed_text, voxel_of,
+        voxel_of_position,
     };
+    use crate::error::Code;
+    use pharmakos_sim::math::quantity::{Hp, Money};
+
+    /// Hit points and `$` reach the wire by `try_from` (S2's `wgw`, the carry
+    /// of decisions-log item 145 (5)): a figure that fits is itself, and one
+    /// that does not is a typed refusal naming it, never clamped.
+    #[test]
+    fn a_figure_the_wire_cannot_carry_is_refused_not_clamped() {
+        assert_eq!(hp_wire(Hp::new(250)).expect("fits"), 250);
+        assert_eq!(hp_wire(Hp::ZERO).expect("fits"), 0);
+        let below = hp_wire(Hp::new(-1)).expect_err("refused");
+        assert_eq!(below.code, Code::Internal);
+        assert!(below.message.contains("-1 hit points"), "{}", below.message);
+
+        assert_eq!(
+            dollars_wire(Money::new(-40), "a treasury").expect("fits"),
+            -40
+        );
+        assert_eq!(
+            dollars_wire(Money::new(i64::from(i32::MAX)), "a treasury").expect("fits"),
+            i32::MAX
+        );
+        let past = dollars_wire(Money::new(i64::from(i32::MAX) + 1), "value destroyed")
+            .expect_err("refused");
+        assert_eq!(past.code, Code::Internal);
+        assert!(
+            past.message.starts_with("value destroyed is $ 2147483648"),
+            "{}",
+            past.message
+        );
+    }
     use pharmakos_proto::gp::v1::beacon_filter::MandateKind as WireMandate;
     use pharmakos_sim::knowledge::Position;
     use pharmakos_sim::math::fixed::Fx;

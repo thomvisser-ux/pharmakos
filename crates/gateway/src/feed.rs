@@ -637,7 +637,9 @@ impl SegmentFeed {
                 from.index()
             ))
         })?;
-        let limit = limit.clamp(1, MAX_PAGE_EVENTS);
+        // As asked, never past the page cap: a limit of 0 answers no event,
+        // as `list_beacons` answers a page of none (no silent `.max(1)`).
+        let limit = limit.min(MAX_PAGE_EVENTS);
 
         let visible: Vec<&Event> = self
             .events

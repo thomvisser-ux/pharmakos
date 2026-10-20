@@ -39,16 +39,32 @@
 //! handed, which is what keeps fog a per-match server-side policy rather than
 //! something baked into the graph" (`crates/sim/src/pathing/estimate.rs`).
 //!
-//! At the skeleton the sim computes no per-seat vision, so there is no mask to
-//! hand it and every query runs [`Fog::Clear`]. That is stated rather than
-//! hidden: [`RouteAdapter::set_unknown_columns`] is where a mask arrives when
-//! one exists, `is_fogged` answers `false` without a search while the mask is
-//! empty, and the editor therefore draws no dashed leg yet. A mask of "the
-//! seat has seen nothing" would be the opposite mistake -- every leg a bound,
-//! every route priced at 3/2, and an editor full of caveats the world does not
-//! justify.
+//! The sim does compute per-seat vision, through its one sensor interface
+//! (S2's plan, E10), but it keeps no record of which **columns** a seat has
+//! seen: the knowledge store holds sightings of assets, not explored terrain,
+//! and the terrain mask is S3's, with the knowledge store (the view feed's
+//! own marker says the same). So there is no mask to hand the estimator yet,
+//! and every query runs [`Fog::Clear`]: a route is priced over the ground as
+//! it stands, voxel edits a seat has not seen included -- accepted until S3's
+//! mask (the main session's ruling R4 on the reviews of #128). That is stated
+//! rather than hidden: [`RouteAdapter::set_unknown_columns`] is where a mask
+//! arrives when one exists, `is_fogged` answers `false` without a search while
+//! the mask is empty, and the editor therefore draws no dashed leg yet. A mask
+//! of "the seat has seen nothing" would be the opposite mistake -- every leg a
+//! bound, every route priced at 3/2, and an editor full of caveats the world
+//! does not justify.
+//!
+//! # A fault is raised, not read as "no route"
+//!
+//! plan-core's [`TravelEstimator`] answers `Option`: `None` is the
+//! connectivity oracle's "no route", a normal answer. A fault in the query
+//! itself -- the scratch already borrowed, a negative tick count from the sim
+//! -- is not "no route", and the trait has no way to say so; changing it is
+//! plan-core's (carried). So the adapter keeps the first fault it meets
+//! ([`RouteAdapter::take_fault`]) and its caller raises it as a typed error
+//! after the call, rather than drawing an unreachable leg over a bug.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use pharmakos_plan_core::travel::{Estimate, TravelEstimator};
 use pharmakos_proto::gp::v1::Voxel;
@@ -77,6 +93,9 @@ pub struct RouteAdapter {
     /// One entry per column, `true` where the asking seat has never seen it.
     /// Empty means [`Fog::Clear`] -- see the module docs.
     unknown: Vec<bool>,
+    /// The first fault a query met since the last [`RouteAdapter::take_fault`]
+    /// (the module docs, "A fault is raised").
+    fault: Cell<Option<Error>>,
 }
 
 impl std::fmt::Debug for RouteAdapter {
@@ -127,6 +146,7 @@ impl RouteAdapter {
             speed: Speed::commander(rules),
             cluster_voxels,
             unknown: Vec::new(),
+            fault: Cell::new(None),
         })
     }
 
@@ -200,11 +220,41 @@ impl RouteAdapter {
         }
     }
 
-    /// One query, straight through to item 61's function.
+    /// The first fault a query has met since this was last asked, taken, so
+    /// that the caller of a [`TravelEstimator`] call raises it.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`]: the fault, as the query met it.
+    pub fn take_fault(&self) -> Result<(), Error> {
+        match self.fault.take() {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
+    /// Keep `error` as this adapter's fault, unless one is held already: the
+    /// first is the one that explains the rest.
+    fn fault(&self, error: Error) {
+        let first = match self.fault.take() {
+            Some(held) => held,
+            None => error,
+        };
+        self.fault.set(Some(first));
+    }
+
+    /// One query, straight through to item 61's function. A voxel off the map
+    /// has no route, which is an answer; a scratch already borrowed is a fault
+    /// ([`RouteAdapter::take_fault`]).
     fn query(&self, start: Voxel, goal: Voxel) -> Option<pharmakos_sim::pathing::Estimate> {
         let start = self.node_of(start)?;
         let goal = self.node_of(goal)?;
-        let mut scratch = self.scratch.try_borrow_mut().ok()?;
+        let Ok(mut scratch) = self.scratch.try_borrow_mut() else {
+            self.fault(Error::internal(
+                "a route query found its search scratch already in use",
+            ));
+            return None;
+        };
         estimate(
             &self.surface,
             &self.clusters,
@@ -222,9 +272,15 @@ impl TravelEstimator for RouteAdapter {
         let found = self.query(start, goal)?;
         // The sim counts ticks as `i32` and plan-core as `u32`; the estimator
         // never returns a negative one, and a conversion is a decision
-        // (AGENTS.md section 4.3), so a negative is no estimate rather than a
-        // number nobody meant.
-        let ticks = u32::try_from(found.ticks).ok()?;
+        // (AGENTS.md section 4.3), so a negative is a fault the caller raises
+        // rather than a number nobody meant or a route that is not there.
+        let Ok(ticks) = u32::try_from(found.ticks) else {
+            self.fault(Error::internal(format!(
+                "the estimator priced a leg at {} ticks, below zero",
+                found.ticks
+            )));
+            return None;
+        };
         Some(Estimate {
             cost: found.cost,
             ticks,

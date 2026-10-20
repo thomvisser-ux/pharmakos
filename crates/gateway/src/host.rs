@@ -785,9 +785,8 @@ pub struct LiveVision {
 
 /// The production vision's name before it read every sensor, kept so that the
 /// crates outside this one that still spell it (`gamectl`'s hosted tests)
-/// build unchanged.
-///
-/// PLACEHOLDER: the old name `SphereVision`, kept for `gamectl`'s tests — the next owner of `crates/gamectl`, at S2 (`oprd`).
+/// build unchanged. Carried to the next owner of those tests, `oprd`, which
+/// moves them onto [`LiveVision`] and deletes this alias.
 pub type SphereVision = LiveVision;
 
 impl LiveVision {

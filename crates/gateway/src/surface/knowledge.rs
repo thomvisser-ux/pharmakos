@@ -568,13 +568,9 @@ impl Surface {
                 ];
                 if seat.is_some() {
                     let reached = match travel.iter().find(|(index, _)| *index == read.index) {
-                        Some((_, cost)) => {
-                            Some(crate::targeting::travel_ms(world, *cost).ok_or_else(|| {
-                                Error::internal(
-                                    "an estimate's cost does not convert to game milliseconds",
-                                )
-                            })?)
-                        }
+                        // A commander with no speed walks nowhere, so the
+                        // feature is not reached.
+                        Some((_, cost)) => crate::targeting::travel_ms(world, *cost)?,
                         None => None,
                     };
                     entries.push((
@@ -911,7 +907,11 @@ impl Surface {
             places.push(self.place_of(seat, waypoint, index, from, &mut scratch)?);
         }
 
-        let route = pharmakos_plan_core::travel::Route::estimate(&places, self.host()?.routes());
+        let routes = self.host()?.routes();
+        let route = pharmakos_plan_core::travel::Route::estimate(&places, routes);
+        // A fault in a query is raised, never drawn as an unreachable leg
+        // (`crate::routes`, "A fault is raised").
+        routes.take_fault()?;
         let legs: Vec<Json> = route
             .legs
             .iter()
@@ -1135,16 +1135,27 @@ impl Surface {
         Ok(view::voxel_of(point))
     }
 
-    /// Name, for every seat, every other seat's beacon it may see or
-    /// remembers, as its own listing would: the handles a verifier scope
-    /// spells its sightings with ([`Surface::verifier_sightings`]).
+    /// Name, for every seat, every other seat's beacon it remembers or sees:
+    /// **the one place a seat's `e_NN` handles are minted** (the main
+    /// session's ruling R1 on the reviews of #128).
     ///
     /// Called where a Lull opens and where a save resumes, before anything is
-    /// verified against the planning snapshot, so that every report of the
-    /// Lull reads the handles the seat's listing shows, and a pre-check and
-    /// the check at submit name them alike. A handle is minted in the order
-    /// [`Surface::known_beacons`] mints it, so a seat that lists its beacons
-    /// later sees the names its reports used.
+    /// verified against the planning snapshot, and nowhere else: no
+    /// `get_view`, `list_beacons` or `get_beacon` call mints a seat's handle,
+    /// so the names -- which a verifier scope spells its sightings with
+    /// ([`Surface::verifier_sightings`]) and every `report_hash` therefore
+    /// reads -- depend on the sim's hashed sighting table and the frozen world
+    /// alone, never on how often a client polled during the Push. New names
+    /// are minted in the table's own `(seat, asset)` order, then for the
+    /// beacons in live vision the table does not hold yet, by row.
+    ///
+    /// The sim's table keeps the tick a beacon was **last** seen at and not
+    /// the first, so the names count up in that order rather than in
+    /// first-sighting order; a resume rebuilds them from the table at its
+    /// Lull, which reproduces the names a match had whenever every name it
+    /// held was minted at that Lull. First-sighting order, which would make
+    /// the names a pure function of hashed state across every Lull, is
+    /// carried to the sim.
     ///
     /// # Errors
     ///
@@ -1153,7 +1164,28 @@ impl Surface {
         let vision = crate::host::LiveVision::of(self.host()?.world());
         let seats: Vec<SeatId> = self.seats.iter().map(|slot| slot.seat).collect();
         for seat in seats {
-            let _ = self.known_beacons(Viewer::Seat(seat), &vision)?;
+            let viewer = Viewer::Seat(seat);
+            // First what the seat remembers, in the sim's own sighting table
+            // order, `(seat, asset)` ...
+            let mut ids: Vec<u32> = remembered_beacons(hosted(self.host.as_ref())?.world(), seat)?
+                .into_iter()
+                .map(|(id, ..)| id)
+                .collect();
+            // ... then any other seat's beacon in its live vision of the
+            // frozen world that the table does not hold yet (one placed since
+            // the last decision tick), in table row order.
+            let rows = self.host()?.world().beacons().ids().len();
+            for row in 0..rows {
+                if let Some((id, _, _, Seen::Live { .. })) =
+                    self.live_beacon(viewer, &vision, row)?
+                    && !ids.contains(&id)
+                {
+                    ids.push(id);
+                }
+            }
+            for id in ids {
+                let _ = self.views.foreign_beacon_name(viewer, id)?;
+            }
         }
         Ok(())
     }
@@ -1201,11 +1233,16 @@ impl Surface {
         let filter = FogFilter::new(&self.fog, &vision);
         let units = world.units();
         for row in 0..units.ids().len() {
-            if units.frees().get(row) != Some(&false) {
-                continue;
-            }
             let missing =
                 |name: &str| Error::internal(format!("the unit table has no {name} in row {row}"));
+            if units
+                .frees()
+                .get(row)
+                .copied()
+                .ok_or_else(|| missing("free flag"))?
+            {
+                continue;
+            }
             let kind = units
                 .kinds()
                 .get(row)
@@ -1290,6 +1327,12 @@ impl Surface {
     /// hit points. Its mandate, power state, priority, units by role and build
     /// progress are never shown. A field left unset is left out rather than
     /// written as a zero a reader would take for an answer.
+    ///
+    /// **`max_hp` tells another seat's core from its other beacons**
+    /// (`beacon.core_hp` against `structures.beacon.hp`), and that is accepted
+    /// (the main session's ruling R3 on the reviews of #128): a seat's core is
+    /// the beacon the map places for it at its spawn, public from the first
+    /// tick, so the figure tells a seat nothing it could not see.
     ///
     /// # Errors
     ///
@@ -1448,9 +1491,20 @@ impl Surface {
                     let world = hosted(self.host.as_ref())?.world();
                     self.views.beacon_name(viewer, world, row)?
                 }
-                Seen::Live { .. } | Seen::Remembered { .. } => {
-                    self.views.foreign_beacon_name(viewer, id)?
-                }
+                Seen::Live { .. } | Seen::Remembered { .. } => match viewer {
+                    // A seat's handles are minted only where a Lull opens
+                    // ([`Surface::name_sightings`]): a beacon it first sees
+                    // in a Push is listed once the next Lull names it.
+                    Viewer::Seat(_) => match self.views.foreign_beacon_handle(viewer, id) {
+                        Some(name) => name,
+                        None => continue,
+                    },
+                    // A spectator's names reach no report, so it is shown a
+                    // beacon under the handle minted the first time it sees it.
+                    Viewer::Spectator { .. } | Viewer::Admin => {
+                        self.views.foreign_beacon_name(viewer, id)?
+                    }
+                },
             };
             let Some(
                 pharmakos_sim::tables::BeaconName::Own(number)
@@ -1511,7 +1565,10 @@ impl Surface {
             let name = match seen {
                 Seen::Own { row } => self.views.beacon_name(viewer, world, row)?,
                 Seen::Live { .. } | Seen::Remembered { .. } => {
-                    self.views.foreign_beacon_name(viewer, id)?
+                    match self.views.foreign_beacon_handle(viewer, id) {
+                        Some(name) => name,
+                        None => return Ok(None),
+                    }
                 }
             };
             return Ok(Some(KnownBeacon {
@@ -1531,8 +1588,11 @@ impl Surface {
         else {
             return Ok(None);
         };
+        let Some(name) = self.views.foreign_beacon_handle(viewer, id) else {
+            return Ok(None);
+        };
         Ok(Some(KnownBeacon {
-            name: self.views.foreign_beacon_name(viewer, id)?,
+            name,
             id,
             at,
             owner,
@@ -1556,11 +1616,16 @@ impl Surface {
         let beacons = self.host()?.world().beacons();
         // A freed row is no beacon at all (S2's plan, E1): listed, it would
         // be a phantom beacon of the no-seat value's.
-        if beacons.frees().get(row) != Some(&false) {
-            return Ok(None);
-        }
         let missing =
             |name: &str| Error::internal(format!("the beacon table has no {name} in row {row}"));
+        if beacons
+            .frees()
+            .get(row)
+            .copied()
+            .ok_or_else(|| missing("free flag"))?
+        {
+            return Ok(None);
+        }
         let hp = beacons
             .hit_points()
             .get(row)
@@ -2110,8 +2175,13 @@ pub(crate) const fn grade_proto(
 /// every enum this surface answers with is (decisions-log item 80).
 ///
 /// The column holds the enum's wire values (`SeatTable`'s doc), so a value
-/// the enum does not name is the sim and the schema disagreeing; it is spelt
-/// `unspecified` rather than guessed at, which a client reads as "not known".
+/// the enum does not name is the sim and the schema disagreeing, and it is
+/// refused as a typed internal error rather than spelt `unspecified`, which a
+/// client would read as an answer.
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] for a value the schema does not name.
 fn priority_wire_name(value: u8) -> Result<String, Error> {
     use pharmakos_proto::gp::v1::interface_row::QuartermasterPriority;
     let named = QuartermasterPriority::try_from(i32::from(value)).map_err(|_| {

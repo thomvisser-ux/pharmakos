@@ -139,8 +139,11 @@ struct ViewerState {
     units: Vec<(u32, String)>,
     structures: Vec<(u32, String)>,
     /// The viewer's `e_NN` handles for other seats' beacons, by beacon id,
-    /// in the order it was first shown each one.
+    /// in the order each was named.
     beacons: Vec<(u32, String)>,
+    /// The view's `v_N` handles for other seats' beacons a seat holds no
+    /// `e_NN` for yet ([`ViewFeed::beacon_name`]).
+    unnamed: Vec<(u32, String)>,
 }
 
 impl ViewerState {
@@ -156,6 +159,7 @@ impl ViewerState {
             units: Vec::new(),
             structures: Vec::new(),
             beacons: Vec::new(),
+            unnamed: Vec::new(),
         }
     }
 }
@@ -619,13 +623,15 @@ impl ViewFeed {
     ///
     /// A seat's **own** beacon is its `b_NN`, the beacon's per-seat ordinal,
     /// so a seat's core is `b_00` (decisions-log item 127 (13)). **Anybody
-    /// else's** is an `e_NN`: a handle minted for this viewer the first time
-    /// it is shown that beacon, counting from `e_01`, exactly as
-    /// [`ViewFeed::unit_handle`] mints a unit's (`docs/design/targeting.md`,
-    /// "Names"). Either way the number counts what this viewer already knows,
-    /// so no name tells a seat how many beacons another has placed. A
-    /// spectator and the lobby own no beacon, so every beacon is an `e_NN` to
-    /// them.
+    /// else's** is an `e_NN`, counting from `e_01` (`docs/design/targeting.md`,
+    /// "Names"). A seat's `e_NN` is minted only where a Lull opens or a save
+    /// resumes, from the sim's sighting table (`Surface::name_sightings`); a
+    /// beacon it holds none for yet is drawn under a `v_N` view handle. A
+    /// spectator's and the lobby's, which no report reads, are minted the
+    /// first time each is shown. Either way the number counts what this viewer
+    /// already knows, so no name tells a seat how many beacons another has
+    /// placed. A spectator and the lobby own no beacon, so every beacon is an
+    /// `e_NN` to them.
     ///
     /// Re-minted on a restore, with the unit and structure handles (the
     /// module docs): an `e_NN` reaches no hashed state, and the sim answers
@@ -653,7 +659,42 @@ impl ViewFeed {
             return Ok(pharmakos_sim::tables::own_beacon_name(ordinal));
         }
         let id = beacons.ids().get(row).copied().ok_or_else(missing)?;
-        self.foreign_beacon_name(viewer, id)
+        match viewer {
+            // A seat's `e_NN` is minted only where a Lull opens
+            // (`Surface::name_sightings`), so a call made in a Push cannot
+            // change the names a report reads. A beacon it holds no name for
+            // yet is drawn under a view handle, `v_N`, which reaches nothing
+            // but the camera.
+            Viewer::Seat(_) => match self.foreign_beacon_handle(viewer, id) {
+                Some(name) => Ok(name),
+                None => self.beacon_view_handle(viewer, id),
+            },
+            Viewer::Spectator { .. } | Viewer::Admin => self.foreign_beacon_name(viewer, id),
+        }
+    }
+
+    /// This viewer's view handle for another seat's beacon it holds no
+    /// `e_NN` for yet: `v_N`, minted the first time the view draws it, as a
+    /// unit's `u_N` is. It names nothing to any method but `get_view`, and is
+    /// never a report's: the beacon takes its `e_NN` at the next Lull.
+    ///
+    /// # Errors
+    ///
+    /// As [`ViewFeed::foreign_beacon_name`].
+    fn beacon_view_handle(&mut self, viewer: Viewer, id: u32) -> Result<String, Error> {
+        let index = slot_of(&mut self.viewers, viewer);
+        let state = self.viewers.get_mut(index).ok_or_else(|| {
+            Error::internal("the view feed lost the viewer slot it had just made")
+        })?;
+        if let Some((_, handle)) = state.unnamed.iter().find(|(held, _)| *held == id) {
+            return Ok(handle.clone());
+        }
+        let number = state.unnamed.len().checked_add(1).ok_or_else(|| {
+            Error::internal("this viewer holds more view handles than usize counts")
+        })?;
+        let handle = format!("v_{number}");
+        state.unnamed.push((id, handle.clone()));
+        Ok(handle)
     }
 
     /// This viewer's `e_NN` for another seat's beacon by its id, minted the

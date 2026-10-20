@@ -230,14 +230,27 @@ where
 
 /// An estimator cost as the game milliseconds the commander takes to walk it:
 /// the same `ceil(cost * 20 / cost_per_second)` ticks `estimate_route`'s legs
-/// are in, so a chip's figure and a route's agree. `None` when the rules
-/// table gives the commander no speed or the cost is out of range.
-#[must_use]
-pub fn travel_ms(world: &World, cost: i64) -> Option<Ms> {
+/// are in, so a chip's figure and a route's agree. `Ok(None)` when the rules
+/// table gives the commander no speed, so it walks nowhere.
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] for a cost past the estimator's `i32`, a
+/// tick count past it or below zero: the sim's estimator hands out none, so
+/// one is the two disagreeing, and it is said rather than read as "no route".
+pub fn travel_ms(world: &World, cost: i64) -> Result<Option<Ms>, Error> {
     let speed = Speed::commander(world.rules());
-    let cost = i32::try_from(cost).ok()?;
-    let ticks = ticks_for_cost(cost, speed.cost_per_second)?;
-    Some(Ms::from_ticks(u32::try_from(ticks).ok()?))
+    let cost = i32::try_from(cost).map_err(|_| {
+        Error::internal(format!(
+            "an estimate costs {cost}, past the estimator's i32"
+        ))
+    })?;
+    let Some(ticks) = ticks_for_cost(cost, speed.cost_per_second) else {
+        return Ok(None);
+    };
+    let ticks = u32::try_from(ticks)
+        .map_err(|_| Error::internal(format!("an estimate takes {ticks} ticks, below zero")))?;
+    Ok(Some(Ms::from_ticks(ticks)))
 }
 
 // ---------------------------------------------------------------------------
@@ -438,8 +451,8 @@ impl Reader<'_> {
         found
             .into_iter()
             .map(|(index, cost)| {
-                let travel_ms = travel_ms(self.world, cost).ok_or_else(|| {
-                    Error::internal("an estimate's cost does not convert to game milliseconds")
+                let travel_ms = travel_ms(self.world, cost)?.ok_or_else(|| {
+                    Error::internal("the rules table gives the commander no speed to rank with")
                 })?;
                 Ok((
                     index,
