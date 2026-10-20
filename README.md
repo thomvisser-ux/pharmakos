@@ -38,7 +38,8 @@ the owner's review of its stage demo on 2026-09-29.
 ## Setting up a clone
 
 1. Wire the versioned git hooks, once per clone (every worktree of the clone shares the setting,
-   and a worktree of a commit older than the hooks runs none until it is rebased):
+   and a worktree of a commit older than the hooks runs none until it takes `main` by a signed
+   merge, never a rebase, AGENTS.md section 6):
 
    ```sh
    git config core.hooksPath scripts/githooks
