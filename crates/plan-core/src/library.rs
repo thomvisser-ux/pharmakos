@@ -477,9 +477,17 @@ pub fn instantiate(
                 ));
                 compact(applied)
             }
-            // Resolved by `declared_in` already; empty only if it vanished,
-            // which a parsed document cannot do.
-            None => value_at(&template, &declaration.pointer)?.map_or_else(String::new, compact),
+            // Resolved by `declared_in` already, so it is there; if it ever
+            // is not, that is said rather than filled with nothing.
+            None => match value_at(&template, &declaration.pointer)? {
+                Some(found) => compact(found),
+                None => {
+                    return Err(Error::at(
+                        declaration.pointer.clone(),
+                        "the template declares a parameter it does not hold",
+                    ));
+                }
+            },
         };
         filled.push(Filled {
             pointer: declaration.pointer.clone(),

@@ -26,6 +26,9 @@
 //! | A Build target, in a deploy's `initial`, a `set_mandate` or `set_mandate_settings` row, or an `add_build_target` row | its blueprint's `cost_dollars` | the blueprint's draw, by the sim's own rule (a Generator and an autocannon draw nothing) |
 //! | A queued capability structure | its blueprint's `cost_dollars` | its draw, as above |
 //! | A Survey mandate's `scout_count` | that many `units.scout.cost_dollars` | that many `power.kw_per_unit` |
+//! | A `wall` target (S2) | its box's voxels, at most, at `structures.wall_cost_per_voxel` | none |
+//! | A Defend mandate's `picket_scouts` (S2) | as Survey's scouts | as Survey's scouts |
+//! | An Attack mandate with `breach_allowed` (S2) | one `structures.demolition_charge_cost_dollars` a launch, as a possible order only | none |
 //!
 //! Scouts are the one unit a playbook **orders**: spec section 6's Survey row
 //! makes the count a setting, and the sim's Survey mandate fields scouts until
@@ -117,6 +120,10 @@ const BLUEPRINTS: [(&str, StructureKind); 5] = [
     ("resonance_spire", StructureKind::ResonanceSpire),
 ];
 
+/// The one blueprint priced per voxel rather than per structure: a `wall`
+/// target fills its `wall_box` (S2's plan, decisions 10 and 40).
+const WALL: &str = "wall";
+
 /// What one order costs: `$` out of the treasury and `kW` onto the grid.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Cost {
@@ -164,6 +171,14 @@ impl Cost {
 /// hostile `scout_count` can leave, and why the estimate stage tests the route
 /// in this type: an order too large for [`Cost`] is past every supply, and has
 /// to say so rather than fall silent.
+///
+/// **A wall's term is the exception** (S2's `vfy2`): it is a price times its
+/// box's voxels, and three `i32` extents multiply to about 2^99, so the term
+/// alone can leave `i128`. It is therefore built checked and refused as
+/// [`ProjectionError::Overflow`] when it does, never saturated; a playbook
+/// with such a wall gets no figure for that step, and the estimate stage
+/// stops there as it does at an unpriced blueprint, while the seal's price
+/// check (`E0603`) refuses it.
 ///
 /// The additions saturate, which by the argument above never happens; were it
 /// to, every term is non-negative, so a saturated figure would still exceed
@@ -258,6 +273,11 @@ pub enum ProjectionError {
     /// refuse it rather than wrap. The estimate stage never meets it, because
     /// it sums in [`Tally`].
     Overflow,
+    /// A `wall` target with no box, a half-written one (a corner missing) or
+    /// an inside-out one has no voxels to price. `E0101` names the first two
+    /// and `E0406` the third, and the projection stops there as
+    /// it does at a blueprint it does not price.
+    UnpricedWall,
 }
 
 impl core::fmt::Display for ProjectionError {
@@ -275,6 +295,10 @@ impl core::fmt::Display for ProjectionError {
                     "the projection does not fit in a `$` or `kW` figure"
                 )
             }
+            ProjectionError::UnpricedWall => write!(
+                formatter,
+                "a `wall` target with no whole box (none, a corner missing, or inside out) has no voxels to price"
+            ),
         }
     }
 }
@@ -287,6 +311,8 @@ pub struct Prices {
     beacon: Cost,
     scout: Cost,
     structures: [Cost; 5],
+    wall_voxel: Money,
+    charge: Money,
 }
 
 impl Prices {
@@ -367,6 +393,8 @@ impl Prices {
                 row(StructureKind::SurveyPost)?,
                 row(StructureKind::ResonanceSpire)?,
             ],
+            wall_voxel: Money::new(i64::from(structures.wall_cost_per_voxel)),
+            charge: Money::new(i64::from(structures.demolition_charge_cost_dollars)),
         })
     }
 
@@ -380,6 +408,22 @@ impl Prices {
     #[must_use]
     pub const fn scout(&self) -> Cost {
         self.scout
+    }
+
+    /// One wall voxel (`structures.wall_cost_per_voxel`).
+    #[must_use]
+    pub const fn wall_voxel(&self) -> Money {
+        self.wall_voxel
+    }
+
+    /// One demolition charge (`structures.demolition_charge_cost_dollars`;
+    /// S2's plan, decision 9).
+    #[must_use]
+    pub const fn charge(&self) -> Cost {
+        Cost {
+            spend: self.charge,
+            draw: Kw::ZERO,
+        }
     }
 
     /// One structure of the blueprint a playbook names.
@@ -416,9 +460,10 @@ pub fn step_cost(entry: &Step, prices: &Prices) -> Result<Cost, ProjectionError>
 ///
 /// # Errors
 ///
-/// As [`Prices::blueprint`]: a blueprint the rules table does not price. Never
-/// [`ProjectionError::Overflow`], because a [`Tally`] holds any playbook's
-/// orders.
+/// As [`Prices::blueprint`]: a blueprint the rules table does not price;
+/// [`ProjectionError::UnpricedWall`] for a wall with no whole box; and
+/// [`ProjectionError::Overflow`] only for a wall whose box's price leaves
+/// `i128` (see [`Tally`]). Every other order a [`Tally`] holds exactly.
 pub fn step_orders(
     entry: &Step,
     prices: &Prices,
@@ -441,11 +486,11 @@ fn orders(entry: &Step, prices: &Prices, scope: Option<&Scope>) -> Result<Orders
                 .and_then(|initial| initial.mandate.as_ref())
             {
                 Some(settings) => settings_tally(settings, prices)?,
-                None => Tally::ZERO,
+                None => Orders::default(),
             };
             Ok(Orders {
-                adds: Tally::of(prices.beacon()).plus(initial),
-                at_most: Tally::ZERO,
+                adds: Tally::of(prices.beacon()).plus(initial.adds),
+                at_most: initial.at_most,
             })
         }
         Some(step::Kind::Interface(visit)) => {
@@ -455,13 +500,16 @@ fn orders(entry: &Step, prices: &Prices, scope: Option<&Scope>) -> Result<Orders
                     Some(interface_row::Row::SetMandate(settings)) => {
                         let ordered = settings_tally(settings, prices)?;
                         if is_a_switch(visit, settings, scope) {
-                            found.adds = found.adds.plus(ordered);
+                            found.adds = found.adds.plus(ordered.adds);
+                            found.at_most = found.at_most.plus(ordered.at_most);
                         } else {
-                            found.at_most = found.at_most.plus(ordered);
+                            found.at_most = found.at_most.plus(ordered.upper());
                         }
                     }
                     Some(interface_row::Row::SetMandateSettings(settings)) => {
-                        found.at_most = found.at_most.plus(settings_tally(settings, prices)?);
+                        found.at_most = found
+                            .at_most
+                            .plus(settings_tally(settings, prices)?.upper());
                     }
                     Some(interface_row::Row::AddBuildTarget(add)) => {
                         if let Some(target) = add.target.as_ref() {
@@ -521,30 +569,90 @@ fn is_a_switch(visit: &InterfaceStep, settings: &MandateSettings, scope: Option<
 }
 
 /// What a settings block orders: its Build targets, or its scouts.
-fn settings_tally(settings: &MandateSettings, prices: &Prices) -> Result<Tally, ProjectionError> {
+fn settings_tally(settings: &MandateSettings, prices: &Prices) -> Result<Orders, ProjectionError> {
+    let ordered = |adds: Tally| Orders {
+        adds,
+        at_most: Tally::ZERO,
+    };
     match settings.mandate.as_ref() {
         Some(mandate_settings::Mandate::Build(build)) => {
             let mut total = Tally::ZERO;
             for target in &build.targets {
                 total = total.plus(target_tally(target, prices)?);
             }
-            Ok(total)
+            Ok(ordered(total))
         }
         Some(mandate_settings::Mandate::Survey(survey)) => {
-            Ok(Tally::times(prices.scout(), survey.scout_count))
+            Ok(ordered(Tally::times(prices.scout(), survey.scout_count)))
         }
-        Some(
-            mandate_settings::Mandate::Mine(_)
-            | mandate_settings::Mandate::Defend(_)
-            | mandate_settings::Mandate::Attack(_),
-        )
-        | None => Ok(Tally::ZERO),
+        // S2's picket (decision 13): the count is a setting, as Survey's is,
+        // so the scouts it orders are priced as Survey's are.
+        Some(mandate_settings::Mandate::Defend(defend)) => match defend.picket_scouts {
+            Some(pickets) => Ok(ordered(Tally::times(prices.scout(), pickets))),
+            None => Ok(ordered(Tally::ZERO)),
+        },
+        // S2's demolition charge (decision 9): a raider of an Attack beacon
+        // with `breach_allowed` loads one "when the breach needs it", which is
+        // a fact about the Push. So one charge per launch is what the playbook
+        // may spend, never what it certainly spends: it goes on the upper
+        // pile alone, and a further breach in one launch is not counted. One
+        // launch is the floor: an edit that writes `breach_allowed` and no
+        // `waves` leaves the beacon's count, which is at least one, so the
+        // edit may spend one charge whatever it leaves out.
+        Some(mandate_settings::Mandate::Attack(attack)) => Ok(Orders {
+            adds: Tally::ZERO,
+            at_most: if attack.breach_allowed == Some(true) {
+                Tally::times(prices.charge(), attack.waves.max(1))
+            } else {
+                Tally::ZERO
+            },
+        }),
+        Some(mandate_settings::Mandate::Mine(_)) | None => Ok(ordered(Tally::ZERO)),
     }
 }
 
-/// One Build target: one structure of its blueprint.
+/// One Build target: one structure of its blueprint, or a wall's voxels.
+///
+/// **A wall is priced by its box** (S2's plan, decision 10: "each voxel at
+/// `wall_cost_per_voxel`"). The box's voxels are an upper bound on the wall's:
+/// each column is filled from the ground's top to `max.z`, and `min.z` lies at
+/// or below the ground, so the ground fills the bottom of the box and the wall
+/// can only be smaller. Where the ground is the view does not say, so the box
+/// is what the playbook commits the seat to at most. A wall has no draw.
+///
+/// # Errors
+///
+/// As [`Prices::blueprint`], and [`ProjectionError::UnpricedWall`] for a
+/// wall with no box, or an inside-out one, which `E0101` and `E0406` name.
 fn target_tally(target: &BuildTarget, prices: &Prices) -> Result<Tally, ProjectionError> {
+    if target.blueprint_id == WALL {
+        let voxels = wall_voxels(target).ok_or(ProjectionError::UnpricedWall)?;
+        // Checked, never saturated: a box near the map's `i32` corners holds
+        // about 2^99 voxels, and at a 32-bit price the product can leave
+        // `i128`, which is past every treasury and is said as such.
+        let spend = i128::from(prices.wall_voxel().raw())
+            .checked_mul(voxels)
+            .ok_or(ProjectionError::Overflow)?;
+        return Ok(Tally { spend, draw: 0 });
+    }
     prices.blueprint(&target.blueprint_id).map(Tally::of)
+}
+
+/// The voxels of a wall's box, inclusive at both ends, or `None` when it has
+/// no box or an inside-out one. Exact: three `i32` extents multiply to below
+/// 2^99, inside `i128`.
+fn wall_voxels(target: &BuildTarget) -> Option<i128> {
+    let wall_box = target.wall_box.as_ref()?;
+    let (low, high) = (wall_box.min.as_ref()?, wall_box.max.as_ref()?);
+    let extent = |from: i32, to: i32| -> Option<i128> {
+        let span = i128::from(to)
+            .checked_sub(i128::from(from))?
+            .checked_add(1)?;
+        (span > 0).then_some(span)
+    };
+    extent(low.x, high.x)?
+        .checked_mul(extent(low.y, high.y)?)?
+        .checked_mul(extent(low.z, high.z)?)
 }
 
 /// What the playbook orders, and what the seat is left with.

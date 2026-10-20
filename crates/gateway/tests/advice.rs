@@ -915,9 +915,13 @@ fn the_advisor_leaves_the_humans_view_feed_as_it_found_it() {
 fn an_advised_safe_playbook_that_does_not_qualify_is_replaced_by_the_fallback_and_audited() {
     // A negative hold: the verifier's E0109.
     let refused = SAFE_PLAYBOOK.replace("\"ms\": 8000", "\"ms\": -1");
-    // More handlers than the interpreter's ceiling: the verifier qualifies it
-    // and this build cannot execute it. (A queued capability structure was
-    // this case until S2's `vfy1` gave it a verifier code, E0009.)
+    // More handlers than the interpreter's ceiling. Until S2's `vfy2` the
+    // verifier qualified it and the compile refused it (`INVALID_ARGUMENT`);
+    // the verifier now reads the sim's own ceiling (E0113), so it is refused
+    // at the first door like the negative hold. No construct is left that
+    // qualifies and does not compile, so the compile door has no case of its
+    // own here until one appears. (A queued capability structure was this case
+    // until S2's `vfy1` gave it a verifier code, E0009.)
     let mut extra = String::new();
     for index in 0..64 {
         extra.push_str("{\"id\": \"x");
@@ -939,7 +943,7 @@ fn an_advised_safe_playbook_that_does_not_qualify_is_replaced_by_the_fallback_an
 
     for (advised, code, own) in [
         (refused, Some("NO_QUALIFYING_PLAN"), false),
-        (uncompilable, Some("INVALID_ARGUMENT"), false),
+        (uncompilable, Some("NO_QUALIFYING_PLAN"), false),
         (good.clone(), None, true),
     ] {
         let mut surface = hosted();

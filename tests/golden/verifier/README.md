@@ -224,3 +224,47 @@ cargo xtask golden --bless              # accepts them
   `E0004`'s message now says a missing `schema_version` is missing rather
   than "0.0" (`e0004_no_schema_version`); of the committed reports only
   `e0004_unsupported_version`'s message moved, and no `report_hash` did.
+* **Every `report_hash` moved in S2's second verifier lane (`vfy2`), the
+  reports whose diagnostics stayed the same included.** Two of the five inputs
+  moved. The seat's view gained its sightings with their ages
+  (`Scope::encode`), and `REPORT_HASH_DOMAIN` went from `gp.api.v1/report/2`
+  to `/3` with it, so input 2's bytes moved for every case (an empty sighting
+  list is bytes too); and `VERIFIER_VERSION` went from `0.1.0-s2` to
+  `0.1.0-s2.2`, input 4. Reports moved for three rules:
+  * an omitted `roe` reads as RETURN_FIRE with an `I0003` note (S2's plan,
+    decision 4), on every deploy's `initial` and every `set_mandate` that
+    names a writ and leaves `roe` out;
+  * a Build beacon whose `repair_threshold_pct` is 0 carries an `I0004` note
+    (decision 38), under the same carriers;
+  * `E0508`'s message names its field (`scout_count`, or from S2 Defend's
+    `picket_scouts`), so `e0508_more_scouts_than_a_beacon_holds`'s message
+    moved.
+
+  Seventeen cases are new: one per new code (`w0502_a_protect_list_naming_one_asset_twice`
+  among them, a harmless repeat being advice and never a refusal), a second
+  `E0416` for a target's anchor outside its beacon's sphere, two `E0101`
+  shapes for a wall's box (none, and a corner missing), and
+  `e0003_a_go_code_launch`, which pins that `AttackLaunch`'s held go-code arm
+  (`broadcast_received`, S4's) is refused by name. Its message, "not part of
+  the v1 vocabulary", is decode's wording for every reserved name; for an S4
+  arm it says less than the truth, a wording question for the string table.
+  Every Build target with a voxel anchor and a named holder is now checked
+  against that beacon's sphere too (`E0416`, the column test).
+  A Defend case also carries `E0012`, an Attack case `E0013` and a wall case
+  `E0019`, because the sim refuses those arms and that blueprint whole until
+  S2's `dfnd`, `atk` and `site` lanes; the case still isolates its own code.
+
+**The sightings, for the cases that read them (S2).** The cases named in
+`verifier.rs`'s `SIGHT_CASES` (`e0418_an_attack_target_seen_too_long_ago`,
+`w0703_a_reference_resting_on_an_old_sighting`) are checked against
+`sight_scope`, the plain fixture with the seat's sightings added and nothing
+else changed:
+
+| Sighted | At | Age |
+| --- | --- | --- |
+| `e_01` | 300, 300, 40 | 240 000 ms, past the reach window's 180 000 |
+| seat 1's commander | 290, 295, 40 | 30 000 ms |
+* **Every `report_hash` moved again when this lane merged `main` after `ids`
+  (#123), and nothing else in any report did.** `ids` widened the snapshot to
+  `SNAPSHOT_VERSION` 10, and the fixture snapshot is input 2 of the five, so
+  each case's bytes moved (E33: the second lane to merge re-blesses).

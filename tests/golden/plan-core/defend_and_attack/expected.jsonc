@@ -1,0 +1,172 @@
+// defend_and_attack.jsonc - S2's constructs as an author writes them (S2's
+// plan, task `vfy2`): a Defend arm with every field, an Attack arm with every
+// field, an edit that writes a present-but-false `optional`, and a wall
+// target with its box, so the round trip, the canonical form and the prose
+// are pinned for each.
+{
+  "schema_version": {
+    "major": 1
+  },
+  "meta": {
+    "title": "Defend and attack",
+    "author_kind": "HUMAN"
+  },
+  "declarative": {
+    "route": [
+      // a Defend beacon guarding the core and the commander
+      {
+        "label": "guard",
+        "place_beacon": {
+          "at": {
+            "voxel": {
+              "x": 96,
+              "y": 11,
+              "z": 62
+            }
+          },
+          "initial": {
+            "mandate": {
+              "roe": "RETURN_FIRE",
+              "defend": {
+                "protect": [
+                  {
+                    "beacon": {
+                      "beacon_id": "b_00"
+                    }
+                  },
+                  {
+                    "my_commander": {}
+                  }
+                ],
+                "engagement_radius_pct": 60,
+                "pursue": "SPHERE_EDGE",
+                "picket_scouts": 2
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "raid",
+        "place_beacon": {
+          "at": {
+            "voxel": {
+              "x": 100,
+              "y": 20,
+              "z": 58
+            }
+          },
+          "initial": {
+            "mandate": {
+              "roe": "FREE_FIRE",
+              "attack": {
+                "target": {
+                  "beacon": {
+                    "beacon_id": "e_01"
+                  }
+                },
+                "retarget": "NEAREST_KNOWN",
+                "staging": {
+                  "x": 120,
+                  "y": 30,
+                  "z": 40
+                },
+                "launch": {
+                  "force_size": 6,
+                  "segment_ms": 90000
+                },
+                "retreat": {
+                  "force_below_pct": 30,
+                  "after_launch_ms": 60000
+                },
+                "after_action": "REGROUP_AT_STAGING",
+                "avoid_areas": [
+                  {
+                    "min": {
+                      "x": 130,
+                      "y": 30
+                    },
+                    "max": {
+                      "x": 140,
+                      "y": 40,
+                      "z": 60
+                    }
+                  }
+                ],
+                "breach_allowed": true,
+                "waves": 1
+              }
+            }
+          }
+        }
+      },
+      /* an edit can write false, because the field is optional */
+      {
+        "label": "hold back",
+        "interface": {
+          "beacon": {
+            "beacon_id": "b_00"
+          },
+          "rows": [
+            {
+              "set_mandate_settings": {
+                "attack": {
+                  "target": {
+                    "enemy_commander": {}
+                  },
+                  "breach_allowed": false
+                }
+              }
+            },
+            {
+              "set_mandate": {
+                "defend": {}
+              }
+            },
+            {
+              "add_build_target": {
+                "target": {
+                  "blueprint_id": "wall",
+                  "anchor": {
+                    "voxel": {
+                      "x": 90,
+                      "y": 12,
+                      "z": 11
+                    }
+                  },
+                  "order": 3,
+                  "wall_box": {
+                    "min": {
+                      "x": 90,
+                      "y": 12,
+                      "z": 10
+                    },
+                    "max": {
+                      "x": 94,
+                      "y": 12,
+                      "z": 13
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "on_death": {
+    "on_respawn": "CONTINUE",
+    "max_deaths_before_fallback": 2
+  },
+  "fallback": {
+    "hold": {
+      "at": {
+        "beacon_anchor": {
+          "safest": {}
+        }
+      }
+    }
+  },
+  "kind": "PLAYBOOK"
+}

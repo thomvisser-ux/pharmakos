@@ -3,6 +3,20 @@
   "depth": "FULL",
   "diagnostics": [
     {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/0/place_beacon/initial/mandate/roe",
+      "message": "`roe` is omitted and reads as RETURN_FIRE.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/place_beacon/initial/mandate/roe\",\"value\":\"RETURN_FIRE\"}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
       "code": "W0603",
       "severity": "WARNING",
       "path": "/declarative/route/0",
@@ -13,10 +27,10 @@
       "beginner": "Some of what this playbook switches on will have no power and will sit idle."
     }
   ],
-  "report_hash": "b0X7qF1LMK8=",
+  "report_hash": "xoLDIyFt7Lc=",
   "rules_hash": "gCjUE4Tm3i8=",
   "plan_fingerprint": "5sI0LmZ+rOA=",
-  "verifier_version": "0.1.0-s2",
+  "verifier_version": "0.1.0-s2.2",
   "size_units": 1,
   "size_budget": 128
 }

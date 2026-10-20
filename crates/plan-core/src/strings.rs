@@ -109,7 +109,7 @@ pub const ON_FAIL_JUMP: &str = "On failure, jump forward to";
 // --- Interface rows ---------------------------------------------------------
 
 /// `set_mandate`.
-pub const ROW_SET_MANDATE: &str = "switch it to a";
+pub const ROW_SET_MANDATE: &str = "switch it to";
 /// `set_mandate_settings`.
 pub const ROW_SET_SETTINGS: &str = "change its mandate settings";
 /// `set_priority`.
@@ -281,3 +281,84 @@ pub const DEATHS_UNIT: &str = "times";
 pub const POWERED: &str = "powered";
 /// `beacon_powered` false.
 pub const DORMANT: &str = "dormant";
+
+// --- S2's Defend and Attack settings (task `vfy2`) ---------------------------
+
+/// Before a Defend arm's protect list.
+pub const DEFEND_PROTECTING: &str = "protecting";
+/// A protect-list entry naming the seat's own commander.
+pub const DEFEND_MY_COMMANDER: &str = "your commander";
+/// A protect-list entry with no asset.
+pub const DEFEND_NOTHING: &str = "nothing the file names";
+/// Before the engagement radius.
+pub const DEFEND_ENGAGING: &str = "engaging within";
+/// After the engagement radius's percentage.
+pub const DEFEND_OF_SPHERE: &str = "of the sphere";
+/// `pursue: NEVER`.
+pub const PURSUE_NEVER: &str = "never pursuing";
+/// `pursue: SPHERE_EDGE`.
+pub const PURSUE_SPHERE_EDGE: &str = "pursuing to the sphere edge";
+/// `pursue: WHILE_IN_REACH`.
+pub const PURSUE_WHILE_IN_REACH: &str = "pursuing while in reach";
+/// A pursue value the file does not set.
+pub const PURSUE_UNSET: &str = "pursuing as the file does not say";
+/// Before a picket's scout count.
+pub const DEFEND_PICKET: &str = "with a picket of";
+/// After a picket's scout count.
+pub const DEFEND_PICKET_UNIT: &str = "scouts";
+/// Before an Attack target.
+pub const ATTACK_TARGETING: &str = "attacking";
+/// `enemy_commander`.
+pub const ATTACK_ENEMY_COMMANDER: &str = "the enemy commander";
+/// An Attack target with no arm.
+pub const ATTACK_NOTHING: &str = "nothing the file names";
+/// `retarget: NEAREST_KNOWN`.
+pub const RETARGET_NEAREST: &str = "retargeting the nearest known enemy beacon";
+/// `retarget: NONE`.
+pub const RETARGET_NONE: &str = "keeping its target";
+/// A retarget value the file does not set.
+pub const RETARGET_UNSET: &str = "retargeting as the file does not say";
+/// Before the staging point.
+pub const ATTACK_STAGING: &str = "gathering at";
+/// Before the launch conditions.
+pub const ATTACK_LAUNCH: &str = "launching once";
+/// A launch's force size, before the count.
+pub const LAUNCH_FORCE: &str = "raiders stand there";
+/// A launch's segment time, after the duration.
+pub const LAUNCH_SEGMENT: &str = "of the segment have passed";
+/// A launch with no condition.
+pub const LAUNCH_NEVER: &str = "never, for no launch condition is written";
+/// Before the retreat conditions.
+pub const ATTACK_RETREAT: &str = "breaking off once";
+/// A retreat's force threshold, before the percentage.
+pub const RETREAT_FORCE: &str = "fewer than";
+/// A retreat's force threshold, after the percentage.
+pub const RETREAT_FORCE_UNIT: &str = "of the force remain";
+/// A retreat's time, after the duration.
+pub const RETREAT_TIME: &str = "after launch";
+/// `after_action: REGROUP_AT_STAGING`.
+pub const AFTER_REGROUP: &str = "then regrouping at the staging point";
+/// `after_action: RETURN_HOME`.
+pub const AFTER_HOME: &str = "then returning home";
+/// An after-action the file does not set.
+pub const AFTER_UNSET: &str = "then doing what the file does not say";
+/// Before the count of avoid areas.
+pub const ATTACK_AVOIDING: &str = "avoiding";
+/// One avoid area.
+pub const AREA_ONE: &str = "area";
+/// More than one avoid area.
+pub const AREA_MANY: &str = "areas";
+/// `breach_allowed: true`.
+pub const BREACH_ALLOWED: &str = "breaching walls if it must";
+/// `breach_allowed: false`.
+pub const BREACH_REFUSED: &str = "never breaching walls";
+/// One wave.
+pub const WAVE_ONE: &str = "wave";
+/// More than one wave.
+pub const WAVE_MANY: &str = "waves";
+/// Before the count of waves.
+pub const WAVES_IN: &str = "in";
+/// The article before a writ's name that begins with a consonant sound.
+pub const ARTICLE_A: &str = "a";
+/// The article before "Attack".
+pub const ARTICLE_AN: &str = "an";

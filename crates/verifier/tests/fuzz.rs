@@ -64,7 +64,8 @@ use pharmakos_sim::snapshot::{SNAPSHOT_VERSION, Snapshot};
 use pharmakos_sim::tables::SeatId;
 use pharmakos_verifier::catalogue::CATALOGUE;
 use pharmakos_verifier::{
-    FeatureKind, Input, KnownBeacon, KnownFeature, Ownership, Scope, VERIFIER_VERSION, verify,
+    FeatureKind, Input, KnownBeacon, KnownFeature, Ownership, Scope, Sighted, Sighting,
+    VERIFIER_VERSION, verify,
 };
 
 use pharmakos_proto::gp::v1::beacon_filter::MandateKind;
@@ -107,7 +108,18 @@ const FUZZ_SEED: u64 = 0x5052_4F42_4C45_4D53;
 
 /// Names the generator draws from, chosen so some resolve and some do not.
 const NAMES: &[&str] = &[
-    "s0", "s1", "s2", "h1", "b_01", "b_02", "e_01", "nowhere", "",
+    "s0", "s1", "s2", "h1", "b_01", "b_02", "e_01", "nowhere", "", "e_02", "e_03", "e_04",
+];
+
+/// The reach window the committed rules table holds (`verifier.reach_memory_ms`),
+/// which the sightings' ages straddle; the long run checks it is still the
+/// table's.
+const WINDOW: u32 = 180_000;
+
+/// S2's `vfy2` codes, in code order: the ten thousand runs reach every one.
+const S2_CODES: [&str; 13] = [
+    "E0113", "E0414", "E0415", "E0416", "E0417", "E0418", "E0508", "E0510", "E0511", "E0512",
+    "W0502", "W0703", "I0004",
 ];
 
 /// The codes for what the sim refuses at the seal (E0009 to E0017, and S2's
@@ -191,7 +203,8 @@ impl Shape {
     }
 
     fn name(&mut self) -> String {
-        let index = usize::try_from(self.below(9)).unwrap_or(0);
+        let index =
+            usize::try_from(self.below(i32::try_from(NAMES.len()).unwrap_or(1))).unwrap_or(0);
         NAMES.get(index).copied().unwrap_or("s0").to_owned()
     }
 
@@ -786,6 +799,10 @@ impl Shape {
         if self.damage(5) {
             fields.push(("wall_box".to_owned(), self.wild_area()));
         }
+        // A turn, which a wall may not take (E0511) and nothing past 3 may.
+        if self.damage(5) {
+            fields.push(("rotation_quarter_turns".to_owned(), self.number(0, 5)));
+        }
         Json::Object(fields)
     }
 
@@ -852,7 +869,8 @@ impl Shape {
         for _ in 0..route_count {
             route.push(self.entry());
         }
-        let handler_count = self.below(3);
+        // Now and then more handlers than the sim compiles (E0113).
+        let handler_count = if self.damage(40) { 65 } else { self.below(3) };
         let mut handlers: Vec<Json> = Vec::new();
         for _ in 0..handler_count {
             handlers.push(self.handler());
@@ -962,6 +980,23 @@ fn scope() -> Scope {
         },
         is_core: true,
     })
+    .with_beacon(enemy("e_01", 0))
+    .with_beacon(enemy("e_02", 1))
+    .with_beacon(enemy("e_03", 2))
+    .with_beacon(enemy("e_04", 3))
+    .with_sighting(seen(Sighted::Beacon("e_01".to_owned()), 0))
+    .with_sighting(seen(Sighted::Beacon("e_02".to_owned()), WINDOW))
+    .with_sighting(seen(
+        Sighted::Beacon("e_03".to_owned()),
+        WINDOW.saturating_add(1),
+    ))
+    .with_sighting(seen(Sighted::Beacon("e_04".to_owned()), u32::MAX))
+    .with_sighting(seen(Sighted::Commander(SeatId::new(0)), 0))
+    .with_sighting(seen(
+        Sighted::Commander(SeatId::new(1)),
+        WINDOW.saturating_add(1),
+    ))
+    .with_sighting(seen(Sighted::Commander(SeatId::new(2)), u32::MAX))
     .with_feature(feature(
         "vent_150_25",
         FeatureKind::Vent,
@@ -990,6 +1025,38 @@ fn scope() -> Scope {
         true,
         None,
     ))
+}
+
+/// An enemy beacon the seat knows, the `offset`th along the far corner.
+fn enemy(id: &str, offset: i32) -> KnownBeacon {
+    KnownBeacon {
+        beacon_id: id.to_owned(),
+        owner: SeatId::new(1),
+        side: Ownership::EnemyKnown,
+        mandate: MandateKind::Unspecified,
+        tags: Vec::new(),
+        at: Voxel {
+            x: 300_i32.saturating_add(offset),
+            y: 300,
+            z: 40,
+        },
+        is_core: false,
+    }
+}
+
+/// A sighting of `what`, this many ms old: the ages straddle the window (0,
+/// the window, one past it, and the top of `u32`), and the seat's own
+/// commander is sighted too, which never stands in for an enemy one.
+fn seen(what: Sighted, age_ms: u32) -> Sighting {
+    Sighting {
+        what,
+        at: Voxel {
+            x: 300,
+            y: 300,
+            z: 40,
+        },
+        age_ms,
+    }
 }
 
 /// A snapshot with a first round's three minutes coming, so the schedule
@@ -1196,7 +1263,16 @@ fn ten_thousand_playbooks_come_back_as_reports() {
     let mut lints: Vec<String> = Vec::new();
     let mut estimates: Vec<String> = Vec::new();
     let mut refusals: Vec<String> = Vec::new();
+    let mut s2: Vec<String> = Vec::new();
     let mut applied: u32 = 0;
+    let window = pharmakos_verifier::Limits::from_rules(&rules)
+        .unwrap_or_else(|gap| panic!("the limits: {gap}"))
+        .reach_memory_ms();
+    assert_eq!(
+        u32::try_from(window).ok(),
+        Some(WINDOW),
+        "the fuzz scope's ages straddle the committed reach window"
+    );
     for index in 0..RUNS {
         let (report, held) = check(index, &rules, &scope, &snapshot);
         applied = applied.saturating_add(u32::from(held));
@@ -1212,6 +1288,8 @@ fn ten_thousand_playbooks_come_back_as_reports() {
                 &mut estimates
             } else if REFUSALS.contains(&code.as_str()) {
                 &mut refusals
+            } else if S2_CODES.contains(&code.as_str()) {
+                &mut s2
             } else {
                 continue;
             };
@@ -1239,6 +1317,12 @@ fn ten_thousand_playbooks_come_back_as_reports() {
     // build does not name, is reached (S2's `vfy1`).
     refusals.sort();
     assert_eq!(refusals, REFUSALS, "the refusals the run reached");
+    // Every code S2's `vfy2` added, or gave a new shape (E0508's picket), is
+    // reached, so a green run says something about each of them.
+    s2.sort();
+    let mut wanted = S2_CODES.to_vec();
+    wanted.sort_unstable();
+    assert_eq!(s2, wanted, "the vfy2 codes the run reached");
     // Every emitting branch of targeting's three lints is reached, so a green
     // run says something about each of them.
     lints.sort();

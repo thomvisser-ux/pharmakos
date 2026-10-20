@@ -62,10 +62,11 @@
 
 use pharmakos_proto::gp::v1::feature_ref::{self, Coverage, Rank};
 use pharmakos_proto::gp::v1::{
-    BeaconFilter, BeaconRef, Condition, Fallback, FeatureRef, Handler, InterfaceRow, Location,
-    MandateSettings, OnDeath, Options, Playbook, Step, Voxel, beacon_filter, beacon_ref,
-    cmdr_hp_pct, condition, fallback, handler, int_compare, interface_row, location,
-    mandate_settings, meta, on_death, on_fail, playbook, step,
+    AttackSettings, BeaconFilter, BeaconRef, Condition, DefendSettings, Fallback, FeatureRef,
+    Handler, InterfaceRow, Location, MandateSettings, OnDeath, Options, Playbook, Step, Voxel,
+    attack_settings, attack_target, beacon_filter, beacon_ref, cmdr_hp_pct, condition,
+    defend_settings, fallback, handler, int_compare, interface_row, location, mandate_settings,
+    meta, on_death, on_fail, playbook, protected_asset, step,
 };
 use std::fmt::Write as _;
 
@@ -219,7 +220,13 @@ fn step_body(entry: &Step, rates: &Rates) -> String {
             }
             if let Some(initial) = place.initial.as_ref() {
                 if let Some(settings) = initial.mandate.as_ref() {
-                    let _ = write!(sentence, ", on a {} mandate", writ(settings));
+                    let _ = write!(
+                        sentence,
+                        ", on {} {} mandate{}",
+                        article(settings),
+                        writ(settings),
+                        settings_clause(settings)
+                    );
                 }
                 if initial.priority != 0 {
                     let _ = write!(
@@ -280,9 +287,17 @@ fn row_sentence(row: &InterfaceRow) -> String {
     match row.row.as_ref() {
         None => s::ROW_NOTHING.to_owned(),
         Some(interface_row::Row::SetMandate(settings)) => {
-            format!("{} {} mandate", s::ROW_SET_MANDATE, writ(settings))
+            format!(
+                "{} {} {} mandate{}",
+                s::ROW_SET_MANDATE,
+                article(settings),
+                writ(settings),
+                settings_clause(settings)
+            )
         }
-        Some(interface_row::Row::SetMandateSettings(_)) => s::ROW_SET_SETTINGS.to_owned(),
+        Some(interface_row::Row::SetMandateSettings(settings)) => {
+            format!("{}{}", s::ROW_SET_SETTINGS, settings_clause(settings))
+        }
         Some(interface_row::Row::SetPriority(value)) => {
             format!("{} {}", s::ROW_SET_PRIORITY, priority(*value))
         }
@@ -316,6 +331,166 @@ fn row_sentence(row: &InterfaceRow) -> String {
         Some(interface_row::Row::QueueStructure(queue)) => {
             format!("{} {}", s::ROW_QUEUE, queue.blueprint_id)
         }
+    }
+}
+
+/// What a Defend or an Attack arm writes, as a clause after its writ: `""`
+/// for every other writ and for an empty arm, so S1's prose is unchanged
+/// (S2's plan, task `vfy2`). Every field the arm writes is said, in field
+/// order, as the file wrote it; whether it is legal is the verifier's.
+fn settings_clause(settings: &MandateSettings) -> String {
+    let parts = match settings.mandate.as_ref() {
+        Some(mandate_settings::Mandate::Defend(defend)) => defend_parts(defend),
+        Some(mandate_settings::Mandate::Attack(attack)) => attack_parts(attack),
+        _ => Vec::new(),
+    };
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!(": {}", join(&parts))
+    }
+}
+
+/// A Defend arm's fields, in field order.
+fn defend_parts(defend: &DefendSettings) -> Vec<String> {
+    let mut parts = Vec::new();
+    if !defend.protect.is_empty() {
+        let assets: Vec<String> = defend
+            .protect
+            .iter()
+            .map(|entry| match entry.asset.as_ref() {
+                Some(protected_asset::Asset::Beacon(reference)) => beacon(Some(reference)),
+                Some(protected_asset::Asset::MyCommander(_)) => s::DEFEND_MY_COMMANDER.to_owned(),
+                None => s::DEFEND_NOTHING.to_owned(),
+            })
+            .collect();
+        parts.push(format!("{} {}", s::DEFEND_PROTECTING, join(&assets)));
+    }
+    if defend.engagement_radius_pct != 0 {
+        parts.push(format!(
+            "{} {}% {}",
+            s::DEFEND_ENGAGING,
+            defend.engagement_radius_pct,
+            s::DEFEND_OF_SPHERE
+        ));
+    }
+    if defend.pursue != 0 {
+        parts.push(
+            match defend_settings::Pursue::try_from(defend.pursue) {
+                Ok(defend_settings::Pursue::Never) => s::PURSUE_NEVER,
+                Ok(defend_settings::Pursue::SphereEdge) => s::PURSUE_SPHERE_EDGE,
+                Ok(defend_settings::Pursue::WhileInReach) => s::PURSUE_WHILE_IN_REACH,
+                Ok(defend_settings::Pursue::Unspecified) | Err(_) => s::PURSUE_UNSET,
+            }
+            .to_owned(),
+        );
+    }
+    if let Some(pickets) = defend.picket_scouts {
+        parts.push(format!(
+            "{} {pickets} {}",
+            s::DEFEND_PICKET,
+            s::DEFEND_PICKET_UNIT
+        ));
+    }
+    parts
+}
+
+/// An Attack arm's fields, in field order.
+fn attack_parts(attack: &AttackSettings) -> Vec<String> {
+    let mut parts = Vec::new();
+    if let Some(target) = attack.target.as_ref() {
+        let what = match target.target.as_ref() {
+            Some(attack_target::Target::Beacon(reference)) => beacon(Some(reference)),
+            Some(attack_target::Target::Voxel(at)) => voxel(at),
+            Some(attack_target::Target::EnemyCommander(_)) => s::ATTACK_ENEMY_COMMANDER.to_owned(),
+            None => s::ATTACK_NOTHING.to_owned(),
+        };
+        parts.push(format!("{} {what}", s::ATTACK_TARGETING));
+    }
+    if attack.retarget != 0 {
+        parts.push(
+            match attack_settings::Retarget::try_from(attack.retarget) {
+                Ok(attack_settings::Retarget::NearestKnown) => s::RETARGET_NEAREST,
+                Ok(attack_settings::Retarget::None) => s::RETARGET_NONE,
+                Ok(attack_settings::Retarget::Unspecified) | Err(_) => s::RETARGET_UNSET,
+            }
+            .to_owned(),
+        );
+    }
+    if let Some(staging) = attack.staging.as_ref() {
+        parts.push(format!("{} {}", s::ATTACK_STAGING, voxel(staging)));
+    }
+    if let Some(launch) = attack.launch.as_ref() {
+        let mut when = Vec::new();
+        if let Some(force) = launch.force_size {
+            when.push(format!("{force} {}", s::LAUNCH_FORCE));
+        }
+        if let Some(ms) = launch.segment_ms {
+            when.push(format!("{} {}", duration(Ms::new(ms)), s::LAUNCH_SEGMENT));
+        }
+        let when = if when.is_empty() {
+            s::LAUNCH_NEVER.to_owned()
+        } else {
+            when.join(s::OR)
+        };
+        parts.push(format!("{} {when}", s::ATTACK_LAUNCH));
+    }
+    if let Some(retreat) = attack.retreat.as_ref() {
+        let mut when = Vec::new();
+        if let Some(pct) = retreat.force_below_pct {
+            when.push(format!(
+                "{} {pct}% {}",
+                s::RETREAT_FORCE,
+                s::RETREAT_FORCE_UNIT
+            ));
+        }
+        if let Some(ms) = retreat.after_launch_ms {
+            when.push(format!("{} {}", duration(Ms::new(ms)), s::RETREAT_TIME));
+        }
+        if !when.is_empty() {
+            parts.push(format!("{} {}", s::ATTACK_RETREAT, when.join(s::OR)));
+        }
+    }
+    if attack.after_action != 0 {
+        parts.push(
+            match attack_settings::AfterAction::try_from(attack.after_action) {
+                Ok(attack_settings::AfterAction::RegroupAtStaging) => s::AFTER_REGROUP,
+                Ok(attack_settings::AfterAction::ReturnHome) => s::AFTER_HOME,
+                Ok(attack_settings::AfterAction::Unspecified) | Err(_) => s::AFTER_UNSET,
+            }
+            .to_owned(),
+        );
+    }
+    if !attack.avoid_areas.is_empty() {
+        let count = attack.avoid_areas.len();
+        let noun = if count == 1 {
+            s::AREA_ONE
+        } else {
+            s::AREA_MANY
+        };
+        parts.push(format!("{} {count} {noun}", s::ATTACK_AVOIDING));
+    }
+    match attack.breach_allowed {
+        Some(true) => parts.push(s::BREACH_ALLOWED.to_owned()),
+        Some(false) => parts.push(s::BREACH_REFUSED.to_owned()),
+        None => {}
+    }
+    if attack.waves != 0 {
+        let noun = if attack.waves == 1 {
+            s::WAVE_ONE
+        } else {
+            s::WAVE_MANY
+        };
+        parts.push(format!("{} {} {noun}", s::WAVES_IN, attack.waves));
+    }
+    parts
+}
+
+/// The article a writ's name takes: "an Attack", "a Build".
+fn article(settings: &MandateSettings) -> &'static str {
+    match settings.mandate.as_ref() {
+        Some(mandate_settings::Mandate::Attack(_)) => s::ARTICLE_AN,
+        _ => s::ARTICLE_A,
     }
 }
 
@@ -736,17 +911,10 @@ fn line(depth: usize, text: &str, out: &mut String) {
 
 /// `a`, `a and b`, `a, b and c` — the Oxford-free reading a sentence wants.
 fn join(parts: &[String]) -> String {
-    match parts.len() {
-        0 => String::new(),
-        1 => parts.first().cloned().unwrap_or_default(),
-        _ => {
-            let last = parts.last().cloned().unwrap_or_default();
-            let head: Vec<String> = parts
-                .get(..parts.len().saturating_sub(1))
-                .unwrap_or_default()
-                .to_vec();
-            format!("{} and {last}", head.join(", "))
-        }
+    match parts.split_last() {
+        None => String::new(),
+        Some((last, [])) => last.clone(),
+        Some((last, head)) => format!("{} and {last}", head.join(", ")),
     }
 }
 

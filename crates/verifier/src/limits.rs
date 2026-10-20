@@ -5,8 +5,8 @@
 //!
 //! **Tuning values are data** (AGENTS.md section 12). Not one number below is a
 //! constant in this crate: the size budget, the cooldown floor, the `max_fires`
-//! ceiling, the notebook length, the reach window, the map extent and the
-//! beacon sphere all come from `rules/rules.v1.json` through
+//! ceiling, the notebook length, the reach window, the map extent, the
+//! beacon sphere and a wall's least height all come from `rules/rules.v1.json` through
 //! [`RulesTable::message`], and they are covered by `rules_hash` — so a tuning
 //! pull request that moves one of them moves every `report_hash` with it, by
 //! construction rather than by agreement (decisions-log item 89).
@@ -48,6 +48,11 @@ pub const CONDITION_MAX_NODES: u32 = 24;
 pub enum RulesGap {
     /// A block the verifier reads is absent. Proto3 cannot tell that from a
     /// block of zeroes, so the verifier refuses rather than guesses.
+    ///
+    /// Since S2's `base` the sim's loader refuses most such blocks first, so
+    /// for them this is defence in depth; `verifier`, `materials` and
+    /// `interface_times`, which only the verifier reads, reach it
+    /// (`tests/verifier.rs`' `which_missing_blocks_the_sim_refuses_first_is_measured`).
     MissingBlock(&'static str),
     /// A value does not fit the signed type the checks compare in.
     OutOfRange {
@@ -114,6 +119,7 @@ pub struct Limits {
     decision_tick_ms: i32,
     map_size: [i32; 3],
     beacon_sphere_radius_voxels: i32,
+    wall_min_height_voxels: i32,
 }
 
 impl Limits {
@@ -138,6 +144,10 @@ impl Limits {
             .r#match
             .as_ref()
             .ok_or(RulesGap::MissingBlock("match"))?;
+        let materials = message
+            .materials
+            .as_ref()
+            .ok_or(RulesGap::MissingBlock("materials"))?;
 
         Ok(Limits {
             size_budget_units: verifier.size_budget_units,
@@ -154,6 +164,10 @@ impl Limits {
             beacon_sphere_radius_voxels: signed(
                 "beacon.sphere_radius_voxels",
                 beacon.sphere_radius_voxels,
+            )?,
+            wall_min_height_voxels: signed(
+                "materials.wall_min_height_voxels",
+                materials.wall_min_height_voxels,
             )?,
         })
     }
@@ -197,8 +211,10 @@ impl Limits {
     /// (`verifier.reach_memory_ms`).
     ///
     /// The one reach window of spec section 10: Attack target selectors take
-    /// their freshness from it rather than declaring their own. Read but not yet
-    /// compared against — `W0703` waits for the sightings that would be stale.
+    /// their freshness from it rather than declaring their own. From S2 an
+    /// Attack target named by id, or the enemy commander, is compared against
+    /// it (`E0418`), and so is every other reference to an enemy beacon
+    /// (`W0703`), each over the sightings the view carries.
     ///
     /// PLACEHOLDER: the reach window's tuning — owner, S3 (item 90).
     #[must_use]
@@ -228,6 +244,13 @@ impl Limits {
     #[must_use]
     pub const fn beacon_sphere_radius_voxels(&self) -> i32 {
         self.beacon_sphere_radius_voxels
+    }
+
+    /// The lowest wall a Build target may ask for, in voxels above the ground
+    /// (`materials.wall_min_height_voxels`; S2's plan, decision 40).
+    #[must_use]
+    pub const fn wall_min_height_voxels(&self) -> i32 {
+        self.wall_min_height_voxels
     }
 }
 

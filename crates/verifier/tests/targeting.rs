@@ -199,7 +199,9 @@ fn generator_on(on: &str) -> String {
 }
 
 fn build_initial(target: &str) -> String {
-    format!(r#"{{"mandate":{{"build":{{"targets":[{target}],"terraform":"NONE"}}}}}}"#)
+    format!(
+        r#"{{"mandate":{{"roe":"RETURN_FIRE","build":{{"targets":[{target}],"repair_threshold_pct":50,"terraform":"NONE"}}}}}}"#
+    )
 }
 
 fn visit_core(row: &str) -> String {
@@ -331,6 +333,7 @@ fn an_edit_row_carries_no_default_note() {
             r#"{"set_mandate":{"mine":{"dig_max_depth":3}}}"#
         )),
         [
+            "/declarative/route/0/interface/rows/0/set_mandate/roe",
             "/declarative/route/0/interface/rows/0/set_mandate/mine/seam_choice",
             "/declarative/route/0/interface/rows/0/set_mandate/mine/pillar_spacing",
         ]

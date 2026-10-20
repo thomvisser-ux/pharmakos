@@ -1,0 +1,27 @@
+{
+  "qualifies": true,
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "W0703",
+      "severity": "WARNING",
+      "path": "/declarative/route/0/move/to/beacon_anchor/beacon_id",
+      "message": "the sighting this rests on is 240000 ms old; the reach window is 180000 ms.",
+      "beginner": "What the seat remembers here may be too old to act on.",
+      "map_refs": [
+        {
+          "x": 300,
+          "y": 300,
+          "z": 40
+        }
+      ]
+    }
+  ],
+  "report_hash": "lQ5VHCFhQ/k=",
+  "rules_hash": "gCjUE4Tm3i8=",
+  "plan_fingerprint": "xwxDkvg/dP4=",
+  "verifier_version": "0.1.0-s2.2",
+  "size_units": 1,
+  "size_budget": 128
+}
+

@@ -11,6 +11,9 @@
 //! > one unit per route step, per handler, per step in a handler body, per build
 //! > target, per protected area and per patrol waypoint.
 //!
+//! From S2 an Attack's avoid area and a Defend's protect-list entry count one
+//! unit each as well (task `vfy2`; `mandate_units` says why).
+//!
 //! **Conditions and settings count nothing**, because their cost is bounded by
 //! the node they hang off — a condition is capped at 24 nodes and four levels by
 //! spec section 10, and a mandate's settings are a fixed row shape.
@@ -92,10 +95,23 @@ fn initial_units(initial: &InitialSettings) -> u32 {
     initial.mandate.as_ref().map_or(0, mandate_units)
 }
 
-/// Build targets and protected areas inside one mandate's settings.
+/// Build targets and protected areas inside one mandate's settings, and from
+/// S2 an Attack's avoid areas and a Defend's protect list.
+///
+/// **What S2 adds, decided (task `vfy2`; the owner can veto).** An Attack's
+/// `avoid_areas` count one unit each: `playbook.proto` says so ("Areas count
+/// toward the playbook size budget"), and an avoid area is a route cost the
+/// pathfinder pays every time it plans, as a protected area is one the Build
+/// mandate tests. A Defend's `protect` list counts one unit an entry too,
+/// for item 94's own reason: it is a list of unbounded length that the
+/// guards read on every decision tick, and the size budget is the one meter
+/// that bounds what a playbook makes the sim do each tick. Survey's
+/// `probe_areas` still count nothing, as item 94 lists them.
 fn mandate_units(settings: &MandateSettings) -> u32 {
     match settings.mandate.as_ref() {
         Some(mandate_settings::Mandate::Build(build)) => build_units(build),
+        Some(mandate_settings::Mandate::Attack(attack)) => count(attack.avoid_areas.len()),
+        Some(mandate_settings::Mandate::Defend(defend)) => count(defend.protect.len()),
         _ => 0,
     }
 }
