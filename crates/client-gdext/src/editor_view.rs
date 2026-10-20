@@ -18,7 +18,7 @@ use pharmakos_proto::json;
 use crate::editor::{Check, Editor, Route, Row, Selector, Target, Unchecked, rows_of};
 use crate::error::BridgeError;
 use crate::rig::{Meter, Recap};
-use crate::targeting::{Chip, ChipFeature, FeatureKind, FeatureName};
+use crate::targeting::{AttackAim, AttackMark, Chip, ChipFeature, FeatureKind, FeatureName};
 use crate::wizard::{Instance, Wizard};
 
 /// The menu's target, from the dictionary GDScript builds: `voxel` (a `Vector3i` in the
@@ -186,12 +186,12 @@ pub(crate) fn state_dictionary(editor: &Editor) -> VarDictionary {
     put("prose", prose.to_variant());
     put("prose_current", editor.prose_current().to_variant());
 
-    let mut chips = VarArray::new();
-    for chip in editor.chips() {
-        chips.push(&chip_dictionary(chip).to_variant());
-    }
-    put("chips", chips.to_variant());
+    put("chips", chips_array(editor.chips()).to_variant());
     put("chips_current", editor.chips_current().to_variant());
+    put(
+        "attack_targets",
+        attack_array(&editor.attack_targets()).to_variant(),
+    );
     put(
         "this_round",
         editor.this_round().unwrap_or_default().to_variant(),
@@ -227,12 +227,12 @@ pub(crate) fn state_dictionary(editor: &Editor) -> VarDictionary {
 /// One chip as a dictionary: `pointer`, `step` (from 1; 0 for a reference outside the
 /// route), `arm` (`covering`, `on`, `other`), `form` (`name`, `description`,
 /// `covered`, `unknown`), `now` and `next` (each empty, or a feature: `id`, `kind`, `x`,
-/// `y` as the name spells them, and `travel_ms` as the gateway answered), `failure` and
-/// `matched`.
+/// `y` as the name spells them, and `travel_ms` as the gateway answered), `failure`,
+/// `matched` and `reachable` (whether a route reaches what it reads, as the gateway said).
 fn chip_dictionary(chip: &Chip) -> VarDictionary {
     let mut out = VarDictionary::new();
     out.set(&"pointer".to_variant(), &chip.pointer.to_variant());
-    out.set(&"step".to_variant(), &count(chip.step.unwrap_or(0)));
+    out.set(&"step".to_variant(), &step_count(chip.step));
     out.set(&"arm".to_variant(), &chip.arm.name().to_variant());
     out.set(&"form".to_variant(), &chip.form.name().to_variant());
     out.set(
@@ -248,6 +248,43 @@ fn chip_dictionary(chip: &Chip) -> VarDictionary {
         &"matched".to_variant(),
         &i64::from(chip.matched).to_variant(),
     );
+    out.set(&"reachable".to_variant(), &chip.reachable.to_variant());
+    out
+}
+
+/// The chips as an array of [`chip_dictionary`]s, in the file's order.
+fn chips_array(chips: &[Chip]) -> VarArray {
+    let mut out = VarArray::new();
+    for chip in chips {
+        out.push(&chip_dictionary(chip).to_variant());
+    }
+    out
+}
+
+/// The Attack targets as an array of [`attack_dictionary`]s, in the file's order.
+fn attack_array(marks: &[AttackMark]) -> VarArray {
+    let mut out = VarArray::new();
+    for mark in marks {
+        out.push(&attack_dictionary(mark).to_variant());
+    }
+    out
+}
+
+/// One Attack beacon's target as a dictionary: `pointer`, `step` (from 1; 0 outside the
+/// route), `aim` (`voxel`, `beacon`, `selector`, `enemy_commander`, `unknown`), and `at` (a
+/// `Vector3i`, sim axes) for a voxel or `id` (the name the player wrote) for a beacon.
+fn attack_dictionary(mark: &AttackMark) -> VarDictionary {
+    let mut out = VarDictionary::new();
+    out.set(&"pointer".to_variant(), &mark.pointer.to_variant());
+    out.set(&"step".to_variant(), &step_count(mark.step));
+    out.set(&"aim".to_variant(), &mark.aim.name().to_variant());
+    match &mark.aim {
+        AttackAim::Voxel([x, y, z]) => {
+            out.set(&"at".to_variant(), &Vector3i::new(*x, *y, *z).to_variant());
+        }
+        AttackAim::Beacon(id) => out.set(&"id".to_variant(), &id.to_variant()),
+        AttackAim::Selector | AttackAim::EnemyCommander | AttackAim::Unknown => {}
+    }
     out
 }
 
@@ -386,4 +423,13 @@ fn counter(value: u64) -> Variant {
 
 fn count(value: usize) -> Variant {
     i64::try_from(value).unwrap_or(i64::MAX).to_variant()
+}
+
+/// A route step numbered from 1 as GDScript reads it, 0 for none: the panel's own
+/// spelling of "outside the route", which no step number can be.
+fn step_count(step: Option<usize>) -> Variant {
+    match step {
+        Some(step) => count(step),
+        None => 0_i64.to_variant(),
+    }
 }

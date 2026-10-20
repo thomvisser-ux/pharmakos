@@ -280,8 +280,10 @@ mod tests {
         let text = std::fs::read_to_string(&path)
             .unwrap_or_else(|error| panic!("reading {}: {error}", path.display()));
         let table = table_from_json(&text).expect("the committed table is canonical gp.v1 JSON");
-        // Present, not pinned: both rows are the owner's to tune at S1's demo (the `tune`
-        // lane), and `tests/godot_project.rs` holds the client's inline copy to them.
+        // Present, not pinned: the owner ruled at S1's demo that both rows stand for S1
+        // (decisions-log item 139 (1), ruling 6), and they stay the owner's to tune, so a
+        // pin here would only move with them; `tests/godot_project.rs` holds the client's
+        // inline copy to them.
         assert!(first_lull_ms(&table).is_ok(), "match.first_lull_ms");
         assert!(lull_ms(&table).is_ok(), "match.lull_ms");
     }

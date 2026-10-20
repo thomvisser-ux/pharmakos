@@ -64,7 +64,14 @@ const CLOCKWISE_FRONT: bool = true;
 /// something rather than as grey. They are art, not a rules-table row — nothing in
 /// `rules/rules.v1.json` names a palette — so they cannot be a parameter the caller fills.
 /// Owner replaces them at S6's art polish, and the geometry golden moves when they do.
-pub const PALETTE: [[u8; 3]; 7] = [
+///
+/// Rows 7 to 23 are S2's (S2's plan, task `view`; E14 and decisions 10 and 42, ruled by
+/// decisions-log item 144 (11)): bedrock; a wall by the seat that built it, whole and
+/// cracked, for the sim's four seats; and each terrain row cracked once and twice, a
+/// darker shade of its base. PLACEHOLDER: the S2 rows' colours — owner, at S6's art pass.
+/// They are art like the rows above; a seat's wall colour says only who built it, never
+/// whose the wall is now (that is the sim's reading, E14).
+pub const PALETTE: [[u8; 3]; 24] = [
     [0, 0, 0],       // 0 air, never emitted
     [133, 133, 143], // 1 stone
     [107, 79, 51],   // 2 dirt
@@ -72,7 +79,75 @@ pub const PALETTE: [[u8; 3]; 7] = [
     [204, 163, 66],  // 4 ore A
     [71, 168, 189],  // 5 ore B
     [189, 184, 173], // 6 concrete
+    [58, 56, 64],    // 7 bedrock
+    [150, 196, 190], // 8 wall, seat 0, whole
+    [102, 133, 129], // 9 wall, seat 0, cracked
+    [204, 140, 128], // 10 wall, seat 1, whole
+    [139, 95, 87],   // 11 wall, seat 1, cracked
+    [212, 196, 128], // 12 wall, seat 2, whole
+    [144, 133, 87],  // 13 wall, seat 2, cracked
+    [170, 150, 204], // 14 wall, seat 3, whole
+    [116, 102, 139], // 15 wall, seat 3, cracked
+    [86, 63, 41],    // 16 dirt, cracked once
+    [66, 49, 32],    // 17 dirt, cracked twice
+    [106, 106, 114], // 18 stone, cracked once
+    [82, 82, 89],    // 19 stone, cracked twice
+    [163, 130, 53],  // 20 ore A, cracked once
+    [126, 101, 41],  // 21 ore A, cracked twice
+    [57, 134, 151],  // 22 ore B, cracked once
+    [44, 104, 117],  // 23 ore B, cracked twice
 ];
+
+/// The palette ids by what each row draws, so the client's wire lookup and the tests read
+/// a row by its name rather than by its number.
+pub mod palette {
+    /// Generated stone.
+    pub const STONE: u8 = 1;
+    /// Generated dirt.
+    pub const DIRT: u8 = 2;
+    /// Grass.
+    pub const GRASS: u8 = 3;
+    /// A scrap seam's voxels, every grade.
+    pub const ORE_A: u8 = 4;
+    /// A heat vent's voxels, every grade.
+    pub const ORE_B: u8 = 5;
+    /// Concrete.
+    pub const CONCRETE: u8 = 6;
+    /// The floor no blast cracks or removes.
+    pub const BEDROCK: u8 = 7;
+    /// A wall seat 0 built, whole.
+    pub const WALL_0: u8 = 8;
+    /// A wall seat 0 built, cracked.
+    pub const WALL_0_CRACKED: u8 = 9;
+    /// A wall seat 1 built, whole.
+    pub const WALL_1: u8 = 10;
+    /// A wall seat 1 built, cracked.
+    pub const WALL_1_CRACKED: u8 = 11;
+    /// A wall seat 2 built, whole.
+    pub const WALL_2: u8 = 12;
+    /// A wall seat 2 built, cracked.
+    pub const WALL_2_CRACKED: u8 = 13;
+    /// A wall seat 3 built, whole.
+    pub const WALL_3: u8 = 14;
+    /// A wall seat 3 built, cracked.
+    pub const WALL_3_CRACKED: u8 = 15;
+    /// Dirt cracked once.
+    pub const DIRT_CRACKED_ONCE: u8 = 16;
+    /// Dirt cracked twice.
+    pub const DIRT_CRACKED_TWICE: u8 = 17;
+    /// Stone cracked once.
+    pub const STONE_CRACKED_ONCE: u8 = 18;
+    /// Stone cracked twice.
+    pub const STONE_CRACKED_TWICE: u8 = 19;
+    /// Ore A cracked once.
+    pub const ORE_A_CRACKED_ONCE: u8 = 20;
+    /// Ore A cracked twice.
+    pub const ORE_A_CRACKED_TWICE: u8 = 21;
+    /// Ore B cracked once.
+    pub const ORE_B_CRACKED_ONCE: u8 = 22;
+    /// Ore B cracked twice.
+    pub const ORE_B_CRACKED_TWICE: u8 = 23;
+}
 
 /// The per-face shading factor, in 256ths, indexed by [`Face::index`].
 ///

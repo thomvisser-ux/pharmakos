@@ -118,6 +118,7 @@ mod sweep;
 mod upload;
 
 pub use crate::bake::{ChunkBorders, LightError, LightField, LightParams, chunk_view, map_offset};
+pub use crate::sweep::palette;
 pub use crate::sweep::{
     FACE_SHADE_256, MAX_VERTICES, MeshError, Mesher, PALETTE, gpu_surface_bytes, mesh_chunk,
     quantise_channel,

@@ -547,9 +547,19 @@ impl SealLine {
 /// source.
 pub const SAFE_PLAYBOOK_FILED_KIND: &str = "safe_playbook_filed";
 
-/// The error code `estimate_route` answers a waypoint that resolves to nothing with: a
-/// `covering` that covers nothing, or a selector that ranks nothing, which would be a step
-/// failure at run time (`crates/gateway/src/surface/knowledge.rs`, `place_of`).
+/// The error code `estimate_route` answers a waypoint that resolves to nothing with
+/// (`crates/gateway/src/surface/knowledge.rs`, `place_of`): a `covering` that covers
+/// nothing, a selector that ranks nothing, a beacon this seat does not know (unknown, or
+/// another seat's it has not seen, which the gateway answers alike so that a seat cannot map
+/// the enemy's beacons), or a commander standing nowhere. Every one is the route's answer
+/// and is drawn as the route (decisions-log item 136 (3) (k)).
+///
+/// **Not narrowed to the `covering` and selector causes** (item 136 (5) asked S2's first
+/// client lane to decide; decided, the owner can veto). The client reads the code alone, and
+/// telling the causes apart would mean classifying the waypoints itself or parsing the
+/// gateway's sentence, which is the gateway's to word; and the gateway answers an unseen
+/// beacon and a missing one alike on purpose. So a mistyped own beacon reads as no route,
+/// with the gateway's own sentence saying why, rather than as a refused call.
 const ESTIMATE_FOUND_NOTHING: &str = "NOT_FOUND";
 
 /// The route as the gateway priced it: where each leg ends and what it costs.
@@ -569,8 +579,9 @@ pub struct Route {
     /// polyline is drawn, rather than one to a point the gateway never named.
     pub readable: bool,
     /// The gateway's `NOT_FOUND` sentence when a waypoint resolves to nothing — a
-    /// `covering` that covers nothing, a selector that ranks nothing — as it came, and
-    /// empty otherwise. That is the gateway's answer about the route, which the editor
+    /// `covering` that covers nothing, a selector that ranks nothing, a beacon this seat
+    /// does not know, a commander standing nowhere ([`ESTIMATE_FOUND_NOTHING`]) — as it
+    /// came, and empty otherwise. That is the gateway's answer about the route, which the editor
     /// draws (no polyline, the sentence), not a refused call.
     pub found_nothing: String,
 }
@@ -1309,6 +1320,16 @@ impl Editor {
     }
 
     // --- Targeting (S1's plan, task `ui`) -------------------------------------------------
+
+    /// Every Attack beacon's target in the text on screen, in the file's order, for the map
+    /// to draw ([`targeting::attack_targets`]); none without a text.
+    #[must_use]
+    pub fn attack_targets(&self) -> Vec<targeting::AttackMark> {
+        match self.text.as_deref() {
+            Some(text) => targeting::attack_targets(text),
+            None => Vec::new(),
+        }
+    }
 
     /// The chips: what each feature reference in the text reads now, in the file's order.
     #[must_use]
@@ -3096,6 +3117,8 @@ mod tests {
             subtype: "commander".to_owned(),
             owner: "seat.0".to_owned(),
             at: [358, 22, 36],
+            hp: None,
+            heading: None,
         }]);
         // The load itself owes a route estimate.
         let call = editor.next_call(false).expect("the estimate");
@@ -3996,6 +4019,8 @@ mod tests {
             subtype: "commander".to_owned(),
             owner: "seat.0".to_owned(),
             at: [358, 22, 36],
+            hp: None,
+            heading: None,
         }]);
         assert_eq!(method_of(editor.next_call(false)), "estimate_route");
         editor
@@ -4126,6 +4151,8 @@ mod tests {
             subtype: "commander".to_owned(),
             owner: "seat.0".to_owned(),
             at: [358, 22, 36],
+            hp: None,
+            heading: None,
         }]);
         assert_eq!(method_of(editor.next_call(false)), "estimate_route");
         editor
@@ -4161,6 +4188,8 @@ mod tests {
             subtype: "commander".to_owned(),
             owner: "seat.0".to_owned(),
             at: [358, 22, 36],
+            hp: None,
+            heading: None,
         }]);
         assert_eq!(method_of(editor.next_call(false)), "estimate_route");
         let said = "waypoint 1 covers nothing: its step would fail `illegal_site`";
@@ -4193,6 +4222,8 @@ mod tests {
             subtype: "commander".to_owned(),
             owner: "seat.0".to_owned(),
             at: [358, 22, 36],
+            hp: None,
+            heading: None,
         }]);
         assert_eq!(method_of(editor.next_call(false)), "estimate_route");
         let settled = editor

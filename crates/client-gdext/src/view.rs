@@ -42,13 +42,14 @@
 //! mesher's own [`ChunkBorders`], because a whole map is now resident.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::num::NonZeroU32;
 
 use pharmakos_mesher::{
     AIR, CHUNK_EDGE, CHUNK_VOLUME, ChunkBorders, ChunkGrid, DrainBudget, DrainQueue, LightField,
     LightParams, MeshBuffers, Mesher, chunk_view, gpu_surface_bytes,
 };
 use pharmakos_proto::chunk_rle;
-use pharmakos_proto::gp::api::v1::{GetViewResponse, Status, view_entity};
+use pharmakos_proto::gp::api::v1::{GetViewResponse, Status, ViewEntity, view_entity};
 use pharmakos_proto::json::{self, Json};
 
 use crate::chunks;
@@ -60,30 +61,64 @@ use crate::error::BridgeError;
 /// the footer is split off before the result is read against its message.
 pub const STATUS_KEY: &str = "_status";
 
+/// [`CHUNK_EDGE`] as an `i32`, for the sim-axes voxel arithmetic of an origin.
+const CHUNK_EDGE_I32: i32 = 32;
+
+// The two spellings of the chunk edge cannot drift apart.
+const _: () = assert!(CHUNK_EDGE_I32 as usize == CHUNK_EDGE);
+
 /// The mesher's palette id for a wire material byte.
 ///
 /// The wire's table is `ViewChunk`'s comment in `gateway.proto`: 0 air, 1 dirt, 2 stone,
 /// 3 to 5 the scrap seam lean, standard and rich, 6 to 8 the heat vent lean, standard and
-/// rich. The mesher's palette is its own art table (`pharmakos_mesher::PALETTE`): 1 stone,
-/// 2 dirt, 3 grass, 4 ore A, 5 ore B, 6 concrete. So the two disagree about what 1 and 2
-/// mean, and the palette has no row for a vent's richness at all — this lookup is where the
+/// rich; and S2's 9 to 33 (S2's plan, E14 and decisions 10 and 42): 9 to 16 a wall by the
+/// seat that built it, whole then cracked, for seats 0 to 3; 17 to 32 each terrain
+/// material cracked once and twice, ore and vent keeping their grade; and 33 bedrock. The
+/// mesher's palette is its own art table (`pharmakos_mesher::PALETTE`, its ids named in
+/// `pharmakos_mesher::palette`), so the two disagree about what 1 and 2 mean, and the
+/// palette has no row for a seam's or a vent's grade at all: this lookup is where the
 /// wire's meaning meets the art's colours, and it decides nothing about the world.
+///
+/// **A wall is drawn by the seat its material names, which is who built it.** Whose the
+/// wall is now, a seat's or neutral, is the sim's reading of the spheres and is written into
+/// no voxel (E14, decision 42), so the client may not make it (AGENTS.md section 3 rule 4)
+/// and draws the builder's row. A cracked voxel is solid, so it draws as ground in a darker
+/// row of its base, never as a hole.
 ///
 /// **A value this table does not know draws nothing** ([`AIR`]), which is what
 /// `ViewChunk`'s comment requires of every decoder and what lets a material be added to
-/// the wire without breaking this client.
+/// the wire without breaking this client. `every_wire_material_draws` walks the wire's
+/// table in `gateway.proto` and fails on any value it names that maps to air but air.
 ///
 /// PLACEHOLDER: the seam and vent colours — OWNER, at S6's art pass. Art, like the
 /// mesher's palette itself, and whether richness is visible at all; the palette grows the
 /// rows these three share today then.
 #[must_use]
 pub const fn palette_of(wire: u8) -> u8 {
+    use pharmakos_mesher::palette;
     match wire {
-        1 => 2,     // dirt
-        2 => 1,     // stone
-        3..=5 => 4, // scrap seam, lean to rich: the palette's ore A
-        6..=8 => 5, // heat vent, lean to rich: the palette's ore B
-        _ => AIR,   // air, and every value the wire's table does not name
+        1 => palette::DIRT,
+        2 => palette::STONE,
+        3..=5 => palette::ORE_A, // scrap seam, lean to rich
+        6..=8 => palette::ORE_B, // heat vent, lean to rich
+        9 => palette::WALL_0,
+        10 => palette::WALL_0_CRACKED,
+        11 => palette::WALL_1,
+        12 => palette::WALL_1_CRACKED,
+        13 => palette::WALL_2,
+        14 => palette::WALL_2_CRACKED,
+        15 => palette::WALL_3,
+        16 => palette::WALL_3_CRACKED,
+        17 => palette::DIRT_CRACKED_ONCE,
+        18 => palette::DIRT_CRACKED_TWICE,
+        19 => palette::STONE_CRACKED_ONCE,
+        20 => palette::STONE_CRACKED_TWICE,
+        21 | 23 | 25 => palette::ORE_A_CRACKED_ONCE, // a scrap seam of any grade
+        22 | 24 | 26 => palette::ORE_A_CRACKED_TWICE,
+        27 | 29 | 31 => palette::ORE_B_CRACKED_ONCE, // a heat vent of any grade
+        28 | 30 | 32 => palette::ORE_B_CRACKED_TWICE,
+        33 => palette::BEDROCK,
+        _ => AIR, // air, and every value the wire's table does not name
     }
 }
 
@@ -92,10 +127,19 @@ pub const fn palette_of(wire: u8) -> u8 {
 pub enum EntityKind {
     /// A unit; the commander is a unit whose subtype is `commander`.
     Unit,
-    /// A beacon, whose id is `b_NN` and which `get_beacon` takes.
+    /// A beacon. A seat's own is `b_NN`, which `get_beacon` takes; another seat's carries
+    /// the handle the gateway gave this viewer (`e_NN`, or `v_N` for one first seen in a
+    /// Push until the next Lull names it), which the client never parses.
     Beacon,
     /// A structure.
     Structure,
+    /// A mortar shell in flight (S2). Its owner is the seat that fired it.
+    Shell,
+    /// What a dead unit or structure leaves (S2). Owned by nobody.
+    Wreck,
+    /// A structure on a destroyed beacon, turned neutral (S2). Owned by nobody: the wire
+    /// spells its owner `""`.
+    Ruin,
     /// A kind the schema declares and this build has no marker for (today only
     /// `KIND_UNSPECIFIED`, or a number with no name). Drawn as a generic marker rather than
     /// dropped: the server decided the viewer may see it.
@@ -115,26 +159,64 @@ impl EntityKind {
             Self::Unit => "unit",
             Self::Beacon => "beacon",
             Self::Structure => "structure",
+            Self::Shell => "shell",
+            Self::Wreck => "wreck",
+            Self::Ruin => "ruin",
             Self::Unknown => "unknown",
+        }
+    }
+
+    /// The kind a wire value names; [`EntityKind::Unknown`] for `KIND_UNSPECIFIED` and for
+    /// a number the schema has no name for, which is still drawn.
+    #[must_use]
+    pub fn of_wire(kind: i32) -> Self {
+        match view_entity::Kind::try_from(kind) {
+            Ok(view_entity::Kind::Unit) => Self::Unit,
+            Ok(view_entity::Kind::Beacon) => Self::Beacon,
+            Ok(view_entity::Kind::Structure) => Self::Structure,
+            Ok(view_entity::Kind::Shell) => Self::Shell,
+            Ok(view_entity::Kind::Wreck) => Self::Wreck,
+            Ok(view_entity::Kind::Ruin) => Self::Ruin,
+            Ok(view_entity::Kind::Unspecified) | Err(_) => Self::Unknown,
         }
     }
 }
 
 /// One thing standing on the terrain, as the viewer may see it.
+///
+/// Every field is the gateway's, carried as it came: what a seat sees of another seat's
+/// asset is the gateway's fog filter's (S2's plan, decision 5), so a field the gateway
+/// left unset stays unset here and is not drawn, rather than drawn as a zero.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Entity {
     /// Opaque and viewer-scoped. Never parsed here.
     pub id: String,
-    /// Unit, beacon or structure.
+    /// Unit, beacon, structure, shell, wreck or ruin.
     pub kind: EntityKind,
     /// `commander`, `build_drone`, `generator`; empty when the build has no name for it.
     pub subtype: String,
-    /// `seat.0`, or empty for nobody.
+    /// `seat.0`, or empty for nobody (a wreck, a ruin).
     pub owner: String,
     /// Whole voxels, in the SIM's axes: x east, y north, z up.
     pub at: [i32; 3],
+    /// Its hit points and their maximum, whole HP, when the view carries them: on a unit,
+    /// a structure or a beacon the viewer sees live, its own or another seat's. `None` on a
+    /// shell, a wreck and a ruin, which have none. The schema sends the two together.
+    pub hp: Option<Health>,
+    /// Its heading in the sim's units, 65 536 to the full turn, 0 east (+x) and 16 384
+    /// north (+y), when the view carries one: a unit's. `None` for anything without a
+    /// heading of its own.
+    pub heading: Option<u16>,
 }
 
+/// An entity's hit points as the view gave them.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Health {
+    /// Hit points now.
+    pub hp: u32,
+    /// Its maximum hit points, never zero.
+    pub max_hp: NonZeroU32,
+}
 /// One chunk of a page, decoded and ready to store.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct PageChunk {
@@ -233,28 +315,57 @@ pub fn decode_page(result: &Json) -> Result<Page, BridgeError> {
     let entities = response
         .entities
         .iter()
-        .map(|entity| Entity {
-            id: entity.id.clone(),
-            kind: match view_entity::Kind::try_from(entity.kind) {
-                Ok(view_entity::Kind::Unit) => EntityKind::Unit,
-                Ok(view_entity::Kind::Beacon) => EntityKind::Beacon,
-                Ok(view_entity::Kind::Structure) => EntityKind::Structure,
-                _ => EntityKind::Unknown,
-            },
-            subtype: entity.subtype.clone(),
-            owner: entity.owner.clone(),
-            at: entity
-                .at
-                .as_ref()
-                .map_or([0, 0, 0], |voxel| [voxel.x, voxel.y, voxel.z]),
-        })
-        .collect();
+        .map(entity_of)
+        .collect::<Result<Vec<Entity>, BridgeError>>()?;
     Ok(Page {
         at_ms: response.at_ms,
         chunks: decoded,
         entities,
         next_cursor: response.next_cursor,
         complete: response.complete,
+    })
+}
+
+/// One `ViewEntity`, read as it came.
+///
+/// # Errors
+///
+/// [`BridgeError::View`] for an entity with no position, a hit-point count without its
+/// maximum or the other way round, a maximum of zero, or a heading past the full turn.
+/// A refused entity refuses its page, as a refused chunk does: an entity drawn somewhere
+/// the gateway never said, or with a bar it never sent, is a guess.
+fn entity_of(entity: &ViewEntity) -> Result<Entity, BridgeError> {
+    let refused = |why: &str| BridgeError::View(format!("the entity {:?} {why}", entity.id));
+    let at = entity
+        .at
+        .as_ref()
+        .map(|voxel| [voxel.x, voxel.y, voxel.z])
+        .ok_or_else(|| refused("arrived with no position"))?;
+    let hp = match (entity.hp, entity.max_hp) {
+        (None, None) => None,
+        (Some(hp), Some(max_hp)) => Some(Health {
+            hp,
+            max_hp: NonZeroU32::new(max_hp)
+                .ok_or_else(|| refused("has a maximum of zero hit points"))?,
+        }),
+        (Some(_), None) | (None, Some(_)) => {
+            return Err(refused("carries its hit points or their maximum alone"));
+        }
+    };
+    let heading = entity
+        .heading
+        .map(|heading| {
+            u16::try_from(heading).map_err(|_| refused("has a heading past the full turn"))
+        })
+        .transpose()?;
+    Ok(Entity {
+        id: entity.id.clone(),
+        kind: EntityKind::of_wire(entity.kind),
+        subtype: entity.subtype.clone(),
+        owner: entity.owner.clone(),
+        at,
+        hp,
+        heading,
     })
 }
 
@@ -274,7 +385,7 @@ pub fn decode_page_text(text: &str) -> Result<Page, BridgeError> {
 /// edge.
 #[must_use]
 pub fn chunk_coords_of(origin: [i32; 3]) -> Option<[i32; 3]> {
-    let edge = i32::try_from(CHUNK_EDGE).ok()?;
+    let edge = CHUNK_EDGE_I32;
     let mut out = [0_i32; 3];
     for (slot, value) in out.iter_mut().zip(origin) {
         if value < 0 || value.checked_rem(edge)? != 0 {
@@ -285,16 +396,6 @@ pub fn chunk_coords_of(origin: [i32; 3]) -> Option<[i32; 3]> {
     let [east, north, up] = out;
     Some([east, up, north])
 }
-
-/// How many chunks one completing view may change before the light is baked afresh over the
-/// whole map instead of box by box.
-///
-/// Not a rule and not a tuning value: a cost cut with no effect on any pixel. A reconnect's
-/// keyframe or the full-map unlock re-sends many chunks at once, and a box rebake per chunk
-/// would redo overlapping work hundreds of times; above this count one whole bake is
-/// cheaper. Both paths produce the same light field, which
-/// `a_box_rebake_and_a_whole_bake_agree` in this module's tests checks.
-pub const WHOLE_BAKE_ABOVE: usize = 16;
 
 /// How many voxel boundaries a pick ray crosses before it gives up: longer than the
 /// camera's farthest reach across the whole map.
@@ -481,7 +582,7 @@ impl ViewModel {
 
     /// Whether the voxel at `world` (x east, y up, z north) is solid in the chunks held.
     fn solid_world(&self, world: [i32; 3]) -> bool {
-        let edge = i32::try_from(CHUNK_EDGE).unwrap_or(32);
+        let edge = CHUNK_EDGE_I32;
         let [x, up, north] = world;
         if x < 0 || up < 0 || north < 0 {
             return false;
@@ -604,7 +705,17 @@ impl ViewModel {
         Ok(())
     }
 
-    /// Writes the changed chunks into the map, rebakes their light and queues what moved.
+    /// Writes the changed chunks into the map, relights what they changed and queues the
+    /// chunks whose mesh moved.
+    ///
+    /// Each changed chunk is compared with the copy the map holds, voxel by voxel, and only
+    /// the box of voxels that differ is handed to the mesher's bounded relight
+    /// ([`LightField::relight`]), which re-bakes box by box, or in one whole bake when the
+    /// boxes together are larger than the map, and names exactly the chunks whose mesh the
+    /// edits changed. Before S2 a changed chunk re-baked and queued its whole padded box,
+    /// and more than 16 changed chunks re-baked the whole map and queued every chunk of it,
+    /// so a crater stream at speed queued the map (S2's plan, task `view`). A diff of two
+    /// copies of what the gateway sent decides nothing: it is where to redraw.
     fn rebake_changed(&mut self) -> Result<usize, BridgeError> {
         let Some(map) = self.map.as_mut() else {
             return Ok(0);
@@ -613,41 +724,27 @@ impl ViewModel {
             return Ok(0);
         }
         let before = map.queue.len();
-        let mut boxes: Vec<([i32; 3], [i32; 3])> = Vec::with_capacity(self.changed.len());
+        let mut edits: Vec<([i32; 3], [i32; 3])> = Vec::with_capacity(self.changed.len());
         for origin in &self.changed {
-            let (Some(bytes), Some(slot)) = (
-                self.held.get(origin),
-                slice_of(map.grid, &mut map.materials, *origin),
-            ) else {
-                continue;
-            };
+            let bytes = self.held.get(origin).ok_or_else(|| {
+                BridgeError::View(format!("the changed chunk at {origin:?} is not held"))
+            })?;
+            let corner = mesher_corner(*origin)
+                .ok_or_else(|| BridgeError::View(format!("{origin:?} is not a chunk origin")))?;
+            let slot = slice_of(map.grid, &mut map.materials, *origin).ok_or_else(|| {
+                BridgeError::View(format!("the chunk at {origin:?} is outside the grid"))
+            })?;
+            if let Some(edit) = edited_box(slot, bytes, corner) {
+                edits.push(edit);
+            }
             slot.copy_from_slice(bytes);
-            if let Some(coords) = chunk_coords_of(*origin) {
-                let edge = i32::try_from(CHUNK_EDGE).unwrap_or(32);
-                let lo = coords.map(|value| value.saturating_mul(edge));
-                let hi = lo.map(|value| value.saturating_add(edge.saturating_sub(1)));
-                boxes.push((lo, hi));
-            }
         }
-        let refused = |error: pharmakos_mesher::LightError| {
-            BridgeError::View(format!("the light bake refused: {error}"))
-        };
-        if boxes.len() > WHOLE_BAKE_ABOVE {
-            map.light.bake_all(&map.materials).map_err(refused)?;
-            for chunk in 0..map.grid.chunk_count() {
-                map.queue.push(chunk, self.drains);
-            }
-        } else {
-            let mut dirty: Vec<u32> = Vec::new();
-            for (lo, hi) in &boxes {
-                map.light
-                    .rebake_box(&map.materials, *lo, *hi)
-                    .map_err(refused)?;
-                map.light.dirty_chunks(*lo, *hi, &mut dirty);
-            }
-            for chunk in dirty {
-                map.queue.push(chunk, self.drains);
-            }
+        let mut dirty: Vec<u32> = Vec::new();
+        map.light
+            .relight(&map.materials, &edits, &mut dirty)
+            .map_err(|error| BridgeError::View(format!("the light bake refused: {error}")))?;
+        for chunk in dirty {
+            map.queue.push(chunk, self.drains);
         }
         Ok(map.queue.len().saturating_sub(before))
     }
@@ -709,9 +806,45 @@ impl ViewModel {
         {
             *size = gpu_surface_bytes(buffers);
         }
-        let edge = i32::try_from(CHUNK_EDGE).unwrap_or(32);
+        let edge = CHUNK_EDGE_I32;
         Ok(coords.map(|value| value.saturating_mul(edge)))
     }
+}
+
+/// A sim-axes chunk origin as the chunk's lowest voxel in the MESHER's axes.
+fn mesher_corner(origin: [i32; 3]) -> Option<[i32; 3]> {
+    let coords = chunk_coords_of(origin)?;
+    Some(coords.map(|value| value.saturating_mul(CHUNK_EDGE_I32)))
+}
+
+/// The inclusive box, in map voxels and the mesher's axes, of the voxels whose material
+/// differs between two copies of one chunk whose lowest voxel is `corner`; `None` when the
+/// copies agree. Both are in the mesher's order, `x + 32 z + 1024 y`, which the loops
+/// below walk in.
+fn edited_box(old: &[u8], new: &[u8], corner: [i32; 3]) -> Option<([i32; 3], [i32; 3])> {
+    let mut pairs = old.iter().zip(new);
+    let mut bounds: Option<([i32; 3], [i32; 3])> = None;
+    for y in 0..CHUNK_EDGE_I32 {
+        for z in 0..CHUNK_EDGE_I32 {
+            for x in 0..CHUNK_EDGE_I32 {
+                if pairs.next().is_some_and(|(was, now)| was != now) {
+                    let at = [
+                        corner[0].saturating_add(x),
+                        corner[1].saturating_add(y),
+                        corner[2].saturating_add(z),
+                    ];
+                    bounds = Some(match bounds {
+                        None => (at, at),
+                        Some((lo, hi)) => (
+                            [lo[0].min(at[0]), lo[1].min(at[1]), lo[2].min(at[2])],
+                            [hi[0].max(at[0]), hi[1].max(at[1]), hi[2].max(at[2])],
+                        ),
+                    });
+                }
+            }
+        }
+    }
+    bounds
 }
 
 /// The mesher chunk index of a sim-axes origin, when it is inside `grid`.
@@ -795,19 +928,96 @@ mod tests {
         value
     }
 
-    #[test]
-    fn the_wire_table_maps_every_known_value_and_draws_nothing_for_the_rest() {
-        assert_eq!(palette_of(0), AIR);
-        for known in 1..=8_u8 {
-            assert_ne!(
-                palette_of(known),
-                AIR,
-                "wire material {known} is in the table"
-            );
+    /// The wire's material table, read out of `ViewChunk`'s comment in `gateway.proto`:
+    /// every value the table names, from "THE MATERIAL BYTE VALUES" to "ADDITIVE ONLY".
+    fn wire_table() -> Vec<u8> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../proto/gp/api/v1/gateway.proto");
+        let text = std::fs::read_to_string(&path).expect("gateway.proto reads");
+        let from = text
+            .find("THE MATERIAL BYTE VALUES")
+            .expect("ViewChunk's comment names its table");
+        let to = from
+            + text
+                .get(from..)
+                .and_then(|rest| rest.find("ADDITIVE ONLY"))
+                .expect("the table ends where the comment says it is additive");
+        let mut values: Vec<u8> = Vec::new();
+        for line in text.get(from..to).expect("the table's text").lines() {
+            let row = line.trim_start_matches(|c: char| c == '/' || c.is_whitespace());
+            // A table line starts with a value; a prose line never does.
+            if !row.starts_with(|c: char| c.is_ascii_digit()) {
+                continue;
+            }
+            let words: Vec<&str> = row.split_whitespace().collect();
+            // A row is `<value>  <name ...>`, one or two to a line.
+            for pair in words.windows(2) {
+                if let [value, name] = pair
+                    && let Ok(value) = value.parse::<u8>()
+                    && name.starts_with(|c: char| c.is_ascii_alphabetic())
+                {
+                    values.push(value);
+                }
+            }
         }
-        for unknown in 9..=255_u8 {
+        values.sort_unstable();
+        values.dedup();
+        values
+    }
+
+    /// No value the wire's table names maps to air but air itself, so no material the sim
+    /// writes is drawn as a hole (S2's plan, task `view`; E14). The table runs without a
+    /// gap from 0, and a value past it still draws nothing.
+    #[test]
+    fn every_wire_material_draws() {
+        let table = wire_table();
+        let expected: Vec<u8> = (0..=33).collect();
+        assert_eq!(
+            table, expected,
+            "the wire's table as gateway.proto names it"
+        );
+        for value in &table {
+            if *value == 0 {
+                assert_eq!(palette_of(0), AIR, "air draws nothing");
+            } else {
+                assert_ne!(palette_of(*value), AIR, "wire material {value} draws");
+                let row = usize::from(palette_of(*value));
+                assert!(
+                    row < pharmakos_mesher::PALETTE.len(),
+                    "wire material {value} names palette row {row}, which the palette has"
+                );
+            }
+        }
+        let past = table.last().copied().expect("a table") + 1;
+        for unknown in past..=255_u8 {
             assert_eq!(palette_of(unknown), AIR, "{unknown} is not in the table");
         }
+    }
+
+    /// A wall draws by the seat that built it, whole and cracked apart, and a cracked
+    /// terrain voxel draws in its base's cracked row, never as its base or as air.
+    #[test]
+    fn a_wall_draws_by_its_builder_and_a_cracked_voxel_by_its_base() {
+        use pharmakos_mesher::palette;
+        let walls: Vec<u8> = (9..=16).map(palette_of).collect();
+        let mut distinct = walls.clone();
+        distinct.sort_unstable();
+        distinct.dedup();
+        assert_eq!(
+            distinct.len(),
+            8,
+            "four builders, whole and cracked: {walls:?}"
+        );
+        assert_eq!(palette_of(19), palette::STONE_CRACKED_ONCE);
+        assert_eq!(palette_of(20), palette::STONE_CRACKED_TWICE);
+        assert_eq!(palette_of(17), palette::DIRT_CRACKED_ONCE);
+        assert_eq!(
+            palette_of(21),
+            palette_of(25),
+            "a seam keeps one row whatever its grade"
+        );
+        assert_eq!(palette_of(28), palette_of(32), "and a vent");
+        assert_eq!(palette_of(33), palette::BEDROCK);
     }
 
     #[test]
@@ -940,6 +1150,126 @@ mod tests {
         assert!(
             applied.queued >= 1,
             "the edited chunk is queued: {applied:?}"
+        );
+    }
+
+    /// A completing page of no chunks carrying exactly `entities`.
+    fn with_entities(entities: Vec<ViewEntity>) -> Json {
+        let response = GetViewResponse {
+            at_ms: 0,
+            chunks: Vec::new(),
+            entities,
+            next_cursor: "c".to_owned(),
+            complete: true,
+        };
+        json::encode_json(&response).expect("encodes")
+    }
+
+    fn entity(id: &str, kind: view_entity::Kind, owner: &str) -> ViewEntity {
+        ViewEntity {
+            id: id.to_owned(),
+            kind: kind.into(),
+            subtype: String::new(),
+            owner: owner.to_owned(),
+            at: Some(Voxel { x: 1, y: 2, z: 3 }),
+            hp: None,
+            max_hp: None,
+            heading: None,
+        }
+    }
+
+    /// S2's entities come through as the gateway sent them: HP with its maximum, a heading,
+    /// and shells, wrecks and ruins as their own kinds, a ruin owned by nobody.
+    #[test]
+    fn hit_points_headings_and_s2_kinds_are_carried_as_sent() {
+        let mut raider = entity("u_4", view_entity::Kind::Unit, "seat.1");
+        raider.hp = Some(30);
+        raider.max_hp = Some(120);
+        raider.heading = Some(16_384);
+        let page = decode_page(&with_entities(vec![
+            raider,
+            entity("s_1", view_entity::Kind::Shell, "seat.0"),
+            entity("w_1", view_entity::Kind::Wreck, ""),
+            entity("r_1", view_entity::Kind::Ruin, ""),
+            entity("v_1", view_entity::Kind::Beacon, "seat.1"),
+        ]))
+        .expect("decodes");
+        let kinds: Vec<&str> = page.entities.iter().map(|one| one.kind.name()).collect();
+        assert_eq!(kinds, ["unit", "shell", "wreck", "ruin", "beacon"]);
+        let first = page.entities.first().expect("the raider");
+        assert_eq!(
+            first.hp.map(|health| (health.hp, health.max_hp.get())),
+            Some((30, 120))
+        );
+        assert_eq!(first.heading, Some(16_384));
+        let ruin = page.entities.get(3).expect("the ruin");
+        assert_eq!(
+            (ruin.owner.as_str(), ruin.hp, ruin.heading),
+            ("", None, None)
+        );
+        assert_eq!(
+            page.entities.get(4).map(|beacon| beacon.id.as_str()),
+            Some("v_1"),
+            "a Push's temporary handle is carried as an opaque id"
+        );
+    }
+
+    /// An entity the client would have to guess about refuses its page.
+    #[test]
+    fn an_entity_with_no_position_or_half_its_hit_points_is_refused() {
+        let mut nowhere = entity("u_1", view_entity::Kind::Unit, "seat.0");
+        nowhere.at = None;
+        let mut no_maximum = entity("u_2", view_entity::Kind::Unit, "seat.0");
+        no_maximum.hp = Some(5);
+        let mut no_count = entity("u_3", view_entity::Kind::Unit, "seat.0");
+        no_count.max_hp = Some(5);
+        let mut zero = entity("u_4", view_entity::Kind::Unit, "seat.0");
+        zero.hp = Some(0);
+        zero.max_hp = Some(0);
+        let mut spun = entity("u_5", view_entity::Kind::Unit, "seat.0");
+        spun.heading = Some(65_536);
+        for refused in [nowhere, no_maximum, no_count, zero, spun] {
+            let id = refused.id.clone();
+            let error = decode_page(&with_entities(vec![refused])).expect_err(&id);
+            assert!(matches!(error, BridgeError::View(_)), "{id}: {error}");
+        }
+    }
+
+    /// One crater in a delta queues the chunks its relight reaches, not the map: before S2
+    /// a changed chunk queued its whole padded box, and more than 16 queued every chunk.
+    #[test]
+    fn a_crater_queues_the_chunks_it_reaches_and_not_the_map() {
+        let mut model = ViewModel::new(params(), budget(), EXTENT);
+        let mut keyframe: Vec<([i32; 3], Vec<u8>)> = Vec::new();
+        for x in (0..256).step_by(32) {
+            for y in (0..256).step_by(32) {
+                keyframe.push(([x, y, 0], floor(24, 2)));
+            }
+        }
+        model
+            .apply(decode_page(&result(&keyframe, true)).expect("keyframe"))
+            .expect("applies");
+        while model.pending() > 0 {
+            let _ = model.next_uploads([0, 0, 0]);
+        }
+        // A crater three voxels deep in the middle of chunk (128, 128, 0).
+        let mut cratered = floor(24, 2);
+        for z in 21..24_usize {
+            for y in 14..18_usize {
+                for x in 14..18_usize {
+                    if let Some(slot) = cratered.get_mut(x + 32 * y + 1024 * z) {
+                        *slot = 0;
+                    }
+                }
+            }
+        }
+        let applied = model
+            .apply(decode_page(&result(&[([128, 128, 0], cratered)], true)).expect("delta"))
+            .expect("applies");
+        assert!(
+            (1..=8).contains(&applied.queued),
+            "a crater in the middle of one chunk queues it and at most its neighbours, not \
+             the 64 chunks of the map: {applied:?}"
         );
     }
 

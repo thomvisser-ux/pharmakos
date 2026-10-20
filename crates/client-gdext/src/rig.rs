@@ -1649,6 +1649,8 @@ mod tests {
                     subtype: "commander".to_owned(),
                     owner: "seat.0".to_owned(),
                     at: [358, 22, 36],
+                    hp: None,
+                    heading: None,
                 }]);
             }
         };

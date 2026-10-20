@@ -65,6 +65,8 @@ fn burst(edits: usize, order: Order, latency: usize) -> (Gateway, Rig) {
         subtype: "commander".to_owned(),
         owner: "seat.0".to_owned(),
         at: [358, 22, 36],
+        hp: None,
+        heading: None,
     }]);
 
     let mut in_transit: Vec<(usize, usize, String)> = Vec::new();

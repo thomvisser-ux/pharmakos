@@ -236,6 +236,10 @@ pub struct Chip {
     pub failure: String,
     /// How many features matched before reachability was asked.
     pub matched: u32,
+    /// Whether a route reaches what it reads from its origin, as the gateway answered
+    /// (`ResolvedRef.reachable`): false when it reads nothing, or reads a named feature the
+    /// origin cannot reach, and then `now`'s travel time means nothing and is not drawn.
+    pub reachable: bool,
 }
 
 /// The chips of one `resolve_refs` answer, in the file's order, for the playbook `text`
@@ -293,6 +297,7 @@ pub fn chips_of(result: &Json, text: &str) -> Result<Vec<Chip>, BridgeError> {
                 next,
                 failure: reference.failure,
                 matched: reference.matched,
+                reachable: reference.reachable,
                 pointer: reference.pointer,
             }
         })
@@ -314,6 +319,139 @@ pub fn has_feature_refs(text: &str) -> bool {
         }
     }
     json::read(&crate::editor::strip_comments(text)).is_ok_and(|document| walk(&document))
+}
+
+/// What an Attack beacon's `target` names, as the player wrote it (`gp.v1.AttackTarget`).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum AttackAim {
+    /// A fixed voxel, sim axes (x east, y north, z up).
+    Voxel([i32; 3]),
+    /// An enemy beacon by the name the player wrote (`e_NN`), which the map draws over the
+    /// beacon the view shows under that id, if it shows one.
+    Beacon(String),
+    /// An enemy beacon chosen by a selector when the attack runs: the sim's ranking, so
+    /// nothing is drawn on the map.
+    Selector,
+    /// "The enemy commander", from the seat's last sighting: the sim's reading, so nothing
+    /// is drawn on the map.
+    EnemyCommander,
+    /// A target this lax walk cannot read; the verifier has the last word on it.
+    Unknown,
+}
+
+impl AttackAim {
+    /// The name GDScript looks the target's words up by.
+    #[must_use]
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Self::Voxel(_) => "voxel",
+            Self::Beacon(_) => "beacon",
+            Self::Selector => "selector",
+            Self::EnemyCommander => "enemy_commander",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// One Attack beacon's target, found in the player's text.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct AttackMark {
+    /// The `target`'s JSON Pointer in the file.
+    pub pointer: String,
+    /// The route step it is written in, numbered from 1 as `render_plan` numbers steps;
+    /// `None` outside the route.
+    pub step: Option<usize>,
+    /// What it names.
+    pub aim: AttackAim,
+}
+
+/// Every Attack beacon's target in the playbook `text`, in the file's order: an `attack`
+/// object's `target`, wherever the text writes one (a placement's initial mandate, a
+/// visit's settings row). So the editor can draw what an Attack beacon will go for (S2's
+/// plan, task `view`).
+///
+/// Read laxly, like the route's targets ([`crate::editor::route_waypoints`]): it decides
+/// nothing, a target this walk cannot read is [`AttackAim::Unknown`] and is not drawn, and
+/// the verdict on the file is the verifier's. A selector and "the enemy commander" are
+/// drawn as words only, because where they point is the sim's to read when the attack runs
+/// (AGENTS.md section 3 rule 2, "never ranks"). A text that is not JSON once its comments
+/// are gone names none.
+#[must_use]
+pub fn attack_targets(text: &str) -> Vec<AttackMark> {
+    fn walk(value: &Json, pointer: &mut String, out: &mut Vec<AttackMark>) {
+        match value {
+            Json::Object(entries) => {
+                for (key, child) in entries {
+                    let mark = pointer.len();
+                    pointer.push('/');
+                    pointer.push_str(&key.replace('~', "~0").replace('/', "~1"));
+                    if key == "attack"
+                        && let Some(target) = child.get("target")
+                    {
+                        let at = format!("{pointer}/target");
+                        out.push(AttackMark {
+                            step: step_of(&at),
+                            aim: aim_of(target),
+                            pointer: at,
+                        });
+                    } else {
+                        walk(child, pointer, out);
+                    }
+                    pointer.truncate(mark);
+                }
+            }
+            Json::Array(items) => {
+                for (index, child) in items.iter().enumerate() {
+                    let mark = pointer.len();
+                    pointer.push('/');
+                    pointer.push_str(&index.to_string());
+                    walk(child, pointer, out);
+                    pointer.truncate(mark);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    if let Ok(document) = json::read(&crate::editor::strip_comments(text)) {
+        walk(&document, &mut String::new(), &mut out);
+    }
+    out
+}
+
+/// What one `gp.v1.AttackTarget` object names, in either of proto JSON's spellings.
+fn aim_of(target: &Json) -> AttackAim {
+    if let Some(voxel) = target.get("voxel") {
+        return voxel_aim(voxel);
+    }
+    if target.get("enemy_commander").is_some() || target.get("enemyCommander").is_some() {
+        return AttackAim::EnemyCommander;
+    }
+    let Some(beacon) = target.get("beacon") else {
+        return AttackAim::Unknown;
+    };
+    match beacon.get("beacon_id").or_else(|| beacon.get("beaconId")) {
+        Some(Json::String(id)) => AttackAim::Beacon(id.clone()),
+        Some(_) => AttackAim::Unknown,
+        None => AttackAim::Selector,
+    }
+}
+
+/// A `gp.v1.Voxel` object as an aim. An absent axis is zero, which is proto3 JSON's own
+/// rule for an unwritten integer; an axis that is not a whole number reads as
+/// [`AttackAim::Unknown`], not as zero.
+fn voxel_aim(voxel: &Json) -> AttackAim {
+    let axis = |name: &str| -> Option<i32> {
+        match voxel.get(name) {
+            None => Some(0),
+            Some(Json::Number(lexeme) | Json::String(lexeme)) => lexeme.parse::<i32>().ok(),
+            Some(_) => None,
+        }
+    };
+    match (axis("x"), axis("y"), axis("z")) {
+        (Some(x), Some(y), Some(z)) => AttackAim::Voxel([x, y, z]),
+        _ => AttackAim::Unknown,
+    }
 }
 
 /// The gateway's "This round: ..." sentence, found at the end of a Lull briefing's prose
@@ -411,9 +549,9 @@ mod tests {
             r#"{"refs":[
               {"pointer":"/declarative/route/0/place_beacon/at/covering","feature_id":"vent_120_88","travel_ms":14000,
                "candidates":[{"feature_id":"vent_9_9","travel_ms":9000},{"feature_id":"vent_120_88","travel_ms":14000},{"feature_id":"vent_150_20","travel_ms":16000}],
-               "matched":3,"failure":""},
+               "matched":3,"failure":"","reachable":true},
               {"pointer":"/declarative/route/0/place_beacon/initial/mandate/build/targets/0/anchor/on","feature_id":"vent_120_88","travel_ms":13000,
-               "candidates":[{"feature_id":"vent_120_88","travel_ms":13000}],"matched":1,"failure":""},
+               "candidates":[{"feature_id":"vent_120_88","travel_ms":13000}],"matched":1,"failure":"","reachable":true},
               {"pointer":"/declarative/route/1/place_beacon/at/covering","feature_id":"","travel_ms":0,
                "candidates":[],"matched":3,"failure":"no_target"}
             ],"_status":{"phase":"lull","round":1}}"#,
@@ -423,6 +561,7 @@ mod tests {
         assert_eq!(chips.len(), 3);
         let first = chips.first().expect("one");
         assert_eq!(first.step, Some(1));
+        assert!(first.reachable, "the gateway said the pick is reached");
         assert_eq!(first.arm, ChipArm::Covering);
         assert_eq!(first.form, ChipForm::Description);
         assert_eq!(
@@ -449,6 +588,10 @@ mod tests {
         assert_eq!(third.now, None);
         assert_eq!(third.next, None);
         assert_eq!((third.failure.as_str(), third.matched), ("no_target", 3));
+        assert!(
+            !third.reachable,
+            "a reference that reads nothing reaches nothing"
+        );
     }
 
     #[test]
@@ -461,6 +604,50 @@ mod tests {
         assert!(
             !has_feature_refs(r#"{"declarative":{"route":[{"label":"on","on_death":{}}]}}"#),
             "a key that starts with `on` is not `on`"
+        );
+    }
+
+    /// Every Attack beacon's target is found where the text writes it, named, fixed,
+    /// described or the enemy commander, in either spelling, and nothing is ranked.
+    #[test]
+    fn an_attack_beacons_target_is_read_where_the_text_writes_it() {
+        let text = r#"{
+  // the targets the editor draws
+  "declarative": {"route": [
+    {"label": "a", "place_beacon": {"at": {"voxel": {"x": 1, "y": 2, "z": 3}},
+      "initial": {"mandate": {"attack": {"target": {"beacon": {"beacon_id": "e_03"}}}}}}},
+    {"label": "b", "place_beacon": {"at": {"voxel": {"x": 4, "y": 5, "z": 6}},
+      "initial": {"mandate": {"attack": {"target": {"voxel": {"x": 200, "y": 40}}}}}}},
+    {"label": "c", "place_beacon": {"at": {"voxel": {"x": 7, "y": 8, "z": 9}},
+      "initial": {"mandate": {"attack": {"target": {"enemyCommander": {}}}}}}},
+    {"label": "d", "place_beacon": {"at": {"voxel": {"x": 7, "y": 8, "z": 9}},
+      "initial": {"mandate": {"attack": {"target": {"beacon": {"nearest": {}}}}}}}},
+    {"label": "e", "place_beacon": {"at": {"voxel": {"x": 7, "y": 8, "z": 9}},
+      "initial": {"mandate": {"attack": {"target": {"voxel": {"x": "east"}}}}}}}
+  ]}
+}"#;
+        let marks = attack_targets(text);
+        let aims: Vec<&AttackAim> = marks.iter().map(|mark| &mark.aim).collect();
+        assert_eq!(
+            aims,
+            [
+                &AttackAim::Beacon("e_03".to_owned()),
+                &AttackAim::Voxel([200, 40, 0]),
+                &AttackAim::EnemyCommander,
+                &AttackAim::Selector,
+                &AttackAim::Unknown,
+            ]
+        );
+        let first = marks.first().expect("one");
+        assert_eq!(
+            first.pointer,
+            "/declarative/route/0/place_beacon/initial/mandate/attack/target"
+        );
+        assert_eq!(first.step, Some(1));
+        assert!(attack_targets("not json").is_empty());
+        assert!(
+            attack_targets(COVERING).is_empty(),
+            "no Attack beacon, no target"
         );
     }
 

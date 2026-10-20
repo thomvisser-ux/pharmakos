@@ -1294,7 +1294,30 @@ fn entity_dictionary(entity: &Entity) -> VarDictionary {
     dictionary.set(&"owner".to_variant(), &entity.owner.to_variant());
     let [x, y, z] = entity.at;
     dictionary.set(&"at".to_variant(), &Vector3i::new(x, y, z).to_variant());
+    // Hit points only where the view carried them: an absent key is "draw no bar", never a
+    // bar at zero (decision 5's fields, as the gateway's fog filter filled them).
+    if let Some(health) = entity.hp {
+        dictionary.set(&"hp".to_variant(), &i64::from(health.hp).to_variant());
+        dictionary.set(
+            &"max_hp".to_variant(),
+            &i64::from(health.max_hp.get()).to_variant(),
+        );
+    }
+    if let Some(heading) = entity.heading {
+        dictionary.set(&"yaw".to_variant(), &yaw_of(heading).to_variant());
+    }
     dictionary
+}
+
+/// A sim heading as the yaw a marker turns to, in radians about the world's up axis.
+///
+/// The sim's heading is 65 536 to the full turn, 0 east (+x) and 16 384 north (+y, the
+/// world's +z); a marker's yaw is `atan2(dx, dz)` of the way it faces, as `vista.gd` turns
+/// a marker along its last move. So a heading `h` faces `(cos t, sin t)` in the world's x
+/// and z for `t = h * TAU / 65 536`, which is the yaw `PI / 2 - t`. A unit conversion for
+/// drawing, which decides nothing.
+fn yaw_of(heading: u16) -> f32 {
+    std::f32::consts::FRAC_PI_2 - f32::from(heading) * std::f32::consts::TAU / 65_536.0
 }
 
 /// One renderer's counters as a dictionary GDScript can read.

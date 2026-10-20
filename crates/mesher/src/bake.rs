@@ -198,6 +198,9 @@ pub struct LightField {
     heights: Vec<u16>,
     /// The flood fill's queue, kept so a rebake allocates nothing after the first.
     queue: VecDeque<[i32; 3]>,
+    /// The light before a [`LightField::relight`], kept so a relight allocates nothing
+    /// after the first: a box's copy, or the whole field's before a whole bake.
+    previous: Vec<u8>,
 }
 
 impl LightField {
@@ -213,6 +216,7 @@ impl LightField {
             light: vec![0_u8; grid.voxel_count()],
             heights: vec![0_u16; columns],
             queue: VecDeque::new(),
+            previous: Vec::new(),
         }
     }
 
@@ -388,6 +392,178 @@ impl LightField {
         for cy in first(lo[1], chunks_y)..=last(hi[1], chunks_y) {
             for cz in first(lo[2], chunks_z)..=last(hi[2], chunks_z) {
                 for cx in first(lo[0], chunks_x)..=last(hi[0], chunks_x) {
+                    if let Some(index) = self.grid.chunk_index([cx, cy, cz]) {
+                        out.push(index);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Re-lights the map after a batch of edits and appends exactly the chunks whose mesh
+    /// the batch changed, in chunk-index order, each once.
+    ///
+    /// `edits` are the **edited** boxes, inclusive, in map voxels: the voxels whose
+    /// material changed, which the caller has already written into `materials`. This is the
+    /// bounded incremental relight a crater stream needs (S2's plan, task `view`, against
+    /// G1's three frames). The light is re-baked box by box ([`LightField::rebake_box`])
+    /// while the padded boxes together hold fewer voxels than the map, and in one whole
+    /// bake otherwise; that choice is a cost cut with no effect on any pixel, since the two
+    /// bakes agree. Either way the light before and after is compared, and a chunk is dirty
+    /// only when a voxel that changed, in material or in light, lies inside it or one voxel
+    /// outside it, which is exactly what the mesher reads (a [`ChunkView`]'s one-voxel
+    /// borders). A re-bake that moves no light therefore dirties no chunk beyond the edit,
+    /// where [`LightField::dirty_chunks`] names every chunk the pad reaches.
+    ///
+    /// # Errors
+    ///
+    /// [`LightError::Materials`] when `materials` is not `grid.voxel_count()` bytes; nothing
+    /// is re-lit then.
+    pub fn relight(
+        &mut self,
+        materials: &[u8],
+        edits: &[([i32; 3], [i32; 3])],
+        out: &mut Vec<u32>,
+    ) -> Result<(), LightError> {
+        self.check(materials)?;
+        let mut changed: Vec<([i32; 3], [i32; 3])> = Vec::with_capacity(edits.len());
+        let padded: Vec<([i32; 3], [i32; 3])> = edits
+            .iter()
+            .filter_map(|(lo, hi)| self.padded_box(*lo, *hi))
+            .collect();
+        let volume = padded.iter().fold(0_usize, |sum, (lo, hi)| {
+            sum.saturating_add(box_volume(*lo, *hi))
+        });
+        if volume >= self.grid.voxel_count() {
+            self.previous.clone_from(&self.light);
+            self.bake_all(materials)?;
+            self.whole_changes(&mut changed);
+        } else {
+            for (lo, hi) in edits {
+                let Some((padded_lo, padded_hi)) = self.padded_box(*lo, *hi) else {
+                    continue;
+                };
+                self.snapshot(padded_lo, padded_hi);
+                self.rebake_box(materials, *lo, *hi)?;
+                if let Some(moved) = self.box_changes(padded_lo, padded_hi) {
+                    changed.push(moved);
+                }
+            }
+        }
+        changed.extend(edits.iter().copied());
+        let from = out.len();
+        for (lo, hi) in &changed {
+            self.touching(*lo, *hi, out);
+        }
+        let mut added = out.split_off(from);
+        added.sort_unstable();
+        added.dedup();
+        out.extend(added);
+        Ok(())
+    }
+
+    /// The edited box widened by the pad and cut to the map, as [`LightField::rebake_box`]
+    /// widens it; [`None`] when nothing of it is inside the map.
+    fn padded_box(&self, lo: [i32; 3], hi: [i32; 3]) -> Option<([i32; 3], [i32; 3])> {
+        let [voxels_x, voxels_y, voxels_z] = self.grid.voxels();
+        let pad = self.params.pad();
+        let widened_lo = [
+            lo[0].saturating_sub(pad).max(0),
+            lo[1].saturating_sub(pad).max(0),
+            lo[2].saturating_sub(pad).max(0),
+        ];
+        let widened_hi = [
+            hi[0].saturating_add(pad).min(voxels_x - 1),
+            hi[1].saturating_add(pad).min(voxels_y - 1),
+            hi[2].saturating_add(pad).min(voxels_z - 1),
+        ];
+        (widened_lo[0] <= widened_hi[0]
+            && widened_lo[1] <= widened_hi[1]
+            && widened_lo[2] <= widened_hi[2])
+            .then_some((widened_lo, widened_hi))
+    }
+
+    /// Copies the light inside an inclusive box into the scratch, in the box's own order.
+    fn snapshot(&mut self, lo: [i32; 3], hi: [i32; 3]) {
+        self.previous.clear();
+        for y in lo[1]..=hi[1] {
+            for z in lo[2]..=hi[2] {
+                for x in lo[0]..=hi[0] {
+                    let value = self.light_at(x, y, z);
+                    self.previous.push(value);
+                }
+            }
+        }
+    }
+
+    /// The bounding box of the voxels inside an inclusive box whose light differs from the
+    /// copy [`LightField::snapshot`] took of it.
+    fn box_changes(&self, lo: [i32; 3], hi: [i32; 3]) -> Option<([i32; 3], [i32; 3])> {
+        let mut bounds: Option<([i32; 3], [i32; 3])> = None;
+        let mut before = self.previous.iter();
+        for y in lo[1]..=hi[1] {
+            for z in lo[2]..=hi[2] {
+                for x in lo[0]..=hi[0] {
+                    if before.next() != Some(&self.light_at(x, y, z)) {
+                        bounds = Some(grow(bounds, [x, y, z]));
+                    }
+                }
+            }
+        }
+        bounds
+    }
+
+    /// One bounding box per chunk whose light differs from the copy of the whole field
+    /// taken before a whole bake.
+    fn whole_changes(&self, out: &mut Vec<([i32; 3], [i32; 3])>) {
+        for index in 0..self.grid.chunk_count() {
+            let Some(coords) = self.grid.chunk_coords(index) else {
+                continue;
+            };
+            let corner = coords.map(|value| value.saturating_mul(CHUNK_EDGE_I32));
+            let mut bounds: Option<([i32; 3], [i32; 3])> = None;
+            for y in corner[1]..corner[1].saturating_add(CHUNK_EDGE_I32) {
+                for z in corner[2]..corner[2].saturating_add(CHUNK_EDGE_I32) {
+                    for x in corner[0]..corner[0].saturating_add(CHUNK_EDGE_I32) {
+                        let differs = self
+                            .voxel_offset(x, y, z)
+                            .is_some_and(|at| self.light.get(at) != self.previous.get(at));
+                        if differs {
+                            bounds = Some(grow(bounds, [x, y, z]));
+                        }
+                    }
+                }
+            }
+            if let Some(found) = bounds {
+                out.push(found);
+            }
+        }
+    }
+
+    /// Appends the chunks an inclusive box of changed voxels reaches, one voxel outside it
+    /// included, because the mesher reads a neighbour's boundary voxel.
+    fn touching(&self, lo: [i32; 3], hi: [i32; 3], out: &mut Vec<u32>) {
+        let voxels = self.grid.voxels();
+        let span = |axis: usize| -> Option<(i32, i32)> {
+            let count = voxels.get(axis)?.checked_div(CHUNK_EDGE_I32)?;
+            let first = lo
+                .get(axis)?
+                .saturating_sub(1)
+                .max(0)
+                .checked_div(CHUNK_EDGE_I32)?;
+            let last = hi
+                .get(axis)?
+                .saturating_add(1)
+                .checked_div(CHUNK_EDGE_I32)?
+                .min(count.saturating_sub(1));
+            (first <= last).then_some((first, last))
+        };
+        let (Some((x0, x1)), Some((y0, y1)), Some((z0, z1))) = (span(0), span(1), span(2)) else {
+            return;
+        };
+        for cy in y0..=y1 {
+            for cz in z0..=z1 {
+                for cx in x0..=x1 {
                     if let Some(index) = self.grid.chunk_index([cx, cy, cz]) {
                         out.push(index);
                     }
@@ -745,6 +921,35 @@ pub fn chunk_view<'a>(
     ChunkView::new(slice, field.chunk_light(chunk), borders.views())
 }
 
+/// [`CHUNK_EDGE`] as an `i32`, for map-voxel arithmetic.
+const CHUNK_EDGE_I32: i32 = 32;
+
+// The two spellings of the chunk edge cannot drift apart.
+const _: () = assert!(CHUNK_EDGE_I32 as usize == CHUNK_EDGE);
+
+/// The voxels an inclusive box holds; zero for a box with an axis inside out.
+fn box_volume(lo: [i32; 3], hi: [i32; 3]) -> usize {
+    let side = |axis: usize| -> usize {
+        match (lo.get(axis), hi.get(axis)) {
+            (Some(low), Some(high)) if low <= high => usize::try_from(high.abs_diff(*low))
+                .map_or(usize::MAX, |span| span.saturating_add(1)),
+            _ => 0,
+        }
+    };
+    side(0).saturating_mul(side(1)).saturating_mul(side(2))
+}
+
+/// An inclusive bounding box grown to take in one more voxel.
+fn grow(bounds: Option<([i32; 3], [i32; 3])>, at: [i32; 3]) -> ([i32; 3], [i32; 3]) {
+    match bounds {
+        None => (at, at),
+        Some((lo, hi)) => (
+            [lo[0].min(at[0]), lo[1].min(at[1]), lo[2].min(at[2])],
+            [hi[0].max(at[0]), hi[1].max(at[1]), hi[2].max(at[2])],
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ChunkBorders, LightError, LightField, LightParams, chunk_view, map_offset};
@@ -1047,6 +1252,119 @@ mod tests {
                 dirty.contains(&index),
                 "chunk {index} changed but the dirty set is {dirty:?}"
             );
+        }
+    }
+
+    /// One chunk's mesh: its positions, colours and indices.
+    type Meshed = (Vec<[f32; 3]>, Vec<[u8; 4]>, Vec<u16>);
+
+    /// Every chunk's mesh, digested as its buffers: what a relight's dirty set must cover.
+    fn meshes(
+        grid: ChunkGrid,
+        materials: &[u8],
+        field: &LightField,
+        params: LightParams,
+    ) -> Vec<Meshed> {
+        let mut mesher = Mesher::new(params);
+        let mut borders = ChunkBorders::new();
+        let mut buffers = MeshBuffers::empty();
+        (0..grid.chunk_count())
+            .map(|chunk| {
+                borders.gather(grid, materials, field.all(), params, chunk);
+                let view = chunk_view(materials, field, &borders, chunk).expect("inside");
+                mesher
+                    .mesh_chunk_into(&view, &mut buffers)
+                    .expect("under the cap");
+                (
+                    buffers.positions().to_vec(),
+                    buffers.colours().to_vec(),
+                    buffers.indices().to_vec(),
+                )
+            })
+            .collect()
+    }
+
+    /// A crater stream through `relight`, in batches small enough for the box path and
+    /// one batch large enough for the whole bake: after each, the light is a bake from
+    /// scratch's, and every chunk whose mesh changed is in the dirty set, which names no
+    /// chunk twice and comes back in index order.
+    #[test]
+    fn a_relight_is_a_whole_bake_and_dirties_every_chunk_whose_mesh_moved() {
+        let grid = ChunkGrid::new(3, 2, 3).expect("a 3 x 2 x 3 grid is legal");
+        let params = LightParams::new(15, 1).expect("the committed pair");
+        let [voxels_x, _, voxels_z] = grid.voxels();
+        let mut materials = vec![AIR; grid.voxel_count()];
+        for z in 0..voxels_z {
+            for x in 0..voxels_x {
+                for y in 0..24 {
+                    if let Some(at) = map_offset(grid, x, y, z)
+                        && let Some(slot) = materials.get_mut(at)
+                    {
+                        *slot = if y < 20 { 1 } else { 2 };
+                    }
+                }
+            }
+        }
+        let mut field = LightField::new(grid, params);
+        field.bake_all(&materials).expect("the right size");
+        let mut seed = 0x2545_f491_u32;
+        let mut next = |below: i32| {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            i32::try_from(seed >> 16).expect("16 bits fit") % below
+        };
+        // A crater's padded box is at most 41 voxels a side, about 69 000 voxels against
+        // this map's 589 824, so the small batches take the box path and the batch of 40
+        // the whole bake.
+        for batch in [1_usize, 3, 5, 2, 40] {
+            let before = meshes(grid, &materials, &field, params);
+            let mut edits = Vec::new();
+            for _ in 0..batch {
+                let centre = [next(voxels_x), 20 + next(6), next(voxels_z)];
+                let radius = 2 + next(4);
+                let mut bounds: Option<([i32; 3], [i32; 3])> = None;
+                for y in centre[1] - radius..=centre[1] + radius {
+                    for z in centre[2] - radius..=centre[2] + radius {
+                        for x in centre[0] - radius..=centre[0] + radius {
+                            let d = [x - centre[0], y - centre[1], z - centre[2]];
+                            if d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > radius * radius {
+                                continue;
+                            }
+                            if let Some(at) = map_offset(grid, x, y, z)
+                                && let Some(slot) = materials.get_mut(at)
+                                && *slot != AIR
+                            {
+                                *slot = AIR;
+                                bounds = Some(super::grow(bounds, [x, y, z]));
+                            }
+                        }
+                    }
+                }
+                edits.extend(bounds);
+            }
+            let mut dirty = Vec::new();
+            field
+                .relight(&materials, &edits, &mut dirty)
+                .expect("the right size");
+            let mut fresh = LightField::new(grid, params);
+            fresh.bake_all(&materials).expect("the right size");
+            assert!(
+                field.all() == fresh.all(),
+                "batch of {batch}: the relit field is a bake from scratch's"
+            );
+            let mut sorted = dirty.clone();
+            sorted.sort_unstable();
+            sorted.dedup();
+            assert_eq!(dirty, sorted, "batch of {batch}: in index order, each once");
+            let after = meshes(grid, &materials, &field, params);
+            for (chunk, (was, now)) in before.iter().zip(&after).enumerate() {
+                let chunk = u32::try_from(chunk).expect("a chunk index");
+                if was != now {
+                    assert!(
+                        dirty.contains(&chunk),
+                        "batch of {batch}: chunk {chunk}'s mesh moved, dirty is {dirty:?}"
+                    );
+                }
+            }
         }
     }
 
