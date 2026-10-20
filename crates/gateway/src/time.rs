@@ -251,7 +251,11 @@ impl PhaseMark {
     /// twenty times a second.
     #[must_use]
     pub fn of(match_seed: u64, time: MatchTime) -> PhaseMark {
-        let phase = u32::try_from(i32::from(time.phase)).unwrap_or(0);
+        // A phase is a small non-negative enum value of `gp.api.v1`, so its
+        // eight bits are its own; the byte keeps the mark's layout whatever
+        // the enum grows to.
+        let [phase, ..] = i32::from(time.phase).to_le_bytes();
+        let phase = u32::from(phase);
         let round = time.round & 0x00ff_ffff;
         PhaseMark {
             mark: (phase << 24) | round,
@@ -304,8 +308,8 @@ impl PhaseMark {
         let mut bytes: Vec<u8> = Vec::with_capacity(12);
         bytes.extend_from_slice(&self.mark.to_le_bytes());
         bytes.extend_from_slice(&self.match_seed.to_le_bytes());
-        let hash = pharmakos_sim::digest(&bytes);
-        u32::try_from(hash & 0xffff_ffff).unwrap_or(0)
+        let [a, b, c, d, ..] = pharmakos_sim::digest(&bytes).to_le_bytes();
+        u32::from_le_bytes([a, b, c, d])
     }
 }
 

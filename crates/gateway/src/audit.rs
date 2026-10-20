@@ -160,6 +160,11 @@ impl Entry {
     }
 }
 
+/// The log's header line, without its newline: the columns every record
+/// line fills, in order. [`AuditLog::render`] writes it first, and a resume's
+/// reader skips it ([`crate::cache::MatchCache::continuation`]).
+pub const HEADER: &str = "seq\ttick\tsubject\thandle\taction\toutcome";
+
 /// The log itself.
 #[derive(Debug, Default)]
 pub struct AuditLog {
@@ -245,7 +250,8 @@ impl AuditLog {
     /// year says what its columns are.
     #[must_use]
     pub fn render(&self) -> String {
-        let mut out = String::from("seq\ttick\tsubject\thandle\taction\toutcome\n");
+        let mut out = String::from(HEADER);
+        out.push('\n');
         for entry in &self.entries {
             out.push_str(&entry.render());
             out.push('\n');

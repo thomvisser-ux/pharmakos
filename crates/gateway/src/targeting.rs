@@ -230,14 +230,27 @@ where
 
 /// An estimator cost as the game milliseconds the commander takes to walk it:
 /// the same `ceil(cost * 20 / cost_per_second)` ticks `estimate_route`'s legs
-/// are in, so a chip's figure and a route's agree. `None` when the rules
-/// table gives the commander no speed or the cost is out of range.
-#[must_use]
-pub fn travel_ms(world: &World, cost: i64) -> Option<Ms> {
+/// are in, so a chip's figure and a route's agree. `Ok(None)` when the rules
+/// table gives the commander no speed, so it walks nowhere.
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] for a cost past the estimator's `i32`, a
+/// tick count past it or below zero: the sim's estimator hands out none, so
+/// one is the two disagreeing, and it is said rather than read as "no route".
+pub fn travel_ms(world: &World, cost: i64) -> Result<Option<Ms>, Error> {
     let speed = Speed::commander(world.rules());
-    let cost = i32::try_from(cost).ok()?;
-    let ticks = ticks_for_cost(cost, speed.cost_per_second)?;
-    Some(Ms::from_ticks(u32::try_from(ticks).ok()?))
+    let cost = i32::try_from(cost).map_err(|_| {
+        Error::internal(format!(
+            "an estimate costs {cost}, past the estimator's i32"
+        ))
+    })?;
+    let Some(ticks) = ticks_for_cost(cost, speed.cost_per_second) else {
+        return Ok(None);
+    };
+    let ticks = u32::try_from(ticks)
+        .map_err(|_| Error::internal(format!("an estimate takes {ticks} ticks, below zero")))?;
+    Ok(Some(Ms::from_ticks(ticks)))
 }
 
 // ---------------------------------------------------------------------------
@@ -294,10 +307,8 @@ pub struct Resolved {
     /// ranks with. `None` when it reads nothing, and when it reads a feature
     /// it **names** (a `feature_id`, or `covered {}`) that the origin cannot
     /// reach: a name is never ranked, so the sim binds it reachable or not.
-    /// The wire's `travel_ms` has no "unreachable" value, so it is written 0
-    /// there, beside a `feature_id` and an empty candidate list -- which is
-    /// how a reader tells it from a feature at the origin (a reachable named
-    /// feature is always its own one candidate).
+    /// The wire says which with `ResolvedRef.reachable` (decisions-log item
+    /// 133 (3) (i)), and writes `travel_ms` only beside `reachable: true`.
     pub travel_ms: Option<Ms>,
     /// Every reachable candidate that matched, nearest first.
     pub candidates: Vec<Candidate>,
@@ -440,8 +451,8 @@ impl Reader<'_> {
         found
             .into_iter()
             .map(|(index, cost)| {
-                let travel_ms = travel_ms(self.world, cost).ok_or_else(|| {
-                    Error::internal("an estimate's cost does not convert to game milliseconds")
+                let travel_ms = travel_ms(self.world, cost)?.ok_or_else(|| {
+                    Error::internal("the rules table gives the commander no speed to rank with")
                 })?;
                 Ok((
                     index,
@@ -907,28 +918,28 @@ fn row_anchors<'a>(row: &'a InterfaceRow, at: &str) -> Vec<(String, &'a FeatureR
                 .map(|(pointer, reference)| (pointer, reference, on))
                 .collect()
         }
-        Some(Row::AddBuildTarget(add)) => anchor_on(
+        // A target anchored anywhere but `on` a feature names no feature, so
+        // it lists nothing.
+        Some(Row::AddBuildTarget(add)) => match anchor_on(
             add.target
                 .as_ref()
                 .and_then(|target| target.anchor.as_ref()),
-        )
-        .map(|reference| {
-            vec![(
+        ) {
+            Some(reference) => vec![(
                 format!("{at}/add_build_target/target/anchor/on"),
                 reference,
                 on,
-            )]
-        })
-        .unwrap_or_default(),
-        Some(Row::RemoveBuildTarget(remove)) => anchor_on(remove.anchor.as_ref())
-            .map(|reference| {
-                vec![(
-                    format!("{at}/remove_build_target/anchor/on"),
-                    reference,
-                    Site::Removal,
-                )]
-            })
-            .unwrap_or_default(),
+            )],
+            None => Vec::new(),
+        },
+        Some(Row::RemoveBuildTarget(remove)) => match anchor_on(remove.anchor.as_ref()) {
+            Some(reference) => vec![(
+                format!("{at}/remove_build_target/anchor/on"),
+                reference,
+                Site::Removal,
+            )],
+            None => Vec::new(),
+        },
         Some(Row::SetPriority(_) | Row::Recycle(_) | Row::QueueStructure(_)) | None => Vec::new(),
     }
 }
