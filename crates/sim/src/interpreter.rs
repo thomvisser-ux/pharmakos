@@ -314,6 +314,9 @@ pub struct Target {
     /// Its place in the build order (lower first, ties by list position) and
     /// the rotation the structure built for it takes.
     pub build: BuildOrder,
+    /// A `wall` target's box (`BuildTarget.wall_box`), required on a wall and
+    /// refused on anything else; `None` on every other blueprint.
+    pub wall: Option<crate::site::WallBox>,
 }
 
 /// Spec section 5's rate card, read out of the rules table **once, at the
@@ -493,6 +496,9 @@ pub enum Row {
         /// The Common row's `retreat_hp_pct`; `0` when the row does not name
         /// it, which writes nothing.
         retreat_hp_pct: u8,
+        /// The Build mandate's `repair_threshold_pct`, `rebuild_destroyed` and
+        /// `terraform`, each only when the row names it (S2's `site`).
+        build: crate::site::BuildEdit,
     },
     /// Set the Quartermaster priority — `interface_times.set_priority_ms`.
     Priority {
@@ -1306,6 +1312,7 @@ fn compile_switch_settings(
                 mine: None,
                 roe,
                 retreat_hp_pct,
+                build: crate::site::BuildEdit::default(),
             })
         }));
     }
@@ -1348,6 +1355,7 @@ fn compile_settings_row(
     let mut probes: Vec<([i16; 3], ColumnBox)> = Vec::new();
     let mut scouts: u8 = 0;
     let mut mine: Option<crate::mining::MineEdit> = None;
+    let mut build_edit = crate::site::BuildEdit::default();
     if let Some(mandate) = settings.mandate.as_ref() {
         fields = fields
             .checked_add(mandate_fields(mandate)?)
@@ -1360,6 +1368,7 @@ fn compile_settings_row(
                 for area in &build.protected_areas {
                     protected.push(compile_area(area, names)?);
                 }
+                build_edit = compile_build_settings(build)?;
             }
             gp::v1::mandate_settings::Mandate::Survey(survey) => {
                 for area in &survey.probe_areas {
@@ -1394,6 +1403,93 @@ fn compile_settings_row(
         mine,
         roe,
         retreat_hp_pct,
+        build: build_edit,
+    })
+}
+
+/// The Build settings a row names (S2's `site`): `repair_threshold_pct`,
+/// refused past 100; `rebuild_destroyed`; and `terraform`, refused when it is
+/// a number this build does not name. Each is written only when the row names
+/// it -- a proto3 scalar at its default is silent -- so an omitted terraform
+/// leaves the beacon's as it is, which a new beacon holds as `NONE`.
+///
+/// # Errors
+///
+/// [`PlanError::RepairThresholdOutOfRange`] and [`PlanError::UnknownEnum`].
+fn compile_build_settings(
+    build: &gp::v1::BuildSettings,
+) -> Result<crate::site::BuildEdit, PlanError> {
+    let repair_threshold_pct = match build.repair_threshold_pct {
+        0 => None,
+        pct => Some(
+            u8::try_from(pct)
+                .ok()
+                .filter(|pct| *pct <= 100)
+                .ok_or(PlanError::RepairThresholdOutOfRange { found: pct })?,
+        ),
+    };
+    let terraform = match build.terraform {
+        0 => None,
+        value => {
+            let unknown = PlanError::UnknownEnum {
+                field: "build.terraform",
+                value,
+            };
+            let id = u8::try_from(value).map_err(|_| unknown.clone())?;
+            Some(crate::site::Terraform::from_id(id).ok_or(unknown)?)
+        }
+    };
+    Ok(crate::site::BuildEdit {
+        repair_threshold_pct,
+        rebuild_destroyed: build.rebuild_destroyed.then_some(true),
+        terraform,
+    })
+}
+
+/// A `wall` target's box (`BuildTarget.wall_box`), its anchor a voxel inside
+/// it and its rotation none: the file's own halves of the box's checks, as
+/// the verifier's E0101, E0406, E0417 and E0511 make them. Whether the box
+/// reaches the ground, stands high enough over it and lies in the sphere is
+/// the ground's question, asked when the row commits
+/// ([`crate::site::check_wall`]).
+fn compile_wall_box(
+    target: &gp::v1::BuildTarget,
+    anchor: &Anchor,
+    names: &Names<'_>,
+) -> Result<crate::site::WallBox, PlanError> {
+    let area = target.wall_box.as_ref().ok_or(PlanError::WallWithoutBox)?;
+    let min = area
+        .min
+        .as_ref()
+        .ok_or(PlanError::MissingBlock("wall_box.min"))?;
+    let max = area
+        .max
+        .as_ref()
+        .ok_or(PlanError::MissingBlock("wall_box.max"))?;
+    let [lx, ly, lz] = names.voxel(min)?;
+    let [hx, hy, hz] = names.voxel(max)?;
+    if lz > hz {
+        return Err(PlanError::WallBoxInsideOut);
+    }
+    let columns = ColumnBox::new([lx, ly], [hx, hy]).ok_or(PlanError::AreaInsideOut)?;
+    if target.rotation_quarter_turns != 0 {
+        return Err(PlanError::WallTurned {
+            found: target.rotation_quarter_turns,
+        });
+    }
+    let inside = match anchor {
+        Anchor::Voxel([x, y, z]) => {
+            columns.contains(i32::from(*x), i32::from(*y)) && lz <= *z && *z <= hz
+        }
+        Anchor::On(_) => false,
+    };
+    if !inside {
+        return Err(PlanError::WallAnchorOutsideBox);
+    }
+    Ok(crate::site::WallBox {
+        columns,
+        floor: lz,
+        top: hz,
     })
 }
 
@@ -1431,9 +1527,10 @@ fn compile_common(settings: &gp::v1::MandateSettings) -> Result<(u8, u8), PlanEr
 /// which is what the plan's wk-18.5 row names. Any other id is refused rather
 /// than compiled to a structure this build cannot raise, so a playbook naming a
 /// capability structure fails loudly at the seal instead of silently building
-/// nothing (owner, at S4). S2's base kit — `autocannon`, `mortar` and `wall` —
-/// is refused under an entry of its own ([`REFUSE_BUILD_BASE_KIT`]) until S2's
-/// `site` lane builds it, and a `wall_box` on any target but a `wall` is
+/// nothing (owner, at S4). S2's base kit -- `autocannon`, `mortar` and `wall` --
+/// is built beside it since S2's `site` lane, which lifted the base kit's
+/// refusal (decisions-log item 145 (5)): a `wall` carries its box
+/// ([`compile_wall_box`]), and a `wall_box` on any target but a `wall` is
 /// [`PlanError::WallBoxOffAWall`] (S2's wire, `con4`).
 ///
 /// Its `order` and `rotation_quarter_turns` are kept (S1's plan, decision 5):
@@ -1455,10 +1552,10 @@ fn compile_build_target(
         });
     }
     let blueprint = match target.blueprint_id.as_str() {
-        "generator" => crate::tables::StructureKind::Generator.id(),
-        "autocannon" | "mortar" | "wall" => {
-            return Err(REFUSE_BUILD_BASE_KIT.error());
-        }
+        "generator" => crate::tables::StructureKind::Generator,
+        "autocannon" => crate::tables::StructureKind::Autocannon,
+        "mortar" => crate::tables::StructureKind::Mortar,
+        "wall" => crate::tables::StructureKind::Wall,
         _ => {
             return Err(REFUSE_BUILD_BLUEPRINT.error());
         }
@@ -1467,13 +1564,20 @@ fn compile_build_target(
         QuarterTurns::new(target.rotation_quarter_turns).ok_or(PlanError::RotationOutOfRange {
             found: target.rotation_quarter_turns,
         })?;
+    let anchor = compile_anchor(target.anchor.as_ref(), names, covering)?;
+    let wall = if blueprint == crate::tables::StructureKind::Wall {
+        Some(compile_wall_box(target, &anchor, names)?)
+    } else {
+        None
+    };
     Ok(Target {
-        blueprint,
-        anchor: compile_anchor(target.anchor.as_ref(), names, covering)?,
+        blueprint: blueprint.id(),
+        anchor,
         build: BuildOrder {
             order: target.order,
             rotation,
         },
+        wall,
     })
 }
 
@@ -2134,6 +2238,27 @@ pub enum PlanError {
     /// An area whose `min` exceeds its `max` in x or y: a box that holds no
     /// column (the verifier's E0406 at plan time).
     AreaInsideOut,
+    /// A `repair_threshold_pct` past 100 (S2's `site`): a percentage of hit
+    /// points is 0 to 100.
+    RepairThresholdOutOfRange {
+        /// What the playbook wrote.
+        found: u32,
+    },
+    /// A `wall` target with no `wall_box`: a wall is the box it fills (the
+    /// verifier's E0101).
+    WallWithoutBox,
+    /// A `wall_box` whose `min.z` exceeds its `max.z`: a box that holds no
+    /// voxel.
+    WallBoxInsideOut,
+    /// A `wall` target turned: a wall's box is the author's and is not turned
+    /// (the verifier's E0511).
+    WallTurned {
+        /// What the playbook wrote.
+        found: u32,
+    },
+    /// A `wall` target whose anchor is no voxel inside its box (the verifier's
+    /// E0417): a removal finds a wall by its anchor.
+    WallAnchorOutsideBox,
     /// A voxel names a place outside the map (`map.size_*`).
     VoxelOutOfMap {
         /// `"x"`, `"y"` or `"z"`.
@@ -2208,8 +2333,7 @@ pub enum PlanError {
     /// | Construct | Stage |
     /// |---|---|
     /// | `queue_structure` | S4 (capability licences) |
-    /// | a Build target naming a blueprint other than `generator` or S2's base kit | S4 |
-    /// | a Build target naming S2's base kit (`autocannon`, `mortar`, `wall`) | S2, `site` |
+    /// | a Build target naming a blueprint other than `generator` or S2's base kit (`autocannon`, `mortar`, `wall`, which S2's `site` built) | S4 |
     /// | a Build target (or a removal) anchored on a beacon selector rather than on a voxel or `on` a vent | S3 |
     /// | Defend and Attack mandate settings | S2 |
     /// | selector `most_threatened` | S2 |
@@ -2290,13 +2414,6 @@ pub const REFUSE_BUILD_BLUEPRINT: Refusal = Refusal {
     stage: "S4 (the capability catalogue and its licences)",
 };
 
-/// A Build target naming one of S2's base kit: S2, `site` (S2's wire, `con4`).
-pub const REFUSE_BUILD_BASE_KIT: Refusal = Refusal {
-    name: "build_target_base_kit",
-    construct: "a Build target naming a blueprint of S2's base kit (`autocannon`, `mortar` or `wall`)",
-    stage: "S2, `site`",
-};
-
 /// A Build target, or a removal, anchored on a beacon selector: S3.
 pub const REFUSE_BUILD_BEACON_ANCHOR: Refusal = Refusal {
     name: "build_target_beacon_anchor",
@@ -2349,10 +2466,9 @@ pub const REFUSE_BEACON_UNDER_ATTACK: Refusal = Refusal {
 
 /// Every construct the compile refuses for its stage, in the order
 /// [`PlanError::NotAtThisStage`]'s documentation lists them (E8).
-pub const REFUSALS: [Refusal; 10] = [
+pub const REFUSALS: [Refusal; 9] = [
     REFUSE_QUEUE_STRUCTURE,
     REFUSE_BUILD_BLUEPRINT,
-    REFUSE_BUILD_BASE_KIT,
     REFUSE_BUILD_BEACON_ANCHOR,
     REFUSE_DEFEND_SETTINGS,
     REFUSE_ATTACK_SETTINGS,
@@ -2436,6 +2552,24 @@ impl core::fmt::Display for PlanError {
             PlanError::WallBoxOffAWall { blueprint } => wall_box_off_a_wall(f, blueprint),
             PlanError::AreaInsideOut => {
                 write!(f, "an area's `min` exceeds its `max` in x or y")
+            }
+            PlanError::RepairThresholdOutOfRange { found } => write!(
+                f,
+                "a `repair_threshold_pct` of {found} is past 100 percent of a structure's hit points"
+            ),
+            PlanError::WallWithoutBox => write!(f, "a `wall` target carries no `wall_box`"),
+            PlanError::WallBoxInsideOut => {
+                write!(f, "a `wall_box`'s `min.z` exceeds its `max.z`")
+            }
+            PlanError::WallTurned { found } => write!(
+                f,
+                "a `wall` target is turned {found} quarter turns; a wall's box is not turned"
+            ),
+            PlanError::WallAnchorOutsideBox => {
+                write!(
+                    f,
+                    "a `wall` target's anchor is no voxel inside its `wall_box`"
+                )
             }
             PlanError::UnknownLabel(label) => {
                 write!(f, "`{label}` names no step in this playbook's route")

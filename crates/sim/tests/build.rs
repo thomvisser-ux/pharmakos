@@ -485,7 +485,7 @@ fn unaffordable_targets_wait_for_the_highest_order_affordable_one() {
         .expect("an unpaid target is asked for");
     let row = match request.buys {
         Purchase::Structure(row) => usize::try_from(row).expect("a row"),
-        Purchase::Unit(kind) => panic!("a structure, not a {kind:?}"),
+        other => panic!("a structure, not {other:?}"),
     };
     assert_eq!(runner.world().targets().orders().get(row), Some(&2));
 
@@ -551,7 +551,7 @@ fn an_affordable_target_is_asked_for_before_a_higher_order_one_that_is_not() {
             .expect("an unpaid target is asked for");
         let row = match request.buys {
             Purchase::Structure(row) => usize::try_from(row).expect("a row"),
-            Purchase::Unit(kind) => panic!("a structure, not a {kind:?}"),
+            other => panic!("a structure, not {other:?}"),
         };
         world
             .targets()

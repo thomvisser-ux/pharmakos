@@ -100,6 +100,7 @@ pub mod snapshot;
 pub mod survey;
 pub mod tables;
 pub mod targeting;
+pub mod terrain;
 pub mod voxels;
 pub mod world;
 
@@ -127,6 +128,7 @@ pub use runner::{
 pub use sight::Spheres;
 pub use snapshot::{SNAPSHOT_VERSION, Snapshot, SnapshotError};
 pub use voxels::{CHUNK_EDGE, CHUNK_VOXELS, Material, Richness, VoxelEdit, VoxelStore};
+pub use world::site;
 pub use world::{DamageOrder, DamageTarget, PHASE_ORDER, Phase, World, WorldConfig};
 
 use pharmakos_proto::gp;

@@ -265,11 +265,23 @@ pub enum EventKind {
     /// 25: the ash buries old wrecks). `subject` is the buried wreck and `at`
     /// where it lay; a wreck is nobody's, so the event names no seat.
     WreckBuried,
+    /// A repair drone brought an own unit or structure back to full hit
+    /// points (S2's `site`; decision 43). `subject` is the asset, `seat` its
+    /// owner, `value` its full hit points.
+    AssetRepaired,
+    /// A structure standing for a Build target a settings edit dropped was
+    /// recycled (S2's `site`; register S2-10, decision 26). `subject` is the
+    /// structure, `seat` its owner, `value` the refund in `$`.
+    StructureRecycled,
+    /// A Build beacon's refill brought a column back to the generated surface
+    /// (S2's `site`; decisions-log item 144 (5)). `at` is the voxel filled,
+    /// `seat` the refilling seat.
+    GroundRefilled,
 }
 
 impl EventKind {
     /// Every kind, in ascending [`EventKind::id`] order.
-    pub const ALL: [EventKind; 45] = [
+    pub const ALL: [EventKind; 48] = [
         EventKind::MatchStarted,
         EventKind::LullOpened,
         EventKind::PushStarted,
@@ -315,6 +327,9 @@ impl EventKind {
         EventKind::ReturnedFire,
         EventKind::RetreatAnnounced,
         EventKind::WreckBuried,
+        EventKind::AssetRepaired,
+        EventKind::StructureRecycled,
+        EventKind::GroundRefilled,
     ];
 
     /// The wire id. Additive only: never reuse, never renumber.
@@ -366,6 +381,9 @@ impl EventKind {
             EventKind::ReturnedFire => 43,
             EventKind::RetreatAnnounced => 44,
             EventKind::WreckBuried => 45,
+            EventKind::AssetRepaired => 46,
+            EventKind::StructureRecycled => 47,
+            EventKind::GroundRefilled => 48,
         }
     }
 
@@ -418,6 +436,9 @@ impl EventKind {
             43 => Some(EventKind::ReturnedFire),
             44 => Some(EventKind::RetreatAnnounced),
             45 => Some(EventKind::WreckBuried),
+            46 => Some(EventKind::AssetRepaired),
+            47 => Some(EventKind::StructureRecycled),
+            48 => Some(EventKind::GroundRefilled),
             _ => None,
         }
     }
@@ -473,6 +494,9 @@ impl EventKind {
             EventKind::ReturnedFire => "returned_fire",
             EventKind::RetreatAnnounced => "retreat_announced",
             EventKind::WreckBuried => "wreck_buried",
+            EventKind::AssetRepaired => "asset_repaired",
+            EventKind::StructureRecycled => "structure_recycled",
+            EventKind::GroundRefilled => "ground_refilled",
         }
     }
 

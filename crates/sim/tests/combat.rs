@@ -578,6 +578,7 @@ fn a_death_leaves_a_wreck_worth_the_salvage_percent() {
     let mut world = world(2);
     let here = field(&world);
     let home = beacon(&mut world, seat(1), here, HOLD_FIRE);
+    quiet(&mut world, home);
     let raider = unit(&mut world, seat(1), home, UnitKind::Raider, here);
     assert!(
         world
@@ -614,6 +615,7 @@ fn a_full_wreck_table_buries_the_oldest_wreck() {
     let mut world = world(2);
     let here = field(&world);
     let home = beacon(&mut world, seat(1), here, HOLD_FIRE);
+    quiet(&mut world, home);
     let limit = world.wreck_limit();
     assert!(limit > 0);
     let mut runner = pushing(world);
@@ -842,6 +844,7 @@ fn splash_hurts_the_firers_own_unit() {
     let mortar = raise(&mut world, seat(0), home, StructureKind::Mortar, here);
     let own_at = ground(&world, here, 20, 0);
     let own_home = beacon(&mut world, seat(0), own_at, HOLD_FIRE);
+    quiet(&mut world, own_home);
     let own = unit(&mut world, seat(0), own_home, UnitKind::Raider, own_at);
     let mut runner = pushing(world);
     let mut feed = Vec::new();
@@ -1882,6 +1885,7 @@ fn a_raid_on_a_mortar() {
         );
         let raid_at = ground(&world, core_at, 12, 0);
         let raid_home = beacon(&mut world, seat(1), raid_at, FREE_FIRE);
+        quiet(&mut world, raid_home);
         for _ in 0..3 {
             let _ = unit(&mut world, seat(1), raid_home, UnitKind::Raider, raid_at);
         }
@@ -1943,4 +1947,12 @@ fn the_core_autocannon_fires_while_its_core_is_dormant() {
     }
     assert!(unit_hp(runner.world(), raider) < full, "the core fired");
     assert!(hit_while_dark, "and fired on a tick it began dark");
+}
+
+/// A beacon that fabricates nothing: a Survey writ with no scouts. S2's
+/// `site` lets a Build beacon field repair drones for the work in hand -- a
+/// wounded unit, a wreck -- which would heal a test's casualty or lift its
+/// wreck before the test reads it.
+fn quiet(world: &mut World, beacon: BeaconId) {
+    world.set_writ(beacon, MandateKind::Survey);
 }

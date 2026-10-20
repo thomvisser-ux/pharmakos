@@ -1264,6 +1264,10 @@ pub struct MatchColumns<'a> {
     pub respawn_due: &'a mut [u32],
 }
 
+/// A target row's wall top when the row is no wall ([`TargetTable::wall_tops`]):
+/// below every voxel, so no comparison with a height can read it as one.
+pub const NO_WALL: i16 = i16::MIN;
+
 /// What one row of a [`TargetTable`] is.
 ///
 /// The ids are written out and additive only, for the reason every other wire
@@ -1484,6 +1488,7 @@ pub struct TargetTable {
     desc: Vec<u8>,
     order: Vec<u32>,
     rotation: Vec<u8>,
+    wall_top: Vec<i16>,
     capacity: u32,
 }
 
@@ -1512,6 +1517,7 @@ impl TargetTable {
             desc: Vec::with_capacity(n),
             order: Vec::with_capacity(n),
             rotation: Vec::with_capacity(n),
+            wall_top: Vec::with_capacity(n),
             capacity,
         }
     }
@@ -1639,6 +1645,28 @@ impl TargetTable {
         &self.rotation
     }
 
+    /// Each wall target's top, the highest voxel its box fills (S2's
+    /// `site`), or [`NO_WALL`] on every other row. A wall row's box of
+    /// columns is its [`TargetTable::areas`] entry. Hashed: it decides how far
+    /// a build drone fills.
+    #[must_use]
+    pub fn wall_tops(&self) -> &[i16] {
+        &self.wall_top
+    }
+
+    /// Write row `slot` as a wall: its box of columns and its top. The row was
+    /// added by [`TargetTable::add_bound`] a moment before, so it is a Build
+    /// row; `false` for a slot the table does not hold.
+    pub fn make_wall(&mut self, slot: usize, columns: ColumnBox, top: i16) -> bool {
+        let (Some(area), Some(wall)) = (self.area.get_mut(slot), self.wall_top.get_mut(slot))
+        else {
+            return false;
+        };
+        *area = columns;
+        *wall = top;
+        true
+    }
+
     /// Append one Build target written as a fixed voxel, keeping the table in
     /// `(beacon, kind)` order, at order 0 with no turn ([`BuildOrder::NONE`]).
     ///
@@ -1731,6 +1759,7 @@ impl TargetTable {
         self.desc.insert(slot, bound.1);
         self.order.insert(slot, build.order);
         self.rotation.insert(slot, build.rotation.raw());
+        self.wall_top.insert(slot, NO_WALL);
         self.count = self.count.saturating_add(1);
         Ok(())
     }
@@ -1750,6 +1779,7 @@ impl TargetTable {
         self.desc.remove(slot);
         self.order.remove(slot);
         self.rotation.remove(slot);
+        self.wall_top.remove(slot);
         self.count = self.count.saturating_sub(1);
     }
 
@@ -1783,6 +1813,7 @@ impl TargetTable {
             || columns.desc.len() != n
             || columns.order.len() != n
             || columns.rotation.len() != n
+            || columns.wall_top.len() != n
         {
             return false;
         }
@@ -1807,6 +1838,23 @@ impl TargetTable {
         {
             return false;
         }
+        // A wall top stands on a wall's Build row and on no other, and a wall
+        // is bought by the voxel, so no structure ever stands for it (S2's
+        // `site`): a file pairing them otherwise describes no table this sim
+        // builds.
+        let walls_agree = columns
+            .kind
+            .iter()
+            .zip(&columns.blueprint)
+            .zip(columns.wall_top.iter().zip(&columns.built))
+            .all(|((kind, blueprint), (top, built))| {
+                let wall =
+                    *kind == TargetKind::Build.id() && *blueprint == StructureKind::Wall.id();
+                (*top != NO_WALL) == wall && !(wall && built.is_some())
+            });
+        if !walls_agree {
+            return false;
+        }
         let Ok(count) = u32::try_from(n) else {
             return false;
         };
@@ -1825,6 +1873,7 @@ impl TargetTable {
         self.desc = columns.desc;
         self.order = columns.order;
         self.rotation = columns.rotation;
+        self.wall_top = columns.wall_top;
         true
     }
 }
@@ -1853,6 +1902,8 @@ pub struct TargetColumns {
     pub order: Vec<u32>,
     /// Each Build target's rotation, 0 to 3.
     pub rotation: Vec<u8>,
+    /// Each wall target's top, or [`NO_WALL`].
+    pub wall_top: Vec<i16>,
 }
 
 /// What one seat remembers seeing, with the tick it was seen at (spec section
@@ -2774,6 +2825,21 @@ impl StructureKind {
         }
     }
 
+    /// Whether it is a **capability** structure, earned by a licence and never
+    /// rebuilt automatically (spec section 8): of this build's kinds, the
+    /// Resonance Spire, one of spec section 8's three licensed structures. The
+    /// Generator, the base kit and the Survey post are ordinary.
+    ///
+    /// PLACEHOLDER: which structure kinds are capability structures, the Resonance Spire alone — owner, at S4, with the capability catalogue.
+    /// The Survey post is spec section 6's in-world name for a Survey
+    /// beacon's post and earns no licence, so it is read as ordinary; no Build
+    /// target can name either before S4's catalogue, so the reading moves
+    /// nothing yet.
+    #[must_use]
+    pub const fn is_capability(self) -> bool {
+        matches!(self, StructureKind::ResonanceSpire)
+    }
+
     /// The kind an id names, or `None` for an id this build does not define.
     #[must_use]
     pub const fn from_id(id: u8) -> Option<StructureKind> {
@@ -2987,6 +3053,8 @@ pub struct BeaconColumns {
     pub arms: Vec<Arms>,
     /// Each beacon's Common settings ([`Common`]).
     pub common: Vec<Common>,
+    /// Each beacon's Build settings and paid work ([`crate::site::BeaconSite`]).
+    pub site: Vec<crate::site::BeaconSite>,
     /// Whether each row is free (S2's plan, E1).
     pub free: Vec<bool>,
 }
@@ -3047,6 +3115,7 @@ pub struct BeaconTable {
     seam: Vec<u32>,
     arms: Vec<Arms>,
     common: Vec<Common>,
+    site: Vec<crate::site::BeaconSite>,
     free: Vec<bool>,
 }
 
@@ -3074,6 +3143,7 @@ impl BeaconTable {
             seam: Vec::with_capacity(n),
             arms: Vec::with_capacity(n),
             common: Vec::with_capacity(n),
+            site: Vec::with_capacity(n),
             free: Vec::with_capacity(n),
         }
     }
@@ -3160,6 +3230,7 @@ impl BeaconTable {
         put(&mut self.seam, row, crate::targeting::NO_FEATURE);
         put(&mut self.arms, row, Arms::ready_at(start.ready_at));
         put(&mut self.common, row, Common::DEFAULT);
+        put(&mut self.site, row, crate::site::BeaconSite::DEFAULT);
         put(&mut self.free, row, false);
         if !at.reused {
             // An appended row is the table's last, at most `Row::MAX`.
@@ -3213,6 +3284,9 @@ impl BeaconTable {
         }
         if let Some(slot) = self.common.get_mut(index) {
             *slot = Common::DEFAULT;
+        }
+        if let Some(slot) = self.site.get_mut(index) {
+            *slot = crate::site::BeaconSite::DEFAULT;
         }
         self.id
             .get(index)
@@ -3313,6 +3387,7 @@ impl BeaconTable {
         self.seam.reserve(n);
         self.arms.reserve(n);
         self.common.reserve(n);
+        self.site.reserve(n);
         self.free.reserve(n);
     }
 
@@ -3552,6 +3627,18 @@ impl BeaconTable {
         &mut self.common
     }
 
+    /// The Build settings and paid-work column ([`crate::site::BeaconSite`]).
+    #[must_use]
+    pub fn sites(&self) -> &[crate::site::BeaconSite] {
+        &self.site
+    }
+
+    /// The Build settings and paid-work column, to write into: a committed
+    /// settings row, a mandate switch, the Quartermaster and the drones.
+    pub fn sites_mut(&mut self) -> &mut [crate::site::BeaconSite] {
+        &mut self.site
+    }
+
     /// Replace the whole table from a restored snapshot. Same contract as
     /// [`UnitTable::restore`].
     pub fn restore(&mut self, columns: BeaconColumns) -> bool {
@@ -3572,6 +3659,7 @@ impl BeaconTable {
             || columns.seam.len() != n
             || columns.arms.len() != n
             || columns.common.len() != n
+            || columns.site.len() != n
             || columns.free.len() != n
             || !ids_name_their_rows(&columns.id)
         {
@@ -3626,6 +3714,7 @@ impl BeaconTable {
         self.seam = columns.seam;
         self.arms = columns.arms;
         self.common = columns.common;
+        self.site = columns.site;
         self.free = columns.free;
         true
     }

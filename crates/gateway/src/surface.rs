@@ -2116,7 +2116,12 @@ impl Surface {
             | EventKind::StructureDestroyed
             | EventKind::ShellLanded
             | EventKind::WreckLeft
-            | EventKind::WreckBuried => Ok(Audience::World {
+            | EventKind::WreckBuried
+            // S2's `site`: an asset back at full hit points and a column of
+            // ground refilled are things in the world an opponent with eyes on
+            // the place sees, as it sees them hurt or cratered.
+            | EventKind::AssetRepaired
+            | EventKind::GroundRefilled => Ok(Audience::World {
                 owner: event.seat,
                 // A world event the sim placed nowhere would be filtered at
                 // the origin, where a seat that sees the origin would be told
@@ -2171,6 +2176,11 @@ impl Surface {
             | EventKind::OreDelivered
             | EventKind::SalvageDelivered
             | EventKind::BeaconRecycled
+            // S2's `site`: a structure recycled for a dropped Build target
+            // carries its refund in `value`, a treasury figure, as
+            // `beacon_recycled` does; its leaving the world is visible on its
+            // own terms.
+            | EventKind::StructureRecycled
             | EventKind::Settled
             | EventKind::KillCredited
             // S2's `fire`: return fire and a retreat are a seat's rules of
@@ -4041,8 +4051,9 @@ mod tests {
         // puts on the world's side, for the reason `beacon_placed` is there.
         //
         // Plus S2's `fire`'s two: `returned_fire` and `retreat_announced`, a
-        // seat's own rules of engagement and retreat threshold acting.
-        assert_eq!(private, 13 + 9 + 2);
+        // seat's own rules of engagement and retreat threshold acting; and S2's
+        // `site`'s one, `structure_recycled`, which carries a refund.
+        assert_eq!(private, 13 + 9 + 2 + 1);
         assert!(matches!(
             Surface::audience_of(&sim_event(EventKind::BeaconPlaced, Some(1))),
             Ok(Audience::World { .. })

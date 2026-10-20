@@ -162,6 +162,17 @@ pub fn event_text(event: &Event) -> String {
         EventKind::WreckBuried => {
             String::from("The ash buried the oldest wreck to make room for a new one.")
         }
+        // S2's `site`.
+        EventKind::AssetRepaired => {
+            format!("A repair drone brought an asset of {seat} back to full.")
+        }
+        EventKind::StructureRecycled => format!(
+            "A structure of {seat} left its dropped Build target and was recycled for $ {}.",
+            event.value
+        ),
+        EventKind::GroundRefilled => {
+            format!("A Build beacon of {seat} refilled a crater to the ground it was made at.")
+        }
     }
 }
 
@@ -260,6 +271,15 @@ const fn failure_reason(failure: pharmakos_sim::interpreter::StepFailure) -> &'s
         StepFailure::Unaffordable => "the treasury could not cover it",
         StepFailure::TargetsUnwritten => {
             "the beacon's list settings had no room for the whole list, so nothing was written"
+        }
+        StepFailure::WallOffTheGround => {
+            "a wall's box does not reach the ground, so nothing was written"
+        }
+        StepFailure::WallTooLow => {
+            "a wall's box stands too low over the ground somewhere, so nothing was written"
+        }
+        StepFailure::WallOutsideSphere => {
+            "a wall's box leaves the beacon's sphere, so nothing was written"
         }
     }
 }
@@ -708,6 +728,27 @@ mod tests {
         assert_eq!(
             text,
             "The ash buried the oldest ruin to make room for a new one."
+        );
+    }
+
+    /// S2's `site`: a repair, a recycled structure and a refill each name
+    /// the seat they are about, and a recycle says its refund.
+    #[test]
+    fn the_site_lines_name_their_seat() {
+        let text = event_text(&event(EventKind::AssetRepaired, Some(1), 300));
+        assert_eq!(
+            text,
+            "A repair drone brought an asset of seat 1 back to full."
+        );
+        let text = event_text(&event(EventKind::StructureRecycled, Some(0), 22));
+        assert_eq!(
+            text,
+            "A structure of seat 0 left its dropped Build target and was recycled for $ 22."
+        );
+        let text = event_text(&event(EventKind::GroundRefilled, Some(2), 0));
+        assert_eq!(
+            text,
+            "A Build beacon of seat 2 refilled a crater to the ground it was made at."
         );
     }
 

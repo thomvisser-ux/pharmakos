@@ -100,6 +100,24 @@ impl Mandate for Build {
 
     fn request(&self, world: &World, beacon: BeaconId) -> Option<SpendRequest> {
         let seat = seat_of(world, beacon)?;
+        // S2's `site`: the work the beacon's drones stand at, paid in advance
+        // ([`crate::site`]). Repair first, in its own band, which is second
+        // on spec section 7's ladder (decision 43); then the voxel work a
+        // build drone waits on, in the Build band. Neither asks for anything
+        // while no drone stands at such work, so a beacon with none buys as
+        // it did before S2.
+        if let Some(repair) = repair_request(world, seat, beacon) {
+            return Some(repair);
+        }
+        if let Some(cost) = crate::site::build_shortfall(world, beacon) {
+            return Some(work_request(
+                seat,
+                beacon,
+                Urgency::Build,
+                cost,
+                Purchase::BuildWork,
+            ));
+        }
         // The highest-order affordable target that is unbuilt (spec section 6,
         // the Build row): the lowest `order`, ties by list position, among the
         // targets the treasury covers ([`next_unpaid_target`]).
@@ -120,8 +138,22 @@ impl Mandate for Build {
                 buys: Purchase::Structure(u32::try_from(row).ok()?),
             });
         }
-        // Otherwise the fabricator, and only while the work outruns the drones.
-        let work = building_work(world, beacon);
+        // Otherwise the fabricator, and only while the work outruns the drones:
+        // a repair drone for the repair work in hand (spec section 9: "fabricated
+        // by Build beacons on work in hand"; decision 15), then a build drone.
+        let repairs = crate::site::repair_work(world, beacon);
+        let menders = drones_homed(world, beacon, UnitKind::RepairDrone);
+        if backlogged(world, repairs, menders) {
+            return Some(unit_request(
+                world,
+                seat,
+                beacon,
+                UnitKind::RepairDrone,
+                Urgency::Units,
+            ));
+        }
+        let work =
+            building_work(world, beacon).saturating_add(crate::site::voxel_work(world, beacon));
         let drones = drones_homed(world, beacon, UnitKind::BuildDrone);
         backlogged(world, work, drones)
             .then(|| unit_request(world, seat, beacon, UnitKind::BuildDrone, Urgency::Units))
@@ -135,6 +167,9 @@ impl Mandate for Mine {
 
     fn request(&self, world: &World, beacon: BeaconId) -> Option<SpendRequest> {
         let seat = seat_of(world, beacon)?;
+        if let Some(repair) = repair_request(world, seat, beacon) {
+            return Some(repair);
+        }
         // "Reachable ore" is the work in hand (item 22): the seam the beacon
         // holds, while it has a voxel left that the beacon's settings allow
         // and a drone can safely take (`crate::mining`). One item rather than
@@ -159,6 +194,9 @@ impl Mandate for Survey {
 
     fn request(&self, world: &World, beacon: BeaconId) -> Option<SpendRequest> {
         let seat = seat_of(world, beacon)?;
+        if let Some(repair) = repair_request(world, seat, beacon) {
+            return Some(repair);
+        }
         let row = world.beacons().row_of(beacon).ok()?;
         let wanted = u32::from(world.beacons().scout_counts().get(row.index()).copied()?);
         let have = drones_homed(world, beacon, UnitKind::Scout);
@@ -284,7 +322,8 @@ pub(crate) fn next_unpaid_target(world: &World, beacon: BeaconId) -> Option<usiz
     for (row, ((owner, kind), (built, order))) in rows.enumerate() {
         if *owner != beacon
             || *kind != TargetKind::Build.id()
-            || built.is_some()
+            || is_wall(world, row)
+            || !needs_buying(world, beacon, row, *built)
             || !buildable(world, beacon, row)
         {
             continue;
@@ -358,6 +397,7 @@ pub(crate) fn protected(world: &World, beacon: BeaconId, at: [Fx; 3]) -> bool {
         })
 }
 
+#[cfg(test)]
 /// The first Build target of `beacon` that has a structure and is not finished.
 ///
 /// What a build drone walks to: either something still going up, or something
@@ -415,7 +455,7 @@ pub(crate) fn next_unfinished_target(world: &World, beacon: BeaconId) -> Option<
 /// The row a Build target's `built` link names, or `None` for a structure
 /// since freed, which is counted as a stale reference and read as a target not
 /// going up (S2's plan, E1).
-fn built_row(world: &World, built: StructureId) -> Option<usize> {
+pub(crate) fn built_row(world: &World, built: StructureId) -> Option<usize> {
     match world.structures().row_of(built) {
         Ok(row) => Some(row.index()),
         Err(crate::ids::RefError::Stale) => {
@@ -437,16 +477,16 @@ fn building_work(world: &World, beacon: BeaconId) -> u32 {
         .zip(targets.anchors().iter().zip(targets.built()));
     let mut work: u32 = 0;
     for (row, ((owner, kind), (at, built))) in rows.enumerate() {
-        if *owner != beacon || *kind != TargetKind::Build.id() {
+        if *owner != beacon || *kind != TargetKind::Build.id() || is_wall(world, row) {
             continue;
         }
-        let outstanding = if built.is_some() {
+        let outstanding = if needs_buying(world, beacon, row, *built) {
+            buildable(world, beacon, row)
+        } else {
             !protected(world, beacon, *at)
                 && built_row(world, *built).is_some_and(|index| {
                     world.structures().building().get(index).copied() == Some(true)
                 })
-        } else {
-            buildable(world, beacon, row)
         };
         if outstanding {
             work = work.saturating_add(1);
@@ -466,4 +506,83 @@ pub(crate) fn inside_sphere(world: &World, beacon: BeaconId, at: [Fx; 3]) -> boo
     };
     let radius = world.sphere_radius();
     Sq::between(at, centre) <= Sq::of_radius(radius)
+}
+
+/// A request for work paid in advance (S2's `site`): it draws no `kW`, since
+/// the drones that do the work already draw.
+fn work_request(
+    seat: SeatId,
+    beacon: BeaconId,
+    urgency: Urgency,
+    cost: Money,
+    buys: Purchase,
+) -> SpendRequest {
+    SpendRequest {
+        seat,
+        beacon,
+        urgency,
+        cost,
+        draw: Kw::new(0),
+        buys,
+    }
+}
+
+/// Whether the Build target at `row` is a wall, whose voxels are paid for one
+/// at a time rather than bought whole (S2's `site`).
+fn is_wall(world: &World, row: usize) -> bool {
+    let targets = world.targets();
+    targets
+        .wall_tops()
+        .get(row)
+        .is_some_and(|top| *top != crate::tables::NO_WALL)
+        || targets.blueprints().get(row).copied() == Some(StructureKind::Wall.id())
+}
+
+/// Whether the Build target at `row` of `beacon` is to be bought: nothing has
+/// been paid for it yet, or what was paid for has been destroyed and the
+/// beacon's `rebuild_destroyed` is set and the target is no capability
+/// structure, which is never rebuilt automatically (item 128 (d); spec
+/// section 8). A destroyed target is one whose structure has no hit points
+/// left, or whose row has since been freed and reused.
+fn needs_buying(world: &World, beacon: BeaconId, row: usize, built: StructureId) -> bool {
+    if !built.is_some() {
+        return true;
+    }
+    let destroyed = match world.structures().row_of(built) {
+        Ok(at) => !world
+            .structures()
+            .hit_points()
+            .get(at.index())
+            .is_some_and(|hp| hp.is_alive()),
+        Err(crate::ids::RefError::Stale) => true,
+        Err(crate::ids::RefError::Id(_) | crate::ids::RefError::NoSuchRow) => false,
+    };
+    if !destroyed {
+        return false;
+    }
+    let rebuild = world
+        .beacons()
+        .row_of(beacon)
+        .ok()
+        .and_then(|at| world.beacons().sites().get(at.index()).copied())
+        .is_some_and(|site| site.settings.rebuild_destroyed);
+    let ordinary = world
+        .targets()
+        .blueprints()
+        .get(row)
+        .copied()
+        .and_then(StructureKind::from_id)
+        .is_some_and(|kind| !kind.is_capability());
+    rebuild && ordinary
+}
+
+/// The Repair band's top-up for the repair drones homed to `beacon`, whatever
+/// its writ (S2's `site`; decision 43). Only a Build beacon fabricates repair
+/// drones, but a drone keeps its job when its beacon dies and it is re-homed
+/// (spec section 5: a unit's kind is its job), so every mandate asks for the
+/// repair work its drones stand at. Without drones at work it asks nothing,
+/// so a beacon with none buys as it did before.
+fn repair_request(world: &World, seat: SeatId, beacon: BeaconId) -> Option<SpendRequest> {
+    crate::site::repair_shortfall(world, beacon)
+        .map(|cost| work_request(seat, beacon, Urgency::Repair, cost, Purchase::RepairWork))
 }
