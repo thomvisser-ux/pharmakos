@@ -29,8 +29,12 @@ The `dco` job in `.github/workflows/ci.yml` walks every commit in the pull reque
 is missing the trailer. No sign-off, no merge. Dependabot's own commits carry its sign-off line,
 `dependabot[bot] <support@github.com>`, which is accepted for them in place of a person's
 (decisions-log items 119 (4), 120 and 122 (4)); a commit anyone else adds to its branch still needs
-its own. There is no CLA. If a branch is already written, fix
-it in one go with `git rebase --signoff <base>`.
+its own. There is no CLA. An unsigned commit you have not pushed is fixed in place: `git commit
+--amend -s` for the last commit, or `git rebase --signoff <base>` for several. Once a branch is
+pushed it is never rewritten: make the commits again, signed, on a new branch, and open a new pull
+request in place of the old one (AGENTS.md sections 6 and 8). A branch takes `main` only by a
+signed merge (`git fetch origin main`, `git merge --no-ff --no-commit FETCH_HEAD`, `git commit -s`),
+never by a rebase or a force-push.
 
 ## Licences
 
