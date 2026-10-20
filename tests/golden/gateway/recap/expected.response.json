@@ -2,12 +2,18 @@
   "jsonrpc": "2.0",
   "id": 1,
   "result": {
-    "prose": "Round 1 ran 20 ticks. The match continues. The Ledger settled and credited you $ 95, your Basic Minimum Income at band 1 (-5 %). The award fund pays out from S4, when there are awards to split it by.",
+    "prose": "Round 1 ran 20 ticks. The match continues. The Ledger settled and credited you $ 95, your Basic Minimum Income at band 1 (-5 %). The award fund pays out from S4, when there are awards to split it by. This match so far you destroyed no enemy assets and lost no assets.",
     "settlement": {
       "bmi_dollars": 95,
       "band_rank": 1,
       "band_percent": -5,
       "award_dollars": 0
+    },
+    "tally": {
+      "kills": 0,
+      "shared_kills": 0,
+      "losses": 0,
+      "value_destroyed_dollars": 0
     },
     "_status": {
       "phase": "recap",
