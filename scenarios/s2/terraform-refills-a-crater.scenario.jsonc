@@ -1,0 +1,61 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// S2's `site` (decisions-log item 144 (5): terraform's FILL refills craters
+// and trenches inside a Build beacon's sphere back to the generated surface):
+// repair-and-salvage.scenario.jsonc's mortar duel, with seat 0's forward Build
+// beacon writing `terraform: FILL`.
+//
+//   seat 0  seals scenarios/s2/terraform-refills-a-crater.seat0.playbook.jsonc:
+//           the chain north along x = 358 to b_08 at (358, 185), whose initial
+//           settings name a mortar at (358, 175), FREE_FIRE, a repair
+//           threshold of 50 and `terraform: FILL`;
+//   seat 1  seals the mirror, south along x = 357 to b_08 at (357, 198) and a
+//           mortar at (357, 208), with `terraform: NONE`.
+//
+// The shells land where their targets stood, crater the ground around both
+// mortars, and every crater inside seat 0's forward sphere is refilled, one
+// voxel at a time at the wall's price, each column announced as it reaches the
+// generated surface (ground_refilled, seat 0's). Seat 1 refills nothing: its
+// beacon writes NONE. A crater in stone cracks before it opens, and a refill
+// fills air only, so the cracked stone stays as it is.
+{
+  "format": "pharmakos.scenario.v1",
+  "name": "terraform-refills-a-crater",
+  "summary": "The mortar duel again, with seat 0's forward beacon on FILL: the craters inside its sphere are refilled to the generated surface.",
+
+  "map": {
+    "seed": "0x00000000ca5caded",
+    "generator": "skeleton"
+  },
+
+  "rules": "rules/rules.v1.json",
+  "round_limit": 5,
+
+  "seats": [
+    { "seat": 0, "kind": "playbook", "playbook": "scenarios/s2/terraform-refills-a-crater.seat0.playbook.jsonc" },
+    { "seat": 1, "kind": "playbook", "playbook": "scenarios/s2/terraform-refills-a-crater.seat1.playbook.jsonc" }
+  ],
+
+  "segments": [
+    { "index": 0, "length_ms": 480000, "note": "Round 1: the Generator's beacon and the first of the chain." },
+    { "index": 1, "length_ms": 480000, "note": "Round 2: more of the chain, as the `$` comes in." },
+    { "index": 2, "length_ms": 480000, "note": "Round 3: the chain reaches its seventh beacon." },
+    { "index": 3, "length_ms": 480000, "note": "Round 4: the last beacon waits for the mortar's `$`." },
+    { "index": 4, "length_ms": 480000, "note": "Round 5: the mortars duel, and seat 0 refills the craters." }
+  ],
+
+  "assertions": [
+    { "assert": "event_fired", "event": "structure_completed", "seat": 0, "by_tick": 41500,
+      "note": "A structure of seat 0's is finished: its Generator in round 1, and its mortar in round 5, which the chain pins (`event_fired` has no \"after\", register M-05)." },
+    { "assert": "event_fired", "event": "shell_landed", "by_tick": 41500,
+      "note": "The first shells land, and crater the ground." },
+    { "assert": "event_fired", "event": "ground_refilled", "seat": 0, "by_tick": 41500,
+      "note": "Seat 0's build drones refill a crater inside its forward sphere to the generated surface." },
+    { "assert": "event_fired", "event": "match_ended", "by_tick": 48000,
+      "note": "Five rounds of 9 600 ticks." },
+    { "assert": "hash_chain_equals",
+      "golden": "tests/golden/scenarios/terraform-refills-a-crater/expected.hashes.txt",
+      "note": "Byte-identical on Windows, Linux and macOS. Re-blessed with `cargo xtask golden --bless`, and never to turn a red build green." }
+  ]
+}

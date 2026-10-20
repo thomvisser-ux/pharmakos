@@ -1,0 +1,72 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// S2's `site`: seat 0's half of terraform-refills-a-crater.scenario.jsonc's mortar duel. It covers its
+// starting vent with a Generator, walks a chain of seven beacons north along
+// x = 358, and builds a mortar at the chain's end under FREE_FIRE, inside
+// seat 1's sphere and its mortar's range. Every step but the first is skipped
+// once its beacon stands, so the route picks up each round where the last one
+// left off.
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {"title": "Mortar duel, south", "author_kind": "HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {"label": "vent", "skip_if": {"beacon_hp_pct": {"beacon": {"beacon_id": "b_01"}, "pct": {"op": "GT", "value": 0}}},
+        "place_beacon": {
+          "at": {"covering": {"vent": {"rank": "NEAREST", "coverage": "UNCOVERED"}}},
+          "initial": {"mandate": {"build": {"targets": [
+            {"blueprint_id": "generator", "anchor": {"on": {"covered": {}}}}
+          ]}}}},
+        "timeout_ms": 120000, "on_fail": {"action": "SKIP"}},
+      {"label": "fund_2", "skip_if": {"beacon_hp_pct": {"beacon": {"beacon_id": "b_02"}, "pct": {"op": "GT", "value": 0}}},
+        "wait_until": {"condition": {"treasury": {"dollars": {"op": "GE", "value": 60}}}},
+        "timeout_ms": 400000, "on_fail": {"action": "SKIP"}},
+      {"label": "chain_2", "skip_if": {"beacon_hp_pct": {"beacon": {"beacon_id": "b_02"}, "pct": {"op": "GT", "value": 0}}},
+        "place_beacon": {"at": {"voxel": {"x": 358, "y": 47, "z": 36}}},
+        "timeout_ms": 300000, "on_fail": {"action": "SKIP"}},
+      {"label": "fund_3", "skip_if": {"beacon_hp_pct": {"beacon": {"beacon_id": "b_03"}, "pct": {"op": "GT", "value": 0}}},
+        "wait_until": {"condition": {"treasury": {"dollars": {"op": "GE", "value": 60}}}},
+        "timeout_ms": 400000, "on_fail": {"action": "SKIP"}},
+      {"label": "chain_3", "skip_if": {"beacon_hp_pct": {"beacon": {"beacon_id": "b_03"}, "pct": {"op": "GT", "value": 0}}},
+        "place_beacon": {"at": {"voxel": {"x": 358, "y": 70, "z": 36}}},
+        "timeout_ms": 300000, "on_fail": {"action": "SKIP"}},
+      {"label": "fund_4", "skip_if": {"beacon_hp_pct": {"beacon": {"beacon_id": "b_04"}, "pct": {"op": "GT", "value": 0}}},
+        "wait_until": {"condition": {"treasury": {"dollars": {"op": "GE", "value": 60}}}},
+        "timeout_ms": 400000, "on_fail": {"action": "SKIP"}},
+      {"label": "chain_4", "skip_if": {"beacon_hp_pct": {"beacon": {"beacon_id": "b_04"}, "pct": {"op": "GT", "value": 0}}},
+        "place_beacon": {"at": {"voxel": {"x": 358, "y": 93, "z": 35}}},
+        "timeout_ms": 300000, "on_fail": {"action": "SKIP"}},
+      {"label": "fund_5", "skip_if": {"beacon_hp_pct": {"beacon": {"beacon_id": "b_05"}, "pct": {"op": "GT", "value": 0}}},
+        "wait_until": {"condition": {"treasury": {"dollars": {"op": "GE", "value": 60}}}},
+        "timeout_ms": 400000, "on_fail": {"action": "SKIP"}},
+      {"label": "chain_5", "skip_if": {"beacon_hp_pct": {"beacon": {"beacon_id": "b_05"}, "pct": {"op": "GT", "value": 0}}},
+        "place_beacon": {"at": {"voxel": {"x": 358, "y": 116, "z": 33}}},
+        "timeout_ms": 300000, "on_fail": {"action": "SKIP"}},
+      {"label": "fund_6", "skip_if": {"beacon_hp_pct": {"beacon": {"beacon_id": "b_06"}, "pct": {"op": "GT", "value": 0}}},
+        "wait_until": {"condition": {"treasury": {"dollars": {"op": "GE", "value": 60}}}},
+        "timeout_ms": 400000, "on_fail": {"action": "SKIP"}},
+      {"label": "chain_6", "skip_if": {"beacon_hp_pct": {"beacon": {"beacon_id": "b_06"}, "pct": {"op": "GT", "value": 0}}},
+        "place_beacon": {"at": {"voxel": {"x": 358, "y": 139, "z": 34}}},
+        "timeout_ms": 300000, "on_fail": {"action": "SKIP"}},
+      {"label": "fund_7", "skip_if": {"beacon_hp_pct": {"beacon": {"beacon_id": "b_07"}, "pct": {"op": "GT", "value": 0}}},
+        "wait_until": {"condition": {"treasury": {"dollars": {"op": "GE", "value": 60}}}},
+        "timeout_ms": 400000, "on_fail": {"action": "SKIP"}},
+      {"label": "chain_7", "skip_if": {"beacon_hp_pct": {"beacon": {"beacon_id": "b_07"}, "pct": {"op": "GT", "value": 0}}},
+        "place_beacon": {"at": {"voxel": {"x": 358, "y": 162, "z": 35}}},
+        "timeout_ms": 300000, "on_fail": {"action": "SKIP"}},
+      {"label": "fund_8", "skip_if": {"beacon_hp_pct": {"beacon": {"beacon_id": "b_08"}, "pct": {"op": "GT", "value": 0}}},
+        "wait_until": {"condition": {"treasury": {"dollars": {"op": "GE", "value": 170}}}},
+        "timeout_ms": 400000, "on_fail": {"action": "SKIP"}},
+      {"label": "chain_8", "skip_if": {"beacon_hp_pct": {"beacon": {"beacon_id": "b_08"}, "pct": {"op": "GT", "value": 0}}},
+        "place_beacon": {"at": {"voxel": {"x": 358, "y": 185, "z": 35}}, "initial": {"mandate": {"roe": "FREE_FIRE", "build": {"targets": [
+            {"blueprint_id": "mortar", "anchor": {"voxel": {"x": 358, "y": 175, "z": 36}}}
+          ], "repair_threshold_pct": 50, "terraform": "FILL"}}}},
+        "timeout_ms": 300000, "on_fail": {"action": "SKIP"}}
+    ],
+    "handlers": []
+  },
+  "on_death": {"on_respawn": "CONTINUE", "max_deaths_before_fallback": 2},
+  "fallback": {"hold": {"at": {"safest": {}}}}
+}
