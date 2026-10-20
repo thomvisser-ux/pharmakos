@@ -1182,7 +1182,11 @@ fn a_sealed_in_walker_parks_and_is_re_armed_when_the_graph_changes() {
                 .voxels()
                 .top_solid_z(x + dx, y + dy)
                 .expect("a column with a floor");
-            wall.push([x + dx, y + dy, top + 5]);
+            // A supported column, not a voxel hung in air: a voxel written into
+            // air with nothing under it falls (S2's plan, `fall`).
+            for z in (top + 1)..=(top + 5) {
+                wall.push([x + dx, y + dy, z]);
+            }
         }
     }
     for at in &wall {
