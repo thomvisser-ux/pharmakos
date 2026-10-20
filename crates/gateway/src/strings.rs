@@ -145,10 +145,10 @@ pub fn event_text(event: &Event) -> String {
         EventKind::FinalAudit => format!("The final audit scored {seat} at $ {}.", event.value),
         // S2's `fire`: the combat lines (S2's plan, E17).
         EventKind::UnitDestroyed => format!("A unit of {seat} was destroyed."),
-        EventKind::StructureDestroyed => event.seat.map_or_else(
-            || String::from("A ruin was destroyed."),
-            |owner| format!("A structure of seat {} was destroyed.", owner.raw()),
-        ),
+        EventKind::StructureDestroyed => match event.seat {
+            Some(owner) => format!("A structure of seat {} was destroyed.", owner.raw()),
+            None => String::from("A ruin was destroyed."),
+        },
         EventKind::ShellLanded => format!("A shell from {seat} landed."),
         EventKind::WreckLeft => format!("A wreck worth $ {} was left.", event.value),
         EventKind::ReturnedFire => format!("An asset of {seat} returned fire."),

@@ -1623,7 +1623,7 @@ impl World {
         let placed = match self.wrecks.place(self.wreck_limit, at, salvage, tick) {
             Ok(placed) => Ok(placed),
             Err(_) => {
-                if self.bury_oldest_wreck() {
+                if self.bury_oldest_wreck(at) {
                     self.wrecks.place(self.wreck_limit, at, salvage, tick)
                 } else {
                     Err(crate::tables::TableFull {
@@ -1647,7 +1647,11 @@ impl World {
 
     /// Bury the oldest unsalvaged wreck -- the earliest left, ties to the
     /// lowest id -- freeing its row, and say so. `false` when no wreck stands.
-    fn bury_oldest_wreck(&mut self) -> bool {
+    ///
+    /// The event always carries a place, as every world line must (the
+    /// gateway refuses a world event with none): the buried wreck's, or, for
+    /// a row whose place cannot be read, `instead`, where the new wreck lies.
+    fn bury_oldest_wreck(&mut self, instead: [Fx; 3]) -> bool {
         let mut oldest: Option<(u32, u32, Row)> = None;
         let rows = self
             .wrecks
@@ -1667,16 +1671,19 @@ impl World {
         let Some((_, id, row)) = oldest else {
             return false;
         };
-        let at = self.wrecks.positions().get(row.index()).copied();
+        let at = match self.wrecks.positions().get(row.index()) {
+            Some(at) => *at,
+            None => instead,
+        };
         if self.wrecks.release(row) {
             self.refs.retired();
         }
-        let mut emission = Emission::of(EventKind::WreckBuried)
-            .subject_of(AssetId::of_wreck(crate::tables::WreckId::new(id)));
-        if let Some(point) = at {
-            emission = emission.at(Position::from_array(point));
-        }
-        self.emit(self.tick, emission);
+        self.emit(
+            self.tick,
+            Emission::of(EventKind::WreckBuried)
+                .subject_of(AssetId::of_wreck(crate::tables::WreckId::new(id)))
+                .at(Position::from_array(at)),
+        );
         true
     }
 
