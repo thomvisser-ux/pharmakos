@@ -528,6 +528,34 @@ pub fn map_summary(size: [u32; 3], seed: &str, seats: u32) -> String {
     )
 }
 
+/// The recap's tally sentence: the seat's own kills, how many of them were
+/// shared, the enemy value they were worth and the seat's own losses, for the
+/// match so far (spec section 3's "shared kill"; S2's plan, E15).
+#[must_use]
+pub fn recap_tally(kills: u32, shared: u32, value_dollars: i32, losses: u32) -> String {
+    let lost = count(losses, "asset", "assets");
+    let destroyed = count(kills, "enemy asset", "enemy assets");
+    match (kills, shared) {
+        (0, _) => format!("This match so far you destroyed no enemy assets and lost {lost}."),
+        (_, 0) => format!(
+            "This match so far you destroyed {destroyed}, worth $ {value_dollars}, and lost \
+             {lost}."
+        ),
+        (1, _) => format!(
+            "This match so far you destroyed 1 enemy asset, a shared kill, worth $ \
+             {value_dollars}, and lost {lost}."
+        ),
+        (_, 1) => format!(
+            "This match so far you destroyed {destroyed}, 1 of them a shared kill, worth $ \
+             {value_dollars}, and lost {lost}."
+        ),
+        _ => format!(
+            "This match so far you destroyed {destroyed}, {shared} of them shared kills, worth \
+             $ {value_dollars}, and lost {lost}."
+        ),
+    }
+}
+
 /// `get_beacon`'s prose for one of the seat's own beacons: its mandate and its
 /// hit points, the seat's own business.
 #[must_use]
@@ -724,6 +752,33 @@ mod tests {
         );
         let text = event_text(&event(EventKind::UnitDestroyed, Some(1), 5));
         assert_eq!(text, "A unit of seat 1 was destroyed.");
+    }
+
+    #[test]
+    fn the_tally_sentence_counts_and_names_a_shared_kill() {
+        assert_eq!(
+            super::recap_tally(0, 0, 0, 0),
+            "This match so far you destroyed no enemy assets and lost no assets."
+        );
+        assert_eq!(
+            super::recap_tally(2, 1, 35, 1),
+            "This match so far you destroyed 2 enemy assets, 1 of them a shared kill, worth $ 35, \
+             and lost 1 asset."
+        );
+        assert_eq!(
+            super::recap_tally(2, 0, 35, 0),
+            "This match so far you destroyed 2 enemy assets, worth $ 35, and lost no assets."
+        );
+        assert_eq!(
+            super::recap_tally(1, 1, 10, 0),
+            "This match so far you destroyed 1 enemy asset, a shared kill, worth $ 10, and lost \
+             no assets."
+        );
+        assert_eq!(
+            super::recap_tally(3, 2, 60, 2),
+            "This match so far you destroyed 3 enemy assets, 2 of them shared kills, worth $ 60, \
+             and lost 2 assets."
+        );
     }
 
     #[test]
