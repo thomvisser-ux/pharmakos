@@ -361,3 +361,55 @@ fn a_canonical_file_still_round_trips_byte_for_byte() {
     let document = Document::parse(&canonical.text).expect("the canonical form parses");
     assert_eq!(document.to_text(), canonical.text);
 }
+
+// ---------------------------------------------------------------------------
+// S2's constructs (task `vfy2`)
+// ---------------------------------------------------------------------------
+
+fn defend_and_attack() -> String {
+    read(
+        &Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("cases")
+            .join("defend_and_attack.jsonc"),
+    )
+}
+
+#[test]
+fn s2s_constructs_round_trip_canonicalise_and_render_to_their_goldens() {
+    // A Defend arm and an Attack arm with every field, an edit writing a
+    // present `false`, an empty switch, and a wall target with its box.
+    let text = defend_and_attack();
+    let document = Document::parse(&text).expect("the S2 fixture parses");
+    assert_eq!(document.to_text(), text, "load-and-save lost a byte");
+    let canonical = canonicalise_text(&text).expect("the S2 fixture canonicalises");
+    assert!(
+        canonical.relocated.is_empty(),
+        "nothing in the fixture is written at a default: {:?}",
+        canonical.relocated
+    );
+    assert!(
+        canonical.text.contains("\"breach_allowed\": false"),
+        "a present `optional` false survives the canonical form"
+    );
+    assert_golden("defend_and_attack", "jsonc", &canonical.text);
+    let again = canonicalise_text(&canonical.text).expect("the canonical text canonicalises");
+    assert_eq!(
+        again.text, canonical.text,
+        "the canonical form is a fixed point"
+    );
+    let prose = render_plan(&canonical.playbook, &context(), &rules())
+        .expect("the committed rules table is complete");
+    for said in [
+        "protecting beacon \"b_00\" and your commander",
+        "engaging within 60% of the sphere",
+        "with a picket of 2 scouts",
+        "attacking beacon \"e_01\"",
+        "launching once 6 raiders stand there or 1:30 of the segment have passed",
+        "never breaching walls",
+        "attacking the enemy commander",
+    ] {
+        assert!(prose.contains(said), "the prose says `{said}`:\n{prose}");
+    }
+    assert_golden("defend_and_attack", "prose.txt", &prose);
+}

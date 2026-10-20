@@ -2,11 +2,25 @@
   "depth": "FULL",
   "diagnostics": [
     {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/0/place_beacon/initial/mandate/roe",
+      "message": "`roe` is omitted and reads as RETURN_FIRE.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/place_beacon/initial/mandate/roe\",\"value\":\"RETURN_FIRE\"}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
       "code": "E0508",
       "severity": "ERROR",
       "path": "/declarative/route/0/place_beacon/initial/mandate/survey/scout_count",
       "message": "`scout_count` is 4294967295; a beacon holds at most 255 scouts.",
-      "beginner": "A Survey beacon can field only so many scouts. Ask for fewer.",
+      "beginner": "A beacon can field only so many scouts. Ask for fewer.",
       "suggestions": [
         {
           "title": "Ask for as many scouts as a beacon holds",
@@ -44,10 +58,10 @@
       "beginner": "This playbook asks for more than a seal can hold. The game would refuse it when you submit, so it is refused here first."
     }
   ],
-  "report_hash": "abi5+8vneE4=",
+  "report_hash": "SqPw3LOJCdY=",
   "rules_hash": "gCjUE4Tm3i8=",
   "plan_fingerprint": "Owy0Ppy4shs=",
-  "verifier_version": "0.1.0-s2",
+  "verifier_version": "0.1.0-s2.2",
   "size_units": 1,
   "size_budget": 128
 }

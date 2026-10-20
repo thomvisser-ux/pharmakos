@@ -126,6 +126,14 @@ struct Refusals<'a> {
 ///   whole (`E0012`, `E0013`) before it reads a selector in them (S2's wire,
 ///   `con4`).
 ///
+/// **For the lanes that lift `E0012` and `E0013` (S2's `dfnd`, `atk`).** Once
+/// the sim compiles an arm, it reads the selectors in it, so `/defend/` and
+/// `/attack/` leave this list in the same pull request. An Attack target's
+/// selector must rank known enemy beacons (`E0415`, the structure stage), and
+/// `side: ENEMY_KNOWN` is itself `E0015` until S3's knowledge store, so from
+/// then until S3 an Attack target is a handle, a voxel or the enemy
+/// commander, never a selector.
+///
 /// A pointer token is a field name or an index, and each of `broadcast`,
 /// `beacon_under_attack`, `defend`, `attack` and the pair
 /// `anchor`/`beacon_anchor` names exactly one place in `gp.v1`, so the

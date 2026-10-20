@@ -77,6 +77,16 @@ Its fixture carries no SPDX header, so neither does the golden, which stays in
 this area's permissive tier as `awkward/expected.canonical.json` does; the
 fixture's own licence comes from `REUSE.toml`'s `crates/**` block.
 
+`defend_and_attack/` (S2's `vfy2`) pins S2's constructs the same way, from
+`crates/plan-core/tests/cases/defend_and_attack.jsonc`: a Defend arm and an
+Attack arm with every field, an edit that writes a present `false` (an
+`optional` field survives the canonical form at its default, because presence
+is what says it was written), an empty switch to Defend, and a `wall` target
+with its box. Its prose is the first to list a mandate's contents: a Defend
+or an Attack arm's fields are said after its writ, and every other writ still
+reads as its name alone. Like the targeting fixture it carries no SPDX header,
+and its golden is in the permissive tier.
+
 ## Licensing
 
 The whole area is `MIT OR Apache-2.0` but one file,

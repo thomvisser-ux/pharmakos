@@ -294,3 +294,189 @@ fn the_crate_declares_no_features_of_its_own() {
          `cargo xtask ci`'s research-guard checks for"
     );
 }
+
+/// Every fallback this crate's shipped code keeps, with the rule that makes
+/// its answer exact rather than a silent default, and how many lines carry it
+/// (S2's plan, E7's sweep over `crates/plan-core`; task `vfy2`).
+///
+/// The sweep fixed the three that could answer wrong: `verify.rs`' blanked
+/// file, which now builds a `String` by construction rather than converting
+/// bytes back with the raw text as its fallback; `library.rs`' filled
+/// parameter, which refuses a declared parameter the template does not hold
+/// rather than filling it with nothing; and `render.rs`' list joiner, which
+/// splits the list rather than reading its ends through defaults.
+const KEPT_FALLBACKS: &[(&str, &str, usize, &str)] = &[
+    (
+        "canonical.rs",
+        "split_pointer(pointer).unwrap_or_default()",
+        1,
+        "the pointer is an anchor the parser built, which always splits; an empty token list \
+         relocates the comment to the root, which exists",
+    ),
+    (
+        "canonical.rs",
+        "char::from_digit(nibble, 16).unwrap_or('0')",
+        1,
+        "a nibble is masked to 0-15, every one of which is a hex digit",
+    ),
+    (
+        "jsonc.rs",
+        ".unwrap_or_else(|| escape(key));",
+        1,
+        "a key moved to another name is written in that name's canonical spelling, the \
+         module's stated rule",
+    ),
+    (
+        "jsonc.rs",
+        "trivia.get(..at).unwrap_or_default()",
+        2,
+        "`at` is where `find` found a newline, so it is a character boundary inside the text",
+    ),
+    (
+        "jsonc.rs",
+        "trivia.get(at..).unwrap_or_default()",
+        2,
+        "as the head, above",
+    ),
+    (
+        "jsonc.rs",
+        ".map_or(trivia.len(), |offset|",
+        2,
+        "a comment with no end runs to the end of its trivia, which is how the reader reads an \
+         unterminated one",
+    ),
+    (
+        "jsonc.rs",
+        "self.text.get(self.pos..).unwrap_or_default()",
+        1,
+        "`pos` is a character boundary the reader advanced to, and an empty rest is refused on \
+         the next line as a string that ended inside a character",
+    ),
+    (
+        "jsonc.rs",
+        "char::from_digit(nibble, 16).unwrap_or('0')",
+        1,
+        "as canonical.rs': a masked nibble is a hex digit",
+    ),
+    (
+        "library.rs",
+        ".unwrap_or_default()",
+        2,
+        "a template with no `meta` has no title to list (the verifier names the missing block), \
+         and a note with no first line has no blurb",
+    ),
+    (
+        "patch.rs",
+        "position.unwrap_or(len).min(len)",
+        1,
+        "no remembered position means a new member, which goes last; a remembered one past the \
+         end goes last as well, which is where the member it followed now ends",
+    ),
+    (
+        "render.rs",
+        ".unwrap_or(s::UNTITLED);",
+        1,
+        "a playbook with no title is named as untitled, in words the string table holds",
+    ),
+    (
+        "render.rs",
+        "target.map_or_else(String::new, |target| target.blueprint_id.clone())",
+        1,
+        "a row with no target names no blueprint; the verifier refuses the row",
+    ),
+    (
+        "render.rs",
+        ".map_or_else(String::new, |area| {",
+        1,
+        "a target with no box says nothing of one",
+    ),
+    (
+        "render.rs",
+        "at.map_or_else(|| s::PLACE_NOWHERE.to_owned(), voxel)",
+        1,
+        "a corner the file leaves out is said to be nowhere the file names",
+    ),
+    (
+        "render.rs",
+        "test.map_or_else(",
+        3,
+        "a predicate with no comparison is said to compare to nothing the file names",
+    ),
+    (
+        "render.rs",
+        ".checked_div(",
+        3,
+        "each divisor is a non-zero constant, so the division is never refused",
+    ),
+    (
+        "travel.rs",
+        ".unwrap_or(MAX_SECONDS);",
+        1,
+        "rounding up past i32 saturates upwards, the one direction the estimator may err in",
+    ),
+    (
+        "travel.rs",
+        "seconds.checked_div(60).unwrap_or(0)",
+        1,
+        "the divisor is a non-zero constant",
+    ),
+];
+
+/// Every fallback call in the crate's shipped code, as `(file name, the
+/// line)`: `unwrap_or` (and so `unwrap_or_default` and `unwrap_or_else`),
+/// `map_or` and `map_or_else`.
+fn fallbacks() -> Vec<(String, String)> {
+    let mut found: Vec<(String, String)> = Vec::new();
+    for path in sources() {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Some(name) = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+        else {
+            continue;
+        };
+        for (_, line) in code_lines(&text) {
+            if line.contains("unwrap_or")
+                || line.contains("map_or(")
+                || line.contains("map_or_else(")
+            {
+                found.push((name.clone(), line.trim().to_owned()));
+            }
+        }
+    }
+    found
+}
+
+#[test]
+fn no_silent_fallback_is_left() {
+    let found = fallbacks();
+    let unexplained: Vec<String> = found
+        .iter()
+        .filter(|(file, line)| {
+            !KEPT_FALLBACKS
+                .iter()
+                .any(|(kept_file, code, _, _)| kept_file == file && line.contains(code))
+        })
+        .map(|(file, line)| format!("{file}: {line}"))
+        .collect();
+    assert!(
+        unexplained.is_empty(),
+        "a value falls back to a default instead of saying what went wrong. Return a typed \
+         error, make the failure unrepresentable, or, where the default is a rule that leaves \
+         the answer exact, add the line to KEPT_FALLBACKS with that rule:\n{}",
+        unexplained.join("\n")
+    );
+    for (file, code, lines, why) in KEPT_FALLBACKS {
+        let count = found
+            .iter()
+            .filter(|(found_file, line)| found_file == file && line.contains(code))
+            .count();
+        assert_eq!(
+            count, *lines,
+            "KEPT_FALLBACKS' entry in {file} (`{code}`, kept because {why}) matches {count} \
+             lines, not {lines}; a stale entry or an unseen second use hides one"
+        );
+    }
+}

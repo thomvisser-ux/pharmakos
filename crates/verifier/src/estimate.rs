@@ -129,10 +129,11 @@ pub(crate) fn run(playbook: &Playbook, input: &Input<'_>, out: &mut Builder) {
 /// The route is summed in [`Tally`], which holds any playbook's orders
 /// exactly, so no count is large enough to silence the check: an order past
 /// the sim's own `$` and `kW` types is past every supply, and is reported as
-/// what it is (`ProjectionError::Overflow` cannot arise here).
+/// what it is. The one order a [`Tally`] cannot hold is a wall whose box's
+/// price leaves `i128` (`ProjectionError::Overflow`), which `E0603` refuses.
 ///
-/// **A step that orders a blueprint the rules table does not price ends the
-/// projection there.** There is no honest figure for that step or any after
+/// **A step that orders a blueprint the rules table does not price, or a
+/// wall it cannot price, ends the projection there.** There is no honest figure for that step or any after
 /// it, but everything found before it stands and is reported: draw and spend
 /// only grow along a route, so a line crossed before the unpriced step stays
 /// crossed. Such a playbook is refused by the sim at the seal's compile (only
@@ -233,7 +234,10 @@ fn seal_price(playbook: &Playbook, body: &Declarative, input: &Input<'_>, out: &
     let refused = match projection::project(playbook, economy, prices) {
         Ok(found) => i128::from(found.spend.raw()) > int32,
         Err(projection::ProjectionError::Overflow) => true,
-        Err(projection::ProjectionError::UnknownBlueprint(_)) => return,
+        Err(
+            projection::ProjectionError::UnknownBlueprint(_)
+            | projection::ProjectionError::UnpricedWall,
+        ) => return,
     };
     if !refused {
         return;

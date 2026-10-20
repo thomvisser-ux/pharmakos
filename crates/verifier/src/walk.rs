@@ -60,6 +60,20 @@ pub(crate) enum Slot<'a> {
     Elsewhere,
 }
 
+/// Which beacon's mandate holds a Build target, as the file names it: what a
+/// wall box's sphere is measured from (S2's `vfy2`).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) enum Holder<'a> {
+    /// The beacon a `place_beacon` puts up at this voxel, whose `initial`
+    /// holds the target.
+    Site(&'a pharmakos_proto::gp::v1::Voxel),
+    /// The beacon an `interface` step visits.
+    Visited(&'a BeaconRef),
+    /// A beacon the file does not name: a deploy `covering` a feature, whose
+    /// site the sim chooses, or a step that names no place.
+    Unnamed,
+}
+
 /// What carries a mandate settings block, which decides how an omitted field in
 /// it reads.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -104,6 +118,8 @@ pub(crate) trait Visit {
     fn mandate(&mut self, _at: &str, _settings: &MandateSettings, _carrier: Carrier) {}
     /// Any build target.
     fn build_target(&mut self, _at: &str, _target: &BuildTarget) {}
+    /// Any build target, with the beacon whose mandate holds it.
+    fn held_target(&mut self, _at: &str, _target: &BuildTarget, _holder: Holder<'_>) {}
 }
 
 /// Walk the whole playbook in document order.
@@ -176,7 +192,16 @@ fn walk_entry(entry: &Step, at: &str, visitor: &mut dyn Visit) {
             }
             let rows_at = pointer::child(&here, "rows");
             for (index, row) in interface.rows.iter().enumerate() {
-                walk_row(row.row.as_ref(), &pointer::at(&rows_at, index), visitor);
+                let holder = match interface.beacon.as_ref() {
+                    Some(beacon) => Holder::Visited(beacon),
+                    None => Holder::Unnamed,
+                };
+                walk_row(
+                    row.row.as_ref(),
+                    &pointer::at(&rows_at, index),
+                    holder,
+                    visitor,
+                );
             }
         }
         Some(step::Kind::PlaceBeacon(place)) => {
@@ -190,6 +215,10 @@ fn walk_entry(entry: &Step, at: &str, visitor: &mut dyn Visit) {
                 Some(location::Place::Covering(feature)) => Some(feature),
                 _ => None,
             };
+            let holder = match place.at.as_ref().and_then(|site| site.place.as_ref()) {
+                Some(location::Place::Voxel(voxel)) => Holder::Site(voxel),
+                _ => Holder::Unnamed,
+            };
             if let Some(initial) = place.initial.as_ref()
                 && let Some(settings) = initial.mandate.as_ref()
             {
@@ -198,6 +227,7 @@ fn walk_entry(entry: &Step, at: &str, visitor: &mut dyn Visit) {
                     &pointer::child(&pointer::child(&here, "initial"), "mandate"),
                     Carrier::Initial,
                     deploy,
+                    holder,
                     visitor,
                 );
             }
@@ -235,7 +265,12 @@ fn walk_entry(entry: &Step, at: &str, visitor: &mut dyn Visit) {
     }
 }
 
-fn walk_row(row: Option<&interface_row::Row>, at: &str, visitor: &mut dyn Visit) {
+fn walk_row(
+    row: Option<&interface_row::Row>,
+    at: &str,
+    holder: Holder<'_>,
+    visitor: &mut dyn Visit,
+) {
     match row {
         Some(interface_row::Row::SetMandate(settings)) => {
             walk_mandate(
@@ -243,6 +278,7 @@ fn walk_row(row: Option<&interface_row::Row>, at: &str, visitor: &mut dyn Visit)
                 &pointer::child(at, "set_mandate"),
                 Carrier::Switch,
                 None,
+                holder,
                 visitor,
             );
         }
@@ -252,6 +288,7 @@ fn walk_row(row: Option<&interface_row::Row>, at: &str, visitor: &mut dyn Visit)
                 &pointer::child(at, "set_mandate_settings"),
                 Carrier::Edit,
                 None,
+                holder,
                 visitor,
             );
         }
@@ -261,6 +298,7 @@ fn walk_row(row: Option<&interface_row::Row>, at: &str, visitor: &mut dyn Visit)
                     target,
                     &pointer::child(&pointer::child(at, "add_build_target"), "target"),
                     None,
+                    holder,
                     visitor,
                 );
             }
@@ -284,6 +322,7 @@ fn walk_mandate(
     at: &str,
     carrier: Carrier,
     deploy: Option<&FeatureRef>,
+    holder: Holder<'_>,
     visitor: &mut dyn Visit,
 ) {
     visitor.mandate(at, settings, carrier);
@@ -292,7 +331,13 @@ fn walk_mandate(
             let here = pointer::child(at, "build");
             let targets_at = pointer::child(&here, "targets");
             for (index, target) in build.targets.iter().enumerate() {
-                walk_build_target(target, &pointer::at(&targets_at, index), deploy, visitor);
+                walk_build_target(
+                    target,
+                    &pointer::at(&targets_at, index),
+                    deploy,
+                    holder,
+                    visitor,
+                );
             }
             let areas_at = pointer::child(&here, "protected_areas");
             for (index, area) in build.protected_areas.iter().enumerate() {
@@ -363,9 +408,11 @@ fn walk_build_target(
     target: &BuildTarget,
     at: &str,
     deploy: Option<&FeatureRef>,
+    holder: Holder<'_>,
     visitor: &mut dyn Visit,
 ) {
     visitor.build_target(at, target);
+    visitor.held_target(at, target, holder);
     if let Some(anchor) = target.anchor.as_ref() {
         walk_location(
             anchor,

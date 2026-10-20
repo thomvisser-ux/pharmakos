@@ -54,7 +54,9 @@ use crate::error::Error;
 ///
 /// # Errors
 ///
-/// Only when the rules table does not carry a block the checks read. Anything
+/// When the input cannot be assembled ([`pharmakos_verifier::InputError`]):
+/// the rules table does not carry a block the checks read, or carries one out
+/// of range, or an input is past `report_hash`'s length prefix. Anything
 /// wrong with the *playbook* comes back as a diagnostic inside the report,
 /// which is the difference between a verifier and a parser.
 pub fn verify_jsonc(
@@ -76,8 +78,7 @@ pub fn verify_jsonc(
             blanked.as_bytes()
         }
     };
-    let input = Input::new(bytes, snapshot, scope, rules)
-        .map_err(|gap| Error::at("", format!("the rules table is incomplete: {gap}")))?;
+    let input = Input::new(bytes, snapshot, scope, rules).map_err(Error::from)?;
     Ok(pharmakos_verifier::verify(&input, depth))
 }
 
@@ -99,31 +100,39 @@ fn blank_comments(text: &str) -> String {
         Line,
         Block,
     }
-    let mut out: Vec<u8> = Vec::with_capacity(text.len());
+    // Read by character, so a blanked character becomes exactly as many spaces
+    // as it had bytes and the result is a `String` by construction: there is
+    // no byte buffer to convert back, and so no conversion that could fail.
+    let blank = |out: &mut String, character: char| {
+        for _ in 0..character.len_utf8() {
+            out.push(' ');
+        }
+    };
+    let mut out = String::with_capacity(text.len());
     let mut at = At::Code;
-    let mut bytes = text.bytes().peekable();
-    while let Some(byte) = bytes.next() {
+    let mut characters = text.chars().peekable();
+    while let Some(byte) = characters.next() {
         match at {
             At::Code => {
-                if byte == b'/' && bytes.peek() == Some(&b'/') {
-                    let _ = bytes.next();
-                    out.extend_from_slice(b"  ");
+                if byte == '/' && characters.peek() == Some(&'/') {
+                    let _ = characters.next();
+                    out.push_str("  ");
                     at = At::Line;
-                } else if byte == b'/' && bytes.peek() == Some(&b'*') {
-                    let _ = bytes.next();
-                    out.extend_from_slice(b"  ");
+                } else if byte == '/' && characters.peek() == Some(&'*') {
+                    let _ = characters.next();
+                    out.push_str("  ");
                     at = At::Block;
                 } else {
-                    if byte == b'"' {
+                    if byte == '"' {
                         at = At::Text;
                     }
                     out.push(byte);
                 }
             }
             At::Text => {
-                if byte == b'\\' {
+                if byte == '\\' {
                     at = At::Escape;
-                } else if byte == b'"' {
+                } else if byte == '"' {
                     at = At::Code;
                 }
                 out.push(byte);
@@ -133,32 +142,29 @@ fn blank_comments(text: &str) -> String {
                 out.push(byte);
             }
             At::Line => {
-                if byte == b'\n' {
+                if byte == '\n' {
                     at = At::Code;
                     out.push(byte);
-                } else if byte == b'\r' {
+                } else if byte == '\r' {
                     out.push(byte);
                 } else {
-                    out.push(b' ');
+                    blank(&mut out, byte);
                 }
             }
             At::Block => {
-                if byte == b'*' && bytes.peek() == Some(&b'/') {
-                    let _ = bytes.next();
-                    out.extend_from_slice(b"  ");
+                if byte == '*' && characters.peek() == Some(&'/') {
+                    let _ = characters.next();
+                    out.push_str("  ");
                     at = At::Code;
-                } else if byte == b'\n' || byte == b'\r' {
+                } else if byte == '\n' || byte == '\r' {
                     out.push(byte);
                 } else {
-                    out.push(b' ');
+                    blank(&mut out, byte);
                 }
             }
         }
     }
-    // Only ASCII bytes were replaced, each by an ASCII space, and only whole
-    // characters were inside a comment, so this cannot fail; the fallback is
-    // the text as written, which is what this branch handed over before.
-    String::from_utf8(out).unwrap_or_else(|_| text.to_owned())
+    out
 }
 
 #[cfg(test)]

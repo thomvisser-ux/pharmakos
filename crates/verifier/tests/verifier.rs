@@ -59,7 +59,8 @@ use pharmakos_sim::snapshot::{SNAPSHOT_VERSION, Snapshot};
 use pharmakos_sim::tables::SeatId;
 use pharmakos_verifier::catalogue::{CATALOGUE, Emitter, Stage, catalogue_json};
 use pharmakos_verifier::{
-    FeatureKind, Input, KnownBeacon, KnownFeature, Ownership, Scope, VERIFIER_VERSION, hash, verify,
+    FeatureKind, Input, KnownBeacon, KnownFeature, Ownership, Scope, Sighted, Sighting,
+    VERIFIER_VERSION, hash, verify,
 };
 
 // ---------------------------------------------------------------------------
@@ -382,10 +383,47 @@ fn map_scope() -> Scope {
         })
 }
 
+/// The cases checked against [`sight_scope`]: the ones whose code reads how
+/// long ago the seat saw something (S2's `vfy2`).
+const SIGHT_CASES: &[&str] = &[
+    "e0418_an_attack_target_seen_too_long_ago",
+    "w0703_a_reference_resting_on_an_old_sighting",
+];
+
+/// [`fixture_scope`] with the seat's sightings and nothing else changed:
+///
+/// | Sighted | At | Age |
+/// | --- | --- | --- |
+/// | `e_01` | 300, 300, 40 | 240 000 ms, past the reach window's 180 000 |
+/// | seat 1's commander | 290, 295, 40 | 30 000 ms |
+fn sight_scope() -> Scope {
+    fixture_scope()
+        .with_sighting(Sighting {
+            what: Sighted::Beacon("e_01".to_owned()),
+            at: Voxel {
+                x: 300,
+                y: 300,
+                z: 40,
+            },
+            age_ms: 240_000,
+        })
+        .with_sighting(Sighting {
+            what: Sighted::Commander(SeatId::new(1)),
+            at: Voxel {
+                x: 290,
+                y: 295,
+                z: 40,
+            },
+            age_ms: 30_000,
+        })
+}
+
 /// The view a case is checked against.
 fn scope_for(case: &str) -> Scope {
     if MAP_CASES.contains(&case) {
         map_scope()
+    } else if SIGHT_CASES.contains(&case) {
+        sight_scope()
     } else if SHORT_CASES.contains(&case) {
         short_scope()
     } else {
@@ -636,6 +674,95 @@ fn every_map_case_exists_and_the_map_is_all_it_adds() {
     assert_eq!(map.economy(), plain.economy());
     assert!(plain.features().is_empty() && plain.commander().is_none());
     assert_eq!(map.features().len(), 5);
+}
+
+#[test]
+fn every_sight_case_exists_and_the_sightings_are_all_it_adds() {
+    let names = cases();
+    for case in SIGHT_CASES {
+        assert!(
+            names.iter().any(|name| name == case),
+            "{case} is in SIGHT_CASES and has no case file"
+        );
+    }
+    let plain = fixture_scope();
+    let sight = sight_scope();
+    assert_eq!(sight.beacons(), plain.beacons());
+    assert_eq!(sight.economy(), plain.economy());
+    assert!(sight.features().is_empty() && sight.commander().is_none());
+    assert!(plain.sightings().is_empty());
+    assert_eq!(sight.sightings().len(), 2);
+}
+
+/// Freshness reads ages and nothing else (spec section 6; AGENTS.md section 3
+/// rule 2): the same Attack target qualifies on its freshness when the
+/// sighting is inside the window, and is `E0418` when it is not, or when the
+/// view holds none; a commander target reads the commander sightings alone.
+#[test]
+fn an_attack_targets_freshness_is_its_sightings_age_against_the_window() {
+    let rules = rules();
+    let window = u32::try_from(
+        pharmakos_verifier::Limits::from_rules(&rules)
+            .expect("the limits")
+            .reach_memory_ms(),
+    )
+    .expect("a window is not negative");
+    let with_age = |age_ms: Option<u32>| -> Scope {
+        let plain = fixture_scope();
+        match age_ms {
+            Some(age_ms) => plain.with_sighting(Sighting {
+                what: Sighted::Beacon("e_01".to_owned()),
+                at: Voxel {
+                    x: 300,
+                    y: 300,
+                    z: 40,
+                },
+                age_ms,
+            }),
+            None => plain,
+        }
+    };
+    let playbook = case_bytes("e0418_an_attack_target_seen_too_long_ago");
+    let snapshot = fixture_snapshot();
+    let refused = |scope: &Scope, bytes: &[u8]| -> bool {
+        let input = Input::new(bytes, &snapshot, scope, &rules).expect("an input");
+        verify(&input, Depth::Quick)
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "E0418")
+    };
+    assert!(!refused(&with_age(Some(0)), &playbook), "seen now");
+    assert!(!refused(&with_age(Some(window)), &playbook), "at the edge");
+    assert!(refused(&with_age(Some(window + 1)), &playbook), "past it");
+    assert!(refused(&with_age(None), &playbook), "never seen");
+
+    let commander = String::from_utf8(playbook).expect("UTF-8").replace(
+        "\"beacon\": {\n                    \"beacon_id\": \"e_01\"\n                  }",
+        "\"enemy_commander\": {}",
+    );
+    assert!(
+        commander.contains("enemy_commander"),
+        "the target was swapped"
+    );
+    let seen_commander = |age_ms: u32| {
+        fixture_scope().with_sighting(Sighting {
+            what: Sighted::Commander(SeatId::new(1)),
+            at: Voxel { x: 1, y: 1, z: 1 },
+            age_ms,
+        })
+    };
+    assert!(refused(&fixture_scope(), commander.as_bytes()), "none seen");
+    assert!(!refused(&seen_commander(10), commander.as_bytes()));
+    assert!(refused(&seen_commander(window + 1), commander.as_bytes()));
+    // A stale beacon sighting says nothing about a commander target.
+    assert!(!refused(
+        &seen_commander(10).with_sighting(Sighting {
+            what: Sighted::Beacon("e_01".to_owned()),
+            at: Voxel { x: 1, y: 1, z: 1 },
+            age_ms: window + 1,
+        }),
+        commander.as_bytes()
+    ));
 }
 
 #[test]
@@ -1367,5 +1494,73 @@ fn a_wall_box_is_an_area_and_belongs_to_a_wall() {
     assert!(
         !codes.iter().any(|code| code == "E0010" || code == "E0019"),
         "{codes:?}"
+    );
+}
+
+/// The verifier's missing-row branches, measured (decisions-log item 145 (5)).
+///
+/// Since S2's `base` the sim's own loader refuses most missing blocks, so a
+/// `RulesTable` without them cannot be built, and `RulesGap::MissingBlock` for
+/// those is defence in depth that no caller reaches. It is kept, typed, rather
+/// than replaced by an assumption: the verifier reads the message, and a
+/// later loader change must not turn a missing block into zeroes here. This
+/// test pins which blocks reach the verifier's own refusal and which the sim
+/// refuses first, so a loader change shows up as an edit to these two lists.
+#[test]
+fn which_missing_blocks_the_sim_refuses_first_is_measured() {
+    use pharmakos_proto::gp::v1::RulesTable as Message;
+    type Clear = fn(&mut Message);
+    let committed = rules().message().clone();
+    let cases: &[(&str, Clear)] = &[
+        ("verifier", |m| m.verifier = None),
+        ("map", |m| m.map = None),
+        ("beacon", |m| m.beacon = None),
+        ("match", |m| m.r#match = None),
+        ("materials", |m| m.materials = None),
+        ("interface_times", |m| m.interface_times = None),
+        ("structures", |m| m.structures = None),
+        ("units", |m| m.units = None),
+        ("power", |m| m.power = None),
+        ("commander", |m| m.commander = None),
+    ];
+    let mut sim_refuses: Vec<&str> = Vec::new();
+    let mut verifier_refuses: Vec<&str> = Vec::new();
+    for (block, clear) in cases {
+        let mut message = committed.clone();
+        clear(&mut message);
+        match RulesTable::from_message(&message) {
+            Err(_) => sim_refuses.push(block),
+            Ok(table) => {
+                let scope = fixture_scope();
+                let snapshot = fixture_snapshot();
+                match Input::new(b"{}", &snapshot, &scope, &table) {
+                    Err(pharmakos_verifier::InputError::Rules(
+                        pharmakos_verifier::RulesGap::MissingBlock(named),
+                    )) => {
+                        assert_eq!(named, *block, "the gap names the block");
+                        verifier_refuses.push(block);
+                    }
+                    other => panic!("{block}: a missing block is refused, and it was {other:?}"),
+                }
+            }
+        }
+    }
+    assert_eq!(
+        verifier_refuses,
+        ["verifier", "materials", "interface_times"],
+        "the blocks only the verifier reads, which only it can refuse"
+    );
+    assert_eq!(
+        sim_refuses,
+        [
+            "map",
+            "beacon",
+            "match",
+            "structures",
+            "units",
+            "power",
+            "commander"
+        ],
+        "the blocks the sim's loader refuses first, whose verifier branch no caller reaches"
     );
 }

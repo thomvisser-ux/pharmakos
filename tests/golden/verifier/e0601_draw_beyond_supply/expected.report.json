@@ -2,6 +2,20 @@
   "depth": "FULL",
   "diagnostics": [
     {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/0/place_beacon/initial/mandate/roe",
+      "message": "`roe` is omitted and reads as RETURN_FIRE.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/place_beacon/initial/mandate/roe\",\"value\":\"RETURN_FIRE\"}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
       "code": "E0601",
       "severity": "ERROR",
       "path": "/declarative/route/0",
@@ -16,10 +30,10 @@
       ]
     }
   ],
-  "report_hash": "y7tUL71om+o=",
+  "report_hash": "ysiKkaiCmyI=",
   "rules_hash": "gCjUE4Tm3i8=",
   "plan_fingerprint": "OMyX+iax6no=",
-  "verifier_version": "0.1.0-s2",
+  "verifier_version": "0.1.0-s2.2",
   "size_units": 1,
   "size_budget": 128
 }

@@ -248,6 +248,14 @@
     "beginner": "The notebook is longer than a seat may keep."
   },
   {
+    "code": "E0113",
+    "family": "limits and required blocks",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "the playbook has {found} handlers; this build compiles at most {max}.",
+    "beginner": "A playbook can carry only so many rules, however small each one is. Take some out."
+  },
+  {
     "code": "E0201",
     "family": "conditions",
     "severity": "ERROR",
@@ -464,6 +472,46 @@
     "beginner": "Buildings stand on vents. A seam is dug, not built on."
   },
   {
+    "code": "E0414",
+    "family": "references and placement",
+    "severity": "ERROR",
+    "emitter": "semantics",
+    "message": "`{id}` is {side}; {role} names {wanted}.",
+    "beginner": "A Defend beacon protects your own beacons, and an Attack beacon attacks an enemy's."
+  },
+  {
+    "code": "E0415",
+    "family": "references and placement",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "{role} is a selector that ranks {found}; it must rank {wanted}.",
+    "beginner": "A Defend beacon protects your own beacons, and an Attack beacon attacks an enemy's, so a selector there has to look among the right side's beacons."
+  },
+  {
+    "code": "E0416",
+    "family": "references and placement",
+    "severity": "ERROR",
+    "emitter": "semantics",
+    "message": "{what} column ({x}, {y}) lies outside the sphere of the beacon whose mandate holds the target.",
+    "beginner": "A beacon builds only inside its own sphere."
+  },
+  {
+    "code": "E0417",
+    "family": "references and placement",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "a wall's anchor names the wall and must be a voxel inside its box; {found}.",
+    "beginner": "A wall is found by its anchor, so the anchor has to be one of the wall's own voxels."
+  },
+  {
+    "code": "E0418",
+    "family": "references and placement",
+    "severity": "ERROR",
+    "emitter": "semantics",
+    "message": "{what}; an Attack target must have been seen within the reach window, {max} ms, when the playbook is sealed.",
+    "beginner": "An Attack beacon attacks what the seat has seen recently. Look again with a scout, or choose a target the seat has seen."
+  },
+  {
     "code": "E0501",
     "family": "settings and recycle",
     "severity": "ERROR",
@@ -524,8 +572,8 @@
     "family": "settings and recycle",
     "severity": "ERROR",
     "emitter": "semantics",
-    "message": "`scout_count` is {found}; a beacon holds at most {most} scouts.",
-    "beginner": "A Survey beacon can field only so many scouts. Ask for fewer."
+    "message": "`{field}` is {found}; a beacon holds at most {most} scouts.",
+    "beginner": "A beacon can field only so many scouts. Ask for fewer."
   },
   {
     "code": "E0509",
@@ -536,12 +584,44 @@
     "beginner": "Only a wall is built as a box of voxels. Leave the box out, or make this target a wall."
   },
   {
+    "code": "E0510",
+    "family": "settings and recycle",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "`{field}` is {found}; it must be {range}.",
+    "beginner": "This setting has a range, and the value written is outside it."
+  },
+  {
+    "code": "E0511",
+    "family": "settings and recycle",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "a wall is not turned: `rotation_quarter_turns` is {found}, and a wall's is 0.",
+    "beginner": "A wall's box already says where every voxel goes, so it has no rotation."
+  },
+  {
+    "code": "E0512",
+    "family": "settings and recycle",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "the wall box is {found} voxels from `min.z` to `max.z`; a wall stands at least {min} voxels above the ground, and `min.z` lies at or below the ground, so this box cannot.",
+    "beginner": "A wall lower than this is climbable and blocks nothing. Raise the top of the box."
+  },
+  {
     "code": "W0501",
     "family": "settings and recycle",
     "severity": "WARNING",
     "emitter": "semantics",
     "message": "`seam_choice` SAFEST reads as NEAREST until S2's threat model arrives.",
     "beginner": "\"Safest\" needs threats to weigh, and they come later. Until then this beacon digs the nearest seam."
+  },
+  {
+    "code": "W0502",
+    "family": "settings and recycle",
+    "severity": "WARNING",
+    "emitter": "structure",
+    "message": "`{name}` is on this protect list more than once; its guards escort it once, and the repeat only adds a field to the edit.",
+    "beginner": "This asset is already on the list. Naming it again changes nothing."
   },
   {
     "code": "E0601",
@@ -619,7 +699,7 @@
     "code": "W0703",
     "family": "schedule, conflicts and staleness",
     "severity": "WARNING",
-    "emitter": "none at the skeleton (S3, with the reach window)",
+    "emitter": "lint",
     "message": "the sighting this rests on is {found} ms old; the reach window is {max} ms.",
     "beginner": "What the seat remembers here may be too old to act on."
   },
@@ -678,6 +758,14 @@
     "emitter": "structure",
     "message": "`{field}` is omitted and reads as {value}.",
     "beginner": "A setting left out takes its named default."
+  },
+  {
+    "code": "I0004",
+    "family": "information",
+    "severity": "INFO",
+    "emitter": "structure",
+    "message": "`repair_threshold_pct` is 0, so this Build beacon's drones never repair a structure; its units and the commander are still repaired.",
+    "beginner": "A repair threshold of 0 means never. Write a percentage to have damaged structures repaired."
   }
 ]
 

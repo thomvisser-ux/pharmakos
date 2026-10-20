@@ -1,0 +1,33 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0511",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/place_beacon/initial/mandate/build/targets/0/rotation_quarter_turns",
+      "message": "a wall is not turned: `rotation_quarter_turns` is 1, and a wall's is 0.",
+      "beginner": "A wall's box already says where every voxel goes, so it has no rotation.",
+      "suggestions": [
+        {
+          "title": "Leave the rotation out",
+          "json_patch": "[{\"op\":\"remove\",\"path\":\"/declarative/route/0/place_beacon/initial/mandate/build/targets/0/rotation_quarter_turns\"}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "E0019",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/place_beacon/initial/mandate/build/targets/0/blueprint_id",
+      "message": "a Build target names `wall`, one of S2's base kit, which has no effect until S2's base kit lands; it is refused rather than ignored.",
+      "beginner": "Autocannons, mortars and walls cannot be built in this build yet."
+    }
+  ],
+  "report_hash": "tPQpUS3JYvc=",
+  "rules_hash": "gCjUE4Tm3i8=",
+  "plan_fingerprint": "0y0eGJbZXKI=",
+  "verifier_version": "0.1.0-s2.2",
+  "size_units": 2,
+  "size_budget": 128
+}
+

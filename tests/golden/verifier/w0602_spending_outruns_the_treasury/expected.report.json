@@ -3,6 +3,27 @@
   "depth": "FULL",
   "diagnostics": [
     {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/0/place_beacon/initial/mandate/roe",
+      "message": "`roe` is omitted and reads as RETURN_FIRE.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/place_beacon/initial/mandate/roe\",\"value\":\"RETURN_FIRE\"}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0004",
+      "severity": "INFO",
+      "path": "/declarative/route/0/place_beacon/initial/mandate/build/repair_threshold_pct",
+      "message": "`repair_threshold_pct` is 0, so this Build beacon's drones never repair a structure; its units and the commander are still repaired.",
+      "beginner": "A repair threshold of 0 means never. Write a percentage to have damaged structures repaired."
+    },
+    {
       "code": "W0602",
       "severity": "WARNING",
       "path": "/declarative/route/0",
@@ -10,10 +31,10 @@
       "beginner": "This playbook spends more than the seat is likely to have."
     }
   ],
-  "report_hash": "rBpLY5wnvOw=",
+  "report_hash": "j9gtCKVvnjA=",
   "rules_hash": "gCjUE4Tm3i8=",
   "plan_fingerprint": "1YIySXchqG0=",
-  "verifier_version": "0.1.0-s2",
+  "verifier_version": "0.1.0-s2.2",
   "size_units": 3,
   "size_budget": 128
 }

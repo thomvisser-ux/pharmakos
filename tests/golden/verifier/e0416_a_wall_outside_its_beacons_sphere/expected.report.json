@@ -1,0 +1,33 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0019",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/place_beacon/initial/mandate/build/targets/0/blueprint_id",
+      "message": "a Build target names `wall`, one of S2's base kit, which has no effect until S2's base kit lands; it is refused rather than ignored.",
+      "beginner": "Autocannons, mortars and walls cannot be built in this build yet."
+    },
+    {
+      "code": "E0416",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/place_beacon/initial/mandate/build/targets/0/wall_box",
+      "message": "the wall box's column (127, 11) lies outside the sphere of the beacon whose mandate holds the target.",
+      "beginner": "A beacon builds only inside its own sphere.",
+      "map_refs": [
+        {
+          "x": 127,
+          "y": 11,
+          "z": 62
+        }
+      ]
+    }
+  ],
+  "report_hash": "VcA/brC9d9g=",
+  "rules_hash": "gCjUE4Tm3i8=",
+  "plan_fingerprint": "vGqFMOm3Fes=",
+  "verifier_version": "0.1.0-s2.2",
+  "size_units": 2,
+  "size_budget": 128
+}
+

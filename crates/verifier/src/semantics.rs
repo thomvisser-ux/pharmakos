@@ -36,6 +36,16 @@
 //! `seam_choice: SAFEST` reads as NEAREST until S2's threat model and is
 //! `W0501` (decisions-log item 127 (9), S1's plan's decision 6).
 //!
+//! # S2's Defend and Attack, and the wall's sphere (task `vfy2`)
+//!
+//! A protect list names the seat's own beacons and an Attack target an
+//! enemy's (`E0414`); an Attack target named by its handle, or the enemy
+//! commander, rests on a sighting inside the reach window (`E0418`), the
+//! sightings' ages read and compared and nothing ranked; a picket is as many
+//! scouts as a beacon holds (`E0508`); and a wall box's columns stand inside
+//! the sphere of the beacon whose mandate holds it (`E0416`), by the column
+//! test the view allows.
+//!
 //! # No dry runs
 //!
 //! Everything below is a comparison between a number in the file, a number in
@@ -50,8 +60,9 @@ use pharmakos_proto::gp::v1::handler::Resume;
 use pharmakos_proto::gp::v1::mine_settings::SeamChoice;
 use pharmakos_proto::gp::v1::on_fail::Action;
 use pharmakos_proto::gp::v1::{
-    Area, BeaconFilter, BuildTarget, FeatureRef, InterfaceStep, Location, MandateSettings,
-    Playbook, Step, Voxel, beacon_ref, interface_row, location, mandate_settings,
+    Area, AttackSettings, BeaconFilter, BuildTarget, DefendSettings, FeatureRef, InterfaceStep,
+    Location, MandateSettings, Playbook, Step, Voxel, attack_target, beacon_ref, interface_row,
+    location, mandate_settings, protected_asset,
 };
 
 use crate::limits::Limits;
@@ -61,7 +72,7 @@ use crate::resolve::Symbols;
 use crate::scope::{FeatureKind, Ownership, Scope};
 use crate::strings;
 use crate::structure::arm_name;
-use crate::walk::{self, Carrier, List, Slot, Visit};
+use crate::walk::{self, Carrier, Holder, List, Slot, Visit};
 
 /// Run the stage.
 pub(crate) fn run(
@@ -289,7 +300,20 @@ impl Visit for Semantics<'_> {
             ));
         }
         if let Some(mandate_settings::Mandate::Survey(survey)) = settings.mandate.as_ref() {
-            self.scouts(&pointer::child(at, "survey"), survey.scout_count);
+            self.scouts(
+                &pointer::child(at, "survey"),
+                "scout_count",
+                survey.scout_count,
+            );
+        }
+        match settings.mandate.as_ref() {
+            Some(mandate_settings::Mandate::Defend(defend)) => {
+                self.defend(&pointer::child(at, "defend"), defend);
+            }
+            Some(mandate_settings::Mandate::Attack(attack)) => {
+                self.attack(&pointer::child(at, "attack"), attack);
+            }
+            _ => {}
         }
         self.percent(at, "retreat_hp_pct", settings.retreat_hp_pct);
         if let Some(mandate_settings::Mandate::Build(build)) = settings.mandate.as_ref() {
@@ -299,6 +323,11 @@ impl Visit for Semantics<'_> {
                 build.repair_threshold_pct,
             );
         }
+    }
+
+    fn held_target(&mut self, at: &str, target: &BuildTarget, holder: Holder<'_>) {
+        self.anchor_sphere(at, target, holder);
+        self.wall_sphere(at, target, holder);
     }
 
     fn build_target(&mut self, at: &str, target: &BuildTarget) {
@@ -319,6 +348,239 @@ impl Visit for Semantics<'_> {
 }
 
 impl Semantics<'_> {
+    /// S2's Defend settings against the seat's view: a protect list names the
+    /// seat's own beacons (`E0414`), and a picket is as many scouts as a
+    /// beacon holds (`E0508`, as Survey's count).
+    fn defend(&mut self, at: &str, defend: &DefendSettings) {
+        let protect_at = pointer::child(at, "protect");
+        for (index, entry) in defend.protect.iter().enumerate() {
+            let Some(protected_asset::Asset::Beacon(beacon)) = entry.asset.as_ref() else {
+                continue;
+            };
+            let Some(beacon_ref::Ref::BeaconId(id)) = beacon.r#ref.as_ref() else {
+                continue;
+            };
+            if let Some(known) = self.scope.beacon(id)
+                && known.side == Ownership::EnemyKnown
+            {
+                self.out.emit(
+                    Diag::new(
+                        "E0414",
+                        pointer::child(
+                            &pointer::child(&pointer::at(&protect_at, index), "beacon"),
+                            "beacon_id",
+                        ),
+                    )
+                    .arg("id", id)
+                    .arg("side", strings::SIDE_ENEMY)
+                    .arg("role", strings::ROLE_PROTECT)
+                    .arg("wanted", strings::WANTED_OWN),
+                );
+            }
+        }
+        if let Some(pickets) = defend.picket_scouts {
+            // PLACEHOLDER: the picket's ceiling, the Survey scout column's u8 until Defend's own column exists — dfnd, S2.
+            self.scouts(at, "picket_scouts", pickets);
+        }
+    }
+
+    /// S2's Attack target against the seat's view: a handle names an enemy
+    /// beacon (`E0414`), and a target named by its handle, or the enemy
+    /// commander, rests on a sighting inside the reach window (`E0418`).
+    ///
+    /// **Freshness is a plan-time test** (spec section 6: "Freshness is a
+    /// qualification test at plan time only; the target is pinned at the
+    /// seal"), and spec section 10 takes it from the seat's one reach window.
+    /// The check reads the sightings' ages and compares them with the window:
+    /// it never ranks a sighting, never guesses where an asset went since, and
+    /// never models an enemy (AGENTS.md section 3 rule 2). A selector target
+    /// takes its freshness from the same window when its step starts, in the
+    /// sim, so nothing is judged here for one; a voxel target rests on no
+    /// sighting.
+    fn attack(&mut self, at: &str, attack: &AttackSettings) {
+        let Some(target) = attack.target.as_ref() else {
+            return;
+        };
+        let target_at = pointer::child(at, "target");
+        let window = i64::from(self.limits.reach_memory_ms());
+        match target.target.as_ref() {
+            Some(attack_target::Target::Beacon(beacon)) => {
+                let Some(beacon_ref::Ref::BeaconId(id)) = beacon.r#ref.as_ref() else {
+                    return;
+                };
+                let here = pointer::child(&pointer::child(&target_at, "beacon"), "beacon_id");
+                let Some(known) = self.scope.beacon(id) else {
+                    // `E0401` from the resolve stage.
+                    return;
+                };
+                if known.side == Ownership::Own {
+                    self.out.emit(
+                        Diag::new("E0414", here)
+                            .arg("id", id)
+                            .arg("side", strings::SIDE_OWN)
+                            .arg("role", strings::ROLE_ATTACK_TARGET)
+                            .arg("wanted", strings::WANTED_ENEMY),
+                    );
+                    return;
+                }
+                match self.scope.beacon_sighting(id) {
+                    None => self.out.emit(
+                        Diag::new("E0418", here)
+                            .arg("what", strings::never_sighted(id))
+                            .arg("max", window)
+                            .map_ref(known.at),
+                    ),
+                    Some(sighting) if i64::from(sighting.age_ms) > window => self.out.emit(
+                        Diag::new("E0418", here)
+                            .arg(
+                                "what",
+                                strings::sighted_ago(&format!("`{id}`"), sighting.age_ms),
+                            )
+                            .arg("max", window)
+                            .map_ref(sighting.at),
+                    ),
+                    Some(_) => {}
+                }
+            }
+            Some(attack_target::Target::EnemyCommander(_)) => {
+                let here = pointer::child(&target_at, "enemy_commander");
+                // The freshest sighting of any enemy commander: an age is
+                // compared, nothing is ranked, and which commander the target
+                // pins is the sim's rule (S2's `atk`).
+                let freshest = self
+                    .scope
+                    .commander_sightings()
+                    .min_by_key(|seen| seen.age_ms);
+                match freshest {
+                    None => self.out.emit(
+                        Diag::new("E0418", here)
+                            .arg("what", strings::NO_COMMANDER_SIGHTED)
+                            .arg("max", window),
+                    ),
+                    Some(sighting) if i64::from(sighting.age_ms) > window => self.out.emit(
+                        Diag::new("E0418", here)
+                            .arg(
+                                "what",
+                                strings::sighted_ago(strings::THE_ENEMY_COMMANDER, sighting.age_ms),
+                            )
+                            .arg("max", window)
+                            .map_ref(sighting.at),
+                    ),
+                    Some(_) => {}
+                }
+            }
+            Some(attack_target::Target::Voxel(_)) | None => {}
+        }
+    }
+
+    /// `E0416`: a wall box's column outside the sphere of the beacon whose
+    /// mandate holds the wall (decisions-log item 12: the sphere is
+    /// building's only range).
+    ///
+    /// **The column test, which the file and the view can make.** A column
+    /// whose distance from the beacon in x and y alone is past the radius has
+    /// no voxel inside the sphere at any height, so it is refused here; the
+    /// sphere is round, so the box's four corner columns are the farthest and
+    /// are the ones tested. Whether every wall voxel, from the ground's top to
+    /// `max.z`, lies inside the sphere in three dimensions needs the ground,
+    /// which the view does not carry, and is the sim's to judge when it builds
+    /// (S2's `site`). A beacon the file does not place or name by its handle
+    /// (a deploy `covering` a feature, a selector) is not known until the
+    /// Push, so nothing is judged for it.
+    fn wall_sphere(&mut self, at: &str, target: &BuildTarget, holder: Holder<'_>) {
+        let Some(wall_box) = target.wall_box.as_ref() else {
+            return;
+        };
+        let (Some(low), Some(high)) = (wall_box.min.as_ref(), wall_box.max.as_ref()) else {
+            return;
+        };
+        if low.x > high.x || low.y > high.y || low.z > high.z {
+            return;
+        }
+        let Some(centre) = self.holder_centre(holder) else {
+            return;
+        };
+        for (x, y) in [
+            (low.x, low.y),
+            (high.x, low.y),
+            (low.x, high.y),
+            (high.x, high.y),
+        ] {
+            if self.column_outside(&centre, x, y) {
+                self.out.emit(
+                    Diag::new("E0416", pointer::child(at, "wall_box"))
+                        .arg("what", strings::WALL_BOX_COLUMN)
+                        .arg("x", x)
+                        .arg("y", y)
+                        .map_ref(Voxel { x, y, z: centre.z }),
+                );
+                return;
+            }
+        }
+    }
+
+    /// `E0416` for a Build target's voxel anchor, whatever its blueprint (the
+    /// Generator and S2's base kit alike): "Must lie inside one of your own
+    /// spheres: inside the sphere of the beacon whose mandate holds the
+    /// target" (`playbook.proto`'s `BuildTarget.anchor`). The same column
+    /// test as [`Semantics::wall_sphere`], for the same reason: the view
+    /// carries no ground, so the height half is the sim's at the site. An
+    /// anchor `on` a feature is placed by the sim inside the sphere by
+    /// construction, and an unnamed holder is not known until the Push.
+    fn anchor_sphere(&mut self, at: &str, target: &BuildTarget, holder: Holder<'_>) {
+        let Some(location::Place::Voxel(anchor)) = target
+            .anchor
+            .as_ref()
+            .and_then(|anchor| anchor.place.as_ref())
+        else {
+            return;
+        };
+        let Some(centre) = self.holder_centre(holder) else {
+            return;
+        };
+        if self.column_outside(&centre, anchor.x, anchor.y) {
+            self.out.emit(
+                Diag::new(
+                    "E0416",
+                    pointer::child(&pointer::child(at, "anchor"), "voxel"),
+                )
+                .arg("what", strings::ANCHOR_COLUMN)
+                .arg("x", anchor.x)
+                .arg("y", anchor.y)
+                .map_ref(*anchor),
+            );
+        }
+    }
+
+    /// Where the beacon holding a target stands, when the file names it: a
+    /// deploy's voxel site, or one of the seat's own beacons visited by its
+    /// handle. Anything else is not known before the Push.
+    fn holder_centre(&self, holder: Holder<'_>) -> Option<Voxel> {
+        match holder {
+            Holder::Site(voxel) => Some(*voxel),
+            Holder::Visited(beacon) => {
+                let Some(beacon_ref::Ref::BeaconId(id)) = beacon.r#ref.as_ref() else {
+                    return None;
+                };
+                // Unknown is `E0401`'s, and an enemy beacon is `E0405`'s.
+                self.scope
+                    .beacon(id)
+                    .filter(|known| known.side == Ownership::Own)
+                    .map(|known| known.at)
+            }
+            Holder::Unnamed => None,
+        }
+    }
+
+    /// Whether a column lies wholly outside the sphere about `centre`: its
+    /// distance in x and y alone is past the radius, so no voxel of it at any
+    /// height is inside.
+    fn column_outside(&self, centre: &Voxel, x: i32, y: i32) -> bool {
+        let radius = i64::from(self.limits.beacon_sphere_radius_voxels());
+        let column = Voxel { x, y, z: centre.z };
+        squared_distance(centre, &column) > radius.saturating_mul(radius)
+    }
+
     /// "A jump only ever goes forward" — and it has to have somewhere to go.
     fn jump(&mut self, at: &str, entry: &Step, list: List, index: usize) {
         let Some(on_fail) = entry.on_fail.as_ref() else {
@@ -381,14 +643,15 @@ impl Semantics<'_> {
     /// the column's type, `u8`, and not a rules row: it is the sim's storage,
     /// a technical limit and not a balance cap, so it is read from the type
     /// rather than written down a second time.
-    fn scouts(&mut self, at: &str, found: u32) {
+    fn scouts(&mut self, at: &str, field: &'static str, found: u32) {
         let most = u32::from(u8::MAX);
         if found <= most {
             return;
         }
-        let here = pointer::child(at, "scout_count");
+        let here = pointer::child(at, field);
         self.out.emit(
             Diag::new("E0508", here.clone())
+                .arg("field", field)
                 .arg("found", found)
                 .arg("most", most)
                 .fix(

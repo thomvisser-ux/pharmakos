@@ -234,6 +234,12 @@ pub const VERIFIER_STRINGS: &[Text] = &[
         message: "the notebook is {found} characters; the maximum is {max}.",
         beginner: "The notebook is longer than a seat may keep.",
     },
+    Text {
+        code: "E0113",
+        message: "the playbook has {found} handlers; this build compiles at most {max}.",
+        beginner: "A playbook can carry only so many rules, however small each one is. Take \
+                   some out.",
+    },
     // --- E02xx: conditions ---------------------------------------------------
     Text {
         code: "E0201",
@@ -384,6 +390,37 @@ pub const VERIFIER_STRINGS: &[Text] = &[
         message: "`on` stands a structure on a heat vent, and {what} names a scrap seam.",
         beginner: "Buildings stand on vents. A seam is dug, not built on.",
     },
+    Text {
+        code: "E0414",
+        message: "`{id}` is {side}; {role} names {wanted}.",
+        beginner: "A Defend beacon protects your own beacons, and an Attack beacon attacks an \
+                   enemy's.",
+    },
+    Text {
+        code: "E0415",
+        message: "{role} is a selector that ranks {found}; it must rank {wanted}.",
+        beginner: "A Defend beacon protects your own beacons, and an Attack beacon attacks an \
+                   enemy's, so a selector there has to look among the right side's beacons.",
+    },
+    Text {
+        code: "E0416",
+        message: "{what} column ({x}, {y}) lies outside the sphere of the beacon whose mandate \
+                  holds the target.",
+        beginner: "A beacon builds only inside its own sphere.",
+    },
+    Text {
+        code: "E0417",
+        message: "a wall's anchor names the wall and must be a voxel inside its box; {found}.",
+        beginner: "A wall is found by its anchor, so the anchor has to be one of the wall's own \
+                   voxels.",
+    },
+    Text {
+        code: "E0418",
+        message: "{what}; an Attack target must have been seen within the reach window, {max} \
+                  ms, when the playbook is sealed.",
+        beginner: "An Attack beacon attacks what the seat has seen recently. Look again with a \
+                   scout, or choose a target the seat has seen.",
+    },
     // --- E05xx: settings and recycle -----------------------------------------
     Text {
         code: "E0501",
@@ -423,8 +460,8 @@ pub const VERIFIER_STRINGS: &[Text] = &[
     },
     Text {
         code: "E0508",
-        message: "`scout_count` is {found}; a beacon holds at most {most} scouts.",
-        beginner: "A Survey beacon can field only so many scouts. Ask for fewer.",
+        message: "`{field}` is {found}; a beacon holds at most {most} scouts.",
+        beginner: "A beacon can field only so many scouts. Ask for fewer.",
     },
     Text {
         code: "E0509",
@@ -434,10 +471,34 @@ pub const VERIFIER_STRINGS: &[Text] = &[
                    target a wall.",
     },
     Text {
+        code: "E0510",
+        message: "`{field}` is {found}; it must be {range}.",
+        beginner: "This setting has a range, and the value written is outside it.",
+    },
+    Text {
+        code: "E0511",
+        message: "a wall is not turned: `rotation_quarter_turns` is {found}, and a wall's is 0.",
+        beginner: "A wall's box already says where every voxel goes, so it has no rotation.",
+    },
+    Text {
+        code: "E0512",
+        message: "the wall box is {found} voxels from `min.z` to `max.z`; a wall stands at least \
+                  {min} voxels above the ground, and `min.z` lies at or below the ground, so \
+                  this box cannot.",
+        beginner: "A wall lower than this is climbable and blocks nothing. Raise the top of the \
+                   box.",
+    },
+    Text {
         code: "W0501",
         message: "`seam_choice` SAFEST reads as NEAREST until S2's threat model arrives.",
         beginner: "\"Safest\" needs threats to weigh, and they come later. Until then this beacon \
                    digs the nearest seam.",
+    },
+    Text {
+        code: "W0502",
+        message: "`{name}` is on this protect list more than once; its guards escort it once, \
+                  and the repeat only adds a field to the edit.",
+        beginner: "This asset is already on the list. Naming it again changes nothing.",
     },
     // --- E06xx and W06xx: economy, power and messaging -----------------------
     Text {
@@ -542,6 +603,13 @@ pub const VERIFIER_STRINGS: &[Text] = &[
         message: "`{field}` is omitted and reads as {value}.",
         beginner: "A setting left out takes its named default.",
     },
+    Text {
+        code: "I0004",
+        message: "`repair_threshold_pct` is 0, so this Build beacon's drones never repair a \
+                  structure; its units and the commander are still repaired.",
+        beginner: "A repair threshold of 0 means never. Write a percentage to have damaged \
+                   structures repaired.",
+    },
 ];
 
 // --- Words the templates' arguments use --------------------------------------
@@ -590,6 +658,63 @@ pub const FIX_DROP_WALL_BOX: &str = "Leave the box out";
 /// E0601's Fix: accept the shortfall, so the beacons past the supply stay
 /// dormant.
 pub const FIX_ALLOW_DORMANT: &str = "Allow dormant beacons";
+
+// S2's Defend and Attack (task `vfy2`).
+
+/// E0414's `{side}` for one of the seat's own beacons.
+pub const SIDE_OWN: &str = "one of your own beacons";
+/// E0414's `{side}` for an enemy beacon.
+pub const SIDE_ENEMY: &str = "an enemy beacon";
+/// E0414's and E0415's `{role}` for a protect-list entry.
+pub const ROLE_PROTECT: &str = "a Defend beacon's protect list";
+/// E0414's and E0415's `{role}` for an Attack target.
+pub const ROLE_ATTACK_TARGET: &str = "an Attack target";
+/// E0414's `{wanted}` under a protect list.
+pub const WANTED_OWN: &str = "your own beacons";
+/// E0414's `{wanted}` under an Attack target.
+pub const WANTED_ENEMY: &str = "enemy beacons";
+/// E0415's `{found}` and `{wanted}`: the seat's own beacons (`OWN`, or a side
+/// left unset, which reads as `OWN`).
+pub const RANKS_OWN: &str = "your own beacons (`side: OWN`, or no side)";
+/// E0415's `{found}` and `{wanted}`: the beacons the seat knows of an enemy.
+pub const RANKS_ENEMY: &str = "known enemy beacons (`side: ENEMY_KNOWN`)";
+/// E0415's `{found}` for `safest`, which ranks only the seat's own.
+pub const RANKS_SAFEST: &str = "your own beacons by safety (`safest`)";
+/// E0510's `{range}` for a percentage that cannot be 0.
+pub const RANGE_ONE_TO_HUNDRED: &str = "from 1 to 100";
+/// E0510's `{range}` for a count of at least one.
+pub const RANGE_ONE_OR_MORE: &str = "1 or more";
+/// E0417's `{found}` when the anchor is a voxel outside the box.
+pub const ANCHOR_OUTSIDE_BOX: &str = "this anchor is a voxel outside the box";
+/// E0417's `{found}` when the anchor is not a voxel at all.
+pub const ANCHOR_NOT_A_VOXEL: &str = "this anchor is not a voxel";
+/// E0416's `{what}` for a wall box's corner.
+pub const WALL_BOX_COLUMN: &str = "the wall box's";
+/// E0416's `{what}` for a Build target's anchor.
+pub const ANCHOR_COLUMN: &str = "the anchor's";
+/// E0418's `{what}`: no enemy commander has been sighted.
+pub const NO_COMMANDER_SIGHTED: &str = "the seat has no sighting of an enemy commander";
+/// W0502's `{name}` for a repeated `my_commander`.
+pub const MY_COMMANDER: &str = "my_commander";
+/// E0101's `{what}` for a launch with no condition.
+pub const A_LAUNCH_CONDITION: &str = "a launch condition (`force_size` or `segment_ms`)";
+/// E0511's Fix.
+pub const FIX_DROP_ROTATION: &str = "Leave the rotation out";
+
+/// E0418's `{what}` for a beacon the view holds no sighting of.
+#[must_use]
+pub fn never_sighted(beacon_id: &str) -> String {
+    format!("the seat has no sighting of `{beacon_id}`")
+}
+
+/// E0418's `{what}` for a sighting older than the window.
+#[must_use]
+pub fn sighted_ago(what: &str, age_ms: u32) -> String {
+    format!("{what} was last seen {age_ms} ms ago")
+}
+
+/// The enemy commander, as E0418's `{what}` names it.
+pub const THE_ENEMY_COMMANDER: &str = "the enemy commander";
 
 /// The row for one code, or `None` if the table does not have it.
 #[must_use]

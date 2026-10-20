@@ -50,6 +50,28 @@
 //! A view with no features is legal and is what every gateway builds until
 //! `tgtw`: it encodes as an empty list, a named feature then resolves to
 //! nothing (`E0412`), and the lints that read the map have nothing to say.
+//!
+//! # Sightings and their ages (S2's Attack freshness)
+//!
+//! From S2 the view also carries the seat's own **sightings**: each enemy
+//! beacon and each enemy commander the seat has seen, with the game
+//! milliseconds since it last saw it (0 while it is in live vision). Spec
+//! section 6: "Freshness is a qualification test at plan time only; the
+//! target is pinned at the seal", and spec section 10 takes an Attack
+//! target's freshness from the seat's one reach window,
+//! `verifier.reach_memory_ms`. So an Attack target named by id, or the enemy
+//! commander, must rest on a sighting inside that window (`E0418`), and any
+//! other reference to an enemy beacon resting on an older one is `W0703`.
+//! The verifier **reads ages and nothing else**: it never ranks the
+//! sightings, never guesses where an asset went, and never models what an
+//! enemy does (AGENTS.md section 3 rule 2).
+//!
+//! This is the layout; the gateway's `verifier_scope` fills it in S2's `wgw`
+//! lane (the S1 pattern of `tgtw` filling what `tgtv` laid out). A view with
+//! no sightings is legal and is what every gateway builds until then: an
+//! Attack target then rests on nothing, and is refused as having no sighting,
+//! which is the truth about that view. The Attack arm is refused as a whole
+//! until S2's `atk` lane (`E0013`) in any case.
 
 use pharmakos_proto::gp::v1::Voxel;
 use pharmakos_proto::gp::v1::beacon_filter::MandateKind;
@@ -171,6 +193,44 @@ pub struct KnownFeature {
     pub covered_by: Option<String>,
 }
 
+/// What a [`Sighting`] is of.
+///
+/// Ordered as declared, beacons first, then by the beacon's handle or the
+/// seat's id, which is the order [`Scope::encode`] writes them in.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum Sighted {
+    /// An enemy beacon, by the handle the seat's view spells it (`e_NN`), the
+    /// same string as its [`KnownBeacon::beacon_id`].
+    Beacon(String),
+    /// Another seat's commander.
+    Commander(SeatId),
+}
+
+impl Sighted {
+    /// The tag [`Scope::encode`] writes before the sighting's key.
+    const fn tag(&self) -> u8 {
+        match self {
+            Sighted::Beacon(_) => 1,
+            Sighted::Commander(_) => 2,
+        }
+    }
+}
+
+/// One thing the seat has seen of another seat, and how long ago.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Sighting {
+    /// What was seen.
+    pub what: Sighted,
+    /// Where the seat last saw it.
+    pub at: Voxel,
+    /// Game milliseconds since the seat last saw it, on match game time
+    /// across Pushes; 0 while it is in live vision now. Unsigned, because an
+    /// age below zero is not one: the gateway converts the sim's figure at its
+    /// edge, with a typed error, rather than handing the verifier a value that
+    /// could not be.
+    pub age_ms: u32,
+}
+
 /// What one seat can see of its own frozen snapshot, for one verification.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Scope {
@@ -179,6 +239,7 @@ pub struct Scope {
     beacons: Vec<KnownBeacon>,
     features: Vec<KnownFeature>,
     commander: Option<Voxel>,
+    sightings: Vec<Sighting>,
 }
 
 impl Scope {
@@ -192,6 +253,7 @@ impl Scope {
             beacons: Vec::new(),
             features: Vec::new(),
             commander: None,
+            sightings: Vec::new(),
         }
     }
 
@@ -319,18 +381,75 @@ impl Scope {
         self.commander
     }
 
+    /// Add a sighting, keeping the list in ascending [`Sighted`] order.
+    ///
+    /// One sighting per thing seen, so the order is total. A second sighting
+    /// of something already in the list keeps **the freshest** of the two (the
+    /// smaller age, and on a tie the one already held): the seat's knowledge is
+    /// its latest look, and keeping the freshest is the only rule under which
+    /// the encoding does not depend on the order the gateway added them in.
+    pub fn push_sighting(&mut self, sighting: Sighting) {
+        match self
+            .sightings
+            .binary_search_by(|existing| existing.what.cmp(&sighting.what))
+        {
+            Ok(index) => {
+                if let Some(slot) = self.sightings.get_mut(index)
+                    && sighting.age_ms < slot.age_ms
+                {
+                    *slot = sighting;
+                }
+            }
+            Err(index) => self.sightings.insert(index, sighting),
+        }
+    }
+
+    /// The same, as a builder.
+    #[must_use]
+    pub fn with_sighting(mut self, sighting: Sighting) -> Scope {
+        self.push_sighting(sighting);
+        self
+    }
+
+    /// Every sighting the seat holds, beacons first.
+    #[must_use]
+    pub fn sightings(&self) -> &[Sighting] {
+        &self.sightings
+    }
+
+    /// The seat's sighting of the enemy beacon with exactly this handle.
+    #[must_use]
+    pub fn beacon_sighting(&self, beacon_id: &str) -> Option<&Sighting> {
+        self.sightings
+            .iter()
+            .find(|sighting| matches!(&sighting.what, Sighted::Beacon(id) if id == beacon_id))
+    }
+
+    /// The seat's sightings of other seats' commanders. A sighting of the
+    /// seat's own commander, which a gateway should never put in the view, is
+    /// left out here, so it can never stand in for an enemy one.
+    pub fn commander_sightings(&self) -> impl Iterator<Item = &Sighting> {
+        let own = self.seat;
+        self.sightings.iter().filter(
+            move |sighting| matches!(sighting.what, Sighted::Commander(seat) if seat != own),
+        )
+    }
+
     /// Append the view to the canonical encoding.
     ///
     /// Fixed stride and length prefixes throughout, exactly as
     /// [`Enc`](pharmakos_sim::encoding::Enc) asks: nothing here can be confused
     /// with its neighbour, and no `usize` reaches the bytes.
     ///
-    /// The beacons, then the features, then the commander. An absent
-    /// `covered_by` or commander is a `false` presence byte; a present one is
-    /// `true` followed by the value, so "none" and "the empty string" or "the
-    /// origin" never share bytes. The features and the commander widened this
-    /// encoding in S1 (`REPORT_HASH_DOMAIN` moved with it), so every
-    /// `report_hash` moved once, the view's content unchanged.
+    /// The beacons, then the features, then the commander, then the
+    /// sightings. An absent `covered_by` or commander is a `false` presence
+    /// byte; a present one is `true` followed by the value, so "none" and "the
+    /// empty string" or "the origin" never share bytes. A sighting is a tag
+    /// (1 a beacon, 2 a commander), its key (the handle, or the seat), where it
+    /// was seen and its age. The features and the commander widened this
+    /// encoding in S1, and the sightings in S2 (task `vfy2`), and
+    /// `REPORT_HASH_DOMAIN` moved each time, so every `report_hash` moved once
+    /// each time, the view's content otherwise unchanged.
     ///
     /// # Errors
     ///
@@ -381,6 +500,18 @@ impl Scope {
                 enc.i32(at.z);
             }
         }
+        enc.len(length("the view's sighting list", self.sightings.len())?);
+        for sighting in &self.sightings {
+            enc.u8(sighting.what.tag());
+            match &sighting.what {
+                Sighted::Beacon(beacon_id) => encode_str(enc, "a sighted beacon's id", beacon_id)?,
+                Sighted::Commander(seat) => enc.u8(seat.raw()),
+            }
+            enc.i32(sighting.at.x);
+            enc.i32(sighting.at.y);
+            enc.i32(sighting.at.z);
+            enc.u32(sighting.age_ms);
+        }
         Ok(())
     }
 }
@@ -402,7 +533,7 @@ fn encode_str(enc: &mut Enc, what: &'static str, text: &str) -> Result<(), HashE
 
 #[cfg(test)]
 mod tests {
-    use super::{FeatureKind, KnownBeacon, KnownFeature, Ownership, Scope};
+    use super::{FeatureKind, KnownBeacon, KnownFeature, Ownership, Scope, Sighted, Sighting};
     use pharmakos_proto::gp::v1::Voxel;
     use pharmakos_proto::gp::v1::beacon_filter::{MandateKind, Side};
     use pharmakos_proto::gp::v1::by_richness::Richness;
@@ -529,6 +660,77 @@ mod tests {
                 assert_ne!(one, other, "two different views share bytes");
             }
         }
+    }
+
+    fn sighting(what: Sighted, age_ms: u32) -> Sighting {
+        Sighting {
+            what,
+            at: Voxel { x: 5, y: 6, z: 7 },
+            age_ms,
+        }
+    }
+
+    #[test]
+    fn every_part_of_a_sighting_moves_the_bytes_and_its_order_does_not() {
+        let economy = SeatEconomy::default();
+        let base = Scope::new(SeatId::new(0), economy);
+        let beacon = || sighting(Sighted::Beacon("e_01".to_owned()), 10);
+        let commander = || sighting(Sighted::Commander(SeatId::new(1)), 10);
+        let one = base
+            .clone()
+            .with_sighting(beacon())
+            .with_sighting(commander());
+        let other = base
+            .clone()
+            .with_sighting(commander())
+            .with_sighting(beacon());
+        assert_eq!(digest(&one), digest(&other));
+        let mut moved = beacon();
+        moved.at.z = 8;
+        let older = sighting(Sighted::Beacon("e_01".to_owned()), 11);
+        let all = [
+            digest(&base),
+            digest(&base.clone().with_sighting(beacon())),
+            digest(&base.clone().with_sighting(commander())),
+            digest(&base.clone().with_sighting(moved)),
+            digest(&base.clone().with_sighting(older)),
+            digest(&one),
+        ];
+        for (index, first) in all.iter().enumerate() {
+            for second in all.iter().skip(index.saturating_add(1)) {
+                assert_ne!(first, second, "two different views share bytes");
+            }
+        }
+    }
+
+    #[test]
+    fn a_second_sighting_of_one_thing_keeps_the_freshest() {
+        let fresh_last = Scope::new(SeatId::new(0), SeatEconomy::default())
+            .with_sighting(sighting(Sighted::Beacon("e_01".to_owned()), 900))
+            .with_sighting(sighting(Sighted::Beacon("e_01".to_owned()), 0));
+        let fresh_first = Scope::new(SeatId::new(0), SeatEconomy::default())
+            .with_sighting(sighting(Sighted::Beacon("e_01".to_owned()), 0))
+            .with_sighting(sighting(Sighted::Beacon("e_01".to_owned()), 900));
+        assert_eq!(
+            fresh_last, fresh_first,
+            "the order of arrival does not matter"
+        );
+        let scope = fresh_last
+            .with_sighting(sighting(Sighted::Commander(SeatId::new(2)), 40))
+            .with_sighting(sighting(Sighted::Commander(SeatId::new(0)), 1));
+        assert_eq!(scope.sightings().len(), 3);
+        assert_eq!(
+            scope.beacon_sighting("e_01").map(|found| found.age_ms),
+            Some(0)
+        );
+        assert!(scope.beacon_sighting("e_0").is_none());
+        assert_eq!(scope.commander_sightings().count(), 1);
+        assert!(
+            scope
+                .commander_sightings()
+                .all(|seen| seen.what != Sighted::Commander(SeatId::new(0))),
+            "the seat's own commander is never an enemy sighting"
+        );
     }
 
     #[test]
