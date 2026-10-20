@@ -81,6 +81,7 @@ pub mod economy;
 pub mod encoding;
 pub mod events;
 pub mod features;
+pub mod footing;
 pub mod hash;
 pub mod ids;
 pub mod interpreter;

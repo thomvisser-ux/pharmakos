@@ -449,6 +449,9 @@ pub struct World {
     /// What S2's `site` dropped, by reason ([`crate::site::SiteDrops`]).
     /// Diagnostic; never hashed.
     site_drops: crate::site::SiteDrops,
+    /// Edits a footing refused, by kind ([`crate::footing`]). Diagnostic;
+    /// never hashed.
+    footing_refusals: crate::footing::FootingRefusals,
     /// The core's bore ([`crate::bore`]; S2's plan, E31): derived with the
     /// map and regenerated on restore, never hashed or carried.
     bore: Bore,
@@ -1138,6 +1141,7 @@ impl World {
             rooms,
             damage_drops: DamageDrops::default(),
             site_drops: crate::site::SiteDrops::default(),
+            footing_refusals: crate::footing::FootingRefusals::default(),
             bore: generated.bore,
             generated: generated.surface,
             wreck_limit,
@@ -4065,13 +4069,28 @@ impl World {
                 // A set that changes nothing is an edit that marks nothing
                 // (`VoxelStore::set`), and an edit off the map was refused
                 // where it was filed, so neither answer is a drop.
+                // A footing ignores every edit (the owner's ruling of 2026-10-20;
+                // [`crate::footing`]): a set that names one writes nothing and
+                // is counted.
                 VoxelEdit::Set { at, material, .. } => {
-                    self.voxels.set(at, material);
+                    let footings =
+                        crate::footing::Footings::of(&self.bore, &self.structures, &self.beacons);
+                    if footings.contains(at) {
+                        self.footing_refusals.sets = self.footing_refusals.sets.saturating_add(1);
+                    } else {
+                        self.voxels.set(at, material);
+                    }
                 }
                 VoxelEdit::Crater { centre, radius, .. } => {
                     let levels = self.rules.combat().blast_levels;
+                    let footings =
+                        crate::footing::Footings::of(&self.bore, &self.structures, &self.beacons);
                     self.voxels
-                        .blast(centre, radius, levels, &self.bore, &mut touched);
+                        .blast(centre, radius, levels, &footings, &mut touched);
+                    self.footing_refusals.blast_voxels = self
+                        .footing_refusals
+                        .blast_voxels
+                        .saturating_add(footings.hits());
                 }
             }
         }

@@ -325,6 +325,7 @@ pub(crate) fn next_unpaid_target(world: &World, beacon: BeaconId) -> Option<usiz
             || is_wall(world, row)
             || !needs_buying(world, beacon, row, *built)
             || !buildable(world, beacon, row)
+            || awaits_levelling(world, beacon, row)
         {
             continue;
         }
@@ -358,7 +359,7 @@ fn target_cost(world: &World, row: usize) -> Option<Money> {
 /// Whether the Build target at `row` of `beacon` can still be built: nothing
 /// stands on its column, the feature it is bound to, if any, is not lost, and
 /// it lies in none of the beacon's protected areas.
-fn buildable(world: &World, beacon: BeaconId, row: usize) -> bool {
+pub(crate) fn buildable(world: &World, beacon: BeaconId, row: usize) -> bool {
     let targets = world.targets();
     let (Some(anchor), Some(feature)) = (
         targets.anchors().get(row).copied(),
@@ -544,7 +545,12 @@ fn is_wall(world: &World, row: usize) -> bool {
 /// structure, which is never rebuilt automatically (item 128 (d); spec
 /// section 8). A destroyed target is one whose structure has no hit points
 /// left, or whose row has since been freed and reused.
-fn needs_buying(world: &World, beacon: BeaconId, row: usize, built: StructureId) -> bool {
+pub(crate) fn needs_buying(
+    world: &World,
+    beacon: BeaconId,
+    row: usize,
+    built: StructureId,
+) -> bool {
     if !built.is_some() {
         return true;
     }
@@ -585,4 +591,18 @@ fn needs_buying(world: &World, beacon: BeaconId, row: usize, built: StructureId)
 fn repair_request(world: &World, seat: SeatId, beacon: BeaconId) -> Option<SpendRequest> {
     crate::site::repair_shortfall(world, beacon)
         .map(|cost| work_request(seat, beacon, Urgency::Repair, cost, Purchase::RepairWork))
+}
+
+/// Whether the Build target at `row` of `beacon` waits for its footprint to
+/// be levelled before it is bought: its construction begins on level ground,
+/// since its footing ignores every edit from then on (the owner's ruling of
+/// 2026-10-20; [`crate::footing`]).
+fn awaits_levelling(world: &World, beacon: BeaconId, row: usize) -> bool {
+    let terraform = world
+        .beacons()
+        .row_of(beacon)
+        .ok()
+        .and_then(|at| world.beacons().sites().get(at.index()).copied())
+        .map(|site| site.settings.terraform);
+    terraform.is_some_and(|terraform| crate::site::levelling_due(world, row, terraform).is_some())
 }

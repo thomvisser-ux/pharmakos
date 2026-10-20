@@ -17,9 +17,12 @@
 //!   stands is checked against the ground when its row commits
 //!   ([`check_wall`]): the verifier sees no terrain, so the ground-dependent
 //!   halves of the box's checks are the sim's (decisions-log item 146 (4)).
-//! * **Terraform** (item 144 (5)). Before a structure target is raised its
+//! * **Terraform** (item 144 (5)). Before a structure target is bought its
 //!   drone levels the target's footprint, its anchor column, to the anchor's
-//!   height: `FILL` raises it, `DIG` lowers it, `BOTH` both. `FILL` and `BOTH`
+//!   height: `FILL` raises it, `DIG` lowers it, `BOTH` both. The Quartermaster buys
+//!   it only once it is level, since from the tick its construction begins its
+//!   footing ignores every edit ([`crate::footing`]; the owner's ruling of
+//!   2026-10-20). `FILL` and `BOTH`
 //!   also refill craters and trenches inside the beacon's sphere back to the
 //!   generated surface ([`crate::terrain`]). A refill fills air only, so a
 //!   cracked voxel, which is solid, stays cracked (decision 10). Every voxel
@@ -823,10 +826,11 @@ fn refill_voxel(world: &World, beacon: BeaconId, class: Option<Drone>) -> Option
 ///
 /// Its beacon's Build targets in table order, as the skeleton's drones raised
 /// them: a protected target is passed over; a wall target's box gives the
-/// drone the next voxel of its class; a structure still going up is levelled
-/// first, under the beacon's `terraform`, by the drone of its column's class
-/// (a Generator is never levelled: it stands on its vent as the vent lies),
-/// and is then raised by any drone. Then, under `FILL` or `BOTH`, the refill.
+/// drone the next voxel of its class; a structure target not yet bought is
+/// levelled first, under the beacon's `terraform`, by the drone of its column's
+/// class (a Generator is never levelled: it stands on its vent as the vent
+/// lies), and the Build mandate buys it only once it is level; a structure
+/// going up is raised by any drone. Then, under `FILL` or `BOTH`, the refill.
 #[must_use]
 pub fn build_job(world: &World, unit: usize) -> Option<BuildJob> {
     let home = world.units().homes().get(unit).copied()?;
@@ -846,8 +850,9 @@ pub fn build_job(world: &World, unit: usize) -> Option<BuildJob> {
         .iter()
         .zip(targets.kinds())
         .zip(targets.anchors().iter().zip(targets.built()))
-        .zip(targets.areas().iter().zip(targets.wall_tops()));
-    for (((owner, kind), (anchor, built)), (columns, top)) in rows {
+        .zip(targets.areas().iter().zip(targets.wall_tops()))
+        .enumerate();
+    for (row, (((owner, kind), (anchor, built)), (columns, top))) in rows {
         if *owner != home
             || *kind != TargetKind::Build.id()
             || crate::mandate::protected(world, home, *anchor)
@@ -857,6 +862,22 @@ pub fn build_job(world: &World, unit: usize) -> Option<BuildJob> {
         if *top != NO_WALL {
             if let Some(job) = wall_voxel(world, home, seat, *columns, *top, Some(drone)) {
                 return Some(BuildJob::Voxel(job));
+            }
+            continue;
+        }
+        // A target not yet bought is levelled first, under the beacon's
+        // terraform, by the drone of its column's class: its construction
+        // begins only on level ground, and from then on its footing ignores
+        // every edit ([`crate::footing`]; the owner's ruling of 2026-10-20).
+        if crate::mandate::needs_buying(world, home, row, *built) {
+            if !crate::mandate::buildable(world, home, row) {
+                continue;
+            }
+            if let Some(job) = levelling_due(world, row, terraform) {
+                let [x, y, _] = job.at;
+                if class_of(x, y, class.1) == class.0 && drone.reaches(world, x, y) {
+                    return Some(BuildJob::Voxel(job));
+                }
             }
             continue;
         }
@@ -870,15 +891,6 @@ pub fn build_job(world: &World, unit: usize) -> Option<BuildJob> {
                 .get(index)
                 .is_some_and(|hp| hp.is_alive());
         if !going_up {
-            continue;
-        }
-        let generator =
-            structures.kinds().get(index).copied() == Some(StructureKind::Generator.id());
-        if !generator && let Some(job) = levelling(world, terraform, *anchor) {
-            let [x, y, _] = job.at;
-            if class_of(x, y, class.1) == class.0 {
-                return Some(BuildJob::Voxel(job));
-            }
             continue;
         }
         let at = structures.positions().get(index).copied()?;
@@ -2074,6 +2086,38 @@ impl World {
     pub const fn site_drops(&self) -> SiteDrops {
         self.site_drops
     }
+}
+
+impl World {
+    /// The edits a footing refused, by kind ([`crate::footing`]; the owner's
+    /// ruling of 2026-10-20). Diagnostic; never hashed.
+    #[must_use]
+    pub const fn footing_refusals(&self) -> crate::footing::FootingRefusals {
+        self.footing_refusals
+    }
+
+    /// The footings as the world stands now ([`crate::footing::Footings`]).
+    #[must_use]
+    pub fn footings(&self) -> crate::footing::Footings<'_> {
+        crate::footing::Footings::of(&self.bore, &self.structures, &self.beacons)
+    }
+}
+
+/// The levelling voxel the Build target at `row` still needs before it is
+/// bought, under `terraform`, or `None` when its footprint is level or it is
+/// levelled by nothing: a wall (its box is filled to the ground) and a
+/// Generator (it stands on its vent as the vent lies).
+pub(crate) fn levelling_due(world: &World, row: usize, terraform: Terraform) -> Option<VoxelJob> {
+    if terraform == Terraform::None {
+        return None;
+    }
+    let targets = world.targets();
+    let blueprint = targets.blueprints().get(row).copied()?;
+    if blueprint == StructureKind::Generator.id() || blueprint == StructureKind::Wall.id() {
+        return None;
+    }
+    let anchor = targets.anchors().get(row).copied()?;
+    levelling(world, terraform, anchor)
 }
 
 #[cfg(test)]

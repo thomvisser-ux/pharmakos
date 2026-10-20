@@ -1022,3 +1022,195 @@ fn a_structure_above_its_threshold_is_left_beside_a_drone() {
     run(&mut runner, 600, &[]);
     assert_eq!(structure_hp(runner.world(), cannon), max - hit_hp);
 }
+
+// ---------------------------------------------------------------------------
+// Footings (the owner's ruling of 2026-10-20).
+// ---------------------------------------------------------------------------
+
+/// A blast filed as a host's edit, landing on the next tick.
+fn blast_at(world: &mut World, at: [i32; 3], radius: i32) {
+    world
+        .request_voxel_edit(VoxelEdit::Crater {
+            centre: at,
+            radius,
+            by: Some(SeatId::new(1)),
+        })
+        .expect("a crater files");
+}
+
+/// A column's every voxel, bottom to top.
+fn column_bytes(world: &World, x: i32, y: i32) -> Vec<Option<Material>> {
+    (0..64).map(|z| world.voxels().get([x, y, z])).collect()
+}
+
+/// A shell landing beside a building craters everything in its ball except
+/// the building's footprint column, whose every voxel ignores the edit and is
+/// counted.
+#[test]
+fn a_blast_beside_a_building_spares_its_footing() {
+    let mut world = fixture(settings(Terraform::None, 0, false), UnitKind::BuildDrone);
+    let cannon = standing_structure(&mut world, StructureKind::Autocannon, [5, 3]);
+    let [x, y] = open_column(&world, [5, 3]);
+    let g = top(&world, x, y);
+    let before = column_bytes(&world, x, y);
+    let beside = top(&world, x + 1, y);
+    blast_at(&mut world, [x + 1, y, g], 2);
+    let mut runner = push(world, &idle());
+    run(&mut runner, 1, &[]);
+    let world = runner.world();
+    assert_eq!(
+        column_bytes(world, x, y),
+        before,
+        "the footing is untouched"
+    );
+    assert!(
+        top(world, x + 1, y) < beside,
+        "the ground beside it is cratered"
+    );
+    assert!(
+        world.footing_refusals().blast_voxels > 0,
+        "each spared voxel is counted"
+    );
+    assert!(structure_hp(world, cannon) > 0);
+}
+
+/// A dig, a fill or any other `set` naming a footing voxel writes nothing and
+/// is counted: so a Mine drone's dig can never take a voxel under a building,
+/// and nothing can be set down on top of one.
+#[test]
+fn a_set_on_a_footing_writes_nothing() {
+    let mut world = fixture(settings(Terraform::None, 0, false), UnitKind::BuildDrone);
+    let _cannon = standing_structure(&mut world, StructureKind::Mortar, [5, 3]);
+    let [x, y] = open_column(&world, [5, 3]);
+    let g = top(&world, x, y);
+    let before = column_bytes(&world, x, y);
+    for (at, material) in [
+        // A dig under it, as a Mine drone's would be filed.
+        ([x, y, g], Material::AIR),
+        // A voxel set down above it, as a falling region's would land.
+        ([x, y, g + 4], Material::DIRT),
+    ] {
+        world
+            .request_voxel_edit(VoxelEdit::Set {
+                at,
+                material,
+                by: Some(SEAT),
+            })
+            .expect("files");
+    }
+    let mut runner = push(world, &idle());
+    run(&mut runner, 1, &[]);
+    let world = runner.world();
+    assert_eq!(column_bytes(world, x, y), before);
+    assert_eq!(world.footing_refusals().sets, 2);
+}
+
+/// A ruin is not covered: a destroyed beacon's structures turn to ruins, and
+/// their footings take edits again from that tick.
+#[test]
+fn a_ruins_footing_is_editable() {
+    let mut world = fixture(settings(Terraform::None, 0, false), UnitKind::BuildDrone);
+    let [cx, cy, _] = core_voxel(&world);
+    let outpost = world
+        .place_beacon_directly(SEAT, standing(&world, cx - 8, cy), MandateKind::Build, 2)
+        .expect("room for a beacon");
+    let [x, y] = open_column(&world, [-8, 4]);
+    let at = standing(&world, x, y);
+    let ruin = world
+        .raise_structure(SEAT, outpost, StructureKind::Mortar, at)
+        .expect("room");
+    let hp = {
+        let row = world.beacons().row_of(outpost).expect("a beacon");
+        world
+            .beacons()
+            .hit_points()
+            .get(row.index())
+            .expect("hp")
+            .raw()
+    };
+    world
+        .request_damage(hit(DamageTarget::Beacon(outpost), i64::from(hp)))
+        .expect("files");
+    let mut runner = push(world, &idle());
+    run(&mut runner, 2, &[]);
+    let row = runner
+        .world()
+        .structures()
+        .row_of(ruin)
+        .expect("the ruin stands");
+    assert!(
+        !runner
+            .world()
+            .structures()
+            .seats()
+            .get(row.index())
+            .copied()
+            .is_some_and(|s| SeatId::new(s).is_some()),
+        "a ruin is nobody's"
+    );
+    let g = top(runner.world(), x, y);
+    runner
+        .world_mut()
+        .request_voxel_edit(VoxelEdit::Set {
+            at: [x, y, g],
+            material: Material::AIR,
+            by: Some(SEAT),
+        })
+        .expect("files");
+    run(&mut runner, 1, &[]);
+    assert_eq!(
+        top(runner.world(), x, y),
+        g - 1,
+        "the ruin's footing took the dig"
+    );
+}
+
+/// A seat's voxel wall is no footing: a blast still cracks it.
+#[test]
+fn a_wall_voxel_still_breaks() {
+    let mut world = fixture(settings(Terraform::None, 0, false), UnitKind::BuildDrone);
+    let [x, y] = open_column(&world, [-4, 5]);
+    let g = top(&world, x, y);
+    let whole = Material::wall(SEAT, false).expect("a wall");
+    world
+        .request_voxel_edit(VoxelEdit::Set {
+            at: [x, y, g + 1],
+            material: whole,
+            by: Some(SEAT),
+        })
+        .expect("files");
+    let mut runner = push(world, &idle());
+    run(&mut runner, 1, &[]);
+    blast_at(runner.world_mut(), [x, y, g + 1], 1);
+    run(&mut runner, 1, &[]);
+    assert_eq!(
+        runner.world().voxels().get([x, y, g + 1]),
+        Material::wall(SEAT, true),
+        "the wall voxel cracked"
+    );
+}
+
+/// The footings are derived from hashed tables and add no state: a restored
+/// world reads the same footings and the same state hash.
+#[test]
+fn the_footings_are_derived_from_hashed_tables() {
+    let mut world = fixture(settings(Terraform::None, 0, false), UnitKind::BuildDrone);
+    let _ = standing_structure(&mut world, StructureKind::Autocannon, [5, 3]);
+    let [x, y] = open_column(&world, [5, 3]);
+    let snapshot = Snapshot::capture(&world);
+    let mut restored = self::world();
+    snapshot.restore_into(&mut restored).expect("restores");
+    assert_eq!(restored.state_hash(), world.state_hash());
+    for (dx, dy) in [(0, 0), (1, 0), (0, 1)] {
+        assert_eq!(
+            restored.footings().column(x + dx, y + dy),
+            world.footings().column(x + dx, y + dy)
+        );
+    }
+    assert!(world.footings().column(x, y));
+    let [cx, cy, _] = core_voxel(&world);
+    assert!(
+        world.footings().column(cx, cy),
+        "the core's column is a footing"
+    );
+}

@@ -1130,7 +1130,9 @@ impl VoxelStore {
 
     /// One blast: step every voxel inside the ball of `radius` whole voxels
     /// centred on `centre` down one level under `levels` (S2's plan, decision
-    /// 10 and E14), skipping every voxel of the core's `bore` (E31).
+    /// 10 and E14), skipping every voxel of a footing: the core's bore (E31) and
+    /// every live building's footprint columns ([`crate::footing`], the owner's
+    /// ruling of 2026-10-20). Each skipped voxel is counted by the footings.
     ///
     /// A wall voxel cracks, then breaks; a terrain voxel steps down a level
     /// and is removed at its last ([`Material::after_blast`]); air and bedrock
@@ -1148,7 +1150,7 @@ impl VoxelStore {
         centre: [i32; 3],
         radius: i32,
         levels: BlastLevels,
-        bore: &crate::bore::Bore,
+        bore: &crate::footing::Footings<'_>,
         touched: &mut Vec<u32>,
     ) -> u32 {
         touched.clear();
