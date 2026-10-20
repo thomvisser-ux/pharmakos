@@ -55,7 +55,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::ChunkGrid;
+use crate::{ChunkGrid, size_u64};
 
 /// The three rules-table rows the drain queue needs.
 ///
@@ -226,7 +226,7 @@ impl DrainQueue {
             if surfaces >= self.budget.surfaces_per_frame {
                 break;
             }
-            let size = u64::try_from(byte_size_of(*chunk)).unwrap_or(u64::MAX);
+            let size = size_u64(byte_size_of(*chunk));
             // The first chunk of a frame always goes through, even if it alone exceeds B.
             if surfaces > 0 && bytes.saturating_add(size) > self.budget.bytes_per_frame {
                 break;
@@ -252,10 +252,9 @@ impl DrainQueue {
             return i64::MAX;
         };
         let mut total = 0_i64;
-        for axis in 0..3_usize {
-            let here = i64::from(coords.get(axis).copied().unwrap_or(0));
-            let there = i64::from(camera_chunk.get(axis).copied().unwrap_or(0));
-            let delta = here.saturating_sub(there);
+        for (here, there) in coords.iter().zip(camera_chunk.iter()) {
+            // Both coordinates are `i32`, so their difference fits an `i64` exactly.
+            let delta = i64::from(*here) - i64::from(*there);
             total = total.saturating_add(delta.saturating_mul(delta));
         }
         total
