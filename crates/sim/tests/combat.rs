@@ -1841,3 +1841,41 @@ fn a_raid_on_a_mortar() {
     assert!(world.combat_counts().shots() > 0);
     let _ = Hp::ZERO;
 }
+
+#[test]
+fn the_core_autocannon_fires_while_its_core_is_dormant() {
+    // Item 146 (3) (k): the core's autocannon runs off the deep bore, so
+    // dormancy, which powers down what the grid feeds, neither blinds nor
+    // silences it (spec section 5).
+    let mut world = world(2);
+    let core0 = core(&world, seat(0));
+    let core_at = beacon_at(&world, core0);
+    let raider_at = ground(&world, core_at, 10, 0);
+    let raider_home = beacon(&mut world, seat(1), raider_at, HOLD_FIRE);
+    let raider = unit(
+        &mut world,
+        seat(1),
+        raider_home,
+        UnitKind::Raider,
+        raider_at,
+    );
+    let mut runner = pushing(world);
+    let mut feed = Vec::new();
+    let full = runner.world().unit_max_hp(UnitKind::Raider).raw();
+    let mut hit_while_dark = false;
+    for _ in 0..40 {
+        runner.world_mut().set_dormant(core0, true);
+        let before = unit_hp(runner.world(), raider);
+        let dark = {
+            let world = runner.world();
+            let row = world.beacons().row_of(core0).expect("the core");
+            world.beacons().dormant()[row.index()]
+        };
+        play(&mut runner, 1, &mut feed);
+        if dark && unit_hp(runner.world(), raider) < before {
+            hit_while_dark = true;
+        }
+    }
+    assert!(unit_hp(runner.world(), raider) < full, "the core fired");
+    assert!(hit_while_dark, "and fired on a tick it began dark");
+}
