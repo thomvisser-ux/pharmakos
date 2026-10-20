@@ -1006,7 +1006,7 @@ passive receiver this way, so that adding an illuminator is a new scenario entry
   simplify things - acknowledge this unrealism in comments"*. The receiver's position and height
   are fixed for a run, whether a tower or a tethered balloon sets the height. Platform motion, the
   position wander and the Doppler it puts on the reference channel, is not modelled, so the
-  goldens of sections 7.6 and 7.8 apply unchanged. The ruling named the drone; it carries over to the tethered balloon that replaced it (item 147), whose sway in the wind it covers the same way.
+  goldens of sections 7.6 and 7.8 apply unchanged. The ruling named the drone; it carries over to the tethered balloon that replaced it (item 147), whose sway in the wind it covers the same way. The balloon binds the game too: when radar is ported to the sim, its raised receiver is a tethered balloon, fixed at its height (item 147).
 - **Binding: the unrealism is stated in the code (the owner's ruling).** The code says plainly
   that a real tethered balloon sways and Doppler-shifts the reference channel, and that the lab
   ignores this by the owner's choice (decisions-log item 140 (3) (d)).
