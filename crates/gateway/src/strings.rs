@@ -162,6 +162,20 @@ pub fn event_text(event: &Event) -> String {
         EventKind::WreckBuried => {
             String::from("The ash buried the oldest wreck to make room for a new one.")
         }
+        // S2's `fall`: the support rule's lines (S2's plan, E17). A region is
+        // terrain and nobody's; an asset that fell names its owner.
+        EventKind::RegionCollapsed => format!("A region of {} voxels collapsed.", event.value),
+        EventKind::AssetFell => match event.seat {
+            Some(owner) => format!(
+                "An asset of seat {} fell, and {} fall damage was filed against it.",
+                owner.raw(),
+                event.value
+            ),
+            None => format!(
+                "An unclaimed asset fell, and {} fall damage was filed against it.",
+                event.value
+            ),
+        },
     }
 }
 
@@ -724,6 +738,24 @@ mod tests {
         );
         let text = event_text(&event(EventKind::UnitDestroyed, Some(1), 5));
         assert_eq!(text, "A unit of seat 1 was destroyed.");
+    }
+
+    /// S2's `fall`: a collapsed region names nobody, and a fallen asset names
+    /// its owner, or nobody for a ruin or a wreck.
+    #[test]
+    fn a_collapse_names_nobody_and_a_fallen_asset_names_its_owner() {
+        let text = event_text(&event(EventKind::RegionCollapsed, None, 12));
+        assert_eq!(text, "A region of 12 voxels collapsed.");
+        let text = event_text(&event(EventKind::AssetFell, Some(2), 100));
+        assert_eq!(
+            text,
+            "An asset of seat 2 fell, and 100 fall damage was filed against it."
+        );
+        let text = event_text(&event(EventKind::AssetFell, None, 0));
+        assert_eq!(
+            text,
+            "An unclaimed asset fell, and 0 fall damage was filed against it."
+        );
     }
 
     #[test]
