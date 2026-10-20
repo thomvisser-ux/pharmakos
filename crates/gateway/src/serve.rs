@@ -148,7 +148,7 @@ use crate::advice::Advice;
 use crate::cache::MatchCache;
 use crate::error::Error;
 use crate::fog::FogPolicy;
-use crate::host::{Host, Settings, SphereVision};
+use crate::host::{Host, LiveVision, Settings};
 use crate::net::Listener;
 use crate::rpc::{self, Request};
 use crate::save::{Save, Stamp};
@@ -567,7 +567,7 @@ impl Announce {
             .ok_or_else(refuse)?;
         let match_id = fields.get(1).ok_or_else(refuse)?;
         let admin_token = fields.get(2).ok_or_else(refuse)?;
-        let seat = fields.get(3).copied().unwrap_or("-");
+        let seat = fields.get(3).copied().ok_or_else(refuse)?;
         Ok(Announce {
             port,
             match_id: (*match_id).to_owned(),
@@ -1369,12 +1369,14 @@ fn serve_surface(
 
 /// What a seat can see right now, rebuilt before every call.
 ///
-/// An owned snapshot rather than a long-lived object, because a sphere moves
-/// when a beacon is placed or lost and a stale one would be a fog leak with a
-/// delay on it.
-fn vision_of(surface: &Surface) -> SphereVision {
+/// An owned snapshot rather than a long-lived object, because a sensor moves
+/// whenever a unit walks, a beacon is placed or lost or a structure is
+/// finished, and a stale one would be a fog leak with a delay on it. With no
+/// match hosted there is no sensor at all, so the vision is blind: nothing
+/// can be seen where nothing stands.
+fn vision_of(surface: &Surface) -> LiveVision {
     surface.host().map_or_else(
-        |_| SphereVision::default(),
-        |host| SphereVision::of(host.world()),
+        |_| LiveVision::default(),
+        |host| LiveVision::of(host.world()),
     )
 }

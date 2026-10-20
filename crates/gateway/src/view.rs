@@ -23,8 +23,11 @@ use pharmakos_proto::gp::v1::Voxel;
 use pharmakos_proto::gp::v1::beacon_filter::MandateKind as WireMandate;
 use pharmakos_sim::knowledge::Position;
 use pharmakos_sim::math::fixed::Fx;
+use pharmakos_sim::math::quantity::{Hp, Money};
 use pharmakos_sim::seams::MandateKind;
 use pharmakos_sim::tables::{SeatId, StructureKind, UnitKind};
+
+use crate::error::Error;
 
 /// A fixed-point position as the whole voxel it stands in.
 ///
@@ -35,12 +38,49 @@ use pharmakos_sim::tables::{SeatId, StructureKind, UnitKind};
 /// name.
 #[must_use]
 pub fn voxel_of(at: [Fx; 3]) -> Voxel {
-    let axis = |index: usize| at.get(index).map_or(0, |value| value.floor_voxels());
+    let [x, y, z] = at;
     Voxel {
-        x: axis(0),
-        y: axis(1),
-        z: axis(2),
+        x: x.floor_voxels(),
+        y: y.floor_voxels(),
+        z: z.floor_voxels(),
     }
+}
+
+/// Hit points as the wire's whole, unsigned HP (`ViewEntity.hp`,
+/// `BeaconSummary.hp` and their `max_hp`).
+///
+/// By `try_from` and never by a cast or a saturation (S2's plan, E7; the
+/// carry of decisions-log item 145 (5)): the sim clamps hit points at zero, so
+/// a figure below it is the sim and the gateway disagreeing, and it is said
+/// rather than written as a number a reader would take for an answer.
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] for hit points below zero.
+pub fn hp_wire(hp: Hp) -> Result<u32, Error> {
+    let raw = hp.raw();
+    u32::try_from(raw).map_err(|_| {
+        Error::internal(format!(
+            "the sim holds {raw} hit points, below the zero it clamps at, so the wire's whole HP              cannot carry them"
+        ))
+    })
+}
+
+/// A `$` figure as the wire's whole `int32` dollars.
+///
+/// As [`hp_wire`]: by `try_from`, with a typed refusal naming `what` when the
+/// sim's `i64` does not fit, never clamped to the nearest `int32`.
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] for a figure past `int32`.
+pub fn dollars_wire(money: Money, what: &str) -> Result<i32, Error> {
+    let raw = money.raw();
+    i32::try_from(raw).map_err(|_| {
+        Error::internal(format!(
+            "{what} is $ {raw}, which does not fit the wire's int32 dollars"
+        ))
+    })
 }
 
 /// A knowledge position as the whole voxel it stands in.

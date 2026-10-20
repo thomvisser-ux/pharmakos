@@ -294,10 +294,8 @@ pub struct Resolved {
     /// ranks with. `None` when it reads nothing, and when it reads a feature
     /// it **names** (a `feature_id`, or `covered {}`) that the origin cannot
     /// reach: a name is never ranked, so the sim binds it reachable or not.
-    /// The wire's `travel_ms` has no "unreachable" value, so it is written 0
-    /// there, beside a `feature_id` and an empty candidate list -- which is
-    /// how a reader tells it from a feature at the origin (a reachable named
-    /// feature is always its own one candidate).
+    /// The wire says which with `ResolvedRef.reachable` (decisions-log item
+    /// 133 (3) (i)), and writes `travel_ms` only beside `reachable: true`.
     pub travel_ms: Option<Ms>,
     /// Every reachable candidate that matched, nearest first.
     pub candidates: Vec<Candidate>,
@@ -907,28 +905,28 @@ fn row_anchors<'a>(row: &'a InterfaceRow, at: &str) -> Vec<(String, &'a FeatureR
                 .map(|(pointer, reference)| (pointer, reference, on))
                 .collect()
         }
-        Some(Row::AddBuildTarget(add)) => anchor_on(
+        // A target anchored anywhere but `on` a feature names no feature, so
+        // it lists nothing.
+        Some(Row::AddBuildTarget(add)) => match anchor_on(
             add.target
                 .as_ref()
                 .and_then(|target| target.anchor.as_ref()),
-        )
-        .map(|reference| {
-            vec![(
+        ) {
+            Some(reference) => vec![(
                 format!("{at}/add_build_target/target/anchor/on"),
                 reference,
                 on,
-            )]
-        })
-        .unwrap_or_default(),
-        Some(Row::RemoveBuildTarget(remove)) => anchor_on(remove.anchor.as_ref())
-            .map(|reference| {
-                vec![(
-                    format!("{at}/remove_build_target/anchor/on"),
-                    reference,
-                    Site::Removal,
-                )]
-            })
-            .unwrap_or_default(),
+            )],
+            None => Vec::new(),
+        },
+        Some(Row::RemoveBuildTarget(remove)) => match anchor_on(remove.anchor.as_ref()) {
+            Some(reference) => vec![(
+                format!("{at}/remove_build_target/anchor/on"),
+                reference,
+                Site::Removal,
+            )],
+            None => Vec::new(),
+        },
         Some(Row::SetPriority(_) | Row::Recycle(_) | Row::QueueStructure(_)) | None => Vec::new(),
     }
 }

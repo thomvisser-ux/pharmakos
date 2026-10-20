@@ -161,7 +161,9 @@ impl RouteAdapter {
     /// [`crate::error::Code::Internal`] when the mask is neither empty nor one
     /// entry per column.
     pub fn set_unknown_columns(&mut self, unknown: &[bool]) -> Result<(), Error> {
-        let nodes = usize::try_from(self.surface.node_count()).unwrap_or(usize::MAX);
+        let nodes = usize::try_from(self.surface.node_count()).map_err(|_| {
+            Error::internal("this map has more columns than this host's usize counts")
+        })?;
         if !unknown.is_empty() && unknown.len() != nodes {
             return Err(Error::internal(format!(
                 "a fog mask is one entry per column: this map has {nodes} and the mask has {}",

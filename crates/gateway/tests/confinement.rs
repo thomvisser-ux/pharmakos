@@ -1356,3 +1356,275 @@ fn surface_calls_no_save_seam(surface_text: &str, needles: &[(&str, &str)]) {
          guard over a name nobody defines guards nothing"
     );
 }
+
+// ---------------------------------------------------------------------------
+// No silent fallback (S2's plan, E7: each crate's next S2 owner sweeps its own)
+// ---------------------------------------------------------------------------
+
+/// Every fallback call left in the crate's shipped code, each with the rule
+/// that makes its default the exact answer rather than a guess: `(file name,
+/// the code, why)`.
+///
+/// S2's plan counted 66 `try_from(..).unwrap_or(..)` and `.get(..)…unwrap_or(..)`
+/// sites here at `7a351e7`; S2's `wgw` swept them with the wider net below
+/// (every `unwrap_or`, `map_or` and `map_or_else`, 144 lines at `cb2da2e`).
+/// Each one that hid a failure now returns a typed error, or is rewritten so
+/// the failure cannot be written; what is left is a default that **is** the
+/// answer -- proto3's default for an absent parameter, the log formats' `-`
+/// for "none", nothing to see where no match is hosted -- and says so here.
+const KEPT_FALLBACKS: &[(&str, &str, &str)] = &[
+    (
+        "audit.rs",
+        ".map_or_else(|| String::from(\"-\"), Subject::render);",
+        "the audit log's format spells a line with no subject `-` (its reader, `MatchCache::continuation`, reads it so)",
+    ),
+    (
+        "audit.rs",
+        ".map_or_else(|| String::from(\"-\"), |handle| handle.to_string());",
+        "the audit log's format spells a line with no token handle `-`",
+    ),
+    (
+        "cache.rs",
+        ".unwrap_or(0)",
+        "an audit log with no numbered line yet has made no call, and the first call is numbered after 0",
+    ),
+    (
+        "save.rs",
+        "self.config.human_seat.map_or(Json::Null, number),",
+        "the save container writes a match with no human seat as `null`, which its reader reads back as none",
+    ),
+    (
+        "save.rs",
+        "|seat: Option<u8>| seat.map_or_else(|| String::from(\"-\"), |raw| raw.to_string());",
+        "a refusal's message names an absent human seat `-`, as the config line spells it",
+    ),
+    (
+        "save.rs",
+        "let sealed = seat.seal.as_ref().map_or(Json::Null, |held| {",
+        "the save container writes a seat that sealed nothing as `null`",
+    ),
+    (
+        "serve.rs",
+        ".map_or_else(|| String::from(\"-\"), |seat| seat.to_string());",
+        "the config line spells no human seat `-` (`ConfigLine`'s format)",
+    ),
+    (
+        "serve.rs",
+        "let seventh = trimmed.split('\\t').nth(6).unwrap_or(\"\");",
+        "a config line of six fields is a new match: the seventh is absent, read as the empty field the format allows",
+    ),
+    (
+        "serve.rs",
+        "let seat = self.seat_token.clone().unwrap_or_else(|| String::from(\"-\"));",
+        "the announce line spells a match with no human seat's token `-`, which `Announce::parse` reads back as none",
+    ),
+    (
+        "serve.rs",
+        "self.opens.1.recv().unwrap_or(false)",
+        "a host loop that has stopped opens no session, which is the answer a refused open gets",
+    ),
+    (
+        "serve.rs",
+        "self.replies.1.recv().unwrap_or_else(|_| {",
+        "a host loop that has stopped answers with the shutting-down refusal, the same one a failed send gets",
+    ),
+    (
+        "serve.rs",
+        "method.map_or_else(",
+        "a refusal names a method the wire does not know `<unknown>`, rather than echoing an unbounded name",
+    ),
+    (
+        "serve.rs",
+        "surface.host().map_or_else(",
+        "with no match hosted there is no sensor, so the vision is blind: nothing is seen where nothing stands",
+    ),
+    (
+        "sha1.rs",
+        "schedule.get(index).copied().unwrap_or(0)",
+        "every index the compression reads is under 80 by its loop bounds; the hash is checked against RFC 3174's vectors",
+    ),
+    (
+        "strings.rs",
+        "let seat = event.seat.map_or_else(",
+        "an event with no seat is about an asset nobody owns, and the sentence says so",
+    ),
+    (
+        "strings.rs",
+        "EventKind::MatchEnded => event.seat.map_or_else(",
+        "a match that ended with no single winner names none (a shared win, or no seat left)",
+    ),
+    (
+        "surface.rs",
+        "let characters = u32::try_from(held.notebook.chars().count()).unwrap_or(u32::MAX);",
+        "the count is compared with a u32 maximum, so a saturated count is refused exactly as the true one would be",
+    ),
+    (
+        "surface.rs",
+        ".map_or(self.time.tick, |host| host.runner().tick());",
+        "with no match hosted the feed's anchor is the gateway's own tick, as nothing has been stamped",
+    ),
+    (
+        "surface.rs",
+        "self.host.as_ref().map_or(Ms::ZERO, |host| {",
+        "with no match hosted no segment has opened, so none of it has elapsed",
+    ),
+    (
+        "surface.rs",
+        "let last = self.reported_elapsed_ms.unwrap_or(Ms::ZERO);",
+        "a phase whose clock nobody has reported yet is at its start",
+    ),
+    (
+        "surface.rs",
+        "let ticks = self.host.as_ref().map_or(0, |host| {",
+        "with no match hosted a segment has no ticks to reserve room for",
+    ),
+    (
+        "surface.rs",
+        ".reserve(usize::try_from(ticks).unwrap_or(0).saturating_add(1));",
+        "a capacity hint: reserving less only means the chain grows by allocating, and its contents are the same",
+    ),
+    (
+        "surface.rs",
+        ".map_or(self.time.round, |host| host.runner().round());",
+        "with no match hosted the round is the gateway's own",
+    ),
+    (
+        "surface.rs",
+        "reported.unwrap_or(Ms::ZERO)",
+        "a Lull no host has put a countdown on is untimed, and the footer's `untimed` says that this 0 is no countdown (S1-11)",
+    ),
+    (
+        "surface.rs",
+        ".map_or(self.limits, |treatment| treatment.limits);",
+        "a socket seat is rate limited by the match's limits; only an in-process seat has its own",
+    ),
+    (
+        "surface.rs",
+        "let cursor = request.string_param(\"cursor\")?.unwrap_or_default();",
+        "proto3's default: an absent cursor is the empty one, which waits from now",
+    ),
+    (
+        "surface.rs",
+        "let characters = u32::try_from(notes.chars().count()).unwrap_or(u32::MAX);",
+        "as the saved notebook's count: compared with a u32 maximum, and refused exactly as the true count would be",
+    ),
+    (
+        "surface.rs",
+        "let ready = request.bool_param(\"ready\")?.unwrap_or(true);",
+        "`set_ready`'s documented default: a seat that says nothing says it is ready",
+    ),
+    (
+        "surface.rs",
+        "scopes::method_from_wire(method).map_or_else(",
+        "the audit log names a method the wire does not know `call <unknown>`, never an unbounded name",
+    ),
+    (
+        "planning.rs",
+        "let part = request.string_param(\"part\")?.unwrap_or_default();",
+        "proto3's default: an absent part is the empty one, the whole playbook schema",
+    ),
+    (
+        "planning.rs",
+        "let tag = request.string_param(\"tag\")?.unwrap_or_default();",
+        "proto3's default: an absent tag is the empty one, every template",
+    ),
+    (
+        "planning.rs",
+        "let suggested = request.bool_param(\"suggested\")?.unwrap_or(false);",
+        "proto3's default: an absent `suggested` is false, the template's own defaults",
+    ),
+    (
+        "planning.rs",
+        "suggestion.map_or_else(Vec::new, |suggestion| {",
+        "with no suggestion there are no suggested parameters, and the template's own defaults stand",
+    ),
+    (
+        "planning.rs",
+        "let why = suggestion.map_or_else(String::new, |suggestion| suggestion.why.clone());",
+        "with no suggestion there is no reason for one, which proto3 writes empty",
+    ),
+    (
+        "planning.rs",
+        ".map_or(\"feature\", pharmakos_sim::features::FeatureKind::name);",
+        "a `covered {}` reference asks for no kind, so its sentence names a feature",
+    ),
+];
+
+/// Every fallback call in the crate's shipped code, as `(file name, the
+/// line)`: `unwrap_or` (and so `unwrap_or_default` and `unwrap_or_else`),
+/// `map_or` and `map_or_else`.
+fn fallbacks() -> Vec<(String, String)> {
+    let mut found: Vec<(String, String)> = Vec::new();
+    for path in sources() {
+        let text = std::fs::read_to_string(&path).expect("a source file reads");
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .expect("a source file has a name");
+        for (_, line) in code_lines(&text) {
+            if line.contains("unwrap_or")
+                || line.contains("map_or(")
+                || line.contains("map_or_else(")
+            {
+                found.push((name.clone(), line.trim().to_owned()));
+            }
+        }
+    }
+    found
+}
+
+/// No value in the crate's shipped code falls back to a default instead of
+/// saying what went wrong (S2's plan, E7, and the global rule: never a silent
+/// fallback), except the defaults [`KEPT_FALLBACKS`] lists with the rule that
+/// makes each one the exact answer. A new fallback fails here until it is a
+/// typed error or takes its line and its reason in the list.
+#[test]
+fn no_silent_fallback_is_left() {
+    let found = fallbacks();
+    let unexplained: Vec<String> = found
+        .iter()
+        .filter(|(file, line)| {
+            !KEPT_FALLBACKS
+                .iter()
+                .any(|(kept_file, code, _)| kept_file == file && line.contains(code))
+        })
+        .map(|(file, line)| format!("{file}: {line}"))
+        .collect();
+    assert!(
+        unexplained.is_empty(),
+        "a value falls back to a default instead of saying what went wrong. Return a typed \
+         error, make the failure unrepresentable, or, where the default is a rule that leaves \
+         the answer exact, add the line to KEPT_FALLBACKS with that rule:\n{}",
+        unexplained.join("\n")
+    );
+    for (file, code, why) in KEPT_FALLBACKS {
+        let count = found
+            .iter()
+            .filter(|(found_file, line)| found_file == file && line.contains(code))
+            .count();
+        assert_eq!(
+            count, 1,
+            "KEPT_FALLBACKS' entry in {file} (`{code}`, kept because {why}) matches {count} \
+             lines; an entry that matches nothing is stale, and one that matches two hides one"
+        );
+        assert!(!why.is_empty(), "{file}: a kept fallback names its rule");
+    }
+}
+
+/// The scan must see the kept fallbacks, or every assertion above passes over
+/// nothing.
+#[test]
+fn the_fallback_scan_finds_what_it_looks_for() {
+    let found = fallbacks();
+    assert_eq!(
+        found.len(),
+        KEPT_FALLBACKS.len(),
+        "the fallback scan sees {} lines and the list keeps {}",
+        found.len(),
+        KEPT_FALLBACKS.len()
+    );
+    assert!(
+        found.iter().any(|(file, _)| file == "sha1.rs"),
+        "the fallback scan no longer sees sha1.rs' kept read"
+    );
+}

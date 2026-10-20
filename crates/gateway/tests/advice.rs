@@ -1248,11 +1248,13 @@ impl Vision for Everywhere {
     }
 }
 
-/// Another seat's beacon carries its owner and nothing more -- under both fog
-/// policies, through both methods -- while the seat's own carries core,
-/// priority and power state.
+/// Another seat's beacon in sight carries its owner and what S2's plan's
+/// decision 5 shows in live vision -- its exact hit points with their maximum,
+/// and a sighting age of 0 -- and nothing more, under both fog policies,
+/// through both methods; the seat's own carries core, priority, power state
+/// and its hit points.
 #[test]
-fn another_seats_beacon_carries_its_owner_and_nothing_else() {
+fn another_seats_beacon_carries_its_owner_and_what_decision_5_shows() {
     for policy in [FogPolicy::fogged(), FogPolicy::casual()] {
         let mut surface = match_with(policy.clone());
         let token: Token = support::seat_token(&mut surface, 0);
@@ -1274,15 +1276,35 @@ fn another_seats_beacon_carries_its_owner_and_nothing_else() {
             if owner == "seat.0" {
                 assert_eq!(
                     keys,
-                    ["beacon_id", "at", "owner", "core", "priority", "powered"],
+                    [
+                        "beacon_id",
+                        "at",
+                        "owner",
+                        "core",
+                        "priority",
+                        "powered",
+                        "hp",
+                        "max_hp"
+                    ],
                     "{policy:?}: an own beacon"
                 );
             } else {
                 assert_eq!(owner, "seat.1");
                 assert_eq!(
                     keys,
-                    ["beacon_id", "at", "owner"],
-                    "{policy:?}: another seat's beacon carries its owner and nothing else"
+                    [
+                        "beacon_id",
+                        "at",
+                        "owner",
+                        "hp",
+                        "max_hp",
+                        "sighting_age_ms"
+                    ],
+                    "{policy:?}: another seat's beacon in sight carries its owner, its hit points                      and an age of 0, and nothing of its mandate, power or priority"
+                );
+                assert_eq!(
+                    row.get("sighting_age_ms"),
+                    Some(&Json::Number(String::from("0")))
                 );
             }
         }
@@ -1304,18 +1326,10 @@ fn another_seats_beacon_carries_its_owner_and_nothing_else() {
         );
         let summary = one.get("summary").cloned().expect("a summary");
         assert_eq!(
-            summary,
-            Json::Object(vec![
-                (String::from("beacon_id"), Json::String(theirs.clone())),
-                (
-                    String::from("at"),
-                    rows.iter()
-                        .find(|row| text_of(row, "beacon_id") == theirs)
-                        .and_then(|row| row.get("at").cloned())
-                        .expect("listed")
-                ),
-                (String::from("owner"), Json::String(String::from("seat.1"))),
-            ]),
+            Some(summary),
+            rows.iter()
+                .find(|row| text_of(row, "beacon_id") == theirs)
+                .cloned(),
             "{policy:?}: get_beacon answers the same summary as the listing"
         );
     }

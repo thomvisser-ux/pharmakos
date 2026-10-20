@@ -57,9 +57,14 @@ pub fn digest(message: &[u8]) -> Digest {
     while padded.len().checked_rem(64) != Some(56) {
         padded.push(0);
     }
-    let bits = u64::try_from(message.len())
-        .unwrap_or(u64::MAX)
-        .wrapping_mul(8);
+    // The message length in bits, modulo 2^64, as FIPS 180-4 section 5.1.1
+    // writes it: a `usize` is at most 64 bits on every target this project
+    // builds, so its bytes are the length's own.
+    let mut length = [0_u8; 8];
+    for (slot, byte) in length.iter_mut().zip(message.len().to_le_bytes()) {
+        *slot = byte;
+    }
+    let bits = u64::from_le_bytes(length).wrapping_mul(8);
     padded.extend_from_slice(&bits.to_be_bytes());
 
     for block in padded.as_chunks::<64>().0 {
@@ -95,11 +100,7 @@ fn compress(state: &mut [u32; 5], block: &[u8; 64]) {
         }
     }
 
-    let mut va = state.first().copied().unwrap_or(0);
-    let mut vb = state.get(1).copied().unwrap_or(0);
-    let mut vc = state.get(2).copied().unwrap_or(0);
-    let mut vd = state.get(3).copied().unwrap_or(0);
-    let mut ve = state.get(4).copied().unwrap_or(0);
+    let [mut va, mut vb, mut vc, mut vd, mut ve] = *state;
 
     for index in 0_usize..80 {
         let (mixed, constant) = round(index, vb, vc, vd);

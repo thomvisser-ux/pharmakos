@@ -66,7 +66,7 @@ use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::runner::{
     Layout, LayoutRefused, MatchPhase, MatchSettings, PhasedTick, Runner, TickReport,
 };
-use pharmakos_sim::sight::Spheres;
+use pharmakos_sim::sight::{Sensor, Sight};
 use pharmakos_sim::snapshot::Snapshot;
 use pharmakos_sim::tables::SeatId;
 use pharmakos_sim::voxels::VoxelEdit;
@@ -103,8 +103,16 @@ use crate::routes::RouteAdapter;
 /// client receives is and because the "why" note is the teaching half
 /// (spec section 13).
 ///
-/// PLACEHOLDER: the spec's rescue rule ("with the flee and rescue rules") — owner, at S2/S5.
-/// It is absent, because nothing can be rescued before combat: flee only.
+/// PLACEHOLDER: the rescue rule's `safest` term, a beacon with a live repair drone first — dfnd, at S2.
+/// **The rescue rides `safest`, with no new vocabulary** (S2's plan,
+/// decision 6, ruled by decisions-log item 144 (11)): while the commander is
+/// below full HP, `safest` ranks the seat's own beacons whose sphere holds a
+/// live repair drone ahead of those without, so this route's walk to safety
+/// and its shadowing of the safest beacon are the rescue, and this constant
+/// gains nothing for it. The term is the sim's, built by `dfnd`; until it
+/// lands, `safest` ranks as it did in S1 and the rescue is the flee rule
+/// alone. A seat no operator advises is still filed this text, which writes
+/// nothing to any beacon.
 pub const SAFE_PLAYBOOK: &str = concat!(
     "// The safe playbook: what is filed for you if the Lull ends with nothing\n",
     "// sealed and no built-in operator advised you. It spends nothing, places\n",
@@ -743,58 +751,72 @@ impl Host {
     }
 }
 
-/// The production [`Vision`]: a seat sees inside the spheres of its own living
-/// beacons.
+/// The production [`Vision`]: a seat sees what its own sensors see, as the
+/// sim's one sensor interface draws the live view (S2's plan, E10;
+/// decisions-log item 138 (4) (c); the register's S1-34, the gateway's half).
 ///
-/// **A call to the sim's own rule**, [`World::in_own_sphere`], and no longer a
-/// second copy of it (decisions-log items 107 (6) and 110 (5); T17). It holds
-/// the owned [`Spheres`] value the sim builds for exactly this -- a host asks
+/// **A call to the sim's own rule and no copy of it.** It holds the owned
+/// [`Sight`] the sim builds for exactly this ([`World::sight`]) -- a host asks
 /// "may this seat see that voxel" many times a call, from code that holds the
 /// surface mutably, so it cannot hold a borrow of the world -- and asks it
-/// through [`Spheres::contains`], which is the one place the rule is written
-/// and which `World::in_own_sphere` asks too. The arithmetic is the
-/// interpreter's `within`: integer squared distance in the sim's fixed point,
-/// no square root (AGENTS.md section 4.2).
-/// `the_view_uses_the_sims_own_sphere_rule` pins the boundary voxel through
-/// both.
+/// through [`Sight::sees`]. Every source is there and nothing is restated
+/// here: each living beacon's sphere, dormant or not (a dormant beacon keeps
+/// its seal and its sphere, item 10), each living unit's own vision radius
+/// from its kind's rules row, the commander's included, and each finished
+/// structure's; a unit or a structure homed to a dormant beacon is powered
+/// down and sees nothing, while the commander keeps its own sight (the
+/// owner's ruling of 2026-10-19, decisions-log item 146). Vision is a radius
+/// with no line of sight (item 144 (4)); the line-of-sight model is the sim's
+/// seam, [`pharmakos_sim::sight::LineOfSight`], and a later model changes
+/// what this answers without a line changing here.
+/// `the_view_uses_the_sims_own_sensor_rule` holds the two together voxel by
+/// voxel.
 ///
-/// What it does **not** model, because the owner's answer keeps it out
-/// (decisions-log item 108 (1): enemy units, beacons, structures and edits
-/// "appear only inside own beacon spheres until the match-end unlock"): a
-/// scout's own vision, Survey-lite's recorded sightings, a Sensor Spire's
-/// reveal. A commander that walks out of its own spheres is still drawn to its
-/// owner -- that is ownership, not sight -- and sees no enemy entity or edit
-/// around it. Whether scouts join the live view was **ruled at the demo**:
-/// spheres only, for now (item 126 (2) (b), register D-25).
-/// PLACEHOLDER: a sight-radius row per unit and structure — owner, at S2, with scouting (decision 13 of S1's plan, register S1-34).
-/// Survey-lite's sightings join at **S3**.
+/// What a seat **remembers** -- the knowledge store's sightings, with their
+/// ages -- is not live vision and is not here: the beacon listing and the
+/// verifier's scope read it from the sim's sighting table
+/// ([`pharmakos_sim::world::World::sightings`]).
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
-pub struct SphereVision {
-    /// The sim's own snapshot of every living beacon's sphere, rebuilt before
-    /// each call, so that nothing here can be read after the world has moved
-    /// on.
-    spheres: Spheres,
+pub struct LiveVision {
+    /// The sim's own snapshot of every sensor, rebuilt before each call, so
+    /// that nothing here can be read after the world has moved on.
+    sight: Sight,
 }
 
-impl SphereVision {
-    /// The spheres of every living beacon in `world`.
+/// The production vision's name before it read every sensor, kept so that the
+/// crates outside this one that still spell it (`gamectl`'s hosted tests)
+/// build unchanged.
+///
+/// PLACEHOLDER: the old name `SphereVision`, kept for `gamectl`'s tests — the next owner of `crates/gamectl`, at S2 (`oprd`).
+pub type SphereVision = LiveVision;
+
+impl LiveVision {
+    /// Every sensor of `world`, as its live view.
     #[must_use]
-    pub fn of(world: &World) -> SphereVision {
-        SphereVision {
-            spheres: world.spheres(),
+    pub fn of(world: &World) -> LiveVision {
+        LiveVision {
+            sight: world.sight(),
         }
     }
 
-    /// How many living beacons the snapshot holds.
+    /// The sensors the snapshot holds, every seat's together, in the sim's
+    /// walk order.
     #[must_use]
-    pub fn spheres(&self) -> usize {
-        self.spheres.len()
+    pub fn sensors(&self) -> &[Sensor] {
+        self.sight.sensors()
+    }
+
+    /// The sim's own value, for a reader that needs more than [`Vision`]'s
+    /// one question.
+    #[must_use]
+    pub const fn sight(&self) -> &Sight {
+        &self.sight
     }
 }
 
-impl Vision for SphereVision {
+impl Vision for LiveVision {
     fn sees(&self, seat: SeatId, at: &Voxel) -> bool {
-        self.spheres.contains(seat, [at.x, at.y, at.z])
+        self.sight.sees(seat, [at.x, at.y, at.z])
     }
 }
 

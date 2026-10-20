@@ -72,7 +72,7 @@ impl Listener {
         let mut chosen = port;
         match first {
             Ok(socket) => {
-                chosen = socket.local_addr().map_or(port, |address| address.port());
+                chosen = bound_port(&socket)?;
                 sockets.push(socket);
             }
             Err(error) => {
@@ -85,7 +85,7 @@ impl Listener {
         match TcpListener::bind(SocketAddr::from((Ipv6Addr::LOCALHOST, chosen))) {
             Ok(socket) => {
                 if sockets.is_empty() {
-                    chosen = socket.local_addr().map_or(port, |address| address.port());
+                    chosen = bound_port(&socket)?;
                 }
                 sockets.push(socket);
             }
@@ -148,6 +148,23 @@ impl Listener {
         drop(sender);
         Accepting { receiver, threads }
     }
+}
+
+/// The port a socket was bound to, which for an ephemeral bind is the one the
+/// operating system chose.
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] when the operating system will not say:
+/// the announce line would otherwise carry the port that was asked for, which
+/// for an ephemeral bind is 0 and reaches nobody.
+fn bound_port(socket: &TcpListener) -> Result<u16, Error> {
+    socket
+        .local_addr()
+        .map(|address| address.port())
+        .map_err(|error| {
+            Error::internal(format!("a bound loopback socket has no address: {error}"))
+        })
 }
 
 /// One accepted connection.

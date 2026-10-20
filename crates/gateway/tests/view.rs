@@ -23,12 +23,13 @@
 mod support;
 
 use pharmakos_gateway::fog::{FogPolicy, Viewer, Vision};
-use pharmakos_gateway::host::SphereVision;
+use pharmakos_gateway::host::LiveVision;
 use pharmakos_gateway::surface::Surface;
 use pharmakos_gateway::token::Token;
 use pharmakos_proto::gp::v1::Voxel;
 use pharmakos_proto::json::Json;
-use pharmakos_sim::tables::SeatId;
+use pharmakos_sim::sight::SensorKind;
+use pharmakos_sim::tables::{SeatId, UnitKind};
 use pharmakos_sim::voxels::Material;
 use std::collections::BTreeSet;
 use std::fs;
@@ -167,55 +168,76 @@ fn an_edit_a_seat_can_see_arrives_with_its_current_bytes() {
     );
 }
 
-/// The boundary is pinned with the answer written out. Since T17 the
-/// production vision is a call to the sim's own rule, `World::in_own_sphere`
-/// (decisions-log item 107 (6)); `the_view_uses_the_sims_own_sphere_rule`
-/// holds the two together, and this holds the numbers.
+/// The live view reads every sensor the sim's one interface walks (S2's plan,
+/// E10; S1-34's gateway half), and the boundary is pinned with the answer
+/// written out: the core's own sphere is one of the seat's sensors at the
+/// beacon's place and `beacon.sphere_radius_voxels`, and every sensor in the
+/// vision is the sim's, the commander's own vision among them.
 #[test]
-fn the_boundary_voxel_of_a_sphere_is_seen_and_the_next_one_is_not() {
+fn the_view_reads_every_sensor_the_sim_walks() {
     let surface = hosted(2, SEGMENT_MS, 3);
     let radius = sphere_radius(&surface);
     assert_eq!(radius, 24, "rules.beacon.sphere_radius_voxels, item 90");
 
+    let world = surface.host().expect("a match").world();
     let (_, centre) = core_beacon(&surface, 0);
-    let sight = SphereVision::of(surface.host().expect("a match").world());
-    assert!(sight.spheres() >= 2, "one core per seat");
-
-    let at = |dx: i32| Voxel {
-        x: centre[0].saturating_add(dx),
-        y: centre[1],
-        z: centre[2],
+    let sight = LiveVision::of(world);
+    assert_eq!(
+        sight.sensors(),
+        world.sight().sensors(),
+        "the vision holds the sim's own sensors, every one, in the sim's order"
+    );
+    let own = |kind: SensorKind| {
+        sight
+            .sensors()
+            .iter()
+            .any(|sensor| sensor.seat == SeatId::new(0) && sensor.kind == kind)
     };
-    // Measured from the beacon's own voxel: 24 out is inside, 25 is not, and
-    // the comparison is `<=` on squared distance with no square root anywhere
-    // (AGENTS.md section 4.2).
-    assert!(sight.sees(SeatId::new(0), &at(23)), "inside");
-    assert!(sight.sees(SeatId::new(0), &at(24)), "the boundary voxel");
-    assert!(!sight.sees(SeatId::new(0), &at(25)), "one voxel past it");
+    assert!(own(SensorKind::Sphere), "the core's sphere");
     assert!(
-        !sight.sees(SeatId::new(1), &at(0)),
-        "another seat's sphere is not this seat's"
+        own(SensorKind::Unit(UnitKind::Commander)),
+        "the commander's own vision"
+    );
+    let sphere = sight
+        .sensors()
+        .iter()
+        .find(|sensor| sensor.seat == SeatId::new(0) && sensor.kind == SensorKind::Sphere)
+        .expect("a sphere");
+    assert_eq!(
+        sphere.radius.floor_voxels(),
+        radius,
+        "a sphere's radius is the row's"
+    );
+    assert_eq!(
+        pharmakos_gateway::view::voxel_of(sphere.centre),
+        Voxel {
+            x: centre[0],
+            y: centre[1],
+            z: centre[2],
+        },
+        "and it stands where the core does"
     );
 }
 
-/// The view draws with the sim's own sphere rule and no copy of it (T17;
-/// decisions-log items 107 (6) and 110 (5)): the production vision and
-/// `World::in_own_sphere` -- the interpreter's `within` -- agree on every voxel
-/// of a square around a beacon's sphere boundary, for the seat that owns it and
-/// for the seat that does not, and the boundary voxel is where the sim says.
+/// The view draws with the sim's own sensor rule and no copy of it (T17,
+/// decisions-log items 107 (6) and 110 (5), and S2's E10): the production
+/// vision and `Sight::sees` -- the interpreter's `within`, per sensor --
+/// agree on every voxel of a square around the core's sphere boundary, for
+/// the seat that owns it and for the seat that does not, and inside the
+/// sphere the owner sees.
 #[test]
-fn the_view_uses_the_sims_own_sphere_rule() {
+fn the_view_uses_the_sims_own_sensor_rule() {
     let surface = hosted(2, SEGMENT_MS, 3);
     let world = surface.host().expect("a match").world();
     let radius = sphere_radius(&surface);
     let (_, centre) = core_beacon(&surface, 0);
-    let sight = SphereVision::of(world);
+    let sight = LiveVision::of(world);
+    let sim = world.sight();
 
-    // The boundary, pinned through the sim: 24 out along an axis is inside
-    // and 25 is not, measured from the beacon's own voxel.
+    // Inside the sphere along an axis, the sim and the view both see it.
     let along = |dx: i32| [centre[0].saturating_add(dx), centre[1], centre[2]];
+    assert!(sim.sees(SeatId::new(0), along(radius)));
     assert!(world.in_own_sphere(SeatId::new(0), along(radius)));
-    assert!(!world.in_own_sphere(SeatId::new(0), along(radius.saturating_add(1))));
 
     let mut compared = 0_u32;
     for dx in -(radius + 2)..=(radius + 2) {
@@ -234,10 +256,17 @@ fn the_view_uses_the_sims_own_sphere_rule() {
                 for seat in [SeatId::new(0), SeatId::new(1)] {
                     assert_eq!(
                         sight.sees(seat, &voxel),
-                        world.in_own_sphere(seat, at),
+                        sim.sees(seat, at),
                         "seat {} at {at:?}",
                         seat.raw()
                     );
+                    if world.in_own_sphere(seat, at) {
+                        assert!(
+                            sight.sees(seat, &voxel),
+                            "a seat sees inside its own spheres, seat {} at {at:?}",
+                            seat.raw()
+                        );
+                    }
                     compared = compared.saturating_add(1);
                 }
             }
@@ -245,7 +274,6 @@ fn the_view_uses_the_sims_own_sphere_rule() {
     }
     assert!(compared > 1_000, "a comparison over nothing proves nothing");
 }
-
 // ---------------------------------------------------------------------------
 // Entities
 // ---------------------------------------------------------------------------
@@ -278,6 +306,93 @@ fn a_fogged_seat_never_receives_an_unseen_entity() {
         !ids.is_empty(),
         "a seat that saw nothing at all would make every assertion above vacuous"
     );
+}
+
+/// S2's plan, decision 5 (decisions-log item 144 (11)), on the view: an enemy
+/// asset a seat cannot see is absent, and one in its live vision carries its
+/// kind, position, exact hit points with their maximum and, for a unit, its
+/// heading -- and nothing else. Fogged, seat 1 is a map away and nothing of it
+/// is listed; in a casual match it is in sight, and every field is the sim's
+/// own figure.
+#[test]
+fn the_view_shows_what_decision_5_rules() {
+    // Fogged: the other seat is a map away, and none of it is in the list.
+    let mut fogged = hosted(2, SEGMENT_MS, 3);
+    let token = seat_token(&mut fogged, 0);
+    let (page, _) = view(&mut fogged, &token, "");
+    assert!(
+        array_of(&page, "entities")
+            .iter()
+            .all(|entity| text_of(entity, "owner") == "seat.0"),
+        "a fogged enemy is absent: {page:?}"
+    );
+
+    // Visible: every enemy asset in sight carries decision 5's fields.
+    let mut visible = hosted_casual(2, SEGMENT_MS, 3);
+    let token = seat_token(&mut visible, 0);
+    let (page, _) = view(&mut visible, &token, "");
+    let entities = array_of(&page, "entities");
+    let theirs: Vec<&Json> = entities
+        .iter()
+        .filter(|entity| text_of(entity, "owner") == "seat.1")
+        .collect();
+    assert!(!theirs.is_empty(), "seat 1 is in sight in a casual match");
+    let world = visible.host().expect("a match").world();
+    let mut units = 0_u32;
+    for entity in theirs {
+        let mut found: BTreeSet<String> = BTreeSet::new();
+        keys(entity, &mut found);
+        let number = |key: &str| match entity.get(key) {
+            Some(Json::Number(text)) => text.parse::<i64>().expect("a whole number"),
+            other => panic!("{key}: {other:?} on {entity:?}"),
+        };
+        assert!(number("hp") > 0 && number("hp") <= number("max_hp"));
+        match text_of(entity, "kind").as_str() {
+            "unit" => {
+                units = units.saturating_add(1);
+                let expected: BTreeSet<String> = [
+                    "id", "kind", "subtype", "owner", "at", "x", "y", "z", "hp", "max_hp",
+                    "heading",
+                ]
+                .iter()
+                .map(|key| (*key).to_owned())
+                .collect();
+                assert_eq!(found, expected, "a unit in sight: {entity:?}");
+                assert!((0..65_536).contains(&number("heading")));
+            }
+            "beacon" => {
+                let expected: BTreeSet<String> = [
+                    "id", "kind", "subtype", "owner", "at", "x", "y", "z", "hp", "max_hp",
+                ]
+                .iter()
+                .map(|key| (*key).to_owned())
+                .collect();
+                assert_eq!(
+                    found, expected,
+                    "a beacon in sight: never its mandate or power: {entity:?}"
+                );
+                let core = world
+                    .beacons()
+                    .ids()
+                    .iter()
+                    .zip(world.beacons().seats())
+                    .find(|(_, seat)| **seat == 1)
+                    .map(|(id, _)| *id)
+                    .expect("seat 1's core");
+                assert_eq!(
+                    number("max_hp"),
+                    i64::from(
+                        world
+                            .beacon_max_hp(pharmakos_sim::tables::BeaconId::new(core))
+                            .raw()
+                    ),
+                    "the core's maximum is the sim's own"
+                );
+            }
+            other => panic!("seat 1 holds a `{other}` at the opening: {entity:?}"),
+        }
+    }
+    assert!(units > 0, "seat 1's commander and drones are in sight");
 }
 
 /// An id is a handle this viewer was given, in the order it first saw the
@@ -331,7 +446,7 @@ fn an_entity_id_reveals_nothing_about_the_tables_size() {
 /// field nobody thought about: a ban-list only catches what somebody already
 /// worried over, and "never on the wire" is a claim about everything.
 #[test]
-fn no_view_ever_carries_a_destination_a_step_a_mandate_or_a_hit_point() {
+fn no_view_ever_carries_a_destination_a_step_a_mandate_or_a_power_state() {
     const ALLOWED: &[&str] = &[
         // The response.
         "at_ms",
@@ -348,6 +463,12 @@ fn no_view_ever_carries_a_destination_a_step_a_mandate_or_a_hit_point() {
         "subtype",
         "owner",
         "at",
+        // What decision 5 shows of an entity in live vision (S2's plan;
+        // decisions-log item 144 (11)): its hit points with their maximum,
+        // and a unit's heading.
+        "hp",
+        "max_hp",
+        "heading",
         // A voxel.
         "x",
         "y",
@@ -391,7 +512,7 @@ fn no_view_ever_carries_a_destination_a_step_a_mandate_or_a_hit_point() {
                     "a view under the `{policy}` policy carried `{key}`, which is not one of \
                      the fields `get_view` answers. \
                      Never on the wire: a destination, a route, a step or rule index, a mandate, \
-                     a treasury, a score, a hit point, a power state, a count."
+                     a treasury, a score, a power state, a build's progress, a count."
                 );
             }
             assert!(found.contains("at_ms"), "the scan read a real answer");
@@ -968,6 +1089,69 @@ fn the_whole_map_keyframe_is_measured_and_reported() {
         pharmakos_gateway::viewfeed::VIEW_PAGE_BYTES,
     );
     assert!(runs > 0);
+}
+
+/// E28's measurement (S2's plan; the register's S2-12): the bytes of a full
+/// entity list at the gate load of 300 units, reported as a number for the
+/// pull request that records it.
+///
+/// Two seats each field 150 of the harness's walkers on top of their starting
+/// force, and a casual match shows every entity to every seat, so the seat's
+/// keyframe lists the whole world: every unit with its hit points, maximum and
+/// heading (decision 5). Not a gate, as the keyframe's size is not: a delta
+/// mode is decided by `view`'s per-frame cost against this figure (E28).
+#[test]
+fn the_entity_list_at_the_gate_load_is_measured_and_reported() {
+    use pharmakos_gateway::host::Host;
+    use pharmakos_sim::runner::MatchSettings;
+    use pharmakos_sim::world::WorldConfig;
+    const UNITS_PER_SEAT: u32 = 150;
+    let ids = [SeatId::new(0), SeatId::new(1)];
+    let mut surface =
+        Surface::new(MATCH, SEED, support::rules(), FogPolicy::casual(), &ids).expect("a match id");
+    let host = Host::open(
+        &WorldConfig {
+            match_seed: SEED,
+            seats: 2,
+            units_per_seat: UNITS_PER_SEAT,
+            rules: support::rules(),
+            match_settings: MatchSettings {
+                segment_lengths_ms: vec![SEGMENT_MS],
+                round_limit: 3,
+            },
+        },
+        None,
+    )
+    .expect("a match");
+    surface.attach(host).expect("attached");
+    surface.set_phase_remaining_ms(pharmakos_sim::math::quantity::Ms::new(FIRST_LULL_MS));
+    surface.open_lull().expect("the opening Lull");
+    let token = seat_token(&mut surface, 0);
+    let pages = view_pages(&mut surface, &token, "");
+    let last = pages.last().expect("a page");
+    let Some(Json::Array(entities)) = last.get("entities") else {
+        panic!("the completing page lists the entities: {last:?}");
+    };
+    let units = entities
+        .iter()
+        .filter(|entity| entity.get("kind") == Some(&Json::String(String::from("unit"))))
+        .count();
+    assert!(
+        units >= 300,
+        "the gate load is 300 units, and the list holds {units}"
+    );
+    let bytes = pharmakos_proto::json::write(&Json::Array(entities.clone())).len();
+    let per_entity = bytes.checked_div(entities.len()).expect("a list of some");
+    println!(
+        "::notice::full entity list at the gate load (seed 0x{SEED:016x}, {UNITS_PER_SEAT} walkers \
+         a seat, casual): {} entities, {units} of them units, {bytes} bytes of JSON, about \
+         {per_entity} bytes an entity",
+        entities.len(),
+    );
+    assert!(
+        entities.iter().all(|entity| entity.get("hp").is_some()),
+        "in a casual match every listed entity is in live vision and carries its hit points"
+    );
 }
 
 /// A watch session, call by call: the shape T16's watch rig drives.

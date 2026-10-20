@@ -344,8 +344,8 @@ impl Cursor {
         bytes.extend_from_slice(&self.snapshot.0.to_le_bytes());
         bytes.push(self.listing.tag());
         bytes.extend_from_slice(&self.index.to_le_bytes());
-        let hash = pharmakos_sim::digest(&bytes);
-        u32::try_from(hash & 0xffff_ffff).unwrap_or(0)
+        let [a, b, c, d, ..] = pharmakos_sim::digest(&bytes).to_le_bytes();
+        u32::from_le_bytes([a, b, c, d])
     }
 }
 
@@ -469,8 +469,8 @@ impl ViewCursor {
         bytes.extend_from_slice(&self.from_seq.to_le_bytes());
         bytes.extend_from_slice(&self.to_seq.to_le_bytes());
         bytes.extend_from_slice(&self.index.to_le_bytes());
-        let hash = pharmakos_sim::digest(&bytes);
-        u32::try_from(hash & 0xffff_ffff).unwrap_or(0)
+        let [a, b, c, d, ..] = pharmakos_sim::digest(&bytes).to_le_bytes();
+        u32::from_le_bytes([a, b, c, d])
     }
 }
 
@@ -631,7 +631,12 @@ impl SegmentFeed {
             Some(text) if !text.is_empty() => Cursor::parse(text, self.snapshot, Listing::Feed)?,
             _ => Cursor::start(self.snapshot),
         };
-        let start = usize::try_from(from.index()).unwrap_or(usize::MAX);
+        let start = usize::try_from(from.index()).map_err(|_| {
+            Error::invalid(format!(
+                "this cursor points at event {}, past any listing",
+                from.index()
+            ))
+        })?;
         let limit = limit.clamp(1, MAX_PAGE_EVENTS);
 
         let visible: Vec<&Event> = self
@@ -651,7 +656,9 @@ impl SegmentFeed {
         let next = Cursor {
             snapshot: self.snapshot,
             listing: Listing::Feed,
-            index: u32::try_from(index).unwrap_or(u32::MAX),
+            index: u32::try_from(index).map_err(|_| {
+                Error::internal(format!("a feed listing of {index} does not fit a cursor"))
+            })?,
         };
         Ok(Page {
             events,
@@ -712,10 +719,9 @@ fn digests_of(events: &[&Event]) -> Vec<Digest> {
 
 /// Which 60-second window a time falls in.
 fn window_of(at: Ms) -> i32 {
-    at.raw()
-        .max(0)
-        .checked_div(DIGEST_PERIOD.raw())
-        .unwrap_or(0)
+    // A time before the segment's start falls in its first window: the feed
+    // stamps events from the segment's own epoch, so none is earlier.
+    at.raw().max(0).div_euclid(DIGEST_PERIOD.raw())
 }
 
 /// The digest's deterministic template prose.
@@ -744,9 +750,9 @@ fn render_digest(from: Ms, to: Ms, counts: &[(Kind, u32)]) -> String {
 
 /// Game milliseconds as `m:ss`, for the digest's prose.
 fn clock(at: Ms) -> String {
-    let seconds = at.raw().max(0).checked_div(1000).unwrap_or(0);
-    let minutes = seconds.checked_div(60).unwrap_or(0);
-    let rest = seconds.saturating_sub(minutes.saturating_mul(60));
+    let seconds = at.raw().max(0).div_euclid(1000);
+    let minutes = seconds.div_euclid(60);
+    let rest = seconds.rem_euclid(60);
     format!("{minutes}:{rest:02}")
 }
 

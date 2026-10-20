@@ -73,6 +73,7 @@ use pharmakos_proto::gp::v1::Voxel;
 use pharmakos_sim::tables::SeatId;
 use pharmakos_sim::voxels::VoxelStore;
 
+use crate::error::Error;
 use crate::feed::ViewCursor;
 use crate::fog::{Viewer, Vision};
 
@@ -98,16 +99,18 @@ pub const VIEW_PAGE_BYTES: usize = 256 * 1024;
 ///
 /// The feed takes it as a pair of plain numbers rather than reaching for a
 /// world, because the day the sim answers "what changed about this seat's
-/// sight" (when units get a sight radius -- PLACEHOLDER, **OWNER**, at S2,
-/// with scouting: decision 13 of S1's plan, register S1-34) this is the value
-/// that stops being recomputed from scratch.
+/// sight" this is the value that stops being recomputed from scratch. Units
+/// and structures see since S2 (the sim's one sensor interface, S2's plan
+/// E10), so the key moves whenever one of the seat's sensors does; its cost
+/// is the watch handler's marker (`Surface::sight_key`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct Sight {
     /// True when the fog policy has lifted for this viewer, so every voxel of
     /// every chunk is its own.
     pub unfogged: bool,
-    /// A digest of whatever else decides what the viewer sees -- today, its
-    /// own living beacons' centres. When this changes, every modified chunk is
+    /// A digest of whatever else decides what the viewer sees -- every one
+    /// of its own sensors, as the sim's live view draws them. When this
+    /// changes, every modified chunk is
     /// recomputed for the viewer rather than only the ones the world touched.
     pub key: u64,
 }
@@ -256,15 +259,28 @@ impl ViewFeed {
     /// The whole map is encoded once: 288 chunks at the skeleton's size, a few
     /// hundred kilobytes of runs, and every keyframe of the match is served
     /// from it without touching the world again.
-    pub fn attach(&mut self, voxels: &VoxelStore, match_id: &str, match_seed: u64) {
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] when the store's own chunk count names
+    /// a chunk it holds no bytes for, or does not fit this host's `usize`: a
+    /// keyframe built over either would draw a hole as if it were air.
+    pub fn attach(
+        &mut self,
+        voxels: &VoxelStore,
+        match_id: &str,
+        match_seed: u64,
+    ) -> Result<(), Error> {
         let count = voxels.chunk_count();
-        let slots = usize::try_from(count).unwrap_or(0);
+        let slots = slot(count)?;
         let mut generated: Vec<Vec<u8>> = Vec::with_capacity(slots);
         for chunk in 0..count {
-            let bytes = voxels
-                .chunk_bytes(chunk)
-                .map_or_else(Vec::new, |raw| chunk_rle::encode(raw.as_slice()));
-            generated.push(bytes);
+            let raw = voxels.chunk_bytes(chunk).ok_or_else(|| {
+                Error::internal(format!(
+                    "the voxel store counts {count} chunks and holds no bytes for chunk {chunk}"
+                ))
+            })?;
+            generated.push(chunk_rle::encode(raw.as_slice()));
         }
         self.attaches = self.attaches.saturating_add(1);
         let mut identity: Vec<u8> = Vec::with_capacity(match_id.len().saturating_add(32));
@@ -290,6 +306,7 @@ impl ViewFeed {
         self.modified = Vec::new();
         self.modified_flag = vec![false; slots];
         self.viewers = Vec::new();
+        Ok(())
     }
 
     /// True when a match has been attached.
@@ -382,13 +399,18 @@ impl ViewFeed {
     /// this viewer was last refreshed at moves the stamp before anything is
     /// stamped with it. The cost of the extra bump is nothing -- a stamp
     /// nobody's bytes carry changes nobody's delta.
+    ///
+    /// # Errors
+    ///
+    /// As [`entitled_bytes`], and [`crate::error::Code::Internal`] for a
+    /// modified chunk the attached map does not hold.
     pub fn refresh<V: Vision>(
         &mut self,
         viewer: Viewer,
         sight: Sight,
         voxels: &VoxelStore,
         vision: &V,
-    ) {
+    ) -> Result<(), Error> {
         let index = slot_of(&mut self.viewers, viewer);
         // A viewer seeing this feed for the first time needs no bump: it has
         // no cursor yet, and its keyframe is stamped with whatever the feed
@@ -408,9 +430,9 @@ impl ViewFeed {
             viewers,
             ..
         } = self;
-        let Some(state) = viewers.get_mut(index) else {
-            return;
-        };
+        let state = viewers.get_mut(index).ok_or_else(|| {
+            Error::internal("the view feed lost the viewer slot it had just made")
+        })?;
         let whole = state.sight != sight || state.refreshed_at == 0;
         let seat = match viewer {
             Viewer::Seat(seat) => Some(seat),
@@ -418,16 +440,19 @@ impl ViewFeed {
         };
 
         for chunk in modified.iter() {
-            let slot = usize::try_from(*chunk).unwrap_or(usize::MAX);
+            let index = slot(*chunk)?;
             let written = changed_at
-                .get(slot)
+                .get(index)
                 .copied()
                 .is_some_and(|stamp| stamp > state.refreshed_at);
             if !whole && !written {
                 continue;
             }
-            let base = generated.get(slot).map_or(&[][..], Vec::as_slice);
-            let bytes = entitled_bytes(*chunk, voxels, base, seat, sight.unfogged, vision);
+            let base = generated
+                .get(index)
+                .map(Vec::as_slice)
+                .ok_or_else(|| unmapped(*chunk))?;
+            let bytes = entitled_bytes(*chunk, voxels, base, seat, sight.unfogged, vision)?;
             if let Some(at) = state.entitled.iter().position(|held| held.chunk == *chunk) {
                 if let Some(held) = state.entitled.get_mut(at)
                     && held.bytes != bytes
@@ -456,6 +481,7 @@ impl ViewFeed {
         }
         state.sight = sight;
         state.refreshed_at = *seq;
+        Ok(())
     }
 
     /// One page of the view for a viewer that has been refreshed.
@@ -463,13 +489,17 @@ impl ViewFeed {
     /// `cursor` is `None` for a keyframe. The listing is every chunk of the
     /// map for a keyframe and, for a delta, exactly the modified chunks whose
     /// bytes **for this viewer** changed after the cursor's `from_seq`.
-    #[must_use]
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] for a listed chunk the attached map
+    /// does not hold, or whose origin the store cannot place.
     pub fn page(
         &self,
         viewer: Viewer,
         cursor: Option<ViewCursor>,
         voxels: &VoxelStore,
-    ) -> ViewPage {
+    ) -> Result<ViewPage, Error> {
         let (from_seq, to_seq, start) = match cursor {
             None => (0, self.seq, 0),
             Some(held) if held.index == 0 => (held.from_seq, self.seq, 0),
@@ -480,21 +510,24 @@ impl ViewFeed {
         let listing: Vec<u32> = if from_seq == 0 {
             (start..voxels.chunk_count()).collect()
         } else {
-            state.map_or_else(Vec::new, |state| {
-                state
+            // A viewer this feed has never refreshed holds no entitled bytes,
+            // so nothing has changed for it: an empty delta, which is exact.
+            match state {
+                Some(state) => state
                     .entitled
                     .iter()
                     .filter(|held| held.changed_at > from_seq && held.chunk >= start)
                     .map(|held| held.chunk)
-                    .collect()
-            })
+                    .collect(),
+                None => Vec::new(),
+            }
         };
 
         let mut chunks: Vec<(Voxel, Vec<u8>)> = Vec::new();
         let mut spent: usize = 0;
         let mut next: Option<u32> = None;
         for chunk in listing {
-            let bytes = self.bytes_for(state, chunk);
+            let bytes = self.bytes_for(state, chunk)?;
             // The first chunk of a page always goes through: a chunk whose
             // encoding is larger than the whole budget would otherwise be a
             // hole no page could ever fill.
@@ -503,17 +536,11 @@ impl ViewFeed {
                 break;
             }
             spent = spent.saturating_add(bytes.len());
-            let origin = voxels
-                .chunk_origin(chunk)
-                .map_or(Voxel { x: 0, y: 0, z: 0 }, |at| Voxel {
-                    x: at.first().copied().unwrap_or(0),
-                    y: at.get(1).copied().unwrap_or(0),
-                    z: at.get(2).copied().unwrap_or(0),
-                });
-            chunks.push((origin, bytes));
+            let [x, y, z] = voxels.chunk_origin(chunk).ok_or_else(|| unmapped(chunk))?;
+            chunks.push((Voxel { x, y, z }, bytes));
         }
 
-        match next {
+        Ok(match next {
             Some(index) => ViewPage {
                 chunks,
                 complete: false,
@@ -538,25 +565,30 @@ impl ViewFeed {
                     index: 0,
                 },
             },
-        }
+        })
     }
 
     /// The bytes one chunk goes on the wire as for this viewer: its entitled
     /// bytes when the chunk has ever been written, and the generated chunk
     /// otherwise.
-    fn bytes_for(&self, state: Option<&ViewerState>, chunk: u32) -> Vec<u8> {
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] for a chunk the attached map does not
+    /// hold.
+    fn bytes_for(&self, state: Option<&ViewerState>, chunk: u32) -> Result<Vec<u8>, Error> {
         if let Some(held) = state.and_then(|state| {
             state
                 .entitled
                 .iter()
                 .find(|entitled| entitled.chunk == chunk)
         }) {
-            return held.bytes.clone();
+            return Ok(held.bytes.clone());
         }
         self.generated
-            .get(usize::try_from(chunk).unwrap_or(usize::MAX))
+            .get(slot(chunk)?)
             .cloned()
-            .unwrap_or_default()
+            .ok_or_else(|| unmapped(chunk))
     }
 
     /// This viewer's opaque handle for a unit, minted on first sighting.
@@ -566,12 +598,20 @@ impl ViewFeed {
     /// units, which is a number no answer of this gateway reports and no seat
     /// may derive. So a handle counts what *this viewer* has seen, which is by
     /// construction something it already knows.
-    pub fn unit_handle(&mut self, viewer: Viewer, id: u32) -> String {
+    ///
+    /// # Errors
+    ///
+    /// As [`ViewFeed::foreign_beacon_name`].
+    pub fn unit_handle(&mut self, viewer: Viewer, id: u32) -> Result<String, Error> {
         ViewFeed::handle(&mut self.viewers, viewer, id, false)
     }
 
     /// This viewer's opaque handle for a structure. As [`ViewFeed::unit_handle`].
-    pub fn structure_handle(&mut self, viewer: Viewer, id: u32) -> String {
+    ///
+    /// # Errors
+    ///
+    /// As [`ViewFeed::unit_handle`].
+    pub fn structure_handle(&mut self, viewer: Viewer, id: u32) -> Result<String, Error> {
         ViewFeed::handle(&mut self.viewers, viewer, id, true)
     }
 
@@ -588,38 +628,90 @@ impl ViewFeed {
     /// them.
     ///
     /// Re-minted on a restore, with the unit and structure handles (the
-    /// module docs): an `e_NN` reaches no hashed state and no verifier
-    /// scope in S1 (S3 gives the knowledge store the sighted enemy beacons,
-    /// register S3-04), and the sim answers one with `no_target`.
+    /// module docs): an `e_NN` reaches no hashed state, and the sim answers
+    /// one with `no_target`. From S2 it does reach the verifier's scope, as
+    /// the key of a sighting (`Surface::verifier_scope`), so a seat's report
+    /// spells an enemy beacon as the seat's own listing does.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] for a row the beacon table does not
+    /// hold, and as [`ViewFeed::foreign_beacon_name`].
     pub fn beacon_name(
         &mut self,
         viewer: Viewer,
         world: &pharmakos_sim::world::World,
         row: usize,
-    ) -> String {
+    ) -> Result<String, Error> {
         let beacons = world.beacons();
-        let owner = beacons.seats().get(row).copied();
+        let missing = || Error::internal(format!("the beacon table has no row {row}"));
+        let owner = beacons.seats().get(row).copied().ok_or_else(missing)?;
         if let Viewer::Seat(seat) = viewer
-            && owner == Some(seat.raw())
+            && owner == seat.raw()
         {
-            return pharmakos_sim::tables::own_beacon_name(
-                beacons.ordinals().get(row).copied().unwrap_or(0),
-            );
+            let ordinal = beacons.ordinals().get(row).copied().ok_or_else(missing)?;
+            return Ok(pharmakos_sim::tables::own_beacon_name(ordinal));
         }
-        let id = beacons.ids().get(row).copied().unwrap_or(u32::MAX);
+        let id = beacons.ids().get(row).copied().ok_or_else(missing)?;
+        self.foreign_beacon_name(viewer, id)
+    }
+
+    /// This viewer's `e_NN` for another seat's beacon by its id, minted the
+    /// first time it is asked, as [`ViewFeed::beacon_name`] mints one.
+    ///
+    /// By id rather than by row, because a beacon a seat **remembers** may
+    /// have died and its row been given to another since (S2's plan, E1): the
+    /// id, generation and all, names the beacon that was seen, and the handle
+    /// the seat knows it by stays that beacon's.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] when this viewer already holds more
+    /// handles than a `u32` counts.
+    pub fn foreign_beacon_name(&mut self, viewer: Viewer, id: u32) -> Result<String, Error> {
         let index = slot_of(&mut self.viewers, viewer);
-        let Some(state) = self.viewers.get_mut(index) else {
-            return String::new();
-        };
+        let state = self.viewers.get_mut(index).ok_or_else(|| {
+            Error::internal("the view feed lost the viewer slot it had just made")
+        })?;
         if let Some((_, name)) = state.beacons.iter().find(|(held, _)| *held == id) {
-            return name.clone();
+            return Ok(name.clone());
         }
         let number = u32::try_from(state.beacons.len())
-            .unwrap_or(u32::MAX)
-            .saturating_add(1);
+            .ok()
+            .and_then(|held| held.checked_add(1))
+            .ok_or_else(|| {
+                Error::internal("this viewer holds more beacon handles than u32 counts")
+            })?;
         let name = pharmakos_sim::tables::foreign_beacon_name(number);
         state.beacons.push((id, name.clone()));
-        name
+        Ok(name)
+    }
+
+    /// The handle this viewer already holds for another seat's beacon `id`,
+    /// or `None` when it holds none. Read-only: it mints nothing.
+    #[must_use]
+    pub fn foreign_beacon_handle(&self, viewer: Viewer, id: u32) -> Option<String> {
+        self.viewers
+            .iter()
+            .find(|state| state.viewer == viewer)?
+            .beacons
+            .iter()
+            .find(|(held, _)| *held == id)
+            .map(|(_, name)| name.clone())
+    }
+
+    /// The id of the beacon this viewer was shown under the handle `name`, or
+    /// `None` when it was shown none by that handle. Read-only: it mints
+    /// nothing.
+    #[must_use]
+    pub fn foreign_beacon_id(&self, viewer: Viewer, name: &str) -> Option<u32> {
+        self.viewers
+            .iter()
+            .find(|state| state.viewer == viewer)?
+            .beacons
+            .iter()
+            .find(|(_, held)| held == name)
+            .map(|(id, _)| *id)
     }
 
     /// The row of `world`'s beacon table a name names **for this viewer**, or
@@ -657,22 +749,30 @@ impl ViewFeed {
         }
     }
 
-    fn handle(viewers: &mut Vec<ViewerState>, viewer: Viewer, id: u32, structure: bool) -> String {
+    fn handle(
+        viewers: &mut Vec<ViewerState>,
+        viewer: Viewer,
+        id: u32,
+        structure: bool,
+    ) -> Result<String, Error> {
         let index = slot_of(viewers, viewer);
-        let Some(state) = viewers.get_mut(index) else {
-            return String::new();
-        };
+        let state = viewers.get_mut(index).ok_or_else(|| {
+            Error::internal("the view feed lost the viewer slot it had just made")
+        })?;
         let (prefix, table) = if structure {
             ("s_", &mut state.structures)
         } else {
             ("u_", &mut state.units)
         };
         if let Some((_, handle)) = table.iter().find(|(held, _)| *held == id) {
-            return handle.clone();
+            return Ok(handle.clone());
         }
-        let handle = format!("{prefix}{}", table.len().saturating_add(1));
+        let number = table.len().checked_add(1).ok_or_else(|| {
+            Error::internal("this viewer holds more entity handles than usize counts")
+        })?;
+        let handle = format!("{prefix}{number}");
         table.push((id, handle.clone()));
-        handle
+        Ok(handle)
     }
 }
 
@@ -699,6 +799,15 @@ fn slot_of(viewers: &mut Vec<ViewerState>, viewer: Viewer) -> usize {
 /// A voxel whose current material equals the generated one is copied without
 /// asking the vision at all: identical bytes disclose nothing, and skipping
 /// the question is what keeps a chunk with one crater in it cheap.
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] when the store holds no bytes or no origin
+/// for a chunk the feed lists as modified, or when the generated chunk the
+/// feed encoded at attach does not decode to a whole chunk. Each was once a
+/// silent fallback -- the generated map, or a chunk of zeros, which is air
+/// (the carry of decisions-log item 145 (5)) -- and each would have drawn a
+/// hole, or hidden an edit, as if it were the map.
 fn entitled_bytes<V: Vision>(
     chunk: u32,
     voxels: &VoxelStore,
@@ -706,42 +815,39 @@ fn entitled_bytes<V: Vision>(
     seat: Option<SeatId>,
     unfogged: bool,
     vision: &V,
-) -> Vec<u8> {
-    let Some(world) = voxels.chunk_bytes(chunk) else {
-        return generated.to_vec();
-    };
+) -> Result<Vec<u8>, Error> {
+    let world = voxels.chunk_bytes(chunk).ok_or_else(|| unmapped(chunk))?;
     if unfogged {
-        return chunk_rle::encode(world.as_slice());
+        return Ok(chunk_rle::encode(world.as_slice()));
     }
     let Some(seat) = seat else {
         // No seat, no sight, and the policy has not lifted: the generated map
         // and nothing of what happened to it.
-        return generated.to_vec();
+        return Ok(generated.to_vec());
     };
-    let base = chunk_rle::decode(generated).unwrap_or_else(|_| vec![0; chunk_rle::CHUNK_VOXELS]);
-    let Some(origin) = voxels.chunk_origin(chunk) else {
-        return generated.to_vec();
-    };
-    let (ox, oy, oz) = (
-        origin.first().copied().unwrap_or(0),
-        origin.get(1).copied().unwrap_or(0),
-        origin.get(2).copied().unwrap_or(0),
-    );
+    let base = chunk_rle::decode(generated).map_err(|error| {
+        Error::internal(format!(
+            "chunk {chunk}'s generated bytes, encoded at attach, do not decode: {error:?}"
+        ))
+    })?;
+    let [ox, oy, oz] = voxels.chunk_origin(chunk).ok_or_else(|| unmapped(chunk))?;
 
     let mut out: Vec<u8> = Vec::with_capacity(chunk_rle::CHUNK_VOXELS);
-    for index in 0..chunk_rle::CHUNK_VOXELS {
-        let current = world.get(index).copied().unwrap_or(0);
-        let pristine = base.get(index).copied().unwrap_or(current);
+    // The store's chunk and the decoded generated chunk are both
+    // `CHUNK_VOXELS` long by construction (the store's array type, and the
+    // codec's refusal of a short run list), so the zip walks every voxel.
+    for (index, (current, pristine)) in world.iter().zip(base.iter()).enumerate() {
+        let (current, pristine) = (*current, *pristine);
         if current == pristine {
             out.push(current);
             continue;
         }
         // The voxel order inside a chunk is x + 32y + 1024z (item 92), so the
-        // address splits by a shift and a mask and never by a division.
-        let Ok(offset) = i32::try_from(index) else {
-            out.push(pristine);
-            continue;
-        };
+        // address splits by a shift and a mask and never by a division. A
+        // chunk's index is under 32 768, and a chunk's origin plus 31 is a
+        // voxel of the map, so neither step can overflow.
+        let offset = i32::try_from(index)
+            .map_err(|_| Error::internal(format!("chunk {chunk} has a voxel past i32")))?;
         let at = Voxel {
             x: ox.saturating_add(offset & 31),
             y: oy.saturating_add((offset >> 5_i32) & 31),
@@ -753,7 +859,25 @@ fn entitled_bytes<V: Vision>(
             pristine
         });
     }
-    chunk_rle::encode(&out)
+    Ok(chunk_rle::encode(&out))
+}
+
+/// A chunk index as a slot of the feed's per-chunk columns.
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] for an index past this host's `usize`,
+/// which no map this project makes has.
+fn slot(chunk: u32) -> Result<usize, Error> {
+    usize::try_from(chunk)
+        .map_err(|_| Error::internal(format!("chunk {chunk} does not fit this host's usize")))
+}
+
+/// The refusal for a chunk the feed or the store does not hold.
+fn unmapped(chunk: u32) -> Error {
+    Error::internal(format!(
+        "chunk {chunk} is listed by the view feed and not held by the map it was attached to"
+    ))
 }
 
 #[cfg(test)]
@@ -781,7 +905,7 @@ mod tests {
     fn open() -> (ViewFeed, VoxelStore) {
         let store = store();
         let mut feed = ViewFeed::new();
-        feed.attach(&store, "m-0001", 7);
+        feed.attach(&store, "m-0001", 7).expect("attached");
         (feed, store)
     }
 
@@ -793,8 +917,9 @@ mod tests {
     fn a_keyframe_carries_every_chunk_of_the_map() {
         let (mut feed, store) = open();
         let viewer = Viewer::Seat(SeatId::new(0));
-        feed.refresh(viewer, sight(false), &store, &Blind);
-        let page = feed.page(viewer, None, &store);
+        feed.refresh(viewer, sight(false), &store, &Blind)
+            .expect("refreshed");
+        let page = feed.page(viewer, None, &store).expect("a page");
         assert!(page.complete);
         assert_eq!(page.chunks.len(), 2, "a 64x32x32 map is two chunks");
         let origins: Vec<(i32, i32, i32)> = page
@@ -821,9 +946,9 @@ mod tests {
     fn a_re_attach_mints_a_different_view_than_the_attach_before_it() {
         let store = store();
         let mut feed = ViewFeed::new();
-        feed.attach(&store, "m-0001", 7);
+        feed.attach(&store, "m-0001", 7).expect("attached");
         let first = feed.view_id();
-        feed.attach(&store, "m-0001", 7);
+        feed.attach(&store, "m-0001", 7).expect("attached");
         let second = feed.view_id();
         assert_ne!(
             first, second,
@@ -836,16 +961,16 @@ mod tests {
         // view, because nothing in the id is read from a clock: a replay of
         // the same inputs renders the same cursor.
         let mut again = ViewFeed::new();
-        again.attach(&store, "m-0001", 7);
+        again.attach(&store, "m-0001", 7).expect("attached");
         assert_eq!(again.view_id(), first);
 
         // Another match is another view, on the id alone and on the seed
         // alone.
         let mut other = ViewFeed::new();
-        other.attach(&store, "m-0002", 7);
+        other.attach(&store, "m-0002", 7).expect("attached");
         assert_ne!(other.view_id(), first);
         let mut seeded = ViewFeed::new();
-        seeded.attach(&store, "m-0001", 8);
+        seeded.attach(&store, "m-0001", 8).expect("attached");
         assert_ne!(seeded.view_id(), first);
     }
 
@@ -854,12 +979,12 @@ mod tests {
         let store = store();
         // The dead process: a new match, attached once.
         let mut dead = ViewFeed::new();
-        dead.attach(&store, "m-0001", 7);
+        dead.attach(&store, "m-0001", 7).expect("attached");
         // The resumed process: a fresh feed, attached once over the same
         // match, seed and map -- the case the attach count cannot tell apart.
         let mut resumed = ViewFeed::new();
         resumed.resumed_after(3);
-        resumed.attach(&store, "m-0001", 7);
+        resumed.attach(&store, "m-0001", 7).expect("attached");
         assert_ne!(
             resumed.view_id(),
             dead.view_id(),
@@ -869,16 +994,16 @@ mod tests {
         // a third view; the same resume replayed is the same view.
         let mut later = ViewFeed::new();
         later.resumed_after(9);
-        later.attach(&store, "m-0001", 7);
+        later.attach(&store, "m-0001", 7).expect("attached");
         assert_ne!(later.view_id(), resumed.view_id());
         let mut replayed = ViewFeed::new();
         replayed.resumed_after(3);
-        replayed.attach(&store, "m-0001", 7);
+        replayed.attach(&store, "m-0001", 7).expect("attached");
         assert_eq!(replayed.view_id(), resumed.view_id());
         // Even a resume at generation zero is not the new match's view.
         let mut zero = ViewFeed::new();
         zero.resumed_after(0);
-        zero.attach(&store, "m-0001", 7);
+        zero.attach(&store, "m-0001", 7).expect("attached");
         assert_ne!(zero.view_id(), dead.view_id());
     }
 
@@ -887,8 +1012,9 @@ mod tests {
         let (mut feed, mut store) = open();
         let seat = SeatId::new(0);
         let viewer = Viewer::Seat(seat);
-        feed.refresh(viewer, sight(false), &store, &Blind);
-        let caught_up = feed.page(viewer, None, &store).next;
+        feed.refresh(viewer, sight(false), &store, &Blind)
+            .expect("refreshed");
+        let caught_up = feed.page(viewer, None, &store).expect("a page").next;
 
         // A tick writes one voxel of chunk 0 that this blind seat cannot see.
         let mut digests = pharmakos_sim::chunks::ChunkDigests::new(store.chunk_count());
@@ -898,8 +1024,9 @@ mod tests {
         feed.stamp(store.settled());
         assert_eq!(feed.modified(), 1);
 
-        feed.refresh(viewer, sight(false), &store, &Blind);
-        let page = feed.page(viewer, Some(caught_up), &store);
+        feed.refresh(viewer, sight(false), &store, &Blind)
+            .expect("refreshed");
+        let page = feed.page(viewer, Some(caught_up), &store).expect("a page");
         assert!(page.complete);
         assert!(
             page.chunks.is_empty(),
@@ -916,8 +1043,9 @@ mod tests {
         let mut vision = KnownVoxels::new();
         vision.see(seat, &place);
 
-        feed.refresh(viewer, sight(false), &store, &vision);
-        let caught_up = feed.page(viewer, None, &store).next;
+        feed.refresh(viewer, sight(false), &store, &vision)
+            .expect("refreshed");
+        let caught_up = feed.page(viewer, None, &store).expect("a page").next;
 
         let mut digests = pharmakos_sim::chunks::ChunkDigests::new(store.chunk_count());
         store.set([4, 4, 0], Material::AIR);
@@ -925,8 +1053,9 @@ mod tests {
         feed.bump();
         feed.stamp(store.settled());
 
-        feed.refresh(viewer, sight(false), &store, &vision);
-        let page = feed.page(viewer, Some(caught_up), &store);
+        feed.refresh(viewer, sight(false), &store, &vision)
+            .expect("refreshed");
+        let page = feed.page(viewer, Some(caught_up), &store).expect("a page");
         assert_eq!(page.chunks.len(), 1);
         let (_, bytes) = page.chunks.first().expect("the chunk");
         let voxels = chunk_rle::decode(bytes).expect("a chunk");
@@ -944,24 +1073,30 @@ mod tests {
     fn the_full_map_unlock_is_the_viewer_becoming_unfogged() {
         let (mut feed, mut store) = open();
         let viewer = Viewer::Seat(SeatId::new(0));
-        feed.refresh(viewer, sight(false), &store, &Blind);
-        let caught_up = feed.page(viewer, None, &store).next;
+        feed.refresh(viewer, sight(false), &store, &Blind)
+            .expect("refreshed");
+        let caught_up = feed.page(viewer, None, &store).expect("a page").next;
 
         let mut digests = pharmakos_sim::chunks::ChunkDigests::new(store.chunk_count());
         store.set([40, 4, 0], Material::AIR);
         store.settle(&mut digests);
         feed.bump();
         feed.stamp(store.settled());
-        feed.refresh(viewer, sight(false), &store, &Blind);
+        feed.refresh(viewer, sight(false), &store, &Blind)
+            .expect("refreshed");
         assert!(
-            feed.page(viewer, Some(caught_up), &store).chunks.is_empty(),
+            feed.page(viewer, Some(caught_up), &store)
+                .expect("a page")
+                .chunks
+                .is_empty(),
             "fogged: nothing"
         );
 
         // The policy lifts. Nothing about the world changed.
         feed.bump();
-        feed.refresh(viewer, sight(true), &store, &Blind);
-        let page = feed.page(viewer, Some(caught_up), &store);
+        feed.refresh(viewer, sight(true), &store, &Blind)
+            .expect("refreshed");
+        let page = feed.page(viewer, Some(caught_up), &store).expect("a page");
         assert_eq!(page.chunks.len(), 1, "only the modified chunk pages out");
     }
 
@@ -972,21 +1107,27 @@ mod tests {
     fn a_sight_change_moves_the_stamp_even_when_the_caller_did_not() {
         let (mut feed, mut store) = open();
         let viewer = Viewer::Seat(SeatId::new(0));
-        feed.refresh(viewer, sight(false), &store, &Blind);
-        let caught_up = feed.page(viewer, None, &store).next;
+        feed.refresh(viewer, sight(false), &store, &Blind)
+            .expect("refreshed");
+        let caught_up = feed.page(viewer, None, &store).expect("a page").next;
 
         let mut digests = pharmakos_sim::chunks::ChunkDigests::new(store.chunk_count());
         store.set([40, 4, 0], Material::AIR);
         store.settle(&mut digests);
         feed.bump();
         feed.stamp(store.settled());
-        feed.refresh(viewer, sight(false), &store, &Blind);
-        let caught_up = feed.page(viewer, Some(caught_up), &store).next;
+        feed.refresh(viewer, sight(false), &store, &Blind)
+            .expect("refreshed");
+        let caught_up = feed
+            .page(viewer, Some(caught_up), &store)
+            .expect("a page")
+            .next;
         assert_eq!(caught_up.from_seq, feed.seq(), "the viewer is caught up");
 
         // No bump here, which is the whole point of the test.
-        feed.refresh(viewer, sight(true), &store, &Blind);
-        let page = feed.page(viewer, Some(caught_up), &store);
+        feed.refresh(viewer, sight(true), &store, &Blind)
+            .expect("refreshed");
+        let page = feed.page(viewer, Some(caught_up), &store).expect("a page");
         assert_eq!(
             page.chunks.len(),
             1,
@@ -998,13 +1139,17 @@ mod tests {
     fn a_handle_counts_what_this_viewer_has_seen_and_nothing_else() {
         let (mut feed, _store) = open();
         let viewer = Viewer::Seat(SeatId::new(0));
-        assert_eq!(feed.unit_handle(viewer, 812), "u_1");
-        assert_eq!(feed.unit_handle(viewer, 9), "u_2");
-        assert_eq!(feed.unit_handle(viewer, 812), "u_1", "stable");
-        assert_eq!(feed.structure_handle(viewer, 400), "s_1");
+        assert_eq!(feed.unit_handle(viewer, 812).expect("a handle"), "u_1");
+        assert_eq!(feed.unit_handle(viewer, 9).expect("a handle"), "u_2");
+        assert_eq!(
+            feed.unit_handle(viewer, 812).expect("a handle"),
+            "u_1",
+            "stable"
+        );
+        assert_eq!(feed.structure_handle(viewer, 400).expect("a handle"), "s_1");
         let other = Viewer::Seat(SeatId::new(1));
         assert_eq!(
-            feed.unit_handle(other, 812),
+            feed.unit_handle(other, 812).expect("a handle"),
             "u_1",
             "another viewer's numbering is its own"
         );
@@ -1035,15 +1180,16 @@ mod tests {
         store.settle(&mut digests);
 
         let mut feed = ViewFeed::new();
-        feed.attach(&store, "m-0001", 11);
+        feed.attach(&store, "m-0001", 11).expect("attached");
         let viewer = Viewer::Seat(SeatId::new(0));
-        feed.refresh(viewer, sight(false), &store, &Blind);
+        feed.refresh(viewer, sight(false), &store, &Blind)
+            .expect("refreshed");
 
         let mut pages = 0_u32;
         let mut delivered: Vec<i32> = Vec::new();
         let mut cursor = None;
         loop {
-            let page = feed.page(viewer, cursor, &store);
+            let page = feed.page(viewer, cursor, &store).expect("a page");
             pages = pages.saturating_add(1);
             let spent: usize = page.chunks.iter().map(|(_, bytes)| bytes.len()).sum();
             assert!(
@@ -1075,9 +1221,10 @@ mod tests {
     fn a_keyframe_pages_and_the_completing_cursor_is_the_stamp_it_started_at() {
         let (mut feed, store) = open();
         let viewer = Viewer::Seat(SeatId::new(0));
-        feed.refresh(viewer, sight(false), &store, &Blind);
+        feed.refresh(viewer, sight(false), &store, &Blind)
+            .expect("refreshed");
         let started = feed.seq();
-        let page = feed.page(viewer, None, &store);
+        let page = feed.page(viewer, None, &store).expect("a page");
         assert!(page.complete, "two small chunks fit one page");
         assert_eq!(page.next.from_seq, started);
         assert_eq!(page.next.to_seq, started);
