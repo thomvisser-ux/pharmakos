@@ -100,8 +100,9 @@ adds what S2's combat lanes read, so that no lane writes a number of its own:
   E26) and `vision_radius_voxels` 8 on every unit kind, every structure kind
   and the commander (the scouts' `UNIT_VISION_RADIUS_VOXELS`, register S1-34).
   The vision markers carry decision 17's proposals for `tune2` to apply (E26
-  keeps the headroom at 2; decision 17 proposes nothing for it), so no chain
-  moves until a lane reads a row;
+  keeps the headroom at 2; decision 17 proposes nothing for it). S2's `ids`
+  #123 reads both rows and deleted both constants (decisions-log item 146);
+  every kind still holds the constant's value;
 - **rows nothing reads yet, at the plan's proposals:** a `weapon` on
   `units.raider`, `structures.autocannon` and `structures.mortar` (whose
   `projectile` makes it indirect) and `beacon.core_weapon`; the `combat` block; the
@@ -207,8 +208,8 @@ so it is the first place the omission is visible.
 | `verifier.size_budget_units` 128 | item 94 | **PLACEHOLDER** — tuning, owner, at **S3's exit**; P1 sets the real number from the measured per-rule cost per decision tick. A unit is one route step, one handler, one step in a handler body, one build target, one protected area or one patrol waypoint; conditions and settings count nothing |
 | `verifier.handler_cooldown_min_ms` 5000, `max_fires_max` 8, `notebook_max_chars` 4000 | item 90, spec §§10, 11 | **PLACEHOLDER** — tuning, owner, S3 |
 | `verifier.reach_memory_ms` 180000 | item 90 | **PLACEHOLDER** — tuning, owner, S3 (item 90 marks it S2/S3) |
-| `locomotion.headroom_voxels` 2 | S2-05, S2's plan E26 | **PLACEHOLDER** — tuning, owner, at S2's demo, with `tune2`'s report. The sim's `HEADROOM_VOXELS` given a row at its own value (revision 5); S2's `ids` swaps the constant for the row. E26 keeps today's 2; decision 17 proposes nothing for it |
-| `units.*.vision_radius_voxels`, `structures.*.vision_radius_voxels`, `commander.vision_radius_voxels` 8 | S1-34, item 144 (4), S2's plan decisions 17 and 22 | **PLACEHOLDER** — tuning, owner, at S2's demo, with `tune2`'s report. Every kind holds the scouts' constant (`UNIT_VISION_RADIUS_VOXELS`), so the sim's answer is unchanged until S2's `ids` reads the rows. Decision 17 proposes scout 24, raider 12, commander 10, the drones 8, autocannon 20, mortar 12, Generator and survey post 8; none for a beacon, which sees by its sphere, or the resonance spire |
+| `locomotion.headroom_voxels` 2 | S2-05, S2's plan E26 | **PLACEHOLDER** — tuning, owner, at S2's demo, with `tune2`'s report. The sim's `HEADROOM_VOXELS` given a row at its own value (revision 5); S2's `ids` #123 reads the row and deleted the constant (decisions-log item 146). E26 keeps today's 2; decision 17 proposes nothing for it |
+| `units.*.vision_radius_voxels`, `structures.*.vision_radius_voxels`, `commander.vision_radius_voxels` 8 | S1-34, item 144 (4), S2's plan decisions 17 and 22 | **PLACEHOLDER** — tuning, owner, at S2's demo, with `tune2`'s report. Every kind holds the value of the scouts' constant, `UNIT_VISION_RADIUS_VOXELS`, which S2's `ids` #123 deleted when its sensor seam began reading the rows (decisions-log item 146). Decision 17 proposes scout 24, raider 12, commander 10, the drones 8, autocannon 20, mortar 12, Generator and survey post 8; none for a beacon, which sees by its sphere, or the resonance spire |
 | `units.raider.weapon` 4 / 8 / 500, `structures.autocannon.weapon` 20 / 12 / 250, `beacon.core_weapon` 24 / 12 / 250 (range voxels, HP, cooldown ms) | S2's plan decision 17 | **PLACEHOLDER** — tuning, owner, at S2's demo, with `tune2`'s duel report. Direct fire: no `projectile`, so the damage lands in the tick it is dealt (E2). Read from S2's `fire` |
 | `structures.mortar.weapon` 40 / 60 / 4000, projectile 8 voxels/s, splash 3, crater 2 | S2's plan decision 17 | **PLACEHOLDER** — tuning, owner, at S2's demo, with `tune2`'s duel report. The `projectile` (the shell) is what makes it indirect (E13); the splash has no falloff. Read from S2's `fire` |
 | `combat.under_attack_window_ms` 10000, `threat_step_cost_multiplier` 4, `charge_radius_voxels` 4, `charge_fuse_ms` 5000, `repair_hp_per_second` 20, `terraform_ms_per_voxel` 1000 | S2's plan decision 17 | **PLACEHOLDER** — tuning, owner, at S2's demo, with `tune2`'s reports. Nothing reads them until the S2 lane that builds each rule |

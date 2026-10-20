@@ -267,7 +267,7 @@ aimed at the trailing seat (decision 36).
 | `crates/verifier/src/limits.rs` (~203) dating the reach window S2/S3, where `rules.proto` (~727) says S3 | digest | `vfy1` rewords `limits.rs` to S3 |
 | `playbook.proto`'s `repair_threshold_pct` comment (~1308–1310, "once it falls below this percentage … 0 means never") and the header's "terraform's meaning beyond its enum is still unruled" (~1302), stale since item 144 (5) | the reviews | `con4`, with decision 38 |
 | The no-silent-fallback sweep beyond the sim: `try_from(..).unwrap_or(..)` and `.get(..).unwrap_or(..)` fallbacks counted at `7a351e7` in `crates/gateway` (66), `crates/client-gdext` (34), `crates/mesher` (33), `crates/verifier` (12), `crates/gamectl` (10), `crates/plan-core` (6), `crates/bench` (4), `crates/operator` (3) and `crates/proto`'s hand-written sources | the operator's global rules; AGENTS.md §6's sweep rule (item 135) | each crate's next S2 owner, written into its section: `wgw`, `view` (client-gdext and mesher), `vfy1`, `night`, `vfy2`, `g3h`, `oprd`, `con3` (E7) |
-| `MineSettings.flee_on_threat` and `BuildSettings.rebuild_destroyed` made `optional`, so an edit row can write false, their presence priced in `interface.rs`; `BuildTarget.wall_box`'s comment, which says a lower box "is a verifier error", made to say that the verifier refuses only a box too short in its own extent and that the height over the ground is the sim's (`site`) | `vfy2` #125; item 146 (4) | the next `proto/**` pull request. Section 4.6 plans none after `con4`, so it lands with whichever comes first: an S2 lane's, or M-14's (owner, S3) |
+| `MineSettings.flee_on_threat` and `BuildSettings.rebuild_destroyed` made `optional`, so an edit row can write false, their presence priced in `interface.rs`; `BuildTarget.wall_box`'s comment, which says a lower box "is a verifier error", made to say that the verifier refuses only a box too short in its own extent and that the height over the ground is the sim's (`site`); `rules.proto`'s comments at ~238 (`headroom_voxels`) and ~718 (`vision_radius_voxels`), which still say `ids` is to swap the constants for the rows (`ids` #123 has; `rules/README.md`'s copies are reworded by item 146's PR) | `vfy2` #125, `ids` #123; item 146 (3) (l) and (4) | the next `proto/**` pull request. Section 4.6 plans none after `con4`, so it lands with whichever comes first: an S2 lane's, or M-14's (owner, S3) |
 | `ci.yml`'s DCO message (~390), which still says to fix a written branch with `git rebase --signoff <base>` | #122's review; item 146 (4) | the firewall-runner `.github/**` pull request (section 4.6), brought to AGENTS.md §8's remedy |
 
 ### 2.3 Engineering calls, decided here (the owner can veto each)
@@ -476,8 +476,10 @@ and names the decision that puts that reading to the owner.
   quadratic scan. A sighting's age stays derived from the tick it was taken at. **Dormant sight,
   the owner's ruling of 2026-10-19 (decisions-log item 146 (2)):** a dormant beacon's units and
   structures give no vision; the commander keeps its own; a beacon's sphere still sees while the
-  beacon is alive, dormant or not; a structure still going up sees nothing. `ids` #123 built it in
-  `World::sensor_at`.
+  beacon is alive, dormant or not. `ids` #123 built it in `World::sensor_at`, beside spec §7's
+  older rule that a structure still going up sees nothing. The core autocannon, which runs off the
+  deep bore and which dormancy does not power down (spec §5), keeps its sight: the main session's
+  reading, open to the owner's veto (item 146 (3) (k)), built by `fire`.
 - **E11. The broadphase query radius is a weapon's range, and a query is exact over positions that
   moved.** `BROADPHASE_QUERY_RADIUS_VOXELS` (16) is referenced nowhere (S2-09); `fire` deletes it. A
   query of radius r touches (2⌈r / cell⌉ + 1)² cells, so any range is answered whatever the cell
@@ -1348,7 +1350,10 @@ rename (below) stands.
     bore, never shed in a brownout, drawing no `kW`; item 123; spec §5), the mortar and the raider's
     gun, each reading its `Weapon` row; range tests on squared distance over `ids`' padded query
     (AGENTS.md §4.2, E11); cooldowns in game milliseconds as hashed state of the armed assets;
-    targets per decisions 8, 21 and 41; `BROADPHASE_QUERY_RADIUS_VOXELS` deleted (S2-09).
+    targets per decisions 8, 21 and 41; `BROADPHASE_QUERY_RADIUS_VOXELS` deleted (S2-09). **The
+    core autocannon keeps its sight while its beacon is dormant** (decisions-log item 146 (3) (k),
+    the main session's reading of the owner's dormant-sight ruling, E10): dormancy blinds what it
+    powers down, and the bore, not the grid, powers the core autocannon; a test pins it.
   - **The rules of engagement** for every armed asset: `HOLD_FIRE` never fires, `RETURN_FIRE` fires
     only at an asset that damaged one of the seat's own assets inside its range within the
     under-attack window, read from E12's attacker memory, `FREE_FIRE` fires at any enemy in range
@@ -1457,7 +1462,7 @@ rename (below) stands.
   the bytes of a full entity list at the gate load of 300 units, recorded in the PR; E7's sweep over
   `crates/gateway` (66 counted).
 - **Also (decisions-log item 145 (5)):** the silent fallbacks `con3` found on `main`,
-  `viewfeed.rs:716` (a chunk that fails to decode drawn as zeros, air) and `schema.rs:242`
+  `viewfeed.rs` ~721 (`chunk_rle::decode`'s error drawn as a chunk of zeros, air; decisions-log item 146 (4) corrects the line) and `schema.rs:242`
   (`i32::MAX` for an index that does not fit), each a typed error; `con4`'s new `ViewEntity` and
   `BeaconSummary` fields (`hp`, `max_hp`, `heading`, `sighting_age_ms`) filled under the fog
   filter; the recap's `tally`, the calling seat's own, and its `seat_tallies`, every seat's, filled
@@ -1867,18 +1872,19 @@ duplicate entry is W0502, and its "for later lanes" are carried in `site`, `atk`
   verifier follows the sim (the main session's call, open to the owner's veto). The verifier mirrors
   the sim there and no verifier lane runs in wave 4, so this lane is granted
   `crates/verifier/src/refusals.rs`' E0012 entry, with its case and goldens, as named places.
-- **Also (decisions-log item 146 (4), from `vfy2` #125):**
-  - a protect-list selector ranking `ENEMY_KNOWN` raises E0415 in the verifier and would raise
-    E0015 at the sim once the arm compiles: the lane keeps one of the two and names which in its
-    PR, the verifier's E0415 check for the protect list, with its case and goldens, being a named
-    place if the lane drops it;
-  - pickets are spent as ordered scouts in the verifier's projection, as Survey's are, and the sim
-    spends them the same way;
+- **Also (decisions-log item 146 (3) (h) and (i), and (4), from `vfy2` #125):**
+  - a protect-list selector ranking `ENEMY_KNOWN` keeps both its codes: E0415, the verifier's
+    semantic check, and E0015, which mirrors the sim's refusal; `refusals.rs` holds the two to each
+    other, so the lane needs no verifier place for it;
+  - pickets are spent as ordered scouts in the verifier's projection, as Survey's are, and this lane
+    makes the sim spend them the same way;
   - when E0012 lifts, `/defend/` leaves `refusals.rs`' `not_compiled` skip list, through the E0012
     places above;
   - the picket ceiling borrows Survey's `u8` scout column until Defend's own column exists
     (`crates/verifier/src/semantics.rs`' marker, register S2-18): the lane gives Defend its column
-    and discharges the marker, or re-dates it.
+    and discharges the marker, or re-dates it. **Granted** for it, as named places, since no
+    verifier lane runs in wave 4: `semantics.rs`' `picket_scouts` check, its S2-18 marker, its case
+    and goldens.
 - **Implements:** items 104, 138 (4) (c) (pickets); spec §6's Defend row, §4's bodyguard, §10's
   reflex; register S2-02 (the sim's half), S2-04. **Needs:** `site` and `fall` merged; the ruled
   decisions 6, 12, 13 and 21. **Acceptance:**
@@ -1917,7 +1923,10 @@ duplicate entry is W0502, and its "for later lanes" are carried in `site`, `atk`
 
 ### `vfy3` — `crates/verifier`: the threat model's lints
 
-- **Owns:** `crates/verifier`, its goldens. **Branch** `feat/verifier-threats`, worktree
+- **Owns:** `crates/verifier`, its goldens, except `atk`'s named places while `atk` is open
+  (decisions-log item 146 (4): E0418's commander rule and E0013's entry, with `/attack/` in
+  `refusals.rs`' `not_compiled`, and their cases and goldens; this lane runs beside `atk` in wave 5,
+  so it cannot wait for it). **Branch** `feat/verifier-threats`, worktree
   `../pharmakos-vfy3`. **Builds:** W0501 retired with its catalogue row (SAFEST means something
   now), if `dfnd` has not done it in its named place; an I-level note where `AVOID_KNOWN_THREATS`
   has no sighting in `Scope` to avoid and so routes as `DIRECT` (a new code, the editor's
@@ -1934,7 +1943,10 @@ duplicate entry is W0502, and its "for later lanes" are carried in `site`, `atk`
 
 - **Owns:** `crates/sim` except `surv`'s named places, every golden it moves, the preamble's named
   places (the Attack row of `mandate_and_rule_gaps()`), `crates/sim/tests/allocations.rs`, its
-  scenarios' entries. **Branch** `feat/sim-attack`, worktree `../pharmakos-atk`, target
+  scenarios' entries, and, as named places in `crates/verifier` (decisions-log item 146 (4); `vfy3`
+  runs beside it and excepts them), E0418's commander rule and E0013's entry in
+  `crates/verifier/src/refusals.rs` with `/attack/` in its `not_compiled`, each with its case and
+  goldens. **Branch** `feat/sim-attack`, worktree `../pharmakos-atk`, target
   `D:/build/atk`.
 - **Builds:**
   - **The Attack mandate** (spec §6): raiders fielded on work in hand; gather at the staging point;
@@ -1980,15 +1992,16 @@ duplicate entry is W0502, and its "for later lanes" are carried in `site`, `atk`
 - **For the owner, before the lane starts** (decisions-log item 145 (5)): which enemy commander an
   Attack on "the enemy commander" (`con4`'s `AttackTarget.enemy_commander`) picks when there are
   three seats. The lane puts the question with its options and stops for the answer.
-- **Also (decisions-log item 146 (4), from `vfy2` #125):**
-  - E0418's commander rule follows the owner's answer to that question; today any enemy
-    commander's sighting inside `verifier.reach_memory_ms` qualifies;
+- **Also (decisions-log item 146 (3) (j) and (4), from `vfy2` #125):**
+  - the sim half: this lane builds an empty Attack arm in a deploy's `initial` as legal, as `dfnd`
+    does for Defend (spec §5: the mandate type is a free choice at deploy), and prices the fields
+    in the sim's `mandate_fields` as `interface.rs` does;
+  - the verifier half, through the named places in the Owns line: E0013 lifted to follow the sim,
+    with `/attack/` out of `refusals.rs`' `not_compiled`; and E0418's commander rule brought to the
+    owner's answer to the question above (today any enemy commander's sighting inside
+    `verifier.reach_memory_ms` qualifies);
   - the lane needs `wgw` merged (`Scope`'s sightings) before freshness means anything in a real
-    match;
-  - an empty Attack arm in a deploy's `initial` is refused today (E0013, as the sim refuses it):
-    whether it becomes legal, as Defend's will, is this lane's to settle; lifting E0013 drops
-    `/attack/` from `refusals.rs`' `not_compiled` and prices the fields in the sim's
-    `mandate_fields` as `interface.rs` does.
+    match.
 - **Implements:** items 13, 104; spec §4 (hunting), §6's Attack row, §9 (breach, friendly fire);
   register S2-03. **Needs:** `dfnd` merged; the ruled decisions 9, 10, 12, 14, 40 and 41.
   **Acceptance:** `an_attack_waits_for_its_force_size`; `the_target_is_pinned_at_the_seal`;
@@ -2314,12 +2327,12 @@ Beyond the second cut, any further cut is the owner's (decision 32, section 7).
 
 ### 4.6 The contract pull requests, in merge order
 
-Nineteen of S2's PRs touch an AGENTS.md §5 path: seventeen lanes' and the main session's
-harness and firewall-runner PRs. The main session's docs PRs (section 4.4), which touch AGENTS.md and
+Twenty of S2's PRs touch an AGENTS.md §5 path: seventeen lanes' and the main session's
+harness, lints and firewall-runner PRs (decisions-log item 146). The main session's docs PRs (section 4.4), which touch AGENTS.md and
 `docs/design/`, contract paths too, are counted apart: they are the record's own PRs, take the
 docs-only fast path and queue on no lane. Each body names its paths; each new hashed field goes into
 the state hash, the snapshot round-trip and the goldens in the same PR (§4.8); each snapshot change
-bumps `SNAPSHOT_VERSION` (9 today, `crates/sim/src/snapshot.rs` ~153) and refuses an older snapshot
+bumps `SNAPSHOT_VERSION` (10 today, since `ids` #123; `crates/sim/src/snapshot.rs` ~153) and refuses an older snapshot
 with a clear message. `SAVE_FORMAT_VERSION` (2, `crates/gateway/src/save.rs` ~99) moves only if a
 lane changes the save container itself, which none is planned to; a save holding an older snapshot
 is refused through the snapshot's own version. Event kinds and step failures are added at the end
