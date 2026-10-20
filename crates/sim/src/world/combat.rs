@@ -50,10 +50,12 @@
 //!   inside its splash radius, ties nearest then lowest id, and **never** a
 //!   point whose splash holds an own unit, structure, beacon or own wall voxel
 //!   (spec section 9: "the built-in mandates aim to avoid your own assets").
-//! * **The raider**: the nearest enemy structure or beacon; under
-//!   `RETURN_FIRE` it answers the asset that hit it. A raider on `FREE_FIRE`
-//!   with no structure or beacon in reach answers an attacker too, rather than
-//!   standing under fire.
+//! * **The raider**: under `FREE_FIRE`, the nearest enemy structure or
+//!   beacon, then any enemy unit; under `RETURN_FIRE`, only the asset that hit
+//!   its seat, so it starts no fight (the owner's answer of 2026-10-20).
+//!
+//! Every weapon chooses only a target its seat sees this tick
+//! (`World::seen_by`; the owner's answer of 2026-10-20).
 //!
 //! Ties everywhere are the squared distance, then the lowest id (E12). Enemy
 //! wall voxels are no asset and no `FREE_FIRE` target: a breach shells them,
@@ -108,16 +110,24 @@ pub enum Roe {
 }
 
 impl Roe {
-    /// The rules of engagement a beacon's Common `roe` byte reads as: an unset
-    /// `0` is `RETURN_FIRE` (decision 4, the fifth omitted-setting default),
-    /// and a byte this build does not name is `None` (the beacon table's
-    /// restore refuses one, and a compiled playbook cannot write one).
+    /// The rules of engagement a beacon's Common `roe` byte reads as, on a
+    /// beacon whose writ is `mandate`: a byte this build does not name is
+    /// `None` (the beacon table's restore refuses one, and a compiled playbook
+    /// cannot write one).
+    ///
+    /// **The unset default is the mandate's** (the owner's answer of
+    /// 2026-10-20): an unset `0` reads as `RETURN_FIRE` (decision 4, the fifth
+    /// omitted-setting default) on every writ but Attack, where it reads as
+    /// `FREE_FIRE`. Attack does not compile until S2's `atk`, so no Attack
+    /// beacon exists yet and its arm is `atk`'s to add here, beside the
+    /// Attack mandate it builds; until then every writ reads unset as
+    /// `RETURN_FIRE`.
     #[must_use]
-    pub const fn of_wire(roe: u8) -> Option<Roe> {
-        match roe {
-            0 | 2 => Some(Roe::Return),
-            1 => Some(Roe::Hold),
-            3 => Some(Roe::Free),
+    pub const fn of_setting(roe: u8, mandate: crate::seams::MandateKind) -> Option<Roe> {
+        match (roe, mandate) {
+            (0 | 2, _) => Some(Roe::Return),
+            (1, _) => Some(Roe::Hold),
+            (3, _) => Some(Roe::Free),
             _ => None,
         }
     }
@@ -510,7 +520,9 @@ impl World {
                     return None;
                 }
                 let row = self.beacons.row_of(home).ok()?;
-                Roe::of_wire(self.beacons.commons().get(row.index())?.roe)?
+                let mandate =
+                    crate::seams::MandateKind::from_id(*self.beacons.mandates().get(row.index())?)?;
+                Roe::of_setting(self.beacons.commons().get(row.index())?.roe, mandate)?
             }
         };
         if roe == Roe::Hold {
@@ -549,7 +561,7 @@ impl World {
             Armament::Structure(_) => Rule::UnitsThenSites,
         };
         let only = (gun.roe == Roe::Return).then_some(attackers);
-        let Some(mark) = self.choose(&gun, rule, only, attackers, rows, splash) else {
+        let Some(mark) = self.choose(&gun, rule, only, rows, splash) else {
             return;
         };
         let tick = self.tick.raw();
@@ -648,7 +660,6 @@ impl World {
         gun: &Gun,
         rule: Rule,
         only: Option<&[(u8, u32)]>,
-        attackers: &[(u8, u32)],
         rows: &mut Vec<Row>,
         splash: &mut Vec<Row>,
     ) -> Option<Mark> {
@@ -659,15 +670,14 @@ impl World {
                 .nearest_unit(gun, range, only, rows)
                 .or_else(|| self.nearest_site(gun, range, only)),
             // The raider's job is its target structure or beacon (decision 21),
-            // and its rules of engagement say what it does about units: under
-            // `RETURN_FIRE` it answers the asset that hit it first, then goes
-            // on with its job; under `FREE_FIRE` it does its job first, then
-            // fires at any enemy unit in reach (decision 4).
+            // under `FREE_FIRE`, then any enemy unit it sees in reach. Under
+            // `RETURN_FIRE` it is literal (the owner's answer of 2026-10-20):
+            // it starts no fight and raids nothing, and its only shots answer
+            // an asset that hit one of its seat's own, units first.
             Rule::SitesThenAttackers => match only {
                 Some(_) => self
-                    .nearest_unit(gun, range, Some(attackers), rows)
-                    .or_else(|| self.nearest_site(gun, range, Some(attackers)))
-                    .or_else(|| self.nearest_site(gun, range, None)),
+                    .nearest_unit(gun, range, only, rows)
+                    .or_else(|| self.nearest_site(gun, range, only)),
                 None => self
                     .nearest_site(gun, range, None)
                     .or_else(|| self.nearest_unit(gun, range, None, rows)),
@@ -680,6 +690,29 @@ impl World {
     /// `only`: always, unless `only` is the attacker set and it is not in it.
     fn may_target(seat: u8, asset: AssetId, only: Option<&[(u8, u32)]>) -> bool {
         only.is_none_or(|set| set.binary_search(&(seat, asset.raw())).is_ok())
+    }
+
+    /// Whether `point` lies in `seat`'s live vision this tick: some sensor of
+    /// the seat sees it under the sim's sensor seam ([`World::sensor_at`],
+    /// the line-of-sight model included), a dormant beacon's dark units and
+    /// structures excepted and a core's sphere kept (decisions-log item 146).
+    ///
+    /// **Every weapon chooses only what its seat sees** (the owner's answer
+    /// of 2026-10-20): vision gates the choice of target, range is still the
+    /// weapon's own squared-distance test, and an attacker the seat cannot
+    /// see is not answered. The mortar's friendly-fire test stays on ground
+    /// truth, since it is about the firer's own assets, and a shell already
+    /// in flight lands whatever is seen. Walked sensor by sensor, so nothing
+    /// allocates inside the tick.
+    fn seen_by(&self, seat: u8, point: [Fx; 3]) -> bool {
+        let mut at: usize = 0;
+        while let Some((sensor, next)) = self.sensor_at(at) {
+            at = next;
+            if sensor.seat.raw() == seat && sensor.sees(&crate::sight::RadiusOnly, point) {
+                return true;
+            }
+        }
+        false
     }
 
     /// The nearest enemy unit in range, alive, the commander included.
@@ -696,7 +729,7 @@ impl World {
             let Some(mark) = self.enemy_unit_mark(gun, *row) else {
                 continue;
             };
-            if Self::may_target(gun.seat, mark.asset, only) {
+            if Self::may_target(gun.seat, mark.asset, only) && self.seen_by(gun.seat, mark.at) {
                 best = Some(nearer(best, mark));
             }
         }
@@ -727,7 +760,8 @@ impl World {
         let mut best: Option<Mark> = None;
         self.for_each_enemy_site(gun.seat, |mark_target, asset, at| {
             let d2 = Sq::between(gun.at, at);
-            if d2 <= limit && Self::may_target(gun.seat, asset, only) {
+            if d2 <= limit && Self::may_target(gun.seat, asset, only) && self.seen_by(gun.seat, at)
+            {
                 best = Some(nearer(
                     best,
                     Mark {
@@ -797,6 +831,7 @@ impl World {
         let mut best: Option<(u32, Mark)> = None;
         let mut consider = |world: &World, mark: Mark, splash: &mut Vec<Row>| {
             if !Self::may_target(gun.seat, mark.asset, only)
+                || !world.seen_by(gun.seat, mark.at)
                 || !world.splash_is_clear(gun.seat, mark.at, radius, splash)
             {
                 return;
@@ -914,8 +949,9 @@ impl World {
         false
     }
 
-    /// How many live enemy assets of `seat`'s lie inside a splash of `radius`
-    /// at `point`.
+    /// How many live enemy assets of `seat`'s, each in the seat's sight, lie
+    /// inside a splash of `radius` at `point`: a clump is what the seat can
+    /// see of one.
     fn enemies_in_splash(&self, seat: u8, point: [Fx; 3], radius: Fx, rows: &mut Vec<Row>) -> u32 {
         let enemy = |owner: u8| SeatId::new(owner).is_some() && owner != seat;
         let limit = Sq::of_radius(radius);
@@ -932,7 +968,12 @@ impl World {
                     .units
                     .hit_points()
                     .get(index)
-                    .is_some_and(|hp| hp.is_alive());
+                    .is_some_and(|hp| hp.is_alive())
+                && self
+                    .units
+                    .positions()
+                    .get(index)
+                    .is_some_and(|at| self.seen_by(seat, *at));
             if hostile {
                 count = count.saturating_add(1);
             }
@@ -951,7 +992,11 @@ impl World {
         ];
         for (seats, hps, positions) in tables {
             for ((owner, hp), at) in seats.iter().zip(hps).zip(positions) {
-                if enemy(*owner) && hp.is_alive() && Sq::between(point, *at) <= limit {
+                if enemy(*owner)
+                    && hp.is_alive()
+                    && Sq::between(point, *at) <= limit
+                    && self.seen_by(seat, *at)
+                {
                     count = count.saturating_add(1);
                 }
             }

@@ -1009,31 +1009,96 @@ fn the_attacker_memory_survives_save_and_restore() {
 }
 
 #[test]
-fn a_raider_on_the_default_rules_still_raids() {
-    // Decision 21: a raider's job is the nearest enemy structure or beacon,
-    // and an unset `roe` (RETURN_FIRE, decision 4) says what it does about
-    // units, not whether it raids.
+fn a_raider_raids_on_free_fire_and_not_on_return_fire() {
+    // The owner's answer of 2026-10-20: RETURN_FIRE is literal, so a raider
+    // on it (or on an unset `roe`, which reads as RETURN_FIRE off an Attack
+    // beacon) starts no fight and raids nothing; on FREE_FIRE it raids.
+    for (roe, raids) in [(0, false), (RETURN_FIRE, false), (FREE_FIRE, true)] {
+        let mut world = world(2);
+        let here = field(&world);
+        let spot = ground(&world, here, -8, 0);
+        let home = beacon(&mut world, seat(0), spot, HOLD_FIRE);
+        let target = raise(&mut world, seat(0), home, StructureKind::Generator, here);
+        let raider_at = ground(&world, here, 2, 0);
+        let raider_home = beacon(&mut world, seat(1), raider_at, roe);
+        let _raider = unit(
+            &mut world,
+            seat(1),
+            raider_home,
+            UnitKind::Raider,
+            raider_at,
+        );
+        let full = structure_hp(&world, target);
+        let mut runner = pushing(world);
+        let mut feed = Vec::new();
+        play(&mut runner, 100, &mut feed);
+        assert_eq!(
+            structure_hp(runner.world(), target) < full,
+            raids,
+            "roe {roe}: raids {raids}"
+        );
+    }
+}
+
+#[test]
+fn a_target_in_range_but_unseen_is_not_fired_at_until_a_scout_sees_it() {
+    // The owner's answer of 2026-10-20: every weapon chooses only what its
+    // seat sees. The autocannon's own vision is short of its range, and its
+    // home's sphere is far away, so a raider inside its range goes unseen
+    // until a scout of the seat walks up to it.
+    let row = rules().structure(StructureKind::Autocannon).expect("a row");
+    let range = i32::from(row.weapon.expect("armed").range_voxels);
+    let vision = i32::from(row.vision_radius_voxels);
+    let sphere = i32::from(rules().sphere_radius_voxels());
+    let gap = range - 2;
+    assert!(
+        gap > vision,
+        "the test needs a target inside range and outside the gun's own sight"
+    );
     let mut world = world(2);
     let here = field(&world);
-    let spot = ground(&world, here, -8, 0);
-    let home = beacon(&mut world, seat(0), spot, HOLD_FIRE);
-    let target = raise(&mut world, seat(0), home, StructureKind::Generator, here);
-    let raider_at = ground(&world, here, 2, 0);
-    let raider_home = beacon(&mut world, seat(1), raider_at, 0);
-    let _raider = unit(
+    let home_spot = ground(&world, here, -(sphere + 4), 0);
+    let home = beacon(&mut world, seat(0), home_spot, FREE_FIRE);
+    let _gun = raise(&mut world, seat(0), home, StructureKind::Autocannon, here);
+    let raider_at = ground(&world, here, gap, 0);
+    let far = ground(&world, here, gap + sphere + 30, 0);
+    let raider_home = beacon(&mut world, seat(1), far, HOLD_FIRE);
+    let raider = unit(
         &mut world,
         seat(1),
         raider_home,
         UnitKind::Raider,
         raider_at,
     );
-    let full = structure_hp(&world, target);
     let mut runner = pushing(world);
     let mut feed = Vec::new();
-    play(&mut runner, 100, &mut feed);
+    // The raider walks home, away; pin it where it stands each tick.
+    let full = runner.world().unit_max_hp(UnitKind::Raider).raw();
+    for _ in 0..60 {
+        runner
+            .world_mut()
+            .send_unit_directly(raider.raw(), raider_at);
+        play(&mut runner, 1, &mut feed);
+    }
+    assert_eq!(
+        unit_hp(runner.world(), raider),
+        full,
+        "in range but unseen: no shot"
+    );
+    let scout_spot = ground(runner.world(), here, gap - 2, 0);
+    let _scout = runner
+        .world_mut()
+        .field_unit(seat(0), home, UnitKind::Scout, scout_spot)
+        .expect("a scout");
+    for _ in 0..60 {
+        runner
+            .world_mut()
+            .send_unit_directly(raider.raw(), raider_at);
+        play(&mut runner, 1, &mut feed);
+    }
     assert!(
-        structure_hp(runner.world(), target) < full,
-        "the raider raided"
+        unit_hp(runner.world(), raider) < full,
+        "seen by the scout: fired at"
     );
 }
 
