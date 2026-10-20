@@ -1934,6 +1934,10 @@ duplicate entry is W0502, and its "for later lanes" are carried in `site`, `atk`
   decision 12; E0209 stays S3's (the enemy-knowledge predicates); and, from `vfy2` #125
   (decisions-log item 146 (4)), a half-written general `Area` (a protected, probe or avoid area
   missing a corner) refused as E0101 outside a wall's box, as a wall's box already is, with a case.
+  Also from `vfy2` #125 (item 146 (4)): E0003's message in `crates/verifier/src/strings.rs`, "not
+  part of the v1 vocabulary", is decode's wording for every reserved S4 name (the go-code arm's
+  `broadcast_received` among them, `e0003_a_go_code_launch`) and says less than the truth for them;
+  this lane, the string table's owner then, words it truthfully.
   **Granted** (decisions-log item 145 (5)): `crates/gateway/tests/{methods,advice,economy}.rs` and
   `tests/golden/docs/reference/expected.docs.txt`, which a new catalogue row moves. **Needs:** `dfnd`
   and `vfy2` merged; decision 12. **Acceptance:** a case per code; the catalogue golden. **Contract PR:** no.
@@ -2002,6 +2006,8 @@ duplicate entry is W0502, and its "for later lanes" are carried in `site`, `atk`
     `verifier.reach_memory_ms` qualifies);
   - the lane needs `wgw` merged (`Scope`'s sightings) before freshness means anything in a real
     match.
+  - until S3 an Attack target cannot be a selector: E0415 requires `ENEMY_KNOWN`, which is itself
+    E0015 (`vfy2` #125).
 - **Implements:** items 13, 104; spec §4 (hunting), §6's Attack row, §9 (breach, friendly fire);
   register S2-03. **Needs:** `dfnd` merged; the ruled decisions 9, 10, 12, 14, 40 and 41.
   **Acceptance:** `an_attack_waits_for_its_force_size`; `the_target_is_pinned_at_the_seal`;
@@ -2328,11 +2334,11 @@ Beyond the second cut, any further cut is the owner's (decision 32, section 7).
 ### 4.6 The contract pull requests, in merge order
 
 Twenty of S2's PRs touch an AGENTS.md §5 path: seventeen lanes' and the main session's
-harness, lints and firewall-runner PRs (decisions-log item 146). The main session's docs PRs (section 4.4), which touch AGENTS.md and
+harness, lints and firewall-runner PRs. The main session's docs PRs (section 4.4), which touch AGENTS.md and
 `docs/design/`, contract paths too, are counted apart: they are the record's own PRs, take the
 docs-only fast path and queue on no lane. Each body names its paths; each new hashed field goes into
 the state hash, the snapshot round-trip and the goldens in the same PR (§4.8); each snapshot change
-bumps `SNAPSHOT_VERSION` (10 today, since `ids` #123; `crates/sim/src/snapshot.rs` ~153) and refuses an older snapshot
+bumps `SNAPSHOT_VERSION` (10 since `ids` #123, `crates/sim/src/snapshot.rs` ~164) and refuses an older snapshot
 with a clear message. `SAVE_FORMAT_VERSION` (2, `crates/gateway/src/save.rs` ~99) moves only if a
 lane changes the save container itself, which none is planned to; a save holding an older snapshot
 is refused through the snapshot's own version. Event kinds and step failures are added at the end
