@@ -192,9 +192,9 @@ impl FogPolicy {
 
 /// What a seat can see, as the host knows it.
 ///
-/// The gateway asks and never computes. A host wires this to the sim's vision at
-/// T13; until then [`KnownVoxels`] is the implementation the tests and the
-/// skeleton's host use.
+/// The gateway asks and never computes. The production implementation is
+/// [`crate::host::LiveVision`], the sim's own sensor interface; [`KnownVoxels`]
+/// and [`Blind`] are the tests'.
 pub trait Vision {
     /// True when `seat` can see `at` right now.
     fn sees(&self, seat: SeatId, at: &Voxel) -> bool;

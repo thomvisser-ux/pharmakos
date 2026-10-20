@@ -112,9 +112,14 @@ pub fn document(part: &str) -> Result<Json, Error> {
         if !seen.insert(name.clone()) {
             continue;
         }
-        let Some(nested) = schema.message(&name) else {
-            continue;
-        };
+        // Every message a field names is in the descriptor set, which `buf`
+        // checks when it is built; one that is not would leave the document
+        // describing a type it never defines.
+        let nested = schema.message(&name).ok_or_else(|| {
+            Error::internal(format!(
+                "`{name}` is named by a field and is not in the checked-in descriptor set"
+            ))
+        })?;
         for field in &nested.fields {
             match field.kind {
                 ScalarKind::Message => pending.push(field.type_name.clone()),
@@ -125,10 +130,15 @@ pub fn document(part: &str) -> Result<Json, Error> {
             }
         }
         claim(&mut source, &name)?;
-        defs.insert(short(&name), message_schema(schema, nested));
+        defs.insert(short(&name), message_schema(schema, nested)?);
     }
     for name in &enums {
-        if let Some(declared) = schema.enumeration(name) {
+        {
+            let declared = schema.enumeration(name).ok_or_else(|| {
+                Error::internal(format!(
+                    "`{name}` is named by a field and is not in the checked-in descriptor set"
+                ))
+            })?;
             claim(&mut source, name)?;
             let values: Vec<Json> = declared
                 .values
@@ -209,7 +219,11 @@ fn root_of(schema: &Schema, part: &str) -> Result<String, Error> {
 }
 
 /// One message as a JSON Schema object.
-fn message_schema(schema: &Schema, message: &Message) -> Json {
+///
+/// # Errors
+///
+/// As [`oneof_exclusions`].
+fn message_schema(schema: &Schema, message: &Message) -> Result<Json, Error> {
     let mut properties: Vec<(String, Json)> = Vec::new();
     for field in &message.fields {
         properties.push((field.name.clone(), field_schema(schema, field)));
@@ -228,18 +242,30 @@ fn message_schema(schema: &Schema, message: &Message) -> Json {
         ),
         (String::from("properties"), Json::Object(properties)),
     ];
-    let exclusions = oneof_exclusions(message);
+    let exclusions = oneof_exclusions(message)?;
     if !exclusions.is_empty() {
         entries.push((String::from("allOf"), Json::Array(exclusions)));
     }
-    Json::Object(entries)
+    Ok(Json::Object(entries))
 }
 
 /// One `{"not": {"required": [a, b]}}` per pair of arms of each `oneof`.
-fn oneof_exclusions(message: &Message) -> Vec<Json> {
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] for a `oneof` whose index does not fit
+/// the descriptor's `int32`. It was read as `i32::MAX` once, which matched no
+/// field and so wrote **no** exclusion: a document that allowed two arms at
+/// once, which the decoder refuses (the carry of decisions-log item 145 (5)).
+fn oneof_exclusions(message: &Message) -> Result<Vec<Json>, Error> {
     let mut out: Vec<Json> = Vec::new();
     for (index, _) in message.oneofs.iter().enumerate() {
-        let index = i32::try_from(index).unwrap_or(i32::MAX);
+        let index = i32::try_from(index).map_err(|_| {
+            Error::internal(format!(
+                "`{}` declares a oneof at index {index}, past the descriptor's int32",
+                message.full_name
+            ))
+        })?;
         let arms: Vec<&str> = message
             .fields
             .iter()
@@ -261,7 +287,7 @@ fn oneof_exclusions(message: &Message) -> Vec<Json> {
             }
         }
     }
-    out
+    Ok(out)
 }
 
 /// One field as a JSON Schema value.
@@ -342,7 +368,11 @@ fn claim(source: &mut BTreeMap<String, String>, full_name: &str) -> Result<(), E
 
 /// A full name's last segment: `gp.v1.BeaconFilter.MandateKind` -> `MandateKind`.
 fn short(full_name: &str) -> String {
-    full_name.rsplit('.').next().unwrap_or(full_name).to_owned()
+    // A name with no package is its own last segment.
+    match full_name.rsplit_once('.') {
+        Some((_, last)) => last.to_owned(),
+        None => full_name.to_owned(),
+    }
 }
 
 /// A full name's last segment in `lower_snake_case`, which is what a `part`

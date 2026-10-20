@@ -223,10 +223,12 @@ pub fn decode(bytes: &[u8]) -> Result<Option<(Frame, usize)>, Error> {
     let Some(masked) = bytes.get(cursor..cursor.saturating_add(length)) else {
         return Ok(None);
     };
+    // The key repeats every four bytes (RFC 6455 section 5.3), which is what
+    // cycling it says without an index that could miss.
     let payload: Vec<u8> = masked
         .iter()
-        .enumerate()
-        .map(|(index, byte)| byte ^ key.get(index.wrapping_rem(4)).copied().unwrap_or(0))
+        .zip(key.iter().cycle())
+        .map(|(byte, mask)| byte ^ mask)
         .collect();
 
     Ok(Some((
@@ -246,14 +248,23 @@ pub fn encode(opcode: Opcode, payload: &[u8]) -> Vec<u8> {
     let mut out: Vec<u8> = Vec::with_capacity(payload.len().saturating_add(10));
     out.push(0x80 | opcode.bits());
     let length = payload.len();
-    if length < 126 {
-        out.push(u8::try_from(length).unwrap_or(125));
-    } else if let Ok(short) = u16::try_from(length) {
-        out.push(126);
-        out.extend_from_slice(&short.to_be_bytes());
-    } else {
-        out.push(127);
-        out.extend_from_slice(&u64::try_from(length).unwrap_or(u64::MAX).to_be_bytes());
+    match (u8::try_from(length), u16::try_from(length)) {
+        (Ok(tiny), _) if tiny < 126 => out.push(tiny),
+        (_, Ok(short)) => {
+            out.push(126);
+            out.extend_from_slice(&short.to_be_bytes());
+        }
+        _ => {
+            out.push(127);
+            // A `usize` is at most 64 bits on every target this project
+            // builds for, so the widening is exact: `u64::from` has no
+            // `usize` impl to call, and the eight bytes are the length's own.
+            let mut wide = [0_u8; 8];
+            for (slot, byte) in wide.iter_mut().rev().zip(length.to_le_bytes()) {
+                *slot = byte;
+            }
+            out.extend_from_slice(&wide);
+        }
     }
     out.extend_from_slice(payload);
     out
@@ -316,14 +327,10 @@ impl Assembler {
             Opcode::Ping => return Ok(Some(Message::Ping(frame.payload))),
             Opcode::Pong => return Ok(Some(Message::Pong(frame.payload))),
             Opcode::Close => {
-                let code = match frame.payload.len() {
-                    0 => 1005,
-                    1 => return Err(Error::MalformedClose),
-                    _ => {
-                        let mut raw = [0_u8; 2];
-                        raw.copy_from_slice(frame.payload.get(..2).unwrap_or(&[0, 0]));
-                        u16::from_be_bytes(raw)
-                    }
+                let code = match frame.payload.as_slice() {
+                    [] => 1005,
+                    [_] => return Err(Error::MalformedClose),
+                    [high, low, ..] => u16::from_be_bytes([*high, *low]),
                 };
                 // RFC 6455 section 5.5.1: the reason is UTF-8, and section 7.4.1
                 // gives 1007 for text that is not. Decoding it lossily would
@@ -359,7 +366,9 @@ impl Assembler {
         if !frame.fin {
             return Ok(None);
         }
-        let joined = self.partial.take().unwrap_or_default();
+        let Some(joined) = self.partial.take() else {
+            return Err(Error::Fragmentation);
+        };
         let text = String::from_utf8(joined).map_err(|_| Error::NotUtf8)?;
         Ok(Some(Message::Text(text)))
     }

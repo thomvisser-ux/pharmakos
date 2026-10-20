@@ -30,7 +30,8 @@
           }
         ],
         "matched": 5,
-        "failure": ""
+        "failure": "",
+        "reachable": true
       },
       {
         "pointer": "/declarative/route/0/place_beacon/initial/mandate/build/targets/0/anchor/on",
@@ -43,7 +44,8 @@
           }
         ],
         "matched": 1,
-        "failure": ""
+        "failure": "",
+        "reachable": true
       }
     ],
     "_status": {

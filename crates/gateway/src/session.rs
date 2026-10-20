@@ -266,8 +266,11 @@ fn read_handshake<S: Read>(stream: &mut S) -> Result<(String, Vec<u8>), Ended> {
             Err(error) => return Err(Ended::Io(error.to_string())),
         }
     };
-    let leftover = buffer.get(end..).unwrap_or_default().to_vec();
-    let head = buffer.get(..end).unwrap_or_default().to_vec();
+    // `end` is the blank line's end inside `buffer`, found by the search above.
+    let Some((head, leftover)) = buffer.split_at_checked(end) else {
+        return Err(Ended::UpgradeRefused(Refusal::Malformed));
+    };
+    let (head, leftover) = (head.to_vec(), leftover.to_vec());
     let text = String::from_utf8(head).map_err(|_| Ended::UpgradeRefused(Refusal::Malformed))?;
     Ok((text, leftover))
 }
