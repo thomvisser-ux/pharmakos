@@ -219,7 +219,14 @@ editor UI. Nothing else executes. Directories are under `crates/`; package names
    (the text's own file, or no name), as Save does; the filing (`Editor::safe_playbook_filed`, `Editor::filed`), the
    gateway's words on the status line, the "This round" sentence dropped and the mark cleared at a new round; the door's gating of the Fix
    buttons' and the E0601 checkbox's enabled state; and `editor.gd`'s `map_open` (a branch on the bridge's phase
-   string), `map_click` (the map's click routing) and `unchecked_text`. The client may compose a JSON Patch from a click; a verdict, a
+   string), `map_click` (the map's click routing) and `unchecked_text`; and, from S2's `rnds` (decisions-log item 146),
+   `godot/scripts/host_link.gd`'s test-only `--rounds` reader: `ROUNDS_ARG`, `rounds_arg`, which reads the launch's user
+   arguments and answers whether `--rounds` was given, its text and a `RoundsRefusal`, and `round_limit`, which copies
+   that text into the config line's round-limit field, or `ROUND_LIMIT` when none was given, and neither parses nor
+   bounds it; `RoundsRefusal` with `rounds_refusal`, the client's only refusals of the option, each about the command
+   line's shape or the line's framing and never the number (`NO_VALUE`, `REPEATED`, `BREAKS_LINE`), made in `start()`
+   before any host is spawned, every refusal of the value being the gateway's; and `watch_check.gd`'s `_rounds_cases`,
+   which runs `rounds_arg` over a fixed table first and fails the check on a mismatch. The client may compose a JSON Patch from a click; a verdict, a
    travel time, a legality answer, a Fix and the patched text (`patch_plan`'s answer) still come
    from the gateway. The gateway's JSON-RPC answers are not canonical `gp.api.v1` JSON — they carry
    a `_status` footer and lower-case enum values (decisions-log item 80) — so every client of them,

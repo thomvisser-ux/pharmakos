@@ -267,6 +267,8 @@ aimed at the trailing seat (decision 36).
 | `crates/verifier/src/limits.rs` (~203) dating the reach window S2/S3, where `rules.proto` (~727) says S3 | digest | `vfy1` rewords `limits.rs` to S3 |
 | `playbook.proto`'s `repair_threshold_pct` comment (~1308–1310, "once it falls below this percentage … 0 means never") and the header's "terraform's meaning beyond its enum is still unruled" (~1302), stale since item 144 (5) | the reviews | `con4`, with decision 38 |
 | The no-silent-fallback sweep beyond the sim: `try_from(..).unwrap_or(..)` and `.get(..).unwrap_or(..)` fallbacks counted at `7a351e7` in `crates/gateway` (66), `crates/client-gdext` (34), `crates/mesher` (33), `crates/verifier` (12), `crates/gamectl` (10), `crates/plan-core` (6), `crates/bench` (4), `crates/operator` (3) and `crates/proto`'s hand-written sources | the operator's global rules; AGENTS.md §6's sweep rule (item 135) | each crate's next S2 owner, written into its section: `wgw`, `view` (client-gdext and mesher), `vfy1`, `night`, `vfy2`, `g3h`, `oprd`, `con3` (E7) |
+| `MineSettings.flee_on_threat` and `BuildSettings.rebuild_destroyed` made `optional`, so an edit row can write false, their presence priced in `interface.rs`; `BuildTarget.wall_box`'s comment, which says a lower box "is a verifier error", made to say that the verifier refuses only a box too short in its own extent and that the height over the ground is the sim's (`site`) | `vfy2` #125; item 146 (4) | the next `proto/**` pull request. Section 4.6 plans none after `con4`, so it lands with whichever comes first: an S2 lane's, or M-14's (owner, S3) |
+| `ci.yml`'s DCO message (~390), which still says to fix a written branch with `git rebase --signoff <base>` | #122's review; item 146 (4) | the firewall-runner `.github/**` pull request (section 4.6), brought to AGENTS.md §8's remedy |
 
 ### 2.3 Engineering calls, decided here (the owner can veto each)
 
@@ -471,7 +473,11 @@ and names the decision that puts that reading to the owner.
   sightings and reach (item 138 (4) (c)). Its line-of-sight method is a seam that answers "visible"
   for every point in the radius (item 144 (4)); a later model replaces the method, not its callers.
   Vision queries go through the broadphase grid, padded as E11 says, rather than `survey.rs`'s
-  quadratic scan. A sighting's age stays derived from the tick it was taken at.
+  quadratic scan. A sighting's age stays derived from the tick it was taken at. **Dormant sight,
+  the owner's ruling of 2026-10-19 (decisions-log item 146 (2)):** a dormant beacon's units and
+  structures give no vision; the commander keeps its own; a beacon's sphere still sees while the
+  beacon is alive, dormant or not; a structure still going up sees nothing. `ids` #123 built it in
+  `World::sensor_at`.
 - **E11. The broadphase query radius is a weapon's range, and a query is exact over positions that
   moved.** `BROADPHASE_QUERY_RADIUS_VOXELS` (16) is referenced nowhere (S2-09); `fire` deletes it. A
   query of radius r touches (2⌈r / cell⌉ + 1)² cells, so any range is answered whatever the cell
@@ -983,6 +989,13 @@ item 145 (1), (2) and (4)).**
 
 ### `ids` — `crates/sim`: generational ids, live fielding and the sensor seam
 
+**Merged as #123 (`75583bd`, head `cad71df`) (decisions-log item 146 (1) to (3)).** Every chain
+moved once, from its first recorded tick, by E1's new hashed state; the fix pass moved four more
+(`against-easy` and `against-easy-three-rounds` from tick 1084, `deploy-and-visit` from 946,
+`mine-to-depth` from 2530) by the accumulator reset alone. It built the owner's dormant sight
+(E10), swept E7's 216 carried sites to zero, and its `Host::resume` edit was accepted beyond its
+literal grant.
+
 - **Owns:** `crates/sim` (except `con4`'s named place while `con4` is open), every golden its
   changes move, the preamble's named places, and named places in `crates/gateway`:
   `src/targeting.rs`' two row reads (~137, ~1141) and any other gateway line that reads an id's raw
@@ -1119,6 +1132,9 @@ rules-table lane must be: the rules-hash pin `crates/sim/tests/determinism.rs:81
 
 ### `con4` — S2's playbook and gateway wire
 
+**Merged as #120 (`2901f95`, head `203730c`) (decisions-log item 146 (1)).** It discharged S2-11
+and S2-13 and re-dated M-14 to S3; its carries are in `vfy2`, `site`, `dfnd`, `atk` and `wgw`.
+
 **Granted at the lane** (decisions-log item 145 (4)): the named sim place below, the Defend and
 Attack arms of `compile_settings_row`, needed no edit, because `base`'s arms refuse the whole arm.
 The constructs that need sim refusals, the base kit and the wall box, live in `compile_build_target`,
@@ -1182,6 +1198,11 @@ after S2's".
 
 ### `rnds` — `crates/client-gdext` + `godot/`: `-- --rounds <n>` (item 143 (5))
 
+**Merged as #124 (`8dc98a0`, head `cd52ecc`) (decisions-log item 146 (1) and (3) (e) and (f)).**
+It reads `--rounds=<n>` as well, in the spelling of the readers beside it; its three client
+refusals below were accepted at the merge, and AGENTS.md §3 rule 4 names its pieces. Its table in
+`godot/scripts/watch_check.gd` (`_rounds_cases`) was a named place granted at its fix pass.
+
 - **Owns:** `godot/scripts/host_link.gd` and its pins in
   `crates/client-gdext/tests/godot_project.rs`. **Branch** `feat/client-rounds-option`, worktree
   `../pharmakos-rnds`, target `D:/build/rnds`.
@@ -1190,9 +1211,13 @@ after S2's".
   line's round-limit field in place of `ROUND_LIMIT` (~74, ~134–135); absent, the line keeps 3. The
   client parses and bounds nothing: a value that is not a whole number, is 0 or does not fit a `u32`
   is the gateway's refusal (`serve::Config`, `host.rs` ~288), which the lobby draws as it draws any
-  host that refuses its config line (E21). The only thing the client refuses itself is an argument
-  holding a tab or a newline, because that would change the line's framing rather than its value.
-  The option is not shown in the lobby. The config line's format and `last_match.txt` are unchanged
+  host that refuses its config line (E21). The client refuses only the command line's shape and the
+  line's framing, never the number, each an enumerated `RoundsRefusal` with its own words, made in
+  `start()` before any host is spawned, for a Resume as for a new match (as built by #124; item 146
+  (3) (e)): `NO_VALUE`, `--rounds` as the last argument or followed by another option;
+  `REPEATED`, `--rounds` given more than once in either spelling; and `BREAKS_LINE`, a value holding
+  a tab, a line feed or a carriage return, which would change the line's framing rather than its
+  value. The option is not shown in the lobby. The config line's format and `last_match.txt` are unchanged
   (AGENTS.md §5).
 - **Implements:** item 143 (5). **Needs:** `con4` merged (`con3` and `con4` hold places in
   `crates/client-gdext`, `con3`'s in this lane's own `godot_project.rs`, so it starts after `night`
@@ -1442,6 +1467,10 @@ rename (below) stands.
   (~760) and `surface/knowledge.rs` (~738, ~810), which say a qualifying FULL report may fail to
   price (E0603 ended that; the door stays as defence in depth), and `surface/knowledge.rs` (~1112),
   which says a beacon's HP and a sighting's age stay reserved.
+- **Amended by decisions-log item 146 (4), from `vfy2` #125** (already in the lane's brief, recorded
+  here): `Scope`'s sightings filled from the seat's own knowledge, each age converted to `u32` with
+  a typed error; `vfy2`'s `push_sighting` keeps the freshest of two sightings of one thing, and the
+  seat's own commander is never an enemy sighting. The rest of item 145 (5)'s list above stands.
 - **Implements:** items 104 (the gateway half), 133 (3) (i), 136 (5); register S1-34 (gateway),
   S2-02 (gateway's marker), S2-11, S2-12 (measured). **Needs:** `con4`, `ids` and `vfy2` merged; the
   ruled decisions 5 and 6. **Acceptance:**
@@ -1455,6 +1484,12 @@ rename (below) stands.
   **Agent-days:** 6–7.
 
 ### `vfy2` — `crates/verifier` + `crates/plan-core`: S2's constructs
+
+**Merged as #125 (`cb2da2e`, head `7218f86`) (decisions-log item 146 (1), (3) (a) and (b), and
+(4)).** No chain moved; as the second of `ids` and `vfy2` to merge, it re-blessed every
+`report_hash` golden for snapshot version 10 (E33). The size budget counts `protect` entries, a
+duplicate entry is W0502, and its "for later lanes" are carried in `site`, `atk`, `dfnd`, `wgw`,
+`vfy3` and section 2.2 (the next `proto/**` pull request).
 
 - **Owns:** `crates/verifier`, `crates/plan-core`, their goldens, the named place in
   `godot/fixtures/rows_report.json`, and, if it changes the verifier goldens' fixture, the named
@@ -1571,6 +1606,11 @@ rename (below) stands.
 - **E0019 lifted** (decisions-log item 145 (5)): `con4`'s refusal of the base kit's blueprints, the
   sim's `build_target_base_kit` entry and the verifier's E0019, is removed when this lane builds
   them, after `vfy2`; `crates/verifier/tests/refusals.rs` holds the two to each other.
+- **The wall's ground-dependent checks** (decisions-log item 146 (4), from `vfy2` #125): the
+  verifier makes only the column and box-extent halves of the wall box's checks (E0416, E0417,
+  E0511, E0512), because the view carries no terrain. This lane makes the rest in the sim: whether
+  the box's `min.z` reaches the ground, the wall's height over the ground in every column against
+  `wall_min_height_voxels`, and the 3-D sphere test, each a typed refusal.
 - **Implements:** items 128 (d), 144 (5); spec §4, §6's Build row, §7's Repair band, §8, §9;
   register S2-10.
 - **Needs:** `fire` merged; the ruled decisions 10, 15, 26, 38, 40, 42 and 43.
@@ -1759,6 +1799,10 @@ rename (below) stands.
   `crates/client-gdext` (34 counted) and `crates/mesher` (33 counted); E28's per-frame cost of the
   full entity list. Every new piece that schedules or draws without deciding is named in the PR for
   AGENTS.md §3 rule 4. Nothing here decides, times or validates (rule 4).
+- **Also (decisions-log item 146 (4), from `rnds` #124):** `host_link.gd`'s `--gamectl=` and
+  `--root=` readers silently take the first match of a repeated option, where `rnds`' `--rounds`
+  reader refuses a repeat (`RoundsRefusal.REPEATED`); this lane gives them the same refusal, with
+  its words and its `godot_project.rs` pins.
 - **Implements:** register S2-12's measurement; G1's stress headroom; item 144 (11)'s cracked
   terrain, drawn. **Needs:** `wgw` and `fire` merged (the client draws an unknown material as air,
   so it waits for both the wire's table and the sim's materials, E14); the ruled decisions 5, 10
@@ -1823,6 +1867,18 @@ rename (below) stands.
   verifier follows the sim (the main session's call, open to the owner's veto). The verifier mirrors
   the sim there and no verifier lane runs in wave 4, so this lane is granted
   `crates/verifier/src/refusals.rs`' E0012 entry, with its case and goldens, as named places.
+- **Also (decisions-log item 146 (4), from `vfy2` #125):**
+  - a protect-list selector ranking `ENEMY_KNOWN` raises E0415 in the verifier and would raise
+    E0015 at the sim once the arm compiles: the lane keeps one of the two and names which in its
+    PR, the verifier's E0415 check for the protect list, with its case and goldens, being a named
+    place if the lane drops it;
+  - pickets are spent as ordered scouts in the verifier's projection, as Survey's are, and the sim
+    spends them the same way;
+  - when E0012 lifts, `/defend/` leaves `refusals.rs`' `not_compiled` skip list, through the E0012
+    places above;
+  - the picket ceiling borrows Survey's `u8` scout column until Defend's own column exists
+    (`crates/verifier/src/semantics.rs`' marker, register S2-18): the lane gives Defend its column
+    and discharges the marker, or re-dates it.
 - **Implements:** items 104, 138 (4) (c) (pickets); spec §6's Defend row, §4's bodyguard, §10's
   reflex; register S2-02 (the sim's half), S2-04. **Needs:** `site` and `fall` merged; the ruled
   decisions 6, 12, 13 and 21. **Acceptance:**
@@ -1866,8 +1922,10 @@ rename (below) stands.
   now), if `dfnd` has not done it in its named place; an I-level note where `AVOID_KNOWN_THREATS`
   has no sighting in `Scope` to avoid and so routes as `DIRECT` (a new code, the editor's
   explanation and no more); the prose and catalogue text for SAFEST and `flee_on_threat` brought to
-  decision 12; E0209 stays S3's (the enemy-knowledge predicates). **Granted** (decisions-log item
-  145 (5)): `crates/gateway/tests/{methods,advice,economy}.rs` and
+  decision 12; E0209 stays S3's (the enemy-knowledge predicates); and, from `vfy2` #125
+  (decisions-log item 146 (4)), a half-written general `Area` (a protected, probe or avoid area
+  missing a corner) refused as E0101 outside a wall's box, as a wall's box already is, with a case.
+  **Granted** (decisions-log item 145 (5)): `crates/gateway/tests/{methods,advice,economy}.rs` and
   `tests/golden/docs/reference/expected.docs.txt`, which a new catalogue row moves. **Needs:** `dfnd`
   and `vfy2` merged; decision 12. **Acceptance:** a case per code; the catalogue golden. **Contract PR:** no.
   **Agent-days:** 1.5–2.
@@ -1922,6 +1980,15 @@ rename (below) stands.
 - **For the owner, before the lane starts** (decisions-log item 145 (5)): which enemy commander an
   Attack on "the enemy commander" (`con4`'s `AttackTarget.enemy_commander`) picks when there are
   three seats. The lane puts the question with its options and stops for the answer.
+- **Also (decisions-log item 146 (4), from `vfy2` #125):**
+  - E0418's commander rule follows the owner's answer to that question; today any enemy
+    commander's sighting inside `verifier.reach_memory_ms` qualifies;
+  - the lane needs `wgw` merged (`Scope`'s sightings) before freshness means anything in a real
+    match;
+  - an empty Attack arm in a deploy's `initial` is refused today (E0013, as the sim refuses it):
+    whether it becomes legal, as Defend's will, is this lane's to settle; lifting E0013 drops
+    `/attack/` from `refusals.rs`' `not_compiled` and prices the fields in the sim's
+    `mandate_fields` as `interface.rs` does.
 - **Implements:** items 13, 104; spec §4 (hunting), §6's Attack row, §9 (breach, friendly fire);
   register S2-03. **Needs:** `dfnd` merged; the ruled decisions 9, 10, 12, 14, 40 and 41.
   **Acceptance:** `an_attack_waits_for_its_force_size`; `the_target_is_pinned_at_the_seal`;
@@ -2265,9 +2332,9 @@ with new names, their ids taken at the merge of `main` (E17, E33).
 | 3 | `base` | determinism code: the tick loop's per-phase form and its `MidTick` refusal (E30); the event vocabulary (`StepFailure` `targets_unwritten`) |
 | 4 | `con4` | `playbook.proto` (the header's defaults list, decision 4), `gateway.proto`, `proto/buf.yaml`'s scoped `ignore_only`, the generated tree, the schema and docs goldens |
 | 5 | `night` | `xtask/src/scenario.rs` (what the `scenario` step checks), `xtask/src/package.rs`'s replay list (a named place: `collect_played`, so the package never replays an arm), `.github/workflows/nightly-scenarios.yml`, the nightly result golden (a new golden format) |
-| — | the harness PR (main session, after this plan's item 145 docs PR; open on `docs/harness-merge-only`) | AGENTS.md §6 (the merge-only rule in place of "rebase on `main`", and `tests/golden/scenarios/nightly-result/` in the list of tests that pin the operator's output), CLAUDE.md (~76, the local-verify path), `scripts/merge-train.sh` (~19–21, ~53, ~188: it rebase-merges, rebases the next lane with `--force-with-lease`, and refuses a branch with merge commits), and `.claude/workflows/wave-lanes.js` (~106) (decisions-log item 145 (3) and (7)). The workspace `[lints]` half is its own later contract PR, the next row. Until it merges, `scripts/merge-train.sh` is out of use as a whole (its default mode rebase-merges and rebases and force-pushes the next lane; `--local-verify` refuses merge commits), and the main session merges each PR by a merge commit |
-| — | the lints PR (main session, after the harness PR) | the workspace `[lints]`: `arithmetic_side_effects` and `panic` denied in the crates that parse untrusted input, and `todo` and `unimplemented` at the integration gate (decisions-log item 145 (5)) |
-| — | the firewall-runner PR (main session) | `.github/workflows/claude.yml`'s `runs-on` (item 142 (3)), in the gap between `night` and `g3h`, once the owner's first triggered `claude.yml` run has happened |
+| — | the harness PR (main session, after this plan's item 145 docs PR; **merged as #122, `b1380aa`**, decisions-log item 146 (1)) | AGENTS.md §6 (the merge-only rule in place of "rebase on `main`", and `tests/golden/scenarios/nightly-result/` in the list of tests that pin the operator's output), CLAUDE.md (~76, the local-verify path), `scripts/merge-train.sh` (~19–21, ~53, ~188: it rebase-merged, rebased the next lane with `--force-with-lease`, and refused a branch with merge commits), and `.claude/workflows/wave-lanes.js` (~106) (decisions-log item 145 (3) and (7)). The workspace `[lints]` half is its own later contract PR, the next row. Since it merged, `scripts/merge-train.sh` is in use again, merge-only: every PR merges by `gh pr merge --merge --match-head-commit`, and a lane takes `main` by a signed merge |
+| — | the lints PR (main session, after the harness PR) | the workspace `[lints]`: `arithmetic_side_effects` and `panic` denied in the crates that parse untrusted input, and `todo` and `unimplemented` at the integration gate (decisions-log item 145 (5); split from the harness PR by item 146 (3) (c)) |
+| — | the firewall-runner PR (main session) | `.github/workflows/claude.yml`'s `runs-on` (item 142 (3)), and `ci.yml`'s DCO message (~390), which still says `git rebase --signoff <base>`, brought to AGENTS.md §8's remedy (item 146 (4)); in the gap between `night` and `g3h`, once the owner's first triggered `claude.yml` run has happened |
 | 6 | `ids` | determinism code: ids and generations, the typed id columns, the placement counter, the beacons-lost column, the ruin reserve, `SNAPSHOT_VERSION` 10; the event vocabulary (`ruin_buried`) |
 | 7 | `vfy2` | `report_hash`'s `Scope` encoding |
 | 8 | `fire` | the combat phase, the kill-credit split (E32), `Stream::Combat`'s first draw, the shell table, wall, cracked terrain and bedrock materials (new wire values in the chunk digests; bedrock written by generation, moving the mapgen digest goldens), the destroyed-value and tally columns, the attacker memory, `SNAPSHOT_VERSION` 11, event kinds, the bore's golden (a new golden format) |
@@ -2281,8 +2348,8 @@ with new names, their ids taken at the merge of `main` (E17, E33).
 | 16 | `g3r` | `cargo xtask g3-budget`, `.github/workflows/ci.yml`'s new job |
 | 17 | `tune2` | the rules' values (`rules_hash`), the scenario format (the walkers' key removed), `xtask/src/scenario.rs` |
 
-As merged so far: `msrv`, `con3`, `base`, `night`, with `con4` open as #120 after `night`
-(decisions-log item 145 (1)).
+As merged so far: `msrv`, `con3`, `base`, `night` (decisions-log item 145 (1)), then `con4` #120,
+the harness PR #122, `ids` #123 and `vfy2` #125 (decisions-log item 146 (1)).
 
 `NIGHTLY_SCENARIOS_ENABLED` is not a PR: it is a repository variable the owner sets (decision 30).
 

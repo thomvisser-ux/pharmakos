@@ -228,8 +228,10 @@ Signed-off-by: Your Name <your.email@example.com>
 ```
 
 using your real name and a working address. A commit without a sign-off will be
-asked for one before it is merged; the fix for an existing branch is
-`git rebase --signoff <base>`.
+asked for one before it is merged. Before you push, fix it in place with
+`git commit --amend -s`, or `git rebase --signoff <base>` for several commits;
+once a branch is pushed it is never rewritten, so make the commits again,
+signed, on a new branch and open a new pull request (AGENTS.md sections 6 and 8).
 
 By signing off you agree that your contribution is licensed under the tier of
 the directory it lands in, as listed in the table above, with no additional
