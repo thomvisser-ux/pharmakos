@@ -2099,7 +2099,15 @@ impl Surface {
             // standing on a vent: an opponent with eyes on the place sees it,
             // exactly as it sees a placed beacon. Its *queuing* is not here -
             // that is a spend, and a spend is the seat's own business.
-            | EventKind::StructureCompleted => Ok(Audience::World {
+            | EventKind::StructureCompleted
+            // S2's `fire`: a destruction, a shell's landing and a wreck are
+            // things in the world an opponent with eyes on the place sees; a
+            // wreck and a buried wreck are nobody's.
+            | EventKind::UnitDestroyed
+            | EventKind::StructureDestroyed
+            | EventKind::ShellLanded
+            | EventKind::WreckLeft
+            | EventKind::WreckBuried => Ok(Audience::World {
                 owner: event.seat,
                 at: event
                     .at
@@ -2149,7 +2157,12 @@ impl Surface {
             | EventKind::SalvageDelivered
             | EventKind::BeaconRecycled
             | EventKind::Settled
-            | EventKind::KillCredited => event.seat.map(Audience::Private).ok_or_else(|| {
+            | EventKind::KillCredited
+            // S2's `fire`: return fire and a retreat are a seat's rules of
+            // engagement and its retreat threshold acting, its own settings,
+            // announced to it (spec section 6's Common row).
+            | EventKind::ReturnedFire
+            | EventKind::RetreatAnnounced => event.seat.map(Audience::Private).ok_or_else(|| {
                 Error::internal(format!(
                     "the sim emitted `{}` for no seat, and a seat's orders have no other audience",
                     event.kind.name()
@@ -3933,7 +3946,10 @@ mod tests {
         // lines, and the five that carry a treasury or a credit figure.
         // `structure_completed` is the tenth kind T14 adds and is the one it
         // puts on the world's side, for the reason `beacon_placed` is there.
-        assert_eq!(private, 13 + 9);
+        //
+        // Plus S2's `fire`'s two: `returned_fire` and `retreat_announced`, a
+        // seat's own rules of engagement and retreat threshold acting.
+        assert_eq!(private, 13 + 9 + 2);
         assert!(matches!(
             Surface::audience_of(&sim_event(EventKind::BeaconPlaced, Some(1))),
             Ok(Audience::World { .. })

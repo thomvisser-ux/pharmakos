@@ -408,7 +408,8 @@ fn a_seat_that_was_never_placed_does_not_survive_a_no_survivor_end() {
 }
 
 /// The audit's public rank read (decisions-log item 135 (2) (e)), term by
-/// term in spec section 3's tie-break order: the score first, then enemy value
+/// term in spec section 3's tie-break order as S2's plan's decision 7 reads it:
+/// the score first, then held value (unsmoothed net worth), then enemy value
 /// destroyed, then fewer beacons lost; seats tied on every term share a rank,
 /// the next rank counts every seat ahead of it, and a seat with no line holds
 /// no place. The gateway's displayed standing reads this and keeps no copy.
@@ -446,8 +447,8 @@ fn the_rank_follows_the_audits_tie_break_term_by_term() {
     );
     assert_eq!(
         ranks(vec![line(0, 200, 50, 3), line(1, 200, 10, 0)]),
-        vec![Some(1), Some(2)],
-        "on a tied score, more destroyed ranks ahead, whatever was lost"
+        vec![Some(2), Some(1)],
+        "on a tied score, more held ranks ahead (decision 7: the builder beats the raider),          whatever was lost"
     );
     assert_eq!(
         ranks(vec![line(0, 200, 10, 2), line(1, 200, 10, 1)]),

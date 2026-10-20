@@ -311,7 +311,15 @@ const CONTROL_BANNED: &[(&str, &str)] = &[
 /// A determinism lint is never on this list and never will be: AGENTS.md section
 /// 5 says an `#[allow]` that defeats one is a contract change wearing a
 /// disguise.
-const PERMITTED_ALLOWS: &[&str] = &["clippy::struct_field_names", "clippy::unused_self"];
+///
+/// `clippy::too_many_lines` is on it for `strings::event_text`, whose match has
+/// one arm per sim event kind on purpose, so a kind added to the sim's bus fails
+/// to compile there (S2's plan, E17; S2's `fire` took it past the threshold).
+const PERMITTED_ALLOWS: &[&str] = &[
+    "clippy::struct_field_names",
+    "clippy::unused_self",
+    "clippy::too_many_lines",
+];
 
 /// Every `.rs` file under `crates/gateway/src`, in path order.
 ///

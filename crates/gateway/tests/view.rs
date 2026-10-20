@@ -684,6 +684,10 @@ fn the_full_map_unlock_comes_from_a_server_side_policy_change() {
 /// that produces the bytes, rather than in a client that draws the wrong
 /// thing.
 #[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one row per material of the sim's catalogue, which is the table this test holds the wire to"
+)]
 fn the_wire_material_table_is_the_sims() {
     const TABLE: &[(u8, &str, Material)] = &[
         (0, "air", Material::AIR),
@@ -695,6 +699,79 @@ fn the_wire_material_table_is_the_sims() {
         (6, "heat vent, lean", Material::VENT_LEAN),
         (7, "heat vent, standard", Material::VENT_STANDARD),
         (8, "heat vent, rich", Material::VENT_RICH),
+        (9, "wall, seat 0, whole", Material::WALL_SEAT_0),
+        (10, "wall, seat 0, cracked", Material::WALL_SEAT_0_CRACKED),
+        (11, "wall, seat 1, whole", Material::WALL_SEAT_1),
+        (12, "wall, seat 1, cracked", Material::WALL_SEAT_1_CRACKED),
+        (13, "wall, seat 2, whole", Material::WALL_SEAT_2),
+        (14, "wall, seat 2, cracked", Material::WALL_SEAT_2_CRACKED),
+        (15, "wall, seat 3, whole", Material::WALL_SEAT_3),
+        (16, "wall, seat 3, cracked", Material::WALL_SEAT_3_CRACKED),
+        (17, "dirt, cracked once", Material::DIRT_CRACKED_ONCE),
+        (18, "dirt, cracked twice", Material::DIRT_CRACKED_TWICE),
+        (19, "stone, cracked once", Material::STONE_CRACKED_ONCE),
+        (20, "stone, cracked twice", Material::STONE_CRACKED_TWICE),
+        (
+            21,
+            "scrap seam, lean, cracked once",
+            Material::ORE_LEAN_CRACKED_ONCE,
+        ),
+        (
+            22,
+            "scrap seam, lean, cracked twice",
+            Material::ORE_LEAN_CRACKED_TWICE,
+        ),
+        (
+            23,
+            "scrap seam, standard, cracked once",
+            Material::ORE_STANDARD_CRACKED_ONCE,
+        ),
+        (
+            24,
+            "scrap seam, standard, cracked twice",
+            Material::ORE_STANDARD_CRACKED_TWICE,
+        ),
+        (
+            25,
+            "scrap seam, rich, cracked once",
+            Material::ORE_RICH_CRACKED_ONCE,
+        ),
+        (
+            26,
+            "scrap seam, rich, cracked twice",
+            Material::ORE_RICH_CRACKED_TWICE,
+        ),
+        (
+            27,
+            "heat vent, lean, cracked once",
+            Material::VENT_LEAN_CRACKED_ONCE,
+        ),
+        (
+            28,
+            "heat vent, lean, cracked twice",
+            Material::VENT_LEAN_CRACKED_TWICE,
+        ),
+        (
+            29,
+            "heat vent, standard, cracked once",
+            Material::VENT_STANDARD_CRACKED_ONCE,
+        ),
+        (
+            30,
+            "heat vent, standard, cracked twice",
+            Material::VENT_STANDARD_CRACKED_TWICE,
+        ),
+        (
+            31,
+            "heat vent, rich, cracked once",
+            Material::VENT_RICH_CRACKED_ONCE,
+        ),
+        (
+            32,
+            "heat vent, rich, cracked twice",
+            Material::VENT_RICH_CRACKED_TWICE,
+        ),
+        (33, "bedrock", Material::BEDROCK),
     ];
     assert_eq!(TABLE.len(), Material::ALL.len(), "every material v1 has");
 

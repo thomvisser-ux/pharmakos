@@ -58,9 +58,10 @@ use crate::math::quantity::{Hp, Kw, Money, Tick};
 use crate::pathing::router::{RestoredRouter, first_route_digest_mismatch};
 use crate::runner::{DEFAULT_ROUND_LIMIT, MatchParts, MatchPhase, MatchState};
 use crate::tables::{
-    BeaconColumns, BeaconId, BeaconTable, CREDIT_SLOTS, ColumnBox, CreditTable, QuarterTurns,
-    SeatColumns, SeatId, SeatTable, SightingColumns, SightingTable, StructureColumns, StructureId,
-    StructureTable, TargetColumns, TargetTable, UnitColumns, UnitTable, WreckTable,
+    Arms, BeaconColumns, BeaconId, BeaconTable, CREDIT_SLOTS, ColumnBox, Common, CreditTable,
+    QuarterTurns, SeatColumns, SeatId, SeatTable, ShellTable, SightingColumns, SightingTable,
+    StructureColumns, StructureId, StructureTable, Tally, TargetColumns, TargetTable, UnitColumns,
+    UnitTable, WreckTable,
 };
 use crate::voxels::{CHUNK_VOXELS, VoxelStore};
 use crate::world::{RestoredTables, World};
@@ -161,7 +162,19 @@ use serde::{Deserialize, Serialize};
 /// because it carries no placement counter, and a world restored from it would
 /// hand a dead beacon's name to the next one. The gateway's save refuses a
 /// version-9 snapshot by its stamp first.
-pub const SNAPSHOT_VERSION: u32 = 10;
+///
+/// **Version 11 is S2's combat** (S2's plan, task `fire`; E12, E13, E15 and
+/// E16). It adds every asset's combat memory -- the tick its weapon may next
+/// fire on, and the last enemy that damaged it with the tick (units,
+/// structures and beacons alike) -- each unit's retreat, each beacon's Common
+/// settings (the rules of engagement and the retreat threshold), each seat's
+/// tally (the enemy value it destroyed, its kills, its shared kills and its
+/// losses), each wreck's tick, and a new table, the shells in flight: each
+/// shell's aim point, landing tick, seat, firer and weapon. A version-10 file
+/// is refused rather than read: it carries no cooldown, and a world restored
+/// from it would fire on a tick the unbroken run held its fire. The gateway's
+/// save refuses a version-10 snapshot by its stamp first.
+pub const SNAPSHOT_VERSION: u32 = 11;
 
 /// A flat, fixed-width projection of the world.
 ///
@@ -201,6 +214,19 @@ pub struct Snapshot {
     pub seat_placed: Vec<u32>,
     /// Each seat's beacons lost ([`crate::tables::SeatTable::beacons_lost`]).
     pub seat_beacons_lost: Vec<u32>,
+    /// Each seat's enemy value destroyed, in `$` ([`crate::tables::Tally`]).
+    pub seat_destroyed: Vec<i64>,
+    /// Each seat's kills.
+    pub seat_kills: Vec<u32>,
+    /// Each seat's shared kills.
+    pub seat_shared_kills: Vec<u32>,
+    /// Each seat's losses.
+    pub seat_losses: Vec<u32>,
+    /// The last enemy to attack each seat's assets
+    /// ([`crate::tables::SeatTable::attacks`]).
+    pub seat_attacker: Vec<u32>,
+    /// When.
+    pub seat_attacked_at: Vec<u32>,
 
     /// Unit ids.
     pub unit_id: Vec<u32>,
@@ -225,6 +251,18 @@ pub struct Snapshot {
     pub unit_busy_until: Vec<u32>,
     /// Whether each unit row is free, `0` or `1` (S2's plan, E1).
     pub unit_free: Vec<u8>,
+    /// The tick each unit's weapon may next fire on ([`crate::tables::Arms`]).
+    pub unit_ready_at: Vec<u32>,
+    /// The last enemy that damaged each unit, or
+    /// [`crate::tables::NO_ATTACKER`].
+    pub unit_attacker: Vec<u32>,
+    /// When, or [`crate::tables::NEVER_ATTACKED`].
+    pub unit_attacked_at: Vec<u32>,
+    /// The target each unit's last return-fire shot answered
+    /// ([`crate::tables::Arms::engaged`]).
+    pub unit_engaged: Vec<u32>,
+    /// The beacon each unit is retreating to, or [`BeaconId::NONE`].
+    pub unit_retreat: Vec<u32>,
 
     /// Beacon ids.
     pub beacon_id: Vec<u32>,
@@ -262,6 +300,18 @@ pub struct Snapshot {
     pub beacon_seam: Vec<u32>,
     /// Whether each beacon row is free, `0` or `1`.
     pub beacon_free: Vec<u8>,
+    /// The tick each beacon's weapon may next fire on: a core's.
+    pub beacon_ready_at: Vec<u32>,
+    /// The last enemy that damaged each beacon.
+    pub beacon_attacker: Vec<u32>,
+    /// When.
+    pub beacon_attacked_at: Vec<u32>,
+    /// The target each beacon's last return-fire shot answered.
+    pub beacon_engaged: Vec<u32>,
+    /// Each beacon's rules of engagement, `MandateSettings.roe`'s wire value.
+    pub beacon_roe: Vec<u8>,
+    /// Each beacon's retreat threshold, a whole percent.
+    pub beacon_retreat_pct: Vec<u8>,
 
     /// Structure ids.
     pub structure_id: Vec<u32>,
@@ -283,6 +333,14 @@ pub struct Snapshot {
     pub structure_ruined_at: Vec<u32>,
     /// Whether each structure row is free, `0` or `1`.
     pub structure_free: Vec<u8>,
+    /// The tick each structure's weapon may next fire on.
+    pub structure_ready_at: Vec<u32>,
+    /// The last enemy that damaged each structure.
+    pub structure_attacker: Vec<u32>,
+    /// When.
+    pub structure_attacked_at: Vec<u32>,
+    /// The target each structure's last return-fire shot answered.
+    pub structure_engaged: Vec<u32>,
 
     /// Wreck ids.
     pub wreck_id: Vec<u32>,
@@ -292,6 +350,20 @@ pub struct Snapshot {
     pub wreck_salvage: Vec<i64>,
     /// Whether each wreck row is free, `0` or `1`.
     pub wreck_free: Vec<u8>,
+    /// The tick each wreck was left on.
+    pub wreck_left_at: Vec<u32>,
+
+    /// Three raw Q16.16 coordinates per shell in flight: its aim point
+    /// ([`crate::tables::ShellTable`]; S2's plan, E13).
+    pub shell_aim: Vec<i32>,
+    /// The tick each shell lands on.
+    pub shell_lands_at: Vec<u32>,
+    /// The seat each shell's firer belonged to.
+    pub shell_seat: Vec<u8>,
+    /// Each shell's firer, an [`crate::knowledge::AssetId`] raw value.
+    pub shell_firer: Vec<u32>,
+    /// Each shell's weapon ([`crate::tables::Armament::id`]).
+    pub shell_weapon: Vec<u8>,
 
     /// The beacon each list setting belongs to.
     pub target_beacon: Vec<u32>,
@@ -499,6 +571,12 @@ impl Default for Snapshot {
             seat_qm_cursor: Vec::new(),
             seat_placed: Vec::new(),
             seat_beacons_lost: Vec::new(),
+            seat_destroyed: Vec::new(),
+            seat_kills: Vec::new(),
+            seat_shared_kills: Vec::new(),
+            seat_losses: Vec::new(),
+            seat_attacker: Vec::new(),
+            seat_attacked_at: Vec::new(),
             unit_id: Vec::new(),
             unit_seat: Vec::new(),
             unit_kind: Vec::new(),
@@ -510,6 +588,11 @@ impl Default for Snapshot {
             unit_carrying: Vec::new(),
             unit_busy_until: Vec::new(),
             unit_free: Vec::new(),
+            unit_ready_at: Vec::new(),
+            unit_attacker: Vec::new(),
+            unit_attacked_at: Vec::new(),
+            unit_engaged: Vec::new(),
+            unit_retreat: Vec::new(),
             beacon_id: Vec::new(),
             beacon_seat: Vec::new(),
             beacon_pos: Vec::new(),
@@ -526,6 +609,12 @@ impl Default for Snapshot {
             beacon_flee: Vec::new(),
             beacon_seam: Vec::new(),
             beacon_free: Vec::new(),
+            beacon_ready_at: Vec::new(),
+            beacon_attacker: Vec::new(),
+            beacon_attacked_at: Vec::new(),
+            beacon_engaged: Vec::new(),
+            beacon_roe: Vec::new(),
+            beacon_retreat_pct: Vec::new(),
             structure_id: Vec::new(),
             structure_seat: Vec::new(),
             structure_kind: Vec::new(),
@@ -536,10 +625,20 @@ impl Default for Snapshot {
             structure_rotation: Vec::new(),
             structure_ruined_at: Vec::new(),
             structure_free: Vec::new(),
+            structure_ready_at: Vec::new(),
+            structure_attacker: Vec::new(),
+            structure_attacked_at: Vec::new(),
+            structure_engaged: Vec::new(),
             wreck_id: Vec::new(),
             wreck_pos: Vec::new(),
             wreck_salvage: Vec::new(),
             wreck_free: Vec::new(),
+            wreck_left_at: Vec::new(),
+            shell_aim: Vec::new(),
+            shell_lands_at: Vec::new(),
+            shell_seat: Vec::new(),
+            shell_firer: Vec::new(),
+            shell_weapon: Vec::new(),
             target_beacon: Vec::new(),
             target_kind: Vec::new(),
             target_blueprint: Vec::new(),
@@ -783,6 +882,7 @@ impl Snapshot {
         let sightings = world.sightings();
         let credit = world.credit();
         let voxels = world.voxels();
+        let shells = world.shells();
 
         let state = world.match_state().to_parts();
         let plan = world.interpreter().to_parts();
@@ -810,6 +910,12 @@ impl Snapshot {
             seat_qm_cursor: seats.qm_cursors().to_vec(),
             seat_placed: seats.placed().to_vec(),
             seat_beacons_lost: seats.beacons_lost().to_vec(),
+            seat_destroyed: seats.tallies().iter().map(|t| t.destroyed.raw()).collect(),
+            seat_kills: seats.tallies().iter().map(|t| t.kills).collect(),
+            seat_shared_kills: seats.tallies().iter().map(|t| t.shared_kills).collect(),
+            seat_losses: seats.tallies().iter().map(|t| t.losses).collect(),
+            seat_attacker: seats.attacks().iter().map(|a| a.attacker).collect(),
+            seat_attacked_at: seats.attacks().iter().map(|a| a.attacked_at).collect(),
 
             unit_id: units.ids().to_vec(),
             unit_seat: units.seats().to_vec(),
@@ -822,6 +928,11 @@ impl Snapshot {
             unit_carrying: units.carrying().iter().map(|m| m.raw()).collect(),
             unit_busy_until: units.busy_until().to_vec(),
             unit_free: units.frees().iter().map(|f| u8::from(*f)).collect(),
+            unit_ready_at: units.arms().iter().map(|a| a.ready_at).collect(),
+            unit_attacker: units.arms().iter().map(|a| a.attacker).collect(),
+            unit_attacked_at: units.arms().iter().map(|a| a.attacked_at).collect(),
+            unit_engaged: units.arms().iter().map(|a| a.engaged).collect(),
+            unit_retreat: units.retreats().iter().map(|b| b.raw()).collect(),
 
             beacon_id: beacons.ids().to_vec(),
             beacon_seat: beacons.seats().to_vec(),
@@ -839,6 +950,12 @@ impl Snapshot {
             beacon_flee: beacons.flees().iter().map(|f| u8::from(*f)).collect(),
             beacon_seam: beacons.seams().to_vec(),
             beacon_free: beacons.frees().iter().map(|f| u8::from(*f)).collect(),
+            beacon_ready_at: beacons.arms().iter().map(|a| a.ready_at).collect(),
+            beacon_attacker: beacons.arms().iter().map(|a| a.attacker).collect(),
+            beacon_attacked_at: beacons.arms().iter().map(|a| a.attacked_at).collect(),
+            beacon_engaged: beacons.arms().iter().map(|a| a.engaged).collect(),
+            beacon_roe: beacons.commons().iter().map(|c| c.roe).collect(),
+            beacon_retreat_pct: beacons.commons().iter().map(|c| c.retreat_hp_pct).collect(),
 
             structure_id: structures.ids().to_vec(),
             structure_seat: structures.seats().to_vec(),
@@ -850,11 +967,22 @@ impl Snapshot {
             structure_rotation: structures.rotations().to_vec(),
             structure_ruined_at: structures.ruined_at().to_vec(),
             structure_free: structures.frees().iter().map(|f| u8::from(*f)).collect(),
+            structure_ready_at: structures.arms().iter().map(|a| a.ready_at).collect(),
+            structure_attacker: structures.arms().iter().map(|a| a.attacker).collect(),
+            structure_attacked_at: structures.arms().iter().map(|a| a.attacked_at).collect(),
+            structure_engaged: structures.arms().iter().map(|a| a.engaged).collect(),
 
             wreck_id: wrecks.ids().to_vec(),
             wreck_pos: axes_from_points(wrecks.positions()),
             wreck_salvage: wrecks.salvages().iter().map(|m| m.raw()).collect(),
             wreck_free: wrecks.frees().iter().map(|f| u8::from(*f)).collect(),
+            wreck_left_at: wrecks.left_at().to_vec(),
+
+            shell_aim: axes_from_points(shells.aims()),
+            shell_lands_at: shells.lands_at().to_vec(),
+            shell_seat: shells.seats().to_vec(),
+            shell_firer: shells.firers().to_vec(),
+            shell_weapon: shells.weapons().to_vec(),
 
             target_beacon: targets
                 .beacons()
@@ -1023,6 +1151,23 @@ impl Snapshot {
             qm_cursor: self.seat_qm_cursor.clone(),
             placed: self.seat_placed.clone(),
             beacons_lost: self.seat_beacons_lost.clone(),
+            tally: tallies(self)?,
+            attack: arms(
+                &self
+                    .seat_attacked_at
+                    .iter()
+                    .map(|_| 0)
+                    .collect::<Vec<u32>>(),
+                &self.seat_attacker,
+                &self.seat_attacked_at,
+                &self
+                    .seat_attacked_at
+                    .iter()
+                    .map(|_| crate::tables::NO_ATTACKER)
+                    .collect::<Vec<u32>>(),
+                self.tick,
+                "seat_attacker",
+            )?,
         }) {
             return Err(SnapshotError::Ragged("seat"));
         }
@@ -1049,6 +1194,20 @@ impl Snapshot {
             home: self.unit_home.iter().copied().map(BeaconId::new).collect(),
             carrying: self.unit_carrying.iter().copied().map(Money::new).collect(),
             busy_until: self.unit_busy_until.clone(),
+            arms: arms(
+                &self.unit_ready_at,
+                &self.unit_attacker,
+                &self.unit_attacked_at,
+                &self.unit_engaged,
+                self.tick,
+                "unit_ready_at",
+            )?,
+            retreat: self
+                .unit_retreat
+                .iter()
+                .copied()
+                .map(BeaconId::new)
+                .collect(),
             free: flags(&self.unit_free, "unit_free")?,
         }) {
             return Err(SnapshotError::Ragged("unit"));
@@ -1084,6 +1243,15 @@ impl Snapshot {
             seam_choice: self.beacon_seam_choice.clone(),
             flee: flags(&self.beacon_flee, "beacon_flee")?,
             seam: self.beacon_seam.clone(),
+            arms: arms(
+                &self.beacon_ready_at,
+                &self.beacon_attacker,
+                &self.beacon_attacked_at,
+                &self.beacon_engaged,
+                self.tick,
+                "beacon_ready_at",
+            )?,
+            common: commons(&self.beacon_roe, &self.beacon_retreat_pct)?,
             free: flags(&self.beacon_free, "beacon_free")?,
         }) {
             return Err(SnapshotError::Ragged("beacon"));
@@ -1127,6 +1295,14 @@ impl Snapshot {
             building: flags(&self.structure_building, "structure_building")?,
             rotation: rotations(&self.structure_rotation, "structure_rotation")?,
             ruined_at: self.structure_ruined_at.clone(),
+            arms: arms(
+                &self.structure_ready_at,
+                &self.structure_attacker,
+                &self.structure_attacked_at,
+                &self.structure_engaged,
+                self.tick,
+                "structure_ready_at",
+            )?,
             free: flags(&self.structure_free, "structure_free")?,
         }) {
             return Err(SnapshotError::Ragged("structure"));
@@ -1138,16 +1314,21 @@ impl Snapshot {
             self.wreck_id.clone(),
             points_from_axes(&self.wreck_pos).ok_or(SnapshotError::Ragged("wreck_pos"))?,
             self.wreck_salvage.iter().copied().map(Money::new).collect(),
+            self.wreck_left_at.clone(),
             flags(&self.wreck_free, "wreck_free")?,
         ) {
             return Err(SnapshotError::Ragged("wreck"));
         }
+        if wrecks.len() > world.wreck_limit() {
+            return Err(SnapshotError::OutOfRange("wreck_id"));
+        }
+        let shells = self.restore_shells(world)?;
 
         let targets = self.restore_targets(world)?;
         let sightings = self.restore_sightings(world)?;
         let credit = self.restore_credit(world)?;
 
-        let (voxels, chunks, features) = self.restore_store(world, seat_count)?;
+        let (voxels, chunks, features, bore) = self.restore_store(world, seat_count)?;
         // A held seam names a seam of the regenerated map, or none: an index
         // past the table, or one naming a vent, describes no beacon this sim
         // builds.
@@ -1185,9 +1366,11 @@ impl Snapshot {
             targets,
             sightings,
             credit,
+            shells,
             voxels,
             chunks,
             features,
+            bore,
             router,
             match_state,
             plan,
@@ -1549,9 +1732,6 @@ impl Snapshot {
         if self.structure_id.len() > crate::math::index::row(crate::world::STRUCTURE_ROWS) {
             return refuse("structure_id");
         }
-        if self.wreck_id.len() > crate::math::index::row(crate::world::WRECK_TABLE_ROOM) {
-            return refuse("wreck_id");
-        }
         for (salvage, free) in self.wreck_salvage.iter().zip(&self.wreck_free) {
             if *free != 0 && *salvage != 0 {
                 return refuse("wreck_free");
@@ -1709,7 +1889,15 @@ impl Snapshot {
         &self,
         world: &World,
         seat_count: u32,
-    ) -> Result<(VoxelStore, ChunkDigests, crate::features::FeatureTable), SnapshotError> {
+    ) -> Result<
+        (
+            VoxelStore,
+            ChunkDigests,
+            crate::features::FeatureTable,
+            crate::bore::Bore,
+        ),
+        SnapshotError,
+    > {
         if self.modified_chunk.len().saturating_mul(CHUNK_VOXELS) != self.modified_chunk_bytes.len()
         {
             return Err(SnapshotError::Ragged("modified_chunk"));
@@ -1717,6 +1905,7 @@ impl Snapshot {
         let generated = mapgen::generate(self.match_seed, world.rules(), seat_count)
             .map_err(SnapshotError::Map)?;
         let features = generated.features;
+        let bore = generated.bore;
         let mut voxels = generated.voxels;
         for (slot, chunk) in self.modified_chunk.iter().enumerate() {
             let from = slot.saturating_mul(CHUNK_VOXELS);
@@ -1749,7 +1938,63 @@ impl Snapshot {
             }
             chunk = chunk.saturating_add(1);
         }
-        Ok((voxels, chunks, features))
+        Ok((voxels, chunks, features, bore))
+    }
+
+    /// The shells in flight (S2's plan, E13), checked before anything is
+    /// written: the columns are one length, every seat byte names a seat of
+    /// the file, every weapon byte one this build arms, no shell has landed
+    /// already, and the table fits the receiving world's room.
+    ///
+    /// # Errors
+    ///
+    /// [`SnapshotError::Ragged`] for columns of different lengths or a table
+    /// past the room, and [`SnapshotError::OutOfRange`] naming a column whose
+    /// value describes no shell this sim fires.
+    fn restore_shells(&self, world: &World) -> Result<ShellTable, SnapshotError> {
+        let aims = points_from_axes(&self.shell_aim).ok_or(SnapshotError::Ragged("shell_aim"))?;
+        let seats = self.seat_id.len();
+        if self
+            .shell_seat
+            .iter()
+            .any(|seat| usize::from(*seat) >= seats)
+        {
+            return Err(SnapshotError::OutOfRange("shell_seat"));
+        }
+        // Every weapon byte names an indirect weapon this build arms, and
+        // every shell lands after the snapshot's tick and no later than that
+        // weapon's longest flight from it.
+        for (id, lands) in self.shell_weapon.iter().zip(&self.shell_lands_at) {
+            let flight = crate::tables::Armament::from_id(*id)
+                .and_then(|armament| world.weapon_of(armament))
+                .and_then(crate::arms::WeaponRow::longest_flight_ticks)
+                .ok_or(SnapshotError::OutOfRange("shell_weapon"))?;
+            if *lands <= self.tick || *lands > self.tick.saturating_add(flight) {
+                return Err(SnapshotError::OutOfRange("shell_lands_at"));
+            }
+        }
+        // Every firer is a unit, a structure or a beacon.
+        if self.shell_firer.iter().any(|firer| {
+            !matches!(
+                crate::knowledge::AssetId::new(*firer).tag(),
+                crate::knowledge::AssetId::TAG_UNIT
+                    | crate::knowledge::AssetId::TAG_STRUCTURE
+                    | crate::knowledge::AssetId::TAG_BEACON
+            )
+        }) {
+            return Err(SnapshotError::OutOfRange("shell_firer"));
+        }
+        let mut shells = ShellTable::with_room(world.shells().room());
+        if !shells.restore(
+            aims,
+            self.shell_lands_at.clone(),
+            self.shell_seat.clone(),
+            self.shell_firer.clone(),
+            self.shell_weapon.clone(),
+        ) {
+            return Err(SnapshotError::Ragged("shell"));
+        }
+        Ok(shells)
     }
 }
 
@@ -1809,6 +2054,109 @@ fn rotations(column: &[u8], name: &'static str) -> Result<Vec<u8>, SnapshotError
 /// other byte is refused as `Ragged(name)`. The capture writes nothing else,
 /// so a byte that is neither describes no world this sim saved, and reading
 /// it as `true` would re-save a different file from the one restored.
+/// Each seat's tally, the four columns walked together.
+///
+/// # Errors
+///
+/// [`SnapshotError::Ragged`] when the four columns disagree in length with the
+/// seat column.
+fn tallies(snapshot: &Snapshot) -> Result<Vec<Tally>, SnapshotError> {
+    let n = snapshot.seat_id.len();
+    if snapshot.seat_destroyed.len() != n
+        || snapshot.seat_kills.len() != n
+        || snapshot.seat_shared_kills.len() != n
+        || snapshot.seat_losses.len() != n
+    {
+        return Err(SnapshotError::Ragged("seat_tally"));
+    }
+    // A tally only ever grows from zero, and a shared kill is a kill.
+    if snapshot.seat_destroyed.iter().any(|value| *value < 0) {
+        return Err(SnapshotError::OutOfRange("seat_destroyed"));
+    }
+    if snapshot
+        .seat_shared_kills
+        .iter()
+        .zip(&snapshot.seat_kills)
+        .any(|(shared, kills)| shared > kills)
+    {
+        return Err(SnapshotError::OutOfRange("seat_shared_kills"));
+    }
+    Ok(snapshot
+        .seat_destroyed
+        .iter()
+        .zip(&snapshot.seat_kills)
+        .zip(&snapshot.seat_shared_kills)
+        .zip(&snapshot.seat_losses)
+        .map(|(((destroyed, kills), shared_kills), losses)| Tally {
+            destroyed: Money::new(*destroyed),
+            kills: *kills,
+            shared_kills: *shared_kills,
+            losses: *losses,
+        })
+        .collect())
+}
+
+/// One table's combat memory, its four columns walked together.
+///
+/// # Errors
+///
+/// [`SnapshotError::Ragged`], naming the first column, when they disagree in
+/// length, and [`SnapshotError::OutOfRange`] for an attack remembered from
+/// after the snapshot's own tick, which no run of this sim records.
+fn arms(
+    ready_at: &[u32],
+    attacker: &[u32],
+    attacked_at: &[u32],
+    engaged: &[u32],
+    tick: u32,
+    name: &'static str,
+) -> Result<Vec<Arms>, SnapshotError> {
+    if attacker.len() != ready_at.len()
+        || attacked_at.len() != ready_at.len()
+        || engaged.len() != ready_at.len()
+    {
+        return Err(SnapshotError::Ragged(name));
+    }
+    if attacked_at
+        .iter()
+        .any(|at| *at != crate::tables::NEVER_ATTACKED && *at > tick)
+    {
+        return Err(SnapshotError::OutOfRange(name));
+    }
+    Ok(ready_at
+        .iter()
+        .zip(attacker)
+        .zip(attacked_at)
+        .zip(engaged)
+        .map(|(((ready_at, attacker), attacked_at), engaged)| Arms {
+            ready_at: *ready_at,
+            attacker: *attacker,
+            attacked_at: *attacked_at,
+            engaged: *engaged,
+        })
+        .collect())
+}
+
+/// Each beacon's Common settings, the two columns walked together.
+///
+/// # Errors
+///
+/// [`SnapshotError::Ragged`] when they disagree in length; the beacon
+/// table's restore refuses a value out of range.
+fn commons(roe: &[u8], retreat: &[u8]) -> Result<Vec<Common>, SnapshotError> {
+    if roe.len() != retreat.len() {
+        return Err(SnapshotError::Ragged("beacon_roe"));
+    }
+    Ok(roe
+        .iter()
+        .zip(retreat)
+        .map(|(roe, retreat_hp_pct)| Common {
+            roe: *roe,
+            retreat_hp_pct: *retreat_hp_pct,
+        })
+        .collect())
+}
+
 fn flags(column: &[u8], name: &'static str) -> Result<Vec<bool>, SnapshotError> {
     column
         .iter()
