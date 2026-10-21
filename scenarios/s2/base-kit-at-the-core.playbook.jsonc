@@ -4,7 +4,7 @@
 // S2's `site`: one visit to the core that writes Build's S2 settings and two
 // of the base kit -- an autocannon and a wall box filled to the ground -- with
 // a repair threshold of 50 and rebuild destroyed on. See
-// repair-and-salvage.scenario.jsonc for what is asserted, and why the duel
+// base-kit-at-the-core.scenario.jsonc for what is asserted, and why the duel
 // that exercises repair and salvage is a headless test.
 {
   "schema_version": {"major": 1, "minor": 0},

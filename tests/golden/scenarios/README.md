@@ -259,9 +259,9 @@ hashed as a block after every other that writes nothing while every beacon
 holds a placed beacon's defaults, nothing is paid and no target is a wall, and
 no committed scenario writes a Build setting or a wall or fields a repair
 drone. Its two scenarios are new, each one segment of 60 s on the golden seed
-through the playbook door: `repair-and-salvage` writes Build's S2 settings and
+through the playbook door: `base-kit-at-the-core` writes Build's S2 settings and
 builds an autocannon and a wall box at seat 0's core, and
-`terraform-refills-a-crater` levels a mortar's footprint with `FILL` before it
+`terraform-levels-a-footprint` levels a mortar's footprint with `FILL` before it
 is bought. The mortar duel the plan named for them -- repair, salvage and the
 crater refill -- is headless (`crates/sim/tests/site.rs`'
 `a_mortar_duel_repairs_and_salvages` and `a_mortar_duel_refills_its_craters`):

@@ -4,7 +4,7 @@
 // S2's `site`: one visit to the core that writes `terraform: FILL` and a
 // mortar anchored two voxels above the ground, so the core's build drones
 // level its footprint before the Quartermaster buys it. See
-// terraform-refills-a-crater.scenario.jsonc for what is asserted, and why the
+// terraform-levels-a-footprint.scenario.jsonc for what is asserted, and why the
 // crater refill is a headless test.
 {
   "schema_version": {"major": 1, "minor": 0},

@@ -4,7 +4,7 @@
 // S2's `site` (S2's plan, task `site`): the base kit and Build's S2 settings
 // through the playbook door, on the golden seed, in one minute.
 //
-//   seat 0  seals scenarios/s2/repair-and-salvage.playbook.jsonc: one visit
+//   seat 0  seals scenarios/s2/base-kit-at-the-core.playbook.jsonc: one visit
 //           to its core that writes an autocannon at (362, 30, 36), a wall
 //           box (357..360, 32, 35..37) filled to the ground at
 //           `wall_cost_per_voxel` a voxel, a repair threshold of 50 and
@@ -17,11 +17,13 @@
 // with the golden seed's cores 335 voxels apart: a seven-beacon chain each,
 // five rounds of 480 s, which cost the CI legs their time budget. So the duel
 // is crates/sim/tests/site.rs' `a_mortar_duel_repairs_and_salvages`, played
-// headless with the beacons placed by the fixture: repair drones repair their
-// wounded and pay for it in the Repair band, and salvage any seat's wrecks.
+// headless with the beacons placed by the fixture, twice and through a
+// restore, with its chain pinned: repair drones repair their wounded and pay
+// for it in the Repair band, and salvage any seat's wrecks. This scenario
+// asserts the base kit only, as its name says.
 {
   "format": "pharmakos.scenario.v1",
-  "name": "repair-and-salvage",
+  "name": "base-kit-at-the-core",
   "summary": "Seat 0 writes Build's S2 settings and builds an autocannon and a wall at its core.",
 
   "map": {
@@ -33,7 +35,7 @@
   "round_limit": 1,
 
   "seats": [
-    { "seat": 0, "kind": "playbook", "playbook": "scenarios/s2/repair-and-salvage.playbook.jsonc" },
+    { "seat": 0, "kind": "playbook", "playbook": "scenarios/s2/base-kit-at-the-core.playbook.jsonc" },
     { "seat": 1, "kind": "safe" }
   ],
 
@@ -47,7 +49,7 @@
     { "assert": "event_fired", "event": "structure_completed", "seat": 0, "by_tick": 1200,
       "note": "The autocannon is raised." },
     { "assert": "hash_chain_equals",
-      "golden": "tests/golden/scenarios/repair-and-salvage/expected.hashes.txt",
+      "golden": "tests/golden/scenarios/base-kit-at-the-core/expected.hashes.txt",
       "note": "Byte-identical on Windows, Linux and macOS; pins the wall's voxels too. Re-blessed with `cargo xtask golden --bless`, and never to turn a red build green." }
   ]
 }

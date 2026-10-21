@@ -56,8 +56,8 @@ const SCENARIOS: &[&str] = &[
     COVER_NEAREST_VENT,
     MINE_TO_DEPTH,
     BROWNOUT_BY_RECYCLE,
-    REPAIR_AND_SALVAGE,
-    TERRAFORM_REFILLS_A_CRATER,
+    BASE_KIT_AT_THE_CORE,
+    TERRAFORM_LEVELS_A_FOOTPRINT,
 ];
 
 /// The scenario against the built-in operator: seat 1 is `builtin`, played by
@@ -101,14 +101,19 @@ const MINE_TO_DEPTH: &str = "scenarios/s1/mine-to-depth.scenario.jsonc";
 const BROWNOUT_BY_RECYCLE: &str = "scenarios/s1/brownout-by-recycle.scenario.jsonc";
 
 /// The base kit and Build's S2 settings through the playbook door: an
-/// autocannon and a wall at seat 0's core (S2's `site`; the duel that repairs
-/// and salvages is headless, in `crates/sim/tests/site.rs`).
-const REPAIR_AND_SALVAGE: &str = "scenarios/s2/repair-and-salvage.scenario.jsonc";
+/// autocannon and a wall box at seat 0's core (S2's `site`). It asserts the
+/// base kit, not repair or salvage: the plan's mortar duel is evidenced
+/// headless, by `crates/sim/tests/site.rs`' `a_mortar_duel_repairs_and_salvages`,
+/// played twice and through a restore with its chain pinned.
+const BASE_KIT_AT_THE_CORE: &str = "scenarios/s2/base-kit-at-the-core.scenario.jsonc";
 
 /// Terraform through the playbook door: `FILL` levels a mortar's footprint
-/// before it is bought (S2's `site`; decisions-log item 144 (5); the crater
-/// refill is headless, in `crates/sim/tests/site.rs`).
-const TERRAFORM_REFILLS_A_CRATER: &str = "scenarios/s2/terraform-refills-a-crater.scenario.jsonc";
+/// before it is bought (S2's `site`; decisions-log item 144 (5)). The crater
+/// refill is evidenced headless, by `crates/sim/tests/site.rs`'
+/// `a_mortar_duel_refills_its_craters`, played twice and through a restore
+/// with its chain pinned.
+const TERRAFORM_LEVELS_A_FOOTPRINT: &str =
+    "scenarios/s2/terraform-levels-a-footprint.scenario.jsonc";
 
 /// **The exact set of scenarios allowed to seal through the harness door.**
 ///
@@ -287,7 +292,7 @@ fn the_committed_list_is_the_whole_set() {
         ),
         (
             "s2",
-            &["repair-and-salvage", "terraform-refills-a-crater"][..],
+            &["base-kit-at-the-core", "terraform-levels-a-footprint"][..],
         ),
     ] {
         let dir = root().join("scenarios").join(stage);

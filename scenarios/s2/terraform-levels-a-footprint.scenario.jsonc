@@ -4,7 +4,7 @@
 // S2's `site` (decisions-log item 144 (5)): terraform through the playbook
 // door, on the golden seed, in one minute.
 //
-//   seat 0  seals scenarios/s2/terraform-refills-a-crater.playbook.jsonc: one
+//   seat 0  seals scenarios/s2/terraform-levels-a-footprint.playbook.jsonc: one
 //           visit to its core that writes `terraform: FILL` and a mortar
 //           anchored at (354, 30, 38), two voxels above the ground. The
 //           core's build drones fill the two voxels under the anchor, each at
@@ -14,12 +14,13 @@
 //   seat 1  seals nothing, so it files the safe playbook.
 //
 // The crater refill needs a crater, and a playbook makes one only with a
-// mortar duel the cores' distance makes long (repair-and-salvage.scenario.jsonc
+// mortar duel the cores' distance makes long (base-kit-at-the-core.scenario.jsonc
 // says why), so the refill is crates/sim/tests/site.rs'
-// `a_mortar_duel_refills_its_craters`, played headless.
+// `a_mortar_duel_refills_its_craters`, played headless, twice and through a
+// restore, with its chain pinned. This scenario asserts the levelling only.
 {
   "format": "pharmakos.scenario.v1",
-  "name": "terraform-refills-a-crater",
+  "name": "terraform-levels-a-footprint",
   "summary": "Seat 0's core levels a mortar's footprint with FILL before it is bought, then raises it.",
 
   "map": {
@@ -31,7 +32,7 @@
   "round_limit": 1,
 
   "seats": [
-    { "seat": 0, "kind": "playbook", "playbook": "scenarios/s2/terraform-refills-a-crater.playbook.jsonc" },
+    { "seat": 0, "kind": "playbook", "playbook": "scenarios/s2/terraform-levels-a-footprint.playbook.jsonc" },
     { "seat": 1, "kind": "safe" }
   ],
 
@@ -47,7 +48,7 @@
     { "assert": "event_fired", "event": "structure_completed", "seat": 0, "by_tick": 1200,
       "note": "And raised." },
     { "assert": "hash_chain_equals",
-      "golden": "tests/golden/scenarios/terraform-refills-a-crater/expected.hashes.txt",
+      "golden": "tests/golden/scenarios/terraform-levels-a-footprint/expected.hashes.txt",
       "note": "Byte-identical on Windows, Linux and macOS; pins the two levelled voxels too. Re-blessed with `cargo xtask golden --bless`, and never to turn a red build green." }
   ]
 }
