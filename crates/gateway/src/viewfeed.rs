@@ -140,9 +140,12 @@ struct ViewerState {
     structures: Vec<(u64, String)>,
     /// The wrecks this viewer has been shown, by wreck id.
     wrecks: Vec<(u64, String)>,
-    /// The shells in flight this viewer has been shown, by
-    /// [`ViewFeed::shell_handle`]'s key.
-    shells: Vec<(u64, String)>,
+    /// The shells in flight this viewer has been shown, by their key; a shell
+    /// that has landed is forgotten ([`ViewFeed::forget_landed_shells`]).
+    shells: Vec<(ShellKey, String)>,
+    /// How many shell handles this viewer has been given, so a forgotten one
+    /// is never minted again.
+    shells_minted: u64,
     /// The viewer's `e_NN` handles for other seats' beacons, by beacon id,
     /// in the order each was named.
     beacons: Vec<(u32, String)>,
@@ -165,6 +168,7 @@ impl ViewerState {
             structures: Vec::new(),
             wrecks: Vec::new(),
             shells: Vec::new(),
+            shells_minted: 0,
             beacons: Vec::new(),
             unnamed: Vec::new(),
         }
@@ -629,21 +633,36 @@ impl ViewFeed {
 
     /// This viewer's opaque handle for a shell in flight, `p_N`, minted on
     /// first sight. A shell has no id of its own in the sim's table (its rows
-    /// compact as shells land), so it is keyed by what makes it one shell: its
-    /// firer, with the id's generation, and the tick it lands on. A weapon
-    /// fires at most once a tick, so no two shells share the key.
+    /// compact as shells land), so it is keyed by what makes it one shell
+    /// ([`ShellKey`]).
     ///
     /// # Errors
     ///
     /// As [`ViewFeed::unit_handle`].
-    pub fn shell_handle(
-        &mut self,
-        viewer: Viewer,
-        firer: u32,
-        lands_at: u32,
-    ) -> Result<String, Error> {
-        let key = (u64::from(firer) << 32) | u64::from(lands_at);
-        ViewFeed::handle(&mut self.viewers, viewer, key, Space::Shell)
+    pub fn shell_handle(&mut self, viewer: Viewer, key: ShellKey) -> Result<String, Error> {
+        let index = slot_of(&mut self.viewers, viewer);
+        let state = self.viewers.get_mut(index).ok_or_else(|| {
+            Error::internal("the view feed lost the viewer slot it had just made")
+        })?;
+        if let Some((_, handle)) = state.shells.iter().find(|(held, _)| *held == key) {
+            return Ok(handle.clone());
+        }
+        let number = state.shells_minted.checked_add(1).ok_or_else(|| {
+            Error::internal("this viewer has been given more shell handles than u64 counts")
+        })?;
+        state.shells_minted = number;
+        let handle = format!("p_{number}");
+        state.shells.push((key, handle.clone()));
+        Ok(handle)
+    }
+
+    /// Forget this viewer's handles for shells no longer in flight, so the
+    /// table holds what is in the air rather than every shell of the match.
+    /// A landed shell's number is never minted again.
+    pub fn forget_landed_shells(&mut self, viewer: Viewer, live: &[ShellKey]) {
+        if let Some(state) = self.viewers.iter_mut().find(|state| state.viewer == viewer) {
+            state.shells.retain(|(key, _)| live.contains(key));
+        }
     }
 
     /// This viewer's opaque handle for a structure. As [`ViewFeed::unit_handle`].
@@ -840,7 +859,6 @@ impl ViewFeed {
             Space::Unit => ("u_", &mut state.units),
             Space::Structure => ("s_", &mut state.structures),
             Space::Wreck => ("w_", &mut state.wrecks),
-            Space::Shell => ("p_", &mut state.shells),
         };
         if let Some((_, handle)) = table.iter().find(|(held, _)| *held == id) {
             return Ok(handle.clone());
@@ -865,8 +883,21 @@ enum Space {
     Structure,
     /// A wreck, `w_N`.
     Wreck,
-    /// A shell in flight, `p_N`.
-    Shell,
+}
+
+/// What makes one shell in flight one shell: its firer, with the id's
+/// generation, the tick it lands on and the point it was aimed at, raw. Two
+/// shots of one weapon can land on one tick (a far shot and a nearer one a
+/// cooldown later), but not at one point, since one distance is one flight
+/// time; the key is therefore unique among the shells in the air.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ShellKey {
+    /// The firer, an `AssetId` raw value.
+    pub firer: u32,
+    /// The tick it lands on.
+    pub lands_at: u32,
+    /// The point it was aimed at, raw Q16.16.
+    pub aim: [i32; 3],
 }
 
 /// This viewer's slot, made on first sight of it.

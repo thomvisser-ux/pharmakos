@@ -4648,9 +4648,11 @@ mod tests {
             .map(pharmakos_sim::math::fixed::Fx::raw)
     }
 
-    /// Two mortar shells of seat 1's in flight, landing next tick: one aimed
-    /// beside seat 1's own core, out of seat 0's sight, and one aimed beside
-    /// seat 0's core, in it.
+    /// Two mortar shells of seat 1's in flight, from one mortar, landing on
+    /// the same next tick: one aimed beside seat 1's own core, out of seat 0's
+    /// sight, and one aimed beside seat 0's core, in it. One firer and one
+    /// landing tick, so only the aim tells them apart (#133's reviews: a far
+    /// shot and a nearer one a cooldown later land together).
     fn two_shells(
         snapshot: &mut pharmakos_sim::snapshot::Snapshot,
         world: &pharmakos_sim::world::World,
@@ -4658,34 +4660,34 @@ mod tests {
         use pharmakos_sim::knowledge::AssetId;
         use pharmakos_sim::tables::{Armament, StructureId, StructureKind};
         let weapon = Armament::Structure(StructureKind::Mortar).id();
-        for (index, target) in [(0_u32, 1_u8), (1, 0)] {
+        let firer = AssetId::of_structure(StructureId::new(0))
+            .expect("an asset")
+            .raw();
+        for target in [1_u8, 0] {
             let [x, y, z] = core_at(world, target);
             snapshot.shell_aim.extend([x, y.saturating_add(3 << 16), z]);
             snapshot
                 .shell_lands_at
                 .push(snapshot.tick.saturating_add(1));
             snapshot.shell_seat.push(1);
-            snapshot.shell_firer.push(
-                AssetId::of_structure(StructureId::new(index))
-                    .expect("an asset")
-                    .raw(),
-            );
+            snapshot.shell_firer.push(firer);
             snapshot.shell_weapon.push(weapon);
         }
     }
 
     /// `ViewEntity.Kind.SHELL`: a shell in flight is drawn at its aim point
-    /// with its firer's seat as owner and no hit points. The firing seat sees
-    /// both of its own; seat 0 sees only the one aimed into its live vision,
-    /// and is **never sent** the one aimed out of it.
+    /// with its firer's seat as owner and no hit points, and is sent only to
+    /// its firing seat until the sim gives its in-flight point (#133's fog
+    /// review, F1). The firing seat sees both of its own, under two distinct
+    /// `p_N` handles though they share a firer and a landing tick. Seat 0 is
+    /// **never sent** either, not even the one aimed into its live vision; a
+    /// casual match, which hides nothing, sends both to every seat.
     #[test]
-    fn a_shell_is_shown_only_where_it_is_seen() {
+    fn a_shell_is_sent_only_to_its_firing_seat() {
         let mut surface = resumed_with(FogPolicy::fogged(), two_shells);
-        let world = surface.host().expect("hosted").world();
-        let near_zero =
-            crate::view::voxel_of(core_at(world, 0).map(pharmakos_sim::math::fixed::Fx::from_raw));
         let own = seen_of(&mut surface, 1, "shell");
         assert_eq!(own.len(), 2, "the firing seat sees its own shells: {own:?}");
+        let mut ids: Vec<String> = Vec::new();
         for shell in &own {
             assert_eq!(
                 shell.get("owner"),
@@ -4693,21 +4695,26 @@ mod tests {
             );
             assert!(shell.get("hp").is_none() && shell.get("max_hp").is_none());
             assert_eq!(shell.get("subtype"), Some(&Json::String(String::new())));
+            match shell.get("id") {
+                Some(Json::String(id)) if id.starts_with("p_") => ids.push(id.clone()),
+                other => panic!("a shell handle: {other:?}"),
+            }
         }
-        let theirs = seen_of(&mut surface, 0, "shell");
+        ids.dedup();
         assert_eq!(
-            theirs.len(),
-            1,
-            "only the shell aimed into seat 0's sight: {theirs:?}"
+            ids.len(),
+            2,
+            "one firer, one landing tick, two shells, two ids"
         );
-        let at = theirs
-            .first()
-            .and_then(|shell| shell.get("at"))
-            .expect("a place");
+        assert!(
+            seen_of(&mut surface, 0, "shell").is_empty(),
+            "seat 0 is sent no shell in flight, even one aimed where it sees"
+        );
+        let mut casual = resumed_with(FogPolicy::casual(), two_shells);
         assert_eq!(
-            at.get("x"),
-            Some(&Json::Number(near_zero.x.to_string())),
-            "the one beside seat 0's core"
+            seen_of(&mut casual, 0, "shell").len(),
+            2,
+            "nothing is hidden"
         );
     }
 
