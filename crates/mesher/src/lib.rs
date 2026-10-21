@@ -287,6 +287,15 @@ pub enum ChunkInputError {
         /// How many chunks the grid holds.
         chunks: u32,
     },
+    /// A whole map's material or light array was not the grid's voxel count long.
+    MapLength {
+        /// `materials` or `light`.
+        what: &'static str,
+        /// The length that was offered.
+        len: usize,
+        /// The grid's voxel count.
+        expected: usize,
+    },
 }
 
 impl fmt::Display for ChunkInputError {
@@ -305,6 +314,14 @@ impl fmt::Display for ChunkInputError {
             Self::OutsideGrid { chunk, chunks } => write!(
                 f,
                 "chunk {chunk} is outside the map, whose grid holds {chunks} chunks"
+            ),
+            Self::MapLength {
+                what,
+                len,
+                expected,
+            } => write!(
+                f,
+                "the map's {what} must be {expected} bytes for this grid, got {len}"
             ),
         }
     }

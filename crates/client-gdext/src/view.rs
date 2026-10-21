@@ -817,7 +817,7 @@ impl ViewModel {
             map.light.all(),
             self.params,
             chunk,
-        );
+        )?;
         let view = chunk_view(&map.materials, &map.light, &map.borders, chunk)?;
         mesher.mesh_chunk_into(&view, buffers)?;
         if let Some(size) = map.sizes.get_mut(chunk_slot(chunk)) {

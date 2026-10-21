@@ -1736,7 +1736,13 @@ fn mesh_case(
 
     let input = ChunkInput::new(
         mesher_order,
-        light.chunk_light(0).to_vec(),
+        light
+            .chunk_light(0)
+            .ok_or_else(|| BridgeError::Schema {
+                pointer: String::new(),
+                message: "the self-check map has no chunk 0".to_owned(),
+            })?
+            .to_vec(),
         ChunkInput::no_borders(),
     )?;
     mesher.mesh_chunk_into(&input.as_view(), buffers)?;

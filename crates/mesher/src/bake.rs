@@ -246,16 +246,9 @@ impl LightField {
 
     /// One chunk's light, in [`voxel_index`] order — what a [`ChunkView`] takes.
     ///
-    /// Returns an empty slice for a chunk outside the grid, which [`ChunkView::new`]
-    /// refuses as [`crate::ChunkInputError::Light`]; [`chunk_view`] refuses such a chunk
-    /// itself, as [`crate::ChunkInputError::OutsideGrid`].
+    /// [`None`] for a chunk outside the grid.
     #[must_use]
-    pub fn chunk_light(&self, chunk: u32) -> &[u8] {
-        self.chunk_light_of(chunk).unwrap_or(&[])
-    }
-
-    /// One chunk's light, or [`None`] for a chunk outside the grid.
-    fn chunk_light_of(&self, chunk: u32) -> Option<&[u8]> {
+    pub fn chunk_light(&self, chunk: u32) -> Option<&[u8]> {
         self.light.get(chunk_range(chunk)?)
     }
 
@@ -322,10 +315,43 @@ impl LightField {
         self.check(materials)?;
         // The pad is this call's, not the caller's — see the doc comment. A box the cut to
         // the map empties re-lights nothing.
-        let Some((lo, hi)) = self.padded_box(lo, hi) else {
+        let Some((lo, hi)) = self.relight_extent(materials, lo, hi) else {
             return Ok(());
         };
+        self.rebake_within(materials, lo, hi);
+        Ok(())
+    }
 
+    /// The box an edit of `lo..=hi` re-lights: the edited box widened by the pad and cut to
+    /// the map, reaching further down wherever the edit moved a column's height. A roof
+    /// removed over a gap deeper than the pad turns the whole gap to sky down to the
+    /// column's floor, and a roof added over one darkens it as deep, so the box reaches the
+    /// lower of the old and new heights less the pad (S2's `view`, its correctness review).
+    /// [`None`] when nothing of the box is inside the map.
+    fn relight_extent(
+        &self,
+        materials: &[u8],
+        lo: [i32; 3],
+        hi: [i32; 3],
+    ) -> Option<([i32; 3], [i32; 3])> {
+        let (padded_lo, padded_hi) = self.padded_box(lo, hi)?;
+        let pad = self.params.pad();
+        let mut low = padded_lo[1];
+        for z in padded_lo[2]..=padded_hi[2] {
+            for x in padded_lo[0]..=padded_hi[0] {
+                let was = self.height_at(x, z);
+                let now = self.column_top(materials, x, z);
+                if was != now {
+                    low = low.min(was.min(now).saturating_sub(pad).max(0));
+                }
+            }
+        }
+        Some(([padded_lo[0], low, padded_lo[2]], padded_hi))
+    }
+
+    /// Re-bakes exactly the inclusive box `lo..=hi`, which lies inside the map, joining up
+    /// with the light outside it.
+    fn rebake_within(&mut self, materials: &[u8], lo: [i32; 3], hi: [i32; 3]) {
         // Heights are recomputed over whole columns: an edit at the top of a column moves
         // the column's floor, and the sky seeds below depend on it.
         self.recompute_heights(materials, lo[0], hi[0], lo[2], hi[2]);
@@ -352,7 +378,6 @@ impl LightField {
         }
         self.push_shell_seeds(materials, lo, hi);
         self.flood(materials, lo, hi);
-        Ok(())
     }
 
     /// The chunks an edit of the inclusive box `lo..=hi` dirties, in chunk-index order.
@@ -420,11 +445,11 @@ impl LightField {
     ) -> Result<(), LightError> {
         self.check(materials)?;
         let mut changed: Vec<([i32; 3], [i32; 3])> = Vec::with_capacity(edits.len());
-        let padded: Vec<([i32; 3], [i32; 3])> = edits
+        let extents: Vec<([i32; 3], [i32; 3])> = edits
             .iter()
-            .filter_map(|(lo, hi)| self.padded_box(*lo, *hi))
+            .filter_map(|(lo, hi)| self.relight_extent(materials, *lo, *hi))
             .collect();
-        let volume = padded.iter().fold(0_usize, |sum, (lo, hi)| {
+        let volume = extents.iter().fold(0_usize, |sum, (lo, hi)| {
             sum.saturating_add(box_volume(*lo, *hi))
         });
         if volume >= self.grid.voxel_count() {
@@ -432,13 +457,10 @@ impl LightField {
             self.bake_all(materials)?;
             self.whole_changes(&mut changed);
         } else {
-            for (lo, hi) in edits {
-                let Some((padded_lo, padded_hi)) = self.padded_box(*lo, *hi) else {
-                    continue;
-                };
-                self.snapshot(padded_lo, padded_hi);
-                self.rebake_box(materials, *lo, *hi)?;
-                if let Some(moved) = self.box_changes(padded_lo, padded_hi) {
+            for (lo, hi) in &extents {
+                self.snapshot(*lo, *hi);
+                self.rebake_within(materials, *lo, *hi);
+                if let Some(moved) = self.box_changes(*lo, *hi) {
                     changed.push(moved);
                 }
             }
@@ -585,21 +607,26 @@ impl LightField {
         tallest
     }
 
+    /// The topmost solid voxel plus one in column `(x, z)` of `materials`; 0 for a column
+    /// with none.
+    fn column_top(&self, materials: &[u8], x: i32, z: i32) -> i32 {
+        let [_, voxels_y, _] = self.grid.voxels();
+        let mut y = voxels_y - 1;
+        while y >= 0 {
+            if self.material_at(materials, x, y, z) != AIR {
+                // `y` is below the map's height, an `i32`, so `y + 1` fits.
+                return y + 1;
+            }
+            y -= 1;
+        }
+        0
+    }
+
     /// Recomputes whole-column heights over an inclusive x and z range.
     fn recompute_heights(&mut self, materials: &[u8], x0: i32, x1: i32, z0: i32, z1: i32) {
-        let [_, voxels_y, _] = self.grid.voxels();
         for z in z0..=z1 {
             for x in x0..=x1 {
-                let mut height = 0_i32;
-                let mut y = voxels_y - 1;
-                while y >= 0 {
-                    if self.material_at(materials, x, y, z) != AIR {
-                        // `y` is below the map's height, an `i32`, so `y + 1` fits.
-                        height = y + 1;
-                        break;
-                    }
-                    y -= 1;
-                }
+                let height = self.column_top(materials, x, z);
                 if let Some(at) = self.column_offset(x, z)
                     && let Some(slot) = self.heights.get_mut(at)
                 {
@@ -785,6 +812,12 @@ impl ChunkBorders {
     /// materials and light.
     ///
     /// `light` is [`LightField::all`]. Allocates nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::ChunkInputError::MapLength`] when `materials` or `light` is not the grid's
+    /// voxel count long, and [`crate::ChunkInputError::OutsideGrid`] for a chunk outside
+    /// the grid.
     pub fn gather(
         &mut self,
         grid: ChunkGrid,
@@ -792,12 +825,23 @@ impl ChunkBorders {
         light: &[u8],
         params: LightParams,
         chunk: u32,
-    ) {
-        let Some([cx, cy, cz]) = grid.chunk_coords(chunk) else {
-            self.materials.fill(AIR);
-            self.light.fill(params.light_max());
-            return;
-        };
+    ) -> Result<(), crate::ChunkInputError> {
+        let expected = grid.voxel_count();
+        for (what, len) in [("materials", materials.len()), ("light", light.len())] {
+            if len != expected {
+                return Err(crate::ChunkInputError::MapLength {
+                    what,
+                    len,
+                    expected,
+                });
+            }
+        }
+        let [cx, cy, cz] = grid
+            .chunk_coords(chunk)
+            .ok_or(crate::ChunkInputError::OutsideGrid {
+                chunk,
+                chunks: grid.chunk_count(),
+            })?;
         let origin = [
             cx.saturating_mul(CHUNK_EDGE_I32),
             cy.saturating_mul(CHUNK_EDGE_I32),
@@ -827,21 +871,33 @@ impl ChunkBorders {
                     1 => [quick, outside, slow], // free axes x (quick) and z (slow)
                     _ => [quick, slow, outside], // free axes x (quick) and y (slow)
                 };
-                // Outside the map nothing is there, and it is lit as sky.
-                let (material, value) = map_offset(
+                // Outside the map nothing is there, and it is lit as sky: the map's rim rule
+                // (this type's doc).
+                let (material, value) = match map_offset(
                     grid,
                     origin[0].saturating_add(local[0]),
                     origin[1].saturating_add(local[1]),
                     origin[2].saturating_add(local[2]),
-                )
-                .and_then(|offset| materials.get(offset).zip(light.get(offset)))
-                .map_or((AIR, params.light_max()), |(material, value)| {
-                    (*material, *value)
-                });
+                ) {
+                    None => (AIR, params.light_max()),
+                    Some(offset) => {
+                        let (Some(material), Some(value)) =
+                            (materials.get(offset), light.get(offset))
+                        else {
+                            return Err(crate::ChunkInputError::MapLength {
+                                what: "materials",
+                                len: materials.len(),
+                                expected,
+                            });
+                        };
+                        (*material, *value)
+                    }
+                };
                 *material_slot = material;
                 *light_slot = value;
             }
         }
+        Ok(())
     }
 
     /// The six borders, as a [`ChunkView`] takes them. Every slot is present.
@@ -897,7 +953,7 @@ pub fn chunk_view<'a>(
     let slice = materials
         .get(range)
         .ok_or(crate::ChunkInputError::Materials { len: held })?;
-    let light = field.chunk_light_of(chunk).ok_or(outside)?;
+    let light = field.chunk_light(chunk).ok_or(outside)?;
     ChunkView::new(slice, light, borders.views())
 }
 
@@ -1260,7 +1316,9 @@ mod tests {
         let mut buffers = MeshBuffers::empty();
         (0..grid.chunk_count())
             .map(|chunk| {
-                borders.gather(grid, materials, field.all(), params, chunk);
+                borders
+                    .gather(grid, materials, field.all(), params, chunk)
+                    .expect("inside");
                 let view = chunk_view(materials, field, &borders, chunk).expect("inside");
                 mesher
                     .mesh_chunk_into(&view, &mut buffers)
@@ -1358,6 +1416,77 @@ mod tests {
         }
     }
 
+    /// A roof over a gap deeper than the pad, opened and then closed again: the gap's
+    /// light changes all the way down to its floor, two chunks below the roof, and the
+    /// relight must reach it (S2's `view`, its correctness review: the padded box alone
+    /// stopped 15 voxels under the roof and left the floor lit as it was).
+    #[test]
+    fn a_roof_over_a_deep_gap_relights_down_to_the_floor() {
+        let grid = ChunkGrid::new(2, 2, 2).expect("a 2 x 2 x 2 grid is legal");
+        let params = LightParams::new(15, 1).expect("the committed pair");
+        let [voxels_x, _, voxels_z] = grid.voxels();
+        let mut materials = vec![AIR; grid.voxel_count()];
+        let set = |materials: &mut Vec<u8>, x: i32, y: i32, z: i32, material: u8| {
+            if let Some(at) = map_offset(grid, x, y, z)
+                && let Some(slot) = materials.get_mut(at)
+            {
+                *slot = material;
+            }
+        };
+        for z in 0..voxels_z {
+            for x in 0..voxels_x {
+                for y in 0..20 {
+                    set(&mut materials, x, y, z, 1);
+                }
+                // A roof at y = 50 over the middle of the map, 30 voxels above the floor.
+                if (8..56).contains(&x) && (8..56).contains(&z) {
+                    set(&mut materials, x, 50, z, 1);
+                }
+            }
+        }
+        let mut field = LightField::new(grid, params);
+        field.bake_all(&materials).expect("the right size");
+        let hole = ([30, 50, 30], [33, 50, 33]);
+        for (material, what) in [(AIR, "opened"), (1, "closed")] {
+            let before = meshes(grid, &materials, &field, params);
+            for z in hole.0[2]..=hole.1[2] {
+                for x in hole.0[0]..=hole.1[0] {
+                    set(&mut materials, x, 50, z, material);
+                }
+            }
+            let mut dirty = Vec::new();
+            field
+                .relight(&materials, &[hole], &mut dirty)
+                .expect("the right size");
+            let mut fresh = LightField::new(grid, params);
+            fresh.bake_all(&materials).expect("the right size");
+            assert!(
+                field.all() == fresh.all(),
+                "the roof {what}: the relit field is a bake from scratch's"
+            );
+            let after = meshes(grid, &materials, &field, params);
+            let mut moved = 0;
+            for (chunk, (was, now)) in before.iter().zip(&after).enumerate() {
+                let chunk = u32::try_from(chunk).expect("a chunk index");
+                if was != now {
+                    moved += 1;
+                    assert!(
+                        dirty.contains(&chunk),
+                        "the roof {what}: chunk {chunk}'s mesh moved, dirty is {dirty:?}"
+                    );
+                }
+            }
+            assert!(moved > 0, "the roof {what}: something was redrawn");
+            // The floor at y = 19 is in the bottom layer of chunks, under the hole.
+            assert!(
+                dirty.iter().any(|chunk| grid
+                    .chunk_coords(*chunk)
+                    .is_some_and(|coords| coords[1] == 0)),
+                "the roof {what}: the floor's chunks are redrawn: {dirty:?}"
+            );
+        }
+    }
+
     #[test]
     fn a_material_array_of_the_wrong_length_is_refused() {
         let grid = ChunkGrid::new(1, 1, 1).expect("a one-chunk grid is legal");
@@ -1398,7 +1527,9 @@ mod tests {
         field.bake_all(&materials).expect("the right size");
 
         let mut borders = ChunkBorders::new();
-        borders.gather(grid, &materials, field.all(), params, 0);
+        borders
+            .gather(grid, &materials, field.all(), params, 0)
+            .expect("chunk 0 exists");
         let view = chunk_view(&materials, &field, &borders, 0).expect("chunk 0 exists");
         let mut mesher = Mesher::new(params);
         let mut out = MeshBuffers::empty();
@@ -1422,12 +1553,14 @@ mod tests {
         let mut field = LightField::new(grid, params);
         field.bake_all(&materials).expect("the right size");
         assert_eq!(
-            field.chunk_light(0).len(),
-            CHUNK_EDGE * CHUNK_EDGE * CHUNK_EDGE
+            field.chunk_light(0).map(<[u8]>::len),
+            Some(CHUNK_EDGE * CHUNK_EDGE * CHUNK_EDGE)
         );
-        assert_eq!(field.chunk_light(9).len(), 0, "outside the grid");
+        assert_eq!(field.chunk_light(9), None, "outside the grid");
         assert_eq!(
-            field.chunk_light(0).get(voxel_index(5, 10, 5)).copied(),
+            field
+                .chunk_light(0)
+                .and_then(|light| light.get(voxel_index(5, 10, 5)).copied()),
             Some(15)
         );
         let borders = ChunkBorders::new();

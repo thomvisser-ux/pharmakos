@@ -24,17 +24,15 @@ use std::path::PathBuf;
 const KEPT_FALLBACKS: &[(&str, &str, &str)] = &[
     (
         "bake.rs",
-        "self.chunk_light_of(chunk).unwrap_or(&[])",
-        "`chunk_light`'s documented answer for a chunk outside the grid, kept because its \
-         signature (no `Option`) is the client's: the empty slice is what `ChunkView::new` \
-         refuses as `ChunkInputError::Light`, and `chunk_view` itself refuses such a chunk \
-         as `OutsideGrid`",
-    ),
-    (
-        "bake.rs",
         "let widened_lo = lo.map(|value| value.saturating_sub(margin).max(0));",
         "a box is cut to the map, whose low edge is voxel 0 on every axis; the high edge is \
          cut beside it, and a box the cut empties is `None`",
+    ),
+    (
+        "bake.rs",
+        "low = low.min(was.min(now).saturating_sub(pad).max(0));",
+        "a relight's box reaches down to a moved column's lower height less the pad and is \
+         cut to the map's low edge, voxel 0, as every box is",
     ),
     (
         "bake.rs",
@@ -53,15 +51,6 @@ const KEPT_FALLBACKS: &[(&str, &str, &str)] = &[
         ".map_or(AIR, |material| *material)",
         "outside the map is air (`material_at`'s rule), and `check` has held the materials to \
          the grid's voxel count before any bake reads one",
-    ),
-    (
-        "bake.rs",
-        ".map_or((AIR, params.light_max()), |(material, value)| {",
-        "a border outside the map is open sky, air at `light_max` (`ChunkBorders`' documented \
-         rule). Inside the map the read is of the caller's map arrays, which `gather` cannot \
-         refuse because its signature (no `Result`) is the client's; an array shorter than \
-         the grid is refused by the bake's own `check` on the same array, which the client \
-         calls first",
     ),
     (
         "lib.rs",

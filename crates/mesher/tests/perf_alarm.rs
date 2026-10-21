@@ -140,7 +140,9 @@ fn per_chunk_mesh_cpu_p99() {
         .bake_all(&materials)
         .expect("the map is the right size");
     let mut borders = ChunkBorders::new();
-    borders.gather(grid, &materials, field.all(), params, 0);
+    borders
+        .gather(grid, &materials, field.all(), params, 0)
+        .expect("chunk 0 is inside the grid");
     let view = chunk_view(&materials, &field, &borders, 0).expect("chunk 0 is inside the grid");
 
     let mut mesher = Mesher::new(params);
@@ -405,7 +407,9 @@ fn crater_stream(explosions_per_s: u64, frames: u64, relight: Relight) -> Stream
                 .expect("a chunk of the grid")
         });
         for chunk in drained {
-            borders.gather(grid, &materials, field.all(), params, chunk);
+            borders
+                .gather(grid, &materials, field.all(), params, chunk)
+                .expect("inside the grid");
             let view = chunk_view(&materials, &field, &borders, chunk).expect("inside");
             mesher
                 .mesh_chunk_into(&view, &mut buffers)
