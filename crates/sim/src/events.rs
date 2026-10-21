@@ -265,11 +265,27 @@ pub enum EventKind {
     /// 25: the ash buries old wrecks). `subject` is the buried wreck and `at`
     /// where it lay; a wreck is nobody's, so the event names no seat.
     WreckBuried,
+    /// A detached region of voxels fell (S2's plan, `fall`; decisions-log item
+    /// 144 (1)): no face-connected path of solid voxels joined it to the
+    /// bedrock layer or a core's bore, so it dropped rigidly until it came to
+    /// rest. `at` is where its identifying voxel, the region's lowest voxel
+    /// index, came to rest, and `value` carries how many voxels it holds. A
+    /// region is terrain and nobody's, so the event names no seat.
+    RegionCollapsed,
+    /// Something on the map fell with a detached region it stood on, or was
+    /// under where one came to rest (S2's plan, `fall`; decision 11): an asset,
+    /// or a seat's commander, which spec section 4 says is not one. `seat` is
+    /// its owner (none for a ruin or a wreck), `subject` what fell, `at` where
+    /// it came to rest, and `value` the flat fall damage **filed** against it
+    /// in hit points, the rules table's `collapse.fall_damage_hp` (zero for a
+    /// wreck, which has no hit points). What it lost is the damage phase's,
+    /// clamped to what it had.
+    AssetFell,
 }
 
 impl EventKind {
     /// Every kind, in ascending [`EventKind::id`] order.
-    pub const ALL: [EventKind; 45] = [
+    pub const ALL: [EventKind; 47] = [
         EventKind::MatchStarted,
         EventKind::LullOpened,
         EventKind::PushStarted,
@@ -315,6 +331,8 @@ impl EventKind {
         EventKind::ReturnedFire,
         EventKind::RetreatAnnounced,
         EventKind::WreckBuried,
+        EventKind::RegionCollapsed,
+        EventKind::AssetFell,
     ];
 
     /// The wire id. Additive only: never reuse, never renumber.
@@ -366,6 +384,8 @@ impl EventKind {
             EventKind::ReturnedFire => 43,
             EventKind::RetreatAnnounced => 44,
             EventKind::WreckBuried => 45,
+            EventKind::RegionCollapsed => 46,
+            EventKind::AssetFell => 47,
         }
     }
 
@@ -418,6 +438,8 @@ impl EventKind {
             43 => Some(EventKind::ReturnedFire),
             44 => Some(EventKind::RetreatAnnounced),
             45 => Some(EventKind::WreckBuried),
+            46 => Some(EventKind::RegionCollapsed),
+            47 => Some(EventKind::AssetFell),
             _ => None,
         }
     }
@@ -473,6 +495,8 @@ impl EventKind {
             EventKind::ReturnedFire => "returned_fire",
             EventKind::RetreatAnnounced => "retreat_announced",
             EventKind::WreckBuried => "wreck_buried",
+            EventKind::RegionCollapsed => "region_collapsed",
+            EventKind::AssetFell => "asset_fell",
         }
     }
 

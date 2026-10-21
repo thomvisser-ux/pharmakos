@@ -1139,10 +1139,12 @@ impl VoxelStore {
     /// (AGENTS.md section 4.8's fourth place).
     ///
     /// `touched` is cleared and filled as [`VoxelStore::crater`] fills it, and
-    /// the return value is how many voxels changed. The ball is the crater's
-    /// shape, `dx^2 + dy^2 + dz^2 <= r^2`, walked `z`, then `y`, then `x`
-    /// ascending, which is a total order; no voxel's step depends on another's,
-    /// so the order changes nothing but is still fixed.
+    /// the return value is how many voxels changed. `removed` is called once
+    /// for every voxel the blast turned to air, in the walk's order: the
+    /// support rule seeds its search from them (S2's plan, `fall`). The ball
+    /// is the crater's shape, `dx^2 + dy^2 + dz^2 <= r^2`, walked `z`, then
+    /// `y`, then `x` ascending, which is a total order; no voxel's step
+    /// depends on another's, so the order changes nothing but is still fixed.
     pub fn blast(
         &mut self,
         centre: [i32; 3],
@@ -1150,6 +1152,7 @@ impl VoxelStore {
         levels: BlastLevels,
         bore: &crate::bore::Bore,
         touched: &mut Vec<u32>,
+        removed: &mut impl FnMut([i32; 3]),
     ) -> u32 {
         touched.clear();
         if radius < 0 {
@@ -1193,6 +1196,9 @@ impl VoxelStore {
                         && self.set(at, next)
                     {
                         changed = changed.saturating_add(1);
+                        if next.is_air() {
+                            removed(at);
+                        }
                         if let Ok(index) = usize::try_from(chunk)
                             && matches!(self.touch_flag.get(index), Some(false))
                         {

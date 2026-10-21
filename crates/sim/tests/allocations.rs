@@ -173,6 +173,7 @@ fn a_tick_allocates_nothing() {
     // capacity.
     for step in 0..50 {
         crater_at(runner.world_mut(), step);
+        collapse_at(runner.world_mut(), step);
         runner
             .step()
             .unwrap()
@@ -197,6 +198,7 @@ fn a_tick_allocates_nothing() {
     let units_before = runner.world().units().len();
     for step in 0..GROWTH_TICKS {
         crater_at(runner.world_mut(), step + 50);
+        collapse_at(runner.world_mut(), step + 50);
         runner
             .step()
             .unwrap()
@@ -222,6 +224,7 @@ fn a_tick_allocates_nothing() {
 
     let capacity_after_warmup = enc.encoded_len();
 
+    let regions_before = runner.world().collapse_counts().regions;
     let before = allocations();
     for step in 0..500 {
         // Every tick of the measured loop goes through the voxel phase with
@@ -229,6 +232,9 @@ fn a_tick_allocates_nothing() {
         // empty queue would leave `settle`, `mark` and `crater` outside the
         // property this file exists to defend.
         crater_at(runner.world_mut(), step + 50 + GROWTH_TICKS);
+        // And a collapse every tick (S2's plan, `fall`): the support rule's
+        // search, its fall and its labels' clearing inside the property too.
+        collapse_at(runner.world_mut(), step + 50 + GROWTH_TICKS);
         runner
             .step()
             .unwrap()
@@ -240,6 +246,11 @@ fn a_tick_allocates_nothing() {
         runner.world().encode(&mut enc);
     }
     let during = allocations() - before;
+    let fell = runner.world().collapse_counts().regions - regions_before;
+    assert!(
+        fell >= 500,
+        "a region fell on every measured tick, and a crater sometimes drops one too: {fell}"
+    );
 
     assert_eq!(
         during, 0,
@@ -282,4 +293,36 @@ fn crater_at(world: &mut World, step: u32) {
             .is_ok(),
         "the edit queue is full at step {step}"
     );
+}
+
+/// Queue a collapse on a fresh column: a voxel two above the column's top,
+/// joined to it by one voxel that the same tick's last edit removes, so the
+/// voxel above is a detached region of one that falls a voxel.
+///
+/// The columns walk a different coprime stride from [`crater_at`]'s, offset
+/// across the map, so a collapse and a crater rarely share a column, and a
+/// shared one still collapses: the edits run in the order they are filed.
+fn collapse_at(world: &mut World, step: u32) {
+    let size = world.voxels().size();
+    let width = i32::try_from(size[0]).expect("the map fits in an i32");
+    let depth = i32::try_from(size[1]).expect("the map fits in an i32");
+    let x = (i32::try_from(step.wrapping_mul(41) % 4096).expect("a column index") + 101) % width;
+    let y = (i32::try_from(step.wrapping_mul(59) % 4096).expect("a column index") + 211) % depth;
+    let z = world.voxels().top_solid_z(x, y).unwrap_or(0);
+    for (dz, material) in [
+        (2, pharmakos_sim::voxels::Material::STONE),
+        (1, pharmakos_sim::voxels::Material::STONE),
+        (1, pharmakos_sim::voxels::Material::AIR),
+    ] {
+        assert!(
+            world
+                .request_voxel_edit(VoxelEdit::Set {
+                    at: [x, y, z + dz],
+                    material,
+                    by: None,
+                })
+                .is_ok(),
+            "the edit queue is full at step {step}"
+        );
+    }
 }
