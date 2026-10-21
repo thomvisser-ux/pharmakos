@@ -2124,6 +2124,11 @@ impl Surface {
             | EventKind::ShellLanded
             | EventKind::WreckLeft
             | EventKind::WreckBuried
+            // S2's `fall`: a region that fell and an asset that fell with it,
+            // or under it, are things in the world an opponent with eyes on
+            // the place sees.
+            | EventKind::RegionCollapsed
+            | EventKind::AssetFell
             // S2's `site`: an asset back at full hit points and a column of
             // ground refilled are things in the world an opponent with eyes on
             // the place sees, as it sees them hurt or cratered.

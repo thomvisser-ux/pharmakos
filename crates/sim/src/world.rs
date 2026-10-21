@@ -43,6 +43,10 @@
 
 mod combat;
 pub mod site;
+// The support rule (S2's plan, `fall`): a child of this module so its `impl
+// World` block reaches the edit and damage queues, kept in its own file.
+#[path = "support.rs"]
+pub mod support;
 
 pub use combat::{CombatCounts, CombatDrop, FireRefused, Roe};
 
@@ -520,6 +524,10 @@ pub struct World {
     carry: Vec<Carried>,
     /// Scratch for a crater's touched-chunk list, so an edit allocates nothing.
     touched: Vec<u32>,
+    /// The support rule's scratch (S2's plan, `fall`): unhashed, out of the
+    /// snapshot, holding nothing between ticks but its diagnostic counts, so
+    /// it adds no hash, snapshot or table line.
+    support: support::Scratch,
     /// Scratch for broadphase queries, so a query allocates nothing.
     candidates: Vec<Row>,
     /// This tick's damage orders, drained by [`Phase::Combat`].
@@ -799,6 +807,12 @@ pub enum TickError {
         /// The phase that is next.
         next: Phase,
     },
+    /// The Voxels phase's collapse failed ([`support::CollapseError`]): a
+    /// fault no legal world reaches (S2's plan, `fall`). **Fatal**: the tick
+    /// stops inside the Voxels phase with voxels moved and unsettled, the
+    /// phase not marked run, so the world refuses every later step until it
+    /// is replaced (a restore from the last save).
+    Collapse(support::CollapseError),
 }
 
 impl core::fmt::Display for TickError {
@@ -814,6 +828,7 @@ impl core::fmt::Display for TickError {
                 f,
                 "the open tick cannot end before its {next:?} phase has run"
             ),
+            TickError::Collapse(error) => write!(f, "the voxel phase's collapse failed: {error}"),
         }
     }
 }
@@ -1096,6 +1111,15 @@ impl World {
         let mut wrecks = WreckTable::with_capacity(wreck_limit);
         wrecks.reserve(wreck_limit);
         let damage_capacity = QueueRooms::capacity(rooms.damage, "damage")?;
+        let support = support::Scratch::new(
+            &config.rules,
+            config.rules.map_size_voxels(),
+            unit_ceiling
+                .saturating_add(STRUCTURE_ROWS)
+                .saturating_add(beacon_limit),
+            config.seats,
+            QueueRooms::capacity(rooms.edits, "voxel edit")?,
+        )?;
 
         Ok(World {
             match_seed: config.match_seed,
@@ -1169,6 +1193,7 @@ impl World {
             // touch more chunks than the queue holds edits, and a scratch
             // buffer that has to grow is an allocation inside a tick.
             touched: Vec::with_capacity(crate::math::index::row(chunk_total)),
+            support,
             candidates: Vec::with_capacity(crate::math::index::row(unit_ceiling)),
             damage: Vec::with_capacity(damage_capacity),
             requests: Vec::with_capacity(crate::math::index::row(beacon_limit)),
@@ -3585,7 +3610,7 @@ impl World {
             Phase::Quartermaster => self.phase_quartermaster(),
             Phase::Decision => self.phase_decision(),
             Phase::Pathing => self.phase_pathing(),
-            Phase::Voxels => self.phase_voxels(),
+            Phase::Voxels => self.phase_voxels()?,
             Phase::Match => self.phase_match(),
             Phase::Hash => {}
         }
@@ -4059,11 +4084,24 @@ impl World {
     /// passed rather than made optional so that the primitive has one signature,
     /// and it is a field rather than a local so that a crater inside a tick
     /// allocates nothing.
-    fn phase_voxels(&mut self) {
+    ///
+    /// **The support rule** (S2's plan, `fall`; E2) runs between the edits and
+    /// the settle: every voxel an edit turns to air is noted, the detached
+    /// regions fall, and their fall damage is applied and settled before the
+    /// digests are, so the falls reach the hash, the pathing surface and the
+    /// Match phase on the tick they happen. Settling a death inside Voxels is
+    /// the phase-order change the support rule makes (determinism code).
+    ///
+    /// # Errors
+    ///
+    /// [`TickError::Collapse`] when the collapse fails
+    /// ([`support::CollapseError`]).
+    fn phase_voxels(&mut self) -> Result<(), TickError> {
         // The edit list and the touched scratch are separate fields from the
         // store, so draining one while writing the other borrows nothing twice.
         let edits = core::mem::take(&mut self.edits);
         let mut touched = core::mem::take(&mut self.touched);
+        let mut support = core::mem::take(&mut self.support);
         for edit in &edits {
             match *edit {
                 // A set that changes nothing is an edit that marks nothing
@@ -4072,27 +4110,48 @@ impl World {
                 // A footing ignores every edit (the owner's ruling of 2026-10-20;
                 // [`crate::footing`]): a set that names one writes nothing and
                 // is counted.
-                VoxelEdit::Set { at, material, .. } => {
+                VoxelEdit::Set { at, material, by } => {
                     let footings =
                         crate::footing::Footings::of(&self.bore, &self.structures, &self.beacons);
                     if footings.contains(at) {
                         self.footing_refusals.sets = self.footing_refusals.sets.saturating_add(1);
-                    } else {
-                        self.voxels.set(at, material);
+                        continue;
+                    }
+                    let was = self.voxels.get(at).is_some_and(Material::is_solid);
+                    if self.voxels.set(at, material) {
+                        if was && material.is_air() {
+                            support.note_removed(at, by);
+                        } else if !was && material.is_solid() {
+                            support.note_placed(at);
+                        }
                     }
                 }
-                VoxelEdit::Crater { centre, radius, .. } => {
+                VoxelEdit::Crater { centre, radius, by } => {
                     let levels = self.rules.combat().blast_levels;
                     let footings =
                         crate::footing::Footings::of(&self.bore, &self.structures, &self.beacons);
                     self.voxels
-                        .blast(centre, radius, levels, &footings, &mut touched);
+                        .blast(centre, radius, levels, &footings, &mut touched, &mut |at| {
+                            support.note_removed(at, by);
+                        });
                     self.footing_refusals.blast_voxels = self
                         .footing_refusals
                         .blast_voxels
                         .saturating_add(footings.hits());
                 }
             }
+        }
+        let collapsed = self.collapse_tick(&mut support);
+        self.support = support;
+        if let Err(error) = collapsed {
+            // The tick stops here, and a host treats it as fatal
+            // ([`TickError::Collapse`]); no order it filed is left behind.
+            self.damage.clear();
+            touched.clear();
+            self.touched = touched;
+            self.edits = edits;
+            self.edits.clear();
+            return Err(TickError::Collapse(error));
         }
         self.voxels.settle(&mut self.chunks);
         // The pathing graph's columns are refreshed in the same phase that
@@ -4113,6 +4172,7 @@ impl World {
         self.touched = touched;
         self.edits = edits;
         self.edits.clear();
+        Ok(())
     }
 
     /// Settle the match (T10): the rules that follow from a tick's deaths, and
@@ -5652,6 +5712,18 @@ impl World {
         ) else {
             return false;
         };
+        // The support rule's scratch is sized from the restored rooms too.
+        let Ok(support) = support::Scratch::new(
+            &self.rules,
+            self.rules.map_size_voxels(),
+            self.unit_limit
+                .saturating_add(STRUCTURE_ROWS)
+                .saturating_add(beacon_limit_of(restored.seats.len())),
+            restored.seats.len(),
+            edit_capacity,
+        ) else {
+            return false;
+        };
         let [width, depth, _] = self.rules.map_size_voxels();
         let Some(broadphase) = Csr::new(
             [0, 0],
@@ -5775,6 +5847,7 @@ impl World {
         // this world had been doing before.
         self.events.reset(self.tick);
         self.touched = Vec::with_capacity(crate::math::index::row(self.voxels.chunk_count()));
+        self.support = support;
         // The query scratch is sized the same way, and for the same reason: a
         // query that has to grow its buffer is an allocation inside a tick.
         self.candidates = Vec::with_capacity(crate::math::index::row(self.unit_limit));

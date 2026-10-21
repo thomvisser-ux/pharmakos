@@ -3421,6 +3421,12 @@ impl BeaconTable {
         &self.pos
     }
 
+    /// The position column, to write into: the support rule moves an asset
+    /// that stands on a falling region down with it (S2's plan, `fall`).
+    pub fn positions_mut(&mut self) -> &mut [[Fx; 3]] {
+        &mut self.pos
+    }
+
     /// The mandate column, to write into.
     ///
     /// One caller: the interpreter's committed `set_mandate` row, which is the
@@ -3986,6 +3992,12 @@ impl StructureTable {
         &self.pos
     }
 
+    /// The position column, to write into: the support rule moves an asset
+    /// that stands on a falling region down with it (S2's plan, `fall`).
+    pub fn positions_mut(&mut self) -> &mut [[Fx; 3]] {
+        &mut self.pos
+    }
+
     /// The hit-point column.
     #[must_use]
     pub fn hit_points(&self) -> &[Hp] {
@@ -4224,6 +4236,12 @@ impl WreckTable {
     #[must_use]
     pub fn positions(&self) -> &[[Fx; 3]] {
         &self.pos
+    }
+
+    /// The position column, to write into: the support rule moves an asset
+    /// that stands on a falling region down with it (S2's plan, `fall`).
+    pub fn positions_mut(&mut self) -> &mut [[Fx; 3]] {
+        &mut self.pos
     }
 
     /// The salvage-value column, in `$`.

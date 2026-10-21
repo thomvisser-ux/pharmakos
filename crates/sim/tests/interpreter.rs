@@ -903,15 +903,19 @@ fn wall_in_the_commander(world: &mut World) {
                 .voxels()
                 .top_solid_z(x + dx, y + dy)
                 .expect("a column with a floor");
-            assert!(
-                world
-                    .request_voxel_edit(VoxelEdit::Set {
-                        at: [x + dx, y + dy, top + 5],
-                        material: Material::STONE,
-                        by: None,
-                    })
-                    .is_ok()
-            );
+            // A supported column, not a voxel hung in air: a voxel written
+            // into air with nothing under it falls (S2's plan, `fall`).
+            for z in (top + 1)..=(top + 5) {
+                assert!(
+                    world
+                        .request_voxel_edit(VoxelEdit::Set {
+                            at: [x + dx, y + dy, z],
+                            material: Material::STONE,
+                            by: None,
+                        })
+                        .is_ok()
+                );
+            }
         }
     }
 }

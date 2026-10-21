@@ -429,7 +429,11 @@ fn dig_in(world: &World, row: usize, seam: usize, settings: MineSettings) -> Opt
             cell,
             top: top_below(world, x, y, z),
         }));
-        if grid.strands_nothing(&before, &after) {
+        // Mine never undermines (decisions-log item 144 (3)): a dig that
+        // would detach a region carrying a seat's structure or beacon, over
+        // the world as the edits queued before it will leave it, is refused
+        // and counted, and the drone takes the next voxel.
+        if grid.strands_nothing(&before, &after) && world.dig_keeps_structures_standing([x, y, z]) {
             return Some(Dig {
                 ore: [x, y, z],
                 stand,
