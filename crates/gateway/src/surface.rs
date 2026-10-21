@@ -4683,6 +4683,12 @@ mod tests {
             snapshot.shell_seat.push(1);
             snapshot.shell_firer.push(firer);
             snapshot.shell_weapon.push(weapon);
+            // Fired a tick ago from beside the aim (snapshot version 12's
+            // launch point and fire tick, S2's `site`).
+            snapshot.shell_launch.extend([x, y, z]);
+            snapshot
+                .shell_fired_at
+                .push(snapshot.tick.saturating_sub(1));
         }
     }
 
