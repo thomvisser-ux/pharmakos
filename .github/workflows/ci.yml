@@ -450,6 +450,12 @@ jobs:
       matrix:
         os: [ubuntu-latest]
     steps: &leg-steps
+      - name: Check out
+        # First, and on the fast path too: a checkout empties the workspace, so it must
+        # come before the shards are downloaded into it (it ran after them once, and
+        # deleted them).
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       - name: Download this leg's shards
         # A missing shard is named by the next step, so a failed download is not the
         # verdict.
@@ -525,10 +531,6 @@ jobs:
         if: steps.shards.outputs.prose_only == 'true'
         shell: bash
         run: echo "::notice title=docs-only fast path::Only prose changed, so no shard of this leg ran the suite, and this job merged and compared nothing; the shards' reports are above. It runs in full on main's push (decisions-log item 115 (4))."
-
-      - name: Check out
-        if: steps.shards.outputs.prose_only != 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install the Rust toolchain
         # For xtask alone, which has no dependencies; nothing else is built here. The
