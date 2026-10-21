@@ -60,9 +60,9 @@
 //! `BuildTarget.wall_box` is a `wall` target's voxels and is refused on any
 //! other blueprint (`E0509`): a structure's footprint is its blueprint's, and a
 //! box written on a `generator` would otherwise be read by nothing, which is a
-//! silent strip. A `wall` target itself is refused for its blueprint
-//! (`E0019`, with the rest of S2's base kit) until S2's `site` lane builds
-//! walls. From S2's `vfy2` a `wall` target's own shape is checked here too
+//! silent strip. A `wall` target was refused for its blueprint (`E0019`, with
+//! the rest of S2's base kit) until S2's `site` lane built walls; that code is
+//! retired and raised by nothing now. From S2's `vfy2` a `wall` target's own shape is checked here too
 //! (`Sites::wall`): its box is required (`E0101`), it is not turned
 //! (`E0511`), its anchor is a voxel inside the box (`E0417`), and the box can
 //! stand `materials.wall_min_height_voxels` above the ground (`E0512`).
