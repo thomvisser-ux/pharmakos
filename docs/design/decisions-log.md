@@ -1562,7 +1562,7 @@ Agenda:
   - `wgw` #128, `8f60a1b` (10-20), head `263ab63`: S2’s surfaces (sensor-seam vision, decision 5’s fields, the sightings, `reachable`, E7’s sweep over the gateway). Run 39444179744, green.
   - `fire` #129, `a9b4ee3` (10-20), head `25b8506`: weapons, shells, materials, wrecks, the kill-credit split and `SNAPSHOT_VERSION` 11. Run 39471415164, green.
   - `wgw`’s second pull request #131, `bdee0bf` (10-20), head `6349c0e`: the recap’s tally, and every seat’s at the match’s end. Run 39506130625, green.
-  - `fall` #132, `1a1d05d` (10-21, 01:14 UTC), head `47e454e`: the support rule. Run 39526173701, still running when this entry was written.
+  - `fall` #132, `1a1d05d` (10-21, 01:14 UTC), head `47e454e`: the support rule. Run 39526173701 went red: its Windows `cargo xtask ci` leg ran past the job’s 90-minute timeout and was cancelled (Ubuntu and macOS green). The main session raised the timeout to 120 as a stopgap in #135, under the owner’s waiver in (2), and `main` is green again once #135’s push run is; the CI shard pull request puts it back to 90.
   - **Merges of `main` on the lanes’ branches,** each a plain push of a signed two-parent commit, with no rewrite of a branch, to clear Auto-fix’s conflicts or to let CI see the newest `main`. The main session pushed `fire`’s local merge `42d0e47` (`main` `8f60a1b`); made `47e454e` itself on #132 (`main` `bdee0bf`), so that #132’s CI saw #131; and pushed `site`’s local head `9620f26`, an ordinary commit that carried the signed merge `14aa1cb` (`main` `1a1d05d`), which resolved `site`’s conflicts with `fall`. `site`’s branch also carries its earlier signed merge `01fb185` (`main` `bdee0bf`).
 
   **(2) The owner’s rulings of 2026-10-20, and the owner’s answers to this entry’s rules review.**
