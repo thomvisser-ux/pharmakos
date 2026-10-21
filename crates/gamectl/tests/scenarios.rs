@@ -100,14 +100,14 @@ const MINE_TO_DEPTH: &str = "scenarios/s1/mine-to-depth.scenario.jsonc";
 /// S1's plan, decision 18).
 const BROWNOUT_BY_RECYCLE: &str = "scenarios/s1/brownout-by-recycle.scenario.jsonc";
 
-/// A mortar duel at the map's centre, reached by two beacon chains: the
-/// forward Build beacons' repair drones repair their wounded and salvage the
-/// wrecks (S2's `site`).
+/// The base kit and Build's S2 settings through the playbook door: an
+/// autocannon and a wall at seat 0's core (S2's `site`; the duel that repairs
+/// and salvages is headless, in `crates/sim/tests/site.rs`).
 const REPAIR_AND_SALVAGE: &str = "scenarios/s2/repair-and-salvage.scenario.jsonc";
 
-/// The same duel with seat 0's forward beacon on `terraform: FILL`: the
-/// craters inside its sphere are refilled to the generated surface (S2's
-/// `site`; decisions-log item 144 (5)).
+/// Terraform through the playbook door: `FILL` levels a mortar's footprint
+/// before it is bought (S2's `site`; decisions-log item 144 (5); the crater
+/// refill is headless, in `crates/sim/tests/site.rs`).
 const TERRAFORM_REFILLS_A_CRATER: &str = "scenarios/s2/terraform-refills-a-crater.scenario.jsonc";
 
 /// **The exact set of scenarios allowed to seal through the harness door.**
@@ -128,14 +128,7 @@ const TERRAFORM_REFILLS_A_CRATER: &str = "scenarios/s2/terraform-refills-a-crate
 /// `cover-nearest-vent` was on it until the verifier's targeting lane (`tgtv`)
 /// landed and accepted `covering` and `on`; `submit_plan` now takes the file,
 /// so its entry came off.
-///
-/// S2's `site` adds its two duels: each seat's route places a chain of
-/// beacons whose later sites lie outside every sphere the seat holds when it
-/// seals (`E0403`), and guards each step on a beacon the chain has not placed
-/// yet (`E0401`), since a beacon cannot be placed outside the seat's own
-/// spheres and the cores stand 335 voxels apart, so no client could submit the
-/// route that reaches the centre in one sealing.
-const HARNESS_DOOR: &[&str] = &[REFUSING, REPAIR_AND_SALVAGE, TERRAFORM_REFILLS_A_CRATER];
+const HARNESS_DOOR: &[&str] = &[REFUSING];
 
 /// What a doctored copy is named.
 ///

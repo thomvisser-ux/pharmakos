@@ -1410,3 +1410,117 @@ fn a_shell_is_visible_in_flight() {
     let tenth = shells.position_at(1, 1).expect("a point");
     assert_eq!(tenth.map(Fx::raw), [19_660, 0, 0]);
 }
+
+/// Two seats' forward Build beacons twenty voxels apart at the midpoint of
+/// their cores, each with a mortar under `FREE_FIRE` inside the other's sphere,
+/// so each seat sees the other's mortar (`World::seen_by`). Seat 0's beacon
+/// holds `seat0`'s settings and two build drones. Both seats are rich.
+fn duel(seat0: BuildSettings) -> Runner {
+    let mut world = world();
+    let other = SeatId::new(1);
+    for seat in [SEAT, other] {
+        world.set_treasury(seat, Money::new(RICH));
+    }
+    let a = core_voxel(&world);
+    let b_core = core_of(&world, other);
+    let b = world
+        .beacons()
+        .positions()
+        .get(world.beacons().row_of(b_core).unwrap().index())
+        .copied()
+        .unwrap()
+        .map(Fx::floor_voxels);
+    let (mx, my) = (i32::midpoint(a[0], b[0]), i32::midpoint(a[1], b[1]));
+    let mut forward = Vec::new();
+    for (seat, dx) in [(SEAT, -10), (other, 10)] {
+        let at = standing(&world, mx + dx, my);
+        let beacon = world
+            .place_beacon_directly(seat, at, MandateKind::Build, 2)
+            .expect("room for a beacon");
+        world.set_common(
+            beacon,
+            pharmakos_sim::tables::Common {
+                roe: 3,
+                retreat_hp_pct: 0,
+            },
+        );
+        let mortar_at = standing(&world, mx + dx.checked_div(2).unwrap(), my + 2);
+        world
+            .raise_structure(seat, beacon, StructureKind::Mortar, mortar_at)
+            .expect("room for a mortar");
+        forward.push(beacon);
+    }
+    let [ours, theirs] = [
+        forward.first().copied().unwrap(),
+        forward.get(1).copied().unwrap(),
+    ];
+    world.set_build_settings_directly(ours, seat0);
+    world.set_build_settings_directly(theirs, settings(Terraform::None, 50, false));
+    for _ in 0..2 {
+        let at = standing(&world, mx - 12, my - 1);
+        world
+            .field_unit(SEAT, ours, UnitKind::BuildDrone, at)
+            .expect("room for a drone");
+    }
+    let mut runner = Runner::new(world);
+    for seat in [SEAT, other] {
+        let plan = Plan::compile(&playbook(&idle()), &rules()).expect("compiles");
+        runner
+            .seal_playbook(seat, plan)
+            .expect("a Lull takes a seal");
+    }
+    assert!(runner.begin_push().unwrap());
+    runner
+}
+
+/// The duel of S2's plan, headless (the committed scenario cannot reach it in
+/// CI's time; scenarios/s2/repair-and-salvage.scenario.jsonc says why): the
+/// mortars shell each other's clumps, each forward Build beacon fabricates
+/// repair drones for the work in hand, which repair their wounded at decision
+/// 43's price, paid in the Repair band, and salvage the wrecks the splash
+/// leaves, any seat's.
+#[test]
+fn a_mortar_duel_repairs_and_salvages() {
+    let mut runner = duel(settings(Terraform::None, 50, false));
+    let events = run(
+        &mut runner,
+        2_400,
+        &[
+            EventKind::ShellLanded,
+            EventKind::UnitFabricated,
+            EventKind::AssetRepaired,
+            EventKind::WreckLeft,
+            EventKind::SalvageDelivered,
+        ],
+    );
+    let count = |kind: EventKind| events.iter().filter(|event| event.kind == kind).count();
+    assert!(count(EventKind::ShellLanded) > 0, "the mortars fire");
+    assert!(
+        count(EventKind::AssetRepaired) > 0,
+        "a repair drone repairs: {events:?}"
+    );
+    assert!(count(EventKind::WreckLeft) > 0, "the splash leaves a wreck");
+    assert!(
+        count(EventKind::SalvageDelivered) > 0,
+        "a wreck is salvaged and carried home"
+    );
+    assert_eq!(
+        runner.world().event_bus().dropped(),
+        0,
+        "no event was dropped"
+    );
+}
+
+/// The duel again with seat 0's forward beacon on `FILL`: the shells crater
+/// the ground inside its sphere, and its build drones refill each crater to
+/// the generated surface, announcing each column (decisions-log item 144
+/// (5)).
+#[test]
+fn a_mortar_duel_refills_its_craters() {
+    let mut runner = duel(settings(Terraform::Fill, 50, false));
+    let events = run(&mut runner, 2_400, &[EventKind::GroundRefilled]);
+    assert!(
+        events.iter().any(|event| event.seat == Some(SEAT)),
+        "seat 0 refills a crater: {events:?}"
+    );
+}

@@ -1,35 +1,28 @@
 // SPDX-FileCopyrightText: 2026 Pharmakos contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// S2's `site` (S2's plan, task `site`; spec section 9's repair/reclaim drone;
-// decisions 38, 42 and 43): a mortar duel on the golden seed, the damage a
-// playbook can produce once the base kit is built.
+// S2's `site` (S2's plan, task `site`): the base kit and Build's S2 settings
+// through the playbook door, on the golden seed, in one minute.
 //
-//   seat 0  seals scenarios/s2/repair-and-salvage.seat0.playbook.jsonc every
-//           round: it covers its starting vent with a Generator (b_01, for
-//           the power the chain draws), then walks a chain of seven beacons
-//           north from its core at (358, 24) along x = 358, waiting for the
-//           `$` before each, and deploys the last, b_08 at (358, 185), as a
-//           Build beacon whose initial settings name a mortar at (358, 175),
-//           `roe: FREE_FIRE` and a repair threshold of 50;
-//   seat 1  seals the mirror from its core at (357, 359), south along
-//           x = 357 to b_08 at (357, 198) and a mortar at (357, 208).
+//   seat 0  seals scenarios/s2/repair-and-salvage.playbook.jsonc: one visit
+//           to its core that writes an autocannon at (362, 30, 36), a wall
+//           box (357..360, 32, 35..37) filled to the ground at
+//           `wall_cost_per_voxel` a voxel, a repair threshold of 50 and
+//           rebuild destroyed on. The core's two build drones raise the
+//           autocannon and fill the wall;
+//   seat 1  seals nothing, so it files the safe playbook.
 //
-// The cores are 335 voxels apart, and a beacon stands only inside one of its
-// seat's own spheres (24 voxels), so the chain is the way to the centre; a
-// seat sees inside its spheres, so each last beacon stands inside the other
-// seat's mortar's sight as well as its range (40). The chains take four
-// rounds of 480 s, the `$` being what they wait on; in round 5 the mortars go
-// up 33 voxels apart and shell each other's clump. Each forward Build beacon
-// fabricates repair drones for the work in hand, which repair its wounded
-// drones and pay for it (asset_repaired), and the shells' splash kills drones,
-// whose wrecks any seat's repair drone inside the sphere salvages and carries
-// home (salvage_delivered). Each forward beacon falls to the other mortar, and
-// its mortar is left a ruin.
+// Why no duel here. The plan's duel needs each seat's mortar inside the
+// other's sphere, and a beacon stands only inside its seat's own spheres
+// with the golden seed's cores 335 voxels apart: a seven-beacon chain each,
+// five rounds of 480 s, which cost the CI legs their time budget. So the duel
+// is crates/sim/tests/site.rs' `a_mortar_duel_repairs_and_salvages`, played
+// headless with the beacons placed by the fixture: repair drones repair their
+// wounded and pay for it in the Repair band, and salvage any seat's wrecks.
 {
   "format": "pharmakos.scenario.v1",
   "name": "repair-and-salvage",
-  "summary": "Two seats walk beacon chains to the map's centre and duel with mortars; their repair drones repair their wounded and salvage the wrecks.",
+  "summary": "Seat 0 writes Build's S2 settings and builds an autocannon and a wall at its core.",
 
   "map": {
     "seed": "0x00000000ca5caded",
@@ -37,40 +30,24 @@
   },
 
   "rules": "rules/rules.v1.json",
-  "round_limit": 5,
+  "round_limit": 1,
 
   "seats": [
-    { "seat": 0, "kind": "playbook", "playbook": "scenarios/s2/repair-and-salvage.seat0.playbook.jsonc" },
-    { "seat": 1, "kind": "playbook", "playbook": "scenarios/s2/repair-and-salvage.seat1.playbook.jsonc" }
+    { "seat": 0, "kind": "playbook", "playbook": "scenarios/s2/repair-and-salvage.playbook.jsonc" },
+    { "seat": 1, "kind": "safe" }
   ],
 
   "segments": [
-    { "index": 0, "length_ms": 480000, "note": "Round 1: the Generator's beacon and the first of the chain." },
-    { "index": 1, "length_ms": 480000, "note": "Round 2: more of the chain, as the `$` comes in." },
-    { "index": 2, "length_ms": 480000, "note": "Round 3: the chain reaches its seventh beacon." },
-    { "index": 3, "length_ms": 480000, "note": "Round 4: the last beacon waits for the mortar's `$`." },
-    { "index": 4, "length_ms": 480000, "note": "Round 5: the mortars go up and duel." }
+    { "index": 0, "length_ms": 60000, "note": "The visit, the autocannon and the wall." }
   ],
 
   "assertions": [
-    { "assert": "event_fired", "event": "structure_completed", "seat": 0, "by_tick": 41500,
-      "note": "A structure of seat 0's is finished: its Generator in round 1, and its mortar in round 5, which the chain pins (`event_fired` has no \"after\", register M-05)." },
-    { "assert": "event_fired", "event": "structure_completed", "seat": 1, "by_tick": 41500,
-      "note": "And of seat 1's: its mortar goes up in round 5, which the chain pins." },
-    { "assert": "event_fired", "event": "asset_repaired", "seat": 0, "by_tick": 42000,
-      "note": "A repair drone of seat 0's forward beacon brings a wounded drone back to full, paid for in the Repair band." },
-    { "assert": "event_fired", "event": "asset_repaired", "seat": 1, "by_tick": 42000,
-      "note": "And one of seat 1's." },
-    { "assert": "event_fired", "event": "wreck_left", "by_tick": 42000,
-      "note": "The splash kills a drone, which leaves a wreck." },
-    { "assert": "event_fired", "event": "salvage_delivered", "seat": 0, "by_tick": 42000,
-      "note": "A repair drone of seat 0's lifts the wrecks inside its sphere and carries them home." },
-    { "assert": "event_fired", "event": "structure_ruined", "by_tick": 43000,
-      "note": "A forward beacon falls to the other mortar, and its mortar is left a ruin." },
-    { "assert": "event_fired", "event": "match_ended", "by_tick": 48000,
-      "note": "Five rounds of 9 600 ticks." },
+    { "assert": "event_fired", "event": "row_committed", "seat": 0, "by_tick": 200,
+      "note": "The settings row, with its two base-kit targets, commits on the core." },
+    { "assert": "event_fired", "event": "structure_completed", "seat": 0, "by_tick": 1200,
+      "note": "The autocannon is raised." },
     { "assert": "hash_chain_equals",
       "golden": "tests/golden/scenarios/repair-and-salvage/expected.hashes.txt",
-      "note": "Byte-identical on Windows, Linux and macOS. Re-blessed with `cargo xtask golden --bless`, and never to turn a red build green." }
+      "note": "Byte-identical on Windows, Linux and macOS; pins the wall's voxels too. Re-blessed with `cargo xtask golden --bless`, and never to turn a red build green." }
   ]
 }
