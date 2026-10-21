@@ -29,9 +29,10 @@ use pharmakos_sim::seams::MandateKind;
 use pharmakos_sim::snapshot::Snapshot;
 use pharmakos_sim::tables::{
     BeaconId, Common, PRIORITY_NORMAL, SeatId, StructureId, StructureKind, UnitId, UnitKind,
+    WreckId,
 };
 use pharmakos_sim::voxels::{Material, VoxelEdit};
-use pharmakos_sim::world::support::{CollapseSkip, DigRefused};
+use pharmakos_sim::world::support::CollapseSkip;
 use pharmakos_sim::world::{DamageOrder, DamageTarget, World, WorldConfig};
 use pharmakos_sim::{MatchSettings, RulesTable, default_rules_path};
 use std::path::PathBuf;
@@ -839,15 +840,16 @@ fn a_region_that_lands_on_a_units_head_stands_it_on_top() {
 // ---------------------------------------------------------------------------
 
 /// Walk seat 1's commander a few columns off its core and build a shelf
-/// under where it stands: the commander, a raider, a structure, a beacon, a
-/// wreck and a ruin on it, ready to be cut by `by`'s edit at the necks.
+/// under where it stands: the commander, a raider, a wreck and a ruin on it,
+/// ready to be cut by `by`'s edit at the necks. No live structure or beacon
+/// stands on it: a building's footing is anchored ground (the owner's ruling
+/// of 2026-10-20, S2's `site`), so a shelf carrying one would not detach; a
+/// ruin is no footing, and falls.
 struct Loaded {
     runner: Runner,
     shelf: Shelf,
     commander: UnitId,
     raider: UnitId,
-    structure: StructureId,
-    beacon: BeaconId,
     ruin: StructureId,
     wreck: [Fx; 3],
 }
@@ -876,17 +878,6 @@ fn loaded() -> Loaded {
     let raider = world
         .field_unit(seat(1), core1, UnitKind::Raider, shelf.spot(-2, -2))
         .expect("a raider");
-    let structure = world
-        .raise_structure(seat(1), core1, StructureKind::Generator, shelf.spot(2, -2))
-        .expect("a structure");
-    let beacon = world
-        .place_beacon_directly(
-            seat(1),
-            shelf.spot(2, 2),
-            MandateKind::Build,
-            PRIORITY_NORMAL,
-        )
-        .expect("a beacon");
     // A beacon off the shelf, whose structure on it becomes a ruin.
     let doomed = world
         .place_beacon_directly(
@@ -933,8 +924,6 @@ fn loaded() -> Loaded {
         shelf,
         commander,
         raider,
-        structure,
-        beacon,
         ruin,
         wreck,
     }
@@ -947,8 +936,6 @@ fn everything_on_a_falling_region_falls_and_takes_the_flat_damage_once() {
         shelf,
         commander,
         raider,
-        structure,
-        beacon,
         ruin,
         wreck,
     } = loaded();
@@ -962,15 +949,9 @@ fn everything_on_a_falling_region_falls_and_takes_the_flat_damage_once() {
     let before = (
         unit_hp(world, commander),
         unit_hp(world, raider),
-        structure_hp(world, structure),
-        beacon_hp(world, beacon),
         structure_hp(world, ruin),
     );
-    let heights = (
-        unit_at(world, commander)[2],
-        beacon_at(world, beacon)[2],
-        wreck[2],
-    );
+    let heights = (unit_at(world, commander)[2], wreck[2]);
     for neck in shelf.necks.clone() {
         runner
             .world_mut()
@@ -982,8 +963,8 @@ fn everything_on_a_falling_region_falls_and_takes_the_flat_damage_once() {
     assert_eq!(count(&feed, EventKind::RegionCollapsed), 1);
     assert_eq!(
         count(&feed, EventKind::AssetFell),
-        6,
-        "the commander, the raider, the structure, the beacon, the ruin and the wreck"
+        4,
+        "the commander, the raider, the ruin and the wreck"
     );
     let world = runner.world();
     let two = Fx::from_voxels(2);
@@ -992,35 +973,21 @@ fn everything_on_a_falling_region_falls_and_takes_the_flat_damage_once() {
         heights.0.checked_sub(two).unwrap()
     );
     assert_eq!(
-        beacon_at(world, beacon)[2],
-        heights.1.checked_sub(two).unwrap()
-    );
-    assert_eq!(
         world.wrecks().positions()[0][2],
-        heights.2.checked_sub(two).unwrap(),
+        heights.1.checked_sub(two).unwrap(),
         "the wreck rode down"
     );
     assert_eq!(unit_hp(world, commander), before.0 - fall);
     assert_eq!(unit_hp(world, raider), (before.1 - fall).max(0));
-    assert_eq!(structure_hp(world, structure), (before.2 - fall).max(0));
-    assert_eq!(beacon_hp(world, beacon), (before.3 - fall).max(0));
-    assert_eq!(structure_hp(world, ruin), (before.4 - fall).max(0));
+    assert_eq!(structure_hp(world, ruin), (before.2 - fall).max(0));
     // Once a tick, and never again: nothing more falls.
-    let after = (
-        unit_hp(world, commander),
-        structure_hp(world, structure),
-        beacon_hp(world, beacon),
-    );
+    let after = (unit_hp(world, commander), structure_hp(world, ruin));
     let mut more = Vec::new();
     play(&mut runner, 5, &mut more);
     assert_eq!(count(&more, EventKind::AssetFell), 0);
     let world = runner.world();
     assert_eq!(
-        (
-            unit_hp(world, commander),
-            structure_hp(world, structure),
-            beacon_hp(world, beacon)
-        ),
+        (unit_hp(world, commander), structure_hp(world, ruin)),
         after
     );
     assert_eq!(world.event_bus().dropped(), 0, "no event was dropped");
@@ -1102,19 +1069,18 @@ fn necks_of(seats: u32) -> Vec<[i32; 3]> {
 
 #[test]
 fn two_seats_that_cut_one_region_share_its_credit() {
-    // An odd flat damage on a structure that survives it: the two cutters'
-    // shares differ by the one hit point the largest remainder gives to the
-    // lower seat (decision 37), and the credit counters hold exactly that.
+    // An odd flat damage on a unit that survives it: the two cutters' shares
+    // differ by the one hit point the largest remainder gives to the lower
+    // seat (decision 37), and the credit counters hold exactly that. A unit,
+    // because a structure's footing is anchored ground (the owner's ruling of
+    // 2026-10-20, S2's `site`): a shelf carrying one would not fall.
     let rules = edited(|table| {
-        table.collapse.as_mut().expect("a block").fall_damage_hp = 101;
+        table.collapse.as_mut().expect("a block").fall_damage_hp = 51;
     });
     let mut world = world_with(rules, 3, 600_000);
     let centre = field(&world);
     let shelf = shelf(&mut world, centre, 2, 2, &[[0, 3], [0, -3]]);
-    let core1 = core(&world, seat(1));
-    let generator = world
-        .raise_structure(seat(1), core1, StructureKind::Generator, shelf.spot(0, 0))
-        .expect("a structure");
+    let drone = drone_on(&mut world, &shelf, 0, 0);
     let mut runner = pushing(world);
     for (neck, by) in shelf.necks.iter().zip([seat(2), seat(0)]) {
         runner
@@ -1129,16 +1095,13 @@ fn two_seats_that_cut_one_region_share_its_credit() {
     let mut feed = Vec::new();
     play(&mut runner, 1, &mut feed);
     assert_eq!(count(&feed, EventKind::RegionCollapsed), 1);
-    assert!(
-        structure_hp(runner.world(), generator) > 0,
-        "it survived the fall"
-    );
+    assert!(unit_hp(runner.world(), drone) > 0, "it survived the fall");
     let mut shares = Vec::new();
-    let asset = AssetId::of_structure(generator).expect("an id");
+    let asset = AssetId::of_unit(drone).expect("an id");
     runner.world().credit().shares_of(asset.raw(), &mut shares);
     assert_eq!(
         shares,
-        vec![(0, 51), (2, 50)],
+        vec![(0, 26), (2, 25)],
         "the lower seat takes the odd point"
     );
 }
@@ -1262,10 +1225,13 @@ fn pillars_hold_a_roof() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn the_last_beacon_lost_to_a_collapse_ends_the_match_that_tick() {
-    // A block hung over seat 1's core, its only beacon, falls onto it; the
-    // flat damage is raised past the core's hit points, so the core dies, and
-    // the Match phase ends the match on the same tick.
+fn a_block_hung_over_the_last_beacon_cannot_be_dropped_on_it() {
+    // Fall's E2 case dropped a block onto seat 1's core, its only beacon, to
+    // end the match on the tick of the collapse. A beacon's footing is
+    // anchored ground that ignores every edit (the owner's ruling of
+    // 2026-10-20, S2's `site`), so the block cannot fall on it: a collapse
+    // can no longer end a match, and the E2 tick ordering for a collapse
+    // death is pinned by the unit case below. Here the cut drops nothing.
     let rules = edited(|table| {
         table.collapse.as_mut().expect("a block").fall_damage_hp = 1_000_000;
     });
@@ -1286,6 +1252,7 @@ fn the_last_beacon_lost_to_a_collapse_ends_the_match_that_tick() {
         edits.push(set([xx, y, h], Material::DIRT, None));
     }
     build(&mut world, &edits);
+    let hp = beacon_hp(&world, core1);
     let mut runner = pushing(world);
     runner
         .world_mut()
@@ -1295,17 +1262,12 @@ fn the_last_beacon_lost_to_a_collapse_ends_the_match_that_tick() {
     let feed: Vec<Event> = runner.events().to_vec();
     assert_eq!(
         count(&feed, EventKind::RegionCollapsed),
-        1,
-        "the block fell"
+        0,
+        "the block stays"
     );
-    assert!(
-        feed.iter().any(|event| event.kind == EventKind::AssetFell
-            && event.subject == Some(AssetId::of_beacon(core1).expect("an id"))),
-        "onto the core"
-    );
-    assert_eq!(beacon_hp(runner.world(), core1), 0, "which it killed");
-    assert!(report.match_ended, "and the match ended that tick");
-    assert_eq!(count(&feed, EventKind::MatchEnded), 1);
+    assert_eq!(count(&feed, EventKind::AssetFell), 0, "nothing fell");
+    assert_eq!(beacon_hp(runner.world(), core1), hp, "the core is unhurt");
+    assert!(!report.match_ended, "and the match goes on");
 }
 
 #[test]
@@ -1354,50 +1316,30 @@ fn a_collapse_death_on_a_segments_last_tick_reaches_its_recap() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn two_digs_that_would_drop_a_structure_together_are_refused() {
-    // A shelf on two necks carries a structure. Either dig alone leaves it
-    // standing on the other neck; with one already queued, the check at the
-    // other's filing, against the queue, refuses it (the plan's apply-time
-    // re-check, made at filing, where the queue holds exactly the edits the
-    // Voxels phase applies before it).
+fn two_digs_under_a_structure_on_two_necks_drop_nothing() {
+    // A shelf on two necks carries a structure. Fall's check refused the
+    // second dig; a footing is anchored ground now (the owner's ruling of
+    // 2026-10-20, S2's `site`), so both digs land and the shelf, held by the
+    // structure's footing, stays where it is.
     let mut world = world(2);
     let centre = field(&world);
     let shelf = shelf(&mut world, centre, 2, 2, &[[0, 3], [0, -3]]);
     let core1 = core(&world, seat(1));
-    world
+    let generator = world
         .raise_structure(seat(1), core1, StructureKind::Generator, shelf.spot(0, 0))
         .expect("a structure");
-    let [first, second] = [shelf.necks[0], shelf.necks[1]];
-    assert!(
-        world.dig_keeps_structures_standing(first),
-        "alone, the first holds"
-    );
-    assert!(
-        world.dig_keeps_structures_standing(second),
-        "and so does the second"
-    );
-    let refused = world.collapse_counts().refused(DigRefused::WouldUndermine);
-    world
-        .request_voxel_edit(set(first, Material::AIR, Some(seat(0))))
-        .expect("the first dig, queued");
-    assert!(
-        !world.dig_keeps_structures_standing(second),
-        "the second, after the first, would drop the structure"
-    );
-    assert_eq!(
-        world.collapse_counts().refused(DigRefused::WouldUndermine),
-        refused + 1,
-        "and the refusal is counted"
-    );
-    // Once the first has landed, the shelf stands on the second neck alone,
-    // and the check against the settled world refuses it as well.
+    let hp = structure_hp(&world, generator);
+    for neck in &shelf.necks {
+        world
+            .request_voxel_edit(set(*neck, Material::AIR, Some(seat(0))))
+            .expect("a dig, queued");
+    }
     tick(&mut world);
-    assert_eq!(
-        world.collapse_counts().regions,
-        0,
-        "the first dig dropped nothing"
-    );
-    assert!(!world.dig_keeps_structures_standing(second));
+    for neck in &shelf.necks {
+        assert_eq!(world.voxels().get(*neck), Some(Material::AIR), "dug");
+    }
+    assert_eq!(world.collapse_counts().regions, 0, "the shelf stays");
+    assert_eq!(structure_hp(&world, generator), hp, "and so does its load");
 }
 
 /// Seat 0's core mining its starting seam, and the dig it takes next made the
@@ -1488,15 +1430,13 @@ fn mine_shelf() -> (Runner, BeaconId, [i32; 3], [i32; 2]) {
 }
 
 #[test]
-fn mine_never_digs_a_voxel_that_would_drop_a_structure() {
-    // With nothing on the shelf the dig is free to take; with a structure on
-    // it the dig is refused and the drone is offered another voxel.
+fn mine_takes_a_dig_beside_a_structure_and_the_structure_stands() {
+    // The dig is the shelf's only neck. Fall's check refused it with a
+    // structure on the shelf; the structure's footing is anchored ground now
+    // (the owner's ruling of 2026-10-20, S2's `site`), so Mine takes the dig
+    // and nothing falls.
     let (mut runner, core0, dig, [sx, sy]) = mine_shelf();
-    assert!(
-        runner.world().dig_keeps_structures_standing(dig),
-        "with nothing on the shelf, the dig is free to take"
-    );
-    runner
+    let generator = runner
         .world_mut()
         .raise_structure(
             seat(0),
@@ -1505,44 +1445,28 @@ fn mine_never_digs_a_voxel_that_would_drop_a_structure() {
             point(sx, sy, dig[2] + 1),
         )
         .expect("a structure on the shelf");
-    let refused = runner
-        .world()
-        .collapse_counts()
-        .refused(DigRefused::WouldUndermine);
-    assert!(
-        !runner.world().dig_keeps_structures_standing(dig),
-        "with a structure on the shelf, the dig would drop it"
-    );
-    let next = runner.world().next_dig(core0).map(|next| next.ore);
-    assert_ne!(next, Some(dig), "Mine never digs it");
-    assert!(
-        runner
-            .world()
-            .collapse_counts()
-            .refused(DigRefused::WouldUndermine)
-            > refused,
-        "and the refusal is counted"
-    );
-    // And a Push played on never takes it.
+    let hp = structure_hp(runner.world(), generator);
     let mut feed = Vec::new();
-    play(&mut runner, 600, &mut feed);
-    assert!(
-        runner
-            .world()
-            .voxels()
-            .get(dig)
-            .and_then(Material::ore_richness)
-            .is_some(),
-        "the voxel under the structure's footing stays"
-    );
-    assert_eq!(count(&feed, EventKind::RegionCollapsed), 0);
+    let mut guard = 0;
+    while runner
+        .world()
+        .voxels()
+        .get(dig)
+        .is_some_and(Material::is_solid)
+    {
+        play(&mut runner, 1, &mut feed);
+        guard += 1;
+        assert!(guard < 3_000, "the mining drone takes the dig");
+    }
+    assert_eq!(count(&feed, EventKind::RegionCollapsed), 0, "nothing fell");
+    assert_eq!(structure_hp(runner.world(), generator), hp);
 }
-
 #[test]
 fn a_dig_that_drops_an_enemy_unit_credits_the_mining_seat() {
-    // Mine refuses only a dig that would drop a structure or a beacon. With an
-    // enemy drone on the shelf, seat 0's own mining drone takes the dig, the
-    // shelf falls, and the drone's death is credited to the mining seat.
+    // Mine refuses no dig for the support rule's sake. With an enemy drone
+    // on the shelf (a unit, which no footing holds), seat 0's own mining
+    // drone takes the dig, the shelf falls, and the drone's death is credited
+    // to the mining seat.
     let (mut runner, _, dig, [sx, sy]) = mine_shelf();
     let core1 = core(runner.world(), seat(1));
     let victim = runner
@@ -1586,8 +1510,13 @@ fn a_dig_that_drops_an_enemy_unit_credits_the_mining_seat() {
 // Decision 39's staged collapse
 // ---------------------------------------------------------------------------
 
-/// Build the staged blast: seat 1's shelf with a structure, a raider and the
-/// commander on it, standing on two necks, and seat 0's two mortars in range.
+/// Build the staged blast: seat 1's shelf with the commander, a parked drone,
+/// a wreck and a ruin on it, standing on two necks, and seat 0's two mortars
+/// in range. No live structure or beacon stands on it: a building's footing is
+/// anchored ground (the owner's ruling of 2026-10-20, S2's `site`), so a
+/// shelf carrying one would not detach. The test holds the drone where it
+/// parked, seat 1 surveys so none of its drones salvages the wreck first, and
+/// the ruin is a structure whose beacon, off the shelf, was destroyed.
 fn staged_blast() -> (Runner, [StructureId; 2], [[i32; 3]; 2], Loaded2) {
     let mut world = world(2);
     let core1 = core(&world, seat(1));
@@ -1607,23 +1536,75 @@ fn staged_blast() -> (Runner, [StructureId; 2], [[i32; 3]; 2], Loaded2) {
         tick(&mut world);
     }
     let shelf = shelf(&mut world, goal, 2, 2, &[[0, 3], [0, -3]]);
-    // The drone is homed to a beacon on the shelf, so it parks there rather
-    // than walking home while the mortars come off their cooldown.
+    // Seat 1 surveys, so no drone of its own salvages the wreck or repairs
+    // the ruin before the shells land; the test holds the drone where it
+    // stands while the mortars come off their cooldown.
+    world.set_writ(core1, MandateKind::Survey);
     let perch = world
         .place_beacon_directly(
             seat(1),
-            shelf.spot(-1, 0),
+            world.standing_point([kx + 2, ky - 6, 0]),
+            MandateKind::Survey,
+            PRIORITY_NORMAL,
+        )
+        .expect("a beacon off the shelf");
+    let parked = shelf.spot(-2, 0);
+    let drone = world
+        .field_unit(seat(1), perch, UnitKind::BuildDrone, parked)
+        .expect("a drone");
+    // A structure whose beacon, off the shelf, is destroyed: a ruin on it.
+    let doomed = world
+        .place_beacon_directly(
+            seat(1),
+            world.standing_point([kx + 2, ky + 6, 0]),
             MandateKind::Build,
             PRIORITY_NORMAL,
         )
-        .expect("a beacon on the shelf");
-    let drone = world
-        .field_unit(seat(1), perch, UnitKind::BuildDrone, shelf.spot(-2, 0))
-        .expect("a drone");
+        .expect("a second beacon");
     let structure = world
-        .raise_structure(seat(1), core1, StructureKind::Generator, shelf.spot(2, 0))
-        .expect("a structure");
-    // Seat 0's beacon and two mortars, a dozen columns east.
+        .raise_structure(seat(1), doomed, StructureKind::Generator, shelf.spot(2, 0))
+        .expect("a structure to ruin");
+    world
+        .request_damage(DamageOrder {
+            target: DamageTarget::Beacon(doomed),
+            amount: Damage::new(1_000_000).expect("damage"),
+            by: SeatId::NEUTRAL,
+            source: None,
+        })
+        .expect("filed");
+    // A drone killed on the shelf leaves a wreck there.
+    let doomed_drone = drone_on(&mut world, &shelf, -1, 0);
+    world
+        .request_damage(DamageOrder {
+            target: DamageTarget::Unit(doomed_drone),
+            amount: Damage::new(1_000).expect("damage"),
+            by: SeatId::NEUTRAL,
+            source: None,
+        })
+        .expect("filed");
+    // One tick settles both deaths: the ruin and the wreck are left.
+    tick(&mut world);
+    assert_eq!(world.wrecks().ids().len(), 1, "a wreck on the shelf");
+    let wreck = WreckId::new(world.wrecks().ids()[0]);
+    let mortars = mortars_east_of(&mut world, goal);
+    let necks = [shelf.necks[0], shelf.necks[1]];
+    (
+        pushing(world),
+        mortars,
+        necks,
+        Loaded2 {
+            commander,
+            drone,
+            structure,
+            wreck,
+            parked,
+        },
+    )
+}
+
+/// Seat 0's beacon and two mortars, a dozen columns east of `goal`, holding
+/// their fire so that only the shells the test orders fly.
+fn mortars_east_of(world: &mut World, goal: [i32; 2]) -> [StructureId; 2] {
     let east = world.standing_point([goal[0] + 12, goal[1], 0]);
     let home = world
         .place_beacon_directly(seat(0), east, MandateKind::Build, PRIORITY_NORMAL)
@@ -1635,7 +1616,7 @@ fn staged_blast() -> (Runner, [StructureId; 2], [[i32; 3]; 2], Loaded2) {
             retreat_hp_pct: 0,
         },
     );
-    let mortars = [
+    [
         world
             .raise_structure(
                 seat(0),
@@ -1652,26 +1633,15 @@ fn staged_blast() -> (Runner, [StructureId; 2], [[i32; 3]; 2], Loaded2) {
                 world.standing_point([goal[0] + 11, goal[1] - 1, 0]),
             )
             .expect("a mortar"),
-    ];
-    let necks = [shelf.necks[0], shelf.necks[1]];
-    (
-        pushing(world),
-        mortars,
-        necks,
-        Loaded2 {
-            commander,
-            drone,
-            structure,
-            perch,
-        },
-    )
+    ]
 }
 
 struct Loaded2 {
     commander: UnitId,
     drone: UnitId,
     structure: StructureId,
-    perch: BeaconId,
+    wreck: WreckId,
+    parked: [Fx; 3],
 }
 
 /// The Push tick on which the second neck is cut and the shelf falls, in the
@@ -1686,9 +1656,9 @@ const CUT_TICK: u32 = 109;
 )]
 fn collapse_credits_the_blast() {
     // Decision 39's staged geometry, which no playbook reaches: seat 0's
-    // mortars shell the two necks of a shelf seat 1's structure, raider and
-    // commander stand on; the shelf falls, everything on it takes the flat
-    // damage once, and the fall's credit is seat 0's.
+    // mortars shell the two necks of a shelf seat 1's commander, a held
+    // drone, a wreck and a ruin stand on; the shelf falls, everything on it
+    // takes the flat damage once, and the drone's kill is seat 0's.
     let ticks = 200;
     let named = [
         1_u32,
@@ -1706,6 +1676,13 @@ fn collapse_credits_the_blast() {
         let mut feed = Vec::new();
         let mut fired = [false; 2];
         for tick in 1..=ticks {
+            // The drone held where it parked until the cut.
+            if tick < CUT_TICK
+                && let Ok(row) = runner.world().units().row_of(loaded.drone)
+            {
+                let row = row.raw();
+                runner.world_mut().send_unit_directly(row, loaded.parked);
+            }
             // Each mortar shells its neck once, as soon as it is ready.
             for ((mortar, neck), done) in mortars.iter().zip(necks).zip(fired.iter_mut()) {
                 if *done {
@@ -1744,6 +1721,9 @@ fn collapse_credits_the_blast() {
     // the hash, or one that moves on another platform, is red here
     // (AGENTS.md section 4.8). A change that moves them re-blesses them with
     // its reason, as any golden chain.
+    // Re-blessed by S2's `site`: the staging moved to units, a wreck and a
+    // ruin, because a live building's footing is anchored ground (the
+    // owner's ruling of 2026-10-20) and a shelf carrying one cannot fall.
     let pinned: Vec<(u32, u64)> = first
         .iter()
         .copied()
@@ -1752,9 +1732,9 @@ fn collapse_credits_the_blast() {
     assert_eq!(
         pinned,
         vec![
-            (CUT_TICK - 1, 0xa46e_a9f4_7530_9436),
-            (CUT_TICK, 0xa9fc_b9cd_5860_8512),
-            (CUT_TICK + 1, 0xc05e_e6cb_fff7_4fb8),
+            (CUT_TICK - 1, 0x6285_6f9e_da95_3c1a),
+            (CUT_TICK, 0x7746_1ffc_5168_cbae),
+            (CUT_TICK + 1, 0x28e6_ef7d_2466_e17a),
         ],
         "the staged blast's chain at the cut"
     );
@@ -1800,7 +1780,7 @@ fn collapse_credits_the_blast() {
         AssetId::of_unit(loaded.commander),
         AssetId::of_unit(loaded.drone),
         AssetId::of_structure(loaded.structure),
-        AssetId::of_beacon(loaded.perch),
+        AssetId::of_wreck(loaded.wreck),
     ] {
         assert!(fallers.contains(&asset.ok()), "{asset:?} fell");
     }
@@ -1826,14 +1806,13 @@ fn collapse_credits_the_blast() {
         shares.is_empty(),
         "the commander's fall credits nobody: {shares:?}"
     );
-    // The structure survived; seat 0 holds the fall's credit on it.
-    let structure = AssetId::of_structure(loaded.structure).expect("an id");
+    // A ruin belongs to no seat, so its fall credits nobody.
+    let wreckage = AssetId::of_structure(loaded.structure).expect("an id");
     let mut shares = Vec::new();
-    world.credit().shares_of(structure.raw(), &mut shares);
-    assert_eq!(
-        shares,
-        vec![(0, fall)],
-        "seat 0 holds the fall's credit on the structure"
+    world.credit().shares_of(wreckage.raw(), &mut shares);
+    assert!(
+        shares.is_empty(),
+        "the ruin's fall credits nobody: {shares:?}"
     );
     assert_eq!(world.event_bus().dropped(), 0, "no event was dropped");
 }

@@ -67,22 +67,12 @@
 //!
 //! # Mine never undermines (item 144 (3))
 //!
-//! [`World::dig_keeps_structures_standing`] runs the same bounded search
-//! read-only, over the world as the edits already queued this tick will leave
-//! it, with the dig's voxel as air, and refuses a dig that would detach a
-//! region carrying a seat's structure or beacon. The queue at the moment a dig
-//! is chosen and filed holds exactly the edits the Voxels phase will apply
-//! before it, so the check at filing is the check at application for every
-//! edit queued before the dig. That is the plan's apply-time re-check moved to
-//! the filing, a correction this lane made: at application the phase could
-//! not tell which drone had been paid for the dig. An edit filed **after** the
-//! dig on the same tick (a shell landing in Combat) is not seen, so a dig and
-//! a later crater can still drop a structure together; the fall is then
-//! credited to both seats, as decision 37 says.
-//!
-//! The check is a pure read: it builds its own scratch per call, and only on
-//! the slow path, when a face of the dig is not grounded by its own column. A
-//! dig into ordinary ground allocates nothing.
+//! A live structure's or beacon's footprint columns ignore every edit and
+//! count as anchored ground (the owner's ruling of 2026-10-20, S2's `site`,
+//! [`crate::footing`]), so no dig, crater or fall can detach a region that
+//! carries one. Mine therefore runs no support search of its own: the
+//! read-only check this module once ran at a dig's filing, over the queued
+//! edits, could no longer say no, and went with the ruling.
 //!
 //! # Allocations
 //!
@@ -93,17 +83,11 @@
 //! # A note for the roadmap
 //!
 //! The owner's roadmap entry "some materials like dirt to be displaceable but
-//! not destroyable" is not built. Two places would have to change with it:
+//! not destroyable" is not built. One place would have to change with it:
 //! the removal hook in [`VoxelStore::blast`] reports only a voxel the blast
 //! turned to air (`next.is_air()`), so a voxel displaced rather than removed
-//! needs its own report; and [`Thought`] repeats the blast's ball, bore and
-//! `after_blast` test to see the queued edits, so any new blast outcome must
-//! be mirrored there (one shared predicate in `voxels.rs` would end the copy).
-//! A displaced voxel that lands in air is already a seed, as every solid
-//! write into air is.
-
-use std::collections::BTreeSet;
-use std::sync::atomic::{AtomicU64, Ordering};
+//! needs its own report. A displaced voxel that lands in air is already a
+//! seed, as every solid write into air is.
 
 use crate::events::{Emission, EventKind};
 use crate::footing::Footings;
@@ -114,9 +98,7 @@ use crate::math::fixed::Fx;
 use crate::math::quantity::Damage;
 use crate::rules::RulesTable;
 use crate::tables::{SeatId, StructureKind, UnitKind, WreckId};
-use crate::voxels::{
-    BlastLevels, Blasted, CHUNK_MASK, CHUNK_SHIFT, Material, VoxelEdit, VoxelStore,
-};
+use crate::voxels::{CHUNK_MASK, CHUNK_SHIFT, Material, VoxelStore};
 use crate::world::{DamageOrder, DamageTarget, World};
 
 /// The face-neighbour order every search enumerates: `-z, +x, -x, +y, -y, +z`.
@@ -168,38 +150,6 @@ impl CollapseSkip {
         match self {
             CollapseSkip::RegionBound => 0,
             CollapseSkip::TickBudget => 1,
-        }
-    }
-}
-
-/// Why the support rule refused a Mine dig (item 144 (3)).
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub enum DigRefused {
-    /// The dig would detach a region carrying a seat's structure or beacon.
-    WouldUndermine,
-    /// The check could not run to its end (a voxel index named no voxel), so
-    /// the dig is refused rather than taken unchecked. No legal world reaches
-    /// it.
-    Unchecked,
-}
-
-impl DigRefused {
-    /// Every reason.
-    pub const ALL: [DigRefused; 2] = [DigRefused::WouldUndermine, DigRefused::Unchecked];
-
-    /// The reason's name.
-    #[must_use]
-    pub const fn name(self) -> &'static str {
-        match self {
-            DigRefused::WouldUndermine => "would_undermine",
-            DigRefused::Unchecked => "unchecked",
-        }
-    }
-
-    const fn slot(self) -> usize {
-        match self {
-            DigRefused::WouldUndermine => 0,
-            DigRefused::Unchecked => 1,
         }
     }
 }
@@ -269,7 +219,6 @@ pub struct CollapseCounts {
     /// The voxels the last tick's searches visited.
     pub last_visits: usize,
     skipped: [u64; 2],
-    refused: [u64; 2],
 }
 
 impl CollapseCounts {
@@ -277,15 +226,6 @@ impl CollapseCounts {
     #[must_use]
     pub fn skipped(&self, reason: CollapseSkip) -> u64 {
         self.skipped.get(reason.slot()).copied().into_iter().sum()
-    }
-
-    /// Mine dig checks that refused, for `reason`. Every evaluation counts:
-    /// Mine's choice is asked on more paths than the filing (the seam choice,
-    /// the mandate's work count, a drone's walk), so this is how often the
-    /// check said no, not how many digs a drone gave up.
-    #[must_use]
-    pub fn refused(&self, reason: DigRefused) -> u64 {
-        self.refused.get(reason.slot()).copied().into_iter().sum()
     }
 
     fn skip(&mut self, reason: CollapseSkip, count: u64) {
@@ -419,28 +359,6 @@ impl Labels for TickLabels<'_> {
     }
 }
 
-/// A Mine check's own sets, built per call on its slow path.
-#[derive(Default)]
-struct CallLabels {
-    visited: BTreeSet<u32>,
-    supported: BTreeSet<u32>,
-}
-
-impl Labels for CallLabels {
-    fn visited(&self, index: u32) -> bool {
-        self.visited.contains(&index)
-    }
-    fn visit(&mut self, index: u32) {
-        self.visited.insert(index);
-    }
-    fn supported(&self, index: u32) -> bool {
-        self.supported.contains(&index)
-    }
-    fn support(&mut self, index: u32) {
-        self.supported.insert(index);
-    }
-}
-
 /// How solid a voxel is to a search: the store as it is, or as the queued
 /// edits will leave it.
 trait Solidity {
@@ -453,119 +371,6 @@ struct Settled<'a>(&'a VoxelStore);
 impl Solidity for Settled<'_> {
     fn solid(&self, at: [i32; 3]) -> bool {
         self.0.get(at).is_some_and(Material::is_solid)
-    }
-}
-
-/// The store as the edits already queued this tick, and then one dig, will
-/// leave it: what Mine's check searches (item 144 (3)).
-///
-/// The queue is pre-indexed once per check by the box its edits reach, so a
-/// read outside it costs one comparison, not a walk of the queue.
-struct Thought<'a> {
-    store: &'a VoxelStore,
-    queue: &'a [VoxelEdit],
-    levels: BlastLevels,
-    bore: &'a Footings<'a>,
-    dug: [i32; 3],
-    /// `[min x, min y, min z, max x, max y, max z]` of every queued edit's
-    /// reach, or `None` for an empty queue.
-    reach: Option<[i32; 6]>,
-}
-
-impl<'a> Thought<'a> {
-    fn new(
-        store: &'a VoxelStore,
-        queue: &'a [VoxelEdit],
-        levels: BlastLevels,
-        bore: &'a Footings<'a>,
-        dug: [i32; 3],
-    ) -> Thought<'a> {
-        let mut reach: Option<[i32; 6]> = None;
-        for edit in queue {
-            let (centre, radius) = match *edit {
-                VoxelEdit::Set { at, .. } => (at, 0),
-                VoxelEdit::Crater { centre, radius, .. } => (centre, radius.max(0)),
-            };
-            let low = centre.map(|axis| axis.saturating_sub(radius));
-            let high = centre.map(|axis| axis.saturating_add(radius));
-            let mut next = [low[0], low[1], low[2], high[0], high[1], high[2]];
-            if let Some(held) = reach {
-                for (slot, (axis, was)) in next.iter_mut().zip(held.iter().enumerate()) {
-                    *slot = if axis < 3 {
-                        (*slot).min(*was)
-                    } else {
-                        (*slot).max(*was)
-                    };
-                }
-            }
-            reach = Some(next);
-        }
-        Thought {
-            store,
-            queue,
-            levels,
-            bore,
-            dug,
-            reach,
-        }
-    }
-
-    fn reached(&self, at: [i32; 3]) -> bool {
-        let [x, y, z] = at;
-        self.reach.is_some_and(|[a, b, c, d, e, f]| {
-            x >= a && y >= b && z >= c && x <= d && y <= e && z <= f
-        })
-    }
-}
-
-impl Solidity for Thought<'_> {
-    fn solid(&self, at: [i32; 3]) -> bool {
-        if at == self.dug {
-            return false;
-        }
-        let Some(mut material) = self.store.get(at) else {
-            return false;
-        };
-        if !self.reached(at) {
-            return material.is_solid();
-        }
-        for edit in self.queue {
-            match *edit {
-                VoxelEdit::Set {
-                    at: written,
-                    material: next,
-                    ..
-                } => {
-                    if written == at {
-                        material = next;
-                    }
-                }
-                VoxelEdit::Crater { centre, radius, .. } => {
-                    // The ball `VoxelStore::blast` walks, the bore skipped:
-                    // a copy of its test, which the module docs name.
-                    let [x, y, z] = at;
-                    let [cx, cy, cz] = centre;
-                    let (dx, dy, dz) = (
-                        x.saturating_sub(cx),
-                        y.saturating_sub(cy),
-                        z.saturating_sub(cz),
-                    );
-                    let d2 = dx
-                        .saturating_mul(dx)
-                        .saturating_add(dy.saturating_mul(dy))
-                        .saturating_add(dz.saturating_mul(dz));
-                    let inside =
-                        radius >= 0 && radius.checked_mul(radius).is_some_and(|r2| d2 <= r2);
-                    if inside
-                        && !self.bore.holds(at)
-                        && let Blasted::Into(next) = material.after_blast(self.levels)
-                    {
-                        material = next;
-                    }
-                }
-            }
-        }
-        material.is_solid()
     }
 }
 
@@ -1325,10 +1130,6 @@ pub struct Scratch {
     rule: SupportRule,
     room: Room,
     counts: CollapseCounts,
-    /// The Mine check's refusals, by [`DigRefused::slot`]: counted through a
-    /// shared read, so atomic. A diagnostic only; nothing reads it back into
-    /// the tick.
-    refused: [AtomicU64; 2],
     fall_damage: i32,
     /// The cells a unit stands in, from its feet up: the headroom row.
     headroom: i32,
@@ -1342,20 +1143,10 @@ pub struct Scratch {
 // a clone is fresh scratch of the same rooms, with the counts.
 impl Clone for Scratch {
     fn clone(&self) -> Scratch {
-        let refused = [0, 1].map(|slot| {
-            AtomicU64::new(
-                self.refused
-                    .get(slot)
-                    .map(|count| count.load(Ordering::Relaxed))
-                    .into_iter()
-                    .sum(),
-            )
-        });
         Scratch {
             rule: SupportRule::with_room(self.room),
             room: self.room,
             counts: self.counts,
-            refused,
             fall_damage: self.fall_damage,
             headroom: self.headroom,
             victims: Vec::with_capacity(self.victims.capacity()),
@@ -1411,7 +1202,6 @@ impl Scratch {
             rule: SupportRule::with_room(room),
             room,
             counts: CollapseCounts::default(),
-            refused: [AtomicU64::new(0), AtomicU64::new(0)],
             fall_damage,
             // An asset stands in one cell at least, whatever the row says.
             headroom: rules.headroom_voxels().max(1),
@@ -1433,17 +1223,7 @@ impl Scratch {
     /// What the support rule has done.
     #[must_use]
     pub fn counts(&self) -> CollapseCounts {
-        let mut counts = self.counts;
-        for (slot, count) in counts.refused.iter_mut().zip(&self.refused) {
-            *slot = count.load(Ordering::Relaxed);
-        }
-        counts
-    }
-
-    fn refuse(&self, reason: DigRefused) {
-        if let Some(count) = self.refused.get(reason.slot()) {
-            count.fetch_add(1, Ordering::Relaxed);
-        }
+        self.counts
     }
 }
 
@@ -1841,104 +1621,5 @@ impl World {
         self.apply_damage();
         self.settle_deaths();
         Ok(())
-    }
-
-    /// Whether a Mine dig of `at` leaves every seat's structure and beacon
-    /// standing (item 144 (3)): the support search, run read-only over the
-    /// world as the edits queued this tick and then the dig will leave it,
-    /// finds no detached region that carries one. A refusal is counted under
-    /// [`DigRefused`]. Mine's dig choice asks it, and a test may.
-    ///
-    /// A pure read: it builds its own scratch, and only when a face of the
-    /// dig is not grounded by its own column. Its searches count against
-    /// neither collapse row's budget; each is bounded by
-    /// `collapse.max_region_voxels`.
-    #[must_use]
-    pub fn dig_keeps_structures_standing(&self, at: [i32; 3]) -> bool {
-        let refused = match self.undermines(at) {
-            Ok(false) => return true,
-            Ok(true) => DigRefused::WouldUndermine,
-            Err(reason) => reason,
-        };
-        self.support.refuse(refused);
-        false
-    }
-
-    fn undermines(&self, dug: [i32; 3]) -> Result<bool, DigRefused> {
-        let footings = Footings::of(&self.bore, &self.structures, &self.beacons);
-        let view = Thought::new(
-            &self.voxels,
-            &self.edits,
-            self.rules.combat().blast_levels,
-            &footings,
-            dug,
-        );
-        let [_, _, size_z] = self.support.room.size;
-        // The fast path: every solid face of the dig grounded by its own
-        // column, or a bore voxel. Nothing is allocated.
-        let mut faces = [None; 6];
-        for (step, face) in NEIGHBOURS.into_iter().zip(faces.iter_mut()) {
-            let next = add(dug, step);
-            if !view.solid(next) {
-                continue;
-            }
-            let [x, y, z] = next;
-            if z < column_height(&view, x, y, size_z) || footings.holds(next) {
-                continue;
-            }
-            *face = Some(index_of(&self.voxels, next).ok_or(DigRefused::Unchecked)?);
-        }
-        if faces.iter().all(Option::is_none) {
-            return Ok(false);
-        }
-        // The slow path: the search from each ungrounded face, over sets of
-        // this call's own.
-        let max_region = crate::math::index::row(self.support.room.max_region);
-        let mut list: Vec<u32> = Vec::with_capacity(max_region.saturating_add(1).saturating_mul(6));
-        let mut labels = CallLabels::default();
-        let walk = Walk {
-            view: &view,
-            store: &self.voxels,
-            bore: &footings,
-            max_region,
-            limit: list.capacity(),
-        };
-        let mut height = |x: i32, y: i32| column_height(&view, x, y, size_z);
-        let mut detached = false;
-        for seed in faces.into_iter().flatten() {
-            if labels.visited(seed) {
-                continue;
-            }
-            match search(&walk, &mut labels, &mut list, &mut height, seed) {
-                // A detached region's voxels stay visited and unlabelled:
-                // that is how a structure standing on it is found below.
-                Ok(Outcome::Detached) => detached = true,
-                Ok(Outcome::Supported | Outcome::RegionBound) => {}
-                Ok(Outcome::Budget) | Err(_) => return Err(DigRefused::Unchecked),
-            }
-        }
-        if !detached {
-            return Ok(false);
-        }
-        let on_region = |point: [Fx; 3]| {
-            index_of(&self.voxels, standing_voxel(point))
-                .is_some_and(|voxel| labels.visited(voxel) && !labels.supported(voxel))
-        };
-        let structures = self
-            .structures
-            .positions()
-            .iter()
-            .zip(self.structures.hit_points())
-            .zip(self.structures.seats())
-            .any(|((point, hp), seat)| {
-                hp.is_alive() && SeatId::new(*seat).is_some() && on_region(*point)
-            });
-        let beacons = self
-            .beacons
-            .positions()
-            .iter()
-            .zip(self.beacons.hit_points())
-            .any(|(point, hp)| hp.is_alive() && on_region(*point));
-        Ok(structures || beacons)
     }
 }
