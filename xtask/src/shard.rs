@@ -91,7 +91,10 @@ pub(crate) enum ShardError {
         target: String,
         flag: &'static str,
     },
-    /// A target `cargo test --workspace` would build that no shard selects.
+    /// A target `cargo test --workspace` would build that no shard selects the
+    /// same way: an example, a bench with `test` set, a kind this has never
+    /// seen, or a library, binary or integration test whose `test` (or a
+    /// library's `doctest`) flag is off.
     UnsupportedTarget {
         package: String,
         target: String,
@@ -264,21 +267,27 @@ pub(crate) fn units<'a>(
             // every shard does for whatever it selects.
             continue;
         }
+        // A unit selects by kind and name across the workspace, and an explicit
+        // selector runs a target whatever its flag says: so a library, binary or
+        // integration test whose flag turns it off (`test = false`, or a
+        // library's `doctest = false`) would run on a shard and not unsharded,
+        // or run where a same-named target elsewhere is selected. Refused.
         if LIB_KINDS.iter().any(|kind| has(kind)) {
-            if flag(target.test, "test")? {
-                found.push(Unit::Lib);
+            if !flag(target.test, "test")? || !flag(target.doctest, "doctest")? {
+                return Err(refuse());
             }
-            if flag(target.doctest, "doctest")? {
-                found.push(Unit::Doc);
-            }
+            found.push(Unit::Lib);
+            found.push(Unit::Doc);
         } else if has("bin") {
-            if flag(target.test, "test")? {
-                found.push(Unit::Bin(target.name.clone()));
+            if !flag(target.test, "test")? {
+                return Err(refuse());
             }
+            found.push(Unit::Bin(target.name.clone()));
         } else if has("test") {
-            if flag(target.test, "test")? {
-                found.push(Unit::Test(target.name.clone()));
+            if !flag(target.test, "test")? {
+                return Err(refuse());
             }
+            found.push(Unit::Test(target.name.clone()));
         } else if has("bench") {
             // `cargo test` builds a bench only when its `test` flag is set.
             if flag(target.test, "test")? {
@@ -434,10 +443,9 @@ mod tests {
                 "pharmakos-gateway",
                 target("economy", &["test"], true, false),
             ),
-            ("pharmakos-gateway", target("off", &["test"], false, false)),
             (
                 "pharmakos-client-gdext",
-                target("pharmakos_client_gdext", &["cdylib", "rlib"], true, false),
+                target("pharmakos_client_gdext", &["cdylib", "rlib"], true, true),
             ),
             (
                 "pharmakos-sim",
@@ -465,6 +473,10 @@ mod tests {
             target("demo", &["example"], false, false),
             target("loud", &["bench"], true, false),
             target("odd", &["some-new-kind"], true, false),
+            target("off", &["test"], false, false),
+            target("quiet_bin", &["bin"], false, false),
+            target("pharmakos_sim", &["lib"], false, true),
+            target("pharmakos_sim", &["lib"], true, false),
         ] {
             let found = units([("pharmakos-sim", &refused)]);
             assert!(

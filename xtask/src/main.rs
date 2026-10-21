@@ -834,7 +834,7 @@ fn run_cli(args: &[String]) -> Result<bool, String> {
         }
     }
     if let Some(shard) = shard {
-        shard_flags_allowed(&commands, &packages, fix, bless)
+        shard_flags_allowed(&commands, &packages, quick, fix, bless)
             .map_err(|reason| format!("--shard {shard}: {reason}"))?;
     }
 
@@ -973,12 +973,14 @@ fn step_in_shard(name: &str, shard: Option<shard::Shard>) -> bool {
 }
 
 /// `--shard` belongs to `ci` alone, and to no flag that would make a shard
-/// mean something else: `--package` narrows the units cargo builds, which the
+/// mean something else: `--quick` would run part of the inner loop's tests on
+/// a shard and none of the rest; `--package` narrows the units cargo builds, which the
 /// split's `--workspace` selection must not change; `--fix` edits rather than
 /// checks; and `--bless` would rewrite goldens from a part of the outputs.
 fn shard_flags_allowed(
     commands: &[String],
     packages: &[String],
+    quick: bool,
     fix: bool,
     bless: bool,
 ) -> Result<(), String> {
@@ -988,6 +990,13 @@ fn shard_flags_allowed(
     if !packages.is_empty() {
         return Err(
             "it cannot be combined with --package: the shards select from the whole workspace"
+                .to_owned(),
+        );
+    }
+    if quick {
+        return Err(
+            "it cannot be combined with --quick: the inner loop is a local run, and a shard \
+             would run only part of its tests"
                 .to_owned(),
         );
     }
@@ -1333,10 +1342,14 @@ fn step_test(ctx: &Ctx) -> Result<Outcome, String> {
     if let Some(shard) = ctx.shard {
         let workspace = metadata(ctx)?;
         let all = workspace_test_units(workspace)?;
-        let part = run_shard_units(ctx, shard, "test", &all, &args)?;
-        return Ok(Outcome::Done(format!(
-            "{part}; tests pass without `research`; {fresh_note}"
-        )));
+        return Ok(Outcome::Done(
+            match run_shard_units(ctx, shard, "test", &all, &args)? {
+                ShardPart::Ran(part) => {
+                    format!("{part}; tests pass without `research`; {fresh_note}")
+                }
+                ShardPart::Empty(part) => format!("{part}; {fresh_note}"),
+            },
+        ));
     }
     if ctx.locked {
         args.push("--locked".to_owned());
@@ -1376,7 +1389,7 @@ fn run_shard_units(
     step: &str,
     all: &[shard::Unit],
     base: &[String],
-) -> Result<String, String> {
+) -> Result<ShardPart, String> {
     let part = shard_part(shard, step, all);
     let keys: Vec<String> = part.iter().map(shard::Unit::key).collect();
     println!(
@@ -1397,11 +1410,25 @@ fn run_shard_units(
         }
         run(ctx, &ctx.cargo, &args)?;
     }
-    Ok(format!(
+    if part.is_empty() {
+        return Ok(ShardPart::Empty(format!(
+            "none of the step's {} unit(s) falls to shard {shard}, so this shard ran none",
+            all.len()
+        )));
+    }
+    Ok(ShardPart::Ran(format!(
         "shard {shard} ran {} of the step's {} unit(s)",
         part.len(),
         all.len()
-    ))
+    )))
+}
+
+/// What a shard did with its part of a step: ran it, or held none of it, in
+/// which case its report says so rather than "tests pass".
+#[derive(Debug)]
+enum ShardPart {
+    Ran(String),
+    Empty(String),
 }
 
 /// Remove `<target>/golden/` and everything under it, if it is there. Its
@@ -1448,8 +1475,12 @@ fn step_test_research(ctx: &Ctx) -> Result<Outcome, String> {
                 }),
         )
         .map_err(|error| error.to_string())?;
-        let part = run_shard_units(ctx, shard, "test-research", &all, &args)?;
-        return Ok(Outcome::Done(format!("{part}; tests pass with {feature}")));
+        return Ok(Outcome::Done(
+            match run_shard_units(ctx, shard, "test-research", &all, &args)? {
+                ShardPart::Ran(part) => format!("{part}; tests pass with {feature}"),
+                ShardPart::Empty(part) => part,
+            },
+        ));
     }
     match research_test_args(sim.as_deref(), &ctx.packages, ctx.locked)? {
         ResearchTests::Run { args, feature } => {
@@ -2163,7 +2194,6 @@ fn step_scenario(ctx: &Ctx) -> Result<Outcome, String> {
         ctx.shard
             .is_none_or(|shard| shard.holds("scenario", &scenario_shard_key(&item.relative)))
     };
-    let mut ran = 0_usize;
     for item in valid.iter().filter(|item| !item.nightly) {
         if !played.iter().any(|path| path.ends_with(&item.relative)) {
             return Err(format!(
@@ -2181,10 +2211,19 @@ fn step_scenario(ctx: &Ctx) -> Result<Outcome, String> {
         let args = cargo_run_args(ctx, &owner, &[SCENARIO_SUBCOMMAND, "run", &relative]);
         run(ctx, &ctx.cargo, &args)
             .map_err(|error| format!("scenario `{}` failed: {error}", item.name))?;
-        ran = ran.saturating_add(1);
     }
+    let ran = valid
+        .iter()
+        .filter(|item| !item.nightly && mine(item))
+        .count();
 
     let part = match ctx.shard {
+        Some(shard) if ran == 0 => {
+            return Ok(Outcome::Done(format!(
+                "{checked}; none of the {to_play} played scenario(s) falls to shard {shard}, so \
+                 this shard played none; {arms} nightly arm(s) valid"
+            )));
+        }
         Some(shard) => format!("shard {shard} played {ran} of {to_play}; "),
         None => String::new(),
     };
@@ -3162,19 +3201,30 @@ fn parse_workspace(metadata: &str) -> Result<Workspace, String> {
         let mut targets: Vec<shard::Target> = Vec::new();
         if let Some(entries) = entry.get("targets").and_then(Json::as_array) {
             for target in entries {
-                let kinds: Vec<String> = target
-                    .get("kind")
-                    .and_then(Json::as_array)
-                    .map(|kinds| {
-                        kinds
-                            .iter()
-                            .filter_map(Json::as_str)
-                            .map(str::to_owned)
-                            .collect()
-                    })
-                    .unwrap_or_default();
+                // A target without its name or its kinds cannot be split, and
+                // dropping it would take it out of the shards in silence.
                 let Some(target_name) = target.get("name").and_then(Json::as_str) else {
-                    continue;
+                    return Err(format!(
+                        "cargo metadata gives {name} a target with no `name`"
+                    ));
+                };
+                let kinds: Vec<String> = match target.get("kind").and_then(Json::as_array) {
+                    Some(kinds) if !kinds.is_empty() => kinds
+                        .iter()
+                        .map(|kind| {
+                            kind.as_str().map(str::to_owned).ok_or_else(|| {
+                                format!(
+                                    "cargo metadata gives {name}'s target `{target_name}` a \
+                                     kind that is not a string"
+                                )
+                            })
+                        })
+                        .collect::<Result<_, _>>()?,
+                    _ => {
+                        return Err(format!(
+                            "cargo metadata gives {name}'s target `{target_name}` no `kind`"
+                        ));
+                    }
                 };
                 if kinds.iter().any(|kind| kind == "bin") {
                     bins.push(target_name.to_owned());
@@ -4828,8 +4878,8 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
         }
     }
 
-    /// ci.yml's split agrees with itself: the `ci-shard` matrix lists shard 1 to
-    /// `CI_SHARDS` exactly, and each shard runs `cargo xtask ci --shard n/CI_SHARDS`,
+    /// ci.yml's split agrees with itself: each operating system's `ci-shard-<os>`
+    /// matrix lists shard 1 to `CI_SHARDS` exactly, and each shard runs `cargo xtask ci --shard n/CI_SHARDS`,
     /// so the leg job's count of reports and the shards' own `N/M` cannot drift
     /// apart (decisions-log item 148 (2)).
     #[test]
@@ -4850,20 +4900,24 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
         };
         assert!(total >= 1);
         let lists = value("shard: [");
-        assert_eq!(lists.len(), 1, "one shard matrix: {lists:?}");
-        let listed: Vec<u32> = lists
-            .first()
-            .and_then(|list| list.strip_suffix(']'))
-            .map(|list| {
-                list.split(',')
-                    .map(|item| match item.trim().parse() {
-                        Ok(number) => number,
-                        Err(error) => panic!("shard matrix entry `{item}`: {error}"),
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        assert_eq!(listed, (1..=total).collect::<Vec<u32>>());
+        assert_eq!(
+            lists.len(),
+            3,
+            "one shard matrix per operating system: {lists:?}"
+        );
+        for list in &lists {
+            let Some(items) = list.strip_suffix(']') else {
+                panic!("shard matrix `{list}` does not close on its line");
+            };
+            let listed: Vec<u32> = items
+                .split(',')
+                .map(|item| match item.trim().parse() {
+                    Ok(number) => number,
+                    Err(error) => panic!("shard matrix entry `{item}`: {error}"),
+                })
+                .collect();
+            assert_eq!(listed, (1..=total).collect::<Vec<u32>>(), "{list}");
+        }
         assert!(
             ci.contains(r#"cargo xtask ci --shard "${{ matrix.shard }}/${CI_SHARDS}""#),
             "each shard runs its own `--shard n/CI_SHARDS`"
@@ -4893,11 +4947,14 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
             );
         }
         let ci = ["ci".to_owned()];
-        assert!(shard_flags_allowed(&ci, &[], false, false).is_ok());
-        assert!(shard_flags_allowed(&["test".to_owned()], &[], false, false).is_err());
-        assert!(shard_flags_allowed(&ci, &["pharmakos-sim".to_owned()], false, false).is_err());
-        assert!(shard_flags_allowed(&ci, &[], true, false).is_err());
-        assert!(shard_flags_allowed(&ci, &[], false, true).is_err());
+        assert!(shard_flags_allowed(&ci, &[], false, false, false).is_ok());
+        assert!(shard_flags_allowed(&["test".to_owned()], &[], false, false, false).is_err());
+        assert!(
+            shard_flags_allowed(&ci, &["pharmakos-sim".to_owned()], false, false, false).is_err()
+        );
+        assert!(shard_flags_allowed(&ci, &[], true, false, false).is_err());
+        assert!(shard_flags_allowed(&ci, &[], false, true, false).is_err());
+        assert!(shard_flags_allowed(&ci, &[], false, false, true).is_err());
     }
 
     /// Decisions-log item 116 (6)(g): every skip that stood for a missing input

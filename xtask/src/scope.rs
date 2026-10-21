@@ -5,8 +5,10 @@
 //! (decisions-log item 115 (4)).
 //!
 //! A pull request that changes only prose should not wait for three
-//! `cargo xtask ci` legs. The ruleset's required checks still have to report
-//! under their own names, so every job still runs; each one that builds asks
+//! `cargo xtask ci` legs (each of them CI_SHARDS shard jobs and a leg job,
+//! decisions-log item 148 (2); every shard job asks this command). The
+//! ruleset's required checks still have to report under their own names, so
+//! every job still runs; each one that builds asks
 //! this command, right after its checkout and toolchain steps, whether anything
 //! but prose changed, and skips its remaining steps when nothing did.
 //!
