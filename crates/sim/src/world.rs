@@ -239,6 +239,11 @@ struct Carried {
     anchor: [Fx; 3],
     feature: u32,
     built: StructureId,
+    /// A wall row's box of columns and top ([`crate::tables::NO_WALL`] for a
+    /// structure row), and whether the wall had been filled whole once: a
+    /// re-sealed wall with the same anchor and box keeps that flag, so a
+    /// re-seal is no way round `rebuild_destroyed`.
+    wall: (ColumnBox, i16, bool),
     /// Whether the new list kept it: an entry it dropped recycles what
     /// stands for it (S2-10).
     kept: bool,
@@ -2165,6 +2170,14 @@ impl World {
         if self.ground().structure_on(x, y) {
             return false;
         }
+        // A `set` already filed on the column this tick (a dig credited, a
+        // fill or a wall voxel paid for) would be refused by the footing this
+        // purchase begins: the purchase waits for the next decision tick, and
+        // nothing is charged for it now (the owner's footing ruling of
+        // 2026-10-20; no paid edit is refused).
+        if self.set_queued_on(x, y) {
+            return false;
+        }
         if self.structures_held_by(seat) >= room_per_seat(STRUCTURE_TABLE_ROOM, self.seats.len()) {
             return false;
         }
@@ -2570,7 +2583,7 @@ impl World {
         at: [Fx; 3],
     ) -> Result<(), TargetsFull> {
         self.targets.add(beacon, blueprint, at)?;
-        self.adopt_paused(beacon, at);
+        let _ = self.adopt_paused(beacon, at, blueprint);
         Ok(())
     }
 
@@ -2584,6 +2597,20 @@ impl World {
     ) {
         if let Ok(row) = self.beacons.row_of(beacon) {
             self.set_build_settings(row.index(), settings);
+        }
+    }
+
+    /// Give `beacon` paid site work directly: its repair and build funds, as
+    /// the Quartermaster's top-ups would leave them (S2's `site`). The `$` is
+    /// not taken from the treasury.
+    ///
+    /// Fixture API; see the block comment above.
+    pub fn set_site_funds_directly(&mut self, beacon: BeaconId, repair: Money, build: Money) {
+        if let Ok(row) = self.beacons.row_of(beacon)
+            && let Some(site) = self.beacons.sites_mut().get_mut(row.index())
+        {
+            site.repair_fund = repair;
+            site.build_fund = build;
         }
     }
 
@@ -2689,9 +2716,9 @@ impl World {
             build,
         )?;
         if let Some(wall) = wall {
-            self.make_wall_at(beacon, at, wall);
+            let _ = self.make_wall_at(beacon, at, wall);
         } else {
-            self.adopt_paused(beacon, at);
+            let _ = self.adopt_paused(beacon, at, blueprint);
         }
         Ok(())
     }
@@ -2844,10 +2871,21 @@ impl World {
                     self.targets.built().get(row).copied(),
                 )
             {
+                let wall = (
+                    self.targets.areas().get(row).copied().unwrap_or_default(),
+                    // E7: rule: a row the table does not hold names no wall
+                    self.targets
+                        .wall_tops()
+                        .get(row)
+                        .copied()
+                        .unwrap_or(crate::tables::NO_WALL),
+                    self.targets.walls_done().get(row).copied() == Some(true),
+                );
                 self.carry.push(Carried {
                     anchor,
                     feature,
                     built,
+                    wall,
                     kept: false,
                 });
             }
@@ -2869,8 +2907,21 @@ impl World {
                 (entry.feature, entry.desc),
                 entry.build,
             )?;
-            if let Some(wall) = entry.wall {
-                self.make_wall_at(beacon, anchor, wall);
+            if let Some(wall) = entry.wall
+                && let Some(slot) = self.make_wall_at(beacon, anchor, wall)
+            {
+                // The same wall sealed again, anchor and box alike, keeps its
+                // filled-whole flag; any change to the box is a new wall
+                // target, whose flag starts clear.
+                let same = self.carry.iter_mut().find(|old| {
+                    old.anchor == anchor && old.wall.0 == wall.columns && old.wall.1 == wall.top
+                });
+                if let Some(old) = same {
+                    old.kept = true;
+                    if old.wall.2 {
+                        self.targets.mark_wall_done(slot);
+                    }
+                }
             }
             let carried = self.carry.iter_mut().find(|old| {
                 if entry.feature == NO_FEATURE {
@@ -2885,8 +2936,16 @@ impl World {
             });
             if built.is_some() {
                 self.set_built_at(beacon, anchor, built);
-            } else if entry.wall.is_none() {
-                self.adopt_paused(beacon, anchor);
+            } else if entry.wall.is_none()
+                && let Some(adopted) = self.adopt_paused(beacon, anchor, entry.blueprint)
+            {
+                // A structure this entry adopted is kept, whichever old entry
+                // it stood for: an old fixed-voxel row the new list wrote by
+                // its feature instead carries nothing by anchor or feature,
+                // and would otherwise recycle the structure just linked.
+                for old in self.carry.iter_mut().filter(|old| old.built == adopted) {
+                    old.kept = true;
+                }
             }
         }
         // S2-10 (decision 26): an entry the new list dropped recycles what
@@ -3006,16 +3065,22 @@ impl World {
 
     /// Write the Build target of `beacon` at `at`, just added, as a wall with
     /// `wall`'s box (S2's `site`).
-    fn make_wall_at(&mut self, beacon: BeaconId, at: [Fx; 3], wall: crate::site::WallBox) {
+    fn make_wall_at(
+        &mut self,
+        beacon: BeaconId,
+        at: [Fx; 3],
+        wall: crate::site::WallBox,
+    ) -> Option<usize> {
         let count = self.targets.row_count();
         let slot = (0..count).rev().find(|row| {
             self.targets.beacons().get(*row).copied() == Some(beacon)
                 && self.targets.kinds().get(*row).copied() == Some(TargetKind::Build.id())
                 && self.targets.anchors().get(*row).copied() == Some(at)
         });
-        if let Some(slot) = slot {
-            self.targets.make_wall(slot, wall.columns, wall.top);
-        }
+        let slot = slot?;
+        self.targets
+            .make_wall(slot, wall.columns, wall.top)
+            .then_some(slot)
     }
 
     /// Recycle what stands for a Build target `beacon` just dropped (S2-10,

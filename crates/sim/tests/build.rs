@@ -1007,7 +1007,7 @@ fn an_unknown_byte_in_a_coded_column_is_refused_by_name() {
         .expect("the control restores: every column names a defined value");
     assert!(!good.unit_kind.is_empty(), "the fixture has a unit row");
 
-    let spoils: [Spoil; 21] = [
+    let spoils: [Spoil; 20] = [
         ("credit_seat", |s| {
             *s.credit_seat.first_mut().expect("a credit row") = 3;
         }),
@@ -1058,9 +1058,6 @@ fn an_unknown_byte_in_a_coded_column_is_refused_by_name() {
         ("target_blueprint", |s| {
             *s.target_blueprint.first_mut().expect("a target") = 200;
         }),
-        ("target_blueprint", |s| {
-            *s.target_blueprint.first_mut().expect("a target") = StructureKind::Wall.id();
-        }),
         ("beacon_mandate", |s| {
             *s.beacon_mandate.first_mut().expect("a beacon") = 6;
         }),
@@ -1083,4 +1080,13 @@ fn an_unknown_byte_in_a_coded_column_is_refused_by_name() {
             "an unknown {column} byte is refused by name"
         );
     }
+    // A wall is a Build target's blueprint since S2's `site`, so it is no
+    // unknown byte there; a wall blueprint on a row with no wall top is still
+    // refused, by the target table's own restore check.
+    let mut bad = good.clone();
+    *bad.target_blueprint.first_mut().expect("a target") = StructureKind::Wall.id();
+    assert!(
+        bad.restore_into(&mut world()).is_err(),
+        "a wall blueprint without its wall top is refused"
+    );
 }

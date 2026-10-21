@@ -1604,9 +1604,11 @@ impl Snapshot {
             ("structure_kind", self.structure_kind.iter().all(row_kind)),
             (
                 "target_blueprint",
+                // A Build target may name a wall (S2's `site`), which no
+                // structure row is.
                 self.target_blueprint
                     .iter()
-                    .all(|id| *id == 0 || row_kind(id)),
+                    .all(|id| *id == 0 || StructureKind::from_id(*id).is_some()),
             ),
             (
                 "beacon_mandate",

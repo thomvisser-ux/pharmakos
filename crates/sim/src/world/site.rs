@@ -553,6 +553,19 @@ fn ground_under_walls(world: &World, x: i32, y: i32) -> Option<i32> {
     Some(z)
 }
 
+/// The lowest air voxel of the column `(x, y)` from `ground + 1` up to `top`,
+/// or `None` when every voxel there is solid (the wall's column stands whole).
+fn lowest_air(world: &World, x: i32, y: i32, ground: i32, top: i32) -> Option<i32> {
+    let mut z = ground.checked_add(1)?;
+    while z <= top {
+        if world.voxels().get([x, y, z]).is_some_and(Material::is_air) {
+            return Some(z);
+        }
+        z = z.checked_add(1)?;
+    }
+    None
+}
+
 /// A drone's class among its beacon's drones of its kind: its rank by row and
 /// how many there are. `None` for a unit that is no live drone of `kind`
 /// homed to `home`.
@@ -654,8 +667,9 @@ fn beacon_on(world: &World, x: i32, y: i32) -> bool {
         .any(|(at, hp)| hp.is_alive() && crate::targeting::column_of(*at) == [x, y])
 }
 
-/// Whether a fill may go into the voxel `at`: it is air, and no structure or
-/// beacon stands on its column, whose voxels are theirs. A walker of the
+/// Whether a fill may go into the voxel `at`: it is air, no structure or
+/// beacon stands on its column, and no footing holds it (a footing ignores
+/// every edit, so a fill there would be paid for and refused). A walker of the
 /// filling seat standing in it is set on the new ground ([`reseat_buried`]);
 /// another seat's is waited for ([`work_voxel`]).
 fn fillable(world: &World, at: [i32; 3]) -> bool {
@@ -663,16 +677,20 @@ fn fillable(world: &World, at: [i32; 3]) -> bool {
     world.voxels().get(at).is_some_and(Material::is_air)
         && !world.ground().structure_on(x, y)
         && !beacon_on(world, x, y)
+        && !world.footings().column(x, y)
 }
 
 /// Whether the voxel `at` may be dug by a footprint's levelling: terrain, not
-/// bedrock and not the core's bore.
+/// bedrock, not the core's bore and no footing's (a footing ignores every
+/// edit, so a dig there would be paid for and refused).
 fn diggable(world: &World, at: [i32; 3]) -> bool {
+    let [x, y, _] = at;
     world
         .voxels()
         .get(at)
         .is_some_and(|material| material.terrain().is_some() && !material.is_bedrock())
         && !world.bore().contains(at)
+        && !world.footings().column(x, y)
 }
 
 /// The settings of `beacon`, or the defaults for a row the table no longer
@@ -723,8 +741,12 @@ fn levelling(world: &World, terraform: Terraform, anchor: [Fx; 3]) -> Option<Vox
 }
 
 /// The next voxel of a wall target's box in the class `class` of `count`, or
-/// any class when `count` is zero: the lowest air voxel of each column, from
-/// the ground up to the box's top, columns in `(y, x)` order.
+/// any class when `count` is zero: the lowest air voxel of each column between
+/// the ground under the wall and the box's top, columns in `(y, x)` order. The
+/// column is judged whole, so an inner voxel a blast took out is found under a
+/// wall voxel still standing above it (the caller gates a wall filled whole
+/// once behind `rebuild_destroyed`). A column whose lowest air voxel cannot be
+/// filled is passed over: a voxel filled above it would stand on air.
 fn wall_voxel(
     world: &World,
     beacon: BeaconId,
@@ -741,13 +763,12 @@ fn wall_voxel(
             if class.is_some_and(|drone| class_of(x, y, drone.count) != drone.rank) {
                 continue;
             }
-            let Some(ground) = ground_top(world, x, y) else {
+            let Some(ground) = ground_under_walls(world, x, y) else {
                 continue;
             };
-            let z = ground.saturating_add(1);
-            if z > i32::from(top) {
+            let Some(z) = lowest_air(world, x, y, ground, i32::from(top)) else {
                 continue;
-            }
+            };
             let at = [x, y, z];
             let Some(point) = voxel_point(at) else {
                 continue;
@@ -1139,11 +1160,21 @@ fn cracked_wall(
             let Some(mut z) = ground_top(world, x, y) else {
                 continue;
             };
-            // A wall stands on the ground's top: read down through its voxels
-            // to the first that is no wall.
-            while let Some((builder, cracked)) =
-                world.voxels().get([x, y, z]).and_then(Material::wall_of)
-            {
+            // A wall stands on the ground's top: read down through its voxels,
+            // and past any air a blast left between them, to the first solid
+            // voxel that is no wall. The column is judged whole.
+            loop {
+                let material = world.voxels().get([x, y, z]);
+                let Some((builder, cracked)) = material.and_then(Material::wall_of) else {
+                    if !material.is_some_and(Material::is_air) {
+                        break;
+                    }
+                    let Some(below) = z.checked_sub(1).filter(|below| *below >= 0) else {
+                        break;
+                    };
+                    z = below;
+                    continue;
+                };
                 let at = [x, y, z];
                 let inside = voxel_point(at)
                     .is_some_and(|point| crate::mandate::inside_sphere(world, beacon, point));
@@ -2172,6 +2203,18 @@ impl World {
         self.footing_refusals
     }
 
+    /// Whether a `set` edit on the column `(x, y)` is queued this tick: a dig,
+    /// a fill or a wall voxel already paid for or credited at its filing. A
+    /// purchase and a beacon placement wait a tick for such a column, so the
+    /// footing they begin cannot refuse an edit that was paid for (the
+    /// owner's footing ruling of 2026-10-20; no paid edit is ever refused).
+    #[must_use]
+    pub(crate) fn set_queued_on(&self, x: i32, y: i32) -> bool {
+        self.edits.iter().any(
+            |edit| matches!(edit, VoxelEdit::Set { at: [ex, ey, _], .. } if *ex == x && *ey == y),
+        )
+    }
+
     /// The footings as the world stands now ([`crate::footing::Footings`]).
     #[must_use]
     pub fn footings(&self) -> crate::footing::Footings<'_> {
@@ -2198,7 +2241,7 @@ pub(crate) fn levelling_due(world: &World, row: usize, terraform: Terraform) -> 
 
 impl World {
     /// Mark every wall target whose box now stands filled whole, once: every
-    /// column of it filled up to the box's top, or one no wall can fill (a
+    /// column of it solid from the ground under it up to the box's top, or one no wall can fill (a
     /// structure or a beacon stands on it, or the beacon protects it). From
     /// then on a voxel blown out of it is a destroyed part of the wall, which
     /// a build drone fills again only under the beacon's `rebuild_destroyed`
@@ -2225,7 +2268,11 @@ impl World {
             let mut whole = true;
             'columns: for y in i32::from(ly)..=i32::from(hy) {
                 for x in i32::from(lx)..=i32::from(hx) {
-                    let filled = ground_top(self, x, y).is_some_and(|g| g >= i32::from(top));
+                    // Whole means every voxel from the ground under the wall
+                    // up to the box's top is solid, not only the top one.
+                    let filled = ground_under_walls(self, x, y).is_some_and(|ground| {
+                        lowest_air(self, x, y, ground, i32::from(top)).is_none()
+                    });
                     let unfillable = self.ground().structure_on(x, y)
                         || beacon_on(self, x, y)
                         || voxel_point([x, y, 0])
@@ -2258,8 +2305,15 @@ impl World {
     /// 5), which resumes now that the beacon is Build again and a Build row
     /// names its target again (the owner's ruling of 2026-10-20). Nothing is
     /// bought for it a second time; its build drones raise it from where it
-    /// stood.
-    pub(crate) fn adopt_paused(&mut self, beacon: BeaconId, at: [Fx; 3]) {
+    /// stood. Only a structure of the row's own blueprint is adopted: another
+    /// kind on the same anchor is left paused. Answers the structure linked,
+    /// so a settings edit keeps it rather than recycling it.
+    pub(crate) fn adopt_paused(
+        &mut self,
+        beacon: BeaconId,
+        at: [Fx; 3],
+        blueprint: u8,
+    ) -> Option<StructureId> {
         let column = crate::targeting::column_of(at);
         let linked = |world: &World, id: StructureId| world.targets().built().contains(&id);
         let rows = self
@@ -2273,10 +2327,12 @@ impl World {
                     .iter()
                     .zip(self.structures.hit_points()),
             )
-            .zip(self.structures.positions());
+            .zip(self.structures.positions())
+            .zip(self.structures.kinds());
         let mut found = None;
-        for (((id, home), (building, hp)), place) in rows {
+        for ((((id, home), (building, hp)), place), kind) in rows {
             if *home == beacon
+                && *kind == blueprint
                 && *building
                 && hp.is_alive()
                 && crate::targeting::column_of(*place) == column
@@ -2285,11 +2341,9 @@ impl World {
                 break;
             }
         }
-        if let Some(id) = found
-            && !linked(self, id)
-        {
-            self.set_built_at(beacon, at, id);
-        }
+        let id = found.filter(|id| !linked(self, *id))?;
+        self.set_built_at(beacon, at, id);
+        Some(id)
     }
 }
 
@@ -2399,5 +2453,71 @@ mod tests {
             vec![Some(seat), Some(seat)],
             "both levelling voxels are seat 0's"
         );
+    }
+
+    /// A settings edit that writes a half-built structure's fixed-voxel row
+    /// again by a feature carries nothing by anchor or by feature, so the
+    /// new row adopts the structure; the old row, dropped, must not then
+    /// recycle what the new one just linked (the second reviews of #133, D3).
+    #[test]
+    fn an_adopted_structure_is_kept_when_its_old_row_is_dropped() {
+        let mut world = world();
+        let seat = SeatId::new(0);
+        let core =
+            crate::power::core_of(&world, seat).unwrap_or_else(|| panic!("seat 0 has a core"));
+        world.set_treasury(seat, Money::new(100_000));
+        let row = world
+            .beacons()
+            .row_of(core)
+            .unwrap_or_else(|_| panic!("the core has a row"));
+        let [cx, cy, _] = world
+            .beacons()
+            .positions()
+            .get(row.index())
+            .copied()
+            .unwrap_or_else(|| panic!("the core stands somewhere"))
+            .map(Fx::floor_voxels);
+        let anchor = world.standing_point([cx.saturating_add(5), cy.saturating_add(3), 0]);
+        assert!(
+            world
+                .add_target(core, StructureKind::Autocannon.id(), anchor)
+                .is_ok()
+        );
+        let target = (0..world.targets().row_count())
+            .find(|row| world.targets().anchors().get(*row) == Some(&anchor))
+            .unwrap_or_else(|| panic!("the row"));
+        let target = u32::try_from(target).unwrap_or_else(|_| panic!("a row"));
+        assert!(world.queue_target(seat, core, target), "bought, going up");
+        let built = world
+            .targets()
+            .built()
+            .iter()
+            .copied()
+            .find(|id| id.is_some())
+            .unwrap_or_else(|| panic!("its structure"));
+        let entry = crate::world::BuildEntry {
+            blueprint: StructureKind::Autocannon.id(),
+            anchor,
+            feature: 0,
+            desc: crate::targeting::DESCRIPTION_NAME,
+            build: crate::tables::BuildOrder::NONE,
+            wall: None,
+        };
+        assert!(
+            world
+                .replace_build_targets(core, core::iter::once(entry))
+                .is_ok()
+        );
+        assert!(
+            world.targets().built().contains(&built),
+            "the new row links it"
+        );
+        let alive = world
+            .structures()
+            .row_of(built)
+            .ok()
+            .and_then(|row| world.structures().hit_points().get(row.index()).copied())
+            .is_some_and(crate::math::quantity::Hp::is_alive);
+        assert!(alive, "and it was not recycled");
     }
 }

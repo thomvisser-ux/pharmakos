@@ -281,9 +281,10 @@ pub enum EventKind {
     /// wreck, which has no hit points). What it lost is the damage phase's,
     /// clamped to what it had.
     AssetFell,
-    /// A repair drone brought an own unit or structure back to full hit
-    /// points (S2's `site`; decision 43). `subject` is the asset, `seat` its
-    /// owner, `value` its full hit points.
+    /// A repair drone brought an own unit, structure or beacon back to full
+    /// hit points (S2's `site`; decision 43, and the owner's ruling of
+    /// 2026-10-20 that every own structure, beacons included, is repairable).
+    /// `subject` is the asset, `seat` its owner, `value` its full hit points.
     AssetRepaired,
     /// A structure standing for a Build target a settings edit dropped was
     /// recycled (S2's `site`; register S2-10, decision 26). `subject` is the

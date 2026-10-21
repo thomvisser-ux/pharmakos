@@ -5,9 +5,12 @@
 //! blueprints, repair and salvage, terraform and S2-10.
 //!
 //! Each acceptance line of the task has a test of its own name here, except
-//! `a_levelling_edit_carries_its_seat`, which reads the voxel queue and so
-//! lives beside it in `crates/sim/src/world/site.rs`, and the two scenarios,
-//! which `gamectl scenario run` plays.
+//! `a_levelling_edit_carries_its_seat`, which reads the voxel queue, and
+//! `an_adopted_structure_is_kept_when_its_old_row_is_dropped`, which writes a
+//! settings edit no playbook can reach (a vent with a Generator going up binds
+//! no `on`), so both live beside the code in `crates/sim/src/world/site.rs`;
+//! and the two scenarios, which `gamectl scenario run` plays. The plan's mortar
+//! duel is evidenced here, headless, with its chain pinned.
 
 #![allow(
     clippy::expect_used,
@@ -835,46 +838,52 @@ fn a_cracked_own_wall_is_repaired() {
 
 /// A beacon is repaired like any other structure of the seat's, below the
 /// threshold, at its share of the beacon's price (the owner's ruling of
-/// 2026-10-20).
+/// 2026-10-20), and a threshold of 0 never repairs one, as it never repairs a
+/// structure.
 #[test]
 fn a_beacon_is_repaired() {
-    let mut world = fixture(settings(Terraform::None, 50, false), UnitKind::RepairDrone);
-    let [cx, cy, _] = core_voxel(&world);
-    let outpost = world
-        .place_beacon_directly(
-            SEAT,
-            standing(&world, cx - 6, cy + 2),
-            MandateKind::Survey,
-            2,
-        )
-        .expect("room for a beacon");
-    let row = world.beacons().row_of(outpost).expect("a beacon");
-    let max = world
-        .beacons()
-        .hit_points()
-        .get(row.index())
-        .expect("hp")
-        .raw();
-    world
-        .request_damage(hit(
-            DamageTarget::Beacon(outpost),
-            i64::from(max).checked_div(2).unwrap() + 10,
-        ))
-        .expect("files");
-    let mut runner = push(world, &idle());
-    run(&mut runner, 3_000, &[]);
-    let row = runner.world().beacons().row_of(outpost).expect("a beacon");
-    assert_eq!(
-        runner
-            .world()
-            .beacons()
-            .hit_points()
-            .get(row.index())
-            .expect("hp")
-            .raw(),
-        max,
-        "repaired to full"
-    );
+    for (threshold, repaired) in [(50, true), (0, false)] {
+        let mut world = fixture(
+            settings(Terraform::None, threshold, false),
+            UnitKind::RepairDrone,
+        );
+        let [cx, cy, _] = core_voxel(&world);
+        let outpost = world
+            .place_beacon_directly(
+                SEAT,
+                standing(&world, cx - 6, cy + 2),
+                MandateKind::Survey,
+                2,
+            )
+            .expect("room for a beacon");
+        let hp_of = |world: &World| {
+            let row = world.beacons().row_of(outpost).expect("a beacon");
+            world
+                .beacons()
+                .hit_points()
+                .get(row.index())
+                .expect("hp")
+                .raw()
+        };
+        let max = hp_of(&world);
+        world
+            .request_damage(hit(
+                DamageTarget::Beacon(outpost),
+                i64::from(max).checked_div(2).unwrap() + 10,
+            ))
+            .expect("files");
+        let mut runner = push(world, &idle());
+        run(&mut runner, 1, &[]);
+        let hurt = hp_of(runner.world());
+        assert!(hurt < max, "the beacon is hurt");
+        run(&mut runner, 3_000, &[]);
+        let expected = if repaired { max } else { hurt };
+        assert_eq!(
+            hp_of(runner.world()),
+            expected,
+            "threshold {threshold}: repaired {repaired}"
+        );
+    }
 }
 
 /// A wall's blown-out voxel is a destroyed part of it: once its box has been
@@ -1474,31 +1483,95 @@ fn duel(seat0: BuildSettings) -> Runner {
     runner
 }
 
-/// The duel of S2's plan, headless (the committed scenario cannot reach it in
-/// CI's time; scenarios/s2/repair-and-salvage.scenario.jsonc says why): the
-/// mortars shell each other's clumps, each forward Build beacon fabricates
-/// repair drones for the work in hand, which repair their wounded at decision
-/// 43's price, paid in the Repair band, and salvage the wrecks the splash
-/// leaves, any seat's.
+/// How long a duel is played: long enough for the shells, the repairs, the
+/// wrecks, their salvage and the refills.
+const DUEL_TICKS: u32 = 2_400;
+
+/// The Push tick a duel's restore is taken and resumed on.
+const DUEL_RESTORE: u32 = 600;
+
+/// Play the duel under `seat0`'s settings: every Push tick's hash, from tick
+/// 1, and every event. With `restore`, the world is captured at
+/// [`DUEL_RESTORE`] and the rest is played on its restore.
+fn duel_chain(seat0: BuildSettings, restore: bool) -> (Vec<u64>, Vec<pharmakos_sim::Event>) {
+    let mut runner = duel(seat0);
+    let mut hashes = Vec::new();
+    let mut events = Vec::new();
+    for tick in 1..=DUEL_TICKS {
+        let report = runner.step().unwrap().expect("in the Push");
+        hashes.push(report.hash);
+        events.extend_from_slice(runner.events());
+        runner.clear_events();
+        if restore && tick == DUEL_RESTORE {
+            let saved = Snapshot::capture(runner.world());
+            let mut fresh = world();
+            saved.restore_into(&mut fresh).expect("restores");
+            assert_eq!(fresh.state_hash(), runner.world().state_hash());
+            *runner.world_mut() = fresh;
+        }
+    }
+    (hashes, events)
+}
+
+/// The duel played twice and once more through a restore: the same chain and
+/// the same events each time. Answers the chain and the events.
+fn duel_evidence(seat0: BuildSettings) -> (Vec<u64>, Vec<pharmakos_sim::Event>) {
+    let (first, feed) = duel_chain(seat0, false);
+    let (second, again) = duel_chain(seat0, false);
+    let (resumed, _) = duel_chain(seat0, true);
+    assert_eq!(first, second, "the same duel gives the same chain");
+    assert_eq!(feed, again, "and the same events");
+    assert_eq!(first, resumed, "and a save and restore changes nothing");
+    (first, feed)
+}
+
+/// The chain on either side of the first event of each of `kinds`, as
+/// `(Push tick, hash)`: what a duel test pins, so a change that moves the
+/// shells, the repairs or the refills is red here (AGENTS.md section 4.8). A
+/// change that moves them re-blesses them with its reason, as any golden
+/// chain.
+fn pinned_around(
+    chain: &[u64],
+    events: &[pharmakos_sim::Event],
+    kinds: &[EventKind],
+) -> Vec<(u32, u64)> {
+    let push = events
+        .iter()
+        .find(|event| event.kind == EventKind::PushStarted)
+        .map_or(0, |event| event.tick.raw());
+    let mut pinned = Vec::new();
+    for kind in kinds {
+        let first = events
+            .iter()
+            .find(|event| event.kind == *kind)
+            .unwrap_or_else(|| panic!("the duel reaches {kind:?}"));
+        let at = first.tick.raw() - push;
+        for tick in [at - 1, at, at + 1] {
+            let hash = chain
+                .get(usize::try_from(tick).unwrap() - 1)
+                .copied()
+                .expect("a hash");
+            pinned.push((tick, hash));
+        }
+    }
+    pinned
+}
+
+/// The duel of S2's plan, headless, and the evidence for it in place of a
+/// committed scenario (CI's time cannot hold the plan's seven-beacon chains):
+/// the mortars shell each other's clumps, each forward Build beacon
+/// fabricates repair drones for the work in hand, which repair their wounded
+/// at decision 43's price, paid in the Repair band, and salvage the wrecks the
+/// splash leaves, any seat's. Played twice and through a restore, with its
+/// chain pinned around the first shell and the first repair.
 #[test]
 fn a_mortar_duel_repairs_and_salvages() {
-    let mut runner = duel(settings(Terraform::None, 50, false));
-    let events = run(
-        &mut runner,
-        2_400,
-        &[
-            EventKind::ShellLanded,
-            EventKind::UnitFabricated,
-            EventKind::AssetRepaired,
-            EventKind::WreckLeft,
-            EventKind::SalvageDelivered,
-        ],
-    );
+    let (chain, events) = duel_evidence(settings(Terraform::None, 50, false));
     let count = |kind: EventKind| events.iter().filter(|event| event.kind == kind).count();
     assert!(count(EventKind::ShellLanded) > 0, "the mortars fire");
     assert!(
         count(EventKind::AssetRepaired) > 0,
-        "a repair drone repairs: {events:?}"
+        "a repair drone repairs"
     );
     assert!(count(EventKind::WreckLeft) > 0, "the splash leaves a wreck");
     assert!(
@@ -1506,23 +1579,52 @@ fn a_mortar_duel_repairs_and_salvages() {
         "a wreck is salvaged and carried home"
     );
     assert_eq!(
-        runner.world().event_bus().dropped(),
-        0,
-        "no event was dropped"
+        pinned_around(
+            &chain,
+            &events,
+            &[EventKind::ShellLanded, EventKind::AssetRepaired]
+        ),
+        vec![
+            (104, 0xd31e_5706_a205_18bc),
+            (105, 0x5dab_15db_ee4e_c131),
+            (106, 0x2557_fde0_84c2_a5a9),
+            (181, 0x04b1_5819_5071_b35c),
+            (182, 0x2b50_7f1b_ffa1_3f75),
+            (183, 0xb08f_dcac_11b2_0592)
+        ],
+        "the duel's chain at its first shell and its first repair"
     );
 }
 
 /// The duel again with seat 0's forward beacon on `FILL`: the shells crater
 /// the ground inside its sphere, and its build drones refill each crater to
 /// the generated surface, announcing each column (decisions-log item 144
-/// (5)).
+/// (5)). Played twice and through a restore, with its chain pinned around the
+/// first shell and the first refill.
 #[test]
 fn a_mortar_duel_refills_its_craters() {
-    let mut runner = duel(settings(Terraform::Fill, 50, false));
-    let events = run(&mut runner, 2_400, &[EventKind::GroundRefilled]);
+    let (chain, events) = duel_evidence(settings(Terraform::Fill, 50, false));
     assert!(
-        events.iter().any(|event| event.seat == Some(SEAT)),
-        "seat 0 refills a crater: {events:?}"
+        events
+            .iter()
+            .any(|event| event.kind == EventKind::GroundRefilled && event.seat == Some(SEAT)),
+        "seat 0 refills a crater"
+    );
+    assert_eq!(
+        pinned_around(
+            &chain,
+            &events,
+            &[EventKind::ShellLanded, EventKind::GroundRefilled]
+        ),
+        vec![
+            (104, 0x4474_f128_54fc_d46a),
+            (105, 0x250e_22f4_ae20_c44a),
+            (106, 0xe6c3_d7ee_8edc_0415),
+            (138, 0xed35_e4a8_3587_6fc6),
+            (139, 0x5287_6dc1_f45f_17f8),
+            (140, 0x0ceb_d776_7c8b_ab02)
+        ],
+        "the duel's chain at its first shell and its first refill"
     );
 }
 
@@ -1583,4 +1685,523 @@ fn a_half_built_structure_pauses_on_a_switch_and_resumes_when_a_build_row_names_
         max,
         "raised from where it stood"
     );
+    // The second leg: the Build row that names it again is a settings row
+    // through the playbook door, which replaces the beacon's list
+    // (`replace_build_targets`), in the next round.
+    resumes_through_a_settings_row();
+}
+
+/// The pause's second leg: paused in round 1, resumed in round 2 by a
+/// `set_mandate_settings` row naming the autocannon's target again.
+fn resumes_through_a_settings_row() {
+    let mut world = world_of_rounds(2, 30_000);
+    world.set_treasury(SEAT, Money::new(RICH));
+    let beacon = core(&world);
+    world.set_build_settings_directly(beacon, settings(Terraform::None, 0, false));
+    let [kx, ky, _] = core_voxel(&world);
+    let near = standing(&world, kx + 1, ky + 1);
+    world
+        .field_unit(SEAT, beacon, UnitKind::BuildDrone, near)
+        .expect("room for a drone");
+    let (mut runner, cannon, at) = paused_cannon(world);
+    run(&mut runner, 200, &[]);
+    let paused = structure_hp(runner.world(), cannon);
+    let [x, y, z] = at.map(Fx::floor_voxels);
+    let row = visit(&format!(
+        r#"{{"set_mandate_settings":{{"build":{{"targets":[{{"blueprint_id":"autocannon","anchor":{{"voxel":{{"x":{x},"y":{y},"z":{z}}}}}}}]}}}}}}"#
+    ));
+    next_round(&mut runner, &row);
+    assert_eq!(
+        structure_hp(runner.world(), cannon),
+        paused,
+        "still paused across the round"
+    );
+    let queued = run(&mut runner, 580, &[EventKind::StructureQueued]);
+    assert!(queued.is_empty(), "nothing is bought twice");
+    let max = runner
+        .world()
+        .structure_max_hp(StructureKind::Autocannon)
+        .expect("a row")
+        .raw();
+    assert_eq!(
+        structure_hp(runner.world(), cannon),
+        max,
+        "raised from where it stood"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Walls judged whole-column, and the done flag across a re-seal and a restore
+// (the second reviews of #133: R1, R2, D4, D5, D6).
+// ---------------------------------------------------------------------------
+
+/// Two open columns side by side, `(x, y)` and `(x + 1, y)`, on ground of one
+/// height, near seat 0's core: a wall two columns wide, so a voxel blown out
+/// of one column leaves the voxel above it held by its neighbour and the
+/// support rule drops nothing.
+fn flat_pair(world: &World) -> ([i32; 2], i32) {
+    let [cx, cy, _] = core_voxel(world);
+    for dy in [-6, -5, 5, 6, -7, 7] {
+        for dx in -8..=7 {
+            let (x, y) = (cx + dx, cy + dy);
+            let open = |x: i32| {
+                world.features().at_column(x, y).is_none() && !world.ground().structure_on(x, y)
+            };
+            if open(x) && open(x + 1) && top(world, x, y) == top(world, x + 1, y) {
+                return ([x, y], top(world, x, y));
+            }
+        }
+    }
+    panic!("no flat pair of open columns near the core");
+}
+
+/// A wall box over the pair from `flat_pair`, `height` voxels over the ground.
+fn pair_wall([x, y]: [i32; 2], ground: i32, height: i32) -> WallBox {
+    let at = |v: i32| i16::try_from(v).unwrap();
+    WallBox {
+        columns: ColumnBox::new([at(x), at(y)], [at(x + 1), at(y)]).unwrap(),
+        floor: at(ground),
+        top: at(ground + height),
+    }
+}
+
+/// An inner voxel blown out of a wall filled whole once, with the wall still
+/// standing above it, is a destroyed part of the wall: rebuilt under
+/// `rebuild_destroyed` and left out without it (the owner's ruling of
+/// 2026-10-20, judged over the whole column).
+#[test]
+fn a_removed_inner_wall_voxel_is_rebuilt_only_under_rebuild_destroyed() {
+    for rebuild in [true, false] {
+        let mut world = fixture(settings(Terraform::None, 0, rebuild), UnitKind::BuildDrone);
+        let beacon = core(&world);
+        let ([x, y], ground) = flat_pair(&world);
+        world
+            .add_wall_target(
+                beacon,
+                point([x, y, ground + 1]),
+                pair_wall([x, y], ground, 3),
+            )
+            .expect("room");
+        let mut runner = push(world, &idle());
+        run(&mut runner, 1_800, &[]);
+        for column in [x, x + 1] {
+            assert_eq!(top(runner.world(), column, y), ground + 3, "filled whole");
+        }
+        assert!(
+            runner.world().targets().walls_done().contains(&true),
+            "and marked done"
+        );
+        runner
+            .world_mut()
+            .request_voxel_edit(VoxelEdit::Set {
+                at: [x, y, ground + 2],
+                material: Material::AIR,
+                by: Some(SeatId::new(1)),
+            })
+            .expect("files");
+        run(&mut runner, 1_200, &[]);
+        let world = runner.world();
+        assert!(
+            world
+                .voxels()
+                .get([x, y, ground + 3])
+                .and_then(Material::wall_of)
+                .is_some(),
+            "the voxel above still stands"
+        );
+        let rebuilt = world
+            .voxels()
+            .get([x, y, ground + 2])
+            .is_some_and(Material::is_solid);
+        assert_eq!(rebuilt, rebuild, "rebuild_destroyed {rebuild}");
+    }
+}
+
+/// A cracked wall voxel under a hole a blast left is still found and
+/// repaired: the repair walk reads down past the air to it.
+#[test]
+fn a_cracked_wall_voxel_under_a_hole_is_repaired() {
+    let mut world = fixture(settings(Terraform::None, 50, false), UnitKind::RepairDrone);
+    let ([x, y], ground) = flat_pair(&world);
+    let whole = Material::wall(SEAT, false).expect("a wall");
+    let cracked = Material::wall(SEAT, true).expect("a wall");
+    let mut edits = vec![([x, y, ground + 1], cracked), ([x, y, ground + 3], whole)];
+    for z in 1..=3 {
+        edits.push(([x + 1, y, ground + z], whole));
+    }
+    for (at, material) in edits {
+        world
+            .request_voxel_edit(VoxelEdit::Set {
+                at,
+                material,
+                by: Some(SEAT),
+            })
+            .expect("files");
+    }
+    let mut runner = push(world, &idle());
+    run(&mut runner, 1, &[]);
+    assert_eq!(
+        runner.world().voxels().get([x, y, ground + 2]),
+        Some(Material::AIR),
+        "the hole is staged under a wall voxel held by its neighbour"
+    );
+    run(&mut runner, 900, &[]);
+    assert_eq!(
+        runner.world().voxels().get([x, y, ground + 1]),
+        Some(whole),
+        "the cracked voxel under the hole is repaired"
+    );
+}
+
+/// The core's Build settings row naming one wall target, as the playbook
+/// door writes it.
+fn wall_settings_row(anchor: [i32; 3], wall: WallBox) -> String {
+    let [x, y, z] = anchor;
+    let [lx, ly] = wall.columns.min_column();
+    let [hx, hy] = wall.columns.max_column();
+    let (floor, top) = (wall.floor, wall.top);
+    let target = format!(
+        r#"{{"blueprint_id":"wall","anchor":{{"voxel":{{"x":{x},"y":{y},"z":{z}}}}},"wall_box":{{"min":{{"x":{lx},"y":{ly},"z":{floor}}},"max":{{"x":{hx},"y":{hy},"z":{top}}}}}}}"#
+    );
+    visit(&format!(
+        r#"{{"set_mandate_settings":{{"build":{{"targets":[{target}]}}}}}}"#
+    ))
+}
+
+/// A world of `rounds` rounds of `segment_ms`, otherwise [`world`]'s.
+fn world_of_rounds(rounds: u32, segment_ms: i32) -> World {
+    World::new(&WorldConfig {
+        match_seed: SEED,
+        seats: SEATS,
+        units_per_seat: 0,
+        rules: rules(),
+        match_settings: MatchSettings {
+            segment_lengths_ms: vec![segment_ms],
+            round_limit: rounds,
+        },
+    })
+    .expect("the rules table describes a map")
+}
+
+/// Play the Push out, close the recap and seal `route` for seat 0's next one.
+fn next_round(runner: &mut Runner, route: &str) {
+    while runner.step().unwrap().is_some() {
+        runner.clear_events();
+    }
+    assert!(runner.end_recap().unwrap(), "the recap closes");
+    let plan = Plan::compile(&playbook(route), &rules()).expect("compiles");
+    runner
+        .seal_playbook(SEAT, plan)
+        .expect("a Lull takes a seal");
+    assert!(runner.begin_push().unwrap());
+}
+
+/// The same wall sealed again, through the playbook door in the next round,
+/// keeps its filled-whole flag, so a voxel blown out of it is not rebuilt
+/// without `rebuild_destroyed`: a re-seal is no way round the setting (R2).
+#[test]
+fn a_resealed_wall_is_not_rebuilt_without_rebuild_destroyed() {
+    let mut world = world_of_rounds(2, 60_000);
+    world.set_treasury(SEAT, Money::new(RICH));
+    let beacon = core(&world);
+    world.set_build_settings_directly(beacon, settings(Terraform::None, 0, false));
+    let [kx, ky, _] = core_voxel(&world);
+    let near = standing(&world, kx + 1, ky + 1);
+    world
+        .field_unit(SEAT, beacon, UnitKind::BuildDrone, near)
+        .expect("room for a drone");
+    let ([x, y], ground) = flat_pair(&world);
+    let wall = pair_wall([x, y], ground, 2);
+    let route = wall_settings_row([x, y, ground + 1], wall);
+    let mut runner = push(world, &route);
+    run(&mut runner, 1_100, &[]);
+    assert!(
+        runner.world().targets().walls_done().contains(&true),
+        "round 1 fills the wall whole"
+    );
+    next_round(&mut runner, &route);
+    runner
+        .world_mut()
+        .request_voxel_edit(VoxelEdit::Set {
+            at: [x, y, ground + 2],
+            material: Material::AIR,
+            by: Some(SeatId::new(1)),
+        })
+        .expect("files");
+    run(&mut runner, 1_100, &[]);
+    let world = runner.world();
+    assert!(
+        world.targets().walls_done().contains(&true),
+        "the re-sealed wall keeps its flag"
+    );
+    assert_eq!(
+        world.voxels().get([x, y, ground + 2]),
+        Some(Material::AIR),
+        "and the blown-out voxel stays out"
+    );
+}
+
+/// The done flag is hashed state: it survives a snapshot and its restore,
+/// and the restored world hashes as the one it came from (D6).
+#[test]
+fn a_walls_done_flag_round_trips_through_a_snapshot() {
+    let mut staged = fixture(settings(Terraform::None, 0, false), UnitKind::BuildDrone);
+    let beacon = core(&staged);
+    let ([x, y], ground) = flat_pair(&staged);
+    staged
+        .add_wall_target(
+            beacon,
+            point([x, y, ground + 1]),
+            pair_wall([x, y], ground, 2),
+        )
+        .expect("room");
+    let mut runner = push(staged, &idle());
+    run(&mut runner, 1_200, &[]);
+    assert!(runner.world().targets().walls_done().contains(&true));
+    let saved = Snapshot::capture(runner.world());
+    let mut fresh = world();
+    saved.restore_into(&mut fresh).expect("restores");
+    assert_eq!(
+        fresh.targets().walls_done(),
+        runner.world().targets().walls_done()
+    );
+    assert_eq!(fresh.state_hash(), runner.world().state_hash());
+}
+
+// ---------------------------------------------------------------------------
+// Adopting a paused structure (R3, D2, D3), the same-tick footing race (R4,
+// D1), the funds (R5) and the footings of a placed beacon and of a structure
+// going up (R6).
+// ---------------------------------------------------------------------------
+
+/// Seat 0's core with a half-built autocannon at `offset`, paused by a switch
+/// to Survey and back to Build: the runner, the structure and its anchor.
+fn paused_cannon(world: World) -> (Runner, pharmakos_sim::tables::StructureId, [Fx; 3]) {
+    let mut world = world;
+    let beacon = core(&world);
+    let [x, y] = open_column(&world, [5, 3]);
+    let at = standing(&world, x, y);
+    world
+        .add_target(beacon, StructureKind::Autocannon.id(), at)
+        .expect("room");
+    let mut runner = push(world, &idle());
+    let queued = run(&mut runner, 60, &[EventKind::StructureQueued]);
+    assert_eq!(queued.len(), 1, "the autocannon is bought");
+    let cannon = runner
+        .world()
+        .targets()
+        .built()
+        .iter()
+        .copied()
+        .find(|id| id.is_some())
+        .expect("its structure");
+    runner.world_mut().set_writ(beacon, MandateKind::Survey);
+    run(&mut runner, 5, &[]);
+    runner.world_mut().set_writ(beacon, MandateKind::Build);
+    (runner, cannon, at)
+}
+
+/// A Build row of another blueprint on the paused structure's anchor does not
+/// adopt it: the autocannon stays paused, and nothing is bought on its column
+/// while it stands (R3).
+#[test]
+fn a_different_blueprint_on_the_anchor_leaves_the_paused_structure_alone() {
+    let world = fixture(settings(Terraform::None, 0, false), UnitKind::BuildDrone);
+    let (mut runner, cannon, at) = paused_cannon(world);
+    let paused = structure_hp(runner.world(), cannon);
+    let beacon = core(runner.world());
+    runner
+        .world_mut()
+        .add_target(beacon, StructureKind::Mortar.id(), at)
+        .expect("room");
+    let queued = run(&mut runner, 600, &[EventKind::StructureQueued]);
+    assert!(queued.is_empty(), "nothing is bought on its column");
+    assert_eq!(
+        structure_hp(runner.world(), cannon),
+        paused,
+        "and the autocannon stays paused"
+    );
+    assert!(
+        !runner.world().targets().built().contains(&cannon),
+        "no row links it"
+    );
+}
+
+/// A dig and a wall voxel filed on a Build target's column on the tick the
+/// Quartermaster would buy it: the purchase waits, so the footing it begins
+/// refuses neither edit and nothing is charged that tick; once the column's
+/// edits stop, it is bought (R4, D1).
+#[test]
+fn a_purchase_waits_for_an_edit_filed_on_its_column_the_same_tick() {
+    let mut world = fixture(settings(Terraform::None, 0, false), UnitKind::BuildDrone);
+    let beacon = core(&world);
+    let [x, y] = open_column(&world, [5, 3]);
+    let g = top(&world, x, y);
+    let at = standing(&world, x, y);
+    world
+        .add_target(beacon, StructureKind::Autocannon.id(), at)
+        .expect("room");
+    let wall = Material::wall(SEAT, false).expect("a wall");
+    let mut runner = push(world, &idle());
+    let before = treasury(runner.world());
+    let mut bought = Vec::new();
+    for _ in 0..60 {
+        for (voxel, material) in [([x, y, g], Material::AIR), ([x, y, g], wall)] {
+            runner
+                .world_mut()
+                .request_voxel_edit(VoxelEdit::Set {
+                    at: voxel,
+                    material,
+                    by: Some(SEAT),
+                })
+                .expect("files");
+        }
+        bought.extend(run(&mut runner, 1, &[EventKind::StructureQueued]));
+    }
+    let world = runner.world();
+    assert!(bought.is_empty(), "the purchase waits: {bought:?}");
+    assert_eq!(world.footing_refusals().sets, 0, "no edit was refused");
+    assert_eq!(world.voxels().get([x, y, g]), Some(wall), "both landed");
+    assert_eq!(treasury(world), before, "nothing was charged");
+    let later = run(&mut runner, 60, &[EventKind::StructureQueued]);
+    assert_eq!(later.len(), 1, "bought once the column is quiet");
+}
+
+/// A Build beacon of seat 0's away from the core, on Build with a drone's
+/// work paid for in advance: `repair` and `build` `$` on its funds.
+fn funded(world: &mut World, repair: i64, build: i64) -> BeaconId {
+    let [cx, cy, _] = core_voxel(world);
+    let beacon = world
+        .place_beacon_directly(SEAT, standing(world, cx - 6, cy + 2), MandateKind::Build, 2)
+        .expect("room for a beacon");
+    world.set_site_funds_directly(beacon, Money::new(repair), Money::new(build));
+    beacon
+}
+
+/// The work a beacon was paid for in advance goes back to the treasury whole
+/// on a mandate switch, and on a recycle beside the recycle's own refund
+/// (ruling (a)).
+#[test]
+fn the_site_funds_return_whole_on_a_switch_and_a_recycle() {
+    let mut switched = world();
+    let beacon = funded(&mut switched, 30, 40);
+    let before = treasury(&switched);
+    switched.set_writ(beacon, MandateKind::Survey);
+    assert_eq!(treasury(&switched).raw(), before.raw() + 70, "a switch");
+    assert_eq!(site_of(&switched, beacon).repair_fund, Money::ZERO);
+    assert_eq!(site_of(&switched, beacon).build_fund, Money::ZERO);
+    // Two beacons alike but for their funds, recycled: the difference in
+    // what comes back is the funds, whole.
+    let mut twin = world();
+    let plain = funded(&mut twin, 0, 0);
+    let start = treasury(&twin);
+    assert!(twin.recycle_beacon(SEAT, plain));
+    let refund = treasury(&twin).raw() - start.raw();
+    let mut recycled = world();
+    let paid = funded(&mut recycled, 30, 40);
+    let start = treasury(&recycled);
+    assert!(recycled.recycle_beacon(SEAT, paid));
+    assert_eq!(
+        treasury(&recycled).raw() - start.raw(),
+        refund + 70,
+        "a recycle"
+    );
+}
+
+/// A beacon destroyed loses the work it was paid for: nothing comes back to
+/// the treasury (ruling (f)).
+#[test]
+fn the_site_funds_are_lost_with_the_beacon() {
+    let mut world = world();
+    let beacon = funded(&mut world, 30, 40);
+    let before = treasury(&world);
+    world
+        .request_damage(hit(DamageTarget::Beacon(beacon), 1_000_000))
+        .expect("files");
+    let mut runner = push(world, &idle());
+    run(&mut runner, 2, &[]);
+    assert_eq!(treasury(runner.world()), before, "nothing comes back");
+}
+
+/// Paid work counts in the seat's held value, "paid means yours".
+#[test]
+fn the_site_funds_count_in_held_value() {
+    let mut world = world();
+    let beacon = funded(&mut world, 0, 0);
+    let before = world.held_value(SEAT);
+    world.set_site_funds_directly(beacon, Money::new(30), Money::new(40));
+    assert_eq!(world.held_value(SEAT).raw(), before.raw() + 70);
+}
+
+/// The voxels of a placed beacon's column, not only a core's, ignore every
+/// edit (the owner's footing ruling of 2026-10-20).
+#[test]
+fn a_placed_beacons_footing_ignores_edits() {
+    let mut world = world();
+    let [cx, cy, _] = core_voxel(&world);
+    let [x, y] = open_column(&world, [-6, 2]);
+    assert_ne!([x, y], [cx, cy]);
+    world
+        .place_beacon_directly(SEAT, standing(&world, x, y), MandateKind::Survey, 2)
+        .expect("room for a beacon");
+    let g = top(&world, x, y);
+    let before = column_bytes(&world, x, y);
+    for (at, material) in [([x, y, g], Material::AIR), ([x, y, g + 4], Material::DIRT)] {
+        world
+            .request_voxel_edit(VoxelEdit::Set {
+                at,
+                material,
+                by: Some(SeatId::new(1)),
+            })
+            .expect("files");
+    }
+    let mut runner = push(world, &idle());
+    run(&mut runner, 1, &[]);
+    assert_eq!(column_bytes(runner.world(), x, y), before);
+    assert_eq!(runner.world().footing_refusals().sets, 2);
+}
+
+/// A structure going up, below its full hit points, already has its footing:
+/// from the tick construction begins (the owner's footing ruling).
+#[test]
+fn a_structure_going_up_has_a_footing() {
+    let mut world = fixture(settings(Terraform::None, 0, false), UnitKind::BuildDrone);
+    let beacon = core(&world);
+    let [x, y] = open_column(&world, [5, 3]);
+    let at = standing(&world, x, y);
+    world
+        .add_target(beacon, StructureKind::Autocannon.id(), at)
+        .expect("room");
+    let mut runner = push(world, &idle());
+    let mut queued = Vec::new();
+    while queued.is_empty() {
+        queued = run(&mut runner, 1, &[EventKind::StructureQueued]);
+    }
+    let cannon = runner
+        .world()
+        .targets()
+        .built()
+        .iter()
+        .copied()
+        .find(|id| id.is_some())
+        .expect("its structure");
+    let max = runner
+        .world()
+        .structure_max_hp(StructureKind::Autocannon)
+        .expect("a row")
+        .raw();
+    assert!(structure_hp(runner.world(), cannon) < max, "going up");
+    let g = top(runner.world(), x, y);
+    let before = column_bytes(runner.world(), x, y);
+    runner
+        .world_mut()
+        .request_voxel_edit(VoxelEdit::Set {
+            at: [x, y, g],
+            material: Material::AIR,
+            by: Some(SeatId::new(1)),
+        })
+        .expect("files");
+    run(&mut runner, 1, &[]);
+    assert_eq!(column_bytes(runner.world(), x, y), before);
+    assert_eq!(runner.world().footing_refusals().sets, 1);
 }

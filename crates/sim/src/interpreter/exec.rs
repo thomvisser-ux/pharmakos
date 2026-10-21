@@ -1156,6 +1156,14 @@ fn run_deploy(
         if !site_is_legal(world, seat, site) {
             return Outcome::Failed(StepFailure::IllegalSite);
         }
+        // A `set` already filed on the site's column this tick (a dig
+        // credited, a fill or a wall voxel paid for) would be refused by the
+        // footing the beacon begins: the placement waits a tick (the owner's
+        // footing ruling of 2026-10-20; no paid edit is refused).
+        let [x, y] = crate::targeting::column_of(site);
+        if world.set_queued_on(x, y) {
+            return Outcome::Running;
+        }
         // Every refusal is the seat's want of room as the step reports it: a
         // seat in the match always has a seat row, and the counter cannot be
         // spent at the beacon room.
