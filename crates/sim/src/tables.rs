@@ -1489,6 +1489,7 @@ pub struct TargetTable {
     order: Vec<u32>,
     rotation: Vec<u8>,
     wall_top: Vec<i16>,
+    wall_done: Vec<bool>,
     capacity: u32,
 }
 
@@ -1518,6 +1519,7 @@ impl TargetTable {
             order: Vec::with_capacity(n),
             rotation: Vec::with_capacity(n),
             wall_top: Vec::with_capacity(n),
+            wall_done: Vec::with_capacity(n),
             capacity,
         }
     }
@@ -1664,7 +1666,26 @@ impl TargetTable {
         };
         *area = columns;
         *wall = top;
+        if let Some(done) = self.wall_done.get_mut(slot) {
+            *done = false;
+        }
         true
+    }
+
+    /// Whether each wall target's box has been filled whole once (S2's
+    /// `site`; the owner's ruling of 2026-10-20): from then on a voxel blown
+    /// out of it is a destroyed part of the wall, rebuilt only under
+    /// `rebuild_destroyed`. `false` on every other row. Hashed.
+    #[must_use]
+    pub fn walls_done(&self) -> &[bool] {
+        &self.wall_done
+    }
+
+    /// Mark row `slot`'s wall filled whole once.
+    pub fn mark_wall_done(&mut self, slot: usize) {
+        if let Some(done) = self.wall_done.get_mut(slot) {
+            *done = true;
+        }
     }
 
     /// Append one Build target written as a fixed voxel, keeping the table in
@@ -1760,6 +1781,7 @@ impl TargetTable {
         self.order.insert(slot, build.order);
         self.rotation.insert(slot, build.rotation.raw());
         self.wall_top.insert(slot, NO_WALL);
+        self.wall_done.insert(slot, false);
         self.count = self.count.saturating_add(1);
         Ok(())
     }
@@ -1780,6 +1802,7 @@ impl TargetTable {
         self.order.remove(slot);
         self.rotation.remove(slot);
         self.wall_top.remove(slot);
+        self.wall_done.remove(slot);
         self.count = self.count.saturating_sub(1);
     }
 
@@ -1814,6 +1837,7 @@ impl TargetTable {
             || columns.order.len() != n
             || columns.rotation.len() != n
             || columns.wall_top.len() != n
+            || columns.wall_done.len() != n
         {
             return false;
         }
@@ -1852,6 +1876,14 @@ impl TargetTable {
                     *kind == TargetKind::Build.id() && *blueprint == StructureKind::Wall.id();
                 (*top != NO_WALL) == wall && !(wall && built.is_some())
             });
+        let done_on_walls = columns
+            .wall_done
+            .iter()
+            .zip(&columns.wall_top)
+            .all(|(done, top)| !*done || *top != NO_WALL);
+        if !done_on_walls {
+            return false;
+        }
         if !walls_agree {
             return false;
         }
@@ -1874,6 +1906,7 @@ impl TargetTable {
         self.order = columns.order;
         self.rotation = columns.rotation;
         self.wall_top = columns.wall_top;
+        self.wall_done = columns.wall_done;
         true
     }
 }
@@ -1904,6 +1937,8 @@ pub struct TargetColumns {
     pub rotation: Vec<u8>,
     /// Each wall target's top, or [`NO_WALL`].
     pub wall_top: Vec<i16>,
+    /// Whether each wall target's box has been filled whole once.
+    pub wall_done: Vec<bool>,
 }
 
 /// What one seat remembers seeing, with the tick it was seen at (spec section

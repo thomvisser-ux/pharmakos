@@ -3782,6 +3782,7 @@ impl World {
             return;
         }
         self.reread_lost_targets();
+        self.mark_walls_done();
         let mut requests = core::mem::take(&mut self.requests);
         requests.clear();
         self.gather_requests(&mut requests);
@@ -5462,6 +5463,9 @@ impl World {
         enc.len(self.targets.len());
         for top in self.targets.wall_tops() {
             enc.i32(i32::from(*top));
+        }
+        for done in self.targets.walls_done() {
+            enc.bool(*done);
         }
     }
 

@@ -420,6 +420,8 @@ pub struct Snapshot {
     /// Each wall target's top, [`crate::tables::NO_WALL`] on other rows (S2's
     /// `site`).
     pub target_wall_top: Vec<i16>,
+    /// Whether each wall target's box has been filled whole once, 0 or 1.
+    pub target_wall_done: Vec<u8>,
 
     /// Whose memory each sighting is.
     pub sighting_seat: Vec<u8>,
@@ -687,6 +689,7 @@ impl Default for Snapshot {
             target_order: Vec::new(),
             target_rotation: Vec::new(),
             target_wall_top: Vec::new(),
+            target_wall_done: Vec::new(),
             sighting_seat: Vec::new(),
             sighting_asset: Vec::new(),
             sighting_owner: Vec::new(),
@@ -1060,6 +1063,7 @@ impl Snapshot {
             target_order: targets.orders().to_vec(),
             target_rotation: targets.rotations().to_vec(),
             target_wall_top: targets.wall_tops().to_vec(),
+            target_wall_done: targets.walls_done().iter().map(|d| u8::from(*d)).collect(),
 
             sighting_seat: sightings.seats().to_vec(),
             sighting_asset: sightings.assets().to_vec(),
@@ -1480,6 +1484,7 @@ impl Snapshot {
                 order: self.target_order.clone(),
                 rotation: rotations(&self.target_rotation, "target_rotation")?,
                 wall_top: self.target_wall_top.clone(),
+                wall_done: flags(&self.target_wall_done, "target_wall_done")?,
             },
         ) {
             return Err(SnapshotError::Ragged("target"));

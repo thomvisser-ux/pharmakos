@@ -800,40 +800,123 @@ fn repair_is_paid_for_under_the_repair_band() {
 /// repair drone, at the wall's price (decision 42).
 #[test]
 fn a_cracked_own_wall_is_repaired() {
-    let mut world = fixture(settings(Terraform::None, 0, false), UnitKind::RepairDrone);
-    let beacon = core(&world);
-    let [x, y] = open_column(&world, [-4, 5]);
-    let ground = top(&world, x, y);
-    let cracked = Material::wall(SEAT, true).expect("a wall");
-    let whole = Material::wall(SEAT, false).expect("a wall");
-    for z in [ground + 1, ground + 2] {
+    // A cracked voxel stands at half its strength: repaired under a threshold
+    // above 50, left at 50 (the owner's ruling of 2026-10-20). No wall target
+    // names it: any wall of the seat's inside the sphere is repaired.
+    for (threshold, repaired) in [(60, true), (50, false)] {
+        let mut world = fixture(
+            settings(Terraform::None, threshold, false),
+            UnitKind::RepairDrone,
+        );
+        let [x, y] = open_column(&world, [-4, 5]);
+        let ground = top(&world, x, y);
+        let cracked = Material::wall(SEAT, true).expect("a wall");
+        let whole = Material::wall(SEAT, false).expect("a wall");
+        for z in [ground + 1, ground + 2] {
+            world
+                .request_voxel_edit(VoxelEdit::Set {
+                    at: [x, y, z],
+                    material: if z == ground + 2 { cracked } else { whole },
+                    by: Some(SEAT),
+                })
+                .expect("files");
+        }
+        let mut runner = push(world, &idle());
+        run(&mut runner, 600, &[]);
+        let now = runner.world().voxels().get([x, y, ground + 2]);
+        assert_eq!(
+            now == Some(whole),
+            repaired,
+            "threshold {threshold}: {now:?}"
+        );
+    }
+}
+
+/// A beacon is repaired like any other structure of the seat's, below the
+/// threshold, at its share of the beacon's price (the owner's ruling of
+/// 2026-10-20).
+#[test]
+fn a_beacon_below_its_threshold_is_repaired() {
+    let mut world = fixture(settings(Terraform::None, 50, false), UnitKind::RepairDrone);
+    let [cx, cy, _] = core_voxel(&world);
+    let outpost = world
+        .place_beacon_directly(
+            SEAT,
+            standing(&world, cx - 6, cy + 2),
+            MandateKind::Survey,
+            2,
+        )
+        .expect("room for a beacon");
+    let row = world.beacons().row_of(outpost).expect("a beacon");
+    let max = world
+        .beacons()
+        .hit_points()
+        .get(row.index())
+        .expect("hp")
+        .raw();
+    world
+        .request_damage(hit(
+            DamageTarget::Beacon(outpost),
+            i64::from(max).checked_div(2).unwrap() + 10,
+        ))
+        .expect("files");
+    let mut runner = push(world, &idle());
+    run(&mut runner, 3_000, &[]);
+    let row = runner.world().beacons().row_of(outpost).expect("a beacon");
+    assert_eq!(
+        runner
+            .world()
+            .beacons()
+            .hit_points()
+            .get(row.index())
+            .expect("hp")
+            .raw(),
+        max,
+        "repaired to full"
+    );
+}
+
+/// A wall's blown-out voxel is a destroyed part of it: once its box has been
+/// filled whole, a build drone fills the gap again only under
+/// `rebuild_destroyed` (the owner's ruling of 2026-10-20).
+#[test]
+fn a_breached_wall_is_rebuilt_only_under_rebuild_destroyed() {
+    for rebuild in [true, false] {
+        let mut world = fixture(settings(Terraform::None, 0, rebuild), UnitKind::BuildDrone);
+        let beacon = core(&world);
+        let [x, y] = open_column(&world, [-6, -3]);
+        let ground = top(&world, x, y);
+        let wall = WallBox {
+            columns: ColumnBox::new(
+                [i16::try_from(x).unwrap(), i16::try_from(y).unwrap()],
+                [i16::try_from(x).unwrap(), i16::try_from(y).unwrap()],
+            )
+            .unwrap(),
+            floor: i16::try_from(ground).unwrap(),
+            top: i16::try_from(ground + 2).unwrap(),
+        };
         world
+            .add_wall_target(beacon, point([x, y, ground + 1]), wall)
+            .expect("room");
+        let mut runner = push(world, &idle());
+        run(&mut runner, 1_200, &[]);
+        assert_eq!(
+            top(runner.world(), x, y),
+            ground + 2,
+            "the wall is filled whole"
+        );
+        runner
+            .world_mut()
             .request_voxel_edit(VoxelEdit::Set {
-                at: [x, y, z],
-                material: if z == ground + 2 { cracked } else { whole },
-                by: Some(SEAT),
+                at: [x, y, ground + 2],
+                material: Material::AIR,
+                by: Some(SeatId::new(1)),
             })
             .expect("files");
+        run(&mut runner, 1_200, &[]);
+        let refilled = top(runner.world(), x, y) == ground + 2;
+        assert_eq!(refilled, rebuild, "rebuild_destroyed {rebuild}");
     }
-    let wall = WallBox {
-        columns: ColumnBox::new(
-            [i16::try_from(x).unwrap(), i16::try_from(y).unwrap()],
-            [i16::try_from(x).unwrap(), i16::try_from(y).unwrap()],
-        )
-        .unwrap(),
-        floor: i16::try_from(ground).unwrap(),
-        top: i16::try_from(ground + 2).unwrap(),
-    };
-    world
-        .add_wall_target(beacon, point([x, y, ground + 1]), wall)
-        .expect("room");
-    let mut runner = push(world, &idle());
-    run(&mut runner, 600, &[]);
-    assert_eq!(
-        runner.world().voxels().get([x, y, ground + 2]),
-        Some(whole),
-        "the cracked voxel is whole again"
-    );
 }
 
 /// Any seat's wreck inside the sphere is salvaged by an own repair drone and
@@ -1181,7 +1264,9 @@ fn a_wall_voxel_still_breaks() {
         .expect("files");
     let mut runner = push(world, &idle());
     run(&mut runner, 1, &[]);
-    blast_at(runner.world_mut(), [x, y, g + 1], 1);
+    // A ball of radius 0 is the one voxel, so the ground under it stays and
+    // the support rule has nothing to drop.
+    blast_at(runner.world_mut(), [x, y, g + 1], 0);
     run(&mut runner, 1, &[]);
     assert_eq!(
         runner.world().voxels().get([x, y, g + 1]),

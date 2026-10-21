@@ -485,13 +485,17 @@ pub enum BuildJob {
     Voxel(VoxelJob),
 }
 
-/// What a repair drone repairs: a unit or a structure, by row.
+/// What a repair drone repairs: a unit, a structure or a beacon, by row
+/// (the owner's ruling of 2026-10-20: every own structure is repairable,
+/// beacons included).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Patient {
     /// A unit (the commander included).
     Unit(Row),
     /// A structure.
     Structure(Row),
+    /// A beacon, the core included.
+    Beacon(Row),
 }
 
 /// What a repair drone does next.
@@ -860,6 +864,9 @@ pub fn build_job(world: &World, unit: usize) -> Option<BuildJob> {
             continue;
         }
         if *top != NO_WALL {
+            if wall_rebuild_barred(world, row, site.settings) {
+                continue;
+            }
             if let Some(job) = wall_voxel(world, home, seat, *columns, *top, Some(drone)) {
                 return Some(BuildJob::Voxel(job));
             }
@@ -920,12 +927,14 @@ pub fn voxel_work(world: &World, beacon: BeaconId) -> u32 {
         .iter()
         .zip(targets.kinds())
         .zip(targets.anchors())
-        .zip(targets.areas().iter().zip(targets.wall_tops()));
+        .zip(targets.areas().iter().zip(targets.wall_tops()))
+        .enumerate();
     let mut work: u32 = 0;
-    for (((owner, kind), anchor), (columns, top)) in rows {
+    for (row, (((owner, kind), anchor), (columns, top))) in rows {
         if *owner == beacon
             && *kind == TargetKind::Build.id()
             && *top != NO_WALL
+            && !wall_rebuild_barred(world, row, site.settings)
             && !crate::mandate::protected(world, beacon, *anchor)
             && wall_voxel(world, beacon, seat, *columns, *top, None).is_some()
         {
@@ -970,7 +979,13 @@ pub fn repair_job(world: &World, unit: usize) -> Option<RepairJob> {
         count: class.1,
         here,
     };
-    if let Some(job) = cracked_wall(world, home, seat, Some(drone)) {
+    if let Some(job) = cracked_wall(
+        world,
+        home,
+        seat,
+        site.settings.repair_threshold_pct,
+        Some(drone),
+    ) {
         return Some(RepairJob::Restore(job));
     }
     salvage_job(world, home)
@@ -1048,6 +1063,28 @@ fn nearest_patient(
                 consider(1, row, Patient::Structure(index), *at);
             }
         }
+        let beacons = world.beacons();
+        let rows = beacons
+            .seats()
+            .iter()
+            .zip(beacons.ids())
+            .zip(beacons.hit_points().iter().zip(beacons.positions()))
+            .enumerate();
+        for (row, ((owner, id), (hp, at))) in rows {
+            if *owner != seat.raw() || !hp.is_alive() {
+                continue;
+            }
+            let max = world.beacon_max_hp(BeaconId::new(*id));
+            let begun = healing && hp.raw() < max.raw() && at_work(world, here, *at);
+            if !(below_threshold(hp.raw(), max.raw(), settings.repair_threshold_pct) || begun)
+                || !crate::mandate::inside_sphere(world, beacon, *at)
+            {
+                continue;
+            }
+            if let Some(index) = Row::of_index(row) {
+                consider(2, row, Patient::Beacon(index), *at);
+            }
+        }
     }
     best.map(|(_, _, _, patient, at)| (patient, at))
 }
@@ -1061,18 +1098,29 @@ pub fn below_threshold(hp: i32, max: i32, pct: u8) -> bool {
 /// The next cracked own wall voxel inside `beacon`'s sphere in the class
 /// `class` (any class when `None`), or `None`.
 ///
-/// Read over the boxes of `seat`'s own wall targets, every beacon's of the
-/// seat, since a cracked voxel is a wall's and the boxes are where walls
-/// stand; each column from the box's top down through the wall to the
-/// ground, columns in `(y, x)` order and boxes in table order. A wall voxel
-/// is its seat's while it lies inside one of the seat's live spheres (E14,
-/// decision 42), which this beacon's is.
+/// Read over every column of the sphere's square, `(y, x)` order, from the
+/// ground's top down through the wall standing there: any wall of the seat's,
+/// whatever target built it or whether one still names it (the owner's ruling
+/// of 2026-10-20). A wall voxel is its seat's while it lies inside one of
+/// the seat's live spheres (E14, decision 42), which this beacon's is; one
+/// outside every live sphere is neutral, and nobody's to repair. A wall
+/// inside a sphere of the seat's whose beacon has no repair drone waits for a
+/// drone homed there: only a Build beacon fabricates one, and a drone
+/// re-homed to another writ keeps its job.
 fn cracked_wall(
     world: &World,
     beacon: BeaconId,
     seat: SeatId,
+    threshold: u8,
     class: Option<Drone>,
 ) -> Option<VoxelJob> {
+    // A cracked voxel has taken one of the two blasts a wall voxel takes, so
+    // it stands at half its strength: it is repaired when half is below the
+    // beacon's threshold, as any structure is (the owner's ruling of
+    // 2026-10-20), and never at a threshold of 50 or less.
+    if !below_threshold(1, 2, threshold) {
+        return None;
+    }
     let whole = Material::wall(seat, false)?;
     let row = world.beacons().row_of(beacon).ok()?;
     let [cx, cy] = world
@@ -1082,62 +1130,38 @@ fn cracked_wall(
         .copied()
         .map(crate::targeting::column_of)?;
     let radius = i32::from(world.rules().sphere_radius_voxels());
-    let targets = world.targets();
-    let rows = targets
-        .beacons()
-        .iter()
-        .zip(targets.kinds())
-        .zip(targets.areas().iter().zip(targets.wall_tops()));
-    for ((owner, kind), (columns, top)) in rows {
-        if *kind != TargetKind::Build.id()
-            || *top == NO_WALL
-            || seat_of(world, *owner) != Some(seat)
-        {
-            continue;
-        }
-        let [lx, ly] = columns.min_column();
-        let [hx, hy] = columns.max_column();
-        // A box wholly outside the sphere's square holds nothing this beacon
-        // repairs: passed over before a column of it is read.
-        let misses = i32::from(hx) < cx.saturating_sub(radius)
-            || i32::from(lx) > cx.saturating_add(radius)
-            || i32::from(hy) < cy.saturating_sub(radius)
-            || i32::from(ly) > cy.saturating_add(radius);
-        if misses {
-            continue;
-        }
-        for y in i32::from(ly)..=i32::from(hy) {
-            for x in i32::from(lx)..=i32::from(hx) {
-                if class.is_some_and(|drone| class_of(x, y, drone.count) != drone.rank)
-                    || class.is_some_and(|drone| !drone.reaches(world, x, y))
+    for dy in radius.saturating_neg()..=radius {
+        for dx in radius.saturating_neg()..=radius {
+            let (x, y) = (cx.saturating_add(dx), cy.saturating_add(dy));
+            if class.is_some_and(|drone| class_of(x, y, drone.count) != drone.rank) {
+                continue;
+            }
+            let Some(mut z) = ground_top(world, x, y) else {
+                continue;
+            };
+            // A wall stands on the ground's top: read down through its voxels
+            // to the first that is no wall.
+            while let Some((builder, cracked)) =
+                world.voxels().get([x, y, z]).and_then(Material::wall_of)
+            {
+                let at = [x, y, z];
+                let inside = voxel_point(at)
+                    .is_some_and(|point| crate::mandate::inside_sphere(world, beacon, point));
+                if builder == seat
+                    && cracked
+                    && inside
+                    && class.is_none_or(|drone| drone.reaches(world, x, y))
                 {
-                    continue;
+                    return Some(VoxelJob {
+                        at,
+                        material: whole,
+                        work: VoxelWork::Restore,
+                    });
                 }
-                let mut z = i32::from(*top);
-                while z >= 0 {
-                    let at = [x, y, z];
-                    let Some(material) = world.voxels().get(at) else {
-                        break;
-                    };
-                    match material.wall_of() {
-                        Some((builder, true)) if builder == seat => {
-                            let inside = voxel_point(at).is_some_and(|point| {
-                                crate::mandate::inside_sphere(world, beacon, point)
-                            });
-                            if inside {
-                                return Some(VoxelJob {
-                                    at,
-                                    material: whole,
-                                    work: VoxelWork::Restore,
-                                });
-                            }
-                        }
-                        Some(_) => {}
-                        None if material.is_air() => {}
-                        None => break,
-                    }
-                    z = z.saturating_sub(1);
-                }
+                let Some(below) = z.checked_sub(1).filter(|below| *below >= 0) else {
+                    break;
+                };
+                z = below;
             }
         }
     }
@@ -1247,10 +1271,41 @@ pub fn repair_work(world: &World, beacon: BeaconId) -> u32 {
                 work = work.saturating_add(1);
             }
         }
+        let beacons = world.beacons();
+        let rows = beacons
+            .seats()
+            .iter()
+            .zip(beacons.ids())
+            .zip(beacons.hit_points().iter().zip(beacons.positions()));
+        for ((owner, id), (hp, at)) in rows {
+            let max = world.beacon_max_hp(BeaconId::new(*id));
+            if *owner == seat.raw()
+                && hp.is_alive()
+                && below_threshold(hp.raw(), max.raw(), site.settings.repair_threshold_pct)
+                && crate::mandate::inside_sphere(world, beacon, *at)
+            {
+                work = work.saturating_add(1);
+            }
+        }
     }
-    if cracked_wall(world, beacon, seat, None).is_some() {
+    if cracked_wall(
+        world,
+        beacon,
+        seat,
+        site.settings.repair_threshold_pct,
+        None,
+    )
+    .is_some()
+    {
         work = work.saturating_add(1);
     }
+    work.saturating_add(salvage_work(world, beacon))
+}
+
+/// The wrecks and ruins with salvage left inside `beacon`'s sphere, any seat's:
+/// repair work as fabrication counts it ([`repair_work`]).
+fn salvage_work(world: &World, beacon: BeaconId) -> u32 {
+    let mut work: u32 = 0;
     let centre = world
         .beacons()
         .row_of(beacon)
@@ -1420,6 +1475,13 @@ fn patient_state(world: &World, patient: Patient) -> Option<(i32, i32, Money)> {
             let hp = structures.hit_points().get(row.index())?.raw();
             let max = world.structure_max_hp(kind)?.raw();
             (hp > 0).then_some((hp, max, world.structure_cost(kind)))
+        }
+        Patient::Beacon(row) => {
+            let beacons = world.beacons();
+            let id = BeaconId::new(*beacons.ids().get(row.index())?);
+            let hp = beacons.hit_points().get(row.index())?.raw();
+            let max = world.beacon_max_hp(id).raw();
+            (hp > 0).then_some((hp, max, world.beacon_cost()))
         }
     }
 }
@@ -1905,8 +1967,8 @@ fn heal(
     world.park_unit(unit);
     // The mark that lets a structure's repair run on to full ([`HEALING`]):
     // set while the drone works a structure short of full, cleared otherwise.
-    let mark =
-        matches!(patient, Patient::Structure(_)) && hp.saturating_add(per_tick_of(world)) < max;
+    let mark = matches!(patient, Patient::Structure(_) | Patient::Beacon(_))
+        && hp.saturating_add(per_tick_of(world)) < max;
     if let Some(slot) = world.units_mut().busy_until_mut().get_mut(drone) {
         *slot = if mark { HEALING } else { NO_WORK };
     }
@@ -1942,6 +2004,20 @@ fn heal(
             (
                 world.structures_mut().hit_points_mut().get_mut(row.index()),
                 id.map(AssetId::of_structure),
+                seat,
+            )
+        }
+        Patient::Beacon(row) => {
+            let id = world
+                .beacons()
+                .ids()
+                .get(row.index())
+                .copied()
+                .map(BeaconId::new);
+            let seat = world.beacons().seats().get(row.index()).copied();
+            (
+                world.beacons_mut().hit_points_mut().get_mut(row.index()),
+                id.map(AssetId::of_beacon),
                 seat,
             )
         }
@@ -2118,6 +2194,61 @@ pub(crate) fn levelling_due(world: &World, row: usize, terraform: Terraform) -> 
     }
     let anchor = targets.anchors().get(row).copied()?;
     levelling(world, terraform, anchor)
+}
+
+impl World {
+    /// Mark every wall target whose box now stands filled whole, once: every
+    /// column of it filled up to the box's top, or one no wall can fill (a
+    /// structure or a beacon stands on it, or the beacon protects it). From
+    /// then on a voxel blown out of it is a destroyed part of the wall, which
+    /// a build drone fills again only under the beacon's `rebuild_destroyed`
+    /// (the owner's ruling of 2026-10-20), as any destroyed structure is.
+    /// Run on a decision tick, before the Quartermaster gathers.
+    pub(crate) fn mark_walls_done(&mut self) {
+        let mut row: usize = 0;
+        while row < self.targets.row_count() {
+            let slot = row;
+            row = row.saturating_add(1);
+            let (Some(top), Some(done), Some(columns), Some(beacon)) = (
+                self.targets.wall_tops().get(slot).copied(),
+                self.targets.walls_done().get(slot).copied(),
+                self.targets.areas().get(slot).copied(),
+                self.targets.beacons().get(slot).copied(),
+            ) else {
+                continue;
+            };
+            if top == NO_WALL || done {
+                continue;
+            }
+            let [lx, ly] = columns.min_column();
+            let [hx, hy] = columns.max_column();
+            let mut whole = true;
+            'columns: for y in i32::from(ly)..=i32::from(hy) {
+                for x in i32::from(lx)..=i32::from(hx) {
+                    let filled = ground_top(self, x, y).is_some_and(|g| g >= i32::from(top));
+                    let unfillable = self.ground().structure_on(x, y)
+                        || beacon_on(self, x, y)
+                        || voxel_point([x, y, 0])
+                            .is_some_and(|point| crate::mandate::protected(self, beacon, point));
+                    if !filled && !unfillable {
+                        whole = false;
+                        break 'columns;
+                    }
+                }
+            }
+            if whole {
+                self.targets.mark_wall_done(slot);
+            }
+        }
+    }
+}
+
+/// Whether the wall target at `row` is filled whole once and its beacon does
+/// not rebuild what is destroyed: then a voxel blown out of it stays out (the
+/// owner's ruling of 2026-10-20: walls follow the same two settings as every
+/// other structure).
+fn wall_rebuild_barred(world: &World, row: usize, settings: BuildSettings) -> bool {
+    !settings.rebuild_destroyed && world.targets().walls_done().get(row).copied() == Some(true)
 }
 
 #[cfg(test)]
