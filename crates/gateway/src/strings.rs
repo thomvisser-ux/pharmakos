@@ -20,9 +20,11 @@
 //! another seat could be shown. What decides who is shown a line is
 //! [`crate::fog`]; what this module decides is what the line says.
 
+use pharmakos_proto::gp::v1::Voxel;
 use pharmakos_sim::events::{Event, EventKind};
 use pharmakos_sim::math::quantity::Ms;
 use pharmakos_sim::runner::{MatchEndReason, MatchPhase};
+use pharmakos_sim::tables::SeatId;
 
 /// One feed line, from a sim event.
 ///
@@ -31,6 +33,10 @@ use pharmakos_sim::runner::{MatchEndReason, MatchPhase};
 /// each kind carries are documented on the kind itself; this is where they are
 /// spelled.
 #[must_use]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one arm per sim event kind, which is the point: a kind added to the bus fails to compile here (S2's plan, E17)"
+)]
 pub fn event_text(event: &Event) -> String {
     let seat = event.seat.map_or_else(
         || String::from("an unclaimed asset"),
@@ -39,10 +45,12 @@ pub fn event_text(event: &Event) -> String {
     match event.kind {
         EventKind::MatchStarted => String::from("The match opened."),
         EventKind::LullOpened => String::from("The Lull opened: seals may be written."),
-        EventKind::PushStarted => format!(
-            "The Push began. This segment runs {}.",
-            clock(Ms::new(i32::try_from(event.value).unwrap_or(i32::MAX)))
-        ),
+        // A length past `i32` is written as the number it is rather than
+        // clamped to the longest clock this one can render.
+        EventKind::PushStarted => match i32::try_from(event.value) {
+            Ok(ms) => format!("The Push began. This segment runs {}.", clock(Ms::new(ms))),
+            Err(_) => format!("The Push began. This segment runs {} ms.", event.value),
+        },
         EventKind::SegmentEnded => format!("The Push ended after {} ticks.", event.value),
         EventKind::RecapOpened => String::from("The recap opened: the Ledger settles."),
         // `seat` is the winner when one seat won: the last standing, or the
@@ -76,14 +84,16 @@ pub fn event_text(event: &Event) -> String {
         // keeps the line private to that seat: a step or a rule is named by
         // its index here and is still never shown to anybody else.
         // The count agrees with itself ("1 route step"), the demo's F5.
-        EventKind::PlanSealed => format!(
-            "The playbook of {seat} was sealed: {}.",
-            count(
-                u32::try_from(event.value).unwrap_or(u32::MAX),
-                "route step",
-                "route steps"
-            )
-        ),
+        EventKind::PlanSealed => match u32::try_from(event.value) {
+            Ok(steps) => format!(
+                "The playbook of {seat} was sealed: {}.",
+                count(steps, "route step", "route steps")
+            ),
+            Err(_) => format!(
+                "The playbook of {seat} was sealed: {} route steps.",
+                event.value
+            ),
+        },
         EventKind::StepStarted => format!("Step {} started.", event.value),
         EventKind::StepCompleted => format!("Step {} completed.", event.value),
         EventKind::StepSkipped => format!(
@@ -139,6 +149,33 @@ pub fn event_text(event: &Event) -> String {
         }
         EventKind::FallbackEngaged => fallback_engaged(event.value),
         EventKind::FinalAudit => format!("The final audit scored {seat} at $ {}.", event.value),
+        // S2's `fire`: the combat lines (S2's plan, E17).
+        EventKind::UnitDestroyed => format!("A unit of {seat} was destroyed."),
+        EventKind::StructureDestroyed => match event.seat {
+            Some(owner) => format!("A structure of seat {} was destroyed.", owner.raw()),
+            None => String::from("A ruin was destroyed."),
+        },
+        EventKind::ShellLanded => format!("A shell from {seat} landed."),
+        EventKind::WreckLeft => format!("A wreck worth $ {} was left.", event.value),
+        EventKind::ReturnedFire => format!("An asset of {seat} returned fire."),
+        EventKind::RetreatAnnounced => format!("A unit of {seat} is retreating."),
+        EventKind::WreckBuried => {
+            String::from("The ash buried the oldest wreck to make room for a new one.")
+        }
+        // S2's `fall`: the support rule's lines (S2's plan, E17). A region is
+        // terrain and nobody's; an asset that fell names its owner.
+        EventKind::RegionCollapsed => format!("A region of {} voxels collapsed.", event.value),
+        EventKind::AssetFell => match event.seat {
+            Some(owner) => format!(
+                "An asset of seat {} fell, and {} fall damage was filed against it.",
+                owner.raw(),
+                event.value
+            ),
+            None => format!(
+                "An unclaimed asset fell, and {} fall damage was filed against it.",
+                event.value
+            ),
+        },
     }
 }
 
@@ -498,21 +535,84 @@ fn seats_prose(seats: &[u8]) -> String {
 /// `get_map_summary`'s prose.
 #[must_use]
 pub fn map_summary(size: [u32; 3], seed: &str, seats: u32) -> String {
-    let axis = |index: usize| size.get(index).copied().unwrap_or(0);
+    let [x, y, z] = size;
     format!(
-        "The map is {} by {} by {} voxels, generated from seed {seed} for {}.",
-        axis(0),
-        axis(1),
-        axis(2),
+        "The map is {x} by {y} by {z} voxels, generated from seed {seed} for {}.",
         count(seats, "seat", "seats"),
     )
 }
 
-/// `get_beacon`'s prose.
+/// The recap's tally sentence: the seat's own kills, how many of them were
+/// shared, the enemy value they were worth and the seat's own losses, for the
+/// match so far (spec section 3's "shared kill"; S2's plan, E15).
 #[must_use]
-pub fn beacon(id: &str, mandate: &str, hit_points: i32, own: bool) -> String {
-    let whose = if own { "Yours" } else { "Not yours" };
-    format!("{whose}. Beacon {id} carries the {mandate} mandate and has {hit_points} HP.")
+pub fn recap_tally(kills: u32, shared: u32, value_dollars: i32, losses: u32) -> String {
+    let lost = count(losses, "asset", "assets");
+    let destroyed = count(kills, "enemy asset", "enemy assets");
+    match (kills, shared) {
+        (0, _) => format!("This match so far you destroyed no enemy assets and lost {lost}."),
+        (_, 0) => format!(
+            "This match so far you destroyed {destroyed}, worth $ {value_dollars}, and lost \
+             {lost}."
+        ),
+        (1, _) => format!(
+            "This match so far you destroyed 1 enemy asset, a shared kill, worth $ \
+             {value_dollars}, and lost {lost}."
+        ),
+        (_, 1) => format!(
+            "This match so far you destroyed {destroyed}, 1 of them a shared kill, worth $ \
+             {value_dollars}, and lost {lost}."
+        ),
+        _ => format!(
+            "This match so far you destroyed {destroyed}, {shared} of them shared kills, worth \
+             $ {value_dollars}, and lost {lost}."
+        ),
+    }
+}
+
+/// `get_beacon`'s prose for one of the seat's own beacons: its mandate and its
+/// hit points, the seat's own business.
+#[must_use]
+pub fn own_beacon(id: &str, mandate: &str, hit_points: u32) -> String {
+    format!("Yours. Beacon {id} carries the {mandate} mandate and has {hit_points} HP.")
+}
+
+/// `get_beacon`'s prose for another seat's beacon in sight now: whose it is and
+/// its hit points, as its summary carries them, and never its mandate (S2's
+/// plan, E9 and decision 5).
+#[must_use]
+pub fn foreign_beacon_in_sight(id: &str, owner: SeatId, (hp, max_hp): (u32, u32)) -> String {
+    format!(
+        "Not yours. Beacon {id} is seat {}'s and in sight now, with {hp} of {max_hp} HP.",
+        owner.raw()
+    )
+}
+
+/// `get_beacon`'s prose for another seat's beacon the seat remembers: whose it
+/// was, where and how long ago it was last seen, and nothing it could not
+/// have seen then (S2's plan, E9 and decision 5).
+#[must_use]
+pub fn foreign_beacon_remembered(id: &str, owner: SeatId, at: Voxel, age_ms: u32) -> String {
+    format!(
+        "Not yours. Beacon {id} is seat {}'s, last seen at ({}, {}, {}) {} ago.",
+        owner.raw(),
+        at.x,
+        at.y,
+        at.z,
+        whole_seconds_ago(age_ms)
+    )
+}
+
+/// An age in game milliseconds as `45 s` or `3:00`, rounded down, as
+/// [`clock`] renders a fact.
+fn whole_seconds_ago(age_ms: u32) -> String {
+    let seconds = age_ms.div_euclid(1000);
+    if seconds < 60 {
+        return format!("{seconds} s");
+    }
+    let minutes = seconds.div_euclid(60);
+    let rest = seconds.rem_euclid(60);
+    format!("{minutes}:{rest:02}")
 }
 
 /// `render_plan`'s fallback when a playbook has no canonical form.
@@ -573,12 +673,15 @@ pub fn count(many: u32, one: &str, several: &str) -> String {
 /// from itself.
 #[must_use]
 pub fn clock(ms: Ms) -> String {
-    let seconds = ms.raw().max(0).checked_div(1000).unwrap_or(0);
+    // A duration below zero is no fact to render, and the clock reads it as
+    // none: the one place a negative game time could arrive is a segment's
+    // remaining time after its end, which is none.
+    let seconds = ms.raw().max(0).div_euclid(1000);
     if seconds < 60 {
         return format!("{seconds} s");
     }
-    let minutes = seconds.checked_div(60).unwrap_or(0);
-    let rest = seconds.saturating_sub(minutes.saturating_mul(60));
+    let minutes = seconds.div_euclid(60);
+    let rest = seconds.rem_euclid(60);
     format!("{minutes}:{rest:02}")
 }
 
@@ -586,9 +689,10 @@ pub fn clock(ms: Ms) -> String {
 /// name. ASCII only, because the one string table is English.
 fn capitalise(text: &str) -> String {
     let mut characters = text.chars();
-    characters.next().map_or_else(String::new, |first| {
-        format!("{}{}", first.to_ascii_uppercase(), characters.as_str())
-    })
+    match characters.next() {
+        Some(first) => format!("{}{}", first.to_ascii_uppercase(), characters.as_str()),
+        None => String::new(),
+    }
 }
 
 #[cfg(test)]
@@ -646,6 +750,66 @@ mod tests {
         assert_eq!(
             text,
             "The ash buried the oldest ruin to make room for a new one."
+        );
+    }
+
+    /// S2's `fire`: a wreck is nobody's, so its lines name no seat, and a
+    /// unit's destruction names the seat it belonged to.
+    #[test]
+    fn a_wreck_names_nobody_and_a_destruction_names_its_seat() {
+        let text = event_text(&event(EventKind::WreckLeft, None, 7));
+        assert_eq!(text, "A wreck worth $ 7 was left.");
+        let text = event_text(&event(EventKind::WreckBuried, None, 0));
+        assert_eq!(
+            text,
+            "The ash buried the oldest wreck to make room for a new one."
+        );
+        let text = event_text(&event(EventKind::UnitDestroyed, Some(1), 5));
+        assert_eq!(text, "A unit of seat 1 was destroyed.");
+    }
+
+    /// S2's `fall`: a collapsed region names nobody, and a fallen asset names
+    /// its owner, or nobody for a ruin or a wreck.
+    #[test]
+    fn a_collapse_names_nobody_and_a_fallen_asset_names_its_owner() {
+        let text = event_text(&event(EventKind::RegionCollapsed, None, 12));
+        assert_eq!(text, "A region of 12 voxels collapsed.");
+        let text = event_text(&event(EventKind::AssetFell, Some(2), 100));
+        assert_eq!(
+            text,
+            "An asset of seat 2 fell, and 100 fall damage was filed against it."
+        );
+        let text = event_text(&event(EventKind::AssetFell, None, 0));
+        assert_eq!(
+            text,
+            "An unclaimed asset fell, and 0 fall damage was filed against it."
+        );
+    }
+
+    #[test]
+    fn the_tally_sentence_counts_and_names_a_shared_kill() {
+        assert_eq!(
+            super::recap_tally(0, 0, 0, 0),
+            "This match so far you destroyed no enemy assets and lost no assets."
+        );
+        assert_eq!(
+            super::recap_tally(2, 1, 35, 1),
+            "This match so far you destroyed 2 enemy assets, 1 of them a shared kill, worth $ 35, \
+             and lost 1 asset."
+        );
+        assert_eq!(
+            super::recap_tally(2, 0, 35, 0),
+            "This match so far you destroyed 2 enemy assets, worth $ 35, and lost no assets."
+        );
+        assert_eq!(
+            super::recap_tally(1, 1, 10, 0),
+            "This match so far you destroyed 1 enemy asset, a shared kill, worth $ 10, and lost \
+             no assets."
+        );
+        assert_eq!(
+            super::recap_tally(3, 2, 60, 2),
+            "This match so far you destroyed 3 enemy assets, 2 of them shared kills, worth $ 60, \
+             and lost 2 assets."
         );
     }
 

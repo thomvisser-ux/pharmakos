@@ -401,20 +401,22 @@ impl Surface {
     ) -> Result<Json, Error> {
         let seat = Surface::seat_of(subject, "drafts")?;
         let playbook = playbook_param(request)?.to_owned();
-        let label = request
-            .string_param("label")?
-            .unwrap_or_default()
-            .to_owned();
+        // An absent label is proto3's empty string: a draft with no label.
+        let label = match request.string_param("label")? {
+            Some(label) => label.to_owned(),
+            None => String::new(),
+        };
         if label.chars().count() > MAX_DRAFT_LABEL_CHARS {
             return Err(Error::invalid(format!(
                 "a draft's label is at most {MAX_DRAFT_LABEL_CHARS} characters"
             )));
         }
         let round = self.host()?.runner().round();
-        let draft_id = request.string_param("draft_id")?.map_or_else(
-            || format!("d{round}-{}", self.next_draft_number(seat, round)),
-            str::to_owned,
-        );
+        // An absent id is minted, the next free `d<round>-<n>` (`gateway.proto`).
+        let draft_id = match request.string_param("draft_id")? {
+            Some(asked) => asked.to_owned(),
+            None => format!("d{round}-{}", self.next_draft_number(seat, round)?),
+        };
         if !is_draft_id(&draft_id) {
             return Err(Error::invalid(format!(
                 "`{draft_id}` is not a draft id: lower-case ASCII letters, digits, `-` and `_`, \
@@ -757,9 +759,10 @@ impl Surface {
             // contradicting a hash it has just handed out.
             let plan = compile_playbook(&playbook, self.host()?.rules())?;
             // The third: a seal always prices, so the seat's own forecast can
-            // always answer its `committed_dollars` (review A of `econ`). The
-            // verifier's estimate sums wide and never overflows, so a FULL
-            // report that qualifies does not promise it.
+            // always answer its `committed_dollars` (review A of `econ`). From
+            // S2 the verifier refuses a seal that does not price (`E0603`), so
+            // no qualifying report reaches this refusal; it stays as defence
+            // in depth.
             self.seal_commitment(seat, &playbook)
                 .map_err(|unpriced| match unpriced {
                     super::knowledge::Unpriced::Gateway(error) => error,
@@ -792,15 +795,28 @@ impl Surface {
     /// and silently replace it. `save_draft` replacing an id on purpose is what
     /// an editor's Save is; replacing one the client never named is data loss
     /// with no error to notice it by.
-    fn next_draft_number(&self, seat: pharmakos_sim::tables::SeatId, round: u32) -> usize {
-        let Ok(state) = self.seat_state(crate::token::Subject::Seat(seat), seat) else {
-            return 1;
-        };
+    ///
+    /// # Errors
+    ///
+    /// As [`Surface::seat_state`], and [`crate::error::Code::Internal`] when
+    /// none of the first `MAX_DRAFTS + 1` numbers is free, which holding at
+    /// most `MAX_DRAFTS` drafts makes impossible.
+    fn next_draft_number(
+        &self,
+        seat: pharmakos_sim::tables::SeatId,
+        round: u32,
+    ) -> Result<usize, Error> {
+        let state = self.seat_state(crate::token::Subject::Seat(seat), seat)?;
         // Bounded by MAX_DRAFTS + 1 by construction: at most MAX_DRAFTS ids are
         // held, so one of the first MAX_DRAFTS + 1 candidates is free.
         (1..=MAX_DRAFTS.saturating_add(1))
             .find(|number| state.draft(&format!("d{round}-{number}")).is_none())
-            .unwrap_or(1)
+            .ok_or_else(|| {
+                Error::internal(format!(
+                    "seat {} holds more than {MAX_DRAFTS} drafts of round {round}",
+                    seat.raw()
+                ))
+            })
     }
 }
 
@@ -951,10 +967,16 @@ fn is_draft_id(text: &str) -> bool {
 }
 
 /// One `gp.api.v1.ResolvedRef` as JSON: every field, the defaults included,
-/// as `estimate_route`'s legs are written. `failure` is the step failure's
-/// name as the segment feed spells it, and empty when the reference reads a
-/// feature. `travel_ms` is 0 when there is no travel to write, as
-/// [`crate::targeting::Resolved::travel_ms`] says.
+/// as `estimate_route`'s legs are written, except `travel_ms`. `failure` is
+/// the step failure's name as the segment feed spells it, and empty when the
+/// reference reads a feature.
+///
+/// **`reachable` says whether a route reaches what the reference reads**
+/// (decisions-log item 133 (3) (i); `con3`'s field): true exactly when there
+/// is a travel to write, and then `travel_ms` is written beside it. A
+/// reference that reads nothing, or reads a named pick the origin cannot
+/// reach, is `reachable: false` **with no `travel_ms` at all**, so no reader
+/// can take the 0 a magic value once stood for as a feature at the origin.
 fn resolved_json(resolved: &crate::targeting::Resolved) -> Json {
     let candidates: Vec<Json> = resolved
         .candidates
@@ -972,7 +994,7 @@ fn resolved_json(resolved: &crate::targeting::Resolved) -> Json {
             ])
         })
         .collect();
-    Json::Object(vec![
+    let mut entries = vec![
         (
             String::from("pointer"),
             Json::String(resolved.pointer.clone()),
@@ -981,15 +1003,14 @@ fn resolved_json(resolved: &crate::targeting::Resolved) -> Json {
             String::from("feature_id"),
             Json::String(resolved.feature_id.clone()),
         ),
-        (
+    ];
+    if let Some(travel) = resolved.travel_ms {
+        entries.push((
             String::from("travel_ms"),
-            Json::Number(
-                resolved
-                    .travel_ms
-                    .map_or(0, pharmakos_sim::math::quantity::Ms::raw)
-                    .to_string(),
-            ),
-        ),
+            Json::Number(travel.raw().to_string()),
+        ));
+    }
+    entries.extend([
         (String::from("candidates"), Json::Array(candidates)),
         (
             String::from("matched"),
@@ -997,13 +1018,17 @@ fn resolved_json(resolved: &crate::targeting::Resolved) -> Json {
         ),
         (
             String::from("failure"),
-            Json::String(
-                resolved
-                    .failure
-                    .map_or_else(String::new, |failure| failure.name().to_owned()),
-            ),
+            Json::String(match resolved.failure {
+                Some(failure) => failure.name().to_owned(),
+                None => String::new(),
+            }),
         ),
-    ])
+        (
+            String::from("reachable"),
+            Json::Bool(resolved.travel_ms.is_some()),
+        ),
+    ]);
+    Json::Object(entries)
 }
 
 /// One `gp.api.v1.VerifyReport` as JSON.
@@ -1124,4 +1149,60 @@ fn diagnostic_json(diagnostic: &pharmakos_proto::gp::api::v1::Diagnostic) -> Jso
         (String::from("suggestions"), Json::Array(suggestions)),
         (String::from("map_refs"), Json::Array(map_refs)),
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolved_json;
+    use crate::targeting::{Candidate, Resolved, Site};
+    use pharmakos_proto::json::Json;
+    use pharmakos_sim::math::quantity::Ms;
+
+    fn named(travel: Option<Ms>, candidates: Vec<Candidate>) -> Resolved {
+        Resolved {
+            pointer: String::from("/declarative/route/0/place_beacon/at/covering"),
+            route_step: Some(0),
+            site: Site::Covering,
+            kind: None,
+            feature_id: String::from("vent_120_88"),
+            travel_ms: travel,
+            candidates,
+            matched: 1,
+            failure: None,
+            site_voxel: None,
+        }
+    }
+
+    /// A named pick the origin cannot reach says so with `reachable: false`
+    /// and writes no `travel_ms` at all, rather than the 0 a magic value once
+    /// stood for (decisions-log item 133 (3) (i)); a reachable one writes its
+    /// travel beside `reachable: true`, a 0 included.
+    #[test]
+    fn an_unreachable_pick_says_so() {
+        let unreachable = resolved_json(&named(None, Vec::new()));
+        assert_eq!(unreachable.get("reachable"), Some(&Json::Bool(false)));
+        assert!(
+            unreachable.get("travel_ms").is_none(),
+            "no travel is written for a pick nothing reaches: {unreachable:?}"
+        );
+        assert_eq!(
+            unreachable.get("feature_id"),
+            Some(&Json::String(String::from("vent_120_88"))),
+            "the name is still the pick"
+        );
+
+        let underfoot = resolved_json(&named(
+            Some(Ms::ZERO),
+            vec![Candidate {
+                feature_id: String::from("vent_120_88"),
+                travel_ms: Ms::ZERO,
+            }],
+        ));
+        assert_eq!(underfoot.get("reachable"), Some(&Json::Bool(true)));
+        assert_eq!(
+            underfoot.get("travel_ms"),
+            Some(&Json::Number(String::from("0"))),
+            "a feature at the origin is reached in no time, and says so"
+        );
+    }
 }

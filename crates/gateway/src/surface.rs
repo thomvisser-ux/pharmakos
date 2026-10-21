@@ -481,6 +481,12 @@ pub(crate) struct RecapFacts {
     /// segment and at its end (`EventBus::dropped`, a per-tick cap): when it
     /// is not 0, `failures` may be short and a `settled` may be missing.
     pub(crate) dropped: u64,
+    /// Every seat's tally as the segment ended, ascending by seat: the sim's
+    /// hashed per-seat counters ([`pharmakos_sim::tables::Tally`]; S2's plan,
+    /// E15), read off the world at `segment_ended` and never summed from the
+    /// feed, so a recap tells the counters of the round it describes in every
+    /// phase, a Push included.
+    pub(crate) tallies: Vec<(SeatId, pharmakos_sim::tables::Tally)>,
 }
 
 /// Why [`RecapFacts::band`] tells no band.
@@ -786,6 +792,7 @@ impl Surface {
         surface.begin_segment(round, 0);
 
         surface.restore_seats(saved)?;
+        surface.name_sightings()?;
         surface.derive_continuity(round)?;
 
         if saved.boundary == Boundary::Sealed {
@@ -824,7 +831,12 @@ impl Surface {
             .message()
             .verifier
             .as_ref()
-            .map_or(0, |verifier| verifier.notebook_max_chars);
+            .map(|verifier| verifier.notebook_max_chars)
+            .ok_or_else(|| {
+                Error::internal(
+                    "this rules table has no verifier block, so the notebook has no size",
+                )
+            })?;
         for held in &saved.seats {
             let characters = u32::try_from(held.notebook.chars().count()).unwrap_or(u32::MAX);
             if characters > notebook_max || held.drafts.len() > crate::surface::planning::MAX_DRAFTS
@@ -890,7 +902,7 @@ impl Surface {
             self.seat_state_mut(Subject::Seat(seat), seat)?.continuity = Some(Continuity {
                 draft_id: String::from(CARRIED_DRAFT_ID),
                 qualifies: report.qualifies,
-                diagnostics: u32::try_from(report.diagnostics.len()).unwrap_or(u32::MAX),
+                diagnostics: diagnostic_count(&report)?,
                 report_hash: report.report_hash,
             });
         }
@@ -1124,7 +1136,7 @@ impl Surface {
                 ..
             } = self;
             if let Some(host) = host.as_ref() {
-                views.attach(host.world().voxels(), match_id, *match_seed);
+                views.attach(host.world().voxels(), match_id, *match_seed)?;
             }
         }
         self.absorb_events()
@@ -1338,6 +1350,9 @@ impl Surface {
         self.host_mut()?.refresh_routes()?;
         self.sync_time();
         let round = self.host()?.runner().round();
+        // Before anything is verified against this Lull's snapshot: the
+        // handles its scopes spell sightings with.
+        self.name_sightings()?;
         let seats: Vec<SeatId> = self.seats.iter().map(|seat| seat.seat).collect();
         for seat in seats {
             self.carry_draft_forward(seat, round)?;
@@ -1966,6 +1981,7 @@ impl Surface {
                     settled: Vec::new(),
                     dark: dark_beacons(world)?,
                     held: held_values(world),
+                    tallies: tallies_of(world)?,
                     failures: std::mem::take(&mut self.segment_failures),
                     dropped: core::mem::take(&mut self.segment_dropped),
                 };
@@ -2099,12 +2115,31 @@ impl Surface {
             // standing on a vent: an opponent with eyes on the place sees it,
             // exactly as it sees a placed beacon. Its *queuing* is not here -
             // that is a spend, and a spend is the seat's own business.
-            | EventKind::StructureCompleted => Ok(Audience::World {
+            | EventKind::StructureCompleted
+            // S2's `fire`: a destruction, a shell's landing and a wreck are
+            // things in the world an opponent with eyes on the place sees; a
+            // wreck and a buried wreck are nobody's.
+            | EventKind::UnitDestroyed
+            | EventKind::StructureDestroyed
+            | EventKind::ShellLanded
+            | EventKind::WreckLeft
+            | EventKind::WreckBuried
+            // S2's `fall`: a region that fell and an asset that fell with it,
+            // or under it, are things in the world an opponent with eyes on
+            // the place sees.
+            | EventKind::RegionCollapsed
+            | EventKind::AssetFell => Ok(Audience::World {
                 owner: event.seat,
-                at: event
-                    .at
-                    .map(crate::view::voxel_of_position)
-                    .unwrap_or_default(),
+                // A world event the sim placed nowhere would be filtered at
+                // the origin, where a seat that sees the origin would be told
+                // of it: refused, never placed at (0, 0, 0).
+                at: event.at.map(crate::view::voxel_of_position).ok_or_else(|| {
+                    Error::internal(format!(
+                        "the sim emitted `{}` with no place, and a world event is fogged by \
+                         its place",
+                        event.kind.name()
+                    ))
+                })?,
             }),
             EventKind::PlanSealed
             | EventKind::StepStarted
@@ -2149,7 +2184,12 @@ impl Surface {
             | EventKind::SalvageDelivered
             | EventKind::BeaconRecycled
             | EventKind::Settled
-            | EventKind::KillCredited => event.seat.map(Audience::Private).ok_or_else(|| {
+            | EventKind::KillCredited
+            // S2's `fire`: return fire and a retreat are a seat's rules of
+            // engagement and its retreat threshold acting, its own settings,
+            // announced to it (spec section 6's Common row).
+            | EventKind::ReturnedFire
+            | EventKind::RetreatAnnounced => event.seat.map(Audience::Private).ok_or_else(|| {
                 Error::internal(format!(
                     "the sim emitted `{}` for no seat, and a seat's orders have no other audience",
                     event.kind.name()
@@ -2455,7 +2495,7 @@ impl Surface {
         let continuity = Continuity {
             draft_id: String::from(CARRIED_DRAFT_ID),
             qualifies: report.qualifies,
-            diagnostics: u32::try_from(report.diagnostics.len()).unwrap_or(u32::MAX),
+            diagnostics: diagnostic_count(&report)?,
             report_hash: report.report_hash.clone(),
         };
         let state = self.seat_state_mut(Subject::Seat(seat), seat)?;
@@ -2510,14 +2550,22 @@ impl Surface {
 
     /// The seat's view of the frozen snapshot, as the verifier reads it.
     ///
-    /// **Its own beacons and nothing else.** A seat's knowledge of another
-    /// seat's beacons is the knowledge store's, which is S3's, and a verifier
+    /// **Its own beacons, and of everybody else's only its sightings.** A
+    /// seat's knowledge of another seat's beacons as beacons -- their mandate,
+    /// their tags -- is the knowledge store's, which is S3's, and a verifier
     /// scope that carried beacons a seat has not seen would let a playbook
     /// reference one it cannot know about -- the same fog leak
     /// [`crate::fog`] exists to prevent, arriving through the back door.
     ///
-    /// PLACEHOLDER: a seat's sighted enemy beacons join this scope — owner, S3
-    /// with the knowledge store (the register's S3-04).
+    /// PLACEHOLDER: a seat's sighted enemy beacons join this scope as known beacons, beyond the sightings S2 carries — owner, S3 with the knowledge store (the register's S3-04).
+    ///
+    /// # Sightings, with their ages (S2's Attack freshness)
+    ///
+    /// From S2 the scope carries the seat's own sightings of other seats'
+    /// beacons and commanders, live ones at an age of 0 and remembered ones
+    /// at their sighting's age ([`Surface::verifier_sightings`]): what the
+    /// verifier's `E0418` and `W0703` read, and nothing else. Every one is a
+    /// `report_hash` input.
     ///
     /// `is_core` marks the seat's `b_00`, by the rule
     /// `crate::surface::knowledge::core_beacon_of` states and the wire's
@@ -2552,80 +2600,10 @@ impl Surface {
             .iter()
             .position(|held| *held == seat.raw())
             .ok_or_else(|| Error::not_found(format!("this match has no seat {}", seat.raw())))?;
-        let economy = pharmakos_sim::knowledge::SeatEconomy {
-            treasury: seats.treasuries().get(row).copied().unwrap_or_default(),
-            supply: seats.supplies().get(row).copied().unwrap_or_default(),
-            draw: seats.draws().get(row).copied().unwrap_or_default(),
-        };
+        let economy = self.seat_economy(seat)?;
         let mut scope = VerifierScope::new(seat, economy);
 
-        let beacons = world.beacons();
-        // A freed row is nobody's (S2's plan, E1), so the seat filter leaves it
-        // out with no test of its own.
-        let mut own: Vec<usize> = (0..beacons.ids().len())
-            .filter(|index| beacons.seats().get(*index).copied() == Some(seat.raw()))
-            .collect();
-        // By per-seat ordinal, which is what the seat's `b_NN` names: `b_00`,
-        // its core, first (decisions-log item 127 (13)).
-        own.sort_by_key(|index| beacons.ordinals().get(*index).copied().unwrap_or(u32::MAX));
-        let core = crate::surface::knowledge::core_beacon_of(world, seat);
-        for index in own {
-            let id = beacons.ids().get(index).copied().unwrap_or_default();
-            scope.push_beacon(pharmakos_verifier::KnownBeacon {
-                beacon_id: pharmakos_sim::tables::own_beacon_name(
-                    beacons.ordinals().get(index).copied().unwrap_or(u32::MAX),
-                ),
-                owner: seat,
-                side: pharmakos_verifier::Ownership::Own,
-                mandate: crate::view::mandate_of(crate::view::mandate_from_id(
-                    beacons.mandates().get(index).copied().unwrap_or_default(),
-                )),
-                // No tag column exists in the sim, and inventing one here would
-                // be a proto change wearing a disguise (AGENTS.md section 5).
-                tags: Vec::new(),
-                at: beacons
-                    .positions()
-                    .get(index)
-                    .copied()
-                    .map(crate::view::voxel_of)
-                    .unwrap_or_default(),
-                is_core: core == Some(id),
-            });
-        }
-        // **A gone `b_NN` stays a name the seat placed** (S2's plan, E1): its
-        // row is freed once its death settles and may hold another asset, but
-        // the placement counter keeps the ordinal from being handed out again,
-        // so a playbook naming it qualifies as it did when the dead row stayed,
-        // and the step fails at run time. The verifier is told the name with
-        // no writ and the core's site: the gone beacon's own place is not kept
-        // anywhere, and the core's sphere is in the scope already, so no
-        // sphere test answers differently for it.
-        let placed = seats.placed().get(row).copied().ok_or_else(|| {
-            Error::internal(format!(
-                "seat {} has no placement counter beside its seat row",
-                seat.raw()
-            ))
-        })?;
-        let core_at = core.and_then(|id| {
-            let at = beacons
-                .row_of(pharmakos_sim::tables::BeaconId::new(id))
-                .ok()?;
-            beacons.positions().get(at.index()).copied()
-        });
-        for ordinal in 0..placed {
-            if beacons.ordinal(seat, ordinal, placed) != pharmakos_sim::tables::Ordinal::Gone {
-                continue;
-            }
-            scope.push_beacon(pharmakos_verifier::KnownBeacon {
-                beacon_id: pharmakos_sim::tables::own_beacon_name(ordinal),
-                owner: seat,
-                side: pharmakos_verifier::Ownership::Own,
-                mandate: crate::view::mandate_of(pharmakos_sim::seams::MandateKind::None),
-                tags: Vec::new(),
-                at: core_at.map(crate::view::voxel_of).unwrap_or_default(),
-                is_core: false,
-            });
-        }
+        push_own_beacons(world, seat, row, &mut scope)?;
 
         for read in crate::targeting::feature_reads(world, Some(seat)) {
             scope.push_feature(pharmakos_verifier::KnownFeature {
@@ -2648,6 +2626,9 @@ impl Surface {
         scope.set_commander(
             crate::targeting::commander_point(world, seat).map(crate::view::voxel_of),
         );
+        for sighting in self.verifier_sightings(seat)? {
+            scope.push_sighting(sighting);
+        }
         Ok(scope)
     }
 
@@ -3147,10 +3128,7 @@ impl Surface {
         // (spec section 12, "Budgets"; [`crate::detail`] for the salience rule
         // that makes the events the part a budget cuts).
         let budget = crate::detail::events(crate::detail::of(request)?);
-        let limit = request
-            .integer_param("limit")?
-            .and_then(|value| usize::try_from(value).ok())
-            .map_or(budget, |asked| asked.min(budget));
+        let limit = crate::surface::knowledge::limit_param(request, budget)?;
         let page = self.feed.page(viewer, &filter, cursor, limit)?;
 
         let events: Vec<Json> = page
@@ -3292,6 +3270,171 @@ fn dark_beacons(world: &pharmakos_sim::world::World) -> Result<Vec<DarkAtEnd>, E
             })
         })
         .collect()
+}
+
+/// The seat's own beacons in its verifier scope, by ordinal, then every name
+/// it placed whose beacon is gone ([`Surface::verifier_scope`] says why).
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] when the beacon table lacks a column for
+/// one of the seat's rows, or the seat table its placement counter.
+fn push_own_beacons(
+    world: &pharmakos_sim::world::World,
+    seat: SeatId,
+    row: usize,
+    scope: &mut VerifierScope,
+) -> Result<(), Error> {
+    let seats = world.seats();
+    let beacons = world.beacons();
+    let column = |name: &str, index: usize| {
+        Error::internal(format!("the beacon table has no {name} in row {index}"))
+    };
+    // A freed row is nobody's (S2's plan, E1), so the seat filter leaves it
+    // out with no test of its own. By per-seat ordinal, which is what the
+    // seat's `b_NN` names: `b_00`, its core, first (decisions-log item
+    // 127 (13)).
+    let mut own: Vec<(u32, usize)> = Vec::new();
+    for index in 0..beacons.ids().len() {
+        if beacons.seats().get(index).copied() != Some(seat.raw()) {
+            continue;
+        }
+        let ordinal = beacons
+            .ordinals()
+            .get(index)
+            .copied()
+            .ok_or_else(|| column("ordinal", index))?;
+        own.push((ordinal, index));
+    }
+    own.sort_unstable();
+    let core = crate::surface::knowledge::core_beacon_of(world, seat);
+    let mut told: Vec<(u32, usize)> = Vec::new();
+    for (ordinal, index) in own {
+        if column_of(beacons.hit_points(), index, "hit points")?.is_alive() {
+            told.push((ordinal, index));
+        }
+        let id = beacons
+            .ids()
+            .get(index)
+            .copied()
+            .ok_or_else(|| column("id", index))?;
+        let mandate = beacons
+            .mandates()
+            .get(index)
+            .copied()
+            .ok_or_else(|| column("mandate", index))?;
+        let at = beacons
+            .positions()
+            .get(index)
+            .copied()
+            .ok_or_else(|| column("position", index))?;
+        scope.push_beacon(pharmakos_verifier::KnownBeacon {
+            beacon_id: pharmakos_sim::tables::own_beacon_name(ordinal),
+            owner: seat,
+            side: pharmakos_verifier::Ownership::Own,
+            mandate: crate::view::mandate_of(crate::view::mandate_from_id(mandate)),
+            // No tag column exists in the sim, and inventing one here would
+            // be a proto change wearing a disguise (AGENTS.md section 5).
+            tags: Vec::new(),
+            at: crate::view::voxel_of(at),
+            is_core: core == Some(id),
+        });
+    }
+    // **A gone `b_NN` stays a name the seat placed** (S2's plan, E1): its
+    // row is freed once its death settles and may hold another asset, but
+    // the placement counter keeps the ordinal from being handed out again,
+    // so a playbook naming it qualifies as it did when the dead row stayed,
+    // and the step fails at run time. The verifier is told the name with
+    // no writ and the site below: the gone beacon's own place is not kept
+    // anywhere, and that site's sphere is in the scope already, so no
+    // sphere test answers differently for it.
+    let placed = seats.placed().get(row).copied().ok_or_else(|| {
+        Error::internal(format!(
+            "seat {} has no placement counter beside its seat row",
+            seat.raw()
+        ))
+    })?;
+    // The site is the seat's lowest-ordinal living beacon's -- its core while
+    // the core stands -- whose sphere the scope holds already. A seat with no
+    // living beacon is out of the match (spec section 3), so no name it placed
+    // reaches anything: its scope tells none of them, and a playbook naming one
+    // is refused as naming nothing, which is the truth about that seat. Before
+    // S2's `wgw` a missing core put every gone name at the origin, a sphere no
+    // beacon of the seat's stood in.
+    let Some(&(_, anchor)) = told.first() else {
+        return Ok(());
+    };
+    let at = column_of(beacons.positions(), anchor, "position")?;
+    for ordinal in 0..placed {
+        if beacons.ordinal(seat, ordinal, placed) != pharmakos_sim::tables::Ordinal::Gone {
+            continue;
+        }
+        scope.push_beacon(pharmakos_verifier::KnownBeacon {
+            beacon_id: pharmakos_sim::tables::own_beacon_name(ordinal),
+            owner: seat,
+            side: pharmakos_verifier::Ownership::Own,
+            mandate: crate::view::mandate_of(pharmakos_sim::seams::MandateKind::None),
+            tags: Vec::new(),
+            at: crate::view::voxel_of(at),
+            is_core: false,
+        });
+    }
+    Ok(())
+}
+
+/// One column's entry for a beacon row, or the typed refusal naming it.
+fn column_of<T: Copy>(column: &[T], index: usize, name: &str) -> Result<T, Error> {
+    column
+        .get(index)
+        .copied()
+        .ok_or_else(|| Error::internal(format!("the beacon table has no {name} in row {index}")))
+}
+
+/// Every seat's tally in `world`, ascending by seat ([`RecapFacts::tallies`]).
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] for a seat the seat table lists and holds
+/// no tally for: the table's columns are one length by construction.
+fn tallies_of(
+    world: &pharmakos_sim::world::World,
+) -> Result<Vec<(SeatId, pharmakos_sim::tables::Tally)>, Error> {
+    let mut seats: Vec<SeatId> = world
+        .seats()
+        .seats()
+        .iter()
+        .copied()
+        .map(SeatId::new)
+        .collect();
+    seats.sort_unstable_by_key(|seat| seat.raw());
+    seats
+        .into_iter()
+        .map(|seat| {
+            let tally = world.tally(seat).ok_or_else(|| {
+                Error::internal(format!(
+                    "the seat table holds no tally for seat {}",
+                    seat.raw()
+                ))
+            })?;
+            Ok((seat, tally))
+        })
+        .collect()
+}
+
+/// How many diagnostics a report carries, as `Continuity.diagnostics`, a
+/// `uint32`.
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] for a report with more diagnostics than a
+/// `u32` counts, which the verifier's own caps keep far below; never clamped.
+fn diagnostic_count(report: &VerifyReport) -> Result<u32, Error> {
+    u32::try_from(report.diagnostics.len()).map_err(|_| {
+        Error::internal(format!(
+            "a report carries {} diagnostics, past a uint32",
+            report.diagnostics.len()
+        ))
+    })
 }
 
 /// Every seat's held value as the world stands, by seat index, `None` for a
@@ -3482,6 +3625,7 @@ mod tests {
             ],
             failures: Vec::new(),
             dropped,
+            tallies: Vec::new(),
         }
     }
 
@@ -3893,7 +4037,13 @@ mod tests {
             kind,
             seat: seat.map(SeatId::new),
             subject: None,
-            at: None,
+            // Every world line the sim emits carries its place, and the
+            // filter refuses one that does not (`audience_of`).
+            at: Some(pharmakos_sim::knowledge::Position::from_array([
+                pharmakos_sim::math::fixed::Fx::from_voxels(5),
+                pharmakos_sim::math::fixed::Fx::from_voxels(6),
+                pharmakos_sim::math::fixed::Fx::from_voxels(7),
+            ])),
             value: 3,
         }
     }
@@ -3933,7 +4083,10 @@ mod tests {
         // lines, and the five that carry a treasury or a credit figure.
         // `structure_completed` is the tenth kind T14 adds and is the one it
         // puts on the world's side, for the reason `beacon_placed` is there.
-        assert_eq!(private, 13 + 9);
+        //
+        // Plus S2's `fire`'s two: `returned_fire` and `retreat_announced`, a
+        // seat's own rules of engagement and retreat threshold acting.
+        assert_eq!(private, 13 + 9 + 2);
         assert!(matches!(
             Surface::audience_of(&sim_event(EventKind::BeaconPlaced, Some(1))),
             Ok(Audience::World { .. })
@@ -3981,6 +4134,1024 @@ mod tests {
         surface
     }
 
+    // -----------------------------------------------------------------------
+    // What a seat sees of another seat's beacon, live and from memory (S2's
+    // plan, decision 5 and E9), and its verifier scope's sightings
+    // -----------------------------------------------------------------------
+
+    /// The config the intelligence tests host: two seats, one-second segments.
+    fn short_config() -> pharmakos_sim::world::WorldConfig {
+        pharmakos_sim::world::WorldConfig {
+            match_seed: 0x0000_0000_ca5c_aded,
+            seats: 2,
+            units_per_seat: 0,
+            rules: rules(),
+            match_settings: pharmakos_sim::runner::MatchSettings {
+                segment_lengths_ms: vec![1_000],
+                round_limit: 3,
+            },
+        }
+    }
+
+    /// A vision that sees everything: another seat's beacon in live vision.
+    struct Everywhere;
+
+    impl crate::fog::Vision for Everywhere {
+        fn sees(&self, _seat: SeatId, _at: &pharmakos_proto::gp::v1::Voxel) -> bool {
+            true
+        }
+    }
+
+    /// Round 2's Lull of a match whose seat 0 **remembers** seat 1's core and
+    /// commander, both seen at tick 0 and neither in its sight now: round 1's
+    /// one-second Push is played out, and the sightings are written into its
+    /// frozen planning snapshot, which a fresh host resumes from -- the one
+    /// way a test outside the sim puts a memory in a seat's head.
+    ///
+    /// Returns the surface, seat 1's core's voxel and seat 1's commander's.
+    fn remembering() -> (Surface, [i32; 3], [i32; 3]) {
+        use pharmakos_sim::knowledge::{AssetId, AssetKind};
+        use pharmakos_sim::snapshot::Snapshot;
+        use pharmakos_sim::tables::{BeaconId, UnitId, UnitKind};
+        let seats = [SeatId::new(0), SeatId::new(1)];
+        let mut first = Surface::new(
+            "m-0001",
+            0x0000_0000_ca5c_aded,
+            rules(),
+            FogPolicy::fogged(),
+            &seats,
+        )
+        .expect("a match id");
+        first
+            .attach(crate::host::Host::open(&short_config(), None).expect("a match"))
+            .expect("attached");
+        first.open_lull().expect("the opening Lull");
+        assert!(first.begin_push().expect("the Push begins"));
+        while first.step().expect("a tick").is_some() {}
+        assert!(first.end_recap().expect("the recap ends"));
+        first.open_lull().expect("round 2's Lull");
+
+        let world = first.host().expect("hosted").world();
+        let beacons = world.beacons();
+        let core = (0..beacons.ids().len())
+            .find(|row| {
+                beacons.seats().get(*row) == Some(&1) && beacons.ordinals().get(*row) == Some(&0)
+            })
+            .expect("seat 1's core");
+        let core_id = BeaconId::new(*beacons.ids().get(core).expect("an id"));
+        let core_at = *beacons.positions().get(core).expect("a place");
+        let units = world.units();
+        let commander = (0..units.ids().len())
+            .find(|row| {
+                units.seats().get(*row) == Some(&1)
+                    && units.kinds().get(*row) == Some(&UnitKind::Commander.id())
+            })
+            .expect("seat 1's commander");
+        let commander_id = UnitId::new(*units.ids().get(commander).expect("an id"));
+        let commander_at = *units.positions().get(commander).expect("a place");
+
+        let mut snapshot =
+            Snapshot::from_bytes(&first.snapshot_bytes().expect("the frozen snapshot"))
+                .expect("it decodes");
+        assert!(
+            snapshot.sighting_seat.is_empty(),
+            "nobody has seen anybody yet"
+        );
+        // In `(seat, asset)` order: a unit's tag sorts below a beacon's.
+        for (asset, kind, at) in [
+            (
+                AssetId::of_unit(commander_id).expect("an asset"),
+                AssetKind::Commander,
+                commander_at,
+            ),
+            (
+                AssetId::of_beacon(core_id).expect("an asset"),
+                AssetKind::Beacon,
+                core_at,
+            ),
+        ] {
+            snapshot.sighting_seat.push(0);
+            snapshot.sighting_asset.push(asset.raw());
+            snapshot.sighting_owner.push(1);
+            snapshot.sighting_kind.push(kind.id());
+            snapshot
+                .sighting_at
+                .extend(at.map(pharmakos_sim::math::fixed::Fx::raw));
+            snapshot.sighting_seen_at.push(0);
+        }
+        let bytes = snapshot.to_bytes().expect("it encodes");
+
+        let mut surface = Surface::new(
+            "m-0001",
+            0x0000_0000_ca5c_aded,
+            rules(),
+            FogPolicy::fogged(),
+            &seats,
+        )
+        .expect("a match id");
+        surface
+            .attach(crate::host::Host::open(&short_config(), None).expect("a match"))
+            .expect("attached");
+        surface
+            .host_mut()
+            .expect("hosted")
+            .resume(&bytes)
+            .expect("the remembering snapshot resumes");
+        surface.set_phase_remaining_ms(Ms::new(300_000));
+        surface.open_lull().expect("round 2's Lull");
+        let voxel = |at: [pharmakos_sim::math::fixed::Fx; 3]| {
+            let voxel = crate::view::voxel_of(at);
+            [voxel.x, voxel.y, voxel.z]
+        };
+        (surface, voxel(core_at), voxel(commander_at))
+    }
+
+    /// The keys of one JSON object, in order.
+    fn keys(value: &Json) -> Vec<String> {
+        match value {
+            Json::Object(entries) => entries.iter().map(|(key, _)| key.clone()).collect(),
+            other => panic!("an object, and this is {other:?}"),
+        }
+    }
+
+    /// Decision 5, from memory: another seat's beacon the seat remembers is
+    /// listed at the place it was last seen, with the sighting's age, and
+    /// with no hit points; nothing else of it is shown.
+    #[test]
+    fn a_remembered_enemy_beacon_is_listed_where_it_was_seen_with_its_age() {
+        let (mut surface, core_at, _) = remembering();
+        let token = seat_token(&mut surface, 0);
+        let listed = result(&surface.call(Some(&token), &request("list_beacons", "{}"), &Blind));
+        let Some(Json::Array(rows)) = listed.get("beacons") else {
+            panic!("beacons: {listed:?}");
+        };
+        let theirs = rows
+            .iter()
+            .find(|row| row.get("owner") == Some(&Json::String(String::from("seat.1"))))
+            .expect("seat 1's core, remembered");
+        assert_eq!(
+            keys(theirs),
+            ["beacon_id", "at", "owner", "sighting_age_ms"],
+            "from memory: its place and the sighting's age, nothing else"
+        );
+        assert_eq!(
+            theirs.get("beacon_id"),
+            Some(&Json::String(String::from("e_01")))
+        );
+        // Seen at tick 0, and round 1's Push ran 20 ticks of 50 ms.
+        assert_eq!(
+            theirs.get("sighting_age_ms"),
+            Some(&Json::Number(String::from("1000")))
+        );
+        let at = theirs.get("at").expect("a place");
+        for (axis, value) in ["x", "y", "z"].iter().zip(core_at) {
+            assert_eq!(at.get(axis), Some(&Json::Number(value.to_string())));
+        }
+        let own = rows
+            .iter()
+            .find(|row| row.get("owner") == Some(&Json::String(String::from("seat.0"))))
+            .expect("seat 0's core");
+        assert_eq!(
+            keys(own),
+            [
+                "beacon_id",
+                "at",
+                "owner",
+                "core",
+                "priority",
+                "powered",
+                "hp",
+                "max_hp"
+            ],
+            "a seat's own beacon carries its hit points too"
+        );
+    }
+
+    /// E9: `get_beacon`'s prose says what the summary says. Another seat's
+    /// beacon in sight is its owner and its hit points; one remembered is its
+    /// owner, where and how long ago it was seen; neither is ever its mandate.
+    #[test]
+    fn an_enemy_beacons_prose_says_what_its_summary_says() {
+        // Remembered.
+        let (mut surface, core_at, _) = remembering();
+        let token = seat_token(&mut surface, 0);
+        let _ = surface.call(Some(&token), &request("list_beacons", "{}"), &Blind);
+        let one = result(&surface.call(
+            Some(&token),
+            &request("get_beacon", r#"{"beacon_id":"e_01"}"#),
+            &Blind,
+        ));
+        let summary = one.get("summary").expect("a summary");
+        assert!(summary.get("hp").is_none(), "memory shows no hit points");
+        let Some(Json::String(prose)) = one.get("prose") else {
+            panic!("prose: {one:?}");
+        };
+        assert_eq!(
+            prose,
+            &format!(
+                "Not yours. Beacon e_01 is seat 1's, last seen at ({}, {}, {}) 1 s ago.",
+                core_at[0], core_at[1], core_at[2]
+            )
+        );
+
+        // In sight now: a casual match, where seat 1's core is in live vision
+        // when the Lull opens and is named then.
+        let mut surface = resumed_with(FogPolicy::casual(), |_, _| {});
+        let token = seat_token(&mut surface, 0);
+        let one = result(&surface.call(
+            Some(&token),
+            &request("get_beacon", r#"{"beacon_id":"e_01"}"#),
+            &Everywhere,
+        ));
+        let summary = one.get("summary").expect("a summary");
+        assert_eq!(
+            keys(summary),
+            [
+                "beacon_id",
+                "at",
+                "owner",
+                "hp",
+                "max_hp",
+                "sighting_age_ms"
+            ],
+            "in live vision: its place, exact HP and an age of 0"
+        );
+        let number = |key: &str| match summary.get(key) {
+            Some(Json::Number(text)) => text.clone(),
+            other => panic!("{key}: {other:?}"),
+        };
+        let Some(Json::String(prose)) = one.get("prose") else {
+            panic!("prose: {one:?}");
+        };
+        assert_eq!(
+            prose,
+            &format!(
+                "Not yours. Beacon e_01 is seat 1's and in sight now, with {} of {} HP.",
+                number("hp"),
+                number("max_hp")
+            )
+        );
+        assert!(!prose.contains("mandate"), "never another seat's mandate");
+    }
+
+    /// A handle the seat was never shown names nothing, remembered or not:
+    /// `get_beacon` mints no name.
+    #[test]
+    fn a_remembered_beacon_is_named_only_once_the_seat_was_given_its_handle() {
+        let (mut surface, _, _) = remembering();
+        let token = seat_token(&mut surface, 0);
+        // `open_lull` named it for the verifier, so the handle is held ...
+        let one = surface.call(
+            Some(&token),
+            &request("get_beacon", r#"{"beacon_id":"e_01"}"#),
+            &Blind,
+        );
+        assert!(result(&one).get("summary").is_some(), "{one:?}");
+        // ... and one past it names nothing.
+        let none = surface.call(
+            Some(&token),
+            &request("get_beacon", r#"{"beacon_id":"e_02"}"#),
+            &Blind,
+        );
+        assert_eq!(code(&none), "NOT_FOUND", "{none:?}");
+    }
+
+    /// The verifier's view carries the seat's own sightings of other seats'
+    /// beacons and commanders, with their ages (S2's Attack freshness; the
+    /// layout is `vfy2`'s): only what the seat itself saw, the remembered
+    /// at their age and nothing the other seat saw.
+    #[test]
+    fn the_verifier_scope_carries_the_seats_own_sightings_with_their_ages() {
+        let (surface, core_at, commander_at) = remembering();
+        let voxel = |at: [i32; 3]| pharmakos_proto::gp::v1::Voxel {
+            x: at[0],
+            y: at[1],
+            z: at[2],
+        };
+        let scope = surface.verifier_scope(SeatId::new(0)).expect("a scope");
+        assert_eq!(
+            scope.sightings(),
+            [
+                pharmakos_verifier::Sighting {
+                    what: pharmakos_verifier::Sighted::Beacon(String::from("e_01")),
+                    at: voxel(core_at),
+                    age_ms: 1_000,
+                },
+                pharmakos_verifier::Sighting {
+                    what: pharmakos_verifier::Sighted::Commander(SeatId::new(1)),
+                    at: voxel(commander_at),
+                    age_ms: 1_000,
+                },
+            ]
+        );
+        let theirs = surface.verifier_scope(SeatId::new(1)).expect("a scope");
+        assert!(
+            theirs.sightings().is_empty(),
+            "seat 1 saw nothing, and seat 0's memory is not its"
+        );
+    }
+
+    /// A world event the sim placed nowhere is refused, never filtered as if it
+    /// stood at the origin, where a seat that sees the origin would be told
+    /// of it.
+    #[test]
+    fn a_world_event_with_no_place_is_refused_not_placed_at_the_origin() {
+        let mut event = sim_event(pharmakos_sim::events::EventKind::BeaconDestroyed, Some(1));
+        event.at = None;
+        let refused = Surface::audience_of(&event).expect_err("refused");
+        assert_eq!(refused.code, Code::Internal);
+        assert!(refused.message.contains("no place"), "{}", refused.message);
+    }
+
+    /// A fresh match's opening Lull, its frozen snapshot edited by `edit` and
+    /// resumed from by a fresh host under `policy`: how a test outside the sim
+    /// puts a row the opening map has none of into a hosted world.
+    fn resumed_with(
+        policy: FogPolicy,
+        edit: impl FnOnce(&mut pharmakos_sim::snapshot::Snapshot, &pharmakos_sim::world::World),
+    ) -> Surface {
+        use pharmakos_sim::snapshot::Snapshot;
+        let seats = [SeatId::new(0), SeatId::new(1)];
+        let mut first = Surface::new(
+            "m-0001",
+            0x0000_0000_ca5c_aded,
+            rules(),
+            FogPolicy::fogged(),
+            &seats,
+        )
+        .expect("a match id");
+        first
+            .attach(crate::host::Host::open(&short_config(), None).expect("a match"))
+            .expect("attached");
+        first.open_lull().expect("the opening Lull");
+        let mut snapshot =
+            Snapshot::from_bytes(&first.snapshot_bytes().expect("the frozen snapshot"))
+                .expect("it decodes");
+        edit(&mut snapshot, first.host().expect("hosted").world());
+        let bytes = snapshot.to_bytes().expect("it encodes");
+        let mut surface = Surface::new("m-0001", 0x0000_0000_ca5c_aded, rules(), policy, &seats)
+            .expect("a match id");
+        surface
+            .attach(crate::host::Host::open(&short_config(), None).expect("a match"))
+            .expect("attached");
+        surface
+            .host_mut()
+            .expect("hosted")
+            .resume(&bytes)
+            .expect("the edited snapshot resumes");
+        surface.set_phase_remaining_ms(Ms::new(300_000));
+        surface.open_lull().expect("the Lull");
+        surface
+    }
+
+    /// Seat 1's core's row in `world`, its id and its place.
+    fn seat_one_core(
+        world: &pharmakos_sim::world::World,
+    ) -> (usize, u32, [pharmakos_sim::math::fixed::Fx; 3]) {
+        let beacons = world.beacons();
+        let row = (0..beacons.ids().len())
+            .find(|row| {
+                beacons.seats().get(*row) == Some(&1) && beacons.ordinals().get(*row) == Some(&0)
+            })
+            .expect("seat 1's core");
+        (
+            row,
+            *beacons.ids().get(row).expect("an id"),
+            *beacons.positions().get(row).expect("a place"),
+        )
+    }
+
+    /// Two structure rows beside seat 1's core: a Generator of seat 1's still
+    /// going up, and a ruin, nobody's.
+    fn building_and_ruin(
+        snapshot: &mut pharmakos_sim::snapshot::Snapshot,
+        world: &pharmakos_sim::world::World,
+    ) {
+        use pharmakos_sim::tables::{BeaconId, StructureKind};
+        let (_, core, at) = seat_one_core(world);
+        for (offset, seat, home, building, ruined_at) in [
+            (3_i16, 1_u8, core, 1_u8, pharmakos_sim::tables::NOT_RUINED),
+            (-3, SeatId::NEUTRAL.raw(), BeaconId::NONE.raw(), 0, 0),
+        ] {
+            let row = u32::try_from(snapshot.structure_id.len()).expect("a row");
+            snapshot.structure_id.push(row);
+            snapshot.structure_seat.push(seat);
+            snapshot.structure_kind.push(StructureKind::Generator.id());
+            let [x, y, z] = at;
+            let x = x
+                .checked_add(pharmakos_sim::math::fixed::Fx::from_voxels(offset))
+                .expect("on the map");
+            snapshot
+                .structure_pos
+                .extend([x, y, z].map(pharmakos_sim::math::fixed::Fx::raw));
+            snapshot.structure_hp.push(40);
+            snapshot.structure_home.push(home);
+            snapshot.structure_building.push(building);
+            snapshot.structure_rotation.push(0);
+            snapshot.structure_ruined_at.push(ruined_at);
+            snapshot.structure_free.push(0);
+            // S2's `fire` (snapshot version 11): the combat memory, ready and
+            // attacked by nobody.
+            snapshot.structure_ready_at.push(0);
+            snapshot
+                .structure_attacker
+                .push(pharmakos_sim::tables::NO_ATTACKER);
+            snapshot
+                .structure_attacked_at
+                .push(pharmakos_sim::tables::NEVER_ATTACKED);
+            snapshot
+                .structure_engaged
+                .push(pharmakos_sim::tables::NO_ATTACKER);
+        }
+    }
+
+    /// The structures one seat's keyframe lists.
+    fn structures_seen(surface: &mut Surface, seat: u8) -> Vec<Json> {
+        let token = seat_token(surface, seat);
+        let vision = crate::host::LiveVision::of(surface.host().expect("hosted").world());
+        let page = result(&surface.call(Some(&token), &request("get_view", "{}"), &vision));
+        assert_eq!(page.get("complete"), Some(&Json::Bool(true)), "one page");
+        match page.get("entities") {
+            Some(Json::Array(entities)) => entities
+                .iter()
+                .filter(|entity| {
+                    entity.get("kind") == Some(&Json::String(String::from("structure")))
+                })
+                .cloned()
+                .collect(),
+            other => panic!("entities: {other:?}"),
+        }
+    }
+
+    /// Ruling R2 on #128's reviews (S1): decision 5 shows exact HP on an enemy
+    /// structure in live vision, one still going up included, as
+    /// `ViewEntity.hp`'s comment says. Seat 0 sees it in a casual match; in a
+    /// fogged one it is out of sight and absent, so nothing of it shows; and
+    /// seat 1 sees its own, hit points and all.
+    #[test]
+    fn an_enemy_structure_going_up_shows_its_hp_in_live_vision() {
+        let mut casual = resumed_with(FogPolicy::casual(), building_and_ruin);
+        let theirs = structures_seen(&mut casual, 0);
+        let building = theirs
+            .iter()
+            .find(|entity| entity.get("owner") == Some(&Json::String(String::from("seat.1"))))
+            .expect("seat 1's Generator, in sight");
+        assert_eq!(building.get("hp"), Some(&Json::Number(String::from("40"))));
+        assert!(building.get("max_hp").is_some());
+
+        let mut fogged = resumed_with(FogPolicy::fogged(), building_and_ruin);
+        assert!(
+            structures_seen(&mut fogged, 0).is_empty(),
+            "out of sight it is not listed, so no HP of it shows"
+        );
+        let own = structures_seen(&mut fogged, 1);
+        let mine = own
+            .iter()
+            .find(|entity| entity.get("owner") == Some(&Json::String(String::from("seat.1"))))
+            .expect("its own Generator");
+        assert_eq!(mine.get("hp"), Some(&Json::Number(String::from("40"))));
+    }
+
+    /// C7 of #128's reviews: a ruin is nobody's, so it is listed with an empty
+    /// `owner` (`ViewEntity.owner`'s comment) rather than as the no-seat value's
+    /// `seat.255`, and with no hit points.
+    #[test]
+    fn a_ruin_is_listed_as_nobodys_with_no_hp() {
+        let mut casual = resumed_with(FogPolicy::casual(), building_and_ruin);
+        let ruin = structures_seen(&mut casual, 0)
+            .into_iter()
+            .find(|entity| entity.get("owner") == Some(&Json::String(String::new())))
+            .expect("the ruin, nobody's");
+        assert!(
+            ruin.get("hp").is_none() && ruin.get("max_hp").is_none(),
+            "{ruin:?}"
+        );
+    }
+
+    /// C10 (1 of 5): a gone `b_NN` is told at the seat's lowest-ordinal living
+    /// beacon, its core while the core stands; a seat with no living beacon
+    /// is told none of its gone names.
+    #[test]
+    fn a_gone_beacon_is_told_at_the_seats_lowest_living_beacon() {
+        // Seat 0 has placed two beacons, and the second is gone.
+        let placed = |snapshot: &mut pharmakos_sim::snapshot::Snapshot,
+                      _: &pharmakos_sim::world::World| {
+            if let Some(slot) = snapshot.seat_placed.first_mut() {
+                *slot = 2;
+            }
+        };
+        let surface = resumed_with(FogPolicy::fogged(), placed);
+        let scope = surface.verifier_scope(SeatId::new(0)).expect("a scope");
+        let core = scope.beacon("b_00").expect("the core").at;
+        assert_eq!(
+            scope.beacon("b_01").map(|gone| gone.at),
+            Some(core),
+            "told at the core"
+        );
+
+        // And with the core's hit points gone too, nothing stands to tell it at.
+        let dead = |snapshot: &mut pharmakos_sim::snapshot::Snapshot,
+                    world: &pharmakos_sim::world::World| {
+            placed(snapshot, world);
+            let row = (0..snapshot.beacon_seat.len())
+                .find(|row| snapshot.beacon_seat.get(*row) == Some(&0))
+                .expect("seat 0's core");
+            if let Some(hp) = snapshot.beacon_hp.get_mut(row) {
+                *hp = 0;
+            }
+        };
+        let surface = resumed_with(FogPolicy::fogged(), dead);
+        let scope = surface.verifier_scope(SeatId::new(0)).expect("a scope");
+        assert!(
+            scope.beacon("b_01").is_none(),
+            "no living beacon, no gone name"
+        );
+    }
+
+    /// C10 (2 of 5): a negative `limit` counts no page, and is refused.
+    #[test]
+    fn a_negative_limit_is_refused_not_read_as_the_budget() {
+        let mut surface = hosted();
+        let token = seat_token(&mut surface, 0);
+        for method in ["list_beacons", "get_events"] {
+            let refused = surface.call(Some(&token), &request(method, r#"{"limit":-1}"#), &Blind);
+            assert_eq!(code(&refused), "INVALID_ARGUMENT", "{method}: {refused:?}");
+        }
+    }
+
+    /// C10 (3 of 5): an announce line with no fourth field is not one this
+    /// host wrote, and is refused rather than read as "no human seat".
+    #[test]
+    fn an_announce_line_with_no_seat_field_is_refused() {
+        assert!(crate::serve::Announce::parse("9500\tm-0001\tadmin-token\t-\n").is_ok());
+        let refused =
+            crate::serve::Announce::parse("9500\tm-0001\tadmin-token\n").expect_err("refused");
+        assert_eq!(refused.code, Code::InvalidArgument);
+    }
+
+    /// R1 on #128's reviews: a seat's `e_NN` names, and every report that
+    /// spells them, do not depend on how often a client polled during the
+    /// Push. Two matches play the same round 1; one polls `get_view` and
+    /// `list_beacons` on every tick, the other never looks; round 2's names
+    /// and `report_hash` agree.
+    #[test]
+    fn names_and_reports_do_not_depend_on_polling() {
+        let play = |poll: bool| {
+            let seats = [SeatId::new(0), SeatId::new(1)];
+            let mut surface = Surface::new(
+                "m-0001",
+                0x0000_0000_ca5c_aded,
+                rules(),
+                FogPolicy::casual(),
+                &seats,
+            )
+            .expect("a match id");
+            surface
+                .attach(crate::host::Host::open(&short_config(), None).expect("a match"))
+                .expect("attached");
+            surface.open_lull().expect("the opening Lull");
+            let token = seat_token(&mut surface, 0);
+            assert!(surface.begin_push().expect("the Push begins"));
+            loop {
+                if poll {
+                    let vision =
+                        crate::host::LiveVision::of(surface.host().expect("hosted").world());
+                    let _ = surface.call(Some(&token), &request("get_view", "{}"), &vision);
+                    let _ = surface.call(Some(&token), &request("list_beacons", "{}"), &vision);
+                }
+                if surface.step().expect("a tick").is_none() {
+                    break;
+                }
+            }
+            assert!(surface.end_recap().expect("the recap ends"));
+            surface.open_lull().expect("round 2's Lull");
+            let vision = crate::host::LiveVision::of(surface.host().expect("hosted").world());
+            let listed =
+                result(&surface.call(Some(&token), &request("list_beacons", "{}"), &vision));
+            let report = surface
+                .verify_for(
+                    SeatId::new(0),
+                    &many_scouts(1),
+                    pharmakos_proto::gp::api::v1::verify_plan::Depth::Full,
+                )
+                .expect("a report");
+            (listed, report.report_hash)
+        };
+        let (polled, polled_hash) = play(true);
+        let (quiet, quiet_hash) = play(false);
+        assert_eq!(polled, quiet, "the same names, polled or not");
+        assert_eq!(polled_hash, quiet_hash, "the same report, polled or not");
+        let names = format!("{polled:?}");
+        assert!(names.contains("e_01"), "seat 1's core is named: {names}");
+    }
+
+    /// R1 on #128's reviews, across a resume: a match resumed from its own
+    /// Lull's snapshot names the beacons it remembers as the match it came
+    /// from did, and gives the same report.
+    #[test]
+    fn names_and_reports_survive_a_resume() {
+        let (mut surface, _, _) = remembering();
+        let token = seat_token(&mut surface, 0);
+        let listed = result(&surface.call(Some(&token), &request("list_beacons", "{}"), &Blind));
+        let report = surface
+            .verify_for(
+                SeatId::new(0),
+                &many_scouts(1),
+                pharmakos_proto::gp::api::v1::verify_plan::Depth::Full,
+            )
+            .expect("a report");
+        let bytes = surface.snapshot_bytes().expect("the frozen snapshot");
+
+        let seats = [SeatId::new(0), SeatId::new(1)];
+        let mut again = Surface::new(
+            "m-0001",
+            0x0000_0000_ca5c_aded,
+            rules(),
+            FogPolicy::fogged(),
+            &seats,
+        )
+        .expect("a match id");
+        again
+            .attach(crate::host::Host::open(&short_config(), None).expect("a match"))
+            .expect("attached");
+        again
+            .host_mut()
+            .expect("hosted")
+            .resume(&bytes)
+            .expect("it resumes");
+        again.set_phase_remaining_ms(Ms::new(300_000));
+        again.open_lull().expect("the Lull");
+        let token = seat_token(&mut again, 0);
+        let relisted = result(&again.call(Some(&token), &request("list_beacons", "{}"), &Blind));
+        let rereport = again
+            .verify_for(
+                SeatId::new(0),
+                &many_scouts(1),
+                pharmakos_proto::gp::api::v1::verify_plan::Depth::Full,
+            )
+            .expect("a report");
+        assert_eq!(listed, relisted);
+        assert_eq!(report.report_hash, rereport.report_hash);
+    }
+
+    /// R5 on #128's reviews (the owner's ruling, decisions-log item 145 (7)):
+    /// between rounds the recap carries no `seat_tallies`, so no seat reads
+    /// another's kills and losses there.
+    #[test]
+    fn a_recap_between_rounds_carries_no_other_seats_tally() {
+        let seats = [SeatId::new(0), SeatId::new(1)];
+        let mut surface = Surface::new(
+            "m-0001",
+            0x0000_0000_ca5c_aded,
+            rules(),
+            FogPolicy::fogged(),
+            &seats,
+        )
+        .expect("a match id");
+        surface
+            .attach(crate::host::Host::open(&short_config(), None).expect("a match"))
+            .expect("attached");
+        surface.open_lull().expect("the opening Lull");
+        let token = seat_token(&mut surface, 0);
+        assert!(surface.begin_push().expect("the Push begins"));
+        while surface.step().expect("a tick").is_some() {}
+        let recap = result(&surface.call(Some(&token), &request("get_recap", "{}"), &Blind));
+        assert!(recap.get("prose").is_some(), "a recap: {recap:?}");
+        assert!(
+            recap.get("seat_tallies").is_none(),
+            "no seat's tally between rounds: {recap:?}"
+        );
+        assert!(
+            !format!("{recap:?}").contains("seat.1"),
+            "nothing of seat 1's: {recap:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // The recap's tally (S2's plan, E15; the owner's ruling, item 145 (7))
+    // -----------------------------------------------------------------------
+
+    /// A three-seat match of one-second segments and `rounds` rounds, in its
+    /// opening Lull.
+    fn three_seats(rounds: u32) -> Surface {
+        let seats = [SeatId::new(0), SeatId::new(1), SeatId::new(2)];
+        let mut surface = Surface::new(
+            "m-0001",
+            0x0000_0000_ca5c_aded,
+            rules(),
+            FogPolicy::fogged(),
+            &seats,
+        )
+        .expect("a match id");
+        let mut config = short_config();
+        config.seats = 3;
+        config.match_settings.round_limit = rounds;
+        surface
+            .attach(crate::host::Host::open(&config, None).expect("a match"))
+            .expect("attached");
+        surface.open_lull().expect("the opening Lull");
+        surface
+    }
+
+    /// Into the Push, where seats 0 and 1 both damage one of seat 2's drones
+    /// on the first tick, each order its whole hit points, and the Push then
+    /// plays out to its recap. Answers the drone's build cost.
+    fn a_shared_kill(surface: &mut Surface) -> i64 {
+        use pharmakos_sim::math::quantity::Damage;
+        use pharmakos_sim::tables::{UnitId, UnitKind};
+        use pharmakos_sim::world::{DamageOrder, DamageTarget};
+        assert!(surface.begin_push().expect("the Push begins"));
+        let (drone, hp, cost) = {
+            let world = surface.host().expect("hosted").world();
+            let units = world.units();
+            let row = (0..units.ids().len())
+                .find(|row| {
+                    units.seats().get(*row) == Some(&2)
+                        && units.kinds().get(*row) != Some(&UnitKind::Commander.id())
+                })
+                .expect("one of seat 2's drones");
+            let kind = UnitKind::from_id(*units.kinds().get(row).expect("a kind"))
+                .expect("a kind this build names");
+            (
+                UnitId::new(*units.ids().get(row).expect("an id")),
+                units.hit_points().get(row).expect("its hit points").raw(),
+                world.unit_cost(kind).raw(),
+            )
+        };
+        // Equal orders, each enough on its own: the credit splits evenly, so
+        // each seat's share of the build cost is a kill of its own.
+        let host = surface.host_mut().expect("hosted");
+        for (by, amount) in [(0_u8, hp), (1, hp)] {
+            assert!(
+                host.file_damage(DamageOrder {
+                    target: DamageTarget::Unit(drone),
+                    amount: Damage::new(i64::from(amount)).expect("a positive amount"),
+                    by: SeatId::new(by),
+                    source: None,
+                })
+                .is_ok(),
+                "the damage queue took seat {by}'s order"
+            );
+        }
+        while surface.step().expect("a tick").is_some() {}
+        cost
+    }
+
+    /// One field of a recap's `tally`, as a whole number.
+    fn tally_field(recap: &Json, field: &str) -> i64 {
+        match recap.get("tally").and_then(|tally| tally.get(field)) {
+            Some(Json::Number(text)) => text.parse().expect("a whole number"),
+            other => panic!("tally.{field}: {other:?} in {recap:?}"),
+        }
+    }
+
+    /// E15 and spec section 3's "shared kill": two seats each dealt part of
+    /// the damage that killed a third seat's drone, so the kill is a shared
+    /// one for both, and each recap names it -- in its tally, read from the
+    /// sim's counters, and in its prose. The victim counts a loss.
+    #[test]
+    fn the_recap_names_a_shared_kill() {
+        let mut surface = three_seats(3);
+        let tokens: Vec<Token> = (0..3).map(|seat| seat_token(&mut surface, seat)).collect();
+        let cost = a_shared_kill(&mut surface);
+        for (seat, token) in tokens.iter().enumerate().take(2) {
+            let recap = result(&surface.call(Some(token), &request("get_recap", "{}"), &Blind));
+            assert_eq!(tally_field(&recap, "kills"), 1, "seat {seat}: {recap:?}");
+            assert_eq!(tally_field(&recap, "shared_kills"), 1, "seat {seat}");
+            assert_eq!(tally_field(&recap, "losses"), 0, "seat {seat}");
+            let Some(Json::String(prose)) = recap.get("prose") else {
+                panic!("prose: {recap:?}");
+            };
+            assert!(prose.contains("a shared kill"), "seat {seat}: {prose}");
+        }
+        let victim = result(&surface.call(
+            Some(tokens.get(2).expect("seat 2")),
+            &request("get_recap", "{}"),
+            &Blind,
+        ));
+        assert_eq!(tally_field(&victim, "losses"), 1, "{victim:?}");
+        assert_eq!(tally_field(&victim, "kills"), 0);
+        // The split values sum to the drone's whole build cost, each seat its
+        // own share, as the sim's own counters hold them, and neither is zero.
+        let mut sum = 0_i64;
+        for seat in [0_u8, 1] {
+            let counted = surface
+                .host()
+                .expect("hosted")
+                .world()
+                .tally(SeatId::new(seat))
+                .expect("a tally");
+            let recap = result(&surface.call(
+                Some(tokens.get(usize::from(seat)).expect("a token")),
+                &request("get_recap", "{}"),
+                &Blind,
+            ));
+            let value = tally_field(&recap, "value_destroyed_dollars");
+            assert_eq!(value, counted.destroyed.raw());
+            assert!(value > 0, "seat {seat}'s share is worth something");
+            sum = sum.saturating_add(value);
+        }
+        assert_eq!(sum, cost, "the shares sum to the drone's whole build cost");
+        assert!(
+            victim.get("seat_tallies").is_none(),
+            "between rounds no seat reads another's: {victim:?}"
+        );
+    }
+
+    /// E15: the tally is the sim's hashed per-seat counters and never a sum of
+    /// the feed. A kill made in round 1 is still counted at round 2's recap,
+    /// whose segment feed holds no event of it, and the figures are the sim's
+    /// own. During a Push the recap, its tally included, is still the last
+    /// round's.
+    #[test]
+    fn the_recap_tally_reads_the_counters_not_the_feed() {
+        let mut surface = three_seats(3);
+        let token = seat_token(&mut surface, 0);
+        let _ = a_shared_kill(&mut surface);
+        let first = format!("{:?}", surface.feed());
+        assert!(
+            first.contains("kill_credited"),
+            "the positive control: round 1's feed holds the kill"
+        );
+        assert!(surface.end_recap().expect("the recap ends"));
+        surface.open_lull().expect("round 2's Lull");
+        assert!(surface.begin_push().expect("round 2's Push"));
+        let pushing = result(&surface.call(Some(&token), &request("get_recap", "{}"), &Blind));
+        assert_eq!(
+            tally_field(&pushing, "kills"),
+            1,
+            "in a Push the recap is still round 1's, its tally with it"
+        );
+        while surface.step().expect("a tick").is_some() {}
+        let feed = format!("{:?}", surface.feed());
+        assert!(
+            !feed.contains("kill_credited"),
+            "round 2's feed holds nothing of round 1's kill"
+        );
+        let recap = result(&surface.call(Some(&token), &request("get_recap", "{}"), &Blind));
+        let counted = surface
+            .host()
+            .expect("hosted")
+            .world()
+            .tally(SeatId::new(0))
+            .expect("a tally");
+        assert_eq!(tally_field(&recap, "kills"), i64::from(counted.kills));
+        assert_eq!(
+            tally_field(&recap, "kills"),
+            1,
+            "round 1's kill, still counted"
+        );
+        assert_eq!(
+            tally_field(&recap, "shared_kills"),
+            i64::from(counted.shared_kills)
+        );
+        assert_eq!(tally_field(&recap, "losses"), i64::from(counted.losses));
+    }
+
+    /// Between rounds no seat reads another's tally, whatever the fog policy:
+    /// a casual match lifts the fog and not the ruling.
+    #[test]
+    fn a_casual_recap_between_rounds_carries_no_seat_tallies() {
+        let mut surface = resumed_with(FogPolicy::casual(), |_, _| {});
+        let token = seat_token(&mut surface, 0);
+        assert!(surface.begin_push().expect("the Push begins"));
+        while surface.step().expect("a tick").is_some() {}
+        let recap = result(&surface.call(Some(&token), &request("get_recap", "{}"), &Blind));
+        assert!(recap.get("tally").is_some(), "its own: {recap:?}");
+        assert!(
+            recap.get("seat_tallies").is_none(),
+            "nobody else's: {recap:?}"
+        );
+    }
+
+    /// The owner's ruling (decisions-log item 145 (7)): once the match is
+    /// decided -- the final recap, and after it -- the recap carries every
+    /// seat's tally, ascending by seat, each the sim's own counters, and the
+    /// calling seat's own `tally` beside it; the lobby is told none.
+    #[test]
+    fn the_recap_at_match_end_carries_every_seats_tally() {
+        let mut surface = three_seats(1);
+        let token = seat_token(&mut surface, 0);
+        let (admin, _) = surface
+            .tokens()
+            .mint(
+                Subject::Admin,
+                "m-0001",
+                ScopeSet::of(&[Scope::Admin, Scope::Observe]),
+                Tick::ZERO,
+            )
+            .expect("an admin token");
+        let _ = a_shared_kill(&mut surface);
+        // The final recap: the outcome is decided on the final tick, so every
+        // seat's tally is told there already.
+        let last = result(&surface.call(Some(&token), &request("get_recap", "{}"), &Blind));
+        assert!(
+            last.get("seat_tallies").is_some(),
+            "the final recap: {last:?}"
+        );
+        // The lobby reads no seat's knowledge, at the end as before it.
+        let lobby = result(&surface.call(Some(&admin), &request("get_recap", "{}"), &Blind));
+        assert!(
+            lobby.get("seat_tallies").is_none() && lobby.get("tally").is_none(),
+            "the lobby is told no tally: {lobby:?}"
+        );
+        let _ = surface.end_recap().expect("the recap ends");
+        assert_eq!(
+            surface.host().expect("hosted").runner().phase(),
+            pharmakos_sim::runner::MatchPhase::Ended
+        );
+        let recap = result(&surface.call(Some(&token), &request("get_recap", "{}"), &Blind));
+        let Some(Json::Array(all)) = recap.get("seat_tallies") else {
+            panic!("seat_tallies at match end: {recap:?}");
+        };
+        let seats: Vec<String> = all
+            .iter()
+            .map(|one| match one.get("seat") {
+                Some(Json::String(seat)) => seat.clone(),
+                other => panic!("seat: {other:?}"),
+            })
+            .collect();
+        assert_eq!(seats, ["seat.0", "seat.1", "seat.2"]);
+        let world = surface.host().expect("hosted").world();
+        for (raw, one) in all.iter().enumerate() {
+            let counted = world
+                .tally(SeatId::new(u8::try_from(raw).expect("a seat")))
+                .expect("a tally");
+            assert_eq!(
+                tally_field(one, "losses"),
+                i64::from(counted.losses),
+                "{one:?}"
+            );
+            assert_eq!(tally_field(one, "kills"), i64::from(counted.kills));
+        }
+        assert_eq!(
+            all.first().and_then(|one| one.get("tally")),
+            recap.get("tally"),
+            "the seat's own tally is its row of the list"
+        );
+    }
+
+    /// One playbook placing a Survey beacon with `scouts` scouts, which the
+    /// projection prices at the scout's cost each.
+    fn many_scouts(scouts: u64) -> String {
+        format!(
+            r#"{{
+  "schema_version": {{"major": 1, "minor": 0}},
+  "meta": {{"title": "Many scouts", "author_kind": "HUMAN"}},
+  "kind": "PLAYBOOK",
+  "declarative": {{
+    "route": [
+      {{"label": "first", "place_beacon": {{"at": {{"covering": {{"vent": {{"rank": "NEAREST", "coverage": "UNCOVERED"}}}}}},
+        "initial": {{"mandate": {{"roe": "RETURN_FIRE", "survey": {{"scout_count": {scouts}}}}}}}}},
+        "timeout_ms": 30000, "on_fail": {{"action": "SKIP"}}}}
+    ],
+    "handlers": [],
+    "options": {{"allow_dormant_beacons": true}}
+  }},
+  "on_death": {{"on_respawn": "CONTINUE"}},
+  "fallback": {{"hold": {{"at": {{"safest": {{}}}}}}}}
+}}
+"#
+        )
+    }
+
+    /// The `seal_commitment` door, reached past the verifier (decisions-log
+    /// item 136 (5): "a test of the `seal_commitment` door"). Since S2's
+    /// `vfy1` no qualifying playbook reaches it -- `E0603` refuses a seal that
+    /// does not price first, and `tests/economy.rs` holds that -- so the door
+    /// is asked directly, with the two playbooks that would leave the
+    /// projection's types and the forecast's `int32`: each is
+    /// `Unpriced::Playbook`, never a price, and a playbook that prices is
+    /// priced.
+    #[test]
+    fn the_seal_commitment_door_refuses_an_unpriced_seal() {
+        let surface = hosted();
+        // 3e9 scouts: the draw would leave the sim's kW type. 3e8: the spend
+        // would fit `$` and be past the forecast's int32.
+        for (scouts, says) in [
+            (
+                3_000_000_000_u64,
+                "the projection does not fit in a `$` or `kW` figure",
+            ),
+            (300_000_000, "past the `int32`"),
+        ] {
+            match surface.seal_commitment(SeatId::new(0), &many_scouts(scouts)) {
+                Err(super::knowledge::Unpriced::Playbook(why)) => {
+                    assert!(why.contains(says), "{scouts} scouts: {why}");
+                }
+                Err(super::knowledge::Unpriced::Gateway(error)) => {
+                    panic!("{scouts} scouts: the door blamed itself: {error:?}")
+                }
+                Ok(spend) => panic!("{scouts} scouts priced at $ {spend}"),
+            }
+        }
+        let priced = surface.seal_commitment(SeatId::new(0), &many_scouts(1));
+        assert!(
+            matches!(priced, Ok(spend) if spend > 0),
+            "one scout prices, and costs something"
+        );
+    }
+
     /// The verifier's view carries every field of each feature that
     /// `get_map_summary` tells the same seat, and the commander's voxel
     /// (decisions-log item 131 (4) (d): W0704 and W0706 read `covered_by` and
@@ -3991,7 +5162,7 @@ mod tests {
         let token = seat_token(&mut surface, 0);
         let vision = surface
             .host()
-            .map(|host| crate::host::SphereVision::of(host.world()))
+            .map(|host| crate::host::LiveVision::of(host.world()))
             .expect("hosted");
         let summary =
             result(&surface.call(Some(&token), &request("get_map_summary", "{}"), &vision));

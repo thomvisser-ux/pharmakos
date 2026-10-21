@@ -344,16 +344,17 @@ pub fn review(text: &str, policy: &Policy) -> Result<Upgrade, Refusal> {
         return Err(Refusal::ForeignHost(host.to_owned()));
     }
 
-    let upgrade = header(&headers, "Upgrade")?.unwrap_or_default();
+    let upgrade = header(&headers, "Upgrade")?.ok_or(Refusal::MissingUpgrade)?;
     if !lists(upgrade, "websocket") {
         return Err(Refusal::MissingUpgrade);
     }
-    let connection = header(&headers, "Connection")?.unwrap_or_default();
+    let connection = header(&headers, "Connection")?.ok_or(Refusal::MissingConnectionUpgrade)?;
     if !lists(connection, "upgrade") {
         return Err(Refusal::MissingConnectionUpgrade);
     }
 
-    let version = header(&headers, "Sec-WebSocket-Version")?.unwrap_or_default();
+    let version = header(&headers, "Sec-WebSocket-Version")?
+        .ok_or_else(|| Refusal::UnsupportedVersion(String::new()))?;
     if version != WEBSOCKET_VERSION {
         return Err(Refusal::UnsupportedVersion(version.to_owned()));
     }

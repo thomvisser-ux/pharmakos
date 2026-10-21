@@ -428,42 +428,68 @@ impl MatchCache {
             .map_err(|error| Error::internal(format!("writing {}: {error}", path.display())))
     }
 
-    /// The sequence number of the last line `audit.log` holds, or zero.
+    /// The sequence number of the last line `audit.log` holds, or zero when
+    /// there is no log yet.
     ///
     /// A host that resumes a match, or opens a folder an earlier process
     /// wrote into, numbers its own lines after it: an audit entry's sequence
     /// number is "never reused" ([`crate::audit::Entry::seq`]).
-    #[must_use]
-    pub fn last_audit_seq(&self) -> u64 {
-        let Ok(text) = fs::read_to_string(self.directory.join("audit.log")) else {
-            return 0;
-        };
-        text.lines()
-            .filter_map(|line| line.split('\t').next()?.parse::<u64>().ok())
-            .max()
-            .unwrap_or(0)
+    ///
+    /// # Errors
+    ///
+    /// As [`MatchCache::continuation`].
+    pub fn last_audit_seq(&self) -> Result<u64, Error> {
+        Ok(self.continuation()?.generation)
     }
 
     /// What a resume needs from the processes that ran this match before it:
     /// the audit log's last sequence number and its largest tick, both zero
     /// when there is no log.
-    #[must_use]
-    pub fn continuation(&self) -> crate::save::Continuation {
-        let Ok(text) = fs::read_to_string(self.directory.join("audit.log")) else {
-            return crate::save::Continuation::default();
+    ///
+    /// Only a log that is not there is read as empty. A log that will not
+    /// read, or a line in it that is neither the header nor a record this
+    /// gateway writes (a sequence number and a tick first), is refused: a
+    /// resume numbering its lines after a log it could not read would reuse a
+    /// sequence number, which the format promises never happens.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] for a log the filesystem will not
+    /// read, and for a line the gateway did not write.
+    pub fn continuation(&self) -> Result<crate::save::Continuation, Error> {
+        let path = self.directory.join("audit.log");
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(crate::save::Continuation::default());
+            }
+            Err(error) => {
+                return Err(Error::internal(format!(
+                    "reading {}: {error}",
+                    path.display()
+                )));
+            }
         };
         let mut found = crate::save::Continuation::default();
-        for line in text.lines() {
-            let mut fields = line.split('\t');
-            let Some(seq) = fields.next().and_then(|field| field.parse::<u64>().ok()) else {
+        for (number, line) in text.lines().enumerate() {
+            if line.is_empty() || line == crate::audit::HEADER {
                 continue;
+            }
+            let mut fields = line.split('\t');
+            let seq = fields.next().and_then(|field| field.parse::<u64>().ok());
+            let tick = fields.next().and_then(|field| field.parse::<u32>().ok());
+            let (Some(seq), Some(tick)) = (seq, tick) else {
+                return Err(Error::internal(format!(
+                    "{} line {} is not a record this gateway writes: it starts with no sequence \
+                     number and tick",
+                    path.display(),
+                    number.saturating_add(1)
+                )));
             };
             found.generation = found.generation.max(seq);
-            if let Some(tick) = fields.next().and_then(|field| field.parse::<u32>().ok()) {
-                found.last_tick = found.last_tick.max(tick);
-            }
+            found.last_tick = found.last_tick.max(tick);
         }
-        found
+        Ok(found)
     }
 
     /// The folder itself.
@@ -517,7 +543,8 @@ impl MatchCache {
         let fresh = !path.exists();
         let mut text = String::new();
         if fresh {
-            text.push_str("seq\ttick\tsubject\thandle\taction\toutcome\n");
+            text.push_str(crate::audit::HEADER);
+            text.push('\n');
         }
         for entry in entries {
             text.push_str(&entry.render());
@@ -789,9 +816,13 @@ mod tests {
         cache.append_audit(&log.take()).expect("appended");
 
         let text = cache.audit_text().expect("read back");
-        assert_eq!(cache.last_audit_seq(), 2, "the last line's sequence number");
         assert_eq!(
-            cache.continuation(),
+            cache.last_audit_seq().expect("read"),
+            2,
+            "the last line's sequence number"
+        );
+        assert_eq!(
+            cache.continuation().expect("read"),
             crate::save::Continuation {
                 generation: 2,
                 last_tick: 1,
@@ -812,5 +843,34 @@ mod tests {
         cache
             .append_audit(&[])
             .expect("nothing to append is not an error");
+    }
+
+    /// Only a log that is not there reads as empty (S3 of #128's reviews): a
+    /// line the gateway did not write is a typed refusal, never skipped, so a
+    /// resume cannot number its lines after a log it misread.
+    #[test]
+    fn an_audit_log_reads_as_empty_only_when_it_is_not_there() {
+        let root = scratch("audit-damaged");
+        let cache = MatchCache::open(&root, "m-0004", &header(3)).expect("opened");
+        assert_eq!(
+            cache.continuation().expect("no log yet"),
+            crate::save::Continuation::default(),
+            "no log is the one empty answer"
+        );
+        assert_eq!(cache.last_audit_seq().expect("no log yet"), 0);
+        let mut log = AuditLog::new();
+        log.record(Tick::ZERO, None, None, "upgrade", Outcome::Ok);
+        cache.append_audit(&log.take()).expect("appended");
+        let path = cache.directory().join("audit.log");
+        let mut text = std::fs::read_to_string(&path).expect("the log");
+        text.push_str("not a record\n");
+        std::fs::write(&path, text).expect("damaged");
+        let refused = cache.continuation().expect_err("refused");
+        assert_eq!(refused.code, crate::error::Code::Internal);
+        assert!(refused.message.contains("line 3"), "{}", refused.message);
+        assert!(
+            cache.last_audit_seq().is_err(),
+            "and so is the sequence number"
+        );
     }
 }

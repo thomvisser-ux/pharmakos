@@ -41,8 +41,9 @@ A target is a **name** or a **description**.
 
 - A **name** is a fixed id:
   - `b_NN` for one of the seat's own beacons (per seat from S1);
-  - `e_NN` for another seat's beacon, a per-viewer handle minted on first sighting, as the view feed
-    already does for units and structures;
+  - `e_NN` for another seat's beacon, a per-viewer handle. A seat's are minted where a Lull opens or
+    a save resumes, from the sim's sighting table (S2's `wgw`; see "Other seats' beacons" below);
+    a spectator's on first sight, as the view feed does for units and structures;
   - `vent_<x>_<y>` for a vent and `seam_<x>_<y>` for a seam. The view feed's `s_` and `u_` prefixes
     are taken.
 - A **description** is a pick from one closed catalogue per kind: a rank and a few flat filters, for
@@ -110,9 +111,15 @@ Nothing substitutes silently.
   - `power.rs`'s `one_vent` moves onto the table.
 - **Own beacons** become per seat (item 127 (13)). A seat's core is always `b_00`, so a template can
   name it anywhere. A `b_NN` resolves only among the seat's own beacons.
-- **Other seats' beacons** are `e_NN`, per viewer, in first-sighting order. `get_beacon`,
-  `list_beacons`, the verifier's `Scope` and events use them, and a seat never sees another seat's
-  `b_NN`.
+- **Other seats' beacons** are `e_NN`, per viewer. `get_beacon`, `list_beacons`, the verifier's
+  `Scope` and events use them, and a seat never sees another seat's `b_NN`. A seat's handles are
+  minted only where a Lull opens or a save resumes, from the sim's hashed sighting table in its own
+  `(seat, asset)` order and then the beacons in live vision it does not hold yet, so no `get_view`
+  or `list_beacons` call during a Push can change a name a report reads (S2's `wgw`, the main
+  session's ruling R1 on #128's reviews). A beacon first seen in a Push is drawn by `get_view` under
+  a `v_N` view handle and takes its `e_NN` at the next Lull. The table keeps the tick a beacon was
+  last seen at, not the first, so the order is not first-sighting order; first-sighting order is
+  carried to the sim.
 - **Table room** becomes per seat so that a full table stops leaking the others' counts: each seat
   gets the world total divided by the seat count, rounded down (item 63's 40 beacons and 300 units
   give 13 and 100 at three seats, 20 and 150 at two). Build targets and structures follow. This

@@ -51,7 +51,7 @@ use core::num::{NonZeroU32, NonZeroUsize};
 
 use pharmakos_proto::gp::v1::Voxel;
 use pharmakos_proto::json::Json;
-use pharmakos_sim::math::quantity::{Money, Ms};
+use pharmakos_sim::math::quantity::Money;
 use pharmakos_sim::runner::MatchEndReason;
 use pharmakos_sim::tables::SeatId;
 
@@ -60,7 +60,7 @@ use crate::error::Error;
 use crate::fog::{Audience, FogFilter, Viewer, Vision};
 use crate::rpc::Request;
 use crate::strings;
-use crate::surface::{BandError, Surface};
+use crate::surface::{BandError, RecapFacts, Surface};
 use crate::view;
 
 /// How many beacons one page of `list_beacons` carries at each rung.
@@ -243,6 +243,18 @@ impl Surface {
     ///   each first happened ([`strings::recap_step_failed`]): "3 matched,
     ///   none reachable" for a description that matched and reached nothing
     ///   (`docs/design/targeting.md`, "Surfaces").
+    /// * **The tally** (S2's plan, E15): the seat's own kills, shared kills,
+    ///   losses and enemy value destroyed for the match so far, as the sim's
+    ///   hashed per-seat counters stood when the segment ended
+    ///   ([`RecapFacts::tallies`]), never added up from the feed, whose bus
+    ///   drops past its capacity. Like the settlement it is this recap's, so
+    ///   it is the same in the recap, the Lull and the Push that follow.
+    /// * **Every seat's tally**, `seat_tallies`, ascending by seat, **only once
+    ///   the match is decided** -- from the final recap on, where the outcome
+    ///   is decided and the fog lifts -- (the owner's ruling, decisions-log item
+    ///   145 (7)): between rounds a seat learns its own counts and nobody
+    ///   else's. Told to a seat only, like everything in this block: the lobby
+    ///   and a spectator read no seat's knowledge (AGENTS.md section 7).
     pub(super) fn get_recap(
         &self,
         subject: crate::token::Subject,
@@ -300,6 +312,7 @@ impl Surface {
             {
                 entries.push((String::from("settlement"), settlement));
             }
+            entries.push((String::from("tally"), own_tally(facts, seat, &mut prose)?));
             if let Some(dark) = facts.dark.iter().find(|dark| dark.seat == seat) {
                 let names: Vec<String> = dark
                     .ordinals
@@ -322,16 +335,26 @@ impl Surface {
                 ));
             }
             failure_lines(facts, seat, &mut prose)?;
+            if let Some(all) = seat_tallies(host, facts)? {
+                entries.push((String::from("seat_tallies"), all));
+            }
         }
         entries.insert(0, (String::from("prose"), Json::String(prose)));
         Ok(Json::Object(entries))
     }
 
-    /// `list_beacons`: the beacons this seat may see, its own first.
+    /// `list_beacons`: the beacons this seat may see or remembers, its own
+    /// first.
     ///
     /// `&mut self` because naming another seat's beacon mints this viewer's
     /// `e_NN` for it the first time it is shown
     /// ([`crate::viewfeed::ViewFeed::beacon_name`]); nothing else is written.
+    ///
+    /// # Errors
+    ///
+    /// As [`Surface::known_beacons`], and
+    /// [`crate::error::Code::InvalidArgument`] for a cursor this gateway did
+    /// not issue.
     pub(super) fn list_beacons<V: Vision>(
         &mut self,
         subject: crate::token::Subject,
@@ -341,11 +364,8 @@ impl Surface {
     ) -> Result<Json, Error> {
         let viewer = self.viewer_of(subject, held);
         let budget = beacon_budget(detail::of(request)?);
-        let limit = request
-            .integer_param("limit")?
-            .and_then(|value| usize::try_from(value).ok())
-            .map_or(budget, |asked| asked.min(budget));
-        let visible = self.visible_beacons(viewer, vision);
+        let limit = limit_param(request, budget)?;
+        let visible = self.known_beacons(viewer, vision)?;
 
         // The cursor is an index into THIS viewer's own visible listing, for
         // the same reason `crate::feed`'s is: an index over the unfiltered
@@ -353,32 +373,36 @@ impl Surface {
         // length to learn how many beacons it was not told about.
         let snapshot = self.feed().snapshot();
         let from = match request.string_param("cursor")? {
-            Some(text) if !text.is_empty() => usize::try_from(
-                crate::feed::Cursor::parse(text, snapshot, crate::feed::Listing::Beacons)?.index(),
-            )
-            .unwrap_or(usize::MAX),
+            Some(text) if !text.is_empty() => {
+                let index =
+                    crate::feed::Cursor::parse(text, snapshot, crate::feed::Listing::Beacons)?
+                        .index();
+                usize::try_from(index).map_err(|_| {
+                    Error::invalid(format!(
+                        "this cursor points at beacon {index}, past any listing"
+                    ))
+                })?
+            }
             _ => 0,
         };
         // `limit` is taken as asked, zero included: the doc above says a client
         // may always ask for less than its budget, and zero is less. A page of
         // none with the cursor where it was is the honest answer to it, and a
         // silent `.max(1)` would be the gateway deciding what the client meant.
-        let page: Vec<Json> = visible
+        let page = visible
             .iter()
             .skip(from)
             .take(limit)
-            .map(|(name, row, at)| self.beacon_summary(viewer, name, *row, *at))
-            .collect();
+            .map(|known| self.beacon_summary(known))
+            .collect::<Result<Vec<Json>, Error>>()?;
         let index = from.min(visible.len()).saturating_add(page.len());
         let next = if index >= visible.len() {
             String::new()
         } else {
-            crate::feed::Cursor::at(
-                snapshot,
-                crate::feed::Listing::Beacons,
-                u32::try_from(index).unwrap_or(u32::MAX),
-            )
-            .render()
+            let at = u32::try_from(index).map_err(|_| {
+                Error::internal(format!("a beacon listing of {index} does not fit a cursor"))
+            })?;
+            crate::feed::Cursor::at(snapshot, crate::feed::Listing::Beacons, at).render()
         };
         Ok(Json::Object(vec![
             (String::from("beacons"), Json::Array(page)),
@@ -386,12 +410,24 @@ impl Surface {
         ]))
     }
 
-    /// `get_beacon`: one beacon, if this seat may see it.
+    /// `get_beacon`: one beacon, if this seat may see it or remembers it.
     ///
     /// A `b_NN` names one of the caller's own beacons by its per-seat
     /// ordinal, and an `e_NN` the beacon this caller was shown under that
     /// handle (decisions-log item 127 (13); `docs/design/targeting.md`,
-    /// "Names"). `&mut self` for the reason `list_beacons` is.
+    /// "Names"). Nothing is minted here: a handle the caller was never shown
+    /// names nothing, so a guess answers exactly as an absent beacon does.
+    ///
+    /// **The prose says what the summary says and nothing more** (S2's plan,
+    /// E9, with decision 5): another seat's beacon in sight is its owner and
+    /// its hit points, one remembered is its owner, its place and how long ago
+    /// it was seen, and neither is ever its mandate; a seat's own beacon is
+    /// its mandate and its hit points, which are the seat's own business.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::NotFound`] for a name that names no beacon this
+    /// caller may see or remembers, and as [`Surface::known_beacon`].
     pub(super) fn get_beacon<V: Vision>(
         &mut self,
         subject: crate::token::Subject,
@@ -403,64 +439,56 @@ impl Surface {
         let wanted = request
             .string_param("beacon_id")?
             .ok_or_else(|| Error::invalid("`beacon_id` names a beacon, as in `b_04`"))?;
-        if pharmakos_sim::tables::parse_beacon_name(wanted).is_none() {
+        let Some(name) = pharmakos_sim::tables::parse_beacon_name(wanted) else {
             return Err(Error::not_found(format!("`{wanted}` is not a beacon id")));
-        }
-        let viewer = self.viewer_of(subject, held);
-
-        let host = self
-            .host
-            .as_ref()
-            .ok_or_else(|| Error::internal("this gateway is not hosting a match"))?;
-        let world = host.world();
-        let beacons = world.beacons();
-        let row = self
-            .views
-            .beacon_row(viewer, world, wanted)
-            // NOT_FOUND, deliberately, and the same refusal a beacon the seat
-            // may not see gets below: "a named beacon does not exist, or is not
-            // yours" is one answer in the closed set, and two answers would let
-            // a seat map the enemy's beacons by asking for every id.
-            .ok_or_else(|| Error::not_found(format!("no beacon `{wanted}` here")))?;
-        let owner = beacons.seats().get(row).copied().unwrap_or_default();
-        let at = beacons
-            .positions()
-            .get(row)
-            .copied()
-            .map(view::voxel_of)
-            .unwrap_or_default();
-        let filter = FogFilter::new(&self.fog, vision);
-        let audience = Audience::World {
-            owner: Some(SeatId::new(owner)),
-            at,
         };
-        if !filter.visible(viewer, &audience) {
-            return Err(Error::not_found(format!("no beacon `{wanted}` here")));
-        }
-        let name = self.views.beacon_name(viewer, world, row);
-
-        let hit_points = beacons
-            .hit_points()
-            .get(row)
-            .copied()
-            .unwrap_or_default()
-            .raw();
-        let mandate = view::mandate_from_id(beacons.mandates().get(row).copied().unwrap_or(0));
-        let own = viewer == Viewer::Seat(SeatId::new(owner));
+        let viewer = self.viewer_of(subject, held);
+        // NOT_FOUND, deliberately, and the same refusal for every way a name
+        // can name nothing: "a named beacon does not exist, or is not yours"
+        // is one answer in the closed set, and two answers would let a seat
+        // map the enemy's beacons by asking for every id.
+        let absent = || Error::not_found(format!("no beacon `{wanted}` here"));
+        let id = match name {
+            pharmakos_sim::tables::BeaconName::Own(_) => {
+                let world = self.host()?.world();
+                let row = self
+                    .views
+                    .beacon_row(viewer, world, wanted)
+                    .ok_or_else(absent)?;
+                world.beacons().ids().get(row).copied().ok_or_else(|| {
+                    Error::internal(format!("the beacon table has no id in row {row}"))
+                })?
+            }
+            // By the handle's canonical spelling, so `e_7` and `e_07` name
+            // the one beacon, as `parse_beacon_name` reads them.
+            pharmakos_sim::tables::BeaconName::Foreign(number) => self
+                .views
+                .foreign_beacon_id(viewer, &pharmakos_sim::tables::foreign_beacon_name(number))
+                .ok_or_else(absent)?,
+        };
+        let known = self.known_beacon(viewer, vision, id)?.ok_or_else(absent)?;
+        let summary = self.beacon_summary(&known)?;
+        let prose = match known.seen {
+            Seen::Own { row } => {
+                let beacons = self.host()?.world().beacons();
+                let mandate =
+                    view::mandate_from_id(beacons.mandates().get(row).copied().ok_or_else(
+                        || Error::internal(format!("the beacon table has no mandate in row {row}")),
+                    )?);
+                let hp = self.beacon_hit_points(row, id)?;
+                strings::own_beacon(&known.name, view::mandate_name(mandate), hp.0)
+            }
+            Seen::Live { row } => {
+                let hp = self.beacon_hit_points(row, id)?;
+                strings::foreign_beacon_in_sight(&known.name, known.owner, hp)
+            }
+            Seen::Remembered { age_ms } => {
+                strings::foreign_beacon_remembered(&known.name, known.owner, known.at, age_ms)
+            }
+        };
         Ok(Json::Object(vec![
-            (
-                String::from("summary"),
-                self.beacon_summary(viewer, &name, row, at),
-            ),
-            (
-                String::from("prose"),
-                Json::String(strings::beacon(
-                    &name,
-                    view::mandate_name(mandate),
-                    hit_points,
-                    own,
-                )),
-            ),
+            (String::from("summary"), summary),
+            (String::from("prose"), Json::String(prose)),
         ]))
     }
 
@@ -490,17 +518,16 @@ impl Surface {
         let size = host.world().voxels().size();
         let seed = view::seed_text(host.world().match_seed());
         let seats = host.world().seats().len();
-        let axis = |index: usize| {
-            Json::Number(i64::from(size.get(index).copied().unwrap_or(0)).to_string())
-        };
+        let [x, y, z] = size;
+        let axis = |length: u32| Json::Number(length.to_string());
         let features = self.map_features(subject.seat())?;
         Ok(Json::Object(vec![
             (
                 String::from("size"),
                 Json::Object(vec![
-                    (String::from("x"), axis(0)),
-                    (String::from("y"), axis(1)),
-                    (String::from("z"), axis(2)),
+                    (String::from("x"), axis(x)),
+                    (String::from("y"), axis(y)),
+                    (String::from("z"), axis(z)),
                 ]),
             ),
             (
@@ -557,23 +584,25 @@ impl Surface {
                 ];
                 if seat.is_some() {
                     let reached = match travel.iter().find(|(index, _)| *index == read.index) {
-                        Some((_, cost)) => {
-                            Some(crate::targeting::travel_ms(world, *cost).ok_or_else(|| {
-                                Error::internal(
-                                    "an estimate's cost does not convert to game milliseconds",
-                                )
-                            })?)
-                        }
+                        // A commander with no speed walks nowhere, so the
+                        // feature is not reached.
+                        Some((_, cost)) => crate::targeting::travel_ms(world, *cost)?,
                         None => None,
                     };
                     entries.push((
                         String::from("covered"),
                         Json::Bool(read.covered_by.is_some()),
                     ));
-                    entries.push((
-                        String::from("travel_ms"),
-                        Json::Number(reached.map_or(0, Ms::raw).to_string()),
-                    ));
+                    // `travel_ms` only beside `reachable: true`, as
+                    // `resolve_refs` writes it (decisions-log item 133 (3)
+                    // (i)): a 0 beside an unreachable feature would read as
+                    // a feature at the commander's feet.
+                    if let Some(reached) = reached {
+                        entries.push((
+                            String::from("travel_ms"),
+                            Json::Number(reached.raw().to_string()),
+                        ));
+                    }
                     entries.push((String::from("reachable"), Json::Bool(reached.is_some())));
                 }
                 Ok(Json::Object(entries))
@@ -735,10 +764,10 @@ impl Surface {
     /// price ([`Surface::seal_commitment`]): `submit_plan` refuses a playbook
     /// that does not, and a resume refuses a save whose seal does not, against
     /// the same frozen economy this reads -- so one that reaches here is the
-    /// gateway contradicting itself, not anything a seat could seal. The
-    /// verifier's FULL report alone does not promise it: its estimate stage
-    /// sums in `Tally` and never meets the projection's overflow (review A of
-    /// `econ`).
+    /// gateway contradicting itself, not anything a seat could seal. From S2
+    /// the verifier refuses an unpriceable seal itself (`E0603`, S2-14), so a
+    /// qualifying FULL report promises it too; the door stays as defence in
+    /// depth, and so does this refusal.
     fn committed_dollars(
         &self,
         subject: crate::token::Subject,
@@ -807,14 +836,17 @@ impl Surface {
     ///
     /// The one place a seal is priced, so the door that seals it
     /// (`submit_plan`), the resume that restores it and the forecast that
-    /// reads it cannot price it two ways. A playbook can qualify FULL and
-    /// still not price: the verifier's estimate sums in `Tally`, which never
-    /// overflows, while the projection narrows to the sim's `$` and kW types
-    /// -- one `scout_count` near the top of its `u32` is enough
-    /// ([`pharmakos_verifier::projection::ProjectionError::Overflow`]) -- and
-    /// a spend that fits `$` can still be past the wire's `int32`. Both are
+    /// reads it cannot price it two ways. Two things make a playbook not
+    /// price: its spend or draw leaving the sim's `$` and kW types
+    /// ([`pharmakos_verifier::projection::ProjectionError::Overflow`]), and a
+    /// spend that fits `$` but is past the wire's `int32`. Both are
     /// [`Unpriced::Playbook`], which the door refuses rather than seal a
-    /// playbook whose own forecast could not answer.
+    /// playbook whose own forecast could not answer. From S2 the verifier
+    /// refuses both before a report qualifies (`E0603`, S2-14), so no
+    /// qualifying playbook reaches the refusal; the door stays as defence in
+    /// depth (decisions-log item 136 (5) (d)), and
+    /// `the_seal_commitment_door_refuses_an_unpriced_seal` keeps it from
+    /// rotting unseen.
     ///
     /// # Errors
     ///
@@ -891,13 +923,16 @@ impl Surface {
             places.push(self.place_of(seat, waypoint, index, from, &mut scratch)?);
         }
 
-        let route = pharmakos_plan_core::travel::Route::estimate(&places, self.host()?.routes());
+        let routes = self.host()?.routes();
+        let route = pharmakos_plan_core::travel::Route::estimate(&places, routes);
+        // A fault in a query is raised, never drawn as an unreachable leg
+        // (`crate::routes`, "A fault is raised").
+        routes.take_fault()?;
         let legs: Vec<Json> = route
             .legs
             .iter()
             .map(|leg| {
-                let ms = leg.estimate.map_or(0, |found| found.ms().raw());
-                Json::Object(vec![
+                let mut entries = vec![
                     // `gp.api.v1.Leg.to` is a `gp.v1.Location`, so the voxel
                     // goes under its oneof arm, `{"voxel": {x, y, z}}`, and
                     // not bare (decisions-log item 112 (3); pinned by
@@ -914,20 +949,30 @@ impl Surface {
                             ]),
                         )]),
                     ),
-                    (String::from("ms"), Json::Number(ms.to_string())),
-                    (String::from("fogged"), Json::Bool(leg.fogged)),
-                ])
+                ];
+                // A leg with no estimate writes no `ms`, and the route says it
+                // is unreachable: a 0 would read as a leg that costs nothing.
+                if let Some(found) = leg.estimate {
+                    entries.push((
+                        String::from("ms"),
+                        Json::Number(found.ms().raw().to_string()),
+                    ));
+                }
+                entries.push((String::from("fogged"), Json::Bool(leg.fogged)));
+                Json::Object(entries)
             })
             .collect();
-        let total = route.total().unwrap_or(Ms::ZERO);
-        Ok(Json::Object(vec![
-            (
-                String::from("reachable"),
-                Json::Bool(!route.is_unreachable()),
-            ),
-            (String::from("ms"), Json::Number(total.raw().to_string())),
-            (String::from("legs"), Json::Array(legs)),
-        ]))
+        let mut entries = vec![(
+            String::from("reachable"),
+            Json::Bool(!route.is_unreachable()),
+        )];
+        // The total only for a route every leg of which reaches, as a leg's
+        // own `ms` is written.
+        if let Some(total) = route.total() {
+            entries.push((String::from("ms"), Json::Number(total.raw().to_string())));
+        }
+        entries.push((String::from("legs"), Json::Array(legs)));
+        Ok(Json::Object(entries))
     }
 
     /// One `gp.v1.Location` as the voxel it names.
@@ -1106,22 +1151,213 @@ impl Surface {
         Ok(view::voxel_of(point))
     }
 
+    /// Name, for every seat, every other seat's beacon it remembers or sees:
+    /// **the one place a seat's `e_NN` handles are minted** (the main
+    /// session's ruling R1 on the reviews of #128).
+    ///
+    /// Called where a Lull opens and where a save resumes, before anything is
+    /// verified against the planning snapshot, and nowhere else: no
+    /// `get_view`, `list_beacons` or `get_beacon` call mints a seat's handle,
+    /// so the names -- which a verifier scope spells its sightings with
+    /// ([`Surface::verifier_sightings`]) and every `report_hash` therefore
+    /// reads -- depend on the sim's hashed sighting table and the frozen world
+    /// alone, never on how often a client polled during the Push. New names
+    /// are minted in the table's own `(seat, asset)` order, then for the
+    /// beacons in live vision the table does not hold yet, by row.
+    ///
+    /// The sim's table keeps the tick a beacon was **last** seen at and not
+    /// the first, so the names count up in that order rather than in
+    /// first-sighting order; a resume rebuilds them from the table at its
+    /// Lull, which reproduces the names a match had whenever every name it
+    /// held was minted at that Lull. First-sighting order, which would make
+    /// the names a pure function of hashed state across every Lull, is
+    /// carried to the sim.
+    ///
+    /// # Errors
+    ///
+    /// As [`Surface::known_beacons`].
+    pub(crate) fn name_sightings(&mut self) -> Result<(), Error> {
+        let vision = crate::host::LiveVision::of(self.host()?.world());
+        let seats: Vec<SeatId> = self.seats.iter().map(|slot| slot.seat).collect();
+        for seat in seats {
+            let viewer = Viewer::Seat(seat);
+            // First what the seat remembers, in the sim's own sighting table
+            // order, `(seat, asset)` ...
+            let mut ids: Vec<u32> = remembered_beacons(hosted(self.host.as_ref())?.world(), seat)?
+                .into_iter()
+                .map(|(id, ..)| id)
+                .collect();
+            // ... then any other seat's beacon in its live vision of the
+            // frozen world that the table does not hold yet (one placed since
+            // the last decision tick), in table row order.
+            let rows = self.host()?.world().beacons().ids().len();
+            for row in 0..rows {
+                if let Some((id, _, _, Seen::Live { .. })) =
+                    self.live_beacon(viewer, &vision, row)?
+                    && !ids.contains(&id)
+                {
+                    ids.push(id);
+                }
+            }
+            for id in ids {
+                let _ = self.views.foreign_beacon_name(viewer, id)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// `seat`'s sightings for its verifier scope: every other seat's beacon
+    /// and commander it sees now, at an age of 0, and every one it remembers,
+    /// at the age its sighting has (S2's plan, task `wgw`; the layout is
+    /// `pharmakos_verifier::Sighting`'s, `vfy2`'s). Only what the seat itself
+    /// saw: live vision is the sim's sensor interface through the fog filter,
+    /// and memory is the sim's own sighting table. The verifier keeps the
+    /// freshest of two sightings of one thing, so a beacon both in sight and
+    /// remembered rests on its live sighting.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] for a sighted beacon this seat holds
+    /// no handle for, which [`Surface::name_sightings`] gives it before any
+    /// verification; and as [`sightings_of`] and [`Surface::live_beacon`].
+    pub(crate) fn verifier_sightings(
+        &self,
+        seat: SeatId,
+    ) -> Result<Vec<pharmakos_verifier::Sighting>, Error> {
+        let viewer = Viewer::Seat(seat);
+        let world = self.host()?.world();
+        let vision = crate::host::LiveVision::of(world);
+        let handle = |id: u32| {
+            self.views.foreign_beacon_handle(viewer, id).ok_or_else(|| {
+                Error::internal(format!(
+                    "seat {} sights beacon {id} and holds no handle for it",
+                    seat.raw()
+                ))
+            })
+        };
+        let mut out: Vec<pharmakos_verifier::Sighting> = Vec::new();
+        let beacons = world.beacons();
+        for row in 0..beacons.ids().len() {
+            if let Some((id, at, _, Seen::Live { .. })) = self.live_beacon(viewer, &vision, row)? {
+                out.push(pharmakos_verifier::Sighting {
+                    what: pharmakos_verifier::Sighted::Beacon(handle(id)?),
+                    at,
+                    age_ms: 0,
+                });
+            }
+        }
+        let filter = FogFilter::new(&self.fog, &vision);
+        let units = world.units();
+        for row in 0..units.ids().len() {
+            let missing =
+                |name: &str| Error::internal(format!("the unit table has no {name} in row {row}"));
+            if units
+                .frees()
+                .get(row)
+                .copied()
+                .ok_or_else(|| missing("free flag"))?
+            {
+                continue;
+            }
+            let kind = units
+                .kinds()
+                .get(row)
+                .copied()
+                .ok_or_else(|| missing("kind"))?;
+            let hp = units
+                .hit_points()
+                .get(row)
+                .copied()
+                .ok_or_else(|| missing("hit points"))?;
+            if kind != pharmakos_sim::tables::UnitKind::Commander.id() || !hp.is_alive() {
+                continue;
+            }
+            let owner = SeatId::new(
+                units
+                    .seats()
+                    .get(row)
+                    .copied()
+                    .ok_or_else(|| missing("seat"))?,
+            );
+            if owner == seat {
+                continue;
+            }
+            let at = view::voxel_of(
+                units
+                    .positions()
+                    .get(row)
+                    .copied()
+                    .ok_or_else(|| missing("position"))?,
+            );
+            if filter.visible(
+                viewer,
+                &Audience::World {
+                    owner: Some(owner),
+                    at,
+                },
+            ) {
+                out.push(pharmakos_verifier::Sighting {
+                    what: pharmakos_verifier::Sighted::Commander(owner),
+                    at,
+                    age_ms: 0,
+                });
+            }
+        }
+        for remembered in sightings_of(world, seat)? {
+            let what = match remembered.kind {
+                pharmakos_sim::knowledge::AssetKind::Beacon => {
+                    pharmakos_verifier::Sighted::Beacon(handle(beacon_of(&remembered)?)?)
+                }
+                pharmakos_sim::knowledge::AssetKind::Commander => {
+                    pharmakos_verifier::Sighted::Commander(remembered.owner)
+                }
+                // A unit, a structure or a wreck: no Attack target or
+                // freshness rule reads one (spec section 10), and the
+                // verifier's layout has no place for it. `Unknown` is a kind
+                // the sim never records.
+                pharmakos_sim::knowledge::AssetKind::Unit
+                | pharmakos_sim::knowledge::AssetKind::Structure
+                | pharmakos_sim::knowledge::AssetKind::Wreck
+                | pharmakos_sim::knowledge::AssetKind::Unknown => continue,
+            };
+            out.push(pharmakos_verifier::Sighting {
+                what,
+                at: remembered.at,
+                age_ms: remembered.age_ms,
+            });
+        }
+        Ok(out)
+    }
+
     /// One `gp.api.v1.BeaconSummary`, as `viewer` may be told it.
     ///
-    /// `beacon_id`, `at` and `owner` for every beacon a viewer may see. For a
-    /// seat's **own** beacon, also `core`, `priority` and `powered`
-    /// (decisions-log item 111, decision C7): what a client needs to tell
-    /// which of its beacons would brown out first. **Another seat's beacon
-    /// carries its owner and nothing more**, under every fog policy and to
-    /// every viewer that is not its owner — a spectator and the lobby
-    /// included — because its power state and priority are that seat's
-    /// business (spec section 3 names only a seat's own), and a field left
-    /// unset is left out rather than written as a zero a reader would take for
-    /// an answer. The rest of spec section 12's beacon detail — mandate, HP,
-    /// units by role, tags, a sighting's age — stays `reserved 7 to 15`.
-    fn beacon_summary(&self, viewer: Viewer, name: &str, row: usize, at: Voxel) -> Json {
+    /// `beacon_id`, `at` and `owner` for every beacon a viewer may see or
+    /// remembers. For a seat's **own** beacon, also `core`, `priority` and
+    /// `powered` (decisions-log item 111, decision C7): what a client needs to
+    /// tell which of its beacons would brown out first, and its `hp` with its
+    /// `max_hp`. **Another seat's beacon** carries what S2's plan's decision 5
+    /// shows (decisions-log item 144 (11), the register's S2-11) and nothing
+    /// more, under every fog policy and to every viewer that is not its owner:
+    /// in live vision its `hp` and `max_hp` and a `sighting_age_ms` of 0, and
+    /// from memory the place it was last seen and that sighting's age, with no
+    /// hit points. Its mandate, power state, priority, units by role and build
+    /// progress are never shown. A field left unset is left out rather than
+    /// written as a zero a reader would take for an answer.
+    ///
+    /// **`max_hp` tells another seat's core from its other beacons**
+    /// (`beacon.core_hp` against `structures.beacon.hp`), and that is accepted
+    /// (the main session's ruling R3 on the reviews of #128): a seat's core is
+    /// the beacon the map places for it at its spawn, public from the first
+    /// tick, so the figure tells a seat nothing it could not see.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] when the beacon table lacks a column
+    /// for the row, or a figure does not fit the wire.
+    fn beacon_summary(&self, known: &KnownBeacon) -> Result<Json, Error> {
+        let at = known.at;
         let mut entries = vec![
-            (String::from("beacon_id"), Json::String(name.to_owned())),
+            (String::from("beacon_id"), Json::String(known.name.clone())),
             (
                 String::from("at"),
                 Json::Object(vec![
@@ -1130,107 +1366,550 @@ impl Surface {
                     (String::from("z"), Json::Number(at.z.to_string())),
                 ]),
             ),
+            (
+                String::from("owner"),
+                Json::String(crate::token::Subject::Seat(known.owner).render()),
+            ),
         ];
-        let Ok(host) = self.host() else {
-            return Json::Object(entries);
+        let hit_points = |entries: &mut Vec<(String, Json)>, (hp, max_hp): (u32, u32)| {
+            entries.push((String::from("hp"), Json::Number(hp.to_string())));
+            entries.push((String::from("max_hp"), Json::Number(max_hp.to_string())));
         };
-        let beacons = host.world().beacons();
-        if beacons.frees().get(row) != Some(&false) {
-            return Json::Object(entries);
+        match known.seen {
+            Seen::Own { row } => {
+                let world = self.host()?.world();
+                let beacons = world.beacons();
+                let missing = |name: &str| {
+                    Error::internal(format!("the beacon table has no {name} in row {row}"))
+                };
+                let core = core_beacon_of(world, known.owner) == Some(known.id);
+                let priority = beacons
+                    .priorities()
+                    .get(row)
+                    .copied()
+                    .ok_or_else(|| missing("priority"))?;
+                let dormant = beacons
+                    .dormant()
+                    .get(row)
+                    .copied()
+                    .ok_or_else(|| missing("dormancy"))?;
+                entries.push((String::from("core"), Json::Bool(core)));
+                entries.push((
+                    String::from("priority"),
+                    Json::String(priority_wire_name(priority)?),
+                ));
+                entries.push((String::from("powered"), Json::Bool(!dormant)));
+                hit_points(&mut entries, self.beacon_hit_points(row, known.id)?);
+            }
+            Seen::Live { row } => {
+                hit_points(&mut entries, self.beacon_hit_points(row, known.id)?);
+                entries.push((
+                    String::from("sighting_age_ms"),
+                    Json::Number(String::from("0")),
+                ));
+            }
+            Seen::Remembered { age_ms } => {
+                let age = i32::try_from(age_ms).map_err(|_| {
+                    Error::internal(format!(
+                        "a sighting {age_ms} ms old does not fit the wire's int32 age"
+                    ))
+                })?;
+                entries.push((
+                    String::from("sighting_age_ms"),
+                    Json::Number(age.to_string()),
+                ));
+            }
         }
-        let id = beacons.ids().get(row).copied().unwrap_or(u32::MAX);
-        let owner = beacons.seats().get(row).copied().unwrap_or_default();
-        entries.push((
-            String::from("owner"),
-            Json::String(crate::token::Subject::Seat(SeatId::new(owner)).render()),
-        ));
-        if viewer != Viewer::Seat(SeatId::new(owner)) {
-            return Json::Object(entries);
-        }
-        let core = core_beacon_of(host.world(), SeatId::new(owner)) == Some(id);
-        let priority = beacons.priorities().get(row).copied().unwrap_or_default();
-        let powered = !beacons.dormant().get(row).copied().unwrap_or(false);
-        entries.push((String::from("core"), Json::Bool(core)));
-        entries.push((
-            String::from("priority"),
-            Json::String(priority_wire_name(priority)),
-        ));
-        entries.push((String::from("powered"), Json::Bool(powered)));
-        Json::Object(entries)
+        Ok(Json::Object(entries))
     }
 
-    /// The beacons a viewer may see, with this viewer's name for each, own
-    /// first by ordinal (`b_00` first), then everybody else's by this viewer's
-    /// handle (`e_01` first).
+    /// One living beacon's hit points now and at full condition, as the
+    /// wire's whole HP.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] for a row with no hit points, and as
+    /// [`view::hp_wire`].
+    fn beacon_hit_points(&self, row: usize, id: u32) -> Result<(u32, u32), Error> {
+        let world = self.host()?.world();
+        let hp = world
+            .beacons()
+            .hit_points()
+            .get(row)
+            .copied()
+            .ok_or_else(|| {
+                Error::internal(format!("the beacon table has no hit points in row {row}"))
+            })?;
+        let max = world.beacon_max_hp(pharmakos_sim::tables::BeaconId::new(id));
+        Ok((view::hp_wire(hp)?, view::hp_wire(max)?))
+    }
+
+    /// Every beacon a viewer may see or remembers, with this viewer's name for
+    /// each, own first by ordinal (`b_00` first), then everybody else's by this
+    /// viewer's handle (`e_01` first).
+    ///
+    /// **Live vision first, then memory.** A beacon the fog filter lets the
+    /// viewer see now is listed where it stands, with its hit points. A seat's
+    /// own sightings of another seat's beacons that are not in sight now come
+    /// from the sim's knowledge store (its hashed sighting table, which the one
+    /// sensor interface fills on every decision tick; S2's plan, E10) at the
+    /// place each was last seen, with that sighting's age: only what the seat
+    /// itself saw, nothing inferred. A spectator and the lobby remember
+    /// nothing, because memory is a seat's.
     ///
     /// Another seat's beacons are named in table order the first time they
     /// are shown together, so the handles a listing mints count up in the
     /// order a seat's own listing reads; a beacon seen later takes the next
     /// handle and sorts last, which keeps an earlier page's cursor honest.
-    fn visible_beacons<V: Vision>(
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] when no match is hosted, a table row
+    /// lacks a column, or a sighting cannot be read as a beacon's.
+    fn known_beacons<V: Vision>(
         &mut self,
         viewer: Viewer,
         vision: &V,
-    ) -> Vec<(String, usize, Voxel)> {
-        let Some(host) = self.host.as_ref() else {
-            return Vec::new();
-        };
-        let world = host.world();
-        let beacons = world.beacons();
-        let filter = FogFilter::new(&self.fog, vision);
-        let mut found: Vec<(bool, usize, Voxel)> = Vec::new();
-        for row in 0..beacons.ids().len() {
-            // A freed row is no beacon at all (S2's plan, E1): listed, it
-            // would be a phantom beacon of seat 255's.
-            if beacons.frees().get(row) != Some(&false) {
-                continue;
+    ) -> Result<Vec<KnownBeacon>, Error> {
+        let mut found: Vec<(bool, usize, u32, Voxel, SeatId, Seen)> = Vec::new();
+        {
+            let world = self.host()?.world();
+            let beacons = world.beacons();
+            for row in 0..beacons.ids().len() {
+                if let Some((id, at, owner, seen)) = self.live_beacon(viewer, vision, row)? {
+                    found.push((seen != Seen::Own { row }, row, id, at, owner, seen));
+                }
             }
-            let owner = beacons.seats().get(row).copied().unwrap_or_default();
-            let at = beacons
-                .positions()
-                .get(row)
-                .copied()
-                .map(view::voxel_of)
-                .unwrap_or_default();
-            let audience = Audience::World {
-                owner: Some(SeatId::new(owner)),
-                at,
-            };
-            if !filter.visible(viewer, &audience) {
-                continue;
+            if let Viewer::Seat(seat) = viewer {
+                for (id, at, owner, age_ms) in remembered_beacons(world, seat)? {
+                    if found.iter().any(|(_, _, held, ..)| *held == id) {
+                        continue;
+                    }
+                    found.push((
+                        true,
+                        row_key(id)?,
+                        id,
+                        at,
+                        owner,
+                        Seen::Remembered { age_ms },
+                    ));
+                }
             }
-            let own = viewer == Viewer::Seat(SeatId::new(owner));
-            found.push((!own, row, at));
         }
         // Named in table order, which is the order a first listing mints the
-        // `e_NN` handles in.
-        found.sort_unstable_by_key(|(foreign, row, _)| (*foreign, *row));
-        let mut named: Vec<(bool, u32, String, usize, Voxel)> = found
-            .into_iter()
-            .map(|(foreign, row, at)| {
-                let name = self.views.beacon_name(viewer, world, row);
-                let number = match pharmakos_sim::tables::parse_beacon_name(&name) {
-                    Some(
-                        pharmakos_sim::tables::BeaconName::Own(number)
-                        | pharmakos_sim::tables::BeaconName::Foreign(number),
-                    ) => number,
-                    None => u32::MAX,
-                };
-                (foreign, number, name, row, at)
-            })
-            .collect();
+        // `e_NN` handles in; the id breaks a tie between a remembered beacon
+        // and a live one that took its row.
+        found.sort_unstable_by_key(|(foreign, key, id, ..)| (*foreign, *key, *id));
+        let mut named: Vec<(bool, u32, KnownBeacon)> = Vec::with_capacity(found.len());
+        for (foreign, _, id, at, owner, seen) in found {
+            let name = match seen {
+                Seen::Own { row } => {
+                    let world = hosted(self.host.as_ref())?.world();
+                    self.views.beacon_name(viewer, world, row)?
+                }
+                Seen::Live { .. } | Seen::Remembered { .. } => match viewer {
+                    // A seat's handles are minted only where a Lull opens
+                    // ([`Surface::name_sightings`]): a beacon it first sees
+                    // in a Push is listed once the next Lull names it.
+                    Viewer::Seat(_) => match self.views.foreign_beacon_handle(viewer, id) {
+                        Some(name) => name,
+                        None => continue,
+                    },
+                    // A spectator's names reach no report, so it is shown a
+                    // beacon under the handle minted the first time it sees it.
+                    Viewer::Spectator { .. } | Viewer::Admin => {
+                        self.views.foreign_beacon_name(viewer, id)?
+                    }
+                },
+            };
+            let Some(
+                pharmakos_sim::tables::BeaconName::Own(number)
+                | pharmakos_sim::tables::BeaconName::Foreign(number),
+            ) = pharmakos_sim::tables::parse_beacon_name(&name)
+            else {
+                return Err(Error::internal(format!(
+                    "the view feed minted `{name}`, which is no beacon name"
+                )));
+            };
+            named.push((
+                foreign,
+                number,
+                KnownBeacon {
+                    name,
+                    id,
+                    at,
+                    owner,
+                    seen,
+                },
+            ));
+        }
         // Own beacons first, then by the number in the name: every sort key
         // ends in a unique value (item 62's convention, which this crate keeps
         // because its outputs are byte-compared across three operating
         // systems), and within a side a name's number is unique.
-        named.sort_unstable_by_key(|(foreign, number, _, row, _)| (*foreign, *number, *row));
-        named
+        named.sort_unstable_by_key(|(foreign, number, known)| (*foreign, *number, known.id));
+        Ok(named.into_iter().map(|(_, _, known)| known).collect())
+    }
+
+    /// The one beacon with id `id`, if `viewer` may see it now or remembers
+    /// it, with the name this viewer already holds for it. Mints nothing:
+    /// [`Surface::get_beacon`] reaches it only through a name the viewer was
+    /// given.
+    ///
+    /// # Errors
+    ///
+    /// As [`Surface::known_beacons`].
+    fn known_beacon<V: Vision>(
+        &mut self,
+        viewer: Viewer,
+        vision: &V,
+        id: u32,
+    ) -> Result<Option<KnownBeacon>, Error> {
+        let live = match self
+            .host()?
+            .world()
+            .beacons()
+            .row_of(pharmakos_sim::tables::BeaconId::new(id))
+        {
+            Ok(row) => self.live_beacon(viewer, vision, row.index())?,
+            // An id whose row has been freed or reused names no beacon that
+            // stands: the seat can only remember it.
+            Err(_) => None,
+        };
+        let world = hosted(self.host.as_ref())?.world();
+        if let Some((id, at, owner, seen)) = live {
+            let name = match seen {
+                Seen::Own { row } => self.views.beacon_name(viewer, world, row)?,
+                Seen::Live { .. } | Seen::Remembered { .. } => {
+                    match self.views.foreign_beacon_handle(viewer, id) {
+                        Some(name) => name,
+                        None => return Ok(None),
+                    }
+                }
+            };
+            return Ok(Some(KnownBeacon {
+                name,
+                id,
+                at,
+                owner,
+                seen,
+            }));
+        }
+        let Viewer::Seat(seat) = viewer else {
+            return Ok(None);
+        };
+        let Some((id, at, owner, age_ms)) = remembered_beacons(world, seat)?
             .into_iter()
-            .map(|(_, _, name, row, at)| (name, row, at))
-            .collect()
+            .find(|(held, ..)| *held == id)
+        else {
+            return Ok(None);
+        };
+        let Some(name) = self.views.foreign_beacon_handle(viewer, id) else {
+            return Ok(None);
+        };
+        Ok(Some(KnownBeacon {
+            name,
+            id,
+            at,
+            owner,
+            seen: Seen::Remembered { age_ms },
+        }))
+    }
+
+    /// The beacon in `row`, if it stands and `viewer` may see it now: its id,
+    /// its place, its owner and how it is seen.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] when no match is hosted or the row
+    /// lacks a column.
+    fn live_beacon<V: Vision>(
+        &self,
+        viewer: Viewer,
+        vision: &V,
+        row: usize,
+    ) -> Result<Option<(u32, Voxel, SeatId, Seen)>, Error> {
+        let beacons = self.host()?.world().beacons();
+        // A freed row is no beacon at all (S2's plan, E1): listed, it would
+        // be a phantom beacon of the no-seat value's.
+        let missing =
+            |name: &str| Error::internal(format!("the beacon table has no {name} in row {row}"));
+        if beacons
+            .frees()
+            .get(row)
+            .copied()
+            .ok_or_else(|| missing("free flag"))?
+        {
+            return Ok(None);
+        }
+        let hp = beacons
+            .hit_points()
+            .get(row)
+            .copied()
+            .ok_or_else(|| missing("hit points"))?;
+        if !hp.is_alive() {
+            return Ok(None);
+        }
+        let owner = SeatId::new(
+            beacons
+                .seats()
+                .get(row)
+                .copied()
+                .ok_or_else(|| missing("seat"))?,
+        );
+        let at = view::voxel_of(
+            beacons
+                .positions()
+                .get(row)
+                .copied()
+                .ok_or_else(|| missing("position"))?,
+        );
+        let id = beacons
+            .ids()
+            .get(row)
+            .copied()
+            .ok_or_else(|| missing("id"))?;
+        let filter = FogFilter::new(&self.fog, vision);
+        let audience = Audience::World {
+            owner: Some(owner),
+            at,
+        };
+        if !filter.visible(viewer, &audience) {
+            return Ok(None);
+        }
+        let seen = if viewer == Viewer::Seat(owner) {
+            Seen::Own { row }
+        } else {
+            Seen::Live { row }
+        };
+        Ok(Some((id, at, owner, seen)))
     }
 }
 
+/// How a viewer knows one beacon.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Seen {
+    /// One of the viewer's own, standing in `row`.
+    Own {
+        /// Its row of the beacon table.
+        row: usize,
+    },
+    /// Another seat's, standing in `row`, in the viewer's live vision now.
+    Live {
+        /// Its row of the beacon table.
+        row: usize,
+    },
+    /// Another seat's, from the viewer's memory, last seen `age_ms` ago on
+    /// match game time.
+    Remembered {
+        /// Game milliseconds since the seat last saw it.
+        age_ms: u32,
+    },
+}
+
+/// One beacon as a viewer knows it, named as that viewer names it.
+#[derive(Clone, PartialEq, Eq, Debug)]
+struct KnownBeacon {
+    /// This viewer's name for it: `b_NN` or `e_NN`.
+    name: String,
+    /// The beacon's id, generation and all.
+    id: u32,
+    /// Where it stands, or where it was last seen.
+    at: Voxel,
+    /// The seat that owns it, or owned it when it was seen.
+    owner: SeatId,
+    /// How the viewer knows it.
+    seen: Seen,
+}
+
+/// A beacon id's row, the key a listing mints handles in: table order.
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] for an id outside the sim's id layout,
+/// which no sighting the sim records holds.
+fn row_key(id: u32) -> Result<usize, Error> {
+    pharmakos_sim::tables::BeaconId::new(id)
+        .row()
+        .map(pharmakos_sim::ids::Row::index)
+        .map_err(|error| Error::internal(format!("a sighted beacon's id {id} has no row: {error}")))
+}
+
+/// The hosted match, borrowed through the field alone, so the view feed can be
+/// written while the world is read.
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] when no match is hosted.
+fn hosted(host: Option<&crate::host::Host>) -> Result<&crate::host::Host, Error> {
+    host.ok_or_else(|| Error::internal("this gateway is not hosting a match"))
+}
+
+/// `seat`'s own sightings of other seats' beacons, from the sim's knowledge
+/// store: each beacon's id, the place it was last seen, the seat that owned it
+/// and the sighting's age, in the table's own order.
+///
+/// # Errors
+///
+/// As [`sightings_of`].
+pub(crate) fn remembered_beacons(
+    world: &pharmakos_sim::world::World,
+    seat: SeatId,
+) -> Result<Vec<(u32, Voxel, SeatId, u32)>, Error> {
+    sightings_of(world, seat)?
+        .into_iter()
+        .filter(|sighting| sighting.kind == pharmakos_sim::knowledge::AssetKind::Beacon)
+        .map(|sighting| {
+            Ok((
+                beacon_of(&sighting)?,
+                sighting.at,
+                sighting.owner,
+                sighting.age_ms,
+            ))
+        })
+        .collect()
+}
+
+/// The beacon id a sighting of a beacon names.
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] for a sighting recorded as a beacon's
+/// whose asset id is tagged as another kind's: the sim writes the two
+/// together, so they disagreeing is the sim and the gateway disagreeing.
+pub(crate) fn beacon_of(sighting: &Remembered) -> Result<u32, Error> {
+    if sighting.asset.tag() != pharmakos_sim::knowledge::AssetId::TAG_BEACON {
+        return Err(Error::internal(format!(
+            "a sighting of a beacon names asset {}, which is tagged as another kind's",
+            sighting.asset.raw()
+        )));
+    }
+    Ok(sighting.asset.index())
+}
+
+/// One of a seat's own sightings, read off the sim's hashed sighting table.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct Remembered {
+    /// What was seen.
+    pub asset: pharmakos_sim::knowledge::AssetId,
+    /// Of what kind.
+    pub kind: pharmakos_sim::knowledge::AssetKind,
+    /// The seat that owned it.
+    pub owner: SeatId,
+    /// Where it was last seen, as a whole voxel.
+    pub at: Voxel,
+    /// Game milliseconds since it was last seen, on match game time across
+    /// Pushes: the table keeps the tick it was taken at, and the age is
+    /// derived against the world's tick, so the Lull and the recap add
+    /// nothing to it (spec section 6).
+    pub age_ms: u32,
+}
+
+/// Every sighting `seat` holds, in the table's own `(seat, asset)` order: only
+/// what the seat itself saw (S2's plan, decision 5, from memory).
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] when the table's columns disagree in
+/// length, a row holds a kind this build does not name, a sighting was taken
+/// after the world's own tick, or its age does not fit a `u32` of
+/// milliseconds.
+pub(crate) fn sightings_of(
+    world: &pharmakos_sim::world::World,
+    seat: SeatId,
+) -> Result<Vec<Remembered>, Error> {
+    let table = world.sightings();
+    let now = world.tick().raw();
+    let rows = table.seats().len();
+    let short = |name: &str| {
+        Error::internal(format!(
+            "the sighting table holds {rows} seats and fewer {name}"
+        ))
+    };
+    let mut out: Vec<Remembered> = Vec::new();
+    for row in 0..rows {
+        if table.seats().get(row).copied() != Some(seat.raw()) {
+            continue;
+        }
+        let asset = table
+            .assets()
+            .get(row)
+            .copied()
+            .ok_or_else(|| short("assets"))?;
+        let raw_kind = table
+            .kinds()
+            .get(row)
+            .copied()
+            .ok_or_else(|| short("kinds"))?;
+        let kind = pharmakos_sim::knowledge::AssetKind::from_id(raw_kind).ok_or_else(|| {
+            Error::internal(format!(
+                "a sighting holds kind {raw_kind}, which this build does not name"
+            ))
+        })?;
+        let owner = table
+            .owners()
+            .get(row)
+            .copied()
+            .ok_or_else(|| short("owners"))?;
+        let place = table
+            .places()
+            .get(row)
+            .copied()
+            .ok_or_else(|| short("places"))?;
+        let seen_at = table
+            .seen_at()
+            .get(row)
+            .copied()
+            .ok_or_else(|| short("ticks"))?;
+        out.push(Remembered {
+            asset: pharmakos_sim::knowledge::AssetId::new(asset),
+            kind,
+            owner: SeatId::new(owner),
+            at: view::voxel_of(place),
+            age_ms: age_ms(now, seen_at)?,
+        });
+    }
+    Ok(out)
+}
+
+/// The age of a sighting taken at tick `seen_at`, at tick `now`, in game
+/// milliseconds.
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] for a sighting taken after `now`, which
+/// the sim cannot record, and for an age past a `u32` of milliseconds, which
+/// no match of this project's lengths reaches; neither is clamped.
+pub(crate) fn age_ms(now: u32, seen_at: u32) -> Result<u32, Error> {
+    let ticks = now.checked_sub(seen_at).ok_or_else(|| {
+        Error::internal(format!(
+            "a sighting was taken at tick {seen_at}, after the world's tick {now}"
+        ))
+    })?;
+    let per_tick = u32::try_from(pharmakos_sim::math::quantity::MS_PER_TICK)
+        .map_err(|_| Error::internal("the sim's tick is no whole number of milliseconds"))?;
+    ticks.checked_mul(per_tick).ok_or_else(|| {
+        Error::internal(format!(
+            "a sighting {ticks} ticks old does not fit a u32 of milliseconds"
+        ))
+    })
+}
+
+/// A page's `limit`: as asked, never past `budget`, and the budget when it is
+/// not asked.
+///
+/// # Errors
+///
+/// [`crate::error::Code::InvalidArgument`] for a negative limit, which counts
+/// no page a client can mean; it is refused rather than read as the budget.
+pub(crate) fn limit_param(request: &Request, budget: usize) -> Result<usize, Error> {
+    match request.integer_param("limit")? {
+        None => Ok(budget),
+        Some(asked) => usize::try_from(asked)
+            .map(|asked| asked.min(budget))
+            .map_err(|_| Error::invalid(format!("`limit` is a count, and {asked} is not one"))),
+    }
+}
 /// The recap's settlement for `seat`, the seat's own, and its sentence pushed
 /// onto `prose` ([`Surface::get_recap`] says what it carries). `None` when the
 /// Ledger credited the seat nothing at this segment end.
@@ -1314,6 +1993,87 @@ fn failure_lines(
         prose.push_str(&strings::recap_step_failed(value, times));
     }
     Ok(())
+}
+
+/// The calling seat's own tally for [`Surface::get_recap`], from the counters
+/// the recap's facts hold for it, with its sentence pushed onto `prose`.
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] for a seat the facts hold no tally for,
+/// and as [`tally_json`].
+fn own_tally(facts: &RecapFacts, seat: SeatId, prose: &mut String) -> Result<Json, Error> {
+    let tally = facts
+        .tallies
+        .iter()
+        .find(|(held, _)| *held == seat)
+        .map(|(_, tally)| *tally)
+        .ok_or_else(|| {
+            Error::internal(format!("the recap holds no tally for seat {}", seat.raw()))
+        })?;
+    let (json, destroyed) = tally_json(tally)?;
+    prose.push(' ');
+    prose.push_str(&strings::recap_tally(
+        tally.kills,
+        tally.shared_kills,
+        destroyed,
+        tally.losses,
+    ));
+    Ok(json)
+}
+
+/// Every seat's tally, ascending by seat, for [`Surface::get_recap`]: `None`
+/// until the match is decided (the owner's ruling, decisions-log item 145
+/// (7)), and from the final recap on, since the outcome is decided on the
+/// final tick and the fog lifts there.
+///
+/// # Errors
+///
+/// As [`tally_json`].
+fn seat_tallies(host: &crate::host::Host, facts: &RecapFacts) -> Result<Option<Json>, Error> {
+    if host.runner().outcome().is_none() {
+        return Ok(None);
+    }
+    let all = facts
+        .tallies
+        .iter()
+        .map(|(seat, tally)| {
+            Ok(Json::Object(vec![
+                (
+                    String::from("seat"),
+                    Json::String(crate::token::Subject::Seat(*seat).render()),
+                ),
+                (String::from("tally"), tally_json(*tally)?.0),
+            ]))
+        })
+        .collect::<Result<Vec<Json>, Error>>()?;
+    Ok(Some(Json::Array(all)))
+}
+
+/// One `gp.api.v1.Tally`, every field written, the zeros included, and the
+/// value destroyed as the wire's whole dollars.
+///
+/// # Errors
+///
+/// As [`view::dollars_wire`], for a value destroyed past `int32`.
+fn tally_json(tally: pharmakos_sim::tables::Tally) -> Result<(Json, i32), Error> {
+    let destroyed = view::dollars_wire(tally.destroyed, "the enemy value a seat destroyed")?;
+    let json = Json::Object(vec![
+        (String::from("kills"), Json::Number(tally.kills.to_string())),
+        (
+            String::from("shared_kills"),
+            Json::Number(tally.shared_kills.to_string()),
+        ),
+        (
+            String::from("losses"),
+            Json::Number(tally.losses.to_string()),
+        ),
+        (
+            String::from("value_destroyed_dollars"),
+            Json::Number(destroyed.to_string()),
+        ),
+    ]);
+    Ok((json, destroyed))
 }
 
 /// Why a seal does not price ([`Surface::seal_commitment`]).
@@ -1512,16 +2272,25 @@ pub(crate) const fn grade_proto(
 /// every enum this surface answers with is (decisions-log item 80).
 ///
 /// The column holds the enum's wire values (`SeatTable`'s doc), so a value
-/// the enum does not name is the sim and the schema disagreeing; it is spelt
-/// `unspecified` rather than guessed at, which a client reads as "not known".
-fn priority_wire_name(value: u8) -> String {
+/// the enum does not name is the sim and the schema disagreeing, and it is
+/// refused as a typed internal error rather than spelt `unspecified`, which a
+/// client would read as an answer.
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] for a value the schema does not name.
+fn priority_wire_name(value: u8) -> Result<String, Error> {
     use pharmakos_proto::gp::v1::interface_row::QuartermasterPriority;
-    let named = QuartermasterPriority::try_from(i32::from(value))
-        .unwrap_or(QuartermasterPriority::Unspecified);
-    pharmakos_proto::scope::wire_name(
+    let named = QuartermasterPriority::try_from(i32::from(value)).map_err(|_| {
+        Error::internal(format!(
+            "a beacon's Quartermaster priority column holds {value}, which the schema does not \
+             name"
+        ))
+    })?;
+    Ok(pharmakos_proto::scope::wire_name(
         "gp.v1.InterfaceRow.QuartermasterPriority",
         named.as_str_name(),
-    )
+    ))
 }
 
 /// A whole voxel as the fixed-point point at its corner, which is the voxel

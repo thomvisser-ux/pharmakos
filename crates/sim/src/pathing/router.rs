@@ -1070,7 +1070,7 @@ mod tests {
                 heights.push(if wall(x, y) { 28 } else { GROUND });
             }
         }
-        voxels.fill_from_heightmap(&heights, 3, Material::DIRT, Material::STONE);
+        voxels.fill_from_heightmap(&heights, 0, 3, Material::DIRT, Material::STONE);
         voxels
     }
 

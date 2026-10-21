@@ -938,7 +938,7 @@ mod tests {
                 heights.push(if ravine(x, y) { 2 } else { GROUND });
             }
         }
-        voxels.fill_from_heightmap(&heights, 3, Material::DIRT, Material::STONE);
+        voxels.fill_from_heightmap(&heights, 0, 3, Material::DIRT, Material::STONE);
         let mut features: Vec<Feature> = Vec::new();
         for anchor in vents {
             let mut footprint: Vec<FootprintColumn> = Vec::new();

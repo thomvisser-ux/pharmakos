@@ -298,14 +298,16 @@ fn a_hidden_or_foreign_name_answers_no_target() {
         )
     };
     // The answer without its pointer: what a seat learns from it.
-    let learned = |answer: &[Json]| -> Vec<(String, String, i64, usize, String)> {
+    // `travel_ms` is written only beside `reachable: true` (decisions-log
+    // item 133 (3) (i)), so a reference that reads nothing carries none.
+    let learned = |answer: &[Json]| -> Vec<(String, String, Option<i64>, usize, String)> {
         answer
             .iter()
             .map(|one| {
                 (
                     text_of(one, "feature_id"),
                     text_of(one, "failure"),
-                    number(one, "travel_ms"),
+                    one.get("travel_ms").map(|_| number(one, "travel_ms")),
                     array_of(one, "candidates").len(),
                     pharmakos_proto::json::write(one.get("matched").expect("matched")),
                 )
@@ -320,7 +322,7 @@ fn a_hidden_or_foreign_name_answers_no_target() {
         vec![(
             String::new(),
             String::from("no_target"),
-            0,
+            None,
             0,
             String::from("0\n")
         )]
@@ -728,9 +730,17 @@ fn a_non_seat_is_told_the_map_and_nothing_about_a_seat() {
     sorted.sort();
     assert_eq!(names, sorted, "in feature id order");
     for feature in &features {
-        for key in ["covered", "travel_ms", "reachable", "live"] {
+        for key in ["covered", "reachable", "live"] {
             assert!(feature.get(key).is_some(), "a seat is told `{key}`");
         }
+        // `travel_ms` beside `reachable: true` and never beside `false`, so a
+        // 0 is a feature at the commander's feet and never "unreachable"
+        // (decisions-log item 133 (3) (i)).
+        assert_eq!(
+            feature.get("travel_ms").is_some(),
+            feature.get("reachable") == Some(&Json::Bool(true)),
+            "{feature:?}"
+        );
     }
     // Seat 0's starting seam lies inside its core's sphere, its starting vent
     // outside it (the generator's distance bands, rules `map.*`).

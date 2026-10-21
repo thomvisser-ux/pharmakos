@@ -141,6 +141,8 @@ pub struct UnitTable {
     home: Vec<BeaconId>,
     carrying: Vec<Money>,
     busy_until: Vec<u32>,
+    arms: Vec<Arms>,
+    retreat: Vec<BeaconId>,
     free: Vec<bool>,
 }
 
@@ -312,6 +314,8 @@ impl UnitTable {
             home: Vec::with_capacity(n),
             carrying: Vec::with_capacity(n),
             busy_until: Vec::with_capacity(n),
+            arms: Vec::with_capacity(n),
+            retreat: Vec::with_capacity(n),
             free: Vec::with_capacity(n),
         }
     }
@@ -336,6 +340,8 @@ impl UnitTable {
         self.home.reserve(n);
         self.carrying.reserve(n);
         self.busy_until.reserve(n);
+        self.arms.reserve(n);
+        self.retreat.reserve(n);
         self.free.reserve(n);
     }
 
@@ -373,6 +379,7 @@ impl UnitTable {
         dest: [Fx; 3],
         hp: Hp,
         home: BeaconId,
+        ready_at: u32,
     ) -> Result<Placed<UnitId>, TableFull> {
         let at = self.vacancy(room)?;
         let id = UnitId::of(at.row, at.generation);
@@ -387,6 +394,8 @@ impl UnitTable {
         put(&mut self.home, row, home);
         put(&mut self.carrying, row, Money::ZERO);
         put(&mut self.busy_until, row, NO_WORK);
+        put(&mut self.arms, row, Arms::ready_at(ready_at));
+        put(&mut self.retreat, row, BeaconId::NONE);
         put(&mut self.free, row, false);
         if !at.reused {
             // An appended row is the table's last, at most `Row::MAX`, so the
@@ -414,7 +423,7 @@ impl UnitTable {
         hp: Hp,
         home: BeaconId,
     ) -> Result<UnitId, TableFull> {
-        self.place(crate::ids::ROOM_LIMIT, seat, kind, pos, dest, hp, home)
+        self.place(crate::ids::ROOM_LIMIT, seat, kind, pos, dest, hp, home, 0)
             .map(|placed| placed.id)
     }
 
@@ -443,6 +452,12 @@ impl UnitTable {
         }
         if let Some(slot) = self.busy_until.get_mut(index) {
             *slot = NO_WORK;
+        }
+        if let Some(slot) = self.arms.get_mut(index) {
+            *slot = Arms::NONE;
+        }
+        if let Some(slot) = self.retreat.get_mut(index) {
+            *slot = BeaconId::NONE;
         }
         if let (Some(here), Some(slot)) = (self.pos.get(index).copied(), self.dest.get_mut(index)) {
             *slot = here;
@@ -651,6 +666,30 @@ impl UnitTable {
         &mut self.busy_until
     }
 
+    /// The combat memory column ([`Arms`]; S2's plan, E12).
+    #[must_use]
+    pub fn arms(&self) -> &[Arms] {
+        &self.arms
+    }
+
+    /// The combat memory column, to write into: the combat phase.
+    pub fn arms_mut(&mut self) -> &mut [Arms] {
+        &mut self.arms
+    }
+
+    /// The retreat column (decision 4; S2's plan, E12): the beacon a unit is
+    /// retreating to, or [`BeaconId::NONE`] when it is not retreating.
+    #[must_use]
+    pub fn retreats(&self) -> &[BeaconId] {
+        &self.retreat
+    }
+
+    /// The retreat column, to write into: the combat phase starts a retreat
+    /// and the programs phase ends one.
+    pub fn retreats_mut(&mut self) -> &mut [BeaconId] {
+        &mut self.retreat
+    }
+
     /// Replace the whole table from the columns of a restored snapshot.
     ///
     /// Returns `false` and changes nothing when the columns disagree in
@@ -667,6 +706,8 @@ impl UnitTable {
             || columns.home.len() != n
             || columns.carrying.len() != n
             || columns.busy_until.len() != n
+            || columns.arms.len() != n
+            || columns.retreat.len() != n
             || columns.free.len() != n
             || !ids_name_their_rows(&columns.id)
         {
@@ -686,6 +727,8 @@ impl UnitTable {
         self.home = columns.home;
         self.carrying = columns.carrying;
         self.busy_until = columns.busy_until;
+        self.arms = columns.arms;
+        self.retreat = columns.retreat;
         self.free = columns.free;
         true
     }
@@ -718,6 +761,10 @@ pub struct UnitColumns {
     pub carrying: Vec<Money>,
     /// The tick each unit's timed work finishes at, or [`NO_WORK`].
     pub busy_until: Vec<u32>,
+    /// Each unit's combat memory ([`Arms`]).
+    pub arms: Vec<Arms>,
+    /// The beacon each unit is retreating to, or [`BeaconId::NONE`].
+    pub retreat: Vec<BeaconId>,
     /// Whether each row is free (S2's plan, E1).
     pub free: Vec<bool>,
 }
@@ -761,6 +808,116 @@ pub const NO_RESPAWN: u32 = u32::MAX;
 /// one, and not a tick any match reaches.
 pub const NO_WORK: u32 = u32::MAX;
 
+/// "No attacker remembered" -- the value [`Arms::attacker`] carries for an
+/// asset no enemy has damaged. `u32::MAX` is tag 15 of an
+/// [`crate::knowledge::AssetId`], which names no kind, so no asset holds it.
+pub const NO_ATTACKER: u32 = u32::MAX;
+
+/// "Never attacked" -- the value [`Arms::attacked_at`] carries beside
+/// [`NO_ATTACKER`]. Not a tick any match reaches.
+pub const NEVER_ATTACKED: u32 = u32::MAX;
+
+/// One asset's combat memory (S2's plan, E12): when its weapon may fire next,
+/// and the last enemy that damaged it, with the tick. **Hashed, snapshotted
+/// and in the goldens**, a column of the unit, structure and beacon tables,
+/// reset when a row is reused (E1).
+///
+/// * `ready_at` is the first tick the asset's weapon may fire on: a shot sets
+///   it to the shot's tick plus the weapon's cooldown in ticks, so a cooldown
+///   is game milliseconds turned into ticks (AGENTS.md section 4.5). A
+///   structure or a unit is placed with it at its placement tick plus that
+///   cooldown, so no row fires twice inside one cooldown, a reused row
+///   included (the shell room's bound, E13). An unarmed asset's is never read.
+/// * `attacker` is the last enemy asset that damaged it, as an
+///   [`crate::knowledge::AssetId`] raw value with its generation, or
+///   [`NO_ATTACKER`]; for a shell it is the shell's firer. `RETURN_FIRE` and
+///   retreat read it (decision 4).
+/// * `attacked_at` is the tick of that damage, or [`NEVER_ATTACKED`].
+/// * `engaged` is the target its last `RETURN_FIRE` shot answered, or
+///   [`NO_ATTACKER`]: a shot at a different target opens a new engagement,
+///   which is announced (`returned_fire`, decision 4), and a shot at the same
+///   one is not, so return fire is announced once per engagement and never
+///   once per shot (E15).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Arms {
+    /// The first tick the weapon may fire on.
+    pub ready_at: u32,
+    /// The last enemy that damaged it, or [`NO_ATTACKER`].
+    pub attacker: u32,
+    /// When, or [`NEVER_ATTACKED`].
+    pub attacked_at: u32,
+    /// The target its last return-fire shot answered, or [`NO_ATTACKER`].
+    pub engaged: u32,
+}
+
+impl Arms {
+    /// A fresh row's memory: ready at `ready_at`, attacked by nobody.
+    #[must_use]
+    pub const fn ready_at(ready_at: u32) -> Arms {
+        Arms {
+            ready_at,
+            attacker: NO_ATTACKER,
+            attacked_at: NEVER_ATTACKED,
+            engaged: NO_ATTACKER,
+        }
+    }
+
+    /// A freed row's memory: nothing.
+    pub const NONE: Arms = Arms::ready_at(0);
+}
+
+/// A beacon's Common settings (spec section 6's Common row): the rules of
+/// engagement and the retreat threshold every armed asset and unit homed to it
+/// follows (decision 4). **Hashed, snapshotted and in the goldens**, written by
+/// a committed settings row that names them and reset by a mandate switch
+/// (spec section 5: switching clears the old settings).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Common {
+    /// `MandateSettings.roe`'s wire value: 0 unset, which reads as
+    /// `RETURN_FIRE` (decision 4), 1 `HOLD_FIRE`, 2 `RETURN_FIRE`, 3
+    /// `FREE_FIRE`.
+    pub roe: u8,
+    /// `MandateSettings.retreat_hp_pct`, 0 to 100: a unit below this
+    /// percentage of its hit points retreats. Zero never retreats.
+    pub retreat_hp_pct: u8,
+}
+
+impl Common {
+    /// The defaults a beacon is placed with and a switch leaves: an unset
+    /// `roe` and no retreat.
+    pub const DEFAULT: Common = Common {
+        roe: 0,
+        retreat_hp_pct: 0,
+    };
+}
+
+/// One seat's tally for the match (S2's plan, E15): the enemy value it
+/// destroyed, its kills, the kills it shared and its losses. **Hashed,
+/// snapshotted and in the goldens**, accumulated as deaths settle and never
+/// read off the event bus, which drops past its capacity.
+///
+/// * `destroyed` is the seat's settled share of the build cost of every enemy
+///   asset destroyed (largest remainder, spec section 3), the final audit's
+///   enemy-value term (decision 7).
+/// * `kills` counts enemy assets destroyed with a share of their credit going
+///   to the seat; `shared_kills` those of them whose credit was split with
+///   another seat (spec section 3's "shared kill").
+/// * `losses` counts the seat's own assets destroyed, whatever destroyed them:
+///   a unit or structure killed, a beacon destroyed or recycled, and a
+///   structure left as a ruin (decisions-log item 145 (5)). The commander is
+///   not an asset and is counted in none of these (`gateway.proto`'s `Tally`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Tally {
+    /// Enemy value destroyed, in `$`.
+    pub destroyed: Money,
+    /// Enemy assets destroyed with a share of their credit.
+    pub kills: u32,
+    /// Of `kills`, those whose credit was split with another seat.
+    pub shared_kills: u32,
+    /// Own assets destroyed.
+    pub losses: u32,
+}
+
 /// Per-seat treasury, power and match standing, structure-of-arrays.
 ///
 /// The economy proper is T14's; what is here is the shape the hash and the
@@ -785,6 +942,8 @@ pub struct SeatTable {
     qm_cursor: Vec<u32>,
     placed: Vec<u32>,
     beacons_lost: Vec<u32>,
+    tally: Vec<Tally>,
+    attack: Vec<Arms>,
 }
 
 impl SeatTable {
@@ -804,6 +963,8 @@ impl SeatTable {
             qm_cursor: Vec::with_capacity(n),
             placed: Vec::with_capacity(n),
             beacons_lost: Vec::with_capacity(n),
+            tally: Vec::with_capacity(n),
+            attack: Vec::with_capacity(n),
         }
     }
 
@@ -819,6 +980,8 @@ impl SeatTable {
         self.qm_cursor.push(BeaconId::NONE.raw());
         self.placed.push(0);
         self.beacons_lost.push(0);
+        self.tally.push(Tally::default());
+        self.attack.push(Arms::NONE);
         self.count = self.count.saturating_add(1);
     }
 
@@ -867,6 +1030,30 @@ impl SeatTable {
         if let Some(slot) = self.beacons_lost.get_mut(index) {
             *slot = slot.saturating_add(1);
         }
+    }
+
+    /// Each seat's tally for the match ([`Tally`]; S2's plan, E15).
+    #[must_use]
+    pub fn tallies(&self) -> &[Tally] {
+        &self.tally
+    }
+
+    /// The tally column, to write into: the settle of a tick's deaths.
+    pub fn tallies_mut(&mut self) -> &mut [Tally] {
+        &mut self.tally
+    }
+
+    /// Each seat's memory of the last enemy attack on any of its assets
+    /// ([`Arms::attacker`] and [`Arms::attacked_at`]; the rest unused): what
+    /// `RETURN_FIRE` answers when the asset attacked died (decision 4).
+    #[must_use]
+    pub fn attacks(&self) -> &[Arms] {
+        &self.attack
+    }
+
+    /// The attack column, to write into: the combat phase.
+    pub fn attacks_mut(&mut self) -> &mut [Arms] {
+        &mut self.attack
     }
 
     /// How many seats the table holds.
@@ -998,6 +1185,8 @@ impl SeatTable {
             || columns.qm_cursor.len() != n
             || columns.placed.len() != n
             || columns.beacons_lost.len() != n
+            || columns.tally.len() != n
+            || columns.attack.len() != n
         {
             return false;
         }
@@ -1015,6 +1204,8 @@ impl SeatTable {
         self.qm_cursor = columns.qm_cursor;
         self.placed = columns.placed;
         self.beacons_lost = columns.beacons_lost;
+        self.tally = columns.tally;
+        self.attack = columns.attack;
         true
     }
 }
@@ -1043,6 +1234,10 @@ pub struct SeatColumns {
     pub placed: Vec<u32>,
     /// Beacons lost, per seat ([`SeatTable::beacons_lost`]).
     pub beacons_lost: Vec<u32>,
+    /// The tally, per seat ([`SeatTable::tallies`]).
+    pub tally: Vec<Tally>,
+    /// The last attack, per seat ([`SeatTable::attacks`]).
+    pub attack: Vec<Arms>,
 }
 
 /// The supply and draw columns, borrowed together.
@@ -2788,6 +2983,10 @@ pub struct BeaconColumns {
     pub flee: Vec<bool>,
     /// The seam each beacon holds ([`BeaconTable::seams`]).
     pub seam: Vec<u32>,
+    /// Each beacon's combat memory ([`Arms`]): only a core fires.
+    pub arms: Vec<Arms>,
+    /// Each beacon's Common settings ([`Common`]).
+    pub common: Vec<Common>,
     /// Whether each row is free (S2's plan, E1).
     pub free: Vec<bool>,
 }
@@ -2814,6 +3013,8 @@ pub struct StructureColumns {
     pub rotation: Vec<u8>,
     /// The tick each ruin was ruined at, or [`NOT_RUINED`].
     pub ruined_at: Vec<u32>,
+    /// Each structure's combat memory ([`Arms`]).
+    pub arms: Vec<Arms>,
     /// Whether each row is free (S2's plan, E1).
     pub free: Vec<bool>,
 }
@@ -2844,6 +3045,8 @@ pub struct BeaconTable {
     seam_choice: Vec<u8>,
     flee: Vec<bool>,
     seam: Vec<u32>,
+    arms: Vec<Arms>,
+    common: Vec<Common>,
     free: Vec<bool>,
 }
 
@@ -2869,6 +3072,8 @@ impl BeaconTable {
             seam_choice: Vec::with_capacity(n),
             flee: Vec::with_capacity(n),
             seam: Vec::with_capacity(n),
+            arms: Vec::with_capacity(n),
+            common: Vec::with_capacity(n),
             free: Vec::with_capacity(n),
         }
     }
@@ -2903,6 +3108,7 @@ impl BeaconTable {
                 hp,
                 dormant,
                 ordinal,
+                ready_at: 0,
             },
         )
         .map(|placed| placed.id)
@@ -2952,6 +3158,8 @@ impl BeaconTable {
         put(&mut self.seam_choice, row, mine.seam_choice.id());
         put(&mut self.flee, row, mine.flee_on_threat);
         put(&mut self.seam, row, crate::targeting::NO_FEATURE);
+        put(&mut self.arms, row, Arms::ready_at(start.ready_at));
+        put(&mut self.common, row, Common::DEFAULT);
         put(&mut self.free, row, false);
         if !at.reused {
             // An appended row is the table's last, at most `Row::MAX`.
@@ -2999,6 +3207,12 @@ impl BeaconTable {
         self.set_mine_settings(index, mine);
         if let Some(slot) = self.seam.get_mut(index) {
             *slot = crate::targeting::NO_FEATURE;
+        }
+        if let Some(slot) = self.arms.get_mut(index) {
+            *slot = Arms::NONE;
+        }
+        if let Some(slot) = self.common.get_mut(index) {
+            *slot = Common::DEFAULT;
         }
         self.id
             .get(index)
@@ -3097,6 +3311,8 @@ impl BeaconTable {
         self.seam_choice.reserve(n);
         self.flee.reserve(n);
         self.seam.reserve(n);
+        self.arms.reserve(n);
+        self.common.reserve(n);
         self.free.reserve(n);
     }
 
@@ -3128,6 +3344,12 @@ impl BeaconTable {
     #[must_use]
     pub fn positions(&self) -> &[[Fx; 3]] {
         &self.pos
+    }
+
+    /// The position column, to write into: the support rule moves an asset
+    /// that stands on a falling region down with it (S2's plan, `fall`).
+    pub fn positions_mut(&mut self) -> &mut [[Fx; 3]] {
+        &mut self.pos
     }
 
     /// The mandate column, to write into.
@@ -3312,6 +3534,30 @@ impl BeaconTable {
         &mut self.hp
     }
 
+    /// The combat memory column ([`Arms`]): a core's cooldown, and every
+    /// beacon's attacker.
+    #[must_use]
+    pub fn arms(&self) -> &[Arms] {
+        &self.arms
+    }
+
+    /// The combat memory column, to write into: the combat phase.
+    pub fn arms_mut(&mut self) -> &mut [Arms] {
+        &mut self.arms
+    }
+
+    /// The Common settings column ([`Common`]).
+    #[must_use]
+    pub fn commons(&self) -> &[Common] {
+        &self.common
+    }
+
+    /// The Common settings column, to write into: a committed settings row
+    /// and a mandate switch.
+    pub fn commons_mut(&mut self) -> &mut [Common] {
+        &mut self.common
+    }
+
     /// Replace the whole table from a restored snapshot. Same contract as
     /// [`UnitTable::restore`].
     pub fn restore(&mut self, columns: BeaconColumns) -> bool {
@@ -3330,8 +3576,19 @@ impl BeaconTable {
             || columns.seam_choice.len() != n
             || columns.flee.len() != n
             || columns.seam.len() != n
+            || columns.arms.len() != n
+            || columns.common.len() != n
             || columns.free.len() != n
             || !ids_name_their_rows(&columns.id)
+        {
+            return false;
+        }
+        // A rules of engagement is one of the four wire values this build
+        // names, and a retreat threshold a percent.
+        if columns
+            .common
+            .iter()
+            .any(|common| common.roe > 3 || common.retreat_hp_pct > 100)
         {
             return false;
         }
@@ -3373,6 +3630,8 @@ impl BeaconTable {
         self.seam_choice = columns.seam_choice;
         self.flee = columns.flee;
         self.seam = columns.seam;
+        self.arms = columns.arms;
+        self.common = columns.common;
         self.free = columns.free;
         true
     }
@@ -3388,6 +3647,9 @@ pub struct BeaconStart {
     pub dormant: bool,
     /// Its per-seat ordinal: the seat's placement counter when it is placed.
     pub ordinal: u32,
+    /// The first tick its weapon may fire on ([`Arms::ready_at`]): only a
+    /// core is armed, and the generator places a core ready at tick zero.
+    pub ready_at: u32,
 }
 
 /// What a seat's `b_NN` names ([`BeaconTable::ordinal`]).
@@ -3420,6 +3682,7 @@ pub struct StructureTable {
     building: Vec<bool>,
     rotation: Vec<u8>,
     ruined_at: Vec<u32>,
+    arms: Vec<Arms>,
     free: Vec<bool>,
 }
 
@@ -3444,6 +3707,7 @@ impl StructureTable {
             building: Vec::with_capacity(n),
             rotation: Vec::with_capacity(n),
             ruined_at: Vec::with_capacity(n),
+            arms: Vec::with_capacity(n),
             free: Vec::with_capacity(n),
         }
     }
@@ -3461,6 +3725,7 @@ impl StructureTable {
         self.building.reserve(n);
         self.rotation.reserve(n);
         self.ruined_at.reserve(n);
+        self.arms.reserve(n);
         self.free.reserve(n);
     }
 
@@ -3503,6 +3768,7 @@ impl StructureTable {
         home: BeaconId,
         building: bool,
         rotation: QuarterTurns,
+        ready_at: u32,
     ) -> Result<Placed<StructureId>, TableFull> {
         let at = self.vacancy(room)?;
         let id = StructureId::of(at.row, at.generation);
@@ -3516,6 +3782,7 @@ impl StructureTable {
         put(&mut self.building, row, building);
         put(&mut self.rotation, row, rotation.raw());
         put(&mut self.ruined_at, row, NOT_RUINED);
+        put(&mut self.arms, row, Arms::ready_at(ready_at));
         put(&mut self.free, row, false);
         if !at.reused {
             // An appended row is the table's last, at most `Row::MAX`.
@@ -3550,6 +3817,9 @@ impl StructureTable {
         }
         if let Some(slot) = self.ruined_at.get_mut(index) {
             *slot = NOT_RUINED;
+        }
+        if let Some(slot) = self.arms.get_mut(index) {
+            *slot = Arms::NONE;
         }
         self.id
             .get(index)
@@ -3633,6 +3903,12 @@ impl StructureTable {
         &self.pos
     }
 
+    /// The position column, to write into: the support rule moves an asset
+    /// that stands on a falling region down with it (S2's plan, `fall`).
+    pub fn positions_mut(&mut self) -> &mut [[Fx; 3]] {
+        &mut self.pos
+    }
+
     /// The hit-point column.
     #[must_use]
     pub fn hit_points(&self) -> &[Hp] {
@@ -3693,6 +3969,18 @@ impl StructureTable {
         &mut self.seat
     }
 
+    /// The combat memory column ([`Arms`]): an armed structure's cooldown,
+    /// and every structure's attacker.
+    #[must_use]
+    pub fn arms(&self) -> &[Arms] {
+        &self.arms
+    }
+
+    /// The combat memory column, to write into: the combat phase.
+    pub fn arms_mut(&mut self) -> &mut [Arms] {
+        &mut self.arms
+    }
+
     /// Replace the whole table from a restored snapshot. Same contract as
     /// [`UnitTable::restore`].
     pub fn restore(&mut self, columns: StructureColumns) -> bool {
@@ -3705,6 +3993,7 @@ impl StructureTable {
             || columns.building.len() != n
             || columns.rotation.len() != n
             || columns.ruined_at.len() != n
+            || columns.arms.len() != n
             || columns.free.len() != n
             || !ids_name_their_rows(&columns.id)
         {
@@ -3730,6 +4019,7 @@ impl StructureTable {
         self.building = columns.building;
         self.rotation = columns.rotation;
         self.ruined_at = columns.ruined_at;
+        self.arms = columns.arms;
         self.free = columns.free;
         true
     }
@@ -3746,6 +4036,7 @@ pub struct WreckTable {
     id: Vec<u32>,
     pos: Vec<[Fx; 3]>,
     salvage: Vec<Money>,
+    left_at: Vec<u32>,
     free: Vec<bool>,
 }
 
@@ -3759,6 +4050,7 @@ impl WreckTable {
             id: Vec::with_capacity(n),
             pos: Vec::with_capacity(n),
             salvage: Vec::with_capacity(n),
+            left_at: Vec::with_capacity(n),
             free: Vec::with_capacity(n),
         }
     }
@@ -3770,6 +4062,7 @@ impl WreckTable {
         self.id.reserve(n);
         self.pos.reserve(n);
         self.salvage.reserve(n);
+        self.left_at.reserve(n);
         self.free.reserve(n);
     }
 
@@ -3779,11 +4072,14 @@ impl WreckTable {
     /// # Errors
     ///
     /// [`TableFull`] when no row is free and the table holds `room`.
+    /// `left_at` is the tick it was left on, which decides the oldest wreck a
+    /// full table buries (S2's plan, decision 25).
     pub fn place(
         &mut self,
         room: u32,
         pos: [Fx; 3],
         salvage: Money,
+        left_at: u32,
     ) -> Result<Placed<WreckId>, TableFull> {
         let at = vacancy_in(&self.id, &self.free, room)?;
         let id = WreckId::of(at.row, at.generation);
@@ -3791,6 +4087,7 @@ impl WreckTable {
         put(&mut self.id, row, id.raw());
         put(&mut self.pos, row, pos);
         put(&mut self.salvage, row, salvage);
+        put(&mut self.left_at, row, left_at);
         put(&mut self.free, row, false);
         if !at.reused {
             // An appended row is the table's last, at most `Row::MAX`.
@@ -3812,6 +4109,9 @@ impl WreckTable {
         *free = true;
         if let Some(slot) = self.salvage.get_mut(index) {
             *slot = Money::ZERO;
+        }
+        if let Some(slot) = self.left_at.get_mut(index) {
+            *slot = 0;
         }
         self.id
             .get(index)
@@ -3849,6 +4149,12 @@ impl WreckTable {
         &self.pos
     }
 
+    /// The position column, to write into: the support rule moves an asset
+    /// that stands on a falling region down with it (S2's plan, `fall`).
+    pub fn positions_mut(&mut self) -> &mut [[Fx; 3]] {
+        &mut self.pos
+    }
+
     /// The salvage-value column, in `$`.
     #[must_use]
     pub fn salvages(&self) -> &[Money] {
@@ -3861,6 +4167,13 @@ impl WreckTable {
         &mut self.salvage
     }
 
+    /// The tick each wreck was left on (decision 25: a full table buries the
+    /// oldest unsalvaged wreck); zero on a free row.
+    #[must_use]
+    pub fn left_at(&self) -> &[u32] {
+        &self.left_at
+    }
+
     /// Replace the whole table from a restored snapshot. Same contract as
     /// [`UnitTable::restore`].
     pub fn restore(
@@ -3868,10 +4181,16 @@ impl WreckTable {
         id: Vec<u32>,
         pos: Vec<[Fx; 3]>,
         salvage: Vec<Money>,
+        left_at: Vec<u32>,
         free: Vec<bool>,
     ) -> bool {
         let n = id.len();
-        if pos.len() != n || salvage.len() != n || free.len() != n || !ids_name_their_rows(&id) {
+        if pos.len() != n
+            || salvage.len() != n
+            || left_at.len() != n
+            || free.len() != n
+            || !ids_name_their_rows(&id)
+        {
             return false;
         }
         let Ok(count) = u32::try_from(n) else {
@@ -3881,7 +4200,255 @@ impl WreckTable {
         self.id = id;
         self.pos = pos;
         self.salvage = salvage;
+        self.left_at = left_at;
         self.free = free;
+        true
+    }
+}
+
+/// Which weapon fired a shell ([`ShellTable`]): the core's own autocannon, or
+/// the weapon of a unit or structure kind's rules row. A wire byte, additive
+/// only: the core is `1`, a unit kind `0x10` plus its [`UnitKind::id`] and a
+/// structure kind `0x20` plus its [`StructureKind::id`].
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum Armament {
+    /// A seat's core, `beacon.core_weapon`.
+    Core,
+    /// A unit kind's `weapon` row.
+    Unit(UnitKind),
+    /// A structure kind's `weapon` row.
+    Structure(StructureKind),
+}
+
+impl Armament {
+    /// The wire byte.
+    #[must_use]
+    pub const fn id(self) -> u8 {
+        match self {
+            Armament::Core => 1,
+            Armament::Unit(kind) => 0x10 | kind.id(),
+            Armament::Structure(kind) => 0x20 | kind.id(),
+        }
+    }
+
+    /// The armament a byte names, or `None` for one this build does not.
+    #[must_use]
+    pub const fn from_id(id: u8) -> Option<Armament> {
+        match id {
+            1 => Some(Armament::Core),
+            0x11..=0x1F => match UnitKind::from_id(id & 0x0F) {
+                Some(kind) => Some(Armament::Unit(kind)),
+                None => None,
+            },
+            0x21..=0x2F => match StructureKind::from_id(id & 0x0F) {
+                Some(kind) => Some(Armament::Structure(kind)),
+                None => None,
+            },
+            _ => None,
+        }
+    }
+}
+
+/// A shell could not be filed: the table holds its whole room
+/// ([`ShellTable::push`]). The room is sized so that no legal world fills it
+/// (S2's plan, E13), so this is a typed error, propagated, never a drop.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ShellsFull {
+    /// How many shells the table holds.
+    pub room: u32,
+}
+
+impl core::fmt::Display for ShellsFull {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "the shell table holds all {} of its shells", self.room)
+    }
+}
+
+impl std::error::Error for ShellsFull {}
+
+/// The shells in flight, structure-of-arrays (S2's plan, E13): **hashed
+/// entities**, in the hash, the snapshot and the goldens.
+///
+/// Each row is a shell fired and not yet landed: the point it was aimed at,
+/// fixed when it was fired (no lead: a unit that keeps walking is missed,
+/// decision 3), the tick it lands on, its firer's seat, its firer with the
+/// id's generation, and its weapon. Rows are kept in filing order, which is
+/// the firing order (seat, kind, id; E12), and a landing removes its rows in
+/// place, so the order is a total one and nothing allocates.
+///
+/// The room is fixed at construction from firings, not from mortars, because a
+/// dead mortar's shells stay in flight while its row is reused (E1 and E13);
+/// the world sizes it ([`crate::world::World::shells`]).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ShellTable {
+    room: u32,
+    aim: Vec<[Fx; 3]>,
+    lands_at: Vec<u32>,
+    seat: Vec<u8>,
+    firer: Vec<u32>,
+    weapon: Vec<u8>,
+}
+
+impl ShellTable {
+    /// The table's tag in the state hash (S2's plan, E29): a non-empty table
+    /// writes it before its count, so two new tables of one row shape never
+    /// hash alike.
+    pub const HASH_TAG: u8 = 1;
+
+    /// An empty table with room for `room` shells. Nothing allocates after
+    /// this.
+    #[must_use]
+    pub fn with_room(room: u32) -> ShellTable {
+        let n = crate::math::index::row(room);
+        ShellTable {
+            room,
+            aim: Vec::with_capacity(n),
+            lands_at: Vec::with_capacity(n),
+            seat: Vec::with_capacity(n),
+            firer: Vec::with_capacity(n),
+            weapon: Vec::with_capacity(n),
+        }
+    }
+
+    /// How many shells the table may hold.
+    #[must_use]
+    pub const fn room(&self) -> u32 {
+        self.room
+    }
+
+    /// How many shells are in flight.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.aim.len()
+    }
+
+    /// How many shells are in flight, as the `u32` the room is: never more
+    /// than [`ShellTable::room`], which [`ShellTable::push`] and
+    /// [`ShellTable::restore`] hold it to.
+    #[must_use]
+    pub fn count(&self) -> u32 {
+        // E7: cannot miss: the table never holds more than its `u32` room
+        u32::try_from(self.aim.len()).unwrap_or(self.room)
+    }
+
+    /// Whether no shell is in flight.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.aim.is_empty()
+    }
+
+    /// File one shell.
+    ///
+    /// # Errors
+    ///
+    /// [`ShellsFull`] when the table holds its room.
+    pub fn push(
+        &mut self,
+        aim: [Fx; 3],
+        lands_at: u32,
+        seat: SeatId,
+        firer: u32,
+        weapon: Armament,
+    ) -> Result<(), ShellsFull> {
+        let full = ShellsFull { room: self.room };
+        let held = u32::try_from(self.aim.len()).map_err(|_| full)?;
+        if held >= self.room {
+            return Err(full);
+        }
+        self.aim.push(aim);
+        self.lands_at.push(lands_at);
+        self.seat.push(seat.raw());
+        self.firer.push(firer);
+        self.weapon.push(weapon.id());
+        Ok(())
+    }
+
+    /// Remove every shell that lands on or before `tick`, keeping the rest in
+    /// order.
+    /// Compacted in place, column by column, so nothing allocates.
+    pub fn remove_landed(&mut self, tick: u32) {
+        let mut kept: usize = 0;
+        let mut at: usize = 0;
+        while let Some(lands) = self.lands_at.get(at).copied() {
+            if lands > tick {
+                if kept != at {
+                    self.aim.swap(kept, at);
+                    self.lands_at.swap(kept, at);
+                    self.seat.swap(kept, at);
+                    self.firer.swap(kept, at);
+                    self.weapon.swap(kept, at);
+                }
+                kept = kept.saturating_add(1);
+            }
+            at = at.saturating_add(1);
+        }
+        self.aim.truncate(kept);
+        self.lands_at.truncate(kept);
+        self.seat.truncate(kept);
+        self.firer.truncate(kept);
+        self.weapon.truncate(kept);
+    }
+
+    /// The aim-point column.
+    #[must_use]
+    pub fn aims(&self) -> &[[Fx; 3]] {
+        &self.aim
+    }
+
+    /// The landing-tick column.
+    #[must_use]
+    pub fn lands_at(&self) -> &[u32] {
+        &self.lands_at
+    }
+
+    /// The firer's-seat column.
+    #[must_use]
+    pub fn seats(&self) -> &[u8] {
+        &self.seat
+    }
+
+    /// The firer column, [`crate::knowledge::AssetId`] raw values.
+    #[must_use]
+    pub fn firers(&self) -> &[u32] {
+        &self.firer
+    }
+
+    /// The weapon column, [`Armament::id`] bytes.
+    #[must_use]
+    pub fn weapons(&self) -> &[u8] {
+        &self.weapon
+    }
+
+    /// Replace the whole table from a restored snapshot. `false`, and nothing
+    /// changed, when the columns disagree in length or hold more than the
+    /// room.
+    pub fn restore(
+        &mut self,
+        aim: Vec<[Fx; 3]>,
+        lands_at: Vec<u32>,
+        seat: Vec<u8>,
+        firer: Vec<u32>,
+        weapon: Vec<u8>,
+    ) -> bool {
+        let n = aim.len();
+        if lands_at.len() != n
+            || seat.len() != n
+            || firer.len() != n
+            || weapon.len() != n
+            || !u32::try_from(n).is_ok_and(|n| n <= self.room)
+        {
+            return false;
+        }
+        self.aim.clear();
+        self.aim.extend(aim);
+        self.lands_at.clear();
+        self.lands_at.extend(lands_at);
+        self.seat.clear();
+        self.seat.extend(seat);
+        self.firer.clear();
+        self.firer.extend(firer);
+        self.weapon.clear();
+        self.weapon.extend(weapon);
         true
     }
 }

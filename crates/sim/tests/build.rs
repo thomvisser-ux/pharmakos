@@ -986,6 +986,13 @@ fn an_unknown_byte_in_a_coded_column_is_refused_by_name() {
     good.structure_ruined_at
         .push(pharmakos_sim::tables::NOT_RUINED);
     good.structure_free.push(0);
+    good.structure_ready_at.push(0);
+    good.structure_attacker
+        .push(pharmakos_sim::tables::NO_ATTACKER);
+    good.structure_attacked_at
+        .push(pharmakos_sim::tables::NEVER_ATTACKED);
+    good.structure_engaged
+        .push(pharmakos_sim::tables::NO_ATTACKER);
     // A kill-credit row: seat 1 has dealt 10 hit points to seat 0's core, and
     // the other two slots hold nobody.
     good.credit_asset.push(

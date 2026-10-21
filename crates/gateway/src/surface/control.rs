@@ -124,7 +124,14 @@ impl Surface {
         // Floored: a request too small to fill a tick runs nothing and answers
         // zero, which is a normal answer and not an error. The client carries
         // `ms - advanced_ms` and never learns how long a tick is.
-        let ticks = Ms::new(i32::try_from(asked).unwrap_or(MAX_ADVANCE_MS)).to_ticks_floor();
+        // `asked` is already capped at `MAX_ADVANCE_MS` above, so it is an
+        // `i32`; one that is not is a refusal, never the cap.
+        let asked = i32::try_from(asked).map_err(|_| {
+            Error::invalid(format!(
+                "`ms` asks for {asked}, and one call advances at most {MAX_ADVANCE_MS}"
+            ))
+        })?;
+        let ticks = Ms::new(asked).to_ticks_floor();
         let mut ran: u32 = 0;
         for _ in 0..ticks {
             // `None` is the segment ending: the match left the Push under us,

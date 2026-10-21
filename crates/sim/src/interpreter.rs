@@ -486,6 +486,13 @@ pub enum Row {
         /// names it ([`crate::mining::MineEdit`]); `None` when the row carries
         /// no Mine arm.
         mine: Option<crate::mining::MineEdit>,
+        /// The Common row's `roe`, `MandateSettings.Roe`'s wire value; `0`
+        /// when the row does not name it, which writes nothing (S2's `fire`;
+        /// decision 4: an unset `roe` reads as `RETURN_FIRE`).
+        roe: u8,
+        /// The Common row's `retreat_hp_pct`; `0` when the row does not name
+        /// it, which writes nothing.
+        retreat_hp_pct: u8,
     },
     /// Set the Quartermaster priority — `interface_times.set_priority_ms`.
     Priority {
@@ -1287,6 +1294,7 @@ fn compile_switch_settings(
     };
     if empty_s2_arm {
         let fields = u32::from(settings.roe != 0) + u32::from(settings.retreat_hp_pct != 0);
+        let (roe, retreat_hp_pct) = compile_common(settings)?;
         return Ok((fields > 0).then(|| {
             Box::new(Row::Settings {
                 kind: mandate_of(settings),
@@ -1296,6 +1304,8 @@ fn compile_switch_settings(
                 probes: Vec::new(),
                 scouts: 0,
                 mine: None,
+                roe,
+                retreat_hp_pct,
             })
         }));
     }
@@ -1373,6 +1383,7 @@ fn compile_settings_row(
             | gp::v1::mandate_settings::Mandate::Attack(_) => {}
         }
     }
+    let (roe, retreat_hp_pct) = compile_common(settings)?;
     Ok(Row::Settings {
         kind: mandate_of(settings),
         fields,
@@ -1381,7 +1392,34 @@ fn compile_settings_row(
         probes,
         scouts,
         mine,
+        roe,
+        retreat_hp_pct,
     })
+}
+
+/// The Common row's two fields as a beacon holds them (S2's `fire`; decision
+/// 4): `roe`'s wire value, refused when it is one this build does not name,
+/// and `retreat_hp_pct` as a byte, refused past 100.
+///
+/// # Errors
+///
+/// [`PlanError::UnknownEnum`] for a `roe` this build does not name, and
+/// [`PlanError::RetreatOutOfRange`] for a `retreat_hp_pct` past 100.
+fn compile_common(settings: &gp::v1::MandateSettings) -> Result<(u8, u8), PlanError> {
+    let unknown = PlanError::UnknownEnum {
+        field: "roe",
+        value: settings.roe,
+    };
+    let roe = gp::v1::mandate_settings::Roe::try_from(settings.roe).map_err(|_| unknown.clone())?;
+    let roe = u8::try_from(i32::from(roe)).map_err(|_| unknown)?;
+    let refused = PlanError::RetreatOutOfRange {
+        found: settings.retreat_hp_pct,
+    };
+    let retreat_hp_pct = u8::try_from(settings.retreat_hp_pct)
+        .ok()
+        .filter(|pct| *pct <= 100)
+        .ok_or(refused)?;
+    Ok((roe, retreat_hp_pct))
 }
 
 /// One Build target: its blueprint and its anchor.
@@ -2076,6 +2114,12 @@ pub enum PlanError {
         /// The most a beacon holds.
         most: u8,
     },
+    /// A `retreat_hp_pct` past 100 (S2's `fire`): a percentage of hit points
+    /// is 0 to 100, which the verifier refuses as E0501 at the seal.
+    RetreatOutOfRange {
+        /// What the playbook wrote.
+        found: u32,
+    },
     /// A Build target's `rotation_quarter_turns` past three.
     RotationOutOfRange {
         /// What the playbook wrote.
@@ -2328,6 +2372,10 @@ fn wall_box_off_a_wall(f: &mut core::fmt::Formatter<'_>, blueprint: &str) -> cor
 }
 
 impl core::fmt::Display for PlanError {
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one arm per refusal, every one the sentence a seat reads; split, the refusals would be spelled in two places"
+    )]
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             PlanError::MissingBlock(name) => write!(
@@ -2376,6 +2424,10 @@ impl core::fmt::Display for PlanError {
             PlanError::ScoutsOutOfRange { found, most } => write!(
                 f,
                 "a `scout_count` of {found} is past the {most} a beacon holds"
+            ),
+            PlanError::RetreatOutOfRange { found } => write!(
+                f,
+                "a `retreat_hp_pct` of {found} is past 100 percent of a unit's hit points"
             ),
             PlanError::RotationOutOfRange { found } => write!(
                 f,

@@ -21,7 +21,7 @@
 )]
 
 use pharmakos_gateway::fog::FogPolicy;
-use pharmakos_gateway::host::{Host, SphereVision};
+use pharmakos_gateway::host::{Host, LiveVision};
 use pharmakos_gateway::rpc;
 use pharmakos_gateway::scopes::{Scope, ScopeSet};
 use pharmakos_gateway::surface::Surface;
@@ -165,10 +165,10 @@ pub fn hosted_with(
 /// The production vision, rebuilt from the world as the host loop rebuilds it
 /// before every call.
 #[must_use]
-pub fn vision(surface: &Surface) -> SphereVision {
+pub fn vision(surface: &Surface) -> LiveVision {
     surface.host().map_or_else(
-        |_| SphereVision::default(),
-        |host| SphereVision::of(host.world()),
+        |_| LiveVision::default(),
+        |host| LiveVision::of(host.world()),
     )
 }
 

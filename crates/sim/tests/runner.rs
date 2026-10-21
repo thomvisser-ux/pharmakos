@@ -607,6 +607,17 @@ fn a_beacon_death_ruins_the_structures_homed_to_it() {
         .structure_ruined_at
         .push(pharmakos_sim::tables::NOT_RUINED);
     saved.structure_free.push(0);
+    // S2's `fire`: the combat memory, ready and attacked by nobody.
+    saved.structure_ready_at.push(0);
+    saved
+        .structure_attacker
+        .push(pharmakos_sim::tables::NO_ATTACKER);
+    saved
+        .structure_attacked_at
+        .push(pharmakos_sim::tables::NEVER_ATTACKED);
+    saved
+        .structure_engaged
+        .push(pharmakos_sim::tables::NO_ATTACKER);
     runner
         .restore(&saved)
         .expect("the edited snapshot restores");

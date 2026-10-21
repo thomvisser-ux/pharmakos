@@ -230,11 +230,62 @@ pub enum EventKind {
     /// is the buried ruin and `at` where it stood; a ruin is nobody's, so the
     /// event names no seat.
     RuinBuried,
+    /// A unit was destroyed (S2's `fire`). `seat` is its owner, `subject` the
+    /// unit, `at` where it fell, and `value` carries its
+    /// [`crate::tables::UnitKind::id`]. The commander's death is
+    /// `commander_died`, not this: the commander is no asset (spec section 4).
+    UnitDestroyed,
+    /// A structure was destroyed (S2's `fire`): its hit points reached zero,
+    /// which a ruin's may too. `seat` is its owner (none for a ruin),
+    /// `subject` the structure, and `value` its
+    /// [`crate::tables::StructureKind::id`]. A beacon's is `beacon_destroyed`.
+    StructureDestroyed,
+    /// A mortar shell landed (S2's plan, E13). `seat` is its firer's seat,
+    /// `subject` the firer, `at` the point it was aimed at, and `value` its
+    /// weapon's [`crate::tables::Armament::id`].
+    ShellLanded,
+    /// A destroyed unit or structure left a wreck (E16). `subject` is the
+    /// wreck, `at` where it lies, and `value` its salvage in `$`; a wreck is
+    /// nobody's, so the event names no seat.
+    WreckLeft,
+    /// An armed asset opened fire under `RETURN_FIRE` at an asset that had
+    /// damaged its seat's own (decision 4; spec section 6: return fire is
+    /// always announced). `seat` is the firer's seat, `subject` the firer,
+    /// `at` its target's place and `value` the target's
+    /// [`crate::knowledge::AssetId`] raw value. Once per engagement: the shot
+    /// that opens it, never one per shot (E15).
+    ReturnedFire,
+    /// A unit fell below its home beacon's `retreat_hp_pct` and is retreating
+    /// (decision 4; spec section 6: retreat is always announced). `seat` is
+    /// its seat, `subject` the unit, `at` the beacon it retreats to and
+    /// `value` that beacon's [`crate::tables::BeaconId`] raw value.
+    RetreatAnnounced,
+    /// A wreck was buried: a destroyed asset left a wreck while the table was
+    /// full, so the oldest wreck's row was freed for it (S2's plan, decision
+    /// 25: the ash buries old wrecks). `subject` is the buried wreck and `at`
+    /// where it lay; a wreck is nobody's, so the event names no seat.
+    WreckBuried,
+    /// A detached region of voxels fell (S2's plan, `fall`; decisions-log item
+    /// 144 (1)): no face-connected path of solid voxels joined it to the
+    /// bedrock layer or a core's bore, so it dropped rigidly until it came to
+    /// rest. `at` is where its identifying voxel, the region's lowest voxel
+    /// index, came to rest, and `value` carries how many voxels it holds. A
+    /// region is terrain and nobody's, so the event names no seat.
+    RegionCollapsed,
+    /// Something on the map fell with a detached region it stood on, or was
+    /// under where one came to rest (S2's plan, `fall`; decision 11): an asset,
+    /// or a seat's commander, which spec section 4 says is not one. `seat` is
+    /// its owner (none for a ruin or a wreck), `subject` what fell, `at` where
+    /// it came to rest, and `value` the flat fall damage **filed** against it
+    /// in hit points, the rules table's `collapse.fall_damage_hp` (zero for a
+    /// wreck, which has no hit points). What it lost is the damage phase's,
+    /// clamped to what it had.
+    AssetFell,
 }
 
 impl EventKind {
     /// Every kind, in ascending [`EventKind::id`] order.
-    pub const ALL: [EventKind; 38] = [
+    pub const ALL: [EventKind; 47] = [
         EventKind::MatchStarted,
         EventKind::LullOpened,
         EventKind::PushStarted,
@@ -273,6 +324,15 @@ impl EventKind {
         EventKind::KillCredited,
         EventKind::FinalAudit,
         EventKind::RuinBuried,
+        EventKind::UnitDestroyed,
+        EventKind::StructureDestroyed,
+        EventKind::ShellLanded,
+        EventKind::WreckLeft,
+        EventKind::ReturnedFire,
+        EventKind::RetreatAnnounced,
+        EventKind::WreckBuried,
+        EventKind::RegionCollapsed,
+        EventKind::AssetFell,
     ];
 
     /// The wire id. Additive only: never reuse, never renumber.
@@ -317,6 +377,15 @@ impl EventKind {
             EventKind::KillCredited => 36,
             EventKind::FinalAudit => 37,
             EventKind::RuinBuried => 38,
+            EventKind::UnitDestroyed => 39,
+            EventKind::StructureDestroyed => 40,
+            EventKind::ShellLanded => 41,
+            EventKind::WreckLeft => 42,
+            EventKind::ReturnedFire => 43,
+            EventKind::RetreatAnnounced => 44,
+            EventKind::WreckBuried => 45,
+            EventKind::RegionCollapsed => 46,
+            EventKind::AssetFell => 47,
         }
     }
 
@@ -362,6 +431,15 @@ impl EventKind {
             36 => Some(EventKind::KillCredited),
             37 => Some(EventKind::FinalAudit),
             38 => Some(EventKind::RuinBuried),
+            39 => Some(EventKind::UnitDestroyed),
+            40 => Some(EventKind::StructureDestroyed),
+            41 => Some(EventKind::ShellLanded),
+            42 => Some(EventKind::WreckLeft),
+            43 => Some(EventKind::ReturnedFire),
+            44 => Some(EventKind::RetreatAnnounced),
+            45 => Some(EventKind::WreckBuried),
+            46 => Some(EventKind::RegionCollapsed),
+            47 => Some(EventKind::AssetFell),
             _ => None,
         }
     }
@@ -410,6 +488,15 @@ impl EventKind {
             EventKind::KillCredited => "kill_credited",
             EventKind::FinalAudit => "final_audit",
             EventKind::RuinBuried => "ruin_buried",
+            EventKind::UnitDestroyed => "unit_destroyed",
+            EventKind::StructureDestroyed => "structure_destroyed",
+            EventKind::ShellLanded => "shell_landed",
+            EventKind::WreckLeft => "wreck_left",
+            EventKind::ReturnedFire => "returned_fire",
+            EventKind::RetreatAnnounced => "retreat_announced",
+            EventKind::WreckBuried => "wreck_buried",
+            EventKind::RegionCollapsed => "region_collapsed",
+            EventKind::AssetFell => "asset_fell",
         }
     }
 

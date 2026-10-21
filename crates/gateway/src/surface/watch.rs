@@ -27,14 +27,18 @@
 //! # Never on the wire
 //!
 //! A destination, a route, a step or a rule index, a mandate, a treasury, a
-//! score, a hit point, a power state, a count. `no_view_ever_carries_a_...`
+//! score, a power state, a build's progress, a count. `no_view_ever_carries_a_...`
 //! asserts it as a key-set allow-list over the rendered JSON, for every viewer
-//! and under both fog policies, rather than as a promise in a comment.
+//! and under both fog policies, rather than as a promise in a comment. What a
+//! listed entity does carry beyond its kind and place is S2's plan's decision
+//! 5 (decisions-log item 144 (11)): in live vision, its hit points with their
+//! maximum and a unit's heading, for the viewer's own assets and another
+//! seat's alike.
 
 use pharmakos_proto::gp::v1::Voxel;
 use pharmakos_proto::json::{Json, base64};
-use pharmakos_sim::math::quantity::Hp;
-use pharmakos_sim::tables::{SeatId, StructureKind, UnitKind};
+use pharmakos_sim::sight::SensorKind;
+use pharmakos_sim::tables::{BeaconId, SeatId, StructureKind, UnitKind};
 use pharmakos_sim::world::World;
 
 use crate::error::Error;
@@ -67,10 +71,9 @@ impl Surface {
         vision: &V,
     ) -> Result<Json, Error> {
         let viewer = self.viewer_of(subject, held);
-        let asked = request
-            .string_param("cursor")?
-            .unwrap_or_default()
-            .to_owned();
+        // An absent cursor and an empty one are the same request, a
+        // keyframe: proto3 JSON writes no default string at all.
+        let asked = request.string_param("cursor")?.map(str::to_owned);
         if !self.views.is_open() {
             return Err(Error::internal(
                 "this gateway is not hosting a match, so there is nothing to look at",
@@ -100,10 +103,9 @@ impl Surface {
             ));
         }
 
-        let cursor = if asked.is_empty() {
-            None
-        } else {
-            Some(ViewCursor::parse(&asked, view_id)?)
+        let cursor = match asked.as_deref() {
+            None | Some("") => None,
+            Some(text) => Some(ViewCursor::parse(text, view_id)?),
         };
 
         let unfogged = match viewer {
@@ -124,10 +126,10 @@ impl Surface {
             .ok_or_else(|| Error::internal("this gateway is not hosting a match"))?;
         let world = host.world();
         let voxels = world.voxels();
-        views.refresh(viewer, Sight { unfogged, key }, voxels, vision);
-        let page = views.page(viewer, cursor, voxels);
+        views.refresh(viewer, Sight { unfogged, key }, voxels, vision)?;
+        let page = views.page(viewer, cursor, voxels)?;
         let entities = if page.complete {
-            visible_entities(views, world, fog, vision, viewer)
+            visible_entities(views, world, fog, vision, viewer)?
         } else {
             Vec::new()
         };
@@ -135,21 +137,25 @@ impl Surface {
     }
 
     /// A digest of everything besides the fog policy that decides what this
-    /// viewer may see.
+    /// viewer may see: every one of its own sensors, as the sim's live view
+    /// draws them ([`pharmakos_sim::world::World::sight`]) -- each one's kind,
+    /// centre and radius, in the sim's walk order.
     ///
-    /// Today that is the centres of its own living beacons, because
-    /// [`crate::host::SphereVision`] is the production sight rule and spheres
-    /// are all of it. When the viewer's answer to this changes, the feed
-    /// recomputes **every** modified chunk for it rather than only the ones
-    /// the world wrote -- which is how a beacon placed, a beacon lost and an
-    /// elimination all reach the camera without a special case each.
+    /// When the viewer's answer to this changes, the feed recomputes **every**
+    /// modified chunk for it rather than only the ones the world wrote --
+    /// which is how a beacon placed, a beacon lost, a unit walking, a
+    /// structure finished and an elimination all reach the camera without a
+    /// special case each.
     ///
-    /// PLACEHOLDER: the sight key once units gain a sight radius — owner, at S2, with scouting (decision 13 of S1's plan, register S1-34).
-    /// When units gain a sight radius (**OWNER**, at S2, with
-    /// scouting: decision 13 of S1's plan, register S1-34) this key moves every
-    /// tick, and "recompute everything on a change" stops being cheap. That is the moment the sim has to report
-    /// *what* changed about a seat's sight rather than the gateway deriving
-    /// it; the key is where that answer arrives.
+    /// PLACEHOLDER: the cost of recomputing every modified chunk whenever a sensor moves — owner, at S2's G3′-real, with `view`'s per-frame measurement.
+    /// Since units see, the key moves on every tick one of the seat's units
+    /// walks, so "recompute everything on a change" runs on most calls of a
+    /// Push. Its cost is the number of modified chunks times a chunk's 32 768
+    /// voxels compared with the generated bytes, the vision asked only where
+    /// they differ; the moment that misses the client's frame budget is the
+    /// moment the sim reports *what* changed about a seat's sight rather
+    /// than the gateway deriving it, and the key is where that answer
+    /// arrives.
     ///
     /// # Errors
     ///
@@ -158,28 +164,26 @@ impl Surface {
         let Viewer::Seat(seat) = viewer else {
             return Ok(0);
         };
-        let beacons = self.host()?.world().beacons();
+        let sight = self.host()?.world().sight();
         let mut bytes: Vec<u8> = Vec::new();
-        for row in 0..beacons.ids().len() {
-            if beacons.seats().get(row).copied() != Some(seat.raw()) {
-                continue;
-            }
-            if !beacons
-                .hit_points()
-                .get(row)
-                .copied()
-                .is_some_and(Hp::is_alive)
-            {
-                continue;
-            }
-            let Some(centre) = beacons.positions().get(row) else {
-                continue;
-            };
-            for axis in centre {
+        for sensor in sight.sensors().iter().filter(|sensor| sensor.seat == seat) {
+            bytes.push(sensor_tag(sensor.kind));
+            for axis in sensor.centre {
                 bytes.extend_from_slice(&axis.raw().to_le_bytes());
             }
+            bytes.extend_from_slice(&sensor.radius.raw().to_le_bytes());
         }
         Ok(pharmakos_sim::digest(&bytes))
+    }
+}
+
+/// One byte per kind of sensor, so that a sphere and a unit's vision of the
+/// same radius at the same place still digest apart.
+const fn sensor_tag(kind: SensorKind) -> u8 {
+    match kind {
+        SensorKind::Sphere => 0,
+        SensorKind::Unit(_) => 1,
+        SensorKind::Structure(_) => 2,
     }
 }
 
@@ -196,6 +200,19 @@ const fn watches_the_world(viewer: Viewer) -> bool {
     }
 }
 
+/// What one listed entity carries beyond where it is and what it is: S2's
+/// plan, decision 5, ruled by decisions-log item 144 (11) (the register's
+/// S2-11). Everything the list holds is live vision, so every field is a
+/// live one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+struct Condition {
+    /// Hit points now and at full condition, whole HP, or `None` for a thing
+    /// that shows none.
+    hp: Option<(u32, u32)>,
+    /// A unit's heading in the sim's own units, 65 536 to the turn.
+    heading: Option<u32>,
+}
+
 /// The complete list of entities this viewer may see.
 ///
 /// Row by row through the existing [`FogFilter`], in one fixed order --
@@ -203,100 +220,190 @@ const fn watches_the_world(viewer: Viewer) -> bool {
 /// ascending by id. Built by inclusion: a row the filter refuses is simply not
 /// here, and nothing counts what was refused.
 ///
-/// A destroyed asset is not listed: a thing with no hit points left is gone,
-/// and listing it would be the one place in this answer where hit points
-/// decided something a client could read.
+/// A destroyed asset is not listed: a thing with no hit points left is gone.
+/// A listed asset carries its kind, its place, its hit points with their
+/// maximum, and a unit its heading, whoever owns it, because the list is live
+/// vision and decision 5 shows exactly that in live vision -- exact HP on
+/// everything that has them, a structure still going up included, as
+/// `gateway.proto`'s `ViewEntity.hp` says (the main session's ruling R2 on
+/// the reviews of #128). A ruin is nobody's and shows none; a wall has none of
+/// its own.
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] when a table row lacks a column the
+/// table's own constructor gives every row, or a hit-point figure does not fit
+/// the wire's `uint32`.
 fn visible_entities<V: Vision>(
     views: &mut ViewFeed,
     world: &World,
     fog: &FogPolicy,
     vision: &V,
     viewer: Viewer,
-) -> Vec<Json> {
+) -> Result<Vec<Json>, Error> {
     let filter = FogFilter::new(fog, vision);
     let mut out: Vec<Json> = Vec::new();
+    visible_beacons(views, world, &filter, viewer, &mut out)?;
+    visible_units(views, world, &filter, viewer, &mut out)?;
+    visible_structures(views, world, &filter, viewer, &mut out)?;
+    Ok(out)
+}
 
+/// The beacons of [`visible_entities`], in table order.
+///
+/// # Errors
+///
+/// As [`visible_entities`].
+fn visible_beacons<V: Vision>(
+    views: &mut ViewFeed,
+    world: &World,
+    filter: &FogFilter<'_, V>,
+    viewer: Viewer,
+    out: &mut Vec<Json>,
+) -> Result<(), Error> {
     let beacons = world.beacons();
     for row in 0..beacons.ids().len() {
-        if !beacons
-            .hit_points()
-            .get(row)
-            .copied()
-            .is_some_and(Hp::is_alive)
-        {
+        let hp = column(beacons.hit_points().get(row), "beacon", "hit-point")?;
+        if column(beacons.frees().get(row), "beacon", "free")? || !hp.is_alive() {
             continue;
         }
-        let owner = beacons.seats().get(row).copied();
-        let at = beacons
-            .positions()
-            .get(row)
-            .copied()
-            .map(view::voxel_of)
-            .unwrap_or_default();
-        if !filter.visible(viewer, &world_at(owner, at)) {
+        let owner = column(beacons.seats().get(row), "beacon", "seat")?;
+        let at = view::voxel_of(column(beacons.positions().get(row), "beacon", "position")?);
+        if !filter.visible(viewer, &world_at(Some(owner), at)) {
             continue;
         }
+        let id = column(beacons.ids().get(row), "beacon", "id")?;
+        let max = world.beacon_max_hp(BeaconId::new(id));
+        let condition = Condition {
+            hp: Some((view::hp_wire(hp)?, view::hp_wire(max)?)),
+            heading: None,
+        };
         // The viewer's own name for it: a seat's own `b_NN`, anybody else's
         // `e_NN` (decisions-log item 127 (13)).
-        let name = views.beacon_name(viewer, world, row);
-        out.push(entity(&name, "BEACON", "", owner, at));
+        let name = views.beacon_name(viewer, world, row)?;
+        out.push(entity(&name, "BEACON", "", Some(owner), at, condition));
     }
+    Ok(())
+}
 
+/// The units of [`visible_entities`], in table order.
+///
+/// # Errors
+///
+/// As [`visible_entities`].
+fn visible_units<V: Vision>(
+    views: &mut ViewFeed,
+    world: &World,
+    filter: &FogFilter<'_, V>,
+    viewer: Viewer,
+    out: &mut Vec<Json>,
+) -> Result<(), Error> {
     let units = world.units();
     for row in 0..units.ids().len() {
-        if !units
-            .hit_points()
-            .get(row)
-            .copied()
-            .is_some_and(Hp::is_alive)
-        {
+        let hp = column(units.hit_points().get(row), "unit", "hit-point")?;
+        if column(units.frees().get(row), "unit", "free")? || !hp.is_alive() {
             continue;
         }
-        let owner = units.seats().get(row).copied();
-        let at = units
-            .positions()
-            .get(row)
-            .copied()
-            .map(view::voxel_of)
-            .unwrap_or_default();
-        if !filter.visible(viewer, &world_at(owner, at)) {
+        let owner = column(units.seats().get(row), "unit", "seat")?;
+        let at = view::voxel_of(column(units.positions().get(row), "unit", "position")?);
+        if !filter.visible(viewer, &world_at(Some(owner), at)) {
             continue;
         }
-        let id = units.ids().get(row).copied().unwrap_or_default();
-        let subtype = UnitKind::from_id(units.kinds().get(row).copied().unwrap_or(0))
-            .map_or("", view::unit_subtype);
-        let handle = views.unit_handle(viewer, id);
-        out.push(entity(&handle, "UNIT", subtype, owner, at));
+        let id = column(units.ids().get(row), "unit", "id")?;
+        let raw_kind = column(units.kinds().get(row), "unit", "kind")?;
+        let kind = UnitKind::from_id(raw_kind).ok_or_else(|| {
+            Error::internal(format!(
+                "a unit row holds kind {raw_kind}, which this build does not name"
+            ))
+        })?;
+        let heading = column(units.headings().get(row), "unit", "heading")?;
+        let condition = Condition {
+            hp: Some((
+                view::hp_wire(hp)?,
+                view::hp_wire(world.rules().unit(kind).hp)?,
+            )),
+            heading: Some(u32::from(heading.raw())),
+        };
+        let handle = views.unit_handle(viewer, id)?;
+        out.push(entity(
+            &handle,
+            "UNIT",
+            view::unit_subtype(kind),
+            Some(owner),
+            at,
+            condition,
+        ));
     }
+    Ok(())
+}
 
+/// The structures of [`visible_entities`], in table order.
+///
+/// # Errors
+///
+/// As [`visible_entities`].
+fn visible_structures<V: Vision>(
+    views: &mut ViewFeed,
+    world: &World,
+    filter: &FogFilter<'_, V>,
+    viewer: Viewer,
+    out: &mut Vec<Json>,
+) -> Result<(), Error> {
     let structures = world.structures();
     for row in 0..structures.ids().len() {
-        if !structures
-            .hit_points()
-            .get(row)
-            .copied()
-            .is_some_and(Hp::is_alive)
-        {
+        let hp = column(structures.hit_points().get(row), "structure", "hit-point")?;
+        if column(structures.frees().get(row), "structure", "free")? || !hp.is_alive() {
             continue;
         }
-        let owner = structures.seats().get(row).copied();
-        let at = structures
-            .positions()
-            .get(row)
-            .copied()
-            .map(view::voxel_of)
-            .unwrap_or_default();
+        let raw_owner = column(structures.seats().get(row), "structure", "seat")?;
+        // A ruin is nobody's (its seat is the sim's no-seat value), and it is
+        // filtered and drawn as nobody's rather than as a seat's.
+        let owner = SeatId::new(raw_owner).is_some().then_some(raw_owner);
+        let at = view::voxel_of(column(
+            structures.positions().get(row),
+            "structure",
+            "position",
+        )?);
         if !filter.visible(viewer, &world_at(owner, at)) {
             continue;
         }
-        let id = structures.ids().get(row).copied().unwrap_or_default();
-        let subtype = StructureKind::from_id(structures.kinds().get(row).copied().unwrap_or(0))
-            .map_or("", view::structure_subtype);
-        let handle = views.structure_handle(viewer, id);
-        out.push(entity(&handle, "STRUCTURE", subtype, owner, at));
+        let id = column(structures.ids().get(row), "structure", "id")?;
+        let raw_kind = column(structures.kinds().get(row), "structure", "kind")?;
+        let kind = StructureKind::from_id(raw_kind).ok_or_else(|| {
+            Error::internal(format!(
+                "a structure row holds kind {raw_kind}, which this build does not name"
+            ))
+        })?;
+        let hp = match world.structure_max_hp(kind) {
+            Some(max) if owner.is_some() => Some((view::hp_wire(hp)?, view::hp_wire(max)?)),
+            // A wall has no hit points of its own, and a ruin shows none.
+            _ => None,
+        };
+        let condition = Condition { hp, heading: None };
+        let handle = views.structure_handle(viewer, id)?;
+        out.push(entity(
+            &handle,
+            "STRUCTURE",
+            view::structure_subtype(kind),
+            owner,
+            at,
+            condition,
+        ));
     }
+    Ok(())
+}
 
-    out
+/// One column's entry for a row the table holds, or the typed refusal that
+/// says which column of which table came up short.
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`]: the tables give every row every column,
+/// so a missing one is the sim and the gateway disagreeing.
+fn column<T: Copy>(value: Option<&T>, table: &str, name: &str) -> Result<T, Error> {
+    value
+        .copied()
+        .ok_or_else(|| Error::internal(format!("a {table} row has no {name} column")))
 }
 
 /// One row's audience: a thing of `owner`'s, standing at `at`.
@@ -315,11 +422,18 @@ fn world_at(owner: Option<u8>, at: Voxel) -> Audience {
 /// One `gp.api.v1.ViewEntity`.
 ///
 /// `owner` is empty for a thing nobody owns, which is what the field's own
-/// comment in `gateway.proto` promises. Nothing in v1 makes one; the promise
-/// is kept here rather than in a comment so that the first thing that does is
-/// not silently attributed to seat 0.
-fn entity(id: &str, kind: &str, subtype: &str, owner: Option<u8>, at: Voxel) -> Json {
-    Json::Object(vec![
+/// comment in `gateway.proto` promises: a ruin, and from `fire` a wreck. An
+/// unset optional field is left out, as proto3 JSON writes one, so a reader
+/// can tell "no hit points shown" from a zero.
+fn entity(
+    id: &str,
+    kind: &str,
+    subtype: &str,
+    owner: Option<u8>,
+    at: Voxel,
+    condition: Condition,
+) -> Json {
+    let mut entries = vec![
         (String::from("id"), Json::String(id.to_owned())),
         (
             String::from("kind"),
@@ -328,12 +442,21 @@ fn entity(id: &str, kind: &str, subtype: &str, owner: Option<u8>, at: Voxel) -> 
         (String::from("subtype"), Json::String(subtype.to_owned())),
         (
             String::from("owner"),
-            Json::String(
-                owner.map_or_else(String::new, |seat| view::owner_text(SeatId::new(seat))),
-            ),
+            Json::String(match owner {
+                Some(seat) => view::owner_text(SeatId::new(seat)),
+                None => String::new(),
+            }),
         ),
         (String::from("at"), voxel(at)),
-    ])
+    ];
+    if let Some((hp, max_hp)) = condition.hp {
+        entries.push((String::from("hp"), Json::Number(hp.to_string())));
+        entries.push((String::from("max_hp"), Json::Number(max_hp.to_string())));
+    }
+    if let Some(heading) = condition.heading {
+        entries.push((String::from("heading"), Json::Number(heading.to_string())));
+    }
+    Json::Object(entries)
 }
 
 /// One `gp.v1.Voxel`.

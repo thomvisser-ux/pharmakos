@@ -141,6 +141,16 @@ impl Richness {
             Richness::Rich => Material::VENT_RICH,
         }
     }
+
+    /// The grade's place among the three, from zero: where its cracked ids
+    /// sit in the catalogue ([`Material::cracked`]).
+    const fn slot(self) -> u8 {
+        match self {
+            Richness::Lean => 0,
+            Richness::Standard => 1,
+            Richness::Rich => 2,
+        }
+    }
 }
 
 /// One voxel's material.
@@ -165,13 +175,146 @@ impl Richness {
 /// | 7 | [`Material::VENT_STANDARD`] | a heat vent voxel, standard |
 /// | 8 | [`Material::VENT_RICH`] | a heat vent voxel, rich |
 ///
+/// | 9 to 16 | [`Material::wall`] | a wall voxel: the seat that built it (0 to 3) and its level, whole or cracked |
+/// | 17 to 32 | [`Material::cracked`] | a terrain voxel a blast has stepped down one or two levels |
+/// | 33 | [`Material::BEDROCK`] | the bottom `materials.bedrock_layers_voxels` layers of every column |
+///
 /// Richness is three materials rather than one material and a side table
 /// because a side table would be a second source of truth for something the
 /// per-chunk digest already covers — and a side table that is not hashed is
-/// exactly the latent desync AGENTS.md section 4.8 is about. Walls, built
-/// structures and ruins are S2's and take ids from 9 up.
+/// exactly the latent desync AGENTS.md section 4.8 is about.
+///
+/// # S2's ids, 9 to 33 (S2's plan, E14 and decision 10)
+///
+/// **Ownership and damage live in the material**, so they live in the bytes
+/// the chunk digests already hash and no table is added. A wall voxel names the
+/// seat that **built** it and its level: it cracks on its first blast and
+/// breaks on its second. Whose a wall is *now* is read, never written
+/// ([`crate::world::World::wall_owner`]): a seat's wall voxel counts as that
+/// seat's while it lies inside one of the seat's live spheres and as neutral
+/// otherwise, so no id says "neutral" (decision 42). The sim runs four seats
+/// (E19), hence four builders.
+///
+/// A terrain voxel takes as many blasts as `materials.blast_levels` gives its
+/// kind, one to three ([`BlastLevels`]): each blast short of the last steps it
+/// down a level, so a terrain material has a cracked id for each level beyond
+/// its first, up to the catalogue's three, and an ore or vent voxel keeps its
+/// grade when it cracks ([`Material::ore_richness`], [`Material::vent_richness`]).
+/// Every cracked voxel is solid, so walking, pathing's tops and the support
+/// rule read it as they read a whole one.
+///
+/// [`Material::BEDROCK`] never cracks and is never removed, mined or levelled;
+/// generation writes it and nothing else does.
+///
+/// The wire's table, `ViewChunk`'s comment in `gateway.proto`, lists every id
+/// here, and `crates/gateway/tests/view.rs`' `the_wire_material_table_is_the_sims`
+/// holds the two together.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
 pub struct Material(u8);
+
+/// One terrain kind, as `materials.blast_levels` names it: the ore and vent
+/// grades share their kind's row.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum TerrainKind {
+    /// The surface skin.
+    Dirt,
+    /// The bulk below the skin.
+    Stone,
+    /// A scrap seam voxel, of a grade.
+    Ore(Richness),
+    /// A heat vent voxel, of a grade.
+    Vent(Richness),
+}
+
+/// How many blasts each terrain kind takes (`materials.blast_levels`; S2's
+/// plan, decision 10), each **one to three**, the catalogue's levels: a value
+/// outside that range has no material to be cracked into, so it is refused
+/// when the rules table loads ([`BlastLevels::new`]) rather than read short.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct BlastLevels {
+    dirt: u8,
+    stone: u8,
+    ore: u8,
+    vent: u8,
+}
+
+/// A blast level outside the catalogue's one to three ([`BlastLevels::new`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct LevelOutOfRange {
+    /// Which kind's row, as `materials.blast_levels` spells it.
+    pub kind: &'static str,
+    /// What the table said.
+    pub found: u32,
+}
+
+impl core::fmt::Display for LevelOutOfRange {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "materials.blast_levels.{} is {}; the catalogue holds 1 to {} levels a kind",
+            self.kind,
+            self.found,
+            BlastLevels::MAX
+        )
+    }
+}
+
+impl std::error::Error for LevelOutOfRange {}
+
+impl BlastLevels {
+    /// The most levels the catalogue holds for a kind.
+    pub const MAX: u8 = 3;
+
+    /// One blast removes every terrain voxel: what the skeleton's craters did,
+    /// and what a test that does not care about hardness builds.
+    pub const ONE: BlastLevels = BlastLevels {
+        dirt: 1,
+        stone: 1,
+        ore: 1,
+        vent: 1,
+    };
+
+    /// The four rows, each refused outside one to [`BlastLevels::MAX`].
+    ///
+    /// # Errors
+    ///
+    /// [`LevelOutOfRange`] naming the first row out of range.
+    pub fn new(dirt: u32, stone: u32, ore: u32, vent: u32) -> Result<BlastLevels, LevelOutOfRange> {
+        let level = |kind: &'static str, found: u32| {
+            u8::try_from(found)
+                .ok()
+                .filter(|value| (1..=BlastLevels::MAX).contains(value))
+                .ok_or(LevelOutOfRange { kind, found })
+        };
+        Ok(BlastLevels {
+            dirt: level("dirt", dirt)?,
+            stone: level("stone", stone)?,
+            ore: level("ore", ore)?,
+            vent: level("vent", vent)?,
+        })
+    }
+
+    /// How many blasts a voxel of `kind` takes.
+    #[must_use]
+    pub const fn of(self, kind: TerrainKind) -> u8 {
+        match kind {
+            TerrainKind::Dirt => self.dirt,
+            TerrainKind::Stone => self.stone,
+            TerrainKind::Ore(_) => self.ore,
+            TerrainKind::Vent(_) => self.vent,
+        }
+    }
+}
+
+/// What one blast does to one voxel ([`Material::after_blast`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Blasted {
+    /// Nothing: air, bedrock, or a material this build does not define.
+    Unmoved,
+    /// It steps down to this material: a crack, or air when the blast was its
+    /// last level.
+    Into(Material),
+}
 
 impl Material {
     /// Nothing. The only material a unit can stand in rather than on.
@@ -193,8 +336,64 @@ impl Material {
     /// A heat vent voxel, rich.
     pub const VENT_RICH: Material = Material(8);
 
+    /// A wall voxel seat 0 built, whole.
+    pub const WALL_SEAT_0: Material = Material(9);
+    /// A wall voxel seat 0 built, cracked.
+    pub const WALL_SEAT_0_CRACKED: Material = Material(10);
+    /// A wall voxel seat 1 built, whole.
+    pub const WALL_SEAT_1: Material = Material(11);
+    /// A wall voxel seat 1 built, cracked.
+    pub const WALL_SEAT_1_CRACKED: Material = Material(12);
+    /// A wall voxel seat 2 built, whole.
+    pub const WALL_SEAT_2: Material = Material(13);
+    /// A wall voxel seat 2 built, cracked.
+    pub const WALL_SEAT_2_CRACKED: Material = Material(14);
+    /// A wall voxel seat 3 built, whole.
+    pub const WALL_SEAT_3: Material = Material(15);
+    /// A wall voxel seat 3 built, cracked.
+    pub const WALL_SEAT_3_CRACKED: Material = Material(16);
+
+    /// Dirt, cracked once.
+    pub const DIRT_CRACKED_ONCE: Material = Material(17);
+    /// Dirt, cracked twice.
+    pub const DIRT_CRACKED_TWICE: Material = Material(18);
+    /// Stone, cracked once.
+    pub const STONE_CRACKED_ONCE: Material = Material(19);
+    /// Stone, cracked twice.
+    pub const STONE_CRACKED_TWICE: Material = Material(20);
+    /// A lean scrap seam voxel, cracked once.
+    pub const ORE_LEAN_CRACKED_ONCE: Material = Material(21);
+    /// A lean scrap seam voxel, cracked twice.
+    pub const ORE_LEAN_CRACKED_TWICE: Material = Material(22);
+    /// A standard scrap seam voxel, cracked once.
+    pub const ORE_STANDARD_CRACKED_ONCE: Material = Material(23);
+    /// A standard scrap seam voxel, cracked twice.
+    pub const ORE_STANDARD_CRACKED_TWICE: Material = Material(24);
+    /// A rich scrap seam voxel, cracked once.
+    pub const ORE_RICH_CRACKED_ONCE: Material = Material(25);
+    /// A rich scrap seam voxel, cracked twice.
+    pub const ORE_RICH_CRACKED_TWICE: Material = Material(26);
+    /// A lean heat vent voxel, cracked once.
+    pub const VENT_LEAN_CRACKED_ONCE: Material = Material(27);
+    /// A lean heat vent voxel, cracked twice.
+    pub const VENT_LEAN_CRACKED_TWICE: Material = Material(28);
+    /// A standard heat vent voxel, cracked once.
+    pub const VENT_STANDARD_CRACKED_ONCE: Material = Material(29);
+    /// A standard heat vent voxel, cracked twice.
+    pub const VENT_STANDARD_CRACKED_TWICE: Material = Material(30);
+    /// A rich heat vent voxel, cracked once.
+    pub const VENT_RICH_CRACKED_ONCE: Material = Material(31);
+    /// A rich heat vent voxel, cracked twice.
+    pub const VENT_RICH_CRACKED_TWICE: Material = Material(32);
+
+    /// The floor: never cracked, removed, mined or levelled.
+    pub const BEDROCK: Material = Material(33);
+
+    /// How many seats a wall id can name (S2's plan, E19: the sim runs four).
+    pub const WALL_SEATS: u8 = 4;
+
     /// Every material v1 defines, in ascending id order.
-    pub const ALL: [Material; 9] = [
+    pub const ALL: [Material; 34] = [
         Material::AIR,
         Material::DIRT,
         Material::STONE,
@@ -204,7 +403,157 @@ impl Material {
         Material::VENT_LEAN,
         Material::VENT_STANDARD,
         Material::VENT_RICH,
+        Material::WALL_SEAT_0,
+        Material::WALL_SEAT_0_CRACKED,
+        Material::WALL_SEAT_1,
+        Material::WALL_SEAT_1_CRACKED,
+        Material::WALL_SEAT_2,
+        Material::WALL_SEAT_2_CRACKED,
+        Material::WALL_SEAT_3,
+        Material::WALL_SEAT_3_CRACKED,
+        Material::DIRT_CRACKED_ONCE,
+        Material::DIRT_CRACKED_TWICE,
+        Material::STONE_CRACKED_ONCE,
+        Material::STONE_CRACKED_TWICE,
+        Material::ORE_LEAN_CRACKED_ONCE,
+        Material::ORE_LEAN_CRACKED_TWICE,
+        Material::ORE_STANDARD_CRACKED_ONCE,
+        Material::ORE_STANDARD_CRACKED_TWICE,
+        Material::ORE_RICH_CRACKED_ONCE,
+        Material::ORE_RICH_CRACKED_TWICE,
+        Material::VENT_LEAN_CRACKED_ONCE,
+        Material::VENT_LEAN_CRACKED_TWICE,
+        Material::VENT_STANDARD_CRACKED_ONCE,
+        Material::VENT_STANDARD_CRACKED_TWICE,
+        Material::VENT_RICH_CRACKED_ONCE,
+        Material::VENT_RICH_CRACKED_TWICE,
+        Material::BEDROCK,
     ];
+
+    /// The first wall id.
+    const WALL_FIRST: u8 = 9;
+    /// The first cracked terrain id.
+    const CRACKED_FIRST: u8 = 17;
+
+    /// A wall voxel `seat` built, whole or `cracked`, or `None` for a seat
+    /// past the four a wall id names ([`Material::WALL_SEATS`]).
+    #[must_use]
+    pub const fn wall(seat: SeatId, cracked: bool) -> Option<Material> {
+        let seat = seat.raw();
+        if seat >= Material::WALL_SEATS {
+            return None;
+        }
+        // `seat < 4`, so `9 + 2 * seat + 1` is at most 16.
+        let crack = if cracked { 1 } else { 0 };
+        Some(Material(Material::WALL_FIRST + seat * 2 + crack))
+    }
+
+    /// The seat that built a wall voxel and whether it is cracked, or `None`
+    /// when this is not a wall voxel.
+    #[must_use]
+    pub const fn wall_of(self) -> Option<(SeatId, bool)> {
+        if self.0 < Material::WALL_FIRST || self.0 >= Material::CRACKED_FIRST {
+            return None;
+        }
+        let at = self.0 - Material::WALL_FIRST;
+        Some((SeatId::new(at >> 1), at & 1 == 1))
+    }
+
+    /// The terrain kind of a whole terrain voxel, or `None` for any other.
+    const fn whole_kind(self) -> Option<TerrainKind> {
+        match self.0 {
+            1 => Some(TerrainKind::Dirt),
+            2 => Some(TerrainKind::Stone),
+            3 => Some(TerrainKind::Ore(Richness::Lean)),
+            4 => Some(TerrainKind::Ore(Richness::Standard)),
+            5 => Some(TerrainKind::Ore(Richness::Rich)),
+            6 => Some(TerrainKind::Vent(Richness::Lean)),
+            7 => Some(TerrainKind::Vent(Richness::Standard)),
+            8 => Some(TerrainKind::Vent(Richness::Rich)),
+            _ => None,
+        }
+    }
+
+    /// A terrain voxel's kind and how many times it has cracked, 0 for a
+    /// whole one, or `None` when this is not terrain (air, a wall, bedrock).
+    #[must_use]
+    pub const fn terrain(self) -> Option<(TerrainKind, u8)> {
+        if let Some(kind) = self.whole_kind() {
+            return Some((kind, 0));
+        }
+        if self.0 < Material::CRACKED_FIRST || self.0 >= Material::BEDROCK.0 {
+            return None;
+        }
+        let at = self.0 - Material::CRACKED_FIRST;
+        let cracks = (at & 1) + 1;
+        let kind = match at >> 1 {
+            0 => TerrainKind::Dirt,
+            1 => TerrainKind::Stone,
+            2 => TerrainKind::Ore(Richness::Lean),
+            3 => TerrainKind::Ore(Richness::Standard),
+            4 => TerrainKind::Ore(Richness::Rich),
+            5 => TerrainKind::Vent(Richness::Lean),
+            6 => TerrainKind::Vent(Richness::Standard),
+            _ => TerrainKind::Vent(Richness::Rich),
+        };
+        Some((kind, cracks))
+    }
+
+    /// A terrain voxel of `kind` cracked `cracks` times: the whole material at
+    /// zero, a cracked id at one or two, and `None` past the catalogue's two
+    /// cracks ([`BlastLevels::MAX`] levels).
+    #[must_use]
+    pub const fn cracked(kind: TerrainKind, cracks: u8) -> Option<Material> {
+        let (whole, slot) = match kind {
+            TerrainKind::Dirt => (Material::DIRT, 0),
+            TerrainKind::Stone => (Material::STONE, 1),
+            TerrainKind::Ore(grade) => (grade.ore(), 2 + Richness::slot(grade)),
+            TerrainKind::Vent(grade) => (grade.vent(), 5 + Richness::slot(grade)),
+        };
+        match cracks {
+            0 => Some(whole),
+            1 | 2 => Some(Material(Material::CRACKED_FIRST + slot * 2 + cracks - 1)),
+            _ => None,
+        }
+    }
+
+    /// Whether this is [`Material::BEDROCK`].
+    #[must_use]
+    pub const fn is_bedrock(self) -> bool {
+        self.0 == Material::BEDROCK.0
+    }
+
+    /// What one blast does to this voxel under `levels` (decision 10): a wall
+    /// voxel cracks, and breaks when it is already cracked; a terrain voxel
+    /// steps down one level and is removed at its last; air, bedrock and an id
+    /// this build does not define are unmoved.
+    ///
+    /// A terrain voxel already cracked as far as its kind's levels allow, or
+    /// further (a table never changes mid-match, so nothing writes one), is
+    /// removed: its next blast is past its last level.
+    #[must_use]
+    pub const fn after_blast(self, levels: BlastLevels) -> Blasted {
+        if let Some((seat, cracked)) = self.wall_of() {
+            if cracked {
+                return Blasted::Into(Material::AIR);
+            }
+            return match Material::wall(seat, true) {
+                Some(next) => Blasted::Into(next),
+                None => Blasted::Into(Material::AIR),
+            };
+        }
+        let Some((kind, cracks)) = self.terrain() else {
+            return Blasted::Unmoved;
+        };
+        let next = cracks + 1;
+        if next >= levels.of(kind) {
+            return Blasted::Into(Material::AIR);
+        }
+        match Material::cracked(kind, next) {
+            Some(material) => Blasted::Into(material),
+            None => Blasted::Into(Material::AIR),
+        }
+    }
 
     /// Build from a raw wire id. Any `u8` is representable; an id v1 does not
     /// define is a material this build cannot draw, not an error.
@@ -231,24 +580,23 @@ impl Material {
         !self.is_air()
     }
 
-    /// The grade of a scrap seam voxel, or `None` when this is not ore.
+    /// The grade of a scrap seam voxel, whole or cracked, or `None` when this
+    /// is not ore: a cracked seam voxel mines as its grade (S2's plan, E14).
     #[must_use]
     pub const fn ore_richness(self) -> Option<Richness> {
-        match self.0 {
-            3 => Some(Richness::Lean),
-            4 => Some(Richness::Standard),
-            5 => Some(Richness::Rich),
+        match self.terrain() {
+            Some((TerrainKind::Ore(grade), _)) => Some(grade),
             _ => None,
         }
     }
 
-    /// The grade of a heat vent voxel, or `None` when this is not a vent.
+    /// The grade of a heat vent voxel, whole or cracked, or `None` when this
+    /// is not a vent: a cracked vent feeds as its grade and keeps its feature
+    /// live (S2's plan, E14; AGENTS.md section 4.8).
     #[must_use]
     pub const fn vent_richness(self) -> Option<Richness> {
-        match self.0 {
-            6 => Some(Richness::Lean),
-            7 => Some(Richness::Standard),
-            8 => Some(Richness::Rich),
+        match self.terrain() {
+            Some((TerrainKind::Vent(grade), _)) => Some(grade),
             _ => None,
         }
     }
@@ -267,6 +615,31 @@ impl Material {
             6 => "vent_lean",
             7 => "vent_standard",
             8 => "vent_rich",
+            9 => "wall_seat_0",
+            10 => "wall_seat_0_cracked",
+            11 => "wall_seat_1",
+            12 => "wall_seat_1_cracked",
+            13 => "wall_seat_2",
+            14 => "wall_seat_2_cracked",
+            15 => "wall_seat_3",
+            16 => "wall_seat_3_cracked",
+            17 => "dirt_cracked_once",
+            18 => "dirt_cracked_twice",
+            19 => "stone_cracked_once",
+            20 => "stone_cracked_twice",
+            21 => "ore_lean_cracked_once",
+            22 => "ore_lean_cracked_twice",
+            23 => "ore_standard_cracked_once",
+            24 => "ore_standard_cracked_twice",
+            25 => "ore_rich_cracked_once",
+            26 => "ore_rich_cracked_twice",
+            27 => "vent_lean_cracked_once",
+            28 => "vent_lean_cracked_twice",
+            29 => "vent_standard_cracked_once",
+            30 => "vent_standard_cracked_twice",
+            31 => "vent_rich_cracked_once",
+            32 => "vent_rich_cracked_twice",
+            33 => "bedrock",
             _ => "unknown",
         }
     }
@@ -298,7 +671,9 @@ pub enum VoxelEdit {
         /// The seat whose edit it is, or `None`.
         by: Option<SeatId>,
     },
-    /// Turn a ball of whole voxels to air.
+    /// A blast: step every voxel of a ball down one level
+    /// ([`VoxelStore::blast`]; S2's plan, decision 10), skipping the core's
+    /// bore. A mortar shell's landing files one, carrying its firer's seat.
     Crater {
         /// The ball's centre, in whole voxels.
         centre: [i32; 3],
@@ -591,8 +966,11 @@ impl VoxelStore {
     /// Fill the pristine layer from a heightmap.
     ///
     /// `height[y * size_x + x]` is how many solid voxels the column carries, so
-    /// `z` in `0..height` is solid and everything above it is air. The top
-    /// `skin_depth` voxels of a column are `skin` and the rest are `bulk`.
+    /// `z` in `0..height` is solid and everything above it is air. The bottom
+    /// `bedrock_layers` voxels of a column are [`Material::BEDROCK`] (S2's
+    /// plan, E14: the floor the support rule needs), the top `skin_depth` of the
+    /// rest are `skin`, and the others are `bulk`. Bedrock wins over the skin
+    /// in a column too short to hold both.
     ///
     /// Written as a bulk fill rather than as a few million [`VoxelStore::set`]
     /// calls for one reason and it is not elegance: the generator runs once per
@@ -605,6 +983,7 @@ impl VoxelStore {
     pub(crate) fn fill_from_heightmap(
         &mut self,
         height: &[i32],
+        bedrock_layers: i32,
         skin_depth: i32,
         skin: Material,
         bulk: Material,
@@ -649,7 +1028,9 @@ impl VoxelStore {
                     let hi = top.min(oz.saturating_add(edge));
                     let mut z = oz;
                     while z < hi {
-                        let material = if z >= top.saturating_sub(skin_depth) {
+                        let material = if z < bedrock_layers {
+                            Material::BEDROCK
+                        } else if z >= top.saturating_sub(skin_depth) {
                             skin
                         } else {
                             bulk
@@ -745,6 +1126,104 @@ impl VoxelStore {
         // the `touch_flag` guard above, so the order is total.
         touched.sort_unstable();
         removed
+    }
+
+    /// One blast: step every voxel inside the ball of `radius` whole voxels
+    /// centred on `centre` down one level under `levels` (S2's plan, decision
+    /// 10 and E14), skipping every voxel of the core's `bore` (E31).
+    ///
+    /// A wall voxel cracks, then breaks; a terrain voxel steps down a level
+    /// and is removed at its last ([`Material::after_blast`]); air and bedrock
+    /// are unmoved. Every write goes through [`VoxelStore::set`], so every
+    /// chunk it changes is marked and its digest refreshed at the next settle
+    /// (AGENTS.md section 4.8's fourth place).
+    ///
+    /// `touched` is cleared and filled as [`VoxelStore::crater`] fills it, and
+    /// the return value is how many voxels changed. `removed` is called once
+    /// for every voxel the blast turned to air, in the walk's order: the
+    /// support rule seeds its search from them (S2's plan, `fall`). The ball
+    /// is the crater's shape, `dx^2 + dy^2 + dz^2 <= r^2`, walked `z`, then
+    /// `y`, then `x` ascending, which is a total order; no voxel's step
+    /// depends on another's, so the order changes nothing but is still fixed.
+    pub fn blast(
+        &mut self,
+        centre: [i32; 3],
+        radius: i32,
+        levels: BlastLevels,
+        bore: &crate::bore::Bore,
+        touched: &mut Vec<u32>,
+        removed: &mut impl FnMut([i32; 3]),
+    ) -> u32 {
+        touched.clear();
+        if radius < 0 {
+            return 0;
+        }
+        let Some(r2) = radius.checked_mul(radius) else {
+            return 0;
+        };
+        let [cx, cy, cz] = centre;
+        let near_bore = bore.touches(
+            [cx.saturating_sub(radius), cy.saturating_sub(radius)],
+            [cx.saturating_add(radius), cy.saturating_add(radius)],
+        );
+        let mut changed: u32 = 0;
+        let mut dz = -radius;
+        while dz <= radius {
+            let mut dy = -radius;
+            while dy <= radius {
+                let mut dx = -radius;
+                while dx <= radius {
+                    let d2 = dx
+                        .saturating_mul(dx)
+                        .saturating_add(dy.saturating_mul(dy))
+                        .saturating_add(dz.saturating_mul(dz));
+                    let at = [
+                        cx.saturating_add(dx),
+                        cy.saturating_add(dy),
+                        cz.saturating_add(dz),
+                    ];
+                    dx = dx.saturating_add(1);
+                    if d2 > r2 || (near_bore && bore.contains(at)) {
+                        continue;
+                    }
+                    let Some(material) = self.get(at) else {
+                        continue;
+                    };
+                    let Blasted::Into(next) = material.after_blast(levels) else {
+                        continue;
+                    };
+                    if let Some((chunk, _)) = self.address(at)
+                        && self.set(at, next)
+                    {
+                        changed = changed.saturating_add(1);
+                        if next.is_air() {
+                            removed(at);
+                        }
+                        if let Ok(index) = usize::try_from(chunk)
+                            && matches!(self.touch_flag.get(index), Some(false))
+                        {
+                            if let Some(flag) = self.touch_flag.get_mut(index) {
+                                *flag = true;
+                            }
+                            touched.push(chunk);
+                        }
+                    }
+                }
+                dy = dy.saturating_add(1);
+            }
+            dz = dz.saturating_add(1);
+        }
+        for chunk in touched.iter() {
+            if let Ok(index) = usize::try_from(*chunk)
+                && let Some(flag) = self.touch_flag.get_mut(index)
+            {
+                *flag = false;
+            }
+        }
+        // item 62: the key IS the chunk index, unique in this list by the
+        // `touch_flag` guard above, so the order is total.
+        touched.sort_unstable();
+        changed
     }
 
     /// Record that `chunk` has been written.
