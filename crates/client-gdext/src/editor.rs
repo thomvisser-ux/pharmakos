@@ -75,6 +75,7 @@ use pharmakos_proto::json::{self, Json};
 use crate::enums;
 use crate::error::BridgeError;
 use crate::targeting::{self, Chip, Feature, FeatureKind};
+use crate::variant::proto3_integer;
 use crate::variant::text_or_empty;
 use crate::view::{Entity, EntityKind, split_footer};
 use crate::wizard::{self, Instance, TemplateRow, Wizard};
@@ -895,6 +896,9 @@ pub struct Editor {
     /// The chips: what each feature reference in the text reads now, for the text at
     /// `chips_revision`.
     chips: Vec<Chip>,
+    /// Every Attack beacon's target in the text on screen, read once per text
+    /// ([`targeting::attack_targets`]), not once per frame.
+    attack: Vec<targeting::AttackMark>,
     chips_revision: Option<u64>,
     /// The chips (`resolve_refs`) are owed for the newest text.
     resolve_owed: bool,
@@ -1320,11 +1324,8 @@ impl Editor {
     /// Every Attack beacon's target in the text on screen, in the file's order, for the map
     /// to draw ([`targeting::attack_targets`]); none without a text.
     #[must_use]
-    pub fn attack_targets(&self) -> Vec<targeting::AttackMark> {
-        match self.text.as_deref() {
-            Some(text) => targeting::attack_targets(text),
-            None => Vec::new(),
-        }
+    pub fn attack_targets(&self) -> &[targeting::AttackMark] {
+        &self.attack
     }
 
     /// The chips: what each feature reference in the text reads now, in the file's order.
@@ -2460,6 +2461,7 @@ impl Editor {
             return;
         }
         self.text = None;
+        self.attack.clear();
         self.revision = self.revision.wrapping_add(1);
         self.rows.clear();
         self.verdict = Verdict::None;
@@ -2493,6 +2495,7 @@ impl Editor {
 
     /// A new text is on screen: every check of it is owed.
     fn accept_text(&mut self, text: String) {
+        self.attack = targeting::attack_targets(&text);
         self.text = Some(text);
         self.revision = self.revision.wrapping_add(1);
         self.owed.quick = true;
@@ -2956,22 +2959,6 @@ fn voxel_of(value: &Json) -> Result<[i32; 3], BridgeError> {
 
 /// The integer field `name` of an answer: proto3's canonical JSON leaves a zero out, so
 /// an absent field is 0, and anything but an integer is refused.
-fn proto3_integer(answer: &Json, name: &str) -> Result<i64, BridgeError> {
-    match answer.get(name) {
-        None => Ok(0),
-        Some(value) => {
-            integer(value).ok_or_else(|| BridgeError::Rpc(format!("`{name}` is not an integer")))
-        }
-    }
-}
-
-fn integer(value: &Json) -> Option<i64> {
-    match value {
-        Json::Number(lexeme) | Json::String(lexeme) => lexeme.parse::<i64>().ok(),
-        _ => None,
-    }
-}
-
 fn object(entries: Vec<(&str, Json)>) -> Json {
     Json::Object(
         entries

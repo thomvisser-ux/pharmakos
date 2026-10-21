@@ -72,3 +72,22 @@ pub(crate) fn godot_int<T: TryInto<i64>>(count: T) -> i64 {
 pub(crate) fn text_or_empty(text: Option<&str>) -> &str {
     text.unwrap_or_default()
 }
+
+/// An integer field of a gateway answer read laxly by name, as proto3 JSON writes it: an
+/// absent field is 0 (proto3's own rule for an unwritten integer), and a present one is a
+/// number or, as proto3 JSON's parsers accept for every integer type, a quoted number.
+/// The one reader the rig and the editor share, so the two never disagree about a value.
+///
+/// # Errors
+///
+/// [`crate::error::BridgeError::Rpc`] for a field that is neither, or past an `i64`.
+pub(crate) fn proto3_integer(answer: &Json, name: &str) -> Result<i64, crate::error::BridgeError> {
+    let refused = || crate::error::BridgeError::Rpc(format!("`{name}` is not an integer"));
+    match answer.get(name) {
+        None => Ok(0),
+        Some(Json::Number(lexeme) | Json::String(lexeme)) => {
+            lexeme.parse::<i64>().map_err(|_| refused())
+        }
+        Some(_) => Err(refused()),
+    }
+}

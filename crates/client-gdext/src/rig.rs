@@ -101,7 +101,7 @@
 //! paced from its first answer, and the editor waits for the next Lull.
 
 use pharmakos_proto::gp::api::v1::{
-    GetEconomyForecastResponse, GetRecapResponse, GetSegmentFeedResponse, status,
+    GetEconomyForecastResponse, GetRecapResponse, GetSegmentFeedResponse, Status, status,
 };
 use pharmakos_proto::json::{self, Json};
 
@@ -109,6 +109,7 @@ use crate::editor::{Door, Editor, SAFE_PLAYBOOK_FILED_KIND};
 use crate::enums;
 use crate::error::BridgeError;
 use crate::pacer::{CLOCK_REPORT_US, ClockPhase, KEEPALIVE_US, Timing, clock_text};
+use crate::variant::proto3_integer;
 use crate::view::{read_status, split_footer};
 
 /// Seat calls the rig sends between two moves of the gateway's clock.
@@ -572,6 +573,15 @@ impl Rig {
             }
             return Some((Purpose::Clock, "report_host_clock", object(params)));
         }
+        if self.timing.clock.unreportable() && self.last_error.is_none() {
+            // Said once, where the lobby reads the rig's errors: the gateway's clock stops
+            // here rather than being reported at a bound it would read as time not passing.
+            self.last_error = Some(
+                "this phase has run longer than report_host_clock can carry (i32::MAX ms), \
+                 so the host clock is no longer reported"
+                    .to_owned(),
+            );
+        }
         if self.timing.keepalive_due(ADMIN) {
             return Some((Purpose::Status, "get_status", object(Vec::new())));
         }
@@ -798,7 +808,7 @@ impl Rig {
                         return Err(error);
                     }
                 };
-                self.timing.pacer.answered(ran);
+                self.timing.pacer.answered(ran)?;
                 if ran > 0 {
                     self.due.view = true;
                     self.due.feed = true;
@@ -836,13 +846,10 @@ impl Rig {
                 // Which phase the numbers are from: the answer's own footer, which says when
                 // the gateway served it. It labels the meter and moves nothing (only the
                 // admin connection's footers move the rig's phase).
-                // An answer with no footer is labelled with the phase the rig is in, as the
-                // recap's round is; a footer this build cannot read is refused.
-                let served = footer
-                    .as_ref()
-                    .map(read_status)
-                    .transpose()?
-                    .map_or(self.phase, |status| Phase::of(status.phase));
+                // Every gateway answer carries the footer, so one without it, or with one
+                // this build cannot read, is refused rather than labelled with a guess.
+                let served =
+                    Phase::of(served_status(footer.as_ref(), "get_economy_forecast")?.phase);
                 // The next BMI and the committed spend are left out of an answer that has
                 // none (item 135 (2) (g)), and an absent field is not 0: the schema marks
                 // the two `optional`, so the decoded type carries their presence.
@@ -873,11 +880,7 @@ impl Rig {
         let (body, footer) = split_footer(result);
         let recap: GetRecapResponse =
             json::decode_json(&enums::canonical("gp.api.v1.GetRecapResponse", &body))?;
-        let round = footer
-            .as_ref()
-            .map(read_status)
-            .transpose()?
-            .map_or(self.round, |status| status.round);
+        let round = served_status(footer.as_ref(), "get_recap")?.round;
         self.recap = Recap {
             answers: self.recap.answers.saturating_add(1),
             round,
@@ -1245,14 +1248,6 @@ fn proto3_text<'a>(answer: &'a Json, name: &str) -> Result<&'a str, BridgeError>
 
 /// The integer field `name` of an answer: proto3's canonical JSON leaves a zero out, so an
 /// absent field is 0, and anything but an integer is refused.
-fn proto3_integer(answer: &Json, name: &str) -> Result<i64, BridgeError> {
-    match answer.get(name) {
-        None => Ok(0),
-        Some(value) => json_integer(value)
-            .ok_or_else(|| BridgeError::Rpc(format!("`{name}` is not an integer"))),
-    }
-}
-
 fn object(entries: Vec<(&str, Json)>) -> Json {
     Json::Object(
         entries
@@ -1264,6 +1259,20 @@ fn object(entries: Vec<(&str, Json)>) -> Json {
 
 fn number(value: i64) -> Json {
     Json::Number(value.to_string())
+}
+
+/// The `_status` footer of an answer from `method`, read.
+///
+/// # Errors
+///
+/// [`BridgeError::Rpc`] when the answer carries none, which every gateway answer does (this
+/// module's doc, "Whose footer is believed"), and [`BridgeError::Schema`] for a footer this
+/// build cannot read.
+fn served_status(footer: Option<&Json>, method: &str) -> Result<Status, BridgeError> {
+    let footer = footer.ok_or_else(|| {
+        BridgeError::Rpc(format!("a {method} answer came with no _status footer"))
+    })?;
+    read_status(footer)
 }
 
 fn cursor_params(cursor: &str) -> Json {

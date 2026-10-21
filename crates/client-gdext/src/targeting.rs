@@ -419,6 +419,17 @@ pub fn attack_targets(text: &str) -> Vec<AttackMark> {
     out
 }
 
+/// `gp.v1.BeaconRef`'s selector arms, in both of proto JSON's spellings: a `beacon` that
+/// writes one of these is a selector, and one that writes neither a name nor a selector
+/// is a target this walk cannot read.
+const SELECTOR_ARMS: &[&str] = &[
+    "safest",
+    "nearest",
+    "weakest",
+    "most_threatened",
+    "mostThreatened",
+];
+
 /// What one `gp.v1.AttackTarget` object names, in either of proto JSON's spellings.
 fn aim_of(target: &Json) -> AttackAim {
     if let Some(voxel) = target.get("voxel") {
@@ -432,8 +443,8 @@ fn aim_of(target: &Json) -> AttackAim {
     };
     match beacon.get("beacon_id").or_else(|| beacon.get("beaconId")) {
         Some(Json::String(id)) => AttackAim::Beacon(id.clone()),
-        Some(_) => AttackAim::Unknown,
-        None => AttackAim::Selector,
+        None if SELECTOR_ARMS.iter().any(|arm| beacon.get(arm).is_some()) => AttackAim::Selector,
+        Some(_) | None => AttackAim::Unknown,
     }
 }
 
@@ -621,7 +632,9 @@ mod tests {
     {"label": "d", "place_beacon": {"at": {"voxel": {"x": 7, "y": 8, "z": 9}},
       "initial": {"mandate": {"attack": {"target": {"beacon": {"nearest": {}}}}}}}},
     {"label": "e", "place_beacon": {"at": {"voxel": {"x": 7, "y": 8, "z": 9}},
-      "initial": {"mandate": {"attack": {"target": {"voxel": {"x": "east"}}}}}}}
+      "initial": {"mandate": {"attack": {"target": {"voxel": {"x": "east"}}}}}}},
+    {"label": "f", "place_beacon": {"at": {"voxel": {"x": 7, "y": 8, "z": 9}},
+      "initial": {"mandate": {"attack": {"target": {"beacon": {}}}}}}}
   ]}
 }"#;
         let marks = attack_targets(text);
@@ -633,6 +646,7 @@ mod tests {
                 &AttackAim::Voxel([200, 40, 0]),
                 &AttackAim::EnemyCommander,
                 &AttackAim::Selector,
+                &AttackAim::Unknown,
                 &AttackAim::Unknown,
             ]
         );

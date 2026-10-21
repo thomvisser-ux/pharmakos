@@ -360,6 +360,9 @@ fn entity_of(entity: &ViewEntity) -> Result<Entity, BridgeError> {
         .ok_or_else(|| refused("arrived with no position"))?;
     let hp = match (entity.hp, entity.max_hp) {
         (None, None) => None,
+        (Some(hp), Some(max_hp)) if hp > max_hp => {
+            return Err(refused("has more hit points than its maximum"));
+        }
         (Some(hp), Some(max_hp)) => Some(Health {
             hp,
             max_hp: NonZeroU32::new(max_hp)
@@ -463,6 +466,9 @@ pub struct ViewModel {
     /// The map's extent in voxels, sim axes, from the rules table's `map` row: no chunk
     /// origin at or beyond it is taken.
     extent: [u32; 3],
+    /// The map's height in voxels, the extent's third axis, checked once to fit the
+    /// sim-axes `i32` a column search counts in.
+    height: i32,
     /// Every chunk ever received, keyed by its sim-axes origin, in mesher order.
     held: BTreeMap<[i32; 3], Vec<u8>>,
     /// Origins whose bytes changed since the last completing page.
@@ -477,18 +483,38 @@ impl ViewModel {
     /// An empty model that will bake with `params`, drain under `budget` and take chunks
     /// inside `extent` (voxels, sim axes) — all three read from the rules table by
     /// [`crate::rules`].
-    #[must_use]
-    pub fn new(params: LightParams, budget: DrainBudget, extent: [u32; 3]) -> Self {
-        Self {
+    ///
+    /// # Errors
+    ///
+    /// [`BridgeError::View`] when an axis of `extent` does not fit the `i32` the sim's
+    /// voxel coordinates are counted in: no chunk origin past it could ever be sent.
+    pub fn new(
+        params: LightParams,
+        budget: DrainBudget,
+        extent: [u32; 3],
+    ) -> Result<Self, BridgeError> {
+        for axis in extent {
+            if i32::try_from(axis).is_err() {
+                return Err(BridgeError::View(format!(
+                    "the map's extent {extent:?} does not fit the sim's voxel coordinates"
+                )));
+            }
+        }
+        let [_, _, top] = extent;
+        let height = i32::try_from(top).map_err(|_| {
+            BridgeError::View(format!("the map's height {top} does not fit an i32"))
+        })?;
+        Ok(Self {
             params,
             budget,
             extent,
+            height,
             held: BTreeMap::new(),
             changed: BTreeSet::new(),
             map: None,
             entities: Vec::new(),
             drains: 0,
-        }
+        })
     }
 
     /// The chunk grid, once a keyframe has established it.
@@ -590,9 +616,7 @@ impl ViewModel {
     /// says where to draw, never whether anything may stand there.
     #[must_use]
     pub fn ground_at(&self, x: i32, y: i32) -> Option<i32> {
-        let [_, _, top] = self.extent;
-        let top = i32::try_from(top).unwrap_or(i32::MAX);
-        (0..top)
+        (0..self.height)
             .rev()
             .find(|up| self.solid_world([x, *up, y]))
             .and_then(|up| up.checked_add(1))
@@ -1080,7 +1104,7 @@ mod tests {
 
     #[test]
     fn a_pick_finds_the_empty_voxel_on_top_of_the_ground() {
-        let mut model = ViewModel::new(params(), budget(), EXTENT);
+        let mut model = ViewModel::new(params(), budget(), EXTENT).expect("the committed extent");
         model
             .apply(decode_page(&result(&[([0, 0, 0], floor(4, 2))], true)).expect("keyframe"))
             .expect("applies");
@@ -1109,9 +1133,18 @@ mod tests {
         );
     }
 
+    /// An extent the sim's `i32` voxel coordinates cannot reach is refused when the model
+    /// is built, not met later as a column search two billion voxels tall.
+    #[test]
+    fn an_extent_past_the_sims_coordinates_is_refused() {
+        let error = ViewModel::new(params(), budget(), [384, 384, u32::MAX])
+            .expect_err("a height past i32::MAX");
+        assert!(matches!(error, BridgeError::View(_)), "{error}");
+    }
+
     #[test]
     fn the_ground_at_a_column_is_the_empty_voxel_on_top_of_it() {
-        let mut model = ViewModel::new(params(), budget(), EXTENT);
+        let mut model = ViewModel::new(params(), budget(), EXTENT).expect("the committed extent");
         assert_eq!(model.ground_at(10, 20), None, "nothing held yet");
         model
             .apply(decode_page(&result(&[([0, 0, 0], floor(4, 2))], true)).expect("keyframe"))
@@ -1126,7 +1159,7 @@ mod tests {
 
     #[test]
     fn a_keyframe_builds_the_grid_and_queues_every_chunk() {
-        let mut model = ViewModel::new(params(), budget(), EXTENT);
+        let mut model = ViewModel::new(params(), budget(), EXTENT).expect("the committed extent");
         let first = decode_page(&result(&[([0, 0, 0], floor(4, 2))], false)).expect("page 1");
         let applied = model.apply(first).expect("applies");
         assert!(!applied.complete);
@@ -1150,7 +1183,7 @@ mod tests {
 
     #[test]
     fn a_delta_that_changes_nothing_queues_nothing_and_one_that_does_queues_its_fan_out() {
-        let mut model = ViewModel::new(params(), budget(), EXTENT);
+        let mut model = ViewModel::new(params(), budget(), EXTENT).expect("the committed extent");
         let keyframe = [([0, 0, 0], floor(4, 2)), ([32, 0, 0], floor(4, 2))];
         model
             .apply(decode_page(&result(&keyframe, true)).expect("keyframe"))
@@ -1245,7 +1278,10 @@ mod tests {
         zero.max_hp = Some(0);
         let mut spun = entity("u_5", view_entity::Kind::Unit, "seat.0");
         spun.heading = Some(65_536);
-        for refused in [nowhere, no_maximum, no_count, zero, spun] {
+        let mut overfull = entity("u_6", view_entity::Kind::Unit, "seat.0");
+        overfull.hp = Some(121);
+        overfull.max_hp = Some(120);
+        for refused in [nowhere, no_maximum, no_count, zero, spun, overfull] {
             let id = refused.id.clone();
             let error = decode_page(&with_entities(vec![refused])).expect_err(&id);
             assert!(matches!(error, BridgeError::View(_)), "{id}: {error}");
@@ -1256,7 +1292,7 @@ mod tests {
     /// a changed chunk queued its whole padded box, and more than 16 queued every chunk.
     #[test]
     fn a_crater_queues_the_chunks_it_reaches_and_not_the_map() {
-        let mut model = ViewModel::new(params(), budget(), EXTENT);
+        let mut model = ViewModel::new(params(), budget(), EXTENT).expect("the committed extent");
         let mut keyframe: Vec<([i32; 3], Vec<u8>)> = Vec::new();
         for x in (0..256).step_by(32) {
             for y in (0..256).step_by(32) {
@@ -1292,7 +1328,7 @@ mod tests {
 
     #[test]
     fn a_chunk_outside_the_map_is_refused_before_anything_is_stored() {
-        let mut model = ViewModel::new(params(), budget(), EXTENT);
+        let mut model = ViewModel::new(params(), budget(), EXTENT).expect("the committed extent");
         // 360 chunks east and north: a grid of 4.27e9 voxels if it were ever sized from it.
         let far = decode_page(&result(
             &[([0, 0, 0], floor(4, 2)), ([11_520, 11_520, 0], floor(4, 2))],
@@ -1319,7 +1355,7 @@ mod tests {
     #[test]
     fn a_box_rebake_and_a_whole_bake_agree() {
         let keyframe = [([0, 0, 0], floor(6, 2)), ([32, 0, 0], floor(6, 2))];
-        let mut boxed = ViewModel::new(params(), budget(), EXTENT);
+        let mut boxed = ViewModel::new(params(), budget(), EXTENT).expect("the committed extent");
         boxed
             .apply(decode_page(&result(&keyframe, true)).expect("keyframe"))
             .expect("applies");
@@ -1327,7 +1363,7 @@ mod tests {
             .apply(decode_page(&result(&[([32, 0, 0], floor(2, 1))], true)).expect("delta"))
             .expect("applies");
 
-        let mut whole = ViewModel::new(params(), budget(), EXTENT);
+        let mut whole = ViewModel::new(params(), budget(), EXTENT).expect("the committed extent");
         whole
             .apply(
                 decode_page(&result(

@@ -192,7 +192,7 @@ pub(crate) fn state_dictionary(editor: &Editor) -> VarDictionary {
     put("chips_current", editor.chips_current().to_variant());
     put(
         "attack_targets",
-        attack_array(&editor.attack_targets()).to_variant(),
+        attack_array(editor.attack_targets()).to_variant(),
     );
     put(
         "this_round",

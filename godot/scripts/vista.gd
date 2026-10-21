@@ -15,11 +15,12 @@
 # ordinary view pages under the same token. The source-text test
 # `crates/client-gdext/tests/unlock.rs` holds every script in godot/ to that.
 #
-# Entities are placeholder primitives until the art pass: PLACEHOLDER, every shape and
-# colour below, OWNER at S6 (skeleton plan T16, PLACEHOLDERs). Positions arrive in whole
-# voxels, so a marker eases towards its latest position. A unit the view gives a heading
-# turns to it (the bridge hands the heading over as a draw yaw); anything else faces the
-# way it last moved (walled floats; Tuning, OWNER).
+# Entities are placeholder primitives until the art pass (skeleton plan T16). Positions
+# arrive in whole voxels, so a marker eases towards its latest position. A unit the view
+# gives a heading turns to it (the bridge hands the heading over as a draw yaw); anything
+# else faces the way it last moved (walled floats).
+#
+# PLACEHOLDER: every entity marker's shape and colour in this file — OWNER, at S6.
 #
 # S2 (S2's plan, task `view`): shells, wrecks and ruins are markers of their own, and
 # every entity the view gives hit points to carries a bar over it, filled by its `hp`
@@ -33,28 +34,36 @@ extends Node3D
 
 const MesherRules := preload("res://scripts/mesher_rules.gd")
 
-## How quickly a marker closes on its latest position, per second. PLACEHOLDER, Tuning.
+## How quickly a marker closes on its latest position, per second.
+## PLACEHOLDER: the markers' easing rate — OWNER, at S6.
 const EASE_RATE := 6.0
-## The smallest move that turns a marker to face along it, in voxels. PLACEHOLDER, Tuning.
+## The smallest move that turns a marker to face along it, in voxels.
+## PLACEHOLDER: the markers' turning threshold — OWNER, at S6.
 const TURN_AFTER := 0.05
 
-## Placeholder colours: own, another seat's, and nobody's. PLACEHOLDER, art, OWNER at S6.
+## Colours: own, another seat's, and nobody's.
+## PLACEHOLDER: the own, other and nobody colours — OWNER, at S6.
 const OWN_COLOUR := Color(0.20, 0.85, 0.80)
 const OTHER_COLOUR := Color(0.90, 0.30, 0.25)
 const NOBODY_COLOUR := Color(0.60, 0.60, 0.60)
-## A beacon's emissive glow under the Pall. PLACEHOLDER, art, OWNER at S6.
+## A beacon's emissive glow under the Pall.
+## PLACEHOLDER: the beacon's glow — OWNER, at S6.
 const BEACON_GLOW := Color(1.0, 0.62, 0.20)
-## A shell's glow in flight, and a wreck's and a ruin's darker body. PLACEHOLDER, art,
-## OWNER at S6.
+## A shell's glow in flight, and a wreck's and a ruin's darker body.
+## PLACEHOLDER: the shell, wreck and ruin looks — OWNER, at S6.
 const SHELL_GLOW := Color(1.0, 0.85, 0.45)
 const WRECK_COLOUR := Color(0.22, 0.20, 0.19)
 const RUIN_COLOUR := Color(0.35, 0.33, 0.31)
 ## The hit-point bar: its size in voxels, how far over the marker's top it floats, and
-## its two colours. PLACEHOLDER, art, OWNER at S6.
+## its two colours.
+## PLACEHOLDER: the hit-point bar's size and colours — OWNER, at S6.
 const BAR_SIZE := Vector2(2.4, 0.3)
 const BAR_LIFT := 0.8
 const BAR_BACK := Color(0.25, 0.05, 0.05)
 const BAR_FILL := Color(0.30, 0.90, 0.35)
+## How far the fill floats in front of the back, in voxels, so the two never fight for
+## the same depth at a distance.
+const BAR_GAP := 0.03
 
 ## The seat this client plays, as the gateway spells a seat: `seat.0`. Empty for a
 ## spectator. Own against other is `owner == my_seat` and nothing more.
@@ -225,7 +234,7 @@ func _set_bar(marker: Dictionary, entity: Dictionary) -> void:
 	var quad: QuadMesh = fill.mesh
 	quad.size = Vector2(BAR_SIZE.x * share, BAR_SIZE.y)
 	# Left-aligned in the billboard's own plane, so the bar empties towards its left end.
-	quad.center_offset = Vector3(-BAR_SIZE.x * (1.0 - share) * 0.5, 0.0, 0.001)
+	quad.center_offset = Vector3(-BAR_SIZE.x * (1.0 - share) * 0.5, 0.0, BAR_GAP)
 
 
 func _marker_for(entity: Dictionary) -> Node3D:
@@ -299,6 +308,9 @@ func _bar(lift: float) -> Node3D:
 		paint.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 		paint.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
 		paint.no_depth_test = false
+		if part[0] == "Fill":
+			quad.center_offset = Vector3(0.0, 0.0, BAR_GAP)
+			paint.render_priority = 1
 		quad.material = paint
 		var shown := MeshInstance3D.new()
 		shown.name = part[0]

@@ -39,7 +39,9 @@ fn drive(pacer: &mut Pacer, walls: &[u64], run: impl Fn(i32) -> i32) -> Vec<Opti
         pacer.elapse(*wall);
         let ask = pacer.next_ask();
         if let Some(asked) = ask {
-            pacer.answered(run(asked).unsigned_abs());
+            pacer
+                .answered(run(asked).unsigned_abs())
+                .expect("no more than was asked");
         }
         asks.push(ask);
     }
@@ -60,13 +62,13 @@ fn the_pacer_asks_for_game_milliseconds_and_carries_what_was_not_run() {
     assert_eq!(pacer.next_ask(), Some(130));
     // The host ran 100 of it: the 30 it did not run are carried, not lost and not re-asked
     // as a fresh debt.
-    pacer.answered(100);
+    pacer.answered(100).expect("no more than was asked");
     assert_eq!(pacer.owed_ms(), 30);
     pacer.elapse(PACER_PERIOD_US);
     assert_eq!(pacer.next_ask(), Some(130), "30 carried plus 100 new");
     // An ask too small to run anything is answered with 0, which is not an error: all of
     // it is carried.
-    pacer.answered(0);
+    pacer.answered(0).expect("no more than was asked");
     assert_eq!(pacer.owed_ms(), 130);
 
     // Over a long run the game time the host RAN adds up to the wall time: nothing is
@@ -134,7 +136,9 @@ fn the_pacer_never_has_two_advances_in_flight() {
         assert_eq!(pacer.next_ask(), None, "one advance in flight at a time");
         assert!(pacer.in_flight());
     }
-    pacer.answered(first.expect("asked").unsigned_abs());
+    pacer
+        .answered(first.expect("asked").unsigned_abs())
+        .expect("no more than was asked");
     assert!(!pacer.in_flight());
     assert!(
         pacer.next_ask().is_some(),

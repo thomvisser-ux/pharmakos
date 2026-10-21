@@ -126,7 +126,7 @@ fn target_dir() -> PathBuf {
 #[test]
 fn a_view_response_decodes_and_meshes_to_the_committed_geometry_digest() {
     let (params, budget, extent) = rules();
-    let mut model = ViewModel::new(params, budget, extent);
+    let mut model = ViewModel::new(params, budget, extent).expect("the committed extent");
     let text = fs::read_to_string(godot_copy()).expect("the fixture");
     let mut pages = 0_usize;
     for line in text.lines().filter(|line| !line.trim().is_empty()) {

@@ -73,11 +73,6 @@ const KEPT_FALLBACKS: &[(&str, &str, &str)] = &[
     ),
     (
         "view.rs",
-        "let top = i32::try_from(top).unwrap_or(i32::MAX);",
-        "every chunk origin is an i32, so no voxel the client holds lies above i32::MAX and a search from there misses nothing",
-    ),
-    (
-        "view.rs",
         "sizes.get(chunk_slot(chunk)).copied().unwrap_or(0)",
         "the drain queue holds only this grid's chunks and `build` gives each a size slot starting at 0 bytes, the cost of a surface not yet uploaded; the mesher's drain callback answers bytes, not an error",
     ),
@@ -103,23 +98,8 @@ const KEPT_FALLBACKS: &[(&str, &str, &str)] = &[
     ),
     (
         "pacer.rs",
-        "i32::try_from(ms).unwrap_or(i32::MAX)",
-        "`report_host_clock`'s fields are int32: a phase longer than i32::MAX ms (24.8 days) is reported at that bound, a step of zero that moves the gateway's clock no further rather than backwards (`wire_ms`)",
-    ),
-    (
-        "pacer.rs",
         "self.origin.elapsed().as_micros()).unwrap_or(u64::MAX)",
         "the one wall clock reads microseconds in a u64, which overflows 584 000 years after the client started; it stays monotone at the bound",
-    ),
-    (
-        "rig.rs",
-        ".map_or(self.phase, |status| Phase::of(status.phase));",
-        "a meter answer with no footer is labelled with the phase the rig is in, as the recap's round is; a footer this build cannot read is refused",
-    ),
-    (
-        "rig.rs",
-        ".map_or(self.round, |status| status.round);",
-        "a recap answer with no footer is the rig's round (`take_recap`'s doc); a footer this build cannot read is refused",
     ),
     (
         "surface.rs",

@@ -232,7 +232,14 @@ impl PharmakosBridge {
 
         self.mesher = Some(Mesher::new(parsed.light));
         self.budget = Some(parsed.budget);
-        self.view = Some(ViewModel::new(parsed.light, parsed.budget, extent));
+        let model = match ViewModel::new(parsed.light, parsed.budget, extent) {
+            Ok(model) => model,
+            Err(error) => {
+                godot_error!("[pharmakos] configure: {error}");
+                return not_configured(&error.to_string());
+            }
+        };
+        self.view = Some(model);
         self.lulls = lulls;
 
         let attached = self.attach_renderer(count);

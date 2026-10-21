@@ -56,7 +56,13 @@
               report (clippy.toml's own wording)."
 )]
 
+use std::sync::{Mutex, PoisonError};
 use std::time::Instant;
+
+/// Held by each measurement for its whole run, so the two alarms in this binary never
+/// share the machine: libtest runs tests in parallel, and `cargo xtask perf-alarms` passes
+/// no `--test-threads=1` (its doc says why), so each would otherwise skew the other.
+static MACHINE: Mutex<()> = Mutex::new(());
 
 use pharmakos_mesher::{
     AIR, ChunkBorders, ChunkGrid, DrainBudget, DrainQueue, LightField, LightParams, MeshBuffers,
@@ -131,6 +137,7 @@ fn percentile(sorted: &[u128], percent: u128) -> u128 {
 #[test]
 #[ignore = "a performance alarm, not a gate: cargo xtask perf-alarms runs it with --ignored"]
 fn per_chunk_mesh_cpu_p99() {
+    let _alone = MACHINE.lock().unwrap_or_else(PoisonError::into_inner);
     let grid = ChunkGrid::new(1, 1, 1).expect("a one-chunk grid is legal");
     let params = LightParams::new(15, 1).expect("the committed rules-table rows");
     let materials = cratered(grid);
@@ -328,10 +335,11 @@ fn relight_whole_above_16(
 }
 
 /// G1's headless CPU proxy (G1 section 10.8; its step 6, "S2 will need this"), on the
-/// committed map and the client's own path: `explosions_per_s` craters a second land at
-/// deterministic places, each view carries the craters since the last, the view's edits
-/// are relit and queued as `relight` says, and every frame drains under the committed
-/// budget and meshes what it drains with the real mesher. Upload is modelled as G1's was.
+/// committed map's size on flat ground (see [`ground`]) and the client's own path:
+/// `explosions_per_s` craters a second land at deterministic places, each view carries the
+/// craters since the last, the view's edits are relit and queued as `relight` says, and
+/// every frame drains under the committed budget and meshes what it drains with the real
+/// mesher. Upload is modelled as G1's was.
 #[allow(
     clippy::too_many_lines,
     reason = "one frame loop, read top to bottom in the order the proxy runs it"
@@ -461,7 +469,10 @@ fn percentile_u64(sorted: &[u64], percent: usize) -> u64 {
 }
 
 /// S2's crater stream through the client's relight and the drain queue, at 20 and 40
-/// explosions a second (G1's gate and its stress step), on the committed map: the remesh
+/// explosions a second (G1's gate and its stress step), on FLAT ground the size of the
+/// committed map (stone to y = 20, dirt to y = 24, open sky above), not on generated
+/// relief: light moves little outside a crater on flat ground, so a hillside's fan-out and
+/// latency would be larger than these (S2's `view`, its correctness review). The remesh
 /// latency in frames from the view that carried the craters, against G1's three, and the
 /// modelled CPU per frame. Published beside the old path's figures, a whole-map bake above
 /// 16 changed chunks, which S2's `view` lane replaced because it missed G1's three frames.
@@ -470,6 +481,7 @@ fn percentile_u64(sorted: &[u64], percent: usize) -> u64 {
 #[test]
 #[ignore = "a performance alarm, not a gate: cargo xtask perf-alarms runs it with --ignored"]
 fn crater_stream_remesh_latency() {
+    let _alone = MACHINE.lock().unwrap_or_else(PoisonError::into_inner);
     for (rate, relight, frames) in [
         (20, Relight::Bounded, 3_600),
         (40, Relight::Bounded, 3_600),
@@ -482,7 +494,7 @@ fn crater_stream_remesh_latency() {
             Relight::WholeAbove16 => "pre-S2 whole bake above 16 chunks",
         };
         println!(
-            "::notice::crater stream {rate}/s ({path}): remesh latency p50 {} p99 {} max {} \
+            "::notice::crater stream {rate}/s ({path}, flat ground): remesh latency p50 {} p99 {} max {} \
              frames from the view (G1 wants p99 <= {G1_FRAMES}), modelled CPU p99 {} us a \
              frame, {} of {frames} frames over {FRAME_US} us, max queue depth {}, {} \
              uploads, {} left queued",

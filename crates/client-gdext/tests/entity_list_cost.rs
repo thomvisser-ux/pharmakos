@@ -11,10 +11,13 @@
 //! beacons, decisions-log item 63), every entity carrying the hit points, maximum and
 //! heading decision 5 lets a seat see, and times the client's own path for one view: the
 //! text read, the schema decode and the model's replacement of its list
-//! (`view::decode_page_text`, then `ViewModel::apply`). The watch rig asks for a view once a
-//! pacer period, 100 ms, six frames at 60 fps, so the per-frame share is a sixth of the
-//! figure; the Godot half (the dictionaries the bridge builds and `vista.gd`'s `_show`)
-//! runs inside the engine and is not measured here.
+//! (`view::decode_page_text`, then `ViewModel::apply`). Each view is timed once, so the
+//! tail stays in the sample, and the figure is set against the whole 16.7 ms frame the view
+//! lands in: the watch rig asks for a view once a pacer period, 100 ms, but the decode and
+//! apply run in the one frame its answer arrives in, beside that frame's drain. The Godot
+//! half (the dictionaries the bridge builds and `vista.gd`'s `_show`) runs inside the
+//! engine and is not measured here, so E28's reading from this figure is provisional
+//! until that half is measured too.
 //!
 //! An alarm, not a gate, like the mesher's (`crates/mesher/tests/perf_alarm.rs`): it is
 //! `#[ignore]`d, prints `::notice::` lines, and asserts only that it measured something.
@@ -49,12 +52,13 @@ use pharmakos_proto::json;
 const UNITS: u32 = 300;
 const BEACONS: u32 = 40;
 
-/// How many views the sample is taken over, and how many times each is timed.
-const VIEWS: usize = 200;
-const REPEATS: usize = 5;
+/// How many views the sample is taken over, each timed once: the tail is the point.
+const VIEWS: usize = 1_000;
 
-/// The frames one view covers: a pacer period of 100 ms at 60 fps.
-const FRAMES_PER_VIEW: u128 = 6;
+/// The frame the view lands in, in microseconds: 60 fps. A view's decode and apply run in
+/// the one frame the answer arrives in, so this, not a sixth of it, is what they spend
+/// against.
+const FRAME_US: u128 = 16_667;
 
 fn entity(id: String, kind: view_entity::Kind, owner: &str, at: [i32; 3]) -> ViewEntity {
     ViewEntity {
@@ -122,7 +126,7 @@ fn a_full_entity_list_at_the_gate_load_costs_this_much_a_view() {
         bytes_per_frame: 524_288,
         age_frames: 2,
     };
-    let mut model = ViewModel::new(params, budget, [384, 384, 64]);
+    let mut model = ViewModel::new(params, budget, [384, 384, 64]).expect("the committed extent");
     // A keyframe of one chunk first, so the pages below are views of an established map.
     let keyframe = GetViewResponse {
         at_ms: 0,
@@ -140,26 +144,23 @@ fn a_full_entity_list_at_the_gate_load_costs_this_much_a_view() {
         .expect("applies");
 
     let page = gate_load_page();
-    let mut best: Vec<u128> = Vec::with_capacity(VIEWS);
+    let mut sample: Vec<u128> = Vec::with_capacity(VIEWS);
     for _ in 0..VIEWS {
-        let mut lowest = u128::MAX;
-        for _ in 0..REPEATS {
-            let started = Instant::now();
-            let decoded = decode_page_text(&page).expect("the gate load decodes");
-            model.apply(decoded).expect("applies");
-            lowest = lowest.min(started.elapsed().as_micros());
-        }
-        best.push(lowest);
+        let started = Instant::now();
+        let decoded = decode_page_text(&page).expect("the gate load decodes");
+        model.apply(decoded).expect("applies");
+        sample.push(started.elapsed().as_micros());
     }
-    best.sort_unstable();
-    let p50 = percentile(&best, 50);
-    let p99 = percentile(&best, 99);
+    sample.sort_unstable();
+    let p50 = percentile(&sample, 50);
+    let p99 = percentile(&sample, 99);
+    let max = sample.last().copied().expect("a sample");
     println!(
         "::notice::full entity list at the gate load ({UNITS} units, {BEACONS} beacons, {} \
-         bytes of JSON): decode and apply p50 {p50} us, p99 {p99} us a view, about {} us a \
-         frame at a view every {FRAMES_PER_VIEW} frames",
+         bytes of JSON): decode and apply in the frame the view lands in, p50 {p50} us, p99 \
+         {p99} us, max {max} us, against a {FRAME_US} us frame; the Godot half (the \
+         bridge's dictionaries and vista.gd's _show) is not in this figure",
         page.len(),
-        p99.div_euclid(FRAMES_PER_VIEW),
     );
     assert_eq!(
         model.entities().len(),
