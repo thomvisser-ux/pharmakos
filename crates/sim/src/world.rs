@@ -2870,17 +2870,13 @@ impl World {
                     self.targets.features().get(row).copied(),
                     self.targets.built().get(row).copied(),
                 )
+                && let (Some(area), Some(top), Some(done)) = (
+                    self.targets.areas().get(row).copied(),
+                    self.targets.wall_tops().get(row).copied(),
+                    self.targets.walls_done().get(row).copied(),
+                )
             {
-                let wall = (
-                    self.targets.areas().get(row).copied().unwrap_or_default(),
-                    // E7: rule: a row the table does not hold names no wall
-                    self.targets
-                        .wall_tops()
-                        .get(row)
-                        .copied()
-                        .unwrap_or(crate::tables::NO_WALL),
-                    self.targets.walls_done().get(row).copied() == Some(true),
-                );
+                let wall = (area, top, done);
                 self.carry.push(Carried {
                     anchor,
                     feature,
