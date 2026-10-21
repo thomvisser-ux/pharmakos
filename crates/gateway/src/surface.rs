@@ -2123,7 +2123,12 @@ impl Surface {
             | EventKind::StructureDestroyed
             | EventKind::ShellLanded
             | EventKind::WreckLeft
-            | EventKind::WreckBuried => Ok(Audience::World {
+            | EventKind::WreckBuried
+            // S2's `fall`: a region that fell and an asset that fell with it,
+            // or under it, are things in the world an opponent with eyes on
+            // the place sees.
+            | EventKind::RegionCollapsed
+            | EventKind::AssetFell => Ok(Audience::World {
                 owner: event.seat,
                 // A world event the sim placed nowhere would be filtered at
                 // the origin, where a seat that sees the origin would be told
