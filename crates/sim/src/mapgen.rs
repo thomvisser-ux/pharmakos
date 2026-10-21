@@ -501,6 +501,10 @@ pub struct GeneratedMap {
     /// The core's bore, each occupied seat's ([`crate::bore`]; S2's plan,
     /// E31): derived with the map and regenerated with it, never hashed.
     pub bore: Bore,
+    /// Each column's top solid voxel as generated ([`crate::terrain`]; S2's
+    /// `site`): terraform's refill stops there. Derived with the map and
+    /// regenerated with it, never hashed.
+    pub surface: crate::terrain::GeneratedSurface,
     /// What the map turned out to be.
     pub report: MapReport,
 }
@@ -732,6 +736,10 @@ pub fn generate(seed: u64, rules: &RulesTable, seats: u32) -> Result<GeneratedMa
     // 10. The core's bore (S2's plan, E31).
     let bore = bore_of(&voxels, &zones)?;
 
+    // 11. The generated surface (S2's `site`): read off the finished pristine
+    // store, as the bore is.
+    let surface = crate::terrain::GeneratedSurface::of(&voxels);
+
     let report = MapReport {
         seed,
         size,
@@ -760,6 +768,7 @@ pub fn generate(seed: u64, rules: &RulesTable, seats: u32) -> Result<GeneratedMa
         seat_draw,
         features,
         bore,
+        surface,
         report,
     })
 }

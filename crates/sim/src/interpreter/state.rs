@@ -930,6 +930,17 @@ pub enum StepFailure {
     /// written (ruling 10 of S1's stage demo, decisions-log item 139 (1); item
     /// 136 (5)).
     TargetsUnwritten,
+    /// A `wall` target's box does not reach the ground: its `min.z` lies above
+    /// the ground's top in some column, so the wall would hang in the air
+    /// (S2's `site`; decisions-log item 146 (4)). The row writes nothing.
+    WallOffTheGround,
+    /// A `wall` target's box stands less than
+    /// `materials.wall_min_height_voxels` over the ground in some column
+    /// (decision 40; item 146 (4)). The row writes nothing.
+    WallTooLow,
+    /// A voxel a `wall` target would fill lies outside the sphere of the
+    /// beacon whose mandate holds it (item 146 (4)). The row writes nothing.
+    WallOutsideSphere,
 }
 
 impl StepFailure {
@@ -938,7 +949,7 @@ impl StepFailure {
     /// `tests/interpreter.rs`'s `every_step_failure_has_a_unique_id` walks it,
     /// which is what makes the ordering claim checked rather than asserted —
     /// the array was out of order when it was only a doc comment.
-    pub const ALL: [StepFailure; 12] = [
+    pub const ALL: [StepFailure; 15] = [
         StepFailure::Timeout,
         StepFailure::NoTarget,
         StepFailure::NoPath,
@@ -951,6 +962,9 @@ impl StepFailure {
         StepFailure::FeatureLost,
         StepFailure::Unaffordable,
         StepFailure::TargetsUnwritten,
+        StepFailure::WallOffTheGround,
+        StepFailure::WallTooLow,
+        StepFailure::WallOutsideSphere,
     ];
 
     /// The id `not_own` carried until S1: **retired, never reused**. It told a
@@ -975,6 +989,9 @@ impl StepFailure {
             StepFailure::FeatureLost => 11,
             StepFailure::Unaffordable => 12,
             StepFailure::TargetsUnwritten => 13,
+            StepFailure::WallOffTheGround => 14,
+            StepFailure::WallTooLow => 15,
+            StepFailure::WallOutsideSphere => 16,
         }
     }
 
@@ -994,6 +1011,9 @@ impl StepFailure {
             StepFailure::FeatureLost => "feature_lost",
             StepFailure::Unaffordable => "unaffordable",
             StepFailure::TargetsUnwritten => "targets_unwritten",
+            StepFailure::WallOffTheGround => "wall_off_the_ground",
+            StepFailure::WallTooLow => "wall_too_low",
+            StepFailure::WallOutsideSphere => "wall_outside_sphere",
         }
     }
 

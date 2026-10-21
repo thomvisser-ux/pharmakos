@@ -281,11 +281,24 @@ pub enum EventKind {
     /// wreck, which has no hit points). What it lost is the damage phase's,
     /// clamped to what it had.
     AssetFell,
+    /// A repair drone brought an own unit, structure or beacon back to full
+    /// hit points (S2's `site`; decision 43, and the owner's ruling of
+    /// 2026-10-20 that every own structure, beacons included, is repairable).
+    /// `subject` is the asset, `seat` its owner, `value` its full hit points.
+    AssetRepaired,
+    /// A structure standing for a Build target a settings edit dropped was
+    /// recycled (S2's `site`; register S2-10, decision 26). `subject` is the
+    /// structure, `seat` its owner, `value` the refund in `$`.
+    StructureRecycled,
+    /// A Build beacon's refill brought a column back to the generated surface
+    /// (S2's `site`; decisions-log item 144 (5)). `at` is the voxel filled,
+    /// `seat` the refilling seat.
+    GroundRefilled,
 }
 
 impl EventKind {
     /// Every kind, in ascending [`EventKind::id`] order.
-    pub const ALL: [EventKind; 47] = [
+    pub const ALL: [EventKind; 50] = [
         EventKind::MatchStarted,
         EventKind::LullOpened,
         EventKind::PushStarted,
@@ -333,6 +346,9 @@ impl EventKind {
         EventKind::WreckBuried,
         EventKind::RegionCollapsed,
         EventKind::AssetFell,
+        EventKind::AssetRepaired,
+        EventKind::StructureRecycled,
+        EventKind::GroundRefilled,
     ];
 
     /// The wire id. Additive only: never reuse, never renumber.
@@ -386,6 +402,9 @@ impl EventKind {
             EventKind::WreckBuried => 45,
             EventKind::RegionCollapsed => 46,
             EventKind::AssetFell => 47,
+            EventKind::AssetRepaired => 48,
+            EventKind::StructureRecycled => 49,
+            EventKind::GroundRefilled => 50,
         }
     }
 
@@ -440,6 +459,9 @@ impl EventKind {
             45 => Some(EventKind::WreckBuried),
             46 => Some(EventKind::RegionCollapsed),
             47 => Some(EventKind::AssetFell),
+            48 => Some(EventKind::AssetRepaired),
+            49 => Some(EventKind::StructureRecycled),
+            50 => Some(EventKind::GroundRefilled),
             _ => None,
         }
     }
@@ -497,6 +519,9 @@ impl EventKind {
             EventKind::WreckBuried => "wreck_buried",
             EventKind::RegionCollapsed => "region_collapsed",
             EventKind::AssetFell => "asset_fell",
+            EventKind::AssetRepaired => "asset_repaired",
+            EventKind::StructureRecycled => "structure_recycled",
+            EventKind::GroundRefilled => "ground_refilled",
         }
     }
 

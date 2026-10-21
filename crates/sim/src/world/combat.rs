@@ -117,11 +117,11 @@ impl Roe {
     ///
     /// **The unset default is the mandate's** (the owner's answer of
     /// 2026-10-20): an unset `0` reads as `RETURN_FIRE` (decision 4, the fifth
-    /// omitted-setting default) on every writ but Attack, where it reads as
-    /// `FREE_FIRE`. Attack does not compile until S2's `atk`, so no Attack
-    /// beacon exists yet and its arm is `atk`'s to add here, beside the
-    /// Attack mandate it builds; until then every writ reads unset as
-    /// `RETURN_FIRE`.
+    /// omitted-setting default) on Build, Mine and Survey, and as `FREE_FIRE`
+    /// on Defend and Attack (the owner's rulings of 2026-10-20). Neither Defend
+    /// nor Attack compiles until S2's `dfnd` and `atk`, so no such beacon
+    /// exists yet and their arms are theirs to add here, beside the mandates
+    /// they build; until then every writ reads unset as `RETURN_FIRE`.
     #[must_use]
     pub const fn of_setting(roe: u8, mandate: crate::seams::MandateKind) -> Option<Roe> {
         match (roe, mandate) {
@@ -589,6 +589,7 @@ impl World {
                         .push(
                             mark.at,
                             lands,
+                            (gun.at, tick),
                             SeatId::new(gun.seat),
                             gun.asset.raw(),
                             gun.armament,
@@ -1873,6 +1874,7 @@ impl World {
             .push(
                 aim,
                 lands,
+                (at, tick),
                 SeatId::new(seat),
                 asset.raw(),
                 Armament::Structure(kind),

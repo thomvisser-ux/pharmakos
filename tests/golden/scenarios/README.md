@@ -252,6 +252,23 @@ both seats did before: its walk times out at 2401, its deploy is refused
 (S2's plan, E2 to E8, E27 and E30) moved no chain: the queues are never state,
 the refusals and the typed reads change nothing a committed match reaches.
 
+**S2's `site` moved no committed chain** (S2's plan, task `site`; decisions-log
+items 128 (d) and 144 (5)). Its new state -- each beacon's Build settings and
+the drone work the Quartermaster has paid for, and each wall target's top -- is
+hashed as a block after every other that writes nothing while every beacon
+holds a placed beacon's defaults, nothing is paid and no target is a wall, and
+no committed scenario writes a Build setting or a wall or fields a repair
+drone. Its two scenarios are new, each one segment of 60 s on the golden seed
+through the playbook door: `base-kit-at-the-core` writes Build's S2 settings and
+builds an autocannon and a wall box at seat 0's core, and
+`terraform-levels-a-footprint` levels a mortar's footprint with `FILL` before it
+is bought. The mortar duel the plan named for them -- repair, salvage and the
+crater refill -- is headless (`crates/sim/tests/site.rs`'
+`a_mortar_duel_repairs_and_salvages` and `a_mortar_duel_refills_its_craters`):
+the golden seed's cores stand 335 voxels apart and a beacon stands only inside
+its seat's spheres, so reaching it through playbooks took seven-beacon chains
+over five rounds of 480 s, more than CI's legs could hold.
+
 `expand-east-segment` carries one more thing worth knowing before its chain is
 read. The playbook it seals **does not qualify against either seat's own frozen
 snapshot** on this map: `E0401` for `b_01`, which since S1 names each seat's own

@@ -1,0 +1,35 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// S2's `site`: one visit to the core that writes Build's S2 settings and two
+// of the base kit -- an autocannon and a wall box filled to the ground -- with
+// a repair threshold of 50 and rebuild destroyed on. See
+// base-kit-at-the-core.scenario.jsonc for what is asserted, and why the duel
+// that exercises repair and salvage is a headless test.
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {"title": "Arm the core", "author_kind": "HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {"label": "arm",
+        "interface": {"beacon": {"beacon_id": "b_00"}, "rows": [
+          {"set_mandate_settings": {"build": {
+            "targets": [
+              {"blueprint_id": "autocannon", "anchor": {"voxel": {"x": 362, "y": 30, "z": 36}}},
+              {"blueprint_id": "wall", "anchor": {"voxel": {"x": 358, "y": 32, "z": 36}},
+                "wall_box": {"min": {"x": 357, "y": 32, "z": 35}, "max": {"x": 360, "y": 32, "z": 37}},
+                "order": 1}
+            ],
+            "repair_threshold_pct": 50,
+            "rebuild_destroyed": true,
+            "terraform": "NONE"
+          }}}
+        ]},
+        "timeout_ms": 60000, "on_fail": {"action": "SKIP"}}
+    ],
+    "handlers": []
+  },
+  "on_death": {"on_respawn": "CONTINUE", "max_deaths_before_fallback": 2},
+  "fallback": {"hold": {"at": {"safest": {}}}}
+}

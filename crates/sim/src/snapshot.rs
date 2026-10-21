@@ -174,7 +174,19 @@ use serde::{Deserialize, Serialize};
 /// is refused rather than read: it carries no cooldown, and a world restored
 /// from it would fire on a tick the unbroken run held its fire. The gateway's
 /// save refuses a version-10 snapshot by its stamp first.
-pub const SNAPSHOT_VERSION: u32 = 11;
+///
+/// **Version 12 is S2's Build settings and drone work** (S2's plan, task
+/// `site`). It adds each beacon's Build settings -- `repair_threshold_pct`,
+/// `rebuild_destroyed` and `terraform` -- and the repair and voxel work the
+/// Quartermaster has paid its drones for and they have not yet done
+/// ([`crate::site::BeaconSite`]), and each wall target's top (its box of
+/// columns rides the target's footprint column). It also adds each shell's launch
+/// point and fire tick, so a shell can be drawn in flight
+/// ([`crate::tables::ShellTable::position_at`]). A version-11 file is refused
+/// rather than read: it carries no settings, and a world restored from it
+/// would never repair, rebuild or level where the unbroken run did. The
+/// gateway's save refuses a version-11 snapshot by its stamp first.
+pub const SNAPSHOT_VERSION: u32 = 12;
 
 /// A flat, fixed-width projection of the world.
 ///
@@ -312,6 +324,16 @@ pub struct Snapshot {
     pub beacon_roe: Vec<u8>,
     /// Each beacon's retreat threshold, a whole percent.
     pub beacon_retreat_pct: Vec<u8>,
+    /// Each beacon's `repair_threshold_pct`, a whole percent (S2's `site`).
+    pub beacon_repair_threshold: Vec<u8>,
+    /// Each beacon's `rebuild_destroyed`, 0 or 1.
+    pub beacon_rebuild: Vec<u8>,
+    /// Each beacon's `terraform`, [`crate::site::Terraform::id`].
+    pub beacon_terraform: Vec<u8>,
+    /// Each beacon's paid repair work, in `$`.
+    pub beacon_repair_fund: Vec<i64>,
+    /// Each beacon's paid voxel work, in `$`.
+    pub beacon_build_fund: Vec<i64>,
 
     /// Structure ids.
     pub structure_id: Vec<u32>,
@@ -364,6 +386,11 @@ pub struct Snapshot {
     pub shell_firer: Vec<u32>,
     /// Each shell's weapon ([`crate::tables::Armament::id`]).
     pub shell_weapon: Vec<u8>,
+    /// Three raw Q16.16 coordinates per shell: where it was fired from (S2's
+    /// `site`, version 12).
+    pub shell_launch: Vec<i32>,
+    /// The tick each shell was fired on.
+    pub shell_fired_at: Vec<u32>,
 
     /// The beacon each list setting belongs to.
     pub target_beacon: Vec<u32>,
@@ -390,6 +417,11 @@ pub struct Snapshot {
     /// Each Build target's rotation in quarter turns, 0 to 3; zero on other
     /// rows.
     pub target_rotation: Vec<u8>,
+    /// Each wall target's top, [`crate::tables::NO_WALL`] on other rows (S2's
+    /// `site`).
+    pub target_wall_top: Vec<i16>,
+    /// Whether each wall target's box has been filled whole once, 0 or 1.
+    pub target_wall_done: Vec<u8>,
 
     /// Whose memory each sighting is.
     pub sighting_seat: Vec<u8>,
@@ -615,6 +647,11 @@ impl Default for Snapshot {
             beacon_engaged: Vec::new(),
             beacon_roe: Vec::new(),
             beacon_retreat_pct: Vec::new(),
+            beacon_repair_threshold: Vec::new(),
+            beacon_rebuild: Vec::new(),
+            beacon_terraform: Vec::new(),
+            beacon_repair_fund: Vec::new(),
+            beacon_build_fund: Vec::new(),
             structure_id: Vec::new(),
             structure_seat: Vec::new(),
             structure_kind: Vec::new(),
@@ -639,6 +676,8 @@ impl Default for Snapshot {
             shell_seat: Vec::new(),
             shell_firer: Vec::new(),
             shell_weapon: Vec::new(),
+            shell_launch: Vec::new(),
+            shell_fired_at: Vec::new(),
             target_beacon: Vec::new(),
             target_kind: Vec::new(),
             target_blueprint: Vec::new(),
@@ -649,6 +688,8 @@ impl Default for Snapshot {
             target_desc: Vec::new(),
             target_order: Vec::new(),
             target_rotation: Vec::new(),
+            target_wall_top: Vec::new(),
+            target_wall_done: Vec::new(),
             sighting_seat: Vec::new(),
             sighting_asset: Vec::new(),
             sighting_owner: Vec::new(),
@@ -956,6 +997,27 @@ impl Snapshot {
             beacon_engaged: beacons.arms().iter().map(|a| a.engaged).collect(),
             beacon_roe: beacons.commons().iter().map(|c| c.roe).collect(),
             beacon_retreat_pct: beacons.commons().iter().map(|c| c.retreat_hp_pct).collect(),
+            beacon_repair_threshold: beacons
+                .sites()
+                .iter()
+                .map(|s| s.settings.repair_threshold_pct)
+                .collect(),
+            beacon_rebuild: beacons
+                .sites()
+                .iter()
+                .map(|s| u8::from(s.settings.rebuild_destroyed))
+                .collect(),
+            beacon_terraform: beacons
+                .sites()
+                .iter()
+                .map(|s| s.settings.terraform.id())
+                .collect(),
+            beacon_repair_fund: beacons
+                .sites()
+                .iter()
+                .map(|s| s.repair_fund.raw())
+                .collect(),
+            beacon_build_fund: beacons.sites().iter().map(|s| s.build_fund.raw()).collect(),
 
             structure_id: structures.ids().to_vec(),
             structure_seat: structures.seats().to_vec(),
@@ -983,6 +1045,8 @@ impl Snapshot {
             shell_seat: shells.seats().to_vec(),
             shell_firer: shells.firers().to_vec(),
             shell_weapon: shells.weapons().to_vec(),
+            shell_launch: axes_from_points(shells.launches()),
+            shell_fired_at: shells.fired_at().to_vec(),
 
             target_beacon: targets
                 .beacons()
@@ -998,6 +1062,8 @@ impl Snapshot {
             target_desc: targets.descriptions().to_vec(),
             target_order: targets.orders().to_vec(),
             target_rotation: targets.rotations().to_vec(),
+            target_wall_top: targets.wall_tops().to_vec(),
+            target_wall_done: targets.walls_done().iter().map(|d| u8::from(*d)).collect(),
 
             sighting_seat: sightings.seats().to_vec(),
             sighting_asset: sightings.assets().to_vec(),
@@ -1252,6 +1318,7 @@ impl Snapshot {
                 "beacon_ready_at",
             )?,
             common: commons(&self.beacon_roe, &self.beacon_retreat_pct)?,
+            site: self.sites()?,
             free: flags(&self.beacon_free, "beacon_free")?,
         }) {
             return Err(SnapshotError::Ragged("beacon"));
@@ -1328,7 +1395,7 @@ impl Snapshot {
         let sightings = self.restore_sightings(world)?;
         let credit = self.restore_credit(world)?;
 
-        let (voxels, chunks, features, bore) = self.restore_store(world, seat_count)?;
+        let (voxels, chunks, features, bore, generated) = self.restore_store(world, seat_count)?;
         // A held seam names a seam of the regenerated map, or none: an index
         // past the table, or one naming a vent, describes no beacon this sim
         // builds.
@@ -1371,6 +1438,7 @@ impl Snapshot {
             chunks,
             features,
             bore,
+            generated,
             router,
             match_state,
             plan,
@@ -1415,6 +1483,8 @@ impl Snapshot {
                 desc: self.target_desc.clone(),
                 order: self.target_order.clone(),
                 rotation: rotations(&self.target_rotation, "target_rotation")?,
+                wall_top: self.target_wall_top.clone(),
+                wall_done: flags(&self.target_wall_done, "target_wall_done")?,
             },
         ) {
             return Err(SnapshotError::Ragged("target"));
@@ -1534,9 +1604,11 @@ impl Snapshot {
             ("structure_kind", self.structure_kind.iter().all(row_kind)),
             (
                 "target_blueprint",
+                // A Build target may name a wall (S2's `site`), which no
+                // structure row is.
                 self.target_blueprint
                     .iter()
-                    .all(|id| *id == 0 || row_kind(id)),
+                    .all(|id| *id == 0 || StructureKind::from_id(*id).is_some()),
             ),
             (
                 "beacon_mandate",
@@ -1895,6 +1967,7 @@ impl Snapshot {
             ChunkDigests,
             crate::features::FeatureTable,
             crate::bore::Bore,
+            crate::terrain::GeneratedSurface,
         ),
         SnapshotError,
     > {
@@ -1906,6 +1979,7 @@ impl Snapshot {
             .map_err(SnapshotError::Map)?;
         let features = generated.features;
         let bore = generated.bore;
+        let surface = generated.surface;
         let mut voxels = generated.voxels;
         for (slot, chunk) in self.modified_chunk.iter().enumerate() {
             let from = slot.saturating_mul(CHUNK_VOXELS);
@@ -1938,7 +2012,58 @@ impl Snapshot {
             }
             chunk = chunk.saturating_add(1);
         }
-        Ok((voxels, chunks, features, bore))
+        Ok((voxels, chunks, features, bore, surface))
+    }
+
+    /// Each beacon's Build settings and paid work (S2's `site`), the five
+    /// columns walked together.
+    ///
+    /// # Errors
+    ///
+    /// [`SnapshotError::Ragged`] when they disagree in length, or hold a
+    /// threshold past 100, a flag that is not 0 or 1, a terraform id this
+    /// build does not name, or a negative fund.
+    fn sites(&self) -> Result<Vec<crate::site::BeaconSite>, SnapshotError> {
+        let n = self.beacon_repair_threshold.len();
+        if self.beacon_rebuild.len() != n
+            || self.beacon_terraform.len() != n
+            || self.beacon_repair_fund.len() != n
+            || self.beacon_build_fund.len() != n
+        {
+            return Err(SnapshotError::Ragged("beacon_repair_threshold"));
+        }
+        let rebuild = flags(&self.beacon_rebuild, "beacon_rebuild")?;
+        let mut out = Vec::with_capacity(n);
+        let rows = self
+            .beacon_repair_threshold
+            .iter()
+            .zip(rebuild)
+            .zip(self.beacon_terraform.iter())
+            .zip(
+                self.beacon_repair_fund
+                    .iter()
+                    .zip(self.beacon_build_fund.iter()),
+            );
+        for (((threshold, rebuild_destroyed), terraform), (repair, build)) in rows {
+            let terraform = crate::site::Terraform::from_id(*terraform)
+                .ok_or(SnapshotError::Ragged("beacon_terraform"))?;
+            if *threshold > 100 {
+                return Err(SnapshotError::Ragged("beacon_repair_threshold"));
+            }
+            if *repair < 0 || *build < 0 {
+                return Err(SnapshotError::Ragged("beacon_repair_fund"));
+            }
+            out.push(crate::site::BeaconSite {
+                settings: crate::site::BuildSettings {
+                    repair_threshold_pct: *threshold,
+                    rebuild_destroyed,
+                    terraform,
+                },
+                repair_fund: Money::new(*repair),
+                build_fund: Money::new(*build),
+            });
+        }
+        Ok(out)
     }
 
     /// The shells in flight (S2's plan, E13), checked before anything is
@@ -1985,9 +2110,12 @@ impl Snapshot {
             return Err(SnapshotError::OutOfRange("shell_firer"));
         }
         let mut shells = ShellTable::with_room(world.shells().room());
+        let launches =
+            points_from_axes(&self.shell_launch).ok_or(SnapshotError::Ragged("shell_launch"))?;
         if !shells.restore(
             aims,
             self.shell_lands_at.clone(),
+            (launches, self.shell_fired_at.clone()),
             self.shell_seat.clone(),
             self.shell_firer.clone(),
             self.shell_weapon.clone(),
