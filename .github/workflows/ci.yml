@@ -113,7 +113,10 @@ jobs:
     # seeds) in the same pull request. Item 116 (6)(f)'s `[profile.*]` question falls due at
     # the same 75 minutes and stays the owner's, a contract change (AGENTS.md section 5),
     # not a way out of the rule. The legs' measured times are in each xtask pull request.
-    timeout-minutes: 90
+    # 120 since decisions-log item 148: a stopgap after `main`'s Windows leg ran out at 90 on
+    # #132's merge (run 39526173701), with item 119 (5)'s rule waived by the owner until the
+    # CI shard pull request splits the test step; that pull request puts this back to 90.
+    timeout-minutes: 120
     # The docs-only fast path's answer, for the cross-OS guard. A matrix job has one set of
     # outputs, so this is the last leg's to finish among those that set it. The legs agree
     # unless one hits an error. An error inside the decision answers false and runs that leg
