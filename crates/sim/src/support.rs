@@ -105,8 +105,8 @@
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::bore::Bore;
 use crate::events::{Emission, EventKind};
+use crate::footing::Footings;
 use crate::ids::Row;
 use crate::knowledge::{AssetId, Position};
 use crate::mapgen::MapError;
@@ -465,7 +465,7 @@ struct Thought<'a> {
     store: &'a VoxelStore,
     queue: &'a [VoxelEdit],
     levels: BlastLevels,
-    bore: &'a Bore,
+    bore: &'a Footings<'a>,
     dug: [i32; 3],
     /// `[min x, min y, min z, max x, max y, max z]` of every queued edit's
     /// reach, or `None` for an empty queue.
@@ -477,7 +477,7 @@ impl<'a> Thought<'a> {
         store: &'a VoxelStore,
         queue: &'a [VoxelEdit],
         levels: BlastLevels,
-        bore: &'a Bore,
+        bore: &'a Footings<'a>,
         dug: [i32; 3],
     ) -> Thought<'a> {
         let mut reach: Option<[i32; 6]> = None;
@@ -557,7 +557,7 @@ impl Solidity for Thought<'_> {
                     let inside =
                         radius >= 0 && radius.checked_mul(radius).is_some_and(|r2| d2 <= r2);
                     if inside
-                        && !self.bore.contains(at)
+                        && !self.bore.holds(at)
                         && let Blasted::Into(next) = material.after_blast(self.levels)
                     {
                         material = next;
@@ -596,7 +596,7 @@ fn column_height<V: Solidity>(view: &V, x: i32, y: i32, size_z: i32) -> i32 {
 struct Walk<'a, V: Solidity> {
     view: &'a V,
     store: &'a VoxelStore,
-    bore: &'a Bore,
+    bore: &'a Footings<'a>,
     max_region: usize,
     /// The list's length the search may not pass: the tick's budget.
     limit: usize,
@@ -643,7 +643,7 @@ fn walk_from<V: Solidity, L: Labels>(
     labels.visit(seed);
     let grounded = |at: [i32; 3], height: &mut dyn FnMut(i32, i32) -> i32| {
         let [x, y, z] = at;
-        z < height(x, y) || walk.bore.contains(at)
+        z < height(x, y) || walk.bore.holds(at)
     };
     if grounded(seed_at, height) {
         return Ok(Outcome::Supported);
@@ -935,7 +935,11 @@ impl SupportRule {
     }
 
     /// Search every seed in order, and record the detached regions.
-    fn find_regions(&mut self, store: &VoxelStore, bore: &Bore) -> Result<(), CollapseError> {
+    fn find_regions(
+        &mut self,
+        store: &VoxelStore,
+        bore: &Footings<'_>,
+    ) -> Result<(), CollapseError> {
         self.next_stamp();
         let view = Settled(store);
         let walk = Walk {
@@ -1212,7 +1216,11 @@ pub trait Collapse {
     ///
     /// [`CollapseError`]: the fall's pass bound, or a list or index fault no
     /// legal world reaches.
-    fn collapse(&mut self, store: &mut VoxelStore, bore: &Bore) -> Result<(), CollapseError>;
+    fn collapse(
+        &mut self,
+        store: &mut VoxelStore,
+        bore: &Footings<'_>,
+    ) -> Result<(), CollapseError>;
 
     /// The fallen region an asset stood on, by the voxel under it before the
     /// fall: how far it fell, and its cutters.
@@ -1251,7 +1259,11 @@ impl Collapse for SupportRule {
         self.record(at, PLACED);
     }
 
-    fn collapse(&mut self, store: &mut VoxelStore, bore: &Bore) -> Result<(), CollapseError> {
+    fn collapse(
+        &mut self,
+        store: &mut VoxelStore,
+        bore: &Footings<'_>,
+    ) -> Result<(), CollapseError> {
         self.passes = 0;
         if self.overflow {
             return Err(CollapseError::Room { list: "change" });
@@ -1533,7 +1545,10 @@ impl World {
     /// kill-credit phase's settle function, so the Match phase sees a death on
     /// the tick it happened.
     pub(super) fn collapse_tick(&mut self, scratch: &mut Scratch) -> Result<(), CollapseError> {
-        let outcome = Collapse::collapse(&mut scratch.rule, &mut self.voxels, &self.bore);
+        // A footing is anchored ground (the owner's ruling of 2026-10-20;
+        // [`crate::footing`]): the core's bore is one case of it.
+        let footings = Footings::of(&self.bore, &self.structures, &self.beacons);
+        let outcome = Collapse::collapse(&mut scratch.rule, &mut self.voxels, &footings);
         let rule = &mut scratch.rule;
         let (skipped, passes, visits) = (rule.skipped, rule.passes, rule.list.len());
         rule.skipped = [0; 2];
@@ -1850,11 +1865,12 @@ impl World {
     }
 
     fn undermines(&self, dug: [i32; 3]) -> Result<bool, DigRefused> {
+        let footings = Footings::of(&self.bore, &self.structures, &self.beacons);
         let view = Thought::new(
             &self.voxels,
             &self.edits,
             self.rules.combat().blast_levels,
-            &self.bore,
+            &footings,
             dug,
         );
         let [_, _, size_z] = self.support.room.size;
@@ -1867,7 +1883,7 @@ impl World {
                 continue;
             }
             let [x, y, z] = next;
-            if z < column_height(&view, x, y, size_z) || self.bore.contains(next) {
+            if z < column_height(&view, x, y, size_z) || footings.holds(next) {
                 continue;
             }
             *face = Some(index_of(&self.voxels, next).ok_or(DigRefused::Unchecked)?);
@@ -1883,7 +1899,7 @@ impl World {
         let walk = Walk {
             view: &view,
             store: &self.voxels,
-            bore: &self.bore,
+            bore: &footings,
             max_region,
             limit: list.capacity(),
         };

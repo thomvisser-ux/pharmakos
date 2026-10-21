@@ -1214,3 +1214,73 @@ fn the_footings_are_derived_from_hashed_tables() {
         "the core's column is a footing"
     );
 }
+
+/// Stage a span over the column `s`: a pillar two columns east of it, from
+/// the ground up to `g + 5`, and a beam at `g + 5` from the pillar west over
+/// `s` to the column west of it. Every voxel stands on the one below or on
+/// its neighbour, so nothing floats.
+fn stage_span(world: &mut World, s: [i32; 2], g: i32) -> Vec<[i32; 3]> {
+    let [x, y] = s;
+    let mut placed = Vec::new();
+    for z in g + 1..=g + 5 {
+        placed.push([x + 2, y, z]);
+    }
+    for bx in [x + 1, x, x - 1] {
+        placed.push([bx, y, g + 5]);
+    }
+    for at in &placed {
+        world
+            .request_voxel_edit(VoxelEdit::Set {
+                at: *at,
+                material: Material::STONE,
+                by: None,
+            })
+            .expect("files");
+    }
+    placed
+}
+
+/// A footing is anchored ground for the support rule: a beam over a building
+/// whose pillar is cut stays where it is, held by the voxel over the
+/// building's column, so nothing can be dropped on a building. Without the
+/// building the same cut drops the beam, which shows the staging can fall.
+#[test]
+fn an_overhang_over_a_building_cannot_be_dropped_on_it() {
+    for with_building in [true, false] {
+        let mut world = fixture(settings(Terraform::None, 0, false), UnitKind::BuildDrone);
+        let s = open_column(&world, [-6, -3]);
+        let [x, y] = s;
+        let g = top(&world, x, y);
+        let neighbours_flat = [x - 1, x + 1, x + 2]
+            .iter()
+            .all(|cx| top(&world, *cx, y) <= g);
+        assert!(neighbours_flat, "the span stands on open ground");
+        stage_span(&mut world, s, g);
+        let mut runner = push(world, &idle());
+        run(&mut runner, 1, &[]);
+        if with_building {
+            let at = point([x, y, g + 1]);
+            let beacon = core(runner.world());
+            runner
+                .world_mut()
+                .raise_structure(SEAT, beacon, StructureKind::Autocannon, at)
+                .expect("room");
+        }
+        runner
+            .world_mut()
+            .request_voxel_edit(VoxelEdit::Set {
+                at: [x + 2, y, g + 1],
+                material: Material::AIR,
+                by: Some(SeatId::new(1)),
+            })
+            .expect("files");
+        let fell = run(&mut runner, 2, &[EventKind::RegionCollapsed]);
+        let beam_stands = runner.world().voxels().get([x, y, g + 5]) == Some(Material::STONE);
+        if with_building {
+            assert!(fell.is_empty(), "nothing falls: {fell:?}");
+            assert!(beam_stands, "the beam over the building stands");
+        } else {
+            assert!(!fell.is_empty(), "without the building the cut beam falls");
+        }
+    }
+}

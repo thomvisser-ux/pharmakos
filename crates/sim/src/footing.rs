@@ -129,6 +129,15 @@ impl<'a> Footings<'a> {
                 .any(|(hp, at)| hp.is_alive() && inside(at))
     }
 
+    /// Whether the voxel `at` lies in a footing column, as
+    /// [`Footings::contains`] answers, without counting it: the support rule's
+    /// question, for which a footing voxel is anchored ground, and no edit's.
+    #[must_use]
+    pub fn holds(&self, at: [i32; 3]) -> bool {
+        let [x, y, _] = at;
+        self.bore.contains(at) || self.building_column(x, y)
+    }
+
     /// How many voxels [`Footings::contains`] answered `true` for.
     #[must_use]
     pub fn hits(&self) -> u64 {
