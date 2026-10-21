@@ -119,7 +119,9 @@ fn a_warm_meshing_and_a_warm_drain_allocate_nothing() {
         .bake_all(&materials)
         .expect("the map is the right size");
     let mut borders = ChunkBorders::new();
-    borders.gather(grid, &materials, field.all(), params, 0);
+    borders
+        .gather(grid, &materials, field.all(), params, 0)
+        .expect("chunk 0 is inside the grid");
     let view = chunk_view(&materials, &field, &borders, 0).expect("chunk 0 is inside the grid");
 
     let mut mesher = Mesher::new(params);

@@ -64,7 +64,14 @@ const CLOCKWISE_FRONT: bool = true;
 /// something rather than as grey. They are art, not a rules-table row — nothing in
 /// `rules/rules.v1.json` names a palette — so they cannot be a parameter the caller fills.
 /// Owner replaces them at S6's art polish, and the geometry golden moves when they do.
-pub const PALETTE: [[u8; 3]; 7] = [
+///
+/// Rows 7 to 23 are S2's (S2's plan, task `view`; E14 and decisions 10 and 42, ruled by
+/// decisions-log item 144 (11)): bedrock; a wall by the seat that built it, whole and
+/// cracked, for the sim's four seats; and each terrain row cracked once and twice, a
+/// darker shade of its base. PLACEHOLDER: the S2 rows' colours — owner, at S6's art pass.
+/// They are art like the rows above; a seat's wall colour says only who built it, never
+/// whose the wall is now (that is the sim's reading, E14).
+pub const PALETTE: [[u8; 3]; 24] = [
     [0, 0, 0],       // 0 air, never emitted
     [133, 133, 143], // 1 stone
     [107, 79, 51],   // 2 dirt
@@ -72,7 +79,75 @@ pub const PALETTE: [[u8; 3]; 7] = [
     [204, 163, 66],  // 4 ore A
     [71, 168, 189],  // 5 ore B
     [189, 184, 173], // 6 concrete
+    [58, 56, 64],    // 7 bedrock
+    [150, 196, 190], // 8 wall, seat 0, whole
+    [102, 133, 129], // 9 wall, seat 0, cracked
+    [204, 140, 128], // 10 wall, seat 1, whole
+    [139, 95, 87],   // 11 wall, seat 1, cracked
+    [212, 196, 128], // 12 wall, seat 2, whole
+    [144, 133, 87],  // 13 wall, seat 2, cracked
+    [170, 150, 204], // 14 wall, seat 3, whole
+    [116, 102, 139], // 15 wall, seat 3, cracked
+    [86, 63, 41],    // 16 dirt, cracked once
+    [66, 49, 32],    // 17 dirt, cracked twice
+    [106, 106, 114], // 18 stone, cracked once
+    [82, 82, 89],    // 19 stone, cracked twice
+    [163, 130, 53],  // 20 ore A, cracked once
+    [126, 101, 41],  // 21 ore A, cracked twice
+    [57, 134, 151],  // 22 ore B, cracked once
+    [44, 104, 117],  // 23 ore B, cracked twice
 ];
+
+/// The palette ids by what each row draws, so the client's wire lookup and the tests read
+/// a row by its name rather than by its number.
+pub mod palette {
+    /// Generated stone.
+    pub const STONE: u8 = 1;
+    /// Generated dirt.
+    pub const DIRT: u8 = 2;
+    /// Grass.
+    pub const GRASS: u8 = 3;
+    /// A scrap seam's voxels, every grade.
+    pub const ORE_A: u8 = 4;
+    /// A heat vent's voxels, every grade.
+    pub const ORE_B: u8 = 5;
+    /// Concrete.
+    pub const CONCRETE: u8 = 6;
+    /// The floor no blast cracks or removes.
+    pub const BEDROCK: u8 = 7;
+    /// A wall seat 0 built, whole.
+    pub const WALL_0: u8 = 8;
+    /// A wall seat 0 built, cracked.
+    pub const WALL_0_CRACKED: u8 = 9;
+    /// A wall seat 1 built, whole.
+    pub const WALL_1: u8 = 10;
+    /// A wall seat 1 built, cracked.
+    pub const WALL_1_CRACKED: u8 = 11;
+    /// A wall seat 2 built, whole.
+    pub const WALL_2: u8 = 12;
+    /// A wall seat 2 built, cracked.
+    pub const WALL_2_CRACKED: u8 = 13;
+    /// A wall seat 3 built, whole.
+    pub const WALL_3: u8 = 14;
+    /// A wall seat 3 built, cracked.
+    pub const WALL_3_CRACKED: u8 = 15;
+    /// Dirt cracked once.
+    pub const DIRT_CRACKED_ONCE: u8 = 16;
+    /// Dirt cracked twice.
+    pub const DIRT_CRACKED_TWICE: u8 = 17;
+    /// Stone cracked once.
+    pub const STONE_CRACKED_ONCE: u8 = 18;
+    /// Stone cracked twice.
+    pub const STONE_CRACKED_TWICE: u8 = 19;
+    /// Ore A cracked once.
+    pub const ORE_A_CRACKED_ONCE: u8 = 20;
+    /// Ore A cracked twice.
+    pub const ORE_A_CRACKED_TWICE: u8 = 21;
+    /// Ore B cracked once.
+    pub const ORE_B_CRACKED_ONCE: u8 = 22;
+    /// Ore B cracked twice.
+    pub const ORE_B_CRACKED_TWICE: u8 = 23;
+}
 
 /// The per-face shading factor, in 256ths, indexed by [`Face::index`].
 ///
@@ -125,21 +200,46 @@ const LIGHT_SPAN_256: u32 = 192;
 /// addend is half of it, so the rounding is half-up and the maximum, `255 * 256 * 256`,
 /// comes back as exactly 255.
 ///
-/// `light_max` of zero is treated as "no light scale", giving the ambient floor: the
-/// alternative is a division by zero in the one place a caller can reach with a bad
-/// parameter, and [`crate::LightParams`] refuses that value at its own boundary anyway.
+/// The types hold every input in range, so no step can saturate or fail: `light_max` is a
+/// [`LightParams`]' and never zero, the shade is the face's row of [`FACE_SHADE_256`] and
+/// at most 256 (the assertions below this function), and a light above `light_max` is
+/// read as `light_max`, the ramp's top, which no baked light exceeds.
 #[must_use]
-pub fn quantise_channel(base: u8, shade_256: u32, light: u8, light_max: u8) -> u8 {
-    let scaled = LIGHT_SPAN_256
-        .saturating_mul(u32::from(light.min(light_max)))
-        .checked_div(u32::from(light_max))
-        .unwrap_or(0);
-    let light_256 = AMBIENT_256.saturating_add(scaled);
-    let numerator = u32::from(base)
-        .saturating_mul(shade_256)
-        .saturating_mul(light_256);
-    let channel = numerator.saturating_add(32_768) >> 16_u32;
-    u8::try_from(channel.min(255)).unwrap_or(255)
+pub fn quantise_channel(base: u8, face: Face, light: u8, params: LightParams) -> u8 {
+    let light_max = params.light_max_nonzero();
+    let scaled = (LIGHT_SPAN_256 * u32::from(light.min(light_max.get())))
+        .div_euclid(u32::from(light_max.get()));
+    let light_256 = AMBIENT_256 + scaled;
+    let numerator = u32::from(base) * face_shade(face) * light_256;
+    let channel = (numerator + 32_768) >> 16_u32;
+    // At most 255: the brightest product, 255 * 256 * 256, rounds to exactly 255 (the
+    // assertions below bound the factors, and `the_quantiser_never_truncates` walks every
+    // input). The cast is exact.
+    channel as u8
+}
+
+// The bounds `quantise_channel` rests on: a lit face is unattenuated, no face's shade
+// exceeds 256.
+const _: () = assert!(AMBIENT_256 + LIGHT_SPAN_256 == 256);
+const _: () = assert!(
+    FACE_SHADE_256[0] <= 256
+        && FACE_SHADE_256[1] <= 256
+        && FACE_SHADE_256[2] <= 256
+        && FACE_SHADE_256[3] <= 256
+        && FACE_SHADE_256[4] <= 256
+        && FACE_SHADE_256[5] <= 256
+);
+
+/// One face's shade, its row of [`FACE_SHADE_256`].
+const fn face_shade(face: Face) -> u32 {
+    match face {
+        Face::NegX => FACE_SHADE_256[0],
+        Face::PosX => FACE_SHADE_256[1],
+        Face::NegY => FACE_SHADE_256[2],
+        Face::PosY => FACE_SHADE_256[3],
+        Face::NegZ => FACE_SHADE_256[4],
+        Face::PosZ => FACE_SHADE_256[5],
+    }
 }
 
 /// Why a chunk could not be meshed.
@@ -152,6 +252,22 @@ pub enum MeshError {
         /// larger; the sweep stops rather than finishing work it cannot use.
         emitted: usize,
     },
+    /// A visible face has a material id the palette has no row for, so it has no colour.
+    /// The output buffers are left empty rather than drawn in a made-up colour.
+    UnknownMaterial {
+        /// The material id the face has.
+        material: u8,
+    },
+    /// The sweep indexed its own scratch (the padded copy, the mask or a chunk's or a
+    /// border's array, all of fixed, checked length) past its end. Unreachable while the
+    /// sweep's index arithmetic is right; a bug reported as an error rather than read as
+    /// air. The output buffers are left empty.
+    Scratch {
+        /// The index that was reached.
+        at: usize,
+        /// The buffer's length.
+        len: usize,
+    },
 }
 
 impl fmt::Display for MeshError {
@@ -162,6 +278,17 @@ impl fmt::Display for MeshError {
                 "a chunk needs more than {MAX_VERTICES} vertices for 16-bit indices \
                  ({emitted} emitted before the sweep stopped). Spike G1 measured 6 660 at \
                  worst, so this is a correctness failure, not a budget one."
+            ),
+            Self::UnknownMaterial { material } => write!(
+                f,
+                "a visible face has material {material}, which the palette's {} rows do not \
+                 name",
+                PALETTE.len()
+            ),
+            Self::Scratch { at, len } => write!(
+                f,
+                "the sweep reached index {at} of a {len}-entry scratch buffer, past its end: \
+                 a bug in the mesher, reported rather than drawn"
             ),
         }
     }
@@ -196,26 +323,76 @@ pub struct Mesher {
     chunks: u64,
 }
 
-/// The eight numbers one quad needs, bundled so the emit function keeps a readable
-/// signature.
+/// One of the three axes a face can be perpendicular to.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Axis {
+    /// The x axis.
+    X,
+    /// The y axis, vertical.
+    Y,
+    /// The z axis.
+    Z,
+}
+
+impl Axis {
+    /// The three axes, in sweep order.
+    const ALL: [Self; 3] = [Self::X, Self::Y, Self::Z];
+
+    /// The axis after this one, cyclically: the sweep's `(axis + 1) % 3`.
+    const fn next(self) -> Self {
+        match self {
+            Self::X => Self::Y,
+            Self::Y => Self::Z,
+            Self::Z => Self::X,
+        }
+    }
+
+    /// The padded buffer's step for one unit along this axis.
+    const fn stride(self) -> usize {
+        match self {
+            Self::X => PAD_STRIDE[0],
+            Self::Y => PAD_STRIDE[1],
+            Self::Z => PAD_STRIDE[2],
+        }
+    }
+
+    /// This axis's component of a vertex position or a normal.
+    fn component(self, point: &mut [f32; 3]) -> &mut f32 {
+        let [x, y, z] = point;
+        match self {
+            Self::X => x,
+            Self::Y => y,
+            Self::Z => z,
+        }
+    }
+}
+
+/// [`CHUNK_EDGE`] as a `u8`, for a quad's chunk-local coordinates, which run 0 to 32
+/// inclusive and so reach the float side through `f32::from(u8)`.
+const CHUNK_EDGE_U8: u8 = 32;
+
+// The two spellings of the chunk edge cannot drift apart.
+const _: () = assert!(CHUNK_EDGE_U8 as usize == CHUNK_EDGE);
+
+/// The numbers one quad needs, bundled so the emit function keeps a readable signature.
 #[derive(Clone, Copy, Debug)]
 struct Quad {
-    /// Which axis the face is perpendicular to: 0 for x, 1 for y, 2 for z.
-    axis: usize,
+    /// Which axis the face is perpendicular to.
+    axis: Axis,
     /// The free axis the mask's first index runs along.
-    axis_u: usize,
+    axis_u: Axis,
     /// The free axis the mask's second index runs along.
-    axis_v: usize,
+    axis_v: Axis,
     /// The plane the quad sits in, along `axis`, in chunk-local voxels.
-    plane: usize,
+    plane: u8,
     /// The quad's origin along `axis_u`.
-    origin_u: usize,
+    origin_u: u8,
     /// The quad's origin along `axis_v`.
-    origin_v: usize,
+    origin_v: u8,
     /// The quad's extent along `axis_u`.
-    width: usize,
+    width: u8,
     /// The quad's extent along `axis_v`.
-    height: usize,
+    height: u8,
     /// True when the face points along the positive axis direction.
     positive: bool,
     /// The mask key, `(material << 8) | light`.
@@ -286,23 +463,34 @@ impl Mesher {
     /// # Errors
     ///
     /// [`MeshError::TooManyVertices`] when the chunk would need more than [`MAX_VERTICES`]
-    /// vertices. `out` is left empty in that case: half a chunk rendered is worse than
-    /// none, and a caller that ignored the error would upload stale winding.
+    /// vertices, [`MeshError::UnknownMaterial`] when a visible face's material has no row
+    /// in [`PALETTE`], and [`MeshError::Scratch`] if the sweep's own indexing ever left its
+    /// buffers. `out` is left empty in every case: half a chunk rendered is worse than none,
+    /// and a caller that ignored the error would upload stale winding.
     pub fn mesh_chunk_into(
         &mut self,
         view: &ChunkView<'_>,
         out: &mut MeshBuffers,
     ) -> Result<(), MeshError> {
         out.clear();
-        self.fill_padded(view);
+        let swept = self.sweep(view, out);
+        if swept.is_err() {
+            out.clear();
+        }
+        swept
+    }
+
+    /// The sweep itself: [`Mesher::mesh_chunk_into`] less the clearing on an error.
+    fn sweep(&mut self, view: &ChunkView<'_>, out: &mut MeshBuffers) -> Result<(), MeshError> {
+        self.fill_padded(view)?;
         self.chunks = self.chunks.saturating_add(1);
 
-        for axis in 0..3_usize {
-            let axis_u = (axis + 1) % 3;
-            let axis_v = (axis + 2) % 3;
+        for axis in Axis::ALL {
+            let axis_u = axis.next();
+            let axis_v = axis_u.next();
             for positive in [true, false] {
-                for slice in 0..CHUNK_EDGE {
-                    if !self.build_mask(axis, axis_u, axis_v, slice, positive) {
+                for slice in 0..CHUNK_EDGE_U8 {
+                    if !self.build_mask(axis, axis_u, axis_v, slice, positive)? {
                         continue;
                     }
                     self.merge_slice(axis, axis_u, axis_v, slice, positive, out)?;
@@ -311,11 +499,17 @@ impl Mesher {
         }
 
         if !out.indices.is_empty() {
+            // The vertex cap holds both counts far below `u32::MAX`; the conversion is
+            // checked all the same, and refused as the cap would be.
+            let emitted = out.positions.len();
+            let too_many = |_| MeshError::TooManyVertices { emitted };
+            let vertex_count = u32::try_from(emitted).map_err(too_many)?;
+            let index_count = u32::try_from(out.indices.len()).map_err(too_many)?;
             out.surfaces.push(Surface {
                 first_vertex: 0,
-                vertex_count: u32::try_from(out.positions.len()).unwrap_or(u32::MAX),
+                vertex_count,
                 first_index: 0,
-                index_count: u32::try_from(out.indices.len()).unwrap_or(u32::MAX),
+                index_count,
             });
         }
         Ok(())
@@ -325,7 +519,7 @@ impl Mesher {
     ///
     /// A border the caller did not hand in stays air at light 0 — [`ChunkView`]'s "open
     /// sky" rule — because the buffers are reset to exactly that first.
-    fn fill_padded(&mut self, view: &ChunkView<'_>) {
+    fn fill_padded(&mut self, view: &ChunkView<'_>) -> Result<(), MeshError> {
         self.pad_materials.fill(AIR);
         self.pad_light.fill(0);
 
@@ -335,8 +529,8 @@ impl Mesher {
             for z in 0..CHUNK_EDGE {
                 let from = (y * CHUNK_EDGE + z) * CHUNK_EDGE;
                 let to = (y + 1) * PAD_STRIDE[1] + (z + 1) * PAD_STRIDE[2] + 1;
-                copy_row(&mut self.pad_materials, to, view.materials(), from);
-                copy_row(&mut self.pad_light, to, view.light(), from);
+                copy_row(&mut self.pad_materials, to, view.materials(), from)?;
+                copy_row(&mut self.pad_light, to, view.light(), from)?;
             }
         }
 
@@ -345,43 +539,29 @@ impl Mesher {
                 continue;
             };
             let outer = if face.is_positive() { PAD_EDGE - 1 } else { 0 };
-            for first in 0..CHUNK_EDGE {
-                for second in 0..CHUNK_EDGE {
-                    // The border's own indexing: the two free axes, x fastest, then z,
-                    // then y. `first` is the faster of the two.
-                    let source = second * CHUNK_EDGE + first;
-                    let target = match face.axis() {
-                        // +/-x: free axes are z (faster) and y.
-                        0 => {
-                            second.saturating_add(1) * PAD_STRIDE[1]
-                                + first.saturating_add(1) * PAD_STRIDE[2]
-                                + outer
-                        }
-                        // +/-y: free axes are x (faster) and z.
-                        1 => {
-                            outer * PAD_STRIDE[1]
-                                + second.saturating_add(1) * PAD_STRIDE[2]
-                                + first.saturating_add(1)
-                        }
-                        // +/-z: free axes are x (faster) and y.
-                        _ => {
-                            second.saturating_add(1) * PAD_STRIDE[1]
-                                + outer * PAD_STRIDE[2]
-                                + first.saturating_add(1)
-                        }
-                    };
-                    set_byte(
-                        &mut self.pad_materials,
-                        target,
-                        byte_at(border.materials(), source),
-                    );
-                    set_byte(&mut self.pad_light, target, byte_at(border.light(), source));
-                }
+            // The border's own indexing: the two free axes, x fastest, then z, then y.
+            // `first` is the faster of the two, so walking `second` outermost reads the
+            // border's slices in order, every cell once.
+            let cells = (0..CHUNK_EDGE)
+                .flat_map(|second| (0..CHUNK_EDGE).map(move |first| (second, first)))
+                .zip(border.materials().iter().zip(border.light()));
+            for ((second, first), (material, light)) in cells {
+                let target = match face.axis() {
+                    // +/-x: free axes are z (faster) and y.
+                    0 => (second + 1) * PAD_STRIDE[1] + (first + 1) * PAD_STRIDE[2] + outer,
+                    // +/-y: free axes are x (faster) and z.
+                    1 => outer * PAD_STRIDE[1] + (second + 1) * PAD_STRIDE[2] + first + 1,
+                    // +/-z: free axes are x (faster) and y.
+                    _ => (second + 1) * PAD_STRIDE[1] + outer * PAD_STRIDE[2] + first + 1,
+                };
+                write(&mut self.pad_materials, target, *material)?;
+                write(&mut self.pad_light, target, *light)?;
             }
         }
+        Ok(())
     }
 
-    /// Fills [`Mesher::mask`] for one slice. Returns `false` when the slice is blank.
+    /// Fills [`Mesher::mask`] for one slice. Answers `false` when the slice is blank.
     ///
     /// The padded index is a linear function of the three coordinates, so the sweep is a
     /// pointer walk: one add per cell along u, one per row along v, and no three-dimensional
@@ -390,72 +570,76 @@ impl Mesher {
     /// the quad count, is what sets the p50.
     fn build_mask(
         &mut self,
-        axis: usize,
-        axis_u: usize,
-        axis_v: usize,
-        slice: usize,
+        axis: Axis,
+        axis_u: Axis,
+        axis_v: Axis,
+        slice: u8,
         positive: bool,
-    ) -> bool {
-        let stride_axis = stride(axis);
-        let stride_u = stride(axis_u);
-        let stride_v = stride(axis_v);
+    ) -> Result<bool, MeshError> {
+        let stride_axis = axis.stride();
+        let stride_u = axis_u.stride();
+        let stride_v = axis_v.stride();
         // Padded coordinates are chunk-local + 1, so (0, 0) sits one step along each free
         // axis from the slice's origin.
-        let base = (slice + 1) * stride_axis + stride_u + stride_v;
+        let base = (usize::from(slice) + 1) * stride_axis + stride_u + stride_v;
         let mut any = false;
 
         for step_v in 0..CHUNK_EDGE {
             let mut at = base + step_v * stride_v;
             let row = step_v * CHUNK_EDGE;
             for step_u in 0..CHUNK_EDGE {
-                let here = byte_at(&self.pad_materials, at);
+                let here = read(&self.pad_materials, at)?;
+                // `at` is at least one `stride_axis` in, by `base`; the check says so.
                 let across = if positive {
-                    at.saturating_add(stride_axis)
+                    at + stride_axis
                 } else {
-                    at.saturating_sub(stride_axis)
+                    at.checked_sub(stride_axis).ok_or(MeshError::Scratch {
+                        at,
+                        len: self.pad_materials.len(),
+                    })?
                 };
-                let key = if here == AIR || byte_at(&self.pad_materials, across) != AIR {
+                let key = if here == AIR || read(&self.pad_materials, across)? != AIR {
                     0
                 } else {
                     any = true;
-                    (u32::from(here) << 8_u32) | u32::from(byte_at(&self.pad_light, across))
+                    (u32::from(here) << 8_u32) | u32::from(read(&self.pad_light, across)?)
                 };
-                set_mask(&mut self.mask, row + step_u, key);
-                at = at.saturating_add(stride_u);
+                write(&mut self.mask, row + step_u, key)?;
+                at += stride_u;
             }
         }
-        any
+        Ok(any)
     }
 
     /// Merges the mask's maximal rectangles and emits one quad each.
     fn merge_slice(
         &mut self,
-        axis: usize,
-        axis_u: usize,
-        axis_v: usize,
-        slice: usize,
+        axis: Axis,
+        axis_u: Axis,
+        axis_v: Axis,
+        slice: u8,
         positive: bool,
         out: &mut MeshBuffers,
     ) -> Result<(), MeshError> {
         let plane = if positive { slice + 1 } else { slice };
 
-        for origin_v in 0..CHUNK_EDGE {
-            let mut origin_u = 0_usize;
-            while origin_u < CHUNK_EDGE {
-                let key = mask_at(&self.mask, origin_v * CHUNK_EDGE + origin_u);
+        for origin_v in 0..CHUNK_EDGE_U8 {
+            let mut origin_u = 0_u8;
+            while origin_u < CHUNK_EDGE_U8 {
+                let key = read(&self.mask, mask_index(origin_u, origin_v))?;
                 if key == 0 {
                     origin_u += 1;
                     continue;
                 }
-                let width = self.widen(origin_u, origin_v, key);
-                let height = self.grow(origin_u, origin_v, width, key);
+                let width = self.widen(origin_u, origin_v, key)?;
+                let height = self.grow(origin_u, origin_v, width, key)?;
                 for down in 0..height {
                     for across in 0..width {
-                        set_mask(
+                        write(
                             &mut self.mask,
-                            (origin_v + down) * CHUNK_EDGE + origin_u + across,
+                            mask_index(origin_u + across, origin_v + down),
                             0,
-                        );
+                        )?;
                     }
                 }
                 self.emit_quad(
@@ -480,32 +664,28 @@ impl Mesher {
     }
 
     /// How far the run of equal keys extends along u from `(origin_u, origin_v)`.
-    fn widen(&self, origin_u: usize, origin_v: usize, key: u32) -> usize {
-        let mut width = 1_usize;
-        while origin_u + width < CHUNK_EDGE
-            && mask_at(&self.mask, origin_v * CHUNK_EDGE + origin_u + width) == key
+    fn widen(&self, origin_u: u8, origin_v: u8, key: u32) -> Result<u8, MeshError> {
+        let mut width = 1_u8;
+        while origin_u + width < CHUNK_EDGE_U8
+            && read(&self.mask, mask_index(origin_u + width, origin_v))? == key
         {
             width += 1;
         }
-        width
+        Ok(width)
     }
 
     /// How many whole rows of `width` equal keys sit below `(origin_u, origin_v)`.
-    fn grow(&self, origin_u: usize, origin_v: usize, width: usize, key: u32) -> usize {
-        let mut height = 1_usize;
-        'rows: while origin_v + height < CHUNK_EDGE {
+    fn grow(&self, origin_u: u8, origin_v: u8, width: u8, key: u32) -> Result<u8, MeshError> {
+        let mut height = 1_u8;
+        'rows: while origin_v + height < CHUNK_EDGE_U8 {
             for across in 0..width {
-                if mask_at(
-                    &self.mask,
-                    (origin_v + height) * CHUNK_EDGE + origin_u + across,
-                ) != key
-                {
+                if read(&self.mask, mask_index(origin_u + across, origin_v + height))? != key {
                     break 'rows;
                 }
             }
             height += 1;
         }
-        height
+        Ok(height)
     }
 
     /// Emits one quad: four vertices, six indices, one flat colour.
@@ -515,36 +695,35 @@ impl Mesher {
     fn emit_quad(&mut self, quad: Quad, out: &mut MeshBuffers) -> Result<(), MeshError> {
         let first = out.positions.len();
         if first.saturating_add(4) > MAX_VERTICES {
-            out.clear();
             return Err(MeshError::TooManyVertices { emitted: first });
         }
 
-        let material = usize::try_from(quad.key >> 8_u32).unwrap_or(0);
-        let light = u8::try_from(quad.key & 0xFF).unwrap_or(0);
-        let base = PALETTE
-            .get(material)
-            .copied()
-            .unwrap_or([255_u8, 0_u8, 255_u8]);
+        // The key is `(material << 8) | light`, one byte each.
+        let [light, material, _, _] = quad.key.to_le_bytes();
+        let [red, green, blue] = *PALETTE
+            .get(usize::from(material))
+            .ok_or(MeshError::UnknownMaterial { material })?;
         let face = face_of(quad.axis, quad.positive);
-        let shade = FACE_SHADE_256.get(face.index()).copied().unwrap_or(256);
         // The light in the key is the *neighbour* cell's — the air cell the face looks out
         // into — and the ramp runs from 0 to the caller's `light_max`, which is the value
         // the bake seeds the sky with. That is why the mesher is told the parameter rather
         // than assuming 15: a rules table with a different maximum would otherwise render
         // the whole world at the wrong brightness with nothing to point at.
-        let light_max = self.params.light_max();
         let colour = [
-            quantise_channel(byte_at3(base, 0), shade, light, light_max),
-            quantise_channel(byte_at3(base, 1), shade, light, light_max),
-            quantise_channel(byte_at3(base, 2), shade, light, light_max),
+            quantise_channel(red, face, light, self.params),
+            quantise_channel(green, face, light, self.params),
+            quantise_channel(blue, face, light, self.params),
             255,
         ];
 
-        let corner = |along_u: usize, along_v: usize| -> [f32; 3] {
+        // Every coordinate is a chunk-local voxel coordinate, 0 to 32 inclusive, so it is
+        // exact in `f32` and reaches the float side through `f32::from(u8)` rather than
+        // through a cast — there is no rounding to disagree about across platforms.
+        let corner = |along_u: u8, along_v: u8| -> [f32; 3] {
             let mut point = [0.0_f32; 3];
-            set_coord(&mut point, quad.axis, quad.plane);
-            set_coord(&mut point, quad.axis_u, quad.origin_u + along_u);
-            set_coord(&mut point, quad.axis_v, quad.origin_v + along_v);
+            *quad.axis.component(&mut point) = f32::from(quad.plane);
+            *quad.axis_u.component(&mut point) = f32::from(quad.origin_u + along_u);
+            *quad.axis_v.component(&mut point) = f32::from(quad.origin_v + along_v);
             point
         };
         out.positions.push(corner(0, 0));
@@ -553,15 +732,16 @@ impl Mesher {
         out.positions.push(corner(0, quad.height));
 
         let mut normal = [0.0_f32; 3];
-        if let Some(slot) = normal.get_mut(quad.axis) {
-            *slot = if quad.positive { 1.0 } else { -1.0 };
-        }
+        *quad.axis.component(&mut normal) = if quad.positive { 1.0 } else { -1.0 };
         for _ in 0..4 {
             out.normals.push(normal);
             out.colours.push(colour);
         }
 
-        let base_index = u16::try_from(first).unwrap_or(u16::MAX);
+        // The cap above holds `first` to at most `MAX_VERTICES - 4`, so the quad's last
+        // index, `first + 3`, is a `u16`; the conversion is refused as the cap would be.
+        let base_index =
+            u16::try_from(first).map_err(|_| MeshError::TooManyVertices { emitted: first })?;
         let pattern: [u16; 6] = if quad.positive == CLOCKWISE_FRONT {
             // Seen from the visible side the walk reads counter-clockwise: reverse it.
             [0, 2, 1, 0, 3, 2]
@@ -569,7 +749,7 @@ impl Mesher {
             [0, 1, 2, 0, 2, 3]
         };
         for offset in pattern {
-            out.indices.push(base_index.saturating_add(offset));
+            out.indices.push(base_index + offset);
         }
         self.quads = self.quads.saturating_add(1);
         Ok(())
@@ -577,71 +757,58 @@ impl Mesher {
 }
 
 /// The face for one axis and sign.
-fn face_of(axis: usize, positive: bool) -> Face {
+const fn face_of(axis: Axis, positive: bool) -> Face {
     match (axis, positive) {
-        (0, true) => Face::PosX,
-        (0, false) => Face::NegX,
-        (1, true) => Face::PosY,
-        (1, false) => Face::NegY,
-        (_, true) => Face::PosZ,
-        (_, false) => Face::NegZ,
+        (Axis::X, true) => Face::PosX,
+        (Axis::X, false) => Face::NegX,
+        (Axis::Y, true) => Face::PosY,
+        (Axis::Y, false) => Face::NegY,
+        (Axis::Z, true) => Face::PosZ,
+        (Axis::Z, false) => Face::NegZ,
     }
 }
 
-/// The padded buffer's stride for one axis.
-fn stride(axis: usize) -> usize {
-    PAD_STRIDE.get(axis).copied().unwrap_or(1)
+/// The mask's index of the cell at `(u, v)`.
+fn mask_index(u: u8, v: u8) -> usize {
+    usize::from(v) * CHUNK_EDGE + usize::from(u)
 }
 
-/// One byte of a slice, or air past its end. `clippy::indexing_slicing` is denied
-/// workspace-wide and the wall does not lift it; every read in the sweep goes through here.
-fn byte_at(slice: &[u8], at: usize) -> u8 {
-    slice.get(at).copied().unwrap_or(AIR)
+/// One entry of the sweep's scratch, a chunk's array or a border's.
+/// `clippy::indexing_slicing` is denied workspace-wide and the wall does not lift it, so
+/// every read in the sweep goes through here, and a read past the end is
+/// [`MeshError::Scratch`], never a made-up value.
+fn read<T: Copy>(slice: &[T], at: usize) -> Result<T, MeshError> {
+    slice.get(at).copied().ok_or(MeshError::Scratch {
+        at,
+        len: slice.len(),
+    })
 }
 
-/// One byte of an RGB triple.
-fn byte_at3(triple: [u8; 3], at: usize) -> u8 {
-    triple.get(at).copied().unwrap_or(0)
-}
-
-/// Writes one byte, ignoring a write past the end.
-fn set_byte(slice: &mut [u8], at: usize, value: u8) {
-    if let Some(slot) = slice.get_mut(at) {
-        *slot = value;
-    }
-}
-
-/// One mask entry, or "no face" past its end.
-fn mask_at(mask: &[u32], at: usize) -> u32 {
-    mask.get(at).copied().unwrap_or(0)
-}
-
-/// Writes one mask entry, ignoring a write past the end.
-fn set_mask(mask: &mut [u32], at: usize, value: u32) {
-    if let Some(slot) = mask.get_mut(at) {
-        *slot = value;
-    }
+/// Writes one entry of the sweep's scratch; a write past the end is [`MeshError::Scratch`].
+fn write<T>(slice: &mut [T], at: usize, value: T) -> Result<(), MeshError> {
+    let len = slice.len();
+    let slot = slice.get_mut(at).ok_or(MeshError::Scratch { at, len })?;
+    *slot = value;
+    Ok(())
 }
 
 /// Copies one 32-byte row out of a chunk array into the padded buffer.
-fn copy_row(into: &mut [u8], to: usize, from_slice: &[u8], from: usize) {
-    let Some(source) = from_slice.get(from..from + CHUNK_EDGE) else {
-        return;
-    };
-    if let Some(target) = into.get_mut(to..to + CHUNK_EDGE) {
-        target.copy_from_slice(source);
-    }
-}
-
-/// Writes one coordinate of a vertex position.
-///
-/// The value is a chunk-local voxel coordinate, 0 to 32 inclusive, so it is exact in `f32`
-/// and reaches the float side through `f32::from(u8)` rather than through a cast — there is
-/// no rounding to disagree about across platforms.
-fn set_coord(point: &mut [f32; 3], axis: usize, value: usize) {
-    if let Some(slot) = point.get_mut(axis) {
-        *slot = f32::from(u8::try_from(value).unwrap_or(u8::MAX));
-    }
+fn copy_row(into: &mut [u8], to: usize, from_slice: &[u8], from: usize) -> Result<(), MeshError> {
+    let source = from_slice
+        .get(from..from + CHUNK_EDGE)
+        .ok_or(MeshError::Scratch {
+            at: from + CHUNK_EDGE,
+            len: from_slice.len(),
+        })?;
+    let len = into.len();
+    let target = into
+        .get_mut(to..to + CHUNK_EDGE)
+        .ok_or(MeshError::Scratch {
+            at: to + CHUNK_EDGE,
+            len,
+        })?;
+    target.copy_from_slice(source);
+    Ok(())
 }
 
 /// Meshes one owned chunk, allocating as it goes.
@@ -903,15 +1070,60 @@ mod tests {
 
     #[test]
     fn the_quantiser_is_exact_at_both_ends() {
-        // Full light, unshaded face: the base colour survives unchanged.
-        assert_eq!(quantise_channel(255, 256, 15, 15), 255);
-        assert_eq!(quantise_channel(133, 256, 15, 15), 133);
+        // Full light, unshaded face (+y's shade is 256): the base colour survives unchanged.
+        assert_eq!(quantise_channel(255, Face::PosY, 15, params()), 255);
+        assert_eq!(quantise_channel(133, Face::PosY, 15, params()), 133);
         // No light: the ambient floor is a quarter.
-        assert_eq!(quantise_channel(255, 256, 0, 15), 64);
-        // Light above the maximum clamps rather than overshooting.
-        assert_eq!(quantise_channel(255, 256, 200, 15), 255);
-        // A zero light scale cannot divide by zero.
-        assert_eq!(quantise_channel(255, 256, 9, 0), 64);
+        assert_eq!(quantise_channel(255, Face::PosY, 0, params()), 64);
+        // Light above the maximum is read as the maximum, the ramp's top.
+        assert_eq!(quantise_channel(255, Face::PosY, 200, params()), 255);
+    }
+
+    /// The quantiser's narrowing to a `u8` is exact for every input its types admit: each
+    /// answer equals the formula worked in `u64`, where nothing can overflow or truncate.
+    #[test]
+    fn the_quantiser_never_truncates() {
+        for [light_max, light_atten] in [[15_u8, 1_u8], [1, 1], [255, 1], [255, 255], [7, 3]] {
+            let params = LightParams::new(light_max, light_atten).expect("a legal pair");
+            for face in Face::ALL {
+                let shade = u64::from(
+                    *super::FACE_SHADE_256
+                        .get(face.index())
+                        .expect("a face has a shade"),
+                );
+                for base in 0..=255_u8 {
+                    for light in 0..=255_u8 {
+                        let lit = u64::from(light.min(light_max));
+                        let light_256 = 64 + (192 * lit).div_euclid(u64::from(light_max));
+                        let expected = (u64::from(base) * shade * light_256 + 32_768) >> 16;
+                        assert_eq!(
+                            u64::from(quantise_channel(base, face, light, params)),
+                            expected,
+                            "base {base}, face {face}, light {light}, light_max {light_max}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_material_the_palette_does_not_name_is_an_error_and_leaves_nothing() {
+        let unknown = u8::try_from(super::PALETTE.len()).expect("the palette is under 256 rows");
+        let mut materials = vec![AIR; CHUNK_VOLUME];
+        if let Some(slot) = materials.get_mut(voxel_index(4, 4, 4)) {
+            *slot = unknown;
+        }
+        let chunk = ChunkInput::new(materials, vec![15; CHUNK_VOLUME], ChunkInput::no_borders())
+            .expect("both arrays are CHUNK_VOLUME long");
+        let mut mesher = Mesher::new(params());
+        let mut out = mesh_chunk(&chunk_with(&[(1, 1, 1)]), params()).expect("under the cap");
+        assert!(!out.is_empty());
+        assert_eq!(
+            mesher.mesh_chunk_into(&chunk.as_view(), &mut out),
+            Err(MeshError::UnknownMaterial { material: unknown })
+        );
+        assert!(out.is_empty() && out.positions().is_empty() && out.indices().is_empty());
     }
 
     #[test]
@@ -964,6 +1176,7 @@ mod tests {
             Err(MeshError::TooManyVertices { emitted }) => {
                 assert!(emitted <= MAX_VERTICES, "emitted {emitted}");
             }
+            Err(other) => panic!("the checkerboard was refused for another reason: {other}"),
             Ok(buffers) => panic!(
                 "the checkerboard meshed to {} vertices without hitting the cap",
                 buffers.positions().len()

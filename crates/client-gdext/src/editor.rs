@@ -75,6 +75,8 @@ use pharmakos_proto::json::{self, Json};
 use crate::enums;
 use crate::error::BridgeError;
 use crate::targeting::{self, Chip, Feature, FeatureKind};
+use crate::variant::proto3_integer;
+use crate::variant::text_or_empty;
 use crate::view::{Entity, EntityKind, split_footer};
 use crate::wizard::{self, Instance, TemplateRow, Wizard};
 
@@ -361,9 +363,10 @@ pub fn rows_of(report: &VerifyReport) -> Vec<Row> {
 }
 
 /// Which answer the rows on screen came from.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Verdict {
     /// Nothing has been checked.
+    #[default]
     None,
     /// Load refused the file; the rows say why, and the editor's text is unchanged.
     Refused,
@@ -547,9 +550,19 @@ impl SealLine {
 /// source.
 pub const SAFE_PLAYBOOK_FILED_KIND: &str = "safe_playbook_filed";
 
-/// The error code `estimate_route` answers a waypoint that resolves to nothing with: a
-/// `covering` that covers nothing, or a selector that ranks nothing, which would be a step
-/// failure at run time (`crates/gateway/src/surface/knowledge.rs`, `place_of`).
+/// The error code `estimate_route` answers a waypoint that resolves to nothing with
+/// (`crates/gateway/src/surface/knowledge.rs`, `place_of`): a `covering` that covers
+/// nothing, a selector that ranks nothing, a beacon this seat does not know (unknown, or
+/// another seat's it has not seen, which the gateway answers alike so that a seat cannot map
+/// the enemy's beacons), or a commander standing nowhere. Every one is the route's answer
+/// and is drawn as the route (decisions-log item 136 (3) (k)).
+///
+/// **Not narrowed to the `covering` and selector causes** (item 136 (5) asked S2's first
+/// client lane to decide; decided, the owner can veto). The client reads the code alone, and
+/// telling the causes apart would mean classifying the waypoints itself or parsing the
+/// gateway's sentence, which is the gateway's to word; and the gateway answers an unseen
+/// beacon and a missing one alike on purpose. So a mistyped own beacon reads as no route,
+/// with the gateway's own sentence saying why, rather than as a refused call.
 const ESTIMATE_FOUND_NOTHING: &str = "NOT_FOUND";
 
 /// The route as the gateway priced it: where each leg ends and what it costs.
@@ -569,8 +582,9 @@ pub struct Route {
     /// polyline is drawn, rather than one to a point the gateway never named.
     pub readable: bool,
     /// The gateway's `NOT_FOUND` sentence when a waypoint resolves to nothing — a
-    /// `covering` that covers nothing, a selector that ranks nothing — as it came, and
-    /// empty otherwise. That is the gateway's answer about the route, which the editor
+    /// `covering` that covers nothing, a selector that ranks nothing, a beacon this seat
+    /// does not know, a commander standing nowhere ([`ESTIMATE_FOUND_NOTHING`]) — as it
+    /// came, and empty otherwise. That is the gateway's answer about the route, which the editor
     /// draws (no polyline, the sentence), not a refused call.
     pub found_nothing: String,
 }
@@ -851,7 +865,7 @@ pub struct Editor {
     owed: Owed,
     full_done: Option<u64>,
     rows: Vec<Row>,
-    verdict: Option<Verdict>,
+    verdict: Verdict,
     rows_revision: u64,
     qualifies: bool,
     route: Route,
@@ -882,6 +896,9 @@ pub struct Editor {
     /// The chips: what each feature reference in the text reads now, for the text at
     /// `chips_revision`.
     chips: Vec<Chip>,
+    /// Every Attack beacon's target in the text on screen, read once per text
+    /// ([`targeting::attack_targets`]), not once per frame.
+    attack: Vec<targeting::AttackMark>,
     chips_revision: Option<u64>,
     /// The chips (`resolve_refs`) are owed for the newest text.
     resolve_owed: bool,
@@ -968,19 +985,13 @@ impl Editor {
     /// The text the editor holds, as bytes: what Save writes. Empty with no text.
     #[must_use]
     pub fn bytes(&self) -> Vec<u8> {
-        self.text
-            .as_ref()
-            .map(|text| text.as_bytes().to_vec())
-            .unwrap_or_default()
+        text_or_empty(self.text.as_deref()).as_bytes().to_vec()
     }
 
     /// The text the last accepted submission sealed, as bytes; empty before one.
     #[must_use]
     pub fn sealed_bytes(&self) -> Vec<u8> {
-        self.sealed
-            .as_ref()
-            .map(|text| text.as_bytes().to_vec())
-            .unwrap_or_default()
+        text_or_empty(self.sealed.as_deref()).as_bytes().to_vec()
     }
 
     /// A map action. Returns whether it was taken: an action needs text to act on, and a
@@ -1052,7 +1063,7 @@ impl Editor {
             if let Some((rows, qualifies, dormant)) = preview.checked {
                 self.rows = rows;
                 self.dormant_patch = dormant;
-                self.verdict = Some(Verdict::Quick);
+                self.verdict = Verdict::Quick;
                 self.rows_revision = self.revision;
                 self.qualifies = qualifies;
                 self.owed.quick = false;
@@ -1309,6 +1320,13 @@ impl Editor {
     }
 
     // --- Targeting (S1's plan, task `ui`) -------------------------------------------------
+
+    /// Every Attack beacon's target in the text on screen, in the file's order, for the map
+    /// to draw ([`targeting::attack_targets`]); none without a text.
+    #[must_use]
+    pub fn attack_targets(&self) -> &[targeting::AttackMark] {
+        &self.attack
+    }
 
     /// The chips: what each feature reference in the text reads now, in the file's order.
     #[must_use]
@@ -1729,14 +1747,13 @@ impl Editor {
     /// Which answer the rows came from.
     #[must_use]
     pub fn verdict(&self) -> Verdict {
-        self.verdict.unwrap_or(Verdict::None)
+        self.verdict
     }
 
     /// Whether the rows describe the text on screen.
     #[must_use]
     pub fn rows_current(&self) -> bool {
-        self.verdict
-            .is_some_and(|verdict| verdict != Verdict::Refused)
+        !matches!(self.verdict, Verdict::None | Verdict::Refused)
             && self.rows_revision == self.revision
     }
 
@@ -2208,13 +2225,13 @@ impl Editor {
             }
             Sent::Estimate { revision } => {
                 if revision == self.revision {
-                    self.take_route(result);
+                    self.take_route(result)?;
                 }
             }
             Sent::Submit { text, revision } => {
                 let response: SubmitPlanResponse =
                     json::decode_json(&body(result, "gp.api.v1.SubmitPlanResponse"))?;
-                self.settle_submit(text, revision, response);
+                self.settle_submit(text, revision, response)?;
             }
             Sent::Briefing => {
                 let response: GetBriefingResponse =
@@ -2339,7 +2356,7 @@ impl Editor {
         if let Some(refusal) = refusal {
             let detail = format!("{} {}", refusal.code, refusal.path);
             self.rows = rows_of(report);
-            self.verdict = Some(Verdict::Refused);
+            self.verdict = Verdict::Refused;
             self.say("load_refused", &detail);
         } else {
             self.undo.clear();
@@ -2368,8 +2385,13 @@ impl Editor {
         self.carry_forward();
     }
 
-    fn settle_submit(&mut self, text: String, revision: u64, response: SubmitPlanResponse) {
-        let report = response.report.unwrap_or_default();
+    fn settle_submit(
+        &mut self,
+        text: String,
+        revision: u64,
+        response: SubmitPlanResponse,
+    ) -> Result<(), BridgeError> {
+        let report = response.report.ok_or_else(|| no_report("submit_plan"))?;
         self.submitted = Some(Submitted {
             accepted: response.accepted,
             qualifies: report.qualifies,
@@ -2388,6 +2410,7 @@ impl Editor {
         } else {
             self.say("submit_refused", "");
         }
+        Ok(())
     }
 
     /// Draft continuity (spec section 13): "each Lull opens with last round's playbook
@@ -2438,9 +2461,10 @@ impl Editor {
             return;
         }
         self.text = None;
+        self.attack.clear();
         self.revision = self.revision.wrapping_add(1);
         self.rows.clear();
-        self.verdict = None;
+        self.verdict = Verdict::None;
         self.qualifies = false;
         self.route = Route::default();
         self.prose.clear();
@@ -2471,6 +2495,7 @@ impl Editor {
 
     /// A new text is on screen: every check of it is owed.
     fn accept_text(&mut self, text: String) {
+        self.attack = targeting::attack_targets(&text);
         self.text = Some(text);
         self.revision = self.revision.wrapping_add(1);
         self.owed.quick = true;
@@ -2485,18 +2510,24 @@ impl Editor {
     fn take_rows(&mut self, report: &VerifyReport, verdict: Verdict) {
         self.rows = rows_of(report);
         self.dormant_patch = dormant_patch_of(report);
-        self.verdict = Some(verdict);
+        self.verdict = verdict;
         self.rows_revision = self.revision;
         self.qualifies = report.qualifies;
         self.touch();
     }
 
-    fn take_route(&mut self, result: &Json) {
+    /// Takes in an `estimate_route` answer.
+    ///
+    /// # Errors
+    ///
+    /// [`BridgeError::Rpc`] for a time or an axis that is present and not an integer (an
+    /// absent one is proto3's zero), or an axis outside an `i32`.
+    fn take_route(&mut self, result: &Json) -> Result<(), BridgeError> {
         let (answer, _) = split_footer(result);
         let reachable = matches!(answer.get("reachable"), Some(Json::Bool(true)));
         let mut route = Route {
             reachable,
-            whole: answer.get("ms").and_then(integer).unwrap_or(0),
+            whole: proto3_integer(&answer, "ms")?,
             current: true,
             readable: true,
             ..Route::default()
@@ -2506,9 +2537,7 @@ impl Editor {
         }
         if let Some(Json::Array(legs)) = answer.get("legs") {
             for leg in legs {
-                route
-                    .legs
-                    .push(leg.get("ms").and_then(integer).unwrap_or(0));
+                route.legs.push(proto3_integer(leg, "ms")?);
                 // `gp.api.v1.Leg.to` is a `gp.v1.Location`, `{"voxel":{..}}`; the gateway
                 // at `main` writes the bare voxel `{"x":..}` there instead. Both spellings
                 // name the same voxel, so both are read; the disagreement is the gateway's
@@ -2516,7 +2545,7 @@ impl Editor {
                 let to = leg.get("to");
                 let voxel = to.and_then(|to| to.get("voxel")).or(to);
                 match voxel {
-                    Some(voxel @ Json::Object(_)) => route.points.push(voxel_of(voxel)),
+                    Some(voxel @ Json::Object(_)) => route.points.push(voxel_of(voxel)?),
                     // A leg that names no end is not drawn to a point the gateway never
                     // named: the polyline goes, and the times stay.
                     _ => route.readable = false,
@@ -2528,6 +2557,7 @@ impl Editor {
         }
         self.route = route;
         self.touch();
+        Ok(())
     }
 
     fn refused(&mut self, sent: &Sent, code: &str, message: &str) -> Settled {
@@ -2778,9 +2808,21 @@ pub fn strip_comments(text: &str) -> String {
     out
 }
 
+/// The player's JSONC text as JSON, for the lax readers of the client's own file: the
+/// route's targets ([`route_waypoints`]), the E0601 option ([`dormant_key`]) and
+/// targeting's walks (`has_feature_refs`, `attack_targets`, `chips_of`'s form read).
+///
+/// They decide nothing, and the verdict on the file is the verifier's (AGENTS.md section 3
+/// rule 4), so a text that is not JSON once its comments are gone is no document here, and
+/// each reader answers what it documents for one: no route, no option set, no reference.
+/// The verifier, asked about the same text, names what is wrong with it.
+pub(crate) fn lax_document(text: &str) -> Option<Json> {
+    json::read(&strip_comments(text)).ok()
+}
+
 /// The route's steps, read laxly out of a JSONC text.
 fn route_steps(text: &str) -> Option<Vec<Json>> {
-    let document = json::read(&strip_comments(text)).ok()?;
+    let document = lax_document(text)?;
     match document
         .get("declarative")
         .and_then(|value| value.get("route"))
@@ -2839,7 +2881,7 @@ fn dormant_patch_of(report: &VerifyReport) -> Option<String> {
 /// in the spelling the text uses ([`DORMANT_KEYS`]), read laxly as the route is: a text
 /// this walk cannot read sets nothing, and the verifier has the last word.
 fn dormant_key(text: &str) -> Option<&'static str> {
-    let document = json::read(&strip_comments(text)).ok()?;
+    let document = lax_document(text)?;
     let options = document.get("declarative")?.get("options")?;
     DORMANT_KEYS
         .iter()
@@ -2851,7 +2893,13 @@ fn dormant_key(text: &str) -> Option<&'static str> {
 fn report_of(result: &Json) -> Result<VerifyReport, BridgeError> {
     let response: VerifyPlanResponse =
         json::decode_json(&body(result, "gp.api.v1.VerifyPlanResponse"))?;
-    Ok(response.report.unwrap_or_default())
+    response.report.ok_or_else(|| no_report("verify_plan"))
+}
+
+/// An answer that carries no report, which the gateway always writes: refused, never
+/// read as an empty report, which would show the text as clean.
+fn no_report(method: &str) -> BridgeError {
+    BridgeError::Rpc(format!("a {method} answer with no report"))
 }
 
 /// A `patch_plan` answer.
@@ -2897,24 +2945,20 @@ fn voxel_location(at: [i32; 3]) -> Json {
 }
 
 /// A `gp.v1.Voxel` object's three axes; an absent axis is zero, as proto3 JSON writes it.
-fn voxel_of(value: &Json) -> [i32; 3] {
+///
+/// # Errors
+///
+/// [`BridgeError::Rpc`] for an axis that is not an integer or does not fit an `i32`.
+fn voxel_of(value: &Json) -> Result<[i32; 3], BridgeError> {
     let axis = |name: &str| {
-        value
-            .get(name)
-            .and_then(integer)
-            .and_then(|found| i32::try_from(found).ok())
-            .unwrap_or(0)
+        let found = proto3_integer(value, name)?;
+        i32::try_from(found).map_err(|_| BridgeError::Rpc(format!("a voxel's `{name}` is {found}")))
     };
-    [axis("x"), axis("y"), axis("z")]
+    Ok([axis("x")?, axis("y")?, axis("z")?])
 }
 
-fn integer(value: &Json) -> Option<i64> {
-    match value {
-        Json::Number(lexeme) | Json::String(lexeme) => lexeme.parse::<i64>().ok(),
-        _ => None,
-    }
-}
-
+/// The integer field `name` of an answer: proto3's canonical JSON leaves a zero out, so
+/// an absent field is 0, and anything but an integer is refused.
 fn object(entries: Vec<(&str, Json)>) -> Json {
     Json::Object(
         entries
@@ -3096,6 +3140,8 @@ mod tests {
             subtype: "commander".to_owned(),
             owner: "seat.0".to_owned(),
             at: [358, 22, 36],
+            hp: None,
+            heading: None,
         }]);
         // The load itself owes a route estimate.
         let call = editor.next_call(false).expect("the estimate");
@@ -3996,6 +4042,8 @@ mod tests {
             subtype: "commander".to_owned(),
             owner: "seat.0".to_owned(),
             at: [358, 22, 36],
+            hp: None,
+            heading: None,
         }]);
         assert_eq!(method_of(editor.next_call(false)), "estimate_route");
         editor
@@ -4126,6 +4174,8 @@ mod tests {
             subtype: "commander".to_owned(),
             owner: "seat.0".to_owned(),
             at: [358, 22, 36],
+            hp: None,
+            heading: None,
         }]);
         assert_eq!(method_of(editor.next_call(false)), "estimate_route");
         editor
@@ -4161,6 +4211,8 @@ mod tests {
             subtype: "commander".to_owned(),
             owner: "seat.0".to_owned(),
             at: [358, 22, 36],
+            hp: None,
+            heading: None,
         }]);
         assert_eq!(method_of(editor.next_call(false)), "estimate_route");
         let said = "waypoint 1 covers nothing: its step would fail `illegal_site`";
@@ -4193,6 +4245,8 @@ mod tests {
             subtype: "commander".to_owned(),
             owner: "seat.0".to_owned(),
             at: [358, 22, 36],
+            hp: None,
+            heading: None,
         }]);
         assert_eq!(method_of(editor.next_call(false)), "estimate_route");
         let settled = editor

@@ -48,6 +48,7 @@
 //! Godot's own heartbeat closes a connection whose pong is late, and a pong is late behind
 //! a long `advance_push` on the one thread that owns the match.
 
+use std::num::NonZeroU64;
 use std::time::Instant;
 
 /// The speeds the watch rig offers: 1x, 2x and 4x.
@@ -68,6 +69,9 @@ pub const PACER_PERIOD_US: u64 = 100_000;
 /// The most one `advance_push` may ask for: the gateway's `MAX_ADVANCE_MS`, a wire bound
 /// that the gateway refuses above rather than clamps.
 pub const MAX_ADVANCE_MS: i32 = 60_000;
+
+// An ask is a positive number of milliseconds, so the bound is one.
+const _: () = assert!(MAX_ADVANCE_MS > 0);
 
 /// How much owed game time the pacer carries before it drops the rest: 5 seconds.
 ///
@@ -104,7 +108,29 @@ pub const KEEPALIVE_US: u64 = 5_000_000;
 pub const FULL_AFTER_IDLE_US: u64 = 600_000;
 
 /// Microseconds in a millisecond.
-const US_PER_MS: u64 = 1_000;
+const US_PER_MS: NonZeroU64 = non_zero(1_000);
+
+/// Milliseconds in a second, for [`clock_text`].
+const MS_PER_SECOND: NonZeroU64 = non_zero(1_000);
+
+/// Seconds in a minute, for [`clock_text`].
+const SECONDS_PER_MINUTE: NonZeroU64 = non_zero(60);
+
+/// A unit that is not zero, checked when the constant is built: a zero is a compile error,
+/// never a division at run time.
+const fn non_zero(value: u64) -> NonZeroU64 {
+    match NonZeroU64::new(value) {
+        Some(unit) => unit,
+        None => panic!("a unit of time is not zero"),
+    }
+}
+
+/// `value` in whole `unit`s, rounded down: the one division the timers make, by a unit
+/// that cannot be zero, so it cannot fail. (Named rather than written `/`, because
+/// `integer_division` asks for the rounding to be said.)
+fn floor_div(value: u64, unit: NonZeroU64) -> u64 {
+    value.div_euclid(unit.get())
+}
 
 /// The one wall clock the client reads.
 #[derive(Clone, Copy, Debug)]
@@ -227,7 +253,7 @@ impl Pacer {
     /// Game milliseconds owed and not yet asked for.
     #[must_use]
     pub fn owed_ms(&self) -> u64 {
-        self.owed_us.checked_div(US_PER_MS).unwrap_or(0)
+        floor_div(self.owed_us, US_PER_MS)
     }
 
     /// Game milliseconds dropped at the backlog bound so far.
@@ -261,47 +287,63 @@ impl Pacer {
         if self.since_ask_us < PACER_PERIOD_US {
             return None;
         }
-        let limit = u64::try_from(MAX_ADVANCE_MS).unwrap_or(0);
-        let due_ms = self.owed_ms().min(limit);
-        if due_ms == 0 {
+        let ask = match i32::try_from(self.owed_ms()) {
+            Ok(owed) => owed.min(MAX_ADVANCE_MS),
+            // More milliseconds owed than an `i32` holds is more than one ask may carry.
+            Err(_) => MAX_ADVANCE_MS,
+        };
+        if ask == 0 {
             return None;
         }
-        let ask = i32::try_from(due_ms).unwrap_or(MAX_ADVANCE_MS);
-        self.owed_us = self
-            .owed_us
-            .saturating_sub(due_ms.saturating_mul(US_PER_MS));
+        let due_us = u64::from(ask.unsigned_abs()).saturating_mul(US_PER_MS.get());
+        self.owed_us = self.owed_us.saturating_sub(due_us);
         self.since_ask_us = 0;
         self.in_flight = Some(ask);
         Some(ask)
     }
 
     /// The gateway ran `advanced_ms` of the ask in flight. What was asked and not run is
-    /// carried into the next ask.
-    pub fn answered(&mut self, advanced_ms: i32) {
+    /// carried into the next ask; the gateway floors an advance to what it could run, so
+    /// it never runs more than it was asked.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::BridgeError::Rpc`] for an answer that says the gateway ran more
+    /// than it was asked, which the gateway never does; the ask is settled with nothing
+    /// carried, since the host is past it.
+    pub fn answered(&mut self, advanced_ms: u32) -> Result<(), crate::error::BridgeError> {
         let Some(asked) = self.in_flight.take() else {
-            return;
+            return Ok(());
+        };
+        let Some(unrun) = asked.unsigned_abs().checked_sub(advanced_ms) else {
+            return Err(crate::error::BridgeError::Rpc(format!(
+                "advance_push ran {advanced_ms} ms where {asked} ms were asked"
+            )));
         };
         if !self.active || self.skipping {
-            return;
+            return Ok(());
         }
-        let unrun = u64::try_from(asked.saturating_sub(advanced_ms).max(0)).unwrap_or(0);
-        let owed = self.owed_us.saturating_add(unrun.saturating_mul(US_PER_MS));
+        let owed = self
+            .owed_us
+            .saturating_add(u64::from(unrun).saturating_mul(US_PER_MS.get()));
         self.owed_us = self.bounded(owed);
+        Ok(())
     }
 
     /// The ask in flight was refused or lost: carry all of it.
     pub fn refused(&mut self) {
-        self.answered(0);
+        // An answer of 0 ms is never more than was asked, so it carries the whole ask and
+        // cannot be refused.
+        if self.answered(0).is_err() {
+            self.in_flight = None;
+        }
     }
 
     /// `owed` with everything above the backlog bound dropped, and counted.
     fn bounded(&mut self, owed: u64) -> u64 {
-        let bound = BACKLOG_BOUND_MS.saturating_mul(US_PER_MS);
+        let bound = BACKLOG_BOUND_MS.saturating_mul(US_PER_MS.get());
         if owed > bound {
-            let over = owed
-                .saturating_sub(bound)
-                .checked_div(US_PER_MS)
-                .unwrap_or(0);
+            let over = floor_div(owed.saturating_sub(bound), US_PER_MS);
             self.dropped_ms = self.dropped_ms.saturating_add(over);
             bound
         } else {
@@ -340,6 +382,11 @@ pub struct HostClock {
     pending_ms: Option<u64>,
     /// Wall microseconds since the last report went out.
     since_report_us: u64,
+    /// Whether a report was due that `report_host_clock`'s `int32` fields cannot carry: a
+    /// phase longer than `i32::MAX` milliseconds (24.8 days of wall time in one Lull,
+    /// recap or ended match). No report goes out from then on in that phase, rather than
+    /// one held at the bound, and [`HostClock::unreportable`] says so.
+    unreportable: bool,
 }
 
 impl Default for HostClock {
@@ -358,6 +405,7 @@ impl HostClock {
             accepted_ms: 0,
             pending_ms: None,
             since_report_us: CLOCK_REPORT_US,
+            unreportable: false,
         }
     }
 
@@ -368,6 +416,14 @@ impl HostClock {
         self.accepted_ms = 0;
         self.pending_ms = None;
         self.since_report_us = CLOCK_REPORT_US;
+        self.unreportable = false;
+    }
+
+    /// Whether this phase ran past what `report_host_clock` can carry, so no report goes
+    /// out until the next phase ([`HostClock::next_report`]).
+    #[must_use]
+    pub const fn unreportable(&self) -> bool {
+        self.unreportable
     }
 
     /// The phase this clock reports for.
@@ -390,7 +446,7 @@ impl HostClock {
     /// After a stall the report is a step of at most [`MAX_CLOCK_STEP_MS`] beyond the last
     /// one the gateway accepted, so a long freeze is reported as several steps in a row.
     pub fn next_report(&mut self) -> Option<(i32, Option<i32>)> {
-        if self.phase == ClockPhase::Silent || self.pending_ms.is_some() {
+        if self.phase == ClockPhase::Silent || self.pending_ms.is_some() || self.unreportable {
             return None;
         }
         let behind = self.spent_ms().saturating_sub(self.accepted_ms) > MAX_CLOCK_STEP_MS;
@@ -406,12 +462,18 @@ impl HostClock {
             } => Some(total_ms.saturating_sub(report)),
             ClockPhase::Lull { countdown_ms: None } | ClockPhase::Silent | ClockPhase::Open => None,
         };
+        // A countdown is at most a Lull's length, a positive `int32` of the rules table, so
+        // only the time spent can outgrow the wire.
+        let (Ok(wired), Ok(countdown)) = (
+            i32::try_from(report),
+            countdown.map(i32::try_from).transpose(),
+        ) else {
+            self.unreportable = true;
+            return None;
+        };
         self.pending_ms = Some(report);
         self.since_report_us = 0;
-        Some((
-            i32::try_from(report).unwrap_or(i32::MAX),
-            countdown.map(|left| i32::try_from(left).unwrap_or(i32::MAX)),
-        ))
+        Some((wired, countdown))
     }
 
     /// The report in flight was accepted.
@@ -454,16 +516,16 @@ impl HostClock {
 
     /// Whole milliseconds spent in this phase.
     fn spent_ms(&self) -> u64 {
-        self.spent_us.checked_div(US_PER_MS).unwrap_or(0)
+        floor_div(self.spent_us, US_PER_MS)
     }
 }
 
 /// Game or wall milliseconds as `m:ss`, rounded down to the second.
 #[must_use]
 pub fn clock_text(ms: u64) -> String {
-    let seconds = ms.checked_div(1_000).unwrap_or(0);
-    let minutes = seconds.checked_div(60).unwrap_or(0);
-    let rest = seconds.checked_rem(60).unwrap_or(0);
+    let seconds = floor_div(ms, MS_PER_SECOND);
+    let minutes = floor_div(seconds, SECONDS_PER_MINUTE);
+    let rest = seconds % SECONDS_PER_MINUTE;
     format!("{minutes}:{rest:02}")
 }
 
@@ -508,7 +570,10 @@ impl IdleTimer {
 /// Everything the watch rig times, advanced together from one reading of [`WallClock`].
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct Timing {
-    last_us: Option<u64>,
+    /// Whether [`Timing::advance`] has been given a reading yet.
+    started: bool,
+    /// The latest reading; zero before the first.
+    last_us: u64,
     /// The Push's pacer.
     pub pacer: Pacer,
     /// The host clock outside a Push.
@@ -523,8 +588,14 @@ impl Timing {
     /// Brings every timer up to `now_us`, a [`WallClock`] reading. A reading earlier than
     /// the last one moves nothing.
     pub fn advance(&mut self, now_us: u64) {
-        let gone = self.last_us.map_or(0, |last| now_us.saturating_sub(last));
-        self.last_us = Some(now_us.max(self.last_us.unwrap_or(0)));
+        // The first reading starts the timers, so no time went by before it.
+        let gone = if self.started {
+            now_us.saturating_sub(self.last_us)
+        } else {
+            0
+        };
+        self.started = true;
+        self.last_us = now_us.max(self.last_us);
         self.pacer.elapse(gone);
         self.clock.elapse(gone);
         self.idle.elapse(gone);
@@ -556,8 +627,8 @@ impl Timing {
 
     /// The latest [`WallClock`] reading [`Timing::advance`] was given; zero before any.
     #[must_use]
-    pub fn now_us(&self) -> u64 {
-        self.last_us.unwrap_or(0)
+    pub const fn now_us(&self) -> u64 {
+        self.last_us
     }
 }
 
@@ -601,9 +672,11 @@ mod tests {
         pacer.skip();
         assert_eq!(pacer.next_ask(), Some(MAX_ADVANCE_MS));
         assert_eq!(pacer.next_ask(), None, "one in flight");
-        pacer.answered(MAX_ADVANCE_MS);
+        pacer
+            .answered(MAX_ADVANCE_MS.unsigned_abs())
+            .expect("no more than was asked");
         assert_eq!(pacer.next_ask(), Some(MAX_ADVANCE_MS), "no period between");
-        pacer.answered(20_000);
+        pacer.answered(20_000).expect("no more than was asked");
         pacer.stop();
         assert_eq!(pacer.next_ask(), None, "the footer left the Push");
         assert!(!pacer.skipping());
@@ -694,6 +767,46 @@ mod tests {
         clock.answered();
         clock.elapse(250_000);
         assert_eq!(clock.next_report(), Some((150_250, None)));
+    }
+
+    /// A phase that runs past what `report_host_clock`'s `int32` carries stops reporting
+    /// and says so, rather than reporting the bound for ever; the next phase reports again.
+    #[test]
+    fn a_phase_past_the_wire_stops_reporting_and_says_so() {
+        let mut clock = HostClock::new();
+        clock.enter(ClockPhase::Open);
+        clock.elapse(3_000_000_000_000);
+        let mut last = 0;
+        while let Some((report, _)) = clock.next_report() {
+            assert!(report >= last, "the reports never run backwards");
+            last = report;
+            clock.answered();
+        }
+        assert!(clock.unreportable(), "it says why it stopped");
+        assert!(
+            last > i32::MAX - 60_000,
+            "it reported up to the wire's bound: {last}"
+        );
+        clock.enter(ClockPhase::Open);
+        assert!(!clock.unreportable());
+        assert_eq!(clock.next_report(), Some((0, None)));
+    }
+
+    /// An answer that says the gateway ran more than it was asked is refused, and the ask
+    /// is settled with nothing carried.
+    #[test]
+    fn an_advance_past_the_ask_is_refused() {
+        let mut pacer = pushing(1);
+        pacer.elapse(130_000);
+        assert_eq!(pacer.next_ask(), Some(130));
+        assert!(pacer.answered(131).is_err());
+        assert_eq!(pacer.owed_ms(), 0, "nothing carried");
+        pacer.elapse(PACER_PERIOD_US);
+        assert_eq!(
+            pacer.next_ask(),
+            Some(100),
+            "the next ask is the next period's"
+        );
     }
 
     #[test]
