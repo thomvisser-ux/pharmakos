@@ -136,8 +136,13 @@ struct ViewerState {
     refreshed_at: u64,
     sight: Sight,
     /// Opaque handles, in the order this viewer first saw each thing.
-    units: Vec<(u32, String)>,
-    structures: Vec<(u32, String)>,
+    units: Vec<(u64, String)>,
+    structures: Vec<(u64, String)>,
+    /// The wrecks this viewer has been shown, by wreck id.
+    wrecks: Vec<(u64, String)>,
+    /// The shells in flight this viewer has been shown, by
+    /// [`ViewFeed::shell_handle`]'s key.
+    shells: Vec<(u64, String)>,
     /// The viewer's `e_NN` handles for other seats' beacons, by beacon id,
     /// in the order each was named.
     beacons: Vec<(u32, String)>,
@@ -158,6 +163,8 @@ impl ViewerState {
             },
             units: Vec::new(),
             structures: Vec::new(),
+            wrecks: Vec::new(),
+            shells: Vec::new(),
             beacons: Vec::new(),
             unnamed: Vec::new(),
         }
@@ -607,7 +614,36 @@ impl ViewFeed {
     ///
     /// As [`ViewFeed::foreign_beacon_name`].
     pub fn unit_handle(&mut self, viewer: Viewer, id: u32) -> Result<String, Error> {
-        ViewFeed::handle(&mut self.viewers, viewer, id, false)
+        ViewFeed::handle(&mut self.viewers, viewer, u64::from(id), Space::Unit)
+    }
+
+    /// This viewer's opaque handle for a wreck, `w_N`, minted on first sight
+    /// by the wreck's id. As [`ViewFeed::unit_handle`].
+    ///
+    /// # Errors
+    ///
+    /// As [`ViewFeed::unit_handle`].
+    pub fn wreck_handle(&mut self, viewer: Viewer, id: u32) -> Result<String, Error> {
+        ViewFeed::handle(&mut self.viewers, viewer, u64::from(id), Space::Wreck)
+    }
+
+    /// This viewer's opaque handle for a shell in flight, `p_N`, minted on
+    /// first sight. A shell has no id of its own in the sim's table (its rows
+    /// compact as shells land), so it is keyed by what makes it one shell: its
+    /// firer, with the id's generation, and the tick it lands on. A weapon
+    /// fires at most once a tick, so no two shells share the key.
+    ///
+    /// # Errors
+    ///
+    /// As [`ViewFeed::unit_handle`].
+    pub fn shell_handle(
+        &mut self,
+        viewer: Viewer,
+        firer: u32,
+        lands_at: u32,
+    ) -> Result<String, Error> {
+        let key = (u64::from(firer) << 32) | u64::from(lands_at);
+        ViewFeed::handle(&mut self.viewers, viewer, key, Space::Shell)
     }
 
     /// This viewer's opaque handle for a structure. As [`ViewFeed::unit_handle`].
@@ -616,7 +652,7 @@ impl ViewFeed {
     ///
     /// As [`ViewFeed::unit_handle`].
     pub fn structure_handle(&mut self, viewer: Viewer, id: u32) -> Result<String, Error> {
-        ViewFeed::handle(&mut self.viewers, viewer, id, true)
+        ViewFeed::handle(&mut self.viewers, viewer, u64::from(id), Space::Structure)
     }
 
     /// This viewer's name for the beacon at `row` of `world`'s table.
@@ -793,17 +829,18 @@ impl ViewFeed {
     fn handle(
         viewers: &mut Vec<ViewerState>,
         viewer: Viewer,
-        id: u32,
-        structure: bool,
+        id: u64,
+        space: Space,
     ) -> Result<String, Error> {
         let index = slot_of(viewers, viewer);
         let state = viewers.get_mut(index).ok_or_else(|| {
             Error::internal("the view feed lost the viewer slot it had just made")
         })?;
-        let (prefix, table) = if structure {
-            ("s_", &mut state.structures)
-        } else {
-            ("u_", &mut state.units)
+        let (prefix, table) = match space {
+            Space::Unit => ("u_", &mut state.units),
+            Space::Structure => ("s_", &mut state.structures),
+            Space::Wreck => ("w_", &mut state.wrecks),
+            Space::Shell => ("p_", &mut state.shells),
         };
         if let Some((_, handle)) = table.iter().find(|(held, _)| *held == id) {
             return Ok(handle.clone());
@@ -815,6 +852,21 @@ impl ViewFeed {
         table.push((id, handle.clone()));
         Ok(handle)
     }
+}
+
+/// Which of a viewer's handle spaces a handle is minted in: one prefix each,
+/// so no two kinds of thing share a name.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Space {
+    /// A unit, `u_N`.
+    Unit,
+    /// A structure, a ruin included, `s_N`: a structure keeps its handle when
+    /// it turns into a ruin.
+    Structure,
+    /// A wreck, `w_N`.
+    Wreck,
+    /// A shell in flight, `p_N`.
+    Shell,
 }
 
 /// This viewer's slot, made on first sight of it.

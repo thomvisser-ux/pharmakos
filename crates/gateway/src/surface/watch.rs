@@ -246,6 +246,8 @@ fn visible_entities<V: Vision>(
     visible_beacons(views, world, &filter, viewer, &mut out)?;
     visible_units(views, world, &filter, viewer, &mut out)?;
     visible_structures(views, world, &filter, viewer, &mut out)?;
+    visible_wrecks(views, world, &filter, viewer, &mut out)?;
+    visible_shells(views, world, &filter, viewer, &mut out)?;
     Ok(out)
 }
 
@@ -381,13 +383,91 @@ fn visible_structures<V: Vision>(
         };
         let condition = Condition { hp, heading: None };
         let handle = views.structure_handle(viewer, id)?;
+        // A ruin is listed as one (`ViewEntity.Kind.RUIN`), keeping the
+        // subtype of the structure it was and the handle it had.
+        let listed = if owner.is_some() { "STRUCTURE" } else { "RUIN" };
         out.push(entity(
             &handle,
-            "STRUCTURE",
+            listed,
             view::structure_subtype(kind),
             owner,
             at,
             condition,
+        ));
+    }
+    Ok(())
+}
+
+/// The wrecks of [`visible_entities`], in table order: nobody's, with no hit
+/// points, shown where the viewer's live vision reaches them. A wreck the
+/// viewer only remembers is not listed: `get_view` is live vision only, and
+/// the sim's sightings of wrecks are read by no gateway surface yet.
+///
+/// # Errors
+///
+/// As [`visible_entities`].
+fn visible_wrecks<V: Vision>(
+    views: &mut ViewFeed,
+    world: &World,
+    filter: &FogFilter<'_, V>,
+    viewer: Viewer,
+    out: &mut Vec<Json>,
+) -> Result<(), Error> {
+    let wrecks = world.wrecks();
+    for row in 0..wrecks.ids().len() {
+        if column(wrecks.frees().get(row), "wreck", "free")? {
+            continue;
+        }
+        let at = view::voxel_of(column(wrecks.positions().get(row), "wreck", "position")?);
+        if !filter.visible(viewer, &world_at(None, at)) {
+            continue;
+        }
+        let id = column(wrecks.ids().get(row), "wreck", "id")?;
+        let handle = views.wreck_handle(viewer, id)?;
+        out.push(entity(&handle, "WRECK", "", None, at, Condition::default()));
+    }
+    Ok(())
+}
+
+/// The shells in flight of [`visible_entities`], in the table's firing order:
+/// the firer's seat as the owner, no hit points.
+///
+/// **The sim keeps no position for a shell in flight**: a row holds the point
+/// it was aimed at and the tick it lands on (S2's plan, E13; decision 3, no
+/// lead), and nothing in between. So a shell is drawn at its aim point, where
+/// it lands, and filtered there: the firing seat always sees its own, as it
+/// sees every asset of its own, and another seat sees one only while that aim
+/// point is in its live vision. A shell aimed out of a seat's sight is never
+/// sent to it, whoever fired it.
+///
+/// # Errors
+///
+/// As [`visible_entities`].
+fn visible_shells<V: Vision>(
+    views: &mut ViewFeed,
+    world: &World,
+    filter: &FogFilter<'_, V>,
+    viewer: Viewer,
+    out: &mut Vec<Json>,
+) -> Result<(), Error> {
+    let shells = world.shells();
+    for row in 0..shells.len() {
+        let raw_owner = column(shells.seats().get(row), "shell", "seat")?;
+        let owner = SeatId::new(raw_owner).is_some().then_some(raw_owner);
+        let at = view::voxel_of(column(shells.aims().get(row), "shell", "aim")?);
+        if !filter.visible(viewer, &world_at(owner, at)) {
+            continue;
+        }
+        let firer = column(shells.firers().get(row), "shell", "firer")?;
+        let lands_at = column(shells.lands_at().get(row), "shell", "landing")?;
+        let handle = views.shell_handle(viewer, firer, lands_at)?;
+        out.push(entity(
+            &handle,
+            "SHELL",
+            "",
+            owner,
+            at,
+            Condition::default(),
         ));
     }
     Ok(())
