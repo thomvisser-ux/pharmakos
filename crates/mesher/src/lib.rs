@@ -118,6 +118,7 @@ mod sweep;
 mod upload;
 
 pub use crate::bake::{ChunkBorders, LightError, LightField, LightParams, chunk_view, map_offset};
+pub use crate::sweep::palette;
 pub use crate::sweep::{
     FACE_SHADE_256, MAX_VERTICES, MeshError, Mesher, PALETTE, gpu_surface_bytes, mesh_chunk,
     quantise_channel,
@@ -254,8 +255,9 @@ impl fmt::Display for Face {
 
 /// Why a [`ChunkInput`], a [`NeighbourBorder`] or a [`ChunkView`] was refused.
 ///
-/// Length is the only thing checked: material ids and light values are bytes, and every
-/// byte is a legal one at this boundary.
+/// Length is the only thing checked of the data, and [`chunk_view`] also checks that the
+/// chunk is inside the grid: material ids and light values are bytes, and every byte is a
+/// legal one at this boundary.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ChunkInputError {
     /// The material array was not [`CHUNK_VOLUME`] long.
@@ -278,6 +280,22 @@ pub enum ChunkInputError {
         /// The length that was offered.
         len: usize,
     },
+    /// The chunk asked for is outside the map's grid, so there is no chunk to view.
+    OutsideGrid {
+        /// The chunk index that was asked for.
+        chunk: u32,
+        /// How many chunks the grid holds.
+        chunks: u32,
+    },
+    /// A whole map's material or light array was not the grid's voxel count long.
+    MapLength {
+        /// `materials` or `light`.
+        what: &'static str,
+        /// The length that was offered.
+        len: usize,
+        /// The grid's voxel count.
+        expected: usize,
+    },
 }
 
 impl fmt::Display for ChunkInputError {
@@ -293,6 +311,18 @@ impl fmt::Display for ChunkInputError {
             Self::BorderLight { len } => {
                 write!(f, "border light must be {FACE_AREA} bytes, got {len}")
             }
+            Self::OutsideGrid { chunk, chunks } => write!(
+                f,
+                "chunk {chunk} is outside the map, whose grid holds {chunks} chunks"
+            ),
+            Self::MapLength {
+                what,
+                len,
+                expected,
+            } => write!(
+                f,
+                "the map's {what} must be {expected} bytes for this grid, got {len}"
+            ),
         }
     }
 }
@@ -611,6 +641,14 @@ pub struct ChunkGrid {
     x: u32,
     y: u32,
     z: u32,
+    /// The dimensions in chunks as `i32`, `[x, y, z]`, converted once by the constructor.
+    chunks: [i32; 3],
+    /// The extent in voxels, `[x, y, z]`, converted once by the constructor.
+    voxels: [i32; 3],
+    /// How many voxels the map holds, converted once by the constructor.
+    voxel_count: usize,
+    /// How many voxel columns the map holds, `voxels x * voxels z`.
+    columns: usize,
 }
 
 /// Why a [`ChunkGrid`] was refused.
@@ -650,10 +688,32 @@ impl ChunkGrid {
         if chunks_x == 0 || chunks_y == 0 || chunks_z == 0 || volume > u64::from(u32::MAX) {
             return Err(GridError { dims });
         }
+        // The volume check bounds every figure below; converting each once here means the
+        // accessors hold values and can never fail. A platform whose `usize` could not hold
+        // the volume is refused with the same error.
+        let refused = |_| GridError { dims };
+        let chunks_i32 = |chunks: u32| i32::try_from(chunks).map_err(refused);
+        let along = |chunks: u32| {
+            chunks
+                .checked_mul(CHUNK_EDGE_U32)
+                .ok_or(GridError { dims })
+                .and_then(|voxels| i32::try_from(voxels).map_err(refused))
+        };
+        let columns = u64::from(chunks_x)
+            .saturating_mul(u64::from(chunks_z))
+            .saturating_mul(FACE_AREA_U64);
         Ok(Self {
             x: chunks_x,
             y: chunks_y,
             z: chunks_z,
+            chunks: [
+                chunks_i32(chunks_x)?,
+                chunks_i32(chunks_y)?,
+                chunks_i32(chunks_z)?,
+            ],
+            voxels: [along(chunks_x)?, along(chunks_y)?, along(chunks_z)?],
+            voxel_count: usize::try_from(volume).map_err(refused)?,
+            columns: usize::try_from(columns).map_err(refused)?,
         })
     }
 
@@ -683,67 +743,86 @@ impl ChunkGrid {
 
     /// The map's extent in voxels, `[x, y, z]`.
     ///
-    /// The constructor's volume check is what makes every one of these fit an `i32`.
+    /// The constructor's volume check is what makes every one of these fit an `i32`, and
+    /// the constructor converted them.
     #[must_use]
-    pub fn voxels(self) -> [i32; 3] {
-        [
-            voxels_along(self.x),
-            voxels_along(self.y),
-            voxels_along(self.z),
-        ]
+    pub const fn voxels(self) -> [i32; 3] {
+        self.voxels
     }
 
     /// How many voxels the map holds: `chunk_count * CHUNK_VOLUME`.
     #[must_use]
-    pub fn voxel_count(self) -> usize {
-        usize::try_from(self.chunk_count())
-            .unwrap_or(0)
-            .saturating_mul(CHUNK_VOLUME)
+    pub const fn voxel_count(self) -> usize {
+        self.voxel_count
+    }
+
+    /// How many voxel columns the map holds: voxels across times voxels deep.
+    #[must_use]
+    pub(crate) const fn columns(self) -> usize {
+        self.columns
     }
 
     /// The index of chunk `(cx, cy, cz)`, or [`None`] when it is outside the grid.
     #[must_use]
     pub fn chunk_index(self, coords: [i32; 3]) -> Option<u32> {
         let [cx, cy, cz] = coords;
-        let (x, y, z) = (
-            u32::try_from(cx).ok()?,
-            u32::try_from(cy).ok()?,
-            u32::try_from(cz).ok()?,
-        );
-        if x >= self.x || y >= self.y || z >= self.z {
+        let [chunks_x, chunks_y, chunks_z] = self.chunks;
+        if cx < 0 || cy < 0 || cz < 0 || cx >= chunks_x || cy >= chunks_y || cz >= chunks_z {
             return None;
         }
+        // Each coordinate is non-negative here, so its magnitude is its value.
+        let (x, y, z) = (cx.unsigned_abs(), cy.unsigned_abs(), cz.unsigned_abs());
         Some(x + self.x * z + self.x * self.z * y)
     }
 
     /// The chunk coordinates of chunk `index`, or [`None`] when it is outside the grid.
     #[must_use]
     pub fn chunk_coords(self, index: u32) -> Option<[i32; 3]> {
-        if index >= self.chunk_count() {
+        // An index past `i32::MAX` is past every grid: the constructor's volume check
+        // holds a grid to fewer than 2^17 chunks.
+        let index = i32::try_from(index).ok()?;
+        let [chunks_x, chunks_y, chunks_z] = self.chunks;
+        let layer = chunks_x.checked_mul(chunks_z)?;
+        if index >= layer.checked_mul(chunks_y)? {
             return None;
         }
-        let layer = self.x.checked_mul(self.z)?;
         let cy = index.checked_div(layer)?;
         let within = index.checked_rem(layer)?;
-        let cz = within.checked_div(self.x)?;
-        let cx = within.checked_rem(self.x)?;
-        Some([
-            i32::try_from(cx).ok()?,
-            i32::try_from(cy).ok()?,
-            i32::try_from(cz).ok()?,
-        ])
+        let cz = within.checked_div(chunks_x)?;
+        let cx = within.checked_rem(chunks_x)?;
+        Some([cx, cy, cz])
     }
-}
-
-/// One grid dimension, in voxels.
-fn voxels_along(chunks: u32) -> i32 {
-    i32::try_from(chunks.saturating_mul(CHUNK_EDGE_U32)).unwrap_or(i32::MAX)
 }
 
 /// [`CHUNK_EDGE`] as a `u32`, for the grid's own arithmetic.
 const CHUNK_EDGE_U32: u32 = 32;
 /// [`CHUNK_VOLUME`] as a `u64`, for the grid's overflow check.
 const CHUNK_VOLUME_U64: u64 = 32 * 32 * 32;
+/// [`FACE_AREA`] as a `u64`, for the grid's column count.
+const FACE_AREA_U64: u64 = 32 * 32;
+
+// The other spellings of the chunk's sizes cannot drift from the `usize` ones.
+const _: () = assert!(CHUNK_EDGE_U32 as usize == CHUNK_EDGE);
+const _: () = assert!(CHUNK_VOLUME_U64 as usize == CHUNK_VOLUME);
+const _: () = assert!(FACE_AREA_U64 as usize == FACE_AREA);
+
+// `widen` and `size_u64` are exact on every target this crate builds for.
+const _: () = assert!(usize::BITS >= u32::BITS);
+const _: () = assert!(usize::BITS <= u64::BITS);
+
+/// A `u32` as a `usize`, which every target this crate builds for holds whole (the
+/// assertion above): the one widening `std` spells only as a fallible conversion.
+#[must_use]
+pub(crate) const fn widen(value: u32) -> usize {
+    value as usize
+}
+
+/// A `usize` as a `u64`, which holds every `usize` on every target this crate builds for
+/// (the assertion above).
+#[must_use]
+pub(crate) const fn size_u64(value: usize) -> u64 {
+    value as u64
+}
 
 /// One drawable surface inside a [`MeshBuffers`]: a half-open run of vertices and a
 /// half-open run of indices.
@@ -862,7 +941,7 @@ impl MeshBuffers {
     /// used to has stopped merging something it used to merge.
     #[must_use]
     pub fn quad_count(&self) -> usize {
-        self.indices.len().checked_div(6).unwrap_or(0)
+        self.indices.len().div_euclid(6)
     }
 
     /// True when there is nothing to upload.

@@ -62,6 +62,8 @@ fn recap_then_burst(continue_after: usize, latency: usize, seat_first: bool) -> 
         subtype: "commander".to_owned(),
         owner: "seat.0".to_owned(),
         at: [358, 22, 36],
+        hp: None,
+        heading: None,
     }]);
 
     let mut in_transit: Vec<(usize, usize, String)> = Vec::new();

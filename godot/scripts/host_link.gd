@@ -100,6 +100,10 @@ enum RoundsRefusal {
 	BREAKS_LINE,
 }
 
+## The two launch options the host is found by, each `<prefix><value>` after `--`.
+const GAMECTL_ARG := "--gamectl="
+const ROOT_ARG := "--root="
+
 var bridge: Node = null
 
 var _pid := -1
@@ -119,11 +123,13 @@ var _done := false
 
 ## The `gamectl` binary: `--gamectl=` after `--` on the command line, then the
 ## PHARMAKOS_GAMECTL environment variable, then beside the executable - which is where a
-## packaged build keeps it (skeleton-plan-t16a-notes.md section B, T21).
+## packaged build keeps it (skeleton-plan-t16a-notes.md section B, T21). A `--gamectl=`
+## given twice answers "": `start()` refuses that launch before it spawns anything
+## (`repeated_option()`), as it refuses a repeated `--rounds`.
 static func find_gamectl() -> String:
-	for arg in OS.get_cmdline_user_args():
-		if arg.begins_with("--gamectl="):
-			return arg.trim_prefix("--gamectl=")
+	var given := prefixed_arg(OS.get_cmdline_user_args(), GAMECTL_ARG)
+	if given["given"]:
+		return String(given["text"])
 	var named := OS.get_environment("PHARMAKOS_GAMECTL")
 	if named != "":
 		return named
@@ -140,10 +146,12 @@ static func find_gamectl() -> String:
 ## is the executable's folder. An export has no `res://` on disk
 ## (`ProjectSettings.globalize_path("res://")` is empty there), which is why the export
 ## asks `OS.has_feature("template")` rather than falling through to the project's folder.
+##
+## A `--root=` given twice answers "", which `start()` refuses first, as for `--gamectl=`.
 static func find_root() -> String:
-	for arg in OS.get_cmdline_user_args():
-		if arg.begins_with("--root="):
-			return arg.trim_prefix("--root=")
+	var given := prefixed_arg(OS.get_cmdline_user_args(), ROOT_ARG)
+	if given["given"]:
+		return String(given["text"])
 	var named := OS.get_environment("PHARMAKOS_ROOT")
 	if named != "":
 		return named
@@ -207,6 +215,31 @@ static func round_limit() -> String:
 	return str(ROUND_LIMIT)
 
 
+## What this launch said about a `<prefix><value>` option (`--gamectl=`, `--root=`): `given`
+## (whether it said anything), `text` (the value as it was given) and `repeated` (it was
+## given more than once, so which one to use is a guess; `text` is then ""). `args` is the
+## command line's user arguments. The value is not judged: a path the host cannot use is
+## the host's refusal.
+static func prefixed_arg(args: PackedStringArray, prefix: String) -> Dictionary:
+	var found := {"given": false, "text": "", "repeated": false}
+	for arg in args:
+		if not arg.begins_with(prefix):
+			continue
+		if found["given"]:
+			return {"given": true, "text": "", "repeated": true}
+		found = {"given": true, "text": arg.trim_prefix(prefix), "repeated": false}
+	return found
+
+
+## The words for a launch that gives `--gamectl=` or `--root=` more than once, or "" when
+## it gives each at most once. Like `rounds_refusal()`, about the command line's shape only.
+static func repeated_option() -> String:
+	for prefix in [GAMECTL_ARG, ROOT_ARG]:
+		if prefixed_arg(OS.get_cmdline_user_args(), prefix)["repeated"]:
+			return "`%s` is given more than once" % prefix
+	return ""
+
+
 ## The words for a launch whose `--rounds` cannot go on the config line, or "" when it can.
 static func rounds_refusal() -> String:
 	match int(rounds_arg(OS.get_cmdline_user_args())["refusal"]):
@@ -250,10 +283,17 @@ static func my_seat() -> String:
 ## line, round limit and all (decisions-log item 112 (8)). A launch whose `--rounds`
 ## cannot go on a line (`rounds_refusal()`) still starts no host, for a Resume as for a new
 ## match: the command line is malformed either way, and the words say how. Those are the
-## only refusals of `--rounds` the client makes; its value is the gateway's.
+## only refusals of `--rounds` the client makes; its value is the gateway's. A launch
+## that gives `--gamectl=` or `--root=` twice (`repeated_option()`) is refused the same
+## way and first, since which binary or root to use would be a guess (decisions-log item
+## 146 (4)).
 func start(gamectl: String, root: String, config_line: String) -> bool:
 	if bridge == null:
 		failed.emit("the host link has no bridge")
+		return false
+	var repeated := repeated_option()
+	if repeated != "":
+		failed.emit(repeated)
 		return false
 	var rounds := rounds_refusal()
 	if rounds != "":

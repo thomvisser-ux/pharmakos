@@ -361,13 +361,15 @@ impl Case {
             .bake_all(&self.materials)
             .expect("the case built its map at the grid's size");
         let mut borders = ChunkBorders::new();
-        borders.gather(
-            self.grid,
-            &self.materials,
-            field.all(),
-            params(),
-            self.chunk,
-        );
+        borders
+            .gather(
+                self.grid,
+                &self.materials,
+                field.all(),
+                params(),
+                self.chunk,
+            )
+            .expect("the case names a chunk inside its grid");
         let view = chunk_view(&self.materials, &field, &borders, self.chunk)
             .expect("the case names a chunk inside its grid");
         let mut mesher = Mesher::new(params());

@@ -204,6 +204,15 @@ const TEXT := {
 	# One chip per vent or seam the playbook names or describes. Every number is the
 	# gateway's, as it came; a travel time is game milliseconds (strings.gd's `leg`).
 	"chip_now": "Step {step}: now {feature}, {ms} ms",
+	"chip_now_unreachable": "Step {step}: now {feature}, which no route reaches from where it is read",
+	"attack_heading": "Attack targets",
+	"attack_none": "No Attack beacon in the text.",
+	"attack_mark": "Attack (step {step})",
+	"attack_voxel": "Step {step}: attacks the ground at ({x}, {y}, {z})",
+	"attack_beacon": "Step {step}: attacks {id}, marked on the map while it is in sight",
+	"attack_selector": "Step {step}: attacks the enemy beacon its selector picks when the attack runs",
+	"attack_enemy_commander": "Step {step}: attacks the enemy commander, from its last sighting",
+	"attack_unknown": "Step {step}: an attack target this panel cannot read; the checks say what is wrong",
 	"chip_next": "; next {feature}, {ms} ms",
 	"chip_how_description_covering": " - nearest by travel from the commander, read when the step starts",
 	"chip_how_description_on": " - nearest by travel from its beacon, read when the step starts",

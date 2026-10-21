@@ -53,7 +53,7 @@ fn the_event_list_shows_exactly_what_get_segment_feed_said() {
         json::decode_json(&enums::canonical("gp.api.v1.GetSegmentFeedResponse", &body))
             .expect("a GetSegmentFeedResponse");
 
-    let rows = event_rows(&feed);
+    let rows = event_rows(&feed).expect("every event is at a time in the segment");
     assert_eq!(
         rows.len(),
         feed.events.len(),
