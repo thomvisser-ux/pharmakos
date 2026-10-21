@@ -1284,3 +1284,44 @@ fn an_overhang_over_a_building_cannot_be_dropped_on_it() {
         }
     }
 }
+
+/// A shell in flight can be drawn: its row keeps where and when it was fired,
+/// and `ShellTable::position_at` is the straight-line point between launch and
+/// aim in proportion to the ticks flown, the launch point before the fire tick
+/// and the aim point from the landing tick. The columns ride the snapshot.
+#[test]
+fn a_shell_is_visible_in_flight() {
+    let mut shells = pharmakos_sim::tables::ShellTable::with_room(4);
+    let launch = point([10, 20, 30]);
+    let aim = point([30, 0, 30]);
+    shells
+        .push(
+            aim,
+            110,
+            (launch, 100),
+            SEAT,
+            0,
+            pharmakos_sim::tables::Armament::Structure(StructureKind::Mortar),
+        )
+        .expect("room");
+    assert_eq!(shells.position_at(0, 90), Some(launch));
+    assert_eq!(shells.position_at(0, 100), Some(launch));
+    assert_eq!(shells.position_at(0, 105), Some(point([20, 10, 30])));
+    assert_eq!(shells.position_at(0, 110), Some(aim));
+    assert_eq!(shells.position_at(0, 999), Some(aim));
+    assert_eq!(shells.position_at(1, 105), None, "no such row");
+    // A fractional point stays in Fx, rounded toward the launch: a tenth of
+    // three voxels is 19 660 raw Q16.16.
+    shells
+        .push(
+            point([3, 0, 0]),
+            10,
+            (point([0, 0, 0]), 0),
+            SEAT,
+            0,
+            pharmakos_sim::tables::Armament::Structure(StructureKind::Mortar),
+        )
+        .expect("room");
+    let tenth = shells.position_at(1, 1).expect("a point");
+    assert_eq!(tenth.map(Fx::raw), [19_660, 0, 0]);
+}

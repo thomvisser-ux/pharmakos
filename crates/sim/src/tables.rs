@@ -4373,6 +4373,8 @@ pub struct ShellTable {
     room: u32,
     aim: Vec<[Fx; 3]>,
     lands_at: Vec<u32>,
+    launch: Vec<[Fx; 3]>,
+    fired_at: Vec<u32>,
     seat: Vec<u8>,
     firer: Vec<u32>,
     weapon: Vec<u8>,
@@ -4393,6 +4395,8 @@ impl ShellTable {
             room,
             aim: Vec::with_capacity(n),
             lands_at: Vec::with_capacity(n),
+            launch: Vec::with_capacity(n),
+            fired_at: Vec::with_capacity(n),
             seat: Vec::with_capacity(n),
             firer: Vec::with_capacity(n),
             weapon: Vec::with_capacity(n),
@@ -4426,7 +4430,9 @@ impl ShellTable {
         self.aim.is_empty()
     }
 
-    /// File one shell.
+    /// File one shell: where it lands and when, and where it was fired from
+    /// and when (`launch`, the firer's point and the fire tick; S2's `site`, so
+    /// a shell can be drawn in flight, [`ShellTable::position_at`]).
     ///
     /// # Errors
     ///
@@ -4435,6 +4441,7 @@ impl ShellTable {
         &mut self,
         aim: [Fx; 3],
         lands_at: u32,
+        launch: ([Fx; 3], u32),
         seat: SeatId,
         firer: u32,
         weapon: Armament,
@@ -4446,6 +4453,8 @@ impl ShellTable {
         }
         self.aim.push(aim);
         self.lands_at.push(lands_at);
+        self.launch.push(launch.0);
+        self.fired_at.push(launch.1);
         self.seat.push(seat.raw());
         self.firer.push(firer);
         self.weapon.push(weapon.id());
@@ -4463,6 +4472,8 @@ impl ShellTable {
                 if kept != at {
                     self.aim.swap(kept, at);
                     self.lands_at.swap(kept, at);
+                    self.launch.swap(kept, at);
+                    self.fired_at.swap(kept, at);
                     self.seat.swap(kept, at);
                     self.firer.swap(kept, at);
                     self.weapon.swap(kept, at);
@@ -4473,6 +4484,8 @@ impl ShellTable {
         }
         self.aim.truncate(kept);
         self.lands_at.truncate(kept);
+        self.launch.truncate(kept);
+        self.fired_at.truncate(kept);
         self.seat.truncate(kept);
         self.firer.truncate(kept);
         self.weapon.truncate(kept);
@@ -4488,6 +4501,48 @@ impl ShellTable {
     #[must_use]
     pub fn lands_at(&self) -> &[u32] {
         &self.lands_at
+    }
+
+    /// The launch-point column: where each shell was fired from (S2's `site`).
+    #[must_use]
+    pub fn launches(&self) -> &[[Fx; 3]] {
+        &self.launch
+    }
+
+    /// The fire-tick column: the tick each shell was fired on.
+    #[must_use]
+    pub fn fired_at(&self) -> &[u32] {
+        &self.fired_at
+    }
+
+    /// Where the shell in `row` is at `tick`: the straight-line point between
+    /// its launch point and its aim point, in proportion to the ticks flown,
+    /// its launch point before it is fired and its aim point from the tick it
+    /// lands. A pure read of the row, in integer `Fx`; `None` for a row the
+    /// table does not hold. "Slow and visible in flight" (S2's plan, step 4):
+    /// what a client draws, which the gateway's view reads.
+    #[must_use]
+    pub fn position_at(&self, row: usize, tick: u32) -> Option<[Fx; 3]> {
+        let aim = self.aim.get(row).copied()?;
+        let lands = self.lands_at.get(row).copied()?;
+        let launch = self.launch.get(row).copied()?;
+        let fired = self.fired_at.get(row).copied()?;
+        if tick <= fired {
+            return Some(launch);
+        }
+        if tick >= lands {
+            return Some(aim);
+        }
+        let flown = i64::from(tick.checked_sub(fired)?);
+        let whole = i64::from(lands.checked_sub(fired)?);
+        let mut at = launch;
+        for (axis, (from, to)) in at.iter_mut().zip(launch.iter().zip(aim)) {
+            let span = i64::from(to.raw()).checked_sub(i64::from(from.raw()))?;
+            let step = span.checked_mul(flown)?.checked_div(whole)?;
+            let raw = i64::from(from.raw()).checked_add(step)?;
+            *axis = Fx::from_raw(i32::try_from(raw).ok()?);
+        }
+        Some(at)
     }
 
     /// The firer's-seat column.
@@ -4515,12 +4570,20 @@ impl ShellTable {
         &mut self,
         aim: Vec<[Fx; 3]>,
         lands_at: Vec<u32>,
+        launch: (Vec<[Fx; 3]>, Vec<u32>),
         seat: Vec<u8>,
         firer: Vec<u32>,
         weapon: Vec<u8>,
     ) -> bool {
         let n = aim.len();
+        let (launch, fired_at) = launch;
         if lands_at.len() != n
+            || launch.len() != n
+            || fired_at.len() != n
+            || fired_at
+                .iter()
+                .zip(&lands_at)
+                .any(|(fired, lands)| fired > lands)
             || seat.len() != n
             || firer.len() != n
             || weapon.len() != n
@@ -4532,6 +4595,10 @@ impl ShellTable {
         self.aim.extend(aim);
         self.lands_at.clear();
         self.lands_at.extend(lands_at);
+        self.launch.clear();
+        self.launch.extend(launch);
+        self.fired_at.clear();
+        self.fired_at.extend(fired_at);
         self.seat.clear();
         self.seat.extend(seat);
         self.firer.clear();

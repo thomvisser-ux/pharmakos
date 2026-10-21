@@ -5417,6 +5417,15 @@ impl World {
             enc.u32(*firer);
             enc.u8(*weapon);
         }
+        // S2's `site` (snapshot version 12): each shell's launch point and
+        // fire tick, as blocks after the rows (the count above fixes their
+        // length).
+        for launch in self.shells.launches() {
+            encode_point(enc, launch);
+        }
+        for fired in self.shells.fired_at() {
+            enc.u32(*fired);
+        }
     }
 
     /// The site block (S2's `site`): every beacon's Build settings and paid

@@ -589,6 +589,7 @@ impl World {
                         .push(
                             mark.at,
                             lands,
+                            (gun.at, tick),
                             SeatId::new(gun.seat),
                             gun.asset.raw(),
                             gun.armament,
@@ -1873,6 +1874,7 @@ impl World {
             .push(
                 aim,
                 lands,
+                (at, tick),
                 SeatId::new(seat),
                 asset.raw(),
                 Armament::Structure(kind),

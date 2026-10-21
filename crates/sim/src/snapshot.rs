@@ -180,7 +180,9 @@ use serde::{Deserialize, Serialize};
 /// `rebuild_destroyed` and `terraform` -- and the repair and voxel work the
 /// Quartermaster has paid its drones for and they have not yet done
 /// ([`crate::site::BeaconSite`]), and each wall target's top (its box of
-/// columns rides the target's footprint column). A version-11 file is refused
+/// columns rides the target's footprint column). It also adds each shell's launch
+/// point and fire tick, so a shell can be drawn in flight
+/// ([`crate::tables::ShellTable::position_at`]). A version-11 file is refused
 /// rather than read: it carries no settings, and a world restored from it
 /// would never repair, rebuild or level where the unbroken run did. The
 /// gateway's save refuses a version-11 snapshot by its stamp first.
@@ -384,6 +386,11 @@ pub struct Snapshot {
     pub shell_firer: Vec<u32>,
     /// Each shell's weapon ([`crate::tables::Armament::id`]).
     pub shell_weapon: Vec<u8>,
+    /// Three raw Q16.16 coordinates per shell: where it was fired from (S2's
+    /// `site`, version 12).
+    pub shell_launch: Vec<i32>,
+    /// The tick each shell was fired on.
+    pub shell_fired_at: Vec<u32>,
 
     /// The beacon each list setting belongs to.
     pub target_beacon: Vec<u32>,
@@ -667,6 +674,8 @@ impl Default for Snapshot {
             shell_seat: Vec::new(),
             shell_firer: Vec::new(),
             shell_weapon: Vec::new(),
+            shell_launch: Vec::new(),
+            shell_fired_at: Vec::new(),
             target_beacon: Vec::new(),
             target_kind: Vec::new(),
             target_blueprint: Vec::new(),
@@ -1033,6 +1042,8 @@ impl Snapshot {
             shell_seat: shells.seats().to_vec(),
             shell_firer: shells.firers().to_vec(),
             shell_weapon: shells.weapons().to_vec(),
+            shell_launch: axes_from_points(shells.launches()),
+            shell_fired_at: shells.fired_at().to_vec(),
 
             target_beacon: targets
                 .beacons()
@@ -2092,9 +2103,12 @@ impl Snapshot {
             return Err(SnapshotError::OutOfRange("shell_firer"));
         }
         let mut shells = ShellTable::with_room(world.shells().room());
+        let launches =
+            points_from_axes(&self.shell_launch).ok_or(SnapshotError::Ragged("shell_launch"))?;
         if !shells.restore(
             aims,
             self.shell_lands_at.clone(),
+            (launches, self.shell_fired_at.clone()),
             self.shell_seat.clone(),
             self.shell_firer.clone(),
             self.shell_weapon.clone(),

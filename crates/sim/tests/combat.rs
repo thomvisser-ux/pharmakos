@@ -951,9 +951,9 @@ fn the_shell_table_cannot_fill() {
     let mut table = pharmakos_sim::tables::ShellTable::with_room(1);
     let aim = [Fx::ZERO; 3];
     let weapon = pharmakos_sim::tables::Armament::Structure(StructureKind::Mortar);
-    assert!(table.push(aim, 5, seat(0), 0, weapon).is_ok());
+    assert!(table.push(aim, 5, (aim, 0), seat(0), 0, weapon).is_ok());
     assert_eq!(
-        table.push(aim, 5, seat(0), 0, weapon),
+        table.push(aim, 5, (aim, 0), seat(0), 0, weapon),
         Err(pharmakos_sim::tables::ShellsFull { room: 1 })
     );
 }
