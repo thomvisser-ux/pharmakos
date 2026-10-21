@@ -98,6 +98,7 @@ the owner, who says then whether it runs on into S3:
 ```sh
 cargo fmt --all           # rustfmt defaults for edition 2024; the tree is formatted
 cargo xtask ci            # the whole check suite — what CI's legs run, and it is green
+cargo xtask ci --shard 2/3   # one of a CI leg's three shards (AGENTS.md §9); not for local use
 cargo xtask ci --quick    # fmt, clippy, unit tests — the inner loop
 cargo xtask ci --fix      # rustfmt plus machine-applicable clippy fixes
 cargo xtask package       # the unsigned zip for this platform (T21); --bless its manifest
@@ -107,7 +108,11 @@ git worktree add ../pharmakos-<task> -b feat/<crate>-<task>
 ```
 
 `cargo xtask ci` is the single entry point for the suite; the required `package` jobs run
-`cargo xtask package` instead, and the `clean launch` jobs run its zip (AGENTS.md §9).
+`cargo xtask package` instead, and the `clean launch` jobs run its zip (AGENTS.md §9). In CI each
+operating system's leg is three `cargo xtask ci shard <n> (<os>)` jobs, each running
+`cargo xtask ci --shard <n>/3`, and the leg's `cargo xtask ci (<os>)` job, the required check, which
+fails unless every shard passed and runs `golden` over their merged outputs (decisions-log item
+148 (2)); the unsharded command runs the same steps over the same units.
 A prose-only pull request (one that changes nothing but
 `docs/**`, `AGENTS.md`, `CLAUDE.md`, `.claude/**` and top-level `*.md`) runs the DCO walk and the
 `reuse` step in place of the suite, so for it "CI's checks are green on the branch" means those two

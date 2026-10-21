@@ -707,7 +707,25 @@ second command, `cargo xtask package` (below), which `ci` never runs.
 cargo xtask ci            # everything below
 cargo xtask ci --quick    # fmt, clippy, unit tests — the inner loop
 cargo xtask ci --fix      # rustfmt and the machine-applicable clippy fixes
+cargo xtask ci --shard 2/3   # one of CI's shards (below); never needed locally
 ```
+
+**The shards.** In CI each operating system's leg runs as `CI_SHARDS` (three) parallel jobs,
+`cargo xtask ci shard <n> (<os>)`, each running `cargo xtask ci --shard <n>/3`, so that a leg
+stays inside the owner's 75-minute budget (decisions-log items 119 (5) and 148 (2)). A shard runs
+its part of the three slow steps, `test`, `test-research` and `scenario`, and shard 1 runs every
+other step as well, except `golden`, which reads every shard's fresh outputs. The split is by name,
+never by timing: each test target (`--lib`, `--bin <name>`, `--test <name>`, `--doc`, selected over
+`--workspace`, so the build and its features are the unsharded run's) and each played scenario falls
+to the shard a hash of its name picks (`xtask/src/shard.rs`), so every unit runs on exactly one
+shard, and xtask's tests prove that over this workspace's own metadata. A target kind the split
+cannot select (an example, a bench `cargo test` would build) is a failure, never a target the
+shards stop testing. The leg's own job, `cargo xtask ci (<os>)`, is the required check under the
+name it always had: it fails unless every shard of its leg reported success, merges their fresh
+outputs (a file two shards wrote must be byte-identical), runs `cargo xtask golden` over them and
+uploads the `cross-os-<os>` artefact the cross-OS guard compares. `--shard` goes with `ci` alone and
+refuses `--package`, `--fix` and `--bless`; without it, `cargo xtask ci` runs every step, as it does
+locally and in the merge train's local check.
 
 > **Status.** `xtask/src/main.rs` is green, and its sixteen steps cover items 1–10 below. Every step
 > is required: a step whose input is missing fails rather than skips (decisions-log item
@@ -792,7 +810,8 @@ cargo xtask ci --fix      # rustfmt and the machine-applicable clippy fixes
 `CLAUDE.md`, `.claude/**` and top-level `*.md` runs the DCO walk and the `reuse` step in place of the
 suite; either can still fail it. Every other required job skips its remaining steps and reports
 success; each job that builds, and the cross-OS guard, says so in a `::notice::`. Each building
-job's scope step decides: it answers `full` in bash,
+job's scope step decides (each shard, not the leg's `cargo xtask ci (<os>)` job, which takes prose
+only when every one of its shards' reports says so): it answers `full` in bash,
 before it builds `xtask`, for a merge commit that changes `xtask/`, `.github/` or `.cargo/`, so the
 decider never judges its own change; otherwise `cargo xtask ci-scope` decides, and answers `full` on
 any event but `pull_request` and on any error. Nothing can force it. The `perf alarms (…)` jobs,

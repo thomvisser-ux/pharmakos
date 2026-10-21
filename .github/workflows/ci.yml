@@ -9,6 +9,14 @@
 # mesher, mapgen and vista geometry digests (decisions-log items 71 and 116 (6)(n)). That
 # comparison is gate G4 in the flesh: "identical hashes on 3 operating systems".
 #
+# Each operating system's leg runs as CI_SHARDS shards (decisions-log item 148 (2)): the
+# `cargo xtask ci shard <n> (<os>)` jobs each run `cargo xtask ci --shard <n>/<CI_SHARDS>`
+# (shard n's part of `test`, `test-research` and `scenario`, and on shard 1 every cheap
+# step), and the leg's `cargo xtask ci (<os>)` job, the required check, requires every
+# shard's report, merges their fresh outputs, runs the `golden` step over them and uploads
+# the leg's artefact for the guard. Without `--shard`, `cargo xtask ci` runs every step,
+# as it does locally and in scripts/merge-train.sh.
+#
 # Hash chain path convention (also documented in xtask/src/main.rs):
 #
 #     target/determinism/hashes.txt
@@ -16,9 +24,9 @@
 #         "<tick in decimal>\t<xxh3-64 state hash as 16 lowercase hex digits>"
 #         \n endings, trailing newline, no \r anywhere
 #
-# Each matrix leg uploads that file and the fresh `actual.*` files under
-# target/golden/{scenarios/*,pathing,mesher,mapgen}/ and target/golden/vista/
-# actual.geometry.txt as ONE artefact, `cross-os-<os>`. The guard downloads all three and
+# Each leg's `cargo xtask ci (<os>)` job uploads that file and the fresh `actual.*` files
+# under target/golden/{scenarios/*,pathing,mesher,mapgen}/ and target/golden/vista/
+# actual.geometry.txt, merged from its shards, as ONE artefact, `cross-os-<os>`. The guard downloads all three and
 # requires every file any leg uploaded on all three legs, the fixed kinds named in its
 # script, and at least one scenario chain; it compares each whole, byte for byte. No perf
 # figure is uploaded or compared: a number that cannot vary across platforms must not be
@@ -34,10 +42,11 @@
 # THE DOCS-ONLY FAST PATH (decisions-log item 115 (4)). Every required job runs on every
 # pull request, because the ruleset's twelve required checks must report under their own
 # names (decisions-log item 121 (3)); a `paths-ignore` filter or a job-level `if:` would
-# leave some of them never reporting. Instead each job that builds — the three
-# `cargo xtask ci` legs, the two `client extension` legs, `vista screenshot (linux)` and
-# the two `package (<os>)` jobs — runs `cargo xtask ci-scope` right after its checkout and
-# toolchain steps, in a step with `id: scope`. It answers
+# leave some of them never reporting. Instead each job that builds — the
+# `cargo xtask ci shard <n> (<os>)` jobs, CI_SHARDS a leg, the two `client extension`
+# legs, `vista screenshot (linux)` and the two `package (<os>)` jobs — runs
+# `cargo xtask ci-scope` right after its checkout and toolchain steps, in a step with
+# `id: scope`. It answers
 # `prose_only=true` only for a `pull_request` whose merge commit changes nothing but
 # `docs/**`, `AGENTS.md`, `CLAUDE.md`, `.claude/**` and top-level `*.md`, and false on every
 # other event and on any error (the rules and their tests are in xtask/src/scope.rs).
@@ -47,11 +56,17 @@
 #     never `== 'false'`, so a failed decision or a misspelt step id runs the step; the
 #     gate is ADDED to an existing condition, never put in its place;
 #   * only a step that runs in prose mode alone tests `== 'true'`: each job's notice, and
-#     the ubuntu leg's `cargo xtask reuse`;
+#     the ubuntu leg's shard 1's `cargo xtask reuse`;
 #   * no job gets a job-level `if:` for it: a skipped job prints no notice, and a skipped
 #     matrix job reports under its unexpanded name;
 #   * the decision is computed in each job, never in a job of its own: a failed `needs:`
 #     job would skip its matrix dependents, with the same unexpanded names;
+#   * the three `cargo xtask ci (<os>)` jobs, the required checks, compute no answer of
+#     their own (they build xtask alone, for the `golden` step): each reads its shards'
+#     answers from their reports (an artefact per shard, uploaded on the fast path too),
+#     answers prose only when every one of them did, and runs whenever the run was not
+#     cancelled (`!cancelled()`, so a failed shard turns the required check red rather
+#     than skipping it);
 #   * the cross-OS guard takes the legs' answer through the `ci` job's outputs, and the
 #     DCO job does not ask at all;
 #   * the two `clean launch (<os>)` jobs take their own platform's `package (<os>)` job's
@@ -100,34 +115,48 @@ env:
   # `cargo xtask ci` skips a step whose external tool is missing. In CI every tool is
   # installed on purpose, so a missing one is a broken runner, not a reason to go green.
   PHARMAKOS_REQUIRE_TOOLS: "1"
+  # How many shards each operating system's suite runs as (decisions-log item 148 (2)):
+  # `cargo xtask ci --shard N/M`'s M, and the reports the `cargo xtask ci (<os>)` job
+  # requires. The `ci-shard` matrix's `shard:` list is 1 to this, and xtask's
+  # `the_ci_shards_are_the_matrix` holds the two together.
+  CI_SHARDS: "3"
 
 jobs:
-  ci:
-    name: cargo xtask ci (${{ matrix.os }})
+  ci-shard:
+    name: cargo xtask ci shard ${{ matrix.shard }} (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # Each operating system's suite runs as CI_SHARDS jobs side by side (decisions-log item
+    # 148 (2), the owner's ruling of 2026-10-20), because one job per OS took the Windows leg
+    # past item 119 (5)'s 75 minutes: `cargo xtask ci --shard N/M` runs shard N's part of the
+    # three slow steps (`test`, `test-research` and `scenario`, split by a hash of each test
+    # target's or scenario's name, xtask/src/shard.rs), and shard 1 also runs every cheap
+    # step. `golden` runs on no shard: the `cargo xtask ci (<os>)` job below merges the
+    # shards' fresh outputs and runs it over them. The shard jobs are not required checks;
+    # that job is, and it fails unless every shard of its leg reported success.
+    #
     # 90, not 45 (decisions-log item 109): windows-latest ran the suite in 41 minutes at T14
     # and ran out of time once T15 added its headless matches. The limit is a hang guard,
-    # not a budget (item 109 (8)), and it stays one. The suite's own budget is the owner's
-    # (decisions-log item 119 (5)): a pull request that takes the Windows `cargo xtask ci`
-    # leg past 75 minutes moves or narrows its own slowest tests (to nightly, or to fewer
-    # seeds) in the same pull request. Item 116 (6)(f)'s `[profile.*]` question falls due at
-    # the same 75 minutes and stays the owner's, a contract change (AGENTS.md section 5),
-    # not a way out of the rule. The legs' measured times are in each xtask pull request.
+    # not a budget (item 109 (8)), and it stays one; #135's stopgap of 120 is undone here,
+    # since a shard is a fraction of the leg it replaced. The suite's own budget is the
+    # owner's (decisions-log item 119 (5)): a pull request that takes the Windows
+    # `cargo xtask ci` leg past 75 minutes, from its shards' start to the leg job's end,
+    # moves or narrows its own slowest tests (to nightly, or to fewer seeds) in the same
+    # pull request; a fourth shard is a change to CI_SHARDS and the matrix below. Item
+    # 116 (6)(f)'s `[profile.*]` question stays the owner's, a contract change (AGENTS.md
+    # section 5), not a way out of the rule. The legs' measured times, shard by shard, are
+    # in each xtask pull request.
     timeout-minutes: 90
-    # The docs-only fast path's answer, for the cross-OS guard. A matrix job has one set of
-    # outputs, so this is the last leg's to finish among those that set it. The legs agree
-    # unless one hits an error. An error inside the decision answers false and runs that leg
-    # in full; if that leg finishes last, the guard compares what exists, which is red after
-    # the G4 flip: the safe side. A scope step that fails before it answers (rustup, or
-    # xtask failing to build) leaves that leg's output unset, so the guard follows the other
-    # legs; that leg still runs in full, since every gate on it reads `!= 'true'`.
-    outputs:
-      prose_only: ${{ steps.scope.outputs.prose_only }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        # 1 to CI_SHARDS, every one of them: xtask's `the_ci_shards_are_the_matrix` holds
+        # the two together, and the leg job requires a report from each.
+        shard: [1, 2, 3]
         include:
-          # The REUSE licence check is platform-independent, so it runs once, on Linux.
+          # Each entry adds its `xtask_args` to the three shards of its operating system.
+          # The REUSE licence check is platform-independent, so it runs once, on the ubuntu
+          # leg's shard 1, which runs every step but the sharded and the merged ones.
           #
           # `--skip screenshot` on the ubuntu leg is REQUIRED, not an optimisation. The
           # `screenshot` step's order is project → Linux → godot → xvfb-run → staging →
@@ -150,13 +179,10 @@ jobs:
           # reading in the summary, and it is why the step is not skipped there too.
           - os: ubuntu-latest
             xtask_args: "--skip screenshot --skip stage-client"
-            reuse: true
           - os: windows-latest
             xtask_args: "--skip reuse --skip stage-client"
-            reuse: false
           - os: macos-latest
             xtask_args: "--skip reuse"
-            reuse: false
     steps:
       - name: Check out the full history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -201,14 +227,15 @@ jobs:
         if: steps.scope.outputs.prose_only == 'true'
         shell: bash
         run: |
-          if [ "${{ matrix.reuse }}" = "true" ]; then
-            echo "::notice title=docs-only fast path::Only prose changed (docs/**, AGENTS.md, CLAUDE.md, .claude/**, top-level *.md), so \`cargo xtask ci\` did not run on this leg: it runs the \`reuse\` step alone, and the DCO job walks the sign-offs. The full suite runs on main's push (decisions-log item 115 (4))."
+          if [ "${{ matrix.os }}" = "ubuntu-latest" ] && [ "${{ matrix.shard }}" = "1" ]; then
+            echo "::notice title=docs-only fast path::Only prose changed (docs/**, AGENTS.md, CLAUDE.md, .claude/**, top-level *.md), so \`cargo xtask ci\` did not run on this shard: it runs the \`reuse\` step alone, and the DCO job walks the sign-offs. The full suite runs on main's push (decisions-log item 115 (4))."
           else
-            echo "::notice title=docs-only fast path::Only prose changed (docs/**, AGENTS.md, CLAUDE.md, .claude/**, top-level *.md), so \`cargo xtask ci\` did not run on this leg; the ubuntu leg runs the \`reuse\` step and the DCO job walks the sign-offs. The full suite runs on main's push (decisions-log item 115 (4))."
+            echo "::notice title=docs-only fast path::Only prose changed (docs/**, AGENTS.md, CLAUDE.md, .claude/**, top-level *.md), so \`cargo xtask ci\` did not run on this shard; the ubuntu leg's shard 1 runs the \`reuse\` step and the DCO job walks the sign-offs. The full suite runs on main's push (decisions-log item 115 (4))."
           fi
 
       - name: Make `main` available locally
-        if: steps.scope.outputs.prose_only != 'true'
+        # For the `buf` step, which runs on shard 1.
+        if: matrix.shard == 1 && steps.scope.outputs.prose_only != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -221,12 +248,17 @@ jobs:
           fi
 
       - name: Cache cargo registry and target
+        # A cache per shard: each shard builds the part of the workspace its units need,
+        # and one key shared by the three would keep whichever shard saved first, so the
+        # other two would rebuild what it left out on every run.
         if: steps.scope.outputs.prose_only != 'true'
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          key: ${{ matrix.os }}
+          key: ${{ matrix.os }}-shard${{ matrix.shard }}
 
       - name: Install buf
+        # On every shard: the `buf` step runs on shard 1, and crates/proto's generated-tree
+        # test, which runs `buf generate`, falls to whichever shard holds its test target.
         if: steps.scope.outputs.prose_only != 'true'
         uses: bufbuild/buf-setup-action@a47c93e0b1648d5651a065437926377d060baa99 # v1 (branch; the repository is archived)
         with:
@@ -248,7 +280,7 @@ jobs:
         # skipped on every runner and the committed tree — a checked-in artefact of the
         # .proto contract files — could drift from proto/** with CI green; the test now
         # honours PHARMAKOS_REQUIRE_TOOLS and fails instead, so the install is what keeps
-        # the leg green honestly.
+        # the leg green honestly. On every shard, since the test falls to any of them.
         #
         # The version is PINNED, not `latest`: the check is a byte-for-byte comparison of
         # generated source, so a new plugin release that changes its output by a line
@@ -263,16 +295,16 @@ jobs:
       # raises it on its own: check it whenever Dependabot bumps install-action, and raise it
       # in its own PR, with deny.toml checked against the new release's notes. `fallback:
       # none` makes a version missing from the action's manifest fail the job rather than
-      # fall back to cargo-binstall with a warning.
+      # fall back to cargo-binstall with a warning. Shard 1 alone runs the `deny` step.
       - name: Install cargo-deny
-        if: steps.scope.outputs.prose_only != 'true'
+        if: matrix.shard == 1 && steps.scope.outputs.prose_only != 'true'
         uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
         with:
           tool: cargo-deny@0.20.2
           fallback: none
 
       - name: Install reuse
-        if: matrix.reuse
+        if: matrix.os == 'ubuntu-latest' && matrix.shard == 1
         shell: bash
         run: |
           set -euo pipefail
@@ -287,33 +319,205 @@ jobs:
       - name: cargo xtask reuse (docs-only fast path)
         # The one suite step the fast path keeps: a prose change can still add a file
         # without an SPDX header. It is the suite's own step, which builds nothing but xtask.
-        if: matrix.reuse && steps.scope.outputs.prose_only == 'true'
+        if: matrix.os == 'ubuntu-latest' && matrix.shard == 1 && steps.scope.outputs.prose_only == 'true'
         shell: bash
         run: cargo xtask reuse
 
       - name: Clear what an earlier run left in target/
-        # The cache step above restores target/, and the cross-OS artefact below is read
-        # out of it: a chain or a digest left by an earlier run must not pass for this
-        # one's when this leg stops before producing its own.
+        # The cache step above restores target/, and the shard's outputs below are read out
+        # of it: a chain or a digest left by an earlier run must not pass for this one's
+        # when this shard stops before producing its own.
         if: steps.scope.outputs.prose_only != 'true'
         shell: bash
         run: rm -rf target/golden target/determinism
 
-      - name: cargo xtask ci
+      - name: cargo xtask ci, this shard
         if: steps.scope.outputs.prose_only != 'true'
         shell: bash
-        run: cargo xtask ci ${{ matrix.xtask_args }}
+        run: cargo xtask ci --shard "${{ matrix.shard }}/${CI_SHARDS}" ${{ matrix.xtask_args }}
+
+      - name: Stage this shard's report and outputs for the leg job
+        # Always, the fast path included: the `cargo xtask ci (<os>)` job reads every
+        # shard's report, and a shard with none is a failure there. The report is the
+        # shard's result so far (`job.status`: success only when no earlier step failed)
+        # and its fast-path answer. Off the fast path, the fresh outputs too: the
+        # determinism step's chain (shard 1) and every `actual.*` the shard's tests and
+        # scenarios wrote under target/golden, the cross-OS kinds and the `golden` step's
+        # inputs alike. Staged under one folder, so the artefact's layout does not depend on
+        # which of them exist; tar, not `cp --parents`, which macOS's cp lacks.
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf shard-out
+          mkdir -p shard-out/target
+          {
+            echo "shard=${{ matrix.shard }}/${CI_SHARDS}"
+            echo "status=${{ job.status }}"
+            echo "prose_only=${{ steps.scope.outputs.prose_only }}"
+          } > shard-out/status.txt
+          cat shard-out/status.txt
+          if [ "${{ steps.scope.outputs.prose_only }}" != "true" ] && [ -d target ]; then
+            (
+              cd target
+              if [ -d golden ]; then find golden -type f -name 'actual.*'; fi
+              if [ -f determinism/hashes.txt ]; then echo determinism/hashes.txt; fi
+            ) > shard-out/files.txt
+            if [ -s shard-out/files.txt ]; then
+              tar -C target -cf - -T shard-out/files.txt | tar -C shard-out/target -xf -
+            fi
+            echo "$(wc -l < shard-out/files.txt) fresh output(s) staged"
+          fi
+
+      - name: Upload this shard's report and outputs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: shard-${{ matrix.os }}-${{ matrix.shard }}
+          path: shard-out/
+          # The report is always there, so nothing found means the staging step broke.
+          if-no-files-found: error
+          retention-days: 3
+
+  ci:
+    name: cargo xtask ci (${{ matrix.os }})
+    # The leg: the required check `cargo xtask ci (<os>)`, under the name it had before the
+    # shards, so the `main-protection` ruleset's twelve required checks are unchanged. It
+    # needs every shard of every operating system (a `needs:` cannot name one leg of a
+    # matrix), runs unless the run was cancelled, and reads its own leg's shards through
+    # their reports: it fails unless each of shard 1 to CI_SHARDS reported success, so a
+    # shard that failed, never started or uploaded nothing turns this check red. It then
+    # merges its shards' fresh outputs (a file two shards both wrote must be
+    # byte-identical), runs the `golden` step over them, and uploads the `cross-os-<os>`
+    # artefact the cross-OS guard compares, as the one job per leg did. `!cancelled()`
+    # rather than `always()`, and no other job-level `if:`: a skipped required check counts
+    # as passed, and a cancelled one does not.
+    needs: ci-shard
+    if: ${{ !cancelled() }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    # The docs-only fast path's answer, for the cross-OS guard: `true` only when every
+    # shard of this leg reported `prose_only=true`. A matrix job has one set of outputs, so
+    # this is the last leg's to finish. The legs agree unless a shard hits an error, which
+    # answers full; the guard then compares what exists, which is red after the G4 flip:
+    # the safe side.
+    outputs:
+      prose_only: ${{ steps.shards.outputs.prose_only }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - name: Download this leg's shards
+        # A missing shard is named by the next step, so a failed download is not the
+        # verdict.
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: shard-${{ matrix.os }}-*
+          path: shards
+
+      - name: Read every shard's report
+        id: shards
+        shell: bash
+        run: |
+          set -euo pipefail
+          failed=""
+          prose=true
+          for n in $(seq 1 "${CI_SHARDS}"); do
+            report="shards/shard-${{ matrix.os }}-${n}/status.txt"
+            if [ ! -f "$report" ]; then
+              echo "::error::shard ${n} of ${CI_SHARDS} (${{ matrix.os }}) sent no report: it never ran, or stopped before its upload"
+              failed="${failed} ${n}"
+              prose=false
+              continue
+            fi
+            cat "$report"
+            if ! grep -qx "shard=${n}/${CI_SHARDS}" "$report"; then
+              echo "::error::shard ${n}'s report names another split: $(head -n 1 "$report")"
+              failed="${failed} ${n}"
+            elif ! grep -qx 'status=success' "$report"; then
+              echo "::error::shard ${n} of ${CI_SHARDS} (${{ matrix.os }}) failed; its log is the job \`cargo xtask ci shard ${n} (${{ matrix.os }})\`"
+              failed="${failed} ${n}"
+            fi
+            grep -qx 'prose_only=true' "$report" || prose=false
+          done
+          # An artefact for a shard past CI_SHARDS: the matrix and CI_SHARDS disagree.
+          for dir in shards/shard-${{ matrix.os }}-*; do
+            [ -e "$dir" ] || continue
+            n="${dir##*-}"
+            if ! [ "$n" -ge 1 ] 2>/dev/null || [ "$n" -gt "${CI_SHARDS}" ]; then
+              echo "::error::an artefact for shard ${n} of ${CI_SHARDS}: the matrix and CI_SHARDS disagree"
+              failed="${failed} ${n}"
+            fi
+          done
+          echo "prose_only=${prose}" >> "$GITHUB_OUTPUT"
+          echo "failed=${failed# }" >> "$GITHUB_OUTPUT"
+
+      - name: Only prose changed, so there is nothing to merge
+        if: steps.shards.outputs.prose_only == 'true'
+        shell: bash
+        run: echo "::notice title=docs-only fast path::Only prose changed, so no shard of this leg ran the suite, and this job merged and compared nothing; the shards' reports are above. It runs in full on main's push (decisions-log item 115 (4))."
+
+      - name: Check out
+        if: steps.shards.outputs.prose_only != 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the Rust toolchain
+        # For xtask alone, which has no dependencies; nothing else is built here.
+        if: steps.shards.outputs.prose_only != 'true'
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (branch)
+        with:
+          toolchain: 1.98.1
+
+      - name: Merge the shards' fresh outputs
+        # Into target/, where the `golden` step and the upload below read them. A file two
+        # shards both wrote (a scenario's chain, written by the scenario test and by the
+        # `scenario` step) must be byte-identical: the same commit wrote it twice on the
+        # same operating system.
+        if: steps.shards.outputs.prose_only != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf target/golden target/determinism
+          status=0
+          merged=0
+          for dir in shards/shard-${{ matrix.os }}-*; do
+            [ -d "$dir/target" ] || continue
+            while IFS= read -r -d '' file; do
+              relative="${file#"$dir/target/"}"
+              destination="target/$relative"
+              if [ -e "$destination" ]; then
+                if ! cmp -s "$file" "$destination"; then
+                  echo "::error::$relative differs between two shards of ${{ matrix.os }}: the same commit wrote different bytes on the same operating system"
+                  status=1
+                fi
+                continue
+              fi
+              mkdir -p "$(dirname "$destination")"
+              cp "$file" "$destination"
+              merged=$((merged + 1))
+            done < <(find "$dir/target" -type f -print0)
+          done
+          echo "${merged} fresh output(s) merged"
+          exit "$status"
+
+      - name: cargo xtask golden, over the merged outputs
+        # The suite's `golden` step, which no shard runs. Only when every shard passed: a
+        # failed shard's outputs are missing, and this check is red for it already.
+        if: steps.shards.outputs.prose_only != 'true' && steps.shards.outputs.failed == ''
+        shell: bash
+        run: cargo xtask golden
 
       - name: Upload what the cross-OS guard compares
-        # One artefact per leg: the determinism step's chain, and every fresh output the
-        # `test` step wrote for the kinds that must agree across operating systems —
-        # each scenario's chain (and expand-east-segment's event log), the path hashes,
-        # and the mesher, mapgen and vista geometry digests. The actuals come from the
-        # `test` step and the chain from `determinism`, so `always()` hands the guard
-        # whatever a leg produced before a later step failed; a leg that failed before
-        # `test` uploads nothing, the upload is an error, and the guard is red, which is
-        # right. Not on the fast path, where nothing was produced.
-        if: always() && steps.scope.outputs.prose_only != 'true'
+        # One artefact per leg, as before the shards: the determinism step's chain (from
+        # shard 1), and every fresh output the shards wrote for the kinds that must agree
+        # across operating systems — each scenario's chain (and expand-east-segment's event
+        # log), the path hashes, and the mesher, mapgen and vista geometry digests.
+        # `always()` hands the guard whatever the shards produced before a later step
+        # failed; a leg whose shards produced none of it makes the upload an error, and the
+        # guard is red, which is right. Not on the fast path, where nothing was produced.
+        if: always() && steps.shards.outputs.prose_only != 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cross-os-${{ matrix.os }}
@@ -328,6 +532,17 @@ jobs:
           # fails here rather than silently reducing the comparison.
           if-no-files-found: error
           retention-days: 14
+
+      - name: Every shard of this leg passed
+        # Last, so that the merge and the upload above still hand the guard what exists.
+        if: always()
+        shell: bash
+        run: |
+          if [ "${{ steps.shards.outcome }}" != "success" ] || [ -n "${{ steps.shards.outputs.failed }}" ]; then
+            echo "::error::${{ matrix.os }}: shard(s) ${{ steps.shards.outputs.failed }} of ${CI_SHARDS} did not pass, or their reports could not be read; see the errors above"
+            exit 1
+          fi
+          echo "every shard of ${{ matrix.os }} passed"
 
   dco:
     name: DCO sign-off
@@ -396,8 +611,10 @@ jobs:
   determinism-cross-os:
     name: cross-OS determinism guard
     needs: ci
-    # Runs even when a matrix leg failed: an ubuntu-only clippy failure should not hide a
-    # hash divergence that the other two legs did produce.
+    # Runs even when a leg failed: an ubuntu-only clippy failure should not hide a hash
+    # divergence that the other two legs did produce. `ci` is the three leg jobs, each of
+    # which merges its shards' outputs into the one `cross-os-<os>` artefact compared here,
+    # so the comparison is the same as before the shards.
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -457,7 +674,7 @@ jobs:
 
           for os in "${legs[@]}"; do
             if [ ! -d "$legs_dir/cross-os-$os" ]; then
-              fail "the $os leg uploaded nothing (no cross-os-$os artefact): its suite stopped before the test step, or the upload failed"
+              fail "the $os leg uploaded nothing (no cross-os-$os artefact): its shards produced none of the compared kinds, or the leg job or its upload failed (see the cargo xtask ci ($os) job)"
             fi
           done
 
