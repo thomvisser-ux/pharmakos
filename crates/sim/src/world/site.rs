@@ -1114,11 +1114,11 @@ fn cracked_wall(
     threshold: u8,
     class: Option<Drone>,
 ) -> Option<VoxelJob> {
-    // A cracked voxel has taken one of the two blasts a wall voxel takes, so
-    // it stands at half its strength: it is repaired when half is below the
-    // beacon's threshold, as any structure is (the owner's ruling of
-    // 2026-10-20), and never at a threshold of 50 or less.
-    if !below_threshold(1, 2, threshold) {
+    // A wall voxel has two levels, whole and cracked, so a cracked one is
+    // below any threshold a beacon can name above zero, and a threshold of 0
+    // never repairs it, as it never repairs a structure (the owner's ruling of
+    // 2026-10-20: walls follow the same two settings as every structure).
+    if threshold == 0 {
         return None;
     }
     let whole = Material::wall(seat, false)?;
@@ -2249,6 +2249,48 @@ impl World {
 /// other structure).
 fn wall_rebuild_barred(world: &World, row: usize, settings: BuildSettings) -> bool {
     !settings.rebuild_destroyed && world.targets().walls_done().get(row).copied() == Some(true)
+}
+
+impl World {
+    /// Link the Build target of `beacon` just written at `at` to a structure
+    /// of the beacon's that stands there half built: the structure a mandate
+    /// switch paused (the switch clears the old writ's targets, spec section
+    /// 5), which resumes now that the beacon is Build again and a Build row
+    /// names its target again (the owner's ruling of 2026-10-20). Nothing is
+    /// bought for it a second time; its build drones raise it from where it
+    /// stood.
+    pub(crate) fn adopt_paused(&mut self, beacon: BeaconId, at: [Fx; 3]) {
+        let column = crate::targeting::column_of(at);
+        let linked = |world: &World, id: StructureId| world.targets().built().contains(&id);
+        let rows = self
+            .structures
+            .ids()
+            .iter()
+            .zip(self.structures.homes())
+            .zip(
+                self.structures
+                    .building()
+                    .iter()
+                    .zip(self.structures.hit_points()),
+            )
+            .zip(self.structures.positions());
+        let mut found = None;
+        for (((id, home), (building, hp)), place) in rows {
+            if *home == beacon
+                && *building
+                && hp.is_alive()
+                && crate::targeting::column_of(*place) == column
+            {
+                found = Some(StructureId::new(*id));
+                break;
+            }
+        }
+        if let Some(id) = found
+            && !linked(self, id)
+        {
+            self.set_built_at(beacon, at, id);
+        }
+    }
 }
 
 #[cfg(test)]

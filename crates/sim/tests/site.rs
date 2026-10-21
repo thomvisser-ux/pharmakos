@@ -800,10 +800,11 @@ fn repair_is_paid_for_under_the_repair_band() {
 /// repair drone, at the wall's price (decision 42).
 #[test]
 fn a_cracked_own_wall_is_repaired() {
-    // A cracked voxel stands at half its strength: repaired under a threshold
-    // above 50, left at 50 (the owner's ruling of 2026-10-20). No wall target
-    // names it: any wall of the seat's inside the sphere is repaired.
-    for (threshold, repaired) in [(60, true), (50, false)] {
+    // A cracked voxel counts as below any threshold above zero, Hold & Build's
+    // 50 included, and a threshold of 0 never repairs it (the owner's ruling
+    // of 2026-10-20). No wall target names it: any wall of the seat's inside
+    // the sphere is repaired.
+    for (threshold, repaired) in [(50, true), (1, true), (0, false)] {
         let mut world = fixture(
             settings(Terraform::None, threshold, false),
             UnitKind::RepairDrone,
@@ -836,7 +837,7 @@ fn a_cracked_own_wall_is_repaired() {
 /// threshold, at its share of the beacon's price (the owner's ruling of
 /// 2026-10-20).
 #[test]
-fn a_beacon_below_its_threshold_is_repaired() {
+fn a_beacon_is_repaired() {
     let mut world = fixture(settings(Terraform::None, 50, false), UnitKind::RepairDrone);
     let [cx, cy, _] = core_voxel(&world);
     let outpost = world
@@ -880,7 +881,7 @@ fn a_beacon_below_its_threshold_is_repaired() {
 /// filled whole, a build drone fills the gap again only under
 /// `rebuild_destroyed` (the owner's ruling of 2026-10-20).
 #[test]
-fn a_breached_wall_is_rebuilt_only_under_rebuild_destroyed() {
+fn a_removed_wall_voxel_is_rebuilt_only_under_rebuild_destroyed() {
     for rebuild in [true, false] {
         let mut world = fixture(settings(Terraform::None, 0, rebuild), UnitKind::BuildDrone);
         let beacon = core(&world);
@@ -1522,5 +1523,64 @@ fn a_mortar_duel_refills_its_craters() {
     assert!(
         events.iter().any(|event| event.seat == Some(SEAT)),
         "seat 0 refills a crater: {events:?}"
+    );
+}
+
+/// A half-built structure pauses on a mandate switch, which clears the old
+/// writ's targets (spec section 5), and resumes only when its beacon is Build
+/// again and a Build row names its target again (the owner's rulings of
+/// 2026-10-20, (d) and (e)): nothing is bought twice, and it is raised from
+/// where it stood.
+#[test]
+fn a_half_built_structure_pauses_on_a_switch_and_resumes_when_a_build_row_names_it() {
+    let mut world = fixture(settings(Terraform::None, 0, false), UnitKind::BuildDrone);
+    let beacon = core(&world);
+    let [x, y] = open_column(&world, [5, 3]);
+    let at = standing(&world, x, y);
+    world
+        .add_target(beacon, StructureKind::Autocannon.id(), at)
+        .expect("room");
+    let mut runner = push(world, &idle());
+    let mut queued = run(&mut runner, 60, &[EventKind::StructureQueued]);
+    assert_eq!(queued.len(), 1, "the autocannon is bought");
+    let cannon = runner
+        .world()
+        .targets()
+        .built()
+        .iter()
+        .copied()
+        .find(|id| id.is_some())
+        .expect("its structure");
+    runner.world_mut().set_writ(beacon, MandateKind::Survey);
+    run(&mut runner, 5, &[]);
+    let paused = structure_hp(runner.world(), cannon);
+    run(&mut runner, 200, &[]);
+    assert_eq!(
+        structure_hp(runner.world(), cannon),
+        paused,
+        "paused while Survey"
+    );
+    runner.world_mut().set_writ(beacon, MandateKind::Build);
+    run(&mut runner, 200, &[]);
+    assert_eq!(
+        structure_hp(runner.world(), cannon),
+        paused,
+        "Build alone does not resume it"
+    );
+    runner
+        .world_mut()
+        .add_target(beacon, StructureKind::Autocannon.id(), at)
+        .expect("room");
+    queued.extend(run(&mut runner, 600, &[EventKind::StructureQueued]));
+    assert_eq!(queued.len(), 1, "nothing is bought twice");
+    let max = runner
+        .world()
+        .structure_max_hp(StructureKind::Autocannon)
+        .expect("a row")
+        .raw();
+    assert_eq!(
+        structure_hp(runner.world(), cannon),
+        max,
+        "raised from where it stood"
     );
 }

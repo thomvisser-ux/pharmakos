@@ -2569,7 +2569,9 @@ impl World {
         blueprint: u8,
         at: [Fx; 3],
     ) -> Result<(), TargetsFull> {
-        self.targets.add(beacon, blueprint, at)
+        self.targets.add(beacon, blueprint, at)?;
+        self.adopt_paused(beacon, at);
+        Ok(())
     }
 
     /// Give `beacon` Build settings directly (S2's `site`).
@@ -2688,6 +2690,8 @@ impl World {
         )?;
         if let Some(wall) = wall {
             self.make_wall_at(beacon, at, wall);
+        } else {
+            self.adopt_paused(beacon, at);
         }
         Ok(())
     }
@@ -2881,6 +2885,8 @@ impl World {
             });
             if built.is_some() {
                 self.set_built_at(beacon, anchor, built);
+            } else if entry.wall.is_none() {
+                self.adopt_paused(beacon, anchor);
             }
         }
         // S2-10 (decision 26): an entry the new list dropped recycles what
