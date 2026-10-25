@@ -70,9 +70,15 @@ pub struct BuildProgram;
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct MineProgram;
 
-/// Probe the mandate's areas, then refresh the stalest sighting.
+/// Probe the mandate's areas, then refresh the stalest sighting; under a
+/// Defend beacon, picket its ring ([`crate::defend`]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct ScoutProgram;
+
+/// Guard under a Defend beacon ([`crate::defend`]); elsewhere, walk home and
+/// idle there until S2's `atk` gives a raider its Attack.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct RaiderProgram;
 
 /// Repair the seat's own structures, units and cracked walls inside the
 /// beacon's sphere, then lift wrecks and ruins there and carry the salvage
@@ -120,8 +126,8 @@ pub struct RepairProgram;
 ///
 /// Where the commander goes is the playbook's to say and nothing else's
 /// (AGENTS.md §11: "no manual control" cuts the other way too — no program may
-/// steer it either). A raider runs the move program until S2 gives it a
-/// target.
+/// steer it either). A raider guards under a Defend beacon (S2's `dfnd`) and
+/// idles at home elsewhere until S2's `atk`.
 #[must_use]
 pub fn program_for(kind: UnitKind) -> Option<&'static dyn Program> {
     match kind {
@@ -130,7 +136,7 @@ pub fn program_for(kind: UnitKind) -> Option<&'static dyn Program> {
         UnitKind::MiningDrone => Some(&MineProgram),
         UnitKind::RepairDrone => Some(&RepairProgram),
         UnitKind::Scout => Some(&ScoutProgram),
-        UnitKind::Raider => Some(&MoveProgram),
+        UnitKind::Raider => Some(&RaiderProgram),
     }
 }
 
@@ -142,6 +148,9 @@ pub fn program_for(kind: UnitKind) -> Option<&'static dyn Program> {
 /// tick are added in row order. A freed row has no hit points and no home, so
 /// no program drives it.
 pub(crate) fn run_all(world: &mut World) {
+    // Every Defend beacon's quarry and picket leg first, so each of its
+    // guards and pickets reads one answer this tick (S2's `dfnd`).
+    crate::defend::update(world);
     let count = world.units().len();
     let mut unit: u32 = 0;
     while unit < count {
@@ -316,6 +325,18 @@ impl Program for MoveProgram {
     }
 }
 
+impl Program for RaiderProgram {
+    fn id(&self) -> ProgramId {
+        ProgramId::new(6)
+    }
+
+    fn run(&self, world: &mut World, unit: u32) {
+        if !crate::defend::run_guard(world, unit) {
+            idle_at_home(world, unit);
+        }
+    }
+}
+
 impl Program for BuildProgram {
     fn id(&self) -> ProgramId {
         ProgramId::new(2)
@@ -340,6 +361,22 @@ impl Program for MineProgram {
         let Some(me) = me(world, row) else {
             return;
         };
+        // 0. Flee a known threat inside the home beacon's sphere, when the
+        //    beacon's `flee_on_threat` says so (decision 12): the dig in hand
+        //    is dropped and the drone walks home with what it carries.
+        if flees(world, me.seat, me.home) {
+            if me.busy != NO_WORK
+                && let Some(slot) = world.units_mut().busy_until_mut().get_mut(row)
+            {
+                *slot = NO_WORK;
+            }
+            if me.carried.raw() > 0 {
+                deliver(world, unit, EventKind::OreDelivered);
+            } else {
+                idle_at_home(world, unit);
+            }
+            return;
+        }
         // 1. Finish the voxel the drone is digging, if its clock has run out.
         if me.busy != NO_WORK {
             if tick.raw() < me.busy {
@@ -419,6 +456,9 @@ impl Program for ScoutProgram {
     }
 
     fn run(&self, world: &mut World, unit: u32) {
+        if crate::defend::run_picket(world, unit) {
+            return;
+        }
         let row = crate::math::index::row(unit);
         let Some(me) = me(world, row) else {
             return;
@@ -441,6 +481,24 @@ impl Program for ScoutProgram {
         }
         idle_at_home(world, unit);
     }
+}
+
+/// Whether a mining drone homed to `home` flees: the beacon's
+/// `flee_on_threat` is set and its seat knows of a threat inside the beacon's
+/// sphere (decision 12).
+fn flees(world: &World, seat: SeatId, home: BeaconId) -> bool {
+    let Ok(row) = world.beacons().row_of(home) else {
+        return false;
+    };
+    let index = row.index();
+    let flee_set = world.beacons().flees().get(index).copied() == Some(true);
+    flee_set
+        && world
+            .beacons()
+            .positions()
+            .get(index)
+            .copied()
+            .is_some_and(|centre| crate::defend::threat_in_sphere(world, seat, centre))
 }
 
 /// What a full load of ore is worth, in `$`, for a drone working the seam that

@@ -579,15 +579,18 @@ fn a_construct_this_build_cannot_execute_is_refused_rather_than_skipped() {
             ),
         ),
         (
-            "most_threatened",
+            "filter_side_enemy_known",
             gp::v1::Step {
                 label: "m".to_owned(),
                 kind: Some(gp::v1::step::Kind::Move(gp::v1::MoveStep {
                     to: Some(gp::v1::Location {
                         place: Some(gp::v1::location::Place::BeaconAnchor(gp::v1::BeaconRef {
-                            r#ref: Some(gp::v1::beacon_ref::Ref::MostThreatened(
-                                gp::v1::MostThreatened { filter: None },
-                            )),
+                            r#ref: Some(gp::v1::beacon_ref::Ref::Nearest(gp::v1::Nearest {
+                                filter: Some(gp::v1::BeaconFilter {
+                                    side: i32::from(gp::v1::beacon_filter::Side::EnemyKnown),
+                                    ..gp::v1::BeaconFilter::default()
+                                }),
+                            })),
                         })),
                     }),
                     pace: i32::from(gp::v1::move_step::Pace::Direct),
@@ -1776,18 +1779,8 @@ fn the_refusal_table_and_the_arms_agree() {
             String::new(),
         ),
         (
-            "defend_settings",
-            interface(r#"{"set_mandate_settings": {"defend": {}}}"#),
-            String::new(),
-        ),
-        (
             "attack_settings",
             interface(r#"{"set_mandate_settings": {"attack": {}}}"#),
-            String::new(),
-        ),
-        (
-            "most_threatened",
-            walk(r#"{"beacon_anchor": {"most_threatened": {}}}"#),
             String::new(),
         ),
         (
@@ -1797,14 +1790,10 @@ fn the_refusal_table_and_the_arms_agree() {
         ),
         (
             "filter_tags",
-            walk(r#"{"beacon_anchor": {"nearest": {"filter": {"side": "OWN", "tags": ["east"]}}}}"#),
+            walk(
+                r#"{"beacon_anchor": {"nearest": {"filter": {"side": "OWN", "tags": ["east"]}}}}"#,
+            ),
             String::new(),
-        ),
-        (
-            "beacon_under_attack",
-            String::new(),
-            r#"{"id": "h", "when": {"beacon_under_attack": {"beacon": {"safest": {}}, "within_ms": 1000}}, "body": [{"label": "b", "hold": {"ms": 1000}}], "resume": "CONTINUE", "cooldown_ms": 1000, "max_fires": 1}"#
-                .to_owned(),
         ),
     ];
     let named: Vec<&str> = cases.iter().map(|(name, _, _)| *name).collect();
@@ -1887,12 +1876,9 @@ fn the_refusal_table_and_the_arms_agree() {
         "REFUSE_QUEUE_STRUCTURE",
         "REFUSE_BUILD_BLUEPRINT",
         "REFUSE_BUILD_BEACON_ANCHOR",
-        "REFUSE_DEFEND_SETTINGS",
         "REFUSE_ATTACK_SETTINGS",
-        "REFUSE_MOST_THREATENED",
         "REFUSE_ENEMY_KNOWN",
         "REFUSE_FILTER_TAGS",
-        "REFUSE_BEACON_UNDER_ATTACK",
     ] {
         let uses = source.matches(&format!("{constant}.error()")).count();
         assert!(
@@ -1904,8 +1890,10 @@ fn the_refusal_table_and_the_arms_agree() {
 
 /// S2's wire (task `con4`): each new construct is refused at the seal with
 /// its own entry, whatever it holds, until the lane that gives it an effect.
-/// Defend's and Attack's arms are refused whole however many of their new
-/// fields they write; and the arm-less switch stays legal. The base kit, refused
+/// Attack's arm is refused whole however many of its new fields it writes;
+/// Defend's compiles since S2's `dfnd`, in an edit, a switch and a deploy's
+/// `initial`, an empty one included (decisions-log item 145 (5)); and the
+/// arm-less switch stays legal. The base kit, refused
 /// here until S2's `site` built it, now compiles: a turret as a structure
 /// target and a wall with the box it needs, a wall without one refused.
 #[test]
@@ -1923,7 +1911,34 @@ fn s2s_wire_is_refused_construct_by_construct() {
         r#"{"set_mandate_settings": {"defend": {"protect": [{"my_commander": {}}], "engagement_radius_pct": 80, "pursue": "SPHERE_EDGE", "picket_scouts": 2}}}"#,
         r#"{"set_mandate": {"defend": {"pursue": "NEVER"}}}"#,
     ] {
-        assert_eq!(refused(row), Some("defend_settings"), "{row}");
+        assert!(compile(&refusal_case(&interface(row), "")).is_ok(), "{row}");
+    }
+    // Out of range, a number `Pursue` does not name, a picket past a byte.
+    for (row, error) in [
+        (
+            r#"{"set_mandate_settings": {"defend": {"engagement_radius_pct": 101}}}"#,
+            PlanError::EngagementOutOfRange { found: 101 },
+        ),
+        (
+            r#"{"set_mandate_settings": {"defend": {"pursue": 9}}}"#,
+            PlanError::UnknownEnum {
+                field: "defend.pursue",
+                value: 9,
+            },
+        ),
+        (
+            r#"{"set_mandate_settings": {"defend": {"picket_scouts": 256}}}"#,
+            PlanError::ScoutsOutOfRange {
+                found: 256,
+                most: u8::MAX,
+            },
+        ),
+    ] {
+        assert_eq!(
+            compile(&refusal_case(&interface(row), "")).unwrap_err(),
+            error,
+            "{row}"
+        );
     }
     for row in [
         r#"{"set_mandate_settings": {"attack": {"target": {"enemy_commander": {}}, "retarget": "NEAREST_KNOWN", "staging": {"x": 10, "y": 10, "z": 10}, "launch": {"force_size": 4}, "after_action": "RETURN_HOME", "breach_allowed": true, "waves": 1}}}"#,

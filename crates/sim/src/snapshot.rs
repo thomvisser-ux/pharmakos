@@ -186,7 +186,17 @@ use serde::{Deserialize, Serialize};
 /// rather than read: it carries no settings, and a world restored from it
 /// would never repair, rebuild or level where the unbroken run did. The
 /// gateway's save refuses a version-11 snapshot by its stamp first.
-pub const SNAPSHOT_VERSION: u32 = 12;
+///
+/// **Version 13 is S2's Defend mandate** (S2's plan, task `dfnd`). It adds a
+/// new table, every Defend beacon's settings -- the engagement radius, pursue,
+/// the picket count and whether it escorts the commander -- with its guard
+/// assignment and its picket leg, and the protect list's beacons; and the
+/// explored table `surv` writes, each `(seat, cell)` a seat has explored. Both
+/// hash nothing while empty (E29). A version-12 file is refused rather than
+/// read: it carries no Defend settings, and a world restored from it would
+/// field no guard where the unbroken run did. The gateway's save refuses a
+/// version-12 snapshot by its stamp first.
+pub const SNAPSHOT_VERSION: u32 = 13;
 
 /// A flat, fixed-width projection of the world.
 ///
@@ -570,6 +580,30 @@ pub struct Snapshot {
     pub plan_restart_at: Vec<u32>,
     /// The first initial row it had not committed, per seat.
     pub plan_restart_row: Vec<u32>,
+    /// S2's `dfnd` (version 13): each Defend beacon, a [`BeaconId`] raw
+    /// value, ascending.
+    pub defend_beacon: Vec<u32>,
+    /// Each Defend beacon's engagement radius percentage, `0` unwritten.
+    pub defend_engagement: Vec<u8>,
+    /// Each Defend beacon's pursue setting ([`crate::tables::Pursue::id`]).
+    pub defend_pursue: Vec<u8>,
+    /// Each Defend beacon's picket count.
+    pub defend_pickets: Vec<u8>,
+    /// Whether each Defend beacon escorts its seat's commander, `0` or `1`.
+    pub defend_escort: Vec<u8>,
+    /// Each Defend beacon's guard assignment, an
+    /// [`crate::knowledge::AssetId`] raw value or [`crate::tables::NO_QUARRY`].
+    pub defend_quarry: Vec<u32>,
+    /// Each Defend beacon's picket leg.
+    pub defend_leg: Vec<u8>,
+    /// The protect list's defending beacon, per entry.
+    pub defend_protect_by: Vec<u32>,
+    /// The protect list's protected beacon, per entry.
+    pub defend_protect_of: Vec<u32>,
+    /// The explored table's seat, per row (S2's `surv`, laid out by `dfnd`).
+    pub explored_seat: Vec<u8>,
+    /// The explored table's cell, per row.
+    pub explored_cell: Vec<u32>,
 }
 
 /// An empty snapshot in an **opening Lull**, not an empty one in no phase at
@@ -751,6 +785,17 @@ impl Default for Snapshot {
             plan_restart_rule: Vec::new(),
             plan_restart_at: Vec::new(),
             plan_restart_row: Vec::new(),
+            defend_beacon: Vec::new(),
+            defend_engagement: Vec::new(),
+            defend_pursue: Vec::new(),
+            defend_pickets: Vec::new(),
+            defend_escort: Vec::new(),
+            defend_quarry: Vec::new(),
+            defend_leg: Vec::new(),
+            defend_protect_by: Vec::new(),
+            defend_protect_of: Vec::new(),
+            explored_seat: Vec::new(),
+            explored_cell: Vec::new(),
         }
     }
 }
@@ -924,6 +969,8 @@ impl Snapshot {
         let credit = world.credit();
         let voxels = world.voxels();
         let shells = world.shells();
+        let defend = world.defend();
+        let explored = world.explored();
 
         let state = world.match_state().to_parts();
         let plan = world.interpreter().to_parts();
@@ -1136,6 +1183,33 @@ impl Snapshot {
             plan_restart_rule: plan.restart_rule,
             plan_restart_at: plan.restart_at,
             plan_restart_row: plan.restart_row,
+            defend_beacon: defend.rows().iter().map(|row| row.beacon.raw()).collect(),
+            defend_engagement: defend
+                .rows()
+                .iter()
+                .map(|row| row.settings.engagement_pct)
+                .collect(),
+            defend_pursue: defend
+                .rows()
+                .iter()
+                .map(|row| row.settings.pursue.id())
+                .collect(),
+            defend_pickets: defend
+                .rows()
+                .iter()
+                .map(|row| row.settings.pickets)
+                .collect(),
+            defend_escort: defend
+                .rows()
+                .iter()
+                .map(|row| u8::from(row.settings.escort))
+                .collect(),
+            defend_quarry: defend.rows().iter().map(|row| row.quarry).collect(),
+            defend_leg: defend.rows().iter().map(|row| row.leg).collect(),
+            defend_protect_by: defend.protected().iter().map(|(by, _)| by.raw()).collect(),
+            defend_protect_of: defend.protected().iter().map(|(_, of)| of.raw()).collect(),
+            explored_seat: explored.rows().iter().map(|(seat, _)| *seat).collect(),
+            explored_cell: explored.rows().iter().map(|(_, cell)| *cell).collect(),
         }
     }
 
@@ -1390,6 +1464,8 @@ impl Snapshot {
             return Err(SnapshotError::OutOfRange("wreck_id"));
         }
         let shells = self.restore_shells(world)?;
+        let defend = self.restore_defend(&beacons)?;
+        let explored = self.restore_explored()?;
 
         let targets = self.restore_targets(world)?;
         let sightings = self.restore_sightings(world)?;
@@ -1434,6 +1510,8 @@ impl Snapshot {
             sightings,
             credit,
             shells,
+            defend,
+            explored,
             voxels,
             chunks,
             features,
@@ -2123,6 +2201,141 @@ impl Snapshot {
             return Err(SnapshotError::Ragged("shell"));
         }
         Ok(shells)
+    }
+}
+
+impl Snapshot {
+    /// The Defend table (S2's `dfnd`), checked before anything is written:
+    /// the columns are one length, every row names a live beacon of the file
+    /// on the Defend writ, ascending, every pursue byte is one this build
+    /// names, every engagement percentage is at most 100, every quarry is a
+    /// unit's id, every leg is a point of the picket's ring, and the protect
+    /// list is grouped by a defending beacon that has a row and names live
+    /// beacons.
+    ///
+    /// # Errors
+    ///
+    /// [`SnapshotError::Ragged`] for columns of different lengths or an
+    /// out-of-order table, and [`SnapshotError::OutOfRange`] naming a column
+    /// whose value describes no Defend beacon this sim holds.
+    fn restore_defend(
+        &self,
+        beacons: &BeaconTable,
+    ) -> Result<crate::tables::DefendTable, SnapshotError> {
+        use crate::tables::{DefendRow, DefendSettings, Pursue};
+        let n = self.defend_beacon.len();
+        if self.defend_engagement.len() != n
+            || self.defend_pursue.len() != n
+            || self.defend_pickets.len() != n
+            || self.defend_escort.len() != n
+            || self.defend_quarry.len() != n
+            || self.defend_leg.len() != n
+            || self.defend_protect_by.len() != self.defend_protect_of.len()
+        {
+            return Err(SnapshotError::Ragged("defend"));
+        }
+        let live_on = |raw: u32, defend: bool| -> bool {
+            beacons.row_of(BeaconId::new(raw)).is_ok_and(|row| {
+                let alive = beacons
+                    .hit_points()
+                    .get(row.index())
+                    .is_some_and(|hp| hp.is_alive());
+                let writ = beacons.mandates().get(row.index()).copied()
+                    == Some(crate::seams::MandateKind::Defend.id());
+                alive && (writ || !defend)
+            })
+        };
+        let mut rows: Vec<DefendRow> = Vec::with_capacity(n);
+        let columns = self
+            .defend_beacon
+            .iter()
+            .zip(&self.defend_engagement)
+            .zip(&self.defend_pursue)
+            .zip(&self.defend_pickets)
+            .zip(&self.defend_escort)
+            .zip(&self.defend_quarry)
+            .zip(&self.defend_leg);
+        for ((((((beacon, engagement), pursue), pickets), escort), quarry), leg) in columns {
+            if !live_on(*beacon, true) {
+                return Err(SnapshotError::OutOfRange("defend_beacon"));
+            }
+            if *engagement > 100 {
+                return Err(SnapshotError::OutOfRange("defend_engagement"));
+            }
+            let pursue =
+                Pursue::from_id(*pursue).ok_or(SnapshotError::OutOfRange("defend_pursue"))?;
+            let escort = match escort {
+                0 => false,
+                1 => true,
+                _ => return Err(SnapshotError::OutOfRange("defend_escort")),
+            };
+            if *quarry != crate::tables::NO_QUARRY
+                && crate::knowledge::AssetId::new(*quarry).tag()
+                    != crate::knowledge::AssetId::TAG_UNIT
+            {
+                return Err(SnapshotError::OutOfRange("defend_quarry"));
+            }
+            if *leg >= crate::defend::PICKET_LEGS {
+                return Err(SnapshotError::OutOfRange("defend_leg"));
+            }
+            rows.push(DefendRow {
+                beacon: BeaconId::new(*beacon),
+                settings: DefendSettings {
+                    engagement_pct: *engagement,
+                    pursue,
+                    pickets: *pickets,
+                    escort,
+                },
+                quarry: *quarry,
+                leg: *leg,
+            });
+        }
+        let protected: Vec<(BeaconId, BeaconId)> = self
+            .defend_protect_by
+            .iter()
+            .zip(&self.defend_protect_of)
+            .map(|(by, of)| (BeaconId::new(*by), BeaconId::new(*of)))
+            .collect();
+        if protected.iter().any(|(_, of)| !live_on(of.raw(), false)) {
+            return Err(SnapshotError::OutOfRange("defend_protect_of"));
+        }
+        let mut table = crate::tables::DefendTable::with_room(beacons.len());
+        if !table.restore(rows, protected) {
+            return Err(SnapshotError::Ragged("defend"));
+        }
+        Ok(table)
+    }
+
+    /// The explored table (S2's `surv`, laid out by `dfnd`), checked before
+    /// anything is written: the columns are one length, every seat byte names
+    /// a seat of the file, and the rows are strictly ascending.
+    ///
+    /// # Errors
+    ///
+    /// [`SnapshotError::Ragged`] and [`SnapshotError::OutOfRange`].
+    fn restore_explored(&self) -> Result<crate::tables::ExploredTable, SnapshotError> {
+        if self.explored_seat.len() != self.explored_cell.len() {
+            return Err(SnapshotError::Ragged("explored"));
+        }
+        let seats = self.seat_id.len();
+        if self
+            .explored_seat
+            .iter()
+            .any(|seat| usize::from(*seat) >= seats)
+        {
+            return Err(SnapshotError::OutOfRange("explored_seat"));
+        }
+        let mut table = crate::tables::ExploredTable::default();
+        let rows = self
+            .explored_seat
+            .iter()
+            .copied()
+            .zip(self.explored_cell.iter().copied())
+            .collect();
+        if !table.restore(rows) {
+            return Err(SnapshotError::Ragged("explored"));
+        }
+        Ok(table)
     }
 }
 

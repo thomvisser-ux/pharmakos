@@ -1,0 +1,36 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// S2's `dfnd`: walk a little west, deploy a Defend beacon inside the core's
+// sphere that protects the commander and fields one picket, and stand in its
+// sphere. See guards-escort-the-commander.scenario.jsonc for what is
+// asserted, and why the guards' own fight is a headless test.
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {"title": "Guard the commander", "author_kind": "HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {"label": "to_site", "timeout_ms": 30000,
+        "move": {"to": {"voxel": {"x": 350, "y": 22, "z": 36}}, "pace": "DIRECT"},
+        "on_fail": {"action": "ABORT_ROUTE"}},
+      // A Defend beacon from its first tick: an `initial` Defend arm, legal at
+      // a deploy since S2's `dfnd` (decisions-log item 145 (5)).
+      {"label": "guard_post", "timeout_ms": 30000,
+        "place_beacon": {"at": {"voxel": {"x": 350, "y": 22, "z": 36}},
+          "initial": {"priority": "NORMAL", "mandate": {"defend": {
+            "protect": [{"my_commander": {}}],
+            "engagement_radius_pct": 100,
+            "pursue": "SPHERE_EDGE",
+            "picket_scouts": 1}}}},
+        "on_fail": {"action": "ABORT_ROUTE"}},
+      // And stand in the post's sphere for the rest of the minute.
+      {"label": "stand", "timeout_ms": 50000,
+        "wait_until": {"condition": {"segment_elapsed": {"ms": {"op": "GE", "value": 55000}}}},
+        "on_fail": {"action": "SKIP"}}
+    ],
+    "handlers": []
+  },
+  "on_death": {"on_respawn": "CONTINUE", "max_deaths_before_fallback": 2},
+  "fallback": {"hold": {"at": {"safest": {}}}}
+}

@@ -77,6 +77,7 @@ pub mod audit;
 pub mod bore;
 pub mod chunks;
 pub mod credit;
+pub mod defend;
 pub mod economy;
 pub mod encoding;
 pub mod events;

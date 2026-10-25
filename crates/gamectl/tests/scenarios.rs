@@ -58,6 +58,7 @@ const SCENARIOS: &[&str] = &[
     BROWNOUT_BY_RECYCLE,
     BASE_KIT_AT_THE_CORE,
     TERRAFORM_LEVELS_A_FOOTPRINT,
+    GUARDS_ESCORT_THE_COMMANDER,
 ];
 
 /// The scenario against the built-in operator: seat 1 is `builtin`, played by
@@ -106,6 +107,10 @@ const BROWNOUT_BY_RECYCLE: &str = "scenarios/s1/brownout-by-recycle.scenario.jso
 /// headless, by `crates/sim/tests/site.rs`' `a_mortar_duel_repairs_and_salvages`,
 /// played twice and through a restore with its chain pinned.
 const BASE_KIT_AT_THE_CORE: &str = "scenarios/s2/base-kit-at-the-core.scenario.jsonc";
+
+/// S2's `dfnd`: a Defend beacon deployed with an `initial` Defend arm, its
+/// picket fielded and walking the ring.
+const GUARDS_ESCORT_THE_COMMANDER: &str = "scenarios/s2/guards-escort-the-commander.scenario.jsonc";
 
 /// Terraform through the playbook door: `FILL` levels a mortar's footprint
 /// before it is bought (S2's `site`; decisions-log item 144 (5)). The crater
@@ -292,7 +297,11 @@ fn the_committed_list_is_the_whole_set() {
         ),
         (
             "s2",
-            &["base-kit-at-the-core", "terraform-levels-a-footprint"][..],
+            &[
+                "base-kit-at-the-core",
+                "guards-escort-the-commander",
+                "terraform-levels-a-footprint",
+            ][..],
         ),
     ] {
         let dir = root().join("scenarios").join(stage);

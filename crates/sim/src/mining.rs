@@ -24,10 +24,13 @@
 //!   is targeting's "nearest" (`docs/design/targeting.md`, "Nearest") measured
 //!   from the beacon's anchor; `RICHEST` is the most **remaining** yield, ore
 //!   voxels times the grade's `$` per voxel, among the reachable seams with
-//!   work left for this beacon, ties by nearest; `SAFEST` reads as `NEAREST`
-//!   until S2's threat model, and the verifier warns that it does (W0501).
-//! * **`flee_on_threat`** is stored and does nothing until S2, which brings
-//!   the threats to flee from.
+//!   work left for this beacon, ties by nearest; `SAFEST` is the nearest of
+//!   them with no known threat whose weapon reaches its anchor (S2's
+//!   decision 12, built by `dfnd`; [`crate::defend`]), and none when every
+//!   one is threatened.
+//! * **`flee_on_threat`** walks the beacon's mining drones home, dropping the
+//!   dig in hand, while its seat knows of a threat inside the beacon's
+//!   sphere (decision 12; [`crate::programs`]).
 //!
 //! And the rule that is not a setting: **never under structures**. A voxel in
 //! or beside the column of any live structure or beacon, any seat's, is never
@@ -106,8 +109,8 @@ pub enum SeamChoice {
     /// I0003 says so).
     #[default]
     Nearest,
-    /// Reads as [`SeamChoice::Nearest`] until S2's threat model (decision 6),
-    /// and the verifier warns that it does.
+    /// The nearest seam with no known threat whose weapon reaches its anchor
+    /// (S2's decision 12).
     Safest,
 }
 
@@ -169,7 +172,8 @@ pub struct MineSettings {
     pub pillar_spacing: u32,
     /// Which seam the beacon chooses.
     pub seam_choice: SeamChoice,
-    /// Stored; does nothing until S2.
+    /// Walk the beacon's mining drones home while a known threat is inside
+    /// its sphere (S2's decision 12).
     pub flee_on_threat: bool,
 }
 
@@ -846,6 +850,23 @@ fn choose_seam(world: &mut World, row: usize, settings: MineSettings) -> u32 {
     else {
         return NO_FEATURE;
     };
+    // `SAFEST`'s known threats, read before the ranker borrows the world: each
+    // armed enemy asset the beacon's seat sees, with its weapon's reach
+    // (decision 12). Read only for a `SAFEST` choice, on the decision tick a
+    // seam is chosen.
+    let mut threats: Vec<([Fx; 3], Sq)> = Vec::new();
+    if settings.seam_choice == SeamChoice::Safest
+        && let Some(seat) = world
+            .beacons()
+            .seats()
+            .get(row)
+            .copied()
+            .map(crate::tables::SeatId::new)
+    {
+        crate::defend::for_each_known_threat(world, seat, |known| {
+            threats.push((known.at, Sq::of_radius(known.weapon.range())));
+        });
+    }
     let (ground, scratch) = world.ground_and_scratch();
     let mut ranker = Ranker::new(&ground, origin, |index| {
         // E7: rule: an index the work table does not hold is no work
@@ -859,9 +880,20 @@ fn choose_seam(world: &mut World, row: usize, settings: MineSettings) -> u32 {
             continue;
         };
         match settings.seam_choice {
-            SeamChoice::Nearest | SeamChoice::Safest => {
+            SeamChoice::Nearest => {
                 best = Some((index, yield_left));
                 break;
+            }
+            SeamChoice::Safest => {
+                let threatened = ground.anchor_point(index).is_none_or(|anchor| {
+                    threats
+                        .iter()
+                        .any(|(at, reach)| Sq::between(*at, anchor) <= *reach)
+                });
+                if !threatened {
+                    best = Some((index, yield_left));
+                    break;
+                }
             }
             // Nearest first, so a strictly greater yield is the only thing
             // that displaces the holder: ties stay with the nearer.

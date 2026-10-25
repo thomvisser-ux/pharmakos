@@ -4643,3 +4643,307 @@ impl ShellTable {
         true
     }
 }
+
+/// How far a Defend beacon's guards follow a threat (`DefendSettings.Pursue`,
+/// spec section 6's Defend row).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
+pub enum Pursue {
+    /// Not written: a Defend beacon placed or switched with an empty arm,
+    /// which reads as [`Pursue::Never`] ([`DefendSettings::pursue_reading`]).
+    #[default]
+    Unset,
+    /// A guard never leaves the engagement radius.
+    Never,
+    /// A guard follows a threat as far as the sphere edge.
+    SphereEdge,
+    /// A guard follows a threat while its seat sees it.
+    WhileInReach,
+}
+
+impl Pursue {
+    /// The wire value (`DefendSettings.Pursue`), which is also the hashed byte.
+    #[must_use]
+    pub const fn id(self) -> u8 {
+        match self {
+            Pursue::Unset => 0,
+            Pursue::Never => 1,
+            Pursue::SphereEdge => 2,
+            Pursue::WhileInReach => 3,
+        }
+    }
+
+    /// The setting a wire value names, or `None` for one this build does not
+    /// name.
+    #[must_use]
+    pub const fn from_id(id: u8) -> Option<Pursue> {
+        match id {
+            0 => Some(Pursue::Unset),
+            1 => Some(Pursue::Never),
+            2 => Some(Pursue::SphereEdge),
+            3 => Some(Pursue::WhileInReach),
+            _ => None,
+        }
+    }
+}
+
+/// A Defend beacon's settings as the sim holds them (spec section 6's Defend
+/// row; S2's `dfnd`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct DefendSettings {
+    /// The engagement radius as a whole percentage of the sphere radius,
+    /// 1 to 100, or 0 when no row has written it.
+    pub engagement_pct: u8,
+    /// How far a guard follows a threat.
+    pub pursue: Pursue,
+    /// How many scouts picket just outside the sphere edge: Defend's own
+    /// column, a byte (the verifier's `picket_scouts` ceiling, register
+    /// S2-18).
+    pub pickets: u8,
+    /// Whether the protect list holds `my_commander`.
+    pub escort: bool,
+}
+
+impl DefendSettings {
+    /// The engagement radius the beacon's guards read, as a percentage: the
+    /// one written, or the whole sphere when none is (an empty Defend arm,
+    /// legal at a deploy and a switch, decisions-log item 145 (5)).
+    ///
+    /// PLACEHOLDER: an empty Defend arm reads its engagement radius as the whole sphere and its pursue as NEVER — owner, S2 demo.
+    #[must_use]
+    pub const fn engagement_reading(self) -> u8 {
+        if self.engagement_pct == 0 {
+            100
+        } else {
+            self.engagement_pct
+        }
+    }
+
+    /// The pursue setting the beacon's guards read: the one written, or
+    /// [`Pursue::Never`] when none is (see
+    /// [`DefendSettings::engagement_reading`]).
+    #[must_use]
+    pub const fn pursue_reading(self) -> Pursue {
+        match self.pursue {
+            Pursue::Unset => Pursue::Never,
+            other => other,
+        }
+    }
+}
+
+/// No quarry: a Defend beacon whose guards have no threat to go after.
+pub const NO_QUARRY: u32 = u32::MAX;
+
+/// One row of the Defend table: a Defend beacon, its settings and its state.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct DefendRow {
+    /// The beacon, with its generation.
+    pub beacon: BeaconId,
+    /// Its settings.
+    pub settings: DefendSettings,
+    /// The guard assignment: the enemy unit every guard of the beacon goes
+    /// after, an [`crate::knowledge::AssetId`] raw value, or [`NO_QUARRY`].
+    pub quarry: u32,
+    /// The picket's leg: which of the ring's points the first picket walks
+    /// to, the others spaced evenly after it.
+    pub leg: u8,
+}
+
+/// Every Defend beacon's settings and state (S2's `dfnd`): one row per live
+/// Defend beacon, in ascending beacon id, and the protect list's beacons as
+/// `(defend beacon, protected beacon)` pairs, grouped by the defending beacon
+/// in ascending id and in list order within a group.
+///
+/// **Hashed as one block that writes nothing while the table holds no row**
+/// (S2's plan, E29), so a match with no Defend beacon hashes as it did before
+/// the table existed. A row is opened when a beacon takes the Defend writ and
+/// closed when it leaves it or dies (the world's `set_beacon_mandate`,
+/// `place_beacon` and `end_mandate`), so a row always names a live Defend
+/// beacon.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct DefendTable {
+    rows: Vec<DefendRow>,
+    protected: Vec<(BeaconId, BeaconId)>,
+}
+
+impl DefendTable {
+    /// The table's tag in the state hash (E29), after the shell table's 1 and
+    /// the site block's 2.
+    pub const HASH_TAG: u8 = 3;
+
+    /// An empty table with room for `beacons` rows, so a row opened inside a
+    /// tick allocates nothing.
+    #[must_use]
+    pub fn with_room(beacons: u32) -> DefendTable {
+        DefendTable {
+            rows: Vec::with_capacity(crate::math::index::row(beacons)),
+            protected: Vec::new(),
+        }
+    }
+
+    /// The rows, in ascending beacon id.
+    #[must_use]
+    pub fn rows(&self) -> &[DefendRow] {
+        &self.rows
+    }
+
+    /// The protect list's beacons, `(defend beacon, protected beacon)`.
+    #[must_use]
+    pub fn protected(&self) -> &[(BeaconId, BeaconId)] {
+        &self.protected
+    }
+
+    /// Whether the table holds no row (and so no protected beacon, which
+    /// [`DefendTable::restore`] and [`DefendTable::close`] keep true).
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty() && self.protected.is_empty()
+    }
+
+    fn index_of(&self, beacon: BeaconId) -> Result<usize, usize> {
+        self.rows
+            .binary_search_by_key(&beacon.raw(), |row| row.beacon.raw())
+    }
+
+    /// The row of `beacon`, if it is a Defend beacon.
+    #[must_use]
+    pub fn row_of(&self, beacon: BeaconId) -> Option<&DefendRow> {
+        self.index_of(beacon).ok().and_then(|at| self.rows.get(at))
+    }
+
+    /// The row of `beacon`, to write.
+    pub fn row_mut(&mut self, beacon: BeaconId) -> Option<&mut DefendRow> {
+        let at = self.index_of(beacon).ok()?;
+        self.rows.get_mut(at)
+    }
+
+    /// Give `beacon` a row at the defaults, or leave the one it has: a beacon
+    /// that takes the Defend writ.
+    pub fn open(&mut self, beacon: BeaconId) {
+        if let Err(at) = self.index_of(beacon) {
+            self.rows.insert(
+                at,
+                DefendRow {
+                    beacon,
+                    settings: DefendSettings::default(),
+                    quarry: NO_QUARRY,
+                    leg: 0,
+                },
+            );
+        }
+    }
+
+    /// Remove `beacon`'s row and its protect list, and every protect entry
+    /// naming it: a beacon that leaves the writ or dies.
+    pub fn close(&mut self, beacon: BeaconId) {
+        if let Ok(at) = self.index_of(beacon) {
+            self.rows.remove(at);
+        }
+        self.protected
+            .retain(|(by, of)| *by != beacon && *of != beacon);
+    }
+
+    /// Replace `beacon`'s protect list's beacons with `list`, in order. Does
+    /// nothing for a beacon with no row.
+    pub fn set_protected(&mut self, beacon: BeaconId, list: &[BeaconId]) {
+        if self.index_of(beacon).is_err() {
+            return;
+        }
+        self.protected.retain(|(by, _)| *by != beacon);
+        let at = self
+            .protected
+            .partition_point(|(by, _)| by.raw() < beacon.raw());
+        let mut index = at;
+        for protected in list {
+            self.protected.insert(index, (beacon, *protected));
+            index = index.saturating_add(1);
+        }
+    }
+
+    /// The beacons `beacon` protects, in list order.
+    pub fn protected_by(&self, beacon: BeaconId) -> impl Iterator<Item = BeaconId> + '_ {
+        self.protected
+            .iter()
+            .filter(move |(by, _)| *by == beacon)
+            .map(|(_, of)| *of)
+    }
+
+    /// Replace the table from a restored snapshot. `false`, changing nothing,
+    /// when the rows are not in strictly ascending beacon id, or the protect
+    /// list is not grouped in ascending order or names a defending beacon
+    /// with no row.
+    pub fn restore(&mut self, rows: Vec<DefendRow>, protected: Vec<(BeaconId, BeaconId)>) -> bool {
+        let ascending = rows
+            .windows(2)
+            .all(|pair| matches!(pair, [a, b] if a.beacon.raw() < b.beacon.raw()));
+        let grouped = protected
+            .windows(2)
+            .all(|pair| matches!(pair, [a, b] if a.0.raw() <= b.0.raw()));
+        let owned = protected.iter().all(|(by, _)| {
+            rows.binary_search_by_key(&by.raw(), |row| row.beacon.raw())
+                .is_ok()
+        });
+        if !ascending || !grouped || !owned {
+            return false;
+        }
+        self.rows.clear();
+        self.rows.extend(rows);
+        self.protected = protected;
+        true
+    }
+}
+
+/// Every seat's explored coarse cells (S2's `surv`, laid out by `dfnd`): one
+/// row per `(seat, cell)` a seat has explored, ascending. The cell's meaning
+/// -- its size, and how a scout marks one -- is `surv`'s; this table holds
+/// the marks, and nothing writes one yet.
+///
+/// **Hashed as one block that writes nothing while the table holds no row**
+/// (S2's plan, E29).
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct ExploredTable {
+    rows: Vec<(u8, u32)>,
+}
+
+impl ExploredTable {
+    /// The table's tag in the state hash (E29).
+    pub const HASH_TAG: u8 = 4;
+
+    /// The rows, `(seat, cell)`, ascending.
+    #[must_use]
+    pub fn rows(&self) -> &[(u8, u32)] {
+        &self.rows
+    }
+
+    /// Whether no seat has explored a cell.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
+
+    /// Whether `seat` has explored `cell`.
+    #[must_use]
+    pub fn contains(&self, seat: SeatId, cell: u32) -> bool {
+        self.rows.binary_search(&(seat.raw(), cell)).is_ok()
+    }
+
+    /// Mark `cell` explored for `seat`: `true` when the mark is new.
+    pub fn mark(&mut self, seat: SeatId, cell: u32) -> bool {
+        match self.rows.binary_search(&(seat.raw(), cell)) {
+            Ok(_) => false,
+            Err(at) => {
+                self.rows.insert(at, (seat.raw(), cell));
+                true
+            }
+        }
+    }
+
+    /// Replace the table from a restored snapshot. `false`, changing nothing,
+    /// when the rows are not strictly ascending.
+    pub fn restore(&mut self, rows: Vec<(u8, u32)>) -> bool {
+        if !rows.windows(2).all(|pair| matches!(pair, [a, b] if a < b)) {
+            return false;
+        }
+        self.rows = rows;
+        true
+    }
+}
