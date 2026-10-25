@@ -53,28 +53,17 @@
 use std::path::Path;
 use std::time::Instant;
 
-use pharmakos_gateway::fog::{Blind, FogPolicy};
-use pharmakos_gateway::host::Host;
-use pharmakos_gateway::scopes::{Scope, ScopeSet};
-use pharmakos_gateway::surface::Surface;
-use pharmakos_gateway::token::{Subject, Token};
 use pharmakos_proto::gp::v1::{
     BeaconRef, Location, Playbook, Safest, Step, beacon_ref, location, step,
 };
-use pharmakos_proto::json::{self, Json};
-use pharmakos_sim::math::quantity::{MS_PER_TICK, Ms, Tick};
+use pharmakos_proto::json;
+use pharmakos_sim::math::quantity::MS_PER_TICK;
 use pharmakos_sim::rules::RulesTable;
-use pharmakos_sim::runner::MatchSettings;
-use pharmakos_sim::tables::SeatId;
-use pharmakos_sim::world::WorldConfig;
 
+use crate::error::Error;
+use crate::hosted::{self, Opened, Opening};
 use crate::quick::{BUDGET_CASE, cases_dir};
-use crate::stats::micros;
-
-/// The match id every bench match is hosted under. Lower-case letters and
-/// hyphens only, as `MatchCache::valid_match_id` asks; it reaches nothing
-/// hashed.
-const MATCH_ID: &str = "m-bench";
+use crate::stats::{self, micros};
 
 /// The map the decision-tick figure is measured on: the seed every committed
 /// scenario plays (`scenarios/**`), so the map is one the project already
@@ -129,7 +118,8 @@ impl DecisionTiming {
     #[must_use]
     pub fn implied_units_per_seat(&self, seats: u32) -> Option<u128> {
         let per_unit = u128::try_from(self.ns_per_unit).ok().filter(|ns| *ns > 0)?;
-        let tick_ns = u128::try_from(MS_PER_TICK).ok()?.saturating_mul(1_000_000);
+        // `MS_PER_TICK` is a positive constant, so its magnitude is its value.
+        let tick_ns = u128::from(MS_PER_TICK.unsigned_abs()).saturating_mul(1_000_000);
         tick_ns.checked_div(per_unit.saturating_mul(u128::from(seats)))
     }
 }
@@ -142,12 +132,16 @@ impl DecisionTiming {
 ///
 /// When the case cannot be read or decoded, or names no beacon by id (then
 /// it is no longer the case this module documents).
-pub fn hosted_budget_playbook(root: &Path) -> Result<String, String> {
+pub fn hosted_budget_playbook(root: &Path) -> Result<String, Error> {
     let path = cases_dir(root).join(format!("{BUDGET_CASE}.json"));
-    let text = std::fs::read_to_string(&path)
-        .map_err(|error| format!("reading {}: {error}", path.display()))?;
-    let mut playbook: Playbook =
-        json::decode(&text).map_err(|error| format!("decoding {}: {error}", path.display()))?;
+    let text = std::fs::read_to_string(&path).map_err(|error| Error::Read {
+        path: path.clone(),
+        reason: error.to_string(),
+    })?;
+    let mut playbook: Playbook = json::decode(&text).map_err(|error| Error::Codec {
+        what: format!("decoding {}", path.display()),
+        reason: error.to_string(),
+    })?;
     let mut renamed = 0_usize;
     if let Some(declarative) = playbook.declarative.as_mut() {
         for entry in &mut declarative.route {
@@ -160,14 +154,17 @@ pub fn hosted_budget_playbook(root: &Path) -> Result<String, String> {
         }
     }
     if renamed == 0 {
-        return Err(format!(
+        return Err(Error::Drift(format!(
             "{} names no beacon by id any more; the bench's hosted playbook is documented as \
              that case with its named anchors written by role, so the module docs need saying \
              again",
             path.display()
-        ));
+        )));
     }
-    json::encode(&playbook).map_err(|error| format!("encoding the hosted playbook: {error}"))
+    json::encode(&playbook).map_err(|error| Error::Codec {
+        what: "encoding the hosted playbook".to_owned(),
+        reason: error.to_string(),
+    })
 }
 
 /// A move to a beacon named by id becomes a move to the safest own beacon.
@@ -211,98 +208,112 @@ pub fn measure(
     root: &Path,
     rules: &RulesTable,
     plan: DecisionPlan,
-) -> Result<DecisionTiming, String> {
+) -> Result<DecisionTiming, Error> {
     if plan.runs == 0 {
-        return Err("a decision-tick measurement of zero runs measures nothing".to_owned());
+        return Err(Error::Empty(
+            "a decision-tick measurement of zero runs measures nothing".to_owned(),
+        ));
     }
     let playbook = hosted_budget_playbook(root)?;
-    let mut best: Vec<Sample> = Vec::new();
-    let mut units_per_seat = 0_u32;
+    let mut best: Option<(Vec<Sample>, u32)> = None;
     for run in 0..plan.runs {
         let (samples, units) = play(rules, plan, &playbook)?;
-        units_per_seat = units;
-        if run == 0 {
-            best = samples;
+        let Some((kept, _)) = best.as_mut() else {
+            best = Some((samples, units));
             continue;
-        }
-        if samples.len() != best.len()
+        };
+        if samples.len() != kept.len()
             || samples
                 .iter()
-                .zip(&best)
+                .zip(kept.iter())
                 .any(|(now, kept)| now.hash != kept.hash || now.decision != kept.decision)
         {
-            return Err(format!(
+            return Err(Error::Drift(format!(
                 "run {run} of the same match produced a different hash chain or decision \
                  cadence; the per-tick minimum would compare different work"
-            ));
+            )));
         }
-        for (kept, now) in best.iter_mut().zip(&samples) {
+        for (kept, now) in kept.iter_mut().zip(&samples) {
             kept.ns = kept.ns.min(now.ns);
         }
     }
+    let (best, units_per_seat) =
+        best.ok_or_else(|| Error::Empty("no run of the bench match was played".to_owned()))?;
     summarise(&best, plan.seats, units_per_seat)
 }
 
-/// Pair each decision tick with the ordinary ticks after it, and average.
-fn summarise(
-    samples: &[Sample],
-    seats: u32,
-    units_per_seat: u32,
-) -> Result<DecisionTiming, String> {
-    let played: Vec<&Sample> = samples.iter().filter(|sample| !sample.last).collect();
-    let mut decision_sum = 0_u128;
-    let mut decision_count = 0_u128;
-    let mut ordinary_sum = 0_u128;
-    let mut ordinary_count = 0_u128;
-    for sample in &played {
-        if sample.decision {
-            decision_sum = decision_sum.saturating_add(sample.ns);
-            decision_count = decision_count.saturating_add(1);
-        } else {
-            ordinary_sum = ordinary_sum.saturating_add(sample.ns);
-            ordinary_count = ordinary_count.saturating_add(1);
-        }
-    }
+/// A tick's nanoseconds as a signed figure.
+fn signed(ns: u128) -> Result<i128, Error> {
+    i128::try_from(ns).map_err(|_| Error::Overflow("a tick's nanoseconds"))
+}
 
-    let mut excess_sum = 0_i128;
-    let mut windows = 0_i128;
+/// Pair each decision tick with the ordinary ticks after it, and average.
+fn summarise(samples: &[Sample], seats: u32, units_per_seat: u32) -> Result<DecisionTiming, Error> {
+    let played: Vec<&Sample> = samples.iter().filter(|sample| !sample.last).collect();
+    let decision: Vec<u128> = played
+        .iter()
+        .filter(|sample| sample.decision)
+        .map(|sample| sample.ns)
+        .collect();
+    let ordinary: Vec<u128> = played
+        .iter()
+        .filter(|sample| !sample.decision)
+        .map(|sample| sample.ns)
+        .collect();
+
+    let mut excesses: Vec<i128> = Vec::new();
     let mut index = 0_usize;
     while let Some(sample) = played.get(index) {
         index = index.saturating_add(1);
         if !sample.decision {
             continue;
         }
-        let mut sum = 0_u128;
-        let mut count = 0_u128;
+        let mut window: Vec<u128> = Vec::new();
         while let Some(next) = played.get(index) {
             if next.decision {
                 break;
             }
-            sum = sum.saturating_add(next.ns);
-            count = count.saturating_add(1);
+            window.push(next.ns);
             index = index.saturating_add(1);
         }
-        let Some(mean) = sum.checked_div(count) else {
+        // A decision tick with no ordinary tick after it has nothing to be
+        // paired with, and is left out of the pairing by its definition.
+        let Some(mean) = stats::mean(&window) else {
             continue;
         };
-        let excess = i128::try_from(sample.ns)
-            .unwrap_or(i128::MAX)
-            .saturating_sub(i128::try_from(mean).unwrap_or(i128::MAX));
-        excess_sum = excess_sum.saturating_add(excess);
-        windows = windows.saturating_add(1);
+        let excess = signed(sample.ns)?
+            .checked_sub(signed(mean)?)
+            .ok_or(Error::Overflow("a decision tick's excess"))?;
+        excesses.push(excess);
     }
+    let windows = excesses.len();
+    let excess_sum = excesses
+        .iter()
+        .try_fold(0_i128, |sum, excess| sum.checked_add(*excess))
+        .ok_or(Error::Overflow("the summed excess"))?;
     let excess_ns = excess_sum
-        .checked_div(windows)
-        .ok_or("no decision tick was followed by an ordinary tick, so there is nothing to pair")?;
-    let units = i128::from(seats).saturating_mul(i128::from(units_per_seat));
-    let ns_per_unit = excess_ns.checked_div(units).unwrap_or(0);
+        .checked_div(i128::try_from(windows).map_err(|_| Error::Overflow("the window count"))?)
+        .ok_or_else(|| {
+            Error::Empty(
+                "no decision tick was followed by an ordinary tick, so there is nothing to pair"
+                    .to_owned(),
+            )
+        })?;
+    let units = i128::from(seats)
+        .checked_mul(i128::from(units_per_seat))
+        .ok_or(Error::Overflow("the units sealed"))?;
+    let ns_per_unit = excess_ns
+        .checked_div(units)
+        .ok_or_else(|| Error::Empty("no size unit was sealed to divide by".to_owned()))?;
     Ok(DecisionTiming {
         seats,
         units_per_seat,
         ticks: samples.len(),
-        windows: usize::try_from(windows).unwrap_or(usize::MAX),
-        decision_ns: decision_sum.checked_div(decision_count).unwrap_or(0),
-        ordinary_ns: ordinary_sum.checked_div(ordinary_count).unwrap_or(0),
+        windows,
+        decision_ns: stats::mean(&decision)
+            .ok_or_else(|| Error::Empty("no decision tick was played".to_owned()))?,
+        ordinary_ns: stats::mean(&ordinary)
+            .ok_or_else(|| Error::Empty("no ordinary tick was played".to_owned()))?,
         excess_ns,
         ns_per_unit,
     })
@@ -314,62 +325,30 @@ fn play(
     rules: &RulesTable,
     plan: DecisionPlan,
     playbook: &str,
-) -> Result<(Vec<Sample>, u32), String> {
-    let seats: Vec<SeatId> = (0..plan.seats)
-        .map(|seat| u8::try_from(seat).map(SeatId::new))
-        .collect::<Result<_, _>>()
-        .map_err(|_| format!("{} seats do not fit a seat id", plan.seats))?;
-    let host = Host::open(
-        &WorldConfig {
-            match_seed: plan.seed,
-            seats: plan.seats,
-            // The harness walkers stay at 0, as every committed chain has them.
-            units_per_seat: 0,
-            rules: rules.clone(),
-            match_settings: MatchSettings {
-                segment_lengths_ms: vec![plan.segment_ms],
-                round_limit: 1,
-            },
-        },
-        None,
-    )
-    .map_err(|error| format!("the bench match would not open: {}", error.message))?;
-    let mut surface = Surface::new(
-        MATCH_ID,
-        plan.seed,
-        rules.clone(),
-        FogPolicy::fogged(),
-        &seats,
-    )
-    .map_err(gateway)?;
-    surface.attach(host).map_err(gateway)?;
-    let lull = rules
-        .message()
-        .r#match
-        .as_ref()
-        .map(|block| block.lull_ms)
-        .ok_or("the rules table carries no `match` block, so nothing says how long a Lull is")?;
-    surface.set_phase_remaining_ms(Ms::new(lull));
-    surface.open_lull().map_err(gateway)?;
-
-    let mut units_per_seat = 0_u32;
-    for seat in &seats {
-        let token = mint(&mut surface, *seat)?;
-        units_per_seat = submit(&mut surface, &token, *seat, playbook)?;
-    }
-    if !surface.begin_push().map_err(gateway)? {
-        return Err("the bench match would not open its segment".to_owned());
-    }
+) -> Result<(Vec<Sample>, u32), Error> {
+    let opening = Opening {
+        seed: plan.seed,
+        seats: plan.seats,
+        segment_ms: plan.segment_ms,
+        rules,
+        playbook,
+    };
+    let host = hosted::open_host(&opening)?;
+    let Opened {
+        mut surface,
+        units_per_seat,
+    } = hosted::attach(host, None, &opening)?;
 
     let mut samples: Vec<Sample> = Vec::new();
     loop {
         let started = Instant::now();
         let report = surface.step();
         let ns = started.elapsed().as_nanos();
-        let Some(report) = report.map_err(gateway)? else {
+        let Some(report) = report.map_err(|error| Error::gateway("stepping a tick", &error))?
+        else {
             break;
         };
-        let decision = surface.host().map_err(gateway)?.world().is_decision_tick();
+        let decision = hosted::world(&surface)?.is_decision_tick();
         samples.push(Sample {
             ns,
             hash: report.hash,
@@ -383,79 +362,14 @@ fn play(
     Ok((samples, units_per_seat))
 }
 
-fn mint(surface: &mut Surface, seat: SeatId) -> Result<Token, String> {
-    let scopes = ScopeSet::of(&[Scope::Observe, Scope::Plan, Scope::PlanSubmit]);
-    surface
-        .tokens()
-        .mint(Subject::Seat(seat), MATCH_ID, scopes, Tick::ZERO)
-        .map(|(token, _)| token)
-        .map_err(gateway)
-}
-
-/// Submit through the door every player's playbook takes, and answer the
-/// size units the report says were sealed. Refused, or off the budget, is an
-/// error naming why.
-fn submit(
-    surface: &mut Surface,
-    token: &Token,
-    seat: SeatId,
-    playbook: &str,
-) -> Result<u32, String> {
-    let params = json::write(&Json::Object(vec![(
-        String::from("playbook_jsonc"),
-        Json::String(playbook.to_owned()),
-    )]));
-    let request = pharmakos_gateway::rpc::parse(&format!(
-        r#"{{"jsonrpc":"2.0","id":1,"method":"submit_plan","params":{params}}}"#
-    ))
-    .map_err(|error| {
-        format!(
-            "the bench wrote a request the gateway will not parse: {}",
-            error.title()
-        )
-    })?;
-    let answer = surface.call(Some(token), &request, &Blind);
-    let result = answer.get("result");
-    if result.and_then(|result| result.get("accepted")) != Some(&Json::Bool(true)) {
-        return Err(format!(
-            "seat {} could not submit the budget playbook: {}",
-            seat.raw(),
-            json::write(&answer)
-        ));
-    }
-    let report = result.and_then(|result| result.get("report"));
-    let units = number(report.and_then(|report| report.get("size_units")));
-    let budget = number(report.and_then(|report| report.get("size_budget")));
-    match (units, budget) {
-        (Some(units), Some(budget)) if units == budget => Ok(units),
-        _ => Err(format!(
-            "seat {}'s sealed playbook is not exactly on the size budget ({units:?} of \
-             {budget:?} units), so a cost per unit at the budget cannot be read from it",
-            seat.raw()
-        )),
-    }
-}
-
-fn number(value: Option<&Json>) -> Option<u32> {
-    match value {
-        Some(Json::Number(lexeme)) => lexeme.parse().ok(),
-        _ => None,
-    }
-}
-
-fn gateway(error: pharmakos_gateway::Error) -> String {
-    let message = error.message;
-    format!("the gateway refused: {message}")
-}
-
 /// The notice for one decision-tick measurement, word for word. Pure, so the
 /// text is pinned by a unit test.
 #[must_use]
 pub fn notice(timing: &DecisionTiming, os: &str) -> String {
-    let implied = timing.implied_units_per_seat(BENCH_SEATS).map_or_else(
-        || "none: no cost per unit was measured above the noise".to_owned(),
-        |units| format!("{units} units per seat"),
-    );
+    let implied = match timing.implied_units_per_seat(BENCH_SEATS) {
+        Some(units) => format!("{units} units per seat"),
+        None => "none: no cost per unit was measured above the noise".to_owned(),
+    };
     format!(
         "::notice title=decision tick per size unit::{} ns per size unit per decision tick on \
          {os} ({} seats x {} units sealed; a decision tick {} against an ordinary tick {}, mean \

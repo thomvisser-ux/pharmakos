@@ -52,7 +52,16 @@ use pharmakos_verifier::{
     FeatureKind, Input, KnownBeacon, KnownFeature, Ownership, Scope, Sighted, Sighting, verify,
 };
 
+use crate::error::Error;
 use crate::stats::{Summary, micros};
+
+/// A read that failed, as the bench reports it.
+fn read_error(path: &Path, error: &std::io::Error) -> Error {
+    Error::Read {
+        path: path.to_path_buf(),
+        reason: error.to_string(),
+    }
+}
 
 /// The case that sits exactly on the size budget, published on its own as well
 /// as in the pool (S1's plan section 5 item 1).
@@ -82,23 +91,19 @@ pub fn cases_dir(root: &Path) -> PathBuf {
 ///
 /// When the directory cannot be read, holds no case, or holds no
 /// [`BUDGET_CASE`]: a measurement over fewer inputs than it names is not one.
-pub fn committed_cases(root: &Path) -> Result<Vec<Case>, String> {
+pub fn committed_cases(root: &Path) -> Result<Vec<Case>, Error> {
     let dir = cases_dir(root);
-    let entries =
-        fs::read_dir(&dir).map_err(|error| format!("reading {}: {error}", dir.display()))?;
+    let entries = fs::read_dir(&dir).map_err(|error| read_error(&dir, &error))?;
     let mut cases: Vec<Case> = Vec::new();
     for entry in entries {
-        let path = entry
-            .map_err(|error| format!("reading {}: {error}", dir.display()))?
-            .path();
+        let path = entry.map_err(|error| read_error(&dir, &error))?.path();
         if path.extension().is_none_or(|extension| extension != "json") {
             continue;
         }
         let Some(name) = path.file_stem().and_then(|stem| stem.to_str()) else {
             continue;
         };
-        let bytes =
-            fs::read(&path).map_err(|error| format!("reading {}: {error}", path.display()))?;
+        let bytes = fs::read(&path).map_err(|error| read_error(&path, &error))?;
         cases.push(Case {
             name: name.to_owned(),
             bytes,
@@ -106,10 +111,13 @@ pub fn committed_cases(root: &Path) -> Result<Vec<Case>, String> {
     }
     cases.sort_by(|left, right| left.name.cmp(&right.name));
     if cases.is_empty() {
-        return Err(format!("{} holds no case", dir.display()));
+        return Err(Error::Empty(format!("{} holds no case", dir.display())));
     }
     if !cases.iter().any(|case| case.name == BUDGET_CASE) {
-        return Err(format!("{} holds no {BUDGET_CASE}.json", dir.display()));
+        return Err(Error::Empty(format!(
+            "{} holds no {BUDGET_CASE}.json",
+            dir.display()
+        )));
     }
     Ok(cases)
 }
@@ -119,9 +127,9 @@ pub fn committed_cases(root: &Path) -> Result<Vec<Case>, String> {
 /// # Errors
 ///
 /// When `rules/rules.v1.json` cannot be read or decoded.
-pub fn committed_rules(root: &Path) -> Result<RulesTable, String> {
+pub fn committed_rules(root: &Path) -> Result<RulesTable, Error> {
     let path = root.join("rules").join("rules.v1.json");
-    RulesTable::load(&path).map_err(|error| format!("reading {}: {error}", path.display()))
+    RulesTable::load(&path).map_err(|error| Error::Rules(format!("{}: {error}", path.display())))
 }
 
 /// The seat's frozen planning snapshot, as `crates/verifier/tests/verifier.rs`
@@ -130,7 +138,7 @@ pub fn committed_rules(root: &Path) -> Result<RulesTable, String> {
 /// # Errors
 ///
 /// When the snapshot will not encode.
-pub fn fixture_snapshot() -> Result<Vec<u8>, String> {
+pub fn fixture_snapshot() -> Result<Vec<u8>, Error> {
     Snapshot {
         version: SNAPSHOT_VERSION,
         match_seed: 0x0102_0304_0506_0708,
@@ -138,7 +146,10 @@ pub fn fixture_snapshot() -> Result<Vec<u8>, String> {
         ..Snapshot::default()
     }
     .to_bytes()
-    .map_err(|error| format!("encoding the fixture snapshot: {error}"))
+    .map_err(|error| Error::Codec {
+        what: "encoding the fixture snapshot".to_owned(),
+        reason: error.to_string(),
+    })
 }
 
 /// The seat's frozen snapshot with a coming segment in it, as
@@ -147,7 +158,7 @@ pub fn fixture_snapshot() -> Result<Vec<u8>, String> {
 /// # Errors
 ///
 /// When the snapshot will not encode.
-pub fn segment_snapshot() -> Result<Vec<u8>, String> {
+pub fn segment_snapshot() -> Result<Vec<u8>, Error> {
     Snapshot {
         version: SNAPSHOT_VERSION,
         match_seed: 0x0102_0304_0506_0708,
@@ -156,7 +167,10 @@ pub fn segment_snapshot() -> Result<Vec<u8>, String> {
         ..Snapshot::default()
     }
     .to_bytes()
-    .map_err(|error| format!("encoding the segment snapshot: {error}"))
+    .map_err(|error| Error::Codec {
+        what: "encoding the segment snapshot".to_owned(),
+        reason: error.to_string(),
+    })
 }
 
 /// The cases checked against [`segment_snapshot`], as
@@ -393,7 +407,7 @@ impl Fixture {
     /// # Errors
     ///
     /// As [`committed_rules`], [`fixture_snapshot`] and [`segment_snapshot`].
-    pub fn committed(root: &Path) -> Result<Fixture, String> {
+    pub fn committed(root: &Path) -> Result<Fixture, Error> {
         Ok(Fixture {
             rules: committed_rules(root)?,
             scope: fixture_scope(),
@@ -438,10 +452,10 @@ impl Fixture {
     /// # Errors
     ///
     /// When the rules table lacks a block the checks read.
-    pub fn report(&self, case: &Case, depth: Depth) -> Result<VerifyReport, String> {
+    pub fn report(&self, case: &Case, depth: Depth) -> Result<VerifyReport, Error> {
         let scope = self.scope_for(case);
         let input = Input::new(&case.bytes, self.snapshot_for(case), scope, &self.rules)
-            .map_err(|gap| format!("assembling the verifier's input: {gap}"))?;
+            .map_err(|gap| Error::Rules(format!("assembling the verifier's input: {gap}")))?;
         Ok(verify(&input, depth))
     }
 
@@ -450,7 +464,7 @@ impl Fixture {
     /// # Errors
     ///
     /// As [`Fixture::report`]; the error is checked after the clock stops.
-    pub fn time_quick(&self, case: &Case) -> Result<u128, String> {
+    pub fn time_quick(&self, case: &Case) -> Result<u128, Error> {
         let started = Instant::now();
         let report = self.report(case, Depth::Quick);
         let elapsed = started.elapsed().as_nanos();
@@ -493,9 +507,11 @@ pub struct QuickTiming {
 ///
 /// When `cases` holds no [`BUDGET_CASE`], `plan.calls` is zero, or a call
 /// cannot assemble its input.
-pub fn measure(fixture: &Fixture, cases: &[Case], plan: QuickPlan) -> Result<QuickTiming, String> {
+pub fn measure(fixture: &Fixture, cases: &[Case], plan: QuickPlan) -> Result<QuickTiming, Error> {
     if plan.calls == 0 {
-        return Err("a QUICK measurement of zero calls measures nothing".to_owned());
+        return Err(Error::Empty(
+            "a QUICK measurement of zero calls measures nothing".to_owned(),
+        ));
     }
     let mut pooled: Vec<u128> = Vec::with_capacity(cases.len().saturating_mul(plan.calls));
     let mut budget: Option<Summary> = None;
@@ -509,7 +525,7 @@ pub fn measure(fixture: &Fixture, cases: &[Case], plan: QuickPlan) -> Result<Qui
             own.push(fixture.time_quick(case)?);
         }
         pooled.extend_from_slice(&own);
-        let summary = Summary::of(own);
+        let summary = Summary::of(own)?;
         if summary.p99_ns > slowest.1 || slowest.0.is_empty() {
             slowest = (case.name.clone(), summary.p99_ns);
         }
@@ -517,11 +533,11 @@ pub fn measure(fixture: &Fixture, cases: &[Case], plan: QuickPlan) -> Result<Qui
             budget = Some(summary);
         }
     }
-    let budget = budget.ok_or_else(|| format!("the cases hold no {BUDGET_CASE}"))?;
+    let budget = budget.ok_or_else(|| Error::Empty(format!("the cases hold no {BUDGET_CASE}")))?;
     Ok(QuickTiming {
         cases: cases.len(),
         calls_per_case: plan.calls,
-        pooled: Summary::of(pooled),
+        pooled: Summary::of(pooled)?,
         budget,
         slowest,
     })
@@ -565,11 +581,15 @@ mod tests {
             pooled: Summary {
                 p50_ns: 41_000,
                 p99_ns: 1_250_500,
+                mean_ns: 60_000,
+                max_ns: 2_000_000,
                 samples: 9_600,
             },
             budget: Summary {
                 p50_ns: 300_000,
                 p99_ns: 400_001,
+                mean_ns: 310_000,
+                max_ns: 500_000,
                 samples: 200,
             },
             slowest: ("budget_128".to_owned(), 400_001),
