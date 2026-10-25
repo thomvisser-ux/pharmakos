@@ -137,10 +137,14 @@ fn g3_real_segment_support_tick_and_fourth_seat() {
     report("G3' segment", segment_notices(&root, os));
     report(
         "G3' support search",
-        support::measure(&root, G3_SEED).map(|line| vec![g3::support_notice(&line, os)]),
+        support::measure(&root, G3_SEED).map(|line| {
+            vec![
+                g3::support_notice(&line, os),
+                g3::footing_query_notice(&line.footing, os),
+            ]
+        }),
     );
     report("G3' fourth seat", fourth_notice(&root, os));
-    println!("{}", g3::footing_query_notice(os));
     assert!(failed.is_empty(), "{failed:?}");
 }
 

@@ -19,7 +19,7 @@
 //! | [`stream`] | The crater stream at item 65's 20 a second, filed through the host's seam |
 //! | [`segment`] | The 8-minute segment, every tick timed phase by phase through the phase stepper |
 //! | [`sight`] | `World::seen_by` restated and timed at the gate's load (item 148 (4)) |
-//! | [`support`] | The support search's adversarial tick, and Mine's footing check at its worst (item 138 (3)) |
+//! | [`support`] | The support search's adversarial tick (item 138 (3)), and the footing query at its worst (item 148 (4)) |
 //! | [`fourth`] | A fourth, unplaced seat's decision-tick cost (decision 2's separate line) |
 //!
 //! # What the figures are, and what they are not yet
@@ -29,7 +29,7 @@
 //! fires at the enemy raiders in its range and they return fire, craters land
 //! at the budget's rate, regions collapse and units repath, all through the
 //! sim's own phases. Defend and Attack do not run until `dfnd` and `atk`
-//! merge, and the footing query is `site`'s; `g3r` re-points this harness at
+//! merge (the footing query is `site`'s, #133, and measured here); `g3r` re-points this harness at
 //! that sim and certifies there (S2's plan, task `g3r`). Every notice names
 //! the seed, the variant's `rules_hash` and the layout's digest, so a reader
 //! can reproduce the run.
@@ -51,7 +51,7 @@ use crate::error::Error;
 use crate::stats::{micros, millis, per_mille};
 use fourth::FourthSeat;
 use segment::SegmentReport;
-use support::SupportReport;
+use support::{FootingQuery, SupportReport};
 
 /// The seed G3′ is measured on: the seed every committed scenario plays, so
 /// the map is one the project already pins.
@@ -343,8 +343,7 @@ pub fn support_notice(report: &SupportReport, os: &str) -> String {
         "::notice title=G3' support search::the adversarial tick on {os} took {} ({}): {} \
          regions fell, {} voxels moved, in {} passes; the searches visited {} of the {} a tick \
          allows, {} seeds labelled supported for the budget and {} for the {}-voxel region \
-         bound; built of {} voxels over {} ticks at the site {:?}. Mine's footing check at its \
-         worst (a dig detaching a region of exactly the bound) {}",
+         bound; built of {} voxels over {} ticks at the site {:?}",
         ms(report.tick_ns),
         phases.join(", "),
         report.regions,
@@ -358,7 +357,6 @@ pub fn support_notice(report: &SupportReport, os: &str) -> String {
         report.built_voxels,
         report.build_ticks,
         report.site,
-        micros(report.footing_ns),
     )
 }
 
@@ -389,13 +387,20 @@ pub fn fourth_notice(line: &FourthSeat, os: &str) -> Result<String, Error> {
     ))
 }
 
-/// The footing query's line: `site`'s, not on this `main` (item 148 (4)).
+/// The footing query's line (item 148 (4); `site`'s worst case, #133).
 #[must_use]
-pub fn footing_query_notice(os: &str) -> String {
+pub fn footing_query_notice(query: &FootingQuery, os: &str) -> String {
     format!(
-        "::notice title=G3' footing query::not measured on {os}: the footing query's worst case, \
-         (2r + 1)^3 voxels times the live structures and beacons, is the site lane's (#133), \
-         which this harness's main does not hold; g3r measures it on the finished sim"
+        "::notice title=G3' footing query::on {os}, over {} structure and beacon rows: a set's \
+         footing check (a Mine dig) that misses {}, and a blast's ball of radius {} whose box \
+         meets a live beacon's footing, {} voxels each asked, {} (the worst case, (2r + 1)^3 \
+         voxels times the rows); fastest of {} runs each",
+        query.rows,
+        micros(query.set_ns),
+        query.radius,
+        query.ball_voxels,
+        micros(query.blast_ns),
+        support::FOOTING_RUNS,
     )
 }
 
