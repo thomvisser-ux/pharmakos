@@ -28,12 +28,36 @@ use std::path::{Path, PathBuf};
 /// The defaults the bench keeps, as `(file, a substring of the trimmed line,
 /// the rule that makes the default the exact answer)`. Each entry matches
 /// exactly one line.
-const KEPT_FALLBACKS: &[(&str, &str, &str)] = &[(
-    "stats.rs",
-    "let count = u128::try_from(sample.len()).ok()?;",
-    "a `usize` fits a `u128` on every target Rust builds for, so the `None` is unreachable; \
+const KEPT_FALLBACKS: &[(&str, &str, &str)] = &[
+    (
+        "src/stats.rs",
+        "let count = u128::try_from(sample.len()).ok()?;",
+        "a `usize` fits a `u128` on every target Rust builds for, so the `None` is unreachable; \
      `mean` answers `None` only for an empty sample, which the division says",
-)];
+    ),
+    (
+        "src/decision.rs",
+        "let per_unit = u128::try_from(self.ns_per_unit).ok().filter(|ns| *ns > 0)?;",
+        "a cost per unit of zero or below fills no tick, so no ceiling exists and `None` is \
+         that answer, as the method's docs and its tests state",
+    ),
+    (
+        "src/g3/variant.rs",
+        "let raise = draw.saturating_sub(power.core_surplus_kw);",
+        "the raise is how far the gate's draw passes the shipped surplus, and zero when the \n         surplus already covers it: the floor is the rule",
+    ),
+    (
+        "tests/g3_real.rs",
+        "let _ = ALLOCATIONS.try_with(",
+        "a `const` thread-local with no destructor is always accessible, so the error arm is \
+         unreachable, and an allocator has nowhere to report one",
+    ),
+    (
+        "tests/harness.rs",
+        ".unwrap_or_else(|error| panic!(",
+        "a test fails by panicking: this is the failure, named, not a default",
+    ),
+];
 
 /// The needles a fallback is written with, as the mesher's scan has them.
 const FALLBACK_NEEDLES: &[&str] = &[
@@ -44,6 +68,9 @@ const FALLBACK_NEEDLES: &[&str] = &[
     ".ok().and_then(",
     ".clamp(",
     ".max(0)",
+    "saturating_",
+    ".ok().filter(",
+    "let _ =",
 ];
 
 fn walk(dir: &Path, found: &mut Vec<PathBuf>) {
@@ -57,22 +84,25 @@ fn walk(dir: &Path, found: &mut Vec<PathBuf>) {
     }
 }
 
-/// The crate's source files, every directory under `src`, sorted.
+/// The crate's source files, every directory under `src` and `tests`, sorted,
+/// less this file, whose needles are its data.
 fn sources() -> Vec<PathBuf> {
     let mut found: Vec<PathBuf> = Vec::new();
-    walk(&src(), &mut found);
+    walk(&root().join("src"), &mut found);
+    walk(&root().join("tests"), &mut found);
+    found.retain(|path| name(path) != "tests/fallbacks.rs");
     found.sort();
     found
 }
 
-fn src() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src")
+fn root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-/// A source file's path under `src`, with `/` between its parts.
+/// A source file's path under the crate, with `/` between its parts.
 fn name(path: &Path) -> String {
-    path.strip_prefix(src())
-        .expect("a source file under src")
+    path.strip_prefix(root())
+        .expect("a source file under the crate")
         .to_string_lossy()
         .replace('\\', "/")
 }
@@ -134,7 +164,8 @@ fn the_fallback_scan_sees_every_form_it_names() {
                    let x = y.unwrap_or_else(f);\n    let x = y.map_or(0, f);\n    \
                    let x = y.map_or_else(g, f);\n    let x = y.ok()?;\n    let x = \
                    y.ok().and_then(f);\n    let x = y.clamp(1, 9);\n    let x = y.max(0);\n    \
-                   let Ok(x) = y else {\n        return 0;\n    };\n    let Ok(x) = y else {\n        \
+                   let x = y.saturating_add(1);\n    let x = y.ok().filter(f);\n    \
+                   let _ = y;\n    let Ok(x) = y else {\n        return 0;\n    };\n    let Ok(x) = y else {\n        \
                    return Err(e);\n    };\n    // y.unwrap_or(0) in prose\n}\n#[cfg(test)]\n\
                    fn b() { y.unwrap_or(0); }\n";
     assert_eq!(
@@ -149,6 +180,9 @@ fn the_fallback_scan_sees_every_form_it_names() {
             "let x = y.ok().and_then(f);",
             "let x = y.clamp(1, 9);",
             "let x = y.max(0);",
+            "let x = y.saturating_add(1);",
+            "let x = y.ok().filter(f);",
+            "let _ = y;",
             "let Ok(x) = y else {",
         ],
         "every form the scan names, once, and nothing else"
@@ -190,7 +224,7 @@ fn no_silent_fallback_is_left() {
     }
 }
 
-/// The scan must read every file, the ones under `src/g3/` among them, or the
+/// The scan must read every file, the ones under `src/g3/` and `tests/` among them, or the
 /// assertions above pass over nothing.
 #[test]
 fn the_fallback_scan_reads_the_whole_crate() {
@@ -198,21 +232,24 @@ fn the_fallback_scan_reads_the_whole_crate() {
     assert_eq!(
         names,
         [
-            "decision.rs",
-            "error.rs",
-            "g3/fourth.rs",
-            "g3/layout.rs",
-            "g3/segment.rs",
-            "g3/sight.rs",
-            "g3/stream.rs",
-            "g3/support.rs",
-            "g3/variant.rs",
-            "g3.rs",
-            "heap.rs",
-            "hosted.rs",
-            "lib.rs",
-            "quick.rs",
-            "stats.rs",
+            "src/decision.rs",
+            "src/error.rs",
+            "src/g3/fourth.rs",
+            "src/g3/layout.rs",
+            "src/g3/segment.rs",
+            "src/g3/sight.rs",
+            "src/g3/stream.rs",
+            "src/g3/support.rs",
+            "src/g3/variant.rs",
+            "src/g3.rs",
+            "src/heap.rs",
+            "src/hosted.rs",
+            "src/lib.rs",
+            "src/quick.rs",
+            "src/stats.rs",
+            "tests/g3_real.rs",
+            "tests/harness.rs",
+            "tests/perf_alarm.rs",
         ],
         "the scan reads every source file of the crate; a new one joins this list"
     );

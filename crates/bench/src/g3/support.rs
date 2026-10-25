@@ -37,8 +37,9 @@
 //! **The footing query.** Since `site` (#133) a footing ignores every edit, so
 //! Mine never undermines and its dig asks no support search of its own: its
 //! support check is the seam's reach flood, which runs in Programs on the
-//! tick above. What a dig and a blast ask of the footings is timed here, on
-//! the gate's world once the construct stands, at the worst case `pharmakos_sim::footing`
+//! tick above. What a dig and a blast ask of the footings is timed by
+//! [`footing_query`], which the segment asks on the world it ends on (the
+//! most structures Build has placed), at the worst case `pharmakos_sim::footing`
 //! names: a ball of the largest blast radius whose box meets a footing, every
 //! voxel asked, each miss walking every structure and beacon row ([`FootingQuery`]).
 
@@ -76,6 +77,10 @@ const CUT_DEPTH: i32 = 4;
 /// The charges filed on the adversarial tick.
 const CHARGES: i32 = 6;
 
+/// How many `set` checks one timed run of the footing query makes: one is
+/// under the clock's resolution on Windows.
+pub const SET_CALLS: u64 = 10_000;
+
 /// How many times the footing check is timed, the fastest kept.
 pub const FOOTING_RUNS: usize = 5;
 
@@ -109,9 +114,6 @@ pub struct SupportReport {
     /// Seeds labelled supported on the tick because their search passed the
     /// region bound.
     pub bound_skips: u64,
-    /// The footing query at its worst case, on the gate's world as the
-    /// construct left it.
-    pub footing: FootingQuery,
 }
 
 /// One column of the construct: its voxels from `low` to `high`, inclusive.
@@ -312,7 +314,7 @@ fn tick(gate: &mut Gate, played: &mut u64) -> Result<Timed, Error> {
     gate.stream.file(host, *played)?;
     let timed = segment::timed_tick(&mut gate.surface, None)?
         .ok_or_else(|| Error::Empty("the support run's segment ended early".to_owned()))?;
-    *played = played.saturating_add(1);
+    *played += 1;
     Ok(timed)
 }
 
@@ -359,7 +361,7 @@ fn build(gate: &mut Gate, voxels: &[[i32; 3]], played: &mut u64) -> Result<u32, 
             if !file(host(gate)?, edit)? {
                 break;
             }
-            taken = taken.saturating_add(1);
+            taken += 1;
         }
         if taken == 0 {
             return Err(Error::Layout(
@@ -371,7 +373,7 @@ fn build(gate: &mut Gate, voxels: &[[i32; 3]], played: &mut u64) -> Result<u32, 
             .get(taken..)
             .ok_or(Error::Overflow("the build's progress"))?;
         tick(gate, played)?;
-        build_ticks = build_ticks.saturating_add(1);
+        build_ticks += 1;
     }
     Ok(build_ticks)
 }
@@ -400,10 +402,13 @@ pub struct FootingQuery {
     /// The voxels of the ball the query asked about, `(2r + 1)^3` less the
     /// corners outside the ball.
     pub ball_voxels: u64,
-    /// The structure and beacon rows each miss walks, live or not.
-    pub rows: u64,
-    /// One `set`'s check (a Mine dig, a fill, a host's write) that names no
-    /// footing, so it walks every row: best of its runs, in nanoseconds.
+    /// The structure rows each miss walks, live or not.
+    pub structure_rows: u64,
+    /// The beacon rows each miss walks, live or not.
+    pub beacon_rows: u64,
+    /// [`SET_CALLS`] `set` checks (a Mine dig, a fill, a host's write) that
+    /// name no footing, so each walks every row: best of its runs, in
+    /// nanoseconds for all of them.
     pub set_ns: u128,
     /// A blast's whole ball beside a live beacon's column, so its box
     /// touches a footing and every voxel is asked, as `VoxelStore::blast`
@@ -433,7 +438,7 @@ fn fastest(mut run: impl FnMut() -> u64) -> Result<u128, Error> {
 /// the ball. The ball is centred `r` voxels east of the first live beacon's
 /// column, so its box reaches the footing while every other voxel misses, and
 /// a miss walks every row: the most rows asked the most times.
-fn footing_query(world: &World) -> Result<FootingQuery, Error> {
+pub(crate) fn footing_query(world: &World) -> Result<FootingQuery, Error> {
     let radius = i32::try_from(
         world
             .rules()
@@ -483,20 +488,23 @@ fn footing_query(world: &World) -> Result<FootingQuery, Error> {
     if footings.holds(miss) {
         return Err(Error::Drift(format!("{miss:?} lies in a footing")));
     }
-    let set_ns = fastest(|| u64::from(footings.contains(miss)))?;
+    // One call is under the clock's resolution, so a run is SET_CALLS calls.
+    let set_ns = fastest(|| {
+        (0..SET_CALLS).fold(0_u64, |held, _| {
+            held + u64::from(footings.contains(std::hint::black_box(miss)))
+        })
+    })?;
     let blast_ns = fastest(|| {
         let near = footings.touches(min, max);
         ball.iter().fold(0_u64, |held, at| {
             held + u64::from(near && footings.contains(*at))
         })
     })?;
-    let rows = u64::from(world.structures().len())
-        .checked_add(u64::from(beacons.len()))
-        .ok_or(Error::Overflow("the footing rows"))?;
     Ok(FootingQuery {
         radius,
         ball_voxels: u64::try_from(ball.len()).map_err(|_| Error::Overflow("the ball"))?,
-        rows,
+        structure_rows: u64::from(world.structures().len()),
+        beacon_rows: u64::from(beacons.len()),
         set_ns,
         blast_ns,
     })
@@ -566,7 +574,6 @@ pub fn measure(root: &Path, seed: u64) -> Result<SupportReport, Error> {
     let voxels = bottom_up(&construct);
     let build_ticks = build(&mut gate, &voxels, &mut played)?;
     stands(hosted::world(&gate.surface)?, &construct)?;
-    let footing = footing_query(hosted::world(&gate.surface)?)?;
     arm(&mut gate, &construct, corner)?;
     let before = hosted::world(&gate.surface)?.collapse_counts();
     let timed = tick(&mut gate, &mut played)?;
@@ -607,6 +614,5 @@ pub fn measure(root: &Path, seed: u64) -> Result<SupportReport, Error> {
             after.skipped(CollapseSkip::RegionBound),
             before.skipped(CollapseSkip::RegionBound),
         )?,
-        footing,
     })
 }

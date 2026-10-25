@@ -41,6 +41,7 @@ use pharmakos_sim::world::{PHASE_ORDER, Phase, World};
 use super::layout::{self, GATE_SEATS, LAID_OUT_BEACONS, MOST_BEACONS_PER_SEAT, UNITS_PER_SEAT};
 use super::sight::{self, SightProbe};
 use super::stream::{CraterStream, StreamCounts};
+use super::support::FootingQuery;
 use super::variant::{self, Override, SeatLoad};
 use crate::decision::hosted_budget_playbook;
 use crate::error::Error;
@@ -185,6 +186,8 @@ pub struct SegmentReport {
     pub heap_at_start: Option<u64>,
     /// The hash chain's digest, so two runs can be compared.
     pub chain_digest: u64,
+    /// The footing query at its worst case, on the world the segment ended on.
+    pub footing: FootingQuery,
 }
 
 /// The gate's per-seat load, as the variant powers it.
@@ -210,13 +213,16 @@ struct Counters {
     movers: u64,
 }
 
-fn counters(world: &World) -> Counters {
+fn counters(world: &World) -> Result<Counters, Error> {
     let events = world.events();
-    let count = |kinds: &[EventKind]| -> u64 {
-        events
-            .iter()
-            .filter(|event| kinds.contains(&event.kind))
-            .fold(0_u64, |count, _| count.saturating_add(1))
+    let count = |kinds: &[EventKind]| -> Result<u64, Error> {
+        u64::try_from(
+            events
+                .iter()
+                .filter(|event| kinds.contains(&event.kind))
+                .count(),
+        )
+        .map_err(|_| Error::Overflow("a tick's event count"))
     };
     let serve = world.serve_report();
     let collapse = world.collapse_counts();
@@ -230,28 +236,30 @@ fn counters(world: &World) -> Counters {
         .zip(units.destinations())
     {
         if hp.is_alive() {
-            live_units = live_units.saturating_add(1);
+            live_units = live_units
+                .checked_add(1)
+                .ok_or(Error::Overflow("the live units"))?;
             if at != to {
-                movers = movers.saturating_add(1);
+                movers = movers.checked_add(1).ok_or(Error::Overflow("the movers"))?;
             }
         }
     }
-    Counters {
+    Ok(Counters {
         events: events.len(),
         deaths: count(&[
             EventKind::UnitDestroyed,
             EventKind::StructureDestroyed,
             EventKind::BeaconDestroyed,
             EventKind::CommanderDied,
-        ]),
-        credits: count(&[EventKind::KillCredited]),
+        ])?,
+        credits: count(&[EventKind::KillCredited])?,
         served: serve.served,
         backlog: serve.backlog,
         passes: collapse.last_passes,
         visits: collapse.last_visits,
         live_units,
         movers,
-    }
+    })
 }
 
 /// One tick as [`timed_tick`] took it.
@@ -296,9 +304,11 @@ pub(super) fn timed_tick(
     surface: &mut pharmakos_gateway::surface::Surface,
     heap: Option<&dyn HeapCounter>,
 ) -> Result<Option<Timed>, Error> {
+    // Allocated before the counter is read, so the bench's own buffer is
+    // never charged to the tick.
+    let mut phase_ns: Vec<(usize, u128)> = Vec::with_capacity(PHASE_ORDER.len());
     let allocations_before = heap.map(HeapCounter::allocations);
     let begun = Instant::now();
-    let mut phase_ns: Vec<(usize, u128)> = Vec::with_capacity(PHASE_ORDER.len());
     let begin_ns;
     {
         let Some(mut tick) = surface
@@ -327,7 +337,19 @@ pub(super) fn timed_tick(
         }
     }
     let allocations_mid = heap.map(HeapCounter::allocations);
-    let counters = counters(hosted::world(surface)?);
+    let counters = counters(hosted::world(surface)?)?;
+    // The finish window starts here, so what reading the counters cost is
+    // never charged to it either.
+    let allocations_mid = match (allocations_mid, heap.map(HeapCounter::allocations)) {
+        (Some(before), Some(after)) if before == after => Some(after),
+        (None, None) => None,
+        _ => {
+            return Err(Error::Drift(
+                "reading a tick's counters allocated, which the finish window would count"
+                    .to_owned(),
+            ));
+        }
+    };
     let finished = Instant::now();
     let report = {
         let tick = surface
@@ -398,7 +420,7 @@ impl Record {
         self.finish.push(timed.finish_ns);
         self.chain
             .extend_from_slice(&timed.report.hash.to_le_bytes());
-        self.note(timed.counters, cap);
+        self.note(timed.counters, cap)?;
         if let Some((phases, finish)) = timed.allocations {
             self.phase_allocations.push(phases);
             self.finish_allocations.push(finish);
@@ -406,23 +428,53 @@ impl Record {
         Ok((tick_ns, broadphase))
     }
 
-    fn note(&mut self, counters: Counters, cap: u32) {
+    fn note(&mut self, counters: Counters, cap: u32) -> Result<(), Error> {
+        let add = |held: u64, more: u64, what: &'static str| {
+            held.checked_add(more).ok_or(Error::Overflow(what))
+        };
         self.peak_events = self.peak_events.max(counters.events);
-        self.deaths = self.deaths.saturating_add(counters.deaths);
-        self.credits = self.credits.saturating_add(counters.credits);
+        self.deaths = add(self.deaths, counters.deaths, "the deaths")?;
+        self.credits = add(self.credits, counters.credits, "the kill credits")?;
         self.max_passes = self.max_passes.max(counters.passes);
         self.max_visits = self.max_visits.max(counters.visits);
-        self.movers = self.movers.saturating_add(counters.movers);
+        self.movers = add(self.movers, counters.movers, "the movers")?;
         let repaths = &mut self.repaths;
-        repaths.served = repaths.served.saturating_add(u64::from(counters.served));
+        repaths.served = add(repaths.served, u64::from(counters.served), "the repaths")?;
         repaths.max_backlog = repaths.max_backlog.max(counters.backlog);
         if counters.served >= cap {
-            repaths.ticks_at_cap = repaths.ticks_at_cap.saturating_add(1);
-            self.run_at_cap = self.run_at_cap.saturating_add(1);
+            repaths.ticks_at_cap = add(repaths.ticks_at_cap, 1, "the ticks at the cap")?;
+            self.run_at_cap = add(self.run_at_cap, 1, "a run at the cap")?;
             repaths.longest_run_at_cap = repaths.longest_run_at_cap.max(self.run_at_cap);
         } else {
             self.run_at_cap = 0;
         }
+        Ok(())
+    }
+
+    /// A record with room for `ticks` ticks, so its vectors never grow inside
+    /// the segment: their growth would read as the live heap's drift (item 68).
+    fn with_room(ticks: usize, cap: u32) -> Result<Record, Error> {
+        let room = || Vec::with_capacity(ticks);
+        let hashes = ticks
+            .checked_mul(core::mem::size_of::<u64>())
+            .ok_or(Error::Overflow("the hash chain's room"))?;
+        let minutes = ticks
+            .div_ceil(usize::try_from(TICKS_PER_MINUTE).map_err(|_| Error::Overflow("a minute"))?);
+        Ok(Record {
+            tick: room(),
+            begin: room(),
+            finish: room(),
+            phases: (0..PHASE_ORDER.len()).map(|_| room()).collect(),
+            chain: Vec::with_capacity(hashes),
+            repaths: Repaths {
+                cap,
+                ..Repaths::default()
+            },
+            phase_allocations: Vec::with_capacity(ticks),
+            finish_allocations: Vec::with_capacity(ticks),
+            minutes: Vec::with_capacity(minutes),
+            ..Record::default()
+        })
     }
 }
 
@@ -513,19 +565,21 @@ pub fn measure(
         provenance,
         repath_cap: cap,
     } = open_gate(root, plan.seed, plan.segment_ms, plan.craters_per_second)?;
-    let mut record = Record {
-        phases: vec![Vec::new(); PHASE_ORDER.len()],
-        repaths: Repaths {
-            cap,
-            ..Repaths::default()
-        },
-        ..Record::default()
-    };
+    // One tick of slack over the segment's length, so no vector grows inside it.
+    let slots = plan
+        .segment_ms
+        .checked_div(MS_PER_TICK)
+        .and_then(|ticks| usize::try_from(ticks).ok())
+        .and_then(|ticks| ticks.checked_add(1))
+        .ok_or(Error::Overflow("the segment's ticks"))?;
+    let mut record = Record::with_room(slots, cap)?;
+    let per_minute =
+        usize::try_from(TICKS_PER_MINUTE).map_err(|_| Error::Overflow("a minute's ticks"))?;
+    let mut minute_ticks: Vec<u128> = Vec::with_capacity(per_minute);
+    let mut minute_broadphase: Vec<u128> = Vec::with_capacity(per_minute);
     let heap_at_start = heap.map(HeapCounter::live_bytes);
     let queue_bytes = hosted::world(&surface)?.queue_bytes();
     let regions_before = hosted::world(&surface)?.collapse_counts().regions;
-    let mut minute_ticks: Vec<u128> = Vec::new();
-    let mut minute_broadphase: Vec<u128> = Vec::new();
     let mut played: u64 = 0;
     loop {
         {
@@ -541,10 +595,17 @@ pub fn measure(
         let (tick_ns, broadphase) = record.push(&timed, cap)?;
         minute_ticks.push(tick_ns);
         minute_broadphase.push(broadphase);
-        played = played.saturating_add(1);
+        played = played
+            .checked_add(1)
+            .ok_or(Error::Overflow("the ticks played"))?;
         if played.rem_euclid(TICKS_PER_MINUTE) == 0 || segment_ended {
-            let ticks = std::mem::take(&mut minute_ticks);
-            let broadphases = std::mem::take(&mut minute_broadphase);
+            // Copied and cleared, not taken, so the buffers keep their room and
+            // the copies are freed before the heap is read.
+            let minute_p99 = Summary::of(minute_ticks.clone())?.p99_ns;
+            let broadphase_mean = stats::mean(&minute_broadphase)
+                .ok_or_else(|| Error::Empty("a minute with no broadphase".to_owned()))?;
+            minute_ticks.clear();
+            minute_broadphase.clear();
             let probe = if plan.probe_sight {
                 Some(sight::probe(hosted::world(&surface)?)?)
             } else {
@@ -552,9 +613,8 @@ pub fn measure(
             };
             record.minutes.push(Minute {
                 number: played.div_ceil(TICKS_PER_MINUTE),
-                tick_p99_ns: Summary::of(ticks)?.p99_ns,
-                broadphase_mean_ns: stats::mean(&broadphases)
-                    .ok_or_else(|| Error::Empty("a minute with no broadphase".to_owned()))?,
+                tick_p99_ns: minute_p99,
+                broadphase_mean_ns: broadphase_mean,
                 live_units: timed.counters.live_units,
                 live_heap_bytes: heap.map(HeapCounter::live_bytes),
                 sight: probe,
@@ -569,6 +629,9 @@ pub fn measure(
         .regions
         .checked_sub(regions_before)
         .ok_or_else(|| Error::Drift("the support rule's region count went down".to_owned()))?;
+    // The footing query at the end of the segment, where Build has placed the
+    // most structures: each miss walks every structure and beacon row.
+    let footing = super::support::footing_query(hosted::world(&surface)?)?;
     finish(
         record,
         Tally {
@@ -578,6 +641,7 @@ pub fn measure(
             heap_at_start,
             ticks: played,
             regions_fallen,
+            footing,
         },
     )
 }
@@ -591,6 +655,7 @@ struct Tally {
     heap_at_start: Option<u64>,
     ticks: u64,
     regions_fallen: u64,
+    footing: FootingQuery,
 }
 
 /// Turn the record into the report.
@@ -602,9 +667,22 @@ fn finish(record: Record, tally: Tally) -> Result<SegmentReport, Error> {
         heap_at_start,
         ticks,
         regions_fallen,
+        footing,
     } = tally;
     if ticks == 0 {
         return Err(Error::Empty("the segment played no tick".to_owned()));
+    }
+    let played = usize::try_from(ticks).map_err(|_| Error::Overflow("the ticks played"))?;
+    // Every phase but the hash is timed on every tick, so the tick's mean and
+    // a phase's mean are over the same ticks and their difference is the mean
+    // of the per-tick differences.
+    for (phase, sample) in PHASE_ORDER.iter().zip(&record.phases) {
+        if *phase != Phase::Hash && sample.len() != played {
+            return Err(Error::Drift(format!(
+                "{phase:?} was timed on {} of the {played} ticks",
+                sample.len()
+            )));
+        }
     }
     let tick = Summary::of(record.tick)?;
     let mut phases: Vec<PhaseFigure> = Vec::new();
@@ -622,6 +700,9 @@ fn finish(record: Record, tally: Tally) -> Result<SegmentReport, Error> {
         .find(|figure| figure.phase == Phase::Pathing)
         .map(|figure| figure.summary.mean_ns)
         .ok_or_else(|| Error::Drift("no Pathing phase was timed".to_owned()))?;
+    let tick_minus_pathing_mean_ns = tick.mean_ns.checked_sub(pathing).ok_or_else(|| {
+        Error::Drift("the Pathing phase's mean exceeds the tick's, which holds it".to_owned())
+    })?;
     let milli = |sum: u64| -> Result<u64, Error> {
         sum.checked_mul(1_000)
             .and_then(|scaled| scaled.checked_div(ticks))
@@ -630,23 +711,24 @@ fn finish(record: Record, tally: Tally) -> Result<SegmentReport, Error> {
     let allocations = if record.phase_allocations.is_empty() {
         None
     } else {
-        let sum = |sample: &[u64]| {
+        let sum = |sample: &[u64]| -> Result<u64, Error> {
             sample
                 .iter()
-                .fold(0_u64, |sum, value| sum.saturating_add(*value))
+                .try_fold(0_u64, |sum, value| sum.checked_add(*value))
+                .ok_or(Error::Overflow("the allocations"))
         };
         let most = |sample: &[u64]| sample.iter().copied().fold(0_u64, u64::max);
         Some(Allocations {
-            phases_mean_milli: milli(sum(&record.phase_allocations))?,
+            phases_mean_milli: milli(sum(&record.phase_allocations)?)?,
             phases_max: most(&record.phase_allocations),
-            finish_mean_milli: milli(sum(&record.finish_allocations))?,
+            finish_mean_milli: milli(sum(&record.finish_allocations)?)?,
             finish_max: most(&record.finish_allocations),
         })
     };
     Ok(SegmentReport {
         provenance,
         ticks,
-        tick_minus_pathing_mean_ns: tick.mean_ns.saturating_sub(pathing),
+        tick_minus_pathing_mean_ns,
         tick,
         phases,
         begin: Summary::of(record.begin)?,
@@ -665,6 +747,7 @@ fn finish(record: Record, tally: Tally) -> Result<SegmentReport, Error> {
         allocations,
         heap_at_start,
         chain_digest: pharmakos_sim::digest(&record.chain),
+        footing,
     })
 }
 

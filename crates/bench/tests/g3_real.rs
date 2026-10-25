@@ -37,12 +37,6 @@
 //! and the others still run; the test fails at the end if any did. It prints
 //! an empty line before its first notice, for `perf_alarm.rs`'s reason.
 
-#![allow(
-    unsafe_code,
-    reason = "a GlobalAlloc implementation cannot be written without unsafe; scoped to this \
-              test binary's counting allocator, which only forwards to System"
-)]
-
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::path::Path;
@@ -58,44 +52,79 @@ static LIVE: AtomicU64 = AtomicU64::new(0);
 
 thread_local! {
     /// How many times this thread has allocated. `const`-initialised with no
-    /// destructor, so touching it from inside the allocator cannot recurse.
+    /// destructor, so touching it from inside the allocator cannot recurse,
+    /// and it is never torn down while the thread runs.
     static ALLOCATIONS: Cell<u64> = const { Cell::new(0) };
 }
 
-/// A `usize` byte count as a `u64`, which every target this builds for holds.
-fn bytes(size: usize) -> u64 {
-    u64::try_from(size).unwrap_or(u64::MAX)
+/// A byte count as a `u64`. `usize` is at most 64 bits on every target Rust
+/// builds for, so the widening is exact; the allocator cannot return an
+/// error, which is why this is a cast and not a `try_from`.
+#[allow(
+    clippy::as_conversions,
+    reason = "usize to u64 widens exactly on every target; an allocator cannot fail softly"
+)]
+const fn bytes(size: usize) -> u64 {
+    size as u64
 }
 
+/// Count one allocation on this thread. A `u64` of allocations cannot wrap in
+/// a run, and the wrap is written out rather than a panic inside `alloc`.
 fn charge() {
-    let _ = ALLOCATIONS.try_with(|count| count.set(count.get().saturating_add(1)));
+    // A `const` thread-local with no destructor is always accessible, so the
+    // `AccessError` arm cannot be reached; an allocator has nowhere to report
+    // it in any case.
+    let _ = ALLOCATIONS.try_with(|count| count.set(count.get().wrapping_add(1)));
 }
 
 struct Counting;
 
+#[allow(
+    unsafe_code,
+    reason = "a GlobalAlloc implementation cannot be written without unsafe; it only forwards \
+              to System and counts what System returned"
+)]
+// SAFETY: every method forwards to `System` with the caller's own arguments,
+// so `System`'s guarantees are this allocator's; the counting touches only an
+// atomic and a destructor-free thread-local, and never allocates.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        charge();
-        LIVE.fetch_add(bytes(layout.size()), Ordering::Relaxed);
-        unsafe { System.alloc(layout) }
+        // SAFETY: the caller upholds `GlobalAlloc::alloc`'s contract for `layout`.
+        let ptr = unsafe { System.alloc(layout) };
+        if !ptr.is_null() {
+            charge();
+            LIVE.fetch_add(bytes(layout.size()), Ordering::Relaxed);
+        }
+        ptr
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        // SAFETY: `ptr` came from this allocator, which is `System`'s, with `layout`.
+        unsafe { System.dealloc(ptr, layout) };
         LIVE.fetch_sub(bytes(layout.size()), Ordering::Relaxed);
-        unsafe { System.dealloc(ptr, layout) }
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        charge();
-        LIVE.fetch_add(bytes(layout.size()), Ordering::Relaxed);
-        unsafe { System.alloc_zeroed(layout) }
+        // SAFETY: as `alloc`.
+        let ptr = unsafe { System.alloc_zeroed(layout) };
+        if !ptr.is_null() {
+            charge();
+            LIVE.fetch_add(bytes(layout.size()), Ordering::Relaxed);
+        }
+        ptr
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        charge();
-        LIVE.fetch_add(bytes(new_size), Ordering::Relaxed);
-        LIVE.fetch_sub(bytes(layout.size()), Ordering::Relaxed);
-        unsafe { System.realloc(ptr, layout, new_size) }
+        // SAFETY: `ptr` came from this allocator with `layout`, and the caller
+        // upholds `realloc`'s contract for `new_size`.
+        let moved = unsafe { System.realloc(ptr, layout, new_size) };
+        // A null answer leaves the old block live and unchanged.
+        if !moved.is_null() {
+            charge();
+            LIVE.fetch_add(bytes(new_size), Ordering::Relaxed);
+            LIVE.fetch_sub(bytes(layout.size()), Ordering::Relaxed);
+        }
+        moved
     }
 }
 
@@ -111,7 +140,9 @@ impl HeapCounter for Counter {
     }
 
     fn allocations(&self) -> u64 {
-        ALLOCATIONS.try_with(Cell::get).unwrap_or(0)
+        // Read on the bench's own thread, never inside the allocator; a `const`
+        // thread-local with no destructor is always accessible there.
+        ALLOCATIONS.with(Cell::get)
     }
 }
 
@@ -137,12 +168,7 @@ fn g3_real_segment_support_tick_and_fourth_seat() {
     report("G3' segment", segment_notices(&root, os));
     report(
         "G3' support search",
-        support::measure(&root, G3_SEED).map(|line| {
-            vec![
-                g3::support_notice(&line, os),
-                g3::footing_query_notice(&line.footing, os),
-            ]
-        }),
+        support::measure(&root, G3_SEED).map(|line| vec![g3::support_notice(&line, os)]),
     );
     report("G3' fourth seat", fourth_notice(&root, os));
     assert!(failed.is_empty(), "{failed:?}");
@@ -168,6 +194,7 @@ fn segment_notices(root: &Path, os: &str) -> Result<Vec<String>, Error> {
         g3::drift_notice(&report, os),
         g3::combat_notice(&report, os)?,
         g3::sight_notice(&report, os),
+        g3::footing_query_notice(&report.footing, os)?,
     ])
 }
 

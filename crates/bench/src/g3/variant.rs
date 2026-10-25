@@ -105,6 +105,8 @@ pub fn bench_rules(root: &Path, seats: u32, load: SeatLoad) -> Result<BenchRules
         })
         .and_then(|draw| draw.checked_add(power.revive_margin_kw))
         .ok_or(Error::Overflow("the gate's draw per seat"))?;
+    // No raise when the shipped surplus already covers the draw: the floor at
+    // zero is the rule, not a fallback (tests/fallbacks.rs keeps it).
     let raise = draw.saturating_sub(power.core_surplus_kw);
     let surplus = Override {
         row: "power.core_surplus_kw",

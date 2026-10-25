@@ -122,15 +122,21 @@ impl CraterStream {
 
     /// How many craters land on the tick after `played` ticks: the rate spread
     /// evenly, `floor((t + 1) r / 20) - floor(t r / 20)`.
-    fn due(&self, played: u64) -> u64 {
+    fn due(&self, played: u64) -> Result<u64, Error> {
         let ticks_per_second = u64::from(pharmakos_sim::math::quantity::TICK_HZ);
         let rate = u64::from(self.rate);
+        let overflow = || Error::Overflow("the crater stream's schedule");
         let after = played
-            .saturating_add(1)
-            .saturating_mul(rate)
-            .div_euclid(ticks_per_second);
-        let before = played.saturating_mul(rate).div_euclid(ticks_per_second);
-        after.saturating_sub(before)
+            .checked_add(1)
+            .and_then(|next| next.checked_mul(rate))
+            .and_then(|sum| sum.checked_div(ticks_per_second))
+            .ok_or_else(overflow)?;
+        let before = played
+            .checked_mul(rate)
+            .and_then(|sum| sum.checked_div(ticks_per_second))
+            .ok_or_else(overflow)?;
+        // A floor of a larger product is never smaller.
+        after.checked_sub(before).ok_or_else(overflow)
     }
 
     /// One crater's centre, drawn against the world as it stands.
@@ -147,19 +153,27 @@ impl CraterStream {
                 .get(index)
                 .copied()
                 .ok_or(Error::Overflow("a site index"))?;
-            let span = u64::try_from(self.reach.saturating_mul(2).saturating_add(1))
-                .map_err(|_| Error::Overflow("the sphere's span"))?;
+            let span = self
+                .reach
+                .checked_mul(2)
+                .and_then(|both| both.checked_add(1))
+                .ok_or(Error::Overflow("the sphere's span"))?;
+            let span = u64::try_from(span).map_err(|_| Error::Overflow("the sphere's span"))?;
             let along = |bits: u32| -> Result<i32, Error> {
                 i32::try_from((roll >> bits).rem_euclid(span))
                     .map_err(|_| Error::Overflow("an offset"))
                     .map(|offset| offset - self.reach)
             };
-            let x = site[0].saturating_add(along(16)?);
-            let y = site[1].saturating_add(along(40)?);
+            let x = site[0]
+                .checked_add(along(16)?)
+                .ok_or(Error::Overflow("a crater's x"))?;
+            let y = site[1]
+                .checked_add(along(40)?)
+                .ok_or(Error::Overflow("a crater's y"))?;
             if let Some(z) = world.voxels().top_solid_z(x, y) {
                 return Ok([x, y, z]);
             }
-            self.counts.redrawn = self.counts.redrawn.saturating_add(1);
+            self.counts.redrawn += 1;
         }
         Err(Error::Layout(format!(
             "{REDRAWS} crater draws in a row found no ground around the layout's beacons"
@@ -173,7 +187,7 @@ impl CraterStream {
     /// As [`CraterStream::draw`], and [`Error::Layout`] when the host refuses
     /// an edit as off the map or mid-tick, which is the harness's bug.
     pub fn file(&mut self, host: &mut Host, played: u64) -> Result<(), Error> {
-        for _ in 0..self.due(played) {
+        for _ in 0..self.due(played)? {
             let centre = self.draw(host.world())?;
             let edit = VoxelEdit::Crater {
                 centre,
@@ -181,9 +195,9 @@ impl CraterStream {
                 by: None,
             };
             match host.file_voxel_edit(edit) {
-                Ok(()) => self.counts.filed = self.counts.filed.saturating_add(1),
+                Ok(()) => self.counts.filed += 1,
                 Err(FileRefused::QueueFull { .. }) => {
-                    self.counts.queue_full = self.counts.queue_full.saturating_add(1);
+                    self.counts.queue_full += 1;
                 }
                 Err(refused @ (FileRefused::MidTick | FileRefused::OffTheMap)) => {
                     return Err(Error::Layout(format!(
@@ -211,15 +225,17 @@ mod tests {
             next: 0,
             counts: StreamCounts::default(),
         };
-        assert!((0..40).all(|tick| stream.due(tick) == 1));
+        assert!((0..40).all(|tick| stream.due(tick) == Ok(1)));
         let half = CraterStream {
             rate: 10,
             ..stream.clone()
         };
-        let total: u64 = (0..40).map(|tick| half.due(tick)).sum();
+        let total: u64 = (0..40)
+            .map(|tick| half.due(tick).expect("the schedule fits"))
+            .sum();
         assert_eq!(total, 20);
         let fast = CraterStream { rate: 40, ..stream };
-        assert!((0..40).all(|tick| fast.due(tick) == 2));
+        assert!((0..40).all(|tick| fast.due(tick) == Ok(2)));
     }
 
     #[test]

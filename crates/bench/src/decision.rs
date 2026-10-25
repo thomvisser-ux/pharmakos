@@ -119,8 +119,13 @@ impl DecisionTiming {
     pub fn implied_units_per_seat(&self, seats: u32) -> Option<u128> {
         let per_unit = u128::try_from(self.ns_per_unit).ok().filter(|ns| *ns > 0)?;
         // `MS_PER_TICK` is a positive constant, so its magnitude is its value.
-        let tick_ns = u128::from(MS_PER_TICK.unsigned_abs()).saturating_mul(1_000_000);
-        tick_ns.checked_div(per_unit.saturating_mul(u128::from(seats)))
+        // 50 ms in nanoseconds: a constant far inside a `u128`.
+        let tick_ns = u128::from(MS_PER_TICK.unsigned_abs()) * 1_000_000;
+        match per_unit.checked_mul(u128::from(seats)) {
+            Some(per_tick) => tick_ns.checked_div(per_tick),
+            // A cost past a `u128` a unit fits no unit in a tick: exactly zero.
+            None => Some(0),
+        }
     }
 }
 
@@ -145,11 +150,15 @@ pub fn hosted_budget_playbook(root: &Path) -> Result<String, Error> {
     let mut renamed = 0_usize;
     if let Some(declarative) = playbook.declarative.as_mut() {
         for entry in &mut declarative.route {
-            renamed = renamed.saturating_add(anchor_by_role(entry));
+            renamed = renamed
+                .checked_add(anchor_by_role(entry))
+                .ok_or(Error::Overflow("the renamed anchors"))?;
         }
         for handler in &mut declarative.handlers {
             for entry in &mut handler.body {
-                renamed = renamed.saturating_add(anchor_by_role(entry));
+                renamed = renamed
+                    .checked_add(anchor_by_role(entry))
+                    .ok_or(Error::Overflow("the renamed anchors"))?;
             }
         }
     }
@@ -264,7 +273,8 @@ fn summarise(samples: &[Sample], seats: u32, units_per_seat: u32) -> Result<Deci
     let mut excesses: Vec<i128> = Vec::new();
     let mut index = 0_usize;
     while let Some(sample) = played.get(index) {
-        index = index.saturating_add(1);
+        // `index` is below `played.len()` here, so the step cannot overflow.
+        index += 1;
         if !sample.decision {
             continue;
         }
@@ -274,7 +284,7 @@ fn summarise(samples: &[Sample], seats: u32, units_per_seat: u32) -> Result<Deci
                 break;
             }
             window.push(next.ns);
-            index = index.saturating_add(1);
+            index += 1;
         }
         // A decision tick with no ordinary tick after it has nothing to be
         // paired with, and is left out of the pairing by its definition.

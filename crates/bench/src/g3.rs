@@ -104,9 +104,13 @@ pub fn provenance_notice(report: &SegmentReport, os: &str) -> String {
         .collect();
     format!(
         "::notice title=G3' provenance::on {os}: seed 0x{:016x}, bench rules_hash {} (the \
-         committed table's {} with {}), layout {} (3 seats x 100 units on top of the starting \
-         force, 40 beacons as world totals; beacons by mandate: {}), every seat sealed at {} size \
-         units; craters {} filed at 20 a second ({} refused as the queue full, {} draws redrawn)",
+         committed table's {} with {}), layout {} (3 seats x 100 laid-out units on top of each \
+         seat's starting force, so a little over item 63's 300, and 40 beacons as world totals; \
+         beacons by mandate: {}), every seat sealed at {} size units; craters {} filed at 20 a \
+         second ({} refused as the queue full, {} draws redrawn); hash chain digest {}. Defend \
+         and Attack are inert on this sim (dfnd, atk), so their beacons' raiders stand and \
+         combat is the cores' autocannon and the raiders' return fire: g3r re-measures on the \
+         finished sim",
         p.seed,
         hex(p.bench_rules_hash),
         hex(p.shipped_rules_hash),
@@ -117,6 +121,7 @@ pub fn provenance_notice(report: &SegmentReport, os: &str) -> String {
         report.craters.filed,
         report.craters.queue_full,
         report.craters.redrawn,
+        hex(report.chain_digest),
     )
 }
 
@@ -380,7 +385,7 @@ pub fn fourth_notice(line: &FourthSeat, os: &str) -> Result<String, Error> {
         fourth::RUNS,
         line.fourth_units,
         if line.fourth_units == 0 {
-            " (an unplaced seat has no commander, so its playbook has nothing to run)"
+            " (an unplaced seat has no commander, so its playbook has nothing to run: the difference is the seat's dispatch and the runs' noise, not a playbook's cost)"
         } else {
             ""
         },
@@ -388,20 +393,35 @@ pub fn fourth_notice(line: &FourthSeat, os: &str) -> Result<String, Error> {
 }
 
 /// The footing query's line (item 148 (4); `site`'s worst case, #133).
-#[must_use]
-pub fn footing_query_notice(query: &FootingQuery, os: &str) -> String {
-    format!(
-        "::notice title=G3' footing query::on {os}, over {} structure and beacon rows: a set's \
-         footing check (a Mine dig) that misses {}, and a blast's ball of radius {} whose box \
+///
+/// # Errors
+///
+/// [`Error::Overflow`] for a time past a `u64` of thousandths of a nanosecond.
+pub fn footing_query_notice(query: &FootingQuery, os: &str) -> Result<String, Error> {
+    Ok(format!(
+        "::notice title=G3' footing query::on {os}, over {} structure and {} beacon rows (the world the segment ended on; #133 names about 400 rows as the worst case, and a run whose Build has placed fewer measures fewer): a set's \
+         footing check (a Mine dig) that misses {} ns a call (over {} calls), and a blast's ball of radius {} whose box \
          meets a live beacon's footing, {} voxels each asked, {} (the worst case, (2r + 1)^3 \
          voxels times the rows); fastest of {} runs each",
-        query.rows,
-        micros(query.set_ns),
+        query.structure_rows,
+        query.beacon_rows,
+        thousandths(per_call_milli_ns(query.set_ns)?),
+        support::SET_CALLS,
         query.radius,
         query.ball_voxels,
         micros(query.blast_ns),
         support::FOOTING_RUNS,
-    )
+    ))
+}
+
+/// One `set` check's time, in thousandths of a nanosecond, from the time of
+/// [`support::SET_CALLS`] of them.
+fn per_call_milli_ns(total_ns: u128) -> Result<u64, Error> {
+    let milli = total_ns
+        .checked_mul(1_000)
+        .and_then(|scaled| scaled.checked_div(u128::from(support::SET_CALLS)))
+        .ok_or(Error::Overflow("a set check's time"))?;
+    u64::try_from(milli).map_err(|_| Error::Overflow("a set check's time"))
 }
 
 #[cfg(test)]

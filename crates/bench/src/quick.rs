@@ -513,7 +513,11 @@ pub fn measure(fixture: &Fixture, cases: &[Case], plan: QuickPlan) -> Result<Qui
             "a QUICK measurement of zero calls measures nothing".to_owned(),
         ));
     }
-    let mut pooled: Vec<u128> = Vec::with_capacity(cases.len().saturating_mul(plan.calls));
+    let room = cases
+        .len()
+        .checked_mul(plan.calls)
+        .ok_or(Error::Overflow("the pooled calls"))?;
+    let mut pooled: Vec<u128> = Vec::with_capacity(room);
     let mut budget: Option<Summary> = None;
     let mut slowest: (String, u128) = (String::new(), 0);
     for case in cases {

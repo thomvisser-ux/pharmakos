@@ -17,13 +17,16 @@
 //!
 //! **What is measured.** The same seed is played twice, three seats sealed and
 //! then four, every tick stepped phase by phase and the Decision phase timed
-//! alone. Each configuration is played [`RUNS`] times and each tick keeps its
-//! fastest Decision phase; the line is the difference of the two means per
+//! alone. Each configuration is played [`RUNS`] times, every run held to the
+//! first's hash chain, and each tick keeps its fastest Decision phase; the line is the difference of the two means per
 //! decision tick, and the fourth seat's counted evaluation units
 //! (`World::decision_work`) say how much of the playbook it ran. No layout:
 //! at four seats a seat's share of the world totals is 75 units and 10
 //! beacons, which decision 2's 100 a seat does not fit, so both runs are the
-//! generated map alone.
+//! generated map alone. The mean sums the Decision phase over every tick and
+//! divides by the decision ticks the cadence holds, so a seat's off-cadence
+//! overhead is charged to the decision ticks it falls between, as the cost a
+//! seat adds per decision tick.
 
 use std::path::Path;
 use std::time::Instant;
@@ -75,15 +78,22 @@ impl FourthSeat {
     }
 }
 
-/// One run: the Decision phase's time on every tick, and the fourth seat's
-/// units at the end (when there is one).
+/// One run: the Decision phase's time on every tick, every tick's state hash,
+/// and the fourth seat's units at the end (when there is one).
+struct Run {
+    decision: Vec<u128>,
+    hashes: Vec<u64>,
+    fourth: Option<u32>,
+}
+
+/// Play one run.
 fn play(
     rules: &RulesTable,
     seed: u64,
     seats: u32,
     segment_ms: i32,
     playbook: &Playbook,
-) -> Result<(Vec<u128>, Option<u32>), Error> {
+) -> Result<Run, Error> {
     let world = World::new(&WorldConfig {
         match_seed: seed,
         seats,
@@ -121,6 +131,7 @@ fn play(
         });
     }
     let mut decision: Vec<u128> = Vec::new();
+    let mut hashes: Vec<u64> = Vec::new();
     loop {
         let refused = |during: &'static str| {
             move |error: pharmakos_sim::world::TickError| Error::Sim {
@@ -131,7 +142,7 @@ fn play(
         let Some(mut tick) = runner.phased_tick().map_err(refused("opening a tick"))? else {
             break;
         };
-        let mut ns: u128 = 0;
+        let mut ns: Option<u128> = None;
         loop {
             let next = tick.next_phase();
             let started = Instant::now();
@@ -141,11 +152,14 @@ fn play(
                 break;
             }
             if next == Some(Phase::Decision) {
-                ns = elapsed;
+                ns = Some(elapsed);
             }
         }
-        decision.push(ns);
+        decision.push(ns.ok_or_else(|| {
+            Error::Drift("a tick ran no Decision phase, so it has no time to keep".to_owned())
+        })?);
         let report = tick.finish().map_err(refused("finishing a tick"))?;
+        hashes.push(report.hash);
         if report.segment_ended {
             break;
         }
@@ -154,7 +168,11 @@ fn play(
         .world()
         .decision_work(3)
         .map(pharmakos_sim::seams::WorkCounter::spent);
-    Ok((decision, fourth))
+    Ok(Run {
+        decision,
+        hashes,
+        fourth,
+    })
 }
 
 /// The mean of the per-tick fastest Decision phase over `runs` runs, per
@@ -166,20 +184,24 @@ fn configuration(
     segment_ms: i32,
     playbook: &Playbook,
 ) -> Result<(u128, u64, u64, Option<u32>), Error> {
-    let (mut best, mut fourth) = play(rules, seed, seats, segment_ms, playbook)?;
+    let first = play(rules, seed, seats, segment_ms, playbook)?;
+    let (mut best, mut fourth) = (first.decision, first.fourth);
     for _ in 1..RUNS {
-        let (run, units) = play(rules, seed, seats, segment_ms, playbook)?;
-        if run.len() != best.len() {
+        let run = play(rules, seed, seats, segment_ms, playbook)?;
+        // The per-tick minimum is only a figure if every run did the same work:
+        // the same ticks, the same state on each (decision.rs holds P1's runs
+        // to the same rule).
+        if run.hashes != first.hashes {
             return Err(Error::Drift(format!(
-                "two runs of the {seats}-seat match played {} and {} ticks",
-                best.len(),
-                run.len()
+                "two runs of the {seats}-seat match played different hash chains ({} and {} ticks)",
+                first.hashes.len(),
+                run.hashes.len()
             )));
         }
-        for (kept, now) in best.iter_mut().zip(&run) {
+        for (kept, now) in best.iter_mut().zip(&run.decision) {
             *kept = (*kept).min(*now);
         }
-        fourth = units;
+        fourth = run.fourth;
     }
     let ticks = u64::try_from(best.len()).map_err(|_| Error::Overflow("the tick count"))?;
     let cadence = u64::try_from(rules.decision_tick_ms())
