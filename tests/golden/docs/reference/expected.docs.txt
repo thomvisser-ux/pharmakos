@@ -867,7 +867,7 @@ E0011  ERROR  decode and version  raised at: structure
   a Build target is anchored on `{arm}`; until S3 a target stands on a voxel or `on` a vent.
   A building is placed on a spot on the map, not on whichever beacon a selector picks. Pick the spot.
 
-E0012  ERROR  decode and version  raised at: structure
+E0012  ERROR  decode and version  raised at: none at the skeleton (retired by S2's `dfnd`, which built Defend's settings)
   Defend mandate settings have no effect until S2's Defend mandate lands; they are refused rather than ignored.
   A Defend beacon cannot be given settings in this build yet.
 
@@ -875,7 +875,7 @@ E0013  ERROR  decode and version  raised at: structure
   Attack mandate settings have no effect until S2's Attack mandate lands; they are refused rather than ignored.
   An Attack beacon cannot be given settings in this build yet.
 
-E0014  ERROR  decode and version  raised at: structure
+E0014  ERROR  decode and version  raised at: none at the skeleton (retired by S2's `dfnd`, which built `most_threatened`)
   selector `most_threatened` has no effect until S2's threat model, which is what it ranks by; it is refused rather than ignored.
   "Most threatened" needs threats to weigh, and this build has none yet. Name the beacon, or pick it another way.
 
@@ -887,7 +887,7 @@ E0016  ERROR  decode and version  raised at: structure
   selector filter `tags` has no effect until S3: a beacon has no tag column to read yet, so writing tags is legal and filtering on them is not.
   Tags on a beacon are kept, but nothing can pick a beacon by its tags yet.
 
-E0017  ERROR  decode and version  raised at: structure
+E0017  ERROR  decode and version  raised at: none at the skeleton (retired by S2's `dfnd`, which built `beacon_under_attack`)
   predicate `beacon_under_attack` has no effect until S2's combat gives a beacon a damage history to ask about; it is refused rather than read as true or false.
   Asking whether a beacon is under attack comes with combat. Until then the question has no answer, so it cannot be asked.
 
@@ -1127,7 +1127,7 @@ E0512  ERROR  settings and recycle  raised at: structure
   the wall box is {found} voxels from `min.z` to `max.z`; a wall stands at least {min} voxels above the ground, and `min.z` lies at or below the ground, so this box cannot.
   A wall lower than this is climbable and blocks nothing. Raise the top of the box.
 
-W0501  WARNING  settings and recycle  raised at: semantics
+W0501  WARNING  settings and recycle  raised at: none at the skeleton (retired by S2's `dfnd`, which built the threat model)
   `seam_choice` SAFEST reads as NEAREST until S2's threat model arrives.
   "Safest" needs threats to weigh, and they come later. Until then this beacon digs the nearest seam.
 

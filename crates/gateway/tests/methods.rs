@@ -2486,19 +2486,13 @@ fn interface_row_gaps() -> Vec<Case> {
 /// from a neighbour -- the first draft of this table did the second thing and
 /// the review was right that it does not hold. **T14 closed two of the four**:
 /// Survey probe areas and Build targets and protected areas now compile, and
-/// the rows for them are gone rather than moved.
+/// the rows for them are gone rather than moved. **S2's `dfnd` closed two
+/// more**, Defend's settings and `beacon_under_attack`, and their rows went
+/// the same way; Attack's settings are `atk`'s.
 fn mandate_and_rule_gaps() -> Vec<Case> {
     vec![
-        closed(
-            "an interface row that edits a Defend beacon's settings",
-            one_step(
-                "{\"label\": \"d\", \"interface\": {\"beacon\": {\"safest\": {}}, \"rows\": \
-                 [{\"set_mandate_settings\": {\"roe\": \"RETURN_FIRE\", \"defend\": {}}}]}, \
-                 \"timeout_ms\": 30000}",
-            ),
-            "Defend mandate settings",
-            "S2",
-        ),
+        // S2's `dfnd` closed the Defend row: a Defend beacon's settings
+        // compile, seal and execute, so they are a gap at neither door.
         closed(
             "an interface row that edits an Attack beacon's settings",
             one_step(
@@ -2513,15 +2507,8 @@ fn mandate_and_rule_gaps() -> Vec<Case> {
         // mandate's probe areas and a Build mandate's targets and protected
         // areas are compiled, sealed and executed now. Defend and Attack
         // settings are still S2's, above.
-        closed(
-            "a predicate that asks whether a beacon is under attack",
-            one_step(
-                "{\"label\": \"w\", \"wait_until\": {\"condition\": {\"beacon_under_attack\": \
-                 {\"beacon\": {\"safest\": {}}, \"within_ms\": 5000}}}, \"timeout_ms\": 5000}",
-            ),
-            "predicate `beacon_under_attack`",
-            "S2",
-        ),
+        // S2's `dfnd` closed `beacon_under_attack` too: the predicate reads
+        // the beacon's combat memory, so it has no row here.
         // S2's `vfy2` closed the last gap of this block: the verifier reads
         // the sim's own `MAX_HANDLERS` and refuses the 65th handler as E0113.
         Case {
@@ -2564,15 +2551,8 @@ fn verifier_door_cases() -> Vec<Case> {
             "selector filter `tags`",
             "S3",
         ),
-        closed(
-            "a selector that ranks by incoming threat, which needs combat",
-            one_step(
-                "{\"label\": \"m\", \"move\": {\"to\": {\"beacon_anchor\": \
-                 {\"most_threatened\": {}}}, \"pace\": \"DIRECT\"}, \"timeout_ms\": 30000}",
-            ),
-            "selector `most_threatened`",
-            "S2",
-        ),
+        // S2's `dfnd` gave `most_threatened` its threat model, so the
+        // selector is refused at neither door and has no row here.
         closed(
             "a selector filter naming an enemy the knowledge store has not got",
             one_step(

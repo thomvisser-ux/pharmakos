@@ -91,7 +91,7 @@
     "code": "E0012",
     "family": "decode and version",
     "severity": "ERROR",
-    "emitter": "structure",
+    "emitter": "none at the skeleton (retired by S2's `dfnd`, which built Defend's settings)",
     "message": "Defend mandate settings have no effect until S2's Defend mandate lands; they are refused rather than ignored.",
     "beginner": "A Defend beacon cannot be given settings in this build yet."
   },
@@ -107,7 +107,7 @@
     "code": "E0014",
     "family": "decode and version",
     "severity": "ERROR",
-    "emitter": "structure",
+    "emitter": "none at the skeleton (retired by S2's `dfnd`, which built `most_threatened`)",
     "message": "selector `most_threatened` has no effect until S2's threat model, which is what it ranks by; it is refused rather than ignored.",
     "beginner": "\"Most threatened\" needs threats to weigh, and this build has none yet. Name the beacon, or pick it another way."
   },
@@ -131,7 +131,7 @@
     "code": "E0017",
     "family": "decode and version",
     "severity": "ERROR",
-    "emitter": "structure",
+    "emitter": "none at the skeleton (retired by S2's `dfnd`, which built `beacon_under_attack`)",
     "message": "predicate `beacon_under_attack` has no effect until S2's combat gives a beacon a damage history to ask about; it is refused rather than read as true or false.",
     "beginner": "Asking whether a beacon is under attack comes with combat. Until then the question has no answer, so it cannot be asked."
   },
@@ -611,7 +611,7 @@
     "code": "W0501",
     "family": "settings and recycle",
     "severity": "WARNING",
-    "emitter": "semantics",
+    "emitter": "none at the skeleton (retired by S2's `dfnd`, which built the threat model)",
     "message": "`seam_choice` SAFEST reads as NEAREST until S2's threat model arrives.",
     "beginner": "\"Safest\" needs threats to weigh, and they come later. Until then this beacon digs the nearest seam."
   },

@@ -324,7 +324,7 @@ pub const CATALOGUE: &[Entry] = &[
         code: "E0012",
         family: Family::DecodeAndVersion,
         severity: Severity::Error,
-        emitter: Emitter::Stage(Stage::Structure),
+        emitter: Emitter::NoneYet("retired by S2's `dfnd`, which built Defend's settings"),
     },
     Entry {
         code: "E0013",
@@ -336,7 +336,7 @@ pub const CATALOGUE: &[Entry] = &[
         code: "E0014",
         family: Family::DecodeAndVersion,
         severity: Severity::Error,
-        emitter: Emitter::Stage(Stage::Structure),
+        emitter: Emitter::NoneYet("retired by S2's `dfnd`, which built `most_threatened`"),
     },
     Entry {
         code: "E0015",
@@ -354,7 +354,7 @@ pub const CATALOGUE: &[Entry] = &[
         code: "E0017",
         family: Family::DecodeAndVersion,
         severity: Severity::Error,
-        emitter: Emitter::Stage(Stage::Structure),
+        emitter: Emitter::NoneYet("retired by S2's `dfnd`, which built `beacon_under_attack`"),
     },
     // An enum carrying a number this build does not name, read raw rather
     // than through prost's getter, which would answer the default
@@ -749,13 +749,14 @@ pub const CATALOGUE: &[Entry] = &[
     },
     // A warning in the settings family, spelt with the `W` the spec gives a
     // family's warnings, as `W06xx` beside `E06xx`. Decisions-log item 127 (9)
-    // and S1's plan's decision 6: `seam_choice: SAFEST` reads as NEAREST until
-    // S2's threat model, and the verifier says so.
+    // and S1's plan's decision 6: `seam_choice: SAFEST` read as NEAREST until
+    // S2's threat model, and the verifier said so. S2's `dfnd` built the model,
+    // so the code keeps its number, raised by nothing.
     Entry {
         code: "W0501",
         family: Family::SettingsAndRecycle,
         severity: Severity::Warning,
-        emitter: Emitter::Stage(Stage::Semantics),
+        emitter: Emitter::NoneYet("retired by S2's `dfnd`, which built the threat model"),
     },
     // S2's `vfy2`: a protect list naming one asset twice. Harmless, so a
     // warning: no rule refuses it.
