@@ -122,13 +122,13 @@ const S2_CODES: [&str; 13] = [
     "W0502", "W0703", "I0004",
 ];
 
-/// The codes for what the sim refuses at the seal (E0009 to E0017, and S2's
-/// base kit, E0019), for an enum number this build does not name (E0018) and
+/// The codes for what the sim refuses at the seal (E0009 to E0017; S2's base
+/// kit's E0019 is retired, since S2's `site` built it), for an enum number this build does not name (E0018) and
 /// for a `wall_box` on a target that is not a wall (E0509), in code order: the
 /// ten thousand runs reach every one.
-const REFUSALS: [&str; 12] = [
+const REFUSALS: [&str; 11] = [
     "E0009", "E0010", "E0011", "E0012", "E0013", "E0014", "E0015", "E0016", "E0017", "E0018",
-    "E0019", "E0509",
+    "E0509",
 ];
 
 /// The coordinates at the ends of the field, so the walk and the semantics
@@ -768,7 +768,7 @@ impl Shape {
         if self.clean {
             return Json::String("generator".to_owned());
         }
-        // S2's base kit (E0019) among them, the wall included.
+        // S2's base kit among them, the wall included.
         let index = if self.rarely(4) {
             self.below(2).saturating_add(3)
         } else {

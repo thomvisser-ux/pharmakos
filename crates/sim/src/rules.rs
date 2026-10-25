@@ -242,6 +242,9 @@ pub struct RulesTable {
     /// Combat's rows that are not a weapon's and the materials' rows, typed
     /// at load ([`crate::arms::CombatRows`]; S2's `fire`).
     combat: crate::arms::CombatRows,
+    /// Build's S2 rows: repair, terraform and the wall's height, typed at
+    /// load ([`crate::site::SiteRows`]; S2's `site`).
+    site: crate::site::SiteRows,
 }
 
 /// One unit kind's row as the tick reads it: `units.<kind>.*`, or the
@@ -729,6 +732,12 @@ impl RulesTable {
         self.combat
     }
 
+    /// Build's S2 rows ([`crate::site::SiteRows`]).
+    #[must_use]
+    pub const fn site(&self) -> crate::site::SiteRows {
+        self.site
+    }
+
     /// The bottom layers of every column generation writes as bedrock,
     /// `materials.bedrock_layers_voxels`: at least one.
     #[must_use]
@@ -856,6 +865,7 @@ impl RulesTable {
         let typed = TypedRows::read(message, commander)?;
         let kinds = KindRows::read(message)?;
         let combat = crate::arms::CombatRows::read(message)?;
+        let site = crate::site::SiteRows::read(message)?;
 
         let segment_lengths_ms = segment_lengths_of(matched)?;
 
@@ -922,6 +932,7 @@ impl RulesTable {
             power: typed.power,
             kinds,
             combat,
+            site,
         })
     }
 

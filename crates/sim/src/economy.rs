@@ -156,6 +156,14 @@ pub enum Purchase {
     /// structure goes into the ground at one hit point and a build drone
     /// raises it.
     Structure(u32),
+    /// Repair work in advance (S2's `site`; decision 43): the cost moves onto
+    /// the asking beacon's repair fund, which its repair drones draw on as
+    /// they repair ([`crate::site`]).
+    RepairWork,
+    /// Voxel work in advance (S2's `site`): the cost moves onto the asking
+    /// beacon's build fund, which its build drones draw on voxel by voxel as
+    /// they fill a wall, level a footprint or refill a crater.
+    BuildWork,
 }
 
 /// The spend-control seam spec section 15 keeps ("a Quartermaster trait").

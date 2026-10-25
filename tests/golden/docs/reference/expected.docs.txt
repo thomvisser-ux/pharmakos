@@ -895,7 +895,7 @@ E0018  ERROR  decode and version  raised at: decode
   `{field}` carries {value}, which is not a value this build names; it is refused rather than read as a default.
   This setting holds a number the game does not know. Nothing is guessed for you: write one of the setting's names instead.
 
-E0019  ERROR  decode and version  raised at: structure
+E0019  ERROR  decode and version  raised at: none at the skeleton (retired by S2's `site`, which built the base kit)
   a Build target names `{id}`, one of S2's base kit, which has no effect until S2's base kit lands; it is refused rather than ignored.
   Autocannons, mortars and walls cannot be built in this build yet.
 

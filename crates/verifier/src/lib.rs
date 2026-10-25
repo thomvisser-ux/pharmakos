@@ -49,9 +49,11 @@
 //! (`E0418`; spec section 6). A `wall` target's box is required, unturned,
 //! anchored inside itself, tall enough and inside its beacon's sphere
 //! (`E0101`, `E0511`, `E0417`, `E0512`, `E0416`). The sim's handler ceiling is
-//! `E0113`. All of these are refused today by the arm's or the blueprint's own
-//! refusal as well (`E0012`, `E0013`, `E0019`), until the S2 lanes that give
-//! them an effect lift those; the checks stand ready for that day.
+//! `E0113`. Defend's and Attack's are refused today by the arm's own refusal as
+//! well (`E0012`, `E0013`), until the S2 lanes that give them an effect lift
+//! those; the checks stand ready for that day. A wall's checks are live: S2's
+//! `site` built the base kit and retired `E0019`, and the sim makes the
+//! ground-dependent halves of the box's checks when the row commits.
 //!
 //! # The arithmetic the estimate stage shares
 //!
