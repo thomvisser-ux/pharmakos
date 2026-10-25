@@ -90,7 +90,11 @@
 //! says, and P1's wall-clock half from the walled bench,
 //! `crates/bench/tests/perf_alarm.rs` (QUICK's p50 and p99 over the committed
 //! verifier cases and `budget_128`, and ns per size unit per decision tick in
-//! a hosted match at the size budget; S1's plan, task `p1`), each with
+//! a hosted match at the size budget; S1's plan, task `p1`), and G3′-real's
+//! figures from the same crate, `crates/bench/tests/g3_real.rs` (the
+//! 8-minute segment at the gate's load phase by phase, the support search's
+//! adversarial tick and a fourth seat's decision-tick cost; S2's plan, task
+//! `g3h`), each with
 //! `--release`, `--ignored` and `--nocapture`, and each printing its own
 //! `::notice::` lines; then it publishes the allocations per
 //! tick as a notice naming the test that asserts it. It has no threshold, compares nothing
@@ -2916,13 +2920,27 @@ struct Alarm {
 /// so no two measurements share the machine.
 ///
 /// * **mesher p99**: `crates/mesher/tests/perf_alarm.rs`, run exactly as its
-///   header says.
+///   header says: the per-chunk mesh CPU p99, and `view`'s crater stream
+///   through the client's relight and drain queue (its remesh latency at 20
+///   and 40 explosions a second; S2's plan, task `view`).
 /// * **P1's wall-clock half** (S1's plan, task `p1`): `crates/bench/tests/
 ///   perf_alarm.rs` — QUICK's p50 and p99 over the committed verifier cases
 ///   and `budget_128`, and a decision tick's cost in ns per size unit in a
 ///   hosted match at the size budget. The bench is walled, which is what lets
 ///   it read a clock while driving the verifier and the sim from outside
 ///   (AGENTS.md section 4.5).
+/// * **G3′-real's figures** (S2's plan, section 5 and task `g3h`):
+///   `crates/bench/tests/g3_real.rs` — the 8-minute segment at the gate's
+///   load (three seats, 300 units and 40 beacons as world totals, the crater
+///   stream at 20 a second), every tick timed phase by phase: the tick's p99,
+///   p50 and mean, ticks a second, the tick-minus-pathing mean, the repath
+///   backlog against the cap, the broadphase's share, kill-credit settlement,
+///   the peak events per tick, the queues' bytes, live heap and the tick p99
+///   per minute, allocations per tick, and `seen_by` at the gate's load; the
+///   support search's adversarial tick with Mine's footing check at its
+///   worst; and a fourth, unplaced seat's decision-tick cost. Published,
+///   never gated (item 148's CI ruling); `g3r` certifies them on the owner's
+///   machine, and the CI budget job is `g3r`'s.
 const ALARMS: &[Alarm] = &[
     Alarm {
         package: "pharmakos-mesher",
@@ -2933,6 +2951,11 @@ const ALARMS: &[Alarm] = &[
         package: "pharmakos-bench",
         test: "perf_alarm",
         title: "P1 timings",
+    },
+    Alarm {
+        package: "pharmakos-bench",
+        test: "g3_real",
+        title: "G3' timings",
     },
 ];
 
@@ -2956,11 +2979,10 @@ const ALARMS: &[Alarm] = &[
 ///   otherwise, in every leg's `test` step — so it is published, not
 ///   measured again and never compared.
 ///
-/// The tick-minus-pathing mean the skeleton plan named stays S2's G3′-real:
-/// the bench now drives the sim from outside, as AGENTS.md section 4.5
-/// requires of a millisecond figure for it, but S1 asks it for P1's figures
-/// only, and the budget comes with the gate that sets it. xtask itself reads
-/// no clock; the measuring tests do, behind the wall.
+/// The tick-minus-pathing mean the skeleton plan named is G3′-real's, and
+/// published by the third alarm since S2's `g3h`; the budget comes with the
+/// gate that sets it (`g3r`). xtask itself reads no clock; the measuring tests
+/// do, behind the wall.
 fn perf_alarms() {
     let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
     let root = match workspace_root() {
@@ -4621,7 +4643,10 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
     #[test]
     fn every_alarm_runs_in_release_ignored_and_on_libtests_own_threads() {
         let packages: Vec<&str> = ALARMS.iter().map(|alarm| alarm.package).collect();
-        assert_eq!(packages, vec!["pharmakos-mesher", "pharmakos-bench"]);
+        assert_eq!(
+            packages,
+            vec!["pharmakos-mesher", "pharmakos-bench", "pharmakos-bench"]
+        );
         for alarm in ALARMS {
             for locked in [false, true] {
                 let args = alarm_args(alarm, locked);
