@@ -163,6 +163,19 @@ fn transcript(case: &str) -> String {
             .seal_playbook(SeatId::new(CASE_SEAT), plan),
         "the case's seat seals its playbook"
     );
+    if case == "reflex" {
+        // S2's `site`: a Build core fields a repair drone for a wounded
+        // commander, which would heal it between the case's two helpings of
+        // damage. The case is about the reflex, so its core fabricates
+        // nothing: a Survey writ with no scouts.
+        let world = runner.world_mut();
+        let row = world
+            .beacons()
+            .row_of_ordinal(SeatId::new(CASE_SEAT), 0)
+            .expect("the case's seat has a core");
+        let core = pharmakos_sim::tables::BeaconId::new(u32::try_from(row).expect("a beacon row"));
+        world.set_writ(core, pharmakos_sim::seams::MandateKind::Survey);
+    }
     assert!(runner.begin_push().unwrap(), "a match opens in a Lull");
 
     let mut lines = String::from("# tick\tseq\tkind\tseat\tsubject\tvalue\n");
@@ -1756,13 +1769,6 @@ fn the_refusal_table_and_the_arms_agree() {
             String::new(),
         ),
         (
-            "build_target_base_kit",
-            interface(
-                r#"{"add_build_target": {"target": {"blueprint_id": "mortar", "anchor": {"voxel": {"x": 10, "y": 10, "z": 10}}}}}"#,
-            ),
-            String::new(),
-        ),
-        (
             "build_target_beacon_anchor",
             interface(
                 r#"{"add_build_target": {"target": {"blueprint_id": "generator", "anchor": {"safest": {}}}}}"#,
@@ -1880,7 +1886,6 @@ fn the_refusal_table_and_the_arms_agree() {
     for constant in [
         "REFUSE_QUEUE_STRUCTURE",
         "REFUSE_BUILD_BLUEPRINT",
-        "REFUSE_BUILD_BASE_KIT",
         "REFUSE_BUILD_BEACON_ANCHOR",
         "REFUSE_DEFEND_SETTINGS",
         "REFUSE_ATTACK_SETTINGS",
@@ -1900,8 +1905,9 @@ fn the_refusal_table_and_the_arms_agree() {
 /// S2's wire (task `con4`): each new construct is refused at the seal with
 /// its own entry, whatever it holds, until the lane that gives it an effect.
 /// Defend's and Attack's arms are refused whole however many of their new
-/// fields they write; every base-kit blueprint is the base kit's refusal, not
-/// S4's; and the arm-less switch stays legal.
+/// fields they write; and the arm-less switch stays legal. The base kit, refused
+/// here until S2's `site` built it, now compiles: a turret as a structure
+/// target and a wall with the box it needs, a wall without one refused.
 #[test]
 fn s2s_wire_is_refused_construct_by_construct() {
     let interface = |row: &str| {
@@ -1925,12 +1931,20 @@ fn s2s_wire_is_refused_construct_by_construct() {
     ] {
         assert_eq!(refused(row), Some("attack_settings"), "{row}");
     }
-    for blueprint in ["autocannon", "mortar", "wall"] {
+    for blueprint in ["autocannon", "mortar"] {
         let row = format!(
             r#"{{"add_build_target": {{"target": {{"blueprint_id": "{blueprint}", "anchor": {{"voxel": {{"x": 10, "y": 10, "z": 10}}}}}}}}}}"#
         );
-        assert_eq!(refused(&row), Some("build_target_base_kit"), "{blueprint}");
+        assert!(
+            compile(&refusal_case(&interface(&row), "")).is_ok(),
+            "{blueprint}"
+        );
     }
+    let bare = r#"{"add_build_target": {"target": {"blueprint_id": "wall", "anchor": {"voxel": {"x": 10, "y": 10, "z": 10}}}}}"#;
+    assert_eq!(
+        compile(&refusal_case(&interface(bare), "")).unwrap_err(),
+        PlanError::WallWithoutBox
+    );
     // A switch to an S2 writ with nothing in its arm writes nothing to refuse.
     for row in [
         r#"{"set_mandate": {"defend": {}}}"#,
@@ -1941,8 +1955,8 @@ fn s2s_wire_is_refused_construct_by_construct() {
 }
 
 /// A `wall_box` belongs to a `wall` target alone: on any other it is refused
-/// with a typed error, never dropped (the verifier's E0509), and on a wall
-/// the base kit's refusal answers first.
+/// with a typed error, never dropped (the verifier's E0509), and on a wall it
+/// is the wall's own, kept with the target.
 #[test]
 fn a_wall_box_on_another_target_is_refused_not_dropped() {
     let row = |blueprint: &str| {
@@ -1956,10 +1970,9 @@ fn a_wall_box_on_another_target_is_refused_not_dropped() {
             blueprint: "generator".to_owned()
         }
     );
-    let wall = compile(&refusal_case(&row("wall"), "")).unwrap_err();
-    assert_eq!(
-        pharmakos_sim::interpreter::Refusal::of(&wall).map(|refusal| refusal.name),
-        Some("build_target_base_kit")
+    assert!(
+        compile(&refusal_case(&row("wall"), "")).is_ok(),
+        "a wall keeps its box"
     );
 }
 

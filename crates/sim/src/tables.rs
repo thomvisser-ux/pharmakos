@@ -1264,6 +1264,10 @@ pub struct MatchColumns<'a> {
     pub respawn_due: &'a mut [u32],
 }
 
+/// A target row's wall top when the row is no wall ([`TargetTable::wall_tops`]):
+/// below every voxel, so no comparison with a height can read it as one.
+pub const NO_WALL: i16 = i16::MIN;
+
 /// What one row of a [`TargetTable`] is.
 ///
 /// The ids are written out and additive only, for the reason every other wire
@@ -1484,6 +1488,8 @@ pub struct TargetTable {
     desc: Vec<u8>,
     order: Vec<u32>,
     rotation: Vec<u8>,
+    wall_top: Vec<i16>,
+    wall_done: Vec<bool>,
     capacity: u32,
 }
 
@@ -1512,6 +1518,8 @@ impl TargetTable {
             desc: Vec::with_capacity(n),
             order: Vec::with_capacity(n),
             rotation: Vec::with_capacity(n),
+            wall_top: Vec::with_capacity(n),
+            wall_done: Vec::with_capacity(n),
             capacity,
         }
     }
@@ -1639,6 +1647,47 @@ impl TargetTable {
         &self.rotation
     }
 
+    /// Each wall target's top, the highest voxel its box fills (S2's
+    /// `site`), or [`NO_WALL`] on every other row. A wall row's box of
+    /// columns is its [`TargetTable::areas`] entry. Hashed: it decides how far
+    /// a build drone fills.
+    #[must_use]
+    pub fn wall_tops(&self) -> &[i16] {
+        &self.wall_top
+    }
+
+    /// Write row `slot` as a wall: its box of columns and its top. The row was
+    /// added by [`TargetTable::add_bound`] a moment before, so it is a Build
+    /// row; `false` for a slot the table does not hold.
+    pub fn make_wall(&mut self, slot: usize, columns: ColumnBox, top: i16) -> bool {
+        let (Some(area), Some(wall)) = (self.area.get_mut(slot), self.wall_top.get_mut(slot))
+        else {
+            return false;
+        };
+        *area = columns;
+        *wall = top;
+        if let Some(done) = self.wall_done.get_mut(slot) {
+            *done = false;
+        }
+        true
+    }
+
+    /// Whether each wall target's box has been filled whole once (S2's
+    /// `site`; the owner's ruling of 2026-10-20): from then on a voxel blown
+    /// out of it is a destroyed part of the wall, rebuilt only under
+    /// `rebuild_destroyed`. `false` on every other row. Hashed.
+    #[must_use]
+    pub fn walls_done(&self) -> &[bool] {
+        &self.wall_done
+    }
+
+    /// Mark row `slot`'s wall filled whole once.
+    pub fn mark_wall_done(&mut self, slot: usize) {
+        if let Some(done) = self.wall_done.get_mut(slot) {
+            *done = true;
+        }
+    }
+
     /// Append one Build target written as a fixed voxel, keeping the table in
     /// `(beacon, kind)` order, at order 0 with no turn ([`BuildOrder::NONE`]).
     ///
@@ -1731,6 +1780,8 @@ impl TargetTable {
         self.desc.insert(slot, bound.1);
         self.order.insert(slot, build.order);
         self.rotation.insert(slot, build.rotation.raw());
+        self.wall_top.insert(slot, NO_WALL);
+        self.wall_done.insert(slot, false);
         self.count = self.count.saturating_add(1);
         Ok(())
     }
@@ -1750,6 +1801,8 @@ impl TargetTable {
         self.desc.remove(slot);
         self.order.remove(slot);
         self.rotation.remove(slot);
+        self.wall_top.remove(slot);
+        self.wall_done.remove(slot);
         self.count = self.count.saturating_sub(1);
     }
 
@@ -1783,6 +1836,8 @@ impl TargetTable {
             || columns.desc.len() != n
             || columns.order.len() != n
             || columns.rotation.len() != n
+            || columns.wall_top.len() != n
+            || columns.wall_done.len() != n
         {
             return false;
         }
@@ -1807,6 +1862,31 @@ impl TargetTable {
         {
             return false;
         }
+        // A wall top stands on a wall's Build row and on no other, and a wall
+        // is bought by the voxel, so no structure ever stands for it (S2's
+        // `site`): a file pairing them otherwise describes no table this sim
+        // builds.
+        let walls_agree = columns
+            .kind
+            .iter()
+            .zip(&columns.blueprint)
+            .zip(columns.wall_top.iter().zip(&columns.built))
+            .all(|((kind, blueprint), (top, built))| {
+                let wall =
+                    *kind == TargetKind::Build.id() && *blueprint == StructureKind::Wall.id();
+                (*top != NO_WALL) == wall && !(wall && built.is_some())
+            });
+        let done_on_walls = columns
+            .wall_done
+            .iter()
+            .zip(&columns.wall_top)
+            .all(|(done, top)| !*done || *top != NO_WALL);
+        if !done_on_walls {
+            return false;
+        }
+        if !walls_agree {
+            return false;
+        }
         let Ok(count) = u32::try_from(n) else {
             return false;
         };
@@ -1825,6 +1905,8 @@ impl TargetTable {
         self.desc = columns.desc;
         self.order = columns.order;
         self.rotation = columns.rotation;
+        self.wall_top = columns.wall_top;
+        self.wall_done = columns.wall_done;
         true
     }
 }
@@ -1853,6 +1935,10 @@ pub struct TargetColumns {
     pub order: Vec<u32>,
     /// Each Build target's rotation, 0 to 3.
     pub rotation: Vec<u8>,
+    /// Each wall target's top, or [`NO_WALL`].
+    pub wall_top: Vec<i16>,
+    /// Whether each wall target's box has been filled whole once.
+    pub wall_done: Vec<bool>,
 }
 
 /// What one seat remembers seeing, with the tick it was seen at (spec section
@@ -2774,6 +2860,21 @@ impl StructureKind {
         }
     }
 
+    /// Whether it is a **capability** structure, earned by a licence and never
+    /// rebuilt automatically (spec section 8): of this build's kinds, the
+    /// Resonance Spire, one of spec section 8's three licensed structures. The
+    /// Generator, the base kit and the Survey post are ordinary.
+    ///
+    /// PLACEHOLDER: which structure kinds are capability structures, the Resonance Spire alone — owner, at S4, with the capability catalogue.
+    /// The Survey post is spec section 6's in-world name for a Survey
+    /// beacon's post and earns no licence, so it is read as ordinary; no Build
+    /// target can name either before S4's catalogue, so the reading moves
+    /// nothing yet.
+    #[must_use]
+    pub const fn is_capability(self) -> bool {
+        matches!(self, StructureKind::ResonanceSpire)
+    }
+
     /// The kind an id names, or `None` for an id this build does not define.
     #[must_use]
     pub const fn from_id(id: u8) -> Option<StructureKind> {
@@ -2987,6 +3088,8 @@ pub struct BeaconColumns {
     pub arms: Vec<Arms>,
     /// Each beacon's Common settings ([`Common`]).
     pub common: Vec<Common>,
+    /// Each beacon's Build settings and paid work ([`crate::site::BeaconSite`]).
+    pub site: Vec<crate::site::BeaconSite>,
     /// Whether each row is free (S2's plan, E1).
     pub free: Vec<bool>,
 }
@@ -3047,6 +3150,7 @@ pub struct BeaconTable {
     seam: Vec<u32>,
     arms: Vec<Arms>,
     common: Vec<Common>,
+    site: Vec<crate::site::BeaconSite>,
     free: Vec<bool>,
 }
 
@@ -3074,6 +3178,7 @@ impl BeaconTable {
             seam: Vec::with_capacity(n),
             arms: Vec::with_capacity(n),
             common: Vec::with_capacity(n),
+            site: Vec::with_capacity(n),
             free: Vec::with_capacity(n),
         }
     }
@@ -3160,6 +3265,7 @@ impl BeaconTable {
         put(&mut self.seam, row, crate::targeting::NO_FEATURE);
         put(&mut self.arms, row, Arms::ready_at(start.ready_at));
         put(&mut self.common, row, Common::DEFAULT);
+        put(&mut self.site, row, crate::site::BeaconSite::DEFAULT);
         put(&mut self.free, row, false);
         if !at.reused {
             // An appended row is the table's last, at most `Row::MAX`.
@@ -3213,6 +3319,9 @@ impl BeaconTable {
         }
         if let Some(slot) = self.common.get_mut(index) {
             *slot = Common::DEFAULT;
+        }
+        if let Some(slot) = self.site.get_mut(index) {
+            *slot = crate::site::BeaconSite::DEFAULT;
         }
         self.id
             .get(index)
@@ -3313,6 +3422,7 @@ impl BeaconTable {
         self.seam.reserve(n);
         self.arms.reserve(n);
         self.common.reserve(n);
+        self.site.reserve(n);
         self.free.reserve(n);
     }
 
@@ -3558,6 +3668,18 @@ impl BeaconTable {
         &mut self.common
     }
 
+    /// The Build settings and paid-work column ([`crate::site::BeaconSite`]).
+    #[must_use]
+    pub fn sites(&self) -> &[crate::site::BeaconSite] {
+        &self.site
+    }
+
+    /// The Build settings and paid-work column, to write into: a committed
+    /// settings row, a mandate switch, the Quartermaster and the drones.
+    pub fn sites_mut(&mut self) -> &mut [crate::site::BeaconSite] {
+        &mut self.site
+    }
+
     /// Replace the whole table from a restored snapshot. Same contract as
     /// [`UnitTable::restore`].
     pub fn restore(&mut self, columns: BeaconColumns) -> bool {
@@ -3578,6 +3700,7 @@ impl BeaconTable {
             || columns.seam.len() != n
             || columns.arms.len() != n
             || columns.common.len() != n
+            || columns.site.len() != n
             || columns.free.len() != n
             || !ids_name_their_rows(&columns.id)
         {
@@ -3632,6 +3755,7 @@ impl BeaconTable {
         self.seam = columns.seam;
         self.arms = columns.arms;
         self.common = columns.common;
+        self.site = columns.site;
         self.free = columns.free;
         true
     }
@@ -4284,6 +4408,8 @@ pub struct ShellTable {
     room: u32,
     aim: Vec<[Fx; 3]>,
     lands_at: Vec<u32>,
+    launch: Vec<[Fx; 3]>,
+    fired_at: Vec<u32>,
     seat: Vec<u8>,
     firer: Vec<u32>,
     weapon: Vec<u8>,
@@ -4304,6 +4430,8 @@ impl ShellTable {
             room,
             aim: Vec::with_capacity(n),
             lands_at: Vec::with_capacity(n),
+            launch: Vec::with_capacity(n),
+            fired_at: Vec::with_capacity(n),
             seat: Vec::with_capacity(n),
             firer: Vec::with_capacity(n),
             weapon: Vec::with_capacity(n),
@@ -4337,7 +4465,9 @@ impl ShellTable {
         self.aim.is_empty()
     }
 
-    /// File one shell.
+    /// File one shell: where it lands and when, and where it was fired from
+    /// and when (`launch`, the firer's point and the fire tick; S2's `site`, so
+    /// a shell can be drawn in flight, [`ShellTable::position_at`]).
     ///
     /// # Errors
     ///
@@ -4346,6 +4476,7 @@ impl ShellTable {
         &mut self,
         aim: [Fx; 3],
         lands_at: u32,
+        launch: ([Fx; 3], u32),
         seat: SeatId,
         firer: u32,
         weapon: Armament,
@@ -4357,6 +4488,8 @@ impl ShellTable {
         }
         self.aim.push(aim);
         self.lands_at.push(lands_at);
+        self.launch.push(launch.0);
+        self.fired_at.push(launch.1);
         self.seat.push(seat.raw());
         self.firer.push(firer);
         self.weapon.push(weapon.id());
@@ -4374,6 +4507,8 @@ impl ShellTable {
                 if kept != at {
                     self.aim.swap(kept, at);
                     self.lands_at.swap(kept, at);
+                    self.launch.swap(kept, at);
+                    self.fired_at.swap(kept, at);
                     self.seat.swap(kept, at);
                     self.firer.swap(kept, at);
                     self.weapon.swap(kept, at);
@@ -4384,6 +4519,8 @@ impl ShellTable {
         }
         self.aim.truncate(kept);
         self.lands_at.truncate(kept);
+        self.launch.truncate(kept);
+        self.fired_at.truncate(kept);
         self.seat.truncate(kept);
         self.firer.truncate(kept);
         self.weapon.truncate(kept);
@@ -4399,6 +4536,48 @@ impl ShellTable {
     #[must_use]
     pub fn lands_at(&self) -> &[u32] {
         &self.lands_at
+    }
+
+    /// The launch-point column: where each shell was fired from (S2's `site`).
+    #[must_use]
+    pub fn launches(&self) -> &[[Fx; 3]] {
+        &self.launch
+    }
+
+    /// The fire-tick column: the tick each shell was fired on.
+    #[must_use]
+    pub fn fired_at(&self) -> &[u32] {
+        &self.fired_at
+    }
+
+    /// Where the shell in `row` is at `tick`: the straight-line point between
+    /// its launch point and its aim point, in proportion to the ticks flown,
+    /// its launch point before it is fired and its aim point from the tick it
+    /// lands. A pure read of the row, in integer `Fx`; `None` for a row the
+    /// table does not hold. "Slow and visible in flight" (S2's plan, step 4):
+    /// what a client draws, which the gateway's view reads.
+    #[must_use]
+    pub fn position_at(&self, row: usize, tick: u32) -> Option<[Fx; 3]> {
+        let aim = self.aim.get(row).copied()?;
+        let lands = self.lands_at.get(row).copied()?;
+        let launch = self.launch.get(row).copied()?;
+        let fired = self.fired_at.get(row).copied()?;
+        if tick <= fired {
+            return Some(launch);
+        }
+        if tick >= lands {
+            return Some(aim);
+        }
+        let flown = i64::from(tick.checked_sub(fired)?);
+        let whole = i64::from(lands.checked_sub(fired)?);
+        let mut at = launch;
+        for (axis, (from, to)) in at.iter_mut().zip(launch.iter().zip(aim)) {
+            let span = i64::from(to.raw()).checked_sub(i64::from(from.raw()))?;
+            let step = span.checked_mul(flown)?.checked_div(whole)?;
+            let raw = i64::from(from.raw()).checked_add(step)?;
+            *axis = Fx::from_raw(i32::try_from(raw).ok()?);
+        }
+        Some(at)
     }
 
     /// The firer's-seat column.
@@ -4426,12 +4605,20 @@ impl ShellTable {
         &mut self,
         aim: Vec<[Fx; 3]>,
         lands_at: Vec<u32>,
+        launch: (Vec<[Fx; 3]>, Vec<u32>),
         seat: Vec<u8>,
         firer: Vec<u32>,
         weapon: Vec<u8>,
     ) -> bool {
         let n = aim.len();
+        let (launch, fired_at) = launch;
         if lands_at.len() != n
+            || launch.len() != n
+            || fired_at.len() != n
+            || fired_at
+                .iter()
+                .zip(&lands_at)
+                .any(|(fired, lands)| fired > lands)
             || seat.len() != n
             || firer.len() != n
             || weapon.len() != n
@@ -4443,6 +4630,10 @@ impl ShellTable {
         self.aim.extend(aim);
         self.lands_at.clear();
         self.lands_at.extend(lands_at);
+        self.launch.clear();
+        self.launch.extend(launch);
+        self.fired_at.clear();
+        self.fired_at.extend(fired_at);
         self.seat.clear();
         self.seat.extend(seat);
         self.firer.clear();

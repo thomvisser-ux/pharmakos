@@ -1,0 +1,30 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// S2's `site`: one visit to the core that writes `terraform: FILL` and a
+// mortar anchored two voxels above the ground, so the core's build drones
+// level its footprint before the Quartermaster buys it. See
+// terraform-levels-a-footprint.scenario.jsonc for what is asserted, and why the
+// crater refill is a headless test.
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {"title": "Level and raise", "author_kind": "HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {"label": "level",
+        "interface": {"beacon": {"beacon_id": "b_00"}, "rows": [
+          {"set_mandate_settings": {"build": {
+            "targets": [
+              {"blueprint_id": "mortar", "anchor": {"voxel": {"x": 354, "y": 30, "z": 38}}}
+            ],
+            "terraform": "FILL"
+          }}}
+        ]},
+        "timeout_ms": 60000, "on_fail": {"action": "SKIP"}}
+    ],
+    "handlers": []
+  },
+  "on_death": {"on_respawn": "CONTINUE", "max_deaths_before_fallback": 2},
+  "fallback": {"hold": {"at": {"safest": {}}}}
+}

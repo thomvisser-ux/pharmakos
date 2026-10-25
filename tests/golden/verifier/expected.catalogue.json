@@ -147,7 +147,7 @@
     "code": "E0019",
     "family": "decode and version",
     "severity": "ERROR",
-    "emitter": "structure",
+    "emitter": "none at the skeleton (retired by S2's `site`, which built the base kit)",
     "message": "a Build target names `{id}`, one of S2's base kit, which has no effect until S2's base kit lands; it is refused rather than ignored.",
     "beginner": "Autocannons, mortars and walls cannot be built in this build yet."
   },
