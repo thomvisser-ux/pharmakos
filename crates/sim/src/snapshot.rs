@@ -2296,9 +2296,7 @@ impl Snapshot {
             .zip(&self.defend_protect_of)
             .map(|(by, of)| (BeaconId::new(*by), BeaconId::new(*of)))
             .collect();
-        if protected.iter().any(|(_, of)| !live_on(of.raw(), false)) {
-            return Err(SnapshotError::OutOfRange("defend_protect_of"));
-        }
+        defend_cross_checks(beacons, &rows, &protected)?;
         let mut table = crate::tables::DefendTable::with_room(beacons.len());
         if !table.restore(rows, protected) {
             return Err(SnapshotError::Ragged("defend"));
@@ -2337,6 +2335,69 @@ impl Snapshot {
         }
         Ok(table)
     }
+}
+
+/// The Defend table's checks across tables, for [`Snapshot::restore_defend`]:
+/// every live Defend beacon holds a row, and every protected beacon is live,
+/// its defender's seat's own, and named once per list, as a commit writes it.
+///
+/// # Errors
+///
+/// [`SnapshotError::OutOfRange`] naming the column a check refuses.
+fn defend_cross_checks(
+    beacons: &BeaconTable,
+    rows: &[crate::tables::DefendRow],
+    protected: &[(BeaconId, BeaconId)],
+) -> Result<(), SnapshotError> {
+    let live = |beacon: BeaconId| {
+        beacons.row_of(beacon).is_ok_and(|row| {
+            beacons
+                .hit_points()
+                .get(row.index())
+                .is_some_and(|hp| hp.is_alive())
+        })
+    };
+    // And the other way: every live Defend beacon holds a row, so no
+    // restored Defend beacon is one whose guards and pickets nothing
+    // drives.
+    let defend_writ = crate::seams::MandateKind::Defend.id();
+    let unrowed = beacons
+        .ids()
+        .iter()
+        .zip(beacons.mandates())
+        .zip(beacons.hit_points())
+        .any(|((id, writ), hp)| {
+            *writ == defend_writ
+                && hp.is_alive()
+                && rows
+                    .binary_search_by_key(id, |row| row.beacon.raw())
+                    .is_err()
+        });
+    if unrowed {
+        return Err(SnapshotError::OutOfRange("defend_beacon"));
+    }
+    // A protected beacon is live, its defender's seat's own, and named
+    // once per list, as a commit writes it.
+    let seat_of = |beacon: BeaconId| {
+        beacons
+            .row_of(beacon)
+            .ok()
+            .and_then(|row| beacons.seats().get(row.index()).copied())
+    };
+    let mut seen: Vec<(u32, u32)> = protected
+        .iter()
+        .map(|(by, of)| (by.raw(), of.raw()))
+        .collect();
+    seen.sort_unstable();
+    let repeated = seen.windows(2).any(|pair| matches!(pair, [a, b] if a == b));
+    if repeated
+        || protected
+            .iter()
+            .any(|(by, of)| !live(*of) || seat_of(*by) != seat_of(*of))
+    {
+        return Err(SnapshotError::OutOfRange("defend_protect_of"));
+    }
+    Ok(())
 }
 
 /// Three raw axes per point, in encoder order.

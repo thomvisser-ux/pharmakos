@@ -2626,7 +2626,8 @@ impl core::fmt::Display for PlanError {
             ),
             PlanError::EngagementOutOfRange { found } => write!(
                 f,
-                "an `engagement_radius_pct` of {found} is past 100; it is a percentage of the                  sphere radius, 1 to 100"
+                "an `engagement_radius_pct` of {found} is past 100; it is a percentage of the \
+                 sphere radius, 1 to 100"
             ),
             PlanError::RetreatOutOfRange { found } => write!(
                 f,

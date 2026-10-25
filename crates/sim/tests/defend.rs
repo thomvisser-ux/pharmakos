@@ -18,7 +18,7 @@
 )]
 
 use pharmakos_sim::interpreter::{
-    BeaconSpec, Filter, beacon_under_attack, resolve_beacon_in, resolve_beacon_now,
+    BeaconSpec, Filter, Plan, beacon_under_attack, resolve_beacon_in, resolve_beacon_now,
 };
 use pharmakos_sim::knowledge::AssetId;
 use pharmakos_sim::math::fixed::{Fx, Sq};
@@ -512,17 +512,25 @@ fn a_wounded_commander_is_walked_to_a_repair_drone() {
         resolve_beacon_now(&world, seat(0), BeaconSpec::Safest),
         Some(core(&world, seat(0)))
     );
+    // A sealed playbook that holds where it is, so only the reflex moves the
+    // commander.
+    let plan = Plan::compile(&hold_playbook(), world.rules()).expect("the playbook compiles");
+    assert!(world.seal_playbook(seat(0), plan));
     let commander = world.commander_of(seat(0)).unwrap();
+    let full = world.rules().unit_hp(UnitKind::Commander).raw();
     let mut runner = pushing(world);
+    play(&mut runner, 1);
+    // Down to a tenth of its hit points: the reflex fires (spec section 10,
+    // HP at most 20 %) and walks the commander to the safest own beacon,
+    // which, wounded, is the one whose sphere holds a repair drone first
+    // (decision 6).
     hit(
         runner.world_mut(),
         DamageTarget::Unit(commander),
-        10,
+        i64::from(full - full.checked_div(10).unwrap()),
         seat(1),
     );
     play(&mut runner, 1);
-    // Wounded, the beacon whose sphere holds a repair drone comes first: the
-    // reflex and the safe playbook walk the commander there (decision 6).
     assert_eq!(
         resolve_beacon_now(runner.world(), seat(0), BeaconSpec::Safest),
         Some(mended)
@@ -538,6 +546,236 @@ fn a_wounded_commander_is_walked_to_a_repair_drone() {
         ),
         Some(mended)
     );
+    // The reflex sends the commander to the mended beacon, and it walks
+    // there: its destination is that beacon and it closes on it.
+    let start = distance2(unit_at(runner.world(), commander), here);
+    play(&mut runner, 600);
+    let world = runner.world();
+    let row = world.units().row_of(commander).unwrap().index();
+    assert!(
+        within(world.units().destinations()[row], here, 1),
+        "the reflex walks the wounded commander to the repair drone's beacon"
+    );
+    assert!(
+        distance2(unit_at(world, commander), here) < start,
+        "and it is on its way"
+    );
+}
+
+/// A playbook whose route holds for a minute and whose fallback holds at the
+/// safest beacon.
+fn hold_playbook() -> pharmakos_proto::gp::v1::Playbook {
+    pharmakos_proto::json::decode(concat!(
+        r#"{"schema_version":{"major":1},"#,
+        r#""meta":{"title":"hold","author_kind":"HUMAN"},"#,
+        r#""declarative":{"route":[{"label":"h","hold":{"ms":60000}}]},"#,
+        r#""on_death":{"on_respawn":"CONTINUE","max_deaths_before_fallback":3},"#,
+        r#""fallback":{"hold":{"at":{"safest":{}}}},"#,
+        r#""kind":"PLAYBOOK"}"#
+    ))
+    .expect("the playbook decodes")
+}
+
+#[test]
+fn a_threat_in_the_sphere_fields_a_guard_and_pickets_fill_their_count() {
+    let mut world = world();
+    let here = field(&world);
+    let post = defend(
+        &mut world,
+        seat(0),
+        here,
+        DefendSettings {
+            engagement_pct: 100,
+            pursue: Pursue::Never,
+            pickets: 2,
+            escort: false,
+        },
+    );
+    let defend = pharmakos_sim::mandate_for(MandateKind::Defend).expect("Defend runs");
+    // Quiet: the pickets, counted as Survey's scouts, in the units band.
+    let request = defend.request(&world, post).expect("a picket is wanted");
+    assert_eq!(request.urgency, pharmakos_sim::Urgency::Units);
+    assert_eq!(request.buys, pharmakos_sim::Purchase::Unit(UnitKind::Scout));
+    unit(&mut world, seat(0), post, UnitKind::Scout, here);
+    unit(&mut world, seat(0), post, UnitKind::Scout, here);
+    assert_eq!(
+        defend.request(&world, post),
+        None,
+        "the picket's count is filled"
+    );
+    // An armed enemy raider seen in the sphere is work in hand: a guard, in the
+    // band the ladder puts first.
+    let spot = ground(&world, here, 70, 0);
+    let enemy_home = beacon(&mut world, seat(1), spot, MandateKind::Build, HOLD_FIRE);
+    let spot = ground(&world, here, 5, 0);
+    unit(&mut world, seat(1), enemy_home, UnitKind::Raider, spot);
+    let request = defend.request(&world, post).expect("a guard is wanted");
+    assert_eq!(request.urgency, pharmakos_sim::Urgency::DefendUnderAttack);
+    assert_eq!(
+        request.buys,
+        pharmakos_sim::Purchase::Unit(UnitKind::Raider)
+    );
+    // One guard for one threat: no more.
+    unit(&mut world, seat(0), post, UnitKind::Raider, here);
+    assert_eq!(defend.request(&world, post), None);
+}
+
+#[test]
+fn an_armed_threat_outranks_an_unarmed_one_by_the_commander() {
+    let mut fixture = world();
+    let here = field(&fixture);
+    let post = defend(&mut fixture, seat(0), here, holding(Pursue::Never, true));
+    let commander = fixture.commander_of(seat(0)).unwrap();
+    let by = ground(&fixture, here, 6, 0);
+    assert!(fixture.place_unit_directly(commander, by));
+    let spot = ground(&fixture, here, 70, 0);
+    let enemy_home = beacon(&mut fixture, seat(1), spot, MandateKind::Build, HOLD_FIRE);
+    let near_commander = ground(&fixture, here, 7, 0);
+    unit(
+        &mut fixture,
+        seat(1),
+        enemy_home,
+        UnitKind::Scout,
+        near_commander,
+    );
+    let far_side = ground(&fixture, here, -8, 0);
+    let raider = unit(
+        &mut fixture,
+        seat(1),
+        enemy_home,
+        UnitKind::Raider,
+        far_side,
+    );
+    let mut runner = pushing(fixture);
+    play(&mut runner, 1);
+    assert_eq!(
+        quarry(runner.world(), post),
+        AssetId::of_unit(raider).unwrap().raw(),
+        "the guards go after the raider, not the scout by the commander"
+    );
+}
+
+#[test]
+fn the_frozen_snapshot_ranks_as_the_live_world_does() {
+    let mut world = world();
+    let here = field(&world);
+    let r = sphere();
+    beacon(&mut world, seat(0), here, MandateKind::Build, 0);
+    let east = ground(&world, here, 3 * r, 0);
+    let b = beacon(&mut world, seat(0), east, MandateKind::Defend, 0);
+    let spot = ground(&world, here, 6 * r, 0);
+    let enemy_home = beacon(&mut world, seat(1), spot, MandateKind::Build, HOLD_FIRE);
+    // An armed raider and a dead one by the first; a finished autocannon and
+    // a repair drone by the second.
+    let spot = ground(&world, here, 3, 0);
+    unit(&mut world, seat(1), enemy_home, UnitKind::Raider, spot);
+    let spot = ground(&world, here, -3, 0);
+    let dead = unit(&mut world, seat(1), enemy_home, UnitKind::Raider, spot);
+    let spot = ground(&world, east, 4, 4);
+    world
+        .raise_structure(
+            seat(1),
+            enemy_home,
+            pharmakos_sim::tables::StructureKind::Autocannon,
+            spot,
+        )
+        .expect("a turret");
+    let spot = ground(&world, east, 2, 0);
+    unit(&mut world, seat(0), b, UnitKind::RepairDrone, spot);
+    let commander = world.commander_of(seat(0)).unwrap();
+    let mut runner = pushing(world);
+    hit(
+        runner.world_mut(),
+        DamageTarget::Unit(dead),
+        1_000_000,
+        seat(0),
+    );
+    hit(
+        runner.world_mut(),
+        DamageTarget::Unit(commander),
+        50,
+        seat(1),
+    );
+    play(&mut runner, 1);
+    let world = runner.world();
+    let snapshot = Snapshot::capture(world);
+    for spec in [
+        BeaconSpec::Safest,
+        BeaconSpec::MostThreatened(Filter::default()),
+        BeaconSpec::MostThreatened(Filter {
+            mandate: Some(MandateKind::Defend),
+        }),
+    ] {
+        assert_eq!(
+            resolve_beacon_now(world, seat(0), spec),
+            resolve_beacon_in(&snapshot, world.rules(), seat(0), spec, None),
+            "{spec:?}"
+        );
+    }
+}
+
+#[test]
+fn a_guard_in_pursuit_survives_save_and_restore() {
+    let mut fixture = world();
+    let here = field(&fixture);
+    let post = defend(
+        &mut fixture,
+        seat(0),
+        here,
+        DefendSettings {
+            engagement_pct: 100,
+            pursue: Pursue::WhileInReach,
+            pickets: 1,
+            escort: false,
+        },
+    );
+    unit(&mut fixture, seat(0), post, UnitKind::Raider, here);
+    unit(&mut fixture, seat(0), post, UnitKind::Scout, here);
+    let away = ground(&fixture, here, sphere() * 2, 0);
+    let enemy_home = beacon(&mut fixture, seat(1), away, MandateKind::Build, HOLD_FIRE);
+    let spot = ground(&fixture, here, 4, 0);
+    unit(
+        &mut fixture,
+        seat(1),
+        enemy_home,
+        UnitKind::MiningDrone,
+        spot,
+    );
+    let mut runner = pushing(fixture);
+    play(&mut runner, 200);
+    let row = *runner.world().defend().row_of(post).unwrap();
+    assert!(
+        row.leg > 0 || row.quarry != NO_QUARRY,
+        "state worth saving: {row:?}"
+    );
+    let bytes = Snapshot::capture(runner.world()).to_bytes().unwrap();
+    let mut copy = Runner::new(world());
+    Snapshot::from_bytes(&bytes)
+        .unwrap()
+        .restore_into(copy.world_mut())
+        .unwrap();
+    assert_eq!(copy.world().state_hash(), runner.world().state_hash());
+    assert_eq!(copy.world().defend(), runner.world().defend());
+    for _ in 0..200 {
+        let a = runner.step().unwrap().expect("in the Push");
+        let b = copy.step().unwrap().expect("in the Push");
+        assert_eq!(a, b, "the restored run's chain is the unbroken one's");
+        runner.clear_events();
+        copy.clear_events();
+    }
+}
+
+#[test]
+fn a_protected_beacon_that_changes_its_writ_stays_protected() {
+    let mut world = world();
+    let here = field(&world);
+    let post = defend(&mut world, seat(0), here, holding(Pursue::Never, false));
+    let spot = ground(&world, here, 6, 0);
+    let ward = beacon(&mut world, seat(0), spot, MandateKind::Build, 0);
+    assert!(world.set_defend(post, holding(Pursue::Never, false), &[ward]));
+    let row = world.beacons().row_of(ward).unwrap().index();
+    world.switch_mandate_directly(row, MandateKind::Mine);
+    assert_eq!(world.defend().protected(), &[(post, ward)]);
 }
 
 #[test]

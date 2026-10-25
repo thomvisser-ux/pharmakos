@@ -221,14 +221,12 @@ impl Mandate for Defend {
 
     fn request(&self, world: &World, beacon: BeaconId) -> Option<SpendRequest> {
         let seat = seat_of(world, beacon)?;
-        if let Some(repair) = repair_request(world, seat, beacon) {
-            return Some(repair);
-        }
         let row = world.beacons().row_of(beacon).ok()?;
         let centre = world.beacons().positions().get(row.index()).copied()?;
         // Guards on work in hand (decision 13): the armed threats the seat
         // sees inside the sphere, against the raiders the beacon has, in the
-        // band spec section 7's ladder puts first ("defend under attack").
+        // band spec section 7's ladder puts first ("defend under attack"),
+        // so it is asked for before the repair band below it.
         let threats = crate::defend::threats_in_sphere(world, seat, centre);
         let guards = drones_homed(world, beacon, UnitKind::Raider);
         if backlogged(world, threats, guards) {
@@ -239,6 +237,9 @@ impl Mandate for Defend {
                 UnitKind::Raider,
                 Urgency::DefendUnderAttack,
             ));
+        }
+        if let Some(repair) = repair_request(world, seat, beacon) {
+            return Some(repair);
         }
         // Pickets as Survey's scouts (decisions-log item 146 (3) (h)): the
         // setting is a count, and the fabricator fills it exactly.

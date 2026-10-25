@@ -733,13 +733,20 @@ impl World {
                 d2: Sq::between(gun.at, at),
             });
         }
+        // The fallback is held to the beacon's engagement zone (decision 21):
+        // a guard escorting, idling or walking to a drone fires only at what
+        // stands inside it.
+        let (centre, engage) = crate::defend::engagement_zone(self, home)?;
         self.units_within(gun.at, range, rows);
         let mut best: Option<(Threat, Mark)> = None;
         for row in rows.iter() {
             let Some(mark) = self.enemy_unit_mark(gun, *row) else {
                 continue;
             };
-            if !Self::may_target(gun.seat, mark.asset, only) || !self.seen_by(gun.seat, mark.at) {
+            if !Self::may_target(gun.seat, mark.asset, only)
+                || !self.seen_by(gun.seat, mark.at)
+                || Sq::between(mark.at, centre) > Sq::of_radius(engage)
+            {
                 continue;
             }
             let threat = self.threat_of(mark.asset);
@@ -754,15 +761,24 @@ impl World {
         best.map(|(_, mark)| mark)
     }
 
-    /// Every `(seat, attacker)` pair the seats' own assets remember from
-    /// inside the under-attack window, sorted: the set `RETURN_FIRE` answers
-    /// from, as the fire step reads it ([`World::gather_attackers`]). For the
-    /// Defend mandate, which holds an explicit `RETURN_FIRE` beacon's guards
-    /// to it (item 148 (2)). Allocates; read only for such a beacon.
-    pub(crate) fn attackers_now(&self) -> Vec<(u8, u32)> {
-        let mut out = Vec::new();
-        self.gather_attackers(self.tick.raw(), &mut out);
-        out
+    /// Fill `out` with every `(seat, attacker)` pair the seats' own assets
+    /// remember from inside the under-attack window, sorted: the set
+    /// `RETURN_FIRE` answers from, as the fire step reads it. For the Defend
+    /// mandate, which holds an explicit `RETURN_FIRE` beacon's guards to it
+    /// (item 148 (2)).
+    pub(crate) fn gather_attackers_now(&self, out: &mut Vec<(u8, u32)>) {
+        self.gather_attackers(self.tick.raw(), out);
+    }
+
+    /// The fire step's attacker scratch, empty between phases: lent to the
+    /// Defend mandate's update so it allocates nothing.
+    pub(crate) fn take_attacker_scratch(&mut self) -> Vec<(u8, u32)> {
+        core::mem::take(&mut self.attackers)
+    }
+
+    /// Give the attacker scratch back, cleared.
+    pub(crate) fn put_attacker_scratch(&mut self, scratch: Vec<(u8, u32)>) {
+        self.attackers = scratch;
     }
 
     /// Whether `asset`, owned by an enemy of `seat`, may be fired at under

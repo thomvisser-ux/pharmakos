@@ -854,7 +854,7 @@ fn choose_seam(world: &mut World, row: usize, settings: MineSettings) -> u32 {
     // armed enemy asset the beacon's seat sees, with its weapon's reach
     // (decision 12). Read only for a `SAFEST` choice, on the decision tick a
     // seam is chosen.
-    let mut threats: Vec<([Fx; 3], Sq)> = Vec::new();
+    let mut threats = world.take_threat_scratch();
     if settings.seam_choice == SeamChoice::Safest
         && let Some(seat) = world
             .beacons()
@@ -904,6 +904,7 @@ fn choose_seam(world: &mut World, row: usize, settings: MineSettings) -> u32 {
             }
         }
     }
+    world.put_threat_scratch(threats);
     best.and_then(|(index, _)| u32::try_from(index).ok())
         // E7: rule: no seam found is `NO_FEATURE`; a feature index past `u32` names no feature a beacon can hold
         .unwrap_or(NO_FEATURE)

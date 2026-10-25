@@ -495,6 +495,10 @@ pub struct World {
     fire_order: Vec<combat::Firer>,
     /// Scratch for `RETURN_FIRE`'s attacker set, sized as above.
     attackers: Vec<(u8, u32)>,
+    /// Scratch for a `SAFEST` seam choice's known threats, each with its
+    /// weapon's reach (S2's `dfnd`), sized as above: an armed asset is one
+    /// that can fire.
+    threat_scratch: Vec<([Fx; 3], Sq)>,
     /// Scratch for a weapon's unit query, sized to the unit ceiling.
     fire_rows: Vec<Row>,
     /// Scratch for a splash's unit query, sized to the unit ceiling.
@@ -1191,6 +1195,7 @@ impl World {
             damage_dealt: vec![0; seat_rows.saturating_mul(seat_rows)],
             fire_order: Vec::with_capacity(armed_rows),
             attackers: Vec::with_capacity(armed_rows),
+            threat_scratch: Vec::with_capacity(armed_rows),
             fire_rows: Vec::with_capacity(crate::math::index::row(unit_ceiling)),
             splash_rows: Vec::with_capacity(crate::math::index::row(unit_ceiling)),
             damage_index: Vec::with_capacity(damage_capacity),
@@ -1283,6 +1288,18 @@ impl World {
     #[must_use]
     pub const fn shells(&self) -> &ShellTable {
         &self.shells
+    }
+
+    /// The `SAFEST` seam choice's threat scratch, empty between uses (S2's
+    /// `dfnd`): taken and given back so the choice allocates nothing.
+    pub(crate) fn take_threat_scratch(&mut self) -> Vec<([Fx; 3], Sq)> {
+        core::mem::take(&mut self.threat_scratch)
+    }
+
+    /// Give the threat scratch back, cleared.
+    pub(crate) fn put_threat_scratch(&mut self, mut scratch: Vec<([Fx; 3], Sq)>) {
+        scratch.clear();
+        self.threat_scratch = scratch;
     }
 
     /// Every Defend beacon's settings and state (S2's `dfnd`).
@@ -4647,6 +4664,7 @@ impl World {
         }
         self.targets.clear_beacon(beacon);
         self.defend.close(beacon);
+        self.defend.forget(beacon);
     }
 
     /// Re-home every living unit of `seat` bound to `gone` on to the nearest
@@ -6194,6 +6212,14 @@ fn held_by_seat(column: &[u8], seats: u32) -> Vec<u32> {
         .collect()
 }
 
+/// A Defend or explored table's length as the hash's `u32` count. Both are
+/// bounded far below it: a Defend row per beacon, a protect entry per list
+/// field, and an explored row per seat and coarse cell.
+fn table_len(len: usize) -> u32 {
+    // E7: rule: no table this world holds reaches `u32::MAX` rows
+    u32::try_from(len).unwrap_or(u32::MAX)
+}
+
 /// The broadphase pad (S2's plan, E11): the most any unit can move in one
 /// tick, rounded up to whole voxels, from the locomotion rows.
 ///
@@ -6204,14 +6230,6 @@ fn held_by_seat(column: &[u8], seats: u32) -> Vec<u32> {
 /// moves one column across or diagonally and at most one voxel up or down, a
 /// distance under two voxels. So the pad is twice the step count, in whole
 /// voxels: generous, never short, and a cost the G3' measurement counts.
-/// A Defend or explored table's length as the hash's `u32` count. Both are
-/// bounded far below it: a Defend row per beacon, a protect entry per list
-/// field, and an explored row per seat and coarse cell.
-fn table_len(len: usize) -> u32 {
-    // E7: rule: no table this world holds reaches `u32::MAX` rows
-    u32::try_from(len).unwrap_or(u32::MAX)
-}
-
 /// The shell table's room and the most shells that can land on one tick (S2's
 /// plan, E13), from firings rather than from mortars.
 ///

@@ -4832,14 +4832,19 @@ impl DefendTable {
         }
     }
 
-    /// Remove `beacon`'s row and its protect list, and every protect entry
-    /// naming it: a beacon that leaves the writ or dies.
+    /// Remove `beacon`'s row and its protect list: a beacon that leaves the
+    /// Defend writ or dies. A protect entry naming it stays: a protected
+    /// beacon that changes its writ is still protected.
     pub fn close(&mut self, beacon: BeaconId) {
         if let Ok(at) = self.index_of(beacon) {
             self.rows.remove(at);
         }
-        self.protected
-            .retain(|(by, of)| *by != beacon && *of != beacon);
+        self.protected.retain(|(by, _)| *by != beacon);
+    }
+
+    /// Remove every protect entry naming `beacon`: a beacon that died.
+    pub fn forget(&mut self, beacon: BeaconId) {
+        self.protected.retain(|(_, of)| *of != beacon);
     }
 
     /// Replace `beacon`'s protect list's beacons with `list`, in order. Does

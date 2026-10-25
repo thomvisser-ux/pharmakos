@@ -44,10 +44,12 @@
 //!   rule, so the fixed reflex and the safe playbook's shadowing walk a
 //!   wounded commander to a beacon where a drone heals it); then the
 //!   beacon's hit points as a whole percentage of its maximum **less the
-//!   summed threat** of the enemy assets the seat sees inside its sphere, in
-//!   thousandths of a hit point per second, so a beacon under any armed threat
-//!   ranks behind every quiet one and two threatened beacons rank by their
-//!   threat. It is the same ranking the fixed reflex walks to.
+//!   summed threat** of the enemy assets the seat sees inside its sphere,
+//!   read lexicographically: the least threat first, then the highest
+//!   percentage, so a beacon under any armed threat ranks behind every quiet
+//!   one and two threatened beacons rank by their threat (an engineering
+//!   reading of decision 12's "subtracts", which gives no scale). It is the
+//!   same ranking the fixed reflex walks to.
 //! * `most_threatened` — the largest summed threat of the enemy assets the
 //!   seat sees inside the beacon's sphere (decision 12).
 //! * `weakest` — lowest hit points as a whole percentage, the beacon's own and
@@ -275,11 +277,12 @@ pub(crate) fn evaluate(view: &View<'_>, condition: &Cond) -> bool {
     }
 }
 
-/// Whether the commander lost hit points within the last `ms` of game time.
-/// Whether the beacon in `row` took damage at any point inside the last
-/// `within_ms` game milliseconds (`beacon_under_attack`, the predicate's own
-/// window; decision 12): the tick its combat memory last recorded a hit
-/// ([`crate::tables::Arms::attacked_at`]), from any seat.
+/// Whether the beacon in `row` took damage from an enemy asset at any point
+/// inside the last `within_ms` game milliseconds (`beacon_under_attack`, the
+/// predicate's own window; decision 12): the tick its combat memory last
+/// recorded an enemy's hit ([`crate::tables::Arms::attacked_at`]). The
+/// beacon's own hit points only, as the predicate's message says; damage with
+/// no enemy source (a host's order) records no attack.
 pub(crate) fn under_attack(world: &World, row: usize, within_ms: i32) -> bool {
     let Some(arms) = world.beacons().arms().get(row) else {
         return false;
@@ -291,6 +294,7 @@ pub(crate) fn under_attack(world: &World, row: usize, within_ms: i32) -> bool {
     i64::from(Ms::from_ticks(since).raw()) <= i64::from(within_ms)
 }
 
+/// Whether the commander lost hit points within the last `ms` of game time.
 fn took_damage_within(view: &View<'_>, ms: i32) -> bool {
     if view.state.last_damage == NO_TICK {
         return false;
@@ -500,7 +504,10 @@ impl Board for SnapshotBoard<'_> {
     /// Inside an own live beacon's sphere is inside one of the seat's sensors
     /// (the sphere is one, [`crate::sight::SensorKind::Sphere`]), so under the
     /// radius-only model this is what the live world's seen-by test answers;
-    /// `tests/targeting.rs` holds the two to each other.
+    /// `tests/defend.rs`' `the_frozen_snapshot_ranks_as_the_live_world_does`
+    /// holds the two to each other. A core is the seat's beacon of ordinal 0
+    /// (`b_00`, decisions-log item 127 (13)), the live world's
+    /// `power::core_of`.
     fn row_threat(&self, row: usize) -> u64 {
         let Some(centre) = self.row_at(row) else {
             return 0;
@@ -839,7 +846,7 @@ fn rank<B: Board>(board: &B, filter: Filter, rank: Rank) -> Option<BeaconId> {
     let diagonal = i64::from(board.rules().step_diagonal());
     // Decision 6: read once per ranking, not once per beacon.
     let rescue = rank == Rank::Safest && board.commander_wounded();
-    let mut best: Option<((i64, i64), u32)> = None;
+    let mut best: Option<((i64, i64, i64), u32)> = None;
     let mut row: usize = 0;
     while row < count {
         board.charge(1);
@@ -859,21 +866,24 @@ fn rank<B: Board>(board: &B, filter: Filter, rank: Rank) -> Option<BeaconId> {
         let key = match rank {
             // A running *minimum* over the key, so "safest" ranks a beacon
             // with a repair drone first while the commander is wounded, then
-            // negates the percentage less the threat (decisions 6 and 12)
-            // rather than needing a second comparison.
+            // the least threat, then the highest percentage (decisions 6 and
+            // 12): the threat subtracted from the hit-point rank, ordered so
+            // that any threat outweighs any percentage, whatever its size.
             Rank::Safest => (
                 i64::from(rescue && !board.row_repairs(row)),
-                threat(row).saturating_sub(board.row_hp_pct(row)),
+                threat(row),
+                board.row_hp_pct(row).saturating_neg(),
             ),
-            Rank::Weakest => (0, board.row_hp_pct(row)),
+            Rank::Weakest => (0, 0, board.row_hp_pct(row)),
             Rank::Nearest => (
+                0,
                 0,
                 match (from, board.row_at(row)) {
                     (Some(a), Some(b)) => octile(cardinal, diagonal, a, b),
                     _ => i64::MAX,
                 },
             ),
-            Rank::MostThreatened => (0, threat(row).saturating_neg()),
+            Rank::MostThreatened => (0, threat(row).saturating_neg(), 0),
         };
         if best.is_none_or(|(found, found_id)| (key, id) < (found, found_id)) {
             best = Some((key, id));

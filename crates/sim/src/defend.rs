@@ -96,7 +96,8 @@ pub const PICKET_LEGS: u8 = 8;
 pub(crate) struct Known {
     /// Where it stands.
     pub(crate) at: [Fx; 3],
-    /// Its threat; never zero, since only an armed asset is a threat.
+    /// Its threat: zero only for a weapon row slower than a thousandth of a
+    /// hit point a second, which still counts as armed.
     pub(crate) threat: Threat,
     /// Its weapon.
     pub(crate) weapon: WeaponRow,
@@ -298,19 +299,26 @@ pub(crate) fn update(world: &mut World) {
     if world.defend().rows().is_empty() {
         return;
     }
+    // The attacker set `RETURN_FIRE` answers from, read once per tick into
+    // the combat phase's own scratch, which nothing holds between phases, so
+    // nothing allocates (item 148 (2)).
+    let mut attackers = world.take_attacker_scratch();
+    world.gather_attackers_now(&mut attackers);
     let mut index: usize = 0;
     while let Some(row) = world.defend().rows().get(index).copied() {
         index = index.saturating_add(1);
         let Some(post) = post_of(world, &row) else {
             continue;
         };
-        let quarry = choose_quarry(world, &row, &post);
+        let quarry = choose_quarry(world, &row, &post, &attackers);
         let leg = next_leg(world, &row, &post);
         if let Some(slot) = world.defend_mut().row_mut(row.beacon) {
             slot.quarry = quarry;
             slot.leg = leg;
         }
     }
+    attackers.clear();
+    world.put_attacker_scratch(attackers);
 }
 
 /// A candidate quarry: an enemy unit, its threat and its squared distance
@@ -429,62 +437,85 @@ fn commander_at(world: &World, seat: SeatId) -> Option<[Fx; 3]> {
 }
 
 /// The beacon's quarry this tick (see the module docs).
-fn choose_quarry(world: &World, row: &DefendRow, post: &Post) -> u32 {
+///
+/// **Armed before unarmed** (decision 12: an unarmed asset's threat is zero):
+/// the tiers are searched for an armed enemy first, and only when no tier
+/// holds one for an unarmed one, so an unarmed scout by the commander never
+/// pulls the guards off a raider in the sphere. Under `NEVER` every
+/// candidate, and a kept quarry, lies inside the beacon's own engagement
+/// radius, so a guard never leaves it (`DefendSettings.Pursue`'s NEVER), and
+/// the commander's and the protected beacons' tiers only order what lies
+/// there. `attackers` is the sorted `(seat, attacker)` set `RETURN_FIRE`
+/// answers from.
+fn choose_quarry(world: &World, row: &DefendRow, post: &Post, attackers: &[(u8, u32)]) -> u32 {
     if post.roe == Roe::Hold {
         return NO_QUARRY;
     }
-    let attackers = (post.roe == Roe::Return).then(|| world.attackers_now());
     let allowed = |asset: AssetId| {
-        attackers
-            .as_ref()
-            .is_none_or(|set| set.binary_search(&(post.seat.raw(), asset.raw())).is_ok())
+        post.roe != Roe::Return
+            || attackers
+                .binary_search(&(post.seat.raw(), asset.raw()))
+                .is_ok()
     };
+    let pursue = row.settings.pursue_reading();
     let near = |centre: [Fx; 3], at: [Fx; 3]| Sq::between(centre, at) <= Sq::of_radius(post.engage);
+    let held_in =
+        |at: [Fx; 3]| !matches!(pursue, Pursue::Never | Pursue::Unset) || near(post.centre, at);
     // Keep the quarry while pursue lets the guards follow it.
     if let Some(at) = seen_unit_at(world, post.seat, row.quarry)
         && allowed(AssetId::new(row.quarry))
     {
-        let keep = match row.settings.pursue_reading() {
+        let keep = match pursue {
             Pursue::WhileInReach => true,
             Pursue::SphereEdge => Sq::between(at, post.centre) <= Sq::of_radius(post.sphere),
-            Pursue::Never | Pursue::Unset => {
-                let mut zoned = false;
-                for_each_tier(world, row, post, |centre| {
-                    zoned = near(centre, at);
-                    zoned
-                });
-                zoned
-            }
+            Pursue::Never | Pursue::Unset => near(post.centre, at),
         };
         if keep {
             return row.quarry;
         }
     }
-    let mut chosen = NO_QUARRY;
-    for_each_tier(world, row, post, |centre| {
-        let mut best: Option<Candidate> = None;
-        for_each_seen_enemy_unit(world, post.seat, |asset, at, threat| {
-            if !near(centre, at) || !allowed(asset) {
-                return;
-            }
-            let found = Candidate {
-                asset,
-                threat,
-                d2: Sq::between(centre, at),
-            };
-            if best.is_none_or(|held| found.beats(&held)) {
-                best = Some(found);
+    for armed in [true, false] {
+        let mut chosen = NO_QUARRY;
+        for_each_tier(world, row, post, |centre| {
+            let mut best: Option<Candidate> = None;
+            for_each_seen_enemy_unit(world, post.seat, |asset, at, threat| {
+                let is_armed = threat > Threat::NONE;
+                if is_armed != armed || !near(centre, at) || !held_in(at) || !allowed(asset) {
+                    return;
+                }
+                let found = Candidate {
+                    asset,
+                    threat,
+                    d2: Sq::between(centre, at),
+                };
+                if best.is_none_or(|held| found.beats(&held)) {
+                    best = Some(found);
+                }
+            });
+            match best {
+                Some(found) => {
+                    chosen = found.asset.raw();
+                    true
+                }
+                None => false,
             }
         });
-        match best {
-            Some(found) => {
-                chosen = found.asset.raw();
-                true
-            }
-            None => false,
+        if chosen != NO_QUARRY {
+            return chosen;
         }
-    });
-    chosen
+    }
+    NO_QUARRY
+}
+
+/// The engagement zone of a live Defend beacon: its centre and its engagement
+/// radius, or `None` for a beacon with no Defend row. A guard's fallback fire
+/// is held to it (decision 21: guards engage "enemy units inside the
+/// engagement radius").
+#[must_use]
+pub(crate) fn engagement_zone(world: &World, home: BeaconId) -> Option<([Fx; 3], Fx)> {
+    let row = world.defend().row_of(home)?;
+    let post = post_of(world, row)?;
+    Some((post.centre, post.engage))
 }
 
 /// The living units of `kind` homed to `beacon`, in ascending row: a beacon's
