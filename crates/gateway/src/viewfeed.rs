@@ -886,14 +886,18 @@ enum Space {
 }
 
 /// What makes one shell in flight one shell: its firer, with the id's
-/// generation, the tick it lands on and the point it was aimed at, raw. Two
-/// shots of one weapon can land on one tick (a far shot and a nearer one a
-/// cooldown later), but not at one point, since one distance is one flight
-/// time; the key is therefore unique among the shells in the air.
+/// generation, the tick it was fired on, the tick it lands on and the point
+/// it was aimed at, raw. Two shots of one weapon can land on one tick (a far
+/// shot and a nearer one a cooldown later), and a moving firer's two shots
+/// can even share a landing tick and an aim, but one firer fires one weapon
+/// once a tick, so with the fire tick the key is unique among the shells in
+/// the air.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct ShellKey {
     /// The firer, an `AssetId` raw value.
     pub firer: u32,
+    /// The tick it was fired on.
+    pub fired_at: u32,
     /// The tick it lands on.
     pub lands_at: u32,
     /// The point it was aimed at, raw Q16.16.

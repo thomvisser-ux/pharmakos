@@ -456,8 +456,11 @@ fn visible_wrecks<V: Vision>(
 /// world: the firing seat always (it is that seat's), a seat or spectator the
 /// fog hides nothing from always, and any other seat only while its live
 /// vision covers the shell's **current** point. So an enemy sees a shell
-/// crossing its sight and is never told where it is aimed (the main session's
-/// ruling, open to the owner's veto). The landing is a world event,
+/// crossing its sight and is never handed its aim (the main session's ruling,
+/// open to the owner's veto). The flight is a straight line at a steady
+/// pace, so a seat that sees a shell on two ticks can extrapolate its aim and
+/// its launch point: that is the cost of drawing it in flight at all, and it
+/// is bounded by the seat's own vision. The landing is a world event,
 /// `shell_landed`, which the fog filter tells any seat that sees the place.
 ///
 /// # Errors
@@ -486,8 +489,10 @@ fn visible_shells<V: Vision>(
         let firer = column(shells.firers().get(row), "shell", "firer")?;
         let lands_at = column(shells.lands_at().get(row), "shell", "landing")?;
         let aim = column(shells.aims().get(row), "shell", "aim")?;
+        let fired_at = column(shells.fired_at().get(row), "shell", "fire tick")?;
         let key = ShellKey {
             firer,
+            fired_at,
             lands_at,
             aim: aim.map(pharmakos_sim::math::fixed::Fx::raw),
         };
@@ -495,14 +500,17 @@ fn visible_shells<V: Vision>(
             // The sim lands every shell on its landing tick, and a snapshot
             // holds none at or past it, so a held row here is the two
             // disagreeing; drawn, it would sit on its aim point.
+            // The words name no row and no landing tick: the check runs
+            // before the fog filter, so they may be about a shell this
+            // viewer is never shown.
             return Err(Error::internal(format!(
-                "shell row {row} is held at tick {tick}, and it landed at tick {lands_at}"
+                "a shell is held at tick {tick} past its landing tick"
             )));
         }
         live.push(key);
         let now = shells.position_at(row, tick).ok_or_else(|| {
             Error::internal(format!(
-                "shell row {row} is held and in flight, and the sim gives it no position at tick {tick}"
+                "a shell is held and in flight, and the sim gives it no position at tick {tick}"
             ))
         })?;
         let at = view::voxel_of(now);
