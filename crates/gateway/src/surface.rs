@@ -2193,6 +2193,12 @@ impl Surface {
             // `beacon_recycled` does; its leaving the world is visible on its
             // own terms.
             | EventKind::StructureRecycled
+            // S2's `surv`: what a seat's Survey found, finished and refreshed
+            // is its knowledge, and a seat's knowledge is its own (spec
+            // section 6).
+            | EventKind::AreaSurveyed
+            | EventKind::EnemyBeaconFound
+            | EventKind::SightingRefreshed
             | EventKind::Settled
             | EventKind::KillCredited
             // S2's `fire`: return fire and a retreat are a seat's rules of

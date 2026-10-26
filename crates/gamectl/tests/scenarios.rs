@@ -59,6 +59,7 @@ const SCENARIOS: &[&str] = &[
     BASE_KIT_AT_THE_CORE,
     TERRAFORM_LEVELS_A_FOOTPRINT,
     GUARDS_ESCORT_THE_COMMANDER,
+    SURVEY_FINDS_THE_ENEMY,
 ];
 
 /// The scenario against the built-in operator: seat 1 is `builtin`, played by
@@ -111,6 +112,10 @@ const BASE_KIT_AT_THE_CORE: &str = "scenarios/s2/base-kit-at-the-core.scenario.j
 /// S2's `dfnd`: a Defend beacon deployed with an `initial` Defend arm, its
 /// picket fielded and walking the ring.
 const GUARDS_ESCORT_THE_COMMANDER: &str = "scenarios/s2/guards-escort-the-commander.scenario.jsonc";
+
+/// S2's `surv`: a Survey beacon's scout scans its probe area and finds the
+/// enemy outpost beside it.
+const SURVEY_FINDS_THE_ENEMY: &str = "scenarios/s2/survey-finds-the-enemy.scenario.jsonc";
 
 /// Terraform through the playbook door: `FILL` levels a mortar's footprint
 /// before it is bought (S2's `site`; decisions-log item 144 (5)). The crater
@@ -300,6 +305,7 @@ fn the_committed_list_is_the_whole_set() {
             &[
                 "base-kit-at-the-core",
                 "guards-escort-the-commander",
+                "survey-finds-the-enemy",
                 "terraform-levels-a-footprint",
             ][..],
         ),
