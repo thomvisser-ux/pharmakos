@@ -249,7 +249,7 @@ fn visible_entities<V: Vision>(
     visible_units(views, world, &filter, viewer, &mut out)?;
     visible_structures(views, world, &filter, viewer, &mut out)?;
     visible_wrecks(views, world, &filter, viewer, &mut out)?;
-    visible_shells(views, world, fog, viewer, &mut out)?;
+    visible_shells(views, world, &filter, viewer, &mut out)?;
     Ok(out)
 }
 
@@ -447,42 +447,36 @@ fn visible_wrecks<V: Vision>(
 }
 
 /// The shells in flight of [`visible_entities`], in the table's firing order:
-/// the firer's seat as the owner, no hit points.
+/// the firer's seat as the owner, no hit points, drawn **where the shell is
+/// now** -- the sim's own answer, [`pharmakos_sim::tables::ShellTable::position_at`]
+/// at the world's tick, never its aim point and never a point the gateway
+/// works out (S2's plan, `wgw`, amended by decisions-log item 148 (3) (h)).
 ///
-/// **The sim keeps no position for a shell in flight**: a row holds the point
-/// it was aimed at and the tick it lands on (S2's plan, E13; decision 3, no
-/// lead), and nothing in between. So a shell is drawn at its aim point, where
-/// it lands (the main session's call), and **only its firing seat is sent
-/// it**, as it is sent every asset of its own, besides a viewer the fog hides
-/// nothing from. Another seat is sent no shell in flight, whatever it sees: a shell listed at its aim point for its whole
-/// flight would tell the seat it falls on how long that flight is, and so
-/// the range to a mortar it has never seen (#133's fog review, F1). The
-/// landing is a world event, `shell_landed`, which the fog filter tells any
-/// seat that sees the place.
-///
-/// PLACEHOLDER: another seat is sent a shell only once the sim gives its in-flight point (`ShellTable::position_at`, lane `site`), filtered there — owner, at S2, wgw's follow-up after `site`.
+/// The fog filter decides who is sent it, as for every other thing in the
+/// world: the firing seat always (it is that seat's), a seat or spectator the
+/// fog hides nothing from always, and any other seat only while its live
+/// vision covers the shell's **current** point. So an enemy sees a shell
+/// crossing its sight and is never handed its aim (the main session's ruling,
+/// open to the owner's veto). The flight is a straight line at a steady
+/// pace, so a seat that sees a shell on two ticks can extrapolate its aim and
+/// its launch point: that is the cost of drawing it in flight at all, and it
+/// is bounded by the seat's own vision. The landing is a world event,
+/// `shell_landed`, which the fog filter tells any seat that sees the place.
 ///
 /// # Errors
 ///
 /// As [`visible_entities`], and [`crate::error::Code::Internal`] for a shell
-/// whose firer's seat is the sim's no-seat value: a shell is always some
-/// seat's (`ViewEntity.owner`).
-fn visible_shells(
+/// whose firer's seat is the sim's no-seat value (a shell is always some
+/// seat's, `ViewEntity.owner`), a held row whose landing tick has come, or a
+/// held row the sim gives no position for.
+fn visible_shells<V: Vision>(
     views: &mut ViewFeed,
     world: &World,
-    fog: &FogPolicy,
+    filter: &FogFilter<'_, V>,
     viewer: Viewer,
     out: &mut Vec<Json>,
 ) -> Result<(), Error> {
-    // A viewer the fog hides nothing from -- a seat the policy unfogs (a
-    // casual match, its elimination, the match's end) or a spectator holding
-    // `spectate.nofog` -- sees every mortar, so a shell tells it nothing it
-    // cannot see, and it is sent every shell.
-    let sees_all = match viewer {
-        Viewer::Seat(seat) => fog.unfogged(seat),
-        Viewer::Spectator { nofog } => nofog,
-        Viewer::Admin => false,
-    };
+    let tick = world.tick().raw();
     let shells = world.shells();
     let mut live: Vec<ShellKey> = Vec::new();
     for row in 0..shells.len() {
@@ -495,13 +489,32 @@ fn visible_shells(
         let firer = column(shells.firers().get(row), "shell", "firer")?;
         let lands_at = column(shells.lands_at().get(row), "shell", "landing")?;
         let aim = column(shells.aims().get(row), "shell", "aim")?;
+        let fired_at = column(shells.fired_at().get(row), "shell", "fire tick")?;
         let key = ShellKey {
             firer,
+            fired_at,
             lands_at,
             aim: aim.map(pharmakos_sim::math::fixed::Fx::raw),
         };
+        if tick >= lands_at {
+            // The sim lands every shell on its landing tick, and a snapshot
+            // holds none at or past it, so a held row here is the two
+            // disagreeing; drawn, it would sit on its aim point.
+            // The words name no row and no landing tick: the check runs
+            // before the fog filter, so they may be about a shell this
+            // viewer is never shown.
+            return Err(Error::internal(format!(
+                "a shell is held at tick {tick} past its landing tick"
+            )));
+        }
         live.push(key);
-        if !sees_all && viewer != Viewer::Seat(SeatId::new(raw_owner)) {
+        let now = shells.position_at(row, tick).ok_or_else(|| {
+            Error::internal(format!(
+                "a shell is held and in flight, and the sim gives it no position at tick {tick}"
+            ))
+        })?;
+        let at = view::voxel_of(now);
+        if !filter.visible(viewer, &world_at(Some(raw_owner), at)) {
             continue;
         }
         let handle = views.shell_handle(viewer, key)?;
@@ -510,7 +523,7 @@ fn visible_shells(
             "SHELL",
             "",
             Some(raw_owner),
-            view::voxel_of(aim),
+            at,
             Condition::default(),
         ));
     }
