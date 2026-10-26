@@ -1381,8 +1381,17 @@ fn commit_row(
             roe,
             retreat_hp_pct,
             build,
+            defend,
             ..
         } => {
+            // A protect list's beacons resolve once, when the row commits,
+            // and are held from then on (S2's `dfnd`), as a step pins its
+            // selector; one that resolves to nothing fails the step
+            // `no_target` before anything is written.
+            let guarded = match defend.as_ref().and_then(|edit| edit.protect.as_ref()) {
+                Some(list) => Some(resolve_protected(world, seat, list)?),
+                None => None,
+            };
             // A settings edit **replaces** the lists it names, because spec
             // section 5 makes a multi-field edit all-or-nothing and a list that
             // merged would have no way to remove an entry except the dedicated
@@ -1455,9 +1464,42 @@ fn commit_row(
                     .ok_or(StepFailure::BeaconGone)?;
                 world.set_build_settings(row, build.over(held));
             }
+            // The Defend settings the row names (S2's `dfnd`), and nothing it
+            // is silent about.
+            if let Some(edit) = defend {
+                world.set_defend_settings(beacon, edit, guarded.as_ref());
+            }
         }
     }
     Ok(())
+}
+
+/// A protect list as the Defend table holds it: whether it names
+/// `my_commander`, and its beacons, each resolved for `seat` now.
+///
+/// # Errors
+///
+/// [`StepFailure::NoTarget`] when a beacon resolves to nothing.
+fn resolve_protected(
+    world: &World,
+    seat: SeatId,
+    list: &[crate::defend::Protect],
+) -> Result<(bool, Vec<BeaconId>), StepFailure> {
+    let mut escort = false;
+    let mut beacons: Vec<BeaconId> = Vec::with_capacity(list.len());
+    for entry in list {
+        match entry {
+            crate::defend::Protect::Commander => escort = true,
+            crate::defend::Protect::Beacon(spec) => {
+                let beacon = super::cond::resolve_beacon_for(world, seat, *spec)
+                    .ok_or(StepFailure::NoTarget)?;
+                if !beacons.contains(&beacon) {
+                    beacons.push(beacon);
+                }
+            }
+        }
+    }
+    Ok((escort, beacons))
 }
 
 /// The Build entries a settings row's target list writes, in list order, as

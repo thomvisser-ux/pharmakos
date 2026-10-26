@@ -380,6 +380,14 @@ pub struct World {
     /// block after every older table that writes nothing while the table is
     /// empty (E29).
     shells: ShellTable,
+    /// Every Defend beacon's settings, guard assignment and picket leg (S2's
+    /// `dfnd`): a block after the site block that writes nothing while the
+    /// table is empty (E29).
+    defend: crate::tables::DefendTable,
+    /// Every seat's explored coarse cells (S2's `surv`, laid out by `dfnd`):
+    /// a block after the Defend block that writes nothing while it is empty
+    /// (E29).
+    explored: crate::tables::ExploredTable,
 
     chunks: ChunkDigests,
 
@@ -487,6 +495,10 @@ pub struct World {
     fire_order: Vec<combat::Firer>,
     /// Scratch for `RETURN_FIRE`'s attacker set, sized as above.
     attackers: Vec<(u8, u32)>,
+    /// Scratch for a `SAFEST` seam choice's known threats, each with its
+    /// weapon's reach (S2's `dfnd`), sized as above: an armed asset is one
+    /// that can fire.
+    threat_scratch: Vec<([Fx; 3], Sq)>,
     /// Scratch for a weapon's unit query, sized to the unit ceiling.
     fire_rows: Vec<Row>,
     /// Scratch for a splash's unit query, sized to the unit ceiling.
@@ -930,6 +942,8 @@ pub(crate) struct RestoredTables {
     pub(crate) sightings: SightingTable,
     pub(crate) credit: CreditTable,
     pub(crate) shells: ShellTable,
+    pub(crate) defend: crate::tables::DefendTable,
+    pub(crate) explored: crate::tables::ExploredTable,
     pub(crate) voxels: VoxelStore,
     pub(crate) chunks: ChunkDigests,
     /// The map's feature table, regenerated with the pristine map rather than
@@ -1142,6 +1156,8 @@ impl World {
                     .saturating_add(STRUCTURE_ROWS),
             ),
             shells: ShellTable::with_room(shell_room),
+            defend: crate::tables::DefendTable::with_room(beacon_limit),
+            explored: crate::tables::ExploredTable::default(),
             chunks,
             router,
             match_state: MatchState::new(&settings),
@@ -1179,6 +1195,7 @@ impl World {
             damage_dealt: vec![0; seat_rows.saturating_mul(seat_rows)],
             fire_order: Vec::with_capacity(armed_rows),
             attackers: Vec::with_capacity(armed_rows),
+            threat_scratch: Vec::with_capacity(armed_rows),
             fire_rows: Vec::with_capacity(crate::math::index::row(unit_ceiling)),
             splash_rows: Vec::with_capacity(crate::math::index::row(unit_ceiling)),
             damage_index: Vec::with_capacity(damage_capacity),
@@ -1271,6 +1288,41 @@ impl World {
     #[must_use]
     pub const fn shells(&self) -> &ShellTable {
         &self.shells
+    }
+
+    /// The `SAFEST` seam choice's threat scratch, empty between uses (S2's
+    /// `dfnd`): taken and given back so the choice allocates nothing.
+    pub(crate) fn take_threat_scratch(&mut self) -> Vec<([Fx; 3], Sq)> {
+        core::mem::take(&mut self.threat_scratch)
+    }
+
+    /// Give the threat scratch back, cleared.
+    pub(crate) fn put_threat_scratch(&mut self, mut scratch: Vec<([Fx; 3], Sq)>) {
+        scratch.clear();
+        self.threat_scratch = scratch;
+    }
+
+    /// Every Defend beacon's settings and state (S2's `dfnd`).
+    #[must_use]
+    pub const fn defend(&self) -> &crate::tables::DefendTable {
+        &self.defend
+    }
+
+    /// The Defend table, to write: the Defend mandate's own phase and a
+    /// committed settings row.
+    pub(crate) const fn defend_mut(&mut self) -> &mut crate::tables::DefendTable {
+        &mut self.defend
+    }
+
+    /// Every seat's explored coarse cells (S2's `surv`).
+    #[must_use]
+    pub const fn explored(&self) -> &crate::tables::ExploredTable {
+        &self.explored
+    }
+
+    /// The explored table, to write: S2's `surv` marks cells through it.
+    pub(crate) const fn explored_mut(&mut self) -> &mut crate::tables::ExploredTable {
+        &mut self.explored
     }
 
     /// The core's bore ([`crate::bore`]; S2's plan, E31). Derived, never
@@ -1583,6 +1635,11 @@ impl World {
             Some(slot) => *slot = hp.is_alive(),
             None => self.beacon_alive.push(hp.is_alive()),
         }
+        // A beacon placed on the Defend writ holds its Defend row from its
+        // first tick (S2's `dfnd`).
+        if mandate == MandateKind::Defend {
+            self.defend.open(placed.id);
+        }
         Ok(placed.id)
     }
 
@@ -1621,6 +1678,13 @@ impl World {
         self.return_site_funds(row);
         if let Some(id) = id {
             self.targets.clear_beacon(BeaconId::new(id));
+            // Defend's settings and state are the old writ's too (S2's
+            // `dfnd`): a beacon leaving Defend loses its row, and one taking
+            // it starts from a fresh one.
+            self.defend.close(BeaconId::new(id));
+            if mandate == MandateKind::Defend {
+                self.defend.open(BeaconId::new(id));
+            }
         }
     }
 
@@ -1650,6 +1714,36 @@ impl World {
     pub(crate) fn set_beacon_priority(&mut self, row: usize, priority: u8) {
         if let Some(slot) = self.beacons.priorities_mut().get_mut(row) {
             *slot = priority;
+        }
+    }
+
+    /// Write what a committed settings row says about a Defend beacon's
+    /// settings (S2's `dfnd`): each field the row names, and nothing it is
+    /// silent about; `protect`, when the row names a protect list, is whether
+    /// it holds `my_commander` and its beacons, resolved at the commit. A
+    /// beacon on another writ has no Defend row, and the edit writes nothing
+    /// there, as a Survey count written to a Build beacon is read by nothing.
+    pub(crate) fn set_defend_settings(
+        &mut self,
+        beacon: BeaconId,
+        edit: &crate::defend::DefendEdit,
+        protect: Option<&(bool, Vec<BeaconId>)>,
+    ) {
+        let Some(row) = self.defend.row_mut(beacon) else {
+            return;
+        };
+        if let Some(pct) = edit.engagement_pct {
+            row.settings.engagement_pct = pct;
+        }
+        if let Some(pursue) = edit.pursue {
+            row.settings.pursue = pursue;
+        }
+        if let Some(pickets) = edit.pickets {
+            row.settings.pickets = pickets;
+        }
+        if let Some((escort, beacons)) = protect {
+            row.settings.escort = *escort;
+            self.defend.set_protected(beacon, beacons);
         }
     }
 
@@ -2427,6 +2521,60 @@ impl World {
         }
         self.router.clear(row.raw());
         Some(id)
+    }
+
+    /// Write a Defend beacon's settings directly, and its protect list's
+    /// beacons (S2's `dfnd`). `false`, writing nothing, for a beacon with no
+    /// Defend row.
+    ///
+    /// Fixture API; see the block comment above. The settings normally arrive
+    /// as a committed settings row ([`World::set_defend_settings`]).
+    pub fn set_defend(
+        &mut self,
+        beacon: BeaconId,
+        settings: crate::tables::DefendSettings,
+        protected: &[BeaconId],
+    ) -> bool {
+        let Some(row) = self.defend.row_mut(beacon) else {
+            return false;
+        };
+        row.settings = settings;
+        self.defend.set_protected(beacon, protected);
+        true
+    }
+
+    /// Switch the beacon in `row` to `mandate` directly, as a committed
+    /// `set_mandate` row does ([`World::set_beacon_mandate`]).
+    ///
+    /// Fixture API; see the block comment above.
+    pub fn switch_mandate_directly(&mut self, row: usize, mandate: MandateKind) {
+        self.set_beacon_mandate(row, mandate);
+    }
+
+    /// Stand a living unit at `at` directly, its destination with it.
+    ///
+    /// Fixture API; see the block comment above. `false` for a unit the table
+    /// does not hold.
+    pub fn place_unit_directly(&mut self, unit: UnitId, at: [Fx; 3]) -> bool {
+        let Ok(row) = self.units.row_of(unit) else {
+            return false;
+        };
+        if let Some(slot) = self.units.positions_mut().get_mut(row.index()) {
+            *slot = at;
+        }
+        if let Some(slot) = self.units.destinations_mut().get_mut(row.index()) {
+            *slot = at;
+        }
+        self.router.clear(row.raw());
+        true
+    }
+
+    /// Mark a cell explored for a seat directly (S2's `surv` writes the table
+    /// in play): `true` when the mark is new.
+    ///
+    /// Fixture API; see the block comment above.
+    pub fn mark_explored_directly(&mut self, seat: SeatId, cell: u32) -> bool {
+        self.explored_mut().mark(seat, cell)
     }
 
     /// Write a beacon's Common settings directly: its rules of engagement and
@@ -4515,6 +4663,8 @@ impl World {
             *slot = crate::tables::Common::DEFAULT;
         }
         self.targets.clear_beacon(beacon);
+        self.defend.close(beacon);
+        self.defend.forget(beacon);
     }
 
     /// Re-home every living unit of `seat` bound to `gone` on to the nearest
@@ -5458,6 +5608,49 @@ impl World {
         self.interpreter.encode(enc);
         self.encode_shells(enc);
         self.encode_site(enc);
+        self.encode_defend(enc);
+        self.encode_explored(enc);
+    }
+
+    /// The Defend table (S2's `dfnd`), as a block after the site block that
+    /// **writes nothing while the table holds no row** and otherwise writes
+    /// its tag, its rows in ascending beacon id and its protect list (E29), so
+    /// a chain with no Defend beacon does not move for the table.
+    fn encode_defend(&self, enc: &mut Enc) {
+        if self.defend.is_empty() {
+            return;
+        }
+        enc.u8(crate::tables::DefendTable::HASH_TAG);
+        enc.len(table_len(self.defend.rows().len()));
+        for row in self.defend.rows() {
+            enc.u32(row.beacon.raw());
+            enc.u8(row.settings.engagement_pct);
+            enc.u8(row.settings.pursue.id());
+            enc.u8(row.settings.pickets);
+            enc.bool(row.settings.escort);
+            enc.u32(row.quarry);
+            enc.u8(row.leg);
+        }
+        enc.len(table_len(self.defend.protected().len()));
+        for (by, of) in self.defend.protected() {
+            enc.u32(by.raw());
+            enc.u32(of.raw());
+        }
+    }
+
+    /// The explored table (S2's `surv`, laid out by `dfnd`), as a block after
+    /// the Defend block that **writes nothing while the table holds no row**
+    /// and otherwise writes its tag, its count and its rows ascending (E29).
+    fn encode_explored(&self, enc: &mut Enc) {
+        if self.explored.is_empty() {
+            return;
+        }
+        enc.u8(crate::tables::ExploredTable::HASH_TAG);
+        enc.len(table_len(self.explored.rows().len()));
+        for (seat, cell) in self.explored.rows() {
+            enc.u8(*seat);
+            enc.u32(*cell);
+        }
     }
 
     /// The shell table (S2's plan, E13), as a block after every older table
@@ -5876,6 +6069,8 @@ impl World {
         self.sightings = restored.sightings;
         self.credit = restored.credit;
         self.shells = restored.shells;
+        self.defend = restored.defend;
+        self.explored = restored.explored;
         self.bore = restored.bore;
         self.generated = restored.generated;
         self.voxels = restored.voxels;
@@ -6015,6 +6210,14 @@ fn held_by_seat(column: &[u8], seats: u32) -> Vec<u32> {
         .take(crate::math::index::row(seats))
         .map(|seat| count_seat(column, SeatId::new(seat)))
         .collect()
+}
+
+/// A Defend or explored table's length as the hash's `u32` count. Both are
+/// bounded far below it: a Defend row per beacon, a protect entry per list
+/// field, and an explored row per seat and coarse cell.
+fn table_len(len: usize) -> u32 {
+    // E7: rule: no table this world holds reaches `u32::MAX` rows
+    u32::try_from(len).unwrap_or(u32::MAX)
 }
 
 /// The broadphase pad (S2's plan, E11): the most any unit can move in one

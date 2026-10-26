@@ -38,11 +38,20 @@
 //!
 //! What each selector ranks by:
 //!
-//! * `safest` — highest hit points as a whole percentage of the beacon's
-//!   maximum. **PLACEHOLDER**: the word "safest" wants a threat term, and
-//!   incoming threat does not exist until S2 brings combat; hit-point fraction
-//!   is the part of "safe" this build can answer, and it is the same ranking
-//!   the fixed reflex walks to. Owner, at S2, with the threat model.
+//! * `safest` — S2's decisions 6 and 12 (`dfnd`): **while the seat's
+//!   commander is below full hit points**, a beacon whose sphere holds one of
+//!   the seat's live repair drones ranks ahead of one without (the rescue
+//!   rule, so the fixed reflex and the safe playbook's shadowing walk a
+//!   wounded commander to a beacon where a drone heals it); then the
+//!   beacon's hit points as a whole percentage of its maximum **less the
+//!   summed threat** of the enemy assets the seat sees inside its sphere,
+//!   read lexicographically: the least threat first, then the highest
+//!   percentage, so a beacon under any armed threat ranks behind every quiet
+//!   one and two threatened beacons rank by their threat (an engineering
+//!   reading of decision 12's "subtracts", which gives no scale). It is the
+//!   same ranking the fixed reflex walks to.
+//! * `most_threatened` — the largest summed threat of the enemy assets the
+//!   seat sees inside the beacon's sphere (decision 12).
 //! * `weakest` — lowest hit points as a whole percentage, the beacon's own and
 //!   not its structures'.
 //! * `nearest` — least travel from the commander, measured as the **octile
@@ -56,7 +65,7 @@
 //!   ordering in every case the skeleton can produce.
 
 use crate::interpreter::{BeaconSpec, Cond, Filter};
-use crate::math::fixed::Fx;
+use crate::math::fixed::{Fx, Sq};
 use crate::math::quantity::Hp;
 use crate::math::quantity::{Ms, Tick};
 use crate::rules::RulesTable;
@@ -239,6 +248,9 @@ pub(crate) fn evaluate(view: &View<'_>, condition: &Cond) -> bool {
         Cond::BeaconHpPct(spec, cmp, right) => resolve_beacon(view, *spec)
             .and_then(|beacon| view.beacon_row(beacon))
             .is_some_and(|row| cmp.holds(view.beacon_hp_pct(row), *right)),
+        Cond::BeaconUnderAttack(spec, within_ms) => resolve_beacon(view, *spec)
+            .and_then(|beacon| view.beacon_row(beacon))
+            .is_some_and(|row| under_attack(view.world, row, *within_ms)),
         Cond::BeaconPowered(spec, powered) => resolve_beacon(view, *spec)
             .and_then(|beacon| view.beacon_row(beacon))
             .is_some_and(|row| {
@@ -263,6 +275,23 @@ pub(crate) fn evaluate(view: &View<'_>, condition: &Cond) -> bool {
             view.state.fires.get(at).copied().unwrap_or(0) > 0
         }
     }
+}
+
+/// Whether the beacon in `row` took damage from an enemy asset at any point
+/// inside the last `within_ms` game milliseconds (`beacon_under_attack`, the
+/// predicate's own window; decision 12): the tick its combat memory last
+/// recorded an enemy's hit ([`crate::tables::Arms::attacked_at`]). The
+/// beacon's own hit points only, as the predicate's message says; damage with
+/// no enemy source (a host's order) records no attack.
+pub(crate) fn under_attack(world: &World, row: usize, within_ms: i32) -> bool {
+    let Some(arms) = world.beacons().arms().get(row) else {
+        return false;
+    };
+    if arms.attacked_at == crate::tables::NEVER_ATTACKED {
+        return false;
+    }
+    let since = world.tick().raw().saturating_sub(arms.attacked_at);
+    i64::from(Ms::from_ticks(since).raw()) <= i64::from(within_ms)
 }
 
 /// Whether the commander lost hit points within the last `ms` of game time.
@@ -303,6 +332,15 @@ pub(crate) trait Board {
     fn rules(&self) -> &RulesTable;
     /// Where the seat's commander stands, when it has one.
     fn commander_at(&self) -> Option<[Fx; 3]>;
+    /// The summed threat inside the sphere of the beacon in `row`, in
+    /// thousandths of a hit point per second (decision 12).
+    fn row_threat(&self, row: usize) -> u64;
+    /// Whether one of the seat's live repair drones stands inside the sphere
+    /// of the beacon in `row` (decision 6).
+    fn row_repairs(&self, row: usize) -> bool;
+    /// Whether the seat's commander is alive and below its full hit points
+    /// (decision 6).
+    fn commander_wounded(&self) -> bool;
 
     /// Count `units` of evaluation work: the live world counts a decision's
     /// selector candidates (P1's counted half); a frozen snapshot, which no
@@ -383,6 +421,15 @@ impl Board for View<'_> {
     fn commander_at(&self) -> Option<[Fx; 3]> {
         View::commander_at(self)
     }
+    fn row_threat(&self, row: usize) -> u64 {
+        live_row_threat(self.world, self.seat, row)
+    }
+    fn row_repairs(&self, row: usize) -> bool {
+        live_row_repairs(self.world, self.seat, row)
+    }
+    fn commander_wounded(&self) -> bool {
+        live_commander_wounded(self.world, self.seat)
+    }
     fn charge(&self, units: u32) {
         self.world.charge_decision(units);
     }
@@ -451,6 +498,109 @@ impl Board for SnapshotBoard<'_> {
             return None;
         }
         point_at(&self.snapshot.unit_pos, row)
+    }
+    /// Decision 12's sphere threat over the frozen snapshot: every armed
+    /// enemy unit, finished structure and core inside the beacon's sphere.
+    /// Inside an own live beacon's sphere is inside one of the seat's sensors
+    /// (the sphere is one, [`crate::sight::SensorKind::Sphere`]), so under the
+    /// radius-only model this is what the live world's seen-by test answers;
+    /// `tests/defend.rs`' `the_frozen_snapshot_ranks_as_the_live_world_does`
+    /// holds the two to each other. A core is the seat's beacon of ordinal 0
+    /// (`b_00`, decisions-log item 127 (13)), the live world's
+    /// `power::core_of`.
+    fn row_threat(&self, row: usize) -> u64 {
+        let Some(centre) = self.row_at(row) else {
+            return 0;
+        };
+        let snapshot = self.snapshot;
+        let rules = self.rules;
+        let seat = self.seat.raw();
+        let limit = Sq::of_radius(Fx::from_voxels(rules.sphere_radius_voxels()));
+        let enemy = |owner: u8| owner != seat && SeatId::new(owner).is_some();
+        let inside = |at: Option<[Fx; 3]>| at.is_some_and(|at| Sq::between(at, centre) <= limit);
+        let mut sum: u64 = 0;
+        let mut add = |weapon: Option<crate::arms::WeaponRow>| {
+            sum = sum.saturating_add(crate::arms::Threat::of(weapon).milli_hp_per_second());
+        };
+        for (index, ((owner, kind), hp)) in snapshot
+            .unit_seat
+            .iter()
+            .zip(&snapshot.unit_kind)
+            .zip(&snapshot.unit_hp)
+            .enumerate()
+        {
+            if *hp > 0 && enemy(*owner) && inside(point_at(&snapshot.unit_pos, index)) {
+                add(crate::tables::UnitKind::from_id(*kind)
+                    .and_then(|kind| rules.unit(kind).weapon));
+            }
+        }
+        for (index, (((owner, kind), hp), building)) in snapshot
+            .structure_seat
+            .iter()
+            .zip(&snapshot.structure_kind)
+            .zip(&snapshot.structure_hp)
+            .zip(&snapshot.structure_building)
+            .enumerate()
+        {
+            if *hp > 0
+                && *building == 0
+                && enemy(*owner)
+                && inside(point_at(&snapshot.structure_pos, index))
+            {
+                add(crate::tables::StructureKind::from_id(*kind)
+                    .and_then(|kind| rules.structure(kind))
+                    .and_then(|row| row.weapon));
+            }
+        }
+        for (index, ((owner, hp), ordinal)) in snapshot
+            .beacon_seat
+            .iter()
+            .zip(&snapshot.beacon_hp)
+            .zip(&snapshot.beacon_ordinal)
+            .enumerate()
+        {
+            if *hp > 0
+                && *ordinal == 0
+                && enemy(*owner)
+                && inside(point_at(&snapshot.beacon_pos, index))
+            {
+                add(Some(rules.core_weapon()));
+            }
+        }
+        sum
+    }
+    fn row_repairs(&self, row: usize) -> bool {
+        let Some(centre) = self.row_at(row) else {
+            return false;
+        };
+        let limit = Sq::of_radius(Fx::from_voxels(self.rules.sphere_radius_voxels()));
+        let drone = crate::tables::UnitKind::RepairDrone.id();
+        let snapshot = self.snapshot;
+        snapshot
+            .unit_kind
+            .iter()
+            .zip(&snapshot.unit_seat)
+            .zip(&snapshot.unit_hp)
+            .enumerate()
+            .any(|(index, ((kind, owner), hp))| {
+                *kind == drone
+                    && *owner == self.seat.raw()
+                    && *hp > 0
+                    && point_at(&snapshot.unit_pos, index)
+                        .is_some_and(|at| Sq::between(at, centre) <= limit)
+            })
+    }
+    fn commander_wounded(&self) -> bool {
+        let commander = crate::tables::UnitKind::Commander.id();
+        let snapshot = self.snapshot;
+        let full = self.rules.unit_hp(crate::tables::UnitKind::Commander).raw();
+        snapshot
+            .unit_kind
+            .iter()
+            .zip(&snapshot.unit_seat)
+            .position(|(kind, seat)| *kind == commander && *seat == self.seat.raw())
+            .and_then(|row| snapshot.unit_hp.get(row))
+            .is_some_and(|hp| *hp > 0 && *hp < full)
     }
 }
 
@@ -528,7 +678,147 @@ fn resolve_on<B: Board>(board: &B, spec: BeaconSpec) -> Option<BeaconId> {
         BeaconSpec::Safest => rank(board, Filter::default(), Rank::Safest),
         BeaconSpec::Weakest(filter) => rank(board, filter, Rank::Weakest),
         BeaconSpec::Nearest(filter) => rank(board, filter, Rank::Nearest),
+        BeaconSpec::MostThreatened(filter) => rank(board, filter, Rank::MostThreatened),
     }
+}
+
+/// Resolve a beacon reference for `seat` against the live world, outside a
+/// decision: a Defend protect list's beacon, pinned when its row commits
+/// (S2's `dfnd`). The same catalogue [`resolve_beacon`] answers with.
+pub(crate) fn resolve_beacon_for(
+    world: &World,
+    seat: SeatId,
+    spec: BeaconSpec,
+) -> Option<BeaconId> {
+    resolve_on(&SeatBoard { world, seat }, spec)
+}
+
+/// Resolve a beacon reference for `seat` against the live world, as a decision
+/// taken now would (S2's `dfnd`): the read the Defend protect list pins at a
+/// commit, offered to a host and to tests. It reads, it never steps.
+#[must_use]
+pub fn resolve_beacon_now(world: &World, seat: SeatId, spec: BeaconSpec) -> Option<BeaconId> {
+    resolve_beacon_for(world, seat, spec)
+}
+
+/// Whether `beacon` took damage within the last `within_ms` game milliseconds:
+/// the `beacon_under_attack` predicate as a decision reads it (S2's `dfnd`),
+/// `false` for a beacon the world does not hold. It reads, it never steps.
+#[must_use]
+pub fn beacon_under_attack(world: &World, beacon: BeaconId, within_ms: i32) -> bool {
+    world
+        .beacons()
+        .row_of(beacon)
+        .is_ok_and(|row| under_attack(world, row.index(), within_ms))
+}
+
+/// One seat's view of the live world, for a selector read outside a decision.
+struct SeatBoard<'a> {
+    world: &'a World,
+    seat: SeatId,
+}
+
+impl Board for SeatBoard<'_> {
+    fn seat(&self) -> SeatId {
+        self.seat
+    }
+    fn beacon_rows(&self) -> usize {
+        crate::math::index::row(self.world.beacons().len())
+    }
+    fn row_id(&self, row: usize) -> Option<u32> {
+        self.world.beacons().ids().get(row).copied()
+    }
+    fn row_seat(&self, row: usize) -> Option<u8> {
+        self.world.beacons().seats().get(row).copied()
+    }
+    fn row_ordinal(&self, row: usize) -> Option<u32> {
+        self.world.beacons().ordinals().get(row).copied()
+    }
+    fn row_mandate(&self, row: usize) -> u8 {
+        live_row_mandate(self.world, row)
+    }
+    fn row_at(&self, row: usize) -> Option<[Fx; 3]> {
+        self.world.beacons().positions().get(row).copied()
+    }
+    fn row_hp(&self, row: usize) -> i64 {
+        live_row_hp(self.world, row)
+    }
+    fn rules(&self) -> &RulesTable {
+        self.world.rules()
+    }
+    fn commander_at(&self) -> Option<[Fx; 3]> {
+        live_commander(self.world, self.seat).map(|(at, _)| at)
+    }
+    fn row_threat(&self, row: usize) -> u64 {
+        live_row_threat(self.world, self.seat, row)
+    }
+    fn row_repairs(&self, row: usize) -> bool {
+        live_row_repairs(self.world, self.seat, row)
+    }
+    fn commander_wounded(&self) -> bool {
+        live_commander_wounded(self.world, self.seat)
+    }
+}
+
+/// A live beacon row's writ byte.
+fn live_row_mandate(world: &World, row: usize) -> u8 {
+    world
+        .beacons()
+        .mandates()
+        .get(row)
+        .copied()
+        // E7: cannot miss: every caller's `row` is a row of the beacon table it read
+        .unwrap_or(0)
+}
+
+/// A live beacon row's hit points.
+fn live_row_hp(world: &World, row: usize) -> i64 {
+    world
+        .beacons()
+        .hit_points()
+        .get(row)
+        // E7: cannot miss: every caller's `row` is a row of the beacon table it read
+        .map_or(0, |hp| i64::from(hp.raw()))
+}
+
+/// Where `seat`'s living commander stands, and its hit points.
+fn live_commander(world: &World, seat: SeatId) -> Option<([Fx; 3], Hp)> {
+    let id = world.commander_of(seat)?;
+    let index = world.units().row_of(id).ok()?.index();
+    let hp = world.units().hit_points().get(index).copied()?;
+    if !hp.is_alive() {
+        return None;
+    }
+    Some((world.units().positions().get(index).copied()?, hp))
+}
+
+/// Decision 6's "below full HP", over the live world.
+fn live_commander_wounded(world: &World, seat: SeatId) -> bool {
+    live_commander(world, seat)
+        .is_some_and(|(_, hp)| hp < world.rules().unit_hp(crate::tables::UnitKind::Commander))
+}
+
+/// Decision 12's sphere threat for a live beacon row.
+fn live_row_threat(world: &World, seat: SeatId, row: usize) -> u64 {
+    world
+        .beacons()
+        .positions()
+        .get(row)
+        .copied()
+        // E7: cannot miss: every caller's `row` is a row of the beacon table it read
+        .map_or(0, |centre| {
+            crate::defend::sphere_threat(world, seat, centre)
+        })
+}
+
+/// Decision 6's repair term for a live beacon row.
+fn live_row_repairs(world: &World, seat: SeatId, row: usize) -> bool {
+    world
+        .beacons()
+        .positions()
+        .get(row)
+        .copied()
+        .is_some_and(|centre| crate::defend::repairs_in_sphere(world, seat, centre))
 }
 
 /// How a selector orders the beacons that pass its filter.
@@ -540,6 +830,8 @@ enum Rank {
     Weakest,
     /// Least octile travel from the commander first.
     Nearest,
+    /// Largest summed threat inside the sphere first (decision 12).
+    MostThreatened,
 }
 
 /// The best own living beacon under `rank`, ties to the lowest beacon id.
@@ -552,7 +844,9 @@ fn rank<B: Board>(board: &B, filter: Filter, rank: Rank) -> Option<BeaconId> {
     let from = board.commander_at();
     let cardinal = i64::from(board.rules().step_cardinal());
     let diagonal = i64::from(board.rules().step_diagonal());
-    let mut best: Option<(i64, u32)> = None;
+    // Decision 6: read once per ranking, not once per beacon.
+    let rescue = rank == Rank::Safest && board.commander_wounded();
+    let mut best: Option<((i64, i64, i64), u32)> = None;
     let mut row: usize = 0;
     while row < count {
         board.charge(1);
@@ -567,15 +861,29 @@ fn rank<B: Board>(board: &B, filter: Filter, rank: Rank) -> Option<BeaconId> {
             row = row.saturating_add(1);
             continue;
         }
+        // E7: rule: a summed threat past `i64` is a threat no beacon outranks
+        let threat = |row: usize| i64::try_from(board.row_threat(row)).unwrap_or(i64::MAX);
         let key = match rank {
-            // A running *minimum* over the key, so "safest" negates the
-            // percentage rather than needing a second comparison.
-            Rank::Safest => board.row_hp_pct(row).saturating_neg(),
-            Rank::Weakest => board.row_hp_pct(row),
-            Rank::Nearest => match (from, board.row_at(row)) {
-                (Some(a), Some(b)) => octile(cardinal, diagonal, a, b),
-                _ => i64::MAX,
-            },
+            // A running *minimum* over the key, so "safest" ranks a beacon
+            // with a repair drone first while the commander is wounded, then
+            // the least threat, then the highest percentage (decisions 6 and
+            // 12): the threat subtracted from the hit-point rank, ordered so
+            // that any threat outweighs any percentage, whatever its size.
+            Rank::Safest => (
+                i64::from(rescue && !board.row_repairs(row)),
+                threat(row),
+                board.row_hp_pct(row).saturating_neg(),
+            ),
+            Rank::Weakest => (0, 0, board.row_hp_pct(row)),
+            Rank::Nearest => (
+                0,
+                0,
+                match (from, board.row_at(row)) {
+                    (Some(a), Some(b)) => octile(cardinal, diagonal, a, b),
+                    _ => i64::MAX,
+                },
+            ),
+            Rank::MostThreatened => (0, threat(row).saturating_neg(), 0),
         };
         if best.is_none_or(|(found, found_id)| (key, id) < (found, found_id)) {
             best = Some((key, id));

@@ -269,6 +269,19 @@ the golden seed's cores stand 335 voxels apart and a beacon stands only inside
 its seat's spheres, so reaching it through playbooks took seven-beacon chains
 over five rounds of 480 s, more than CI's legs could hold.
 
+**S2's `dfnd`** adds `guards-escort-the-commander`, one segment of 60 s on the
+golden seed through the playbook door: seat 0 deploys a Defend beacon eight
+voxels west of its core with an `initial` Defend arm (protect `my_commander`,
+one picket) and stands in its sphere, and the beacon fields its picket, which
+walks the ring outside the sphere. Its chain pins the Defend table, which no
+other committed scenario fills: the table hashes nothing while it is empty
+(S2's plan, E29), so no older chain moved for it. The guards' fight -- the
+escort inside the sphere and not outside it, threat-weighted targeting,
+pursue, the fall-back to a repair drone -- is headless
+(`crates/sim/tests/defend.rs`), because no enemy reaches the golden seed's
+Defend beacon within a minute and a Defend beacon fields guards only on a
+threat it sees.
+
 `expand-east-segment` carries one more thing worth knowing before its chain is
 read. The playbook it seals **does not qualify against either seat's own frozen
 snapshot** on this map: `E0401` for `b_01`, which since S1 names each seat's own

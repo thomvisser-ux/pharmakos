@@ -1,4 +1,5 @@
 {
+  "qualifies": true,
   "depth": "FULL",
   "diagnostics": [
     {
@@ -10,16 +11,9 @@
       ],
       "message": "`my_commander` is on this protect list more than once; its guards escort it once, and the repeat only adds a field to the edit.",
       "beginner": "This asset is already on the list. Naming it again changes nothing."
-    },
-    {
-      "code": "E0012",
-      "severity": "ERROR",
-      "path": "/declarative/route/0/place_beacon/initial/mandate/defend",
-      "message": "Defend mandate settings have no effect until S2's Defend mandate lands; they are refused rather than ignored.",
-      "beginner": "A Defend beacon cannot be given settings in this build yet."
     }
   ],
-  "report_hash": "hOvDd2ao97w=",
+  "report_hash": "Ow+MKYRqW58=",
   "rules_hash": "gCjUE4Tm3i8=",
   "plan_fingerprint": "EL6v9jvwY+I=",
   "verifier_version": "0.1.0-s2.2",

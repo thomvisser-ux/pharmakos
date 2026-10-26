@@ -74,6 +74,12 @@ pub struct Mine;
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct Survey;
 
+/// The built-in Defend mandate (S2's `dfnd`; [`crate::defend`]): raiders as
+/// guards on the threats seen in its sphere, scouts as pickets up to the
+/// setting's count.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Defend;
+
 /// The built-in mandate a writ runs, or `None` for one this build does not run.
 ///
 /// Zero-sized statics rather than values on the beacon table, because a
@@ -85,11 +91,12 @@ pub fn mandate_for(kind: MandateKind) -> Option<&'static dyn Mandate> {
         MandateKind::Build => Some(&Build),
         MandateKind::Mine => Some(&Mine),
         MandateKind::Survey => Some(&Survey),
-        // Defend and Attack are S2's, with destruction and combat. `None` is
-        // the honest answer: a beacon on one of those writs asks for nothing
-        // and its units idle at it under the common settings, which is exactly
-        // spec section 6's "a unit the mandate has no job for".
-        MandateKind::Defend | MandateKind::Attack | MandateKind::None => None,
+        MandateKind::Defend => Some(&Defend),
+        // Attack is S2's `atk`. `None` is the honest answer: a beacon on that
+        // writ asks for nothing and its units idle at it under the common
+        // settings, which is exactly spec section 6's "a unit the mandate has
+        // no job for".
+        MandateKind::Attack | MandateKind::None => None,
     }
 }
 
@@ -203,6 +210,41 @@ impl Mandate for Survey {
         // A count rather than a backlog: spec section 6's Survey row names
         // "scout count" as a setting, so this is the one mandate the player
         // gives a number to and the fabricator fills it exactly.
+        (have < wanted).then(|| unit_request(world, seat, beacon, UnitKind::Scout, Urgency::Units))
+    }
+}
+
+impl Mandate for Defend {
+    fn kind(&self) -> MandateKind {
+        MandateKind::Defend
+    }
+
+    fn request(&self, world: &World, beacon: BeaconId) -> Option<SpendRequest> {
+        let seat = seat_of(world, beacon)?;
+        let row = world.beacons().row_of(beacon).ok()?;
+        let centre = world.beacons().positions().get(row.index()).copied()?;
+        // Guards on work in hand (decision 13): the armed threats the seat
+        // sees inside the sphere, against the raiders the beacon has, in the
+        // band spec section 7's ladder puts first ("defend under attack"),
+        // so it is asked for before the repair band below it.
+        let threats = crate::defend::threats_in_sphere(world, seat, centre);
+        let guards = drones_homed(world, beacon, UnitKind::Raider);
+        if backlogged(world, threats, guards) {
+            return Some(unit_request(
+                world,
+                seat,
+                beacon,
+                UnitKind::Raider,
+                Urgency::DefendUnderAttack,
+            ));
+        }
+        if let Some(repair) = repair_request(world, seat, beacon) {
+            return Some(repair);
+        }
+        // Pickets as Survey's scouts (decisions-log item 146 (3) (h)): the
+        // setting is a count, and the fabricator fills it exactly.
+        let wanted = u32::from(world.defend().row_of(beacon)?.settings.pickets);
+        let have = drones_homed(world, beacon, UnitKind::Scout);
         (have < wanted).then(|| unit_request(world, seat, beacon, UnitKind::Scout, Urgency::Units))
     }
 }

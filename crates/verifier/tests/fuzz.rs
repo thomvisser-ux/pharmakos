@@ -122,13 +122,14 @@ const S2_CODES: [&str; 13] = [
     "W0502", "W0703", "I0004",
 ];
 
-/// The codes for what the sim refuses at the seal (E0009 to E0017; S2's base
-/// kit's E0019 is retired, since S2's `site` built it), for an enum number this build does not name (E0018) and
-/// for a `wall_box` on a target that is not a wall (E0509), in code order: the
-/// ten thousand runs reach every one.
-const REFUSALS: [&str; 11] = [
-    "E0009", "E0010", "E0011", "E0012", "E0013", "E0014", "E0015", "E0016", "E0017", "E0018",
-    "E0509",
+/// The codes for what the sim refuses at the seal (E0009 to E0016; S2's base
+/// kit's E0019 is retired, since S2's `site` built it, and E0012, E0014 and
+/// E0017, since S2's `dfnd` built Defend's settings, `most_threatened` and
+/// `beacon_under_attack`), for an enum number this build does not name (E0018)
+/// and for a `wall_box` on a target that is not a wall (E0509), in code order:
+/// the ten thousand runs reach every one.
+const REFUSALS: [&str; 8] = [
+    "E0009", "E0010", "E0011", "E0013", "E0015", "E0016", "E0018", "E0509",
 ];
 
 /// The coordinates at the ends of the field, so the walk and the semantics
@@ -246,7 +247,7 @@ impl Shape {
                 Json::Object(vec![("safest".to_owned(), Json::Object(Vec::new()))])
             };
         }
-        // `most_threatened` (E0014) is refused until S2's threat model.
+        // `most_threatened`, legal since S2's `dfnd` built the threat model.
         if self.rarely(8) {
             return Json::Object(vec![(
                 "most_threatened".to_owned(),
@@ -406,7 +407,7 @@ impl Shape {
                 Json::Object(vec![("handler_id".to_owned(), Json::String(self.name()))]),
             )]),
             6 => {
-                // Refused until S2's combat (E0017).
+                // Legal since S2's `dfnd` (E0017 retired).
                 let beacon = self.beacon_ref();
                 Json::Object(vec![(
                     "beacon_under_attack".to_owned(),
@@ -617,8 +618,8 @@ impl Shape {
     /// holds: Mine with nothing set, Survey with a scout count, or Build with
     /// one to three targets.
     fn mandate(&mut self) -> (String, Json) {
-        // Defend and Attack settings (E0012, E0013) are refused until S2's
-        // mandates land, except an empty arm in a switch.
+        // Attack settings (E0013) are refused until S2's `atk`, except an
+        // empty arm in a switch; Defend's are legal since S2's `dfnd`.
         if self.damage(6) {
             let arm = if self.rarely(2) { "defend" } else { "attack" };
             // Empty, or filled with S2's fields, damaged as a hand editor would.

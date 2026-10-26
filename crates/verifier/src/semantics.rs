@@ -33,8 +33,9 @@
 //! name, or `covered {}` under a deploy that covers a seam — is `E0413`. This
 //! is S1's targeting verifier's reading (task `tgtv`): the page defines `on`
 //! over vents alone, and S1's only blueprint is the Generator.
-//! `seam_choice: SAFEST` reads as NEAREST until S2's threat model and is
-//! `W0501` (decisions-log item 127 (9), S1's plan's decision 6).
+//! `seam_choice: SAFEST` read as NEAREST until S2's threat model and was
+//! `W0501` (decisions-log item 127 (9), S1's plan's decision 6); S2's `dfnd`
+//! built the model, so nothing raises it now.
 //!
 //! # S2's Defend and Attack, and the wall's sphere (task `vfy2`)
 //!
@@ -57,7 +58,6 @@ use pharmakos_proto::gp::api::v1::patch_suggestion::Applicability;
 use pharmakos_proto::gp::v1::beacon_filter::{MandateKind, Side};
 use pharmakos_proto::gp::v1::feature_ref;
 use pharmakos_proto::gp::v1::handler::Resume;
-use pharmakos_proto::gp::v1::mine_settings::SeamChoice;
 use pharmakos_proto::gp::v1::on_fail::Action;
 use pharmakos_proto::gp::v1::{
     Area, AttackSettings, BeaconFilter, BuildTarget, DefendSettings, FeatureRef, InterfaceStep,
@@ -291,14 +291,6 @@ impl Visit for Semantics<'_> {
         if settings.mandate.is_none() {
             self.out.emit(Diag::new("E0502", at));
         }
-        if let Some(mandate_settings::Mandate::Mine(mine)) = settings.mandate.as_ref()
-            && mine.seam_choice() == SeamChoice::Safest
-        {
-            self.out.emit(Diag::new(
-                "W0501",
-                pointer::child(&pointer::child(at, "mine"), "seam_choice"),
-            ));
-        }
         if let Some(mandate_settings::Mandate::Survey(survey)) = settings.mandate.as_ref() {
             self.scouts(
                 &pointer::child(at, "survey"),
@@ -379,7 +371,8 @@ impl Semantics<'_> {
             }
         }
         if let Some(pickets) = defend.picket_scouts {
-            // PLACEHOLDER: the picket's ceiling, the Survey scout column's u8 until Defend's own column exists — dfnd, S2.
+            // The picket's ceiling is Defend's own byte column (the sim's
+            // `DefendSettings::pickets`, S2's `dfnd`; register S2-18).
             self.scouts(at, "picket_scouts", pickets);
         }
     }

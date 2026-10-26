@@ -99,7 +99,7 @@ use pharmakos_proto::gp;
 
 pub use crate::targeting::FeatureSpec;
 
-pub use cond::resolve_beacon_in;
+pub use cond::{beacon_under_attack, resolve_beacon_in, resolve_beacon_now};
 pub use state::{
     Binding, Interpreter, PlanParts, PlanState, StepFailed, StepFailedError, StepFailure,
     VisitState,
@@ -251,6 +251,9 @@ pub enum BeaconSpec {
     Nearest(Filter),
     /// Lowest hit points first (the beacon's own, not its structures').
     Weakest(Filter),
+    /// Most incoming threat first: the largest summed threat of the enemy
+    /// assets the seat sees inside the beacon's sphere (S2's decision 12).
+    MostThreatened(Filter),
 }
 
 /// A place, fixed or late-bound.
@@ -499,6 +502,10 @@ pub enum Row {
         /// The Build mandate's `repair_threshold_pct`, `rebuild_destroyed` and
         /// `terraform`, each only when the row names it (S2's `site`).
         build: crate::site::BuildEdit,
+        /// The Defend mandate's settings the row writes, each only when the
+        /// row names it ([`crate::defend::DefendEdit`]; S2's `dfnd`); `None`
+        /// when the row carries no Defend arm.
+        defend: Option<crate::defend::DefendEdit>,
     },
     /// Set the Quartermaster priority — `interface_times.set_priority_ms`.
     Priority {
@@ -787,6 +794,10 @@ pub enum Cond {
     BeaconHpPct(BeaconSpec, Cmp, i64),
     /// Whether a beacon is powered (`true`) or dormant (`false`).
     BeaconPowered(BeaconSpec, bool),
+    /// `beacon_under_attack`: whether the beacon took damage within the
+    /// window, in game milliseconds (S2's `dfnd`; decision 12: the
+    /// predicate's own window).
+    BeaconUnderAttack(BeaconSpec, i32),
     /// The seat treasury in whole `$`.
     Treasury(Cmp, i64),
     /// Supply minus draw, in whole `kW`.
@@ -1278,9 +1289,9 @@ fn compile_row(
 /// carries a [`Row::Settings`] whose targets the step binds -- the reading the
 /// gateway's `resolve_playbook` holds the compiled plan to.
 ///
-/// An empty Defend or Attack arm writes nothing of its own: S2's settings are
-/// refused wherever they are written ([`mandate_fields`]), but a switch to an
-/// S2 writ with nothing in it writes nothing to refuse. The two top-level
+/// An empty Defend or Attack arm writes nothing of its own: Attack's settings
+/// are refused wherever they are written ([`mandate_fields`]), but a switch to
+/// an S2 writ with nothing in it writes nothing to refuse. The two top-level
 /// fields beside the arm, `roe` and `retreat_hp_pct`, are still fields of the
 /// edit and are priced as they are for any other arm (and as `plan-core`
 /// prices them), so they are counted here rather than dropped with the arm.
@@ -1313,6 +1324,7 @@ fn compile_switch_settings(
                 roe,
                 retreat_hp_pct,
                 build: crate::site::BuildEdit::default(),
+                defend: None,
             })
         }));
     }
@@ -1356,6 +1368,7 @@ fn compile_settings_row(
     let mut scouts: u8 = 0;
     let mut mine: Option<crate::mining::MineEdit> = None;
     let mut build_edit = crate::site::BuildEdit::default();
+    let mut defend_edit: Option<crate::defend::DefendEdit> = None;
     if let Some(mandate) = settings.mandate.as_ref() {
         fields = fields
             .checked_add(mandate_fields(mandate)?)
@@ -1388,8 +1401,10 @@ fn compile_settings_row(
                     }
                 })?);
             }
-            gp::v1::mandate_settings::Mandate::Defend(_)
-            | gp::v1::mandate_settings::Mandate::Attack(_) => {}
+            gp::v1::mandate_settings::Mandate::Defend(defend) => {
+                defend_edit = Some(compile_defend_settings(defend, names)?);
+            }
+            gp::v1::mandate_settings::Mandate::Attack(_) => {}
         }
     }
     let (roe, retreat_hp_pct) = compile_common(settings)?;
@@ -1404,6 +1419,75 @@ fn compile_settings_row(
         roe,
         retreat_hp_pct,
         build: build_edit,
+        defend: defend_edit,
+    })
+}
+
+/// The Defend settings a row names (S2's `dfnd`): `engagement_radius_pct`,
+/// refused past 100; `pursue`, refused when it is a number this build does
+/// not name; `picket_scouts`, refused past what Defend's byte column holds;
+/// and the protect list, each entry `my_commander` or one of the seat's own
+/// beacons by name or selector. Each is written only when the row names it.
+///
+/// # Errors
+///
+/// [`PlanError::EngagementOutOfRange`], [`PlanError::UnknownEnum`],
+/// [`PlanError::ScoutsOutOfRange`], [`PlanError::MissingBlock`] for a protect
+/// entry naming nothing, and a beacon reference's own refusals.
+fn compile_defend_settings(
+    defend: &gp::v1::DefendSettings,
+    names: &Names<'_>,
+) -> Result<crate::defend::DefendEdit, PlanError> {
+    let engagement_pct = match defend.engagement_radius_pct {
+        0 => None,
+        found @ 1..=100 => {
+            Some(u8::try_from(found).map_err(|_| PlanError::EngagementOutOfRange { found })?)
+        }
+        found => return Err(PlanError::EngagementOutOfRange { found }),
+    };
+    let pursue = match defend.pursue {
+        0 => None,
+        value => Some(
+            u8::try_from(value)
+                .ok()
+                .and_then(crate::tables::Pursue::from_id)
+                .ok_or(PlanError::UnknownEnum {
+                    field: "defend.pursue",
+                    value,
+                })?,
+        ),
+    };
+    let pickets = match defend.picket_scouts {
+        None => None,
+        Some(found) => Some(
+            u8::try_from(found).map_err(|_| PlanError::ScoutsOutOfRange {
+                found,
+                most: u8::MAX,
+            })?,
+        ),
+    };
+    let protect = if defend.protect.is_empty() {
+        None
+    } else {
+        let mut list: Vec<crate::defend::Protect> = Vec::with_capacity(defend.protect.len());
+        for entry in &defend.protect {
+            list.push(match entry.asset.as_ref() {
+                Some(gp::v1::protected_asset::Asset::MyCommander(_)) => {
+                    crate::defend::Protect::Commander
+                }
+                Some(gp::v1::protected_asset::Asset::Beacon(beacon)) => {
+                    crate::defend::Protect::Beacon(compile_beacon_ref(Some(beacon), names)?)
+                }
+                None => return Err(PlanError::MissingBlock("protected_asset.asset")),
+            });
+        }
+        Some(list)
+    };
+    Ok(crate::defend::DefendEdit {
+        engagement_pct,
+        pursue,
+        pickets,
+        protect,
     })
 }
 
@@ -1820,7 +1904,13 @@ fn mandate_fields(mandate: &gp::v1::mandate_settings::Mandate) -> Result<u32, Pl
             set(mine.seam_choice != 0),
             set(mine.pillar_spacing != 0),
         ]),
-        gp::v1::mandate_settings::Mandate::Defend(_) => Err(REFUSE_DEFEND_SETTINGS.error()),
+        // S2's `dfnd`: the verifier's `defend_fields`, field for field.
+        gp::v1::mandate_settings::Mandate::Defend(defend) => sum(&[
+            each(defend.protect.len())?,
+            set(defend.engagement_radius_pct != 0),
+            set(defend.pursue != 0),
+            set(defend.picket_scouts.is_some()),
+        ]),
         gp::v1::mandate_settings::Mandate::Attack(_) => Err(REFUSE_ATTACK_SETTINGS.error()),
     }
 }
@@ -1898,7 +1988,9 @@ fn compile_beacon_ref(
         Some(gp::v1::beacon_ref::Ref::Weakest(weakest)) => Ok(BeaconSpec::Weakest(compile_filter(
             weakest.filter.as_ref(),
         )?)),
-        Some(gp::v1::beacon_ref::Ref::MostThreatened(_)) => Err(REFUSE_MOST_THREATENED.error()),
+        Some(gp::v1::beacon_ref::Ref::MostThreatened(most)) => Ok(BeaconSpec::MostThreatened(
+            compile_filter(most.filter.as_ref())?,
+        )),
         None => Err(PlanError::MissingBlock("beacon.ref")),
     }
 }
@@ -2126,7 +2218,13 @@ fn compile_cond(
             let beacon = compile_beacon_ref(predicate.beacon.as_ref(), names)?;
             Ok(Cond::BeaconPowered(beacon, predicate.powered))
         }
-        gp::v1::condition::Node::BeaconUnderAttack(_) => Err(REFUSE_BEACON_UNDER_ATTACK.error()),
+        gp::v1::condition::Node::BeaconUnderAttack(predicate) => {
+            let beacon = compile_beacon_ref(predicate.beacon.as_ref(), names)?;
+            if predicate.within_ms < 0 {
+                return Err(PlanError::NegativeDuration("beacon_under_attack.within_ms"));
+            }
+            Ok(Cond::BeaconUnderAttack(beacon, predicate.within_ms))
+        }
         gp::v1::condition::Node::Treasury(predicate) => {
             let (cmp, value) = int_compare(predicate.dollars.as_ref(), "treasury.dollars")?;
             Ok(Cond::Treasury(cmp, value))
@@ -2211,7 +2309,15 @@ pub enum PlanError {
     /// A row would take longer than a signed 32-bit count of game
     /// milliseconds to commit, which is longer than any segment.
     RowTooLong,
-    /// A Survey `scout_count` past what a beacon's column holds.
+    /// A Defend `engagement_radius_pct` past 100 (S2's `dfnd`): a percentage
+    /// of the sphere radius is 1 to 100, which the verifier refuses as E0510
+    /// at the seal.
+    EngagementOutOfRange {
+        /// What the playbook wrote.
+        found: u32,
+    },
+    /// A Survey `scout_count`, or a Defend `picket_scouts`, past what a
+    /// beacon's byte column holds.
     ScoutsOutOfRange {
         /// What the playbook wrote.
         found: u32,
@@ -2335,11 +2441,12 @@ pub enum PlanError {
     /// | `queue_structure` | S4 (capability licences) |
     /// | a Build target naming a blueprint other than `generator` or S2's base kit (`autocannon`, `mortar`, `wall`, which S2's `site` built) | S4 |
     /// | a Build target (or a removal) anchored on a beacon selector rather than on a voxel or `on` a vent | S3 |
-    /// | Defend and Attack mandate settings | S2 |
-    /// | selector `most_threatened` | S2 |
+    /// | Attack mandate settings | S2 |
     /// | selector filter `side: ENEMY_KNOWN` | S3 |
     /// | selector filter `tags` | S3 |
-    /// | predicate `beacon_under_attack` | S2 |
+    ///
+    /// S2's `dfnd` lifted Defend's settings, `most_threatened` and
+    /// `beacon_under_attack`, which have their effect now.
     ///
     /// Targeting's `on` and `covering`, refused here until S1's targeting
     /// behaviour landed (S1's plan, task `con2`), now have their effect and
@@ -2421,25 +2528,11 @@ pub const REFUSE_BUILD_BEACON_ANCHOR: Refusal = Refusal {
     stage: "S3 (the full selector work, where a pinned anchor gets a meaning)",
 };
 
-/// Defend mandate settings: S2.
-pub const REFUSE_DEFEND_SETTINGS: Refusal = Refusal {
-    name: "defend_settings",
-    construct: "Defend mandate settings",
-    stage: "S2 (destruction and combat)",
-};
-
 /// Attack mandate settings: S2.
 pub const REFUSE_ATTACK_SETTINGS: Refusal = Refusal {
     name: "attack_settings",
     construct: "Attack mandate settings",
     stage: "S2 (destruction and combat)",
-};
-
-/// The selector `most_threatened`: S2.
-pub const REFUSE_MOST_THREATENED: Refusal = Refusal {
-    name: "most_threatened",
-    construct: "selector `most_threatened`",
-    stage: "S2 (destruction and combat: incoming threat is what it ranks by)",
 };
 
 /// The selector filter `side: ENEMY_KNOWN`: S3.
@@ -2457,25 +2550,15 @@ pub const REFUSE_FILTER_TAGS: Refusal = Refusal {
             writing tags is legal, reading them is not)",
 };
 
-/// The predicate `beacon_under_attack`: S2.
-pub const REFUSE_BEACON_UNDER_ATTACK: Refusal = Refusal {
-    name: "beacon_under_attack",
-    construct: "predicate `beacon_under_attack`",
-    stage: "S2 (destruction and combat: a beacon has no damage history to ask about)",
-};
-
 /// Every construct the compile refuses for its stage, in the order
 /// [`PlanError::NotAtThisStage`]'s documentation lists them (E8).
-pub const REFUSALS: [Refusal; 9] = [
+pub const REFUSALS: [Refusal; 6] = [
     REFUSE_QUEUE_STRUCTURE,
     REFUSE_BUILD_BLUEPRINT,
     REFUSE_BUILD_BEACON_ANCHOR,
-    REFUSE_DEFEND_SETTINGS,
     REFUSE_ATTACK_SETTINGS,
-    REFUSE_MOST_THREATENED,
     REFUSE_ENEMY_KNOWN,
     REFUSE_FILTER_TAGS,
-    REFUSE_BEACON_UNDER_ATTACK,
 ];
 
 /// [`PlanError::WallBoxOffAWall`]'s words, apart so that `Display`'s match
@@ -2539,7 +2622,12 @@ impl core::fmt::Display for PlanError {
             ),
             PlanError::ScoutsOutOfRange { found, most } => write!(
                 f,
-                "a `scout_count` of {found} is past the {most} a beacon holds"
+                "a `scout_count` or `picket_scouts` of {found} is past the {most} a beacon holds"
+            ),
+            PlanError::EngagementOutOfRange { found } => write!(
+                f,
+                "an `engagement_radius_pct` of {found} is past 100; it is a percentage of the \
+                 sphere radius, 1 to 100"
             ),
             PlanError::RetreatOutOfRange { found } => write!(
                 f,
