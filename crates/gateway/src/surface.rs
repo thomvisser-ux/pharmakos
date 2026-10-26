@@ -4659,12 +4659,15 @@ mod tests {
             .map(pharmakos_sim::math::fixed::Fx::raw)
     }
 
-    /// Two mortar shells of seat 1's in flight, from one mortar, landing on
-    /// the same next tick: one aimed beside seat 1's own core, out of seat 0's
-    /// sight, and one aimed beside seat 0's core, in it. One firer and one
-    /// landing tick, so only the aim tells them apart (#133's reviews: a far
-    /// shot and a nearer one a cooldown later land together).
-    fn two_shells(
+    /// Two mortar shells of seat 1's in flight, from one mortar, fired on the
+    /// snapshot's tick and landing two ticks later, so one tick into the Push
+    /// each is at the midpoint of its flight: one flying through the point above seat 0's core, in seat 0's
+    /// sight, towards seat 1's core, out of it; and one flying through the
+    /// point above seat 1's core, out of seat 0's sight, towards seat 0's
+    /// core, in it. Each is launched from the mirror of its aim through that
+    /// midpoint. One firer and one landing tick, so only the aim tells them
+    /// apart (#133's reviews).
+    fn crossing_shells(
         snapshot: &mut pharmakos_sim::snapshot::Snapshot,
         world: &pharmakos_sim::world::World,
     ) {
@@ -4674,44 +4677,99 @@ mod tests {
         let firer = AssetId::of_structure(StructureId::new(0))
             .expect("an asset")
             .raw();
-        for target in [1_u8, 0] {
-            let [x, y, z] = core_at(world, target);
-            snapshot.shell_aim.extend([x, y.saturating_add(3 << 16), z]);
-            snapshot
-                .shell_lands_at
-                .push(snapshot.tick.saturating_add(1));
+        let above = |seat: u8| {
+            let [x, y, z] = core_at(world, seat);
+            [x, y.saturating_add(3 << 16), z]
+        };
+        let now = snapshot.tick;
+        for (through, to) in [(0_u8, 1_u8), (1, 0)] {
+            let (mid, aim) = (above(through), above(to));
+            let launch: Vec<i32> = mid
+                .iter()
+                .zip(aim)
+                .map(|(m, a)| {
+                    m.checked_mul(2)
+                        .and_then(|m| m.checked_sub(a))
+                        .expect("a launch")
+                })
+                .collect();
+            snapshot.shell_launch.extend(launch);
+            snapshot.shell_aim.extend(aim);
+            snapshot.shell_fired_at.push(now);
+            snapshot.shell_lands_at.push(now.saturating_add(2));
             snapshot.shell_seat.push(1);
             snapshot.shell_firer.push(firer);
             snapshot.shell_weapon.push(weapon);
-            // Fired a tick ago from beside the aim (snapshot version 12's
-            // launch point and fire tick, S2's `site`).
-            snapshot.shell_launch.extend([x, y, z]);
-            snapshot
-                .shell_fired_at
-                .push(snapshot.tick.saturating_sub(1));
         }
     }
 
-    /// `ViewEntity.Kind.SHELL`: a shell in flight is drawn at its aim point
-    /// with its firer's seat as owner and no hit points, and is sent only to
-    /// its firing seat until the sim gives its in-flight point (#133's fog
-    /// review, F1). The firing seat sees both of its own, under two distinct
-    /// `p_N` handles though they share a firer and a landing tick. Seat 0 is
-    /// **never sent** either, not even the one aimed into its live vision; a
-    /// casual match, which hides nothing, sends both to every seat.
+    /// The `at` of a view entity, as a voxel.
+    fn at_of(entity: &Json) -> pharmakos_proto::gp::v1::Voxel {
+        let axis = |name: &str| match entity.get("at").and_then(|at| at.get(name)) {
+            Some(Json::Number(n)) => n.parse::<i32>().expect("an axis"),
+            other => panic!("an axis {name}: {other:?}"),
+        };
+        pharmakos_proto::gp::v1::Voxel {
+            x: axis("x"),
+            y: axis("y"),
+            z: axis("z"),
+        }
+    }
+
+    /// `ViewEntity.Kind.SHELL` (decisions-log item 148 (3) (h)): a shell in
+    /// flight is drawn at the sim's in-flight point
+    /// (`ShellTable::position_at` at the world's tick), strictly between its
+    /// launch and its aim and never at its aim, with its firer's seat as owner
+    /// and no hit points. The firing seat sees both of its shells in flight
+    /// under two distinct `p_N` handles. Seat 0 is sent the one whose current
+    /// point its live vision covers, and not the one aimed into its sight but
+    /// still out of it. A casual match, which hides nothing, sends both to
+    /// every seat.
     #[test]
-    fn a_shell_is_sent_only_to_its_firing_seat() {
-        let mut surface = resumed_with(FogPolicy::fogged(), two_shells);
+    fn a_shell_is_drawn_in_flight_where_the_seat_sees_it() {
+        let mut surface = resumed_with(FogPolicy::fogged(), crossing_shells);
+        assert!(surface.begin_push().expect("the Push begins"));
+        assert!(surface.step().expect("a tick").is_some(), "one tick in");
+        let world = surface.host().expect("hosted").world();
+        let tick = world.tick().raw();
+        let shells = world.shells();
+        assert_eq!(shells.len(), 2, "two rows held");
+        let flying: Vec<pharmakos_proto::gp::v1::Voxel> = (0..2)
+            .map(|row| {
+                let now = shells.position_at(row, tick).expect("a position");
+                let launch = *shells.launches().get(row).expect("a launch");
+                let aim = *shells.aims().get(row).expect("an aim");
+                assert!(now != launch && now != aim, "row {row} is mid-flight");
+                assert!(
+                    launch
+                        .iter()
+                        .zip(&now)
+                        .zip(&aim)
+                        .all(|((a, b), c)| { (a <= b && b <= c) || (c <= b && b <= a) }),
+                    "row {row} is between its launch and its aim"
+                );
+                crate::view::voxel_of(now)
+            })
+            .collect();
+        let aims: Vec<pharmakos_proto::gp::v1::Voxel> = (0..2)
+            .map(|row| crate::view::voxel_of(*shells.aims().get(row).expect("an aim")))
+            .collect();
         let own = seen_of(&mut surface, 1, "shell");
-        assert_eq!(own.len(), 2, "the firing seat sees its own shells: {own:?}");
+        assert_eq!(
+            own.len(),
+            2,
+            "the firing seat sees its two in flight: {own:?}"
+        );
         let mut ids: Vec<String> = Vec::new();
-        for shell in &own {
+        for ((shell, at), aim) in own.iter().zip(&flying).zip(&aims) {
             assert_eq!(
                 shell.get("owner"),
                 Some(&Json::String(String::from("seat.1")))
             );
             assert!(shell.get("hp").is_none() && shell.get("max_hp").is_none());
             assert_eq!(shell.get("subtype"), Some(&Json::String(String::new())));
+            assert_eq!(&at_of(shell), at, "drawn at the sim's point");
+            assert_ne!(&at_of(shell), aim, "never at its aim point");
             match shell.get("id") {
                 Some(Json::String(id)) if id.starts_with("p_") => ids.push(id.clone()),
                 other => panic!("a shell handle: {other:?}"),
@@ -4723,11 +4781,16 @@ mod tests {
             2,
             "one firer, one landing tick, two shells, two ids"
         );
-        assert!(
-            seen_of(&mut surface, 0, "shell").is_empty(),
-            "seat 0 is sent no shell in flight, even one aimed where it sees"
+        let enemy = seen_of(&mut surface, 0, "shell");
+        assert_eq!(
+            enemy.len(),
+            1,
+            "seat 0 sees only the shell now in its sight: {enemy:?}"
         );
-        let mut casual = resumed_with(FogPolicy::casual(), two_shells);
+        assert_eq!(enemy.first().map(at_of), flying.first().copied());
+        let mut casual = resumed_with(FogPolicy::casual(), crossing_shells);
+        assert!(casual.begin_push().expect("the Push begins"));
+        assert!(casual.step().expect("a tick").is_some(), "one tick in");
         assert_eq!(
             seen_of(&mut casual, 0, "shell").len(),
             2,
