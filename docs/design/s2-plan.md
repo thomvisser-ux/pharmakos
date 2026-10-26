@@ -1459,7 +1459,10 @@ rename (below) stands.
   `crates/gateway` while it runs. It draws a shell at its aim point until `site` (#133) adds each
   shell's launch point, its fire tick and `ShellTable::position_at`; a small `wgw` follow-up after
   `site` merges then draws the in-flight point from the sim's answer. `site` is granted no gateway
-  place for it.
+  place for it. **Both merged (decisions-log item 149 (1) and (3) (l)):** the view kinds as #136
+  (`d62e511`, head `9dc4cfb`), and the in-flight point as #141 (`bfd3341`, head `419d023`), where
+  the fog filter reads a shell at its current point, so an enemy seat sees it only while it is in
+  that seat's vision.
 - **Owns:** `crates/gateway` (except, while `fire` is open, `fire`'s named places: the event arms it
   adds, E17, and the `TABLE` of `the_wire_material_table_is_the_sims` in `tests/view.rs`, E14),
   `tests/golden/gateway`, and the byte copies under `godot/fixtures/` its goldens move. **Branch**
@@ -1570,6 +1573,10 @@ duplicate entry is W0502, and its "for later lanes" are carried in `site`, `atk`
 
 ### `site` — `crates/sim`: Build's S2 settings, the base kit's blueprints, repair and salvage
 
+**Merged as #133 (`4db564c`, head `f3eb88e`) (decisions-log item 149 (1) and (3) (a) to (d)).**
+`SNAPSHOT_VERSION` 12, every `report_hash` re-blessed for it; Mine's undermine search retired with
+the footings.
+
 - **Owns:** `crates/sim` except `fall`'s named places (listed in `fall`'s Owns line), every golden
   it moves, the preamble's named places, its scenarios' entries, and, only if section 4.5's cut 2
   is taken at its start, the verifier's refill note with its case and catalogue row and its
@@ -1624,6 +1631,13 @@ duplicate entry is W0502, and its "for later lanes" are carried in `site`, `atk`
     `FILL` beacon's sphere are refilled; a crater in stone cracks before it opens. The core's
     autocannon, the other damage source, fires only at units (decision 8). The lane names in its PR
     the sites it found on the seed; raiders, which only Defend and Attack field, are not needed.
+    **Amended by item 149 (3) (d):** no playbook reaches the duel at CI's cost (a beacon goes only
+    inside its seat's own spheres, the golden seed's cores are 335 voxels apart, and a weapon fires
+    only at what its seat sees), so the duel's evidence is two headless sim tests with hashes,
+    `a_mortar_duel_repairs_and_salvages` and `a_mortar_duel_refills_its_craters`, each played twice
+    and once through a restore, with the chain pinned around the first `ShellLanded`,
+    `AssetRepaired` and `GroundRefilled`; the committed scenarios are `base-kit-at-the-core` and
+    `terraform-levels-a-footprint`, one minute each.
 - **E0019 lifted** (decisions-log item 145 (5)): `con4`'s refusal of the base kit's blueprints, the
   sim's `build_target_base_kit` entry and the verifier's E0019, is removed when this lane builds
   them, after `vfy2`; `crates/verifier/tests/refusals.rs` holds the two to each other.
@@ -1655,7 +1669,7 @@ duplicate entry is W0502, and its "for later lanes" are carried in `site`, `atk`
     with the reason.
   - #133's head still builds the readings in its owner questions 2 to 4 (refill while the target
     stands, no beacon repair, a switch strands); the lane changes them to this ruling before it
-    merges.
+    merges. **Done before the merge** (#133's "Owner's rulings built here"; item 149 (1)).
 - **Implements:** items 128 (d), 144 (5); spec §4, §6's Build row, §7's Repair band, §8, §9;
   register S2-10.
 - **Needs:** `fire` merged; the ruled decisions 10, 15, 26, 38, 40, 42 and 43.
@@ -1670,7 +1684,7 @@ duplicate entry is W0502, and its "for later lanes" are carried in `site`, `atk`
   whose quotient rounds every step); `a_wall_box_is_priced_per_voxel`;
   `a_wall_has_no_air_under_it` (on sloped ground); `a_levelling_edit_carries_its_seat`;
   `a_beacon_is_repaired`; `a_removed_wall_voxel_is_rebuilt_only_under_rebuild_destroyed`;
-  `a_half_built_structure_pauses_on_a_switch_and_resumes_in_build` (item 148 (2)); the two
+  `a_half_built_structure_pauses_on_a_switch_and_resumes_when_a_build_row_names_it` (item 148 (2)); the two
   scenarios; chains with a Build re-blessed with reasons
   (the determinism chain's Hold & Build writes `terraform` omitted, NONE, and nothing in it is
   damaged, so it should not move: if it does, the PR says why); the next `SNAPSHOT_VERSION` if drone
@@ -1784,7 +1798,11 @@ re-stages `collapse_credits_the_blast`.
     could still detach such a region jointly; so the Voxels phase **re-checks each dig when it
     applies it**, against the state the edits before it in the queue have made, and refuses a dig
     that would detach a structure-carrying region, counted under its reason
-    (`DigRefused::WouldUndermine`) and told to the drone, which picks again next tick. A dig may
+    (`DigRefused::WouldUndermine`) and told to the drone, which picks again next tick (**retired
+    by the owner's footing ruling, item 148 (2)**: a footing ignores every edit and counts as
+    anchored ground, so no dig can detach a region carrying a structure or a beacon; `site` #133
+    removed the undermine search and its re-check (`World::dig_keeps_structures_standing`,
+    `DigRefused` and its counters), and Mine keeps its stranding check, item 149 (1)). A dig may
     still detach a region that carries no structure, such as one an enemy unit stands on, and is
     credited like any other edit. Where a legal dig and a crater on one tick both seed the region
     that falls, the credit follows decision 37: split equally among the distinct seats whose edits
@@ -1826,6 +1844,9 @@ re-stages `collapse_credits_the_blast`.
   verification review).
 
 ### `view` — `crates/client-gdext` + `godot/` + `crates/mesher`: drawing combat
+
+**Merged as #137 (`b01b911`, head `9ab6e78`) (decisions-log item 149 (1)).** Its client pieces
+that schedule, draw or name without deciding are in AGENTS.md §3 rule 4 (item 149 (4)).
 
 - **Owns:** `crates/client-gdext`, `godot/`, `crates/mesher`, their goldens. **Branch**
   `feat/client-combat`, worktree `../pharmakos-view`, target `D:/build/view`.
@@ -1870,6 +1891,8 @@ re-stages `collapse_credits_the_blast`.
 
 ### `g3h` — `crates/bench` + `xtask`: the G3′-real harness
 
+**Merged as #139 (`055492c`, head `d0da048`) (decisions-log item 149 (1) and (3) (e) and (f)).**
+
 - **Owns:** `crates/bench` and `xtask/src/main.rs`'s `perf_alarms` entries (its own figures and
   `view`'s mesher stream). It holds no sim or gateway place: the seams it needs are `base`'s (E30).
   **Branch** `feat/bench-g3-real`, worktree `../pharmakos-g3h`, target `D:/build/g3h`.
@@ -1892,6 +1915,13 @@ re-stages `collapse_credits_the_blast`.
   asset per tick) at the gate load, Mine's footing and support checks at their worst case, and the
   footing query's worst case, (2r + 1)³ voxels times the live structures and beacons (#133's
   figure); `g3r` certifies them.
+- **Amended by item 149 (4): carried to `g3r`.** The gate layout has no Build targets
+  (`runner::LayoutBeacon` carries no mandate settings), so the footing query ran over 40 beacon
+  rows, not #133's roughly 400 structure and beacon rows, and closing it needs a sim seam (Build targets in
+  E30's `Layout`); Defend and Attack were inert when it measured, so `g3r` re-measures on the
+  finished sim; and GitHub annotates only the first ten notices of a step, so splitting the alarm
+  steps is a `.github/workflows` change for `g3r` or `tune2`, whichever edits `ci.yml` first. The
+  fourth-seat line is an unplaced seat with no commander, about 0 (item 149 (3) (e)).
 - **Implements:** items 63, 64, 68, 69, 116 (6) (b), 138 (3) (the worst case). **Needs:** `base` and
   `fire` merged to start (it merges `main` in after `site` and `fall` before it opens its PR, and `g3r`
   re-points it at the finished sim); `view` merged (its `perf_alarms` entry); the ruled decision 2.
@@ -1900,6 +1930,10 @@ re-stages `collapse_credits_the_blast`.
   **Contract PR:** yes (`xtask`). **Agent-days:** 4.5–5.5.
 
 ### `dfnd` — `crates/sim`: Defend, the threat model, the bodyguard
+
+**Merged as #140 (`76328f4`, head `b34fba7`) (decisions-log item 149 (1), (3) (g) to (k) and
+(4)).** `SNAPSHOT_VERSION` 13, every `report_hash` re-blessed for the version alone, no committed
+chain moved.
 
 - **Owns:** `crates/sim`, every golden it moves, the preamble's named places (the Defend and
   `beacon_under_attack` rows of `mandate_and_rule_gaps()`), its scenarios' entries. **Branch**
@@ -2408,7 +2442,7 @@ harness, lints, firewall-runner and CI shard PRs. The main session's docs PRs (s
 `docs/design/`, contract paths too, are counted apart: they are the record's own PRs, take the
 docs-only fast path and queue on no lane. Each body names its paths; each new hashed field goes into
 the state hash, the snapshot round-trip and the goldens in the same PR (§4.8); each snapshot change
-bumps `SNAPSHOT_VERSION` (11 since `fire` #129, `crates/sim/src/snapshot.rs` ~177) and refuses an older snapshot
+bumps `SNAPSHOT_VERSION` (13 since `dfnd` #140, 12 at `site` #133 and 11 at `fire` #129, `crates/sim/src/snapshot.rs`) and refuses an older snapshot
 with a clear message. `SAVE_FORMAT_VERSION` (2, `crates/gateway/src/save.rs` ~99) moves only if a
 lane changes the save container itself, which none is planned to; a save holding an older snapshot
 is refused through the snapshot's own version. Event kinds and step failures are added at the end
@@ -2423,8 +2457,8 @@ with new names, their ids taken at the merge of `main` (E17, E33).
 | 5 | `night` | `xtask/src/scenario.rs` (what the `scenario` step checks), `xtask/src/package.rs`'s replay list (a named place: `collect_played`, so the package never replays an arm), `.github/workflows/nightly-scenarios.yml`, the nightly result golden (a new golden format) |
 | — | the harness PR (main session, after this plan's item 145 docs PR; **merged as #122, `b1380aa`**, decisions-log item 146 (1)) | AGENTS.md §6 (the merge-only rule in place of "rebase on `main`", and `tests/golden/scenarios/nightly-result/` in the list of tests that pin the operator's output), CLAUDE.md (~76, the local-verify path), `scripts/merge-train.sh` (~19–21, ~53, ~188: it rebase-merged, rebased the next lane with `--force-with-lease`, and refused a branch with merge commits), and `.claude/workflows/wave-lanes.js` (~106) (decisions-log item 145 (3) and (7)). The workspace `[lints]` half is its own later contract PR, the next row. Since it merged, `scripts/merge-train.sh` is in use again, merge-only: every PR merges by `gh pr merge --merge --match-head-commit`, and a lane takes `main` by a signed merge |
 | — | the lints PR (main session, after the harness PR) | the workspace `[lints]`: `arithmetic_side_effects` and `panic` denied in the crates that parse untrusted input, and `todo` and `unimplemented` at the integration gate (decisions-log item 145 (5); split from the harness PR by item 146 (3) (c)) |
-| — | the firewall-runner PR (main session) | `.github/workflows/claude.yml`'s `runs-on` (item 142 (3)), and `ci.yml`'s DCO message (~390), which still says `git rebase --signoff <base>`, brought to AGENTS.md §8's remedy (item 146 (4)), and `claude.yml`'s version comments, stale after #126 (item 148 (4)); in the gap between `night` and `g3h`, once the owner's first triggered `claude.yml` run has happened |
-| — | the CI shard PR (main session; item 148 (2)) | `ci.yml`'s test step in two or three jobs per OS, the cross-OS guard's per-shard uploads, `xtask/src/main.rs`'s shard selector (`ci` stays the one entry point), the required checks renamed in `main-protection`, AGENTS.md §9 and CLAUDE.md's leg sentences; before `g3h` (`xtask/src/main.rs`) and `g3r` (`ci.yml`) |
+| — | the firewall-runner PR (main session) | `.github/workflows/claude.yml`'s `runs-on` (item 142 (3)), and `ci.yml`'s DCO message (~390), which still says `git rebase --signoff <base>`, brought to AGENTS.md §8's remedy (item 146 (4)), and `claude.yml`'s version comments, stale after #126 (item 148 (4)); before `g3r` (`ci.yml`), once the owner's first triggered `claude.yml` run has happened |
+| — | the CI shard PR (main session; item 148 (2)) | `ci.yml`'s test step in two or three jobs per OS, the cross-OS guard's per-shard uploads, `xtask/src/main.rs`'s shard selector (`ci` stays the one entry point), AGENTS.md §9 and CLAUDE.md's leg sentences; before `g3h` (`xtask/src/main.rs`) and `g3r` (`ci.yml`). **Merged as #138 (`05ddccf`, head `55a542e`), amended by decisions-log item 149 (1):** three shards per OS (`xtask/src/shard.rs`); no required check was renamed, since each leg's job keeps the name `cargo xtask ci (<os>)`, merges its shards' outputs and runs `golden`, and `main-protection` needed no change; a leg's time is its slowest shard plus its leg job (first run on `main`: Windows 40 min, macOS 36, Ubuntu 29), item 119 (5)'s 75 minutes again binding, and the shard jobs' timeout is back to 90 |
 | 6 | `ids` | determinism code: ids and generations, the typed id columns, the placement counter, the beacons-lost column, the ruin reserve, `SNAPSHOT_VERSION` 10; the event vocabulary (`ruin_buried`) |
 | 7 | `vfy2` | `report_hash`'s `Scope` encoding |
 | 8 | `fire` | the combat phase, the kill-credit split (E32), `Stream::Combat`'s first draw, the shell table, wall, cracked terrain and bedrock materials (new wire values in the chunk digests; bedrock written by generation, moving the mapgen digest goldens), the destroyed-value and tally columns, the attacker memory, `SNAPSHOT_VERSION` 11, event kinds, the bore's golden (a new golden format) |
@@ -2441,7 +2475,9 @@ with new names, their ids taken at the merge of `main` (E17, E33).
 As merged so far: `msrv`, `con3`, `base`, `night` (decisions-log item 145 (1)), then `con4` #120,
 the harness PR #122, `ids` #123 and `vfy2` #125 (decisions-log item 146 (1)), then `wgw` #128,
 `fire` #129, `wgw`'s second PR #131 and `fall` #132 (decisions-log item 148 (1); `wgw`'s two are
-not rows of the table).
+not rows of the table), then the timeout stopgap #135, `wgw`'s view kinds #136, `view` #137, the CI
+shard PR #138, `site` #133, `g3h` #139, `dfnd` #140 and `wgw`'s shell flight #141 (decisions-log
+item 149 (1); #135, #136, #137 and #141 are not rows of the table).
 
 `NIGHTLY_SCENARIOS_ENABLED` is not a PR: it is a repository variable the owner sets (decision 30).
 
