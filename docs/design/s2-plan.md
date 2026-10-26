@@ -1669,7 +1669,7 @@ the footings.
     with the reason.
   - #133's head still builds the readings in its owner questions 2 to 4 (refill while the target
     stands, no beacon repair, a switch strands); the lane changes them to this ruling before it
-    merges.
+    merges. **Done before the merge** (#133's "Owner's rulings built here"; item 149 (1)).
 - **Implements:** items 128 (d), 144 (5); spec §4, §6's Build row, §7's Repair band, §8, §9;
   register S2-10.
 - **Needs:** `fire` merged; the ruled decisions 10, 15, 26, 38, 40, 42 and 43.
@@ -1684,7 +1684,7 @@ the footings.
   whose quotient rounds every step); `a_wall_box_is_priced_per_voxel`;
   `a_wall_has_no_air_under_it` (on sloped ground); `a_levelling_edit_carries_its_seat`;
   `a_beacon_is_repaired`; `a_removed_wall_voxel_is_rebuilt_only_under_rebuild_destroyed`;
-  `a_half_built_structure_pauses_on_a_switch_and_resumes_in_build` (item 148 (2)); the two
+  `a_half_built_structure_pauses_on_a_switch_and_resumes_when_a_build_row_names_it` (item 148 (2)); the two
   scenarios; chains with a Build re-blessed with reasons
   (the determinism chain's Hold & Build writes `terraform` omitted, NONE, and nothing in it is
   damaged, so it should not move: if it does, the PR says why); the next `SNAPSHOT_VERSION` if drone
@@ -1801,8 +1801,8 @@ re-stages `collapse_credits_the_blast`.
     (`DigRefused::WouldUndermine`) and told to the drone, which picks again next tick (**retired
     by the owner's footing ruling, item 148 (2)**: a footing ignores every edit and counts as
     anchored ground, so no dig can detach a region carrying a structure or a beacon; `site` #133
-    removed both checks, `World::dig_keeps_structures_standing` and `DigRefused`, and Mine keeps its
-    stranding check, item 149 (1)). A dig may
+    removed the undermine search and its re-check (`World::dig_keeps_structures_standing`,
+    `DigRefused` and its counters), and Mine keeps its stranding check, item 149 (1)). A dig may
     still detach a region that carries no structure, such as one an enemy unit stands on, and is
     credited like any other edit. Where a legal dig and a crater on one tick both seed the region
     that falls, the credit follows decision 37: split equally among the distinct seats whose edits
@@ -1917,7 +1917,7 @@ that schedule, draw or name without deciding are in AGENTS.md §3 rule 4 (item 1
   figure); `g3r` certifies them.
 - **Amended by item 149 (4): carried to `g3r`.** The gate layout has no Build targets
   (`runner::LayoutBeacon` carries no mandate settings), so the footing query ran over 40 beacon
-  rows, not #133's roughly 400 structure rows, and closing it needs a sim seam (Build targets in
+  rows, not #133's roughly 400 structure and beacon rows, and closing it needs a sim seam (Build targets in
   E30's `Layout`); Defend and Attack were inert when it measured, so `g3r` re-measures on the
   finished sim; and GitHub annotates only the first ten notices of a step, so splitting the alarm
   steps is a `.github/workflows` change for `g3r` or `tune2`, whichever edits `ci.yml` first. The
@@ -2457,7 +2457,7 @@ with new names, their ids taken at the merge of `main` (E17, E33).
 | 5 | `night` | `xtask/src/scenario.rs` (what the `scenario` step checks), `xtask/src/package.rs`'s replay list (a named place: `collect_played`, so the package never replays an arm), `.github/workflows/nightly-scenarios.yml`, the nightly result golden (a new golden format) |
 | — | the harness PR (main session, after this plan's item 145 docs PR; **merged as #122, `b1380aa`**, decisions-log item 146 (1)) | AGENTS.md §6 (the merge-only rule in place of "rebase on `main`", and `tests/golden/scenarios/nightly-result/` in the list of tests that pin the operator's output), CLAUDE.md (~76, the local-verify path), `scripts/merge-train.sh` (~19–21, ~53, ~188: it rebase-merged, rebased the next lane with `--force-with-lease`, and refused a branch with merge commits), and `.claude/workflows/wave-lanes.js` (~106) (decisions-log item 145 (3) and (7)). The workspace `[lints]` half is its own later contract PR, the next row. Since it merged, `scripts/merge-train.sh` is in use again, merge-only: every PR merges by `gh pr merge --merge --match-head-commit`, and a lane takes `main` by a signed merge |
 | — | the lints PR (main session, after the harness PR) | the workspace `[lints]`: `arithmetic_side_effects` and `panic` denied in the crates that parse untrusted input, and `todo` and `unimplemented` at the integration gate (decisions-log item 145 (5); split from the harness PR by item 146 (3) (c)) |
-| — | the firewall-runner PR (main session) | `.github/workflows/claude.yml`'s `runs-on` (item 142 (3)), and `ci.yml`'s DCO message (~390), which still says `git rebase --signoff <base>`, brought to AGENTS.md §8's remedy (item 146 (4)), and `claude.yml`'s version comments, stale after #126 (item 148 (4)); in the gap between `night` and `g3h`, once the owner's first triggered `claude.yml` run has happened |
+| — | the firewall-runner PR (main session) | `.github/workflows/claude.yml`'s `runs-on` (item 142 (3)), and `ci.yml`'s DCO message (~390), which still says `git rebase --signoff <base>`, brought to AGENTS.md §8's remedy (item 146 (4)), and `claude.yml`'s version comments, stale after #126 (item 148 (4)); before `g3r` (`ci.yml`), once the owner's first triggered `claude.yml` run has happened |
 | — | the CI shard PR (main session; item 148 (2)) | `ci.yml`'s test step in two or three jobs per OS, the cross-OS guard's per-shard uploads, `xtask/src/main.rs`'s shard selector (`ci` stays the one entry point), AGENTS.md §9 and CLAUDE.md's leg sentences; before `g3h` (`xtask/src/main.rs`) and `g3r` (`ci.yml`). **Merged as #138 (`05ddccf`, head `55a542e`), amended by decisions-log item 149 (1):** three shards per OS (`xtask/src/shard.rs`); no required check was renamed, since each leg's job keeps the name `cargo xtask ci (<os>)`, merges its shards' outputs and runs `golden`, and `main-protection` needed no change; a leg's time is its slowest shard plus its leg job (first run on `main`: Windows 40 min, macOS 36, Ubuntu 29), item 119 (5)'s 75 minutes again binding, and the shard jobs' timeout is back to 90 |
 | 6 | `ids` | determinism code: ids and generations, the typed id columns, the placement counter, the beacons-lost column, the ruin reserve, `SNAPSHOT_VERSION` 10; the event vocabulary (`ruin_buried`) |
 | 7 | `vfy2` | `report_hash`'s `Scope` encoding |
