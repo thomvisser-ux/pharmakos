@@ -38,7 +38,7 @@
 use pharmakos_proto::gp::v1::Voxel;
 use pharmakos_proto::json::{Json, base64};
 use pharmakos_sim::sight::SensorKind;
-use pharmakos_sim::tables::{BeaconId, SeatId, StructureKind, UnitKind};
+use pharmakos_sim::tables::{BeaconId, NOT_RUINED, SeatId, StructureKind, UnitKind};
 use pharmakos_sim::world::World;
 
 use crate::error::Error;
@@ -47,7 +47,7 @@ use crate::fog::{Audience, FogFilter, FogPolicy, Viewer, Vision};
 use crate::rpc::Request;
 use crate::surface::Surface;
 use crate::view;
-use crate::viewfeed::{Sight, ViewFeed, ViewPage};
+use crate::viewfeed::{ShellKey, Sight, ViewFeed, ViewPage};
 
 /// The full name of the entity-kind enum, for its lower-case wire spelling
 /// (decisions-log item 80).
@@ -216,7 +216,9 @@ struct Condition {
 /// The complete list of entities this viewer may see.
 ///
 /// Row by row through the existing [`FogFilter`], in one fixed order --
-/// beacons, then units, then structures, each ascending by table row, which is
+/// beacons, then units, then structures, then wrecks, each ascending by table
+/// row, which is ascending by id, then shells in firing order. The first three
+/// are
 /// ascending by id. Built by inclusion: a row the filter refuses is simply not
 /// here, and nothing counts what was refused.
 ///
@@ -246,6 +248,8 @@ fn visible_entities<V: Vision>(
     visible_beacons(views, world, &filter, viewer, &mut out)?;
     visible_units(views, world, &filter, viewer, &mut out)?;
     visible_structures(views, world, &filter, viewer, &mut out)?;
+    visible_wrecks(views, world, &filter, viewer, &mut out)?;
+    visible_shells(views, world, &filter, viewer, &mut out)?;
     Ok(out)
 }
 
@@ -381,15 +385,149 @@ fn visible_structures<V: Vision>(
         };
         let condition = Condition { hp, heading: None };
         let handle = views.structure_handle(viewer, id)?;
+        // A ruin is listed as one (`ViewEntity.Kind.RUIN`), keeping the
+        // subtype of the structure it was and the handle it had. The sim
+        // marks a ruin twice -- its tick in `ruined_at`, and a no-seat owner --
+        // and the two must agree.
+        let ruined =
+            column(structures.ruined_at().get(row), "structure", "ruined-at")? != NOT_RUINED;
+        if ruined == owner.is_some() {
+            return Err(Error::internal(format!(
+                "structure row {row} is {} by its ruined-at tick and {} by its seat",
+                if ruined { "a ruin" } else { "standing" },
+                if owner.is_some() {
+                    "a seat's"
+                } else {
+                    "nobody's"
+                },
+            )));
+        }
+        let listed = if ruined { "RUIN" } else { "STRUCTURE" };
         out.push(entity(
             &handle,
-            "STRUCTURE",
+            listed,
             view::structure_subtype(kind),
             owner,
             at,
             condition,
         ));
     }
+    Ok(())
+}
+
+/// The wrecks of [`visible_entities`], in table order: nobody's, with no hit
+/// points, shown where the viewer's live vision reaches them. A wreck the
+/// viewer only remembers is not listed: `get_view` is live vision only, and
+/// the sim's sightings of wrecks are read by no gateway surface yet.
+///
+/// # Errors
+///
+/// As [`visible_entities`].
+fn visible_wrecks<V: Vision>(
+    views: &mut ViewFeed,
+    world: &World,
+    filter: &FogFilter<'_, V>,
+    viewer: Viewer,
+    out: &mut Vec<Json>,
+) -> Result<(), Error> {
+    let wrecks = world.wrecks();
+    for row in 0..wrecks.ids().len() {
+        if column(wrecks.frees().get(row), "wreck", "free")? {
+            continue;
+        }
+        let at = view::voxel_of(column(wrecks.positions().get(row), "wreck", "position")?);
+        if !filter.visible(viewer, &world_at(None, at)) {
+            continue;
+        }
+        let id = column(wrecks.ids().get(row), "wreck", "id")?;
+        let handle = views.wreck_handle(viewer, id)?;
+        out.push(entity(&handle, "WRECK", "", None, at, Condition::default()));
+    }
+    Ok(())
+}
+
+/// The shells in flight of [`visible_entities`], in the table's firing order:
+/// the firer's seat as the owner, no hit points, drawn **where the shell is
+/// now** -- the sim's own answer, [`pharmakos_sim::tables::ShellTable::position_at`]
+/// at the world's tick, never its aim point and never a point the gateway
+/// works out (S2's plan, `wgw`, amended by decisions-log item 148 (3) (h)).
+///
+/// The fog filter decides who is sent it, as for every other thing in the
+/// world: the firing seat always (it is that seat's), a seat or spectator the
+/// fog hides nothing from always, and any other seat only while its live
+/// vision covers the shell's **current** point. So an enemy sees a shell
+/// crossing its sight and is never handed its aim (the main session's ruling,
+/// open to the owner's veto). The flight is a straight line at a steady
+/// pace, so a seat that sees a shell on two ticks can extrapolate its aim and
+/// its launch point: that is the cost of drawing it in flight at all, and it
+/// is bounded by the seat's own vision. The landing is a world event,
+/// `shell_landed`, which the fog filter tells any seat that sees the place.
+///
+/// # Errors
+///
+/// As [`visible_entities`], and [`crate::error::Code::Internal`] for a shell
+/// whose firer's seat is the sim's no-seat value (a shell is always some
+/// seat's, `ViewEntity.owner`), a held row whose landing tick has come, or a
+/// held row the sim gives no position for.
+fn visible_shells<V: Vision>(
+    views: &mut ViewFeed,
+    world: &World,
+    filter: &FogFilter<'_, V>,
+    viewer: Viewer,
+    out: &mut Vec<Json>,
+) -> Result<(), Error> {
+    let tick = world.tick().raw();
+    let shells = world.shells();
+    let mut live: Vec<ShellKey> = Vec::new();
+    for row in 0..shells.len() {
+        let raw_owner = column(shells.seats().get(row), "shell", "seat")?;
+        if !SeatId::new(raw_owner).is_some() {
+            return Err(Error::internal(format!(
+                "shell row {row} was fired by the no-seat value, and a shell is always a seat's"
+            )));
+        }
+        let firer = column(shells.firers().get(row), "shell", "firer")?;
+        let lands_at = column(shells.lands_at().get(row), "shell", "landing")?;
+        let aim = column(shells.aims().get(row), "shell", "aim")?;
+        let fired_at = column(shells.fired_at().get(row), "shell", "fire tick")?;
+        let key = ShellKey {
+            firer,
+            fired_at,
+            lands_at,
+            aim: aim.map(pharmakos_sim::math::fixed::Fx::raw),
+        };
+        if tick >= lands_at {
+            // The sim lands every shell on its landing tick, and a snapshot
+            // holds none at or past it, so a held row here is the two
+            // disagreeing; drawn, it would sit on its aim point.
+            // The words name no row and no landing tick: the check runs
+            // before the fog filter, so they may be about a shell this
+            // viewer is never shown.
+            return Err(Error::internal(format!(
+                "a shell is held at tick {tick} past its landing tick"
+            )));
+        }
+        live.push(key);
+        let now = shells.position_at(row, tick).ok_or_else(|| {
+            Error::internal(format!(
+                "a shell is held and in flight, and the sim gives it no position at tick {tick}"
+            ))
+        })?;
+        let at = view::voxel_of(now);
+        if !filter.visible(viewer, &world_at(Some(raw_owner), at)) {
+            continue;
+        }
+        let handle = views.shell_handle(viewer, key)?;
+        out.push(entity(
+            &handle,
+            "SHELL",
+            "",
+            Some(raw_owner),
+            at,
+            Condition::default(),
+        ));
+    }
+    views.forget_landed_shells(viewer, &live);
     Ok(())
 }
 

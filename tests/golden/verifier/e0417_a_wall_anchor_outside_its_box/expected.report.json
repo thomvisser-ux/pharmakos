@@ -14,16 +14,9 @@
           "z": 61
         }
       ]
-    },
-    {
-      "code": "E0019",
-      "severity": "ERROR",
-      "path": "/declarative/route/0/place_beacon/initial/mandate/build/targets/0/blueprint_id",
-      "message": "a Build target names `wall`, one of S2's base kit, which has no effect until S2's base kit lands; it is refused rather than ignored.",
-      "beginner": "Autocannons, mortars and walls cannot be built in this build yet."
     }
   ],
-  "report_hash": "4/EaP/V6+WY=",
+  "report_hash": "5nvu1qlep5M=",
   "rules_hash": "gCjUE4Tm3i8=",
   "plan_fingerprint": "D+3pfMhQ6eU=",
   "verifier_version": "0.1.0-s2.2",

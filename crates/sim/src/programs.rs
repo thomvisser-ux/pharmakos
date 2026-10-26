@@ -31,7 +31,7 @@
 use crate::events::{Emission, EventKind};
 use crate::knowledge::{AssetId, Position};
 use crate::math::fixed::{Fx, Sq};
-use crate::math::quantity::{Hp, Money, Ms};
+use crate::math::quantity::{Money, Ms};
 use crate::seams::ProgramId;
 use crate::tables::{BeaconId, NO_WORK, SeatId, UnitId, UnitKind};
 use crate::world::World;
@@ -70,13 +70,21 @@ pub struct BuildProgram;
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct MineProgram;
 
-/// Probe the mandate's areas, then refresh the stalest sighting.
+/// Probe the mandate's areas, then refresh the stalest sighting; under a
+/// Defend beacon, picket its ring ([`crate::defend`]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct ScoutProgram;
 
-/// Lift wrecks inside the beacon's sphere and carry the salvage home.
+/// Guard under a Defend beacon ([`crate::defend`]); elsewhere, walk home and
+/// idle there until S2's `atk` gives a raider its Attack.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub struct SalvageProgram;
+pub struct RaiderProgram;
+
+/// Repair the seat's own structures, units and cracked walls inside the
+/// beacon's sphere, then lift wrecks and ruins there and carry the salvage
+/// home (spec section 9: "one unit, both jobs"; S2's `site`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct RepairProgram;
 
 /// The built-in program a unit kind runs.
 ///
@@ -118,17 +126,17 @@ pub struct SalvageProgram;
 ///
 /// Where the commander goes is the playbook's to say and nothing else's
 /// (AGENTS.md §11: "no manual control" cuts the other way too — no program may
-/// steer it either). A raider runs the move program until S2 gives it a
-/// target.
+/// steer it either). A raider guards under a Defend beacon (S2's `dfnd`) and
+/// idles at home elsewhere until S2's `atk`.
 #[must_use]
 pub fn program_for(kind: UnitKind) -> Option<&'static dyn Program> {
     match kind {
         UnitKind::Commander => None,
         UnitKind::BuildDrone => Some(&BuildProgram),
         UnitKind::MiningDrone => Some(&MineProgram),
-        UnitKind::RepairDrone => Some(&SalvageProgram),
+        UnitKind::RepairDrone => Some(&RepairProgram),
         UnitKind::Scout => Some(&ScoutProgram),
-        UnitKind::Raider => Some(&MoveProgram),
+        UnitKind::Raider => Some(&RaiderProgram),
     }
 }
 
@@ -140,6 +148,9 @@ pub fn program_for(kind: UnitKind) -> Option<&'static dyn Program> {
 /// tick are added in row order. A freed row has no hit points and no home, so
 /// no program drives it.
 pub(crate) fn run_all(world: &mut World) {
+    // Every Defend beacon's quarry and picket leg first, so each of its
+    // guards and pickets reads one answer this tick (S2's `dfnd`).
+    crate::defend::update(world);
     let count = world.units().len();
     let mut unit: u32 = 0;
     while unit < count {
@@ -314,57 +325,28 @@ impl Program for MoveProgram {
     }
 }
 
+impl Program for RaiderProgram {
+    fn id(&self) -> ProgramId {
+        ProgramId::new(6)
+    }
+
+    fn run(&self, world: &mut World, unit: u32) {
+        if !crate::defend::run_guard(world, unit) {
+            idle_at_home(world, unit);
+        }
+    }
+}
+
 impl Program for BuildProgram {
     fn id(&self) -> ProgramId {
         ProgramId::new(2)
     }
 
+    /// Its beacon's Build targets in table order -- a wall's voxels, a
+    /// footprint's levelling, a structure going up -- and then the refill
+    /// ([`crate::site::build_job`]); idle at home when there is none.
     fn run(&self, world: &mut World, unit: u32) {
-        let row = crate::math::index::row(unit);
-        let Some(me) = me(world, row) else {
-            return;
-        };
-        let Some(structure) = crate::mandate::next_unfinished_target(world, me.home) else {
-            idle_at_home(world, unit);
-            return;
-        };
-        let Ok(at) = world.structures().row_of(structure) else {
-            idle_at_home(world, unit);
-            return;
-        };
-        let at = at.index();
-        let (Some(site), Some(hp), Some(kind)) = (
-            world.structures().positions().get(at).copied(),
-            world.structures().hit_points().get(at).copied(),
-            world.structures().kinds().get(at).copied(),
-        ) else {
-            idle_at_home(world, unit);
-            return;
-        };
-        if !within(me.here, site, world.arrive_radius()) {
-            world.send_unit(unit, site);
-            return;
-        }
-        // On site: raise it. `structures.build_hp_per_second` divides the tick
-        // rate exactly -- a table whose row does not is refused at load -- so
-        // there is no accumulator and no rounding rule
-        // (`RulesTable::build_hp_per_tick`).
-        //
-        // A wall has no structure row, and no row is one
-        // ([`World::structure_max_hp`]).
-        let Some(full) = crate::tables::StructureKind::from_id(kind)
-            .and_then(|kind| world.structure_max_hp(kind))
-        else {
-            return;
-        };
-        let per_tick = world.rules().build_hp_per_tick();
-        let grown = hp.raw().saturating_add(per_tick.raw()).min(full.raw());
-        if let Some(slot) = world.structures_mut().hit_points_mut().get_mut(at) {
-            *slot = Hp::new(grown);
-        }
-        if grown >= full.raw() {
-            world.finish_structure(structure);
-        }
+        crate::site::run_build_drone(world, unit);
     }
 }
 
@@ -379,6 +361,22 @@ impl Program for MineProgram {
         let Some(me) = me(world, row) else {
             return;
         };
+        // 0. Flee a known threat inside the home beacon's sphere, when the
+        //    beacon's `flee_on_threat` says so (decision 12): the dig in hand
+        //    is dropped and the drone walks home with what it carries.
+        if flees(world, me.seat, me.home) {
+            if me.busy != NO_WORK
+                && let Some(slot) = world.units_mut().busy_until_mut().get_mut(row)
+            {
+                *slot = NO_WORK;
+            }
+            if me.carried.raw() > 0 {
+                deliver(world, unit, EventKind::OreDelivered);
+            } else {
+                idle_at_home(world, unit);
+            }
+            return;
+        }
         // 1. Finish the voxel the drone is digging, if its clock has run out.
         if me.busy != NO_WORK {
             if tick.raw() < me.busy {
@@ -438,46 +436,17 @@ impl Program for MineProgram {
     }
 }
 
-impl Program for SalvageProgram {
+impl Program for RepairProgram {
     fn id(&self) -> ProgramId {
         ProgramId::new(4)
     }
 
+    /// Deliver what it carries, then repair, then salvage
+    /// ([`crate::site::repair_job`]): "any seat's reclaim drones may salvage
+    /// any wreck, whoever owned it, within their beacon's sphere" (spec
+    /// section 7).
     fn run(&self, world: &mut World, unit: u32) {
-        let row = crate::math::index::row(unit);
-        let Some(me) = me(world, row) else {
-            return;
-        };
-        if me.carried.raw() > 0 {
-            deliver(world, unit, EventKind::SalvageDelivered);
-            return;
-        }
-        // "Any seat's reclaim drones may salvage any wreck, whoever owned it,
-        // within their beacon's sphere" (spec section 7). Nothing produces a
-        // wreck at the skeleton — destruction is S2 — so this is the path a
-        // wreck takes the day one exists, exercised by a test that makes one.
-        let Some(wreck) = world.wreck_in_sphere(me.home) else {
-            idle_at_home(world, unit);
-            return;
-        };
-        let at = wreck.index();
-        let (Some(site), Some(value)) = (
-            world.wrecks().positions().get(at).copied(),
-            world.wrecks().salvages().get(at).copied(),
-        ) else {
-            idle_at_home(world, unit);
-            return;
-        };
-        if !within(me.here, site, world.arrive_radius()) {
-            world.send_unit(unit, site);
-            return;
-        }
-        if let Some(slot) = world.wrecks_mut().salvages_mut().get_mut(at) {
-            *slot = Money::ZERO;
-        }
-        if let Some(slot) = world.units_mut().carrying_mut().get_mut(row) {
-            *slot = value;
-        }
+        crate::site::run_repair_drone(world, unit);
     }
 }
 
@@ -487,6 +456,9 @@ impl Program for ScoutProgram {
     }
 
     fn run(&self, world: &mut World, unit: u32) {
+        if crate::defend::run_picket(world, unit) {
+            return;
+        }
         let row = crate::math::index::row(unit);
         let Some(me) = me(world, row) else {
             return;
@@ -509,6 +481,24 @@ impl Program for ScoutProgram {
         }
         idle_at_home(world, unit);
     }
+}
+
+/// Whether a mining drone homed to `home` flees: the beacon's
+/// `flee_on_threat` is set and its seat knows of a threat inside the beacon's
+/// sphere (decision 12).
+fn flees(world: &World, seat: SeatId, home: BeaconId) -> bool {
+    let Ok(row) = world.beacons().row_of(home) else {
+        return false;
+    };
+    let index = row.index();
+    let flee_set = world.beacons().flees().get(index).copied() == Some(true);
+    flee_set
+        && world
+            .beacons()
+            .positions()
+            .get(index)
+            .copied()
+            .is_some_and(|centre| crate::defend::threat_in_sphere(world, seat, centre))
 }
 
 /// What a full load of ore is worth, in `$`, for a drone working the seam that
@@ -599,7 +589,7 @@ fn home_site(world: &World, me: &Me) -> Option<[Fx; 3]> {
 }
 
 /// Walk to the home beacon and stop there.
-fn idle_at_home(world: &mut World, unit: u32) {
+pub(crate) fn idle_at_home(world: &mut World, unit: u32) {
     let row = crate::math::index::row(unit);
     let Some(me) = me(world, row) else {
         return;
@@ -672,7 +662,7 @@ fn finish_dig(world: &mut World, unit: u32) {
 }
 
 /// Carry a load home and credit it, or keep walking.
-fn deliver(world: &mut World, unit: u32, kind: EventKind) {
+pub(crate) fn deliver(world: &mut World, unit: u32, kind: EventKind) {
     let row = crate::math::index::row(unit);
     let Some(me) = me(world, row) else {
         return;

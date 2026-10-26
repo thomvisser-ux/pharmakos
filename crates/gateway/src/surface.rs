@@ -2128,7 +2128,12 @@ impl Surface {
             // or under it, are things in the world an opponent with eyes on
             // the place sees.
             | EventKind::RegionCollapsed
-            | EventKind::AssetFell => Ok(Audience::World {
+            | EventKind::AssetFell
+            // S2's `site`: an asset back at full hit points and a column of
+            // ground refilled are things in the world an opponent with eyes on
+            // the place sees, as it sees them hurt or cratered.
+            | EventKind::AssetRepaired
+            | EventKind::GroundRefilled => Ok(Audience::World {
                 owner: event.seat,
                 // A world event the sim placed nowhere would be filtered at
                 // the origin, where a seat that sees the origin would be told
@@ -2183,6 +2188,11 @@ impl Surface {
             | EventKind::OreDelivered
             | EventKind::SalvageDelivered
             | EventKind::BeaconRecycled
+            // S2's `site`: a structure recycled for a dropped Build target
+            // carries its refund in `value`, a treasury figure, as
+            // `beacon_recycled` does; its leaving the world is visible on its
+            // own terms.
+            | EventKind::StructureRecycled
             | EventKind::Settled
             | EventKind::KillCredited
             // S2's `fire`: return fire and a retreat are a seat's rules of
@@ -4085,8 +4095,9 @@ mod tests {
         // puts on the world's side, for the reason `beacon_placed` is there.
         //
         // Plus S2's `fire`'s two: `returned_fire` and `retreat_announced`, a
-        // seat's own rules of engagement and retreat threshold acting.
-        assert_eq!(private, 13 + 9 + 2);
+        // seat's own rules of engagement and retreat threshold acting; and S2's
+        // `site`'s one, `structure_recycled`, which carries a refund.
+        assert_eq!(private, 13 + 9 + 2 + 1);
         assert!(matches!(
             Surface::audience_of(&sim_event(EventKind::BeaconPlaced, Some(1))),
             Ok(Audience::World { .. })
@@ -4612,19 +4623,234 @@ mod tests {
         assert_eq!(mine.get("hp"), Some(&Json::Number(String::from("40"))));
     }
 
-    /// C7 of #128's reviews: a ruin is nobody's, so it is listed with an empty
-    /// `owner` (`ViewEntity.owner`'s comment) rather than as the no-seat value's
-    /// `seat.255`, and with no hit points.
+    // -----------------------------------------------------------------------
+    // SHELL, WRECK and RUIN on the view (`ViewEntity.Kind` 4 to 6)
+    // -----------------------------------------------------------------------
+
+    /// Every entity one seat's keyframe lists of `kind`, spelt as the wire
+    /// spells it (`shell`, `wreck`, `ruin`).
+    fn seen_of(surface: &mut Surface, seat: u8, kind: &str) -> Vec<Json> {
+        let token = seat_token(surface, seat);
+        let vision = crate::host::LiveVision::of(surface.host().expect("hosted").world());
+        let page = result(&surface.call(Some(&token), &request("get_view", "{}"), &vision));
+        assert_eq!(page.get("complete"), Some(&Json::Bool(true)), "one page");
+        match page.get("entities") {
+            Some(Json::Array(entities)) => entities
+                .iter()
+                .filter(|entity| entity.get("kind") == Some(&Json::String(kind.to_owned())))
+                .cloned()
+                .collect(),
+            other => panic!("entities: {other:?}"),
+        }
+    }
+
+    /// The core of `seat` in `world`: its place, raw.
+    fn core_at(world: &pharmakos_sim::world::World, seat: u8) -> [i32; 3] {
+        let beacons = world.beacons();
+        let row = (0..beacons.ids().len())
+            .find(|row| {
+                beacons.seats().get(*row) == Some(&seat) && beacons.ordinals().get(*row) == Some(&0)
+            })
+            .expect("a core");
+        beacons
+            .positions()
+            .get(row)
+            .expect("a place")
+            .map(pharmakos_sim::math::fixed::Fx::raw)
+    }
+
+    /// Two mortar shells of seat 1's in flight, from one mortar, fired on the
+    /// snapshot's tick and landing two ticks later, so one tick into the Push
+    /// each is at the midpoint of its flight: one flying through the point above seat 0's core, in seat 0's
+    /// sight, towards seat 1's core, out of it; and one flying through the
+    /// point above seat 1's core, out of seat 0's sight, towards seat 0's
+    /// core, in it. Each is launched from the mirror of its aim through that
+    /// midpoint. One firer and one landing tick, so only the aim tells them
+    /// apart (#133's reviews).
+    fn crossing_shells(
+        snapshot: &mut pharmakos_sim::snapshot::Snapshot,
+        world: &pharmakos_sim::world::World,
+    ) {
+        use pharmakos_sim::knowledge::AssetId;
+        use pharmakos_sim::tables::{Armament, StructureId, StructureKind};
+        let weapon = Armament::Structure(StructureKind::Mortar).id();
+        let firer = AssetId::of_structure(StructureId::new(0))
+            .expect("an asset")
+            .raw();
+        let above = |seat: u8| {
+            let [x, y, z] = core_at(world, seat);
+            [x, y.saturating_add(3 << 16), z]
+        };
+        let now = snapshot.tick;
+        for (through, to) in [(0_u8, 1_u8), (1, 0)] {
+            let (mid, aim) = (above(through), above(to));
+            let launch: Vec<i32> = mid
+                .iter()
+                .zip(aim)
+                .map(|(m, a)| {
+                    m.checked_mul(2)
+                        .and_then(|m| m.checked_sub(a))
+                        .expect("a launch")
+                })
+                .collect();
+            snapshot.shell_launch.extend(launch);
+            snapshot.shell_aim.extend(aim);
+            snapshot.shell_fired_at.push(now);
+            snapshot.shell_lands_at.push(now.saturating_add(2));
+            snapshot.shell_seat.push(1);
+            snapshot.shell_firer.push(firer);
+            snapshot.shell_weapon.push(weapon);
+        }
+    }
+
+    /// The `at` of a view entity, as a voxel.
+    fn at_of(entity: &Json) -> pharmakos_proto::gp::v1::Voxel {
+        let axis = |name: &str| match entity.get("at").and_then(|at| at.get(name)) {
+            Some(Json::Number(n)) => n.parse::<i32>().expect("an axis"),
+            other => panic!("an axis {name}: {other:?}"),
+        };
+        pharmakos_proto::gp::v1::Voxel {
+            x: axis("x"),
+            y: axis("y"),
+            z: axis("z"),
+        }
+    }
+
+    /// `ViewEntity.Kind.SHELL` (decisions-log item 148 (3) (h)): a shell in
+    /// flight is drawn at the sim's in-flight point
+    /// (`ShellTable::position_at` at the world's tick), strictly between its
+    /// launch and its aim and never at its aim, with its firer's seat as owner
+    /// and no hit points. The firing seat sees both of its shells in flight
+    /// under two distinct `p_N` handles. Seat 0 is sent the one whose current
+    /// point its live vision covers, and not the one aimed into its sight but
+    /// still out of it. A casual match, which hides nothing, sends both to
+    /// every seat.
     #[test]
-    fn a_ruin_is_listed_as_nobodys_with_no_hp() {
-        let mut casual = resumed_with(FogPolicy::casual(), building_and_ruin);
-        let ruin = structures_seen(&mut casual, 0)
-            .into_iter()
-            .find(|entity| entity.get("owner") == Some(&Json::String(String::new())))
-            .expect("the ruin, nobody's");
+    fn a_shell_is_drawn_in_flight_where_the_seat_sees_it() {
+        let mut surface = resumed_with(FogPolicy::fogged(), crossing_shells);
+        assert!(surface.begin_push().expect("the Push begins"));
+        assert!(surface.step().expect("a tick").is_some(), "one tick in");
+        let world = surface.host().expect("hosted").world();
+        let tick = world.tick().raw();
+        let shells = world.shells();
+        assert_eq!(shells.len(), 2, "two rows held");
+        let flying: Vec<pharmakos_proto::gp::v1::Voxel> = (0..2)
+            .map(|row| {
+                let now = shells.position_at(row, tick).expect("a position");
+                let launch = *shells.launches().get(row).expect("a launch");
+                let aim = *shells.aims().get(row).expect("an aim");
+                assert!(now != launch && now != aim, "row {row} is mid-flight");
+                assert!(
+                    launch
+                        .iter()
+                        .zip(&now)
+                        .zip(&aim)
+                        .all(|((a, b), c)| { (a <= b && b <= c) || (c <= b && b <= a) }),
+                    "row {row} is between its launch and its aim"
+                );
+                crate::view::voxel_of(now)
+            })
+            .collect();
+        let aims: Vec<pharmakos_proto::gp::v1::Voxel> = (0..2)
+            .map(|row| crate::view::voxel_of(*shells.aims().get(row).expect("an aim")))
+            .collect();
+        let own = seen_of(&mut surface, 1, "shell");
+        assert_eq!(
+            own.len(),
+            2,
+            "the firing seat sees its two in flight: {own:?}"
+        );
+        let mut ids: Vec<String> = Vec::new();
+        for ((shell, at), aim) in own.iter().zip(&flying).zip(&aims) {
+            assert_eq!(
+                shell.get("owner"),
+                Some(&Json::String(String::from("seat.1")))
+            );
+            assert!(shell.get("hp").is_none() && shell.get("max_hp").is_none());
+            assert_eq!(shell.get("subtype"), Some(&Json::String(String::new())));
+            assert_eq!(&at_of(shell), at, "drawn at the sim's point");
+            assert_ne!(&at_of(shell), aim, "never at its aim point");
+            match shell.get("id") {
+                Some(Json::String(id)) if id.starts_with("p_") => ids.push(id.clone()),
+                other => panic!("a shell handle: {other:?}"),
+            }
+        }
+        ids.dedup();
+        assert_eq!(
+            ids.len(),
+            2,
+            "one firer, one landing tick, two shells, two ids"
+        );
+        let enemy = seen_of(&mut surface, 0, "shell");
+        assert_eq!(
+            enemy.len(),
+            1,
+            "seat 0 sees only the shell now in its sight: {enemy:?}"
+        );
+        assert_eq!(enemy.first().map(at_of), flying.first().copied());
+        let mut casual = resumed_with(FogPolicy::casual(), crossing_shells);
+        assert!(casual.begin_push().expect("the Push begins"));
+        assert!(casual.step().expect("a tick").is_some(), "one tick in");
+        assert_eq!(
+            seen_of(&mut casual, 0, "shell").len(),
+            2,
+            "nothing is hidden"
+        );
+    }
+
+    /// A wreck beside seat 0's core, out of seat 1's sight.
+    fn a_wreck(
+        snapshot: &mut pharmakos_sim::snapshot::Snapshot,
+        world: &pharmakos_sim::world::World,
+    ) {
+        let [x, y, z] = core_at(world, 0);
+        let row = u32::try_from(snapshot.wreck_id.len()).expect("a row");
+        snapshot.wreck_id.push(row);
+        snapshot.wreck_pos.extend([x.saturating_add(3 << 16), y, z]);
+        snapshot.wreck_salvage.push(10);
+        snapshot.wreck_free.push(0);
+        snapshot.wreck_left_at.push(0);
+    }
+
+    /// `ViewEntity.Kind.WRECK`: nobody's, no hit points, shown only where a
+    /// seat's live vision reaches it.
+    #[test]
+    fn a_wreck_is_nobodys_and_shown_where_it_is_seen() {
+        let mut surface = resumed_with(FogPolicy::fogged(), a_wreck);
+        let seen = seen_of(&mut surface, 0, "wreck");
+        assert_eq!(seen.len(), 1, "{seen:?}");
+        let wreck = seen.first().expect("the wreck");
+        assert_eq!(wreck.get("owner"), Some(&Json::String(String::new())));
+        assert!(wreck.get("hp").is_none() && wreck.get("max_hp").is_none());
         assert!(
-            ruin.get("hp").is_none() && ruin.get("max_hp").is_none(),
-            "{ruin:?}"
+            matches!(wreck.get("id"), Some(Json::String(id)) if id.starts_with("w_")),
+            "{wreck:?}"
+        );
+        assert!(
+            seen_of(&mut surface, 1, "wreck").is_empty(),
+            "out of seat 1's sight, it is not sent"
+        );
+    }
+
+    /// `ViewEntity.Kind.RUIN`: a ruined structure is listed as a ruin, not a
+    /// structure, nobody's, with no hit points and the subtype it was.
+    #[test]
+    fn a_ruin_is_listed_as_a_ruin_not_a_structure() {
+        let mut casual = resumed_with(FogPolicy::casual(), building_and_ruin);
+        let ruins = seen_of(&mut casual, 0, "ruin");
+        assert_eq!(ruins.len(), 1, "{ruins:?}");
+        let ruin = ruins.first().expect("the ruin");
+        assert_eq!(ruin.get("owner"), Some(&Json::String(String::new())));
+        assert_eq!(
+            ruin.get("subtype"),
+            Some(&Json::String(String::from("generator")))
+        );
+        assert!(ruin.get("hp").is_none());
+        assert!(
+            seen_of(&mut casual, 0, "structure")
+                .iter()
+                .all(|structure| structure.get("owner") != Some(&Json::String(String::new()))),
+            "no ruin is listed as a structure"
         );
     }
 

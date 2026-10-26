@@ -1156,6 +1156,14 @@ fn run_deploy(
         if !site_is_legal(world, seat, site) {
             return Outcome::Failed(StepFailure::IllegalSite);
         }
+        // A `set` already filed on the site's column this tick (a dig
+        // credited, a fill or a wall voxel paid for) would be refused by the
+        // footing the beacon begins: the placement waits a tick (the owner's
+        // footing ruling of 2026-10-20; no paid edit is refused).
+        let [x, y] = crate::targeting::column_of(site);
+        if world.set_queued_on(x, y) {
+            return Outcome::Running;
+        }
         // Every refusal is the seat's want of room as the step reports it: a
         // seat in the match always has a seat row, and the counter cannot be
         // spent at the beacon room.
@@ -1296,6 +1304,7 @@ fn commit_row(
                 // settings need is counted against the beacon's rows all gone
                 // (ruling 10: the whole row or none of it).
                 settings_room(world, beacon, settings, bindings, slot, &TargetKind::ALL)?;
+                walls_stand(world, beacon, settings)?;
             }
             world.set_beacon_mandate(row, *kind);
             if let Some(settings) = settings {
@@ -1329,8 +1338,21 @@ fn commit_row(
             if crate::mandate::inside_sphere(world, beacon, at)
                 && !world.anchor_is_claimed(seat, at)
             {
+                // A wall's box is checked against the ground before it is
+                // written: the verifier sees no terrain (decisions-log item 146
+                // (4)), so these halves of its checks are the sim's.
+                if let Some(wall) = target.wall {
+                    crate::site::check_wall(world, beacon, wall)?;
+                }
                 world
-                    .add_bound_target(beacon, target.blueprint, at, bound, target.build)
+                    .add_bound_target(
+                        beacon,
+                        target.blueprint,
+                        at,
+                        bound,
+                        target.build,
+                        target.wall,
+                    )
                     .map_err(|_| StepFailure::TargetsUnwritten)?;
             }
         }
@@ -1358,8 +1380,18 @@ fn commit_row(
             mine,
             roe,
             retreat_hp_pct,
+            build,
+            defend,
             ..
         } => {
+            // A protect list's beacons resolve once, when the row commits,
+            // and are held from then on (S2's `dfnd`), as a step pins its
+            // selector; one that resolves to nothing fails the step
+            // `no_target` before anything is written.
+            let guarded = match defend.as_ref().and_then(|edit| edit.protect.as_ref()) {
+                Some(list) => Some(resolve_protected(world, seat, list)?),
+                None => None,
+            };
             // A settings edit **replaces** the lists it names, because spec
             // section 5 makes a multi-field edit all-or-nothing and a list that
             // merged would have no way to remove an entry except the dedicated
@@ -1377,6 +1409,10 @@ fn commit_row(
             }
             let replaced = replaced_kinds(spec);
             settings_room(world, beacon, spec, bindings, slot, &replaced.iter())?;
+            // Every wall the list names is checked against the ground first, so
+            // a box that cannot stand writes nothing (decisions-log item 146
+            // (4)).
+            walls_stand(world, beacon, spec)?;
             if !targets.is_empty() {
                 // Replacing is not abandoning: an anchor that survives the
                 // edit keeps the structure it has already been paid for, or
@@ -1417,9 +1453,53 @@ fn commit_row(
             // The Common settings the row names (S2's `fire`; decision 4), and
             // nothing it is silent about.
             world.set_beacon_common(row, *roe, *retreat_hp_pct);
+            // The Build settings the row names (S2's `site`), and nothing it is
+            // silent about.
+            if build.writes() {
+                let held = world
+                    .beacons()
+                    .sites()
+                    .get(row)
+                    .map(|site| site.settings)
+                    .ok_or(StepFailure::BeaconGone)?;
+                world.set_build_settings(row, build.over(held));
+            }
+            // The Defend settings the row names (S2's `dfnd`), and nothing it
+            // is silent about.
+            if let Some(edit) = defend {
+                world.set_defend_settings(beacon, edit, guarded.as_ref());
+            }
         }
     }
     Ok(())
+}
+
+/// A protect list as the Defend table holds it: whether it names
+/// `my_commander`, and its beacons, each resolved for `seat` now.
+///
+/// # Errors
+///
+/// [`StepFailure::NoTarget`] when a beacon resolves to nothing.
+fn resolve_protected(
+    world: &World,
+    seat: SeatId,
+    list: &[crate::defend::Protect],
+) -> Result<(bool, Vec<BeaconId>), StepFailure> {
+    let mut escort = false;
+    let mut beacons: Vec<BeaconId> = Vec::with_capacity(list.len());
+    for entry in list {
+        match entry {
+            crate::defend::Protect::Commander => escort = true,
+            crate::defend::Protect::Beacon(spec) => {
+                let beacon = super::cond::resolve_beacon_for(world, seat, *spec)
+                    .ok_or(StepFailure::NoTarget)?;
+                if !beacons.contains(&beacon) {
+                    beacons.push(beacon);
+                }
+            }
+        }
+    }
+    Ok((escort, beacons))
 }
 
 /// The Build entries a settings row's target list writes, in list order, as
@@ -1460,6 +1540,7 @@ fn build_entries<'a>(
             feature,
             desc,
             build: target.build,
+            wall: target.wall,
         })
     }))
 }
@@ -1971,4 +2052,23 @@ fn pinned_point(voxel: [i32; 3]) -> Option<[Fx; 3]> {
 fn voxels_of(at: [Fx; 3]) -> [i32; 3] {
     let [x, y, z] = at;
     [x.floor_voxels(), y.floor_voxels(), z.floor_voxels()]
+}
+
+/// Whether every wall a [`Row::Settings`] row names can stand where it was
+/// written: its box reaches the ground, stands high enough over it and lies
+/// in the beacon's sphere ([`crate::site::check_wall`]; decisions-log item 146
+/// (4)). Asked before anything is written, so a row with a wall that cannot
+/// stand writes nothing.
+///
+/// # Errors
+///
+/// The first wall's refusal, as a [`StepFailure`].
+fn walls_stand(world: &World, beacon: BeaconId, spec: &Row) -> Result<(), StepFailure> {
+    let Row::Settings { targets, .. } = spec else {
+        return Ok(());
+    };
+    for wall in targets.iter().filter_map(|target| target.wall) {
+        crate::site::check_wall(world, beacon, wall)?;
+    }
+    Ok(())
 }

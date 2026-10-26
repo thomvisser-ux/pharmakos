@@ -1046,6 +1046,94 @@ fn the_rounds_option_writes_its_text_and_refuses_only_the_lines_framing() {
     }
 }
 
+/// **`--gamectl=` and `--root=` refuse a repeat as `--rounds` does** (S2's `view`;
+/// decisions-log item 146 (4)): before, each reader took the first match and ignored the
+/// rest. Both now read through one `prefixed_arg`, which answers `repeated` for a second
+/// match and judges nothing about the value; `find_gamectl` and `find_root` read through
+/// it; and `start()` refuses a repeat with its words before it reads `--rounds` and before
+/// it spawns anything.
+#[test]
+fn the_gamectl_and_root_readers_refuse_a_repeat_before_any_host_starts() {
+    let text = read("scripts/host_link.gd");
+    assert!(text.contains("const GAMECTL_ARG := \"--gamectl=\""));
+    assert!(text.contains("const ROOT_ARG := \"--root=\""));
+    let code = |name: &str| -> Vec<String> {
+        gd_function(&text, name)
+            .iter()
+            .map(|row| row.trim().to_owned())
+            .filter(|row| !row.is_empty() && !row.starts_with('#'))
+            .collect()
+    };
+    assert_eq!(
+        code("prefixed_arg"),
+        [
+            "static func prefixed_arg(args: PackedStringArray, prefix: String) -> Dictionary:",
+            "var found := {\"given\": false, \"text\": \"\", \"repeated\": false}",
+            "for arg in args:",
+            "if not arg.begins_with(prefix):",
+            "continue",
+            "if found[\"given\"]:",
+            "return {\"given\": true, \"text\": \"\", \"repeated\": true}",
+            "found = {\"given\": true, \"text\": arg.trim_prefix(prefix), \"repeated\": false}",
+            "return found",
+        ],
+        "a second match is `repeated`, and nothing about the value is judged"
+    );
+    for (finder, prefix) in [("find_gamectl", "GAMECTL_ARG"), ("find_root", "ROOT_ARG")] {
+        let lines = code(finder);
+        assert_eq!(
+            lines.get(1).map(String::as_str),
+            Some(
+                format!("var given := prefixed_arg(OS.get_cmdline_user_args(), {prefix})").as_str()
+            ),
+            "{finder} reads its option through prefixed_arg: {lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|row| row.contains("for arg in")),
+            "{finder} no longer walks the arguments itself: {lines:?}"
+        );
+    }
+    let repeated = code("repeated_option");
+    assert!(
+        repeated
+            .iter()
+            .any(|row| row == "for prefix in [GAMECTL_ARG, ROOT_ARG]:"),
+        "repeated_option() asks about both options: {repeated:?}"
+    );
+    let start = gd_function(&text, "start");
+    let at = |needle: &str| {
+        start
+            .iter()
+            .position(|row| row.trim() == needle)
+            .unwrap_or_else(|| panic!("start() has `{needle}`: {start:?}"))
+    };
+    let asked = at("var repeated := repeated_option()");
+    assert!(
+        asked < at("var rounds := rounds_refusal()")
+            && start.get(asked + 1).map(|row| row.trim()) == Some("if repeated != \"\":")
+            && start.get(asked + 2).map(|row| row.trim()) == Some("failed.emit(repeated)")
+            && start.get(asked + 3).map(|row| row.trim()) == Some("return false"),
+        "a repeated option starts no host and says why, before `--rounds` is read: {start:?}"
+    );
+    let check = read("scripts/watch_check.gd");
+    let rounds = gd_function(&check, "_rounds_cases");
+    assert!(
+        rounds.iter().any(|row| row.trim() == "_option_cases()"),
+        "the watch check runs the option table after the rounds table: {rounds:?}"
+    );
+    let table = gd_function(&check, "_option_cases");
+    for row in [
+        "[[\"--gamectl=x\", \"--gamectl=x\"], \"--gamectl=\", true, \"\", true],",
+        "[[\"--root=a\", \"--rounds=3\", \"--root=b\"], \"--root=\", true, \"\", true],",
+        "[[\"--gamectl=x\"], \"--gamectl=\", true, \"x\", false],",
+    ] {
+        assert!(
+            table.iter().any(|line| line.trim() == row),
+            "the option table has `{row}`: {table:?}"
+        );
+    }
+}
+
 /// **The `--rounds` reader is checked by its behaviour too** (S2's `rnds`): `watch_check.gd`
 /// runs a table of argument lists through `host_link.gd`'s `rounds_arg` before anything
 /// else and fails the check on any mismatch (ci.yml's `client extension` jobs).

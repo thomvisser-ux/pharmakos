@@ -2,13 +2,6 @@
   "depth": "FULL",
   "diagnostics": [
     {
-      "code": "E0012",
-      "severity": "ERROR",
-      "path": "/declarative/route/0/place_beacon/initial/mandate/defend",
-      "message": "Defend mandate settings have no effect until S2's Defend mandate lands; they are refused rather than ignored.",
-      "beginner": "A Defend beacon cannot be given settings in this build yet."
-    },
-    {
       "code": "E0414",
       "severity": "ERROR",
       "path": "/declarative/route/0/place_beacon/initial/mandate/defend/protect/0/beacon/beacon_id",
@@ -16,7 +9,7 @@
       "beginner": "A Defend beacon protects your own beacons, and an Attack beacon attacks an enemy's."
     }
   ],
-  "report_hash": "ih4oJTg97IE=",
+  "report_hash": "w6E1wTotlco=",
   "rules_hash": "gCjUE4Tm3i8=",
   "plan_fingerprint": "FrHQr/IENP8=",
   "verifier_version": "0.1.0-s2.2",

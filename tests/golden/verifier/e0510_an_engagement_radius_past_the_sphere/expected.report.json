@@ -14,16 +14,9 @@
           "applicability": "MAYBE_INCORRECT"
         }
       ]
-    },
-    {
-      "code": "E0012",
-      "severity": "ERROR",
-      "path": "/declarative/route/0/place_beacon/initial/mandate/defend",
-      "message": "Defend mandate settings have no effect until S2's Defend mandate lands; they are refused rather than ignored.",
-      "beginner": "A Defend beacon cannot be given settings in this build yet."
     }
   ],
-  "report_hash": "FQMYWxDy1So=",
+  "report_hash": "QWmfwrmECiY=",
   "rules_hash": "gCjUE4Tm3i8=",
   "plan_fingerprint": "Sky7sBNiY2Q=",
   "verifier_version": "0.1.0-s2.2",

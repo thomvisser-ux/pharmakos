@@ -103,15 +103,12 @@ use crate::routes::RouteAdapter;
 /// client receives is and because the "why" note is the teaching half
 /// (spec section 13).
 ///
-/// PLACEHOLDER: the rescue rule's `safest` term, a beacon with a live repair drone first — dfnd, at S2.
 /// **The rescue rides `safest`, with no new vocabulary** (S2's plan,
 /// decision 6, ruled by decisions-log item 144 (11)): while the commander is
 /// below full HP, `safest` ranks the seat's own beacons whose sphere holds a
 /// live repair drone ahead of those without, so this route's walk to safety
 /// and its shadowing of the safest beacon are the rescue, and this constant
-/// gains nothing for it. The term is the sim's, built by `dfnd`; until it
-/// lands, `safest` ranks as it did in S1 and the rescue is the flee rule
-/// alone. A seat no operator advises is still filed this text, which writes
+/// gains nothing for it. The term is the sim's, built by S2's `dfnd`. A seat no operator advises is still filed this text, which writes
 /// nothing to any beacon.
 pub const SAFE_PLAYBOOK: &str = concat!(
     "// The safe playbook: what is filed for you if the Lull ends with nothing\n",

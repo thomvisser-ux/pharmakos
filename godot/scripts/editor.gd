@@ -132,6 +132,11 @@ const GHOST_COLOURS := {
 }
 ## How far above the ground the route is drawn, in voxels. PLACEHOLDER: the lift — OWNER, at S6.
 const ROUTE_LIFT := 1.2
+## An Attack target's mark: its colour, and how far over a voxel target and over a named
+## beacon's marker it floats, in voxels. PLACEHOLDER: the attack marks — OWNER, at S6.
+const ATTACK_COLOUR := Color(1.0, 0.35, 0.25)
+const ATTACK_MARK_LIFT := 2.0
+const ATTACK_BEACON_LIFT := 11.0
 
 ## Menu item ids.
 const ITEM_GO := 1
@@ -176,6 +181,12 @@ var _selector := ""
 var _route_mesh: MeshInstance3D
 var _route_labels: Node3D
 var _ghost: MeshInstance3D
+var _attack_label: Label
+## The map's marks for the Attack targets the text names: a mark per voxel target, and a
+## mark over each named beacon the vista draws, placed every frame because the vista
+## redraws its markers with every view. id -> Label3D for the named beacons.
+var _attack_marks: Node3D
+var _attack_beacons := {}
 var _notes_loaded := false
 var _meter: Label
 var _meter_answers := -1
@@ -414,6 +425,7 @@ func refresh() -> void:
 func _process(_delta: float) -> void:
 	if bridge != null:
 		refresh()
+	_place_attack_marks()
 
 
 ## A press on the panel closes the map menus before any control takes it, so a menu is
@@ -625,6 +637,7 @@ func _draw_state(state: Dictionary) -> void:
 	_draw_rules(state.get("prose", PackedStringArray()), state.get("prose_current", false), state.get("has_text", false), unchecked_text(state, "prose"))
 	_draw_this_round(String(state.get("this_round", "")))
 	_draw_chips(state.get("chips", []), state.get("chips_current", false), state.get("has_text", false), unchecked_text(state, "chips"))
+	_draw_attack(state.get("attack_targets", []))
 	_draw_dormant(state.get("dormant", {}))
 
 
@@ -698,7 +711,13 @@ static func chip_line(chip: Dictionary) -> String:
 	if now.is_empty():
 		return Strings.text("chip_nothing", {"step": chip.get("step", 0), "failure": chip.get("failure", ""), "matched": chip.get("matched", 0)})
 	# The parts are joined, never added: a travel time is put into its frame as it came.
-	var parts: PackedStringArray = [Strings.text("chip_now", {"step": chip.get("step", 0), "feature": feature_text(now), "ms": now.get("travel_ms", 0)})]
+	# A pick no route reaches (the gateway's `reachable`) has a travel time that means
+	# nothing, so the line says it is out of reach instead of drawing one.
+	var parts: PackedStringArray = []
+	if chip.get("reachable", false):
+		parts.append(Strings.text("chip_now", {"step": chip.get("step", 0), "feature": feature_text(now), "ms": now.get("travel_ms", 0)}))
+	else:
+		parts.append(Strings.text("chip_now_unreachable", {"step": chip.get("step", 0), "feature": feature_text(now)}))
 	var next: Dictionary = chip.get("next", {})
 	if not next.is_empty():
 		parts.append(Strings.text("chip_next", {"feature": feature_text(next), "ms": next.get("travel_ms", 0)}))
@@ -845,6 +864,63 @@ func _draw_ghost(ghost: Dictionary) -> void:
 		_ghost_label.text = Strings.text("ghost_" + state)
 
 
+## The Attack beacons' targets the text on screen names (S2's plan, task `view`), read by
+## the bridge's lax walk of the player's own file: one line each in the panel, a mark on a
+## voxel target, and a mark over a named beacon whenever the vista draws one under that
+## id. A selector and "the enemy commander" are words only: where they point is the sim's
+## to read when the attack runs, never the editor's to guess. Drawing, not deciding: the
+## verdict on each target is the verifier's, on the rows.
+func _draw_attack(targets: Array) -> void:
+	for child in _attack_marks.get_children():
+		child.queue_free()
+	_attack_beacons = {}
+	var lines: PackedStringArray = []
+	for target in targets:
+		var aim := String(target.get("aim", "unknown"))
+		var step: int = target.get("step", 0)
+		if aim == "voxel":
+			var at: Vector3i = target["at"]
+			lines.append(Strings.text("attack_voxel", {"step": step, "x": at.x, "y": at.y, "z": at.z}))
+			var mark := _attack_mark(Strings.text("attack_mark", {"step": step}))
+			mark.position = _world(at) + Vector3(0.0, ATTACK_MARK_LIFT, 0.0)
+			_attack_marks.add_child(mark)
+		elif aim == "beacon":
+			var id := String(target.get("id", ""))
+			lines.append(Strings.text("attack_beacon", {"step": step, "id": id}))
+			var mark := _attack_mark(Strings.text("attack_mark", {"step": step}))
+			mark.visible = false
+			_attack_marks.add_child(mark)
+			_attack_beacons[id] = mark
+		else:
+			lines.append(Strings.text("attack_" + aim, {"step": step}))
+	_attack_label.text = "\n".join(lines) if not lines.is_empty() else Strings.text("attack_none")
+	_attack_label.accessibility_name = _attack_label.text
+	_place_attack_marks()
+
+
+## Puts each named beacon's mark over the vista's marker for that id, and hides it while
+## the vista draws none: the view is what says the beacon is in sight.
+func _place_attack_marks() -> void:
+	if vista == null:
+		return
+	for id in _attack_beacons:
+		var mark: Label3D = _attack_beacons[id]
+		var marker: Node3D = vista.marker_node(String(id))
+		mark.visible = marker != null
+		if marker != null:
+			mark.global_position = marker.global_position + Vector3(0.0, ATTACK_BEACON_LIFT, 0.0)
+
+
+func _attack_mark(text: String) -> Label3D:
+	var mark := Label3D.new()
+	mark.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	mark.no_depth_test = true
+	mark.pixel_size = 0.06
+	mark.modulate = ATTACK_COLOUR
+	mark.text = text
+	return mark
+
+
 ## A voxel in the sim's axes (x east, y north, z up) as a point in the world's (x, y up,
 ## z north), at the middle of the voxel and lifted clear of the ground.
 func _world(voxel: Vector3i) -> Vector3:
@@ -912,6 +988,9 @@ func _build_panel() -> void:
 	_heading(column, "route_heading")
 	_route_label = _label(column)
 
+	_heading(column, "attack_heading")
+	_attack_label = _label(column)
+
 	_heading(column, "chips_heading")
 	_chips = _label(column)
 
@@ -972,6 +1051,8 @@ func _build_map_nodes() -> void:
 	vista.add_child(_route_mesh)
 	_route_labels = Node3D.new()
 	vista.add_child(_route_labels)
+	_attack_marks = Node3D.new()
+	vista.add_child(_attack_marks)
 	_ghost = MeshInstance3D.new()
 	var box := BoxMesh.new()
 	box.size = Vector3(2.0, 9.0, 2.0)

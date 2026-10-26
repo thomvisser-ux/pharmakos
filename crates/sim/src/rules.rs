@@ -242,6 +242,12 @@ pub struct RulesTable {
     /// Combat's rows that are not a weapon's and the materials' rows, typed
     /// at load ([`crate::arms::CombatRows`]; S2's `fire`).
     combat: crate::arms::CombatRows,
+    /// Build's S2 rows: repair, terraform and the wall's height, typed at
+    /// load ([`crate::site::SiteRows`]; S2's `site`).
+    site: crate::site::SiteRows,
+    /// `defend.picket_radius_voxels`, typed at load (S2's `dfnd`): how far
+    /// beyond the sphere's edge a Defend beacon's pickets patrol.
+    picket_radius_voxels: i16,
 }
 
 /// One unit kind's row as the tick reads it: `units.<kind>.*`, or the
@@ -729,6 +735,19 @@ impl RulesTable {
         self.combat
     }
 
+    /// Build's S2 rows ([`crate::site::SiteRows`]).
+    #[must_use]
+    pub const fn site(&self) -> crate::site::SiteRows {
+        self.site
+    }
+
+    /// How far beyond its sphere's edge a Defend beacon's pickets patrol, in
+    /// whole voxels (`defend.picket_radius_voxels`; S2's `dfnd`).
+    #[must_use]
+    pub const fn picket_radius_voxels(&self) -> i16 {
+        self.picket_radius_voxels
+    }
+
     /// The bottom layers of every column generation writes as bedrock,
     /// `materials.bedrock_layers_voxels`: at least one.
     #[must_use]
@@ -856,6 +875,8 @@ impl RulesTable {
         let typed = TypedRows::read(message, commander)?;
         let kinds = KindRows::read(message)?;
         let combat = crate::arms::CombatRows::read(message)?;
+        let site = crate::site::SiteRows::read(message)?;
+        let picket_radius_voxels = picket_radius_of(message, sphere_radius_voxels)?;
 
         let segment_lengths_ms = segment_lengths_of(matched)?;
 
@@ -922,6 +943,8 @@ impl RulesTable {
             power: typed.power,
             kinds,
             combat,
+            site,
+            picket_radius_voxels,
         })
     }
 
@@ -1025,6 +1048,30 @@ fn sphere_radius_of(message: &gp::v1::RulesTable) -> Result<i16, RulesError> {
             i16::MAX
         ),
     })
+}
+
+/// `defend.picket_radius_voxels` as the Defend mandate reads it (S2's
+/// `dfnd`): present, and a voxel length whose sum with the sphere's radius is
+/// one too, so the picket's ring is a place on the map's coordinates.
+fn picket_radius_of(
+    message: &gp::v1::RulesTable,
+    sphere_radius_voxels: i16,
+) -> Result<i16, RulesError> {
+    let defend = message
+        .defend
+        .as_ref()
+        .ok_or(RulesError::MissingBlock("defend"))?;
+    i16::try_from(defend.picket_radius_voxels)
+        .ok()
+        .filter(|radius| radius.checked_add(sphere_radius_voxels).is_some())
+        .ok_or_else(|| RulesError::OutOfRange {
+            field: "defend.picket_radius_voxels".to_owned(),
+            value: format!(
+                "{}; the picket's ring, the sphere's radius and this, is a voxel length, at most {}",
+                defend.picket_radius_voxels,
+                i16::MAX
+            ),
+        })
 }
 
 /// The rows S1's `build` lane reads typed at load, so the tick reads each as

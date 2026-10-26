@@ -42,6 +42,7 @@
 //! determinism artefact itself.
 
 mod combat;
+pub mod site;
 // The support rule (S2's plan, `fall`): a child of this module so its `impl
 // World` block reaches the edit and damage queues, kept in its own file.
 #[path = "support.rs"]
@@ -226,6 +227,8 @@ pub(crate) struct BuildEntry {
     pub(crate) desc: u8,
     /// Its place in the build order, and its rotation.
     pub(crate) build: BuildOrder,
+    /// A wall's box, or `None` for a structure target.
+    pub(crate) wall: Option<crate::site::WallBox>,
 }
 
 /// One old Build row of a beacon, read before a settings edit clears the
@@ -236,6 +239,14 @@ struct Carried {
     anchor: [Fx; 3],
     feature: u32,
     built: StructureId,
+    /// A wall row's box of columns and top ([`crate::tables::NO_WALL`] for a
+    /// structure row), and whether the wall had been filled whole once: a
+    /// re-sealed wall with the same anchor and box keeps that flag, so a
+    /// re-seal is no way round `rebuild_destroyed`.
+    wall: (ColumnBox, i16, bool),
+    /// Whether the new list kept it: an entry it dropped recycles what
+    /// stands for it (S2-10).
+    kept: bool,
 }
 
 /// One seat's share of a world total: the total divided by the seat count,
@@ -369,6 +380,14 @@ pub struct World {
     /// block after every older table that writes nothing while the table is
     /// empty (E29).
     shells: ShellTable,
+    /// Every Defend beacon's settings, guard assignment and picket leg (S2's
+    /// `dfnd`): a block after the site block that writes nothing while the
+    /// table is empty (E29).
+    defend: crate::tables::DefendTable,
+    /// Every seat's explored coarse cells (S2's `surv`, laid out by `dfnd`):
+    /// a block after the Defend block that writes nothing while it is empty
+    /// (E29).
+    explored: crate::tables::ExploredTable,
 
     chunks: ChunkDigests,
 
@@ -444,9 +463,19 @@ pub struct World {
     rooms: QueueRooms,
     /// What [`DamageDrop`] counted. Diagnostic; never hashed.
     damage_drops: DamageDrops,
+    /// What S2's `site` dropped, by reason ([`crate::site::SiteDrops`]).
+    /// Diagnostic; never hashed.
+    site_drops: crate::site::SiteDrops,
+    /// Edits a footing refused, by kind ([`crate::footing`]). Diagnostic;
+    /// never hashed.
+    footing_refusals: crate::footing::FootingRefusals,
     /// The core's bore ([`crate::bore`]; S2's plan, E31): derived with the
     /// map and regenerated on restore, never hashed or carried.
     bore: Bore,
+    /// Each column's top solid voxel as generated ([`crate::terrain`]; S2's
+    /// `site`): derived with the map and regenerated on restore, never
+    /// hashed or carried. Terraform's refill stops there.
+    generated: crate::terrain::GeneratedSurface,
     /// How many wreck rows the table may hold: the unit and structure rooms
     /// together, so every live asset can leave one (decision 25). Derived and
     /// kept by a restore, as [`World::unit_limit`] is.
@@ -466,6 +495,10 @@ pub struct World {
     fire_order: Vec<combat::Firer>,
     /// Scratch for `RETURN_FIRE`'s attacker set, sized as above.
     attackers: Vec<(u8, u32)>,
+    /// Scratch for a `SAFEST` seam choice's known threats, each with its
+    /// weapon's reach (S2's `dfnd`), sized as above: an armed asset is one
+    /// that can fire.
+    threat_scratch: Vec<([Fx; 3], Sq)>,
     /// Scratch for a weapon's unit query, sized to the unit ceiling.
     fire_rows: Vec<Row>,
     /// Scratch for a splash's unit query, sized to the unit ceiling.
@@ -909,6 +942,8 @@ pub(crate) struct RestoredTables {
     pub(crate) sightings: SightingTable,
     pub(crate) credit: CreditTable,
     pub(crate) shells: ShellTable,
+    pub(crate) defend: crate::tables::DefendTable,
+    pub(crate) explored: crate::tables::ExploredTable,
     pub(crate) voxels: VoxelStore,
     pub(crate) chunks: ChunkDigests,
     /// The map's feature table, regenerated with the pristine map rather than
@@ -916,6 +951,8 @@ pub(crate) struct RestoredTables {
     pub(crate) features: FeatureTable,
     /// The core's bore, regenerated with the pristine map (E31).
     pub(crate) bore: Bore,
+    /// The generated surface, regenerated with the pristine map (S2's `site`).
+    pub(crate) generated: crate::terrain::GeneratedSurface,
     pub(crate) router: crate::pathing::router::RestoredRouter,
     pub(crate) match_state: MatchState,
     pub(crate) plan: PlanParts,
@@ -1119,6 +1156,8 @@ impl World {
                     .saturating_add(STRUCTURE_ROWS),
             ),
             shells: ShellTable::with_room(shell_room),
+            defend: crate::tables::DefendTable::with_room(beacon_limit),
+            explored: crate::tables::ExploredTable::default(),
             chunks,
             router,
             match_state: MatchState::new(&settings),
@@ -1146,13 +1185,17 @@ impl World {
             edits: Vec::with_capacity(QueueRooms::capacity(rooms.edits, "voxel edit")?),
             rooms,
             damage_drops: DamageDrops::default(),
+            site_drops: crate::site::SiteDrops::default(),
+            footing_refusals: crate::footing::FootingRefusals::default(),
             bore: generated.bore,
+            generated: generated.surface,
             wreck_limit,
             shell_landing,
             combat: CombatCounts::default(),
             damage_dealt: vec![0; seat_rows.saturating_mul(seat_rows)],
             fire_order: Vec::with_capacity(armed_rows),
             attackers: Vec::with_capacity(armed_rows),
+            threat_scratch: Vec::with_capacity(armed_rows),
             fire_rows: Vec::with_capacity(crate::math::index::row(unit_ceiling)),
             splash_rows: Vec::with_capacity(crate::math::index::row(unit_ceiling)),
             damage_index: Vec::with_capacity(damage_capacity),
@@ -1247,11 +1290,53 @@ impl World {
         &self.shells
     }
 
+    /// The `SAFEST` seam choice's threat scratch, empty between uses (S2's
+    /// `dfnd`): taken and given back so the choice allocates nothing.
+    pub(crate) fn take_threat_scratch(&mut self) -> Vec<([Fx; 3], Sq)> {
+        core::mem::take(&mut self.threat_scratch)
+    }
+
+    /// Give the threat scratch back, cleared.
+    pub(crate) fn put_threat_scratch(&mut self, mut scratch: Vec<([Fx; 3], Sq)>) {
+        scratch.clear();
+        self.threat_scratch = scratch;
+    }
+
+    /// Every Defend beacon's settings and state (S2's `dfnd`).
+    #[must_use]
+    pub const fn defend(&self) -> &crate::tables::DefendTable {
+        &self.defend
+    }
+
+    /// The Defend table, to write: the Defend mandate's own phase and a
+    /// committed settings row.
+    pub(crate) const fn defend_mut(&mut self) -> &mut crate::tables::DefendTable {
+        &mut self.defend
+    }
+
+    /// Every seat's explored coarse cells (S2's `surv`).
+    #[must_use]
+    pub const fn explored(&self) -> &crate::tables::ExploredTable {
+        &self.explored
+    }
+
+    /// The explored table, to write: S2's `surv` marks cells through it.
+    pub(crate) const fn explored_mut(&mut self) -> &mut crate::tables::ExploredTable {
+        &mut self.explored
+    }
+
     /// The core's bore ([`crate::bore`]; S2's plan, E31). Derived, never
     /// hashed.
     #[must_use]
     pub const fn bore(&self) -> &Bore {
         &self.bore
+    }
+
+    /// Each column's top solid voxel as generated ([`crate::terrain`]; S2's
+    /// `site`). Derived, never hashed.
+    #[must_use]
+    pub const fn generated_surface(&self) -> &crate::terrain::GeneratedSurface {
+        &self.generated
     }
 
     /// The chunk store's digests.
@@ -1550,6 +1635,11 @@ impl World {
             Some(slot) => *slot = hp.is_alive(),
             None => self.beacon_alive.push(hp.is_alive()),
         }
+        // A beacon placed on the Defend writ holds its Defend row from its
+        // first tick (S2's `dfnd`).
+        if mandate == MandateKind::Defend {
+            self.defend.open(placed.id);
+        }
         Ok(placed.id)
     }
 
@@ -1581,8 +1671,20 @@ impl World {
         if let Some(slot) = self.beacons.commons_mut().get_mut(row) {
             *slot = crate::tables::Common::DEFAULT;
         }
+        // So are the Build settings (S2's `site`), and the work paid for in
+        // advance and not yet done goes back to the treasury: it was paid for
+        // the old writ's drones (`World::return_site_funds`).
+        self.set_build_settings(row, crate::site::BuildSettings::DEFAULT);
+        self.return_site_funds(row);
         if let Some(id) = id {
             self.targets.clear_beacon(BeaconId::new(id));
+            // Defend's settings and state are the old writ's too (S2's
+            // `dfnd`): a beacon leaving Defend loses its row, and one taking
+            // it starts from a fresh one.
+            self.defend.close(BeaconId::new(id));
+            if mandate == MandateKind::Defend {
+                self.defend.open(BeaconId::new(id));
+            }
         }
     }
 
@@ -1612,6 +1714,36 @@ impl World {
     pub(crate) fn set_beacon_priority(&mut self, row: usize, priority: u8) {
         if let Some(slot) = self.beacons.priorities_mut().get_mut(row) {
             *slot = priority;
+        }
+    }
+
+    /// Write what a committed settings row says about a Defend beacon's
+    /// settings (S2's `dfnd`): each field the row names, and nothing it is
+    /// silent about; `protect`, when the row names a protect list, is whether
+    /// it holds `my_commander` and its beacons, resolved at the commit. A
+    /// beacon on another writ has no Defend row, and the edit writes nothing
+    /// there, as a Survey count written to a Build beacon is read by nothing.
+    pub(crate) fn set_defend_settings(
+        &mut self,
+        beacon: BeaconId,
+        edit: &crate::defend::DefendEdit,
+        protect: Option<&(bool, Vec<BeaconId>)>,
+    ) {
+        let Some(row) = self.defend.row_mut(beacon) else {
+            return;
+        };
+        if let Some(pct) = edit.engagement_pct {
+            row.settings.engagement_pct = pct;
+        }
+        if let Some(pursue) = edit.pursue {
+            row.settings.pursue = pursue;
+        }
+        if let Some(pickets) = edit.pickets {
+            row.settings.pickets = pickets;
+        }
+        if let Some((escort, beacons)) = protect {
+            row.settings.escort = *escort;
+            self.defend.set_protected(beacon, beacons);
         }
     }
 
@@ -2132,6 +2264,14 @@ impl World {
         if self.ground().structure_on(x, y) {
             return false;
         }
+        // A `set` already filed on the column this tick (a dig credited, a
+        // fill or a wall voxel paid for) would be refused by the footing this
+        // purchase begins: the purchase waits for the next decision tick, and
+        // nothing is charged for it now (the owner's footing ruling of
+        // 2026-10-20; no paid edit is refused).
+        if self.set_queued_on(x, y) {
+            return false;
+        }
         if self.structures_held_by(seat) >= room_per_seat(STRUCTURE_TABLE_ROOM, self.seats.len()) {
             return false;
         }
@@ -2383,6 +2523,60 @@ impl World {
         Some(id)
     }
 
+    /// Write a Defend beacon's settings directly, and its protect list's
+    /// beacons (S2's `dfnd`). `false`, writing nothing, for a beacon with no
+    /// Defend row.
+    ///
+    /// Fixture API; see the block comment above. The settings normally arrive
+    /// as a committed settings row ([`World::set_defend_settings`]).
+    pub fn set_defend(
+        &mut self,
+        beacon: BeaconId,
+        settings: crate::tables::DefendSettings,
+        protected: &[BeaconId],
+    ) -> bool {
+        let Some(row) = self.defend.row_mut(beacon) else {
+            return false;
+        };
+        row.settings = settings;
+        self.defend.set_protected(beacon, protected);
+        true
+    }
+
+    /// Switch the beacon in `row` to `mandate` directly, as a committed
+    /// `set_mandate` row does ([`World::set_beacon_mandate`]).
+    ///
+    /// Fixture API; see the block comment above.
+    pub fn switch_mandate_directly(&mut self, row: usize, mandate: MandateKind) {
+        self.set_beacon_mandate(row, mandate);
+    }
+
+    /// Stand a living unit at `at` directly, its destination with it.
+    ///
+    /// Fixture API; see the block comment above. `false` for a unit the table
+    /// does not hold.
+    pub fn place_unit_directly(&mut self, unit: UnitId, at: [Fx; 3]) -> bool {
+        let Ok(row) = self.units.row_of(unit) else {
+            return false;
+        };
+        if let Some(slot) = self.units.positions_mut().get_mut(row.index()) {
+            *slot = at;
+        }
+        if let Some(slot) = self.units.destinations_mut().get_mut(row.index()) {
+            *slot = at;
+        }
+        self.router.clear(row.raw());
+        true
+    }
+
+    /// Mark a cell explored for a seat directly (S2's `surv` writes the table
+    /// in play): `true` when the mark is new.
+    ///
+    /// Fixture API; see the block comment above.
+    pub fn mark_explored_directly(&mut self, seat: SeatId, cell: u32) -> bool {
+        self.explored_mut().mark(seat, cell)
+    }
+
     /// Write a beacon's Common settings directly: its rules of engagement and
     /// its retreat threshold.
     ///
@@ -2536,7 +2730,60 @@ impl World {
         blueprint: u8,
         at: [Fx; 3],
     ) -> Result<(), TargetsFull> {
-        self.targets.add(beacon, blueprint, at)
+        self.targets.add(beacon, blueprint, at)?;
+        let _ = self.adopt_paused(beacon, at, blueprint);
+        Ok(())
+    }
+
+    /// Give `beacon` Build settings directly (S2's `site`).
+    ///
+    /// Fixture API; see the block comment above.
+    pub fn set_build_settings_directly(
+        &mut self,
+        beacon: BeaconId,
+        settings: crate::site::BuildSettings,
+    ) {
+        if let Ok(row) = self.beacons.row_of(beacon) {
+            self.set_build_settings(row.index(), settings);
+        }
+    }
+
+    /// Give `beacon` paid site work directly: its repair and build funds, as
+    /// the Quartermaster's top-ups would leave them (S2's `site`). The `$` is
+    /// not taken from the treasury.
+    ///
+    /// Fixture API; see the block comment above.
+    pub fn set_site_funds_directly(&mut self, beacon: BeaconId, repair: Money, build: Money) {
+        if let Ok(row) = self.beacons.row_of(beacon)
+            && let Some(site) = self.beacons.sites_mut().get_mut(row.index())
+        {
+            site.repair_fund = repair;
+            site.build_fund = build;
+        }
+    }
+
+    /// Add a wall target to `beacon` directly, anchored at `at` with `wall`'s
+    /// box, unchecked against the ground (S2's `site`).
+    ///
+    /// Fixture API; see the block comment above.
+    ///
+    /// # Errors
+    ///
+    /// [`TargetsFull`] when the table is full.
+    pub fn add_wall_target(
+        &mut self,
+        beacon: BeaconId,
+        at: [Fx; 3],
+        wall: crate::site::WallBox,
+    ) -> Result<(), TargetsFull> {
+        self.add_bound_target(
+            beacon,
+            StructureKind::Wall.id(),
+            at,
+            (NO_FEATURE, crate::targeting::DESCRIPTION_VOXEL),
+            BuildOrder::NONE,
+            Some(wall),
+        )
     }
 
     /// Add one area to a beacon -- a protected area or a probe area -- with
@@ -2605,6 +2852,7 @@ impl World {
         at: [Fx; 3],
         bound: (u32, u8),
         build: BuildOrder,
+        wall: Option<crate::site::WallBox>,
     ) -> Result<(), TargetsFull> {
         self.targets.add_bound(
             beacon,
@@ -2614,7 +2862,13 @@ impl World {
             ColumnBox::default(),
             bound,
             build,
-        )
+        )?;
+        if let Some(wall) = wall {
+            let _ = self.make_wall_at(beacon, at, wall);
+        } else {
+            let _ = self.adopt_paused(beacon, at, blueprint);
+        }
+        Ok(())
     }
 
     /// Remove the Build target of `beacon` bound to `feature`: a target made
@@ -2628,7 +2882,9 @@ impl World {
                 && self.targets.kinds().get(row).copied() == Some(TargetKind::Build.id())
                 && self.targets.features().get(row).copied() == Some(feature)
             {
+                let built = self.built_of(row);
                 self.targets.remove(row);
+                self.recycle_dropped(beacon, built);
                 return true;
             }
             row = row.saturating_add(1);
@@ -2717,16 +2973,16 @@ impl World {
     /// second building in the same voxel while the first stayed at one hit
     /// point for ever with no target to finish it.
     ///
-    /// PLACEHOLDER: a dropped anchor strands what was paid for there — owner, at S2, with destruction and ruins.
-    /// An anchor that appears in the old list and **not** in the
-    /// new one — a `remove_build_target`, or a replacement that drops it —
-    /// strands whatever was already paid for there: the structure stays in the
-    /// world, unfinished, and no drone returns to it. That is a reading, not a
-    /// rule: "paid means yours" says the `$` is spent and the building is the
-    /// seat's, and the alternatives are to ruin it (S2's ruins, which do not
-    /// exist yet) or to refund it at its condition (which would make a
-    /// remove-and-re-add a way to move a half-built structure across the map
-    /// for free). Owner, at S2, with destruction and ruins.
+    /// An anchor that appears in the old list and **not** in the new one -- a
+    /// replacement that drops it -- **recycles** what stands for it (register
+    /// S2-10, the plan's decision 26, ruled by decisions-log item 144 (11)):
+    /// the structure is refunded `economy.recycle_refund_percent` of its
+    /// remaining value, as recycling does (spec section 7), and leaves the
+    /// world ([`World::recycle_structure`]). An edit can therefore lose money,
+    /// the ruling's accepted downside; a remove-and-re-add moves nothing for
+    /// free, because the refund is half the remaining value. A wall's voxels
+    /// have no structure and no remaining value, so a dropped wall target
+    /// leaves the voxels it filled standing.
     /// The list arrives as a cloneable iterator rather than a slice because
     /// the caller's anchors are whole voxels and this walks them twice: a
     /// `collect` into a `Vec` here would be an allocation inside a tick, which
@@ -2762,11 +3018,19 @@ impl World {
                     self.targets.features().get(row).copied(),
                     self.targets.built().get(row).copied(),
                 )
+                && let (Some(area), Some(top), Some(done)) = (
+                    self.targets.areas().get(row).copied(),
+                    self.targets.wall_tops().get(row).copied(),
+                    self.targets.walls_done().get(row).copied(),
+                )
             {
+                let wall = (area, top, done);
                 self.carry.push(Carried {
                     anchor,
                     feature,
                     built,
+                    wall,
+                    kept: false,
                 });
             }
         }
@@ -2787,19 +3051,56 @@ impl World {
                 (entry.feature, entry.desc),
                 entry.build,
             )?;
-            let built = self
-                .carry
-                .iter()
-                .find(|old| {
-                    if entry.feature == NO_FEATURE {
-                        old.anchor == anchor
-                    } else {
-                        old.feature == entry.feature
+            if let Some(wall) = entry.wall
+                && let Some(slot) = self.make_wall_at(beacon, anchor, wall)
+            {
+                // The same wall sealed again, anchor and box alike, keeps its
+                // filled-whole flag; any change to the box is a new wall
+                // target, whose flag starts clear.
+                let same = self.carry.iter_mut().find(|old| {
+                    old.anchor == anchor && old.wall.0 == wall.columns && old.wall.1 == wall.top
+                });
+                if let Some(old) = same {
+                    old.kept = true;
+                    if old.wall.2 {
+                        self.targets.mark_wall_done(slot);
                     }
-                })
-                .map_or(StructureId::NONE, |old| old.built);
+                }
+            }
+            let carried = self.carry.iter_mut().find(|old| {
+                if entry.feature == NO_FEATURE {
+                    old.anchor == anchor
+                } else {
+                    old.feature == entry.feature
+                }
+            });
+            let built = carried.map_or(StructureId::NONE, |old| {
+                old.kept = true;
+                old.built
+            });
             if built.is_some() {
                 self.set_built_at(beacon, anchor, built);
+            } else if entry.wall.is_none()
+                && let Some(adopted) = self.adopt_paused(beacon, anchor, entry.blueprint)
+            {
+                // A structure this entry adopted is kept, whichever old entry
+                // it stood for: an old fixed-voxel row the new list wrote by
+                // its feature instead carries nothing by anchor or feature,
+                // and would otherwise recycle the structure just linked.
+                for old in self.carry.iter_mut().filter(|old| old.built == adopted) {
+                    old.kept = true;
+                }
+            }
+        }
+        // S2-10 (decision 26): an entry the new list dropped recycles what
+        // stands for it, refunding its remaining value's recycle percent, rather
+        // than leaving it stranded. Walked by index so the scratch buffer is
+        // not borrowed while the world is written.
+        let mut at: usize = 0;
+        while let Some(old) = self.carry.get(at).copied() {
+            at = at.saturating_add(1);
+            if !old.kept && old.built.is_some() {
+                self.recycle_structure(seat, old.built);
             }
         }
         self.carry.clear();
@@ -2906,6 +3207,43 @@ impl World {
         })
     }
 
+    /// Write the Build target of `beacon` at `at`, just added, as a wall with
+    /// `wall`'s box (S2's `site`).
+    fn make_wall_at(
+        &mut self,
+        beacon: BeaconId,
+        at: [Fx; 3],
+        wall: crate::site::WallBox,
+    ) -> Option<usize> {
+        let count = self.targets.row_count();
+        let slot = (0..count).rev().find(|row| {
+            self.targets.beacons().get(*row).copied() == Some(beacon)
+                && self.targets.kinds().get(*row).copied() == Some(TargetKind::Build.id())
+                && self.targets.anchors().get(*row).copied() == Some(at)
+        });
+        let slot = slot?;
+        self.targets
+            .make_wall(slot, wall.columns, wall.top)
+            .then_some(slot)
+    }
+
+    /// Recycle what stands for a Build target `beacon` just dropped (S2-10,
+    /// decision 26), when anything does.
+    fn recycle_dropped(&mut self, beacon: BeaconId, built: StructureId) {
+        if built.is_some() {
+            let seat = self.seat_of_beacon(beacon);
+            self.recycle_structure(seat, built);
+        }
+    }
+
+    /// The structure the Build target in `row` stands for, before the row is
+    /// removed, so a removal can recycle it (S2-10).
+    fn built_of(&self, row: usize) -> StructureId {
+        let built = self.targets.built().get(row).copied();
+        // E7: rule: a row the table does not hold stands for nothing
+        built.unwrap_or(StructureId::NONE)
+    }
+
     /// Write the `built` link of `beacon`'s Build target at `at`.
     fn set_built_at(&mut self, beacon: BeaconId, at: [Fx; 3], built: StructureId) {
         let count = crate::math::index::row(self.targets.len());
@@ -2954,7 +3292,9 @@ impl World {
                 && self.targets.kinds().get(row).copied() == Some(TargetKind::Build.id())
                 && self.targets.anchors().get(row).copied() == Some(at)
             {
+                let built = self.built_of(row);
                 self.targets.remove(row);
+                self.recycle_dropped(beacon, built);
                 return true;
             }
             row = row.saturating_add(1);
@@ -2996,6 +3336,9 @@ impl World {
         );
         let percent = self.rules.recycle_refund_percent();
         let refund = crate::economy::percent_of(remaining, percent);
+        // Work paid for in advance and not yet done is the seat's `$` still,
+        // and goes back whole, apart from the recycle's refund (S2's `site`).
+        self.return_site_funds(row);
         if let Some(slot) = self.beacons.hit_points_mut().get_mut(row) {
             *slot = Hp::ZERO;
         }
@@ -3042,6 +3385,19 @@ impl World {
                     self.beacon_max_hp(BeaconId::new(*id)).raw(),
                 );
                 total = Money::new(total.raw().saturating_add(value.raw()));
+            }
+        }
+        // Work a beacon's drones have been paid for and not yet done (S2's
+        // `site`): paid means yours, as a structure going up is.
+        let paid = self
+            .beacons
+            .seats()
+            .iter()
+            .zip(self.beacons.hit_points())
+            .zip(self.beacons.sites());
+        for ((owner, hp), site) in paid {
+            if *owner == seat.raw() && hp.is_alive() {
+                total = Money::new(total.raw().saturating_add(site.paid().raw()));
             }
         }
         let structures = self
@@ -3518,6 +3874,8 @@ impl World {
         if self.match_state.phase() != MatchPhase::Push {
             return;
         }
+        // S2's `site`: a unit a fill closed over stands on the new ground.
+        crate::site::reseat_buried(self);
         crate::programs::run_all(self);
     }
 
@@ -3639,6 +3997,7 @@ impl World {
             return;
         }
         self.reread_lost_targets();
+        self.mark_walls_done();
         let mut requests = core::mem::take(&mut self.requests);
         requests.clear();
         self.gather_requests(&mut requests);
@@ -3749,6 +4108,8 @@ impl World {
         match request.buys {
             Purchase::Unit(kind) => self.fabricate(request.seat, request.beacon, kind).is_some(),
             Purchase::Structure(target) => self.queue_target(request.seat, request.beacon, target),
+            Purchase::RepairWork => self.pay_site_fund(request.beacon, true, request.cost),
+            Purchase::BuildWork => self.pay_site_fund(request.beacon, false, request.cost),
         }
     }
 
@@ -3962,7 +4323,16 @@ impl World {
                 // A set that changes nothing is an edit that marks nothing
                 // (`VoxelStore::set`), and an edit off the map was refused
                 // where it was filed, so neither answer is a drop.
+                // A footing ignores every edit (the owner's ruling of 2026-10-20;
+                // [`crate::footing`]): a set that names one writes nothing and
+                // is counted.
                 VoxelEdit::Set { at, material, by } => {
+                    let footings =
+                        crate::footing::Footings::of(&self.bore, &self.structures, &self.beacons);
+                    if footings.contains(at) {
+                        self.footing_refusals.sets = self.footing_refusals.sets.saturating_add(1);
+                        continue;
+                    }
                     let was = self.voxels.get(at).is_some_and(Material::is_solid);
                     if self.voxels.set(at, material) {
                         if was && material.is_air() {
@@ -3974,14 +4344,16 @@ impl World {
                 }
                 VoxelEdit::Crater { centre, radius, by } => {
                     let levels = self.rules.combat().blast_levels;
-                    self.voxels.blast(
-                        centre,
-                        radius,
-                        levels,
-                        &self.bore,
-                        &mut touched,
-                        &mut |at| support.note_removed(at, by),
-                    );
+                    let footings =
+                        crate::footing::Footings::of(&self.bore, &self.structures, &self.beacons);
+                    self.voxels
+                        .blast(centre, radius, levels, &footings, &mut touched, &mut |at| {
+                            support.note_removed(at, by);
+                        });
+                    self.footing_refusals.blast_voxels = self
+                        .footing_refusals
+                        .blast_voxels
+                        .saturating_add(footings.hits());
                 }
             }
         }
@@ -4291,6 +4663,8 @@ impl World {
             *slot = crate::tables::Common::DEFAULT;
         }
         self.targets.clear_beacon(beacon);
+        self.defend.close(beacon);
+        self.defend.forget(beacon);
     }
 
     /// Re-home every living unit of `seat` bound to `gone` on to the nearest
@@ -5233,6 +5607,50 @@ impl World {
         self.match_state.encode(enc);
         self.interpreter.encode(enc);
         self.encode_shells(enc);
+        self.encode_site(enc);
+        self.encode_defend(enc);
+        self.encode_explored(enc);
+    }
+
+    /// The Defend table (S2's `dfnd`), as a block after the site block that
+    /// **writes nothing while the table holds no row** and otherwise writes
+    /// its tag, its rows in ascending beacon id and its protect list (E29), so
+    /// a chain with no Defend beacon does not move for the table.
+    fn encode_defend(&self, enc: &mut Enc) {
+        if self.defend.is_empty() {
+            return;
+        }
+        enc.u8(crate::tables::DefendTable::HASH_TAG);
+        enc.len(table_len(self.defend.rows().len()));
+        for row in self.defend.rows() {
+            enc.u32(row.beacon.raw());
+            enc.u8(row.settings.engagement_pct);
+            enc.u8(row.settings.pursue.id());
+            enc.u8(row.settings.pickets);
+            enc.bool(row.settings.escort);
+            enc.u32(row.quarry);
+            enc.u8(row.leg);
+        }
+        enc.len(table_len(self.defend.protected().len()));
+        for (by, of) in self.defend.protected() {
+            enc.u32(by.raw());
+            enc.u32(of.raw());
+        }
+    }
+
+    /// The explored table (S2's `surv`, laid out by `dfnd`), as a block after
+    /// the Defend block that **writes nothing while the table holds no row**
+    /// and otherwise writes its tag, its count and its rows ascending (E29).
+    fn encode_explored(&self, enc: &mut Enc) {
+        if self.explored.is_empty() {
+            return;
+        }
+        enc.u8(crate::tables::ExploredTable::HASH_TAG);
+        enc.len(table_len(self.explored.rows().len()));
+        for (seat, cell) in self.explored.rows() {
+            enc.u8(*seat);
+            enc.u32(*cell);
+        }
     }
 
     /// The shell table (S2's plan, E13), as a block after every older table
@@ -5259,6 +5677,55 @@ impl World {
             enc.u8(*seat);
             enc.u32(*firer);
             enc.u8(*weapon);
+        }
+        // S2's `site` (snapshot version 12): each shell's launch point and
+        // fire tick, as blocks after the rows (the count above fixes their
+        // length).
+        for launch in self.shells.launches() {
+            encode_point(enc, launch);
+        }
+        for fired in self.shells.fired_at() {
+            enc.u32(*fired);
+        }
+    }
+
+    /// The site block (S2's `site`): every beacon's Build settings and paid
+    /// work, then every target row's wall top, as one block after the shell
+    /// block. Like the shell block it **writes nothing while every row holds
+    /// what a placed beacon and a structure target hold** -- default settings,
+    /// nothing paid and no wall -- and otherwise writes its tag and every row,
+    /// so a chain whose playbooks never write a Build setting, never build a
+    /// wall and never pay for drone work does not move for the block (AGENTS.md
+    /// section 4.8; decisions-log item 136's block rule).
+    fn encode_site(&self, enc: &mut Enc) {
+        let quiet = self
+            .beacons
+            .sites()
+            .iter()
+            .all(crate::site::BeaconSite::is_default)
+            && self
+                .targets
+                .wall_tops()
+                .iter()
+                .all(|top| *top == crate::tables::NO_WALL);
+        if quiet {
+            return;
+        }
+        enc.u8(crate::site::SITE_HASH_TAG);
+        enc.len(self.beacons.len());
+        for site in self.beacons.sites() {
+            enc.u8(site.settings.repair_threshold_pct);
+            enc.bool(site.settings.rebuild_destroyed);
+            enc.u8(site.settings.terraform.id());
+            enc.i64(site.repair_fund.raw());
+            enc.i64(site.build_fund.raw());
+        }
+        enc.len(self.targets.len());
+        for top in self.targets.wall_tops() {
+            enc.i32(i32::from(*top));
+        }
+        for done in self.targets.walls_done() {
+            enc.bool(*done);
         }
     }
 
@@ -5602,7 +6069,10 @@ impl World {
         self.sightings = restored.sightings;
         self.credit = restored.credit;
         self.shells = restored.shells;
+        self.defend = restored.defend;
+        self.explored = restored.explored;
         self.bore = restored.bore;
+        self.generated = restored.generated;
         self.voxels = restored.voxels;
         self.chunks = restored.chunks;
         self.features = restored.features;
@@ -5740,6 +6210,14 @@ fn held_by_seat(column: &[u8], seats: u32) -> Vec<u32> {
         .take(crate::math::index::row(seats))
         .map(|seat| count_seat(column, SeatId::new(seat)))
         .collect()
+}
+
+/// A Defend or explored table's length as the hash's `u32` count. Both are
+/// bounded far below it: a Defend row per beacon, a protect entry per list
+/// field, and an explored row per seat and coarse cell.
+fn table_len(len: usize) -> u32 {
+    // E7: rule: no table this world holds reaches `u32::MAX` rows
+    u32::try_from(len).unwrap_or(u32::MAX)
 }
 
 /// The broadphase pad (S2's plan, E11): the most any unit can move in one

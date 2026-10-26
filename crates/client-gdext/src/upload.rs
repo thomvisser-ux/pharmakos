@@ -365,8 +365,8 @@ fn surface_bytes(surface: &Surface) -> u64 {
     // bridge does not compute a second one. `MeshBuffers` is the mesher's type, so the
     // arithmetic is re-derived here from the same per-vertex and per-index widths that
     // `gpu_surface_bytes` documents, and the test below pins the two together.
-    let vertices = u64::try_from(surface.vertex_count()).unwrap_or(u64::MAX);
-    let indices = u64::try_from(surface.indices().len()).unwrap_or(u64::MAX);
+    let vertices = wide(surface.vertex_count());
+    let indices = wide(surface.indices().len());
     vertices
         .saturating_mul(16)
         .saturating_add(indices.saturating_mul(2))
@@ -374,11 +374,19 @@ fn surface_bytes(surface: &Surface) -> u64 {
 
 /// The bytes an in-place patch writes: the two regions, and no indices.
 fn patch_bytes(vertices: usize) -> u64 {
-    let stride = u64::try_from(VERTEX_STRIDE.saturating_add(ATTRIBUTE_STRIDE)).unwrap_or(u64::MAX);
-    u64::try_from(vertices)
-        .unwrap_or(u64::MAX)
-        .saturating_mul(stride)
+    let stride = wide(VERTEX_STRIDE.saturating_add(ATTRIBUTE_STRIDE));
+    wide(vertices).saturating_mul(stride)
 }
+
+/// A count of vertices, indices or bytes as a `u64`, for the byte accounting.
+///
+/// Lossless: a `u64` holds every `usize` on every target the client builds for, which the
+/// assertion below proves at compile time, so the widening cannot fail.
+const fn wide(count: usize) -> u64 {
+    count as u64
+}
+
+const _: () = assert!(usize::BITS <= u64::BITS);
 
 /// What the engine holds for one chunk once an [`UploadOp`] has been executed.
 ///

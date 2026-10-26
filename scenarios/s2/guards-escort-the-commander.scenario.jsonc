@@ -1,0 +1,53 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// S2's `dfnd` (S2's plan, task `dfnd`): the Defend mandate through the
+// playbook door, on the golden seed, in one minute.
+//
+//   seat 0  seals scenarios/s2/guards-escort-the-commander.playbook.jsonc:
+//           it deploys a Defend beacon eight voxels west of its core whose
+//           protect list holds `my_commander` and which fields one picket,
+//           and stands in its sphere. The beacon's fabricator fields the
+//           picket scout, which walks the ring just outside the sphere;
+//   seat 1  seals nothing, so it files the safe playbook.
+//
+// Why no guard fights here. A Defend beacon fields raiders only while an
+// armed threat is seen in its sphere (decision 13), and on the golden seed no
+// enemy comes within a minute. So the bodyguard -- the escort while the
+// commander is inside the sphere, and not outside it; threat-weighted
+// targeting; pursue; the fall-back to a repair drone; the picket's sight past
+// the sphere -- is crates/sim/tests/defend.rs, played headless with the
+// threats placed by the fixture. This scenario pins the Defend table's
+// hashing through a deploy, the picket's fabrication and its patrol.
+{
+  "format": "pharmakos.scenario.v1",
+  "name": "guards-escort-the-commander",
+  "summary": "Seat 0 deploys a Defend beacon that guards its commander and pickets its sphere.",
+
+  "map": {
+    "seed": "0x00000000ca5caded",
+    "generator": "skeleton"
+  },
+
+  "rules": "rules/rules.v1.json",
+  "round_limit": 1,
+
+  "seats": [
+    { "seat": 0, "kind": "playbook", "playbook": "scenarios/s2/guards-escort-the-commander.playbook.jsonc" },
+    { "seat": 1, "kind": "safe" }
+  ],
+
+  "segments": [
+    { "index": 0, "length_ms": 60000, "note": "The deploy, the picket and its patrol." }
+  ],
+
+  "assertions": [
+    { "assert": "event_fired", "event": "beacon_placed", "seat": 0, "by_tick": 600,
+      "note": "The Defend beacon is placed with its initial settings." },
+    { "assert": "event_fired", "event": "unit_fabricated", "seat": 0, "by_tick": 1100,
+      "note": "Its fabricator fields the picket." },
+    { "assert": "hash_chain_equals",
+      "golden": "tests/golden/scenarios/guards-escort-the-commander/expected.hashes.txt",
+      "note": "Byte-identical on Windows, Linux and macOS; pins the Defend table and the picket's walk. Re-blessed with `cargo xtask golden --bless`, and never to turn a red build green." }
+  ]
+}

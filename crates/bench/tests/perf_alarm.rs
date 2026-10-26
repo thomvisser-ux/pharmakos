@@ -37,7 +37,7 @@ use std::path::Path;
 
 use pharmakos_bench::decision::{self, BENCH_SEATS, BENCH_SEED, DecisionPlan};
 use pharmakos_bench::quick::{self, Fixture, QuickPlan};
-use pharmakos_bench::workspace_root;
+use pharmakos_bench::{Error, workspace_root};
 
 /// Untimed QUICK calls per case before its sample.
 const QUICK_WARMUP: usize = 20;
@@ -75,7 +75,7 @@ fn p1_quick_and_decision_tick_timings() {
 }
 
 /// QUICK's p50 and p99 over the committed cases, as notices.
-fn quick_notices(root: &Path, os: &str) -> Result<Vec<String>, String> {
+fn quick_notices(root: &Path, os: &str) -> Result<Vec<String>, Error> {
     let fixture = Fixture::committed(root)?;
     let cases = quick::committed_cases(root)?;
     let timing = quick::measure(
@@ -87,23 +87,23 @@ fn quick_notices(root: &Path, os: &str) -> Result<Vec<String>, String> {
         },
     )?;
     if timing.pooled.samples != cases.len() * QUICK_CALLS {
-        return Err(format!(
+        return Err(Error::Drift(format!(
             "{} samples pooled, expected {}",
             timing.pooled.samples,
             cases.len() * QUICK_CALLS
-        ));
+        )));
     }
     Ok(quick::notices(&timing, os))
 }
 
 /// The decision tick's ns per size unit, as a notice. The bench match's one
 /// segment is the rules table's first, the shortest Push of the ladder.
-fn decision_notice(root: &Path, os: &str) -> Result<String, String> {
+fn decision_notice(root: &Path, os: &str) -> Result<String, Error> {
     let rules = quick::committed_rules(root)?;
     let segment_ms = *rules
         .segment_lengths_ms()
         .first()
-        .ok_or("the rules table has no match.segment_lengths_ms")?;
+        .ok_or_else(|| Error::Rules("no match.segment_lengths_ms".to_owned()))?;
     let timing = decision::measure(
         root,
         &rules,
@@ -115,7 +115,7 @@ fn decision_notice(root: &Path, os: &str) -> Result<String, String> {
         },
     )?;
     if timing.windows == 0 {
-        return Err("no decision tick was measured".to_owned());
+        return Err(Error::Empty("no decision tick was measured".to_owned()));
     }
     Ok(decision::notice(&timing, os))
 }

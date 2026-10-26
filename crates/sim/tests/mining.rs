@@ -459,7 +459,7 @@ fn richest_means_richest_remaining() {
         yields(runner.world(), row_of(beacon))
     );
 
-    // SAFEST reads as NEAREST until S2's threat model (decision 6).
+    // With no threat known, SAFEST is NEAREST (S2's decision 12).
     let (mut runner, beacon) = midpoint(SeamChoice::Safest, &[(&nearer, Some(5))]);
     play(&mut runner, 5);
     assert_eq!(
@@ -938,4 +938,89 @@ fn a_held_seam_survives_save_and_restore_and_a_vent_is_refused() {
         doctored.restore_into(&mut world(&[180_000])),
         Err(SnapshotError::Ragged("beacon_flee"))
     );
+}
+
+/// An armed enemy raider of seat 1's standing at `at`, homed to a beacon of
+/// its own placed there so it stays, holding its fire.
+fn lurker(world: &mut World, at: [pharmakos_sim::math::fixed::Fx; 3]) {
+    let enemy = SeatId::new(1);
+    let home = world
+        .place_beacon_directly(enemy, at, MandateKind::Build, PRIORITY_NORMAL)
+        .expect("room for the enemy's beacon");
+    world.set_common(
+        home,
+        pharmakos_sim::tables::Common {
+            roe: 1,
+            retreat_hp_pct: 0,
+        },
+    );
+    world
+        .field_unit(enemy, home, UnitKind::Raider, at)
+        .expect("room for the raider");
+}
+
+#[test]
+fn safest_seam_avoids_a_known_threat() {
+    let (mut probe, beacon) = midpoint(SeamChoice::Nearest, &[]);
+    play(&mut probe, 5);
+    let nearer = held(probe.world(), beacon).expect("a seam in reach");
+    let farther = other_than(&nearer);
+    // An armed raider of another seat at the nearer seam, inside the Mine
+    // beacon's sphere and so seen by its seat: SAFEST takes the farther.
+    let (mut runner, beacon) = midpoint(SeamChoice::Safest, &[]);
+    let world = runner.world_mut();
+    let (_, seam) = seam_named(world, &nearer);
+    let column = seam.footprint.first().copied().expect("a footprint");
+    let at = world.standing_point([column.x, column.y, 0]);
+    lurker(world, at);
+    play(&mut runner, 5);
+    assert_eq!(
+        held(runner.world(), beacon).as_deref(),
+        Some(farther),
+        "SAFEST passes over the seam a known threat reaches"
+    );
+}
+
+#[test]
+fn a_mine_drone_flees_a_threat() {
+    let run = |flee: bool| -> (bool, u32) {
+        let (mut runner, beacon) = midpoint(SeamChoice::Nearest, &[]);
+        let world = runner.world_mut();
+        world.set_mine_settings(
+            beacon,
+            MineSettings {
+                dig_max_depth: 3,
+                seam_choice: SeamChoice::Nearest,
+                flee_on_threat: flee,
+                ..MineSettings::default()
+            },
+        );
+        let home = *world
+            .beacons()
+            .positions()
+            .get(row_of(beacon))
+            .expect("the beacon");
+        world
+            .field_unit(SEAT, beacon, UnitKind::MiningDrone, home)
+            .expect("room for a drone");
+        play(&mut runner, 400);
+        let drone = drone_of(runner.world(), beacon);
+        let away = |world: &World| {
+            let at = *world.units().positions().get(drone).expect("the drone");
+            pharmakos_sim::math::fixed::Sq::between(at, home)
+                > pharmakos_sim::math::fixed::Sq::of_radius(world.arrive_radius())
+        };
+        assert!(away(runner.world()), "the drone went to its seam");
+        let near = runner
+            .world()
+            .standing_point([MIDPOINT_X + 4, MIDPOINT_Y, 0]);
+        lurker(runner.world_mut(), near);
+        play(&mut runner, 600);
+        (away(runner.world()), busy_of(runner.world(), drone))
+    };
+    let (away, busy) = run(true);
+    assert!(!away, "the drone fled home");
+    assert_eq!(busy, pharmakos_sim::tables::NO_WORK, "and digs nothing");
+    let (away, _) = run(false);
+    assert!(away, "without flee_on_threat the drone keeps working");
 }

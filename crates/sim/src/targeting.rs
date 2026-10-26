@@ -1167,6 +1167,7 @@ mod tests {
                     lost_at,
                     (lost_id, desc),
                     crate::tables::BuildOrder::NONE,
+                    None,
                 )
                 .is_ok()
         );

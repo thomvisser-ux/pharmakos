@@ -1398,13 +1398,15 @@ fn the_limits_are_the_rules_table_and_not_constants() {
 // S2's wire (task `con4`)
 // ---------------------------------------------------------------------------
 
-/// Defend's and Attack's settings arrived with S2's wire and are refused as a
-/// whole until S2's `dfnd` and `atk` lanes (`E0012`, `E0013`), as the sim
-/// refuses them at the seal. Their leaves are walked like any others, so the
-/// checks that hold everywhere hold under them too: a name the seat does not
-/// know, a voxel off the map, an area inside out, an enum number this build
-/// does not name. A selector under them is not judged as a refusal, because
-/// the sim refuses the arm before it reads one.
+/// Attack's settings arrived with S2's wire and are refused as a whole until
+/// S2's `atk` lane (`E0013`), as the sim refuses them at the seal; Defend's
+/// were too until S2's `dfnd` built them (`E0012`, raised by nothing now).
+/// Their leaves are walked like any others, so the checks that hold
+/// everywhere hold under them too: a name the seat does not know, a voxel off
+/// the map, an area inside out, an enum number this build does not name. A
+/// selector under a refused Attack arm is not judged as a refusal, because the
+/// sim refuses the arm before it reads one; under a Defend arm it is judged
+/// like any other, and `most_threatened` is legal.
 #[test]
 fn s2s_settings_are_refused_and_their_leaves_are_still_checked() {
     let scope = fixture_scope();
@@ -1418,15 +1420,15 @@ fn s2s_settings_are_refused_and_their_leaves_are_still_checked() {
         "\"engagement_radius_pct\":80,\"pursue\":9}}}"
     );
     let codes = codes_of(&one_visit("b_01", defend), &scope, &snapshot);
-    for wanted in ["E0012", "E0401", "E0018"] {
+    for wanted in ["E0401", "E0018"] {
         assert!(
             codes.iter().any(|code| code == wanted),
             "{wanted}: {codes:?}"
         );
     }
     assert!(
-        !codes.iter().any(|code| code == "E0014"),
-        "a selector in a refused Defend arm is judged as a refusal of its own: {codes:?}"
+        !codes.iter().any(|code| code == "E0012" || code == "E0014"),
+        "Defend's settings and `most_threatened` are built (S2's `dfnd`): {codes:?}"
     );
 
     let attack = concat!(
@@ -1460,9 +1462,9 @@ fn s2s_settings_are_refused_and_their_leaves_are_still_checked() {
     assert!(!codes.iter().any(|code| code == "E0012"), "{codes:?}");
 }
 
-/// A `wall` target is refused for its blueprint until S2's `site` lane
-/// (`E0019`, the base kit's refusal); a box on any other target is `E0509` whatever the stage, and the
-/// box is an area like any other.
+/// A `wall` target is built since S2's `site` lane lifted the base kit's
+/// refusal (`E0019`, raised by nothing now); a box on any other target is `E0509`
+/// whatever the stage, and the box is an area like any other.
 #[test]
 fn a_wall_box_is_an_area_and_belongs_to_a_wall() {
     let scope = fixture_scope();
@@ -1481,7 +1483,7 @@ fn a_wall_box_is_an_area_and_belongs_to_a_wall() {
         &scope,
         &snapshot,
     );
-    assert!(codes.iter().any(|code| code == "E0019"), "{codes:?}");
+    assert!(!codes.iter().any(|code| code == "E0019"), "{codes:?}");
     assert!(codes.iter().any(|code| code == "E0406"), "{codes:?}");
     assert!(!codes.iter().any(|code| code == "E0509"), "{codes:?}");
 

@@ -227,7 +227,7 @@ editor UI. Nothing else executes. Directories are under `crates/`; package names
    user arguments through `rounds_arg` too, the client's only refusals of the option, each about the command
    line's shape or the line's framing and never the number (`NO_VALUE`, `REPEATED`, `BREAKS_LINE`), made in `start()`
    before any host is spawned, every refusal of the value being the gateway's; and `watch_check.gd`'s `_rounds_cases`,
-   which runs `rounds_arg` over a fixed table first and fails the check on a mismatch. The client may compose a JSON Patch from a click; a verdict, a
+   which runs `rounds_arg` over a fixed table first and fails the check on a mismatch; and, from S2's `view` (decisions-log item 149), `targeting.rs`'s `attack_targets` (`AttackAim`, `AttackMark`, `aim_of`, `voxel_aim`, `SELECTOR_ARMS`), a lax reader of the player's file for each Attack beacon's target, read once per text, with a selector and the enemy commander given as words only, and `editor.rs`'s `lax_document`, the lax JSONC read the route, E0601 and targeting readers share; `editor.gd`'s `_draw_attack` and `_place_attack_marks`, which mark a voxel target and put a named beacon's mark over the vista's marker of the same id (`vista.gd`'s `marker_node`), hidden while the view shows none; `chip_line`'s branch on the gateway's `reachable`; `vista.gd`'s shell, wreck and ruin markers, its hit-point bar filled by `hp` over `max_hp` as sent (`_set_bar`, drawn only when `hp` is present), its turn to the view's heading, and `_same_look`'s redraw on a change of kind, subtype, owner or bar presence, and `bridge.rs`'s `yaw_of`, a unit conversion for drawing; `view.rs`'s `entity_of`, the client's refusals of a view entity, each about the answer's shape (no position, half its hit points, a zero maximum, hit points past the maximum, a heading past the turn), and `ViewModel::new`'s refusal of an extent past the sim's `i32` coordinates; `palette_of`'s S2 rows, a wall drawn by the seat its material names; `edited_box` and the mesher's `LightField::relight`, which choose what to relight and redraw from two copies of what the gateway sent; `rig.rs`'s `served_status`, `refusal_of`, `proto3_text`, `event_rows`' refusal of a negative time, the pacer's refusal of an advance past its ask, and `HostClock::unreportable` with the rig's one sentence for it, and `variant.rs`' `proto3_integer`; and `host_link.gd`'s `GAMECTL_ARG`, `ROOT_ARG`, `prefixed_arg` and `repeated_option`, about the command line's shape and never the value, refused in `start()` before any host spawns; and `watch_check.gd`'s `_option_cases`. The client may compose a JSON Patch from a click; a verdict, a
    travel time, a legality answer, a Fix and the patched text (`patch_plan`'s answer) still come
    from the gateway. The gateway's JSON-RPC answers are not canonical `gp.api.v1` JSON — they carry
    a `_status` footer and lower-case enum values (decisions-log item 80) — so every client of them,
@@ -707,7 +707,29 @@ second command, `cargo xtask package` (below), which `ci` never runs.
 cargo xtask ci            # everything below
 cargo xtask ci --quick    # fmt, clippy, unit tests — the inner loop
 cargo xtask ci --fix      # rustfmt and the machine-applicable clippy fixes
+cargo xtask ci --shard 2/3   # one of CI's shards (below); never needed locally
 ```
+
+**The shards.** In CI each operating system's leg runs as `CI_SHARDS` (three) parallel jobs, `cargo
+xtask ci shard <n> (<os>)`, each running `cargo xtask ci --shard <n>/3`, so that a leg stays inside
+the owner's 75-minute budget (decisions-log items 119 (5) and 148 (2)). A shard runs its part of the
+three slow steps, `test`, `test-research` and `scenario`, and shard 1 runs every other step as well,
+except `golden`, which reads every shard's fresh outputs. The split is by name, never by timing:
+each test target (`--lib`, `--bin <name>`, `--test <name>`, `--doc`, selected over `--workspace`, so
+the build and its features are the unsharded run's) and each played scenario falls to the shard a
+hash of its name picks (`xtask/src/shard.rs`). xtask's tests check that the split is a partition,
+every unit on exactly one shard, over this workspace's own metadata, and that the units mirror
+`cargo test`'s default selection; the pull request that introduced it compared the test executables
+cargo builds both ways. A target the split cannot select the same way (an example, a bench `cargo
+test` would build, a target whose `test` or `doctest` flag is off) is a failure, never a target the
+shards stop testing. The leg's own job, `cargo xtask ci (<os>)`, is the required check under the
+name it always had, needing only its own operating system's shards: it fails unless every shard of
+its leg reported running and passing its suite, merges their fresh outputs (a file two shards wrote
+must be byte-identical), runs `cargo xtask golden` over them and uploads the `cross-os-<os>`
+artefact the cross-OS guard compares. A leg's time, for the budget, is its slowest shard plus its
+leg job (decisions-log item 148). `--shard` goes with `ci` alone and refuses `--quick`, `--package`,
+`--fix` and `--bless`; without it, `cargo xtask ci` runs every step, as it does locally and in the
+merge train's local check.
 
 > **Status.** `xtask/src/main.rs` is green, and its sixteen steps cover items 1–10 below. Every step
 > is required: a step whose input is missing fails rather than skips (decisions-log item
@@ -792,7 +814,8 @@ cargo xtask ci --fix      # rustfmt and the machine-applicable clippy fixes
 `CLAUDE.md`, `.claude/**` and top-level `*.md` runs the DCO walk and the `reuse` step in place of the
 suite; either can still fail it. Every other required job skips its remaining steps and reports
 success; each job that builds, and the cross-OS guard, says so in a `::notice::`. Each building
-job's scope step decides: it answers `full` in bash,
+job's scope step decides (each shard, not the leg's `cargo xtask ci (<os>)` job, which takes prose
+only when every one of its shards' reports says so): it answers `full` in bash,
 before it builds `xtask`, for a merge commit that changes `xtask/`, `.github/` or `.cargo/`, so the
 decider never judges its own change; otherwise `cargo xtask ci-scope` decides, and answers `full` on
 any event but `pull_request` and on any error. Nothing can force it. The `perf alarms (…)` jobs,

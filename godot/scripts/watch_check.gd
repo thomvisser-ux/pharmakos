@@ -261,6 +261,28 @@ func _rounds_cases() -> void:
 		if got["given"] != want["given"] or String(got["text"]) != String(want["text"]) or int(got["refusal"]) != int(want["refusal"]):
 			_failures.append("rounds_arg(%s) answered %s, not %s" % [JSON.stringify(case[0]), JSON.stringify(got), JSON.stringify(want)])
 	print("[watch-check] the --rounds reader's table: %d case(s)" % cases.size())
+	_option_cases()
+
+
+## The `--gamectl=` and `--root=` reader's table (S2's `view`; decisions-log item 146 (4)):
+## absent, once, twice, and an option that only starts the same, run through
+## `host_link.gd`'s `prefixed_arg` before anything else, as the `--rounds` table is.
+func _option_cases() -> void:
+	var cases := [
+		[[], "--gamectl=", false, "", false],
+		[["--gamectl=x"], "--gamectl=", true, "x", false],
+		[["--gamectl="], "--gamectl=", true, "", false],
+		[["--gamectl=x", "--root=y"], "--root=", true, "y", false],
+		[["--gamectl=x", "--gamectl=x"], "--gamectl=", true, "", true],
+		[["--root=a", "--rounds=3", "--root=b"], "--root=", true, "", true],
+		[["--gamectlx"], "--gamectl=", false, "", false],
+	]
+	for case in cases:
+		var got: Dictionary = HostLink.prefixed_arg(PackedStringArray(case[0]), String(case[1]))
+		var want := {"given": case[2], "text": case[3], "repeated": case[4]}
+		if got["given"] != want["given"] or String(got["text"]) != String(want["text"]) or got["repeated"] != want["repeated"]:
+			_failures.append("prefixed_arg(%s, %s) answered %s, not %s" % [JSON.stringify(case[0]), case[1], JSON.stringify(got), JSON.stringify(want)])
+	print("[watch-check] the --gamectl= and --root= reader's table: %d case(s)" % cases.size())
 
 
 func _process(_delta: float) -> void:

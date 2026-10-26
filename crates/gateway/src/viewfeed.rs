@@ -136,8 +136,16 @@ struct ViewerState {
     refreshed_at: u64,
     sight: Sight,
     /// Opaque handles, in the order this viewer first saw each thing.
-    units: Vec<(u32, String)>,
-    structures: Vec<(u32, String)>,
+    units: Vec<(u64, String)>,
+    structures: Vec<(u64, String)>,
+    /// The wrecks this viewer has been shown, by wreck id.
+    wrecks: Vec<(u64, String)>,
+    /// The shells in flight this viewer has been shown, by their key; a shell
+    /// that has landed is forgotten ([`ViewFeed::forget_landed_shells`]).
+    shells: Vec<(ShellKey, String)>,
+    /// How many shell handles this viewer has been given, so a forgotten one
+    /// is never minted again.
+    shells_minted: u64,
     /// The viewer's `e_NN` handles for other seats' beacons, by beacon id,
     /// in the order each was named.
     beacons: Vec<(u32, String)>,
@@ -158,6 +166,9 @@ impl ViewerState {
             },
             units: Vec::new(),
             structures: Vec::new(),
+            wrecks: Vec::new(),
+            shells: Vec::new(),
+            shells_minted: 0,
             beacons: Vec::new(),
             unnamed: Vec::new(),
         }
@@ -607,7 +618,51 @@ impl ViewFeed {
     ///
     /// As [`ViewFeed::foreign_beacon_name`].
     pub fn unit_handle(&mut self, viewer: Viewer, id: u32) -> Result<String, Error> {
-        ViewFeed::handle(&mut self.viewers, viewer, id, false)
+        ViewFeed::handle(&mut self.viewers, viewer, u64::from(id), Space::Unit)
+    }
+
+    /// This viewer's opaque handle for a wreck, `w_N`, minted on first sight
+    /// by the wreck's id. As [`ViewFeed::unit_handle`].
+    ///
+    /// # Errors
+    ///
+    /// As [`ViewFeed::unit_handle`].
+    pub fn wreck_handle(&mut self, viewer: Viewer, id: u32) -> Result<String, Error> {
+        ViewFeed::handle(&mut self.viewers, viewer, u64::from(id), Space::Wreck)
+    }
+
+    /// This viewer's opaque handle for a shell in flight, `p_N`, minted on
+    /// first sight. A shell has no id of its own in the sim's table (its rows
+    /// compact as shells land), so it is keyed by what makes it one shell
+    /// ([`ShellKey`]).
+    ///
+    /// # Errors
+    ///
+    /// As [`ViewFeed::unit_handle`].
+    pub fn shell_handle(&mut self, viewer: Viewer, key: ShellKey) -> Result<String, Error> {
+        let index = slot_of(&mut self.viewers, viewer);
+        let state = self.viewers.get_mut(index).ok_or_else(|| {
+            Error::internal("the view feed lost the viewer slot it had just made")
+        })?;
+        if let Some((_, handle)) = state.shells.iter().find(|(held, _)| *held == key) {
+            return Ok(handle.clone());
+        }
+        let number = state.shells_minted.checked_add(1).ok_or_else(|| {
+            Error::internal("this viewer has been given more shell handles than u64 counts")
+        })?;
+        state.shells_minted = number;
+        let handle = format!("p_{number}");
+        state.shells.push((key, handle.clone()));
+        Ok(handle)
+    }
+
+    /// Forget this viewer's handles for shells no longer in flight, so the
+    /// table holds what is in the air rather than every shell of the match.
+    /// A landed shell's number is never minted again.
+    pub fn forget_landed_shells(&mut self, viewer: Viewer, live: &[ShellKey]) {
+        if let Some(state) = self.viewers.iter_mut().find(|state| state.viewer == viewer) {
+            state.shells.retain(|(key, _)| live.contains(key));
+        }
     }
 
     /// This viewer's opaque handle for a structure. As [`ViewFeed::unit_handle`].
@@ -616,7 +671,7 @@ impl ViewFeed {
     ///
     /// As [`ViewFeed::unit_handle`].
     pub fn structure_handle(&mut self, viewer: Viewer, id: u32) -> Result<String, Error> {
-        ViewFeed::handle(&mut self.viewers, viewer, id, true)
+        ViewFeed::handle(&mut self.viewers, viewer, u64::from(id), Space::Structure)
     }
 
     /// This viewer's name for the beacon at `row` of `world`'s table.
@@ -793,17 +848,17 @@ impl ViewFeed {
     fn handle(
         viewers: &mut Vec<ViewerState>,
         viewer: Viewer,
-        id: u32,
-        structure: bool,
+        id: u64,
+        space: Space,
     ) -> Result<String, Error> {
         let index = slot_of(viewers, viewer);
         let state = viewers.get_mut(index).ok_or_else(|| {
             Error::internal("the view feed lost the viewer slot it had just made")
         })?;
-        let (prefix, table) = if structure {
-            ("s_", &mut state.structures)
-        } else {
-            ("u_", &mut state.units)
+        let (prefix, table) = match space {
+            Space::Unit => ("u_", &mut state.units),
+            Space::Structure => ("s_", &mut state.structures),
+            Space::Wreck => ("w_", &mut state.wrecks),
         };
         if let Some((_, handle)) = table.iter().find(|(held, _)| *held == id) {
             return Ok(handle.clone());
@@ -815,6 +870,38 @@ impl ViewFeed {
         table.push((id, handle.clone()));
         Ok(handle)
     }
+}
+
+/// Which of a viewer's handle spaces a handle is minted in: one prefix each,
+/// so no two kinds of thing share a name.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Space {
+    /// A unit, `u_N`.
+    Unit,
+    /// A structure, a ruin included, `s_N`: a structure keeps its handle when
+    /// it turns into a ruin.
+    Structure,
+    /// A wreck, `w_N`.
+    Wreck,
+}
+
+/// What makes one shell in flight one shell: its firer, with the id's
+/// generation, the tick it was fired on, the tick it lands on and the point
+/// it was aimed at, raw. Two shots of one weapon can land on one tick (a far
+/// shot and a nearer one a cooldown later), and a moving firer's two shots
+/// can even share a landing tick and an aim, but one firer fires one weapon
+/// once a tick, so with the fire tick the key is unique among the shells in
+/// the air.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ShellKey {
+    /// The firer, an `AssetId` raw value.
+    pub firer: u32,
+    /// The tick it was fired on.
+    pub fired_at: u32,
+    /// The tick it lands on.
+    pub lands_at: u32,
+    /// The point it was aimed at, raw Q16.16.
+    pub aim: [i32; 3],
 }
 
 /// This viewer's slot, made on first sight of it.

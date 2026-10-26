@@ -7,16 +7,9 @@
       "path": "/declarative/route/0/place_beacon/initial/mandate/build/targets/0/wall_box",
       "message": "`wall_box` is required and is missing.",
       "beginner": "A part that every playbook must have is not here."
-    },
-    {
-      "code": "E0019",
-      "severity": "ERROR",
-      "path": "/declarative/route/0/place_beacon/initial/mandate/build/targets/0/blueprint_id",
-      "message": "a Build target names `wall`, one of S2's base kit, which has no effect until S2's base kit lands; it is refused rather than ignored.",
-      "beginner": "Autocannons, mortars and walls cannot be built in this build yet."
     }
   ],
-  "report_hash": "T/JLKHauy6I=",
+  "report_hash": "9wlXd0e71Bg=",
   "rules_hash": "gCjUE4Tm3i8=",
   "plan_fingerprint": "DvaPy9lTJFg=",
   "verifier_version": "0.1.0-s2.2",

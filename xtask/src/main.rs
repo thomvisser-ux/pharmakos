@@ -90,7 +90,11 @@
 //! says, and P1's wall-clock half from the walled bench,
 //! `crates/bench/tests/perf_alarm.rs` (QUICK's p50 and p99 over the committed
 //! verifier cases and `budget_128`, and ns per size unit per decision tick in
-//! a hosted match at the size budget; S1's plan, task `p1`), each with
+//! a hosted match at the size budget; S1's plan, task `p1`), and G3′-real's
+//! figures from the same crate, `crates/bench/tests/g3_real.rs` (the
+//! 8-minute segment at the gate's load phase by phase, the support search's
+//! adversarial tick and a fourth seat's decision-tick cost; S2's plan, task
+//! `g3h`), each with
 //! `--release`, `--ignored` and `--nocapture`, and each printing its own
 //! `::notice::` lines; then it publishes the allocations per
 //! tick as a notice naming the test that asserts it. It has no threshold, compares nothing
@@ -105,6 +109,7 @@
 //! cargo xtask ci --quick            # fmt, clippy, test — the inner loop
 //! cargo xtask ci --fix              # rustfmt and the machine-applicable clippy fixes
 //! cargo xtask ci --skip buf         # everything except one step
+//! cargo xtask ci --shard 2/3        # one of CI's shards: see [`shard`]
 //! cargo xtask clippy -p pharmakos-sim   # one step, scoped (what the pre-commit hook runs)
 //! cargo xtask fmt clippy            # two steps, whole workspace (what the pre-push hook runs)
 //! cargo xtask golden --bless        # accept the fresh outputs as the new goldens
@@ -128,6 +133,16 @@
 //! plan, decision 9, ruling the register's S1-10): the step prints only the
 //! count, or the markers that fail it, and the command prints the register;
 //! see [`placeholders`].
+//!
+//! # The shards
+//!
+//! CI runs each operating system's suite as three jobs, `cargo xtask ci
+//! --shard N/3` (decisions-log item 148 (2)): every shard runs its part of
+//! `test`, `test-research` and `scenario`, split by a hash of each test
+//! target's or scenario's name; shard 1 also runs every other step but
+//! `golden`, which the leg's `cargo xtask ci (<os>)` job runs over the merged
+//! outputs. Without `--shard`, `ci` runs every step over every unit, as it
+//! always has. See [`shard`] for the split and why it holds.
 //!
 //! # The research tests
 //!
@@ -208,6 +223,7 @@ mod placeholders;
 mod png;
 mod scenario;
 mod scope;
+mod shard;
 mod zip;
 
 // ---------------------------------------------------------------------------
@@ -701,12 +717,16 @@ struct Ctx {
     client_check: bool,
     /// Workspace metadata, or the reason it could not be read.
     workspace: Result<Workspace, String>,
+    /// `--shard N/M`: run shard N's part of the sharded steps, and on shard 1
+    /// every step that is not sharded ([`shard`]). `None` runs everything.
+    shard: Option<shard::Shard>,
 }
 
 fn run_cli(args: &[String]) -> Result<bool, String> {
     let mut commands: Vec<String> = Vec::new();
     let mut skipped: Vec<String> = Vec::new();
     let mut packages: Vec<String> = Vec::new();
+    let mut shard: Option<shard::Shard> = None;
     let mut bless = false;
     let mut client_check = false;
     let mut quick = false;
@@ -781,6 +801,16 @@ fn run_cli(args: &[String]) -> Result<bool, String> {
                     .ok_or_else(|| "--skip needs a step name".to_owned())?;
                 skipped.push(value.clone());
             }
+            "--shard" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| "--shard needs `N/M`, shard N of M".to_owned())?;
+                if shard.is_some() {
+                    return Err("--shard is given once".to_owned());
+                }
+                shard = Some(shard::Shard::parse(value).map_err(|error| error.to_string())?);
+            }
             "-p" | "--package" => {
                 index += 1;
                 let value = args
@@ -807,6 +837,10 @@ fn run_cli(args: &[String]) -> Result<bool, String> {
             return Err(format!("--skip names an unknown step `{name}`"));
         }
     }
+    if let Some(shard) = shard {
+        shard_flags_allowed(&commands, &packages, quick, fix, bless)
+            .map_err(|reason| format!("--shard {shard}: {reason}"))?;
+    }
 
     let root = workspace_root()?;
     let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
@@ -829,6 +863,7 @@ fn run_cli(args: &[String]) -> Result<bool, String> {
         packages,
         client_check,
         workspace,
+        shard,
     };
 
     // `--fix` is a mode, not a step: it edits the tree and then stops, so that
@@ -858,9 +893,26 @@ fn run_cli(args: &[String]) -> Result<bool, String> {
         if name == "ci" {
             for step in STEPS {
                 let wanted = !quick || QUICK_STEPS.contains(&step.name);
-                if wanted && !skipped.iter().any(|s| s == step.name) {
+                if wanted
+                    && !skipped.iter().any(|s| s == step.name)
+                    && step_in_shard(step.name, ctx.shard)
+                {
                     plan.push(step);
                 }
+            }
+            if let Some(shard) = ctx.shard {
+                println!();
+                println!(
+                    "== shard {shard}: {} over this shard's part of their units{}; {} on no \
+                     shard, run over every shard's merged outputs (`cargo xtask golden`)",
+                    shard::SHARDED_STEPS.join(", "),
+                    if shard.is_first() {
+                        ", and every other step"
+                    } else {
+                        "; every other step runs on shard 1"
+                    },
+                    shard::MERGED_STEPS.join(", ")
+                );
             }
         } else {
             let step = STEPS
@@ -908,6 +960,62 @@ fn run_cli(args: &[String]) -> Result<bool, String> {
     Ok(ok)
 }
 
+/// Whether `ci`'s step `name` runs on `shard`: every step without `--shard`;
+/// with it, the sharded steps on every shard, the merged ones on none, and the
+/// rest on shard 1 ([`shard`]).
+fn step_in_shard(name: &str, shard: Option<shard::Shard>) -> bool {
+    let Some(shard) = shard else {
+        return true;
+    };
+    if shard::SHARDED_STEPS.contains(&name) {
+        true
+    } else if shard::MERGED_STEPS.contains(&name) {
+        false
+    } else {
+        shard.is_first()
+    }
+}
+
+/// `--shard` belongs to `ci` alone, and to no flag that would make a shard
+/// mean something else: `--quick` would run part of the inner loop's tests on
+/// a shard and none of the rest; `--package` narrows the units cargo builds, which the
+/// split's `--workspace` selection must not change; `--fix` edits rather than
+/// checks; and `--bless` would rewrite goldens from a part of the outputs.
+fn shard_flags_allowed(
+    commands: &[String],
+    packages: &[String],
+    quick: bool,
+    fix: bool,
+    bless: bool,
+) -> Result<(), String> {
+    if commands.len() != 1 || commands.first().map(String::as_str) != Some("ci") {
+        return Err("it splits `ci` and is given with `ci` alone".to_owned());
+    }
+    if !packages.is_empty() {
+        return Err(
+            "it cannot be combined with --package: the shards select from the whole workspace"
+                .to_owned(),
+        );
+    }
+    if quick {
+        return Err(
+            "it cannot be combined with --quick: the inner loop is a local run, and a shard \
+             would run only part of its tests"
+                .to_owned(),
+        );
+    }
+    if fix {
+        return Err("it cannot be combined with --fix, which edits and then stops".to_owned());
+    }
+    if bless {
+        return Err(
+            "it cannot be combined with --bless: a shard holds only part of the fresh outputs"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
 /// `cargo xtask ci --fix`: rustfmt, then the machine-applicable clippy fixes.
 fn run_fix(ctx: &Ctx) -> Result<(), String> {
     run(ctx, &ctx.cargo, &["fmt".to_owned(), "--all".to_owned()])?;
@@ -933,7 +1041,7 @@ fn print_help() {
     println!("cargo xtask — the one command that runs every check");
     println!();
     println!("USAGE:");
-    println!("    cargo xtask ci [--quick|--fix] [--skip <step>]...");
+    println!("    cargo xtask ci [--quick|--fix] [--skip <step>]... [--shard <N/M>]");
     println!("    cargo xtask <step> [flags]");
     println!("    cargo xtask list");
     println!("    cargo xtask ci-scope       CI's docs-only fast path: prints `full` or `prose`");
@@ -949,6 +1057,12 @@ fn print_help() {
     println!("    --quick            fmt, clippy and tests only — the inner loop");
     println!("    --fix              apply rustfmt and machine-applicable clippy fixes, then stop");
     println!("    --skip <step>      leave one step out of `ci`");
+    println!(
+        "    --shard <N/M>      ci: shard N of M: its part of test, test-research and scenario,"
+    );
+    println!(
+        "                       and on shard 1 every step but golden (run on the merged outputs)"
+    );
     println!("    -p, --package <n>  restrict package-scoped steps to these packages");
     println!("    --bless            rewrite golden files from the fresh outputs");
     println!("    --check            stage-client: also run the headless client check;");
@@ -1229,6 +1343,18 @@ fn step_test(ctx: &Ctx) -> Result<Outcome, String> {
             args.push(package.clone());
         }
     }
+    if let Some(shard) = ctx.shard {
+        let workspace = metadata(ctx)?;
+        let all = workspace_test_units(workspace)?;
+        return Ok(Outcome::Done(
+            match run_shard_units(ctx, shard, "test", &all, &args)? {
+                ShardPart::Ran(part) => {
+                    format!("{part}; tests pass without `research`; {fresh_note}")
+                }
+                ShardPart::Empty(part) => format!("{part}; {fresh_note}"),
+            },
+        ));
+    }
     if ctx.locked {
         args.push("--locked".to_owned());
     }
@@ -1236,6 +1362,77 @@ fn step_test(ctx: &Ctx) -> Result<Outcome, String> {
     Ok(Outcome::Done(format!(
         "tests pass without `research`; {fresh_note}"
     )))
+}
+
+/// Every unit `cargo test --workspace` runs, from the metadata.
+fn workspace_test_units(workspace: &Workspace) -> Result<Vec<shard::Unit>, String> {
+    shard::units(workspace.packages.iter().flat_map(|package| {
+        package
+            .targets
+            .iter()
+            .map(|target| (package.name.as_str(), target))
+    }))
+    .map_err(|error| error.to_string())
+}
+
+/// The units of `all` that fall to `shard`, for `step`.
+fn shard_part(shard: shard::Shard, step: &str, all: &[shard::Unit]) -> Vec<shard::Unit> {
+    all.iter()
+        .filter(|unit| shard.holds(step, &unit.key()))
+        .cloned()
+        .collect()
+}
+
+/// Runs `base` (a `cargo test` command line up to its target selection) once
+/// per selector list of `shard`'s part of `all`, and says what it ran. A shard
+/// that holds none of the units runs nothing and says so; the split's tests
+/// prove that some shard holds each.
+fn run_shard_units(
+    ctx: &Ctx,
+    shard: shard::Shard,
+    step: &str,
+    all: &[shard::Unit],
+    base: &[String],
+) -> Result<ShardPart, String> {
+    let part = shard_part(shard, step, all);
+    let keys: Vec<String> = part.iter().map(shard::Unit::key).collect();
+    println!(
+        "   shard {shard}: {} of {} unit(s): {}",
+        part.len(),
+        all.len(),
+        if keys.is_empty() {
+            "none".to_owned()
+        } else {
+            keys.join(", ")
+        }
+    );
+    for selectors in shard::selectors(&part) {
+        let mut args: Vec<String> = base.to_vec();
+        args.extend(selectors);
+        if ctx.locked {
+            args.push("--locked".to_owned());
+        }
+        run(ctx, &ctx.cargo, &args)?;
+    }
+    if part.is_empty() {
+        return Ok(ShardPart::Empty(format!(
+            "none of the step's {} unit(s) falls to shard {shard}, so this shard ran none",
+            all.len()
+        )));
+    }
+    Ok(ShardPart::Ran(format!(
+        "shard {shard} ran {} of the step's {} unit(s)",
+        part.len(),
+        all.len()
+    )))
+}
+
+/// What a shard did with its part of a step: ran it, or held none of it, in
+/// which case its report says so rather than "tests pass".
+#[derive(Debug)]
+enum ShardPart {
+    Ran(String),
+    Empty(String),
 }
 
 /// Remove `<target>/golden/` and everything under it, if it is there. Its
@@ -1257,6 +1454,38 @@ fn step_test_research(ctx: &Ctx) -> Result<Outcome, String> {
         .as_ref()
         .ok()
         .and_then(|workspace| workspace.package_with_feature(SIM_PACKAGES, RESEARCH_FEATURE));
+    if let Some(shard) = ctx.shard {
+        // `--locked` is added by `run_shard_units`, after the selectors.
+        let ResearchTests::Run { args, feature } =
+            research_test_args(sim.as_deref(), &ctx.packages, false)?
+        else {
+            return Err(
+                "a sharded run takes no --package filter, so the research tests cannot be \
+                 filtered out"
+                    .to_owned(),
+            );
+        };
+        let workspace = metadata(ctx)?;
+        let all = shard::units(
+            workspace
+                .packages
+                .iter()
+                .filter(|package| sim.as_deref() == Some(package.name.as_str()))
+                .flat_map(|package| {
+                    package
+                        .targets
+                        .iter()
+                        .map(|target| (package.name.as_str(), target))
+                }),
+        )
+        .map_err(|error| error.to_string())?;
+        return Ok(Outcome::Done(
+            match run_shard_units(ctx, shard, "test-research", &all, &args)? {
+                ShardPart::Ran(part) => format!("{part}; tests pass with {feature}"),
+                ShardPart::Empty(part) => part,
+            },
+        ));
+    }
     match research_test_args(sim.as_deref(), &ctx.packages, ctx.locked)? {
         ResearchTests::Run { args, feature } => {
             run(ctx, &ctx.cargo, &args)?;
@@ -1962,6 +2191,13 @@ fn step_scenario(ctx: &Ctx) -> Result<Outcome, String> {
     // and `cargo xtask package`'s replay both play.
     let played = scenario::collect_played(&ctx.root)?;
     let arms = valid.iter().filter(|item| item.nightly).count();
+    let to_play = valid.iter().filter(|item| !item.nightly).count();
+    // On a shard, every file is validated above and only the shard's part is
+    // played, keyed by its relative path (`scenario_shard_key`).
+    let mine = |item: &scenario::Scenario| {
+        ctx.shard
+            .is_none_or(|shard| shard.holds("scenario", &scenario_shard_key(&item.relative)))
+    };
     for item in valid.iter().filter(|item| !item.nightly) {
         if !played.iter().any(|path| path.ends_with(&item.relative)) {
             return Err(format!(
@@ -1970,19 +2206,42 @@ fn step_scenario(ctx: &Ctx) -> Result<Outcome, String> {
                 item.relative.display()
             ));
         }
+        if !mine(item) {
+            continue;
+        }
         // Forward slashes: the path goes on a command line that is quoted in
         // workflow files and in scenario logs on three operating systems.
-        let relative = item.relative.to_string_lossy().replace('\\', "/");
+        let relative = scenario_shard_key(&item.relative);
         let args = cargo_run_args(ctx, &owner, &[SCENARIO_SUBCOMMAND, "run", &relative]);
         run(ctx, &ctx.cargo, &args)
             .map_err(|error| format!("scenario `{}` failed: {error}", item.name))?;
     }
+    let ran = valid
+        .iter()
+        .filter(|item| !item.nightly && mine(item))
+        .count();
 
+    let part = match ctx.shard {
+        Some(shard) if ran == 0 => {
+            return Ok(Outcome::Done(format!(
+                "{checked}; none of the {to_play} played scenario(s) falls to shard {shard}, so \
+                 this shard played none; {arms} nightly arm(s) valid"
+            )));
+        }
+        Some(shard) => format!("shard {shard} played {ran} of {to_play}; "),
+        None => String::new(),
+    };
     Ok(Outcome::Done(format!(
-        "{} scenario(s) pass on their event and hash assertions; {arms} nightly arm(s) valid, \
-         played by the nightly workflow and not here",
-        valid.len().saturating_sub(arms)
+        "{part}{ran} scenario(s) pass on their event and hash assertions; {arms} nightly arm(s) \
+         valid, played by the nightly workflow and not here"
     )))
+}
+
+/// A scenario's relative path with forward slashes: its name on a command
+/// line, and its key in the split ([`shard::Shard::holds`]), the same on every
+/// operating system.
+fn scenario_shard_key(relative: &Path) -> String {
+    relative.to_string_lossy().replace('\\', "/")
 }
 
 /// Harness part 2, half two: the screenshots.
@@ -2661,13 +2920,27 @@ struct Alarm {
 /// so no two measurements share the machine.
 ///
 /// * **mesher p99**: `crates/mesher/tests/perf_alarm.rs`, run exactly as its
-///   header says.
+///   header says: the per-chunk mesh CPU p99, and `view`'s crater stream
+///   through the client's relight and drain queue (its remesh latency at 20
+///   and 40 explosions a second; S2's plan, task `view`).
 /// * **P1's wall-clock half** (S1's plan, task `p1`): `crates/bench/tests/
 ///   perf_alarm.rs` — QUICK's p50 and p99 over the committed verifier cases
 ///   and `budget_128`, and a decision tick's cost in ns per size unit in a
 ///   hosted match at the size budget. The bench is walled, which is what lets
 ///   it read a clock while driving the verifier and the sim from outside
 ///   (AGENTS.md section 4.5).
+/// * **G3′-real's figures** (S2's plan, section 5 and task `g3h`):
+///   `crates/bench/tests/g3_real.rs` — the 8-minute segment at the gate's
+///   load (three seats, 300 units and 40 beacons as world totals, the crater
+///   stream at 20 a second), every tick timed phase by phase: the tick's p99,
+///   p50 and mean, ticks a second, the tick-minus-pathing mean, the repath
+///   backlog against the cap, the broadphase's share, kill-credit settlement,
+///   the peak events per tick, the queues' bytes, live heap and the tick p99
+///   per minute, allocations per tick, and `seen_by` at the gate's load; the
+///   support search's adversarial tick with Mine's footing check at its
+///   worst; and a fourth, unplaced seat's decision-tick cost. Published,
+///   never gated (item 148's CI ruling); `g3r` certifies them on the owner's
+///   machine, and the CI budget job is `g3r`'s.
 const ALARMS: &[Alarm] = &[
     Alarm {
         package: "pharmakos-mesher",
@@ -2678,6 +2951,11 @@ const ALARMS: &[Alarm] = &[
         package: "pharmakos-bench",
         test: "perf_alarm",
         title: "P1 timings",
+    },
+    Alarm {
+        package: "pharmakos-bench",
+        test: "g3_real",
+        title: "G3' timings",
     },
 ];
 
@@ -2701,11 +2979,10 @@ const ALARMS: &[Alarm] = &[
 ///   otherwise, in every leg's `test` step — so it is published, not
 ///   measured again and never compared.
 ///
-/// The tick-minus-pathing mean the skeleton plan named stays S2's G3′-real:
-/// the bench now drives the sim from outside, as AGENTS.md section 4.5
-/// requires of a millisecond figure for it, but S1 asks it for P1's figures
-/// only, and the budget comes with the gate that sets it. xtask itself reads
-/// no clock; the measuring tests do, behind the wall.
+/// The tick-minus-pathing mean the skeleton plan named is G3′-real's, and
+/// published by the third alarm since S2's `g3h`; the budget comes with the
+/// gate that sets it (`g3r`). xtask itself reads no clock; the measuring tests
+/// do, behind the wall.
 fn perf_alarms() {
     let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
     let root = match workspace_root() {
@@ -2862,6 +3139,8 @@ struct Package {
     name: String,
     features: Vec<String>,
     bins: Vec<String>,
+    /// Every target, with the flags `cargo xtask ci --shard` splits by.
+    targets: Vec<shard::Target>,
 }
 
 impl Workspace {
@@ -2941,21 +3220,54 @@ fn parse_workspace(metadata: &str) -> Result<Workspace, String> {
             None => Vec::new(),
         };
         let mut bins: Vec<String> = Vec::new();
-        if let Some(targets) = entry.get("targets").and_then(Json::as_array) {
-            for target in targets {
-                let is_bin = target
-                    .get("kind")
-                    .and_then(Json::as_array)
-                    .is_some_and(|kinds| kinds.iter().any(|kind| kind.as_str() == Some("bin")));
-                if is_bin && let Some(target_name) = target.get("name").and_then(Json::as_str) {
+        let mut targets: Vec<shard::Target> = Vec::new();
+        if let Some(entries) = entry.get("targets").and_then(Json::as_array) {
+            for target in entries {
+                // A target without its name or its kinds cannot be split, and
+                // dropping it would take it out of the shards in silence.
+                let Some(target_name) = target.get("name").and_then(Json::as_str) else {
+                    return Err(format!(
+                        "cargo metadata gives {name} a target with no `name`"
+                    ));
+                };
+                let kinds: Vec<String> = match target.get("kind").and_then(Json::as_array) {
+                    Some(kinds) if !kinds.is_empty() => kinds
+                        .iter()
+                        .map(|kind| {
+                            kind.as_str().map(str::to_owned).ok_or_else(|| {
+                                format!(
+                                    "cargo metadata gives {name}'s target `{target_name}` a \
+                                     kind that is not a string"
+                                )
+                            })
+                        })
+                        .collect::<Result<_, _>>()?,
+                    _ => {
+                        return Err(format!(
+                            "cargo metadata gives {name}'s target `{target_name}` no `kind`"
+                        ));
+                    }
+                };
+                if kinds.iter().any(|kind| kind == "bin") {
                     bins.push(target_name.to_owned());
                 }
+                let flag = |key: &str| match target.get(key) {
+                    Some(Json::Bool(value)) => Some(*value),
+                    _ => None,
+                };
+                targets.push(shard::Target {
+                    name: target_name.to_owned(),
+                    kinds,
+                    test: flag("test"),
+                    doctest: flag("doctest"),
+                });
             }
         }
         packages.push(Package {
             name: name.to_owned(),
             features,
             bins,
+            targets,
         });
     }
     let target_dir = json
@@ -4100,6 +4412,7 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
             ("png.rs", include_str!("png.rs")),
             ("scenario.rs", include_str!("scenario.rs")),
             ("scope.rs", include_str!("scope.rs")),
+            ("shard.rs", include_str!("shard.rs")),
             ("zip.rs", include_str!("zip.rs")),
         ];
         let needle = ["Command", "::new("].concat();
@@ -4330,7 +4643,10 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
     #[test]
     fn every_alarm_runs_in_release_ignored_and_on_libtests_own_threads() {
         let packages: Vec<&str> = ALARMS.iter().map(|alarm| alarm.package).collect();
-        assert_eq!(packages, vec!["pharmakos-mesher", "pharmakos-bench"]);
+        assert_eq!(
+            packages,
+            vec!["pharmakos-mesher", "pharmakos-bench", "pharmakos-bench"]
+        );
         for alarm in ALARMS {
             for locked in [false, true] {
                 let args = alarm_args(alarm, locked);
@@ -4500,6 +4816,170 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
             names.push(shot.name);
         }
         assert_eq!(names, ["vista", "rows", "wizard"]);
+    }
+
+    /// The split over this workspace's own metadata (decisions-log item
+    /// 148 (2)): for the shard count CI runs and its neighbours, every unit of
+    /// `test`, `test-research` and `scenario` falls to exactly one shard, so
+    /// the shards' union is the unsharded set and nothing runs twice. The
+    /// units are read the way a shard reads them, and the ones every run must
+    /// hold are named, so a metadata reader that lost a kind is red here.
+    #[test]
+    fn the_shards_of_the_real_workspace_are_the_unsharded_set() {
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let Some(root) = manifest.parent() else {
+            panic!("xtask's manifest directory has no parent");
+        };
+        let workspace = match load_workspace(false, env!("CARGO"), root) {
+            Ok(workspace) => workspace,
+            Err(reason) => panic!("{reason}"),
+        };
+        let test_units = match workspace_test_units(&workspace) {
+            Ok(units) => units,
+            Err(reason) => panic!("{reason}"),
+        };
+        for wanted in [
+            shard::Unit::Lib,
+            shard::Unit::Doc,
+            shard::Unit::Bin("xtask".to_owned()),
+            shard::Unit::Bin("gamectl".to_owned()),
+            shard::Unit::Test("determinism".to_owned()),
+            shard::Unit::Test("scenarios".to_owned()),
+        ] {
+            assert!(
+                test_units.contains(&wanted),
+                "{wanted:?} is not a test unit"
+            );
+        }
+        let research_units = match shard::units(
+            workspace
+                .packages
+                .iter()
+                .filter(|package| package.name == "pharmakos-sim")
+                .flat_map(|package| {
+                    package
+                        .targets
+                        .iter()
+                        .map(|target| (package.name.as_str(), target))
+                }),
+        ) {
+            Ok(units) => units,
+            Err(error) => panic!("{error}"),
+        };
+        assert!(research_units.contains(&shard::Unit::Test("determinism".to_owned())));
+        let scenarios: Vec<String> = match scenario::collect_played(root) {
+            Ok(paths) => paths
+                .iter()
+                .filter_map(|path| path.strip_prefix(root).ok())
+                .map(scenario_shard_key)
+                .collect(),
+            Err(reason) => panic!("{reason}"),
+        };
+        assert!(!scenarios.is_empty(), "no scenario is played");
+
+        let keyed: [(&str, Vec<String>); 3] = [
+            ("test", test_units.iter().map(shard::Unit::key).collect()),
+            (
+                "test-research",
+                research_units.iter().map(shard::Unit::key).collect(),
+            ),
+            ("scenario", scenarios),
+        ];
+        for total in 1..=4_u32 {
+            for (step, keys) in &keyed {
+                let mut union: Vec<String> = Vec::new();
+                for index in 1..=total {
+                    let shard = match shard::Shard::parse(&format!("{index}/{total}")) {
+                        Ok(shard) => shard,
+                        Err(error) => panic!("{error}"),
+                    };
+                    union.extend(keys.iter().filter(|key| shard.holds(step, key)).cloned());
+                }
+                union.sort();
+                let mut all = keys.clone();
+                all.sort();
+                assert_eq!(union, all, "{step} over {total} shard(s)");
+            }
+        }
+    }
+
+    /// ci.yml's split agrees with itself: each operating system's `ci-shard-<os>`
+    /// matrix lists shard 1 to `CI_SHARDS` exactly, and each shard runs `cargo xtask ci --shard n/CI_SHARDS`,
+    /// so the leg job's count of reports and the shards' own `N/M` cannot drift
+    /// apart (decisions-log item 148 (2)).
+    #[test]
+    fn the_ci_shards_are_the_matrix() {
+        let ci = include_str!("../../.github/workflows/ci.yml");
+        let value = |prefix: &str| -> Vec<String> {
+            ci.lines()
+                .map(str::trim)
+                .filter_map(|line| line.strip_prefix(prefix))
+                .map(str::to_owned)
+                .collect()
+        };
+        let totals = value("CI_SHARDS: ");
+        assert_eq!(totals.len(), 1, "CI_SHARDS is set once: {totals:?}");
+        let total: u32 = match totals.first().map(|text| text.trim_matches('"').parse()) {
+            Some(Ok(total)) => total,
+            other => panic!("CI_SHARDS is not a number: {other:?}"),
+        };
+        assert!(total >= 1);
+        let lists = value("shard: [");
+        assert_eq!(
+            lists.len(),
+            3,
+            "one shard matrix per operating system: {lists:?}"
+        );
+        for list in &lists {
+            let Some(items) = list.strip_suffix(']') else {
+                panic!("shard matrix `{list}` does not close on its line");
+            };
+            let listed: Vec<u32> = items
+                .split(',')
+                .map(|item| match item.trim().parse() {
+                    Ok(number) => number,
+                    Err(error) => panic!("shard matrix entry `{item}`: {error}"),
+                })
+                .collect();
+            assert_eq!(listed, (1..=total).collect::<Vec<u32>>(), "{list}");
+        }
+        assert!(
+            ci.contains(r#"cargo xtask ci --shard "${{ matrix.shard }}/${CI_SHARDS}""#),
+            "each shard runs its own `--shard n/CI_SHARDS`"
+        );
+    }
+
+    #[test]
+    fn a_shard_runs_its_part_of_the_slow_steps_and_shard_one_the_rest() {
+        let first = shard::Shard::parse("1/3").ok();
+        let second = shard::Shard::parse("2/3").ok();
+        assert!(first.is_some() && second.is_some());
+        for step in STEPS {
+            assert!(
+                step_in_shard(step.name, None),
+                "{} runs unsharded",
+                step.name
+            );
+            let sharded = shard::SHARDED_STEPS.contains(&step.name);
+            let merged = shard::MERGED_STEPS.contains(&step.name);
+            assert_eq!(step_in_shard(step.name, first), !merged, "{}", step.name);
+            assert_eq!(step_in_shard(step.name, second), sharded, "{}", step.name);
+        }
+        for name in shard::SHARDED_STEPS.iter().chain(shard::MERGED_STEPS) {
+            assert!(
+                STEPS.iter().any(|step| step.name == *name),
+                "the split names a step that does not exist: {name}"
+            );
+        }
+        let ci = ["ci".to_owned()];
+        assert!(shard_flags_allowed(&ci, &[], false, false, false).is_ok());
+        assert!(shard_flags_allowed(&["test".to_owned()], &[], false, false, false).is_err());
+        assert!(
+            shard_flags_allowed(&ci, &["pharmakos-sim".to_owned()], false, false, false).is_err()
+        );
+        assert!(shard_flags_allowed(&ci, &[], true, false, false).is_err());
+        assert!(shard_flags_allowed(&ci, &[], false, true, false).is_err());
+        assert!(shard_flags_allowed(&ci, &[], false, false, true).is_err());
     }
 
     /// Decisions-log item 116 (6)(g): every skip that stood for a missing input

@@ -268,3 +268,18 @@ else changed:
   (#123), and nothing else in any report did.** `ids` widened the snapshot to
   `SNAPSHOT_VERSION` 10, and the fixture snapshot is input 2 of the five, so
   each case's bytes moved (E33: the second lane to merge re-blesses).
+
+**S2's `site` (snapshot version 12, and `E0019` retired).** Every
+`report_hash` moved, and nothing else did except where the base kit is named:
+`site` widened the snapshot to `SNAPSHOT_VERSION` 12 (each beacon's Build
+settings and paid drone work, each wall target's top), and the fixture snapshot
+is input 2 of the five. It also built the base kit, so the sim no longer
+refuses `autocannon`, `mortar` or `wall` and `E0019` is retired: its catalogue
+row keeps its number and is raised by nothing (`none at the skeleton (retired by
+S2's site, which built the base kit)`), the wall cases no longer carry it beside
+their own code, and `e0019_a_base_kit_blueprint_before_its_lane`, whose one
+diagnostic it was, is gone with its golden. The ground-dependent halves of a
+wall box's checks -- whether `min.z` reaches the ground, the height over the
+ground in every column, and the 3-D sphere test -- are the sim's, refused when
+the row commits (`wall_off_the_ground`, `wall_too_low`, `wall_outside_sphere`),
+because the verifier's view carries no terrain (decisions-log item 146 (4)).

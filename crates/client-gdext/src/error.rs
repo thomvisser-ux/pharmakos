@@ -82,6 +82,15 @@ pub enum BridgeError {
         /// The cap.
         cap: usize,
     },
+    /// The engine handed this bridge a value it cannot use as what it names: an array
+    /// slot ordinal that is not an index. Godot's own constants never are, so this is a
+    /// binding that changed under the bridge, refused before anything is drawn.
+    Engine {
+        /// What the value was meant to be.
+        what: &'static str,
+        /// The value the engine gave.
+        value: i64,
+    },
 }
 
 impl fmt::Display for BridgeError {
@@ -126,6 +135,10 @@ impl fmt::Display for BridgeError {
             Self::SurfaceSize { what, got, cap } => {
                 write!(formatter, "{what} is {got}, which exceeds the cap of {cap}")
             }
+            Self::Engine { what, value } => write!(
+                formatter,
+                "the engine's {what} is {value}, which this bridge cannot use as one"
+            ),
         }
     }
 }

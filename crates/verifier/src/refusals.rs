@@ -33,24 +33,29 @@
 //!
 //! * a `broadcast`'s place is not compiled at all (radio is S4's), so nothing
 //!   under one is judged;
-//! * a selector's filter under `most_threatened`, the beacon of a
-//!   `beacon_under_attack` predicate, the selector in a Build target's
-//!   `beacon_anchor` and every selector in a Defend or an Attack arm are never
-//!   compiled, because the construct around them is refused first, so they
-//!   are not judged either;
-//! * a `set_mandate` row whose Defend or Attack arm is empty writes nothing the
-//!   sim refuses (`compile_switch_settings`): only an arm in a
+//! * the selector in a Build target's `beacon_anchor` and every selector in an
+//!   Attack arm are never compiled, because the construct around them is
+//!   refused first, so they are not judged either;
+//! * a `set_mandate` row whose Attack arm is empty writes nothing the sim
+//!   refuses (`compile_switch_settings`): only an arm in a
 //!   `set_mandate_settings` row, a `place_beacon`'s `initial`, or a non-empty
-//!   one in a switch, is `E0012` or `E0013`.
+//!   one in a switch, is `E0013`.
+//!
+//! S2's `dfnd` lifted `E0012` (Defend's settings), `E0014` (`most_threatened`)
+//! and `E0017` (`beacon_under_attack`), which the sim compiles now: a Defend
+//! arm is legal wherever it is written, an empty one in a deploy's `initial`
+//! included (decisions-log item 145 (5)), and the selectors in it, under
+//! `most_threatened` and in a `beacon_under_attack` are judged like any other
+//! (`side: ENEMY_KNOWN` in a protect list's selector is still `E0015`, beside
+//! the semantic check's `E0415`, decisions-log item 146 (3) (h)).
 //!
 //! Nothing here reads the seat's view: every question is about the file alone,
 //! which is why the stage is structure's.
 
 use pharmakos_proto::gp::v1::beacon_filter::Side;
 use pharmakos_proto::gp::v1::{
-    AttackSettings, BeaconFilter, BeaconRef, BuildTarget, Condition, DefendSettings, InterfaceStep,
-    Location, MandateSettings, Playbook, beacon_ref, condition, interface_row, location,
-    mandate_settings,
+    AttackSettings, BeaconFilter, BuildTarget, InterfaceStep, Location, MandateSettings, Playbook,
+    interface_row, location, mandate_settings,
 };
 
 use crate::pointer;
@@ -74,16 +79,9 @@ pub const REFUSED_CONSTRUCTS: &[(&str, &str)] = &[
         "a Build target anchored on a beacon selector rather than on a voxel or `on` a vent",
         "E0011",
     ),
-    ("Defend mandate settings", "E0012"),
     ("Attack mandate settings", "E0013"),
-    ("selector `most_threatened`", "E0014"),
     ("selector filter `side: ENEMY_KNOWN`", "E0015"),
     ("selector filter `tags`", "E0016"),
-    ("predicate `beacon_under_attack`", "E0017"),
-    (
-        "a Build target naming a blueprint of S2's base kit (`autocannon`, `mortar` or `wall`)",
-        "E0019",
-    ),
 ];
 
 /// The code this crate refuses a construct by, keyed by the sim's name for it,
@@ -96,14 +94,12 @@ pub fn code_for_construct(construct: &str) -> Option<&'static str> {
         .map(|(_, code)| *code)
 }
 
-/// The one blueprint a Build target may name before S4's capability catalogue:
-/// the sim's `compile_build_target` accepts `generator` and refuses the rest.
-const BUILDABLE: &str = "generator";
-
-/// S2's base kit beside the generator (`playbook.proto`'s `BuildTarget`), which
-/// the sim refuses under a construct of its own until S2's `site` lane builds
-/// it (`E0019`); every other id is S4's (`E0010`).
-const BASE_KIT: [&str; 3] = ["autocannon", "mortar", "wall"];
+/// The blueprints a Build target may name before S4's capability catalogue:
+/// the Generator and S2's base kit (`playbook.proto`'s `BuildTarget`), which
+/// the sim's `compile_build_target` builds since S2's `site` lane lifted the
+/// base kit's refusal (`E0019`, kept in the catalogue and raised by nothing,
+/// decisions-log item 145 (5)); every other id is S4's (`E0010`).
+const BUILDABLE: [&str; 4] = ["generator", "autocannon", "mortar", "wall"];
 
 /// Run the check.
 pub(crate) fn run(playbook: &Playbook, out: &mut Builder) {
@@ -118,32 +114,26 @@ struct Refusals<'a> {
 /// that nothing there is judged:
 ///
 /// * under a `broadcast` step, whose place the sim never compiles;
-/// * under `beacon_under_attack`, which the sim refuses before it reads the
-///   predicate's beacon;
 /// * under a Build target's (or a removal's) `beacon_anchor`, which the sim
 ///   refuses before it reads the selector in it;
-/// * under a Defend or an Attack arm, whose settings the sim refuses as a
-///   whole (`E0012`, `E0013`) before it reads a selector in them (S2's wire,
-///   `con4`).
+/// * under an Attack arm, whose settings the sim refuses as a whole (`E0013`)
+///   before it reads a selector in them (S2's wire, `con4`).
 ///
-/// **For the lanes that lift `E0012` and `E0013` (S2's `dfnd`, `atk`).** Once
-/// the sim compiles an arm, it reads the selectors in it, so `/defend/` and
-/// `/attack/` leave this list in the same pull request. An Attack target's
+/// **For the lane that lifts `E0013` (S2's `atk`).** Once the sim compiles an
+/// arm, it reads the selectors in it, so `/attack/` leaves this list in the
+/// same pull request, as `/defend/` and `/beacon_under_attack/` left it with
+/// S2's `dfnd`. An Attack target's
 /// selector must rank known enemy beacons (`E0415`, the structure stage), and
 /// `side: ENEMY_KNOWN` is itself `E0015` until S3's knowledge store, so from
 /// then until S3 an Attack target is a handle, a voxel or the enemy
 /// commander, never a selector.
 ///
 /// A pointer token is a field name or an index, and each of `broadcast`,
-/// `beacon_under_attack`, `defend`, `attack` and the pair
-/// `anchor`/`beacon_anchor` names exactly one place in `gp.v1`, so the
-/// segments are unambiguous (`/attack/` is not `/beacon_under_attack/`).
+/// `attack` and the pair `anchor`/`beacon_anchor` names exactly one place in
+/// `gp.v1`, so the segments are unambiguous (`/attack/` is not
+/// `/beacon_under_attack/`, which a pointer token never contains whole).
 fn not_compiled(at: &str) -> bool {
-    at.contains("/broadcast/")
-        || at.contains("/beacon_under_attack/")
-        || at.contains("/anchor/beacon_anchor")
-        || at.contains("/defend/")
-        || at.contains("/attack/")
+    at.contains("/broadcast/") || at.contains("/anchor/beacon_anchor") || at.contains("/attack/")
 }
 
 impl Visit for Refusals<'_> {
@@ -160,7 +150,7 @@ impl Visit for Refusals<'_> {
     }
 
     fn build_target(&mut self, at: &str, target: &BuildTarget) {
-        if target.blueprint_id == BUILDABLE {
+        if BUILDABLE.contains(&target.blueprint_id.as_str()) {
             return;
         }
         // The sim refuses an empty id as a blueprint other than `generator`;
@@ -172,13 +162,8 @@ impl Visit for Refusals<'_> {
             );
             return;
         }
-        let code = if BASE_KIT.contains(&target.blueprint_id.as_str()) {
-            "E0019"
-        } else {
-            "E0010"
-        };
         self.out.emit(
-            Diag::new(code, pointer::child(at, "blueprint_id")).arg("id", &target.blueprint_id),
+            Diag::new("E0010", pointer::child(at, "blueprint_id")).arg("id", &target.blueprint_id),
         );
     }
 
@@ -197,9 +182,6 @@ impl Visit for Refusals<'_> {
 
     fn mandate(&mut self, at: &str, settings: &MandateSettings, carrier: Carrier) {
         let (code, arm, empty) = match settings.mandate.as_ref() {
-            Some(mandate_settings::Mandate::Defend(defend)) => {
-                ("E0012", "defend", *defend == DefendSettings::default())
-            }
             Some(mandate_settings::Mandate::Attack(attack)) => {
                 ("E0013", "attack", *attack == AttackSettings::default())
             }
@@ -213,20 +195,9 @@ impl Visit for Refusals<'_> {
         self.out.emit(Diag::new(code, pointer::child(at, arm)));
     }
 
-    fn beacon(&mut self, at: &str, reference: &BeaconRef) {
-        if not_compiled(at) {
-            return;
-        }
-        if let Some(beacon_ref::Ref::MostThreatened(_)) = reference.r#ref.as_ref() {
-            self.out
-                .emit(Diag::new("E0014", pointer::child(at, "most_threatened")));
-        }
-    }
-
     fn filter(&mut self, at: &str, filter: &BeaconFilter) {
-        // Under `most_threatened` the sim refuses the selector before it reads
-        // the filter, and in the places `not_compiled` names it reads neither.
-        if not_compiled(at) || at.ends_with("/most_threatened/filter") {
+        // In the places `not_compiled` names the sim reads no filter.
+        if not_compiled(at) {
             return;
         }
         // Read raw: a number `Side` does not name is `E0018`'s, never `OWN`.
@@ -237,15 +208,6 @@ impl Visit for Refusals<'_> {
         if !filter.tags.is_empty() {
             self.out
                 .emit(Diag::new("E0016", pointer::child(at, "tags")));
-        }
-    }
-
-    fn condition(&mut self, at: &str, node: &Condition) {
-        if let Some(condition::Node::BeaconUnderAttack(_)) = node.node.as_ref() {
-            self.out.emit(Diag::new(
-                "E0017",
-                pointer::child(at, "beacon_under_attack"),
-            ));
         }
     }
 }

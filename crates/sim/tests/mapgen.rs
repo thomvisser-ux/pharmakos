@@ -1039,3 +1039,73 @@ fn the_bore_is_derived_and_pinned() {
         golden_path.display()
     );
 }
+
+/// One `expected.surface.txt` line: one seed's generated surface (S2's
+/// `site`).
+fn surface_line(seed: u64, surface: &pharmakos_sim::terrain::GeneratedSurface) -> String {
+    let (low, high) = surface.range().expect("a map has ground");
+    format!(
+        "0x{}\t{}\t{}\t{}\t{}\n",
+        hex(seed),
+        hex(surface.digest()),
+        surface.len(),
+        low,
+        high
+    )
+}
+
+#[test]
+fn the_generated_surface_is_derived_and_pinned() {
+    // S2's `site` (decisions-log item 144 (5)): terraform's refill stops at
+    // the generated surface, each column's top solid voxel as the generator
+    // left it. A table derived with the map, never hashed or carried, and
+    // pinned here as the bore and the feature table are (AGENTS.md section
+    // 4.8's derived-table rule). Every column's entry is the map's own top.
+    let mut fresh = String::new();
+    for seed in SEEDS {
+        let map = generate(seed);
+        let [sx, sy, _] = map.voxels.size();
+        let (sx, sy) = (i32::try_from(sx).expect("x"), i32::try_from(sy).expect("y"));
+        assert_eq!(
+            map.surface.len(),
+            usize::try_from(sx * sy).expect("columns"),
+            "one entry a column"
+        );
+        for y in (0..sy).step_by(7) {
+            for x in (0..sx).step_by(5) {
+                assert_eq!(
+                    map.surface.top(x, y),
+                    map.voxels.top_solid_z(x, y),
+                    "({x}, {y})"
+                );
+            }
+        }
+        assert_eq!(map.surface.top(-1, 0), None, "off the map");
+        assert_eq!(map.surface.top(sx, 0), None, "off the map");
+        fresh.push_str(&surface_line(seed, &map.surface));
+    }
+    if let Some(target) = target_dir() {
+        let out = target.join("golden").join("mapgen");
+        std::fs::create_dir_all(&out).expect("creating the golden output directory");
+        std::fs::write(out.join("actual.surface.txt"), fresh.as_bytes())
+            .expect("writing actual.surface.txt");
+    }
+    let golden_path = repo_root()
+        .join("tests")
+        .join("golden")
+        .join("mapgen")
+        .join("expected.surface.txt");
+    let Ok(golden) = std::fs::read_to_string(&golden_path) else {
+        panic!(
+            "no committed golden at {}. Copy the fresh `actual.surface.txt` into place.",
+            golden_path.display()
+        );
+    };
+    assert_eq!(
+        golden,
+        fresh,
+        "the generated surface moved: {} differs from this run. A moved surface is a moved \
+         generator, which moves `expected.digests.txt` on the same seed.",
+        golden_path.display()
+    );
+}

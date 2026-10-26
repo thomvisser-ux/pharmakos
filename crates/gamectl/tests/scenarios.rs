@@ -56,6 +56,9 @@ const SCENARIOS: &[&str] = &[
     COVER_NEAREST_VENT,
     MINE_TO_DEPTH,
     BROWNOUT_BY_RECYCLE,
+    BASE_KIT_AT_THE_CORE,
+    TERRAFORM_LEVELS_A_FOOTPRINT,
+    GUARDS_ESCORT_THE_COMMANDER,
 ];
 
 /// The scenario against the built-in operator: seat 1 is `builtin`, played by
@@ -97,6 +100,25 @@ const MINE_TO_DEPTH: &str = "scenarios/s1/mine-to-depth.scenario.jsonc";
 /// on site, and the brownout order sheds the low-priority load (S1's `grid`;
 /// S1's plan, decision 18).
 const BROWNOUT_BY_RECYCLE: &str = "scenarios/s1/brownout-by-recycle.scenario.jsonc";
+
+/// The base kit and Build's S2 settings through the playbook door: an
+/// autocannon and a wall box at seat 0's core (S2's `site`). It asserts the
+/// base kit, not repair or salvage: the plan's mortar duel is evidenced
+/// headless, by `crates/sim/tests/site.rs`' `a_mortar_duel_repairs_and_salvages`,
+/// played twice and through a restore with its chain pinned.
+const BASE_KIT_AT_THE_CORE: &str = "scenarios/s2/base-kit-at-the-core.scenario.jsonc";
+
+/// S2's `dfnd`: a Defend beacon deployed with an `initial` Defend arm, its
+/// picket fielded and walking the ring.
+const GUARDS_ESCORT_THE_COMMANDER: &str = "scenarios/s2/guards-escort-the-commander.scenario.jsonc";
+
+/// Terraform through the playbook door: `FILL` levels a mortar's footprint
+/// before it is bought (S2's `site`; decisions-log item 144 (5)). The crater
+/// refill is evidenced headless, by `crates/sim/tests/site.rs`'
+/// `a_mortar_duel_refills_its_craters`, played twice and through a restore
+/// with its chain pinned.
+const TERRAFORM_LEVELS_A_FOOTPRINT: &str =
+    "scenarios/s2/terraform-levels-a-footprint.scenario.jsonc";
 
 /// **The exact set of scenarios allowed to seal through the harness door.**
 ///
@@ -271,6 +293,14 @@ fn the_committed_list_is_the_whole_set() {
                 "mine-to-depth",
                 "round-limit-audit",
                 "unaffordable-deploy",
+            ][..],
+        ),
+        (
+            "s2",
+            &[
+                "base-kit-at-the-core",
+                "guards-escort-the-commander",
+                "terraform-levels-a-footprint",
             ][..],
         ),
     ] {
