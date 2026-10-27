@@ -9,10 +9,10 @@
       "beginner": "This building cannot be made by a Build beacon in this build."
     }
   ],
-  "report_hash": "QwlJUFHCn7w=",
+  "report_hash": "3F2ar5KOgY0=",
   "rules_hash": "gCjUE4Tm3i8=",
   "plan_fingerprint": "A/rshyRcIUM=",
-  "verifier_version": "0.1.0-s2.2",
+  "verifier_version": "0.1.0-s2.3",
   "size_units": 2,
   "size_budget": 128
 }

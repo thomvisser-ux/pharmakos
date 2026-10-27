@@ -424,9 +424,9 @@ pub fn count(settings: &MandateSettings) -> Counted {
         // says the author wrote it; a message field counts once when present,
         // except a launch's and a retreat's conditions, each of which is an
         // element of its own (an `optional` inside them, counted as above).
-        // The sim refuses both arms whole until S2's `dfnd` and `atk` (E0012,
-        // E0013), and its `mandate_fields` prices them the same way when they
-        // lift the refusals. The patterns name every field, so the day
+        // The sim refused both arms whole until S2's `dfnd` and `atk` (E0012,
+        // E0013), and its `mandate_fields` prices them the same way now that
+        // both refusals are lifted. The patterns name every field, so the day
         // another arrives this match stops compiling.
         Some(mandate_settings::Mandate::Defend(defend)) => (defend_fields(defend), 0),
         Some(mandate_settings::Mandate::Attack(attack)) => (attack_fields(attack), 0),

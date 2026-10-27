@@ -44,10 +44,10 @@
       "beginner": "A building is placed on a spot on the map, not on whichever beacon a selector picks. Pick the spot."
     }
   ],
-  "report_hash": "l9beGqH+q5E=",
+  "report_hash": "ge9/SJwnYKM=",
   "rules_hash": "gCjUE4Tm3i8=",
   "plan_fingerprint": "2DRyFKcosIU=",
-  "verifier_version": "0.1.0-s2.2",
+  "verifier_version": "0.1.0-s2.3",
   "size_units": 2,
   "size_budget": 128
 }

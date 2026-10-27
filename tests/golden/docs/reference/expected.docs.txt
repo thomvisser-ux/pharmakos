@@ -820,7 +820,7 @@ gp.v1.Playbook.Kind
 
 ## Diagnostics
 
-97 codes. A code is language-neutral, append-only and never
+98 codes. A code is language-neutral, append-only and never
 reused; only an ERROR stops a playbook qualifying. `none at the skeleton` names the
 task that owes the emitter, which is honesty about coverage rather than a gap.
 
@@ -834,7 +834,7 @@ E0002  ERROR  decode and version  raised at: decode
   There is a name here that the playbook vocabulary does not have. Nothing is removed for you: correct the name or take the line out yourself.
 
 E0003  ERROR  decode and version  raised at: decode
-  `{field}` is held back to a later version and is not part of the v1 vocabulary.
+  `{field}` is reserved: the schema holds it back for a later stage or version, and this build does not read it.
   This is a word the game keeps for later. It is refused rather than quietly ignored, so nothing you wrote disappears without you seeing it.
 
 E0004  ERROR  decode and version  raised at: decode
@@ -870,16 +870,16 @@ E0011  ERROR  decode and version  raised at: structure
   A building is placed on a spot on the map, not on whichever beacon a selector picks. Pick the spot.
 
 E0012  ERROR  decode and version  raised at: none at the skeleton (retired by S2's `dfnd`, which built Defend's settings)
-  Defend mandate settings have no effect until S2's Defend mandate lands; they are refused rather than ignored.
-  A Defend beacon cannot be given settings in this build yet.
+  Defend mandate settings had no effect until S2's Defend mandate landed; this code is retired and raised by nothing.
+  A Defend beacon takes its settings in this build.
 
 E0013  ERROR  decode and version  raised at: none at the skeleton (retired by S2's `atk`, which built Attack's settings)
   Attack mandate settings had no effect until S2's Attack mandate landed; this code is retired and raised by nothing.
   An Attack beacon takes its settings in this build.
 
 E0014  ERROR  decode and version  raised at: none at the skeleton (retired by S2's `dfnd`, which built `most_threatened`)
-  selector `most_threatened` has no effect until S2's threat model, which is what it ranks by; it is refused rather than ignored.
-  "Most threatened" needs threats to weigh, and this build has none yet. Name the beacon, or pick it another way.
+  selector `most_threatened` had no effect until S2's threat model landed; this code is retired and raised by nothing.
+  "Most threatened" picks your own beacon with the most enemy firepower seen inside its sphere.
 
 E0015  ERROR  decode and version  raised at: structure
   selector filter `side: ENEMY_KNOWN` has no effect until S3, with the seat's knowledge store; it is refused rather than ignored.
@@ -890,16 +890,16 @@ E0016  ERROR  decode and version  raised at: structure
   Tags on a beacon are kept, but nothing can pick a beacon by its tags yet.
 
 E0017  ERROR  decode and version  raised at: none at the skeleton (retired by S2's `dfnd`, which built `beacon_under_attack`)
-  predicate `beacon_under_attack` has no effect until S2's combat gives a beacon a damage history to ask about; it is refused rather than read as true or false.
-  Asking whether a beacon is under attack comes with combat. Until then the question has no answer, so it cannot be asked.
+  predicate `beacon_under_attack` had no effect until S2's combat gave a beacon a damage history to ask about; this code is retired and raised by nothing.
+  Asking whether a beacon is under attack works in this build.
 
 E0018  ERROR  decode and version  raised at: decode
   `{field}` carries {value}, which is not a value this build names; it is refused rather than read as a default.
   This setting holds a number the game does not know. Nothing is guessed for you: write one of the setting's names instead.
 
 E0019  ERROR  decode and version  raised at: none at the skeleton (retired by S2's `site`, which built the base kit)
-  a Build target names `{id}`, one of S2's base kit, which has no effect until S2's base kit lands; it is refused rather than ignored.
-  Autocannons, mortars and walls cannot be built in this build yet.
+  a Build target naming one of S2's base kit had no effect until S2's base kit landed; this code is retired and raised by nothing.
+  Autocannons, mortars and walls can be built in this build.
 
 E0101  ERROR  limits and required blocks  raised at: structure
   {what} is required and is missing.
@@ -1134,8 +1134,8 @@ E0512  ERROR  settings and recycle  raised at: structure
   A wall lower than this is climbable and blocks nothing. Raise the top of the box.
 
 W0501  WARNING  settings and recycle  raised at: none at the skeleton (retired by S2's `dfnd`, which built the threat model)
-  `seam_choice` SAFEST reads as NEAREST until S2's threat model arrives.
-  "Safest" needs threats to weigh, and they come later. Until then this beacon digs the nearest seam.
+  `seam_choice` SAFEST read as NEAREST until S2's threat model landed; it digs the nearest seam no known threat's weapon reaches, and this code is retired and raised by nothing.
+  "Safest" digs the nearest seam that no enemy weapon your side sees can reach.
 
 W0502  WARNING  settings and recycle  raised at: structure
   `{name}` is on this protect list more than once; its guards escort it once, and the repeat only adds a field to the edit.
@@ -1212,3 +1212,7 @@ I0003  INFO  information  raised at: structure
 I0004  INFO  information  raised at: structure
   `repair_threshold_pct` is 0, so this Build beacon's drones never repair a structure; its units and the commander are still repaired.
   A repair threshold of 0 means never. Write a percentage to have damaged structures repaired.
+
+I0005  INFO  information  raised at: semantics
+  `pace` is AVOID_KNOWN_THREATS, and the seat's view holds no enemy beacon in sight; unless the seat sees an armed enemy when the move starts, it goes as DIRECT does.
+  Avoiding threats needs an enemy your side can see. None is in sight now, so unless one is when the walk starts, it goes straight.
