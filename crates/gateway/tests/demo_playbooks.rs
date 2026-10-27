@@ -200,6 +200,11 @@ fn defend_the_core_with_its_own_values_qualifies_and_renders_in_the_lobbys_lull(
 }
 
 #[test]
+fn raid_an_enemy_beacon_with_its_own_values_qualifies_and_renders_in_the_lobbys_lull() {
+    template_case("raid_an_enemy_beacon");
+}
+
+#[test]
 fn the_safe_playbook_with_its_own_values_qualifies_and_renders_in_the_lobbys_lull() {
     template_case("safe_playbook");
 }

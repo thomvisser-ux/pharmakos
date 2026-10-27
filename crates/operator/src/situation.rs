@@ -61,6 +61,8 @@ pub(crate) struct Beacon {
     pub(crate) at: [i32; 3],
     /// True when it is this seat's.
     pub(crate) own: bool,
+    /// The seat that owns it.
+    pub(crate) seat: u8,
     /// Own beacons only: the seat's core.
     pub(crate) core: bool,
     /// Own beacons only: false while it is browned out.
@@ -69,6 +71,10 @@ pub(crate) struct Beacon {
     /// seat's beacon, which carries none on the wire, and for a value that
     /// does not read.
     pub(crate) priority: Option<Priority>,
+    /// Another seat's beacon only: game milliseconds since the seat last saw
+    /// it (`BeaconSummary.sighting_age_ms`, 0 in live vision); `None` on an
+    /// own beacon, which the seat never sights.
+    pub(crate) sighting_age_ms: Option<i64>,
 }
 
 /// A Quartermaster priority, in the brownout order's sense: the lowest sheds
@@ -252,6 +258,28 @@ pub(crate) struct Enemy {
     pub(crate) at: [i32; 3],
     /// What it is.
     pub(crate) asset: Asset,
+    /// The seat that owns it.
+    pub(crate) seat: u8,
+}
+
+/// The seat a wire owner names: `seat.N` is N.
+///
+/// # Errors
+///
+/// `MALFORMED`, from `method`, for an owner that is not spelt so: an owner
+/// the operator cannot read is not one it takes for some seat.
+pub(crate) fn seat_of(method: &str, owner: &str) -> Result<u8, Refused> {
+    let unread = || malformed(method, &format!("an owner `{owner}` that names no seat"));
+    let digits = owner.strip_prefix("seat.").ok_or_else(unread)?;
+    // Decimal digits only, and no leading zero: the one spelling the gateway
+    // writes, so `seat.+1` or `seat.01` is not read as seat 1.
+    if digits.is_empty()
+        || !digits.bytes().all(|byte| byte.is_ascii_digit())
+        || (digits.len() > 1 && digits.starts_with('0'))
+    {
+        return Err(unread());
+    }
+    digits.parse::<u8>().map_err(|_| unread())
 }
 
 /// Whether the seat's commander died in the Push before this Lull: what
@@ -452,7 +480,27 @@ fn read_beacons(wire: &mut Wire<'_, '_>, own: &str) -> Result<Vec<Beacon>, Refus
                 .get("at")
                 .ok_or_else(|| malformed("list_beacons", "a beacon with no position"))?;
             let at = voxel(at).map_err(misread)?;
-            let mine = text_of(row, "owner").map_err(misread)? == own;
+            let owner = text_of(row, "owner").map_err(misread)?;
+            let mine = owner == own;
+            let seat = seat_of("list_beacons", owner)?;
+            // Another seat's beacon carries its sighting's age, and one that
+            // does not is an answer the operator cannot tell fresh from
+            // stale: refused rather than read as seen now.
+            let sighting_age_ms = if mine {
+                None
+            } else {
+                if row.get("sighting_age_ms").is_none() {
+                    return Err(malformed(
+                        "list_beacons",
+                        "another seat's beacon with no sighting age",
+                    ));
+                }
+                let age = int_of(row, "sighting_age_ms").map_err(misread)?;
+                if age < 0 {
+                    return Err(malformed("list_beacons", "a sighting age below zero"));
+                }
+                Some(age)
+            };
             let priority = Wire::enum_name(
                 "gp.v1.InterfaceRow.QuartermasterPriority",
                 row.get("priority"),
@@ -463,9 +511,11 @@ fn read_beacons(wire: &mut Wire<'_, '_>, own: &str) -> Result<Vec<Beacon>, Refus
                 id: text_of(row, "beacon_id").map_err(misread)?.to_owned(),
                 at,
                 own: mine,
+                seat,
                 core: mine && bool_of(row, "core").map_err(misread)?,
                 powered: mine && bool_of(row, "powered").map_err(misread)?,
                 priority: if mine { priority } else { None },
+                sighting_age_ms,
             });
         }
         text_of(&page, "next_cursor")
@@ -526,7 +576,11 @@ fn read_view(wire: &mut Wire<'_, '_>, own: &str) -> Result<Seen, Refused> {
                 } else if !owner.is_empty()
                     && let Some(asset) = Asset::of(kind.as_deref(), subtype)?
                 {
-                    seen.enemies.push(Enemy { at, asset });
+                    seen.enemies.push(Enemy {
+                        at,
+                        asset,
+                        seat: seat_of("get_view", owner)?,
+                    });
                 }
             }
             seen.complete = true;
@@ -656,6 +710,21 @@ fn read_templates(wire: &mut Wire<'_, '_>) -> Result<Vec<String>, Refused> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_owner_is_read_in_the_gateways_one_spelling_only() {
+        assert_eq!(seat_of("get_view", "seat.0"), Ok(0));
+        assert_eq!(seat_of("get_view", "seat.12"), Ok(12));
+        for owner in [
+            "seat.x", "seat.+1", "seat.01", "seat.300", "seat.", "seat 1", "",
+        ] {
+            assert_eq!(
+                seat_of("list_beacons", owner).map_err(|refused| refused.code),
+                Err(String::from("MALFORMED")),
+                "{owner}"
+            );
+        }
+    }
 
     #[test]
     fn a_death_line_names_its_seat_and_any_other_line_is_refused() {

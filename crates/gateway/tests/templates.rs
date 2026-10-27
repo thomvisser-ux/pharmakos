@@ -24,11 +24,13 @@ use pharmakos_proto::json::Json;
 
 use support::{MATCH, SEGMENT_MS, library_folder, result, text_of};
 
-/// The three templates item 81 names, by file stem.
-const SHIPPED: [&str; 4] = [
+/// The shipped templates: the three item 81 names, Defend the Core (`oprd`) and
+/// Raid an Enemy Beacon (`opra`), by file stem.
+const SHIPPED: [&str; 5] = [
     "defend_the_core",
     "expand_and_mine",
     "hold_and_build",
+    "raid_an_enemy_beacon",
     "safe_playbook",
 ];
 
@@ -71,7 +73,7 @@ fn each_template_instantiates_and_qualifies_for_both_seats_of_the_golden_seed() 
             .iter()
             .map(|row| text_of(row, "template_id"))
             .collect();
-        assert_eq!(ids, SHIPPED, "the library lists the four, in id order");
+        assert_eq!(ids, SHIPPED, "the library lists the five, in id order");
         for row in support::array_of(&listed, "templates") {
             assert!(!text_of(&row, "title").is_empty());
             assert!(!text_of(&row, "summary").is_empty());

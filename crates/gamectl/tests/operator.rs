@@ -114,6 +114,18 @@ fn power_short_json() -> String {
 
 /// A match in its opening Lull, hosted exactly as `serve::run` hosts one.
 fn open(match_id: &str, seed: u64, seats: u32, rules: &str, rounds: u32) -> Surface {
+    open_under(match_id, seed, seats, rules, rounds, FogPolicy::fogged())
+}
+
+/// [`open`] under a fog policy of the caller's.
+fn open_under(
+    match_id: &str,
+    seed: u64,
+    seats: u32,
+    rules: &str,
+    rounds: u32,
+    fog: FogPolicy,
+) -> Surface {
     let host = Host::open_from(
         rules,
         seed,
@@ -131,8 +143,7 @@ fn open(match_id: &str, seed: u64, seats: u32, rules: &str, rounds: u32) -> Surf
         .filter_map(|raw| u8::try_from(raw).ok())
         .map(SeatId::new)
         .collect();
-    let mut surface =
-        Surface::new(match_id, seed, table, FogPolicy::fogged(), &ids).expect("a surface");
+    let mut surface = Surface::new(match_id, seed, table, fog, &ids).expect("a surface");
     surface.attach(host).expect("attached");
     surface.open_lull().expect("the opening Lull");
     surface
@@ -1375,4 +1386,91 @@ fn the_scenario_generator_raises_supply_by_exactly_the_lean_vent() {
         lean,
         "the Generator on the lean vent adds exactly its output, and nothing else moved supply"
     );
+}
+
+/// S2's `opra` through the real gateway and verifier: under casual fog every
+/// seat sees the other's core and commander in its opening Lull, so Easy's
+/// advisor offers a raid on a fixed target -- an `e_NN` the seat's own
+/// listing gives, or an enemy commander by its seat -- staged at its post's
+/// site, and the Raid template filled with it qualifies FULL (E0414, E0418
+/// and E0419 among the checks) for both seats.
+#[test]
+fn a_suggested_raid_qualifies_through_the_real_verifier() {
+    let rules = rules_json();
+    let mut surface = open_under(
+        &match_id("raid"),
+        SCENARIO_SEED,
+        2,
+        &rules,
+        3,
+        FogPolicy::casual(),
+    );
+    for seat in [0_u8, 1] {
+        let token = in_process_token(&mut surface, seat);
+        let (advice, _) = advise_unforced(&mut surface, &token, seat, &rules);
+        let raid = advice
+            .suggestions
+            .iter()
+            .find(|suggestion| suggestion.template_id == "raid_an_enemy_beacon")
+            .expect("a Raid suggestion");
+        let target = raid
+            .parameters
+            .iter()
+            .find(|value| value.pointer.ends_with("/attack/target"))
+            .unwrap_or_else(|| panic!("seat {seat} is offered a raid: {raid:#?}"));
+        assert!(
+            target.value.contains("\"beacon_id\":\"e_")
+                || target.value.contains("\"enemy_commander\":{\"seat\":"),
+            "a fixed target: {}",
+            target.value
+        );
+        let parameters: Vec<Json> = raid
+            .parameters
+            .iter()
+            .map(|value| {
+                Json::Object(vec![
+                    (String::from("name"), Json::String(value.pointer.clone())),
+                    (String::from("value"), Json::String(value.value.clone())),
+                ])
+            })
+            .collect();
+        let made = result(
+            &call(
+                &mut surface,
+                &token,
+                "instantiate_template",
+                Json::Object(vec![
+                    (
+                        String::from("template_id"),
+                        Json::String(String::from("raid_an_enemy_beacon")),
+                    ),
+                    (String::from("parameters"), Json::Array(parameters)),
+                ]),
+            ),
+            "instantiate_template",
+        );
+        let playbook = made
+            .get("playbook_jsonc")
+            .cloned()
+            .expect("an instantiated playbook");
+        let verified = result(
+            &call(
+                &mut surface,
+                &token,
+                "verify_plan",
+                Json::Object(vec![
+                    (String::from("playbook_jsonc"), playbook),
+                    (String::from("depth"), Json::String(String::from("full"))),
+                ]),
+            ),
+            "verify_plan",
+        );
+        let report = verified.get("report").expect("a report");
+        assert_eq!(
+            report.get("qualifies"),
+            Some(&Json::Bool(true)),
+            "seat {seat}'s raid on {}: {report:?}",
+            target.value
+        );
+    }
 }

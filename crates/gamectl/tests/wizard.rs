@@ -72,10 +72,11 @@ const HUMAN: u8 = 0;
 const ROUND_LIMIT: u32 = 3;
 
 /// The templates the library ships, in the order the wizard lists them.
-const TEMPLATES: [&str; 4] = [
+const TEMPLATES: [&str; 5] = [
     "defend_the_core",
     "expand_and_mine",
     "hold_and_build",
+    "raid_an_enemy_beacon",
     "safe_playbook",
 ];
 

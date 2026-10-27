@@ -51,12 +51,12 @@
 
 use pharmakos_proto::json::Json;
 
-use crate::candidates::{Candidate, Goal, NoVent, core_threat, route_index, tap_step};
+use crate::candidates::{Candidate, Goal, NoVent, RaidTarget, core_threat, route_index, tap_step};
 use crate::easy::{CORE_DIG_MAX_DEPTH, DEFEND_THE_CORE, EASY_ROUTE_FILL_PERCENT};
 use crate::playbook::{Declared, op, pointer_get, with_member, with_pointer};
 use crate::situation::{Kind, LastPush, Situation};
 use crate::tuning::Tuning;
-use crate::wire::{number, object, string};
+use crate::wire::{number, object, string, voxel_json};
 
 /// A composed round: the template, its goals, and the patch that fills it.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -195,8 +195,9 @@ pub(crate) fn compose(
         Some(guard) => (guard.time_ms, guard.cost_dollars),
         None => (0, 0),
     };
+    let top = beside_the_guard(top, guard);
     let goals = greedy(
-        top,
+        &top,
         fill.checked_sub(guard_ms)?,
         situation.economy.treasury.checked_sub(guard_dollars)?,
     );
@@ -281,6 +282,18 @@ pub(crate) fn compose(
     })
 }
 
+/// The top-k less any goal on the guard's seam: a raid post covers the seam
+/// the guard post does, beside the core, so with a guard placed the two would
+/// contend for one site, and the round makes no raid.
+fn beside_the_guard(top: &[Candidate], guard: Option<&Candidate>) -> Vec<Candidate> {
+    top.iter()
+        .filter(|candidate| {
+            guard.is_none_or(|guard| guard.goal.feature() != candidate.goal.feature())
+        })
+        .cloned()
+        .collect()
+}
+
 /// `{"feature_id": "<name>"}`: a feature reference by name.
 fn named(feature: &str) -> Json {
     object(vec![("feature_id", string(feature))])
@@ -333,6 +346,11 @@ fn place_patch(
     let place_prefix = format!("/declarative/route/{place_index}");
     let place_step = pointer_get(&template.body, &place_prefix)?.clone();
     let below = covering.strip_prefix(&place_prefix)?.to_owned();
+    // A raid's two more settings, which only the Raid template declares.
+    let raid_target = template.pointer_ending("/attack/target").map(str::to_owned);
+    let raid_staging = template
+        .pointer_ending("/attack/staging")
+        .map(str::to_owned);
     let mut patch: Vec<Json> = Vec::new();
     let mut removals: Vec<Vec<Json>> = Vec::new();
     if let Some(hold) = template.pointer_ending("/hold/ms") {
@@ -363,6 +381,34 @@ fn place_patch(
                     continue;
                 }
                 place_copy(&place_step, &below, name, n)?
+            }
+            Goal::Raid { seam, target } => {
+                // The post's seam, its target, and its staging at the site
+                // the estimate answered, so the raiders gather at home.
+                // Easy's targets are fixed (spec section 14's Easy column:
+                // "Fixed only", retargeting a rule of Normal's), so it seals
+                // `NONE` where the template says `NEAREST_KNOWN`.
+                let retarget = format!(
+                    "{}/retarget",
+                    raid_target.as_deref()?.strip_suffix("/target")?
+                );
+                let settings = [
+                    (covering.as_str(), named(seam)),
+                    (raid_target.as_deref()?, target.json()),
+                    (raid_staging.as_deref()?, voxel_json(goal.place)),
+                    (retarget.as_str(), string("NONE")),
+                ];
+                if k == 0 {
+                    for (pointer, value) in settings {
+                        patch.push(op("replace", pointer, Some(value)));
+                    }
+                    continue;
+                }
+                let mut step = place_copy(&place_step, &below, seam, n)?;
+                for (pointer, value) in settings.into_iter().skip(1) {
+                    step = with_pointer(&step, pointer.strip_prefix(&place_prefix)?, value)?;
+                }
+                step
             }
             Goal::Tap { beacon, vent, .. } => {
                 let label = if k == 0 {
@@ -483,6 +529,12 @@ pub(crate) fn why_for(candidate: &Candidate, goals: usize, fill: i64) -> String 
              reads now, guarding the core and your commander{more}{tail}",
             place(candidate.place),
         ),
+        Goal::Raid { seam, target } => format!(
+            "An Attack beacon beside the core, covering the scrap seam {seam}, at {} as its site \
+             reads now, whose raiders gather there and raid {}{more}{tail}",
+            place(candidate.place),
+            raid_words(target),
+        ),
     }
 }
 
@@ -518,6 +570,30 @@ pub(crate) fn guard_reason(situation: &Situation, tuning: &Tuning) -> String {
             ),
         },
     }
+}
+
+/// A raid's target, in words.
+///
+/// PLACEHOLDER: the wording is the operator's, in English, until the one string table exists — owner, S6
+pub(crate) fn raid_words(target: &RaidTarget) -> String {
+    match target {
+        RaidTarget::Beacon { id, at } => {
+            format!("the enemy beacon {id}, last seen at {}", place(*at))
+        }
+        RaidTarget::Commander { seat, at } => {
+            format!("the commander of seat {seat}, in sight at {}", place(*at))
+        }
+    }
+}
+
+/// Why Raid an Enemy Beacon has no suggestion this round.
+pub(crate) fn why_no_raid() -> String {
+    String::from(
+        "No raid was weighed this round: it needs your core and your commander in view, a live \
+         scrap seam inside your core's sphere for the post, the treasury for the post and its \
+         raiders, and an enemy beacon you saw within the reach window or an enemy commander in \
+         sight that a route reaches, so this template's own values stand.",
+    )
 }
 
 /// Why a template has no suggestion this round.
