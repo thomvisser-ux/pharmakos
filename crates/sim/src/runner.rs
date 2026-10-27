@@ -785,6 +785,15 @@ pub enum SealRefused {
     /// A tick is open between two of its phases ([`PhasedTick`]): the
     /// phase the match reports is half a tick's (S2's plan, E30).
     MidTick,
+    /// An Attack target's `enemy_commander.seat` names the sealing seat or
+    /// a seat this match has not got (S2's `atk`; the owner's answer of
+    /// 2026-10-26). The verifier refuses either first, as E0419 or E0418.
+    CommanderSeat {
+        /// The seat sealing.
+        seat: SeatId,
+        /// The seat its target names.
+        named: u8,
+    },
 }
 
 impl core::fmt::Display for SealRefused {
@@ -799,6 +808,16 @@ impl core::fmt::Display for SealRefused {
                 write!(f, "this match has no seat {}", seat.raw())
             }
             SealRefused::MidTick => write!(f, "a tick is open between two of its phases"),
+            SealRefused::CommanderSeat { seat, named } => write!(
+                f,
+                "seat {}'s playbook hunts the commander of seat {named}, which is {}",
+                seat.raw(),
+                if *named == seat.raw() {
+                    "its own"
+                } else {
+                    "no seat of this match"
+                }
+            ),
         }
     }
 }
@@ -945,8 +964,9 @@ impl Runner {
     /// # Errors
     ///
     /// [`SealRefused::NotInLull`] outside a Lull — a Push, a recap or an ended
-    /// match — and [`SealRefused::NoSuchSeat`] for a seat this match has not
-    /// got.
+    /// match — [`SealRefused::NoSuchSeat`] for a seat this match has not got,
+    /// and [`SealRefused::CommanderSeat`] for a plan hunting its own
+    /// commander or one of a seat the match has not got (S2's `atk`).
     pub fn seal_playbook(&mut self, seat: SeatId, plan: Plan) -> Result<(), SealRefused> {
         if self.world.tick_is_open() {
             return Err(SealRefused::MidTick);
@@ -954,6 +974,13 @@ impl Runner {
         let phase = self.phase();
         if phase != MatchPhase::Lull {
             return Err(SealRefused::NotInLull(phase));
+        }
+        let seats = self.world.seats().len();
+        if let Some(named) = plan
+            .commander_seats()
+            .find(|named| *named == seat.raw() || u32::from(*named) >= seats)
+        {
+            return Err(SealRefused::CommanderSeat { seat, named });
         }
         if self.world.seal_playbook(seat, plan) {
             Ok(())

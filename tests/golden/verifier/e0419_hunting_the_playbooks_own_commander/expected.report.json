@@ -1,0 +1,19 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0419",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/place_beacon/initial/mandate/attack/target/enemy_commander/seat",
+      "message": "`enemy_commander` names seat 0, which is this playbook's own seat; it hunts another seat's commander in this match, or, without a seat, the nearest the seat has seen.",
+      "beginner": "An Attack beacon hunts an enemy's commander. Name an enemy seat, or leave the seat out to hunt the nearest enemy commander seen."
+    }
+  ],
+  "report_hash": "hOx3HUrj5tc=",
+  "rules_hash": "gCjUE4Tm3i8=",
+  "plan_fingerprint": "xFeUfj09Xcs=",
+  "verifier_version": "0.1.0-s2.2",
+  "size_units": 1,
+  "size_budget": 128
+}
+

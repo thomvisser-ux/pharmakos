@@ -1382,8 +1382,16 @@ fn commit_row(
             retreat_hp_pct,
             build,
             defend,
+            attack,
             ..
         } => {
+            // An Attack target pinned at the seal reads as the beacon it was
+            // pinned to; a handle the seal could not pin fails the step
+            // `no_target` before anything is written (S2's `atk`).
+            let aim = match attack.as_ref().and_then(|edit| edit.target) {
+                Some(target) => Some(attack_aim(target)?),
+                None => None,
+            };
             // A protect list's beacons resolve once, when the row commits,
             // and are held from then on (S2's `dfnd`), as a step pins its
             // selector; one that resolves to nothing fails the step
@@ -1469,9 +1477,30 @@ fn commit_row(
             if let Some(edit) = defend {
                 world.set_defend_settings(beacon, edit, guarded.as_ref());
             }
+            // The Attack settings the row names (S2's `atk`), and nothing it
+            // is silent about.
+            if let Some(edit) = attack {
+                world.set_attack_settings(beacon, edit, aim);
+            }
         }
     }
     Ok(())
+}
+
+/// An Attack target as the Attack table holds it (S2's `atk`).
+///
+/// # Errors
+///
+/// [`StepFailure::NoTarget`] for an enemy beacon's handle the seal pinned to
+/// nothing ([`crate::interpreter::Plan::pin_foreign`]).
+fn attack_aim(target: crate::attack::TargetSpec) -> Result<crate::attack::Aim, StepFailure> {
+    Ok(match target {
+        crate::attack::TargetSpec::Foreign { pinned, .. } => {
+            crate::attack::Aim::Beacon(pinned.ok_or(StepFailure::NoTarget)?)
+        }
+        crate::attack::TargetSpec::Voxel(at) => crate::attack::Aim::Voxel(at),
+        crate::attack::TargetSpec::Commander(seat) => crate::attack::Aim::Commander(seat),
+    })
 }
 
 /// A protect list as the Defend table holds it: whether it names

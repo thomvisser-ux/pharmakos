@@ -73,6 +73,7 @@
 //! against `tests/golden/determinism/expected.hashes.txt`.
 
 pub mod arms;
+pub mod attack;
 pub mod audit;
 pub mod bore;
 pub mod chunks;

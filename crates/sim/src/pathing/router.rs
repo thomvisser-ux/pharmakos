@@ -66,7 +66,7 @@ use crate::math::fixed::{Angle, Fx};
 use crate::math::quantity::{Hp, TICK_HZ};
 use crate::pathing::MAX_ROUTE_NODES;
 use crate::pathing::clusters::Clusters;
-use crate::pathing::route::{NoPath, RouteOutcome, route};
+use crate::pathing::route::{NoPath, RouteOutcome};
 use crate::pathing::search::Scratch;
 use crate::pathing::surface::{Node, Surface};
 use crate::tables::UnitKind;
@@ -496,6 +496,27 @@ impl Router {
         destinations: &[[Fx; 3]],
         cap: u32,
     ) -> ServeReport {
+        self.serve_costed(
+            surface,
+            clusters,
+            scratch,
+            (positions, destinations),
+            cap,
+            |_| crate::pathing::route::Surcharge::NONE,
+        )
+    }
+
+    /// [`Router::serve`], each unit's route priced under the surcharge
+    /// `costs` gives it (S2's `atk`; register S2-03).
+    pub fn serve_costed<'z>(
+        &mut self,
+        surface: &Surface,
+        clusters: &Clusters,
+        scratch: &mut Scratch,
+        (positions, destinations): (&[[Fx; 3]], &[[Fx; 3]]),
+        cap: u32,
+        costs: impl Fn(u32) -> crate::pathing::route::Surcharge<'z>,
+    ) -> ServeReport {
         self.served_this_tick.clear();
         self.sealed_this_tick.clear();
         let count = self.len();
@@ -532,7 +553,14 @@ impl Router {
                 continue;
             };
             let mut buffer = core::mem::take(&mut self.buffer);
-            let outcome = route(surface, clusters, scratch, start, goal, &mut buffer);
+            let outcome = crate::pathing::route::route_with(
+                surface,
+                clusters,
+                scratch,
+                (start, goal),
+                costs(unit),
+                &mut buffer,
+            );
             match outcome {
                 Ok(RouteOutcome { partial, .. }) if buffer.len() > 1 => {
                     self.write_route(unit, &buffer, partial);

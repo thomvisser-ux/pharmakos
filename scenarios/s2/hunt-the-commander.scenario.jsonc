@@ -1,0 +1,58 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// S2's `atk` (S2's plan, task `atk`): commander hunting through the playbook
+// door, on the golden seed, in one eight-minute segment.
+//
+//   seat 0  seals scenarios/s2/hunt-the-commander.playbook.jsonc: an Attack
+//           beacon twenty voxels north of its core, aimed at the enemy
+//           commander, launching on two raiders. Its fabricator fields them
+//           on the work in hand and they gather at the beacon;
+//   seat 1  seals scenarios/s2/hunt-the-commander.enemy.playbook.jsonc: its
+//           commander walks south down the map to sixty voxels short of seat
+//           0's core, outside the core's autocannon.
+//
+// No commander is sighted when seat 0 seals, so the verifier refuses the
+// target as E0418 (an Attack target rests on a fresh sighting) and the
+// harness seals it and says so; the sim's hunt is what is pinned. When seat
+// 1's commander enters the Attack beacon's sphere the seat sights it, the
+// force launches at it, follows it while it sees it, and kills it; the
+// commander dead, the hunt is over (`retarget` NONE), and the force regroups.
+// The live retarget and the loss of a stale sighting are
+// crates/sim/tests/attack.rs's, played headless.
+{
+  "format": "pharmakos.scenario.v1",
+  "name": "hunt-the-commander",
+  "summary": "Seat 0's Attack beacon hunts seat 1's commander when it walks into sight, and kills it.",
+
+  "map": {
+    "seed": "0x00000000ca5caded",
+    "generator": "skeleton"
+  },
+
+  "rules": "rules/rules.v1.json",
+  "round_limit": 1,
+
+  "seats": [
+    { "seat": 0, "kind": "playbook", "playbook": "scenarios/s2/hunt-the-commander.playbook.jsonc" },
+    { "seat": 1, "kind": "playbook", "playbook": "scenarios/s2/hunt-the-commander.enemy.playbook.jsonc" }
+  ],
+
+  "segments": [
+    { "index": 0, "length_ms": 480000, "note": "The walk, the sighting, the launch and the kill." }
+  ],
+
+  "assertions": [
+    { "assert": "event_fired", "event": "beacon_placed", "seat": 0, "by_tick": 700,
+      "note": "The Attack beacon is placed with its initial settings." },
+    { "assert": "event_fired", "event": "attack_launched", "seat": 0, "by_tick": 6300,
+      "note": "The force launches at the commander once the seat sights it." },
+    { "assert": "event_fired", "event": "commander_died", "seat": 1, "by_tick": 7500,
+      "note": "The raiders kill the hunted commander." },
+    { "assert": "event_fired", "event": "attack_ended", "seat": 0, "by_tick": 7500,
+      "note": "The commander dead, the hunt is over and the force regroups." },
+    { "assert": "hash_chain_equals",
+      "golden": "tests/golden/scenarios/hunt-the-commander/expected.hashes.txt",
+      "note": "Byte-identical on Windows, Linux and macOS; pins the Attack table and the hunt. Re-blessed with `cargo xtask golden --bless`, and never to turn a red build green." }
+  ]
+}

@@ -1,0 +1,29 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// S2's `atk`: one visit to the core that sets it to FREE_FIRE and builds a
+// mortar and an autocannon fourteen voxels south of it, the way seat 0's
+// raiders come. See raid-on-a-mortar.scenario.jsonc.
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {"title": "Arm the south", "author_kind": "HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {"label": "arm",
+        "interface": {"beacon": {"beacon_id": "b_00"}, "rows": [
+          {"set_mandate_settings": {"roe": "FREE_FIRE", "build": {
+            "targets": [
+              {"blueprint_id": "mortar", "anchor": {"voxel": {"x": 357, "y": 345, "z": 29}}},
+              {"blueprint_id": "autocannon", "anchor": {"voxel": {"x": 361, "y": 345, "z": 29}},
+                "order": 1}
+            ]
+          }}}
+        ]},
+        "timeout_ms": 60000, "on_fail": {"action": "SKIP"}}
+    ],
+    "handlers": []
+  },
+  "on_death": {"on_respawn": "CONTINUE", "max_deaths_before_fallback": 2},
+  "fallback": {"hold": {"at": {"safest": {}}}}
+}

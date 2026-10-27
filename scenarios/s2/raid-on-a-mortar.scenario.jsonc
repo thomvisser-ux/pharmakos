@@ -1,0 +1,54 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// S2's `atk` (S2's plan, task `atk`, the scenario `fire` staged as
+// crates/sim/tests/combat.rs's `a_raid_on_a_mortar`): an Attack beacon's
+// raiders dive a mortar the other seat's Build beacon built, through the
+// playbook door, on the golden seed, in one eight-minute segment.
+//
+//   seat 0  seals scenarios/s2/raid-on-a-mortar.playbook.jsonc: an Attack
+//           beacon by its core, launching two raiders at the voxel of seat
+//           1's mortar, three hundred voxels down the map;
+//   seat 1  seals scenarios/s2/raid-on-a-mortar.enemy.playbook.jsonc: its
+//           core, a Build beacon, goes FREE_FIRE and builds a mortar and an
+//           autocannon south of it.
+//
+// The raiders walk the length of the map. Where seat 1 sees them, its
+// mortar shells them and its autocannon and its core's autocannon shoot
+// them, and they die short of the mortar, leaving wrecks.
+{
+  "format": "pharmakos.scenario.v1",
+  "name": "raid-on-a-mortar",
+  "summary": "Seat 0's raiders dive seat 1's mortar; the mortar, the autocannon and the core kill them.",
+
+  "map": {
+    "seed": "0x00000000ca5caded",
+    "generator": "skeleton"
+  },
+
+  "rules": "rules/rules.v1.json",
+  "round_limit": 1,
+
+  "seats": [
+    { "seat": 0, "kind": "playbook", "playbook": "scenarios/s2/raid-on-a-mortar.playbook.jsonc" },
+    { "seat": 1, "kind": "playbook", "playbook": "scenarios/s2/raid-on-a-mortar.enemy.playbook.jsonc" }
+  ],
+
+  "segments": [
+    { "index": 0, "length_ms": 480000, "note": "The build, the raid down the map and its end." }
+  ],
+
+  "assertions": [
+    { "assert": "event_fired", "event": "structure_completed", "seat": 1, "by_tick": 600,
+      "note": "Seat 1's mortar and autocannon stand." },
+    { "assert": "event_fired", "event": "attack_launched", "seat": 0, "by_tick": 800,
+      "note": "Seat 0's two raiders launch at the mortar." },
+    { "assert": "event_fired", "event": "unit_destroyed", "seat": 0, "by_tick": 6100,
+      "note": "Seat 1's guns kill them." },
+    { "assert": "event_fired", "event": "wreck_left", "by_tick": 6100,
+      "note": "And they leave wrecks." },
+    { "assert": "hash_chain_equals",
+      "golden": "tests/golden/scenarios/raid-on-a-mortar/expected.hashes.txt",
+      "note": "Byte-identical on Windows, Linux and macOS; pins the raid and the fight. Re-blessed with `cargo xtask golden --bless`, and never to turn a red build green." }
+  ]
+}

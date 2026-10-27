@@ -60,6 +60,10 @@ const SCENARIOS: &[&str] = &[
     TERRAFORM_LEVELS_A_FOOTPRINT,
     GUARDS_ESCORT_THE_COMMANDER,
     SURVEY_FINDS_THE_ENEMY,
+    HUNT_THE_COMMANDER,
+    RAID_ON_A_MORTAR,
+    MORTAR_BREAKS_WALL,
+    BREACH_AND_RAZE,
 ];
 
 /// The scenario against the built-in operator: seat 1 is `builtin`, played by
@@ -116,6 +120,23 @@ const GUARDS_ESCORT_THE_COMMANDER: &str = "scenarios/s2/guards-escort-the-comman
 /// S2's `surv`: a Survey beacon's scout scans its probe area and finds the
 /// enemy outpost beside it.
 const SURVEY_FINDS_THE_ENEMY: &str = "scenarios/s2/survey-finds-the-enemy.scenario.jsonc";
+/// S2's `atk`: an Attack beacon hunts the enemy commander that walks into
+/// its sight, and kills it.
+const HUNT_THE_COMMANDER: &str = "scenarios/s2/hunt-the-commander.scenario.jsonc";
+
+/// S2's `atk`: an Attack beacon's raiders dive the mortar the other seat's
+/// Build beacon built, and its guns kill them (`fire`'s staged
+/// `a_raid_on_a_mortar`, through the playbook door).
+const RAID_ON_A_MORTAR: &str = "scenarios/s2/raid-on-a-mortar.scenario.jsonc";
+
+/// S2's `atk`: a breach asks its seat's mortar to shell the wall that seals
+/// its way, which cracks and then breaks (`fire`'s staged
+/// `a_mortar_breaks_a_wall`, through the playbook door).
+const MORTAR_BREAKS_WALL: &str = "scenarios/s2/mortar-breaks-wall.scenario.jsonc";
+
+/// S2's `atk`: a breach whose way reopens through a demolition charge's
+/// cut, and the walled beacon razed.
+const BREACH_AND_RAZE: &str = "scenarios/s2/breach-and-raze.scenario.jsonc";
 
 /// Terraform through the playbook door: `FILL` levels a mortar's footprint
 /// before it is bought (S2's `site`; decisions-log item 144 (5)). The crater
@@ -143,7 +164,14 @@ const TERRAFORM_LEVELS_A_FOOTPRINT: &str =
 /// `cover-nearest-vent` was on it until the verifier's targeting lane (`tgtv`)
 /// landed and accepted `covering` and `on`; `submit_plan` now takes the file,
 /// so its entry came off.
-const HARNESS_DOOR: &[&str] = &[REFUSING];
+///
+/// S2's `atk` adds two, each for a reason no client could avoid in a round
+/// played from the opening Lull: `hunt-the-commander` targets the enemy
+/// commander, which the verifier qualifies on a fresh sighting (E0418) and
+/// which no seat has before its commander has walked; `mortar-breaks-wall`
+/// recycles the beacon it deploys, named `b_01`, which does not exist when
+/// the seat seals (E0401).
+const HARNESS_DOOR: &[&str] = &[REFUSING, HUNT_THE_COMMANDER, MORTAR_BREAKS_WALL];
 
 /// What a doctored copy is named.
 ///
@@ -304,7 +332,11 @@ fn the_committed_list_is_the_whole_set() {
             "s2",
             &[
                 "base-kit-at-the-core",
+                "breach-and-raze",
                 "guards-escort-the-commander",
+                "hunt-the-commander",
+                "mortar-breaks-wall",
+                "raid-on-a-mortar",
                 "survey-finds-the-enemy",
                 "terraform-levels-a-footprint",
             ][..],

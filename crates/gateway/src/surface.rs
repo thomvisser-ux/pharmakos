@@ -1558,9 +1558,23 @@ impl Surface {
             .seats
             .iter()
             .filter_map(|seat| {
-                seat.sealed
-                    .as_ref()
-                    .map(|sealed| (seat.seat, sealed.plan.clone()))
+                seat.sealed.as_ref().map(|sealed| {
+                    let mut plan = sealed.plan.clone();
+                    // S2's `atk`: an Attack target named by an `e_NN` handle
+                    // is pinned at the seal (decisions-log item 13) to the
+                    // beacon the handle names for this seat now, the names
+                    // the seat planned with (item 148 (3) (a)).
+                    let viewer = Viewer::Seat(seat.seat);
+                    plan.pin_foreign(|handle| {
+                        self.views
+                            .foreign_beacon_id(
+                                viewer,
+                                &pharmakos_sim::tables::foreign_beacon_name(handle),
+                            )
+                            .map(pharmakos_sim::tables::BeaconId::new)
+                    });
+                    (seat.seat, plan)
+                })
             })
             .collect();
         plans.sort_by_key(|(seat, _)| seat.raw());
@@ -2133,7 +2147,11 @@ impl Surface {
             // ground refilled are things in the world an opponent with eyes on
             // the place sees, as it sees them hurt or cratered.
             | EventKind::AssetRepaired
-            | EventKind::GroundRefilled => Ok(Audience::World {
+            | EventKind::GroundRefilled
+            // S2's `atk`: a charge planted and a charge going off are things
+            // in the world an opponent with eyes on the place sees.
+            | EventKind::ChargePlanted
+            | EventKind::ChargeDetonated => Ok(Audience::World {
                 owner: event.seat,
                 // A world event the sim placed nowhere would be filtered at
                 // the origin, where a seat that sees the origin would be told
@@ -2205,7 +2223,13 @@ impl Surface {
             // engagement and its retreat threshold acting, its own settings,
             // announced to it (spec section 6's Common row).
             | EventKind::ReturnedFire
-            | EventKind::RetreatAnnounced => event.seat.map(Audience::Private).ok_or_else(|| {
+            | EventKind::RetreatAnnounced
+            // S2's `atk`: a launch, an attack's end and a lost charge are an
+            // Attack beacon's orders acting, its own settings, announced to
+            // its seat; what an onlooker sees is the force itself.
+            | EventKind::AttackLaunched
+            | EventKind::AttackEnded
+            | EventKind::ChargeLost => event.seat.map(Audience::Private).ok_or_else(|| {
                 Error::internal(format!(
                     "the sim emitted `{}` for no seat, and a seat's orders have no other audience",
                     event.kind.name()
@@ -4106,7 +4130,10 @@ mod tests {
         //
         // Plus S2's `surv`'s three, `area_surveyed`, `enemy_beacon_found` and
         // `sighting_refreshed`: a seat's Survey reporting its own knowledge.
-        assert_eq!(private, 13 + 9 + 2 + 1 + 3);
+        //
+        // Plus S2's `atk`'s three, `attack_launched`, `attack_ended` and
+        // `charge_lost`: an Attack beacon's own orders acting.
+        assert_eq!(private, 13 + 9 + 2 + 1 + 3 + 3);
         assert!(matches!(
             Surface::audience_of(&sim_event(EventKind::BeaconPlaced, Some(1))),
             Ok(Audience::World { .. })

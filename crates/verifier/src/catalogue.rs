@@ -330,7 +330,7 @@ pub const CATALOGUE: &[Entry] = &[
         code: "E0013",
         family: Family::DecodeAndVersion,
         severity: Severity::Error,
-        emitter: Emitter::Stage(Stage::Structure),
+        emitter: Emitter::NoneYet("retired by S2's `atk`, which built Attack's settings"),
     },
     Entry {
         code: "E0014",
@@ -662,6 +662,15 @@ pub const CATALOGUE: &[Entry] = &[
     },
     Entry {
         code: "E0418",
+        family: Family::ReferencesAndPlacement,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Semantics),
+    },
+    // S2's `atk`: an `enemy_commander` target naming the playbook's own seat,
+    // or a seat past any a match holds (the owner's answer of 2026-10-26).
+    // The seat's own number is in its view, so it is the semantics stage's.
+    Entry {
+        code: "E0419",
         family: Family::ReferencesAndPlacement,
         severity: Severity::Error,
         emitter: Emitter::Stage(Stage::Semantics),

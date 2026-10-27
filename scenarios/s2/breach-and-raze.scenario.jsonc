@@ -1,0 +1,71 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// S2's `atk` (S2's plan, task `atk`, its `breach-and-eliminate` less the
+// elimination; see below): a breach whose way reopens through a demolition
+// charge's cut, through the playbook door, on the golden seed, in one
+// eight-minute segment.
+//
+//   seat 0  seals scenarios/s2/breach-and-raze.playbook.jsonc: an Attack
+//           beacon by its core with `breach_allowed`, launching three raiders
+//           at the column of seat 1's walled beacon;
+//   seat 1  seals scenarios/s2/breach-and-raze.enemy.playbook.jsonc: a Build
+//           beacon at its core's sphere edge that walls itself in.
+//
+// The raiders walk the length of the map. Once seat 1's ring stands, the
+// oracle says the target is cut off: the breach search finds the ring's
+// first column, the beacon buys a charge and loads it on its lead raider,
+// who plants it at the wall, while the rest walk on as far as the seal lets
+// them. The charge cuts the wall flat to its footing (decision 40), with
+// seat 0 on the edit; the raiders walk the gap -- a raider at the walled
+// beacon proves it, since nothing outside the ring is in a raider's range
+// of it -- and destroy the beacon and the drones it walled in with it.
+// Nothing falls: the wall stood on the ground, and the cut leaves nothing
+// above it (decision 39).
+//
+// **The elimination is not played here.** The plan's `breach-and-eliminate`
+// also asks for the last beacon lost and the match ending
+// `last_seat_standing` on that tick. A seat's last beacon is its core
+// (3 000 hit points under an autocannon that kills a raider in two and a
+// half seconds), a beacon is placed only inside its own seat's spheres, and
+// the cores stand 335 voxels apart, so no sealed playbook reaches it in a
+// segment; crates/sim/tests/attack.rs's
+// `the_last_beacon_lost_ends_the_match_that_tick` plays that rule headless.
+{
+  "format": "pharmakos.scenario.v1",
+  "name": "breach-and-raze",
+  "summary": "Seat 0's raiders breach seat 1's wall ring with a demolition charge and destroy the beacon inside.",
+
+  "map": {
+    "seed": "0x00000000ca5caded",
+    "generator": "skeleton"
+  },
+
+  "rules": "rules/rules.v1.json",
+  "round_limit": 1,
+
+  "seats": [
+    { "seat": 0, "kind": "playbook", "playbook": "scenarios/s2/breach-and-raze.playbook.jsonc" },
+    { "seat": 1, "kind": "playbook", "playbook": "scenarios/s2/breach-and-raze.enemy.playbook.jsonc" }
+  ],
+
+  "segments": [
+    { "index": 0, "length_ms": 480000, "note": "The ring, the raid, the breach and the raze." }
+  ],
+
+  "assertions": [
+    { "assert": "event_fired", "event": "attack_launched", "seat": 0, "by_tick": 800,
+      "note": "Seat 0's three raiders launch at the walled beacon." },
+    { "assert": "event_fired", "event": "charge_planted", "seat": 0, "by_tick": 5900,
+      "note": "The ring seals their way: the lead raider plants a charge at its first column." },
+    { "assert": "event_fired", "event": "charge_detonated", "seat": 0, "by_tick": 6000,
+      "note": "The charge cuts the wall flat to its footing." },
+    { "assert": "event_fired", "event": "beacon_destroyed", "seat": 1, "by_tick": 6400,
+      "note": "Through the gap, the raiders destroy the beacon inside the ring." },
+    { "assert": "event_fired", "event": "attack_ended", "seat": 0, "by_tick": 6500,
+      "note": "With nothing left in reach, the attack is over." },
+    { "assert": "hash_chain_equals",
+      "golden": "tests/golden/scenarios/breach-and-raze/expected.hashes.txt",
+      "note": "Byte-identical on Windows, Linux and macOS; pins the breach, the cut and the raze. Re-blessed with `cargo xtask golden --bless`, and never to turn a red build green." }
+  ]
+}
