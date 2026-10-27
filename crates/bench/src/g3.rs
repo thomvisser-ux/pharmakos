@@ -21,18 +21,25 @@
 //! | [`sight`] | `World::seen_by` restated and timed at the gate's load (item 148 (4)) |
 //! | [`support`] | The support search's adversarial tick (item 138 (3)), and the footing query at its worst (item 148 (4)) |
 //! | [`fourth`] | A fourth, unplaced seat's decision-tick cost (decision 2's separate line) |
+//! | [`sweep`] | The power sweep: item 65's arithmetic with every input measured, for `tune2`'s power rows |
 //!
 //! # What the figures are, and what they are not yet
 //!
-//! The load is real play from the layout on: the mandates this `main` runs
-//! (Build, Mine, Survey) fabricate, dig and walk, every core's autocannon
-//! fires at the enemy raiders in its range and they return fire, craters land
+//! The load is real play from the layout on, on the finished S2 sim (`dfnd`,
+//! `atk` and `surv` merged; S2's plan, task `g3r`): Mine digs, Survey walks
+//! its scouts, every core's autocannon fires at the enemy raiders in its
+//! range, each Defend beacon's guards (an unset `roe` reads `FREE_FIRE`) go
+//! after the enemy Attack raiders standing three voxels from it, craters land
 //! at the budget's rate, regions collapse and units repath, all through the
-//! sim's own phases. Defend and Attack do not run until `dfnd` and `atk`
-//! merge (the footing query is `site`'s, #133, and measured here); `g3r` re-points this harness at
-//! that sim and certifies there (S2's plan, task `g3r`). Every notice names
-//! the seed, the variant's `rules_hash` and the layout's digest, so a reader
-//! can reproduce the run.
+//! sim's own phases. Two mandates do less than in a played match, because the
+//! layout seam carries no mandate settings (`runner::LayoutBeacon`): an Attack
+//! beacon has no target, so its laid-out raiders gather at it and never
+//! launch, and a Build beacon has no blueprint, so nothing is built. The
+//! repath cap bounds what a launched force's walk would add to Pathing, and
+//! the footing query, which Build's structures lengthen, is also measured over
+//! full tables on a world of the bench's own
+//! ([`support::footing_at_room`]). Every notice names the seed, the variant's
+//! `rules_hash` and the layout's digest, so a reader can reproduce the run.
 //!
 //! The notice text lives here, pure, so a unit test pins it word for word;
 //! `tests/g3_real.rs` measures and prints.
@@ -43,6 +50,7 @@ pub mod segment;
 pub mod sight;
 pub mod stream;
 pub mod support;
+pub mod sweep;
 pub mod variant;
 
 use pharmakos_sim::hex;
@@ -52,11 +60,18 @@ use crate::stats::{micros, millis, per_mille};
 use fourth::FourthSeat;
 use segment::SegmentReport;
 use support::{FootingQuery, SupportReport};
+use sweep::Sweep;
 
-/// The seed G3′ is measured on: the seed every committed scenario plays, so
-/// the map is one the project already pins.
-///
-/// PLACEHOLDER: the seed set G3′-real is certified on — `g3r`, at S2's exit, with the certifying runs (S2's plan, section 5 item 4).
+/// The prefix and format version of the one line `cargo xtask g3-budget`
+/// reads (`xtask/src/g3.rs`, whose unit test holds the two spellings
+/// together).
+pub const BUDGET_REPORT_PREFIX: &str = "g3-budget-report v1";
+
+/// The seed G3′ is measured and certified on: the seed every committed
+/// scenario plays, so the map is one the project already pins. One seed,
+/// played three times per operating system (S2's plan, section 5 item 4):
+/// the repetitions measure the machine's noise, and the layout, not the map,
+/// sets the load (`g3r`'s call, which the owner can veto).
 pub const G3_SEED: u64 = 0x0000_0000_ca5c_aded;
 
 /// The segment G3′ is measured over: the ladder's longest, 8 minutes.
@@ -107,10 +122,10 @@ pub fn provenance_notice(report: &SegmentReport, os: &str) -> String {
          committed table's {} with {}), layout {} (3 seats x 100 laid-out units on top of each \
          seat's starting force, so a little over item 63's 300, and 40 beacons as world totals; \
          beacons by mandate: {}), every seat sealed at {} size units; craters {} filed at 20 a \
-         second ({} refused as the queue full, {} draws redrawn); hash chain digest {}. Defend \
-         and Attack are inert on this sim (dfnd, atk), so their beacons' raiders stand and \
-         combat is the cores' autocannon and the raiders' return fire: g3r re-measures on the \
-         finished sim",
+         second ({} refused as the queue full, {} draws redrawn); hash chain digest {}. On the \
+         finished S2 sim: Defend's guards fight the enemy Attack raiders beside them and the \
+         cores fire; the layout carries no mandate settings, so Attack has no target and never \
+         launches and Build builds nothing",
         p.seed,
         hex(p.bench_rules_hash),
         hex(p.shipped_rules_hash),
@@ -397,21 +412,101 @@ pub fn fourth_notice(line: &FourthSeat, os: &str) -> Result<String, Error> {
 /// # Errors
 ///
 /// [`Error::Overflow`] for a time past a `u64` of thousandths of a nanosecond.
-pub fn footing_query_notice(query: &FootingQuery, os: &str) -> Result<String, Error> {
+pub fn footing_query_notice(
+    ended: &FootingQuery,
+    full: &FootingQuery,
+    os: &str,
+) -> Result<String, Error> {
     Ok(format!(
-        "::notice title=G3' footing query::on {os}, over {} structure and {} beacon rows (the world the segment ended on; #133 names about 400 rows as the worst case, and a run whose Build has placed fewer measures fewer): a set's \
-         footing check (a Mine dig) that misses {} ns a call (over {} calls), and a blast's ball of radius {} whose box \
-         meets a live beacon's footing, {} voxels each asked, {} (the worst case, (2r + 1)^3 \
-         voxels times the rows); fastest of {} runs each",
-        query.structure_rows,
-        query.beacon_rows,
-        thousandths(per_call_milli_ns(query.set_ns)?),
+        "::notice title=G3' footing query::on {os}, a set's footing check (a Mine dig) that \
+         misses, a call (over {} calls), and a blast's ball of radius {} whose box meets a live \
+         beacon's footing, {} voxels each asked (the worst case, (2r + 1)^3 voxels times the \
+         rows), fastest of {} runs each: over full tables ({} structure and {} beacon rows, the \
+         most a match holds, filled on a world of the bench's own) {} ns and {}; over the world \
+         the segment ended on ({} structure and {} beacon rows) {} ns and {}",
         support::SET_CALLS,
-        query.radius,
-        query.ball_voxels,
-        micros(query.blast_ns),
+        full.radius,
+        full.ball_voxels,
         support::FOOTING_RUNS,
+        full.structure_rows,
+        full.beacon_rows,
+        thousandths(per_call_milli_ns(full.set_ns)?),
+        micros(full.blast_ns),
+        ended.structure_rows,
+        ended.beacon_rows,
+        thousandths(per_call_milli_ns(ended.set_ns)?),
+        micros(ended.blast_ns),
     ))
+}
+
+/// The line `cargo xtask g3-budget` reads: the tick's figures, whole
+/// nanoseconds, `key=value`, after [`BUDGET_REPORT_PREFIX`].
+#[must_use]
+pub fn budget_report_line(report: &SegmentReport) -> String {
+    format!(
+        "{BUDGET_REPORT_PREFIX} ticks={} p50_ns={} p99_ns={} mean_ns={} max_ns={}",
+        report.ticks,
+        report.tick.p50_ns,
+        report.tick.p99_ns,
+        report.tick.mean_ns,
+        report.tick.max_ns,
+    )
+}
+
+/// A signed nanosecond figure as milliseconds with three places.
+fn signed_ms(ns: i128) -> String {
+    let sign = if ns < 0 { "-" } else { "" };
+    format!("{sign}{}", ms(ns.unsigned_abs()))
+}
+
+/// The power sweep's notices: the points, then the fit and the budget it
+/// gives (items 65 and 91; `tune2`'s inputs).
+///
+/// # Errors
+///
+/// [`Error::Overflow`] for a unit's cost past a `u64` or below zero.
+pub fn sweep_notices(sweep: &Sweep, os: &str) -> Result<Vec<String>, Error> {
+    let point = |p: &sweep::Point| {
+        format!(
+            "{}/4 of the units at {} craters a second: {} live units, tick mean {}, p99 {}, \
+             Pathing mean {}",
+            p.share.get(),
+            p.craters_per_second,
+            thousandths(p.live_units_milli),
+            ms(p.mean_ns),
+            ms(p.p99_ns),
+            ms(p.pathing_mean_ns),
+        )
+    };
+    let units: Vec<String> = sweep.units.iter().map(point).collect();
+    let craters: Vec<String> = sweep.craters.iter().map(point).collect();
+    // Picoseconds a unit, printed as nanoseconds with three places.
+    let unit_ps = u64::try_from(sweep.unit_ps).map_err(|_| Error::Overflow("a unit's cost"))?;
+    Ok(vec![
+        format!(
+            "::notice title=G3' power sweep::on {os}, each an 8-minute segment of the gate's \
+             layout: {}; and at the full share, {}",
+            units.join("; "),
+            craters.join("; "),
+        ),
+        format!(
+            "::notice title=G3' power budget::on {os}, item 65's arithmetic measured: the tick's \
+             mean fitted against the live units at 20 craters a second is {} fixed and crater \
+             cost plus {} ns a live unit (worst point {} off the line); the {} mean bar less \
+             power.reserve_percent {} leaves {}, which carries {} live units, at \
+             power.kw_per_unit {} a map ceiling of {} kW (committed power.map_ceiling_kw {})",
+            signed_ms(sweep.intercept_ns),
+            thousandths(unit_ps),
+            signed_ms(sweep.worst_residual_ns),
+            ms(MEAN_BAR_NS),
+            sweep.reserve_percent,
+            signed_ms(sweep.budget_ns),
+            sweep.units_carried,
+            sweep.kw_per_unit,
+            sweep.ceiling_kw,
+            sweep.shipped_ceiling_kw,
+        ),
+    ])
 }
 
 /// One `set` check's time, in thousandths of a nanosecond, from the time of

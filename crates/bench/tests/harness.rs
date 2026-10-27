@@ -152,6 +152,7 @@ fn the_gate_match_is_reproducible_from_its_seed_and_rules_hash() {
         segment_ms: 1_000,
         craters_per_second: 20,
         probe_sight: true,
+        share: pharmakos_bench::g3::layout::Quarters::FULL,
     };
     let first = segment::measure(&root, plan, None).expect("a measurement");
     // The probe reads the world and moves nothing, so the second run skips it.

@@ -11,11 +11,21 @@
 //! owner's machine under Windows and WSL2 Linux, three repetitions each (S2's
 //! plan, section 5 item 4); these lines are what they record.
 //!
-//! The test is `#[ignore]`d, so `cargo test --workspace` does not pay for it.
-//! `cargo xtask perf-alarms` runs it on every runner as
+//! The binary holds three `#[ignore]`d tests, so `cargo test --workspace` pays
+//! for none of them, and each is run **alone, by its exact name**: `--ignored`
+//! by itself would run them side by side on libtest's threads, sharing the
+//! machine.
+//!
+//! * `g3_real_segment_support_tick_and_fourth_seat`, every figure:
+//!   `cargo xtask perf-alarms g3` runs it on every runner;
+//! * `g3_budget_segment`, the segment alone and the one report line
+//!   `cargo xtask g3-budget` reads (S2's plan, E18): the CI alarm;
+//! * `g3_power_sweep`, the power sweep for `tune2`'s power rows (items 65 and
+//!   91), six more segments: run by hand with the certifying runs, never in CI.
 //!
 //! ```sh
-//! cargo test --release -p pharmakos-bench --test g3_real -- --ignored --nocapture
+//! cargo test --release -p pharmakos-bench --test g3_real -- --ignored --nocapture \
+//!     --exact g3_real_segment_support_tick_and_fourth_seat
 //! ```
 //!
 //! (with `--locked` in CI). **`--release` is not optional**: a debug build's
@@ -42,8 +52,9 @@ use std::cell::Cell;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use pharmakos_bench::g3::layout::Quarters;
 use pharmakos_bench::g3::segment::{self, SegmentPlan};
-use pharmakos_bench::g3::{self, G3_SEED, G3_SEGMENT_MS, fourth, stream, support, variant};
+use pharmakos_bench::g3::{self, G3_SEED, G3_SEGMENT_MS, fourth, stream, support, sweep, variant};
 use pharmakos_bench::heap::HeapCounter;
 use pharmakos_bench::{Error, workspace_root};
 
@@ -174,18 +185,25 @@ fn g3_real_segment_support_tick_and_fourth_seat() {
     assert!(failed.is_empty(), "{failed:?}");
 }
 
-/// The segment's notices.
-fn segment_notices(root: &Path, os: &str) -> Result<Vec<String>, Error> {
-    let report = segment::measure(
+/// The gate's segment, measured under the counting allocator.
+fn gate_segment(root: &Path) -> Result<segment::SegmentReport, Error> {
+    segment::measure(
         root,
         SegmentPlan {
             seed: G3_SEED,
             segment_ms: G3_SEGMENT_MS,
             craters_per_second: stream::CRATERS_PER_SECOND,
             probe_sight: true,
+            share: Quarters::FULL,
         },
         Some(&Counter),
-    )?;
+    )
+}
+
+/// The segment's notices.
+fn segment_notices(root: &Path, os: &str) -> Result<Vec<String>, Error> {
+    let report = gate_segment(root)?;
+    let full = support::footing_at_room(root, G3_SEED)?;
     Ok(vec![
         g3::provenance_notice(&report, os),
         g3::tick_notice(&report, os)?,
@@ -194,13 +212,45 @@ fn segment_notices(root: &Path, os: &str) -> Result<Vec<String>, Error> {
         g3::drift_notice(&report, os),
         g3::combat_notice(&report, os)?,
         g3::sight_notice(&report, os),
-        g3::footing_query_notice(&report.footing, os)?,
+        g3::footing_query_notice(&report.footing, &full, os)?,
     ])
+}
+
+#[test]
+#[ignore = "the G3' CI alarm: cargo xtask g3-budget runs it with --ignored --exact"]
+fn g3_budget_segment() {
+    let root = workspace_root();
+    let os = std::env::consts::OS;
+    println!();
+    match gate_segment(&root) {
+        Ok(report) => {
+            println!("{}", g3::provenance_notice(&report, os));
+            match g3::tick_notice(&report, os) {
+                Ok(line) => println!("{line}"),
+                Err(error) => panic!("the tick notice: {error}"),
+            }
+            println!("{}", g3::budget_report_line(&report));
+        }
+        // No report line: `cargo xtask g3-budget` fails on its absence too.
+        Err(error) => panic!("the G3' segment was not measured on {os}: {error}"),
+    }
+}
+
+#[test]
+#[ignore = "the power sweep, run by hand with the certifying runs (--ignored --exact)"]
+fn g3_power_sweep() {
+    let root = workspace_root();
+    let os = std::env::consts::OS;
+    println!();
+    match sweep::measure(&root, G3_SEED, Some(&Counter)).and_then(|s| g3::sweep_notices(&s, os)) {
+        Ok(lines) => lines.iter().for_each(|line| println!("{line}")),
+        Err(error) => panic!("the power sweep was not measured on {os}: {error}"),
+    }
 }
 
 /// The fourth seat's notice, under the bench variant.
 fn fourth_notice(root: &Path, os: &str) -> Result<Vec<String>, Error> {
-    let bench = variant::bench_rules(root, 3, segment::gate_load())?;
+    let bench = variant::bench_rules(root, 3, segment::gate_load(Quarters::FULL)?)?;
     let line = fourth::measure(root, &bench.rules, G3_SEED, FOURTH_SEGMENT_MS)?;
     Ok(vec![g3::fourth_notice(&line, os)?])
 }
