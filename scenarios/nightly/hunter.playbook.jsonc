@@ -19,8 +19,9 @@
 // 1 never has and no later round is sure to have, so a file that wrote it
 // would fail the night on every seed. Until that changes the force goes to
 // the map's centre, the one voxel that means the same from every spawn, and
-// fights what it sees there; the scouts still gather the sightings a
-// commander target would need.
+// parks there: a voxel raid ends once the force stands at the voxel with no
+// enemy in reach, and a voxel is never lost, so `retarget` never acts. The
+// scouts, placed first, find an enemy beacon on some seeds, late.
 // PLACEHOLDER: the Hunter's target, the map's centre, until an `enemy_commander` target with no fresh sighting can qualify — owner, S2, at demo2
 {
   "schema_version": {"major": 1, "minor": 0},

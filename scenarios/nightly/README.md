@@ -41,14 +41,25 @@ power projection does not read those guards.
 
 | Arm | What it does | Where it departs from spec section 15, and why |
 | --- | --- | --- |
-| **Rusher** | An Attack beacon first, at HIGH priority beside the core; it launches on two raiders (`force_size: 2`), `FREE_FIRE`, breach allowed, no retreat; a generator only while the grid is short. | Its target. The archetype goes for the nearest known enemy beacon and then the core. In S2 an Attack target is a handle, a voxel or the enemy commander (`E0015` refuses a selector until S3), and a handle needs a fresh sighting at the seal (`E0418`), which round 1 never has. So the force raids the map's centre (192, 192), the one voxel that means the same from every spawn, and fights what it finds there. |
-| **Turtle** | A Defend beacon beside the core guarding the core and "my commander" (`FREE_FIRE`, the whole sphere, one picket); the core and every Build beacon repair below 75 % and rebuild, which fields repair drones; generators, then autocannons `on` free vents; no Attack beacon and no raider of its own, so the treasury hoards what the guns and repairs leave. | The walls. A `wall` target is a box of fixed voxels, one map's and one seat's, so no wall goes up. |
-| **Hunter** | A Survey beacon with two scouts over the whole map; an Attack beacon launching three raiders. | Its target, which is the whole of the archetype. `enemy_commander` qualifies only on a sighting of an enemy commander inside `verifier.reach_memory_ms` at the seal (`E0418`), which round 1 never has and no later round is sure to have. So the force raids the map's centre, as the Rusher's does, and the scouts gather the sightings a commander target would need. |
+| **Rusher** | An Attack beacon first, at HIGH priority beside the core; it launches on two raiders (`force_size: 2`), `FREE_FIRE`, no retreat; a generator only while the grid has under 4 kW to spare, which on the twenty seeds it never is. | Its target. The archetype goes for the nearest known enemy beacon and then the core. In S2 an Attack target is a handle, a voxel or the enemy commander (`E0015` refuses a selector until S3), and a handle needs a fresh sighting at the seal (`E0418`), which round 1 never has. So the target and the staging point are the map's centre (192, 192), the one voxel that means the same from every spawn. A voxel raid ends as soon as the force stands at the voxel with no enemy in reach, so the force **parks at the centre** and fights only what comes into reach; `retarget: NEAREST_KNOWN` and `breach_allowed` never act, because a voxel target is never lost. |
+| **Turtle** | A Defend beacon beside the core guarding the core and "my commander" (`FREE_FIRE`, the whole sphere, one picket); the core and every Build beacon repair below 75 % and rebuild, which fields repair drones; a generator on the nearest free vent while the grid has under 6 kW to spare, otherwise an autocannon `on` the nearest free vent; no Attack beacon and no raider of its own, so the treasury hoards what the guns and repairs leave. | The walls. A `wall` target is a box of fixed voxels, one map's and one seat's, so no wall goes up. The guns stand at the nearest free vents, not at the core, whose only gun is its own built-in autocannon. |
+| **Hunter** | A Survey beacon with two scouts over the whole map, placed first; an Attack beacon launching three raiders, which the seat can afford from round 2. | Its target, which is the whole of the archetype. `enemy_commander` qualifies only on a sighting of an enemy commander inside `verifier.reach_memory_ms` at the seal (`E0418`), which round 1 never has and no later round is sure to have. So the force parks at the map's centre, as the Rusher's does. The scouts find an enemy beacon on some seeds and late in the match, and never in time to aim anything. |
 
-Each departure is a `PLACEHOLDER` in its playbook. Until the owner's ruling
-lifts them, the Rusher and Hunter bands read "a forward raid on the map's
-centre" and the Turtle band "a guarded, armed core without walls", not the
-archetypes spec section 15 names.
+Each departure is a `PLACEHOLDER` in its playbook, for the owner. While they
+stand, each band below still reads as decision 18 writes it, but it measures
+the arm as built, a raid parked at the centre or a guarded core without walls,
+not the archetype spec section 15 names, so a low rate is a floor these
+departures set and not a balance reading. On the run the `arms` lane attached
+(its pull request), every match of the sixty ended on the round limit, so every
+result was the final audit's; none ended by elimination.
+
+Four literals in the playbooks come from the rules table's map, 384 x 384 x 64:
+the centre (192, 192) and the Hunter's probe box (0, 0, 0) to (383, 383, 63).
+A change to the map's size moves what they mean, and one that puts them off
+the map is refused, which `crates/gamectl/tests/nightly.rs` reports on the
+pull request that makes it. The `kw_headroom` thresholds (4 and 6 kW) are
+behaviour, not refusals: a change to the power rows (S2's `tune2`) moves which
+step runs, and `demo2`'s forced run on those numbers is where that shows.
 
 `NIGHTLY_SCENARIOS_ENABLED`, the repository variable the workflow is gated on,
 stays unset until `arms` has merged and its forced run is attached (decision
@@ -108,16 +119,16 @@ shape.
 Written per S2's plan, decisions 18 and 29 (ruled by decisions-log item
 144 (11)), one per arm:
 
-* **Rusher:** an arm that is the sole winner -- last seat standing, or the
-  final audit's -- in more than 13 of the 20 seeds (65 %) against Easy opens a
+* **Rusher:** an arm that is the sole winner — last seat standing, or the
+  final audit's — in more than 13 of the 20 seeds (65 %) against Easy opens a
   tuning task. It watches spec section 19's "an early rush ends matches before
   authoring matters" and the core's HP and turret strength.
-* **Turtle:** an arm that is the sole winner -- last seat standing, or the
-  final audit's -- in more than 13 of the 20 seeds (65 %) against Easy opens a
+* **Turtle:** an arm that is the sole winner — last seat standing, or the
+  final audit's — in more than 13 of the 20 seeds (65 %) against Easy opens a
   tuning task. It watches "hoarding or turtling wins, now that value follows
   condition".
-* **Hunter:** an arm that is the sole winner -- last seat standing, or the
-  final audit's -- in more than 13 of the 20 seeds (65 %) against Easy opens a
+* **Hunter:** an arm that is the sole winner — last seat standing, or the
+  final audit's — in more than 13 of the 20 seeds (65 %) against Easy opens a
   tuning task. It watches "commander hunting dominates", whose counters
   (armour, decoys, a self-defence weapon) are added only if this band shows it
   (spec section 4).
@@ -125,7 +136,9 @@ Written per S2's plan, decisions 18 and 29 (ruled by decisions-log item
 At S2 every band reads against Easy, which carries the Balanced weighting
 (item 144 (6)); each is re-baselined against Normal at S5. A shared win counts
 as no win, which favours not alarming (decision 18's downside). 14 sole wins
-of 20 is 70 % and alarms; 13 is 65 % and does not. Each is an alarm, not a
+of 20 is 70 % and alarms; 13 is 65 % and does not. Each band is stated over
+the committed `seeds.txt`: a manual run on another seed file (the workflow's
+`seeds` input) is not a band reading. Each is an alarm, not a
 gate: `.github/workflows/nightly-scenarios.yml`'s band step warns and fails
 nothing, and a breach is a tuning task, never a tuning change in the pull
 request that saw it. S2's close acknowledges the three bands as Easy's (item

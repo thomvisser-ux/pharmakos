@@ -28,22 +28,24 @@
   "declarative": {
     "route": [
       {"label": "to_safety", "move": {"to": {"safest": {}}}},
-      // The core repairs and rebuilds what stands in its sphere. Round 1 only
-      // (no Defend beacon stands yet): the commander starts at the core, the
-      // only beacon the seat has, so "the nearest Build beacon" is the core,
-      // where in a later round it could be a vent post whose targets this row
-      // would clear. The core is named by a description because `b_00`, a
-      // live seat's core, is not the reference seat view's, which `gamectl
-      // verify` reads (its core is `b_01`).
+      // The core repairs and rebuilds what stands in its sphere. In round 1
+      // the commander starts at the core, the only beacon the seat has, so
+      // "the nearest Build beacon" is the core. In a later round it may be a
+      // vent post, which this row only gives the settings it already has: an
+      // empty `targets` list replaces nothing (the sim's interface row), so
+      // no target is dropped and nothing is recycled. The core is named by a
+      // description because `b_00`, a live seat's core, is not the reference
+      // seat view's, which `gamectl verify` reads (its core is `b_01`).
       {"label": "mend_core",
-        "skip_if": {"beacon_hp_pct": {"beacon": {"nearest": {"filter": {"mandate": "DEFEND"}}}, "pct": {"op": "GE", "value": 0}}},
         "interface": {"beacon": {"nearest": {"filter": {"mandate": "BUILD"}}}, "rows": [
           {"set_mandate_settings": {"build": {"targets": [], "repair_threshold_pct": 75, "rebuild_destroyed": true, "terraform": "NONE"}}}
         ]},
         "timeout_ms": 60000, "on_fail": {"action": "SKIP"}},
       // The guard post beside the core: it protects the core (still the
-      // nearest Build beacon when this step runs, in round 1) and the
-      // commander, with a picket for early warning. Skipped once the seat has
+      // nearest Build beacon when this step runs in round 1; the protect list
+      // is bound when the row commits, so a post re-placed after Easy razes
+      // it binds whichever Build beacon is nearest then) and the commander,
+      // with a picket for early warning. Skipped once the seat has
       // a Defend beacon.
       {"label": "guard",
         "skip_if": {"beacon_hp_pct": {"beacon": {"nearest": {"filter": {"mandate": "DEFEND"}}}, "pct": {"op": "GE", "value": 0}}},

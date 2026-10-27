@@ -20,7 +20,10 @@
 // fresh sighting when the playbook is sealed (E0418), which round 1 never
 // has. A voxel is the only target that qualifies on every seed and seat, and
 // the map's centre is the one voxel that means the same thing from every
-// spawn: the force gathers there and fights whatever it sees there.
+// spawn. The force parks there: a voxel raid ends once the force stands at
+// the voxel with no enemy in reach, and a voxel target is never lost, so
+// `retarget` and `breach_allowed` never act; they say what the archetype
+// would do once its target is a beacon.
 // PLACEHOLDER: the Rusher's target, the map's centre, until an Attack target can name the nearest known enemy beacon and still qualify in round 1 — owner, S2, at demo2
 {
   "schema_version": {"major": 1, "minor": 0},
@@ -33,7 +36,7 @@
       {"label": "to_safety", "move": {"to": {"safest": {}}}},
       // The rush post, first and at HIGH priority, beside the core. Two
       // raiders launch together and fight on until the attack is over (no
-      // retreat is written), with breach allowed. Skipped once the seat has
+      // retreat is written). Skipped once the seat has
       // an Attack beacon.
       {"label": "rush_post",
         "skip_if": {"beacon_hp_pct": {"beacon": {"nearest": {"filter": {"mandate": "ATTACK"}}}, "pct": {"op": "GE", "value": 0}}},
