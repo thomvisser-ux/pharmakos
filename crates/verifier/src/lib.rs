@@ -194,8 +194,12 @@ pub use walking::Walk;
 /// checks Defend's and Attack's settings, a wall's box and an Attack target's
 /// freshness, prices the new fields, refuses more handlers than the sim
 /// compiles, and notes an omitted `roe` and a repair threshold of 0, so its
-/// reports are not comparable with `0.1.0-s2`'s.
-pub const VERIFIER_VERSION: &str = "0.1.0-s2.2";
+/// reports are not comparable with `0.1.0-s2`'s. `0.1.0-s2.3` from S2's
+/// threat model's verifier lane (task `vfy3`): this build notes a move that
+/// avoids known threats with no enemy beacon in sight (`I0005`), reads an
+/// omitted `roe` by writ, and refuses a half-written area, so its reports are
+/// not comparable with `0.1.0-s2.2`'s.
+pub const VERIFIER_VERSION: &str = "0.1.0-s2.3";
 
 /// Everything one verification is a function of, apart from the depth.
 ///

@@ -53,7 +53,8 @@
 //! An omitted `MoveStep.pace`, `MineSettings.seam_choice`,
 //! `MineSettings.pillar_spacing` and `BuildSettings.terraform` read as named
 //! defaults, each with an `I0003` note; see [`walk_action`]. From S2 so does
-//! `MandateSettings.roe`, as `RETURN_FIRE` (S2's plan, decision 4).
+//! `MandateSettings.roe`, by writ (S2's plan, decision 4; decisions-log item
+//! 148 (2)).
 //!
 //! # A wall's box (S2's wire, task `con4`)
 //!
@@ -73,8 +74,11 @@
 //! `E0012` or `E0013`, as the sim's); an arm that writes anything in a deploy
 //! or a switch writes every required field; an edit writes what it changes,
 //! held to its range (`Sites::defend`, `Sites::attack`). An omitted `roe`
-//! reads as `RETURN_FIRE` with `I0003`, the fifth named default, and a Build
-//! beacon's repair threshold of 0 is `I0004` (S2's plan, decisions 4 and 38).
+//! reads by writ with `I0003`, the fifth named default: `FREE_FIRE` on a
+//! Defend or an Attack beacon and `RETURN_FIRE` on the others (decisions-log
+//! item 148 (2)), and a Build beacon's repair threshold of 0 is `I0004` (S2's
+//! plan, decisions 4 and 38). A protected, probe or avoid area missing a
+//! corner is `E0101`, as a wall's box is (decisions-log item 146 (4)).
 //! The sim's handler ceiling is `E0113`.
 
 use pharmakos_proto::gp::api::v1::patch_suggestion::Applicability;
@@ -88,10 +92,10 @@ use pharmakos_proto::gp::v1::mine_settings::SeamChoice;
 use pharmakos_proto::gp::v1::move_step::Pace;
 use pharmakos_proto::gp::v1::on_death::OnRespawn;
 use pharmakos_proto::gp::v1::{
-    AttackSettings, BeaconFilter, BeaconRef, BuildTarget, Condition, DefendSettings, FeatureRef,
-    Handler, IntCompare, Location, MandateSettings, Playbook, ProtectedAsset, Step, attack_target,
-    beacon_ref, condition, fallback, int_compare, interface_row, location, mandate_settings,
-    protected_asset, step,
+    Area, AttackSettings, BeaconFilter, BeaconRef, BuildTarget, Condition, DefendSettings,
+    FeatureRef, Handler, IntCompare, Location, MandateSettings, Playbook, ProtectedAsset, Step,
+    attack_target, beacon_ref, condition, fallback, int_compare, interface_row, location,
+    mandate_settings, protected_asset, step,
 };
 use pharmakos_proto::json::Json;
 
@@ -100,7 +104,7 @@ use crate::pointer;
 use crate::report::{Builder, Diag, number, patch_add, patch_remove, patch_replace};
 use crate::size;
 use crate::strings;
-use crate::walk::{self, Carrier, List, Slot, Visit};
+use crate::walk::{self, AreaOf, Carrier, List, Slot, Visit};
 
 use std::collections::BTreeMap;
 
@@ -459,6 +463,26 @@ impl Visit for Sites<'_> {
         }
     }
 
+    /// A half-written area has no voxels to protect, probe or avoid, and the
+    /// sim refuses one at compile (`compile_area`'s
+    /// `MissingBlock("area.min")`), so each missing corner is `E0101`,
+    /// as a wall's box already is (decisions-log item 146 (4)). A wall's box
+    /// is [`Sites::wall`]'s, which names it so.
+    fn area(&mut self, at: &str, area: &Area, of: AreaOf) {
+        match of {
+            AreaOf::WallBox => return,
+            AreaOf::Protected | AreaOf::Probe | AreaOf::Avoid => {}
+        }
+        for (present, corner) in [(area.min.is_some(), "min"), (area.max.is_some(), "max")] {
+            if !present {
+                self.out.emit(
+                    Diag::new("E0101", pointer::child(at, corner))
+                        .arg("what", format!("`{}.{corner}`", of.field())),
+                );
+            }
+        }
+    }
+
     fn location(&mut self, at: &str, place: &Location, slot: Slot<'_>) {
         match place.place.as_ref() {
             Some(location::Place::Covering(feature)) => {
@@ -535,12 +559,16 @@ impl Visit for Sites<'_> {
         if carrier == Carrier::Edit {
             return;
         }
-        // S2's plan, decision 4: an omitted `roe` reads as RETURN_FIRE, the
-        // fifth named default (`playbook.proto`'s header), said where the
-        // settings start from nothing and the block names a writ (a block
-        // with none is `E0502`'s).
-        if settings.mandate.is_some() && settings.roe == i32::from(Roe::Unspecified) {
-            self.default_note(at, "roe", "RETURN_FIRE", true);
+        // S2's plan, decision 4, as decisions-log item 148 (2) amends it: an
+        // omitted `roe` reads by writ, FREE_FIRE on a Defend or an Attack
+        // beacon and RETURN_FIRE on the others (the sim's `Roe::of_setting`,
+        // whose Defend and Attack arms are S2's `dfnd`'s and `atk`'s),
+        // said where the settings start from nothing and the block names a
+        // writ (a block with none is `E0502`'s).
+        if let Some(mandate) = settings.mandate.as_ref()
+            && settings.roe == i32::from(Roe::Unspecified)
+        {
+            self.default_note(at, "roe", omitted_roe(mandate), true);
         }
         match settings.mandate.as_ref() {
             Some(mandate_settings::Mandate::Build(build)) => {
@@ -674,11 +702,10 @@ impl Sites<'_> {
     /// **Requiredness follows the carrier.** An empty arm writes no field, so
     /// nothing is required of it here. Whether it is legal is the sim's refusal
     /// table's, which `crate::refusals` mirrors: an empty arm in a switch is a
-    /// choice of writ the sim accepts (`compile_switch_settings`), and an empty
-    /// arm in a deploy's `initial` the sim refuses today for both writs
-    /// (`E0012`, `E0013`). Only Defend's empty `initial` is ruled legal for
-    /// later (decisions-log item 145 (5), `dfnd` lifts it); Attack's is `atk`'s
-    /// to settle. An arm that
+    /// choice of writ the sim accepts (`compile_switch_settings`), and so,
+    /// since S2's `dfnd` and `atk`, is an empty arm in a deploy's `initial`
+    /// (decisions-log items 145 (5) and 146 (3) (j); `E0012` and `E0013` are
+    /// raised by nothing now). An arm that
     /// writes anything in a deploy or a switch starts the beacon's settings
     /// from nothing, so it must write every required field. An edit
     /// (`set_mandate_settings`) writes only what it changes, so nothing is
@@ -970,6 +997,20 @@ impl Sites<'_> {
             );
         }
         self.out.emit(diag);
+    }
+}
+
+/// What an omitted `roe` reads as on a beacon of this writ (decisions-log
+/// item 148 (2)): a Defend or an Attack beacon fires freely, and every other
+/// returns fire only.
+fn omitted_roe(mandate: &mandate_settings::Mandate) -> &'static str {
+    match mandate {
+        mandate_settings::Mandate::Defend(_) | mandate_settings::Mandate::Attack(_) => {
+            Roe::FreeFire.as_str_name()
+        }
+        mandate_settings::Mandate::Build(_)
+        | mandate_settings::Mandate::Mine(_)
+        | mandate_settings::Mandate::Survey(_) => Roe::ReturnFire.as_str_name(),
     }
 }
 

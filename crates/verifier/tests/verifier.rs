@@ -1026,6 +1026,10 @@ fn the_worked_example_qualifies_and_is_six_units() {
             ),
             ("I0003", "/declarative/route/2/move/pace"),
             ("I0003", "/declarative/handlers/0/body/0/move/pace"),
+            // The semantics stage (S2's plan, decision 12, task `vfy3`): the
+            // first move avoids known threats, and the plain fixture holds no
+            // sighting of another seat, so it would go as DIRECT does now.
+            ("I0005", "/declarative/route/0/move/pace"),
             // The estimate stage: the one leg whose two ends the view names,
             // from the deploy at (96, 11) to the core `b_01` at (80, 11),
             // sixteen voxels less the four of interface range the deploy
@@ -1573,4 +1577,90 @@ fn which_missing_blocks_the_sim_refuses_first_is_measured() {
         ],
         "the blocks the sim's loader refuses first, whose verifier branch no caller reaches"
     );
+}
+
+// ---------------------------------------------------------------------------
+// S2's threat model (task `vfy3`)
+// ---------------------------------------------------------------------------
+
+/// `I0005` reads whether the view holds an enemy beacon in live vision, and
+/// nothing more: a beacon seen now silences it, while a beacon seen earlier
+/// or a commander (which carries no weapon) does not, because the sim's known
+/// threats are armed enemies seen when the move starts (S2's plan, decision
+/// 12; `crates/sim/src/defend.rs`).
+#[test]
+fn avoiding_threats_is_noted_only_with_no_enemy_beacon_in_sight() {
+    let text = String::from_utf8(case_bytes("i0005_avoiding_threats_with_none_sighted"))
+        .expect("a case is UTF-8");
+    let snapshot = fixture_snapshot();
+    let noted = |scope: &Scope| {
+        codes_of(&text, scope, &snapshot)
+            .iter()
+            .any(|c| c == "I0005")
+    };
+    assert!(noted(&fixture_scope()), "no sighting: the note");
+    for (what, age_ms, wanted) in [
+        (Sighted::Beacon("e_01".to_owned()), 0, false),
+        (Sighted::Beacon("e_01".to_owned()), 1, true),
+        (Sighted::Beacon("e_01".to_owned()), u32::MAX, true),
+        (Sighted::Commander(SeatId::new(1)), 0, true),
+        (Sighted::Commander(SeatId::new(1)), u32::MAX, true),
+    ] {
+        let scope = fixture_scope().with_sighting(Sighting {
+            what: what.clone(),
+            at: Voxel { x: 1, y: 1, z: 1 },
+            age_ms,
+        });
+        assert_eq!(noted(&scope), wanted, "{what:?} seen {age_ms} ms ago");
+    }
+    let direct = text.replace("AVOID_KNOWN_THREATS", "DIRECT");
+    assert!(
+        !codes_of(&direct, &fixture_scope(), &snapshot)
+            .iter()
+            .any(|c| c == "I0005"),
+        "a DIRECT move is never noted"
+    );
+}
+
+/// A half-written area is `E0101` in each field that holds one (decisions-log
+/// item 146 (4)), a corner per code, and a wall's box keeps its own wording.
+#[test]
+fn every_half_written_area_is_refused_as_missing_a_corner() {
+    let scope = fixture_scope();
+    let snapshot = fixture_snapshot();
+    let corner = "{\"min\":{\"x\":90,\"y\":5,\"z\":50}}";
+    for (mandate, field) in [
+        (
+            format!("\"build\":{{\"terraform\":\"NONE\",\"protected_areas\":[{corner}]}}"),
+            "protected_areas",
+        ),
+        (
+            format!("\"survey\":{{\"scout_count\":1,\"probe_areas\":[{corner},{{}}]}}"),
+            "probe_areas",
+        ),
+        (
+            format!("\"attack\":{{\"avoid_areas\":[{corner}]}}"),
+            "avoid_areas",
+        ),
+    ] {
+        let row = format!("{{\"set_mandate_settings\":{{{mandate}}}}}");
+        let text = one_visit("b_01", &row);
+        let rules = rules();
+        let input = Input::new(text.as_bytes(), &snapshot, &scope, &rules)
+            .unwrap_or_else(|error| panic!("assembling the input: {error}"));
+        let missing: Vec<String> = verify(&input, Depth::Quick)
+            .diagnostics
+            .into_iter()
+            .filter(|found| found.code == "E0101" && found.path.starts_with("/declarative"))
+            .map(|found| found.path)
+            .collect();
+        let at = "/declarative/route/0/interface/rows/0/set_mandate_settings";
+        let arm = mandate.split('"').nth(1).expect("the arm's name");
+        let mut wanted = vec![format!("{at}/{arm}/{field}/0/max")];
+        if field == "probe_areas" {
+            wanted.push(format!("{at}/{arm}/{field}/1/min"));
+            wanted.push(format!("{at}/{arm}/{field}/1/max"));
+        }
+        assert_eq!(missing, wanted, "{field}");
+    }
 }

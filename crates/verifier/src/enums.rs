@@ -182,9 +182,10 @@ impl Visit for Enums<'_> {
                     mine.seam_choice,
                 );
             }
-            // S2's settings (`con4`): read raw like every other enum, although
-            // the sim refuses the whole arm until S2's Defend and Attack lanes,
-            // so that the day they are read, an unknown number already is not.
+            // S2's settings (`con4`): read raw like every other enum, as they
+            // were while the sim refused the whole arm (until S2's `dfnd` and
+            // `atk`), so that the day each was read, an unknown number already
+            // was not.
             Some(mandate_settings::Mandate::Defend(defend)) => {
                 self.raw::<defend_settings::Pursue>(
                     &pointer::child(&pointer::child(at, "defend"), "pursue"),
