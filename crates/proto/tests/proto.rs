@@ -1068,8 +1068,9 @@ fn gun(weapon: Option<rules_table::Weapon>, name: &str) -> (u32, u32, i32) {
 }
 
 /// Revision 5: S2's rows (S2's plan, task `con3`). The rows that replace a
-/// constant hold the constant's value, and nothing reads the others yet, so
-/// no chain moves for them.
+/// constant hold the constant's value, and nothing read the others then, so
+/// no chain moved for them. Revision 6 (`tune2`) set decision 17's vision
+/// proposals.
 #[test]
 fn the_rules_table_carries_s2s_rows() {
     let table = committed_rules_table();
@@ -1087,36 +1088,43 @@ fn the_rules_table_carries_s2s_rows() {
 
     let units = table.units.expect("the units block");
     let structures = table.structures.expect("the structures block");
+    // Decision 17's vision proposals (revision 6); a beacon, which sees by
+    // its sphere, and the resonance spire, for which it proposes nothing, keep
+    // the scouts' old constant of 8 (S1-34).
     let unit_kinds = [
-        ("build_drone", units.build_drone),
-        ("mining_drone", units.mining_drone),
-        ("repair_drone", units.repair_drone),
-        ("raider", units.raider),
-        ("scout", units.scout),
+        ("build_drone", units.build_drone, 8),
+        ("mining_drone", units.mining_drone, 8),
+        ("repair_drone", units.repair_drone, 8),
+        ("raider", units.raider, 12),
+        ("scout", units.scout, 24),
     ];
     let structure_kinds = [
-        ("beacon", structures.beacon),
-        ("generator", structures.generator),
-        ("autocannon", structures.autocannon),
-        ("mortar", structures.mortar),
-        ("survey_post", structures.survey_post),
-        ("resonance_spire", structures.resonance_spire),
+        ("beacon", structures.beacon, 8),
+        ("generator", structures.generator, 8),
+        ("autocannon", structures.autocannon, 20),
+        ("mortar", structures.mortar, 12),
+        ("survey_post", structures.survey_post, 8),
+        ("resonance_spire", structures.resonance_spire, 8),
     ];
 
-    // S1-34: every kind sees as far as the scouts' constant until `tune2`
-    // sets decision 17's proposals.
-    for (name, kind) in unit_kinds {
+    for (name, kind, vision) in unit_kinds {
         let kind = kind.unwrap_or_else(|| panic!("the {name} row"));
-        assert_eq!(kind.vision_radius_voxels, 8, "S1-34: units.{name}");
+        assert_eq!(
+            kind.vision_radius_voxels, vision,
+            "decision 17: units.{name}"
+        );
         assert_eq!(
             kind.weapon.is_some(),
             name == "raider",
             "units.{name}: only the raider is armed"
         );
     }
-    for (name, kind) in structure_kinds {
+    for (name, kind, vision) in structure_kinds {
         let kind = kind.unwrap_or_else(|| panic!("the {name} row"));
-        assert_eq!(kind.vision_radius_voxels, 8, "S1-34: structures.{name}");
+        assert_eq!(
+            kind.vision_radius_voxels, vision,
+            "decision 17: structures.{name}"
+        );
         assert_eq!(
             kind.weapon.is_some(),
             name == "autocannon" || name == "mortar",
@@ -1124,7 +1132,10 @@ fn the_rules_table_carries_s2s_rows() {
         );
     }
     let commander = table.commander.expect("the commander block");
-    assert_eq!(commander.vision_radius_voxels, 8, "S1-34: the commander");
+    assert_eq!(
+        commander.vision_radius_voxels, 10,
+        "decision 17: the commander"
+    );
 
     // The weapons, at decision 17's proposals. Only the mortar fires a shell;
     // the rest fire directly, landing in the tick they are dealt (E2).

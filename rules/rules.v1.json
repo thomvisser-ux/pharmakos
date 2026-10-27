@@ -1,6 +1,6 @@
 {
-  "revision": 5,
-  "note": "Walking skeleton. Values from decisions-log items 54, 59, 68 and 69 and spec section 5; everything the log has not fixed is a PLACEHOLDER named in rules/README.md. Revision 2: broadphase.cell_size_voxels 8 -> 16, the edge spike G3' actually measured; still item 67's PLACEHOLDER. Revision 3: the wave-2 rows, from items 90 (the first tuning seed set), 91 (kW per unit and the reserve inside the 190 kW ceiling) and 94 (the playbook size budget) - the per-kind walking speeds, the decision tick, the whole economy and power blocks, and the new commander, beacon, map, units, structures and verifier blocks. Every one of them is a PLACEHOLDER re-derived at the stage its comment names. Revision 4: S1's first contract pull request (decisions-log items 127 (2) and 128) - match.lull_ms 180000 -> 300000 and the new match.first_lull_ms 600000, the spec's five and ten minutes; and the new structures.build_hp_per_second 60 and economy.mining_carry_voxels 16, the sim's two named constants given rows at their own values. Each is a PLACEHOLDER; S1's demo kept every one for S1 (decisions-log item 139 (1) ruling 6). Two grid rules no row holds, stated here because this file is the rules text every client pins (S1's tune): the commander walks through a blackout and draws nothing while its home beacon is dark, the one exception to dormancy parking a beacon's units, so a seat can always walk to a beacon and change something on site (decisions-log item 127 (5), register S1-35); and raising a dark beacon's priority relights it at once when shedding lit beacons of lower rank covers it (draw no higher than supply after the swap), the core outranking every priority, so a dark core may shed a lit HIGH expansion (item 127 (7) and item 135 (2) (a), register S1-22). The economy rows keep item 90's seed after S1's headless balance check (tune), and S1's demo kept them for S1 (item 139 (1) ruling 6): each is the owner's at S3, with the balance check re-run once `toward` lets Easy reach past one beacon, and the two Lull rows and the skeleton's rows (D-02 to D-19) the owner's at S2's demo. Revision 5: S2's rows (S2's plan, task con3; decisions-log item 144) - locomotion.headroom_voxels 2, the sim's HEADROOM_VOXELS given a row at its own value (S2-05); vision_radius_voxels 8 on every unit and structure kind and on the commander, the scouts' constant (S1-34), with decision 17's proposals left in their PLACEHOLDERs for tune2; a weapon on the raider, the autocannon, the mortar and the core; and the new combat, defend, collapse and materials blocks at decisions 10, 11, 17 and 40's proposals. The rows that replace a constant hold its value, and nothing reads the others yet, so no chain moves. Each is a PLACEHOLDER, the owner's at S2's demo with tune2's reports.",
+  "revision": 6,
+  "note": "Walking skeleton. Values from decisions-log items 54, 59, 68 and 69 and spec section 5; everything the log has not fixed is a PLACEHOLDER named in rules/README.md. Revision 2: broadphase.cell_size_voxels 8 -> 16, the edge spike G3' actually measured; still item 67's PLACEHOLDER. Revision 3: the wave-2 rows, from items 90 (the first tuning seed set), 91 (kW per unit and the reserve inside the 190 kW ceiling) and 94 (the playbook size budget) - the per-kind walking speeds, the decision tick, the whole economy and power blocks, and the new commander, beacon, map, units, structures and verifier blocks. Every one of them is a PLACEHOLDER re-derived at the stage its comment names. Revision 4: S1's first contract pull request (decisions-log items 127 (2) and 128) - match.lull_ms 180000 -> 300000 and the new match.first_lull_ms 600000, the spec's five and ten minutes; and the new structures.build_hp_per_second 60 and economy.mining_carry_voxels 16, the sim's two named constants given rows at their own values. Each is a PLACEHOLDER; S1's demo kept every one for S1 (decisions-log item 139 (1) ruling 6). Two grid rules no row holds, stated here because this file is the rules text every client pins (S1's tune): the commander walks through a blackout and draws nothing while its home beacon is dark, the one exception to dormancy parking a beacon's units, so a seat can always walk to a beacon and change something on site (decisions-log item 127 (5), register S1-35); and raising a dark beacon's priority relights it at once when shedding lit beacons of lower rank covers it (draw no higher than supply after the swap), the core outranking every priority, so a dark core may shed a lit HIGH expansion (item 127 (7) and item 135 (2) (a), register S1-22). The economy rows keep item 90's seed after S1's headless balance check (tune), and S1's demo kept them for S1 (item 139 (1) ruling 6): each is the owner's at S3, with the balance check re-run once `toward` lets Easy reach past one beacon, and the two Lull rows and the skeleton's rows (D-02 to D-19) the owner's at S2's demo. Revision 5: S2's rows (S2's plan, task con3; decisions-log item 144) - locomotion.headroom_voxels 2, the sim's HEADROOM_VOXELS given a row at its own value (S2-05); vision_radius_voxels 8 on every unit and structure kind and on the commander, the scouts' constant (S1-34), with decision 17's proposals left in their PLACEHOLDERs for tune2; a weapon on the raider, the autocannon, the mortar and the core; and the new combat, defend, collapse and materials blocks at decisions 10, 11, 17 and 40's proposals. The rows that replace a constant hold its value, and nothing reads the others yet, so no chain moves. Each is a PLACEHOLDER, the owner's at S2's demo with tune2's reports. Revision 6: S2's numbers (S2's plan, task tune2; decisions 17 and 23, item 144 (8)) - decision 17's vision proposals applied, scout 24, raider 12, commander 10, autocannon 20 and mortar 12, every other kind keeping 8; the three power rows kept: power.map_ceiling_kw stays 190, the map's supply at three seats (items 90 and 91), well inside the 386 kW G3'-real certified (g3r #147: 300 units x kw_per_unit 1 + 40 beacons x beacon_base_draw_kw 2 + 3 seats x revive_margin_kw 2), because the ceiling only moves with the map rows that supply it, which are the owner's at S3; the repath cap, the broadphase cell, the fielding totals and the collapse bounds kept on g3r's measurements; every combat row kept at decision 17's proposal on tune2's duel and balance reports. Each is a PLACEHOLDER, the owner's at S2's demo.",
   "match": {
     "segment_lengths_ms": [
       180000,
@@ -87,7 +87,7 @@
     "arrive_radius_voxels": 2,
     "placement_range_voxels": 12,
     "interface_range_voxels": 4,
-    "vision_radius_voxels": 8
+    "vision_radius_voxels": 10
   },
   "beacon": {
     "sphere_radius_voxels": 24,
@@ -143,7 +143,7 @@
       "hp": 120,
       "draw_kw": 1,
       "cost_per_second": 12,
-      "vision_radius_voxels": 8,
+      "vision_radius_voxels": 12,
       "weapon": {
         "range_voxels": 4,
         "damage_hp": 8,
@@ -155,7 +155,7 @@
       "hp": 60,
       "draw_kw": 1,
       "cost_per_second": 20,
-      "vision_radius_voxels": 8
+      "vision_radius_voxels": 24
     },
     "starting_build_drones": 2,
     "starting_mining_drones": 1
@@ -176,7 +176,7 @@
       "cost_dollars": 60,
       "hp": 500,
       "draw_kw": 2,
-      "vision_radius_voxels": 8,
+      "vision_radius_voxels": 20,
       "weapon": {
         "range_voxels": 20,
         "damage_hp": 12,
@@ -187,7 +187,7 @@
       "cost_dollars": 90,
       "hp": 400,
       "draw_kw": 3,
-      "vision_radius_voxels": 8,
+      "vision_radius_voxels": 12,
       "weapon": {
         "range_voxels": 40,
         "damage_hp": 60,
