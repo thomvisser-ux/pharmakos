@@ -15,16 +15,41 @@ scenarios/nightly/
   README.md                           this file
   seeds.txt                           the fixed seed set, twenty seeds
   rusher.scenario.jsonc               the three arms the workflow plays
+  rusher.playbook.jsonc                 and the playbook each seals
   turtle.scenario.jsonc
+  turtle.playbook.jsonc
   hunter.scenario.jsonc
-  placeholder.playbook.jsonc          what the three seal until S2's `arms` lane
+  hunter.playbook.jsonc
+  placeholder.playbook.jsonc          what the result fixture seals
   fixture/result-golden.scenario.jsonc  the arm the result golden is played from
   fixture/two.seeds.txt                 and its two seeds
 ```
 
-**The arms are placeholders until S2's `arms` lane.** Each seals
-`placeholder.playbook.jsonc`, which covers the nearest vent and attacks
-nobody, so a win rate today says nothing about balance.
+## The three arms
+
+Each arm is one hand-written playbook in the v1 vocabulary (spec section 15;
+S2's plan, task `arms`), and one file plays **every round of every seed, from
+seat 0 on half the seeds and seat 1 on the other half**, and must qualify every
+time: a refusal fails the night. That shapes all three. A playbook can name
+nothing one seat or one map owns, so places are descriptions read when their
+step starts ("the nearest scrap seam", "the nearest uncovered vent", "the safest
+beacon"), never a beacon by name, and the route, which every round replays
+from the top, guards each placement with a `skip_if` (a beacon of that mandate
+already stands, or the grid already has the kW to spare), so a later round
+adds no second post. Each sets `allow_dormant_beacons`, because the verifier's
+power projection does not read those guards.
+
+| Arm | What it does | Where it departs from spec section 15, and why |
+| --- | --- | --- |
+| **Rusher** | An Attack beacon first, at HIGH priority beside the core; it launches on two raiders (`force_size: 2`), `FREE_FIRE`, breach allowed, no retreat; a generator only while the grid is short. | Its target. The archetype goes for the nearest known enemy beacon and then the core. In S2 an Attack target is a handle, a voxel or the enemy commander (`E0015` refuses a selector until S3), and a handle needs a fresh sighting at the seal (`E0418`), which round 1 never has. So the force raids the map's centre (192, 192), the one voxel that means the same from every spawn, and fights what it finds there. |
+| **Turtle** | A Defend beacon beside the core guarding the core and "my commander" (`FREE_FIRE`, the whole sphere, one picket); the core and every Build beacon repair below 75 % and rebuild, which fields repair drones; generators, then autocannons `on` free vents; no Attack beacon and no raider of its own, so the treasury hoards what the guns and repairs leave. | The walls. A `wall` target is a box of fixed voxels, one map's and one seat's, so no wall goes up. |
+| **Hunter** | A Survey beacon with two scouts over the whole map; an Attack beacon launching three raiders. | Its target, which is the whole of the archetype. `enemy_commander` qualifies only on a sighting of an enemy commander inside `verifier.reach_memory_ms` at the seal (`E0418`), which round 1 never has and no later round is sure to have. So the force raids the map's centre, as the Rusher's does, and the scouts gather the sightings a commander target would need. |
+
+Each departure is a `PLACEHOLDER` in its playbook. Until the owner's ruling
+lifts them, the Rusher and Hunter bands read "a forward raid on the map's
+centre" and the Turtle band "a guarded, armed core without walls", not the
+archetypes spec section 15 names.
+
 `NIGHTLY_SCENARIOS_ENABLED`, the repository variable the workflow is gated on,
 stays unset until `arms` has merged and its forced run is attached (decision
 30); only the owner sets it.
@@ -78,9 +103,33 @@ winner; a **shared** win is not a win for the band (decision 29). The summary's
 `tests/golden/scenarios/nightly-result/expected.result.json` pins the JSON's
 shape.
 
-The band (decision 18): an arm that is the sole winner in more than 13 of the
-20 seeds (65 %) against Easy opens a tuning task. It is an alarm, not a gate:
-`.github/workflows/nightly-scenarios.yml`'s band step warns and fails nothing.
+### The bands
+
+Written per S2's plan, decisions 18 and 29 (ruled by decisions-log item
+144 (11)), one per arm:
+
+* **Rusher:** an arm that is the sole winner -- last seat standing, or the
+  final audit's -- in more than 13 of the 20 seeds (65 %) against Easy opens a
+  tuning task. It watches spec section 19's "an early rush ends matches before
+  authoring matters" and the core's HP and turret strength.
+* **Turtle:** an arm that is the sole winner -- last seat standing, or the
+  final audit's -- in more than 13 of the 20 seeds (65 %) against Easy opens a
+  tuning task. It watches "hoarding or turtling wins, now that value follows
+  condition".
+* **Hunter:** an arm that is the sole winner -- last seat standing, or the
+  final audit's -- in more than 13 of the 20 seeds (65 %) against Easy opens a
+  tuning task. It watches "commander hunting dominates", whose counters
+  (armour, decoys, a self-defence weapon) are added only if this band shows it
+  (spec section 4).
+
+At S2 every band reads against Easy, which carries the Balanced weighting
+(item 144 (6)); each is re-baselined against Normal at S5. A shared win counts
+as no win, which favours not alarming (decision 18's downside). 14 sole wins
+of 20 is 70 % and alarms; 13 is 65 % and does not. Each is an alarm, not a
+gate: `.github/workflows/nightly-scenarios.yml`'s band step warns and fails
+nothing, and a breach is a tuning task, never a tuning change in the pull
+request that saw it. S2's close acknowledges the three bands as Easy's (item
+144 (6)), with the departures above stated beside them.
 
 ## The seed set
 

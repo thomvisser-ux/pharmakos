@@ -2,20 +2,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // The Hunter arm of the nightly adversarial scenarios (AGENTS.md section 10
-// item 5; spec section 15): a hand-written playbook that hunts Easy's commander
-// down, played against Easy over scenarios/nightly/seeds.txt by
+// item 5; spec section 15): a hand-written playbook that scouts for Easy and
+// raids with a hunting party, played against Easy over scenarios/nightly/seeds.txt by
 // .github/workflows/nightly-scenarios.yml, with the alarm band of S2's plan,
 // decision 18: the arm the sole winner in more than 13 of the 20 seeds (65 %)
 // opens a tuning task.
 //
-// A PLACEHOLDER ARM. S2's `night` lane built the harness and left this file
-// for S2's `arms` lane, which writes the arm's own playbook in place of the
-// shared one below. Until then it seals
-// scenarios/nightly/placeholder.playbook.jsonc, which attacks nobody, so its
-// win rate says nothing about balance; NIGHTLY_SCENARIOS_ENABLED stays unset
-// until `arms` has merged (decision 30).
-//
-// PLACEHOLDER: the Hunter arm's playbook — arms, S2, when the nightly arms are written
+// The arm's playbook is scenarios/nightly/hunter.playbook.jsonc, which says where
+// it departs from the archetype in v1 as built and why;
+// scenarios/nightly/README.md gives the band and what it reads.
 //
 // An arm, not a committed scenario (scenarios/nightly/README.md; S2's plan,
 // E20): it carries no hash_chain_equals, `cargo xtask ci`'s scenario step
@@ -26,7 +21,7 @@
 {
   "format": "pharmakos.scenario.v1",
   "name": "hunter",
-  "summary": "The Hunter arm against Easy, a placeholder until S2's arms lane: seat 0 seals the nightly placeholder playbook, which covers the nearest vent and attacks nobody, and seat 1 is Easy.",
+  "summary": "The Hunter arm against Easy: seat 0 seals scenarios/nightly/hunter.playbook.jsonc, a Survey beacon over the whole map and an Attack beacon that launches three raiders at the map centre, and seat 1 is Easy.",
 
   "map": {
     "seed": "0x00000000ca5caded",
@@ -36,7 +31,7 @@
   "rules": "rules/rules.v1.json",
 
   "seats": [
-    { "seat": 0, "kind": "playbook", "playbook": "scenarios/nightly/placeholder.playbook.jsonc" },
+    { "seat": 0, "kind": "playbook", "playbook": "scenarios/nightly/hunter.playbook.jsonc" },
     { "seat": 1, "kind": "builtin" }
   ],
 

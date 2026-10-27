@@ -1,0 +1,89 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// The Turtle arm's playbook (S2's plan, task `arms`; spec section 15): a
+// Defend beacon guarding the core and "my commander", autocannons, repair
+// drones and no attack at all, played against Easy over
+// scenarios/nightly/seeds.txt. scenarios/nightly/README.md says what it can
+// and cannot do in v1 as built, and gives its band.
+//
+// One file plays every round of every seed, from either seat, and must
+// qualify every time (a refusal fails the night), so it names nothing that
+// belongs to one seat or one map, and each placement is guarded.
+//
+// Hoarding: it builds no Attack beacon and fields no raider of its own, so
+// the treasury keeps what its guns and repairs do not spend. Repair drones:
+// every Build beacon here, the core included, repairs below 75 % and rebuilds
+// what is destroyed, which fields repair drones on the work in hand.
+//
+// The departure from the archetype is the walls. A `wall` target is a box of
+// voxels, which is one map's and one seat's, so a file played on twenty maps
+// from both seats cannot place one where it means anything. The autocannons
+// stand `on` vents, the one description a Build target takes.
+// PLACEHOLDER: the Turtle's walls, which a wall box of fixed voxels cannot place on every map and seat — owner, S2, at demo2
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {"title": "Nightly Turtle", "author_kind": "HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {"label": "to_safety", "move": {"to": {"safest": {}}}},
+      // The core repairs and rebuilds what stands in its sphere. Round 1 only
+      // (no Defend beacon stands yet): the commander starts at the core, the
+      // only beacon the seat has, so "the nearest Build beacon" is the core,
+      // where in a later round it could be a vent post whose targets this row
+      // would clear. The core is named by a description because `b_00`, a
+      // live seat's core, is not the reference seat view's, which `gamectl
+      // verify` reads (its core is `b_01`).
+      {"label": "mend_core",
+        "skip_if": {"beacon_hp_pct": {"beacon": {"nearest": {"filter": {"mandate": "DEFEND"}}}, "pct": {"op": "GE", "value": 0}}},
+        "interface": {"beacon": {"nearest": {"filter": {"mandate": "BUILD"}}}, "rows": [
+          {"set_mandate_settings": {"build": {"targets": [], "repair_threshold_pct": 75, "rebuild_destroyed": true, "terraform": "NONE"}}}
+        ]},
+        "timeout_ms": 60000, "on_fail": {"action": "SKIP"}},
+      // The guard post beside the core: it protects the core (still the
+      // nearest Build beacon when this step runs, in round 1) and the
+      // commander, with a picket for early warning. Skipped once the seat has
+      // a Defend beacon.
+      {"label": "guard",
+        "skip_if": {"beacon_hp_pct": {"beacon": {"nearest": {"filter": {"mandate": "DEFEND"}}}, "pct": {"op": "GE", "value": 0}}},
+        "place_beacon": {"at": {"covering": {"seam": {"rank": "NEAREST", "coverage": "ANY"}}}, "tags": ["guard"],
+          "initial": {"priority": "HIGH", "mandate": {"roe": "FREE_FIRE", "defend": {
+            "protect": [{"beacon": {"nearest": {"filter": {"mandate": "BUILD"}}}}, {"my_commander": {}}],
+            "engagement_radius_pct": 100, "pursue": "SPHERE_EDGE", "picket_scouts": 1}}}},
+        "timeout_ms": 60000, "on_fail": {"action": "SKIP"}},
+      // Power first: a generator on the nearest free vent while the grid has
+      // under 6 kW to spare.
+      {"label": "power",
+        "skip_if": {"kw_headroom": {"kw": {"op": "GE", "value": 6}}},
+        "place_beacon": {"at": {"covering": {"vent": {"rank": "NEAREST", "coverage": "UNCOVERED"}}},
+          "initial": {"mandate": {"build": {"targets": [
+            {"blueprint_id": "generator", "anchor": {"on": {"covered": {}}}}
+          ], "repair_threshold_pct": 75, "rebuild_destroyed": true}}}},
+        "timeout_ms": 90000, "on_fail": {"action": "SKIP"}},
+      // Then a gun: an autocannon on the nearest free vent once the grid has
+      // 6 kW to spare.
+      {"label": "cannon",
+        "skip_if": {"kw_headroom": {"kw": {"op": "LT", "value": 6}}},
+        "place_beacon": {"at": {"covering": {"vent": {"rank": "NEAREST", "coverage": "UNCOVERED"}}},
+          "initial": {"mandate": {"build": {"targets": [
+            {"blueprint_id": "autocannon", "anchor": {"on": {"covered": {}}}}
+          ], "repair_threshold_pct": 75, "rebuild_destroyed": true}}}},
+        "timeout_ms": 90000, "on_fail": {"action": "SKIP"}},
+      {"label": "home", "move": {"to": {"safest": {}}}}
+    ],
+    "handlers": [
+      // Hurt and under fire, the commander walks to safety and waits.
+      {"id": "flee", "when": {"all": {"items": [{"cmdr_hp_pct": {"cmp": "LE", "pct": 40}}, {"cmdr_took_damage_within": {"ms": 3000}}]}},
+       "body": [{"label": "flee_to_safety", "move": {"to": {"safest": {}}}}, {"label": "flee_wait", "hold": {"ms": 8000}}],
+       "resume": "CONTINUE", "cooldown_ms": 30000, "max_fires": 3}
+    ],
+    // A beacon placed past supply waits dark rather than refusing the file:
+    // the verifier's power projection does not read the guards above.
+    "options": {"allow_dormant_beacons": true}
+  },
+  "on_death": {"on_respawn": "CONTINUE"},
+  // After the route, stay with the guard post, inside the sphere where its
+  // guards escort the commander.
+  "fallback": {"shadow": {"beacon": {"nearest": {"filter": {"mandate": "DEFEND"}}}}}
+}
