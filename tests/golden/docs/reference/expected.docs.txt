@@ -215,6 +215,8 @@ gp.v1.DefendSettings
   reserved auto_fortify, unit_mix
 
 gp.v1.EnemyCommander
+  oneof: _seat
+  seat                         1   uint32
 
 gp.v1.Fallback
   oneof: posture
@@ -818,7 +820,7 @@ gp.v1.Playbook.Kind
 
 ## Diagnostics
 
-96 codes. A code is language-neutral, append-only and never
+97 codes. A code is language-neutral, append-only and never
 reused; only an ERROR stops a playbook qualifying. `none at the skeleton` names the
 task that owes the emitter, which is honesty about coverage rather than a gap.
 
@@ -871,9 +873,9 @@ E0012  ERROR  decode and version  raised at: none at the skeleton (retired by S2
   Defend mandate settings have no effect until S2's Defend mandate lands; they are refused rather than ignored.
   A Defend beacon cannot be given settings in this build yet.
 
-E0013  ERROR  decode and version  raised at: structure
-  Attack mandate settings have no effect until S2's Attack mandate lands; they are refused rather than ignored.
-  An Attack beacon cannot be given settings in this build yet.
+E0013  ERROR  decode and version  raised at: none at the skeleton (retired by S2's `atk`, which built Attack's settings)
+  Attack mandate settings had no effect until S2's Attack mandate landed; this code is retired and raised by nothing.
+  An Attack beacon takes its settings in this build.
 
 E0014  ERROR  decode and version  raised at: none at the skeleton (retired by S2's `dfnd`, which built `most_threatened`)
   selector `most_threatened` has no effect until S2's threat model, which is what it ranks by; it is refused rather than ignored.
@@ -1078,6 +1080,10 @@ E0417  ERROR  references and placement  raised at: structure
 E0418  ERROR  references and placement  raised at: semantics
   {what}; an Attack target must have been seen within the reach window, {max} ms, when the playbook is sealed.
   An Attack beacon attacks what the seat has seen recently. Look again with a scout, or choose a target the seat has seen.
+
+E0419  ERROR  references and placement  raised at: semantics
+  `enemy_commander` names seat {seat}, {why}; it hunts another seat's commander in this match, or, without a seat, the nearest the seat has seen.
+  An Attack beacon hunts an enemy's commander. Name an enemy seat, or leave the seat out to hunt the nearest enemy commander seen.
 
 E0501  ERROR  settings and recycle  raised at: semantics
   `{field}` is {found}; it must be between 0 and 100.
