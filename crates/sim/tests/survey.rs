@@ -92,21 +92,42 @@ fn field(world: &World) -> [Fx; 3] {
     world.standing_point([i32::midpoint(ax, bx), i32::midpoint(ay, by), 0])
 }
 
-/// A seat-0 Survey beacon at the field with one scout standing on it.
-fn survey_post(world: &mut World) -> (BeaconId, UnitId) {
+/// A world whose one Push lasts `push_ms`.
+fn world_with(push_ms: i32) -> World {
+    World::new(&WorldConfig {
+        match_seed: SEED,
+        seats: 2,
+        units_per_seat: 0,
+        rules: rules(),
+        match_settings: MatchSettings {
+            segment_lengths_ms: vec![push_ms],
+            round_limit: 1,
+        },
+    })
+    .unwrap_or_else(|error| panic!("generating the world: {error}"))
+}
+
+/// A seat-0 Survey beacon at the field, with no scout and a scout count of
+/// nought, so its fabricator fields none.
+fn survey_post(world: &mut World) -> BeaconId {
     let at = field(world);
     let post = world
         .place_beacon_directly(seat(0), at, MandateKind::Survey, PRIORITY_NORMAL)
         .expect("a beacon");
-    world.set_scouts(post, 1);
-    let scout = world
-        .field_unit(seat(0), post, UnitKind::Scout, at)
-        .expect("a scout");
-    (post, scout)
+    // No count: each test fields its own scouts, when it wants them.
+    world.set_scouts(post, 0);
+    post
 }
 
-/// An enemy raider homed to seat 1's core, put down at `at`: it walks home,
-/// out of the post's sphere, and leaves a sighting behind.
+/// A Survey scout of `post`, standing on it.
+fn scout_of(world: &mut World, post: BeaconId) -> UnitId {
+    let at = beacon_at(world, post);
+    world
+        .field_unit(seat(0), post, UnitKind::Scout, at)
+        .expect("a scout")
+}
+
+/// An enemy raider homed to seat 1's core, put down at `at`.
 fn passer_by(world: &mut World, at: [Fx; 3]) -> UnitId {
     let home = core(world, seat(1));
     world
@@ -120,6 +141,18 @@ fn away(world: &mut World, unit: UnitId) {
     let home = beacon_at(world, core(world, seat(1)));
     let there = ground(world, home, 0, -6);
     assert!(world.place_unit_directly(unit, there), "a living unit");
+}
+
+/// Destroy `beacon` at once, on seat 0's order.
+fn destroy(world: &mut World, beacon: BeaconId) {
+    world
+        .request_damage(DamageOrder {
+            target: DamageTarget::Beacon(beacon),
+            amount: Damage::new(1_000_000).expect("a positive amount"),
+            by: seat(0),
+            source: None,
+        })
+        .expect("the order is filed");
 }
 
 fn pushing(world: World) -> Runner {
@@ -139,62 +172,84 @@ fn play(runner: &mut Runner, ticks: u32, feed: &mut Vec<Event>) {
     }
 }
 
-fn going(world: &World, unit: UnitId) -> [Fx; 3] {
-    let row = world.units().row_of(unit).expect("a live unit");
-    world.units().destinations()[row.index()]
-}
-
-/// Where seat 0 remembers `asset`, and the tick it saw it on.
-fn remembered(world: &World, asset: AssetId) -> ([Fx; 3], u32) {
-    let table = world.sightings();
-    let row = (0..table.seats().len())
-        .find(|row| table.seats()[*row] == 0 && table.assets()[*row] == asset.raw())
-        .expect("seat 0 remembers it");
-    (table.places()[row], table.seen_at()[row])
-}
-
 /// Play until `tick` has been reached.
 fn play_to(runner: &mut Runner, tick: u32, feed: &mut Vec<Event>) {
     let now = runner.world().tick().raw();
     play(runner, tick.saturating_sub(now), feed);
 }
 
+fn going(world: &World, unit: UnitId) -> [Fx; 3] {
+    let row = world.units().row_of(unit).expect("a live unit");
+    world.units().destinations()[row.index()]
+}
+
+/// Where seat 0 remembers `asset`, and the tick it saw it on, or `None`.
+fn remembered(world: &World, asset: AssetId) -> Option<([Fx; 3], u32)> {
+    let table = world.sightings();
+    (0..table.seats().len())
+        .find(|row| table.seats()[*row] == 0 && table.assets()[*row] == asset.raw())
+        .map(|row| (table.places()[row], table.seen_at()[row]))
+}
+
+fn due() -> u32 {
+    REFRESH_INTERVAL.to_ticks_ceil()
+}
+
+/// A probe area of `post`'s inside one row of cells, from `west` to `east`
+/// columns east of the post, and the cells it overlaps west to east.
+fn strip(world: &mut World, post: BeaconId, west: i32, east: i32) -> Vec<u32> {
+    let at = beacon_at(world, post);
+    let [x, y] = column(at);
+    // One row of cells: the post's, clear of its edges.
+    let row = y.div_euclid(16) * 16;
+    let (low, high) = (row + 6, row + 10);
+    let area = ColumnBox::new(
+        [
+            i16::try_from(x + west).unwrap(),
+            i16::try_from(low).unwrap(),
+        ],
+        [
+            i16::try_from(x + east).unwrap(),
+            i16::try_from(high).unwrap(),
+        ],
+    )
+    .expect("a box the right way out");
+    world
+        .add_area(post, AreaKind::Probe, ground(world, at, west, 0), area)
+        .expect("the probe area fits");
+    let cells: std::collections::BTreeSet<u32> = (x + west..=x + east)
+        .filter_map(|cx| cell_of([cx, low]))
+        .collect();
+    cells.into_iter().collect()
+}
+
 #[test]
 fn scouts_scan_unexplored_ground_first() {
     let mut world = world();
-    let (post, scout) = survey_post(&mut world);
-    // A probe area three cells long to the east of the post, the scan's work.
-    let at = beacon_at(&world, post);
-    let [x, y] = column(at);
-    let near = i16::try_from(x + 4).unwrap();
-    let far = i16::try_from(x + 40).unwrap();
-    let (low, high) = (i16::try_from(y - 4).unwrap(), i16::try_from(y + 4).unwrap());
-    let area = ColumnBox::new([near, low], [far, high]).expect("a box the right way out");
-    world
-        .add_area(post, AreaKind::Probe, ground(&world, at, 20, 0), area)
-        .expect("the probe area fits");
-    // The area's cells, and the nearest one already explored, so the scan
-    // must pass it over.
-    let cells: Vec<u32> = (i32::from(near)..=i32::from(far))
-        .flat_map(|cx| (i32::from(low)..=i32::from(high)).map(move |cy| [cx, cy]))
-        .filter_map(cell_of)
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .collect();
-    assert!(cells.len() >= 3, "the area spans several cells: {cells:?}");
-    let first = cell_of([i32::from(near), y]).expect("a cell");
-    assert!(world.mark_explored_directly(seat(0), first));
+    let post = survey_post(&mut world);
+    let cells = strip(&mut world, post, 4, 52);
+    assert!(cells.len() >= 4, "the area spans several cells: {cells:?}");
+    // The nearest cell is explored already, so the scan passes it over.
+    assert!(world.mark_explored_directly(seat(0), cells[0]));
+    let first = scout_of(&mut world, post);
+    let second = scout_of(&mut world, post);
 
     let mut runner = pushing(world);
     let mut feed = Vec::new();
     play(&mut runner, 2, &mut feed);
-    let target = cell_of(column(going(runner.world(), scout))).expect("a cell");
-    assert!(
-        cells.contains(&target) && target != first,
-        "the scout walks to an unexplored cell of its probe area, not the explored one: {target}"
+    let target = |runner: &Runner, scout| cell_of(column(going(runner.world(), scout)));
+    assert_eq!(
+        target(&runner, first),
+        Some(cells[1]),
+        "the scout walks to the nearest unexplored cell of its probe area"
+    );
+    assert_eq!(
+        target(&runner, second),
+        Some(cells[2]),
+        "and a second scout of the beacon takes the next one"
     );
 
-    play(&mut runner, 1_200, &mut feed);
+    play(&mut runner, 1_600, &mut feed);
     let explored = runner.world().explored();
     assert!(
         cells.iter().all(|cell| explored.contains(seat(0), *cell)),
@@ -210,7 +265,7 @@ fn scouts_scan_unexplored_ground_first() {
 #[test]
 fn the_stalest_sighting_is_refreshed_next() {
     let mut world = world();
-    let (post, scout) = survey_post(&mut world);
+    let post = survey_post(&mut world);
     let at = beacon_at(&world, post);
     let east = ground(&world, at, 16, 0);
     let first = passer_by(&mut world, east);
@@ -223,49 +278,38 @@ fn the_stalest_sighting_is_refreshed_next() {
     let second = passer_by(runner.world_mut(), second_at);
     play(&mut runner, 10, &mut feed);
     away(runner.world_mut(), second);
-    play(&mut runner, 400, &mut feed);
 
     let first = AssetId::of_unit(first).unwrap();
     let second = AssetId::of_unit(second).unwrap();
-    let (first_place, first_seen) = remembered(runner.world(), first);
-    let (second_place, second_seen) = remembered(runner.world(), second);
-    assert!(
-        first_seen < second_seen,
-        "the first walked out of sight earlier"
-    );
+    let (first_place, first_seen) = remembered(runner.world(), first).expect("seen");
+    let (second_place, second_seen) = remembered(runner.world(), second).expect("seen");
+    assert!(first_seen < second_seen, "the first is the older");
 
-    // Nothing is due yet: with no probe area there is nothing to scan, so
-    // the scout keeps to its post.
-    let due = REFRESH_INTERVAL.to_ticks_ceil();
-    play_to(&mut runner, first_seen + due - 10, &mut feed);
-    assert_ne!(going(runner.world(), scout), first_place);
-    // The stalest is due first, and the scout goes to re-check it.
-    play_to(&mut runner, first_seen + due + 6, &mut feed);
+    // Both due, and only then a scout: its first choice is between the two.
+    play_to(&mut runner, second_seen + due() + 1, &mut feed);
+    let scout = scout_of(runner.world_mut(), post);
+    play(&mut runner, 6, &mut feed);
     assert_eq!(
         going(runner.world(), scout),
         first_place,
-        "the stalest sighting is re-checked first"
+        "the stalest due sighting is re-checked first"
     );
-    // Once there, the first is in sight and not renewed: the next is next.
-    play_to(&mut runner, second_seen + due + 6, &mut feed);
+    // There, the first is in sight and not renewed: it is forgotten, and the
+    // next stalest is next.
+    until_forgotten(&mut runner, first, &mut feed);
+    play(&mut runner, 6, &mut feed);
     assert_eq!(
-        going(runner.world(), scout),
-        second_place,
-        "then the next stalest"
-    );
-    // The re-check found the first gone, and the seat forgot it.
-    let table = runner.world().sightings();
-    assert!(
-        !(0..table.seats().len())
-            .any(|row| table.seats()[row] == 0 && table.assets()[row] == first.raw()),
+        remembered(runner.world(), first),
+        None,
         "a re-check that finds nothing forgets the sighting"
     );
+    assert_eq!(going(runner.world(), scout), second_place, "then the next");
 }
 
 #[test]
 fn enemy_beacons_come_first() {
     let mut world = world();
-    let (post, scout) = survey_post(&mut world);
+    let post = survey_post(&mut world);
     let at = beacon_at(&world, post);
     // An enemy raider seen first, so its sighting is the older one...
     let west = ground(&world, at, -16, 0);
@@ -285,39 +329,75 @@ fn enemy_beacons_come_first() {
     play(&mut runner, 10, &mut feed);
     away(runner.world_mut(), raider);
     play(&mut runner, 190, &mut feed);
-    runner
-        .world_mut()
-        .request_damage(DamageOrder {
-            target: DamageTarget::Beacon(theirs),
-            amount: Damage::new(1_000_000).expect("a positive amount"),
-            by: seat(0),
-            source: None,
-        })
-        .expect("the order is filed");
+    destroy(runner.world_mut(), theirs);
     play(&mut runner, 10, &mut feed);
 
     let raider = AssetId::of_unit(raider).unwrap();
     let beacon = AssetId::of_beacon(theirs).unwrap();
-    let (_, raider_seen) = remembered(runner.world(), raider);
-    let (beacon_place, beacon_seen) = remembered(runner.world(), beacon);
+    let (raider_place, raider_seen) = remembered(runner.world(), raider).expect("seen");
+    let (beacon_place, beacon_seen) = remembered(runner.world(), beacon).expect("seen");
     assert!(
         raider_seen < beacon_seen,
         "the raider's sighting is the older"
     );
 
-    let due = REFRESH_INTERVAL.to_ticks_ceil();
-    play_to(&mut runner, beacon_seen + due + 6, &mut feed);
+    // Both due, and only then a scout.
+    play_to(&mut runner, beacon_seen + due() + 1, &mut feed);
+    let scout = scout_of(runner.world_mut(), post);
+    play(&mut runner, 6, &mut feed);
     assert_eq!(
         going(runner.world(), scout),
         beacon_place,
         "an enemy beacon's sighting is re-checked before an older unit's"
     );
+    assert!(
+        remembered(runner.world(), raider).is_some(),
+        "the older unit's sighting was still there to choose"
+    );
+    // The beacon is gone; the raider is next.
+    until_forgotten(&mut runner, beacon, &mut feed);
+    play(&mut runner, 6, &mut feed);
+    assert_eq!(going(runner.world(), scout), raider_place);
 }
 
 #[test]
-fn a_survey_scout_reports_an_enemy_beacon_it_finds() {
+fn the_refresh_pass_takes_over_before_the_lull() {
+    // A Push of two minutes: its last minute is the refresh pass.
+    let mut world = world_with(120_000);
+    let post = survey_post(&mut world);
+    let at = beacon_at(&world, post);
+    // Far more ground than a scout scans in a Push.
+    let cells = strip(&mut world, post, 40, 300);
+    let east = ground(&world, at, 16, 0);
+    let raider = passer_by(&mut world, east);
+    let scout = scout_of(&mut world, post);
+    let mut runner = pushing(world);
+    let mut feed = Vec::new();
+    play(&mut runner, 10, &mut feed);
+    away(runner.world_mut(), raider);
+    let raider = AssetId::of_unit(raider).unwrap();
+    let (place, seen) = remembered(runner.world(), raider).expect("seen");
+
+    play_to(&mut runner, seen + due() - 5, &mut feed);
+    assert_ne!(going(runner.world(), scout), place, "still scanning");
+    play_to(&mut runner, seen + due() + 6, &mut feed);
+    assert!(
+        !cells
+            .iter()
+            .all(|cell| runner.world().explored().contains(seat(0), *cell)),
+        "the scan is not done"
+    );
+    assert_eq!(
+        going(runner.world(), scout),
+        place,
+        "in the Push's last refresh interval the due sighting comes before the scan"
+    );
+}
+
+#[test]
+fn a_survey_scout_reports_an_enemy_beacon_it_finds_and_its_refresh() {
     let mut world = world();
-    let (post, _) = survey_post(&mut world);
+    let post = survey_post(&mut world);
     let at = beacon_at(&world, post);
     // An enemy beacon just past the post's sphere, inside a probe area: the
     // sphere does not see it, the scout scanning the area does.
@@ -335,6 +415,7 @@ fn a_survey_scout_reports_an_enemy_beacon_it_finds() {
     world
         .add_area(post, AreaKind::Probe, theirs_at, area)
         .expect("the probe area fits");
+    scout_of(&mut world, post);
     let mut runner = pushing(world);
     let mut feed = Vec::new();
     play(&mut runner, 600, &mut feed);
@@ -346,4 +427,31 @@ fn a_survey_scout_reports_an_enemy_beacon_it_finds() {
     assert_eq!(found.len(), 1, "found once: {found:?}");
     assert_eq!(found[0].seat, Some(seat(0)));
     assert_eq!(found[0].subject, Some(beacon));
+
+    // The scan done, the scout goes home; once the sighting is due it goes
+    // back, and the beacon, still standing, is refreshed.
+    let (_, seen) = remembered(runner.world(), beacon).expect("seen");
+    play_to(&mut runner, seen + due() + 600, &mut feed);
+    let refreshed: Vec<&Event> = feed
+        .iter()
+        .filter(|event| event.kind == EventKind::SightingRefreshed)
+        .collect();
+    assert_eq!(refreshed.len(), 1, "refreshed once: {refreshed:?}");
+    assert_eq!(refreshed[0].subject, Some(beacon));
+    assert!(
+        refreshed[0].value >= i64::from(REFRESH_INTERVAL.raw()),
+        "its value is the age it replaced: {}",
+        refreshed[0].value
+    );
+}
+
+/// Play until seat 0 no longer remembers `asset`, for at most a minute.
+fn until_forgotten(runner: &mut Runner, asset: AssetId, feed: &mut Vec<Event>) {
+    for _ in 0..1_200 {
+        if remembered(runner.world(), asset).is_none() {
+            return;
+        }
+        play(runner, 1, feed);
+    }
+    panic!("the re-check never forgot it");
 }

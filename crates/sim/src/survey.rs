@@ -66,15 +66,15 @@
 //!   [`CELL_VOXELS`] columns square ([`cell_of`]). A Survey scout marks a
 //!   cell for its seat on a decision tick its sensor is on when it stands on
 //!   the cell's scan column ([`record_sightings`]): the cell's centre column,
-//!   brought inside its beacon's probe area when the cell is in one, the
-//!   place it looks round the cell from.
-//!   Only a Survey beacon's scouts mark: a Defend beacon's pickets warn,
-//!   they do not survey ([`World::survey_scout_sensor`]).
+//!   brought inside the first of its beacon's probe areas the cell overlaps,
+//!   the place it looks round the cell from. Only a Survey beacon's scouts
+//!   mark: a Defend beacon's pickets warn, they do not survey
+//!   ([`World::survey_scout_sensor`]). A cell once explored stays explored.
 //! * **The scan.** The scout walks to the nearest unexplored cell of its
-//!   beacon's probe areas, ties to the lowest cell: to the cell's centre
-//!   column brought inside the area, when that column is ground the scout can
-//!   reach (the router's own connectivity oracle), so a scan never parks a
-//!   scout in front of a column it cannot stand on.
+//!   beacon's probe areas, ties to the lowest cell: to the cell's scan column,
+//!   when that column is ground the scout can reach (the router's own
+//!   connectivity oracle), so a scan never sends a scout to a column it cannot
+//!   stand on.
 //! * **The refresh pass.** Once nothing is left to scan, and in any case for
 //!   the last [`REFRESH_INTERVAL`] of every Push, so that the playbook of the
 //!   next Lull is written on fresh knowledge (decisions-log item 13; never cut,
@@ -83,24 +83,32 @@
 //!   it leaves the reach window (`verifier.reach_memory_ms`), and the due
 //!   sightings rank **enemy beacons first**, then oldest first -- the one
 //!   closest to leaving the window -- ties to the lowest asset id. A scout
-//!   already walking to a due sighting keeps it, so a scout does not turn
-//!   back and forth between two.
-//! * **A re-check that finds nothing forgets.** A sighting whose place one of
-//!   the seat's Survey scouts has in sight, and which no sensor renewed on
+//!   already walking to a due sighting keeps it while no due enemy beacon
+//!   outranks it, so a scout does not turn back and forth between two.
+//! * **A re-check that finds nothing forgets.** A due sighting whose place one
+//!   of the seat's Survey scouts has in sight, and which no sensor renewed on
 //!   that decision tick, remembers an asset that is no longer there, and the
 //!   seat forgets it ([`World::forget_sighting`]; the sighting table is hashed
-//!   and snapshotted whole, so this is hashed state like any sighting). Only
-//!   a Survey scout's re-check forgets: a sphere or a picket that sees the
-//!   place passively changes no memory.
+//!   and snapshotted whole, so this is hashed state like any sighting). A
+//!   sighting younger than [`REFRESH_INTERVAL`] is not due a re-check and is
+//!   kept, so an asset that has just walked out of a scout's sight is still
+//!   remembered where it was last seen. Only a Survey scout's re-check
+//!   forgets: a sphere or a picket that sees the place passively changes no
+//!   memory.
 //! * **Known threats** (decision 12, under item 148's seat sight): a cell or
 //!   a sighting inside the weapon range of an armed enemy asset the seat sees
-//!   now is no destination.
+//!   now is no destination. The walk itself is the router's: a route that
+//!   prices a known threat's range is `AVOID_KNOWN_THREATS`, S2's `atk`'s.
 //! * **Several scouts** of one beacon share the work: a destination a scout of
 //!   the same beacon in a lower row is already walking to is not taken again.
+//! * **Arrival.** A scout that has reached the place it was sent to parks
+//!   there, so the wandering a unit at the end of its route is given
+//!   ([`World`]'s arrival draw) does not carry it off before it looks.
 //! * **Reporting back** is three private feed lines: `area_surveyed` when a
-//!   beacon's last scannable cell is marked, `enemy_beacon_found` for an enemy
-//!   beacon its seat had never seen, and `sighting_refreshed` for a due
-//!   sighting a Survey scout renewed.
+//!   scout's mark takes its beacon's last scannable cell, `enemy_beacon_found`
+//!   for an enemy beacon its seat holds no sighting of, and
+//!   `sighting_refreshed` for a sighting older than [`REFRESH_INTERVAL`] a
+//!   Survey scout renewed.
 //!
 //! With nothing to scan and nothing due, the scout idles at its beacon.
 
@@ -115,8 +123,15 @@ use crate::targeting::column_of;
 use crate::world::World;
 
 /// The explored table's coarse cell, in columns on a side.
-// PLACEHOLDER: Survey's coarse cell, 16 columns square — tune2, at S2's demo
+///
+/// A scout standing on a cell's centre sees all of it while its vision radius
+/// is at least the cell's half-diagonal, about 11.3 columns here: true at
+/// decision 17's proposed scout vision of 24, not at the rules table's 8 of
+/// today, under which a cell's corners can be marked unseen.
+// PLACEHOLDER: Survey's coarse cell, 16 columns square, sized against the scout's vision — tune2, at S2's demo
 pub const CELL_VOXELS: i32 = 16;
+
+// PLACEHOLDER: whether an explored cell is ever scanned again, and on what clock — owner, at S3, with the reach filters
 
 /// Survey's refresh interval: a sighting this old is due a re-check, and a
 /// Push's last this-long is the refresh pass (decisions-log item 13).
@@ -190,8 +205,9 @@ pub(crate) fn record_sightings(world: &mut World) {
     recheck(world, tick);
 }
 
-/// A Survey scout's re-check that found nothing: a sighting of its seat's
-/// whose place the scout has in sight, and which no sensor renewed this tick,
+/// A Survey scout's re-check that found nothing: a due sighting of its
+/// seat's (at least [`REFRESH_INTERVAL`] old) whose place the scout has in
+/// sight, and which no sensor renewed this tick,
 /// is a memory of an asset no longer there, and the seat forgets it. Scouts in
 /// ascending unit row, sightings in table order, so the forgets are a total
 /// order.
@@ -213,7 +229,8 @@ fn recheck(world: &mut World, tick: u32) {
 }
 
 /// The first sighting row at or after `from` that `sensor` disproves: its
-/// seat's, not renewed on `tick`, and with its place in the sensor's sight.
+/// seat's, due a re-check (at least [`REFRESH_INTERVAL`] old, so not renewed
+/// on `tick`), and with its place in the sensor's sight.
 fn gone_from(world: &World, sensor: &Sensor, tick: u32, from: usize) -> Option<usize> {
     let table = world.sightings();
     table
@@ -224,7 +241,7 @@ fn gone_from(world: &World, sensor: &Sensor, tick: u32, from: usize) -> Option<u
         .enumerate()
         .skip(from)
         .find(|(_, ((who, place), seen))| {
-            **who == sensor.seat.raw() && **seen < tick && sensor.sees(&RadiusOnly, **place)
+            **who == sensor.seat.raw() && due_at(**seen, tick) && sensor.sees(&RadiusOnly, **place)
         })
         .map(|(slot, _)| slot)
 }
@@ -358,7 +375,7 @@ struct Seen {
 }
 
 /// Record one sighting, and when a Survey scout took it (`report`), report
-/// what it brought in: an enemy beacon the seat had never seen, or a sighting
+/// what it brought in: an enemy beacon the seat held no sighting of, or a sighting
 /// that was due a re-check ([`REFRESH_INTERVAL`]).
 fn note(world: &mut World, report: bool, seen: Seen) {
     let before = report.then(|| seen_at(world, seen.seat, seen.id));
@@ -375,9 +392,10 @@ fn note(world: &mut World, report: bool, seen: Seen) {
         Some(Some(then)) => {
             // E7: rule: a sighting is taken on a tick already played, so it is never later than now
             let age = seen.tick.saturating_sub(then);
-            if age < REFRESH_INTERVAL.to_ticks_ceil() {
+            if !due_at(then, seen.tick) {
                 return;
             }
+            // E7: rule: `Ms::from_ticks` saturates at `i32::MAX` ms, past any reach window a rules table holds
             Emission::of(EventKind::SightingRefreshed).value(i64::from(Ms::from_ticks(age).raw()))
         }
         _ => return,
@@ -410,22 +428,28 @@ fn seen_at(world: &World, seat: SeatId, asset: AssetId) -> Option<u32> {
 /// from; and report `area_surveyed` when that mark took the last scannable
 /// cell of its beacon's probe areas.
 fn explore(world: &mut World, sensor: &Sensor, home: BeaconId) {
-    let Some(cell) = cell_of(column_of(sensor.centre)) else {
-        return;
-    };
-    let Some([x, y]) = scan_column(world, home, cell) else {
-        return;
-    };
-    let (Ok(x), Ok(y)) = (i16::try_from(x), i16::try_from(y)) else {
-        return;
-    };
-    let [_, _, z] = sensor.centre;
-    let on = [Fx::from_voxels(x), Fx::from_voxels(y), z];
-    if Sq::between(sensor.centre, on) > Sq::of_radius(world.arrive_radius())
-        || !world.explored_mut().mark(sensor.seat, cell)
-        || !in_probe_areas(world, home, cell)
-        || nearest_cell(world, sensor.seat, home, sensor.centre, &|_| true).is_some()
-    {
+    let [x, y] = column_of(sensor.centre);
+    let reach = world.arrive_radius().floor_voxels();
+    let mut surveyed = false;
+    // The cells within the arrive radius of where the scout stands: a scan
+    // column on a cell's edge can be reached from the next cell over.
+    for dy in [-reach, 0, reach] {
+        for dx in [-reach, 0, reach] {
+            let (Some(cx), Some(cy)) = (x.checked_add(dx), y.checked_add(dy)) else {
+                continue;
+            };
+            let Some(cell) = cell_of([cx, cy]) else {
+                continue;
+            };
+            if on_scan_column(world, sensor.centre, home, cell)
+                && world.explored_mut().mark(sensor.seat, cell)
+                && in_probe_areas(world, home, cell)
+            {
+                surveyed = true;
+            }
+        }
+    }
+    if !surveyed || nearest_cell(world, sensor.seat, home, sensor.centre, &|_| true).is_some() {
         return;
     }
     let now = world.tick();
@@ -437,29 +461,69 @@ fn explore(world: &mut World, sensor: &Sensor, home: BeaconId) {
     );
 }
 
-/// The column a scout of `home` scans `cell` from, and which marks it once in
-/// sight: the cell's centre column brought inside the first of `home`'s probe
-/// areas it overlaps, in target-table order, or its own centre column when it
-/// overlaps none. One column per cell, so the scan's destination and the
-/// mark agree.
+/// Whether `here` stands on `cell`'s scan column: within the arrive radius
+/// of it on the map, whatever the heights.
+fn on_scan_column(world: &World, here: [Fx; 3], home: BeaconId, cell: u32) -> bool {
+    let Some([x, y]) = scan_column(world, home, cell) else {
+        return false;
+    };
+    // E7: cannot miss: a scan column is a column of the map, which `RulesTable::map_last_voxel` keeps inside `i16`
+    let (Ok(x), Ok(y)) = (i16::try_from(x), i16::try_from(y)) else {
+        return false;
+    };
+    let [_, _, z] = here;
+    Sq::between(here, [Fx::from_voxels(x), Fx::from_voxels(y), z])
+        <= Sq::of_radius(world.arrive_radius())
+}
+
+/// The column a scout of `home` scans `cell` from, and which marks it once it
+/// stands there: the cell's centre column brought inside the first of
+/// `home`'s probe areas it overlaps, in target-table order, or its own centre
+/// column when it overlaps none. One column per cell, so the scan's
+/// destination and the mark agree.
 fn scan_column(world: &World, home: BeaconId, cell: u32) -> Option<[i32; 2]> {
-    if let Some(column) = probe_areas(world, home)
-        .find_map(|area| cells_of(area).find(|(held, _)| *held == cell))
-        .map(|(_, column)| column)
-    {
-        return Some(column);
+    let (cx, cy) = unpack(cell)?;
+    match probe_areas(world, home).find(|area| overlaps(*area, cx, cy)) {
+        Some(area) => {
+            let ([x0, y0], [x1, y1]) = bounds(area);
+            Some([centre(cx, x0, x1)?, centre(cy, y0, y1)?])
+        }
+        None => Some([
+            centre(cx, i32::MIN, i32::MAX)?,
+            centre(cy, i32::MIN, i32::MAX)?,
+        ]),
     }
+}
+
+/// A cell id's cell column and cell row.
+fn unpack(cell: u32) -> Option<(i32, i32)> {
     let cx = i32::try_from(cell.checked_rem(CELL_ROW)?).ok()?;
     let cy = i32::try_from(cell.checked_div(CELL_ROW)?).ok()?;
-    Some([
-        centre(cx, i32::MIN, i32::MAX)?,
-        centre(cy, i32::MIN, i32::MAX)?,
-    ])
+    Some((cx, cy))
+}
+
+/// An area's lowest and highest columns, the lowest clipped at the map's
+/// origin.
+fn bounds(area: ColumnBox) -> ([i32; 2], [i32; 2]) {
+    // E7: rule: a column west or south of the origin is on no map, so the area's part there holds no cell
+    let low = area.min_column().map(|v| i32::from(v).max(0));
+    (low, area.max_column().map(i32::from))
+}
+
+/// Whether `area` overlaps the cell at cell column `cx`, cell row `cy`.
+fn overlaps(area: ColumnBox, cx: i32, cy: i32) -> bool {
+    let ([x0, y0], [x1, y1]) = bounds(area);
+    let side = |c: i32, lo: i32, hi: i32| {
+        let first = c.checked_mul(CELL_VOXELS);
+        let last = first.and_then(|first| first.checked_add(CELL_VOXELS.checked_sub(1)?));
+        matches!((first, last), (Some(first), Some(last)) if first <= hi && last >= lo)
+    };
+    side(cx, x0, x1) && side(cy, y0, y1)
 }
 
 /// Whether `cell` overlaps one of `home`'s probe areas.
 fn in_probe_areas(world: &World, home: BeaconId, cell: u32) -> bool {
-    probe_areas(world, home).any(|area| cells_of(area).any(|(held, _)| held == cell))
+    unpack(cell).is_some_and(|(cx, cy)| probe_areas(world, home).any(|area| overlaps(area, cx, cy)))
 }
 
 /// `home`'s probe areas, in target-table order.
@@ -474,12 +538,12 @@ fn probe_areas(world: &World, home: BeaconId) -> impl Iterator<Item = ColumnBox>
         .map(|(_, area)| *area)
 }
 
-/// Every cell `area` overlaps, in ascending id, each with the column a scout
-/// scans it from: the cell's centre column, brought inside the area. An area
-/// wholly west or south of the origin overlaps no cell.
-fn cells_of(area: ColumnBox) -> impl Iterator<Item = (u32, [i32; 2])> {
-    let [x0, y0] = area.min_column().map(|v| i32::from(v).max(0));
-    let [x1, y1] = area.max_column().map(i32::from);
+/// Every cell `area` overlaps, in ascending id, each with its cell column and
+/// row and the column a scout scans it from for this area: the cell's centre
+/// column, brought inside the area. An area wholly west or south of the
+/// origin overlaps no cell.
+fn cells_of(area: ColumnBox) -> impl Iterator<Item = (u32, [i32; 2], [i32; 2])> {
+    let ([x0, y0], [x1, y1]) = bounds(area);
     // `None` for an axis on which the area holds no column on the map's side
     // of the origin.
     let span = |lo: i32, hi: i32| {
@@ -491,7 +555,7 @@ fn cells_of(area: ColumnBox) -> impl Iterator<Item = (u32, [i32; 2])> {
     rows.into_iter().flatten().flat_map(move |cy| {
         columns.clone().into_iter().flatten().filter_map(move |cx| {
             let cell = pack(cx, cy)?;
-            Some((cell, [centre(cx, x0, x1)?, centre(cy, y0, y1)?]))
+            Some((cell, [cx, cy], [centre(cx, x0, x1)?, centre(cy, y0, y1)?]))
         })
     })
 }
@@ -502,6 +566,7 @@ fn centre(c: i32, lo: i32, hi: i32) -> Option<i32> {
     let mid = c
         .checked_mul(CELL_VOXELS)?
         .checked_add(CELL_VOXELS.checked_div(2)?)?;
+    // E7: rule: the scan column of a cell an area overlaps lies in the area, which is where its playbook said to look
     Some(mid.clamp(lo, hi))
 }
 
@@ -519,11 +584,14 @@ fn nearest_cell(
     let [hx, hy] = column_of(here);
     let start = surface.node_of(hx, hy)?;
     let mut best: Option<(Sq, u32, [Fx; 3])> = None;
-    for area in probe_areas(world, home) {
-        for (cell, [x, y]) in cells_of(area) {
-            // A cell two areas overlap is scanned from the first's column.
+    for (index, area) in probe_areas(world, home).enumerate() {
+        for (cell, [cx, cy], [x, y]) in cells_of(area) {
+            // A cell two areas overlap is scanned from the first's column
+            // ([`scan_column`]), so it is a candidate of the first only.
             if world.explored().contains(seat, cell)
-                || scan_column(world, home, cell) != Some([x, y])
+                || probe_areas(world, home)
+                    .take(index)
+                    .any(|earlier| overlaps(earlier, cx, cy))
             {
                 continue;
             }
@@ -581,6 +649,14 @@ pub(crate) fn run_scout(world: &mut World, unit: u32) {
     };
     world.put_threat_scratch(threats);
     match target {
+        // Arrived (on the map, whatever the heights): park, so the end of the
+        // route's wandering does not carry the scout off before the next
+        // decision looks.
+        Some([tx, ty, _])
+            if crate::programs::within(here, [tx, ty, here[2]], world.arrive_radius()) =>
+        {
+            world.park_unit(unit);
+        }
         Some(to) => world.send_unit(unit, to),
         None => crate::programs::idle_at_home(world, unit),
     }
@@ -615,9 +691,16 @@ fn refresh_pass(world: &World) -> bool {
     end.saturating_sub(world.tick().raw()) <= REFRESH_INTERVAL.to_ticks_ceil()
 }
 
+/// Whether a sighting taken on tick `seen` is due a re-check on tick `now`:
+/// at least [`REFRESH_INTERVAL`] old.
+fn due_at(seen: u32, now: u32) -> bool {
+    // E7: rule: a sighting is taken on a tick already played, so it is never later than now
+    now.saturating_sub(seen) >= REFRESH_INTERVAL.to_ticks_ceil()
+}
+
 /// Where a scout in the refresh pass walks: to `seat`'s sighting most due a
-/// re-check, keeping `going` while it is still one of them, or `None` when
-/// none is due.
+/// re-check, keeping `going` while it is one of them and no due enemy
+/// beacon outranks it, or `None` when none is due.
 fn most_due(
     world: &World,
     seat: SeatId,
@@ -631,7 +714,6 @@ fn most_due(
         .verifier
         .as_ref()
         .map(|block| Ms::new(block.reach_memory_ms).to_ticks_floor())?;
-    let due = REFRESH_INTERVAL.to_ticks_ceil();
     let tick = world.tick().raw();
     let table = world.sightings();
     let rows = table
@@ -641,20 +723,27 @@ fn most_due(
         .zip(table.kinds())
         .zip(table.places())
         .zip(table.seen_at());
+    // The key: not an enemy beacon (beacons first), then the tick it was seen
+    // on (oldest first), then the asset id.
     let mut best: Option<((bool, u32, u32), [Fx; 3])> = None;
+    // Whether `going` is a due sighting, and in which tier.
+    let mut kept: Option<bool> = None;
     for ((((who, asset), kind), place), seen) in rows {
         // E7: rule: a sighting is taken on a tick already played, so it is never later than now
         let age = tick.saturating_sub(*seen);
-        if *who != seat.raw() || age < due || age > window || !open(*place) {
+        if *who != seat.raw() || !due_at(*seen, tick) || age > window || !open(*place) {
             continue;
         }
-        if *place == going {
-            return Some(going);
-        }
         let key = (*kind != AssetKind::Beacon.id(), *seen, *asset);
+        if *place == going && kept.is_none() {
+            kept = Some(key.0);
+        }
         if best.is_none_or(|(held, _)| key < held) {
             best = Some((key, *place));
         }
     }
-    best.map(|(_, place)| place)
+    match (best, kept) {
+        (Some(((tier, _, _), _)), Some(held)) if held == tier => Some(going),
+        (best, _) => best.map(|(_, place)| place),
+    }
 }

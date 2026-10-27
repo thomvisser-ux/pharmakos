@@ -302,8 +302,8 @@ pub enum EventKind {
     /// `surv`). `subject` is the enemy beacon, `seat` the seeing seat, `at`
     /// where it stands.
     EnemyBeaconFound,
-    /// A Survey scout renewed a sighting that was due a re-check: older than
-    /// Survey's refresh interval (S2's `surv`; item 13). `subject` is the
+    /// A Survey scout renewed a sighting older than Survey's refresh
+    /// interval (S2's `surv`; item 13). `subject` is the
     /// asset seen, `seat` the seeing seat, `at` where it is now, `value` the
     /// age in game milliseconds of the memory it replaced.
     SightingRefreshed,
