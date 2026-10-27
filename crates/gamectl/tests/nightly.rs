@@ -328,14 +328,18 @@ fn operator_is_refused_for_a_scenario_with_no_builtin_seat() {
     assert!(outcome.err.contains("seats none"), "{}", outcome.err);
 }
 
-/// A scratch repository root holding the rules table, the placeholder
-/// playbook and one arm file, so the reader's arm rules can be met by a file
-/// that really lives under `scenarios/nightly/`.
+/// A scratch repository root holding the rules table, the nightly playbooks
+/// (the result fixture's and the three arms') and one arm file, so the
+/// reader's arm rules can be met by a file that really lives under
+/// `scenarios/nightly/`.
 fn scratch_root(name: &str, arm: &str) -> PathBuf {
     let dir = scratch(name);
     for file in [
         "rules/rules.v1.json",
         "scenarios/nightly/placeholder.playbook.jsonc",
+        "scenarios/nightly/rusher.playbook.jsonc",
+        "scenarios/nightly/turtle.playbook.jsonc",
+        "scenarios/nightly/hunter.playbook.jsonc",
     ] {
         let to = dir.join(file);
         std::fs::create_dir_all(to.parent().expect("a parent")).expect("a directory");

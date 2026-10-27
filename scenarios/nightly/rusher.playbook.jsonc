@@ -1,0 +1,71 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// The Rusher arm's playbook (S2's plan, task `arms`; spec section 15): an
+// early Attack beacon that launches on a small force, played against Easy
+// over scenarios/nightly/seeds.txt. scenarios/nightly/README.md says what it
+// can and cannot do in v1 as built, and gives its band.
+//
+// One file plays every round of every seed, from seat 0 on some seeds and
+// seat 1 on others, and must qualify every time (a refusal fails the night).
+// So it names nothing that belongs to one seat or one map: places are
+// descriptions read when their step starts, the commander goes to "the
+// safest beacon" rather than to one by name, and each placement is guarded so that a later round, which
+// replays the route from the top, places no second beacon of the same kind.
+//
+// The target is the one departure from the archetype. Spec section 15's
+// Rusher goes for the nearest known enemy beacon, then the core. In S2 an
+// Attack target is a handle, a voxel or the enemy commander (the verifier's
+// E0015 refuses a selector until S3), and a handle or the commander needs a
+// fresh sighting when the playbook is sealed (E0418), which round 1 never
+// has. A voxel is the only target that qualifies on every seed and seat, and
+// the map's centre is the one voxel that means the same thing from every
+// spawn. The force parks there: a voxel raid ends once the force stands at
+// the voxel with no enemy in reach, and a voxel target is never lost, so
+// `retarget` and `breach_allowed` never act; they say what the archetype
+// would do once its target is a beacon.
+// PLACEHOLDER: the Rusher's target, the map's centre, until an Attack target can name the nearest known enemy beacon and still qualify in round 1 — owner, S2, at demo2
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {"title": "Nightly Rusher", "author_kind": "HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      // The post's description reads from where the commander stands: the
+      // safest beacon, which is the core in round 1.
+      {"label": "to_safety", "move": {"to": {"safest": {}}}},
+      // The rush post, first and at HIGH priority, beside the core. Two
+      // raiders launch together and fight on until the attack is over (no
+      // retreat is written). Skipped once the seat has
+      // an Attack beacon.
+      {"label": "rush_post",
+        "skip_if": {"beacon_hp_pct": {"beacon": {"nearest": {"filter": {"mandate": "ATTACK"}}}, "pct": {"op": "GE", "value": 0}}},
+        "place_beacon": {"at": {"covering": {"seam": {"rank": "NEAREST", "coverage": "ANY"}}}, "tags": ["rush"],
+          "initial": {"priority": "HIGH", "mandate": {"roe": "FREE_FIRE", "attack": {
+            "target": {"voxel": {"x": 192, "y": 192, "z": 0}},
+            "retarget": "NEAREST_KNOWN",
+            "staging": {"x": 192, "y": 192, "z": 0},
+            "launch": {"force_size": 2},
+            "after_action": "REGROUP_AT_STAGING",
+            "breach_allowed": true,
+            "waves": 1}}}},
+        "timeout_ms": 60000, "on_fail": {"action": "SKIP"}},
+      // Only as much economy as the raiders need: a generator on the nearest
+      // free vent while the grid has under 4 kW to spare.
+      {"label": "power",
+        "skip_if": {"kw_headroom": {"kw": {"op": "GE", "value": 4}}},
+        "place_beacon": {"at": {"covering": {"vent": {"rank": "NEAREST", "coverage": "UNCOVERED"}}},
+          "initial": {"mandate": {"build": {"targets": [
+            {"blueprint_id": "generator", "anchor": {"on": {"covered": {}}}}
+          ]}}}},
+        "timeout_ms": 90000, "on_fail": {"action": "SKIP"}},
+      {"label": "home", "move": {"to": {"safest": {}}}}
+    ],
+    "handlers": [],
+    // A beacon placed past supply waits dark rather than refusing the file:
+    // the verifier's power projection does not read the guards above.
+    "options": {"allow_dormant_beacons": true}
+  },
+  "on_death": {"on_respawn": "CONTINUE"},
+  "fallback": {"hold": {"at": {"safest": {}}}}
+}
