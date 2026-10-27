@@ -195,8 +195,9 @@ pub(crate) fn compose(
         Some(guard) => (guard.time_ms, guard.cost_dollars),
         None => (0, 0),
     };
+    let top = beside_the_guard(top, guard);
     let goals = greedy(
-        top,
+        &top,
         fill.checked_sub(guard_ms)?,
         situation.economy.treasury.checked_sub(guard_dollars)?,
     );
@@ -279,6 +280,18 @@ pub(crate) fn compose(
         patch,
         removals,
     })
+}
+
+/// The top-k less any goal on the guard's seam: a raid post covers the seam
+/// the guard post does, beside the core, so with a guard placed the two would
+/// contend for one site, and the round makes no raid.
+fn beside_the_guard(top: &[Candidate], guard: Option<&Candidate>) -> Vec<Candidate> {
+    top.iter()
+        .filter(|candidate| {
+            guard.is_none_or(|guard| guard.goal.feature() != candidate.goal.feature())
+        })
+        .cloned()
+        .collect()
 }
 
 /// `{"feature_id": "<name>"}`: a feature reference by name.
@@ -372,10 +385,18 @@ fn place_patch(
             Goal::Raid { seam, target } => {
                 // The post's seam, its target, and its staging at the site
                 // the estimate answered, so the raiders gather at home.
+                // Easy's targets are fixed (spec section 14's Easy column:
+                // "Fixed only", retargeting a rule of Normal's), so it seals
+                // `NONE` where the template says `NEAREST_KNOWN`.
+                let retarget = format!(
+                    "{}/retarget",
+                    raid_target.as_deref()?.strip_suffix("/target")?
+                );
                 let settings = [
                     (covering.as_str(), named(seam)),
                     (raid_target.as_deref()?, target.json()),
                     (raid_staging.as_deref()?, voxel_json(goal.place)),
+                    (retarget.as_str(), string("NONE")),
                 ];
                 if k == 0 {
                     for (pointer, value) in settings {

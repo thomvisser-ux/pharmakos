@@ -36,6 +36,7 @@
 //! | the fixed reads ([`FIXED_READS`]) | `get_status`, `get_briefing`, `get_economy_forecast`, `get_map_summary`, and at most [`PAGES_MAX`] pages each of `list_beacons`, `get_view`, `get_segment_feed` and `list_templates` |
 //! | the tap probe ([`TAP_PROBE_CALLS`]) | one `resolve_refs` and one QUICK `verify_plan` over every tap Easy could make, when there is one (the register's S1-15) |
 //! | the guard probe ([`GUARD_PROBE_CALLS`]) | one `estimate_route` to the nearest own Defend beacon, so a post beside the core is never placed twice |
+//! | the raid probe ([`RAID_PROBE_CALLS`]) | one `estimate_route` to the nearest own Attack beacon, so a raid post is never placed twice |
 //! | one estimate per candidate | [`EASY_CANDIDATES`] `estimate_route`, a placement's to a `covering` waypoint naming its feature, the guard post's and the raids' among them (a raid's by way of its post's site to its target) |
 //! | one instantiate per template | [`EASY_TEMPLATES`] `instantiate_template`, each with its own values, to read what it declares |
 //! | the composition | [`COMPOSE_CALLS`]: one `patch_plan` filling the chosen template and inserting its goals |
@@ -43,7 +44,7 @@
 //! | the safe playbook | [`SAFE_CALLS`]: at most [`SAFE_ESTIMATES`] `estimate_route`, one `instantiate_template` with the route, one `verify_plan` |
 //! | the commit | [`COMMIT_CALLS`]: at most two `submit_plan` (its own plan, then the safe one if the first was refused) and one `set_ready` |
 //!
-//! An advisor makes the fixed reads, the two probes, the estimates, the
+//! An advisor makes the fixed reads, the three probes, the estimates, the
 //! instantiates and the safe playbook's calls, and nothing else
 //! ([`EASY_ADVISOR_CALL_BUDGET`]).
 //! `easy_never_exceeds_its_derived_call_budget` asserts both on a worst-case
@@ -281,6 +282,10 @@ pub const TAP_PROBE_CALLS: u32 = 2;
 /// which says whether a post already stands beside the core.
 pub const GUARD_PROBE_CALLS: u32 = 1;
 
+/// The raid probe: one `estimate_route` to the nearest own Attack beacon,
+/// which says whether a raid post already stands beside the core.
+pub const RAID_PROBE_CALLS: u32 = 1;
+
 /// The composition: one `patch_plan`.
 pub const COMPOSE_CALLS: u32 = 1;
 
@@ -298,6 +303,7 @@ pub const COMMIT_CALLS: u32 = 2 + 1;
 pub const EASY_CALL_BUDGET: u32 = FIXED_READS
     + TAP_PROBE_CALLS
     + GUARD_PROBE_CALLS
+    + RAID_PROBE_CALLS
     + EASY_CANDIDATES
     + EASY_TEMPLATES
     + COMPOSE_CALLS
@@ -309,6 +315,7 @@ pub const EASY_CALL_BUDGET: u32 = FIXED_READS
 pub const EASY_ADVISOR_CALL_BUDGET: u32 = FIXED_READS
     + TAP_PROBE_CALLS
     + GUARD_PROBE_CALLS
+    + RAID_PROBE_CALLS
     + EASY_CANDIDATES
     + EASY_TEMPLATES
     + SAFE_CALLS;
@@ -446,7 +453,8 @@ impl Easy {
     fn plan(&self, wire: &mut Wire<'_, '_>, situation: &Situation, round: &mut Played) {
         let taps = candidates::legal_taps(wire, situation, &self.tuning);
         let post = candidates::defend_post(wire, situation, &self.tuning);
-        let goals = candidates::enumerate(situation, &self.tuning, &taps, post);
+        let raid = candidates::raid_post(wire, situation, &self.tuning);
+        let goals = candidates::enumerate(situation, &self.tuning, &taps, post, raid);
         let evaluated = candidates::evaluate(wire, situation, &self.tuning, goals);
         let top = candidates::top_k(&evaluated);
         let guard = candidates::guard(&evaluated);
@@ -487,7 +495,8 @@ impl Easy {
         if let Ok(situation) = read {
             let taps = candidates::legal_taps(&mut wire, &situation, &self.tuning);
             let post = candidates::defend_post(&mut wire, &situation, &self.tuning);
-            let goals = candidates::enumerate(&situation, &self.tuning, &taps, post);
+            let raid = candidates::raid_post(&mut wire, &situation, &self.tuning);
+            let goals = candidates::enumerate(&situation, &self.tuning, &taps, post, raid);
             let evaluated = candidates::evaluate(&mut wire, &situation, &self.tuning, goals);
             let declared =
                 playbook::declare(&mut wire, &situation.templates, &EASY_KNOWN_TEMPLATES);

@@ -270,11 +270,16 @@ pub(crate) struct Enemy {
 /// the operator cannot read is not one it takes for some seat.
 pub(crate) fn seat_of(method: &str, owner: &str) -> Result<u8, Refused> {
     let unread = || malformed(method, &format!("an owner `{owner}` that names no seat"));
-    owner
-        .strip_prefix("seat.")
-        .ok_or_else(unread)?
-        .parse::<u8>()
-        .map_err(|_| unread())
+    let digits = owner.strip_prefix("seat.").ok_or_else(unread)?;
+    // Decimal digits only, and no leading zero: the one spelling the gateway
+    // writes, so `seat.+1` or `seat.01` is not read as seat 1.
+    if digits.is_empty()
+        || !digits.bytes().all(|byte| byte.is_ascii_digit())
+        || (digits.len() > 1 && digits.starts_with('0'))
+    {
+        return Err(unread());
+    }
+    digits.parse::<u8>().map_err(|_| unread())
 }
 
 /// Whether the seat's commander died in the Push before this Lull: what
@@ -705,6 +710,21 @@ fn read_templates(wire: &mut Wire<'_, '_>) -> Result<Vec<String>, Refused> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_owner_is_read_in_the_gateways_one_spelling_only() {
+        assert_eq!(seat_of("get_view", "seat.0"), Ok(0));
+        assert_eq!(seat_of("get_view", "seat.12"), Ok(12));
+        for owner in [
+            "seat.x", "seat.+1", "seat.01", "seat.300", "seat.", "seat 1", "",
+        ] {
+            assert_eq!(
+                seat_of("list_beacons", owner).map_err(|refused| refused.code),
+                Err(String::from("MALFORMED")),
+                "{owner}"
+            );
+        }
+    }
 
     #[test]
     fn a_death_line_names_its_seat_and_any_other_line_is_refused() {

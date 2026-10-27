@@ -239,7 +239,9 @@ fn attack_rows(
             .reach_memory_ms,
     );
     if reach_memory_ms <= 0 {
-        return Err(missing("verifier.reach_memory_ms"));
+        return Err(RulesError(String::from(
+            "the rules text's `verifier.reach_memory_ms` row is not positive",
+        )));
     }
     let raid_cost_dollars = i64::from(raider.cost_dollars)
         .checked_mul(i64::from(crate::easy::RAID_FORCE_SIZE))

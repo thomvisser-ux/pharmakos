@@ -509,6 +509,7 @@ pub(crate) fn enumerate(
     tuning: &Tuning,
     taps: &[Tap],
     post: Post,
+    raid: Post,
 ) -> Vec<Goal> {
     if situation.commander.is_none() {
         return Vec::new();
@@ -555,7 +556,11 @@ pub(crate) fn enumerate(
     // The guard goes first, so that the cut never drops it, and the rest are
     // cut to the room it leaves.
     let guard = guard_goal(situation, tuning, post);
-    let raids = raid_goals(situation, tuning);
+    let raids = if raid == Post::None {
+        raid_goals(situation, tuning)
+    } else {
+        Vec::new()
+    };
     // The guard and the raids go first, so that the cut never drops them, and
     // the rest are cut to the room they leave.
     let goals: Vec<Goal> = guard
@@ -588,24 +593,50 @@ pub(crate) enum Post {
 /// core and the library lists the template, none otherwise
 /// ([`crate::easy::GUARD_PROBE_CALLS`]).
 pub(crate) fn defend_post(wire: &mut Wire<'_, '_>, situation: &Situation, tuning: &Tuning) -> Post {
+    post_beside_core(
+        wire,
+        situation,
+        tuning,
+        "DEFEND",
+        crate::easy::DEFEND_THE_CORE,
+    )
+}
+
+/// The raid probe, the guard probe's twin for "the nearest own Attack
+/// beacon": a raid post beside the core already regroups and relaunches
+/// every segment, so a second one is never enumerated while one stands, nor
+/// while the probe cannot say ([`crate::easy::RAID_PROBE_CALLS`]).
+pub(crate) fn raid_post(wire: &mut Wire<'_, '_>, situation: &Situation, tuning: &Tuning) -> Post {
+    post_beside_core(
+        wire,
+        situation,
+        tuning,
+        "ATTACK",
+        crate::easy::RAID_AN_ENEMY_BEACON,
+    )
+}
+
+/// Whether an own beacon on `mandate` stands inside the core's sphere: one
+/// estimate to the nearest such beacon, when the seat is shown its commander
+/// and its core and the library lists `template`, and none otherwise.
+fn post_beside_core(
+    wire: &mut Wire<'_, '_>,
+    situation: &Situation,
+    tuning: &Tuning,
+    mandate: &str,
+    template: &str,
+) -> Post {
     let (Some(commander), Some(core)) = (situation.commander, situation.core()) else {
         return Post::Unknown;
     };
-    if !situation
-        .templates
-        .iter()
-        .any(|listed| listed == crate::easy::DEFEND_THE_CORE)
-    {
+    if !lists(situation, template) {
         return Post::Unknown;
     }
     let nearest_defend = object(vec![(
         "beacon_anchor",
         object(vec![(
             "nearest",
-            object(vec![(
-                "filter",
-                object(vec![("mandate", string("DEFEND"))]),
-            )]),
+            object(vec![("filter", object(vec![("mandate", string(mandate))]))]),
         )]),
     )]);
     let params = object(vec![(
@@ -691,7 +722,8 @@ type RaidKey = (bool, Option<i64>, u8, String);
 /// refusal at the seal), or an enemy commander the view shows now, which is
 /// a sighting of age 0 -- a remembered commander is on no seat-facing wire,
 /// so Easy raids only one it sees. One list, ordered by ground distance from
-/// the core, ties to the lowest seat, then the beacon's name, cut at
+/// the core, ties to the lowest seat, then a seat's commander before its
+/// beacons (its key's name is empty), then the beacon's name, cut at
 /// [`RAID_TARGETS_MAX`]. Nothing when the library lists no Raid template, the
 /// seat has no post seam, or the treasury cannot carry the beacon and its
 /// raiders.
@@ -988,6 +1020,12 @@ fn threat_near(situation: &Situation, tuning: &Tuning, at: [i32; 3]) -> Option<u
 /// fit, which no rules table the operator reads can produce.
 ///
 /// PLACEHOLDER: "defends" is within one sphere radius of the target, the sphere radius reused as a threat radius — owner, S5, with the Balanced weights
+///
+/// An enemy core's own weapon is not charged: no seat-facing wire says which
+/// enemy beacon is a core (`gateway.proto`'s `BeaconSummary.core` is own
+/// beacons only), so a raid on a core is weighed as a raid on any beacon.
+///
+/// PLACEHOLDER: a raid on an enemy core is not charged the core's weapon, which no seat-facing field reveals — owner, S5, with Normal and Hard
 fn raid_attack(situation: &Situation, tuning: &Tuning, target: &RaidTarget) -> Option<i64> {
     let threat = i64::try_from(threat_near(situation, tuning, target.at())?).ok()?;
     RAID_POINTS.checked_sub(

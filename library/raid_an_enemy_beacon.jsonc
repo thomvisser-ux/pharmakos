@@ -11,8 +11,9 @@
 // hit at its weak point, the lowest-HP structure of that seat's inside its
 // sphere, else the beacon itself. If the target has moved or died when they
 // arrive, "nearest known" sends them on to the nearest enemy beacon you have a
-// fresh sighting of. They break off once half the force is gone, and the
-// survivors regroup at the staging point.
+// fresh sighting of. They break off once fewer than half the launch force
+// is left -- with two raiders, as soon as one is lost -- and the survivors
+// regroup at the staging point.
 //
 // What to raid is yours to say: an enemy beacon by the name your beacon list
 // gives it, such as {"beacon": {"beacon_id": "e_01"}}; the enemy commander,
@@ -20,8 +21,9 @@
 // {"enemy_commander": {"seat": 1}} for one seat's; or a voxel. A target you
 // have never seen, or not seen recently, is refused at the seal. The wizard
 // offers the nearest enemy beacon you know of, which is what the built-in
-// operator suggests; until you know of one, the template's own target is the
-// middle of the map, a sweep the raiders make and come back from.
+// operator suggests; until you know of one, the template's own target and
+// staging point are the middle of the map: the raiders gather there, sweep it
+// and regroup there, which is why the wizard asks for both.
 //
 // Where the beacon goes is a description, as in Defend the Core: "the nearest
 // scrap seam to you", read once your commander stands at the core, which is
@@ -31,8 +33,8 @@
   "schema_version": {"major": 1, "minor": 0},
   "meta": {
     "parameters": [
-      // Why: the post stands beside the core, where the raiders it fields are
-      // safe while they gather.
+      // Why: the post stands beside the core, where your commander already
+      // is.
       {"pointer": "/declarative/route/1/place_beacon/at/covering", "label": "Which scrap seam the raid post covers: the nearest one to your core, or one by name"},
       // Why: the target is the raid. A name is a fixed target, pinned at the
       // seal; the enemy commander is followed while any of your units sees it.
@@ -55,8 +57,9 @@
       // so the commander walks home first.
       {"label": "to_core", "move": {"to": {"beacon_anchor": {"beacon_id": "b_00"}}}},
       // Why: the step walks to the site it reads, so its timeout bounds the
-      // walk as well as the deploy. Two raiders launch together, half of them
-      // lost breaks the raid off, and one wave goes out a segment.
+      // walk as well as the deploy. Two raiders launch together, fewer than
+      // half of them left (51 %: one of two lost) breaks the raid off, and one
+      // wave goes out a segment.
       // PLACEHOLDER: the Raid template's own target and staging, the middle of the 384 x 384 map, until a description of the nearest known enemy beacon qualifies — owner, S3, with E0015's lift for selectors
       {"label": "place_raid", "place_beacon": {"at": {"covering": {"seam": {"rank": "NEAREST", "coverage": "ANY"}}}, "tags": ["raid"],
         "initial": {"priority": "NORMAL", "mandate": {"roe": "FREE_FIRE", "attack": {
@@ -64,7 +67,7 @@
           "retarget": "NEAREST_KNOWN",
           "staging": {"x": 192, "y": 192, "z": 0},
           "launch": {"force_size": 2},
-          "retreat": {"force_below_pct": 50},
+          "retreat": {"force_below_pct": 51},
           "after_action": "REGROUP_AT_STAGING",
           "waves": 1}}}},
        "timeout_ms": 60000, "on_fail": {"action": "SKIP"}},
