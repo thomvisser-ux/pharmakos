@@ -4165,7 +4165,6 @@ mod tests {
             &WorldConfig {
                 match_seed: seed,
                 seats: 2,
-                units_per_seat: 0,
                 rules: rules(),
                 match_settings: MatchSettings {
                     segment_lengths_ms: vec![60_000],
@@ -4191,7 +4190,6 @@ mod tests {
         pharmakos_sim::world::WorldConfig {
             match_seed: 0x0000_0000_ca5c_aded,
             seats: 2,
-            units_per_seat: 0,
             rules: rules(),
             match_settings: pharmakos_sim::runner::MatchSettings {
                 segment_lengths_ms: vec![1_000],
@@ -5505,7 +5503,6 @@ mod tests {
             &WorldConfig {
                 match_seed: seed,
                 seats: 2,
-                units_per_seat: 0,
                 rules: rules(),
                 match_settings: MatchSettings {
                     segment_lengths_ms: vec![60_000],

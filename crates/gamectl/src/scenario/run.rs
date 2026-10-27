@@ -46,14 +46,11 @@
 //!
 //! # The match settings a file may name
 //!
-//! Two inputs of a match beyond the triple are the scenario's own keys since
-//! S1's first contract pull request (the register's S1-41), each optional:
+//! One input of a match beyond the triple is the scenario's own key since S1's
+//! first contract pull request (the register's S1-41), and optional. Its
+//! sibling `units_per_seat`, the harness walkers, went with them (S2-16, S2's
+//! plan decision 23).
 //!
-//! * `units_per_seat`, the harness walkers each seat fields, is **0** when the
-//!   file names none. Both existing producers of a committed chain use 0
-//!   (`crates/sim/tests/scenario.rs`, `crates/gateway/tests/methods.rs`), and
-//!   a scenario's hash chain has to be reproducible by them; a scenario that
-//!   wants a seat with a roster names it.
 //! * `round_limit` is the sim's
 //!   [`DEFAULT_ROUND_LIMIT`](pharmakos_sim::runner::DEFAULT_ROUND_LIMIT), the
 //!   spec's default and a lobby setting rather than a tuning row
@@ -567,7 +564,6 @@ fn open(root: &Path, scenario: &Scenario, rules: RulesTable) -> Result<Surface, 
         &WorldConfig {
             match_seed: scenario.seed,
             seats: count,
-            units_per_seat: scenario.units_per_seat,
             rules: rules.clone(),
             match_settings: MatchSettings {
                 segment_lengths_ms: scenario

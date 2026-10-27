@@ -92,7 +92,6 @@ fn pristine() -> Host {
         &Settings {
             segment_lengths_ms: vec![SEGMENT_MS],
             round_limit: ROUNDS,
-            units_per_seat: 0,
         },
         None,
     )
@@ -652,7 +651,6 @@ fn a_fourth_seat_is_refused() {
             &Settings {
                 segment_lengths_ms: vec![SEGMENT_MS],
                 round_limit: 2,
-                units_per_seat: 0,
             },
             None,
         )
@@ -668,7 +666,6 @@ fn a_fourth_seat_is_refused() {
         let world = WorldConfig {
             match_seed: SEED,
             seats,
-            units_per_seat: 0,
             rules: rules(),
             match_settings: MatchSettings {
                 segment_lengths_ms: vec![SEGMENT_MS],
@@ -693,7 +690,6 @@ fn a_fourth_seat_is_refused() {
             &Settings {
                 segment_lengths_ms: vec![SEGMENT_MS],
                 round_limit: 2,
-                units_per_seat: 0,
             },
             None,
         )

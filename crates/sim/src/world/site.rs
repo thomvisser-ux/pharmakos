@@ -2371,7 +2371,6 @@ mod tests {
         World::new(&WorldConfig {
             match_seed: crate::DETERMINISM_MATCH_SEED,
             seats: 2,
-            units_per_seat: 0,
             rules,
             match_settings: MatchSettings::default(),
         })

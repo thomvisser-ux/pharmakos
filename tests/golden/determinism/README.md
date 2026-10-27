@@ -64,8 +64,9 @@ Two consequences worth knowing before reading a diff:
 * **No walkers.** Until S1 every seat fielded fifty harness walkers, raiders
   homed to nobody wandering on `Stream::Spawn`, so the unit table was wide.
   The harness fields none now; G3′'s walker load left the chain with them, and
-  S2's G3′-real measures load. `WorldConfig::units_per_seat` still exists for
-  the scenario format's key and the sim's own tests.
+  S2's G3′-real measures load from E30's layout. S2-16 removed the walkers,
+  `WorldConfig::units_per_seat` and the scenario format's key (S2's plan,
+  decision 23).
 * **No segment boundary.** The chain stops inside the first Push, one tick
   before the tick that closes it (tick 3 600, whose `SegmentEnded`,
   `RecapOpened`, respawn settlement and abandoned deploys no committed chain

@@ -124,7 +124,6 @@ fn a_tick_allocates_nothing() {
         // changed between ticks, so the window is no longer steady. The
         // wide-table coverage lives in `tests/determinism.rs` (`TEST_WALKERS`);
         // this test covers the real playbook's in-tick growth instead.
-        units_per_seat: 0,
         rules,
         match_settings: MatchSettings {
             // Long enough that the measured loop never reaches the segment's

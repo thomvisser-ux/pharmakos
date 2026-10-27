@@ -57,7 +57,6 @@ fn world_with(rules: RulesTable, seats: u32, segment_ms: i32) -> World {
     World::new(&WorldConfig {
         match_seed: SEED,
         seats,
-        units_per_seat: 0,
         rules,
         match_settings: MatchSettings {
             segment_lengths_ms: vec![segment_ms],
@@ -1828,7 +1827,6 @@ fn a_collapse_row_no_search_can_use_is_refused_at_load() {
         let refused = World::new(&WorldConfig {
             match_seed: SEED,
             seats: 2,
-            units_per_seat: 0,
             rules: edited(|table| {
                 let collapse = table.collapse.as_mut().expect("a block");
                 collapse.max_region_voxels = region;

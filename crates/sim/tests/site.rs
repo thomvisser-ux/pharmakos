@@ -57,7 +57,6 @@ fn world() -> World {
     World::new(&WorldConfig {
         match_seed: SEED,
         seats: SEATS,
-        units_per_seat: 0,
         rules: rules(),
         match_settings: MatchSettings {
             segment_lengths_ms: vec![180_000],
@@ -1873,7 +1872,6 @@ fn world_of_rounds(rounds: u32, segment_ms: i32) -> World {
     World::new(&WorldConfig {
         match_seed: SEED,
         seats: SEATS,
-        units_per_seat: 0,
         rules: rules(),
         match_settings: MatchSettings {
             segment_lengths_ms: vec![segment_ms],

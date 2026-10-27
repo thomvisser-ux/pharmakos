@@ -74,7 +74,6 @@ fn world(segment_ms: i32) -> World {
     World::new(&WorldConfig {
         match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED,
         seats: 3,
-        units_per_seat: 0,
         rules: rules(),
         match_settings: MatchSettings {
             segment_lengths_ms: vec![segment_ms],

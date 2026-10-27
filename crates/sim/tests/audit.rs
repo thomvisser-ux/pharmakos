@@ -71,7 +71,6 @@ fn world() -> World {
     World::new(&WorldConfig {
         match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED,
         seats: 3,
-        units_per_seat: 0,
         rules: flat_rules(),
         match_settings: MatchSettings {
             segment_lengths_ms: vec![2_000],
@@ -324,7 +323,6 @@ fn four_seat_world() -> World {
     World::new(&WorldConfig {
         match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED,
         seats: 4,
-        units_per_seat: 0,
         rules: flat_rules(),
         match_settings: MatchSettings {
             segment_lengths_ms: vec![2_000],

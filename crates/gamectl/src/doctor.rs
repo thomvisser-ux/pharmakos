@@ -335,7 +335,6 @@ fn check_match(table: Option<&pharmakos_sim::rules::RulesTable>, lines: &mut Vec
         &pharmakos_sim::world::WorldConfig {
             match_seed: CHECK_SEED,
             seats: 2,
-            units_per_seat: 0,
             rules: table.clone(),
             match_settings: pharmakos_sim::runner::MatchSettings {
                 segment_lengths_ms: vec![CHECK_SEGMENT_MS],
@@ -471,7 +470,6 @@ mod tests {
             &pharmakos_sim::world::WorldConfig {
                 match_seed: super::CHECK_SEED,
                 seats: 2,
-                units_per_seat: 0,
                 rules: table.clone(),
                 match_settings: pharmakos_sim::runner::MatchSettings {
                     segment_lengths_ms: vec![super::CHECK_SEGMENT_MS],

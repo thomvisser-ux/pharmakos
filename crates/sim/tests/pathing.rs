@@ -1119,7 +1119,7 @@ fn a_walker_arrives_on_the_tick_the_estimate_promised() {
     // The end-to-end form of item 90's accumulator: a unit walking a real route
     // in a real world arrives no later than the estimator said, and the two
     // computations of "when" are the same number.
-    let mut world = harness_world(0);
+    let mut world = harness_world(4);
     let mut enc = pharmakos_sim::encoding::Enc::with_capacity(64 * 1024);
     // One tick to serve the first repaths, so every unit has a route.
     let _ = world.step(&mut enc).unwrap();
@@ -1200,6 +1200,8 @@ fn a_sealed_in_walker_parks_and_is_re_armed_when_the_graph_changes() {
                 .is_ok()
         );
     }
+    let far = world.standing_point([x + 60, y + 60, 0]);
+    world.send_unit_directly(unit, far);
     let mut tick = 0;
     while tick < 12 {
         let _ = world.step(&mut enc).unwrap();
@@ -1687,14 +1689,21 @@ fn run_segment(units: u32, cap: u32, ticks: u32) -> (bool, Vec<i64>, u32, u64, u
     )
 }
 
-/// The determinism harness's world, at a chosen number of extra walkers.
-fn harness_world(units_per_seat: u32) -> World {
-    World::new(&WorldConfig {
+/// The determinism harness's world, with `movers` raiders a seat sent across
+/// the map (`World::field_movers_directly`, which replaced the harness walkers
+/// when S2-16 removed them).
+fn harness_world(movers: u32) -> World {
+    let mut world = World::new(&WorldConfig {
         match_seed: SEED,
         seats: SEATS,
-        units_per_seat,
         rules: rules(),
         match_settings: MatchSettings::default(),
     })
-    .expect("the committed rules table describes a world")
+    .expect("the committed rules table describes a world");
+    if movers > 0 {
+        world
+            .field_movers_directly(movers)
+            .expect("the movers fit every seat's share");
+    }
+    world
 }

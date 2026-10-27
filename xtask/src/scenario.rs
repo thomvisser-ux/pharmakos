@@ -105,7 +105,6 @@ const TOP_LEVEL_KEYS: &[&str] = &[
     "summary",
     "map",
     "rules",
-    "units_per_seat",
     "round_limit",
     "seats",
     "segments",
@@ -124,18 +123,6 @@ const TOP_LEVEL_KEYS: &[&str] = &[
 /// `gamectl`'s reader holds the same number, so the two readers keep refusing
 /// the same files.
 pub(crate) const MAX_SEGMENT_MS: i64 = 480_000;
-
-/// The most harness walkers a scenario may give one seat, for the reason
-/// [`MAX_SEGMENT_MS`] exists: the sim sizes its unit table from the key before
-/// the first tick, so an unbounded count asked the runner for gigabytes and
-/// aborted it with no pointer. `gamectl`'s reader holds the same number, and
-/// `crates/gamectl/tests/parity.rs` pins the pair.
-// PLACEHOLDER: 256 harness walkers per seat — owner, at S2's G3'-real measurement
-// A guess well above the 50 the determinism harness fielded until S1's real
-// segment (decision 16; register S1-26), which fields none; the cap goes with
-// the walkers when they go, which `pharmakos_sim::WorldConfig::units_per_seat`'s
-// marker puts at the same measurement.
-pub(crate) const MAX_UNITS_PER_SEAT: i64 = 256;
 
 /// The round a match ends on when a scenario names none: the sim's
 /// `DEFAULT_ROUND_LIMIT` (spec section 3's six rounds). xtask is std-only and
@@ -552,34 +539,13 @@ fn check_segments(json: &Json, problems: &mut Vec<Problem>) -> usize {
     segments.len()
 }
 
-/// The two match settings a scenario may name (the register's S1-41, taken in
-/// S1's first contract pull request): `units_per_seat`, the harness walkers
-/// each seat fields, and `round_limit`, the round the match ends on. Both are
-/// optional, and absent they are what every committed chain was produced
-/// with — no walkers, and the sim's `DEFAULT_ROUND_LIMIT` — so adding the keys
-/// moves no chain.
+/// The match setting a scenario may name (the register's S1-41, taken in S1's
+/// first contract pull request): `round_limit`, the round the match ends on,
+/// optional, and absent what every committed chain was produced with, the
+/// sim's `DEFAULT_ROUND_LIMIT`. Its sibling `units_per_seat`, the harness
+/// walkers, went with them (S2-16, S2's plan decision 23): a file that still
+/// names it is refused as an unknown key.
 fn check_match_settings(json: &Json, segments: usize, problems: &mut Vec<Problem>) {
-    if let Some(value) = json.get("units_per_seat") {
-        match integer(Some(value)) {
-            Some(number) if u32::try_from(number).is_err() => problems.push(Problem::new(
-                "/units_per_seat",
-                "optional, but when present it is the walkers each seat fields: an integer of 0 \
-                 or more",
-            )),
-            Some(number) if number > MAX_UNITS_PER_SEAT => problems.push(Problem::new(
-                "/units_per_seat",
-                format!(
-                    "a seat fields at most {MAX_UNITS_PER_SEAT} harness walkers; found {number}"
-                ),
-            )),
-            Some(_) => {}
-            None => problems.push(Problem::new(
-                "/units_per_seat",
-                "optional, but when present it is the walkers each seat fields: an integer of 0 \
-                 or more",
-            )),
-        }
-    }
     // The limit the match plays to, named or the default, never falls below
     // the file's segment count: a scenario plays no round past its limit.
     let limit = match json.get("round_limit") {
@@ -1168,24 +1134,18 @@ mod tests {
     }
 
     #[test]
-    fn units_per_seat_and_round_limit_are_optional_match_settings() {
+    fn round_limit_is_an_optional_match_setting_and_the_walkers_key_is_gone() {
         let dir = scratch("match-settings");
-        let path = write(
-            &dir,
-            &with_keys("  \"units_per_seat\": 0,\n  \"round_limit\": 1,\n"),
-        );
-        validate(&dir, &path).expect("both keys, in range");
-        let path = write(
-            &dir,
-            &with_keys("  \"units_per_seat\": 50,\n  \"round_limit\": 6,\n"),
-        );
-        validate(&dir, &path).expect("walkers and the default round limit");
+        let path = write(&dir, &with_keys("  \"round_limit\": 1,\n"));
+        validate(&dir, &path).expect("the key, in range");
+        let path = write(&dir, &with_keys("  \"round_limit\": 6,\n"));
+        validate(&dir, &path).expect("the default round limit");
 
+        // S2-16 (S2's plan, decision 23): `units_per_seat` left the format
+        // with the walkers, so any value of it is an unknown key.
         for (keys, pointer) in [
-            ("  \"units_per_seat\": -1,\n", "/units_per_seat"),
-            ("  \"units_per_seat\": \"50\",\n", "/units_per_seat"),
-            ("  \"units_per_seat\": 4294967296,\n", "/units_per_seat"),
-            ("  \"units_per_seat\": 257,\n", "/units_per_seat"),
+            ("  \"units_per_seat\": 0,\n", "/units_per_seat"),
+            ("  \"units_per_seat\": 50,\n", "/units_per_seat"),
             ("  \"round_limit\": 0,\n", "/round_limit"),
             ("  \"round_limit\": 1.5,\n", "/round_limit"),
         ] {

@@ -71,7 +71,6 @@ fn lobby_match() -> Surface {
             // Empty is the rules table's own ladder: the lobby's `-`.
             segment_lengths_ms: Vec::new(),
             round_limit: LOBBY_ROUND_LIMIT,
-            units_per_seat: 0,
         },
         Some(support::library_folder()),
     )

@@ -848,7 +848,7 @@ pub enum SnapshotError {
     /// The snapshot holds more units than the receiving world's unit ceiling
     /// ([`World::unit_limit`]), which comes from the receiving world's own
     /// match configuration. The file was saved under another configuration
-    /// (a larger `units_per_seat`, say): restoring it would either overflow
+    /// (another seat count, say, or a hand-edited file): restoring it would either overflow
     /// the table or resume with a ceiling the unbroken run did not have.
     OverCeiling {
         /// How many units the snapshot holds.
@@ -1263,7 +1263,7 @@ impl Snapshot {
     /// (T17) rather than silently half-applied here.
     ///
     /// **The receiving world must be built from the snapshot's own match
-    /// configuration** (its seat count, its `units_per_seat`), as
+    /// configuration** (its seat count, its rules), as
     /// `Host::resume` builds it from the config line. The world keeps its
     /// unit ceiling ([`World::unit_limit`]), which construction derived from
     /// that configuration's starting count, so a resumed match has exactly the

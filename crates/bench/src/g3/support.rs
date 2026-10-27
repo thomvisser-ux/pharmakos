@@ -660,7 +660,6 @@ pub fn footing_at_room(root: &Path, seed: u64) -> Result<FootingQuery, Error> {
     let mut world = World::new(&WorldConfig {
         match_seed: seed,
         seats: GATE_SEATS,
-        units_per_seat: 0,
         rules: bench.rules,
         match_settings: MatchSettings {
             segment_lengths_ms: vec![super::G3_SEGMENT_MS],

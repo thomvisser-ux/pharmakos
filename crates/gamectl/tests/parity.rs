@@ -132,8 +132,7 @@ fn xtask_constant(source: &str, name: &str) -> i64 {
 /// `gamectl`'s reader and `xtask`'s refuse the same files, so the numbers they
 /// refuse by are the same numbers: the longest segment, which is also the top
 /// of the rules table's `match.segment_lengths_ms` ladder (spec §3's eight
-/// minutes); the most walkers a seat may field; and the round limit a file
-/// that names none plays to, the sim's `DEFAULT_ROUND_LIMIT`. A re-tune of the
+/// minutes); and the round limit a file that names none plays to, the sim's `DEFAULT_ROUND_LIMIT`. A re-tune of the
 /// ladder's top fails here rather than having both readers refuse a scenario
 /// that plays the real longest segment.
 #[test]
@@ -143,10 +142,6 @@ fn the_two_scenario_readers_refuse_by_the_same_numbers() {
     assert_eq!(
         xtask_constant(&source, "MAX_SEGMENT_MS"),
         i64::from(scenario::MAX_SEGMENT_MS)
-    );
-    assert_eq!(
-        xtask_constant(&source, "MAX_UNITS_PER_SEAT"),
-        i64::from(scenario::MAX_UNITS_PER_SEAT)
     );
     assert_eq!(
         xtask_constant(&source, "DEFAULT_ROUND_LIMIT"),
@@ -184,7 +179,6 @@ fn client_path(scenario: &Scenario) -> String {
         &WorldConfig {
             match_seed: scenario.seed,
             seats: u32::try_from(scenario.seats.len()).expect("at most three seats"),
-            units_per_seat: 0,
             rules: rules.clone(),
             match_settings: MatchSettings {
                 segment_lengths_ms: scenario

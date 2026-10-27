@@ -32,16 +32,19 @@ fn world() -> World {
             .join("rules.v1.json"),
     )
     .expect("the committed rules table loads");
-    World::new(&WorldConfig {
+    let mut world = World::new(&WorldConfig {
         match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED,
         seats: pharmakos_sim::DETERMINISM_SEATS,
-        // Fifty walkers a seat, the wide moving table the determinism harness
-        // fielded until S1's real segment (decision 16) took them out of it.
-        units_per_seat: 50,
         rules,
         match_settings: MatchSettings::default(),
     })
-    .expect("the rules table describes a map and a broadphase grid")
+    .expect("the rules table describes a map and a broadphase grid");
+    // Fifty raiders a seat sent across the map: the wide moving table the
+    // harness walkers gave until S2-16 removed them.
+    world
+        .field_movers_directly(50)
+        .expect("fifty raiders fit every seat's share");
+    world
 }
 
 #[test]

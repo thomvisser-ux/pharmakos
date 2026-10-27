@@ -59,7 +59,7 @@ fn run_the_push(surface: &mut Surface) {
 const SEGMENT_TICKS: u32 = 20;
 
 /// A two-seat match whose grid cannot carry its starting force: the rules
-/// table's `power.core_surplus_kw` is 0, so the two units each seat fields
+/// table's `power.core_surplus_kw` is 0, so the starting force each seat fields
 /// draw more than its core supplies, and the brownout order darkens the core
 /// at the first settle. Everything else is the shipped table.
 fn short_of_power(round_limit: u32) -> Surface {
@@ -76,7 +76,6 @@ fn short_of_power(round_limit: u32) -> Surface {
         &WorldConfig {
             match_seed: SEED,
             seats: 2,
-            units_per_seat: 2,
             rules,
             match_settings: MatchSettings {
                 segment_lengths_ms: vec![SEGMENT_MS],

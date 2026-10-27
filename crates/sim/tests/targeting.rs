@@ -72,7 +72,6 @@ fn world_at(seed: u64, seats: u32, segments: &[i32]) -> World {
     World::new(&WorldConfig {
         match_seed: seed,
         seats,
-        units_per_seat: 0,
         rules: rules(),
         match_settings: MatchSettings {
             segment_lengths_ms: segments.to_vec(),

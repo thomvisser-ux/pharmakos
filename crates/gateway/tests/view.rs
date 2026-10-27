@@ -1195,25 +1195,29 @@ fn the_whole_map_keyframe_is_measured_and_reported() {
 /// entity list at the gate load of 300 units, reported as a number for the
 /// pull request that records it.
 ///
-/// Two seats each field 150 of the harness's walkers on top of their starting
-/// force, and a casual match shows every entity to every seat, so the seat's
-/// keyframe lists the whole world: every unit with its hit points, maximum and
-/// heading (decision 5). Not a gate, as the keyframe's size is not: a delta
+/// Two seats each field 150 raiders on top of their starting force, laid out
+/// in the lobby through `Host::seed_layout` (E30's seam, which replaced the
+/// harness walkers when S2-16 removed them), and a casual match shows
+/// every entity to every seat, so the seat's keyframe lists the whole world:
+/// every unit with its hit points, maximum and heading (decision 5). Not a gate, as the keyframe's size is not: a delta
 /// mode is decided by `view`'s per-frame cost against this figure (E28).
 #[test]
 fn the_entity_list_at_the_gate_load_is_measured_and_reported() {
     use pharmakos_gateway::host::Host;
     use pharmakos_sim::runner::MatchSettings;
+    use pharmakos_sim::runner::{Layout, LayoutBeacon};
+    use pharmakos_sim::seams::MandateKind;
+    use pharmakos_sim::tables::UnitKind;
     use pharmakos_sim::world::WorldConfig;
     const UNITS_PER_SEAT: u32 = 150;
+    const BEACONS_PER_SEAT: u32 = 5;
     let ids = [SeatId::new(0), SeatId::new(1)];
     let mut surface =
         Surface::new(MATCH, SEED, support::rules(), FogPolicy::casual(), &ids).expect("a match id");
-    let host = Host::open(
+    let mut host = Host::open(
         &WorldConfig {
             match_seed: SEED,
             seats: 2,
-            units_per_seat: UNITS_PER_SEAT,
             rules: support::rules(),
             match_settings: MatchSettings {
                 segment_lengths_ms: vec![SEGMENT_MS],
@@ -1223,6 +1227,29 @@ fn the_entity_list_at_the_gate_load_is_measured_and_reported() {
         None,
     )
     .expect("a match");
+    let beacons = ids
+        .iter()
+        .flat_map(|seat| {
+            (0..BEACONS_PER_SEAT).map(move |index| LayoutBeacon {
+                seat: *seat,
+                column: [
+                    40_i32.saturating_add(
+                        60_i32.saturating_mul(i32::try_from(index).expect("five beacons")),
+                    ),
+                    60_i32.saturating_add(200_i32.saturating_mul(i32::from(seat.raw()))),
+                ],
+                mandate: MandateKind::Build,
+                units: vec![(
+                    UnitKind::Raider,
+                    UNITS_PER_SEAT
+                        .checked_div(BEACONS_PER_SEAT)
+                        .expect("five beacons"),
+                )],
+            })
+        })
+        .collect();
+    host.seed_layout(&Layout { beacons })
+        .expect("the gate load fits each seat's share");
     surface.attach(host).expect("attached");
     surface.set_phase_remaining_ms(pharmakos_sim::math::quantity::Ms::new(FIRST_LULL_MS));
     surface.open_lull().expect("the opening Lull");
