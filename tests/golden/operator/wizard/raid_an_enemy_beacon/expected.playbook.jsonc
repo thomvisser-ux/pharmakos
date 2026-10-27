@@ -1,0 +1,73 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: MIT OR Apache-2.0
+//
+// raid_an_enemy_beacon.jsonc: the Raid template (S2's plan, task `opra`;
+// spec sections 4, 6 and 14).
+//
+// It teaches the raid: walk to your core, place an Attack beacon beside it,
+// and let its raiders do the rest. An Attack beacon fields raiders, gathers
+// them at its staging point, and launches them as soon as its launch
+// condition holds. They walk to the target and fight it: an enemy beacon is
+// hit at its weak point, the lowest-HP structure of that seat's inside its
+// sphere, else the beacon itself. If the target has moved or died when they
+// arrive, "nearest known" sends them on to the nearest enemy beacon you have a
+// fresh sighting of. They break off once fewer than half the launch force
+// is left -- with two raiders, as soon as one is lost -- and the survivors
+// regroup at the staging point.
+//
+// What to raid is yours to say: an enemy beacon by the name your beacon list
+// gives it, such as {"beacon": {"beacon_id": "e_01"}}; the enemy commander,
+// {"enemy_commander": {}}, the nearest one you have a fresh sighting of, or
+// {"enemy_commander": {"seat": 1}} for one seat's; or a voxel. A target you
+// have never seen, or not seen recently, is refused at the seal. The wizard
+// offers the nearest enemy beacon you know of, which is what the built-in
+// operator suggests; until you know of one, the template's own target and
+// staging point are the middle of the map: the raiders gather there, sweep it
+// and regroup there, which is why the wizard asks for both.
+//
+// Where the beacon goes is a description, as in Defend the Core: "the nearest
+// scrap seam to you", read once your commander stands at the core, which is
+// your starting seam beside it. The staging point is a voxel; the built-in
+// operator suggests the post's own site, so the raiders gather at home.
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {
+    "title": "Raid an Enemy Beacon",
+    "author_kind": "BUILTIN",
+    "note": "Walk to your core, place an Attack beacon beside it, and send its raiders against the nearest enemy beacon you know of."
+  },
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      // Why: the post's description reads from where your commander stands,
+      // so the commander walks home first.
+      {"label": "to_core", "move": {"to": {"beacon_anchor": {"beacon_id": "b_00"}}}},
+      // Why: the step walks to the site it reads, so its timeout bounds the
+      // walk as well as the deploy. Two raiders launch together, fewer than
+      // half of them left (51 %: one of two lost) breaks the raid off, and one
+      // wave goes out a segment.
+      // PLACEHOLDER: the Raid template's own target and staging, the middle of the 384 x 384 map, until a description of the nearest known enemy beacon qualifies — owner, S3, with E0015's lift for selectors
+      {"label": "place_raid", "place_beacon": {"at": {"covering": {"seam": {"rank": "NEAREST", "coverage": "ANY"}}}, "tags": ["raid"],
+        "initial": {"priority": "NORMAL", "mandate": {"roe": "FREE_FIRE", "attack": {
+          "target": {"voxel": {"x": 192, "y": 192, "z": 0}},
+          "retarget": "NEAREST_KNOWN",
+          "staging": {"x": 192, "y": 192, "z": 0},
+          "launch": {"force_size": 2},
+          "retreat": {"force_below_pct": 51},
+          "after_action": "REGROUP_AT_STAGING",
+          "waves": 1}}}},
+       "timeout_ms": 60000, "on_fail": {"action": "SKIP"}},
+      {"label": "hold", "hold": {"ms": 30000}}
+    ],
+    "handlers": [
+      // Why: bravery is an ordinary rule. Hurt and under fire, the commander
+      // walks back to safety and waits before carrying on.
+      {"id": "flee", "when": {"all": {"items": [{"cmdr_hp_pct": {"cmp": "LE", "pct": 40}}, {"cmdr_took_damage_within": {"ms": 3000}}]}},
+       "body": [{"label": "flee_to_safety", "move": {"to": {"safest": {}}}}, {"label": "flee_wait", "hold": {"ms": 8000}}],
+       "resume": "CONTINUE", "cooldown_ms": 30000, "max_fires": 3}
+    ]
+  },
+  "on_death": {"on_respawn": "CONTINUE"},
+  // Why: after the hold, wait at the safest beacon you own.
+  "fallback": {"hold": {"at": {"safest": {}}}}
+}

@@ -1,0 +1,27 @@
+Raid an Enemy Beacon
+Written from a built-in template.
+Walk to your core, place an Attack beacon beside it, and send its raiders against the nearest enemy beacon you know of.
+
+Route
+  1. to_core: walk to beacon "b_00".
+  2. place_raid: place a beacon at a site covering the nearest scrap seam (nearest by travel, read when the step starts), tagged "raid", on an Attack mandate: attacking voxel 192, 192, 0, retargeting the nearest known enemy beacon, gathering at voxel 192, 192, 0, launching once 2 raiders stand there, breaking off once fewer than 51% of the force remain, then regrouping at the staging point and in 1 wave, at normal Quartermaster priority (19 s on site).
+    Give up after 1:00.
+    On failure, move on to the next step.
+  3. hold: hold for 30 s.
+
+Rules
+  1. "flee", when the commander is at or below 40% HP and the commander took damage in the last 3 s:
+    1. flee_to_safety: walk to the safest own beacon.
+    2. flee_wait: hold for 8 s.
+    Then carry on with the route.
+    Fires at most 3 times, and no sooner than every 30 s.
+
+If the commander dies
+  On respawn, carry on from the step the route was on.
+
+Fallback
+  Hold at the safest own beacon.
+
+Budget
+  6 of 128 size units.
+  19 s standing at a beacon along the route.
