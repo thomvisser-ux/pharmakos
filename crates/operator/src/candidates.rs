@@ -415,7 +415,12 @@ fn probe(wire: &mut Wire<'_, '_>, pairs: &[(String, Feature)]) -> Result<Vec<boo
 /// reachable, and in a total order -- the feature's travel from the commander
 /// (the feature list's own "nearest"), then the feature's name, then a tap's
 /// beacon -- cut at Easy's candidate count.
-pub(crate) fn enumerate(situation: &Situation, tuning: &Tuning, taps: &[Tap]) -> Vec<Goal> {
+pub(crate) fn enumerate(
+    situation: &Situation,
+    tuning: &Tuning,
+    taps: &[Tap],
+    post: Post,
+) -> Vec<Goal> {
     if situation.commander.is_none() {
         return Vec::new();
     }
@@ -460,7 +465,7 @@ pub(crate) fn enumerate(situation: &Situation, tuning: &Tuning, taps: &[Tap]) ->
     keyed.sort_by(|(a, _), (b, _)| a.cmp(b));
     // The guard goes first, so that the cut never drops it, and the rest are
     // cut to the room it leaves.
-    let guard = guard_goal(situation, tuning);
+    let guard = guard_goal(situation, tuning, post);
     let room = if guard.is_some() {
         ROOM_BESIDE_A_GUARD
     } else {
@@ -472,6 +477,71 @@ pub(crate) fn enumerate(situation: &Situation, tuning: &Tuning, taps: &[Tap]) ->
         .collect()
 }
 
+/// Whether a Defend post already stands beside the core.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Post {
+    /// No Defend beacon of the seat's stands inside the core's sphere.
+    None,
+    /// One does: no second post is enumerated, so posts never stack.
+    Stands,
+    /// The probe was refused or did not read: whether one stands is unknown,
+    /// and no post is enumerated, since a second one would be a beacon's
+    /// price spent on a guess.
+    Unknown,
+}
+
+/// The guard probe: one `estimate_route` from the commander to "the nearest
+/// own Defend beacon" (`beacon_anchor` by the `nearest` selector filtered to
+/// the Defend mandate), the sim's own ranking through the gateway. A
+/// `NOT_FOUND` is the gateway's answer that the selector ranks nothing, so no
+/// Defend beacon stands; a reached anchor inside the core's sphere is a post
+/// beside the core. One call when the seat is shown its commander and its
+/// core and the library lists the template, none otherwise
+/// ([`crate::easy::GUARD_PROBE_CALLS`]).
+pub(crate) fn defend_post(wire: &mut Wire<'_, '_>, situation: &Situation, tuning: &Tuning) -> Post {
+    let (Some(commander), Some(core)) = (situation.commander, situation.core()) else {
+        return Post::Unknown;
+    };
+    if !situation
+        .templates
+        .iter()
+        .any(|listed| listed == crate::easy::DEFEND_THE_CORE)
+    {
+        return Post::Unknown;
+    }
+    let nearest_defend = object(vec![(
+        "beacon_anchor",
+        object(vec![(
+            "nearest",
+            object(vec![(
+                "filter",
+                object(vec![("mandate", string("DEFEND"))]),
+            )]),
+        )]),
+    )]);
+    let params = object(vec![(
+        "waypoints",
+        Json::Array(vec![crate::wire::voxel_location(commander), nearest_defend]),
+    )]);
+    match wire.call("estimate_route", params) {
+        Err(refused) if refused.code == "NOT_FOUND" => Post::None,
+        Err(_) => Post::Unknown,
+        Ok(estimate) => {
+            let anchor = array_of(&estimate, "legs")
+                .ok()
+                .and_then(|legs| legs.last())
+                .and_then(|leg| leg.get("to"))
+                .map(location_voxel);
+            match anchor {
+                Some(Ok(at)) if within(core.at, at, tuning.sphere_radius_voxels) => Post::Stands,
+                Some(Ok(_)) => Post::None,
+                // An answer that does not say where the beacon stands.
+                Some(Err(_)) | None => Post::Unknown,
+            }
+        }
+    }
+}
+
 /// How many candidates a round enumerates beside the guard post: Easy's
 /// count, less the guard's own.
 const ROOM_BESIDE_A_GUARD: u32 = EASY_CANDIDATES - 1;
@@ -480,11 +550,12 @@ const ROOM_BESIDE_A_GUARD: u32 = EASY_CANDIDATES - 1;
 /// covering the live seam the seat covers nearest its core by ground
 /// distance, ties to the lower anchor `y`, then `x` -- the starting seam,
 /// which the core's sphere holds at every seed. `None` when the library lists
-/// no Defend the Core template, the seat is shown no core or covers no live
-/// seam, or the treasury cannot carry the post. It is enumerated every round,
+/// no Defend the Core template, the seat is shown no core, covers no live seam
+/// inside the core's sphere or has a beacon there beside the core already, or
+/// the treasury cannot carry the post. It is enumerated every round,
 /// so the wizard is offered its site; whether a built-in seat places it is
 /// its utility's ([`guard`]).
-fn guard_goal(situation: &Situation, tuning: &Tuning) -> Option<Goal> {
+fn guard_goal(situation: &Situation, tuning: &Tuning, post: Post) -> Option<Goal> {
     if !situation
         .templates
         .iter()
@@ -493,15 +564,22 @@ fn guard_goal(situation: &Situation, tuning: &Tuning) -> Option<Goal> {
     {
         return None;
     }
-    let [cx, cy, _] = situation.core()?.at;
+    let core = situation.core()?;
+    let [cx, cy, _] = core.at;
+    let radius = tuning.sphere_radius_voxels;
+    if post != Post::None {
+        return None;
+    }
     situation
         .features
         .iter()
         .filter(|feature| feature.kind == Kind::Seam && feature.live && feature.covered)
         .filter_map(|feature| {
             let [x, y] = feature.anchor;
+            // Only a seam inside the core's sphere: a post anywhere else would
+            // not stand beside the core it guards.
             let d2 = distance2([x, y, 0], [cx, cy, 0])?;
-            Some(((d2, y, x), feature))
+            (d2 <= radius.checked_mul(radius)?).then_some(((d2, y, x), feature))
         })
         .min_by_key(|(key, _)| *key)
         .map(|(_, feature)| Goal::Guard {

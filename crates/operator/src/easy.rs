@@ -35,6 +35,7 @@
 //! |---|---|
 //! | the fixed reads ([`FIXED_READS`]) | `get_status`, `get_briefing`, `get_economy_forecast`, `get_map_summary`, and at most [`PAGES_MAX`] pages each of `list_beacons`, `get_view`, `get_segment_feed` and `list_templates` |
 //! | the tap probe ([`TAP_PROBE_CALLS`]) | one `resolve_refs` and one QUICK `verify_plan` over every tap Easy could make, when there is one (the register's S1-15) |
+//! | the guard probe ([`GUARD_PROBE_CALLS`]) | one `estimate_route` to the nearest own Defend beacon, so a post beside the core is never placed twice |
 //! | one estimate per candidate | [`EASY_CANDIDATES`] `estimate_route`, a placement's to a `covering` waypoint naming its feature, the guard post's among them |
 //! | one instantiate per template | [`EASY_TEMPLATES`] `instantiate_template`, each with its own values, to read what it declares |
 //! | the composition | [`COMPOSE_CALLS`]: one `patch_plan` filling the chosen template and inserting its goals |
@@ -42,7 +43,7 @@
 //! | the safe playbook | [`SAFE_CALLS`]: at most [`SAFE_ESTIMATES`] `estimate_route`, one `instantiate_template` with the route, one `verify_plan` |
 //! | the commit | [`COMMIT_CALLS`]: at most two `submit_plan` (its own plan, then the safe one if the first was refused) and one `set_ready` |
 //!
-//! An advisor makes the fixed reads, the tap probe, the estimates, the
+//! An advisor makes the fixed reads, the two probes, the estimates, the
 //! instantiates and the safe playbook's calls, and nothing else
 //! ([`EASY_ADVISOR_CALL_BUDGET`]).
 //! `easy_never_exceeds_its_derived_call_budget` asserts both on a worst-case
@@ -57,7 +58,9 @@ use crate::playbook::{self, Declared};
 use crate::safe::{self, SafePlan};
 use crate::situation::{Kind, Situation};
 use crate::tuning::{RulesError, Tuning};
-use crate::wire::{Call, Misread, Wire, array_of, bool_of, compact, object, string, text_of};
+use crate::wire::{
+    Call, Misread, Refused, Wire, array_of, bool_of, compact, object, string, text_of,
+};
 
 // ---------------------------------------------------------------------------
 // Easy's row (spec section 14), and the thresholds with no rules row
@@ -250,6 +253,10 @@ pub const FIXED_READS: u32 = 4 + 4 * PAGES_MAX;
 /// The tap probe: one `resolve_refs` and one QUICK `verify_plan`.
 pub const TAP_PROBE_CALLS: u32 = 2;
 
+/// The guard probe: one `estimate_route` to the nearest own Defend beacon,
+/// which says whether a post already stands beside the core.
+pub const GUARD_PROBE_CALLS: u32 = 1;
+
 /// The composition: one `patch_plan`.
 pub const COMPOSE_CALLS: u32 = 1;
 
@@ -266,6 +273,7 @@ pub const COMMIT_CALLS: u32 = 2 + 1;
 /// the module docs).
 pub const EASY_CALL_BUDGET: u32 = FIXED_READS
     + TAP_PROBE_CALLS
+    + GUARD_PROBE_CALLS
     + EASY_CANDIDATES
     + EASY_TEMPLATES
     + COMPOSE_CALLS
@@ -274,8 +282,12 @@ pub const EASY_CALL_BUDGET: u32 = FIXED_READS
     + COMMIT_CALLS;
 
 /// The most calls an advisor's round makes.
-pub const EASY_ADVISOR_CALL_BUDGET: u32 =
-    FIXED_READS + TAP_PROBE_CALLS + EASY_CANDIDATES + EASY_TEMPLATES + SAFE_CALLS;
+pub const EASY_ADVISOR_CALL_BUDGET: u32 = FIXED_READS
+    + TAP_PROBE_CALLS
+    + GUARD_PROBE_CALLS
+    + EASY_CANDIDATES
+    + EASY_TEMPLATES
+    + SAFE_CALLS;
 
 // ---------------------------------------------------------------------------
 // What comes back
@@ -309,6 +321,9 @@ pub struct Played {
     pub calls: u32,
     /// Why, in one line.
     pub why: String,
+    /// The refusal that kept the round from being read, when one did: the
+    /// round then plans nothing and the gateway files the safe playbook.
+    pub refused: Option<Refused>,
 }
 
 /// One suggested value for one declared template parameter.
@@ -342,6 +357,9 @@ pub struct Advice {
     pub suggestions: Vec<Suggestion>,
     /// How many calls the advice made.
     pub calls: u32,
+    /// The refusal that kept the round from being read, when one did: the
+    /// advice is then empty and the gateway's fallback stands.
+    pub refused: Option<Refused>,
 }
 
 // ---------------------------------------------------------------------------
@@ -382,10 +400,14 @@ impl Easy {
             ready: false,
             calls: 0,
             why: String::new(),
+            refused: None,
         };
-        if let Ok(situation) = Situation::read(&mut wire, seat) {
-            round.round = situation.round;
-            self.plan(&mut wire, &situation, &mut round);
+        match Situation::read(&mut wire, seat) {
+            Ok(situation) => {
+                round.round = situation.round;
+                self.plan(&mut wire, &situation, &mut round);
+            }
+            Err(refused) => round.refused = Some(refused),
         }
         // Always, whatever happened above: a built-in seat that never says it
         // is ready holds the Lull open until the timer ends.
@@ -399,7 +421,8 @@ impl Easy {
     /// Plan and submit.
     fn plan(&self, wire: &mut Wire<'_, '_>, situation: &Situation, round: &mut Played) {
         let taps = candidates::legal_taps(wire, situation, &self.tuning);
-        let goals = candidates::enumerate(situation, &self.tuning, &taps);
+        let post = candidates::defend_post(wire, situation, &self.tuning);
+        let goals = candidates::enumerate(situation, &self.tuning, &taps, post);
         let evaluated = candidates::evaluate(wire, situation, &self.tuning, goals);
         let top = candidates::top_k(&evaluated);
         let guard = candidates::guard(&evaluated);
@@ -433,9 +456,14 @@ impl Easy {
     pub fn advise(&mut self, seat: u8, call: &mut Call<'_>) -> Advice {
         let mut wire = Wire::new(call);
         let mut advice = Advice::default();
-        if let Ok(situation) = Situation::read(&mut wire, seat) {
+        let read = Situation::read(&mut wire, seat);
+        if let Err(refused) = &read {
+            advice.refused = Some(refused.clone());
+        }
+        if let Ok(situation) = read {
             let taps = candidates::legal_taps(&mut wire, &situation, &self.tuning);
-            let goals = candidates::enumerate(&situation, &self.tuning, &taps);
+            let post = candidates::defend_post(&mut wire, &situation, &self.tuning);
+            let goals = candidates::enumerate(&situation, &self.tuning, &taps, post);
             let evaluated = candidates::evaluate(&mut wire, &situation, &self.tuning, goals);
             let declared =
                 playbook::declare(&mut wire, &situation.templates, &EASY_KNOWN_TEMPLATES);

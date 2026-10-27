@@ -224,18 +224,161 @@ fn the_crate_root_is_where_the_list_says() {
     );
 }
 
-/// The defaults this crate keeps, as `(file, a substring of the trimmed line,
-/// the rule that makes the default the exact answer)`. Each matches exactly
-/// one line.
-const KEPT_FALLBACKS: &[(&str, &str, &str)] = &[(
-    "src/compose.rs",
-    "u64::try_from(ms).map_or_else(",
-    "a duration a sentence names is never negative; one that were is written as the \
-     milliseconds it is rather than read as none, so both arms say the figure exactly",
-)];
+/// A refused call, or an answer the operator cannot read, is a candidate,
+/// a plan or a probe that does not hold: the reason the policy entries below
+/// share. Each is the operator's documented decision about what to plan with
+/// what the gateway told it, never a value made up in place of one.
+const POLICY: &str = "a refused or unreadable answer is a plan, candidate or probe that does not \
+                      hold; the module docs state the policy, and the round goes on with what \
+                      the gateway did say";
 
-/// A source file's shipped code: comment-only lines removed, and everything
-/// from its first `#[cfg(test)]` onward.
+/// The defaults and swallows this crate keeps, as `(file, the trimmed line
+/// exactly, how many lines it is, the rule)`.
+const KEPT_FALLBACKS: &[(&str, &str, usize, &str)] = &[
+    (
+        "src/candidates.rs",
+        ".ok()",
+        2,
+        "`route_index`: a pointer that names no index names no route step; the probe's \
+         anchor: an answer that does not say where the Defend beacon stands is Post::Unknown, \
+         a typed answer",
+    ),
+    (
+        "src/candidates.rs",
+        ".ok()?",
+        1,
+        "a count of enemies is a `usize`, which fits an `i64` on every target; a score that \
+         did not fit is a candidate dropped, as `score`'s docs say",
+    ),
+    ("src/candidates.rs", "Err(_) => Post::Unknown,", 1, POLICY),
+    ("src/candidates.rs", "Err(_) => Vec::new(),", 1, POLICY),
+    (
+        "src/candidates.rs",
+        "let Ok(Some((place, travel, lead))) = reading(&estimate) else {",
+        1,
+        POLICY,
+    ),
+    (
+        "src/candidates.rs",
+        "let Ok(estimate) = wire.call(\"estimate_route\", params) else {",
+        1,
+        POLICY,
+    ),
+    (
+        "src/candidates.rs",
+        "let threat = i64::try_from(core_threat(situation, tuning)?).ok()?;",
+        1,
+        "a threat past `i64` is no score at all, and the guard is then not weighed",
+    ),
+    (
+        "src/compose.rs",
+        "let label = crate::wire::text_of(step, \"label\").ok()?;",
+        1,
+        POLICY,
+    ),
+    (
+        "src/compose.rs",
+        "u64::try_from(ms).map_or_else(",
+        1,
+        "a duration a sentence names is never negative; one that were is written as the \
+         milliseconds it is rather than read as none, so both arms say the figure exactly",
+    ),
+    (
+        "src/easy.rs",
+        ".is_ok_and(|answer| bool_of(&answer, \"accepted\") == Ok(true))",
+        1,
+        "only an answer that reads `accepted: true` is an acceptance",
+    ),
+    ("src/easy.rs", ".ok()?;", 2, POLICY),
+    (
+        "src/easy.rs",
+        "if bool_of(report, \"qualifies\").ok()? {",
+        1,
+        POLICY,
+    ),
+    (
+        "src/easy.rs",
+        "if let Ok(situation) = read {",
+        1,
+        "the refusal is kept in `refused` one line before",
+    ),
+    (
+        "src/easy.rs",
+        "let next = if let Some(json_patch) = machine_fix(report).ok()? {",
+        1,
+        POLICY,
+    ),
+    (
+        "src/easy.rs",
+        "let out = text_of(&answer, \"playbook_jsonc\").ok()?;",
+        1,
+        POLICY,
+    ),
+    (
+        "src/playbook.rs",
+        ".and_then(|(_, value)| pharmakos_proto::json::read(value).ok())",
+        1,
+        "a declared value that does not read is no value the operator can copy from",
+    ),
+    (
+        "src/playbook.rs",
+        "Json::Array(items) => items.get(token.parse::<usize>().ok()?)?,",
+        1,
+        "RFC 6901: an array token that is not an index names nothing",
+    ),
+    (
+        "src/playbook.rs",
+        "let Ok(answer) = instantiate(wire, template_id, &[]) else {",
+        1,
+        POLICY,
+    ),
+    (
+        "src/playbook.rs",
+        "let index = token.parse::<usize>().ok()?;",
+        1,
+        "RFC 6901: an array token that is not an index names nothing",
+    ),
+    (
+        "src/safe.rs",
+        ".and_then(|digits| digits.parse::<u32>().ok());",
+        1,
+        "a name that is not `b_<number>` sorts after every numbered one, the order's rule",
+    ),
+    (
+        "src/safe.rs",
+        ".is_some_and(|report| bool_of(report, \"qualifies\") == Ok(true))",
+        1,
+        "only a report that reads `qualifies: true` qualifies",
+    ),
+    (
+        "src/safe.rs",
+        "let Ok(estimate) = wire.call(\"estimate_route\", params) else {",
+        1,
+        POLICY,
+    ),
+    (
+        "src/safe.rs",
+        "let Ok(filled) = instantiate(wire, SAFE_PLAYBOOK, &[(pointer, route.clone())]) else {",
+        1,
+        "the template's own value is the gateway's own fallback and qualifies \
+         (`the_gateways_fallback_is_the_safe_template_with_nothing_raised`)",
+    ),
+    (
+        "src/tuning.rs",
+        ".ok()",
+        1,
+        "a cooldown that is not positive is refused as a RulesError on the next line",
+    ),
+    (
+        "src/wire.rs",
+        "Json::Number(lexeme) | Json::String(lexeme) => lexeme.parse::<i64>().ok(),",
+        1,
+        "`int` answers whether a value is a whole number; its callers refuse a misread",
+    ),
+];
+
+/// A source file's shipped code, each line trimmed: comment-only lines
+/// removed, and everything from its first `#[cfg(test)]` onward.
 fn shipped_lines(text: &str) -> Vec<String> {
     let shipped = match text.find("#[cfg(test)]") {
         Some(index) => text
@@ -250,17 +393,25 @@ fn shipped_lines(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// Every fallback call in the crate's shipped code, as `(file, the line)`:
-/// `unwrap_or` (and so `unwrap_or_default` and `unwrap_or_else`), `map_or`
-/// and `map_or_else`, the needles the verifier's and the sim's scans use.
+/// The needles a fallback or a swallow is written with: the verifier's and
+/// the sim's (`unwrap_or`, `map_or`), and the ways a typed error is dropped
+/// (`.ok()`, `let Ok(`, `Err(_) =>`, `== Ok(`).
+const NEEDLES: &[&str] = &[
+    "unwrap_or",
+    "map_or(",
+    "map_or_else(",
+    ".ok()",
+    "let Ok(",
+    "Err(_) =>",
+    "== Ok(",
+];
+
+/// Every needle's line in the crate's shipped code, as `(file, the line)`.
 fn fallbacks() -> Vec<(String, String)> {
     let mut found: Vec<(String, String)> = Vec::new();
     for relative in SOURCES {
         for line in shipped_lines(&source(relative)) {
-            if line.contains("unwrap_or")
-                || line.contains("map_or(")
-                || line.contains("map_or_else(")
-            {
+            if NEEDLES.iter().any(|needle| line.contains(needle)) {
                 found.push(((*relative).to_owned(), line));
             }
         }
@@ -270,9 +421,10 @@ fn fallbacks() -> Vec<(String, String)> {
 
 /// No silent fallback is left in the operator (S2's plan, E7, task `oprd`;
 /// decisions-log item 136 (5)): the wire's readers answer proto3's default
-/// only for an **absent** member and refuse a misshapen one, and every other
-/// default the scan finds is a typed error, a failure made unrepresentable, or
-/// the exact answer by a rule listed in [`KEPT_FALLBACKS`].
+/// only for an **absent** member and refuse a misshapen one, and every line
+/// the scan finds is a typed error, a failure made unrepresentable, the exact
+/// answer by a rule, or the operator's stated policy for an answer that does
+/// not hold, each listed in [`KEPT_FALLBACKS`] with its reason and count.
 #[test]
 fn no_silent_fallback_is_left() {
     let found = fallbacks();
@@ -281,28 +433,30 @@ fn no_silent_fallback_is_left() {
         .filter(|(file, line)| {
             !KEPT_FALLBACKS
                 .iter()
-                .any(|(kept, code, _)| kept == file && line.contains(code))
+                .any(|(kept, code, _, _)| kept == file && line == code)
         })
         .map(|(file, line)| format!("{file}: {line}"))
         .collect();
     assert!(
         unexplained.is_empty(),
-        "a value falls back to a default instead of saying what went wrong. Return a typed \
-         error, make the failure unrepresentable, or, where the default is a rule that leaves \
-         the answer exact, add the line to KEPT_FALLBACKS with that rule:\n{}",
+        "a value falls back to a default, or an error is dropped, instead of saying what went \
+         wrong. Return a typed error, make the failure unrepresentable, or, where the default \
+         is a rule or the drop is stated policy, add the line to KEPT_FALLBACKS with it:\n{}",
         unexplained.join("\n")
     );
-    for (file, code, why) in KEPT_FALLBACKS {
-        let count = found
+    for (file, code, count, why) in KEPT_FALLBACKS {
+        let matched = found
             .iter()
-            .filter(|(found_file, line)| found_file == file && line.contains(code))
+            .filter(|(found_file, line)| found_file == file && line == code)
             .count();
         assert_eq!(
-            count, 1,
-            "KEPT_FALLBACKS' entry in {file} (`{code}`, kept because {why}) matches {count} lines"
+            matched, *count,
+            "KEPT_FALLBACKS' entry in {file} (`{code}`, kept because {why}) matches {matched} \
+             lines, not {count}"
         );
     }
     // The scan sees what it keeps, or every assertion above passes over
     // nothing.
-    assert_eq!(found.len(), KEPT_FALLBACKS.len());
+    let kept: usize = KEPT_FALLBACKS.iter().map(|(_, _, count, _)| count).sum();
+    assert_eq!(found.len(), kept);
 }

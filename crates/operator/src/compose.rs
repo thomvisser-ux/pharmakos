@@ -188,6 +188,9 @@ pub(crate) fn compose(
         Some(_) => tuning.edit_settings_base_ms.checked_add(lead)?,
         None => 0,
     };
+    // A post that does not fit the share is not placed: the share bounds the
+    // whole route, the post included.
+    let guard = guard.filter(|guard| guard.time_ms <= fill);
     let (guard_ms, guard_dollars) = match guard {
         Some(guard) => (guard.time_ms, guard.cost_dollars),
         None => (0, 0),
@@ -504,10 +507,16 @@ pub(crate) fn guard_reason(situation: &Situation, tuning: &Tuning) -> String {
         (Some(died), Some(threat)) => format!("It guards because {died}, and {threat}."),
         (Some(died), None) => format!("It guards because {died}."),
         (None, Some(threat)) => format!("It guards because {threat}."),
-        (None, None) => String::from(
-            "No threat is in sight inside your core's sphere and your commander did not die in \
-             the last Push.",
-        ),
+        (None, None) => match situation.last_push {
+            LastPush::Unread => String::from(
+                "No threat is in sight inside your core's sphere, and the last Push's feed was not \
+                 read far enough to say whether your commander died.",
+            ),
+            LastPush::Survived | LastPush::Died => String::from(
+                "No threat is in sight inside your core's sphere and your commander did not die \
+                 in the last Push.",
+            ),
+        },
     }
 }
 
@@ -524,8 +533,9 @@ pub(crate) fn why_none(kind: Kind) -> String {
 pub(crate) fn why_no_guard() -> String {
     String::from(
         "No guard post was weighed this round: it needs your core and your commander in view, a \
-         live scrap seam you cover, and the treasury for the post and its picket, so this \
-         template's own values stand.",
+         live scrap seam inside your core's sphere, no Defend beacon of yours beside the core \
+         already, and the treasury for the post and its picket, so this template's own values \
+         stand.",
     )
 }
 

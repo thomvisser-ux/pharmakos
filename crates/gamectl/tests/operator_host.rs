@@ -600,3 +600,26 @@ fn the_operator_reads_whose_commander_died_in_the_gateways_own_words() {
         );
     }
 }
+
+/// The operator reads every unit and structure subtype the gateway writes
+/// (`pharmakos_gateway::view`'s `unit_subtype` and `structure_subtype` over
+/// the sim's whole catalogue), so the threat model never refuses a round over
+/// a kind it was not told about.
+#[test]
+fn the_operator_reads_every_subtype_the_view_writes() {
+    use pharmakos_sim::tables::{StructureKind, UnitKind};
+    for kind in UnitKind::ALL {
+        let subtype = pharmakos_gateway::view::unit_subtype(kind);
+        assert!(
+            pharmakos_operator::reads_view_subtype("UNIT", subtype),
+            "{subtype}"
+        );
+    }
+    for kind in StructureKind::ALL {
+        let subtype = pharmakos_gateway::view::structure_subtype(kind);
+        assert!(
+            pharmakos_operator::reads_view_subtype("STRUCTURE", subtype),
+            "{subtype}"
+        );
+    }
+}

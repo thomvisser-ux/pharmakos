@@ -154,6 +154,9 @@ struct Script {
     /// The seats whose commander the last Push's feed says died, one
     /// `commander_died` line each.
     feed_deaths: Vec<u8>,
+    /// Where the seat's nearest Defend beacon stands, if one does: what an
+    /// `estimate_route` to `nearest {filter: {mandate: DEFEND}}` reaches.
+    defend_post: Option<[i32; 3]>,
     transcript: Vec<String>,
 }
 
@@ -196,6 +199,7 @@ impl Script {
             bare_legs: false,
             malformed_feature: false,
             feed_deaths: Vec::new(),
+            defend_post: None,
             transcript: Vec::new(),
         }
     }
@@ -284,6 +288,13 @@ impl Script {
                 .find(|feature| feature.id == name)
                 .and_then(|feature| feature.site)
                 .ok_or("NOT_FOUND");
+        }
+        if location
+            .get("beacon_anchor")
+            .and_then(|anchor| anchor.get("nearest"))
+            .is_some()
+        {
+            return self.defend_post.ok_or("NOT_FOUND");
         }
         let id = location
             .get("beacon_anchor")
@@ -912,6 +923,7 @@ fn safe_labels(transcript: &[String]) -> Vec<String> {
 /// estimates, and a tap's, are the only ones whose last waypoint is a
 /// `beacon_anchor` (a placement's goes by way of the core's anchor and ends
 /// on a `covering`).
+/// The guard probe's estimate to the nearest own Defend beacon is not one.
 fn beacon_estimated(transcript: &[String]) -> bool {
     transcript.iter().any(|line| {
         line.strip_prefix("estimate_route ")
@@ -920,7 +932,10 @@ fn beacon_estimated(transcript: &[String]) -> bool {
                 Some(Json::Array(items)) => items.last().cloned(),
                 _ => None,
             })
-            .is_some_and(|last| last.get("beacon_anchor").is_some())
+            .is_some_and(|last| {
+                last.get("beacon_anchor")
+                    .is_some_and(|anchor| anchor.get("nearest").is_none())
+            })
     })
 }
 
@@ -2177,4 +2192,23 @@ fn an_unread_death_adds_no_guard_and_the_why_says_so() {
         "no guard post"
     );
     assert!(played.why.contains("not read within"), "{}", played.why);
+}
+
+/// Posts never stack: with a Defend beacon already standing inside the
+/// core's sphere, no second post is weighed, even after a death.
+#[test]
+fn a_post_already_beside_the_core_is_not_placed_again() {
+    let mut world = Script::busy(0);
+    world.round = 2;
+    world.feed_deaths = vec![0];
+    world.defend_post = Some([34, 34, GROUND]);
+    let (script, played) = play(world);
+    assert_eq!(played.submitted, Submitted::Own);
+    assert!(
+        !script
+            .transcript
+            .iter()
+            .any(|line| line.starts_with("estimate_route") && line.contains("seam_36_34")),
+        "no guard site is estimated"
+    );
 }

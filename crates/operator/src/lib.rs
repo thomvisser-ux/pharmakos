@@ -76,3 +76,13 @@ mod tuning;
 pub use easy::{Advice, Easy, Played, Submitted, SuggestedValue, Suggestion};
 pub use tuning::RulesError;
 pub use wire::{Call, Refused};
+
+/// Whether the operator reads a view entity of this kind (`UNIT` or
+/// `STRUCTURE`, as the proto spells them) and subtype as an asset whose
+/// threat it can weigh. `crates/gamectl/tests/operator_host.rs` holds it to
+/// every subtype the gateway writes, so a kind added later cannot turn every
+/// round that sees one into a refused read.
+#[must_use]
+pub fn reads_view_subtype(kind: &str, subtype: &str) -> bool {
+    matches!(situation::Asset::of(Some(kind), subtype), Ok(Some(_)))
+}

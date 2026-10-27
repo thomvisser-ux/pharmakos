@@ -207,7 +207,7 @@ impl Asset {
     /// `unit_subtype` and `structure_subtype`), so an unknown one is an answer
     /// the operator cannot plan around, and it says so rather than reading the
     /// thing as unarmed.
-    fn of(kind: Option<&str>, subtype: &str) -> Result<Option<Asset>, Refused> {
+    pub(crate) fn of(kind: Option<&str>, subtype: &str) -> Result<Option<Asset>, Refused> {
         let unknown = || {
             malformed(
                 "get_view",
@@ -558,18 +558,26 @@ fn read_view(wire: &mut Wire<'_, '_>, own: &str) -> Result<Seen, Refused> {
 /// gateway's one string table writes "The commander of seat N died." and a
 /// line that does not read so is refused, never taken for another seat's.
 ///
+/// A Lull resumed from a save opens with a fresh, empty feed (the save holds
+/// no recap events, as the gateway resumes one), so there it reads as
+/// [`LastPush::Survived`] and the guard a death would add is not added.
+///
+/// PLACEHOLDER: a resumed Lull forgets the last Push's death, which no seat-facing field carries — owner, S3, with `get_reports` or the feed's per-kind payload
+///
 /// # Errors
 ///
 /// The refusal, and `MALFORMED` for an answer that does not read.
 fn read_last_push(wire: &mut Wire<'_, '_>, seat: u8) -> Result<LastPush, Refused> {
     let misread = |misread: Misread| misread.refused("get_segment_feed");
-    let feed = |cursor: &str| object(vec![("cursor", string(cursor))]);
+    // The fullest page the detail ladder serves (256 events), so the bound
+    // reaches as far into a busy Push as the page count allows.
+    let feed = |cursor: &str| object(vec![("cursor", string(cursor)), ("detail", string("full"))]);
     let mut page = wire.call("get_segment_feed", feed(""))?;
     let deaths = deaths_counted(&page).map_err(misread)?;
     if deaths == 0 {
         return Ok(LastPush::Survived);
     }
-    let mut seen: i64 = 0;
+    let mut seen: u64 = 0;
     for read in 1..=PAGES_MAX {
         for event in array_of(&page, "events").map_err(misread)? {
             if text_of(event, "kind").map_err(misread)? != COMMANDER_DIED {
@@ -600,17 +608,19 @@ fn read_last_push(wire: &mut Wire<'_, '_>, seat: u8) -> Result<LastPush, Refused
 /// # Errors
 ///
 /// [`Misread`] for a digest that does not read, or a sum that does not fit.
-fn deaths_counted(page: &Json) -> Result<i64, Misread> {
-    let mut deaths: i64 = 0;
+fn deaths_counted(page: &Json) -> Result<u64, Misread> {
+    let mut deaths: u64 = 0;
     for digest in array_of(page, "digests")? {
         for count in array_of(digest, "counts")? {
             if text_of(count, "kind")? == COMMANDER_DIED {
-                deaths = deaths
-                    .checked_add(int_of(count, "count")?)
-                    .ok_or_else(|| Misread {
-                        key: String::from("count"),
-                        wanted: "a count whose sum fits",
-                    })?;
+                let counted = u64::try_from(int_of(count, "count")?).map_err(|_| Misread {
+                    key: String::from("count"),
+                    wanted: "a count of zero or more",
+                })?;
+                deaths = deaths.checked_add(counted).ok_or_else(|| Misread {
+                    key: String::from("count"),
+                    wanted: "a count whose sum fits",
+                })?;
             }
         }
     }
