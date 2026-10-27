@@ -44,8 +44,8 @@ use crate::world::World;
 /// The mandate seam: one writ, one question.
 ///
 /// Five mandates exist in the schema; **three run at the skeleton** — Build,
-/// Mine and Survey — and Defend and Attack arrive with combat at S2
-/// ([`mandate_for`] answers `None` for them rather than pretending). A mandate
+/// Mine and Survey — and Defend and Attack arrived with combat at S2 (S2's
+/// `dfnd` and `atk`). A mandate
 /// that wants nothing this tick answers `None`, which is the normal state:
 /// "headroom is the normal state" (item 22).
 pub trait Mandate {
@@ -80,6 +80,12 @@ pub struct Survey;
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct Defend;
 
+/// The built-in Attack mandate (S2's `atk`; [`crate::attack`]): raiders on
+/// the work in hand while its force gathers, and a demolition charge when its
+/// breach wants one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Attack;
+
 /// The built-in mandate a writ runs, or `None` for one this build does not run.
 ///
 /// Zero-sized statics rather than values on the beacon table, because a
@@ -92,11 +98,8 @@ pub fn mandate_for(kind: MandateKind) -> Option<&'static dyn Mandate> {
         MandateKind::Mine => Some(&Mine),
         MandateKind::Survey => Some(&Survey),
         MandateKind::Defend => Some(&Defend),
-        // Attack is S2's `atk`. `None` is the honest answer: a beacon on that
-        // writ asks for nothing and its units idle at it under the common
-        // settings, which is exactly spec section 6's "a unit the mandate has
-        // no job for".
-        MandateKind::Attack | MandateKind::None => None,
+        MandateKind::Attack => Some(&Attack),
+        MandateKind::None => None,
     }
 }
 
@@ -246,6 +249,41 @@ impl Mandate for Defend {
         let wanted = u32::from(world.defend().row_of(beacon)?.settings.pickets);
         let have = drones_homed(world, beacon, UnitKind::Scout);
         (have < wanted).then(|| unit_request(world, seat, beacon, UnitKind::Scout, Urgency::Units))
+    }
+}
+
+impl Mandate for Attack {
+    fn kind(&self) -> MandateKind {
+        MandateKind::Attack
+    }
+
+    fn request(&self, world: &World, beacon: BeaconId) -> Option<SpendRequest> {
+        let seat = seat_of(world, beacon)?;
+        // The breach's charge first (decision 9): "loaded at $ 15 when the
+        // breach needs it", in the units band, since it is what the raiders
+        // carry.
+        if crate::attack::wants_charge(world, beacon) {
+            return Some(SpendRequest {
+                seat,
+                beacon,
+                urgency: Urgency::Units,
+                cost: world.rules().attack().charge_cost,
+                draw: Kw::new(0),
+                buys: Purchase::Charge,
+            });
+        }
+        if let Some(repair) = repair_request(world, seat, beacon) {
+            return Some(repair);
+        }
+        // Raiders on the work in hand (decision 13's reading): the force the
+        // launch waits on, fielded while it gathers.
+        let row = world.attack().row_of(beacon)?;
+        if row.phase != crate::attack::Phase::Gathering {
+            return None;
+        }
+        let wanted = row.settings.wanted_force();
+        let have = drones_homed(world, beacon, UnitKind::Raider);
+        (have < wanted).then(|| unit_request(world, seat, beacon, UnitKind::Raider, Urgency::Units))
     }
 }
 

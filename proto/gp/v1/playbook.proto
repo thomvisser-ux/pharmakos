@@ -42,13 +42,15 @@
 //     plan's decision 11 and the register's S1-39). Five settings, and only
 //     these five: MoveStep.pace reads as DIRECT, MineSettings.seam_choice as
 //     NEAREST, MineSettings.pillar_spacing as 0 (no pillars),
-//     BuildSettings.terraform as NONE, and MandateSettings.roe as
-//     RETURN_FIRE. The reason for the first four is the spec's own worked
-//     example, which writes {"mine":{"dig_max_depth":4,"flee_on_threat":true}}
-//     and must verify. The fifth is the owner's too (decisions-log item 144
-//     (11), S2's plan's decision 4): Hold & Build, the safe playbook and the
-//     built-in operator's playbooks all omit `roe`, and the spec's Common row
-//     says return fire is always announced. Nothing else joins the list:
+//     BuildSettings.terraform as NONE, and MandateSettings.roe by writ:
+//     RETURN_FIRE on Build, Mine and Survey, FREE_FIRE on Defend and Attack.
+//     The reason for the first four is the spec's own worked example, which
+//     writes {"mine":{"dig_max_depth":4,"flee_on_threat":true}} and must
+//     verify. The fifth is the owner's too (decisions-log item 144 (11), S2's
+//     plan's decision 4, read by writ since item 148 (2)): Hold & Build, the
+//     safe playbook and the built-in operator's playbooks all omit `roe`, and
+//     the spec's Common row says return fire is always announced. Nothing
+//     else joins the list:
 //     targeting's RANK_UNSPECIFIED and COVERAGE_UNSPECIFIED (FeatureRef), and
 //     every enum of the Defend and Attack settings, stay errors, as
 //     docs/design/targeting.md and S2's plan adopted them. S1's verifier lane
@@ -1296,9 +1298,10 @@ message MandateSettings {
   // --- Common settings (spec section 6, the Common row) --------------------
 
   // Rules of engagement. Shared across mandates that field units. Omitted, it
-  // reads as RETURN_FIRE with an I-level note: one of the five named defaults
-  // in this file's header (decisions-log item 144 (11), S2's plan's decision
-  // 4).
+  // reads by writ with an I-level note: RETURN_FIRE on Build, Mine and
+  // Survey, FREE_FIRE on Defend and Attack; one of the five named defaults in
+  // this file's header (decisions-log item 144 (11), S2's plan's decision 4,
+  // and item 148 (2)).
   Roe roe = 1;
 
   // A unit below this percentage of its HP retreats, following the rules of
@@ -1331,7 +1334,7 @@ message MandateSettings {
   // (11)). The core's autocannon, which has no mandate of its own, fires as
   // FREE_FIRE (S2's plan's decision 8).
   enum Roe {
-    // Omitted, this reads as RETURN_FIRE (above).
+    // Omitted, this reads by writ (above).
     ROE_UNSPECIFIED = 0;
 
     // Never fires.
@@ -1482,8 +1485,7 @@ message MyCommander {}
 // conditions; after-action; avoid areas; breach_allowed; waves." The values
 // are S2's plan's decision 14's (ruled by decisions-log item 144 (11)). The
 // shape is S2's (task `con4`; the register's S2-13); the behaviour is S2's
-// `atk` lane's, and until it lands the sim refuses an Attack arm that writes
-// any of these, and the verifier with it (S2's plan, E8).
+// `atk` lane's.
 //
 // The Attack beacon gathers at the staging point, launches on its condition,
 // attacks the weak point — the target beacon's lowest-HP structure inside its
@@ -1568,9 +1570,20 @@ message AttackTarget {
   // Numbers 4-15 are free for a further arm.
 }
 
-// "enemy commander" — AttackTarget.enemy_commander. It names no seat: which
-// enemy commander it pins is a rule of S2's `atk` lane.
-message EnemyCommander {}
+// "enemy commander" — AttackTarget.enemy_commander (the owner's answer of
+// 2026-10-26 to S2's `atk` lane). Unset, the Attack hunts, from its launch,
+// the nearest enemy commander its seat has a sighting of inside the rules
+// table's `verifier.reach_memory_ms` (the seat's own knowledge, never ground
+// truth), nearest to the staging point, ties to the lowest seat id, and holds
+// that commander until it dies or the seat's sighting of it goes stale.
+message EnemyCommander {
+  // Set, the Attack hunts that seat's commander only. Naming the playbook's
+  // own seat, or a seat past the match's seats, is refused: the verifier's
+  // E0419 for the playbook's own seat and for a seat past the most a match
+  // holds, and its E0418 for a seat of no sighting, which a seat the match
+  // has not got always is.
+  optional uint32 seat = 1;
+}
 
 // When an Attack force launches: as soon as ANY condition written here holds.
 // An absent field is no condition, which is why both are `optional`: a

@@ -187,6 +187,32 @@ pub fn event_text(event: &Event) -> String {
         EventKind::GroundRefilled => {
             format!("A Build beacon of {seat} refilled a crater to the ground it was made at.")
         }
+        EventKind::AttackLaunched => format!(
+            "An Attack beacon of {seat} launched its force of {}.",
+            event.value
+        ),
+        EventKind::AttackEnded => format!(
+            "An Attack beacon of {seat} ended its attack: {}.",
+            attack_ended_reason(event.value)
+        ),
+        EventKind::ChargePlanted => format!("A raider of {seat} planted a demolition charge."),
+        EventKind::ChargeDetonated => format!("A demolition charge of {seat} cut a breach."),
+        EventKind::ChargeLost => {
+            format!("A carrier of {seat} was killed before it planted; its charge will never fire.")
+        }
+    }
+}
+
+/// `attack_ended`'s reason, in words: the sim's `attack::Ended` id. An id
+/// this build does not name is written as the number it is.
+fn attack_ended_reason(value: i64) -> String {
+    match value {
+        1 => String::from("its target is gone"),
+        2 => String::from("it retreated"),
+        3 => String::from("its force was lost"),
+        4 => String::from("its way is sealed"),
+        5 => String::from("it reached its target"),
+        other => format!("reason {other}"),
     }
 }
 
@@ -791,6 +817,32 @@ mod tests {
         assert_eq!(
             text,
             "A Build beacon of seat 2 refilled a crater to the ground it was made at."
+        );
+    }
+
+    /// S2's `atk`: the Attack mandate's lines name the seat, and an ended
+    /// attack says why.
+    #[test]
+    fn the_attack_lines_name_the_seat_and_the_reason() {
+        assert_eq!(
+            event_text(&event(EventKind::AttackLaunched, Some(0), 6)),
+            "An Attack beacon of seat 0 launched its force of 6."
+        );
+        assert_eq!(
+            event_text(&event(EventKind::AttackEnded, Some(1), 2)),
+            "An Attack beacon of seat 1 ended its attack: it retreated."
+        );
+        assert_eq!(
+            event_text(&event(EventKind::ChargePlanted, Some(0), 120)),
+            "A raider of seat 0 planted a demolition charge."
+        );
+        assert_eq!(
+            event_text(&event(EventKind::ChargeDetonated, Some(0), 4)),
+            "A demolition charge of seat 0 cut a breach."
+        );
+        assert_eq!(
+            event_text(&event(EventKind::ChargeLost, Some(2), 0)),
+            "A carrier of seat 2 was killed before it planted; its charge will never fire."
         );
     }
 

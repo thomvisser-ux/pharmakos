@@ -450,6 +450,32 @@ impl Interpreter {
         self.states.get(seat)
     }
 
+    /// Whether the seat's commander is walking a `move` step whose pace is
+    /// `AVOID_KNOWN_THREATS` (S2's `atk`; register S2-03): the step in
+    /// progress, a rule body's before the route's.
+    #[must_use]
+    pub fn avoids_threats(&self, seat: usize) -> bool {
+        let (Some(plan), Some(state)) = (self.plan(seat), self.state(seat)) else {
+            return false;
+        };
+        let step = if state.rule != NO_INDEX {
+            plan.handlers()
+                .get(crate::math::index::row(state.rule))
+                .and_then(|rule| rule.body.get(crate::math::index::row(state.rule_step)))
+        } else if state.cursor != NO_INDEX {
+            plan.route().get(crate::math::index::row(state.cursor))
+        } else {
+            None
+        };
+        matches!(
+            step.map(|step| &step.action),
+            Some(crate::interpreter::Action::Move {
+                avoid_known_threats: true,
+                ..
+            })
+        )
+    }
+
     /// One seat's execution state, to write.
     pub fn state_mut(&mut self, seat: usize) -> Option<&mut PlanState> {
         self.states.get_mut(seat)

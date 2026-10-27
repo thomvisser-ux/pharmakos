@@ -388,6 +388,10 @@ pub struct World {
     /// a block after the Defend block that writes nothing while it is empty
     /// (E29).
     explored: crate::tables::ExploredTable,
+    /// Every Attack beacon's settings and force, the avoid areas and the
+    /// planted charges (S2's `atk`): a block after the explored block that
+    /// writes nothing while it is empty (E29).
+    attack: crate::attack::AttackTable,
 
     chunks: ChunkDigests,
 
@@ -499,6 +503,22 @@ pub struct World {
     /// weapon's reach (S2's `dfnd`), sized as above: an armed asset is one
     /// that can fire.
     threat_scratch: Vec<([Fx; 3], Sq)>,
+    /// Scratch for the breach search (S2's `atk`), reserved for the whole
+    /// graph so a search allocates nothing.
+    breach_scratch: crate::attack::BreachScratch,
+    /// Scratch for the charges that fire on one tick, sized to the beacon
+    /// ceiling (a charge per breach).
+    charge_scratch: Vec<crate::attack::Charge>,
+    /// The Attack mandate's counters (S2's `atk`). Diagnostic; never hashed.
+    attack_counts: crate::attack::AttackCounts,
+    /// Scratch for the pathing phase's route surcharges (S2's `atk`): every
+    /// zone a waiting route avoids, and each unit's span of it.
+    route_zones: Vec<crate::pathing::route::Zone>,
+    /// Each unit row's span of [`World::route_zones`], `(start, end)`.
+    route_spans: Vec<(u32, u32)>,
+    /// How many threat zones the route zones hold room for besides the
+    /// avoid areas: every armed row, for every seat.
+    zone_base: usize,
     /// Scratch for a weapon's unit query, sized to the unit ceiling.
     fire_rows: Vec<Row>,
     /// Scratch for a splash's unit query, sized to the unit ceiling.
@@ -944,6 +964,7 @@ pub(crate) struct RestoredTables {
     pub(crate) shells: ShellTable,
     pub(crate) defend: crate::tables::DefendTable,
     pub(crate) explored: crate::tables::ExploredTable,
+    pub(crate) attack: crate::attack::AttackTable,
     pub(crate) voxels: VoxelStore,
     pub(crate) chunks: ChunkDigests,
     /// The map's feature table, regenerated with the pristine map rather than
@@ -1140,6 +1161,7 @@ impl World {
             QueueRooms::capacity(rooms.edits, "voxel edit")?,
         )?;
 
+        let breach_nodes = surface.node_count();
         Ok(World {
             match_seed: config.match_seed,
             tick: Tick::ZERO,
@@ -1158,6 +1180,7 @@ impl World {
             shells: ShellTable::with_room(shell_room),
             defend: crate::tables::DefendTable::with_room(beacon_limit),
             explored: crate::tables::ExploredTable::default(),
+            attack: crate::attack::AttackTable::with_room(beacon_limit),
             chunks,
             router,
             match_state: MatchState::new(&settings),
@@ -1196,6 +1219,12 @@ impl World {
             fire_order: Vec::with_capacity(armed_rows),
             attackers: Vec::with_capacity(armed_rows),
             threat_scratch: Vec::with_capacity(armed_rows),
+            breach_scratch: crate::attack::BreachScratch::new(breach_nodes),
+            charge_scratch: Vec::with_capacity(crate::math::index::row(beacon_limit)),
+            attack_counts: crate::attack::AttackCounts::default(),
+            route_zones: Vec::with_capacity(armed_rows.saturating_mul(seat_rows.max(1))),
+            route_spans: vec![(0, 0); crate::math::index::row(unit_ceiling)],
+            zone_base: armed_rows.saturating_mul(seat_rows.max(1)),
             fire_rows: Vec::with_capacity(crate::math::index::row(unit_ceiling)),
             splash_rows: Vec::with_capacity(crate::math::index::row(unit_ceiling)),
             damage_index: Vec::with_capacity(damage_capacity),
@@ -1323,6 +1352,76 @@ impl World {
     /// The explored table, to write: S2's `surv` marks cells through it.
     pub(crate) const fn explored_mut(&mut self) -> &mut crate::tables::ExploredTable {
         &mut self.explored
+    }
+
+    /// Every Attack beacon's settings and force, the avoid areas and the
+    /// planted charges (S2's `atk`).
+    #[must_use]
+    pub const fn attack(&self) -> &crate::attack::AttackTable {
+        &self.attack
+    }
+
+    /// The Attack table, to write: the Attack mandate's own phase, a planted
+    /// charge, a bought one and a committed settings row.
+    pub(crate) const fn attack_mut(&mut self) -> &mut crate::attack::AttackTable {
+        &mut self.attack
+    }
+
+    /// The Attack mandate's counters (S2's `atk`). Diagnostic; never hashed.
+    #[must_use]
+    pub const fn attack_counts(&self) -> crate::attack::AttackCounts {
+        self.attack_counts
+    }
+
+    /// Count a breach search that gave no breach, under its reason (E4).
+    pub(crate) const fn count_breach_refused(&mut self, why: crate::attack::BreachRefused) {
+        let counts = &mut self.attack_counts;
+        match why {
+            crate::attack::BreachRefused::Exhausted => {
+                counts.breach_exhausted = counts.breach_exhausted.saturating_add(1);
+            }
+            crate::attack::BreachRefused::NoWall => {
+                counts.breach_no_wall = counts.breach_no_wall.saturating_add(1);
+            }
+            crate::attack::BreachRefused::NoWay => {
+                counts.breach_no_way = counts.breach_no_way.saturating_add(1);
+            }
+        }
+    }
+
+    /// Count a charge's cut the edit queue refused (E4).
+    pub(crate) const fn count_cut_refused(&mut self) {
+        self.attack_counts.cut_refused = self.attack_counts.cut_refused.saturating_add(1);
+    }
+
+    /// Reserve the route zones for every avoid area and every threat zone,
+    /// so the pathing phase's list never grows inside a tick.
+    fn reserve_route_zones(&mut self) {
+        let need = self.attack.avoid().len().saturating_add(self.zone_base);
+        self.route_zones
+            .reserve(need.saturating_sub(self.route_zones.len()));
+    }
+
+    /// The breach search's scratch, taken and given back so a search
+    /// allocates nothing.
+    pub(crate) fn take_breach_scratch(&mut self) -> crate::attack::BreachScratch {
+        core::mem::take(&mut self.breach_scratch)
+    }
+
+    /// Give the breach search's scratch back.
+    pub(crate) fn put_breach_scratch(&mut self, scratch: crate::attack::BreachScratch) {
+        self.breach_scratch = scratch;
+    }
+
+    /// The fired-charge scratch, empty between uses.
+    pub(crate) fn take_charge_scratch(&mut self) -> Vec<crate::attack::Charge> {
+        core::mem::take(&mut self.charge_scratch)
+    }
+
+    /// Give the fired-charge scratch back, cleared.
+    pub(crate) fn put_charge_scratch(&mut self, mut scratch: Vec<crate::attack::Charge>) {
+        scratch.clear();
+        self.charge_scratch = scratch;
     }
 
     /// The core's bore ([`crate::bore`]; S2's plan, E31). Derived, never
@@ -1640,6 +1739,10 @@ impl World {
         if mandate == MandateKind::Defend {
             self.defend.open(placed.id);
         }
+        // And on the Attack writ its Attack row (S2's `atk`).
+        if mandate == MandateKind::Attack {
+            self.attack.open(placed.id);
+        }
         Ok(placed.id)
     }
 
@@ -1684,6 +1787,12 @@ impl World {
             self.defend.close(BeaconId::new(id));
             if mandate == MandateKind::Defend {
                 self.defend.open(BeaconId::new(id));
+            }
+            // So are Attack's (S2's `atk`); a planted charge stays in the
+            // world.
+            self.attack.close(BeaconId::new(id));
+            if mandate == MandateKind::Attack {
+                self.attack.open(BeaconId::new(id));
             }
         }
     }
@@ -1744,6 +1853,60 @@ impl World {
         if let Some((escort, beacons)) = protect {
             row.settings.escort = *escort;
             self.defend.set_protected(beacon, beacons);
+        }
+    }
+
+    /// Write what a committed settings row says about an Attack beacon's
+    /// settings (S2's `atk`): each field the row names, and nothing it is
+    /// silent about; `aim` is the target the commit resolved, when the row
+    /// names one. A row that names a target sends a launched force back to
+    /// gathering: the target is changed on site, and the force regroups for
+    /// it. A beacon on another writ has no Attack row, and the edit writes
+    /// nothing there.
+    pub(crate) fn set_attack_settings(
+        &mut self,
+        beacon: BeaconId,
+        edit: &crate::attack::AttackEdit,
+        aim: Option<crate::attack::Aim>,
+    ) {
+        let Some(row) = self.attack.row_mut(beacon) else {
+            return;
+        };
+        let settings = &mut row.settings;
+        if let Some(aim) = aim {
+            settings.aim = aim;
+            row.phase = crate::attack::Phase::Gathering;
+            row.target = crate::attack::NO_TARGET;
+            row.mark = crate::attack::NO_TARGET;
+            row.launched_at = crate::attack::NEVER;
+            row.breach = None;
+        }
+        if let Some(retarget) = edit.retarget {
+            settings.retarget = retarget;
+        }
+        if let Some(staging) = edit.staging {
+            settings.staging = Some(staging);
+        }
+        if let Some((force_size, launch_ms)) = edit.launch {
+            settings.force_size = force_size;
+            settings.launch_ms = launch_ms;
+        }
+        if let Some((retreat_pct, retreat_ms)) = edit.retreat {
+            settings.retreat_pct = retreat_pct;
+            settings.retreat_ms = retreat_ms;
+        }
+        if let Some(after) = edit.after {
+            settings.after = after;
+        }
+        if let Some(breach) = edit.breach {
+            settings.breach = breach;
+        }
+        if let Some(waves) = edit.waves {
+            settings.waves = waves;
+        }
+        if let Some(list) = edit.avoid.as_ref() {
+            self.attack.set_avoid(beacon, list);
+            self.reserve_route_zones();
         }
     }
 
@@ -2540,6 +2703,26 @@ impl World {
         };
         row.settings = settings;
         self.defend.set_protected(beacon, protected);
+        true
+    }
+
+    /// Write an Attack beacon's settings directly, and its avoid areas (S2's
+    /// `atk`). `false`, writing nothing, for a beacon with no Attack row.
+    ///
+    /// Fixture API; see the block comment above. The settings normally arrive
+    /// as a committed settings row ([`World::set_attack_settings`]).
+    pub fn set_attack(
+        &mut self,
+        beacon: BeaconId,
+        settings: crate::attack::AttackSettings,
+        avoid: &[crate::tables::ColumnBox],
+    ) -> bool {
+        let Some(row) = self.attack.row_mut(beacon) else {
+            return false;
+        };
+        row.settings = settings;
+        self.attack.set_avoid(beacon, avoid);
+        self.reserve_route_zones();
         true
     }
 
@@ -3581,6 +3764,11 @@ impl World {
                     centre: [x, y, _],
                     radius,
                     ..
+                }
+                | VoxelEdit::Cut {
+                    centre: [x, y, _],
+                    radius,
+                    ..
                 } => (x, y, radius),
             };
             x.saturating_add(reach) >= min_x
@@ -4110,6 +4298,7 @@ impl World {
             Purchase::Structure(target) => self.queue_target(request.seat, request.beacon, target),
             Purchase::RepairWork => self.pay_site_fund(request.beacon, true, request.cost),
             Purchase::BuildWork => self.pay_site_fund(request.beacon, false, request.cost),
+            Purchase::Charge => crate::attack::load_charge(self, request.beacon),
         }
     }
 
@@ -4225,16 +4414,98 @@ impl World {
                 self.units.destinations(),
             );
         }
-        self.serve_report = self.router.serve(
+        self.gather_route_zones();
+        let zones = &self.route_zones;
+        let spans = &self.route_spans;
+        let multiplier = self.rules.attack().step_multiplier;
+        self.serve_report = self.router.serve_costed(
             &self.surface,
             &self.clusters,
             &mut self.scratch,
-            self.units.positions(),
-            self.units.destinations(),
+            (self.units.positions(), self.units.destinations()),
             self.rules.repath_cap_per_tick(),
+            |unit| {
+                let (start, end) = spans
+                    .get(crate::math::index::row(unit))
+                    .copied()
+                    // E7: rule: a unit with no span pays no surcharge
+                    .unwrap_or((0, 0));
+                let zones = zones
+                    .get(crate::math::index::row(start)..crate::math::index::row(end))
+                    // E7: cannot miss: every span was cut from this list this tick
+                    .unwrap_or(&[]);
+                crate::pathing::route::Surcharge::new(zones, multiplier)
+            },
         );
         self.repair_report = report;
         self.draw_new_destinations();
+    }
+
+    /// The route surcharges of every unit waiting for a route (S2's `atk`;
+    /// register S2-03): every Attack beacon's avoid areas, in the table's
+    /// order, then, for each commander walking an `AVOID_KNOWN_THREATS` step,
+    /// its seat's known threats' reaches (decision 12); and each waiting
+    /// unit's span of them. A raider of an Attack beacon routes round its
+    /// beacon's avoid areas. Nothing allocates: the list is reserved for the
+    /// armed rows of every seat and every avoid area a commit wrote.
+    fn gather_route_zones(&mut self) {
+        let mut zones = core::mem::take(&mut self.route_zones);
+        zones.clear();
+        zones.extend(
+            self.attack
+                .avoid()
+                .iter()
+                .map(|(_, area)| crate::pathing::route::Zone::Box(*area)),
+        );
+        let count = self.units.len();
+        let mut unit: u32 = 0;
+        while unit < count {
+            let span = self.route_span_of(unit, &mut zones);
+            if let Some(slot) = self.route_spans.get_mut(crate::math::index::row(unit)) {
+                *slot = span;
+            }
+            unit = unit.saturating_add(1);
+        }
+        self.route_zones = zones;
+    }
+
+    /// One unit's span of the route zones, appending its seat's threats for
+    /// a commander that avoids them.
+    fn route_span_of(&self, unit: u32, zones: &mut Vec<crate::pathing::route::Zone>) -> (u32, u32) {
+        if self.router.state(unit) != WalkState::Waiting {
+            return (0, 0);
+        }
+        let index = crate::math::index::row(unit);
+        let (Some(kind), Some(seat), Some(home)) = (
+            self.units.kinds().get(index).copied(),
+            self.units.seats().get(index).copied(),
+            self.units.homes().get(index).copied(),
+        ) else {
+            return (0, 0);
+        };
+        // E7: cannot miss: the zone list is far shorter than `u32::MAX`
+        let at = |len: usize| u32::try_from(len).unwrap_or(u32::MAX);
+        if kind == UnitKind::Commander.id() {
+            if !self.interpreter.avoids_threats(usize::from(seat)) {
+                return (0, 0);
+            }
+            let start = at(zones.len());
+            crate::defend::for_each_known_threat(self, SeatId::new(seat), |known| {
+                let [x, y, _] = known.at;
+                zones.push(crate::pathing::route::Zone::Disc {
+                    centre: [x, y, Fx::from_raw(0)],
+                    limit: Sq::of_radius(known.weapon.range()),
+                });
+            });
+            return (start, at(zones.len()));
+        }
+        if kind == UnitKind::Raider.id() && self.attack.row_of(home).is_some() {
+            let avoid = self.attack.avoid();
+            let start = avoid.partition_point(|(by, _)| by.raw() < home.raw());
+            let end = avoid.partition_point(|(by, _)| by.raw() <= home.raw());
+            return (at(start), at(end));
+        }
+        (0, 0)
     }
 
     /// Give every unit that reached the end of a route somewhere new to be —
@@ -4348,6 +4619,21 @@ impl World {
                         crate::footing::Footings::of(&self.bore, &self.structures, &self.beacons);
                     self.voxels
                         .blast(centre, radius, levels, &footings, &mut touched, &mut |at| {
+                            support.note_removed(at, by);
+                        });
+                    self.footing_refusals.blast_voxels = self
+                        .footing_refusals
+                        .blast_voxels
+                        .saturating_add(footings.hits());
+                }
+                // A demolition charge's flat cut (S2's `atk`; decision 40):
+                // every voxel of its disc above the wall's footing, whatever
+                // its level, sparing bedrock, the bore and every footing.
+                VoxelEdit::Cut { centre, radius, by } => {
+                    let footings =
+                        crate::footing::Footings::of(&self.bore, &self.structures, &self.beacons);
+                    self.voxels
+                        .cut(centre, radius, &footings, &mut touched, &mut |at| {
                             support.note_removed(at, by);
                         });
                     self.footing_refusals.blast_voxels = self
@@ -4665,6 +4951,7 @@ impl World {
         self.targets.clear_beacon(beacon);
         self.defend.close(beacon);
         self.defend.forget(beacon);
+        self.attack.close(beacon);
     }
 
     /// Re-home every living unit of `seat` bound to `gone` on to the nearest
@@ -5610,6 +5897,9 @@ impl World {
         self.encode_site(enc);
         self.encode_defend(enc);
         self.encode_explored(enc);
+        // S2's `atk`: the Attack block, after the explored block, writing
+        // nothing while it holds nothing (E29).
+        self.attack.encode(enc);
     }
 
     /// The Defend table (S2's `dfnd`), as a block after the site block that
@@ -6071,6 +6361,8 @@ impl World {
         self.shells = restored.shells;
         self.defend = restored.defend;
         self.explored = restored.explored;
+        self.attack = restored.attack;
+        self.reserve_route_zones();
         self.bore = restored.bore;
         self.generated = restored.generated;
         self.voxels = restored.voxels;

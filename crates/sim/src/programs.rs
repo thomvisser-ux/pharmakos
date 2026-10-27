@@ -75,8 +75,8 @@ pub struct MineProgram;
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct ScoutProgram;
 
-/// Guard under a Defend beacon ([`crate::defend`]); elsewhere, walk home and
-/// idle there until S2's `atk` gives a raider its Attack.
+/// Guard under a Defend beacon ([`crate::defend`]), raid under an Attack
+/// beacon ([`crate::attack`]); elsewhere, walk home and idle there.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct RaiderProgram;
 
@@ -126,8 +126,8 @@ pub struct RepairProgram;
 ///
 /// Where the commander goes is the playbook's to say and nothing else's
 /// (AGENTS.md §11: "no manual control" cuts the other way too — no program may
-/// steer it either). A raider guards under a Defend beacon (S2's `dfnd`) and
-/// idles at home elsewhere until S2's `atk`.
+/// steer it either). A raider guards under a Defend beacon (S2's `dfnd`),
+/// raids under an Attack beacon (S2's `atk`) and idles at home elsewhere.
 #[must_use]
 pub fn program_for(kind: UnitKind) -> Option<&'static dyn Program> {
     match kind {
@@ -151,6 +151,9 @@ pub(crate) fn run_all(world: &mut World) {
     // Every Defend beacon's quarry and picket leg first, so each of its
     // guards and pickets reads one answer this tick (S2's `dfnd`).
     crate::defend::update(world);
+    // Then every Attack beacon's force, and the charges whose fuses ran out
+    // (S2's `atk`).
+    crate::attack::update(world);
     let count = world.units().len();
     let mut unit: u32 = 0;
     while unit < count {
@@ -331,7 +334,7 @@ impl Program for RaiderProgram {
     }
 
     fn run(&self, world: &mut World, unit: u32) {
-        if !crate::defend::run_guard(world, unit) {
+        if !crate::defend::run_guard(world, unit) && !crate::attack::run_raider(world, unit) {
             idle_at_home(world, unit);
         }
     }

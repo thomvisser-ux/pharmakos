@@ -129,9 +129,9 @@ pub const VERIFIER_STRINGS: &[Text] = &[
     },
     Text {
         code: "E0013",
-        message: "Attack mandate settings have no effect until S2's Attack mandate lands; they \
-                  are refused rather than ignored.",
-        beginner: "An Attack beacon cannot be given settings in this build yet.",
+        message: "Attack mandate settings had no effect until S2's Attack mandate landed; this \
+                  code is retired and raised by nothing.",
+        beginner: "An Attack beacon takes its settings in this build.",
     },
     Text {
         code: "E0014",
@@ -421,6 +421,13 @@ pub const VERIFIER_STRINGS: &[Text] = &[
         beginner: "An Attack beacon attacks what the seat has seen recently. Look again with a \
                    scout, or choose a target the seat has seen.",
     },
+    Text {
+        code: "E0419",
+        message: "`enemy_commander` names seat {seat}, {why}; it hunts another seat's commander \
+                  in this match, or, without a seat, the nearest the seat has seen.",
+        beginner: "An Attack beacon hunts an enemy's commander. Name an enemy seat, or leave \
+                   the seat out to hunt the nearest enemy commander seen.",
+    },
     // --- E05xx: settings and recycle -----------------------------------------
     Text {
         code: "E0501",
@@ -694,6 +701,23 @@ pub const WALL_BOX_COLUMN: &str = "the wall box's";
 pub const ANCHOR_COLUMN: &str = "the anchor's";
 /// E0418's `{what}`: no enemy commander has been sighted.
 pub const NO_COMMANDER_SIGHTED: &str = "the seat has no sighting of an enemy commander";
+/// E0419's `{why}` for the playbook's own seat.
+pub const SEAT_IS_OWN: &str = "which is this playbook's own seat";
+/// E0419's `{why}` for a seat past any match's.
+pub const SEAT_PAST_ANY_MATCH: &str = "which is past any seat a match holds";
+
+/// E0418's `{what}` for a named seat whose commander the view holds no
+/// sighting of.
+#[must_use]
+pub fn commander_never_sighted(seat: u32) -> String {
+    format!("the seat has no sighting of seat {seat}'s commander")
+}
+
+/// E0418's `{what}` subject for a named seat's commander.
+#[must_use]
+pub fn seats_commander(seat: u32) -> String {
+    format!("seat {seat}'s commander")
+}
 /// W0502's `{name}` for a repeated `my_commander`.
 pub const MY_COMMANDER: &str = "my_commander";
 /// E0101's `{what}` for a launch with no condition.

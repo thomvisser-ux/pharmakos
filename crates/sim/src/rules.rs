@@ -245,6 +245,9 @@ pub struct RulesTable {
     /// Build's S2 rows: repair, terraform and the wall's height, typed at
     /// load ([`crate::site::SiteRows`]; S2's `site`).
     site: crate::site::SiteRows,
+    /// The Attack mandate's rows, typed at load ([`crate::attack::AttackRows`];
+    /// S2's `atk`).
+    attack: crate::attack::AttackRows,
     /// `defend.picket_radius_voxels`, typed at load (S2's `dfnd`): how far
     /// beyond the sphere's edge a Defend beacon's pickets patrol.
     picket_radius_voxels: i16,
@@ -741,6 +744,13 @@ impl RulesTable {
         self.site
     }
 
+    /// The Attack mandate's rows: the route surcharge, the charge's cut,
+    /// fuse and price, and the reach window (S2's `atk`).
+    #[must_use]
+    pub const fn attack(&self) -> crate::attack::AttackRows {
+        self.attack
+    }
+
     /// How far beyond its sphere's edge a Defend beacon's pickets patrol, in
     /// whole voxels (`defend.picket_radius_voxels`; S2's `dfnd`).
     #[must_use]
@@ -876,6 +886,7 @@ impl RulesTable {
         let kinds = KindRows::read(message)?;
         let combat = crate::arms::CombatRows::read(message)?;
         let site = crate::site::SiteRows::read(message)?;
+        let attack = crate::attack::AttackRows::read(message)?;
         let picket_radius_voxels = picket_radius_of(message, sphere_radius_voxels)?;
 
         let segment_lengths_ms = segment_lengths_of(matched)?;
@@ -944,6 +955,7 @@ impl RulesTable {
             kinds,
             combat,
             site,
+            attack,
             picket_radius_voxels,
         })
     }

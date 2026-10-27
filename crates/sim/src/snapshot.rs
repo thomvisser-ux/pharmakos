@@ -196,7 +196,17 @@ use serde::{Deserialize, Serialize};
 /// read: it carries no Defend settings, and a world restored from it would
 /// field no guard where the unbroken run did. The gateway's save refuses a
 /// version-12 snapshot by its stamp first.
-pub const SNAPSHOT_VERSION: u32 = 13;
+///
+/// **Version 14 is S2's Attack mandate** (S2's plan, task `atk`). It adds a
+/// new table, every Attack beacon's settings and its force's state -- the
+/// pinned target, the staging and launch state, the wave count, a breach
+/// and its charge's carrier -- with the avoid areas and the planted charges
+/// and their fuses ([`crate::attack::AttackColumns`]), which hashes nothing
+/// while empty (E29). A version-13 file is refused rather than read: it
+/// carries no Attack settings, and a world restored from it would launch no
+/// force where the unbroken run did. The gateway's save refuses a
+/// version-13 snapshot by its stamp first.
+pub const SNAPSHOT_VERSION: u32 = 14;
 
 /// A flat, fixed-width projection of the world.
 ///
@@ -604,6 +614,9 @@ pub struct Snapshot {
     pub explored_seat: Vec<u8>,
     /// The explored table's cell, per row.
     pub explored_cell: Vec<u32>,
+    /// S2's `atk` (version 14): the Attack table, its avoid areas and its
+    /// planted charges.
+    pub attack: crate::attack::AttackColumns,
 }
 
 /// An empty snapshot in an **opening Lull**, not an empty one in no phase at
@@ -796,6 +809,7 @@ impl Default for Snapshot {
             defend_protect_of: Vec::new(),
             explored_seat: Vec::new(),
             explored_cell: Vec::new(),
+            attack: crate::attack::AttackColumns::default(),
         }
     }
 }
@@ -1210,6 +1224,7 @@ impl Snapshot {
             defend_protect_of: defend.protected().iter().map(|(_, of)| of.raw()).collect(),
             explored_seat: explored.rows().iter().map(|(seat, _)| *seat).collect(),
             explored_cell: explored.rows().iter().map(|(_, cell)| *cell).collect(),
+            attack: crate::attack::AttackColumns::of(world.attack()),
         }
     }
 
@@ -1466,6 +1481,7 @@ impl Snapshot {
         let shells = self.restore_shells(world)?;
         let defend = self.restore_defend(&beacons)?;
         let explored = self.restore_explored()?;
+        let attack = self.restore_attack(&beacons)?;
 
         let targets = self.restore_targets(world)?;
         let sightings = self.restore_sightings(world)?;
@@ -1512,6 +1528,7 @@ impl Snapshot {
             shells,
             defend,
             explored,
+            attack,
             voxels,
             chunks,
             features,
@@ -2302,6 +2319,42 @@ impl Snapshot {
             return Err(SnapshotError::Ragged("defend"));
         }
         Ok(table)
+    }
+
+    /// The Attack table (S2's `atk`), checked before anything is written
+    /// ([`crate::attack::AttackColumns::restore`]): every row names a live
+    /// beacon of the file on the Attack writ, and every such beacon holds one.
+    ///
+    /// # Errors
+    ///
+    /// [`SnapshotError::OutOfRange`] naming the column a check refuses.
+    fn restore_attack(
+        &self,
+        beacons: &BeaconTable,
+    ) -> Result<crate::attack::AttackTable, SnapshotError> {
+        let writ = crate::seams::MandateKind::Attack.id();
+        let live_on = |raw: u32| {
+            beacons.row_of(BeaconId::new(raw)).is_ok_and(|row| {
+                beacons
+                    .hit_points()
+                    .get(row.index())
+                    .is_some_and(|hp| hp.is_alive())
+                    && beacons.mandates().get(row.index()).copied() == Some(writ)
+            })
+        };
+        let attack_beacons: Vec<u32> = beacons
+            .ids()
+            .iter()
+            .zip(beacons.mandates())
+            .zip(beacons.hit_points())
+            .filter(|((_, mandate), hp)| **mandate == writ && hp.is_alive())
+            .map(|((id, _), _)| *id)
+            .collect();
+        let mut ascending = attack_beacons;
+        ascending.sort_unstable();
+        self.attack
+            .restore(live_on, &ascending, self.seat_id.len())
+            .map_err(SnapshotError::OutOfRange)
     }
 
     /// The explored table (S2's `surv`, laid out by `dfnd`), checked before

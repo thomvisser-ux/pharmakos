@@ -1345,15 +1345,15 @@ fn the_snapshot_fixture_is_a_snapshot() {
 fn a_missing_rules_block_is_refused_rather_than_defaulted() {
     let rules = rules();
     let mut message = rules.message().clone();
-    message.verifier = None;
+    message.interface_times = None;
     let gapped = RulesTable::from_message(&message).expect("the sim's own view still builds");
     let scope = fixture_scope();
     let snapshot = fixture_snapshot();
     let playbook = case_bytes("expand_east");
     let error = Input::new(&playbook, &snapshot, &scope, &gapped)
-        .expect_err("a verifier with no size budget rejects every playbook ever written");
+        .expect_err("a verifier with no rate card would price every visit at nothing");
     assert!(
-        error.to_string().contains("verifier"),
+        error.to_string().contains("interface_times"),
         "the gap names the block: {error}"
     );
 }
@@ -1398,17 +1398,14 @@ fn the_limits_are_the_rules_table_and_not_constants() {
 // S2's wire (task `con4`)
 // ---------------------------------------------------------------------------
 
-/// Attack's settings arrived with S2's wire and are refused as a whole until
-/// S2's `atk` lane (`E0013`), as the sim refuses them at the seal; Defend's
-/// were too until S2's `dfnd` built them (`E0012`, raised by nothing now).
-/// Their leaves are walked like any others, so the checks that hold
-/// everywhere hold under them too: a name the seat does not know, a voxel off
-/// the map, an area inside out, an enum number this build does not name. A
-/// selector under a refused Attack arm is not judged as a refusal, because the
-/// sim refuses the arm before it reads one; under a Defend arm it is judged
-/// like any other, and `most_threatened` is legal.
+/// Attack's and Defend's settings arrived with S2's wire and were refused as a
+/// whole until S2's `atk` and `dfnd` built them (`E0013`, `E0012`, raised by
+/// nothing now). Their leaves are walked like any others, so the checks that
+/// hold everywhere hold under them too: a name the seat does not know, a
+/// voxel off the map, an area inside out, an enum number this build does not
+/// name, and a selector is judged like any other.
 #[test]
-fn s2s_settings_are_refused_and_their_leaves_are_still_checked() {
+fn s2s_settings_are_built_and_their_leaves_are_checked() {
     let scope = fixture_scope();
     let snapshot = fixture_snapshot();
 
@@ -1441,12 +1438,16 @@ fn s2s_settings_are_refused_and_their_leaves_are_still_checked() {
         "\"waves\":1}}}"
     );
     let codes = codes_of(&one_visit("b_01", attack), &scope, &snapshot);
-    for wanted in ["E0013", "E0402", "E0406", "E0018"] {
+    for wanted in ["E0402", "E0406", "E0018"] {
         assert!(
             codes.iter().any(|code| code == wanted),
             "{wanted}: {codes:?}"
         );
     }
+    assert!(
+        !codes.iter().any(|code| code == "E0013"),
+        "Attack's settings are built (S2's `atk`): {codes:?}"
+    );
     assert_eq!(
         codes.iter().filter(|code| *code == "E0402").count(),
         2,
@@ -1549,12 +1550,16 @@ fn which_missing_blocks_the_sim_refuses_first_is_measured() {
     }
     assert_eq!(
         verifier_refuses,
-        ["verifier", "interface_times"],
+        ["interface_times"],
         "the blocks only the verifier reads, which only it can refuse"
     );
     assert_eq!(
         sim_refuses,
         [
+            // S2's `atk` reads `verifier.reach_memory_ms` at load (an Attack
+            // target's sighting counts for the reach window), so the sim
+            // refuses the block's absence first.
+            "verifier",
             "map",
             "beacon",
             "match",

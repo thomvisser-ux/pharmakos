@@ -2488,25 +2488,16 @@ fn interface_row_gaps() -> Vec<Case> {
 /// Survey probe areas and Build targets and protected areas now compile, and
 /// the rows for them are gone rather than moved. **S2's `dfnd` closed two
 /// more**, Defend's settings and `beacon_under_attack`, and their rows went
-/// the same way; Attack's settings are `atk`'s.
+/// the same way, and S2's `atk` closed Attack's settings.
 fn mandate_and_rule_gaps() -> Vec<Case> {
     vec![
-        // S2's `dfnd` closed the Defend row: a Defend beacon's settings
-        // compile, seal and execute, so they are a gap at neither door.
-        closed(
-            "an interface row that edits an Attack beacon's settings",
-            one_step(
-                "{\"label\": \"a\", \"interface\": {\"beacon\": {\"safest\": {}}, \"rows\": \
-                 [{\"set_mandate_settings\": {\"roe\": \"FREE_FIRE\", \"attack\": {}}}]}, \
-                 \"timeout_ms\": 30000}",
-            ),
-            "Attack mandate settings",
-            "S2",
-        ),
+        // S2's `dfnd` closed the Defend row, and S2's `atk` the Attack row:
+        // both mandates' settings compile, seal and execute, so they are a
+        // gap at neither door.
         // T14 closed the other two rows of this block as well: a Survey
         // mandate's probe areas and a Build mandate's targets and protected
-        // areas are compiled, sealed and executed now. Defend and Attack
-        // settings are still S2's, above.
+        // areas are compiled, sealed and executed now, and so, since S2's
+        // `dfnd` and `atk`, are Defend's and Attack's settings.
         // S2's `dfnd` closed `beacon_under_attack` too: the predicate reads
         // the beacon's combat memory, so it has no row here.
         // S2's `vfy2` closed the last gap of this block: the verifier reads

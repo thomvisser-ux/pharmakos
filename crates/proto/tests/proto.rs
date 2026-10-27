@@ -1908,7 +1908,9 @@ fn s2s_attack_settings_round_trip_in_their_documented_spellings() {
     round_trips(
         &AttackSettings {
             target: Some(AttackTarget {
-                target: Some(attack_target::Target::EnemyCommander(EnemyCommander {})),
+                target: Some(attack_target::Target::EnemyCommander(EnemyCommander {
+                    seat: None,
+                })),
             }),
             retarget: Retarget::None.into(),
             retreat: Some(AttackRetreat {
