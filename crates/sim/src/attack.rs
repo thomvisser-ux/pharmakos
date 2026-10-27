@@ -305,7 +305,9 @@ impl AttackSettings {
             return 0;
         }
         match (self.force_size, self.launch_ms) {
-            (Some(size), _) => size,
+            // A force of none is one: a launch the fabricator never fields
+            // for would wait for ever.
+            (Some(size), _) => size.max(1),
             (None, Some(_)) => 1,
             (None, None) => 0,
         }
@@ -514,6 +516,17 @@ impl AttackTable {
     #[must_use]
     pub fn rows(&self) -> &[AttackRow] {
         &self.rows
+    }
+
+    /// Make room for `beacons` rows and charges, and `areas` avoid areas, so
+    /// opening a row, planting a charge or committing an avoid list inside a
+    /// tick allocates nothing (a restored table holds only its own rows).
+    pub fn reserve(&mut self, beacons: u32, areas: usize) {
+        let room = crate::math::index::row(beacons);
+        self.rows.reserve(room.saturating_sub(self.rows.len()));
+        self.charges
+            .reserve(room.saturating_sub(self.charges.len()));
+        self.avoid.reserve(areas.saturating_sub(self.avoid.len()));
     }
 
     /// The avoid areas, `(attack beacon, area)`, grouped by beacon in
@@ -804,6 +817,8 @@ pub enum Ended {
     Sealed,
     /// A voxel target: the force stands there with nothing in reach.
     Arrived,
+    /// The beacon's `roe` was changed from `FREE_FIRE` after the launch.
+    StoodDown,
 }
 
 impl Ended {
@@ -816,6 +831,7 @@ impl Ended {
             Ended::ForceLost => 3,
             Ended::Sealed => 4,
             Ended::Arrived => 5,
+            Ended::StoodDown => 6,
         }
     }
 }
@@ -832,6 +848,9 @@ pub struct AttackCounts {
     pub breach_no_way: u64,
     /// A charge's cut the edit queue could not take.
     pub cut_refused: u64,
+    /// A launch condition that held with nothing to launch at: a hunt with
+    /// no fresh sighting of an enemy commander, counted per decision.
+    pub launch_without_target: u64,
 }
 
 /// The rows the Attack mandate reads, typed at load (S2's `atk`).
@@ -1002,6 +1021,7 @@ fn fire_charges(world: &mut World) {
         };
         if world.file_voxel_edit(edit).is_err() {
             world.count_cut_refused();
+            continue;
         }
         let [x, y, z] = charge.centre;
         world.emit(
@@ -1106,6 +1126,8 @@ fn gather(world: &mut World, row: &mut AttackRow, post: &Post) {
         return;
     }
     let Some((target, aim)) = launch_target(world, row, post) else {
+        // Counted, never silent (E4): a hunt with no fresh sighting waits.
+        world.count_launch_without_target();
         return;
     };
     let tick = world.tick();
@@ -1141,10 +1163,9 @@ fn launch_target(world: &World, row: &AttackRow, post: &Post) -> Option<(u32, [F
             // walks to where the seat last knew it, and decides on arrival.
             // A target the seat holds no sighting of and that is gone is
             // decided at once, from the staging point.
-            let place = sighting_of(world, post.seat, asset.raw())
-                .map(|(at, _)| at)
-                .or_else(|| crate::defend::live_beacon_at(world, beacon))
-                .unwrap_or(post.staging);
+            // E7: rule: a pinned target the seat no longer remembers is sought from the staging point, where the arrival rule decides it at once; never from ground truth
+            let place =
+                sighting_of(world, post.seat, asset.raw()).map_or(post.staging, |(at, _)| at);
             Some((asset.raw(), place))
         }
         Aim::Commander(seat) => nearest_commander(world, post.seat, seat, post.staging),
@@ -1268,13 +1289,13 @@ fn nearest_known_beacon(
 /// sees it now (`true`), else where the seat last saw it while that sighting
 /// is fresh (`false`); `None` once it is dead or the sighting has gone stale.
 fn track_commander(world: &World, seat: SeatId, asset: u32) -> Option<([Fx; 3], bool)> {
-    if !alive(world, asset) {
-        return None;
-    }
+    // Seen alive, it is followed; seen dead, it is gone. Unseen, its death is
+    // nothing the seat knows (the owner's answer of 2026-10-26: the seat's
+    // knowledge, never ground truth), so the hunt goes on to the sighting.
     if let Some(here) = asset_at(world, asset)
         && world.seen_by(seat.raw(), here)
     {
-        return Some((here, true));
+        return alive(world, asset).then_some((here, true));
     }
     let (at, seen) = sighting_of(world, seat, asset)?;
     fresh(world, seen).then_some((at, false))
@@ -1413,6 +1434,12 @@ fn retreats(world: &World, row: &AttackRow, force: u32) -> bool {
 /// The launched force's tick (see the module docs).
 fn press(world: &mut World, row: &mut AttackRow, post: &Post) {
     lose_dead_carriers_charge(world, row, post);
+    // Off FREE_FIRE the force starts no fight (item 148 (2)), launched or
+    // not: a `roe` written on site after the launch stands it down.
+    if post.roe != Roe::Free {
+        end(world, row, post, Ended::StoodDown);
+        return;
+    }
     let force = force_of(world, row.beacon);
     if force == 0 {
         end(world, row, post, Ended::ForceLost);
@@ -1423,8 +1450,10 @@ fn press(world: &mut World, row: &mut AttackRow, post: &Post) {
         return;
     }
     let lead = lead_of(world, row.beacon).and_then(|unit| position_of(world, unit));
+    // A hunt that retargeted to a beacon is a beacon attack from then on.
+    let hunting = AssetId::new(row.target).tag() == AssetId::TAG_UNIT;
     let lost = match row.settings.aim {
-        Aim::Commander(_) => match track_commander(world, post.seat, row.target) {
+        Aim::Commander(_) if hunting => match track_commander(world, post.seat, row.target) {
             Some((at, live)) => {
                 row.aim_at = at;
                 // Arrived where the seat last saw it, and it is not there.
@@ -1432,7 +1461,7 @@ fn press(world: &mut World, row: &mut AttackRow, post: &Post) {
             }
             None => true,
         },
-        Aim::Beacon(_) => {
+        Aim::Beacon(_) | Aim::Commander(_) => {
             if alive(world, row.target) {
                 if let Some(mark) = weak_point(
                     world,
@@ -1526,6 +1555,7 @@ fn enemy_in_reach(world: &World, seat: SeatId, at: [Fx; 3]) -> bool {
 
 /// Where the launched force walks: its weak point, else its target.
 fn destination_of(world: &World, row: &AttackRow) -> [Fx; 3] {
+    // E7: rule: no live weak point this tick is the target's own place
     asset_at(world, row.mark).unwrap_or(row.aim_at)
 }
 
@@ -1717,6 +1747,7 @@ fn plant_charge(world: &mut World, row: &AttackRow, post: &Post, breach: Breach,
     let [x, y, _] = breach.wall;
     let fuse = world.rules().attack().charge_fuse.to_ticks_ceil();
     let tick = world.tick();
+    // E7: cannot miss: a fuse of at most `i32::MAX` ms after a tick of a segment is far below `u32::MAX` ticks
     let fires_at = tick.raw().saturating_add(fuse);
     world.attack_mut().plant(Charge {
         beacon: row.beacon,
@@ -2018,6 +2049,7 @@ pub fn breach_search(
         let Some((from_top, _)) = breach_column(world, seat, item.n) else {
             continue;
         };
+        // E7: cannot miss: a popped column was reached when it was pushed
         let Some(here) = scratch.cost(item.n) else {
             continue;
         };

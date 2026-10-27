@@ -1574,8 +1574,11 @@ message AttackTarget {
 // 2026-10-26 to S2's `atk` lane). Unset, the Attack hunts, from its launch,
 // the nearest enemy commander its seat has a sighting of inside the rules
 // table's `verifier.reach_memory_ms` (the seat's own knowledge, never ground
-// truth), nearest to the staging point, ties to the lowest seat id, and holds
-// that commander until it dies or the seat's sighting of it goes stale.
+// truth), nearest to the staging point (the lane's reading, open to the
+// owner's veto), ties to the lowest seat id, and holds that commander until
+// the seat sees it dead, its sighting goes stale, or the force reaches the
+// last sighting and finds it gone; then `retarget` decides (decisions-log
+// item 13: decided on arrival).
 message EnemyCommander {
   // Set, the Attack hunts that seat's commander only. Naming the playbook's
   // own seat, or a seat past the match's seats, is refused: the verifier's

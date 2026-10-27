@@ -221,6 +221,7 @@ fn attack_ended_reason(value: i64) -> String {
         3 => String::from("its force was lost"),
         4 => String::from("its way is sealed"),
         5 => String::from("it reached its target"),
+        6 => String::from("its rules of engagement stood it down"),
         other => format!("reason {other}"),
     }
 }

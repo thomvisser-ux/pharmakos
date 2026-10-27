@@ -293,6 +293,15 @@ const _: () = assert!(TARGETS_PER_BEACON == 8 && TARGETS_PER_BEACON_SLOTS == 8);
 /// detail budget (owner, at S3).
 const SIGHTINGS_PER_SEAT: u32 = 64;
 
+/// How many Attack avoid areas the world reserves room for, so committing an
+/// avoid list allocates nothing inside a tick until the reserve is spent:
+/// the playbook size budget's 128 units, each area costing one, for each of
+/// four seats (E19). Past it a commit grows the list, which is correct and
+/// only allocates.
+///
+/// PLACEHOLDER: the avoid-area reserve, a size budget's worth per seat — owner, at S3, with P1's size budget.
+const AVOID_AREA_ROOM: usize = 512;
+
 /// How many beacon rows a match of `seats` seats may ever hold.
 ///
 /// Derived from the **seat count** rather than from the table's current length,
@@ -1180,7 +1189,11 @@ impl World {
             shells: ShellTable::with_room(shell_room),
             defend: crate::tables::DefendTable::with_room(beacon_limit),
             explored: crate::tables::ExploredTable::default(),
-            attack: crate::attack::AttackTable::with_room(beacon_limit),
+            attack: {
+                let mut table = crate::attack::AttackTable::with_room(beacon_limit);
+                table.reserve(beacon_limit, AVOID_AREA_ROOM);
+                table
+            },
             chunks,
             router,
             match_state: MatchState::new(&settings),
@@ -1222,7 +1235,11 @@ impl World {
             breach_scratch: crate::attack::BreachScratch::new(breach_nodes),
             charge_scratch: Vec::with_capacity(crate::math::index::row(beacon_limit)),
             attack_counts: crate::attack::AttackCounts::default(),
-            route_zones: Vec::with_capacity(armed_rows.saturating_mul(seat_rows.max(1))),
+            route_zones: Vec::with_capacity(
+                armed_rows
+                    .saturating_mul(seat_rows.max(1))
+                    .saturating_add(AVOID_AREA_ROOM),
+            ),
             route_spans: vec![(0, 0); crate::math::index::row(unit_ceiling)],
             zone_base: armed_rows.saturating_mul(seat_rows.max(1)),
             fire_rows: Vec::with_capacity(crate::math::index::row(unit_ceiling)),
@@ -1389,6 +1406,12 @@ impl World {
         }
     }
 
+    /// Count a launch condition that held with nothing to launch at (E4).
+    pub(crate) const fn count_launch_without_target(&mut self) {
+        self.attack_counts.launch_without_target =
+            self.attack_counts.launch_without_target.saturating_add(1);
+    }
+
     /// Count a charge's cut the edit queue refused (E4).
     pub(crate) const fn count_cut_refused(&mut self) {
         self.attack_counts.cut_refused = self.attack_counts.cut_refused.saturating_add(1);
@@ -1397,7 +1420,12 @@ impl World {
     /// Reserve the route zones for every avoid area and every threat zone,
     /// so the pathing phase's list never grows inside a tick.
     fn reserve_route_zones(&mut self) {
-        let need = self.attack.avoid().len().saturating_add(self.zone_base);
+        let need = self
+            .attack
+            .avoid()
+            .len()
+            .max(AVOID_AREA_ROOM)
+            .saturating_add(self.zone_base);
         self.route_zones
             .reserve(need.saturating_sub(self.route_zones.len()));
     }
@@ -6363,6 +6391,7 @@ impl World {
         self.defend = restored.defend;
         self.explored = restored.explored;
         self.attack = restored.attack;
+        self.attack.reserve(self.beacon_limit, AVOID_AREA_ROOM);
         self.reserve_route_zones();
         self.bore = restored.bore;
         self.generated = restored.generated;

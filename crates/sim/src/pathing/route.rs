@@ -123,6 +123,7 @@ impl<'a> Surcharge<'a> {
     #[must_use]
     pub fn step(self, surface: &Surface, to: Node, cost: i32) -> i32 {
         if self.holds(surface, to) {
+            // E7: rule: a surcharged step past `i32::MAX` is no step a route takes; the search compares it as the dearest
             cost.saturating_mul(self.multiplier)
         } else {
             cost
@@ -414,6 +415,7 @@ fn relax_edge(
     let priced = if query.surcharge.holds(surface, edge.from_cell)
         || query.surcharge.holds(surface, to_cell)
     {
+        // E7: rule: as `Surcharge::step`, the dearest edge at worst
         fogged.saturating_mul(query.surcharge.multiplier)
     } else {
         fogged

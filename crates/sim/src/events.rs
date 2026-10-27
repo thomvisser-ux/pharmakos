@@ -315,7 +315,8 @@ pub enum EventKind {
     /// `atk`). `seat` is its owner, `subject` the beacon, `at` where its
     /// target was last known, and `value` why ([`crate::attack::Ended::id`]):
     /// 1 the target is gone, 2 a retreat condition held, 3 the force was lost,
-    /// 4 the way is sealed, 5 a voxel target reached.
+    /// 4 the way is sealed, 5 a voxel target reached, 6 stood down off
+    /// `FREE_FIRE`.
     AttackEnded,
     /// A raider planted a demolition charge at a breach (S2's `atk`;
     /// decision 9). `seat` is its owner, `subject` the carrier, `at` where it
