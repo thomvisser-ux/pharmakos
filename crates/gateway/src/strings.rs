@@ -187,6 +187,15 @@ pub fn event_text(event: &Event) -> String {
         EventKind::GroundRefilled => {
             format!("A Build beacon of {seat} refilled a crater to the ground it was made at.")
         }
+        // S2's `surv`: the Survey's reports.
+        EventKind::AreaSurveyed => {
+            format!("A Survey beacon of {seat} has scanned all of its probe areas.")
+        }
+        EventKind::EnemyBeaconFound => format!("A Survey scout of {seat} found an enemy beacon."),
+        EventKind::SightingRefreshed => format!(
+            "A Survey scout of {seat} refreshed a sighting {} ms old.",
+            event.value
+        ),
     }
 }
 
@@ -791,6 +800,24 @@ mod tests {
         assert_eq!(
             text,
             "A Build beacon of seat 2 refilled a crater to the ground it was made at."
+        );
+    }
+
+    /// S2's `surv`: the Survey's reports name the seat they belong to, and a
+    /// refresh says the age of the memory it replaced.
+    #[test]
+    fn the_survey_lines_name_their_seat() {
+        let text = event_text(&event(EventKind::AreaSurveyed, Some(0), 0));
+        assert_eq!(
+            text,
+            "A Survey beacon of seat 0 has scanned all of its probe areas."
+        );
+        let text = event_text(&event(EventKind::EnemyBeaconFound, Some(1), 0));
+        assert_eq!(text, "A Survey scout of seat 1 found an enemy beacon.");
+        let text = event_text(&event(EventKind::SightingRefreshed, Some(0), 61_500));
+        assert_eq!(
+            text,
+            "A Survey scout of seat 0 refreshed a sighting 61500 ms old."
         );
     }
 

@@ -282,6 +282,24 @@ pursue, the fall-back to a repair drone -- is headless
 Defend beacon within a minute and a Defend beacon fields guards only on a
 threat it sees.
 
+**S2's `surv`** adds `survey-finds-the-enemy`, one segment of 300 s on the
+golden seed with both seats sealing playbooks: seat 1 deploys an outpost
+beacon inside its core's sphere, and seat 0 deploys a Survey beacon beside its
+core whose one probe area is a strip of ground beside that outpost, just
+outside the reach of seat 1's core, with one scout. The scout walks the length
+of the map, stands on the strip's cell, marks it (`area_surveyed`) and sees the
+outpost (`enemy_beacon_found`). Its chain pins the explored table, which no
+older committed run fills: the table hashes nothing while it is empty (S2's
+plan, E29). The scan's order, the refresh pass, enemy beacons first and the
+forgetting of a re-check that finds nothing are headless
+(`crates/sim/tests/survey.rs`). One older chain moved with it,
+`brownout-by-recycle`, from tick 4007, the first tick its round-2 Survey
+beacon's seven scouts are driven: a scout now decides on decision ticks only,
+re-checks only a sighting due a re-check, and otherwise idles at its beacon,
+where before it walked to its seat's stalest sighting on every tick. Its event
+assertions hold as they were. `round-limit-audit` and `unaffordable-deploy`
+seal Survey beacons with no scouts, and did not move.
+
 `expand-east-segment` carries one more thing worth knowing before its chain is
 read. The playbook it seals **does not qualify against either seat's own frozen
 snapshot** on this map: `E0401` for `b_01`, which since S1 names each seat's own

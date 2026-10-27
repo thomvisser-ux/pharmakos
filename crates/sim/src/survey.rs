@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Pharmakos contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Survey-lite: what a seat sees, and how stale the memory of it is (spec
-//! section 6, "Vision and sightings").
+//! Survey: what a seat sees, how stale the memory of it is (spec section 6,
+//! "Vision and sightings"), and the Survey mandate's scouts (spec section 6's
+//! Survey row; S2's `surv`). The scouts' part is under "Full Survey" below.
 //!
 //! # What "reach" is, said plainly
 //!
@@ -52,30 +53,140 @@
 //! A sighting's asset is an [`AssetId`] with its row's generation (S2's plan,
 //! E1), so a memory of a unit whose row has since been reused stays a memory of
 //! that unit, and the unit that took the row is a new sighting of its own.
+//!
+//! # Full Survey (S2's `surv`)
+//!
+//! Spec section 6's Survey row: scouts "scan unexplored ground first, then
+//! re-check the sightings closest to leaving the reach window, enemy beacons
+//! first", "refresh those sightings before the next Lull", "avoid known
+//! threats and report back". Each clause is one rule here, which every scout
+//! runs on every decision tick ([`run_scout`]):
+//!
+//! * **Explored ground** is the per-seat explored table over coarse cells
+//!   [`CELL_VOXELS`] columns square ([`cell_of`]). A Survey scout marks a
+//!   cell for its seat on a decision tick its sensor is on when it stands on
+//!   the cell's scan column ([`record_sightings`]): the cell's centre column,
+//!   brought inside the first of its beacon's probe areas the cell overlaps,
+//!   the place it looks round the cell from. Only a Survey beacon's scouts
+//!   mark: a Defend beacon's pickets warn, they do not survey
+//!   ([`World::survey_scout_sensor`]). A cell once explored stays explored.
+//! * **The scan.** The scout walks to the nearest unexplored cell of its
+//!   beacon's probe areas, ties to the lowest cell: to the cell's scan column,
+//!   when that column is ground the scout can reach (the router's own
+//!   connectivity oracle), so a scan never sends a scout to a column it cannot
+//!   stand on.
+//! * **The refresh pass.** Once nothing is left to scan, and in any case for
+//!   the last [`REFRESH_INTERVAL`] of every Push, so that the playbook of the
+//!   next Lull is written on fresh knowledge (decisions-log item 13; never cut,
+//!   item 144 (11)), the scout walks to the sighting most due a re-check. A
+//!   sighting is **due** from the moment it is [`REFRESH_INTERVAL`] old until
+//!   it leaves the reach window (`verifier.reach_memory_ms`), and the due
+//!   sightings rank **enemy beacons first**, then oldest first -- the one
+//!   closest to leaving the window -- ties to the lowest asset id. A scout
+//!   already walking to a due sighting keeps it while no due enemy beacon
+//!   outranks it, so a scout does not turn back and forth between two.
+//! * **A re-check that finds nothing forgets.** A due sighting whose place one
+//!   of the seat's Survey scouts has in sight, and which no sensor renewed on
+//!   that decision tick, remembers an asset that is no longer there, and the
+//!   seat forgets it ([`World::forget_sighting`]; the sighting table is hashed
+//!   and snapshotted whole, so this is hashed state like any sighting). A
+//!   sighting younger than [`REFRESH_INTERVAL`] is not due a re-check and is
+//!   kept, so an asset that has just walked out of a scout's sight is still
+//!   remembered where it was last seen. Only a Survey scout's re-check
+//!   forgets: a sphere or a picket that sees the place passively changes no
+//!   memory.
+//! * **Known threats** (decision 12, under item 148's seat sight): a cell or
+//!   a sighting inside the weapon range of an armed enemy asset the seat sees
+//!   now is no destination. The walk itself is the router's: a route that
+//!   prices a known threat's range is `AVOID_KNOWN_THREATS`, S2's `atk`'s.
+//! * **Several scouts** of one beacon share the work: a destination a scout of
+//!   the same beacon in a lower row is already walking to is not taken again.
+//! * **Arrival.** A scout that has reached the place it was sent to parks
+//!   there, so the wandering a unit at the end of its route is given
+//!   ([`World`]'s arrival draw) does not carry it off before it looks.
+//! * **Reporting back** is three private feed lines: `area_surveyed` when a
+//!   scout's mark takes its beacon's last scannable cell, `enemy_beacon_found`
+//!   for an enemy beacon its seat holds no sighting of, and
+//!   `sighting_refreshed` for a sighting older than [`REFRESH_INTERVAL`] a
+//!   Survey scout renewed.
+//!
+//! With nothing to scan and nothing due, the scout idles at its beacon.
 
+use crate::events::{Emission, EventKind};
 use crate::ids::Row;
-use crate::knowledge::{AssetId, AssetKind};
-use crate::math::fixed::Sq;
+use crate::knowledge::{AssetId, AssetKind, Position};
+use crate::math::fixed::{Fx, Sq};
+use crate::math::quantity::Ms;
 use crate::sight::{RadiusOnly, Sensor};
-use crate::tables::{BeaconId, SeatId, StructureId, UnitId, UnitKind};
+use crate::tables::{BeaconId, ColumnBox, SeatId, StructureId, TargetKind, UnitId, UnitKind};
+use crate::targeting::column_of;
 use crate::world::World;
 
-/// Record what every seat can see, right now.
+/// The explored table's coarse cell, in columns on a side.
 ///
-/// Walked seat by seat in ascending id, and within a seat sensor by sensor in
-/// the interface's order ([`World::sensor_at`]), so the order sightings are
-/// written in is a total order (AGENTS.md §4.6) — which matters because a full
-/// table forgets its stalest row to make space, and *which* row that is has to
-/// be the same everywhere.
+/// A scout standing on a cell's centre sees all of it while its vision radius
+/// is at least the cell's half-diagonal, about 11.3 columns here: true at
+/// decision 17's proposed scout vision of 24, not at the rules table's 8 of
+/// today, under which a cell's corners can be marked unseen.
+// PLACEHOLDER: Survey's coarse cell, 16 columns square, sized against the scout's vision — tune2, at S2's demo
+pub const CELL_VOXELS: i32 = 16;
+
+// PLACEHOLDER: whether an explored cell is ever scanned again, and on what clock — owner, at S3, with the reach filters
+
+/// Survey's refresh interval: a sighting this old is due a re-check, and a
+/// Push's last this-long is the refresh pass (decisions-log item 13).
+// PLACEHOLDER: Survey's refresh interval, 60 s of game time — tune2, at S2's demo
+pub const REFRESH_INTERVAL: Ms = Ms::new(60_000);
+
+/// The cell id's stride between two rows of cells: the id packs the cell row
+/// above the cell column, so the explored table's ascending order is
+/// row-major.
+const CELL_ROW: u32 = 1 << 16;
+
+/// The explored-table cell holding column `[x, y]`, or `None` for a column
+/// west or south of the map's origin, which is on no map.
+#[must_use]
+pub fn cell_of(column: [i32; 2]) -> Option<u32> {
+    let [x, y] = column;
+    if x < 0 || y < 0 {
+        return None;
+    }
+    pack(x.checked_div(CELL_VOXELS)?, y.checked_div(CELL_VOXELS)?)
+}
+
+/// A cell id from its cell column and cell row, or `None` past `u16` cells.
+fn pack(cx: i32, cy: i32) -> Option<u32> {
+    let cx = u32::from(u16::try_from(cx).ok()?);
+    let cy = u32::from(u16::try_from(cy).ok()?);
+    cy.checked_mul(CELL_ROW)?.checked_add(cx)
+}
+
+/// Record what every seat can see, right now; and what its Survey scouts
+/// explored and found.
+///
+/// The Survey scouts look first, in ascending unit row, so a report reads the
+/// memory as it stood before this tick, and each marks the cells it surveyed.
+/// Then every seat in ascending id, and within a seat sensor by sensor in the
+/// interface's order ([`World::sensor_at`]), so the order sightings are written
+/// in is a total order (AGENTS.md §4.6) — which matters because a full table
+/// forgets its stalest row to make space, and *which* row that is has to be the
+/// same everywhere. A scout's second look writes what its first did: the same
+/// asset at the same place on the same tick.
 pub(crate) fn record_sightings(world: &mut World) {
     let tick = world.tick().raw();
     let mut found = core::mem::take(world.sight_rows_mut());
-    let seats = crate::math::index::row(world.seats().len());
-    let mut index: usize = 0;
-    while index < seats {
+    for row in 0..crate::math::index::row(world.units().len()) {
+        let Some((sensor, home)) = world.survey_scout_sensor(row) else {
+            continue;
+        };
+        if seat_alive(world, sensor.seat) {
+            look_around(world, &sensor, tick, &mut found, true);
+            explore(world, &sensor, home);
+        }
+    }
+    for index in 0..crate::math::index::row(world.seats().len()) {
         let seat = world.seats().seats().get(index).copied().map(SeatId::new);
         let alive = world.seats().is_alive(index);
-        index = index.saturating_add(1);
         let Some(seat) = seat.filter(|_| alive) else {
             continue;
         };
@@ -85,21 +196,74 @@ pub(crate) fn record_sightings(world: &mut World) {
         while let Some((sensor, next)) = world.sensor_at(at) {
             at = next;
             if sensor.seat == seat {
-                look_around(world, &sensor, tick, &mut found);
+                look_around(world, &sensor, tick, &mut found, false);
             }
         }
     }
     found.clear();
     *world.sight_rows_mut() = found;
+    recheck(world, tick);
 }
 
-/// Everything of another seat's that `sensor` sees becomes a sighting.
+/// A Survey scout's re-check that found nothing: a due sighting of its
+/// seat's (at least [`REFRESH_INTERVAL`] old) whose place the scout has in
+/// sight, and which no sensor renewed this tick,
+/// is a memory of an asset no longer there, and the seat forgets it. Scouts in
+/// ascending unit row, sightings in table order, so the forgets are a total
+/// order.
+fn recheck(world: &mut World, tick: u32) {
+    for row in 0..crate::math::index::row(world.units().len()) {
+        let Some((sensor, _)) = world.survey_scout_sensor(row) else {
+            continue;
+        };
+        if !seat_alive(world, sensor.seat) {
+            continue;
+        }
+        let mut from: usize = 0;
+        while let Some(slot) = gone_from(world, &sensor, tick, from) {
+            // The next row moves into `slot`, so the walk goes on from it.
+            world.forget_sighting(slot);
+            from = slot;
+        }
+    }
+}
+
+/// The first sighting row at or after `from` that `sensor` disproves: its
+/// seat's, due a re-check (at least [`REFRESH_INTERVAL`] old, so not renewed
+/// on `tick`), and with its place in the sensor's sight.
+fn gone_from(world: &World, sensor: &Sensor, tick: u32, from: usize) -> Option<usize> {
+    let table = world.sightings();
+    table
+        .seats()
+        .iter()
+        .zip(table.places())
+        .zip(table.seen_at())
+        .enumerate()
+        .skip(from)
+        .find(|(_, ((who, place), seen))| {
+            **who == sensor.seat.raw() && due_at(**seen, tick) && sensor.sees(&RadiusOnly, **place)
+        })
+        .map(|(slot, _)| slot)
+}
+
+/// Whether `seat` is a seat of the match still in it.
+fn seat_alive(world: &World, seat: SeatId) -> bool {
+    world
+        .seats()
+        .seats()
+        .iter()
+        .position(|held| *held == seat.raw())
+        .is_some_and(|index| world.seats().is_alive(index))
+}
+
+/// Everything of another seat's that `sensor` sees becomes a sighting; and,
+/// for a Survey scout's sensor (`report`), what it brought in is reported.
 ///
 /// Only **another** seat's: a seat does not remember seeing its own things,
 /// because it knows where they are. That is not an optimisation — it is what
 /// keeps a sighting a memory of somebody else rather than a duplicate of the
 /// unit table.
-fn look_around(world: &mut World, sensor: &Sensor, tick: u32, found: &mut Vec<Row>) {
+fn look_around(world: &mut World, sensor: &Sensor, tick: u32, found: &mut Vec<Row>, report: bool) {
     let seat = sensor.seat;
     let limit = Sq::of_radius(sensor.radius);
     world.units_within(sensor.centre, sensor.radius, found);
@@ -128,15 +292,19 @@ fn look_around(world: &mut World, sensor: &Sensor, tick: u32, found: &mut Vec<Ro
             AssetKind::Unit
         };
         if let Ok(id) = AssetId::of_unit(UnitId::new(id)) {
-            world.see(seat, id, SeatId::new(owner), kind.id(), place, tick);
+            let seen = Seen {
+                seat,
+                id,
+                owner: SeatId::new(owner),
+                kind,
+                place,
+                tick,
+            };
+            note(world, report, seen);
         }
     }
 
-    let beacons = world.beacons().len();
-    let mut row: u32 = 0;
-    while row < beacons {
-        let at = crate::math::index::row(row);
-        row = row.saturating_add(1);
+    for at in 0..crate::math::index::row(world.beacons().len()) {
         let b = world.beacons();
         let (Some(owner), Some(hp), Some(place), Some(id)) = (
             b.seats().get(at).copied(),
@@ -153,22 +321,19 @@ fn look_around(world: &mut World, sensor: &Sensor, tick: u32, found: &mut Vec<Ro
             && sensor.sees(&RadiusOnly, place)
             && let Ok(id) = AssetId::of_beacon(BeaconId::new(id))
         {
-            world.see(
+            let seen = Seen {
                 seat,
                 id,
-                SeatId::new(owner),
-                AssetKind::Beacon.id(),
+                owner: SeatId::new(owner),
+                kind: AssetKind::Beacon,
                 place,
                 tick,
-            );
+            };
+            note(world, report, seen);
         }
     }
 
-    let structures = world.structures().len();
-    let mut row: u32 = 0;
-    while row < structures {
-        let at = crate::math::index::row(row);
-        row = row.saturating_add(1);
+    for at in 0..crate::math::index::row(world.structures().len()) {
         let s = world.structures();
         let (Some(owner), Some(hp), Some(place), Some(id)) = (
             s.seats().get(at).copied(),
@@ -185,14 +350,400 @@ fn look_around(world: &mut World, sensor: &Sensor, tick: u32, found: &mut Vec<Ro
             && sensor.sees(&RadiusOnly, place)
             && let Ok(id) = AssetId::of_structure(StructureId::new(id))
         {
-            world.see(
+            let seen = Seen {
                 seat,
                 id,
-                SeatId::new(owner),
-                AssetKind::Structure.id(),
+                owner: SeatId::new(owner),
+                kind: AssetKind::Structure,
                 place,
                 tick,
-            );
+            };
+            note(world, report, seen);
         }
+    }
+}
+
+/// One sighting about to be written: the columns of [`World::see`].
+#[derive(Clone, Copy, Debug)]
+struct Seen {
+    seat: SeatId,
+    id: AssetId,
+    owner: SeatId,
+    kind: AssetKind,
+    place: [Fx; 3],
+    tick: u32,
+}
+
+/// Record one sighting, and when a Survey scout took it (`report`), report
+/// what it brought in: an enemy beacon the seat held no sighting of, or a sighting
+/// that was due a re-check ([`REFRESH_INTERVAL`]).
+fn note(world: &mut World, report: bool, seen: Seen) {
+    let before = report.then(|| seen_at(world, seen.seat, seen.id));
+    world.see(
+        seen.seat,
+        seen.id,
+        seen.owner,
+        seen.kind.id(),
+        seen.place,
+        seen.tick,
+    );
+    let line = match before {
+        Some(None) if seen.kind == AssetKind::Beacon => Emission::of(EventKind::EnemyBeaconFound),
+        Some(Some(then)) => {
+            // E7: rule: a sighting is taken on a tick already played, so it is never later than now
+            let age = seen.tick.saturating_sub(then);
+            if !due_at(then, seen.tick) {
+                return;
+            }
+            // E7: rule: `Ms::from_ticks` saturates at `i32::MAX` ms, past any reach window a rules table holds
+            Emission::of(EventKind::SightingRefreshed).value(i64::from(Ms::from_ticks(age).raw()))
+        }
+        _ => return,
+    };
+    let now = world.tick();
+    world.emit(
+        now,
+        line.seat(seen.seat)
+            .subject(seen.id)
+            .at(Position::from_array(seen.place)),
+    );
+}
+
+/// The tick `seat` last saw `asset` on, or `None` when it remembers nothing of
+/// it.
+fn seen_at(world: &World, seat: SeatId, asset: AssetId) -> Option<u32> {
+    let table = world.sightings();
+    table
+        .seats()
+        .iter()
+        .zip(table.assets())
+        .zip(table.seen_at())
+        .find(|((who, what), _)| **who == seat.raw() && **what == asset.raw())
+        .map(|(_, seen)| *seen)
+}
+
+/// Mark the cell a Survey scout stands in as explored for its seat once it
+/// stands on the cell's scan column ([`scan_column`], within the arrive
+/// radius on the map, whatever the heights), the place it looks round the cell
+/// from; and report `area_surveyed` when that mark took the last scannable
+/// cell of its beacon's probe areas.
+fn explore(world: &mut World, sensor: &Sensor, home: BeaconId) {
+    let [x, y] = column_of(sensor.centre);
+    let reach = world.arrive_radius().floor_voxels();
+    let mut surveyed = false;
+    // The cells within the arrive radius of where the scout stands: a scan
+    // column on a cell's edge can be reached from the next cell over.
+    for dy in [-reach, 0, reach] {
+        for dx in [-reach, 0, reach] {
+            let (Some(cx), Some(cy)) = (x.checked_add(dx), y.checked_add(dy)) else {
+                continue;
+            };
+            let Some(cell) = cell_of([cx, cy]) else {
+                continue;
+            };
+            if on_scan_column(world, sensor.centre, home, cell)
+                && world.explored_mut().mark(sensor.seat, cell)
+                && in_probe_areas(world, home, cell)
+            {
+                surveyed = true;
+            }
+        }
+    }
+    if !surveyed || nearest_cell(world, sensor.seat, home, sensor.centre, &|_| true).is_some() {
+        return;
+    }
+    let now = world.tick();
+    world.emit(
+        now,
+        Emission::of(EventKind::AreaSurveyed)
+            .seat(sensor.seat)
+            .subject_of(AssetId::of_beacon(home)),
+    );
+}
+
+/// Whether `here` stands on `cell`'s scan column: within the arrive radius
+/// of it on the map, whatever the heights.
+fn on_scan_column(world: &World, here: [Fx; 3], home: BeaconId, cell: u32) -> bool {
+    let Some([x, y]) = scan_column(world, home, cell) else {
+        return false;
+    };
+    // E7: cannot miss: a scan column is a column of the map, which `RulesTable::map_last_voxel` keeps inside `i16`
+    let (Ok(x), Ok(y)) = (i16::try_from(x), i16::try_from(y)) else {
+        return false;
+    };
+    let [_, _, z] = here;
+    Sq::between(here, [Fx::from_voxels(x), Fx::from_voxels(y), z])
+        <= Sq::of_radius(world.arrive_radius())
+}
+
+/// The column a scout of `home` scans `cell` from, and which marks it once it
+/// stands there: the cell's centre column brought inside the first of
+/// `home`'s probe areas it overlaps, in target-table order, or its own centre
+/// column when it overlaps none. One column per cell, so the scan's
+/// destination and the mark agree.
+fn scan_column(world: &World, home: BeaconId, cell: u32) -> Option<[i32; 2]> {
+    let (cx, cy) = unpack(cell)?;
+    match probe_areas(world, home).find(|area| overlaps(*area, cx, cy)) {
+        Some(area) => {
+            let ([x0, y0], [x1, y1]) = bounds(area);
+            Some([centre(cx, x0, x1)?, centre(cy, y0, y1)?])
+        }
+        None => Some([
+            centre(cx, i32::MIN, i32::MAX)?,
+            centre(cy, i32::MIN, i32::MAX)?,
+        ]),
+    }
+}
+
+/// A cell id's cell column and cell row.
+fn unpack(cell: u32) -> Option<(i32, i32)> {
+    let cx = i32::try_from(cell.checked_rem(CELL_ROW)?).ok()?;
+    let cy = i32::try_from(cell.checked_div(CELL_ROW)?).ok()?;
+    Some((cx, cy))
+}
+
+/// An area's lowest and highest columns, the lowest clipped at the map's
+/// origin.
+fn bounds(area: ColumnBox) -> ([i32; 2], [i32; 2]) {
+    // E7: rule: a column west or south of the origin is on no map, so the area's part there holds no cell
+    let low = area.min_column().map(|v| i32::from(v).max(0));
+    (low, area.max_column().map(i32::from))
+}
+
+/// Whether `area` overlaps the cell at cell column `cx`, cell row `cy`.
+fn overlaps(area: ColumnBox, cx: i32, cy: i32) -> bool {
+    let ([x0, y0], [x1, y1]) = bounds(area);
+    let side = |c: i32, lo: i32, hi: i32| {
+        let first = c.checked_mul(CELL_VOXELS);
+        let last = first.and_then(|first| first.checked_add(CELL_VOXELS.checked_sub(1)?));
+        matches!((first, last), (Some(first), Some(last)) if first <= hi && last >= lo)
+    };
+    side(cx, x0, x1) && side(cy, y0, y1)
+}
+
+/// Whether `cell` overlaps one of `home`'s probe areas.
+fn in_probe_areas(world: &World, home: BeaconId, cell: u32) -> bool {
+    unpack(cell).is_some_and(|(cx, cy)| probe_areas(world, home).any(|area| overlaps(area, cx, cy)))
+}
+
+/// `home`'s probe areas, in target-table order.
+fn probe_areas(world: &World, home: BeaconId) -> impl Iterator<Item = ColumnBox> + '_ {
+    let targets = world.targets();
+    targets
+        .beacons()
+        .iter()
+        .zip(targets.kinds())
+        .zip(targets.areas())
+        .filter(move |((owner, kind), _)| **owner == home && **kind == TargetKind::Probe.id())
+        .map(|(_, area)| *area)
+}
+
+/// Every cell `area` overlaps, in ascending id, each with its cell column and
+/// row and the column a scout scans it from for this area: the cell's centre
+/// column, brought inside the area. An area wholly west or south of the
+/// origin overlaps no cell.
+fn cells_of(area: ColumnBox) -> impl Iterator<Item = (u32, [i32; 2], [i32; 2])> {
+    let ([x0, y0], [x1, y1]) = bounds(area);
+    // `None` for an axis on which the area holds no column on the map's side
+    // of the origin.
+    let span = |lo: i32, hi: i32| {
+        (hi >= 0)
+            .then(|| Some(lo.checked_div(CELL_VOXELS)?..=hi.checked_div(CELL_VOXELS)?))
+            .flatten()
+    };
+    let (rows, columns) = (span(y0, y1), span(x0, x1));
+    rows.into_iter().flatten().flat_map(move |cy| {
+        columns.clone().into_iter().flatten().filter_map(move |cx| {
+            let cell = pack(cx, cy)?;
+            Some((cell, [cx, cy], [centre(cx, x0, x1)?, centre(cy, y0, y1)?]))
+        })
+    })
+}
+
+/// The centre column of cell column (or row) `c`, brought inside `lo..=hi`,
+/// or `None` past `i32`.
+fn centre(c: i32, lo: i32, hi: i32) -> Option<i32> {
+    let mid = c
+        .checked_mul(CELL_VOXELS)?
+        .checked_add(CELL_VOXELS.checked_div(2)?)?;
+    // E7: rule: the scan column of a cell an area overlaps lies in the area, which is where its playbook said to look
+    Some(mid.clamp(lo, hi))
+}
+
+/// The nearest cell of `home`'s probe areas that `seat` has not explored and a
+/// scout at `here` can reach, with the point it walks to, ties to the lowest
+/// cell; `open` refuses a point the caller will not send it to.
+fn nearest_cell(
+    world: &World,
+    seat: SeatId,
+    home: BeaconId,
+    here: [Fx; 3],
+    open: &dyn Fn([Fx; 3]) -> bool,
+) -> Option<(u32, [Fx; 3])> {
+    let surface = world.surface();
+    let [hx, hy] = column_of(here);
+    let start = surface.node_of(hx, hy)?;
+    let mut best: Option<(Sq, u32, [Fx; 3])> = None;
+    for (index, area) in probe_areas(world, home).enumerate() {
+        for (cell, [cx, cy], [x, y]) in cells_of(area) {
+            // A cell two areas overlap is scanned from the first's column
+            // ([`scan_column`]), so it is a candidate of the first only.
+            if world.explored().contains(seat, cell)
+                || probe_areas(world, home)
+                    .take(index)
+                    .any(|earlier| overlaps(earlier, cx, cy))
+            {
+                continue;
+            }
+            let Some(node) = surface.node_of(x, y) else {
+                continue;
+            };
+            if !world.clusters().connected(surface, start, node) {
+                continue;
+            }
+            let point = world.standing_point([x, y, 0]);
+            let distance = Sq::between(here, point);
+            if best.is_none_or(|(bd, bc, _)| (distance, cell) < (bd, bc)) && open(point) {
+                best = Some((distance, cell, point));
+            }
+        }
+    }
+    best.map(|(_, cell, point)| (cell, point))
+}
+
+/// Run one decision of a scout that is not standing a picket (spec section
+/// 6's Survey row): scan, or refresh, or idle at its beacon. Called by
+/// [`crate::programs::ScoutProgram`] on every tick; it decides on a decision
+/// tick only, and between two the scout walks where it was sent.
+pub(crate) fn run_scout(world: &mut World, unit: u32) {
+    if !world.is_decision_tick() {
+        return;
+    }
+    let row = crate::math::index::row(unit);
+    let units = world.units();
+    let (Some(seat), Some(home), Some(here), Some(going)) = (
+        units.seats().get(row).copied().map(SeatId::new),
+        units.homes().get(row).copied(),
+        units.positions().get(row).copied(),
+        units.destinations().get(row).copied(),
+    ) else {
+        return;
+    };
+    let mut threats = world.take_threat_scratch();
+    crate::defend::for_each_known_threat(world, seat, |known| {
+        threats.push((known.at, Sq::of_radius(known.weapon.range())));
+    });
+    let target = {
+        let open = |point: [Fx; 3]| {
+            !threats
+                .iter()
+                .any(|(at, reach)| Sq::between(*at, point) <= *reach)
+                && !claimed(world, home, row, point)
+        };
+        let scan = nearest_cell(world, seat, home, here, &open).map(|(_, point)| point);
+        if scan.is_some() && !refresh_pass(world) {
+            scan
+        } else {
+            most_due(world, seat, going, &open).or(scan)
+        }
+    };
+    world.put_threat_scratch(threats);
+    match target {
+        // Arrived (on the map, whatever the heights): park, so the end of the
+        // route's wandering does not carry the scout off before the next
+        // decision looks.
+        Some([tx, ty, _])
+            if crate::programs::within(here, [tx, ty, here[2]], world.arrive_radius()) =>
+        {
+            world.park_unit(unit);
+        }
+        Some(to) => world.send_unit(unit, to),
+        None => crate::programs::idle_at_home(world, unit),
+    }
+}
+
+/// Whether a scout of `home` in a row below `row` is already walking to
+/// `point`.
+fn claimed(world: &World, home: BeaconId, row: usize, point: [Fx; 3]) -> bool {
+    let units = world.units();
+    units
+        .kinds()
+        .iter()
+        .zip(units.homes())
+        .zip(units.hit_points())
+        .zip(units.destinations())
+        .take(row)
+        .any(|(((kind, owner), hp), going)| {
+            *kind == UnitKind::Scout.id() && *owner == home && hp.is_alive() && *going == point
+        })
+}
+
+/// Whether the running Push is in its refresh pass: its last
+/// [`REFRESH_INTERVAL`].
+fn refresh_pass(world: &World) -> bool {
+    let state = world.match_state();
+    // E7: rule: a segment's last tick is a tick the match plays, which `u32` holds by far (`Tick`)
+    let end = state
+        .segment_started()
+        .raw()
+        .saturating_add(state.segment_ticks());
+    // E7: rule: zero once the segment's last tick has been played
+    end.saturating_sub(world.tick().raw()) <= REFRESH_INTERVAL.to_ticks_ceil()
+}
+
+/// Whether a sighting taken on tick `seen` is due a re-check on tick `now`:
+/// at least [`REFRESH_INTERVAL`] old.
+fn due_at(seen: u32, now: u32) -> bool {
+    // E7: rule: a sighting is taken on a tick already played, so it is never later than now
+    now.saturating_sub(seen) >= REFRESH_INTERVAL.to_ticks_ceil()
+}
+
+/// Where a scout in the refresh pass walks: to `seat`'s sighting most due a
+/// re-check, keeping `going` while it is one of them and no due enemy
+/// beacon outranks it, or `None` when none is due.
+fn most_due(
+    world: &World,
+    seat: SeatId,
+    going: [Fx; 3],
+    open: &dyn Fn([Fx; 3]) -> bool,
+) -> Option<[Fx; 3]> {
+    // E7: rule: the interpreter refuses a playbook whose rules carry no `verifier` block (`PlanError::MissingBlock`), so no Survey beacon stands without one; with none, no sighting is inside a window
+    let window = world
+        .rules()
+        .message()
+        .verifier
+        .as_ref()
+        .map(|block| Ms::new(block.reach_memory_ms).to_ticks_floor())?;
+    let tick = world.tick().raw();
+    let table = world.sightings();
+    let rows = table
+        .seats()
+        .iter()
+        .zip(table.assets())
+        .zip(table.kinds())
+        .zip(table.places())
+        .zip(table.seen_at());
+    // The key: not an enemy beacon (beacons first), then the tick it was seen
+    // on (oldest first), then the asset id.
+    let mut best: Option<((bool, u32, u32), [Fx; 3])> = None;
+    // Whether `going` is a due sighting, and in which tier.
+    let mut kept: Option<bool> = None;
+    for ((((who, asset), kind), place), seen) in rows {
+        // E7: rule: a sighting is taken on a tick already played, so it is never later than now
+        let age = tick.saturating_sub(*seen);
+        if *who != seat.raw() || !due_at(*seen, tick) || age > window || !open(*place) {
+            continue;
+        }
+        let key = (*kind != AssetKind::Beacon.id(), *seen, *asset);
+        if *place == going && kept.is_none() {
+            kept = Some(key.0);
+        }
+        if best.is_none_or(|(held, _)| key < held) {
+            best = Some((key, *place));
+        }
+    }
+    match (best, kept) {
+        (Some(((tier, _, _), _)), Some(held)) if held == tier => Some(going),
+        (best, _) => best.map(|(_, place)| place),
     }
 }
