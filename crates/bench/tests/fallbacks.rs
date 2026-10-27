@@ -240,6 +240,7 @@ fn the_fallback_scan_reads_the_whole_crate() {
             "src/g3/sight.rs",
             "src/g3/stream.rs",
             "src/g3/support.rs",
+            "src/g3/sweep.rs",
             "src/g3/variant.rs",
             "src/g3.rs",
             "src/heap.rs",

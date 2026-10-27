@@ -133,6 +133,14 @@ pub(crate) struct Tuning {
     /// The raiders it fields as guards are bought only when a threat is seen
     /// in its sphere, which no Lull can know, so they are not counted.
     pub(crate) guard_cost_dollars: i64,
+    /// What a raid goal spends, whole $: the Attack beacon and the raiders
+    /// its launch waits for, the Raid template's own `force_size`
+    /// ([`crate::easy::RAID_FORCE_SIZE`]; `structures.beacon.cost_dollars`
+    /// plus that many `units.raider.cost_dollars`).
+    pub(crate) raid_cost_dollars: i64,
+    /// `verifier.reach_memory_ms`: how long a sighting stays fresh, the
+    /// window an Attack target's sighting must fall inside (E0418).
+    pub(crate) reach_memory_ms: i64,
     /// Each armed kind's threat (S2's plan, decision 12): its weapon's damage
     /// per second, in thousandths of a hit point per second, as the sim's own
     /// threat model computes it from the same row.
@@ -206,6 +214,40 @@ fn threat_of(row: &str, weapon: Option<Weapon>) -> Result<u64, RulesError> {
         .checked_mul(1_000_000)
         .and_then(|scaled| scaled.checked_div(cooldown))
         .ok_or_else(|| RulesError(format!("`{row}`'s weapon's threat does not fit")))
+}
+
+/// The two rows a raid reads: its price, the Attack beacon and
+/// [`crate::easy::RAID_FORCE_SIZE`] raiders, and `verifier.reach_memory_ms`,
+/// refused at zero or below, where it means nothing.
+///
+/// # Errors
+///
+/// [`RulesError`] for a missing row, a window that is not positive, or a
+/// price that does not fit.
+fn attack_rows(
+    table: &RulesTable,
+    raider: Option<UnitRow>,
+    beacon_cost_dollars: u32,
+) -> Result<(i64, i64), RulesError> {
+    let missing = |row: &str| RulesError(format!("the rules text has no `{row}` row"));
+    let raider = raider.ok_or_else(|| missing("units.raider"))?;
+    let reach_memory_ms = i64::from(
+        table
+            .verifier
+            .as_ref()
+            .ok_or_else(|| missing("verifier"))?
+            .reach_memory_ms,
+    );
+    if reach_memory_ms <= 0 {
+        return Err(RulesError(String::from(
+            "the rules text's `verifier.reach_memory_ms` row is not positive",
+        )));
+    }
+    let raid_cost_dollars = i64::from(raider.cost_dollars)
+        .checked_mul(i64::from(crate::easy::RAID_FORCE_SIZE))
+        .and_then(|raiders| raiders.checked_add(i64::from(beacon_cost_dollars)))
+        .ok_or_else(|| RulesError(String::from("a raid's price does not fit a whole $ figure")))?;
+    Ok((raid_cost_dollars, reach_memory_ms))
 }
 
 impl Tuning {
@@ -296,8 +338,12 @@ impl Tuning {
         let guard_cost_dollars = i64::from(beacon_row.cost_dollars)
             .checked_add(i64::from(scout.cost_dollars))
             .ok_or_else(too_dear)?;
+        let (raid_cost_dollars, reach_memory_ms) =
+            attack_rows(&table, units.raider, beacon_row.cost_dollars)?;
         Ok(Tuning {
             tap_cost_dollars,
+            raid_cost_dollars,
+            reach_memory_ms,
             vent_cost_dollars,
             guard_cost_dollars,
             sphere_radius_voxels: i64::from(beacon.sphere_radius_voxels),
@@ -383,6 +429,11 @@ mod tests {
                 "interface_times.edit_settings_base_ms",
                 "\"edit_settings_base_ms\": 2000",
                 "\"edit_settings_base_ms\": 0",
+            ),
+            (
+                "verifier.reach_memory_ms",
+                "\"reach_memory_ms\": 180000",
+                "\"reach_memory_ms\": 0",
             ),
         ] {
             let text = committed();

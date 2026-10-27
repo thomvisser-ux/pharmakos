@@ -254,7 +254,7 @@ const KEPT_FALLBACKS: &[(&str, &str, usize, &str)] = &[
     ("src/candidates.rs", "Err(_) => Vec::new(),", 1, POLICY),
     (
         "src/candidates.rs",
-        "let Ok(Some((place, travel, lead))) = reading(&estimate) else {",
+        "let Ok(Some((place, travel, lead))) = read else {",
         1,
         POLICY,
     ),
@@ -269,6 +269,12 @@ const KEPT_FALLBACKS: &[(&str, &str, usize, &str)] = &[
         "let threat = i64::try_from(core_threat(situation, tuning)?).ok()?;",
         1,
         "a threat past `i64` is no score at all, and the guard is then not weighed",
+    ),
+    (
+        "src/candidates.rs",
+        "let threat = i64::try_from(threat_near(situation, tuning, target.at())?).ok()?;",
+        1,
+        "a threat past `i64` is no score at all, and the raid is then not weighed",
     ),
     (
         "src/compose.rs",

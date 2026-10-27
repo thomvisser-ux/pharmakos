@@ -38,7 +38,7 @@ use pharmakos_sim::events::EventKind;
 use pharmakos_sim::math::quantity::MS_PER_TICK;
 use pharmakos_sim::world::{PHASE_ORDER, Phase, World};
 
-use super::layout::{self, GATE_SEATS, LAID_OUT_BEACONS, MOST_BEACONS_PER_SEAT, UNITS_PER_SEAT};
+use super::layout::{self, GATE_SEATS, LAID_OUT_BEACONS, MOST_BEACONS_PER_SEAT, Quarters};
 use super::sight::{self, SightProbe};
 use super::stream::{CraterStream, StreamCounts};
 use super::support::FootingQuery;
@@ -63,6 +63,9 @@ pub struct SegmentPlan {
     pub craters_per_second: u32,
     /// Whether `seen_by` is probed at each minute's end.
     pub probe_sight: bool,
+    /// The share of the gate's units laid out: [`Quarters::FULL`] for the
+    /// gate, less for the power sweep.
+    pub share: Quarters,
 }
 
 /// What the layout and the rules were, so the run can be reproduced.
@@ -82,6 +85,10 @@ pub struct Provenance {
     pub proportions: Vec<(&'static str, usize)>,
     /// The size units each seat sealed.
     pub units_per_seat: u32,
+    /// The share of the gate's units laid out.
+    pub share: Quarters,
+    /// The units laid out per seat at that share.
+    pub laid_out_units_per_seat: u32,
 }
 
 /// One phase's sample over the segment.
@@ -146,6 +153,8 @@ pub struct SegmentReport {
     pub provenance: Provenance,
     /// Ticks played.
     pub ticks: u64,
+    /// Ticks the segment holds, from its length: what a full run plays.
+    pub segment_ticks: u64,
     /// The whole tick: begin, phases and finish.
     pub tick: Summary,
     /// Each phase but the hash, in `PHASE_ORDER`.
@@ -176,6 +185,9 @@ pub struct SegmentReport {
     /// The mean of the units walking (destination not their position) per
     /// tick, in thousandths.
     pub movers_mean_milli: u64,
+    /// The mean of the live units per tick, in thousandths: the load the
+    /// power sweep fits a unit's cost against.
+    pub live_units_mean_milli: u64,
     /// The bytes the damage and edit queues hold room for (E5).
     pub queue_bytes: usize,
     /// The crater stream.
@@ -190,13 +202,16 @@ pub struct SegmentReport {
     pub footing: FootingQuery,
 }
 
-/// The gate's per-seat load, as the variant powers it.
-#[must_use]
-pub const fn gate_load() -> SeatLoad {
-    SeatLoad {
-        laid_out_units: UNITS_PER_SEAT,
+/// The gate's per-seat load at `share`, as the variant powers it.
+///
+/// # Errors
+///
+/// As [`layout::units_per_seat`].
+pub fn gate_load(share: Quarters) -> Result<SeatLoad, Error> {
+    Ok(SeatLoad {
+        laid_out_units: layout::units_per_seat(share)?,
         laid_out_beacons: MOST_BEACONS_PER_SEAT,
-    }
+    })
 }
 
 /// What one tick left on the world, read between its last phase and its hash.
@@ -394,6 +409,7 @@ struct Record {
     max_passes: u64,
     max_visits: usize,
     movers: u64,
+    live: u64,
     phase_allocations: Vec<u64>,
     finish_allocations: Vec<u64>,
     minutes: Vec<Minute>,
@@ -438,6 +454,7 @@ impl Record {
         self.max_passes = self.max_passes.max(counters.passes);
         self.max_visits = self.max_visits.max(counters.visits);
         self.movers = add(self.movers, counters.movers, "the movers")?;
+        self.live = add(self.live, counters.live_units, "the live units")?;
         let repaths = &mut self.repaths;
         repaths.served = add(repaths.served, u64::from(counters.served), "the repaths")?;
         repaths.max_backlog = repaths.max_backlog.max(counters.backlog);
@@ -505,8 +522,10 @@ pub fn open_gate(
     seed: u64,
     segment_ms: i32,
     craters_per_second: u32,
+    share: Quarters,
 ) -> Result<Gate, Error> {
-    let bench = variant::bench_rules(root, GATE_SEATS, gate_load())?;
+    let load = gate_load(share)?;
+    let bench = variant::bench_rules(root, GATE_SEATS, load)?;
     let playbook = hosted_budget_playbook(root)?;
     let opening = Opening {
         seed,
@@ -516,7 +535,7 @@ pub fn open_gate(
         playbook: &playbook,
     };
     let host = hosted::open_host(&opening)?;
-    let layout = layout::gate_layout(host.world())?;
+    let layout = layout::layout_at(host.world(), share)?;
     let stream = CraterStream::new(seed, craters_per_second, &layout, host.world())?;
     let Opened {
         surface,
@@ -543,6 +562,8 @@ pub fn open_gate(
             layout_digest: layout::digest(&layout),
             proportions: layout::proportions(&layout),
             units_per_seat,
+            share,
+            laid_out_units_per_seat: load.laid_out_units,
         },
         repath_cap: bench.rules.repath_cap_per_tick(),
     })
@@ -564,7 +585,13 @@ pub fn measure(
         mut stream,
         provenance,
         repath_cap: cap,
-    } = open_gate(root, plan.seed, plan.segment_ms, plan.craters_per_second)?;
+    } = open_gate(
+        root,
+        plan.seed,
+        plan.segment_ms,
+        plan.craters_per_second,
+        plan.share,
+    )?;
     // One tick of slack over the segment's length, so no vector grows inside it.
     let slots = plan
         .segment_ms
@@ -640,6 +667,11 @@ pub fn measure(
             craters: stream.counts(),
             heap_at_start,
             ticks: played,
+            segment_ticks: plan
+                .segment_ms
+                .checked_div(MS_PER_TICK)
+                .and_then(|ticks| u64::try_from(ticks).ok())
+                .ok_or(Error::Overflow("the segment's ticks"))?,
             regions_fallen,
             footing,
         },
@@ -654,6 +686,7 @@ struct Tally {
     craters: StreamCounts,
     heap_at_start: Option<u64>,
     ticks: u64,
+    segment_ticks: u64,
     regions_fallen: u64,
     footing: FootingQuery,
 }
@@ -666,6 +699,7 @@ fn finish(record: Record, tally: Tally) -> Result<SegmentReport, Error> {
         craters,
         heap_at_start,
         ticks,
+        segment_ticks,
         regions_fallen,
         footing,
     } = tally;
@@ -728,6 +762,7 @@ fn finish(record: Record, tally: Tally) -> Result<SegmentReport, Error> {
     Ok(SegmentReport {
         provenance,
         ticks,
+        segment_ticks,
         tick_minus_pathing_mean_ns,
         tick,
         phases,
@@ -742,6 +777,7 @@ fn finish(record: Record, tally: Tally) -> Result<SegmentReport, Error> {
         max_fall_passes: record.max_passes,
         max_support_visits: record.max_visits,
         movers_mean_milli: milli(record.movers)?,
+        live_units_mean_milli: milli(record.live)?,
         queue_bytes,
         craters,
         allocations,

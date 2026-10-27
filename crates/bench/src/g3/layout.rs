@@ -20,20 +20,24 @@
 //! | Build | 3 (4 at seat 0) | 3 build drones and 2 repair drones (the fourth none) | the cardinal points [`BUILD_RING`] voxels from the core |
 //! | Survey | 2 | 5 and 4 scouts | two diagonals [`SURVEY_RING`] voxels from the core |
 //!
-//! PLACEHOLDER: the gate layout's mandate proportions and distances — `g3r`, at S2's exit, re-pointed at the sim `dfnd` and `atk` finish.
+//! The proportions and distances are the harness's own inputs, not rules:
+//! they set where the load stands, and the report prints them beside every
+//! figure. `g3r` kept `g3h`'s on the finished sim, which the owner can veto.
 //!
 //! Seat 0 takes the 13th beacon because 37 does not divide by three; the
 //! world's share rule (13 a seat at three seats) allows it. The units are
 //! 36 + 22 + 18 + 15 + 9 = 100 a seat.
 //!
-//! **What the mandates make of it is the sim's.** On this `main` Defend and
-//! Attack do not run (`crates/sim/src/mandate.rs`), so the raiders stand at
-//! their beacons and return fire; the combat is each core's autocannon, which
-//! fires as `FREE_FIRE`, at the Attack raiders inside its range, and the
-//! raiders' return fire where a core stands in theirs. When `dfnd` and `atk`
-//! merge, the same layout fights both ways (an unset `roe` reads `FREE_FIRE`
-//! on those writs, item 148 (2)), and `g3r` re-points the measurement at that
-//! sim.
+//! **What the mandates make of it is the sim's.** On the finished S2 sim
+//! (`dfnd`, `atk`), each Defend beacon's guards go after the enemy Attack
+//! raiders standing three voxels from it (an unset `roe` reads `FREE_FIRE`,
+//! item 148 (2)), and each core's autocannon fires at the Attack raiders
+//! inside its range. The layout seam carries no mandate settings
+//! (`runner::LayoutBeacon`), so an Attack beacon has no target and its
+//! raiders gather at it and never launch, and a Build beacon has no blueprint.
+//!
+//! [`layout_at`] lays out the same beacons with a share of the units, for the
+//! power sweep ([`super::sweep`]).
 
 use pharmakos_sim::features::FeatureKind;
 use pharmakos_sim::math::fixed::Fx;
@@ -169,6 +173,77 @@ fn nearest_seams(world: &World, core: [i32; 2]) -> Result<Vec<[i32; 2]>, Error> 
     Ok(nearest)
 }
 
+/// A share of the gate's units, in quarters: what the power sweep lays out
+/// to measure a unit's cost (S2's plan, section 5 item 3; item 65's
+/// arithmetic). Every beacon is laid out at every share; only its units scale,
+/// each group's count times the quarters over four, to the nearest unit.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub struct Quarters(u8);
+
+impl Quarters {
+    /// The gate's own load: every unit the module's table names.
+    pub const FULL: Quarters = Quarters(4);
+
+    /// `quarters` of the gate's units, or `None` past four.
+    #[must_use]
+    pub const fn new(quarters: u8) -> Option<Quarters> {
+        if quarters <= 4 {
+            Some(Quarters(quarters))
+        } else {
+            None
+        }
+    }
+
+    /// The quarters, 0 to 4.
+    #[must_use]
+    pub const fn get(self) -> u8 {
+        self.0
+    }
+
+    /// `count` at this share, to the nearest unit, a half rounded up, so each
+    /// group keeps its share of the mix as closely as whole units allow.
+    fn of(self, count: u32) -> Result<u32, Error> {
+        count
+            .checked_mul(u32::from(self.0))
+            .and_then(|scaled| scaled.checked_add(2))
+            .map(|scaled| scaled.div_euclid(4))
+            .ok_or(Error::Overflow("a scaled unit count"))
+    }
+}
+
+/// One seat's unit groups, as the module's table lays them out: Attack's
+/// two, Defend's two, Mine's three, Build's three crews (the fourth Build
+/// beacon has none) and Survey's two.
+const SEAT_GROUPS: [(UnitKind, u32); 15] = [
+    (UnitKind::Raider, 18),
+    (UnitKind::Raider, 18),
+    (UnitKind::Raider, 11),
+    (UnitKind::Raider, 11),
+    (UnitKind::MiningDrone, 6),
+    (UnitKind::MiningDrone, 6),
+    (UnitKind::MiningDrone, 6),
+    (UnitKind::BuildDrone, 3),
+    (UnitKind::RepairDrone, 2),
+    (UnitKind::BuildDrone, 3),
+    (UnitKind::RepairDrone, 2),
+    (UnitKind::BuildDrone, 3),
+    (UnitKind::RepairDrone, 2),
+    (UnitKind::Scout, 5),
+    (UnitKind::Scout, 4),
+];
+
+/// The units one seat is laid out with at `share`: 100 at [`Quarters::FULL`].
+///
+/// # Errors
+///
+/// [`Error::Overflow`], which the table's counts cannot reach.
+pub fn units_per_seat(share: Quarters) -> Result<u32, Error> {
+    SEAT_GROUPS.iter().try_fold(0_u32, |sum, (_, count)| {
+        sum.checked_add(share.of(*count)?)
+            .ok_or(Error::Overflow("a seat's laid-out units"))
+    })
+}
+
 /// The gate's layout on `world`, a freshly generated three-seat map.
 ///
 /// # Errors
@@ -176,6 +251,25 @@ fn nearest_seams(world: &World, core: [i32; 2]) -> Result<Vec<[i32; 2]>, Error> 
 /// [`Error::Layout`] for a map the layout does not fit: not three cores, too
 /// few seams, or cores too close together.
 pub fn gate_layout(world: &World) -> Result<Layout, Error> {
+    layout_at(world, Quarters::FULL)
+}
+
+/// The gate's layout with `share` of its units (the power sweep's).
+///
+/// # Errors
+///
+/// As [`gate_layout`].
+pub fn layout_at(world: &World, share: Quarters) -> Result<Layout, Error> {
+    let scaled = |groups: Vec<(UnitKind, u32)>| -> Result<Vec<(UnitKind, u32)>, Error> {
+        let mut kept = Vec::with_capacity(groups.len());
+        for (kind, count) in groups {
+            let count = share.of(count)?;
+            if count > 0 {
+                kept.push((kind, count));
+            }
+        }
+        Ok(kept)
+    };
     let cores = cores(world)?;
     let mut beacons: Vec<LayoutBeacon> = Vec::new();
     for (index, core) in cores.iter().enumerate() {
@@ -187,13 +281,13 @@ pub fn gate_layout(world: &World) -> Result<Layout, Error> {
                 seat,
                 toward(theirs, *core, ATTACK_FROM_ENEMY_CORE)?,
                 MandateKind::Attack,
-                vec![(UnitKind::Raider, 18)],
+                scaled(vec![(UnitKind::Raider, 18)])?,
             ));
             beacons.push(beacon(
                 seat,
                 toward(*core, theirs, DEFEND_FROM_CORE)?,
                 MandateKind::Defend,
-                vec![(UnitKind::Raider, 11)],
+                scaled(vec![(UnitKind::Raider, 11)])?,
             ));
         }
         let shift = i32::from(seat);
@@ -202,7 +296,7 @@ pub fn gate_layout(world: &World) -> Result<Layout, Error> {
                 seat,
                 offset(seam, shift, 0)?,
                 MandateKind::Mine,
-                vec![(UnitKind::MiningDrone, 6)],
+                scaled(vec![(UnitKind::MiningDrone, 6)])?,
             ));
         }
         let ring = [
@@ -214,7 +308,7 @@ pub fn gate_layout(world: &World) -> Result<Layout, Error> {
         let builds = if seat == 0 { 4 } else { 3 };
         for (slot, (dx, dy)) in ring.into_iter().take(builds).enumerate() {
             let units = if slot < 3 {
-                vec![(UnitKind::BuildDrone, 3), (UnitKind::RepairDrone, 2)]
+                scaled(vec![(UnitKind::BuildDrone, 3), (UnitKind::RepairDrone, 2)])?
             } else {
                 Vec::new()
             };
@@ -233,17 +327,18 @@ pub fn gate_layout(world: &World) -> Result<Layout, Error> {
                 seat,
                 offset(*core, dx, dy)?,
                 MandateKind::Survey,
-                vec![(UnitKind::Scout, scouts)],
+                scaled(vec![(UnitKind::Scout, scouts)])?,
             ));
         }
     }
     let layout = Layout { beacons };
-    check(&layout)?;
+    check(&layout, units_per_seat(share)?)?;
     Ok(layout)
 }
 
-/// The layout holds what the module documents: 37 beacons, 100 units a seat.
-fn check(layout: &Layout) -> Result<(), Error> {
+/// The layout holds what the module documents: 37 beacons, and `units` a seat
+/// (100 at the full share).
+fn check(layout: &Layout, expected: u32) -> Result<(), Error> {
     let placed =
         u32::try_from(layout.beacons.len()).map_err(|_| Error::Overflow("the beacon count"))?;
     if placed != LAID_OUT_BEACONS {
@@ -258,9 +353,9 @@ fn check(layout: &Layout) -> Result<(), Error> {
             .filter(|beacon| u32::from(beacon.seat.raw()) == seat)
             .flat_map(|beacon| beacon.units.iter().map(|(_, count)| *count))
             .sum();
-        if units != UNITS_PER_SEAT {
+        if units != expected {
             return Err(Error::Drift(format!(
-                "seat {seat} is laid out with {units} units, not the documented {UNITS_PER_SEAT}"
+                "seat {seat} is laid out with {units} units, not the documented {expected}"
             )));
         }
     }

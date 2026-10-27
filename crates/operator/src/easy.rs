@@ -36,14 +36,15 @@
 //! | the fixed reads ([`FIXED_READS`]) | `get_status`, `get_briefing`, `get_economy_forecast`, `get_map_summary`, and at most [`PAGES_MAX`] pages each of `list_beacons`, `get_view`, `get_segment_feed` and `list_templates` |
 //! | the tap probe ([`TAP_PROBE_CALLS`]) | one `resolve_refs` and one QUICK `verify_plan` over every tap Easy could make, when there is one (the register's S1-15) |
 //! | the guard probe ([`GUARD_PROBE_CALLS`]) | one `estimate_route` to the nearest own Defend beacon, so a post beside the core is never placed twice |
-//! | one estimate per candidate | [`EASY_CANDIDATES`] `estimate_route`, a placement's to a `covering` waypoint naming its feature, the guard post's among them |
+//! | the raid probe ([`RAID_PROBE_CALLS`]) | one `estimate_route` to the nearest own Attack beacon, so a raid post is never placed twice |
+//! | one estimate per candidate | [`EASY_CANDIDATES`] `estimate_route`, a placement's to a `covering` waypoint naming its feature, the guard post's and the raids' among them (a raid's by way of its post's site to its target) |
 //! | one instantiate per template | [`EASY_TEMPLATES`] `instantiate_template`, each with its own values, to read what it declares |
 //! | the composition | [`COMPOSE_CALLS`]: one `patch_plan` filling the chosen template and inserting its goals |
 //! | the verifies | 1 `verify_plan`, then [`EASY_REPAIRS`] repairs of one `patch_plan` and one `verify_plan` each |
 //! | the safe playbook | [`SAFE_CALLS`]: at most [`SAFE_ESTIMATES`] `estimate_route`, one `instantiate_template` with the route, one `verify_plan` |
 //! | the commit | [`COMMIT_CALLS`]: at most two `submit_plan` (its own plan, then the safe one if the first was refused) and one `set_ready` |
 //!
-//! An advisor makes the fixed reads, the two probes, the estimates, the
+//! An advisor makes the fixed reads, the three probes, the estimates, the
 //! instantiates and the safe playbook's calls, and nothing else
 //! ([`EASY_ADVISOR_CALL_BUDGET`]).
 //! `easy_never_exceeds_its_derived_call_budget` asserts both on a worst-case
@@ -142,11 +143,12 @@ pub const PAGES_MAX: u32 = 4;
 
 /// The templates Easy knows how to fill, in the order it instantiates them.
 /// Which three shipped first is decision 10 (decisions-log item 81); Defend
-/// the Core is S2's (`oprd`).
-pub const EASY_KNOWN_TEMPLATES: [&str; 4] = [
+/// the Core is S2's `oprd`, and Raid an Enemy Beacon S2's `opra`.
+pub const EASY_KNOWN_TEMPLATES: [&str; 5] = [
     EXPAND_AND_MINE,
     HOLD_AND_BUILD,
     DEFEND_THE_CORE,
+    RAID_AN_ENEMY_BEACON,
     SAFE_PLAYBOOK,
 ];
 
@@ -172,8 +174,23 @@ pub const EXPAND_AND_MINE: &str = "expand_and_mine";
 pub const HOLD_AND_BUILD: &str = "hold_and_build";
 /// The Defend the Core template's id in the library (S2's `oprd`).
 pub const DEFEND_THE_CORE: &str = "defend_the_core";
+/// The Raid an Enemy Beacon template's id in the library (S2's `opra`).
+pub const RAID_AN_ENEMY_BEACON: &str = "raid_an_enemy_beacon";
 /// The Safe Playbook template's id in the library.
 pub const SAFE_PLAYBOOK: &str = "safe_playbook";
+
+/// How many raiders a raid's launch waits for: the Raid template's own
+/// `launch.force_size`, which Easy leaves as it is, so a raid's price counts
+/// that many raiders. `the_raid_force_is_the_templates_own` holds the two
+/// together.
+pub const RAID_FORCE_SIZE: u32 = 2;
+
+/// How many raid targets a round weighs at most, nearest the core first: an
+/// enemy beacon the seat has a fresh sighting of, or an enemy commander in
+/// sight, each one estimate out of Easy's candidates.
+///
+/// PLACEHOLDER: how many raid targets Easy weighs, 3 of its 30 candidates — owner, S5, with Normal and Hard
+pub const RAID_TARGETS_MAX: u32 = 3;
 
 // ---------------------------------------------------------------------------
 // The Balanced weighting
@@ -242,6 +259,14 @@ pub const DEFENCE_POINTS_PER_HP_PER_SECOND: i64 = 10;
 /// PLACEHOLDER: the points a guard post is worth after the commander's death — owner, S5, with the Balanced weights
 pub const COMMANDER_DIED_POINTS: i64 = 300;
 
+/// What a raid on one target is worth in points, before the threat that
+/// defends it: the same for an enemy beacon and an enemy commander (spec
+/// section 14: Easy "scores enemy-commander raids like any other target"),
+/// and more than a raid's price, so an undefended target is worth raiding.
+///
+/// PLACEHOLDER: the points a raid on one target is worth — owner, S5, with the Balanced weights
+pub const RAID_POINTS: i64 = 300;
+
 // ---------------------------------------------------------------------------
 // The budget
 // ---------------------------------------------------------------------------
@@ -256,6 +281,10 @@ pub const TAP_PROBE_CALLS: u32 = 2;
 /// The guard probe: one `estimate_route` to the nearest own Defend beacon,
 /// which says whether a post already stands beside the core.
 pub const GUARD_PROBE_CALLS: u32 = 1;
+
+/// The raid probe: one `estimate_route` to the nearest own Attack beacon,
+/// which says whether a raid post already stands beside the core.
+pub const RAID_PROBE_CALLS: u32 = 1;
 
 /// The composition: one `patch_plan`.
 pub const COMPOSE_CALLS: u32 = 1;
@@ -274,6 +303,7 @@ pub const COMMIT_CALLS: u32 = 2 + 1;
 pub const EASY_CALL_BUDGET: u32 = FIXED_READS
     + TAP_PROBE_CALLS
     + GUARD_PROBE_CALLS
+    + RAID_PROBE_CALLS
     + EASY_CANDIDATES
     + EASY_TEMPLATES
     + COMPOSE_CALLS
@@ -285,6 +315,7 @@ pub const EASY_CALL_BUDGET: u32 = FIXED_READS
 pub const EASY_ADVISOR_CALL_BUDGET: u32 = FIXED_READS
     + TAP_PROBE_CALLS
     + GUARD_PROBE_CALLS
+    + RAID_PROBE_CALLS
     + EASY_CANDIDATES
     + EASY_TEMPLATES
     + SAFE_CALLS;
@@ -422,7 +453,8 @@ impl Easy {
     fn plan(&self, wire: &mut Wire<'_, '_>, situation: &Situation, round: &mut Played) {
         let taps = candidates::legal_taps(wire, situation, &self.tuning);
         let post = candidates::defend_post(wire, situation, &self.tuning);
-        let goals = candidates::enumerate(situation, &self.tuning, &taps, post);
+        let raid = candidates::raid_post(wire, situation, &self.tuning);
+        let goals = candidates::enumerate(situation, &self.tuning, &taps, post, raid);
         let evaluated = candidates::evaluate(wire, situation, &self.tuning, goals);
         let top = candidates::top_k(&evaluated);
         let guard = candidates::guard(&evaluated);
@@ -463,7 +495,8 @@ impl Easy {
         if let Ok(situation) = read {
             let taps = candidates::legal_taps(&mut wire, &situation, &self.tuning);
             let post = candidates::defend_post(&mut wire, &situation, &self.tuning);
-            let goals = candidates::enumerate(&situation, &self.tuning, &taps, post);
+            let raid = candidates::raid_post(&mut wire, &situation, &self.tuning);
+            let goals = candidates::enumerate(&situation, &self.tuning, &taps, post, raid);
             let evaluated = candidates::evaluate(&mut wire, &situation, &self.tuning, goals);
             let declared =
                 playbook::declare(&mut wire, &situation.templates, &EASY_KNOWN_TEMPLATES);
@@ -596,12 +629,13 @@ fn submit(wire: &mut Wire<'_, '_>, text: &str) -> bool {
 /// declaration order: own beacons and fixed targets only. Each `why` opens
 /// with the seed line (decision C15: recorded, unused).
 ///
-/// Which templates the operator suggests for a human (all four Easy knows),
+/// Which templates the operator suggests for a human (all five Easy knows),
 /// and that a suggestion names only the seat's own beacons and named
-/// features, never another seat's beacon (Easy's row; decisions-log item 111,
-/// section D).
+/// features (Easy's row; decisions-log item 111, section D), except a raid's
+/// target, which names another seat's beacon by the `e_NN` the seat's own
+/// listing gives it, or another seat's commander it sees (S2's `opra`).
 ///
-/// PLACEHOLDER: the templates suggested to a human, and own beacons and named features only — owner, S5
+/// PLACEHOLDER: the templates suggested to a human, and own beacons, named features and a raid's own-knowledge target only — owner, S5
 fn suggestions(
     situation: &Situation,
     tuning: &Tuning,
@@ -660,6 +694,28 @@ fn suggestions(
                     )
                 }
                 _ => compose::why_no_guard(),
+            },
+            // The nearest raid any route reaches, whatever it is worth this
+            // round, as the guard's site is offered: the person decides.
+            RAID_AN_ENEMY_BEACON => match (candidates::raid_site(evaluated), fill) {
+                (Some(site), Some(fill)) => {
+                    if let candidates::Goal::Raid { seam, target } = &site.goal {
+                        put(covering, named_text(seam));
+                        put(
+                            template.pointer_ending("/attack/target"),
+                            compact(&target.json()),
+                        );
+                        put(
+                            template.pointer_ending("/attack/staging"),
+                            compact(&crate::wire::voxel_json(site.place)),
+                        );
+                    }
+                    if let Some(hold) = compose::hold_left(site, fill, 0) {
+                        put(template.pointer_ending("/hold/ms"), hold.to_string());
+                    }
+                    compose::why_for(site, 1, fill)
+                }
+                _ => compose::why_no_raid(),
             },
             SAFE_PLAYBOOK => {
                 if let Some(plan) = safe.filter(|plan| !plan.own) {
