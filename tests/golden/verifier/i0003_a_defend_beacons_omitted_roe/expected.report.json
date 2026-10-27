@@ -1,0 +1,27 @@
+{
+  "qualifies": true,
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/0/place_beacon/initial/mandate/roe",
+      "message": "`roe` is omitted and reads as FREE_FIRE.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/place_beacon/initial/mandate/roe\",\"value\":\"FREE_FIRE\"}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    }
+  ],
+  "report_hash": "NfxGlPRhM14=",
+  "rules_hash": "gCjUE4Tm3i8=",
+  "plan_fingerprint": "1mFY3evNtao=",
+  "verifier_version": "0.1.0-s2.3",
+  "size_units": 1,
+  "size_budget": 128
+}
+
