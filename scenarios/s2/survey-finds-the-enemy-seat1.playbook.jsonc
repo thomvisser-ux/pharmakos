@@ -1,0 +1,25 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// S2's `surv`, seat 1: walk a little south-west and deploy a beacon inside the
+// core's sphere, for seat 0's Survey to find. See
+// survey-finds-the-enemy.scenario.jsonc.
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {"title": "An outpost", "author_kind": "HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {"label": "to_site", "timeout_ms": 60000,
+        "move": {"to": {"voxel": {"x": 340, "y": 352, "z": 36}}, "pace": "DIRECT"},
+        "on_fail": {"action": "ABORT_ROUTE"}},
+      {"label": "outpost", "timeout_ms": 30000,
+        "place_beacon": {"at": {"voxel": {"x": 337, "y": 350, "z": 36}},
+          "initial": {"priority": "NORMAL", "mandate": {"survey": {}}}},
+        "on_fail": {"action": "ABORT_ROUTE"}}
+    ],
+    "handlers": []
+  },
+  "on_death": {"on_respawn": "CONTINUE", "max_deaths_before_fallback": 2},
+  "fallback": {"hold": {"at": {"safest": {}}}}
+}

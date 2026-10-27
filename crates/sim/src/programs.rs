@@ -459,27 +459,9 @@ impl Program for ScoutProgram {
         if crate::defend::run_picket(world, unit) {
             return;
         }
-        let row = crate::math::index::row(unit);
-        let Some(me) = me(world, row) else {
-            return;
-        };
-        // "Scouts scan unexplored ground inside these first, then re-check the
-        // sightings closest to leaving the reach window" (spec section 6).
-        // Being *inside* a probe area is what "scanned" means at the skeleton:
-        // the sighting half is done by `crate::survey`, which runs every
-        // decision tick wherever the scout happens to be standing. Nothing
-        // records the visit, so a mandate with two or more areas works only
-        // the first one its scout reaches — see `World::probe_to_enter`'s
-        // PLACEHOLDER for what settling that costs and who settles it.
-        if let Some(area) = world.probe_to_enter(me.home, me.here) {
-            world.send_unit(unit, area);
-            return;
-        }
-        if let Some(stale) = world.stalest_sighting_place(me.seat) {
-            world.send_unit(unit, stale);
-            return;
-        }
-        idle_at_home(world, unit);
+        // Scan, refresh, or idle at home: spec section 6's Survey row, in
+        // `crate::survey` (S2's `surv`).
+        crate::survey::run_scout(world, unit);
     }
 }
 
