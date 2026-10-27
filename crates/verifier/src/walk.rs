@@ -74,6 +74,32 @@ pub(crate) enum Holder<'a> {
     Unnamed,
 }
 
+/// Which field holds an [`Area`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum AreaOf {
+    /// A Build mandate's `protected_areas`.
+    Protected,
+    /// A Survey mandate's `probe_areas`.
+    Probe,
+    /// An Attack mandate's `avoid_areas`.
+    Avoid,
+    /// A `wall` target's `wall_box`, whose own checks are the structure
+    /// stage's `Sites::wall`.
+    WallBox,
+}
+
+impl AreaOf {
+    /// The field's JSON name.
+    pub(crate) const fn field(self) -> &'static str {
+        match self {
+            AreaOf::Protected => "protected_areas",
+            AreaOf::Probe => "probe_areas",
+            AreaOf::Avoid => "avoid_areas",
+            AreaOf::WallBox => "wall_box",
+        }
+    }
+}
+
 /// What carries a mandate settings block, which decides how an omitted field in
 /// it reads.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -110,8 +136,8 @@ pub(crate) trait Visit {
     fn filter(&mut self, _at: &str, _filter: &BeaconFilter) {}
     /// Any voxel.
     fn voxel(&mut self, _at: &str, _voxel: &pharmakos_proto::gp::v1::Voxel) {}
-    /// Any area.
-    fn area(&mut self, _at: &str, _area: &Area) {}
+    /// Any area, with the field that holds it.
+    fn area(&mut self, _at: &str, _area: &Area, _of: AreaOf) {}
     /// Any condition node, all the way down.
     fn condition(&mut self, _at: &str, _condition: &Condition) {}
     /// Any mandate settings block, with the row or step that carries it.
@@ -341,13 +367,18 @@ fn walk_mandate(
             }
             let areas_at = pointer::child(&here, "protected_areas");
             for (index, area) in build.protected_areas.iter().enumerate() {
-                walk_area(area, &pointer::at(&areas_at, index), visitor);
+                walk_area(
+                    area,
+                    &pointer::at(&areas_at, index),
+                    AreaOf::Protected,
+                    visitor,
+                );
             }
         }
         Some(mandate_settings::Mandate::Survey(survey)) => {
             let areas_at = pointer::child(&pointer::child(at, "survey"), "probe_areas");
             for (index, area) in survey.probe_areas.iter().enumerate() {
-                walk_area(area, &pointer::at(&areas_at, index), visitor);
+                walk_area(area, &pointer::at(&areas_at, index), AreaOf::Probe, visitor);
             }
         }
         Some(mandate_settings::Mandate::Defend(defend)) => {
@@ -400,7 +431,7 @@ fn walk_attack(attack: &AttackSettings, at: &str, visitor: &mut dyn Visit) {
     }
     let areas_at = pointer::child(at, "avoid_areas");
     for (index, area) in attack.avoid_areas.iter().enumerate() {
-        walk_area(area, &pointer::at(&areas_at, index), visitor);
+        walk_area(area, &pointer::at(&areas_at, index), AreaOf::Avoid, visitor);
     }
 }
 
@@ -423,12 +454,17 @@ fn walk_build_target(
     }
     // A `wall` target's box (S2's plan, task `con4`), an area like any other.
     if let Some(wall_box) = target.wall_box.as_ref() {
-        walk_area(wall_box, &pointer::child(at, "wall_box"), visitor);
+        walk_area(
+            wall_box,
+            &pointer::child(at, "wall_box"),
+            AreaOf::WallBox,
+            visitor,
+        );
     }
 }
 
-fn walk_area(area: &Area, at: &str, visitor: &mut dyn Visit) {
-    visitor.area(at, area);
+fn walk_area(area: &Area, at: &str, of: AreaOf, visitor: &mut dyn Visit) {
+    visitor.area(at, area, of);
     if let Some(corner) = area.min.as_ref() {
         visitor.voxel(&pointer::child(at, "min"), corner);
     }

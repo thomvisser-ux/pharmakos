@@ -35,7 +35,16 @@
 //! over vents alone, and S1's only blueprint is the Generator.
 //! `seam_choice: SAFEST` read as NEAREST until S2's threat model and was
 //! `W0501` (decisions-log item 127 (9), S1's plan's decision 6); S2's `dfnd`
-//! built the model, so nothing raises it now.
+//! built the model, so nothing raises it now: SAFEST digs the nearest seam no
+//! known threat's weapon reaches (S2's plan, decision 12).
+//!
+//! # Avoiding known threats with none sighted (task `vfy3`)
+//!
+//! A move paced `AVOID_KNOWN_THREATS` adds the rules row's surcharge per step
+//! inside a known threat's range (decision 12), and a known threat is one the
+//! seat sees when the step starts. A view with no sighting of another seat
+//! has none, so the move routes as `DIRECT` would if it started now, and
+//! `I0005` says so: the editor's explanation and no more.
 //!
 //! # S2's Defend and Attack, and the wall's sphere (task `vfy2`)
 //!
@@ -58,11 +67,12 @@ use pharmakos_proto::gp::api::v1::patch_suggestion::Applicability;
 use pharmakos_proto::gp::v1::beacon_filter::{MandateKind, Side};
 use pharmakos_proto::gp::v1::feature_ref;
 use pharmakos_proto::gp::v1::handler::Resume;
+use pharmakos_proto::gp::v1::move_step::Pace;
 use pharmakos_proto::gp::v1::on_fail::Action;
 use pharmakos_proto::gp::v1::{
     Area, AttackSettings, BeaconFilter, BuildTarget, DefendSettings, FeatureRef, InterfaceStep,
     Location, MandateSettings, Playbook, Step, Voxel, attack_target, beacon_ref, interface_row,
-    location, mandate_settings, protected_asset,
+    location, mandate_settings, protected_asset, step,
 };
 
 use crate::limits::Limits;
@@ -72,7 +82,7 @@ use crate::resolve::Symbols;
 use crate::scope::{FeatureKind, Ownership, Scope};
 use crate::strings;
 use crate::structure::arm_name;
-use crate::walk::{self, Carrier, Holder, List, Slot, Visit};
+use crate::walk::{self, AreaOf, Carrier, Holder, List, Slot, Visit};
 
 /// Run the stage.
 pub(crate) fn run(
@@ -103,6 +113,27 @@ pub(crate) fn run(
     }
 }
 
+impl Semantics<'_> {
+    /// `I0005` (S2's plan, decision 12): a move paced `AVOID_KNOWN_THREATS`
+    /// prices the threats the seat sees when the step starts, so with no
+    /// sighting of another seat in the view there is nothing to route round,
+    /// and a route started now goes as `DIRECT` does. The note reads whether
+    /// the view holds a sighting and nothing more: it ranks none, prices no
+    /// route and guesses at no threat the Push may bring (AGENTS.md section 3
+    /// rule 2).
+    fn pace(&mut self, at: &str, entry: &Step) {
+        let Some(step::Kind::Move(walk_to)) = entry.kind.as_ref() else {
+            return;
+        };
+        if walk_to.pace == i32::from(Pace::AvoidKnownThreats) && self.scope.sightings().is_empty() {
+            self.out.emit(Diag::new(
+                "I0005",
+                pointer::child(&pointer::child(at, "move"), "pace"),
+            ));
+        }
+    }
+}
+
 struct Semantics<'a> {
     scope: &'a Scope,
     limits: &'a Limits,
@@ -114,6 +145,7 @@ impl Visit for Semantics<'_> {
     fn entry(&mut self, at: &str, entry: &Step, list: List, index: usize) {
         self.jump(at, entry, list, index);
         self.waits(at, entry);
+        self.pace(at, entry);
     }
 
     fn interface(&mut self, at: &str, interface: &InterfaceStep) {
@@ -232,7 +264,7 @@ impl Visit for Semantics<'_> {
         }
     }
 
-    fn area(&mut self, at: &str, area: &Area) {
+    fn area(&mut self, at: &str, area: &Area, _of: AreaOf) {
         let (Some(low), Some(high)) = (area.min.as_ref(), area.max.as_ref()) else {
             // A half-written area is `E0101`'s business, not this check's.
             return;

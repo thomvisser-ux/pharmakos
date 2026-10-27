@@ -66,7 +66,8 @@ pub const VERIFIER_STRINGS: &[Text] = &[
     },
     Text {
         code: "E0003",
-        message: "`{field}` is held back to a later version and is not part of the v1 vocabulary.",
+        message: "`{field}` is reserved: the schema holds it back for a later stage or version, \
+                  and this build does not read it.",
         beginner: "This is a word the game keeps for later. It is refused rather than quietly \
                    ignored, so nothing you wrote disappears without you seeing it.",
     },
@@ -123,9 +124,9 @@ pub const VERIFIER_STRINGS: &[Text] = &[
     },
     Text {
         code: "E0012",
-        message: "Defend mandate settings have no effect until S2's Defend mandate lands; they \
-                  are refused rather than ignored.",
-        beginner: "A Defend beacon cannot be given settings in this build yet.",
+        message: "Defend mandate settings had no effect until S2's Defend mandate landed; this \
+                  code is retired and raised by nothing.",
+        beginner: "A Defend beacon takes its settings in this build.",
     },
     Text {
         code: "E0013",
@@ -135,10 +136,10 @@ pub const VERIFIER_STRINGS: &[Text] = &[
     },
     Text {
         code: "E0014",
-        message: "selector `most_threatened` has no effect until S2's threat model, which is what \
-                  it ranks by; it is refused rather than ignored.",
-        beginner: "\"Most threatened\" needs threats to weigh, and this build has none yet. Name \
-                   the beacon, or pick it another way.",
+        message: "selector `most_threatened` had no effect until S2's threat model landed; this \
+                  code is retired and raised by nothing.",
+        beginner: "\"Most threatened\" picks your own beacon with the most enemy firepower seen \
+                   inside its sphere.",
     },
     Text {
         code: "E0015",
@@ -155,10 +156,9 @@ pub const VERIFIER_STRINGS: &[Text] = &[
     },
     Text {
         code: "E0017",
-        message: "predicate `beacon_under_attack` has no effect until S2's combat gives a beacon \
-                  a damage history to ask about; it is refused rather than read as true or false.",
-        beginner: "Asking whether a beacon is under attack comes with combat. Until then the \
-                   question has no answer, so it cannot be asked.",
+        message: "predicate `beacon_under_attack` had no effect until S2's combat gave a beacon \
+                  a damage history to ask about; this code is retired and raised by nothing.",
+        beginner: "Asking whether a beacon is under attack works in this build.",
     },
     Text {
         code: "E0018",
@@ -169,9 +169,9 @@ pub const VERIFIER_STRINGS: &[Text] = &[
     },
     Text {
         code: "E0019",
-        message: "a Build target names `{id}`, one of S2's base kit, which has no effect until \
-                  S2's base kit lands; it is refused rather than ignored.",
-        beginner: "Autocannons, mortars and walls cannot be built in this build yet.",
+        message: "a Build target naming one of S2's base kit had no effect until S2's base kit \
+                  landed; this code is retired and raised by nothing.",
+        beginner: "Autocannons, mortars and walls can be built in this build.",
     },
     // --- E01xx: limits and required blocks -----------------------------------
     Text {
@@ -490,9 +490,11 @@ pub const VERIFIER_STRINGS: &[Text] = &[
     },
     Text {
         code: "W0501",
-        message: "`seam_choice` SAFEST reads as NEAREST until S2's threat model arrives.",
-        beginner: "\"Safest\" needs threats to weigh, and they come later. Until then this beacon \
-                   digs the nearest seam.",
+        message: "`seam_choice` SAFEST read as NEAREST until S2's threat model landed; it digs \
+                  the nearest seam no known threat's weapon reaches, and this code is retired \
+                  and raised by nothing.",
+        beginner: "\"Safest\" digs the nearest seam that no enemy weapon your side sees can \
+                   reach.",
     },
     Text {
         code: "W0502",
@@ -609,6 +611,15 @@ pub const VERIFIER_STRINGS: &[Text] = &[
                   structure; its units and the commander are still repaired.",
         beginner: "A repair threshold of 0 means never. Write a percentage to have damaged \
                    structures repaired.",
+    },
+    Text {
+        code: "I0005",
+        message: "`pace` is AVOID_KNOWN_THREATS, and the seat has no sighting of another seat, \
+                  so there is no known threat to route around: started now, this move goes as \
+                  DIRECT does.",
+        beginner: "Avoiding threats needs threats your side has seen. None are seen yet, so \
+                   this walk goes straight; it steers round an armed enemy your side sees when \
+                   the move starts.",
     },
 ];
 
