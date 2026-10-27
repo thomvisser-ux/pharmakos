@@ -9,10 +9,10 @@
       "beginner": "An Attack beacon cannot be given settings in this build yet."
     }
   ],
-  "report_hash": "aU5ohulQ7Sc=",
+  "report_hash": "zxtVz0bQXOM=",
   "rules_hash": "gCjUE4Tm3i8=",
   "plan_fingerprint": "gY8RwZPTHiQ=",
-  "verifier_version": "0.1.0-s2.2",
+  "verifier_version": "0.1.0-s2.3",
   "size_units": 1,
   "size_budget": 128
 }

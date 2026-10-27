@@ -27,10 +27,10 @@
       "beginner": "Some of what this playbook switches on will have no power and will sit idle."
     }
   ],
-  "report_hash": "FH9n2PjWJhI=",
+  "report_hash": "emlf8/8sJwM=",
   "rules_hash": "gCjUE4Tm3i8=",
   "plan_fingerprint": "5sI0LmZ+rOA=",
-  "verifier_version": "0.1.0-s2.2",
+  "verifier_version": "0.1.0-s2.3",
   "size_units": 1,
   "size_budget": 128
 }

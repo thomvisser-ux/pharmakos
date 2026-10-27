@@ -55,8 +55,8 @@
       "code": "I0005",
       "severity": "INFO",
       "path": "/declarative/route/0/move/pace",
-      "message": "`pace` is AVOID_KNOWN_THREATS, and the seat has no sighting of another seat, so there is no known threat to route around: started now, this move goes as DIRECT does.",
-      "beginner": "Avoiding threats needs threats your side has seen. None are seen yet, so this walk goes straight; it steers round an armed enemy your side sees when the move starts."
+      "message": "`pace` is AVOID_KNOWN_THREATS, and the seat's view holds no enemy beacon in sight; unless the seat sees an armed enemy when the move starts, it goes as DIRECT does.",
+      "beginner": "Avoiding threats needs an enemy your side can see. None is in sight now, so unless one is when the walk starts, it goes straight."
     },
     {
       "code": "I0001",
@@ -66,10 +66,10 @@
       "beginner": "The least time the walking can take; going round anything in the way takes longer."
     }
   ],
-  "report_hash": "6hUSNddnQQw=",
+  "report_hash": "S6ATBznmOd8=",
   "rules_hash": "gCjUE4Tm3i8=",
   "plan_fingerprint": "tPe4E/SBB60=",
-  "verifier_version": "0.1.0-s2.2",
+  "verifier_version": "0.1.0-s2.3",
   "size_units": 6,
   "size_budget": 128
 }
