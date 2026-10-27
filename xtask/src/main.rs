@@ -775,8 +775,9 @@ fn run_cli(args: &[String]) -> Result<bool, String> {
             // It always answers success, so the job that runs it can never go
             // red (decisions-log item 116 (6)(b)).
             "perf-alarms" => {
-                let selected: Vec<&String> =
-                    args.iter().filter(|arg| *arg != "perf-alarms").collect();
+                // Only what follows the command names the alarm; a flag
+                // before it was read by this loop like any other.
+                let selected: Vec<&String> = args.iter().skip(index + 1).collect();
                 let only = match selected.as_slice() {
                     [] => None,
                     [one] => Some(alarm_selection(one)?),
@@ -795,7 +796,9 @@ fn run_cli(args: &[String]) -> Result<bool, String> {
             // Unlike `perf-alarms` it fails, at the gate's numbers doubled and
             // whenever it gives no verdict.
             "g3-budget" => {
-                if let Some(other) = args.iter().find(|arg| *arg != "g3-budget") {
+                // A flag before it (`--require-tools`) was read by this loop;
+                // anything after it is a mistake.
+                if let Some(other) = args.get(index + 1) {
                     return Err(format!(
                         "`g3-budget` takes no arguments, and was given `{other}`"
                     ));
@@ -3017,30 +3020,6 @@ const ALARMS: &[Alarm] = &[
     },
 ];
 
-/// `cargo xtask perf-alarms`: skeleton-plan section 7 decision 23, logged as
-/// decisions-log item 116 (6)(b). Per runner, never compared, no threshold,
-/// and it never fails — the job that runs it is not required, and
-/// `scripts/merge-train.sh` stops on any check that is not pass or skipping,
-/// so a failed measurement is a `::warning::` and the command still answers
-/// success.
-///
-/// * every [`ALARMS`] entry, run as [`alarm_args`] builds it: `--release` is
-///   not optional (a debug figure is a different number, not a slow version of
-///   the real one), `--ignored`, `--nocapture` so the target's own
-///   `::notice::` lines reach the annotations. No `--test-threads=1`: on one
-///   thread libtest prints `test <name> ... ` before each test runs, so the
-///   test's first `::notice::` would not start its line and GitHub would not
-///   read it. A target whose measurements must not share the machine runs them
-///   in one test, as the bench does;
-/// * **allocations per tick**: a notice naming the test that asserts it. The
-///   count is zero by construction — `crates/sim/tests/allocations.rs` fails
-///   otherwise, in every leg's `test` step — so it is published, not
-///   measured again and never compared.
-///
-/// The tick-minus-pathing mean the skeleton plan named is G3′-real's, and
-/// published by the third alarm since S2's `g3h`; the budget comes with the
-/// gate that sets it (`g3r`). xtask itself reads no clock; the measuring tests
-/// do, behind the wall.
 /// What `cargo xtask perf-alarms <name>` runs.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum AlarmSelection {
@@ -3068,6 +3047,35 @@ fn alarm_selection(name: &str) -> Result<AlarmSelection, String> {
         })
 }
 
+/// `cargo xtask perf-alarms`: skeleton-plan section 7 decision 23, logged as
+/// decisions-log item 116 (6)(b). Per runner, never compared, no threshold,
+/// and it never fails — the job that runs it is not required, and
+/// `scripts/merge-train.sh` stops on any check that is not pass or skipping,
+/// so a failed measurement is a `::warning::` and the command still answers
+/// success.
+///
+/// * every [`ALARMS`] entry, run as [`alarm_args`] builds it: `--release` is
+///   not optional (a debug figure is a different number, not a slow version of
+///   the real one), `--ignored`, `--nocapture` so the target's own
+///   `::notice::` lines reach the annotations. No `--test-threads=1`: on one
+///   thread libtest prints `test <name> ... ` before each test runs, so the
+///   test's first `::notice::` would not start its line and GitHub would not
+///   read it. A target whose measurements must not share the machine runs them
+///   in one test, as the bench does;
+/// * **allocations per tick**: a notice naming the test that asserts it. The
+///   count is zero by construction — `crates/sim/tests/allocations.rs` fails
+///   otherwise, in every leg's `test` step — so it is published, not
+///   measured again and never compared.
+///
+/// The tick-minus-pathing mean the skeleton plan named is G3′-real's, and
+/// published by the `g3` alarm since S2's `g3h`; G3′'s budget is not gated
+/// here but by `cargo xtask g3-budget`'s loose alarm ([`g3`]), and certified
+/// on the owner's machine (`g3r`). xtask itself reads no clock; the measuring
+/// tests do, behind the wall.
+///
+/// `only` runs one alarm, or the allocations notice alone. A name it does not
+/// know is refused before anything runs ([`alarm_selection`]): the command
+/// never fails over a measurement, but a typo is not a measurement.
 fn perf_alarms(only: Option<AlarmSelection>) {
     let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
     let root = match workspace_root() {
@@ -4886,6 +4894,32 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
         assert!(STEPS.iter().all(|step| step.name != "g3-budget"));
     }
 
+    /// An alarm's `exact` test exists in its target, `#[ignore]`d: a renamed
+    /// test would leave libtest running nothing and the alarm silently empty.
+    #[test]
+    fn every_exact_alarm_names_an_ignored_test_of_its_target() {
+        let root = workspace_root().expect("the workspace root");
+        for alarm in ALARMS {
+            let Some(name) = alarm.exact else { continue };
+            let dir = alarm.package.trim_start_matches("pharmakos-");
+            let path = root.join(format!("crates/{dir}/tests/{}.rs", alarm.test));
+            let source = fs::read_to_string(&path).expect("the alarm's target");
+            let lines: Vec<&str> = source.lines().map(str::trim).collect();
+            let at = lines
+                .iter()
+                .position(|line| *line == format!("fn {name}() {{"))
+                .unwrap_or_else(|| panic!("{} has no `{name}` test", path.display()));
+            assert!(
+                at >= 2
+                    && lines
+                        .get(at - 1)
+                        .is_some_and(|line| line.starts_with("#[ignore"))
+                    && lines.get(at - 2).is_some_and(|line| *line == "#[test]"),
+                "`{name}` must be `#[test]` and `#[ignore]`d"
+            );
+        }
+    }
+
     #[test]
     fn each_alarm_is_selected_by_its_own_name_and_a_typo_is_refused() {
         let names: Vec<&str> = ALARMS.iter().map(|alarm| alarm.name).collect();
@@ -4906,6 +4940,7 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
         assert!(cli(&["perf-alarms", "g3", "p1"]).is_err());
         assert!(cli(&["perf-alarms", "nope"]).is_err());
         assert!(cli(&["g3-budget", "--quick"]).is_err());
+        assert!(cli(&["g3-budget", "g3-budget"]).is_err());
     }
 
     #[test]

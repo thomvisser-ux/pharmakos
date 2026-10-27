@@ -16,10 +16,22 @@
 //! item 65 quotes ([`CRATER_RATES`]), so the destruction rate's weight is
 //! recorded beside the budget it sets, as item 65 records it.
 //!
+//! **The ceiling.** `power.map_ceiling_kw` caps what the map supplies, and the
+//! supply powers beacons as well as units, so the ceiling the fit gives is the
+//! carried units' draw (`power.kw_per_unit` each) plus the gate's 40 beacons'
+//! (`power.beacon_base_draw_kw` each) and each seat's
+//! `power.revive_margin_kw`. Structures' draw is not in it: the gate's Build
+//! beacons build nothing (item 149 (4)), so no structure's cost is in the
+//! measured tick either.
+//!
 //! **What this does not measure.** The fit is the mean's (G3′-b); the p99
 //! (G3′-a) does not reduce to a unit count, as item 65 found, and is the
 //! segment's own figure. A unit's cost is fitted at 20 craters a second only:
-//! the other rates are measured at the full share, not swept.
+//! the other rates are measured at the full share and are **not budgets**,
+//! only the destruction rate's weight on the tick. A load the fit carries past
+//! the largest one measured is an extrapolation, and the notice says so:
+//! items 63 and 67 found the broadphase super-linear in density, so it is
+//! re-measured at that load before it is used.
 
 use std::path::Path;
 
@@ -29,8 +41,9 @@ use super::{G3_SEGMENT_MS, MEAN_BAR_NS};
 use crate::error::Error;
 use crate::heap::HeapCounter;
 
-/// The shares of the gate's units the fit is taken over, in quarters.
-pub const UNIT_SHARES: [u8; 3] = [0, 2, 4];
+/// The shares of the gate's units the fit is taken over, in quarters: five
+/// points, so the line is tested by three degrees of freedom.
+pub const UNIT_SHARES: [u8; 5] = [0, 1, 2, 3, 4];
 
 /// The crater rates the full share is also played at, a second (item 65's
 /// 0, 10 and 40 beside the budget's 20).
@@ -54,6 +67,13 @@ pub struct Point {
     pub p99_ns: u128,
     /// The Pathing phase's mean, in nanoseconds.
     pub pathing_mean_ns: u128,
+    /// The point's bench variant's `rules_hash` (the surplus is raised to
+    /// the point's own load).
+    pub bench_rules_hash: u64,
+    /// The point's layout's fingerprint.
+    pub layout_digest: u64,
+    /// Ticks played.
+    pub ticks: u64,
 }
 
 /// The fit and the budget it gives.
@@ -78,9 +98,26 @@ pub struct Sweep {
     /// The mean the reserve leaves, in nanoseconds.
     pub budget_ns: i128,
     /// The live units the fit says the budget carries.
-    pub units_carried: i128,
-    /// Those units' draw: the per-map power budget the fit gives.
-    pub ceiling_kw: i128,
+    pub units_carried: u64,
+    /// The largest mean of live units a point measured, in thousandths.
+    pub largest_measured_milli: u64,
+    /// `power.beacon_base_draw_kw`, as committed.
+    pub beacon_draw_kw: u32,
+    /// `power.revive_margin_kw`, as committed.
+    pub revive_margin_kw: u32,
+    /// The ceiling the fit gives: the carried units', the gate's beacons' and
+    /// the seats' margins' draw.
+    pub ceiling_kw: u64,
+    /// The committed table's `rules_hash`.
+    pub shipped_rules_hash: u64,
+}
+
+impl Sweep {
+    /// Whether the carried load lies past the largest one measured.
+    #[must_use]
+    pub fn extrapolated(&self) -> bool {
+        u128::from(self.units_carried) * 1_000 > u128::from(self.largest_measured_milli)
+    }
 }
 
 /// One point's segment.
@@ -115,6 +152,9 @@ fn play(
         mean_ns: report.tick.mean_ns,
         p99_ns: report.tick.p99_ns,
         pathing_mean_ns,
+        bench_rules_hash: report.provenance.bench_rules_hash,
+        layout_digest: report.provenance.layout_digest,
+        ticks: report.ticks,
     })
 }
 
@@ -224,10 +264,12 @@ pub fn measure(root: &Path, seed: u64, heap: Option<&dyn HeapCounter>) -> Result
         .power
         .as_ref()
         .ok_or_else(|| Error::Rules("no `power` block".to_owned()))?;
-    let (reserve_percent, kw_per_unit, shipped_ceiling_kw) = (
+    let (reserve_percent, kw_per_unit, shipped_ceiling_kw, beacon_draw_kw, revive_margin_kw) = (
         power.reserve_percent,
         power.kw_per_unit,
         power.map_ceiling_kw,
+        power.beacon_base_draw_kw,
+        power.revive_margin_kw,
     );
     if reserve_percent >= 100 {
         return Err(Error::Rules(format!(
@@ -247,14 +289,41 @@ pub fn measure(root: &Path, seed: u64, heap: Option<&dyn HeapCounter>) -> Result
         ))
         .and_then(|v| v.checked_div(100))
         .ok_or_else(overflow)?;
+    if budget_ns <= intercept_ns {
+        return Err(Error::Drift(format!(
+            "the reserve leaves a mean of {budget_ns} ns, at or below the fit's fixed and crater \
+             cost of {intercept_ns} ns: no unit fits, so the per-tick lever is the fallback's \
+             (S2's plan, section 5)"
+        )));
+    }
     // (budget - intercept) ns over unit_ps ps a unit: scale ns to ps first.
     let units_carried = budget_ns
         .checked_sub(intercept_ns)
         .and_then(|v| v.checked_mul(1_000))
         .and_then(|v| v.checked_div(unit_ps))
+        .and_then(|v| u64::try_from(v).ok())
+        .ok_or_else(overflow)?;
+    let largest_measured_milli = units
+        .iter()
+        .map(|point| point.live_units_milli)
+        .max()
+        .ok_or_else(|| Error::Empty("the sweep played no point".to_owned()))?;
+    let seats = u64::from(super::layout::GATE_SEATS);
+    let beacons = u64::from(super::layout::LAID_OUT_BEACONS)
+        .checked_add(seats)
         .ok_or_else(overflow)?;
     let ceiling_kw = units_carried
-        .checked_mul(i128::from(kw_per_unit))
+        .checked_mul(u64::from(kw_per_unit))
+        .and_then(|units| {
+            beacons
+                .checked_mul(u64::from(beacon_draw_kw))
+                .and_then(|draw| units.checked_add(draw))
+        })
+        .and_then(|draw| {
+            seats
+                .checked_mul(u64::from(revive_margin_kw))
+                .and_then(|margin| draw.checked_add(margin))
+        })
         .ok_or_else(overflow)?;
     Ok(Sweep {
         units,
@@ -267,13 +336,22 @@ pub fn measure(root: &Path, seed: u64, heap: Option<&dyn HeapCounter>) -> Result
         shipped_ceiling_kw,
         budget_ns,
         units_carried,
+        largest_measured_milli,
+        beacon_draw_kw,
+        revive_margin_kw,
         ceiling_kw,
+        shipped_rules_hash: shipped.rules_hash(),
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_unit_shares_are_whole_quarters() {
+        assert!(UNIT_SHARES.iter().all(|q| Quarters::new(*q).is_some()));
+    }
 
     #[test]
     fn the_fit_recovers_a_line_exactly() {

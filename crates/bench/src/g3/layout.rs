@@ -176,7 +176,7 @@ fn nearest_seams(world: &World, core: [i32; 2]) -> Result<Vec<[i32; 2]>, Error> 
 /// A share of the gate's units, in quarters: what the power sweep lays out
 /// to measure a unit's cost (S2's plan, section 5 item 3; item 65's
 /// arithmetic). Every beacon is laid out at every share; only its units scale,
-/// each group's count times the quarters over four, rounded down.
+/// each group's count times the quarters over four, to the nearest unit.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct Quarters(u8);
 
@@ -200,10 +200,12 @@ impl Quarters {
         self.0
     }
 
-    /// `count` at this share, rounded down.
+    /// `count` at this share, to the nearest unit, a half rounded up, so each
+    /// group keeps its share of the mix as closely as whole units allow.
     fn of(self, count: u32) -> Result<u32, Error> {
         count
             .checked_mul(u32::from(self.0))
+            .and_then(|scaled| scaled.checked_add(2))
             .map(|scaled| scaled.div_euclid(4))
             .ok_or(Error::Overflow("a scaled unit count"))
     }

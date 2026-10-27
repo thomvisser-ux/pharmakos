@@ -73,6 +73,12 @@ pub(crate) enum BudgetError {
     BadValue { field: &'static str, value: String },
     /// A report over no ticks, which has no figures.
     NoTicks,
+    /// A report over fewer ticks than its segment holds: a short run.
+    ShortSegment { ticks: u128, segment_ticks: u128 },
+    /// A report whose figures cannot all be true at once.
+    Inconsistent(&'static str),
+    /// `CARGO` holds a value that is not Unicode.
+    CargoNotUnicode,
 }
 
 impl fmt::Display for BudgetError {
@@ -96,6 +102,15 @@ impl fmt::Display for BudgetError {
                 write!(f, "report field `{field}` is `{value}`, not a whole number")
             }
             Self::NoTicks => write!(f, "the report covers no ticks"),
+            Self::ShortSegment {
+                ticks,
+                segment_ticks,
+            } => write!(
+                f,
+                "the report covers {ticks} ticks of a segment of {segment_ticks}: a short run"
+            ),
+            Self::Inconsistent(why) => write!(f, "the report's figures disagree: {why}"),
+            Self::CargoNotUnicode => write!(f, "`CARGO` is set to a value that is not Unicode"),
         }
     }
 }
@@ -104,6 +119,7 @@ impl fmt::Display for BudgetError {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct Report {
     pub(crate) ticks: u128,
+    pub(crate) segment_ticks: u128,
     pub(crate) p50_ns: u128,
     pub(crate) p99_ns: u128,
     pub(crate) mean_ns: u128,
@@ -111,7 +127,14 @@ pub(crate) struct Report {
 }
 
 /// The fields a v1 report carries, in the order the bench prints them.
-const FIELDS: [&str; 5] = ["ticks", "p50_ns", "p99_ns", "mean_ns", "max_ns"];
+const FIELDS: [&str; 6] = [
+    "ticks",
+    "segment_ticks",
+    "p50_ns",
+    "p99_ns",
+    "mean_ns",
+    "max_ns",
+];
 
 /// Read the one report line out of the measurement's output.
 pub(crate) fn parse(output: &str) -> Result<Report, BudgetError> {
@@ -128,7 +151,7 @@ pub(crate) fn parse(output: &str) -> Result<Report, BudgetError> {
         [one] => *one,
         many => return Err(BudgetError::SeveralReports(many.len())),
     };
-    let mut values: [(&'static str, Option<u128>); 5] = FIELDS.map(|field| (field, None));
+    let mut values: [(&'static str, Option<u128>); 6] = FIELDS.map(|field| (field, None));
     for token in rest.split_whitespace() {
         let (key, value) = token
             .split_once('=')
@@ -145,10 +168,11 @@ pub(crate) fn parse(output: &str) -> Result<Report, BudgetError> {
             value: value.to_owned(),
         })?);
     }
-    let [ticks, p50_ns, p99_ns, mean_ns, max_ns] =
+    let [ticks, segment_ticks, p50_ns, p99_ns, mean_ns, max_ns] =
         values.map(|(field, value)| value.ok_or(BudgetError::MissingField(field)));
     let report = Report {
         ticks: ticks?,
+        segment_ticks: segment_ticks?,
         p50_ns: p50_ns?,
         p99_ns: p99_ns?,
         mean_ns: mean_ns?,
@@ -156,6 +180,21 @@ pub(crate) fn parse(output: &str) -> Result<Report, BudgetError> {
     };
     if report.ticks == 0 {
         return Err(BudgetError::NoTicks);
+    }
+    if report.ticks < report.segment_ticks {
+        return Err(BudgetError::ShortSegment {
+            ticks: report.ticks,
+            segment_ticks: report.segment_ticks,
+        });
+    }
+    if report.p50_ns > report.p99_ns {
+        return Err(BudgetError::Inconsistent("the p50 is above the p99"));
+    }
+    if report.p99_ns > report.max_ns {
+        return Err(BudgetError::Inconsistent("the p99 is above the max"));
+    }
+    if report.mean_ns > report.max_ns {
+        return Err(BudgetError::Inconsistent("the mean is above the max"));
     }
     Ok(report)
 }
@@ -237,7 +276,14 @@ pub(crate) fn args(locked: bool) -> Vec<String> {
 /// Run the measurement, echoing its output as it comes, and answer whether
 /// the alarm passed.
 pub(crate) fn run(root: &Path, require_tools: bool, locked: bool) -> Result<bool, BudgetError> {
-    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
+    // cargo sets `CARGO` for the commands it runs, `cargo xtask` among them;
+    // unset (xtask run some other way), the one on PATH is the rule.
+    let cargo = match std::env::var_os("CARGO") {
+        None => "cargo".to_owned(),
+        Some(value) => value
+            .into_string()
+            .map_err(|_| BudgetError::CargoNotUnicode)?,
+    };
     let args = args(locked);
     let command = crate::render_command(&cargo, &args);
     println!("   $ {command}");
@@ -251,10 +297,21 @@ pub(crate) fn run(root: &Path, require_tools: bool, locked: bool) -> Result<bool
     let mut output = String::new();
     if let Some(stdout) = child.stdout.take() {
         for line in BufReader::new(stdout).lines() {
-            let line = line.map_err(|error| BudgetError::Read(error.to_string()))?;
-            println!("{line}");
-            output.push_str(&line);
-            output.push('\n');
+            match line {
+                Ok(line) => {
+                    println!("{line}");
+                    output.push_str(&line);
+                    output.push('\n');
+                }
+                Err(error) => {
+                    // Never leave the measurement running unattended. The
+                    // read error is the one reported; the kill's and the
+                    // wait's would only repeat that the child is gone.
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(BudgetError::Read(error.to_string()));
+                }
+            }
         }
     }
     let status = child
@@ -278,7 +335,8 @@ pub(crate) fn run(root: &Path, require_tools: bool, locked: bool) -> Result<bool
 mod tests {
     use super::*;
 
-    const GOOD: &str = "g3-budget-report v1 ticks=9600 p50_ns=3000000 p99_ns=9000000 mean_ns=4000000 max_ns=20000000";
+    const GOOD: &str = "g3-budget-report v1 ticks=9600 segment_ticks=9600 p50_ns=3000000 \
+                        p99_ns=9000000 mean_ns=4000000 max_ns=20000000";
 
     #[test]
     fn a_report_is_read_among_other_output() {
@@ -287,6 +345,7 @@ mod tests {
             parse(&output),
             Ok(Report {
                 ticks: 9_600,
+                segment_ticks: 9_600,
                 p50_ns: 3_000_000,
                 p99_ns: 9_000_000,
                 mean_ns: 4_000_000,
@@ -327,6 +386,25 @@ mod tests {
             })
         );
         assert_eq!(swap("ticks=9600", "ticks=0"), Err(BudgetError::NoTicks));
+        assert_eq!(
+            swap("ticks=9600", "ticks=9599"),
+            Err(BudgetError::ShortSegment {
+                ticks: 9_599,
+                segment_ticks: 9_600
+            })
+        );
+        assert!(matches!(
+            swap("p50_ns=3000000", "p50_ns=9000001"),
+            Err(BudgetError::Inconsistent(_))
+        ));
+        assert!(matches!(
+            swap("p99_ns=9000000", "p99_ns=20000001"),
+            Err(BudgetError::Inconsistent(_))
+        ));
+        assert!(matches!(
+            swap("mean_ns=4000000", "mean_ns=20000001"),
+            Err(BudgetError::Inconsistent(_))
+        ));
         // A longer word that merely starts with the prefix is not a report.
         assert_eq!(
             parse("g3-budget-report v10 ticks=1"),
@@ -338,6 +416,7 @@ mod tests {
     fn the_alarm_fails_only_past_the_doubled_bars() {
         let at = |p99_ns: u128, mean_ns: u128| Report {
             ticks: 1,
+            segment_ticks: 1,
             p50_ns: 0,
             p99_ns,
             mean_ns,
@@ -385,9 +464,20 @@ mod tests {
         );
         let test = std::fs::read_to_string(root.join("crates/bench/tests/g3_real.rs"))
             .unwrap_or_else(|error| panic!("crates/bench/tests/g3_real.rs: {error}"));
+        // `#[test]`, then the `#[ignore = ...]` line, then the function: an
+        // un-ignored segment would run, in debug, in every shard's test step.
+        let lines: Vec<&str> = test.lines().map(str::trim).collect();
+        let at = lines
+            .iter()
+            .position(|line| *line == format!("fn {BUDGET_TEST}() {{"))
+            .unwrap_or_else(|| panic!("crates/bench/tests/g3_real.rs has no `{BUDGET_TEST}` test"));
         assert!(
-            test.contains(&format!("fn {BUDGET_TEST}()")),
-            "crates/bench/tests/g3_real.rs has no `{BUDGET_TEST}` test"
+            at >= 2
+                && lines
+                    .get(at - 1)
+                    .is_some_and(|line| line.starts_with("#[ignore"))
+                && lines.get(at - 2).is_some_and(|line| *line == "#[test]"),
+            "`{BUDGET_TEST}` must be `#[test]` and `#[ignore]`d"
         );
     }
 }

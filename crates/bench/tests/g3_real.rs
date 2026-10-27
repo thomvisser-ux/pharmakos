@@ -242,7 +242,9 @@ fn g3_power_sweep() {
     let root = workspace_root();
     let os = std::env::consts::OS;
     println!();
-    match sweep::measure(&root, G3_SEED, Some(&Counter)).and_then(|s| g3::sweep_notices(&s, os)) {
+    match sweep::measure(&root, G3_SEED, Some(&Counter))
+        .and_then(|s| g3::sweep_notices(&s, G3_SEED, os))
+    {
         Ok(lines) => lines.iter().for_each(|line| println!("{line}")),
         Err(error) => panic!("the power sweep was not measured on {os}: {error}"),
     }

@@ -153,6 +153,8 @@ pub struct SegmentReport {
     pub provenance: Provenance,
     /// Ticks played.
     pub ticks: u64,
+    /// Ticks the segment holds, from its length: what a full run plays.
+    pub segment_ticks: u64,
     /// The whole tick: begin, phases and finish.
     pub tick: Summary,
     /// Each phase but the hash, in `PHASE_ORDER`.
@@ -665,6 +667,11 @@ pub fn measure(
             craters: stream.counts(),
             heap_at_start,
             ticks: played,
+            segment_ticks: plan
+                .segment_ms
+                .checked_div(MS_PER_TICK)
+                .and_then(|ticks| u64::try_from(ticks).ok())
+                .ok_or(Error::Overflow("the segment's ticks"))?,
             regions_fallen,
             footing,
         },
@@ -679,6 +686,7 @@ struct Tally {
     craters: StreamCounts,
     heap_at_start: Option<u64>,
     ticks: u64,
+    segment_ticks: u64,
     regions_fallen: u64,
     footing: FootingQuery,
 }
@@ -691,6 +699,7 @@ fn finish(record: Record, tally: Tally) -> Result<SegmentReport, Error> {
         craters,
         heap_at_start,
         ticks,
+        segment_ticks,
         regions_fallen,
         footing,
     } = tally;
@@ -753,6 +762,7 @@ fn finish(record: Record, tally: Tally) -> Result<SegmentReport, Error> {
     Ok(SegmentReport {
         provenance,
         ticks,
+        segment_ticks,
         tick_minus_pathing_mean_ns,
         tick,
         phases,

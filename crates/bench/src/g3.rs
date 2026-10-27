@@ -439,13 +439,16 @@ pub fn footing_query_notice(
     ))
 }
 
-/// The line `cargo xtask g3-budget` reads: the tick's figures, whole
+/// The line `cargo xtask g3-budget` reads: the ticks played and the ticks the
+/// segment holds (so a short run is refused), and the tick's figures in whole
 /// nanoseconds, `key=value`, after [`BUDGET_REPORT_PREFIX`].
 #[must_use]
 pub fn budget_report_line(report: &SegmentReport) -> String {
     format!(
-        "{BUDGET_REPORT_PREFIX} ticks={} p50_ns={} p99_ns={} mean_ns={} max_ns={}",
+        "{BUDGET_REPORT_PREFIX} ticks={} segment_ticks={} p50_ns={} p99_ns={} mean_ns={} \
+         max_ns={}",
         report.ticks,
+        report.segment_ticks,
         report.tick.p50_ns,
         report.tick.p99_ns,
         report.tick.mean_ns,
@@ -465,13 +468,16 @@ fn signed_ms(ns: i128) -> String {
 /// # Errors
 ///
 /// [`Error::Overflow`] for a unit's cost past a `u64` or below zero.
-pub fn sweep_notices(sweep: &Sweep, os: &str) -> Result<Vec<String>, Error> {
+pub fn sweep_notices(sweep: &Sweep, seed: u64, os: &str) -> Result<Vec<String>, Error> {
     let point = |p: &sweep::Point| {
         format!(
-            "{}/4 of the units at {} craters a second: {} live units, tick mean {}, p99 {}, \
-             Pathing mean {}",
+            "{}/4 of the units at {} craters a second (bench rules_hash {}, layout {}, {} \
+             ticks): {} live units, tick mean {}, p99 {}, Pathing mean {}",
             p.share.get(),
             p.craters_per_second,
+            hex(p.bench_rules_hash),
+            hex(p.layout_digest),
+            p.ticks,
             thousandths(p.live_units_milli),
             ms(p.mean_ns),
             ms(p.p99_ns),
@@ -482,10 +488,24 @@ pub fn sweep_notices(sweep: &Sweep, os: &str) -> Result<Vec<String>, Error> {
     let craters: Vec<String> = sweep.craters.iter().map(point).collect();
     // Picoseconds a unit, printed as nanoseconds with three places.
     let unit_ps = u64::try_from(sweep.unit_ps).map_err(|_| Error::Overflow("a unit's cost"))?;
+    let reach = if sweep.extrapolated() {
+        format!(
+            "EXTRAPOLATED past the largest measured load ({} live units): re-measure at that \
+             load before it is used (items 63 and 67)",
+            thousandths(sweep.largest_measured_milli)
+        )
+    } else {
+        format!(
+            "inside the measured loads (up to {} live units)",
+            thousandths(sweep.largest_measured_milli)
+        )
+    };
     Ok(vec![
         format!(
-            "::notice title=G3' power sweep::on {os}, each an 8-minute segment of the gate's \
-             layout: {}; and at the full share, {}",
+            "::notice title=G3' power sweep::on {os}, seed 0x{seed:016x}, the committed table's \
+             rules_hash {}, each point an 8-minute segment of the gate's layout: {}; and at the \
+             full share, the destruction rate's weight on the tick (not budgets): {}",
+            hex(sweep.shipped_rules_hash),
             units.join("; "),
             craters.join("; "),
         ),
@@ -493,8 +513,11 @@ pub fn sweep_notices(sweep: &Sweep, os: &str) -> Result<Vec<String>, Error> {
             "::notice title=G3' power budget::on {os}, item 65's arithmetic measured: the tick's \
              mean fitted against the live units at 20 craters a second is {} fixed and crater \
              cost plus {} ns a live unit (worst point {} off the line); the {} mean bar less \
-             power.reserve_percent {} leaves {}, which carries {} live units, at \
-             power.kw_per_unit {} a map ceiling of {} kW (committed power.map_ceiling_kw {})",
+             power.reserve_percent {} leaves {}, which carries {} live units, {reach}; at \
+             power.kw_per_unit {}, with the gate's 40 beacons at power.beacon_base_draw_kw {} \
+             and 3 seats' power.revive_margin_kw {}, a map ceiling of {} kW (committed \
+             power.map_ceiling_kw {}; structures' draw is not in it, as no structure is in the \
+             measured load)",
             signed_ms(sweep.intercept_ns),
             thousandths(unit_ps),
             signed_ms(sweep.worst_residual_ns),
@@ -503,6 +526,8 @@ pub fn sweep_notices(sweep: &Sweep, os: &str) -> Result<Vec<String>, Error> {
             signed_ms(sweep.budget_ns),
             sweep.units_carried,
             sweep.kw_per_unit,
+            sweep.beacon_draw_kw,
+            sweep.revive_margin_kw,
             sweep.ceiling_kw,
             sweep.shipped_ceiling_kw,
         ),

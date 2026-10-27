@@ -1320,8 +1320,9 @@ jobs:
     # path like the building jobs: a prose-only pull request skips its steps and prints the
     # notice.
     runs-on: ${{ matrix.os }}
-    # Above the sum of the four measuring steps' own timeouts, so a step that times out
-    # under continue-on-error never brings the job to its timeout, which would be red.
+    # Above the sum of the timed steps' own timeouts (the scope step's 10 and the four
+    # measuring steps' 75), so a step that times out under continue-on-error never brings
+    # the job to its timeout, which would be red.
     timeout-minutes: 90
     strategy:
       fail-fast: false
@@ -1341,8 +1342,10 @@ jobs:
 
       - name: Decide whether anything but prose changed
         # The docs-only fast path (see this file's header), as in the `ci-shard-<os>` jobs.
+        # Timed, so a hung xtask build cannot bring the job to its own timeout.
         id: scope
         continue-on-error: true
+        timeout-minutes: 10
         shell: bash
         env:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -1428,8 +1431,10 @@ jobs:
 
       - name: Decide whether anything but prose changed
         # The docs-only fast path (see this file's header), as in the `ci-shard-<os>` jobs.
+        # Timed, so a hung xtask build cannot bring the job to its own timeout.
         id: scope
         continue-on-error: true
+        timeout-minutes: 10
         shell: bash
         env:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
