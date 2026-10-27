@@ -1026,6 +1026,10 @@ fn the_worked_example_qualifies_and_is_six_units() {
             ),
             ("I0003", "/declarative/route/2/move/pace"),
             ("I0003", "/declarative/handlers/0/body/0/move/pace"),
+            // The semantics stage (S2's plan, decision 12, task `vfy3`): the
+            // first move avoids known threats, and the plain fixture holds no
+            // sighting of another seat, so it would go as DIRECT does now.
+            ("I0005", "/declarative/route/0/move/pace"),
             // The estimate stage: the one leg whose two ends the view names,
             // from the deploy at (96, 11) to the core `b_01` at (80, 11),
             // sixteen voxels less the four of interface range the deploy

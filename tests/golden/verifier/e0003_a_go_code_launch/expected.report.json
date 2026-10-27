@@ -5,7 +5,7 @@
       "code": "E0003",
       "severity": "ERROR",
       "path": "/declarative/route/0/interface/rows/0/set_mandate_settings/attack/launch/broadcast_received",
-      "message": "`broadcast_received` is held back to a later version and is not part of the v1 vocabulary.",
+      "message": "`broadcast_received` is reserved: the schema holds it back for a later stage or version, and this build does not read it.",
       "beginner": "This is a word the game keeps for later. It is refused rather than quietly ignored, so nothing you wrote disappears without you seeing it.",
       "suggestions": [
         {

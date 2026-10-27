@@ -1,0 +1,20 @@
+{
+  "qualifies": true,
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "I0005",
+      "severity": "INFO",
+      "path": "/declarative/route/0/move/pace",
+      "message": "`pace` is AVOID_KNOWN_THREATS, and the seat has no sighting of another seat, so there is no known threat to route around: started now, this move goes as DIRECT does.",
+      "beginner": "Avoiding threats needs threats your side has seen. None are seen yet, so this walk goes straight; it steers round an armed enemy your side sees when the move starts."
+    }
+  ],
+  "report_hash": "7wlJIhmP6+M=",
+  "rules_hash": "gCjUE4Tm3i8=",
+  "plan_fingerprint": "pUsyKTckUJQ=",
+  "verifier_version": "0.1.0-s2.2",
+  "size_units": 1,
+  "size_budget": 128
+}
+
