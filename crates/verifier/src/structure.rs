@@ -53,7 +53,8 @@
 //! An omitted `MoveStep.pace`, `MineSettings.seam_choice`,
 //! `MineSettings.pillar_spacing` and `BuildSettings.terraform` read as named
 //! defaults, each with an `I0003` note; see [`walk_action`]. From S2 so does
-//! `MandateSettings.roe`, as `RETURN_FIRE` (S2's plan, decision 4).
+//! `MandateSettings.roe`, by writ (S2's plan, decision 4; decisions-log item
+//! 148 (2)).
 //!
 //! # A wall's box (S2's wire, task `con4`)
 //!

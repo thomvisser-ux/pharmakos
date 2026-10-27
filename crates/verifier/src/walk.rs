@@ -393,10 +393,9 @@ fn walk_mandate(
 
 /// S2's Defend settings (`con4`): the beacons on the protect list.
 ///
-/// The sim refuses the whole arm until S2's `dfnd` lane (`E0012`), so a stage
-/// that judges what the sim refuses ([`crate::refusals`]) skips what stands
-/// under it; the leaves are walked so that every other stage's checks reach
-/// them now, as they reach the same leaves anywhere else.
+/// The sim refused the whole arm until S2's `dfnd` lane built it (`E0012`,
+/// raised by nothing now); the leaves are walked so that every stage's checks
+/// reach them, as they reach the same leaves anywhere else.
 fn walk_defend(defend: &DefendSettings, at: &str, visitor: &mut dyn Visit) {
     let protect_at = pointer::child(at, "protect");
     for (index, entry) in defend.protect.iter().enumerate() {
