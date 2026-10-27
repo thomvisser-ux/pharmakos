@@ -2165,17 +2165,11 @@ impl World {
     /// because the sighting half is done wherever the scout is standing
     /// ([`crate::survey`]).
     ///
-    /// Named for what it does rather than for a visit it does not track.
-    /// PLACEHOLDER: no probe area is ever recorded as visited — owner, at S3, with the reach window.
-    /// **No probe area is ever recorded as visited**, so a Survey
-    /// mandate carrying two or more areas only ever works the one its scout
-    /// reaches first — inside that area this answers `None` for ever and
-    /// [`crate::programs`] falls through to the stalest sighting. Working
-    /// through the list needs a visited column on the target table, which is
-    /// hashed state (state hash, snapshot, goldens) and a rule the spec does
-    /// not write down: whether an area is re-scanned after the whole list is
-    /// walked, and on what clock. Owner, at S3, with the reach window that
-    /// decides when a scan goes stale.
+    /// Named for what it does rather than for a visit it does not track. Since
+    /// S2's `surv` no program calls it: a Survey scout works through its
+    /// probe areas cell by cell over the per-seat explored table
+    /// ([`crate::survey`]), which records what was scanned. It stays as the
+    /// question it answers, for its tests.
     ///
     /// "Inside" is the area's own box on the scout's column
     /// ([`ColumnBox::contains`]), whatever its height; the nearest area is the
@@ -2228,6 +2222,13 @@ impl World {
         tick: u32,
     ) {
         self.sightings.see(seat, asset.raw(), owner, kind, at, tick);
+    }
+
+    /// Forget sighting row `slot`. Crate-internal: [`crate::survey`]'s
+    /// re-check is the only caller (S2's `surv`). The sighting table is hashed
+    /// and snapshotted whole, so a forget is hashed state like a sighting.
+    pub(crate) fn forget_sighting(&mut self, slot: usize) {
+        self.sightings.forget(slot);
     }
 
     /// Send a unit somewhere. The programs' one way to move anything.

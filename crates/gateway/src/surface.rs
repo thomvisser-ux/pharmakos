@@ -2211,6 +2211,12 @@ impl Surface {
             // `beacon_recycled` does; its leaving the world is visible on its
             // own terms.
             | EventKind::StructureRecycled
+            // S2's `surv`: what a seat's Survey found, finished and refreshed
+            // is its knowledge, and a seat's knowledge is its own (spec
+            // section 6).
+            | EventKind::AreaSurveyed
+            | EventKind::EnemyBeaconFound
+            | EventKind::SightingRefreshed
             | EventKind::Settled
             | EventKind::KillCredited
             // S2's `fire`: return fire and a retreat are a seat's rules of
@@ -4120,10 +4126,14 @@ mod tests {
         //
         // Plus S2's `fire`'s two: `returned_fire` and `retreat_announced`, a
         // seat's own rules of engagement and retreat threshold acting; and S2's
-        // `site`'s one, `structure_recycled`, which carries a refund; and S2's
-        // `atk`'s three, `attack_launched`, `attack_ended` and `charge_lost`,
-        // an Attack beacon's own orders acting.
-        assert_eq!(private, 13 + 9 + 2 + 1 + 3);
+        // `site`'s one, `structure_recycled`, which carries a refund.
+        //
+        // Plus S2's `surv`'s three, `area_surveyed`, `enemy_beacon_found` and
+        // `sighting_refreshed`: a seat's Survey reporting its own knowledge.
+        //
+        // Plus S2's `atk`'s three, `attack_launched`, `attack_ended` and
+        // `charge_lost`: an Attack beacon's own orders acting.
+        assert_eq!(private, 13 + 9 + 2 + 1 + 3 + 3);
         assert!(matches!(
             Surface::audience_of(&sim_event(EventKind::BeaconPlaced, Some(1))),
             Ok(Audience::World { .. })

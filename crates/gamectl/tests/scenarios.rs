@@ -59,6 +59,7 @@ const SCENARIOS: &[&str] = &[
     BASE_KIT_AT_THE_CORE,
     TERRAFORM_LEVELS_A_FOOTPRINT,
     GUARDS_ESCORT_THE_COMMANDER,
+    SURVEY_FINDS_THE_ENEMY,
     HUNT_THE_COMMANDER,
     RAID_ON_A_MORTAR,
     MORTAR_BREAKS_WALL,
@@ -116,6 +117,9 @@ const BASE_KIT_AT_THE_CORE: &str = "scenarios/s2/base-kit-at-the-core.scenario.j
 /// picket fielded and walking the ring.
 const GUARDS_ESCORT_THE_COMMANDER: &str = "scenarios/s2/guards-escort-the-commander.scenario.jsonc";
 
+/// S2's `surv`: a Survey beacon's scout scans its probe area and finds the
+/// enemy outpost beside it.
+const SURVEY_FINDS_THE_ENEMY: &str = "scenarios/s2/survey-finds-the-enemy.scenario.jsonc";
 /// S2's `atk`: an Attack beacon hunts the enemy commander that walks into
 /// its sight, and kills it.
 const HUNT_THE_COMMANDER: &str = "scenarios/s2/hunt-the-commander.scenario.jsonc";
@@ -333,6 +337,7 @@ fn the_committed_list_is_the_whole_set() {
                 "hunt-the-commander",
                 "mortar-breaks-wall",
                 "raid-on-a-mortar",
+                "survey-finds-the-enemy",
                 "terraform-levels-a-footprint",
             ][..],
         ),

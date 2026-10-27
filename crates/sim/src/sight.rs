@@ -327,6 +327,27 @@ impl World {
             == Some(true)
     }
 
+    /// The unit in `row` as a **Survey scout**'s sensor, with the Survey
+    /// beacon it is homed to (S2's `surv`): a living scout whose sensor is on
+    /// ([`World::sensor_at`]'s rule for a unit) and whose home is a living
+    /// beacon carrying the Survey writ. A Defend beacon's pickets are scouts
+    /// too, and are not this: they warn, they do not survey.
+    ///
+    /// The Survey half of this module: [`crate::survey`] marks the explored
+    /// cells and files its reports through this sensor, and only through it.
+    pub(crate) fn survey_scout_sensor(&self, row: usize) -> Option<(Sensor, BeaconId)> {
+        let sensor = self.unit_sensor(row)?;
+        if sensor.kind != SensorKind::Unit(UnitKind::Scout) {
+            return None;
+        }
+        let home = *self.units().homes().get(row)?;
+        let beacon = self.beacons().row_of(home).ok()?.index();
+        let survey = self.beacons().mandates().get(beacon).copied()?
+            == crate::seams::MandateKind::Survey.id();
+        let alive = self.beacons().hit_points().get(beacon)?.is_alive();
+        (survey && alive).then_some((sensor, home))
+    }
+
     /// The live view's output of the sensor interface: every sensor, owned
     /// ([`Sight`]). Allocates; a host's question, never asked inside a tick.
     #[must_use]

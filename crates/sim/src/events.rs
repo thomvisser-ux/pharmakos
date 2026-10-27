@@ -294,6 +294,19 @@ pub enum EventKind {
     /// (S2's `site`; decisions-log item 144 (5)). `at` is the voxel filled,
     /// `seat` the refilling seat.
     GroundRefilled,
+    /// Every scannable cell of a Survey beacon's probe areas is explored for
+    /// its seat (S2's `surv`): the scan is done, and its scouts turn to the
+    /// refresh pass. `subject` is the beacon, `seat` its owner.
+    AreaSurveyed,
+    /// A Survey scout saw an enemy beacon its seat had no sighting of (S2's
+    /// `surv`). `subject` is the enemy beacon, `seat` the seeing seat, `at`
+    /// where it stands.
+    EnemyBeaconFound,
+    /// A Survey scout renewed a sighting older than Survey's refresh
+    /// interval (S2's `surv`; item 13). `subject` is the
+    /// asset seen, `seat` the seeing seat, `at` where it is now, `value` the
+    /// age in game milliseconds of the memory it replaced.
+    SightingRefreshed,
     /// An Attack beacon's force launched (S2's `atk`). `seat` is its owner,
     /// `subject` the beacon, `at` where the force is going, and `value` how
     /// many raiders launched.
@@ -321,7 +334,7 @@ pub enum EventKind {
 
 impl EventKind {
     /// Every kind, in ascending [`EventKind::id`] order.
-    pub const ALL: [EventKind; 55] = [
+    pub const ALL: [EventKind; 58] = [
         EventKind::MatchStarted,
         EventKind::LullOpened,
         EventKind::PushStarted,
@@ -372,6 +385,9 @@ impl EventKind {
         EventKind::AssetRepaired,
         EventKind::StructureRecycled,
         EventKind::GroundRefilled,
+        EventKind::AreaSurveyed,
+        EventKind::EnemyBeaconFound,
+        EventKind::SightingRefreshed,
         EventKind::AttackLaunched,
         EventKind::AttackEnded,
         EventKind::ChargePlanted,
@@ -433,6 +449,9 @@ impl EventKind {
             EventKind::AssetRepaired => 48,
             EventKind::StructureRecycled => 49,
             EventKind::GroundRefilled => 50,
+            EventKind::AreaSurveyed => 51,
+            EventKind::EnemyBeaconFound => 52,
+            EventKind::SightingRefreshed => 53,
             EventKind::AttackLaunched => 54,
             EventKind::AttackEnded => 55,
             EventKind::ChargePlanted => 56,
@@ -495,6 +514,9 @@ impl EventKind {
             48 => Some(EventKind::AssetRepaired),
             49 => Some(EventKind::StructureRecycled),
             50 => Some(EventKind::GroundRefilled),
+            51 => Some(EventKind::AreaSurveyed),
+            52 => Some(EventKind::EnemyBeaconFound),
+            53 => Some(EventKind::SightingRefreshed),
             54 => Some(EventKind::AttackLaunched),
             55 => Some(EventKind::AttackEnded),
             56 => Some(EventKind::ChargePlanted),
@@ -560,6 +582,9 @@ impl EventKind {
             EventKind::AssetRepaired => "asset_repaired",
             EventKind::StructureRecycled => "structure_recycled",
             EventKind::GroundRefilled => "ground_refilled",
+            EventKind::AreaSurveyed => "area_surveyed",
+            EventKind::EnemyBeaconFound => "enemy_beacon_found",
+            EventKind::SightingRefreshed => "sighting_refreshed",
             EventKind::AttackLaunched => "attack_launched",
             EventKind::AttackEnded => "attack_ended",
             EventKind::ChargePlanted => "charge_planted",
