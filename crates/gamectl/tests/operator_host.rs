@@ -567,3 +567,36 @@ fn a_two_seat_hosted_match_against_easy_reaches_the_recap_with_both_seats_sealed
     }
     drop(cache);
 }
+
+/// Whose commander died is in a feed line's words alone (`gateway.proto`'s
+/// `Event` carries no seat field until its per-kind payload), so the operator
+/// reads the gateway's own words strictly, and this test holds its reader to
+/// the one string table that writes them: Easy adds its guard post in the
+/// round after a Push in which its commander died (S2's plan, decision 35).
+#[test]
+fn the_operator_reads_whose_commander_died_in_the_gateways_own_words() {
+    use pharmakos_sim::events::{Event, EventKind};
+    use pharmakos_sim::math::quantity::Tick;
+    use pharmakos_sim::tables::SeatId;
+    for seat in 0..3_u8 {
+        let event = Event {
+            tick: Tick::ZERO,
+            seq: 0,
+            kind: EventKind::CommanderDied,
+            seat: Some(SeatId::new(seat)),
+            subject: None,
+            at: None,
+            value: 2,
+        };
+        let line = pharmakos_gateway::strings::event_text(&event);
+        assert_eq!(
+            pharmakos_operator::wire::whose_commander_died(&line),
+            Ok(seat),
+            "{line}"
+        );
+        assert_eq!(
+            EventKind::CommanderDied.name(),
+            pharmakos_operator::wire::COMMANDER_DIED
+        );
+    }
+}

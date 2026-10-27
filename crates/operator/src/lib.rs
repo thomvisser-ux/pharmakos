@@ -55,10 +55,13 @@
 //!
 //! # What Easy does not do yet
 //!
-//! Spec section 14's Survey post, Defend guard, chatter and target spread are
-//! not built at Easy (decisions-log item 111, section A6).
+//! Spec section 14's Survey post, chatter and target spread are not built at
+//! Easy (decisions-log item 111, section A6). Its Defend guard is: S2's plan,
+//! decision 35, moved it from S5 to S2, and `oprd` built it (a guard post in
+//! the round after a Push in which the commander died, scored by decision
+//! 12's threat model; [`easy`]'s Defend the Core).
 //!
-//! PLACEHOLDER: Easy's Survey post, Defend guard, chatter and target spread — owner, S5, with Normal and Hard
+//! PLACEHOLDER: Easy's Survey post, chatter and target spread — owner, S5, with Normal and Hard
 
 pub mod easy;
 pub mod wire;

@@ -72,7 +72,12 @@ const HUMAN: u8 = 0;
 const ROUND_LIMIT: u32 = 3;
 
 /// The templates the library ships, in the order the wizard lists them.
-const TEMPLATES: [&str; 3] = ["expand_and_mine", "hold_and_build", "safe_playbook"];
+const TEMPLATES: [&str; 4] = [
+    "defend_the_core",
+    "expand_and_mine",
+    "hold_and_build",
+    "safe_playbook",
+];
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))

@@ -6,9 +6,17 @@
 //! Spec section 14's first step, "read the briefing, beacons, known enemies,
 //! economy and capabilities", over the methods an ordinary client has
 //! (decisions-log item 111, section A3): `get_status`, `get_briefing`,
-//! `list_beacons`, `get_economy_forecast`, `get_map_summary`, `get_view` and
-//! `list_templates`. Known enemies are what `get_view` shows of another seat;
-//! capabilities have no method until S4, so there is nothing to read for them.
+//! `list_beacons`, `get_economy_forecast`, `get_map_summary`, `get_view`,
+//! `get_segment_feed` and `list_templates`. Known enemies are what `get_view`
+//! shows of another seat's assets, each by what it is, so the threat model
+//! can weigh it by its weapon's row (S2's plan, decision 12); the segment
+//! feed the Lull still holds says whether the seat's commander died in the
+//! last Push (decision 35); capabilities have no method until S4, so there is
+//! nothing to read for them.
+//!
+//! Every member is read **typed** ([`crate::wire`]'s readers): absent is
+//! proto3's default, and a member of the wrong shape refuses the round's read
+//! as `MALFORMED`, never as a default (decisions-log item 136 (5)).
 //!
 //! # The features, by name
 //!
@@ -40,7 +48,8 @@ use pharmakos_proto::json::Json;
 use crate::easy::PAGES_MAX;
 use crate::tuning::Richness;
 use crate::wire::{
-    Refused, Wire, array_of, bool_of, int_of, location_voxel, object, string, text_of, voxel,
+    COMMANDER_DIED, Misread, Refused, Wire, array_of, bool_of, int_of, location_voxel, malformed,
+    object, string, text_of, voxel, whose_commander_died,
 };
 
 /// One beacon as `list_beacons` answers it.
@@ -103,7 +112,7 @@ pub(crate) struct Economy {
 pub(crate) enum Kind {
     /// A heat vent: a Generator stands on it.
     Vent,
-    /// An ore seam: a Mine beacon's drones dig it.
+    /// A scrap seam: a Mine beacon's drones dig it.
     Seam,
 }
 
@@ -112,7 +121,7 @@ impl Kind {
     pub(crate) const fn name(self) -> &'static str {
         match self {
             Kind::Vent => "heat vent",
-            Kind::Seam => "ore seam",
+            Kind::Seam => "scrap seam",
         }
     }
 }
@@ -137,6 +146,129 @@ pub(crate) struct Feature {
     pub(crate) travel_ms: Option<i64>,
 }
 
+/// A unit kind, as `gp.api.v1.ViewEntity.subtype` spells it.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub(crate) enum UnitKind {
+    /// `commander`: no weapon (spec section 4; a self-defence weapon is
+    /// roadmap).
+    Commander,
+    /// `build_drone`.
+    BuildDrone,
+    /// `mining_drone`.
+    MiningDrone,
+    /// `repair_drone`.
+    RepairDrone,
+    /// `raider`.
+    Raider,
+    /// `scout`.
+    Scout,
+}
+
+/// A structure kind, as `gp.api.v1.ViewEntity.subtype` spells it.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub(crate) enum StructureKind {
+    /// `generator`.
+    Generator,
+    /// `autocannon`.
+    Autocannon,
+    /// `mortar`.
+    Mortar,
+    /// `survey_post`.
+    SurveyPost,
+    /// `resonance_spire`.
+    ResonanceSpire,
+    /// `wall`.
+    Wall,
+}
+
+/// What an asset of another seat is, as the view names it.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub(crate) enum Asset {
+    /// A unit.
+    Unit(UnitKind),
+    /// A structure.
+    Structure(StructureKind),
+    /// A beacon. Whether it is that seat's core, the one armed beacon, is
+    /// that seat's business and on no wire (`gateway.proto`'s
+    /// `BeaconSummary.core`), so the threat model reads none in it
+    /// ([`crate::tuning::Tuning::threat`]).
+    Beacon,
+}
+
+impl Asset {
+    /// The view entity's kind and subtype, read; `None` for a kind that is no
+    /// asset (a shell, a wreck, a ruin), which the threat model does not
+    /// count.
+    ///
+    /// # Errors
+    ///
+    /// `MALFORMED` for an asset kind with a subtype the operator does not
+    /// read: the gateway's catalogue is closed (`crates/gateway/src/view.rs`'
+    /// `unit_subtype` and `structure_subtype`), so an unknown one is an answer
+    /// the operator cannot plan around, and it says so rather than reading the
+    /// thing as unarmed.
+    fn of(kind: Option<&str>, subtype: &str) -> Result<Option<Asset>, Refused> {
+        let unknown = || {
+            malformed(
+                "get_view",
+                &format!("an entity whose subtype `{subtype}` the operator does not read"),
+            )
+        };
+        Ok(Some(match kind {
+            Some("UNIT") => Asset::Unit(match subtype {
+                "commander" => UnitKind::Commander,
+                "build_drone" => UnitKind::BuildDrone,
+                "mining_drone" => UnitKind::MiningDrone,
+                "repair_drone" => UnitKind::RepairDrone,
+                "raider" => UnitKind::Raider,
+                "scout" => UnitKind::Scout,
+                _ => return Err(unknown()),
+            }),
+            Some("STRUCTURE") => Asset::Structure(match subtype {
+                "generator" => StructureKind::Generator,
+                "autocannon" => StructureKind::Autocannon,
+                "mortar" => StructureKind::Mortar,
+                "survey_post" => StructureKind::SurveyPost,
+                "resonance_spire" => StructureKind::ResonanceSpire,
+                "wall" => StructureKind::Wall,
+                _ => return Err(unknown()),
+            }),
+            Some("BEACON") => Asset::Beacon,
+            Some("SHELL" | "WRECK" | "RUIN") => return Ok(None),
+            _ => {
+                return Err(malformed(
+                    "get_view",
+                    "an entity of a kind the operator does not read",
+                ));
+            }
+        }))
+    }
+}
+
+/// One asset of another seat that the view shows.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub(crate) struct Enemy {
+    /// Where it stands.
+    pub(crate) at: [i32; 3],
+    /// What it is.
+    pub(crate) asset: Asset,
+}
+
+/// Whether the seat's commander died in the Push before this Lull: what
+/// decision 35 reads "recently" as (S2's plan; decisions-log item 144 (11)).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum LastPush {
+    /// No `commander_died` line names this seat's commander: the feed was
+    /// read to its end, or there was no Push before this Lull.
+    Survived,
+    /// A `commander_died` line names this seat's commander.
+    Died,
+    /// Some commander died where this seat could see, and the lines naming
+    /// whose were not all reached within [`PAGES_MAX`] pages. Easy then adds
+    /// no guard, and its "why" says the feed was not read to its end.
+    Unread,
+}
+
 /// Everything the fixed reads told the operator.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) struct Situation {
@@ -156,8 +288,10 @@ pub(crate) struct Situation {
     pub(crate) features: Vec<Feature>,
     /// Where the seat's commander stands, if the view shows it.
     pub(crate) commander: Option<[i32; 3]>,
-    /// Where each thing of another seat that the view shows stands, sorted.
-    pub(crate) enemies: Vec<[i32; 3]>,
+    /// Every asset of another seat that the view shows, sorted.
+    pub(crate) enemies: Vec<Enemy>,
+    /// Whether the seat's commander died in the last Push.
+    pub(crate) last_push: LastPush,
     /// The template ids the library lists, ascending.
     pub(crate) templates: Vec<String>,
     /// False when `get_view` did not reach its complete page within
@@ -180,23 +314,29 @@ impl Situation {
     ///
     /// # Errors
     ///
-    /// The first refusal, and `MALFORMED` for a feature row that does not
-    /// read: a round the operator cannot read is a round it does not plan.
+    /// The first refusal, and `MALFORMED` for an answer whose member is not
+    /// the shape the schema gives it, a feature row or an entity that does not
+    /// read, or a `commander_died` line that does not say whose: a round the
+    /// operator cannot read is a round it does not plan.
     pub(crate) fn read(wire: &mut Wire<'_, '_>, seat: u8) -> Result<Situation, Refused> {
         let own = format!("seat.{seat}");
 
-        let status = wire.call("get_status", object(vec![]))?;
-        let status = status.get("status").cloned().unwrap_or(Json::Null);
+        let answer = wire.call("get_status", object(vec![]))?;
+        let status = answer
+            .get("status")
+            .ok_or_else(|| malformed("get_status", "the answer carries no status"))?;
+        let at = |method: &'static str| move |misread: Misread| misread.refused(method);
         // The round and the segment's length. The status also carries the
         // phase timer, which the host clock moves: never read.
-        let round = u32::try_from(int_of(&status, "round"))
+        let round = u32::try_from(int_of(status, "round").map_err(at("get_status"))?)
             .map_err(|_| malformed("get_status", "the round is not a whole number of rounds"))?;
 
         // The notebook at the top of the briefing is never read (spec section
-        // 14: the operator ignores it). The segment length is.
+        // 14: the operator ignores it). The segment length is: the briefing's,
+        // and the status's when the briefing's is proto3's zero.
         let briefing = wire.call("get_briefing", object(vec![]))?;
-        let segment_ms = match int_of(&briefing, "segment_length_ms") {
-            0 => int_of(&status, "segment_length_ms"),
+        let segment_ms = match int_of(&briefing, "segment_length_ms").map_err(at("get_briefing"))? {
+            0 => int_of(status, "segment_length_ms").map_err(at("get_status"))?,
             found => found,
         };
 
@@ -204,19 +344,23 @@ impl Situation {
 
         let forecast = wire.call("get_economy_forecast", object(vec![]))?;
         let economy = Economy {
-            treasury: int_of(&forecast, "treasury_now"),
-            supply_kw: int_of(&forecast, "supply_kw_now"),
-            draw_kw: int_of(&forecast, "draw_kw_now"),
+            treasury: int_of(&forecast, "treasury_now").map_err(at("get_economy_forecast"))?,
+            supply_kw: int_of(&forecast, "supply_kw_now").map_err(at("get_economy_forecast"))?,
+            draw_kw: int_of(&forecast, "draw_kw_now").map_err(at("get_economy_forecast"))?,
         };
 
         let map = wire.call("get_map_summary", object(vec![]))?;
-        let match_seed = text_of(&map, "match_seed").to_owned();
+        let match_seed = text_of(&map, "match_seed")
+            .map_err(at("get_map_summary"))?
+            .to_owned();
         let features = array_of(&map, "features")
+            .map_err(at("get_map_summary"))?
             .iter()
             .map(feature_of)
             .collect::<Result<Vec<Feature>, Refused>>()?;
 
         let seen = read_view(wire, &own)?;
+        let last_push = read_last_push(wire, seat)?;
         let templates = read_templates(wire)?;
 
         Ok(Situation {
@@ -229,18 +373,10 @@ impl Situation {
             features,
             commander: seen.commander,
             enemies: seen.enemies,
+            last_push,
             templates,
             view_complete: seen.complete,
         })
-    }
-}
-
-/// A refusal the operator writes itself: the answer came and did not read.
-fn malformed(method: &str, message: &str) -> Refused {
-    Refused {
-        method: method.to_owned(),
-        code: String::from("MALFORMED"),
-        message: message.to_owned(),
     }
 }
 
@@ -252,7 +388,8 @@ fn malformed(method: &str, message: &str) -> Refused {
 /// one of the wire's values: a feature the operator cannot read is not one it
 /// can plan around, and it says so rather than guessing.
 fn feature_of(row: &Json) -> Result<Feature, Refused> {
-    let id = text_of(row, "feature_id");
+    let misread = |misread: Misread| misread.refused("get_map_summary");
+    let id = text_of(row, "feature_id").map_err(misread)?;
     if id.is_empty() {
         return Err(malformed("get_map_summary", "a feature with no name"));
     }
@@ -276,39 +413,46 @@ fn feature_of(row: &Json) -> Result<Feature, Refused> {
             )
         })?;
     let axis = |name: &str| {
-        i32::try_from(int_of(row, name)).map_err(|_| {
+        i32::try_from(int_of(row, name).map_err(misread)?).map_err(|_| {
             malformed(
                 "get_map_summary",
                 &format!("feature `{id}`'s {name} is not a column"),
             )
         })
     };
-    let reachable = bool_of(row, "reachable");
+    let reachable = bool_of(row, "reachable").map_err(misread)?;
+    let travel_ms = int_of(row, "travel_ms").map_err(misread)?;
     Ok(Feature {
         id: id.to_owned(),
         kind,
         grade,
         anchor: [axis("x")?, axis("y")?],
-        live: bool_of(row, "live"),
-        covered: bool_of(row, "covered"),
+        live: bool_of(row, "live").map_err(misread)?,
+        covered: bool_of(row, "covered").map_err(misread)?,
         // `travel_ms` "is then 0 and means nothing" (`gateway.proto`): read as
         // absent, never as a free walk.
-        travel_ms: reachable.then(|| int_of(row, "travel_ms")),
+        travel_ms: reachable.then_some(travel_ms),
     })
 }
 
 /// Every beacon `list_beacons` shows, ascending by id, at most
 /// [`PAGES_MAX`] pages.
+///
+/// # Errors
+///
+/// The refusal, and `MALFORMED` for a row that does not read.
 fn read_beacons(wire: &mut Wire<'_, '_>, own: &str) -> Result<Vec<Beacon>, Refused> {
+    let misread = |misread: Misread| misread.refused("list_beacons");
     let mut beacons: Vec<Beacon> = Vec::new();
     let mut cursor = String::new();
     for _ in 0..PAGES_MAX {
         let page = wire.call("list_beacons", object(vec![("cursor", string(&cursor))]))?;
-        for row in array_of(&page, "beacons") {
-            let Some(at) = row.get("at").and_then(voxel) else {
-                continue;
-            };
-            let mine = text_of(row, "owner") == own;
+        for row in array_of(&page, "beacons").map_err(misread)? {
+            let at = row
+                .get("at")
+                .ok_or_else(|| malformed("list_beacons", "a beacon with no position"))?;
+            let at = voxel(at).map_err(misread)?;
+            let mine = text_of(row, "owner").map_err(misread)? == own;
             let priority = Wire::enum_name(
                 "gp.v1.InterfaceRow.QuartermasterPriority",
                 row.get("priority"),
@@ -316,15 +460,17 @@ fn read_beacons(wire: &mut Wire<'_, '_>, own: &str) -> Result<Vec<Beacon>, Refus
             .as_deref()
             .and_then(Priority::of);
             beacons.push(Beacon {
-                id: text_of(row, "beacon_id").to_owned(),
+                id: text_of(row, "beacon_id").map_err(misread)?.to_owned(),
                 at,
                 own: mine,
-                core: mine && bool_of(row, "core"),
-                powered: mine && bool_of(row, "powered"),
+                core: mine && bool_of(row, "core").map_err(misread)?,
+                powered: mine && bool_of(row, "powered").map_err(misread)?,
                 priority: if mine { priority } else { None },
             });
         }
-        text_of(&page, "next_cursor").clone_into(&mut cursor);
+        text_of(&page, "next_cursor")
+            .map_err(misread)?
+            .clone_into(&mut cursor);
         if cursor.is_empty() {
             break;
         }
@@ -338,12 +484,17 @@ fn read_beacons(wire: &mut Wire<'_, '_>, own: &str) -> Result<Vec<Beacon>, Refus
 struct Seen {
     complete: bool,
     commander: Option<[i32; 3]>,
-    enemies: Vec<[i32; 3]>,
+    enemies: Vec<Enemy>,
 }
 
 /// Read the view to its complete page, which is the one that carries the
 /// entity list. Its chunks are not decoded: the ground is the gateway's.
+///
+/// # Errors
+///
+/// The refusal, and `MALFORMED` for an entity that does not read.
 fn read_view(wire: &mut Wire<'_, '_>, own: &str) -> Result<Seen, Refused> {
+    let misread = |misread: Misread| misread.refused("get_view");
     let mut seen = Seen {
         complete: false,
         commander: None,
@@ -352,28 +503,38 @@ fn read_view(wire: &mut Wire<'_, '_>, own: &str) -> Result<Seen, Refused> {
     let mut cursor = String::new();
     for _ in 0..PAGES_MAX {
         let page = wire.call("get_view", object(vec![("cursor", string(&cursor))]))?;
-        if bool_of(&page, "complete") {
+        if bool_of(&page, "complete").map_err(misread)? {
             // Read by what each thing is and where it stands, and never by its
             // id.
-            for entity in array_of(&page, "entities") {
-                let Some(at) = entity.get("at").and_then(location_voxel) else {
-                    continue;
-                };
+            for entity in array_of(&page, "entities").map_err(misread)? {
+                let at = entity
+                    .get("at")
+                    .ok_or_else(|| malformed("get_view", "an entity with no position"))?;
+                let at = location_voxel(at).map_err(misread)?;
                 let kind = Wire::enum_name("gp.api.v1.ViewEntity.Kind", entity.get("kind"));
-                let subtype = text_of(entity, "subtype");
-                let owner = text_of(entity, "owner");
+                let subtype = text_of(entity, "subtype").map_err(misread)?;
+                let owner = text_of(entity, "owner").map_err(misread)?;
                 if owner == own {
                     if kind.as_deref() == Some("UNIT") && subtype == "commander" {
-                        seen.commander = Some(seen.commander.map_or(at, |held| held.min(at)));
+                        // The least position when the view shows two, so the
+                        // answer does not hang on the order of the list.
+                        seen.commander = Some(match seen.commander {
+                            Some(held) => held.min(at),
+                            None => at,
+                        });
                     }
-                } else if !owner.is_empty() {
-                    seen.enemies.push(at);
+                } else if !owner.is_empty()
+                    && let Some(asset) = Asset::of(kind.as_deref(), subtype)?
+                {
+                    seen.enemies.push(Enemy { at, asset });
                 }
             }
             seen.complete = true;
             break;
         }
-        text_of(&page, "next_cursor").clone_into(&mut cursor);
+        text_of(&page, "next_cursor")
+            .map_err(misread)?
+            .clone_into(&mut cursor);
         if cursor.is_empty() {
             // Not complete and no page after it: asking again from the empty
             // cursor would read the first page twice.
@@ -384,16 +545,95 @@ fn read_view(wire: &mut Wire<'_, '_>, own: &str) -> Result<Seen, Refused> {
     Ok(seen)
 }
 
+/// Whether this seat's commander died in the last Push, from the segment
+/// feed the Lull still holds: the Push's own (the gateway starts a new feed
+/// when the next Push begins).
+///
+/// The feed's digests count every kind over the whole segment, so the first
+/// page says whether any commander died where this seat could see; only then
+/// are the lines read, at most [`PAGES_MAX`] pages, for the one that names
+/// this seat. A line says whose commander it was in its words alone, since a
+/// feed event carries no seat field until its per-kind payload (`gateway.
+/// proto`'s `Event`, held to after S4), so the words are read strictly: the
+/// gateway's one string table writes "The commander of seat N died." and a
+/// line that does not read so is refused, never taken for another seat's.
+///
+/// # Errors
+///
+/// The refusal, and `MALFORMED` for an answer that does not read.
+fn read_last_push(wire: &mut Wire<'_, '_>, seat: u8) -> Result<LastPush, Refused> {
+    let misread = |misread: Misread| misread.refused("get_segment_feed");
+    let feed = |cursor: &str| object(vec![("cursor", string(cursor))]);
+    let mut page = wire.call("get_segment_feed", feed(""))?;
+    let deaths = deaths_counted(&page).map_err(misread)?;
+    if deaths == 0 {
+        return Ok(LastPush::Survived);
+    }
+    let mut seen: i64 = 0;
+    for read in 1..=PAGES_MAX {
+        for event in array_of(&page, "events").map_err(misread)? {
+            if text_of(event, "kind").map_err(misread)? != COMMANDER_DIED {
+                continue;
+            }
+            if whose_commander_died(text_of(event, "text").map_err(misread)?)? == seat {
+                return Ok(LastPush::Died);
+            }
+            seen = seen.checked_add(1).ok_or_else(|| {
+                malformed("get_segment_feed", "a count of lines that does not fit")
+            })?;
+        }
+        if seen >= deaths {
+            return Ok(LastPush::Survived);
+        }
+        let cursor = text_of(&page, "next_cursor").map_err(misread)?.to_owned();
+        if cursor.is_empty() || read == PAGES_MAX {
+            break;
+        }
+        page = wire.call("get_segment_feed", feed(&cursor))?;
+    }
+    Ok(LastPush::Unread)
+}
+
+/// How many `commander_died` lines the feed's digests count over the whole
+/// segment.
+///
+/// # Errors
+///
+/// [`Misread`] for a digest that does not read, or a sum that does not fit.
+fn deaths_counted(page: &Json) -> Result<i64, Misread> {
+    let mut deaths: i64 = 0;
+    for digest in array_of(page, "digests")? {
+        for count in array_of(digest, "counts")? {
+            if text_of(count, "kind")? == COMMANDER_DIED {
+                deaths = deaths
+                    .checked_add(int_of(count, "count")?)
+                    .ok_or_else(|| Misread {
+                        key: String::from("count"),
+                        wanted: "a count whose sum fits",
+                    })?;
+            }
+        }
+    }
+    Ok(deaths)
+}
+
 /// The template ids the library lists, ascending.
+///
+/// # Errors
+///
+/// The refusal, and `MALFORMED` for a listing that does not read.
 fn read_templates(wire: &mut Wire<'_, '_>) -> Result<Vec<String>, Refused> {
+    let misread = |misread: Misread| misread.refused("list_templates");
     let mut templates: Vec<String> = Vec::new();
     let mut cursor = String::new();
     for _ in 0..PAGES_MAX {
         let page = wire.call("list_templates", object(vec![("cursor", string(&cursor))]))?;
-        for row in array_of(&page, "templates") {
-            templates.push(text_of(row, "template_id").to_owned());
+        for row in array_of(&page, "templates").map_err(misread)? {
+            templates.push(text_of(row, "template_id").map_err(misread)?.to_owned());
         }
-        text_of(&page, "next_cursor").clone_into(&mut cursor);
+        text_of(&page, "next_cursor")
+            .map_err(misread)?
+            .clone_into(&mut cursor);
         if cursor.is_empty() {
             break;
         }
@@ -401,4 +641,29 @@ fn read_templates(wire: &mut Wire<'_, '_>) -> Result<Vec<String>, Refused> {
     templates.sort_unstable();
     templates.dedup();
     Ok(templates)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_death_line_names_its_seat_and_any_other_line_is_refused() {
+        assert_eq!(
+            whose_commander_died("The commander of seat 1 died. That is death 2 in this Push."),
+            Ok(1)
+        );
+        for line in [
+            "The commander of seat one died.",
+            "The commander of seat 1 came back after 3 ticks.",
+            "A commander died.",
+            "The commander of seat 300 died.",
+        ] {
+            assert_eq!(
+                whose_commander_died(line).map_err(|refused| refused.code),
+                Err(String::from("MALFORMED")),
+                "{line}"
+            );
+        }
+    }
 }

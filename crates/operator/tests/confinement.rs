@@ -223,3 +223,86 @@ fn the_crate_root_is_where_the_list_says() {
             .is_file()
     );
 }
+
+/// The defaults this crate keeps, as `(file, a substring of the trimmed line,
+/// the rule that makes the default the exact answer)`. Each matches exactly
+/// one line.
+const KEPT_FALLBACKS: &[(&str, &str, &str)] = &[(
+    "src/compose.rs",
+    "u64::try_from(ms).map_or_else(",
+    "a duration a sentence names is never negative; one that were is written as the \
+     milliseconds it is rather than read as none, so both arms say the figure exactly",
+)];
+
+/// A source file's shipped code: comment-only lines removed, and everything
+/// from its first `#[cfg(test)]` onward.
+fn shipped_lines(text: &str) -> Vec<String> {
+    let shipped = match text.find("#[cfg(test)]") {
+        Some(index) => text
+            .get(..index)
+            .expect("a match starts on a char boundary"),
+        None => text,
+    };
+    shipped
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .map(|line| line.trim().to_owned())
+        .collect()
+}
+
+/// Every fallback call in the crate's shipped code, as `(file, the line)`:
+/// `unwrap_or` (and so `unwrap_or_default` and `unwrap_or_else`), `map_or`
+/// and `map_or_else`, the needles the verifier's and the sim's scans use.
+fn fallbacks() -> Vec<(String, String)> {
+    let mut found: Vec<(String, String)> = Vec::new();
+    for relative in SOURCES {
+        for line in shipped_lines(&source(relative)) {
+            if line.contains("unwrap_or")
+                || line.contains("map_or(")
+                || line.contains("map_or_else(")
+            {
+                found.push(((*relative).to_owned(), line));
+            }
+        }
+    }
+    found
+}
+
+/// No silent fallback is left in the operator (S2's plan, E7, task `oprd`;
+/// decisions-log item 136 (5)): the wire's readers answer proto3's default
+/// only for an **absent** member and refuse a misshapen one, and every other
+/// default the scan finds is a typed error, a failure made unrepresentable, or
+/// the exact answer by a rule listed in [`KEPT_FALLBACKS`].
+#[test]
+fn no_silent_fallback_is_left() {
+    let found = fallbacks();
+    let unexplained: Vec<String> = found
+        .iter()
+        .filter(|(file, line)| {
+            !KEPT_FALLBACKS
+                .iter()
+                .any(|(kept, code, _)| kept == file && line.contains(code))
+        })
+        .map(|(file, line)| format!("{file}: {line}"))
+        .collect();
+    assert!(
+        unexplained.is_empty(),
+        "a value falls back to a default instead of saying what went wrong. Return a typed \
+         error, make the failure unrepresentable, or, where the default is a rule that leaves \
+         the answer exact, add the line to KEPT_FALLBACKS with that rule:\n{}",
+        unexplained.join("\n")
+    );
+    for (file, code, why) in KEPT_FALLBACKS {
+        let count = found
+            .iter()
+            .filter(|(found_file, line)| found_file == file && line.contains(code))
+            .count();
+        assert_eq!(
+            count, 1,
+            "KEPT_FALLBACKS' entry in {file} (`{code}`, kept because {why}) matches {count} lines"
+        );
+    }
+    // The scan sees what it keeps, or every assertion above passes over
+    // nothing.
+    assert_eq!(found.len(), KEPT_FALLBACKS.len());
+}

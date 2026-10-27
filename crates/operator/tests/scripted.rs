@@ -151,6 +151,9 @@ struct Script {
     bare_legs: bool,
     /// Answer one feature row with no grade.
     malformed_feature: bool,
+    /// The seats whose commander the last Push's feed says died, one
+    /// `commander_died` line each.
+    feed_deaths: Vec<u8>,
     transcript: Vec<String>,
 }
 
@@ -192,6 +195,7 @@ impl Script {
             refuse_everything: None,
             bare_legs: false,
             malformed_feature: false,
+            feed_deaths: Vec::new(),
             transcript: Vec::new(),
         }
     }
@@ -320,6 +324,7 @@ impl Script {
             ])),
             "get_map_summary" => self.map_summary(),
             "get_view" => self.get_view(&cursor),
+            "get_segment_feed" => self.segment_feed(&cursor),
             "list_templates" => self.list_templates(&cursor),
             "estimate_route" => self.estimate_route(params),
             "instantiate_template" => self.instantiate(params),
@@ -360,6 +365,55 @@ impl Script {
         } else {
             String::new()
         }
+    }
+
+    /// The last Push's feed: one `commander_died` line per seat in
+    /// `feed_deaths`, and the one digest counting them.
+    fn segment_feed(&self, cursor: &str) -> Json {
+        // Paged to the bound, the lines are never reached: every page but
+        // the digest's count is empty.
+        let lines: &[u8] = if self.paging == Paging::ToTheBound {
+            &[]
+        } else {
+            &self.feed_deaths
+        };
+        let events: Vec<Json> = lines
+            .iter()
+            .map(|seat| {
+                obj(vec![
+                    ("at_ms", num(1_000)),
+                    ("kind", Json::String(String::from("commander_died"))),
+                    (
+                        "text",
+                        Json::String(format!(
+                            "The commander of seat {seat} died. That is death 1 in this Push."
+                        )),
+                    ),
+                ])
+            })
+            .collect();
+        let count = i64::try_from(self.feed_deaths.len()).unwrap();
+        let counts = if count == 0 {
+            Vec::new()
+        } else {
+            vec![obj(vec![
+                ("kind", Json::String(String::from("commander_died"))),
+                ("count", num(count)),
+            ])]
+        };
+        self.ok(obj(vec![
+            ("events", Json::Array(events)),
+            (
+                "digests",
+                Json::Array(vec![obj(vec![
+                    ("from_ms", num(0)),
+                    ("to_ms", num(60_000)),
+                    ("text", Json::String(String::from("scripted"))),
+                    ("counts", Json::Array(counts)),
+                ])]),
+            ),
+            ("next_cursor", Json::String(self.next_page(cursor))),
+        ]))
     }
 
     fn list_beacons(&self, cursor: &str) -> Json {
@@ -451,10 +505,15 @@ impl Script {
 
     fn list_templates(&self, cursor: &str) -> Json {
         let rows = if cursor.is_empty() {
-            ["expand_and_mine", "hold_and_build", "safe_playbook"]
-                .iter()
-                .map(|id| obj(vec![("template_id", Json::String((*id).to_owned()))]))
-                .collect()
+            [
+                "defend_the_core",
+                "expand_and_mine",
+                "hold_and_build",
+                "safe_playbook",
+            ]
+            .iter()
+            .map(|id| obj(vec![("template_id", Json::String((*id).to_owned()))]))
+            .collect()
         } else {
             Vec::new()
         };
@@ -1198,7 +1257,7 @@ fn the_seed_is_recorded_in_every_why() {
         played.why
     );
     let (_, advice) = advise(Script::busy(0));
-    assert_eq!(advice.suggestions.len(), 3);
+    assert_eq!(advice.suggestions.len(), 4);
     for suggestion in &advice.suggestions {
         assert!(
             suggestion.why.contains("seed 0x0000000000005eed"),
@@ -1309,6 +1368,7 @@ fn the_operator_reads_no_notebook_and_writes_nothing_but_its_own_seal() {
         "get_economy_forecast",
         "get_map_summary",
         "get_view",
+        "get_segment_feed",
         "list_templates",
         "estimate_route",
         "resolve_refs",
@@ -1363,6 +1423,9 @@ fn the_operator_reads_no_notebook_and_writes_nothing_but_its_own_seal() {
 fn easy_never_exceeds_its_derived_call_budget() {
     let mut worst = short_with_four_lit(1);
     worst.paging = Paging::ToTheBound;
+    // Another seat's commander died where this one could see, and the line
+    // is never reached: the feed is paged to its bound.
+    worst.feed_deaths = vec![0];
     worst.verify = Verify::NeverButFixable;
     worst.treasury = 10_000;
     for n in 0..40 {
@@ -1478,7 +1541,9 @@ fn a_built_in_seat_says_ready_even_when_it_could_plan_nothing() {
 /// whose last leg is the site; it writes no walk (a `place_beacon` walks to
 /// its site itself), fills the hold, and ends the route at the core with its
 /// dig depth. Its note records the seed it did not use. The covered seam
-/// offers no goal and is never estimated.
+/// offers no Mine goal; it is estimated once, as the guard post's site, and
+/// the post is not placed, since nothing threatens the core and the commander
+/// did not die.
 #[test]
 fn easy_names_the_vent_it_covers_and_writes_no_site_of_its_own() {
     // The busy seat without its uncovered seam, whose Mine beacon would
@@ -1496,12 +1561,14 @@ fn easy_names_the_vent_it_covers_and_writes_no_site_of_its_own() {
         "{:#?}",
         script.transcript
     );
-    assert!(
-        !script
+    assert_eq!(
+        script
             .transcript
             .iter()
-            .any(|line| line.starts_with("estimate_route") && line.contains("seam_36_34")),
-        "the covered seam is the core's: no goal, no estimate"
+            .filter(|line| line.starts_with("estimate_route") && line.contains("seam_36_34"))
+            .count(),
+        1,
+        "the covered seam is the core's: no Mine goal, and one estimate, as the guard post's site"
     );
     let ops = composing_ops(&script.transcript);
     assert_eq!(
@@ -1925,4 +1992,189 @@ fn a_leg_is_read_in_the_declared_shape_and_the_bare_one() {
     assert_eq!(a.transcript, b.transcript);
     assert_eq!(played_a, played_b);
     assert_eq!(played_a.submitted, Submitted::Own);
+}
+
+// ---------------------------------------------------------------------------
+// The guard post: Defend and the threat model under Easy (S2's `oprd`)
+// ---------------------------------------------------------------------------
+
+/// The patched text's template: the `template_id` of the instantiate the
+/// composing patch was applied to, read as the last instantiate before it.
+fn composed_template(transcript: &[String]) -> String {
+    let at = transcript
+        .iter()
+        .position(|line| line.starts_with("patch_plan "))
+        .expect("a composing patch");
+    let earlier = transcript.get(..at).expect("the lines before it");
+    // Every template is instantiated once with its own values before the
+    // composition; the composed one is named by the patch's own note.
+    let ops = composing_ops(transcript);
+    let note = op_value(&ops, "replace", "/meta/note")
+        .or_else(|| op_value(&ops, "add", "/meta/note"))
+        .and_then(|note| text(&note).map(str::to_owned))
+        .expect("the patch writes the note");
+    assert!(
+        earlier
+            .iter()
+            .any(|line| line.starts_with("instantiate_template")),
+        "the templates were declared first"
+    );
+    note
+}
+
+/// Spec section 14 and decision 35: in the round after a Push in which its
+/// commander died, Easy adds a Defend guard on it -- the Defend the Core
+/// template's place step, naming the seam its core covers, inserted right
+/// after the core's own step and ahead of the round's goal.
+#[test]
+fn easy_adds_a_guard_post_in_the_round_after_its_commander_died() {
+    let mut world = Script::busy(0);
+    world.round = 2;
+    world.feed_deaths = vec![0];
+    let (script, played) = play(world);
+    assert_eq!(played.submitted, Submitted::Own, "{:#?}", script.transcript);
+    let ops = composing_ops(&script.transcript);
+    let adds: Vec<&Json> = ops
+        .iter()
+        .filter(|op| {
+            op.get("op").and_then(text) == Some("add")
+                && op.get("path").and_then(text) == Some("/declarative/route/0")
+        })
+        .collect();
+    assert_eq!(adds.len(), 2, "the guard's step, then the core's: {ops:#?}");
+    let guard = adds
+        .first()
+        .and_then(|op| op.get("value"))
+        .expect("the guard's step");
+    assert_eq!(guard.get("label").and_then(text), Some("place_guard"));
+    let covering = pointer_get(guard, "/place_beacon/at/covering/feature_id").and_then(text);
+    assert_eq!(
+        covering,
+        Some("seam_36_34"),
+        "the seam the core covers, by name"
+    );
+    let protect = pointer_get(guard, "/place_beacon/initial/mandate/defend/protect")
+        .map(compact)
+        .expect("a protect list");
+    assert!(protect.contains("my_commander"), "{protect}");
+    let deepen = adds
+        .get(1)
+        .and_then(|op| op.get("value"))
+        .and_then(|step| step.get("label"))
+        .and_then(text);
+    assert_eq!(deepen, Some("deepen_core"));
+    let note = composed_template(&script.transcript);
+    assert!(
+        note.contains("your commander died in the last Push"),
+        "{note}"
+    );
+}
+
+/// Only this seat's death counts: another seat's commander dying where this
+/// seat could see adds no guard.
+#[test]
+fn another_seats_death_adds_no_guard_post() {
+    let mut world = Script::busy(0);
+    world.round = 2;
+    world.feed_deaths = vec![1];
+    let (script, played) = play(world);
+    assert_eq!(played.submitted, Submitted::Own);
+    let ops = composing_ops(&script.transcript);
+    assert!(
+        !compact(&Json::Array(ops)).contains("place_guard"),
+        "no guard post"
+    );
+}
+
+/// With nothing else worth a beacon, the guard post is the round: the Defend
+/// the Core template, its description replaced by the seam's name.
+#[test]
+fn a_guard_post_alone_fills_the_defend_template() {
+    let mut world = Script::new(0);
+    let mut start = Feature::new("seam", "standard", [36, 34]);
+    start.covered = true;
+    world.features.push(start);
+    world.round = 3;
+    world.feed_deaths = vec![0];
+    let (script, played) = play(world);
+    assert_eq!(played.submitted, Submitted::Own, "{:#?}", script.transcript);
+    let ops = composing_ops(&script.transcript);
+    let covering = op_value(
+        &ops,
+        "replace",
+        "/declarative/route/1/place_beacon/at/covering",
+    )
+    .map(|value| compact(&value));
+    assert_eq!(
+        covering.as_deref(),
+        Some(r#"{ "feature_id": "seam_36_34" }"#),
+        "{}",
+        compact(&Json::Array(ops.clone()))
+    );
+    let note = composed_template(&script.transcript);
+    assert!(note.contains("A Defend beacon beside the core"), "{note}");
+}
+
+/// Decision 12's threat model scores the post: armed enemies the view shows
+/// inside the core's sphere, by their weapons' damage per second from the
+/// rules rows, place it with no death; unarmed ones do not.
+#[test]
+fn armed_enemies_inside_the_cores_sphere_place_a_guard_post_and_unarmed_ones_do_not() {
+    let armed = |subtype: &'static str| {
+        let mut world = Script::busy(0);
+        for (n, at) in [[30, 28, GROUND], [34, 28, GROUND]].into_iter().enumerate() {
+            world.entities.push(Entity {
+                id: format!("u_9{n}"),
+                kind: "unit",
+                subtype,
+                owner: 1,
+                at,
+            });
+        }
+        let (script, _) = play(world);
+        compact(&Json::Array(composing_ops(&script.transcript))).contains("place_guard")
+    };
+    assert!(armed("raider"), "two raiders by the core: a guard post");
+    assert!(!armed("scout"), "two scouts are unarmed: no guard post");
+}
+
+/// The advisor offers the guard post's site to the wizard's Defend the Core
+/// page by name, whether or not Easy would place it this round.
+#[test]
+fn the_advisor_suggests_the_guard_posts_seam_by_name() {
+    let (_, advice) = advise(Script::busy(0));
+    let defend = advice
+        .suggestions
+        .iter()
+        .find(|suggestion| suggestion.template_id == "defend_the_core")
+        .expect("a Defend the Core suggestion");
+    assert!(
+        defend.parameters.iter().any(|value| value.pointer
+            == "/declarative/route/1/place_beacon/at/covering"
+            && value.value == r#"{"feature_id":"seam_36_34"}"#),
+        "{defend:#?}"
+    );
+    assert!(
+        defend.why.contains("did not die in the last Push"),
+        "{}",
+        defend.why
+    );
+}
+
+/// A feed paged past the operator's bound before the line naming whose
+/// commander died is reached adds no guard, and the why says so.
+#[test]
+fn an_unread_death_adds_no_guard_and_the_why_says_so() {
+    let mut world = Script::busy(0);
+    world.paging = Paging::ToTheBound;
+    world.feed_deaths = vec![0];
+    let (script, played) = play(world);
+    assert!(
+        !script
+            .transcript
+            .iter()
+            .any(|line| line.starts_with("patch_plan") && line.contains("place_guard")),
+        "no guard post"
+    );
+    assert!(played.why.contains("not read within"), "{}", played.why);
 }

@@ -9,7 +9,7 @@
 1	get_status	phase=lull
 2	get_briefing	segment_length_ms=1000
 3	get_beacon	the seat's own core: owner=seat.0, core=true, priority=normal, powered=true
-4	list_templates	0 templates tagged attack, of 3 in the library
+4	list_templates	0 templates tagged attack, of 4 in the library
 5	get_schema	part=step
 6	estimate_route	reachable, 1 leg, not fogged
 7	verify_plan{depth=quick}	qualifies=false, 2 errors

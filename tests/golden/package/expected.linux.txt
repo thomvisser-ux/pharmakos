@@ -15,6 +15,7 @@ Pharmakos/gamectl
 Pharmakos/libpharmakos_client_gdext.so
 Pharmakos/library/
 Pharmakos/library/LICENSE
+Pharmakos/library/defend_the_core.jsonc
 Pharmakos/library/expand_and_mine.jsonc
 Pharmakos/library/hold_and_build.jsonc
 Pharmakos/library/safe_playbook.jsonc

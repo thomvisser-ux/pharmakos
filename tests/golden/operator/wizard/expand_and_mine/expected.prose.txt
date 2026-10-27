@@ -1,6 +1,6 @@
 Expand & Mine
 Written from a built-in template.
-Place a Mine beacon covering an ore seam you do not cover yet, and walk home while it digs.
+Place a Mine beacon covering a scrap seam you do not cover yet, and walk home while it digs.
 
 Route
   1. place_mine: place a beacon at a site covering the nearest scrap seam you do not cover yet (nearest by travel, read when the step starts), tagged "mine", on a Mine mandate, at normal Quartermaster priority (16.5 s on site).

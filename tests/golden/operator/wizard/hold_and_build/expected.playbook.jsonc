@@ -44,10 +44,14 @@
       {"label": "place_power", "place_beacon": {"at": {"covering": {"feature_id":"vent_324_16"}}, "tags": ["power"],
         // Initial settings are interface rows committed on site after the
         // deploy: choosing the Build mandate is free, and a Build target is
-        // its own row.
+        // its own row. The repair threshold is read as written: a structure
+        // of yours inside the sphere is repaired once it falls below half its
+        // hit points, and an omitted threshold would mean never (S2's plan,
+        // decision 38).
+        // PLACEHOLDER: the repair threshold, 50, a proposal — owner, at S2's demo
         "initial": {"mandate": {"build": {"targets": [
           {"blueprint_id": "generator", "anchor": {"on": {"covered": {}}}, "rotation_quarter_turns": 0, "order": 1}
-        ]}}}},
+        ], "repair_threshold_pct": 50}}}},
        "timeout_ms": 60000, "on_fail": {"action": "SKIP"}},
       {"label": "hold", "hold": {"ms": 79900}}
     ],
