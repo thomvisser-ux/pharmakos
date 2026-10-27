@@ -35,16 +35,6 @@
       "map_refs": []
     },
     {
-      "code": "I0004",
-      "severity": "info",
-      "path": "/declarative/route/0/place_beacon/initial/mandate/build/repair_threshold_pct",
-      "related_paths": [],
-      "message": "`repair_threshold_pct` is 0, so this Build beacon's drones never repair a structure; its units and the commander are still repaired.",
-      "beginner": "A repair threshold of 0 means never. Write a percentage to have damaged structures repaired.",
-      "suggestions": [],
-      "map_refs": []
-    },
-    {
       "code": "I0003",
       "severity": "info",
       "path": "/declarative/handlers/0/body/0/move/pace",
@@ -61,9 +51,9 @@
       "map_refs": []
     }
   ],
-  "report_hash": "LIaEUgLSsj0=",
+  "report_hash": "t16cWAgkzIw=",
   "rules_hash": "gCjUE4Tm3i8=",
-  "plan_fingerprint": "eXVzv4kKF7o=",
+  "plan_fingerprint": "9jpSWLu4iR4=",
   "verifier_version": "0.1.0-s2.2",
   "size_units": 6,
   "size_budget": 128

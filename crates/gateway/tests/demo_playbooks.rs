@@ -5,7 +5,7 @@
 //! verifies and renders them (decisions-log item 123 (2) 10; AGENTS.md
 //! section 10 item 3).
 //!
-//! Five playbooks: the three templates in `library/`, each instantiated for
+//! Six playbooks: the four templates in `library/`, each instantiated for
 //! seat 0 with its own values (`instantiate_template` with `template_id`
 //! alone, as `templates.rs` asks for it), and the two scenario playbooks under
 //! `scenarios/skeleton/`. The wizard itself always asks with `suggested: true`,
@@ -192,6 +192,11 @@ fn hold_and_build_with_its_own_values_qualifies_and_renders_in_the_lobbys_lull()
 #[test]
 fn expand_and_mine_with_its_own_values_qualifies_and_renders_in_the_lobbys_lull() {
     template_case("expand_and_mine");
+}
+
+#[test]
+fn defend_the_core_with_its_own_values_qualifies_and_renders_in_the_lobbys_lull() {
+    template_case("defend_the_core");
 }
 
 #[test]

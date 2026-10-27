@@ -1,0 +1,73 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: MIT OR Apache-2.0
+//
+// defend_the_core.jsonc: the Defend the Core template (S2's plan, task
+// `oprd`; spec sections 4, 6 and 14).
+//
+// It teaches the guard: walk to your core, place a Defend beacon beside it
+// that protects the core and your commander, and stay inside its sphere. A
+// Defend beacon holds its sphere: when a threat is seen inside it, it fields
+// raiders as guards on the work in hand, and they fight the most threatening
+// enemy inside the engagement radius. A guard escorts your commander and
+// intercepts threats near it while your commander is inside this beacon's
+// sphere, which is why the route and the tail stay there. Its one picket scout
+// patrols just outside the sphere's edge, so a raid is seen before it lands.
+//
+// Where the beacon goes is a description, not a place (docs/design/
+// targeting.md): "the nearest scrap seam to you", read when the step starts,
+// once your commander stands at the core. That is your starting seam, which
+// your core's sphere holds at every seed, so the sim chooses a legal site
+// beside the core whose sphere holds that seam, and the guards cover your
+// starting mining drone as well. The wizard asks which seam: the description,
+// or a seam by its name, such as {"feature_id": "seam_348_31"}, which is what
+// the built-in operator suggests. A name is a fixed target for this map only.
+//
+// The built-in operator adds this guard in the round after a Push in which its
+// commander died (S2's plan, decision 35).
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {
+    "parameters": [
+      // Why: the guard post's sphere is where its guards escort your
+      // commander, so it goes where your commander spends its time.
+      {"pointer": "/declarative/route/1/place_beacon/at/covering", "label": "Which scrap seam the guard post covers: the nearest one to your core, or one by name"},
+      // Why: holding keeps your commander inside the post's sphere, where its
+      // guards escort it. A duration is game milliseconds.
+      {"pointer": "/declarative/route/2/hold/ms", "label": "How long to stand by the guard post, in game milliseconds"}
+    ],
+    "title": "Defend the Core",
+    "author_kind": "BUILTIN",
+    "note": "Walk to your core, place a Defend beacon beside it that guards the core and your commander, and stay inside its sphere."
+  },
+  "kind": "TEMPLATE",
+  "declarative": {
+    "route": [
+      // Why: the post's description reads from where your commander stands,
+      // so the commander walks home first.
+      {"label": "to_core", "move": {"to": {"beacon_anchor": {"beacon_id": "b_00"}}}},
+      // Why: the step walks to the site it reads, so its timeout bounds the
+      // walk as well as the deploy. Choosing the Defend mandate at the deploy
+      // is free; its settings are interface rows committed on site.
+      {"label": "place_guard", "place_beacon": {"at": {"covering": {"seam": {"rank": "NEAREST", "coverage": "ANY"}}}, "tags": ["guard"],
+        // Free fire: a guard engages any enemy in range rather than waiting
+        // to be hit (an omitted `roe` reads the same on a Defend beacon). The
+        // core is `b_00` on every map, and "my commander" is yours.
+        "initial": {"priority": "NORMAL", "mandate": {"roe": "FREE_FIRE", "defend": {
+          "protect": [{"beacon": {"beacon_id": "b_00"}}, {"my_commander": {}}],
+          "engagement_radius_pct": 100, "pursue": "SPHERE_EDGE", "picket_scouts": 1}}}},
+       "timeout_ms": 60000, "on_fail": {"action": "SKIP"}},
+      {"label": "hold", "hold": {"ms": 30000}}
+    ],
+    "handlers": [
+      // Why: bravery is an ordinary rule. Hurt and under fire, the commander
+      // walks back to safety and waits before carrying on.
+      {"id": "flee", "when": {"all": {"items": [{"cmdr_hp_pct": {"cmp": "LE", "pct": 40}}, {"cmdr_took_damage_within": {"ms": 3000}}]}},
+       "body": [{"label": "flee_to_safety", "move": {"to": {"safest": {}}}}, {"label": "flee_wait", "hold": {"ms": 8000}}],
+       "resume": "CONTINUE", "cooldown_ms": 30000, "max_fires": 3}
+    ]
+  },
+  "on_death": {"on_respawn": "CONTINUE"},
+  // Why: after the hold, stay with your nearest Defend beacon, inside the
+  // sphere where its guards escort you.
+  "fallback": {"shadow": {"beacon": {"nearest": {"filter": {"mandate": "DEFEND"}}}}}
+}

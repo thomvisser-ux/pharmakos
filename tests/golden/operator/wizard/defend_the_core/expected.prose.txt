@@ -1,0 +1,27 @@
+Defend the Core
+Written from a built-in template.
+Walk to your core, place a Defend beacon beside it that guards the core and your commander, and stay inside its sphere.
+
+Route
+  1. to_core: walk to beacon "b_00".
+  2. place_guard: place a beacon at a site covering Scrap seam (348, 31), tagged "guard", on a Defend mandate: protecting beacon "b_00" and your commander, engaging within 100% of the sphere, pursuing to the sphere edge and with a picket of 1 scouts, at normal Quartermaster priority (18 s on site).
+    Give up after 1:00.
+    On failure, move on to the next step.
+  3. hold: hold for 94.1 s.
+
+Rules
+  1. "flee", when the commander is at or below 40% HP and the commander took damage in the last 3 s:
+    1. flee_to_safety: walk to the safest own beacon.
+    2. flee_wait: hold for 8 s.
+    Then carry on with the route.
+    Fires at most 3 times, and no sooner than every 30 s.
+
+If the commander dies
+  On respawn, carry on from the step the route was on.
+
+Fallback
+  Stay with the nearest own Defend beacon (resolves when the step starts).
+
+Budget
+  8 of 128 size units.
+  18 s standing at a beacon along the route.

@@ -16,10 +16,12 @@
 // `the_gateways_fallback_is_the_safe_template_with_nothing_raised` keeps the
 // two equal ("written once, tested twice", decisions-log item 81).
 //
-// Spec section 14 names "the flee and rescue rules"; this has the flee rule
-// only, because nothing can be rescued before combat.
-//
-// PLACEHOLDER: whether and how the safe playbook gains a rescue rule — owner, S2/S5
+// Spec section 14 names "the flee and rescue rules". The rescue rides
+// `safest`, with no new vocabulary (S2's plan, decision 6): while the
+// commander is below full HP, `safest` ranks your beacons whose sphere holds a
+// live repair drone ahead of those without, so this route's walk to safety,
+// the flee rule's and the shadowing tail all walk a wounded commander to
+// where a drone heals it.
 {
   "schema_version": {"major": 1, "minor": 0},
   "meta": {
