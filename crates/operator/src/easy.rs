@@ -33,16 +33,17 @@
 //!
 //! | term | calls |
 //! |---|---|
-//! | the fixed reads ([`FIXED_READS`]) | `get_status`, `get_briefing`, `get_economy_forecast`, `get_map_summary`, and at most [`PAGES_MAX`] pages each of `list_beacons`, `get_view` and `list_templates` |
+//! | the fixed reads ([`FIXED_READS`]) | `get_status`, `get_briefing`, `get_economy_forecast`, `get_map_summary`, and at most [`PAGES_MAX`] pages each of `list_beacons`, `get_view`, `get_segment_feed` and `list_templates` |
 //! | the tap probe ([`TAP_PROBE_CALLS`]) | one `resolve_refs` and one QUICK `verify_plan` over every tap Easy could make, when there is one (the register's S1-15) |
-//! | one estimate per candidate | [`EASY_CANDIDATES`] `estimate_route`, a placement's to a `covering` waypoint naming its feature |
+//! | the guard probe ([`GUARD_PROBE_CALLS`]) | one `estimate_route` to the nearest own Defend beacon, so a post beside the core is never placed twice |
+//! | one estimate per candidate | [`EASY_CANDIDATES`] `estimate_route`, a placement's to a `covering` waypoint naming its feature, the guard post's among them |
 //! | one instantiate per template | [`EASY_TEMPLATES`] `instantiate_template`, each with its own values, to read what it declares |
 //! | the composition | [`COMPOSE_CALLS`]: one `patch_plan` filling the chosen template and inserting its goals |
 //! | the verifies | 1 `verify_plan`, then [`EASY_REPAIRS`] repairs of one `patch_plan` and one `verify_plan` each |
 //! | the safe playbook | [`SAFE_CALLS`]: at most [`SAFE_ESTIMATES`] `estimate_route`, one `instantiate_template` with the route, one `verify_plan` |
 //! | the commit | [`COMMIT_CALLS`]: at most two `submit_plan` (its own plan, then the safe one if the first was refused) and one `set_ready` |
 //!
-//! An advisor makes the fixed reads, the tap probe, the estimates, the
+//! An advisor makes the fixed reads, the two probes, the estimates, the
 //! instantiates and the safe playbook's calls, and nothing else
 //! ([`EASY_ADVISOR_CALL_BUDGET`]).
 //! `easy_never_exceeds_its_derived_call_budget` asserts both on a worst-case
@@ -57,7 +58,9 @@ use crate::playbook::{self, Declared};
 use crate::safe::{self, SafePlan};
 use crate::situation::{Kind, Situation};
 use crate::tuning::{RulesError, Tuning};
-use crate::wire::{Call, Wire, array_of, bool_of, compact, object, string, text_of};
+use crate::wire::{
+    Call, Misread, Refused, Wire, array_of, bool_of, compact, object, string, text_of,
+};
 
 // ---------------------------------------------------------------------------
 // Easy's row (spec section 14), and the thresholds with no rules row
@@ -138,8 +141,14 @@ pub const CORE_DIG_MAX_DEPTH: u32 = 4;
 pub const PAGES_MAX: u32 = 4;
 
 /// The templates Easy knows how to fill, in the order it instantiates them.
-/// Which three ship is decision 10 (decisions-log item 81).
-pub const EASY_KNOWN_TEMPLATES: [&str; 3] = [EXPAND_AND_MINE, HOLD_AND_BUILD, SAFE_PLAYBOOK];
+/// Which three shipped first is decision 10 (decisions-log item 81); Defend
+/// the Core is S2's (`oprd`).
+pub const EASY_KNOWN_TEMPLATES: [&str; 4] = [
+    EXPAND_AND_MINE,
+    HOLD_AND_BUILD,
+    DEFEND_THE_CORE,
+    SAFE_PLAYBOOK,
+];
 
 /// How many templates Easy instantiates: one per template it knows, counted
 /// from [`EASY_KNOWN_TEMPLATES`] so a template added there moves the budget.
@@ -161,6 +170,8 @@ const fn count(list: &[&str]) -> u32 {
 pub const EXPAND_AND_MINE: &str = "expand_and_mine";
 /// The Hold & Build template's id in the library.
 pub const HOLD_AND_BUILD: &str = "hold_and_build";
+/// The Defend the Core template's id in the library (S2's `oprd`).
+pub const DEFEND_THE_CORE: &str = "defend_the_core";
 /// The Safe Playbook template's id in the library.
 pub const SAFE_PLAYBOOK: &str = "safe_playbook";
 
@@ -217,15 +228,34 @@ pub const EXPANSION_POINTS_PER_BEACON: i64 = 100;
 /// PLACEHOLDER: the points one thing of another seat near a goal costs — owner, S5, with the Balanced weights
 pub const RISK_POINTS_PER_ENEMY: i64 = 100;
 
+/// What one hit point a second of threat inside the core's sphere is worth
+/// to a guard post, in points: decision 12's threat (a weapon's damage per
+/// second from its row) turned into the defence term.
+///
+/// PLACEHOLDER: the points a hit point a second of threat is worth — owner, S5, with the Balanced weights
+pub const DEFENCE_POINTS_PER_HP_PER_SECOND: i64 = 10;
+
+/// What a guard post is worth in the round after a Push in which the
+/// commander died, in points (spec section 14's Defend guard; decision 35):
+/// more than the post's price, so a death alone places one.
+///
+/// PLACEHOLDER: the points a guard post is worth after the commander's death — owner, S5, with the Balanced weights
+pub const COMMANDER_DIED_POINTS: i64 = 300;
+
 // ---------------------------------------------------------------------------
 // The budget
 // ---------------------------------------------------------------------------
 
-/// The fixed reads: four single calls and three paged reads.
-pub const FIXED_READS: u32 = 4 + 3 * PAGES_MAX;
+/// The fixed reads: four single calls and four paged reads (`list_beacons`,
+/// `get_view`, the segment feed and `list_templates`).
+pub const FIXED_READS: u32 = 4 + 4 * PAGES_MAX;
 
 /// The tap probe: one `resolve_refs` and one QUICK `verify_plan`.
 pub const TAP_PROBE_CALLS: u32 = 2;
+
+/// The guard probe: one `estimate_route` to the nearest own Defend beacon,
+/// which says whether a post already stands beside the core.
+pub const GUARD_PROBE_CALLS: u32 = 1;
 
 /// The composition: one `patch_plan`.
 pub const COMPOSE_CALLS: u32 = 1;
@@ -243,6 +273,7 @@ pub const COMMIT_CALLS: u32 = 2 + 1;
 /// the module docs).
 pub const EASY_CALL_BUDGET: u32 = FIXED_READS
     + TAP_PROBE_CALLS
+    + GUARD_PROBE_CALLS
     + EASY_CANDIDATES
     + EASY_TEMPLATES
     + COMPOSE_CALLS
@@ -251,8 +282,12 @@ pub const EASY_CALL_BUDGET: u32 = FIXED_READS
     + COMMIT_CALLS;
 
 /// The most calls an advisor's round makes.
-pub const EASY_ADVISOR_CALL_BUDGET: u32 =
-    FIXED_READS + TAP_PROBE_CALLS + EASY_CANDIDATES + EASY_TEMPLATES + SAFE_CALLS;
+pub const EASY_ADVISOR_CALL_BUDGET: u32 = FIXED_READS
+    + TAP_PROBE_CALLS
+    + GUARD_PROBE_CALLS
+    + EASY_CANDIDATES
+    + EASY_TEMPLATES
+    + SAFE_CALLS;
 
 // ---------------------------------------------------------------------------
 // What comes back
@@ -286,6 +321,9 @@ pub struct Played {
     pub calls: u32,
     /// Why, in one line.
     pub why: String,
+    /// The refusal that kept the round from being read, when one did: the
+    /// round then plans nothing and the gateway files the safe playbook.
+    pub refused: Option<Refused>,
 }
 
 /// One suggested value for one declared template parameter.
@@ -319,6 +357,9 @@ pub struct Advice {
     pub suggestions: Vec<Suggestion>,
     /// How many calls the advice made.
     pub calls: u32,
+    /// The refusal that kept the round from being read, when one did: the
+    /// advice is then empty and the gateway's fallback stands.
+    pub refused: Option<Refused>,
 }
 
 // ---------------------------------------------------------------------------
@@ -359,10 +400,14 @@ impl Easy {
             ready: false,
             calls: 0,
             why: String::new(),
+            refused: None,
         };
-        if let Ok(situation) = Situation::read(&mut wire, seat) {
-            round.round = situation.round;
-            self.plan(&mut wire, &situation, &mut round);
+        match Situation::read(&mut wire, seat) {
+            Ok(situation) => {
+                round.round = situation.round;
+                self.plan(&mut wire, &situation, &mut round);
+            }
+            Err(refused) => round.refused = Some(refused),
         }
         // Always, whatever happened above: a built-in seat that never says it
         // is ready holds the Lull open until the timer ends.
@@ -376,12 +421,14 @@ impl Easy {
     /// Plan and submit.
     fn plan(&self, wire: &mut Wire<'_, '_>, situation: &Situation, round: &mut Played) {
         let taps = candidates::legal_taps(wire, situation, &self.tuning);
-        let goals = candidates::enumerate(situation, &self.tuning, &taps);
+        let post = candidates::defend_post(wire, situation, &self.tuning);
+        let goals = candidates::enumerate(situation, &self.tuning, &taps, post);
         let evaluated = candidates::evaluate(wire, situation, &self.tuning, goals);
         let top = candidates::top_k(&evaluated);
+        let guard = candidates::guard(&evaluated);
         let declared = playbook::declare(wire, &situation.templates, &EASY_KNOWN_TEMPLATES);
 
-        if let Some(composed) = compose::compose(situation, &self.tuning, &top, &declared)
+        if let Some(composed) = compose::compose(situation, &self.tuning, &top, guard, &declared)
             && let Some(text) = verified(wire, &declared, &composed, &mut round.repairs)
             && submit(wire, &text)
         {
@@ -409,9 +456,14 @@ impl Easy {
     pub fn advise(&mut self, seat: u8, call: &mut Call<'_>) -> Advice {
         let mut wire = Wire::new(call);
         let mut advice = Advice::default();
-        if let Ok(situation) = Situation::read(&mut wire, seat) {
+        let read = Situation::read(&mut wire, seat);
+        if let Err(refused) = &read {
+            advice.refused = Some(refused.clone());
+        }
+        if let Ok(situation) = read {
             let taps = candidates::legal_taps(&mut wire, &situation, &self.tuning);
-            let goals = candidates::enumerate(&situation, &self.tuning, &taps);
+            let post = candidates::defend_post(&mut wire, &situation, &self.tuning);
+            let goals = candidates::enumerate(&situation, &self.tuning, &taps, post);
             let evaluated = candidates::evaluate(&mut wire, &situation, &self.tuning, goals);
             let declared =
                 playbook::declare(&mut wire, &situation.templates, &EASY_KNOWN_TEMPLATES);
@@ -423,7 +475,9 @@ impl Easy {
                 &declared,
                 safe.as_ref(),
             );
-            advice.safe_playbook_jsonc = safe.map(|plan| plan.jsonc).unwrap_or_default();
+            if let Some(plan) = safe {
+                advice.safe_playbook_jsonc = plan.jsonc;
+            }
         }
         advice.calls = wire.calls();
         advice
@@ -436,7 +490,8 @@ impl Easy {
 /// the repairs it spent into `repairs` either way. A repair is the verifier's
 /// own machine-applicable fix for its first error when there is one; else,
 /// while no fix has been applied, taking out the last goal the greedy
-/// insertion added; else there is nothing left to try.
+/// insertion added; else there is nothing left to try. An answer that does not
+/// read is a plan that did not qualify.
 fn verified(
     wire: &mut Wire<'_, '_>,
     declared: &[Declared],
@@ -459,14 +514,14 @@ fn verified(
             )
             .ok()?;
         let report = answer.get("report")?;
-        if bool_of(report, "qualifies") {
+        if bool_of(report, "qualifies").ok()? {
             return Some(text);
         }
         if *repairs >= EASY_REPAIRS {
             return None;
         }
         *repairs = repairs.checked_add(1)?;
-        let next = if let Some(json_patch) = machine_fix(report) {
+        let next = if let Some(json_patch) = machine_fix(report).ok()? {
             // The removals name route steps by the index they had in the
             // composed text; a fix may have moved them, so from here on they
             // are not used (a stale index could take out the wrong step).
@@ -480,25 +535,30 @@ fn verified(
     }
 }
 
-/// The first error's first machine-applicable patch, as text.
-fn machine_fix(report: &Json) -> Option<String> {
-    for diagnostic in array_of(report, "diagnostics") {
+/// The first error's first machine-applicable patch, as text; `None` when no
+/// error offers one.
+///
+/// # Errors
+///
+/// [`Misread`] for a report that does not read.
+fn machine_fix(report: &Json) -> Result<Option<String>, Misread> {
+    for diagnostic in array_of(report, "diagnostics")? {
         let severity = Wire::enum_name("gp.api.v1.Diagnostic.Severity", diagnostic.get("severity"));
         if severity.as_deref() != Some("ERROR") {
             continue;
         }
-        for suggestion in array_of(diagnostic, "suggestions") {
+        for suggestion in array_of(diagnostic, "suggestions")? {
             let applicability = Wire::enum_name(
                 "gp.api.v1.PatchSuggestion.Applicability",
                 suggestion.get("applicability"),
             );
-            let patch = text_of(suggestion, "json_patch");
+            let patch = text_of(suggestion, "json_patch")?;
             if applicability.as_deref() == Some("MACHINE_APPLICABLE") && !patch.is_empty() {
-                return Some(patch.to_owned());
+                return Ok(Some(patch.to_owned()));
             }
         }
     }
-    None
+    Ok(None)
 }
 
 /// Apply a patch of operations through `patch_plan`.
@@ -506,7 +566,8 @@ fn patched(wire: &mut Wire<'_, '_>, text: &str, ops: &[Json]) -> Option<String> 
     patched_text(wire, text, &compact(&Json::Array(ops.to_vec())))
 }
 
-/// Apply a JSON Patch text through `patch_plan`.
+/// Apply a JSON Patch text through `patch_plan`; `None` when it is refused or
+/// its answer carries no text.
 fn patched_text(wire: &mut Wire<'_, '_>, text: &str, json_patch: &str) -> Option<String> {
     let answer = wire
         .call(
@@ -517,24 +578,25 @@ fn patched_text(wire: &mut Wire<'_, '_>, text: &str, json_patch: &str) -> Option
             ]),
         )
         .ok()?;
-    let out = text_of(&answer, "playbook_jsonc");
+    let out = text_of(&answer, "playbook_jsonc").ok()?;
     (!out.is_empty()).then(|| out.to_owned())
 }
 
-/// Submit, and say whether it was accepted.
+/// Submit, and say whether it was accepted: a refusal, and an answer that
+/// does not read, are not an acceptance.
 fn submit(wire: &mut Wire<'_, '_>, text: &str) -> bool {
     wire.call(
         "submit_plan",
         object(vec![("playbook_jsonc", string(text))]),
     )
-    .is_ok_and(|answer| bool_of(&answer, "accepted"))
+    .is_ok_and(|answer| bool_of(&answer, "accepted") == Ok(true))
 }
 
 /// One suggestion per template Easy knows and the library lists, in
 /// declaration order: own beacons and fixed targets only. Each `why` opens
 /// with the seed line (decision C15: recorded, unused).
 ///
-/// Which templates the operator suggests for a human (all three Easy knows),
+/// Which templates the operator suggests for a human (all four Easy knows),
 /// and that a suggestion names only the seat's own beacons and named
 /// features, never another seat's beacon (Easy's row; decisions-log item 111,
 /// section D).
@@ -581,6 +643,23 @@ fn suggestions(
                     compose::why_for(best, 1, fill)
                 }
                 _ => compose::why_no_vent(&candidates::no_vent(situation, tuning)),
+            },
+            // The guard post's site, whatever it is worth this round: the
+            // person decides whether to place it, and the why says what Easy
+            // would weigh.
+            DEFEND_THE_CORE => match (candidates::guard_site(evaluated), fill) {
+                (Some(site), Some(fill)) => {
+                    put(covering, named_text(site.goal.feature()));
+                    if let Some(hold) = compose::hold_left(site, fill, 0) {
+                        put(template.pointer_ending("/hold/ms"), hold.to_string());
+                    }
+                    format!(
+                        "{} {}",
+                        compose::why_for(site, 1, fill),
+                        compose::guard_reason(situation, tuning)
+                    )
+                }
+                _ => compose::why_no_guard(),
             },
             SAFE_PLAYBOOK => {
                 if let Some(plan) = safe.filter(|plan| !plan.own) {
