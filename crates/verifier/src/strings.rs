@@ -614,12 +614,11 @@ pub const VERIFIER_STRINGS: &[Text] = &[
     },
     Text {
         code: "I0005",
-        message: "`pace` is AVOID_KNOWN_THREATS, and the seat has no sighting of another seat, \
-                  so there is no known threat to route around: started now, this move goes as \
+        message: "`pace` is AVOID_KNOWN_THREATS, and the seat's view holds no enemy beacon in \
+                  sight; unless the seat sees an armed enemy when the move starts, it goes as \
                   DIRECT does.",
-        beginner: "Avoiding threats needs threats your side has seen. None are seen yet, so \
-                   this walk goes straight; it steers round an armed enemy your side sees when \
-                   the move starts.",
+        beginner: "Avoiding threats needs an enemy your side can see. None is in sight now, so \
+                   unless one is when the walk starts, it goes straight.",
     },
 ];
 

@@ -184,8 +184,8 @@ impl Visit for Enums<'_> {
             }
             // S2's settings (`con4`): read raw like every other enum, as they
             // were while the sim refused the whole arm (Defend's until S2's
-            // `dfnd`, Attack's until S2's `atk`), so that the day they were
-            // read, an unknown number already was not.
+            // `dfnd`; Attack's it refuses until S2's `atk`), so that the day
+            // each is read, an unknown number already is not.
             Some(mandate_settings::Mandate::Defend(defend)) => {
                 self.raw::<defend_settings::Pursue>(
                     &pointer::child(&pointer::child(at, "defend"), "pursue"),

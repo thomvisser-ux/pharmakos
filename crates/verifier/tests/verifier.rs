@@ -1578,12 +1578,13 @@ fn which_missing_blocks_the_sim_refuses_first_is_measured() {
 // S2's threat model (task `vfy3`)
 // ---------------------------------------------------------------------------
 
-/// `I0005` reads whether the view holds a sighting of another seat, and
-/// nothing more: with any sighting, a beacon or a commander, fresh or old, the
-/// note is not raised, because whether a threat is seen when the move starts
-/// is the Push's (S2's plan, decision 12).
+/// `I0005` reads whether the view holds an enemy beacon in live vision, and
+/// nothing more: a beacon seen now silences it, while a beacon seen earlier
+/// or a commander (which carries no weapon) does not, because the sim's known
+/// threats are armed enemies seen when the move starts (S2's plan, decision
+/// 12; `crates/sim/src/defend.rs`).
 #[test]
-fn avoiding_threats_is_noted_only_with_no_sighting() {
+fn avoiding_threats_is_noted_only_with_no_enemy_beacon_in_sight() {
     let text = String::from_utf8(case_bytes("i0005_avoiding_threats_with_none_sighted"))
         .expect("a case is UTF-8");
     let snapshot = fixture_snapshot();
@@ -1593,18 +1594,19 @@ fn avoiding_threats_is_noted_only_with_no_sighting() {
             .any(|c| c == "I0005")
     };
     assert!(noted(&fixture_scope()), "no sighting: the note");
-    for what in [
-        Sighted::Beacon("e_01".to_owned()),
-        Sighted::Commander(SeatId::new(1)),
+    for (what, age_ms, wanted) in [
+        (Sighted::Beacon("e_01".to_owned()), 0, false),
+        (Sighted::Beacon("e_01".to_owned()), 1, true),
+        (Sighted::Beacon("e_01".to_owned()), u32::MAX, true),
+        (Sighted::Commander(SeatId::new(1)), 0, true),
+        (Sighted::Commander(SeatId::new(1)), u32::MAX, true),
     ] {
-        for age_ms in [0, u32::MAX] {
-            let scope = fixture_scope().with_sighting(Sighting {
-                what: what.clone(),
-                at: Voxel { x: 1, y: 1, z: 1 },
-                age_ms,
-            });
-            assert!(!noted(&scope), "{what:?} seen {age_ms} ms ago: no note");
-        }
+        let scope = fixture_scope().with_sighting(Sighting {
+            what: what.clone(),
+            at: Voxel { x: 1, y: 1, z: 1 },
+            age_ms,
+        });
+        assert_eq!(noted(&scope), wanted, "{what:?} seen {age_ms} ms ago");
     }
     let direct = text.replace("AVOID_KNOWN_THREATS", "DIRECT");
     assert!(

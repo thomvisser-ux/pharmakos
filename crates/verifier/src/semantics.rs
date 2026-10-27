@@ -41,10 +41,11 @@
 //! # Avoiding known threats with none sighted (task `vfy3`)
 //!
 //! A move paced `AVOID_KNOWN_THREATS` adds the rules row's surcharge per step
-//! inside a known threat's range (decision 12), and a known threat is one the
-//! seat sees when the step starts. A view with no sighting of another seat
-//! has none, so the move routes as `DIRECT` would if it started now, and
-//! `I0005` says so: the editor's explanation and no more.
+//! inside a known threat's range (decision 12, the sim's from S2's `atk`), and
+//! a known threat is an armed enemy the seat sees when the step starts. A view
+//! with no enemy beacon in live vision shows none, so `I0005` says the move
+//! goes as `DIRECT` does unless one is seen when it starts: the editor's
+//! explanation and no more.
 //!
 //! # S2's Defend and Attack, and the wall's sphere (task `vfy2`)
 //!
@@ -79,7 +80,7 @@ use crate::limits::Limits;
 use crate::pointer;
 use crate::report::{Builder, Diag, number, patch_add, patch_replace};
 use crate::resolve::Symbols;
-use crate::scope::{FeatureKind, Ownership, Scope};
+use crate::scope::{FeatureKind, Ownership, Scope, Sighted};
 use crate::strings;
 use crate::structure::arm_name;
 use crate::walk::{self, AreaOf, Carrier, Holder, List, Slot, Visit};
@@ -115,17 +116,29 @@ pub(crate) fn run(
 
 impl Semantics<'_> {
     /// `I0005` (S2's plan, decision 12): a move paced `AVOID_KNOWN_THREATS`
-    /// prices the threats the seat sees when the step starts, so with no
-    /// sighting of another seat in the view there is nothing to route round,
-    /// and a route started now goes as `DIRECT` does. The note reads whether
-    /// the view holds a sighting and nothing more: it ranks none, prices no
-    /// route and guesses at no threat the Push may bring (AGENTS.md section 3
-    /// rule 2).
+    /// prices the known threats, the armed enemies the seat sees when the step
+    /// starts (`crates/sim/src/defend.rs`). The view carries sightings of
+    /// other seats' beacons and commanders and no other enemy asset, so the
+    /// note reads the one thing it holds that can be armed and seen now: an
+    /// enemy beacon in live vision (age 0), whose core or structures may be
+    /// armed. A commander carries no weapon, and an older sighting is not
+    /// seen now, so neither counts. With none, the note says the move goes as
+    /// `DIRECT` does unless an armed enemy is seen when it starts; it claims
+    /// nothing about the units the view does not carry. It ranks nothing,
+    /// prices no route and guesses at no threat the Push may bring (AGENTS.md
+    /// section 3 rule 2).
     fn pace(&mut self, at: &str, entry: &Step) {
         let Some(step::Kind::Move(walk_to)) = entry.kind.as_ref() else {
             return;
         };
-        if walk_to.pace == i32::from(Pace::AvoidKnownThreats) && self.scope.sightings().is_empty() {
+        let beacon_in_sight = self.scope.sightings().iter().any(|sighting| {
+            sighting.age_ms == 0
+                && match sighting.what {
+                    Sighted::Beacon(_) => true,
+                    Sighted::Commander(_) => false,
+                }
+        });
+        if walk_to.pace == i32::from(Pace::AvoidKnownThreats) && !beacon_in_sight {
             self.out.emit(Diag::new(
                 "I0005",
                 pointer::child(&pointer::child(at, "move"), "pace"),

@@ -253,6 +253,26 @@ cargo xtask golden --bless              # accepts them
   A Defend case also carries `E0012`, an Attack case `E0013` and a wall case
   `E0019`, because the sim refuses those arms and that blueprint whole until
   S2's `dfnd`, `atk` and `site` lanes; the case still isolates its own code.
+* **Every `report_hash` moved in S2's threat model's verifier lane (`vfy3`)**,
+  because `VERIFIER_VERSION` went from `0.1.0-s2.2` to `0.1.0-s2.3`, input 4.
+  Reports moved for three rules and two wordings:
+  * a move paced `AVOID_KNOWN_THREATS` while the view holds no enemy beacon in
+    live vision carries an `I0005` note (S2's plan, decision 12), which
+    `expand_east` gains on its first move;
+  * an omitted `roe` reads by writ (decisions-log item 148 (2)): FREE_FIRE on
+    a Defend or an Attack beacon, RETURN_FIRE on the others;
+  * a protected, probe or avoid area missing a corner is `E0101`, as a wall's
+    box already was (item 146 (4));
+  * `E0003`'s message says a reserved name is held back for a later stage or
+    version rather than "not part of the v1 vocabulary", which was less than
+    the truth for S4's names (both `e0003_*` cases moved);
+  * the retired rows `E0012`, `E0014`, `E0017`, `E0019` and `W0501` say they
+    are retired, on the pattern `atk` set for `E0013` (the catalogue only).
+
+  Four cases are new: `i0005_avoiding_threats_with_none_sighted`,
+  `i0003_a_defend_beacons_omitted_roe`, `i0003_an_attack_beacons_omitted_roe`
+  and `e0101_an_area_missing_a_corner`. The Attack case also carries `E0013`
+  until S2's `atk` lifts it, and is re-blessed then.
 
 **The sightings, for the cases that read them (S2).** The cases named in
 `verifier.rs`'s `SIGHT_CASES` (`e0418_an_attack_target_seen_too_long_ago`,

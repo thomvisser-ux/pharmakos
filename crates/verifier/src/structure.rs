@@ -464,12 +464,15 @@ impl Visit for Sites<'_> {
     }
 
     /// A half-written area has no voxels to protect, probe or avoid, and the
-    /// sim refuses it at compile (`MissingBlock("area.min")`), so each missing
-    /// corner is `E0101`, as a wall's box already is (decisions-log item
-    /// 146 (4)). A wall's box is [`Sites::wall`]'s, which names it so.
+    /// sim refuses a protected or probe area at compile
+    /// (`MissingBlock("area.min")`; an avoid area falls under `E0013`'s
+    /// whole-arm refusal until S2's `atk`), so each missing corner is `E0101`,
+    /// as a wall's box already is (decisions-log item 146 (4)). A wall's box
+    /// is [`Sites::wall`]'s, which names it so.
     fn area(&mut self, at: &str, area: &Area, of: AreaOf) {
-        if of == AreaOf::WallBox {
-            return;
+        match of {
+            AreaOf::WallBox => return,
+            AreaOf::Protected | AreaOf::Probe | AreaOf::Avoid => {}
         }
         for (present, corner) in [(area.min.is_some(), "min"), (area.max.is_some(), "max")] {
             if !present {
@@ -559,7 +562,8 @@ impl Visit for Sites<'_> {
         }
         // S2's plan, decision 4, as decisions-log item 148 (2) amends it: an
         // omitted `roe` reads by writ, FREE_FIRE on a Defend or an Attack
-        // beacon and RETURN_FIRE on the others (the sim's `Roe::of_setting`),
+        // beacon and RETURN_FIRE on the others (the sim's `Roe::of_setting`,
+        // whose Attack arm is S2's `atk`'s; until it lands the arm is `E0013`),
         // said where the settings start from nothing and the block names a
         // writ (a block with none is `E0502`'s).
         if let Some(mandate) = settings.mandate.as_ref()

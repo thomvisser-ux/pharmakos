@@ -896,7 +896,8 @@ pub const CATALOGUE: &[Entry] = &[
     // `seam_choice`, `pillar_spacing` or `terraform` reads as its named
     // default, and the report says so; from S2 (decision 4, task `vfy2`) an
     // omitted `roe` too, read by writ (decisions-log item 148 (2), task
-    // `vfy3`): FREE_FIRE on Defend and Attack, RETURN_FIRE on the others.
+    // `vfy3`): FREE_FIRE on Defend and Attack, RETURN_FIRE on the others, the
+    // Attack arm the sim's once S2's `atk` lifts `E0013`.
     Entry {
         code: "I0003",
         family: Family::Information,
@@ -912,10 +913,9 @@ pub const CATALOGUE: &[Entry] = &[
         emitter: Emitter::Stage(Stage::Structure),
     },
     // S2's plan, decision 12 (task `vfy3`): a move paced AVOID_KNOWN_THREATS
-    // while the seat's view holds no sighting of another seat routes as
-    // DIRECT would, since the sim prices only threats the seat sees. The
-    // editor's explanation and no more; whether a threat is seen when the
-    // step starts is the Push's.
+    // while the seat's view holds no enemy beacon in live vision goes as
+    // DIRECT does unless an armed enemy is seen when it starts. The editor's
+    // explanation and no more; whether a threat is seen then is the Push's.
     Entry {
         code: "I0005",
         family: Family::Information,
