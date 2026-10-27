@@ -166,7 +166,7 @@ pub(crate) fn for_each_known_threat<F: FnMut(Known)>(world: &World, seat: SeatId
 }
 
 /// Whether `owner` is a seat other than `seat`: an enemy of it.
-fn enemy(seat: SeatId, owner: u8) -> bool {
+pub(crate) fn enemy(seat: SeatId, owner: u8) -> bool {
     SeatId::new(owner).is_some() && owner != seat.raw()
 }
 
@@ -414,7 +414,7 @@ fn for_each_tier<F: FnMut([Fx; 3]) -> bool>(
 }
 
 /// Where a live beacon stands.
-fn live_beacon_at(world: &World, beacon: BeaconId) -> Option<[Fx; 3]> {
+pub(crate) fn live_beacon_at(world: &World, beacon: BeaconId) -> Option<[Fx; 3]> {
     let at = world.beacons().row_of(beacon).ok()?.index();
     world
         .beacons()
@@ -520,7 +520,11 @@ pub(crate) fn engagement_zone(world: &World, home: BeaconId) -> Option<([Fx; 3],
 
 /// The living units of `kind` homed to `beacon`, in ascending row: a beacon's
 /// guards or its pickets.
-fn homed(world: &World, beacon: BeaconId, kind: UnitKind) -> impl Iterator<Item = u32> + '_ {
+pub(crate) fn homed(
+    world: &World,
+    beacon: BeaconId,
+    kind: UnitKind,
+) -> impl Iterator<Item = u32> + '_ {
     let units = world.units();
     units
         .homes()
@@ -611,7 +615,7 @@ fn post_of_unit(world: &World, unit: u32) -> Option<(DefendRow, Post)> {
 /// Walk `unit` towards `to`, re-sending it only when its destination is not
 /// already there, so a guard following a moving quarry does not ask for a new
 /// route every tick it stays close to the old one.
-fn steer(world: &mut World, unit: u32, to: [Fx; 3]) {
+pub(crate) fn steer(world: &mut World, unit: u32, to: [Fx; 3]) {
     let row = crate::math::index::row(unit);
     let held = world.units().destinations().get(row).copied();
     let radius = world.arrive_radius();

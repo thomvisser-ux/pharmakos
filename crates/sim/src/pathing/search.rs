@@ -429,6 +429,49 @@ pub fn astar_with_order(
     order: [u8; 8],
     out: &mut Vec<Node>,
 ) -> Option<i32> {
+    astar_inner(
+        surface,
+        bound,
+        scratch,
+        (start, goal),
+        order,
+        crate::pathing::route::Surcharge::NONE,
+        out,
+    )
+}
+
+/// A\* with the default expansion order under a route surcharge (S2's
+/// `atk`): a step onto a surcharged column costs the multiplier times its
+/// ordinary cost. The heuristic stays octile at the ordinary costs, which a
+/// surcharge of one or more never makes inadmissible.
+pub fn astar_costed(
+    surface: &Surface,
+    bound: Bound<'_>,
+    scratch: &mut Scratch,
+    (start, goal): (Node, Node),
+    surcharge: crate::pathing::route::Surcharge<'_>,
+    out: &mut Vec<Node>,
+) -> Option<i32> {
+    astar_inner(
+        surface,
+        bound,
+        scratch,
+        (start, goal),
+        DEFAULT_ORDER,
+        surcharge,
+        out,
+    )
+}
+
+fn astar_inner(
+    surface: &Surface,
+    bound: Bound<'_>,
+    scratch: &mut Scratch,
+    (start, goal): (Node, Node),
+    order: [u8; 8],
+    surcharge: crate::pathing::route::Surcharge<'_>,
+    out: &mut Vec<Node>,
+) -> Option<i32> {
     out.clear();
     if !surface.walkable(start) || !surface.walkable(goal) {
         return None;
@@ -464,7 +507,7 @@ pub fn astar_with_order(
             if !bound.admits(next) || scratch.is_closed(next) {
                 continue;
             }
-            let Some(cost) = here.checked_add(step) else {
+            let Some(cost) = here.checked_add(surcharge.step(surface, next, step)) else {
                 continue;
             };
             if scratch.seen(next) && scratch.cost_at(next) <= cost {

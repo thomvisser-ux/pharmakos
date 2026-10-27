@@ -99,9 +99,9 @@
     "code": "E0013",
     "family": "decode and version",
     "severity": "ERROR",
-    "emitter": "structure",
-    "message": "Attack mandate settings have no effect until S2's Attack mandate lands; they are refused rather than ignored.",
-    "beginner": "An Attack beacon cannot be given settings in this build yet."
+    "emitter": "none at the skeleton (retired by S2's `atk`, which built Attack's settings)",
+    "message": "Attack mandate settings had no effect until S2's Attack mandate landed; this code is retired and raised by nothing.",
+    "beginner": "An Attack beacon takes its settings in this build."
   },
   {
     "code": "E0014",
@@ -510,6 +510,14 @@
     "emitter": "semantics",
     "message": "{what}; an Attack target must have been seen within the reach window, {max} ms, when the playbook is sealed.",
     "beginner": "An Attack beacon attacks what the seat has seen recently. Look again with a scout, or choose a target the seat has seen."
+  },
+  {
+    "code": "E0419",
+    "family": "references and placement",
+    "severity": "ERROR",
+    "emitter": "semantics",
+    "message": "`enemy_commander` names seat {seat}, {why}; it hunts another seat's commander in this match, or, without a seat, the nearest the seat has seen.",
+    "beginner": "An Attack beacon hunts an enemy's commander. Name an enemy seat, or leave the seat out to hunt the nearest enemy commander seen."
   },
   {
     "code": "E0501",

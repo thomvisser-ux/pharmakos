@@ -7,19 +7,12 @@
       "path": "/declarative/route/0/place_beacon/initial/mandate/attack/target/beacon/nearest",
       "message": "an Attack target is a selector that ranks your own beacons (`side: OWN`, or no side); it must rank known enemy beacons (`side: ENEMY_KNOWN`).",
       "beginner": "A Defend beacon protects your own beacons, and an Attack beacon attacks an enemy's, so a selector there has to look among the right side's beacons."
-    },
-    {
-      "code": "E0013",
-      "severity": "ERROR",
-      "path": "/declarative/route/0/place_beacon/initial/mandate/attack",
-      "message": "Attack mandate settings have no effect until S2's Attack mandate lands; they are refused rather than ignored.",
-      "beginner": "An Attack beacon cannot be given settings in this build yet."
     }
   ],
-  "report_hash": "932trQR+Xwc=",
+  "report_hash": "V6/hMNE8Xjo=",
   "rules_hash": "gCjUE4Tm3i8=",
   "plan_fingerprint": "spscYEjmU3c=",
-  "verifier_version": "0.1.0-s2.3",
+  "verifier_version": "0.1.0-s2.2",
   "size_units": 1,
   "size_budget": 128
 }

@@ -164,6 +164,9 @@ pub enum Purchase {
     /// beacon's build fund, which its build drones draw on voxel by voxel as
     /// they fill a wall, level a footprint or refill a crater.
     BuildWork,
+    /// One demolition charge for the asking Attack beacon's breach (S2's
+    /// `atk`; decision 9): loaded on its carrier as it is bought.
+    Charge,
 }
 
 /// The spend-control seam spec section 15 keeps ("a Quartermaster trait").

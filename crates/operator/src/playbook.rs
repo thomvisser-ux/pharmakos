@@ -14,7 +14,9 @@
 
 use pharmakos_proto::json::Json;
 
-use crate::wire::{Refused, Wire, array_of, object, string, strip_comments, text_of};
+use crate::wire::{
+    Misread, Refused, Wire, array_of, malformed, object, string, strip_comments, text_of,
+};
 
 /// One template, instantiated with its own values.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -25,7 +27,7 @@ pub(crate) struct Declared {
     /// answered it.
     pub(crate) jsonc: String,
     /// The same, comments taken out and read, to copy a step's shape from.
-    /// `Json::Null` when it would not read.
+    /// A text that would not read is refused, never read as nothing.
     pub(crate) body: Json,
     /// The declared parameters, in declaration order: pointer and own value
     /// (compact JSON text).
@@ -87,17 +89,26 @@ pub(crate) fn instantiate(
         params.push(("parameters", Json::Array(explicit)));
     }
     let answer = wire.call("instantiate_template", object(params))?;
-    let jsonc = text_of(&answer, "playbook_jsonc").to_owned();
-    let body = pharmakos_proto::json::read(&strip_comments(&jsonc)).unwrap_or(Json::Null);
+    let misread = |misread: Misread| misread.refused("instantiate_template");
+    let jsonc = text_of(&answer, "playbook_jsonc")
+        .map_err(misread)?
+        .to_owned();
+    let body = pharmakos_proto::json::read(&strip_comments(&jsonc)).map_err(|_| {
+        malformed(
+            "instantiate_template",
+            "the instantiated playbook does not read as JSON once its comments are out",
+        )
+    })?;
     let parameters = array_of(&answer, "parameters")
+        .map_err(misread)?
         .iter()
         .map(|filled| {
-            (
-                text_of(filled, "pointer").to_owned(),
-                text_of(filled, "value").to_owned(),
-            )
+            Ok((
+                text_of(filled, "pointer").map_err(misread)?.to_owned(),
+                text_of(filled, "value").map_err(misread)?.to_owned(),
+            ))
         })
-        .collect();
+        .collect::<Result<Vec<(String, String)>, Refused>>()?;
     Ok(Declared {
         template_id: (*template_id).to_owned(),
         jsonc,

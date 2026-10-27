@@ -506,6 +506,10 @@ pub enum Row {
         /// row names it ([`crate::defend::DefendEdit`]; S2's `dfnd`); `None`
         /// when the row carries no Defend arm.
         defend: Option<crate::defend::DefendEdit>,
+        /// The Attack mandate's settings the row writes, each only when the
+        /// row names it ([`crate::attack::AttackEdit`]; S2's `atk`); `None`
+        /// when the row carries no Attack arm.
+        attack: Option<crate::attack::AttackEdit>,
     },
     /// Set the Quartermaster priority — `interface_times.set_priority_ms`.
     Priority {
@@ -831,6 +835,88 @@ impl Plan {
     #[must_use]
     pub fn handlers(&self) -> &[Rule] {
         &self.handlers
+    }
+
+    /// **Pin every Attack target named by an enemy beacon's `e_NN` handle**
+    /// to the beacon `resolve` says the handle names now (S2's `atk`;
+    /// decisions-log item 13: "the target is pinned at the seal and launch
+    /// never re-tests it"). The handles are the gateway's, minted per viewer
+    /// where a Lull opens (decisions-log item 148 (3) (a)), so the host that
+    /// seals the plan resolves them for the sealing seat, against the names
+    /// that seat planned with, just before the seal. A handle `resolve`
+    /// answers `None` for stays unpinned, and the row that names it fails its
+    /// step `no_target` when it commits, as an own beacon that is not there
+    /// does: nothing is substituted.
+    pub fn pin_foreign(&mut self, resolve: impl Fn(u32) -> Option<crate::tables::BeaconId>) {
+        let steps = self.route.iter_mut().chain(
+            self.handlers
+                .iter_mut()
+                .flat_map(|rule| rule.body.iter_mut()),
+        );
+        for step in steps {
+            let rows = match &mut step.action {
+                Action::Interface { rows, .. } | Action::PlaceBeacon { rows, .. } => rows,
+                Action::Move { .. }
+                | Action::WaitUntil(_)
+                | Action::Hold { .. }
+                | Action::Broadcast => continue,
+            };
+            for row in rows.iter_mut() {
+                let edit = match row {
+                    Row::Settings { attack, .. } => attack.as_mut(),
+                    Row::Mandate {
+                        settings: Some(settings),
+                        ..
+                    } => match settings.as_mut() {
+                        Row::Settings { attack, .. } => attack.as_mut(),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if let Some(edit) = edit
+                    && let Some(crate::attack::TargetSpec::Foreign { handle, pinned }) =
+                        edit.target.as_mut()
+                {
+                    *pinned = resolve(*handle);
+                }
+            }
+        }
+    }
+
+    /// Every seat an Attack target's `enemy_commander.seat` names, in plan
+    /// order: what the seal checks against the sealing seat and the match's
+    /// seats ([`crate::runner::SealRefused::CommanderSeat`]).
+    pub fn commander_seats(&self) -> impl Iterator<Item = u8> + '_ {
+        self.route
+            .iter()
+            .chain(self.handlers.iter().flat_map(|rule| rule.body.iter()))
+            .flat_map(|step| match &step.action {
+                Action::Interface { rows, .. } | Action::PlaceBeacon { rows, .. } => {
+                    rows.as_slice()
+                }
+                Action::Move { .. }
+                | Action::WaitUntil(_)
+                | Action::Hold { .. }
+                | Action::Broadcast => &[],
+            })
+            .filter_map(|row| {
+                let settings = match row {
+                    Row::Mandate {
+                        settings: Some(settings),
+                        ..
+                    } => settings.as_ref(),
+                    other => other,
+                };
+                match settings {
+                    Row::Settings {
+                        attack: Some(edit), ..
+                    } => match edit.target {
+                        Some(crate::attack::TargetSpec::Commander(Some(seat))) => Some(seat),
+                        _ => None,
+                    },
+                    _ => None,
+                }
+            })
     }
 
     /// The guaranteed tail.
@@ -1289,9 +1375,8 @@ fn compile_row(
 /// carries a [`Row::Settings`] whose targets the step binds -- the reading the
 /// gateway's `resolve_playbook` holds the compiled plan to.
 ///
-/// An empty Defend or Attack arm writes nothing of its own: Attack's settings
-/// are refused wherever they are written ([`mandate_fields`]), but a switch to
-/// an S2 writ with nothing in it writes nothing to refuse. The two top-level
+/// An empty Defend or Attack arm writes nothing of its own: a switch to an S2
+/// writ with nothing in it writes no field of the arm. The two top-level
 /// fields beside the arm, `roe` and `retreat_hp_pct`, are still fields of the
 /// edit and are priced as they are for any other arm (and as `plan-core`
 /// prices them), so they are counted here rather than dropped with the arm.
@@ -1325,6 +1410,7 @@ fn compile_switch_settings(
                 retreat_hp_pct,
                 build: crate::site::BuildEdit::default(),
                 defend: None,
+                attack: None,
             })
         }));
     }
@@ -1369,6 +1455,7 @@ fn compile_settings_row(
     let mut mine: Option<crate::mining::MineEdit> = None;
     let mut build_edit = crate::site::BuildEdit::default();
     let mut defend_edit: Option<crate::defend::DefendEdit> = None;
+    let mut attack_edit: Option<crate::attack::AttackEdit> = None;
     if let Some(mandate) = settings.mandate.as_ref() {
         fields = fields
             .checked_add(mandate_fields(mandate)?)
@@ -1404,7 +1491,9 @@ fn compile_settings_row(
             gp::v1::mandate_settings::Mandate::Defend(defend) => {
                 defend_edit = Some(compile_defend_settings(defend, names)?);
             }
-            gp::v1::mandate_settings::Mandate::Attack(_) => {}
+            gp::v1::mandate_settings::Mandate::Attack(attack) => {
+                attack_edit = Some(compile_attack_settings(attack, names)?);
+            }
         }
     }
     let (roe, retreat_hp_pct) = compile_common(settings)?;
@@ -1420,6 +1509,141 @@ fn compile_settings_row(
         retreat_hp_pct,
         build: build_edit,
         defend: defend_edit,
+        attack: attack_edit,
+    })
+}
+
+/// The Attack settings a row names (S2's `atk`): the target -- an enemy
+/// beacon by its `e_NN` handle, pinned at the seal, a voxel, or the enemy
+/// commander with its seat -- the retarget rule, the staging point, the
+/// launch and retreat conditions, the after-action, the avoid areas,
+/// `breach_allowed` and `waves`. Each is written only when the row names it.
+///
+/// # Errors
+///
+/// [`PlanError::AttackTargetNotEnemy`] for a target that is not an enemy
+/// beacon's handle (an own name, `safest`, or a selector, which until S3
+/// ranks only the seat's own beacons), [`PlanError::CommanderSeatOutOfRange`]
+/// for a seat past any match's, [`PlanError::UnknownEnum`],
+/// [`PlanError::ForceBelowOutOfRange`], [`PlanError::NegativeDuration`],
+/// [`PlanError::MissingBlock`] for a target naming nothing, and a voxel's,
+/// an area's or a filter's own refusals.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one arm per field of Attack's settings, in the schema's order, as `mandate_fields` counts them"
+)]
+fn compile_attack_settings(
+    attack: &gp::v1::AttackSettings,
+    names: &Names<'_>,
+) -> Result<crate::attack::AttackEdit, PlanError> {
+    use crate::attack::{AfterAction, Retarget, TargetSpec};
+    let target = match attack.target.as_ref() {
+        None => None,
+        Some(target) => Some(match target.target.as_ref() {
+            Some(gp::v1::attack_target::Target::Beacon(beacon)) => {
+                match compile_beacon_ref(Some(beacon), names)? {
+                    BeaconSpec::Foreign(handle) => TargetSpec::Foreign {
+                        handle,
+                        pinned: None,
+                    },
+                    _ => return Err(PlanError::AttackTargetNotEnemy),
+                }
+            }
+            Some(gp::v1::attack_target::Target::Voxel(voxel)) => {
+                TargetSpec::Voxel(names.voxel(voxel)?)
+            }
+            Some(gp::v1::attack_target::Target::EnemyCommander(commander)) => {
+                TargetSpec::Commander(match commander.seat {
+                    None => None,
+                    Some(found) => Some(
+                        u8::try_from(found)
+                            .map_err(|_| PlanError::CommanderSeatOutOfRange { found })?,
+                    ),
+                })
+            }
+            None => return Err(PlanError::MissingBlock("attack.target.target")),
+        }),
+    };
+    let enumerated = |field: &'static str, value: i32| {
+        u8::try_from(value)
+            .ok()
+            .ok_or(PlanError::UnknownEnum { field, value })
+    };
+    let retarget = match attack.retarget {
+        0 => None,
+        value => Some(
+            Retarget::from_id(enumerated("attack.retarget", value)?).ok_or(
+                PlanError::UnknownEnum {
+                    field: "attack.retarget",
+                    value,
+                },
+            )?,
+        ),
+    };
+    let after = match attack.after_action {
+        0 => None,
+        value => Some(
+            AfterAction::from_id(enumerated("attack.after_action", value)?).ok_or(
+                PlanError::UnknownEnum {
+                    field: "attack.after_action",
+                    value,
+                },
+            )?,
+        ),
+    };
+    let staging = attack
+        .staging
+        .as_ref()
+        .map(|voxel| names.voxel(voxel))
+        .transpose()?;
+    let launch = match attack.launch.as_ref() {
+        None => None,
+        Some(launch) => {
+            if launch.segment_ms.is_some_and(|ms| ms < 0) {
+                return Err(PlanError::NegativeDuration("attack.launch.segment_ms"));
+            }
+            Some((launch.force_size, launch.segment_ms))
+        }
+    };
+    let retreat = match attack.retreat.as_ref() {
+        None => None,
+        Some(retreat) => {
+            if retreat.after_launch_ms.is_some_and(|ms| ms < 0) {
+                return Err(PlanError::NegativeDuration(
+                    "attack.retreat.after_launch_ms",
+                ));
+            }
+            let pct = match retreat.force_below_pct {
+                None => None,
+                Some(found) => Some(
+                    u8::try_from(found)
+                        .ok()
+                        .filter(|pct| (1..=100).contains(pct))
+                        .ok_or(PlanError::ForceBelowOutOfRange { found })?,
+                ),
+            };
+            Some((pct, retreat.after_launch_ms))
+        }
+    };
+    let avoid = if attack.avoid_areas.is_empty() {
+        None
+    } else {
+        let mut list: Vec<ColumnBox> = Vec::with_capacity(attack.avoid_areas.len());
+        for area in &attack.avoid_areas {
+            list.push(compile_area(area, names)?.1);
+        }
+        Some(list)
+    };
+    Ok(crate::attack::AttackEdit {
+        target,
+        retarget,
+        staging,
+        launch,
+        retreat,
+        after,
+        breach: attack.breach_allowed,
+        waves: (attack.waves != 0).then_some(attack.waves),
+        avoid,
     })
 }
 
@@ -1911,7 +2135,27 @@ fn mandate_fields(mandate: &gp::v1::mandate_settings::Mandate) -> Result<u32, Pl
             set(defend.pursue != 0),
             set(defend.picket_scouts.is_some()),
         ]),
-        gp::v1::mandate_settings::Mandate::Attack(_) => Err(REFUSE_ATTACK_SETTINGS.error()),
+        // S2's `atk`: the verifier's `attack_fields`, field for field: a
+        // written launch or retreat condition is a field each.
+        gp::v1::mandate_settings::Mandate::Attack(attack) => {
+            let launch = attack.launch.as_ref().map_or(0, |launch| {
+                set(launch.force_size.is_some()) + set(launch.segment_ms.is_some())
+            });
+            let retreat = attack.retreat.as_ref().map_or(0, |retreat| {
+                set(retreat.force_below_pct.is_some()) + set(retreat.after_launch_ms.is_some())
+            });
+            sum(&[
+                set(attack.target.is_some()),
+                set(attack.retarget != 0),
+                set(attack.staging.is_some()),
+                launch,
+                retreat,
+                set(attack.after_action != 0),
+                each(attack.avoid_areas.len())?,
+                set(attack.breach_allowed.is_some()),
+                set(attack.waves != 0),
+            ])
+        }
     }
 }
 
@@ -2309,6 +2553,24 @@ pub enum PlanError {
     /// A row would take longer than a signed 32-bit count of game
     /// milliseconds to commit, which is longer than any segment.
     RowTooLong,
+    /// An Attack target that is not an enemy beacon's `e_NN` handle, a voxel
+    /// or the enemy commander (S2's `atk`): an own `b_NN`, `safest`, or a
+    /// selector, which until S3 ranks only the seat's own beacons. The
+    /// verifier refuses it as E0414 or E0415 at the seal.
+    AttackTargetNotEnemy,
+    /// An Attack target's `enemy_commander.seat` past any seat a match can
+    /// hold, a byte (S2's `atk`; the owner's answer of 2026-10-26), which the
+    /// verifier refuses as E0419 at the seal.
+    CommanderSeatOutOfRange {
+        /// What the playbook wrote.
+        found: u32,
+    },
+    /// An Attack retreat's `force_below_pct` outside 1 to 100 (S2's `atk`),
+    /// which the verifier refuses as E0510 at the seal.
+    ForceBelowOutOfRange {
+        /// What the playbook wrote.
+        found: u32,
+    },
     /// A Defend `engagement_radius_pct` past 100 (S2's `dfnd`): a percentage
     /// of the sphere radius is 1 to 100, which the verifier refuses as E0510
     /// at the seal.
@@ -2441,12 +2703,12 @@ pub enum PlanError {
     /// | `queue_structure` | S4 (capability licences) |
     /// | a Build target naming a blueprint other than `generator` or S2's base kit (`autocannon`, `mortar`, `wall`, which S2's `site` built) | S4 |
     /// | a Build target (or a removal) anchored on a beacon selector rather than on a voxel or `on` a vent | S3 |
-    /// | Attack mandate settings | S2 |
     /// | selector filter `side: ENEMY_KNOWN` | S3 |
     /// | selector filter `tags` | S3 |
     ///
     /// S2's `dfnd` lifted Defend's settings, `most_threatened` and
-    /// `beacon_under_attack`, which have their effect now.
+    /// `beacon_under_attack`, and S2's `atk` Attack's settings, which have
+    /// their effect now.
     ///
     /// Targeting's `on` and `covering`, refused here until S1's targeting
     /// behaviour landed (S1's plan, task `con2`), now have their effect and
@@ -2528,13 +2790,6 @@ pub const REFUSE_BUILD_BEACON_ANCHOR: Refusal = Refusal {
     stage: "S3 (the full selector work, where a pinned anchor gets a meaning)",
 };
 
-/// Attack mandate settings: S2.
-pub const REFUSE_ATTACK_SETTINGS: Refusal = Refusal {
-    name: "attack_settings",
-    construct: "Attack mandate settings",
-    stage: "S2 (destruction and combat)",
-};
-
 /// The selector filter `side: ENEMY_KNOWN`: S3.
 pub const REFUSE_ENEMY_KNOWN: Refusal = Refusal {
     name: "filter_side_enemy_known",
@@ -2552,11 +2807,10 @@ pub const REFUSE_FILTER_TAGS: Refusal = Refusal {
 
 /// Every construct the compile refuses for its stage, in the order
 /// [`PlanError::NotAtThisStage`]'s documentation lists them (E8).
-pub const REFUSALS: [Refusal; 6] = [
+pub const REFUSALS: [Refusal; 5] = [
     REFUSE_QUEUE_STRUCTURE,
     REFUSE_BUILD_BLUEPRINT,
     REFUSE_BUILD_BEACON_ANCHOR,
-    REFUSE_ATTACK_SETTINGS,
     REFUSE_ENEMY_KNOWN,
     REFUSE_FILTER_TAGS,
 ];
@@ -2623,6 +2877,19 @@ impl core::fmt::Display for PlanError {
             PlanError::ScoutsOutOfRange { found, most } => write!(
                 f,
                 "a `scout_count` or `picket_scouts` of {found} is past the {most} a beacon holds"
+            ),
+            PlanError::AttackTargetNotEnemy => write!(
+                f,
+                "an Attack target names no enemy beacon: it is an enemy beacon's `e_NN`, a voxel \
+                 or the enemy commander"
+            ),
+            PlanError::CommanderSeatOutOfRange { found } => write!(
+                f,
+                "an `enemy_commander.seat` of {found} is past any seat a match holds"
+            ),
+            PlanError::ForceBelowOutOfRange { found } => write!(
+                f,
+                "a `force_below_pct` of {found} is outside 1 to 100 percent of the launch force"
             ),
             PlanError::EngagementOutOfRange { found } => write!(
                 f,

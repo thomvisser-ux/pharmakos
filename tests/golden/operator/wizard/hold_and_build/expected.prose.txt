@@ -3,7 +3,7 @@ Written from a built-in template.
 Grow the grid: place a Build beacon covering a heat vent you do not cover yet, with a Generator on the vent as its first target, and hold by it.
 
 Route
-  1. place_power: place a beacon at a site covering Heat vent (324, 16), tagged "power", on a Build mandate (14.5 s on site).
+  1. place_power: place a beacon at a site covering Heat vent (324, 16), tagged "power", on a Build mandate (16.5 s on site).
     Give up after 1:00.
     On failure, move on to the next step.
   2. hold: hold for 79.9 s.
@@ -23,4 +23,4 @@ Fallback
 
 Budget
   6 of 128 size units.
-  14.5 s standing at a beacon along the route.
+  16.5 s standing at a beacon along the route.

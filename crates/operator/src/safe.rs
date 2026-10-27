@@ -67,7 +67,16 @@
 //! The gateway's own fallback, for a seat no operator advises, is the
 //! template with nothing raised and writes nothing.
 //!
-//! PLACEHOLDER: the rescue rule spec section 14 names is absent, because nothing can be rescued before combat; it is the template's to gain — owner, S2/S5
+//! # The rescue rides `safest`
+//!
+//! Spec section 14's "flee and rescue rules" gain no vocabulary (S2's plan,
+//! decision 6, ruled by decisions-log item 144 (11)): while the commander is
+//! below full HP, the sim's `safest` ranks the seat's own beacons whose
+//! sphere holds a live repair drone ahead of those without, then by decision
+//! 12's threat-adjusted rank (S2's `dfnd`). The template's walk to safety,
+//! its flee rule and its shadowing tail all read `safest`, so they walk a
+//! wounded commander to where a drone heals it, and this module writes
+//! nothing for it: what it raises and the core's dig depth are unchanged.
 
 use std::fmt::Write as _;
 
@@ -155,7 +164,7 @@ pub(crate) fn safe_playbook(
     let qualifies = verified.is_ok_and(|answer| {
         answer
             .get("report")
-            .is_some_and(|report| bool_of(report, "qualifies"))
+            .is_some_and(|report| bool_of(report, "qualifies") == Ok(true))
     });
     if !qualifies {
         return Some(as_written);
@@ -263,8 +272,12 @@ fn to_raise(wire: &mut Wire<'_, '_>, situation: &Situation) -> Vec<String> {
         let Ok(estimate) = wire.call("estimate_route", params) else {
             continue;
         };
-        let ms = int_of(&estimate, "ms");
-        if bool_of(&estimate, "reachable") && ms <= SAFE_REACH_MS {
+        // An estimate that does not read is one that says nothing reaches.
+        let (Ok(reachable), Ok(ms)) = (bool_of(&estimate, "reachable"), int_of(&estimate, "ms"))
+        else {
+            continue;
+        };
+        if reachable && ms <= SAFE_REACH_MS {
             within.push((ms, ordinal(&beacon.id), beacon.id.clone()));
         }
     }
@@ -315,7 +328,10 @@ const fn is_are(count: usize) -> &'static str {
 /// not read, so nothing was estimated; the sentence says so rather than
 /// degrading quietly.
 pub(crate) fn why_safe(situation: &Situation, plan: Option<&SafePlan>) -> String {
-    let raised: &[String] = plan.map_or(&[], |plan| plan.raised.as_slice());
+    let raised: &[String] = match plan {
+        Some(plan) => plan.raised.as_slice(),
+        None => &[],
+    };
     let mut why = if !power_short(situation) {
         String::from(
             "Power is not short, so nothing is raised: move to the safest beacon and stay with \

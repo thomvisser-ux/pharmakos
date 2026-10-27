@@ -2,13 +2,6 @@
   "depth": "FULL",
   "diagnostics": [
     {
-      "code": "E0013",
-      "severity": "ERROR",
-      "path": "/declarative/route/0/place_beacon/initial/mandate/attack",
-      "message": "Attack mandate settings have no effect until S2's Attack mandate lands; they are refused rather than ignored.",
-      "beginner": "An Attack beacon cannot be given settings in this build yet."
-    },
-    {
       "code": "E0418",
       "severity": "ERROR",
       "path": "/declarative/route/0/place_beacon/initial/mandate/attack/target/beacon/beacon_id",
@@ -23,10 +16,10 @@
       ]
     }
   ],
-  "report_hash": "Mgoahjhmyu8=",
+  "report_hash": "oeDaUP1WGBc=",
   "rules_hash": "gCjUE4Tm3i8=",
   "plan_fingerprint": "TLWiCds94bE=",
-  "verifier_version": "0.1.0-s2.3",
+  "verifier_version": "0.1.0-s2.2",
   "size_units": 1,
   "size_budget": 128
 }

@@ -58,10 +58,10 @@
       "beginner": "This playbook asks for more than a seal can hold. The game would refuse it when you submit, so it is refused here first."
     }
   ],
-  "report_hash": "uMhKQjBc2vU=",
+  "report_hash": "EQ4Kpv4sBDU=",
   "rules_hash": "gCjUE4Tm3i8=",
   "plan_fingerprint": "Owy0Ppy4shs=",
-  "verifier_version": "0.1.0-s2.3",
+  "verifier_version": "0.1.0-s2.2",
   "size_units": 1,
   "size_budget": 128
 }

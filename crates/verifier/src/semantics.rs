@@ -480,27 +480,61 @@ impl Semantics<'_> {
                     Some(_) => {}
                 }
             }
-            Some(attack_target::Target::EnemyCommander(_)) => {
+            Some(attack_target::Target::EnemyCommander(commander)) => {
                 let here = pointer::child(&target_at, "enemy_commander");
-                // The freshest sighting of any enemy commander: an age is
-                // compared, nothing is ranked, and which commander the target
-                // pins is the sim's rule (S2's `atk`).
+                // The owner's answer of 2026-10-26: unset, the target hunts
+                // the nearest enemy commander the seat has a fresh sighting
+                // of at launch, so it qualifies while any enemy commander's
+                // freshest sighting is inside the window; set, that seat's
+                // commander only, and never the playbook's own seat or one
+                // past any match's (E0419). An age is compared and nothing is
+                // ranked: which commander is nearest is the sim's, at launch.
+                let named = commander.seat;
+                if let Some(seat) = named {
+                    let why = if seat == u32::from(self.scope.seat().raw()) {
+                        Some(strings::SEAT_IS_OWN)
+                    } else if u8::try_from(seat).is_err() {
+                        Some(strings::SEAT_PAST_ANY_MATCH)
+                    } else {
+                        None
+                    };
+                    if let Some(why) = why {
+                        self.out.emit(
+                            Diag::new("E0419", pointer::child(&here, "seat"))
+                                .arg("seat", seat)
+                                .arg("why", why),
+                        );
+                        return;
+                    }
+                }
                 let freshest = self
                     .scope
                     .commander_sightings()
+                    .filter(|seen| match (named, &seen.what) {
+                        (Some(seat), crate::Sighted::Commander(of)) => u32::from(of.raw()) == seat,
+                        (None, _) => true,
+                        (Some(_), crate::Sighted::Beacon(_)) => false,
+                    })
                     .min_by_key(|seen| seen.age_ms);
+                let (never, subject) = match named {
+                    Some(seat) => (
+                        strings::commander_never_sighted(seat),
+                        strings::seats_commander(seat),
+                    ),
+                    None => (
+                        strings::NO_COMMANDER_SIGHTED.to_owned(),
+                        strings::THE_ENEMY_COMMANDER.to_owned(),
+                    ),
+                };
                 match freshest {
                     None => self.out.emit(
                         Diag::new("E0418", here)
-                            .arg("what", strings::NO_COMMANDER_SIGHTED)
+                            .arg("what", never)
                             .arg("max", window),
                     ),
                     Some(sighting) if i64::from(sighting.age_ms) > window => self.out.emit(
                         Diag::new("E0418", here)
-                            .arg(
-                                "what",
-                                strings::sighted_ago(strings::THE_ENEMY_COMMANDER, sighting.age_ms),
-                            )
+                            .arg("what", strings::sighted_ago(&subject, sighting.age_ms))
                             .arg("max", window)
                             .map_ref(sighting.at),
                     ),

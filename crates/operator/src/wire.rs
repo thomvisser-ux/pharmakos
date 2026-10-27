@@ -79,20 +79,30 @@ impl<'c, 'a> Wire<'c, 'a> {
         if let Some(result) = response.get("result") {
             return Ok(without_status(result));
         }
+        // A refusal names its closed-set code. An answer that carries
+        // neither a result nor a refusal with a code is one the operator
+        // cannot read, and says so by the one code it writes itself.
         let error = response.get("error");
-        Err(Refused {
-            method: method.to_owned(),
-            code: error
-                .and_then(|error| error.get("data"))
-                .and_then(|data| data.get("code"))
-                .and_then(text)
-                .unwrap_or("MALFORMED")
-                .to_owned(),
-            message: error
-                .and_then(|error| error.get("message"))
-                .and_then(text)
-                .unwrap_or("")
-                .to_owned(),
+        let code = error
+            .and_then(|error| error.get("data"))
+            .and_then(|data| data.get("code"))
+            .and_then(text);
+        let message = error.and_then(|error| error.get("message")).and_then(text);
+        Err(match (code, message) {
+            (Some(code), Some(message)) => Refused {
+                method: method.to_owned(),
+                code: code.to_owned(),
+                message: message.to_owned(),
+            },
+            (Some(code), None) => Refused {
+                method: method.to_owned(),
+                code: code.to_owned(),
+                message: String::from("the refusal carries no message"),
+            },
+            (None, _) => malformed(
+                method,
+                "the answer is neither a result nor a refusal with a code",
+            ),
         })
     }
 
@@ -136,15 +146,69 @@ pub(crate) fn text(value: &Json) -> Option<&str> {
     }
 }
 
-/// A string member, or the empty string (proto3's default) when absent.
-pub(crate) fn text_of<'j>(value: &'j Json, key: &str) -> &'j str {
-    value.get(key).and_then(text).unwrap_or("")
+/// A refusal the operator writes itself: the answer came and did not read.
+pub(crate) fn malformed(method: &str, message: &str) -> Refused {
+    Refused {
+        method: method.to_owned(),
+        code: String::from("MALFORMED"),
+        message: message.to_owned(),
+    }
 }
 
-/// A whole-number member, or zero (proto3's default) when absent or not a
-/// whole number.
-pub(crate) fn int_of(value: &Json, key: &str) -> i64 {
-    value.get(key).and_then(int).unwrap_or(0)
+/// A member of an answer that is present and is not the shape the schema
+/// gives it: a typed read's one error (decisions-log item 136 (5); S2's plan,
+/// E7). An **absent** member is proto3's spelling of its default and reads as
+/// that default, which is the exact value and no fallback; a member of the
+/// wrong shape is never read as one.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) struct Misread {
+    /// The member's key.
+    pub(crate) key: String,
+    /// The shape it should have had.
+    pub(crate) wanted: &'static str,
+}
+
+impl Misread {
+    fn new(key: &str, wanted: &'static str) -> Misread {
+        Misread {
+            key: key.to_owned(),
+            wanted,
+        }
+    }
+
+    /// The refusal this misread is, in an answer to `method`.
+    pub(crate) fn refused(&self, method: &str) -> Refused {
+        malformed(
+            method,
+            &format!("the member `{}` is not {}", self.key, self.wanted),
+        )
+    }
+}
+
+/// A string member: the empty string (proto3's default) when absent.
+///
+/// # Errors
+///
+/// [`Misread`] when the member is present and not a string.
+pub(crate) fn text_of<'j>(value: &'j Json, key: &str) -> Result<&'j str, Misread> {
+    match value.get(key) {
+        None => Ok(""),
+        Some(Json::String(found)) => Ok(found.as_str()),
+        Some(_) => Err(Misread::new(key, "a string")),
+    }
+}
+
+/// A whole-number member: zero (proto3's default) when absent.
+///
+/// # Errors
+///
+/// [`Misread`] when the member is present and not a whole number that fits
+/// an `i64`.
+pub(crate) fn int_of(value: &Json, key: &str) -> Result<i64, Misread> {
+    match value.get(key) {
+        None => Ok(0),
+        Some(found) => int(found).ok_or_else(|| Misread::new(key, "a whole number")),
+    }
 }
 
 /// A whole number.
@@ -156,43 +220,99 @@ pub(crate) fn int(value: &Json) -> Option<i64> {
     }
 }
 
-/// A boolean member, or false (proto3's default) when absent.
-pub(crate) fn bool_of(value: &Json, key: &str) -> bool {
-    matches!(value.get(key), Some(Json::Bool(true)))
+/// A boolean member: false (proto3's default) when absent.
+///
+/// # Errors
+///
+/// [`Misread`] when the member is present and not a boolean.
+pub(crate) fn bool_of(value: &Json, key: &str) -> Result<bool, Misread> {
+    match value.get(key) {
+        None => Ok(false),
+        Some(Json::Bool(found)) => Ok(*found),
+        Some(_) => Err(Misread::new(key, "a boolean")),
+    }
 }
 
-/// An array member, or an empty slice when absent.
-pub(crate) fn array_of<'j>(value: &'j Json, key: &str) -> &'j [Json] {
+/// An array member: empty (proto3's default) when absent.
+///
+/// # Errors
+///
+/// [`Misread`] when the member is present and not an array.
+pub(crate) fn array_of<'j>(value: &'j Json, key: &str) -> Result<&'j [Json], Misread> {
     match value.get(key) {
-        Some(Json::Array(items)) => items.as_slice(),
-        _ => &[],
+        None => Ok(&[]),
+        Some(Json::Array(items)) => Ok(items.as_slice()),
+        Some(_) => Err(Misread::new(key, "an array")),
     }
 }
 
 /// A `gp.v1.Voxel` as three whole numbers. An absent axis is zero, which is
-/// how proto3 JSON spells a zero; an axis that is present and not a whole
-/// number that fits is no voxel at all.
-pub(crate) fn voxel(value: &Json) -> Option<[i32; 3]> {
-    let axis = |name: &str| -> Option<i32> {
-        match value.get(name) {
-            None => Some(0),
-            Some(found) => int(found).and_then(|whole| i32::try_from(whole).ok()),
-        }
-    };
+/// how proto3 JSON spells a zero.
+///
+/// # Errors
+///
+/// [`Misread`] when the value is not an object, or an axis is present and not
+/// a whole number that fits an `i32`.
+pub(crate) fn voxel(value: &Json) -> Result<[i32; 3], Misread> {
     if !matches!(value, Json::Object(_)) {
-        return None;
+        return Err(Misread::new("voxel", "an object"));
     }
-    Some([axis("x")?, axis("y")?, axis("z")?])
+    let axis = |name: &str| -> Result<i32, Misread> {
+        i32::try_from(int_of(value, name)?).map_err(|_| Misread::new(name, "a voxel coordinate"))
+    };
+    Ok([axis("x")?, axis("y")?, axis("z")?])
 }
 
 /// A `gp.v1.Location` read as the voxel it names: `{"voxel": {...}}`, the
 /// declared shape, or a bare `{x, y, z}`, which `estimate_route`'s `Leg.to`
 /// answered on `main` before T17 fixed it to the declared one.
-pub(crate) fn location_voxel(value: &Json) -> Option<[i32; 3]> {
+///
+/// # Errors
+///
+/// [`Misread`] when the shape it has does not read as a voxel.
+pub(crate) fn location_voxel(value: &Json) -> Result<[i32; 3], Misread> {
     match value.get("voxel") {
         Some(inner) => voxel(inner),
         None => voxel(value),
     }
+}
+
+// ---------------------------------------------------------------------------
+// The segment feed's words
+// ---------------------------------------------------------------------------
+
+/// The feed's kind for a commander's death (`crates/sim/src/events.rs`'
+/// `EventKind::CommanderDied`, a shipped name that never changes, AGENTS.md
+/// section 5's event vocabulary).
+pub const COMMANDER_DIED: &str = "commander_died";
+
+/// The seat a `commander_died` line names: "The commander of seat N died."
+///
+/// A feed event carries no seat field until its per-kind payload
+/// (`gateway.proto`'s `Event`, held to after S4), so whose commander died is
+/// in the line's words alone, and they are read strictly. The gateway's one
+/// string table writes them (its `strings` module's `event_text`), and
+/// `crates/gamectl/tests/operator_host.rs` holds this reader to it.
+///
+/// # Errors
+///
+/// `MALFORMED` for a line that does not read so, never taken for another
+/// seat's.
+pub fn whose_commander_died(line: &str) -> Result<u8, Refused> {
+    let unread = || {
+        malformed(
+            "get_segment_feed",
+            &format!("a `{COMMANDER_DIED}` line that does not say whose: `{line}`"),
+        )
+    };
+    let rest = line
+        .strip_prefix("The commander of seat ")
+        .ok_or_else(unread)?;
+    let (number, tail) = rest.split_once(' ').ok_or_else(unread)?;
+    if !tail.starts_with("died.") {
+        return Err(unread());
+    }
+    number.parse::<u8>().map_err(|_| unread())
 }
 
 // ---------------------------------------------------------------------------
@@ -338,16 +458,49 @@ mod tests {
     fn a_location_is_read_in_the_declared_shape_and_the_bare_one() {
         let declared = pharmakos_proto::json::read(r#"{"voxel":{"x":1,"y":2,"z":3}}"#).unwrap();
         let bare = pharmakos_proto::json::read(r#"{"x":1,"y":2,"z":3}"#).unwrap();
-        assert_eq!(location_voxel(&declared), Some([1, 2, 3]));
-        assert_eq!(location_voxel(&bare), Some([1, 2, 3]));
+        assert_eq!(location_voxel(&declared), Ok([1, 2, 3]));
+        assert_eq!(location_voxel(&bare), Ok([1, 2, 3]));
     }
 
     #[test]
     fn comments_go_and_strings_stay() {
         let text = "{\n  // a comment\n  \"a\": \"// not a comment\", /* gone */ \"b\": 1\n}\n";
         let read = pharmakos_proto::json::read(&strip_comments(text)).unwrap();
-        assert_eq!(text_of(&read, "a"), "// not a comment");
-        assert_eq!(int_of(&read, "b"), 1);
+        assert_eq!(text_of(&read, "a"), Ok("// not a comment"));
+        assert_eq!(int_of(&read, "b"), Ok(1));
+    }
+
+    #[test]
+    fn an_absent_member_is_its_default_and_a_misshapen_one_is_refused() {
+        let value =
+            pharmakos_proto::json::read(r#"{"n":"x","t":1,"b":"yes","a":{},"v":{"x":1.5}}"#)
+                .unwrap();
+        assert_eq!(int_of(&value, "absent"), Ok(0));
+        assert_eq!(text_of(&value, "absent"), Ok(""));
+        assert_eq!(bool_of(&value, "absent"), Ok(false));
+        assert_eq!(array_of(&value, "absent").map(<[Json]>::len), Ok(0));
+        assert!(int_of(&value, "n").is_err());
+        assert!(text_of(&value, "t").is_err());
+        assert!(bool_of(&value, "b").is_err());
+        assert!(array_of(&value, "a").is_err());
+        assert!(voxel(value.get("v").unwrap()).is_err());
+        assert_eq!(
+            voxel(&pharmakos_proto::json::read(r#"{"y":2}"#).unwrap()),
+            Ok([0, 2, 0])
+        );
+        let refused = int_of(&value, "n").unwrap_err().refused("get_status");
+        assert_eq!(refused.code, "MALFORMED");
+        assert_eq!(refused.method, "get_status");
+    }
+
+    #[test]
+    fn an_answer_with_no_coded_refusal_is_malformed() {
+        let mut call = |_: &str, _: Json| -> Json {
+            pharmakos_proto::json::read(r#"{"jsonrpc":"2.0","id":1}"#).unwrap()
+        };
+        let mut wire = Wire::new(&mut call);
+        let refused = wire.call("get_status", object(vec![])).unwrap_err();
+        assert_eq!(refused.code, "MALFORMED");
     }
 
     #[test]
@@ -377,7 +530,7 @@ mod tests {
         let mut wire = Wire::new(&mut call);
         let answer = wire.call("ok", object(vec![])).unwrap();
         assert!(answer.get("_status").is_none());
-        assert_eq!(int_of(&answer, "a"), 1);
+        assert_eq!(int_of(&answer, "a"), Ok(1));
         let refused = wire.call("no", object(vec![])).unwrap_err();
         assert_eq!(refused.code, "FORBIDDEN_SCOPE");
         assert_eq!(wire.calls(), 2);

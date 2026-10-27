@@ -299,6 +299,28 @@ re-checks only a sighting due a re-check, and otherwise idles at its beacon,
 where before it walked to its seat's stalest sighting on every tick. Its event
 assertions hold as they were. `round-limit-audit` and `unaffordable-deploy`
 seal Survey beacons with no scouts, and did not move.
+**S2's `atk`** adds four, each one segment of 480 s on the golden seed. Their
+chains pin the Attack table, which no older committed scenario fills: the
+table hashes nothing while it is empty (S2's plan, E29), so no older chain
+moved for it.
+
+* `hunt-the-commander`: seat 0's Attack beacon by its core, aimed at the enemy
+  commander, launches when seat 1's commander walks into its sphere, and its
+  raiders kill it. It seals through the harness door: no commander is
+  sighted when the seat seals, which the verifier refuses as E0418.
+* `raid-on-a-mortar`: seat 0's raiders walk the map at the voxel of the mortar
+  seat 1's core builds, and seat 1's guns kill them, leaving wrecks.
+* `mortar-breaks-wall`: seat 0 walls in ground past its core's sphere from a
+  Build beacon it then recycles, so the walls read as neutral, and switches
+  its core to Attack with `breach_allowed`: the breach asks the core's mortar
+  to shell the ring's first column, which two shells crack and break before
+  the charge-carrying raider reaches it. Harness door: it recycles `b_01`,
+  which does not exist when the seat seals (E0401).
+* `breach-and-raze`: seat 1 walls in a Build beacon at its core's sphere
+  edge; seat 0's raiders walk the map, plant a demolition charge at the
+  ring, walk the cut and destroy the beacon. The plan's elimination is not
+  played (the scenario's header says why); `crates/sim/tests/attack.rs`'
+  `the_last_beacon_lost_ends_the_match_that_tick` plays it headless.
 
 `expand-east-segment` carries one more thing worth knowing before its chain is
 read. The playbook it seals **does not qualify against either seat's own frozen

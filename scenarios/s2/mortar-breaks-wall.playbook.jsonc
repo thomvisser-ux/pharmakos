@@ -1,0 +1,78 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// S2's `atk`: arm the core with a mortar, wall in a patch of ground past the
+// core's sphere from a Build beacon, recycle that beacon so its walls stand
+// outside every sphere of the seat and read as neutral, then switch the core
+// to Attack with `breach_allowed`, aimed at the walled ground. See
+// mortar-breaks-wall.scenario.jsonc for what is asserted, and why.
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {"title": "Mortar breaks wall", "author_kind": "HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {"label": "arm",
+        "interface": {"beacon": {"beacon_id": "b_00"}, "rows": [
+          {"set_mandate_settings": {"roe": "FREE_FIRE", "build": {
+            "targets": [
+              {"blueprint_id": "mortar", "anchor": {"voxel": {"x": 361, "y": 40, "z": 36}}}
+            ]
+          }}}
+        ]},
+        "timeout_ms": 60000, "on_fail": {"action": "SKIP"}},
+      // A ring of wall round (355, 62), seven columns a side, to z = 38.
+      {"label": "mason", "timeout_ms": 60000,
+        "place_beacon": {"at": {"voxel": {"x": 356, "y": 47, "z": 36}},
+          "initial": {"priority": "NORMAL", "mandate": {"build": {"targets": [
+            {"blueprint_id": "wall", "anchor": {"voxel": {"x": 355, "y": 59, "z": 36}},
+              "wall_box": {"min": {"x": 352, "y": 59, "z": 34}, "max": {"x": 358, "y": 59, "z": 38}}},
+            {"blueprint_id": "wall", "anchor": {"voxel": {"x": 355, "y": 65, "z": 36}},
+              "wall_box": {"min": {"x": 352, "y": 65, "z": 33}, "max": {"x": 358, "y": 65, "z": 38}},
+              "order": 1},
+            {"blueprint_id": "wall", "anchor": {"voxel": {"x": 352, "y": 62, "z": 35}},
+              "wall_box": {"min": {"x": 352, "y": 60, "z": 33}, "max": {"x": 352, "y": 64, "z": 38}},
+              "order": 2},
+            {"blueprint_id": "wall", "anchor": {"voxel": {"x": 358, "y": 62, "z": 36}},
+              "wall_box": {"min": {"x": 358, "y": 60, "z": 35}, "max": {"x": 358, "y": 64, "z": 38}},
+              "order": 3}
+          ]}}}},
+        "on_fail": {"action": "ABORT_ROUTE"}},
+      {"label": "wait_for_the_walls", "timeout_ms": 200000,
+        "wait_until": {"condition": {"segment_elapsed": {"ms": {"op": "GE", "value": 180000}}}},
+        "on_fail": {"action": "SKIP"}},
+      // Recycled, the mason's walls stand outside every live sphere of the
+      // seat, so they read as nobody's (decision 42): a breach may take one.
+      {"label": "recycle", "timeout_ms": 60000,
+        "interface": {"beacon": {"beacon_id": "b_01"}, "rows": [{"recycle": {}}]},
+        "on_fail": {"action": "SKIP"}},
+      // The core takes the Attack writ: its sphere stops short of the ring,
+      // and its grid, which the mortar and two pairs of drones nearly fill,
+      // has the kilowatt for one raider, which a new beacon's own draw would
+      // take.
+      {"label": "raid", "timeout_ms": 60000,
+        "interface": {"beacon": {"beacon_id": "b_00"}, "rows": [
+          {"set_mandate": {"roe": "FREE_FIRE", "attack": {
+            "target": {"voxel": {"x": 355, "y": 62, "z": 36}},
+            "retarget": "NONE",
+            "staging": {"x": 358, "y": 40, "z": 36},
+            "launch": {"segment_ms": 280000},
+            "after_action": "REGROUP_AT_STAGING",
+            "breach_allowed": true,
+            "waves": 1}}}
+        ]},
+        "on_fail": {"action": "ABORT_ROUTE"}},
+      // The commander stands within its sight of the ring, out of a shell's
+      // splash, so the seat sees the wall the mortar is asked to shell.
+      {"label": "watch", "timeout_ms": 100000,
+        "move": {"to": {"voxel": {"x": 355, "y": 51, "z": 37}}, "pace": "DIRECT"},
+        "on_fail": {"action": "SKIP"}},
+      {"label": "stand", "timeout_ms": 470000,
+        "wait_until": {"condition": {"segment_elapsed": {"ms": {"op": "GE", "value": 470000}}}},
+        "on_fail": {"action": "SKIP"}}
+    ],
+    "handlers": []
+  },
+  "on_death": {"on_respawn": "CONTINUE", "max_deaths_before_fallback": 2},
+  "fallback": {"hold": {"at": {"safest": {}}}}
+}

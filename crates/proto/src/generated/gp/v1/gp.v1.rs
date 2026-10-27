@@ -1851,9 +1851,10 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.BeaconFilter".into() }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MandateSettings {
     /// Rules of engagement. Shared across mandates that field units. Omitted, it
-    /// reads as RETURN_FIRE with an I-level note: one of the five named defaults
-    /// in this file's header (decisions-log item 144 (11), S2's plan's decision
-    /// 4).
+    /// reads by writ with an I-level note: RETURN_FIRE on Build, Mine and
+    /// Survey, FREE_FIRE on Defend and Attack; one of the five named defaults in
+    /// this file's header (decisions-log item 144 (11), S2's plan's decision 4,
+    /// and item 148 (2)).
     #[prost(enumeration="mandate_settings::Roe", tag="1")]
     pub roe: i32,
     /// A unit below this percentage of its HP retreats, following the rules of
@@ -1876,7 +1877,7 @@ pub mod mandate_settings {
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Roe {
-        /// Omitted, this reads as RETURN_FIRE (above).
+        /// Omitted, this reads by writ (above).
         Unspecified = 0,
         /// Never fires.
         HoldFire = 1,
@@ -2125,8 +2126,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.MyCommander".into() }f
 /// conditions; after-action; avoid areas; breach_allowed; waves." The values
 /// are S2's plan's decision 14's (ruled by decisions-log item 144 (11)). The
 /// shape is S2's (task `con4`; the register's S2-13); the behaviour is S2's
-/// `atk` lane's, and until it lands the sim refuses an Attack arm that writes
-/// any of these, and the verifier with it (S2's plan, E8).
+/// `atk` lane's.
 ///
 /// The Attack beacon gathers at the staging point, launches on its condition,
 /// attacks the weak point — the target beacon's lowest-HP structure inside its
@@ -2266,10 +2266,24 @@ impl ::prost::Name for AttackTarget {
 const NAME: &'static str = "AttackTarget";
 const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.AttackTarget".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.AttackTarget".into() }}
-/// "enemy commander" — AttackTarget.enemy_commander. It names no seat: which
-/// enemy commander it pins is a rule of S2's `atk` lane.
+/// "enemy commander" — AttackTarget.enemy_commander (the owner's answer of
+/// 2026-10-26 to S2's `atk` lane). Unset, the Attack hunts, from its launch,
+/// the nearest enemy commander its seat has a sighting of inside the rules
+/// table's `verifier.reach_memory_ms` (the seat's own knowledge, never ground
+/// truth), nearest to the staging point (the lane's reading, open to the
+/// owner's veto), ties to the lowest seat id, and holds that commander until
+/// the seat sees it dead, its sighting goes stale, or the force reaches the
+/// last sighting and finds it gone; then `retarget` decides (decisions-log
+/// item 13: decided on arrival).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct EnemyCommander {
+    /// Set, the Attack hunts that seat's commander only. Naming the playbook's
+    /// own seat, or a seat past the match's seats, is refused: the verifier's
+    /// E0419 for the playbook's own seat and for a seat past the most a match
+    /// holds, and its E0418 for a seat of no sighting, which a seat the match
+    /// has not got always is.
+    #[prost(uint32, optional, tag="1")]
+    pub seat: ::core::option::Option<u32>,
 }
 impl ::prost::Name for EnemyCommander {
 const NAME: &'static str = "EnemyCommander";

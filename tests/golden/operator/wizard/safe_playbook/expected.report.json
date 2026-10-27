@@ -17,22 +17,12 @@
         }
       ],
       "map_refs": []
-    },
-    {
-      "code": "I0005",
-      "severity": "info",
-      "path": "/declarative/route/0/move/pace",
-      "related_paths": [],
-      "message": "`pace` is AVOID_KNOWN_THREATS, and the seat's view holds no enemy beacon in sight; unless the seat sees an armed enemy when the move starts, it goes as DIRECT does.",
-      "beginner": "Avoiding threats needs an enemy your side can see. None is in sight now, so unless one is when the walk starts, it goes straight.",
-      "suggestions": [],
-      "map_refs": []
     }
   ],
-  "report_hash": "pZfNA33l+To=",
+  "report_hash": "exec7S6q6Xg=",
   "rules_hash": "gCjUE4Tm3i8=",
   "plan_fingerprint": "D4gqdA0a4mc=",
-  "verifier_version": "0.1.0-s2.3",
+  "verifier_version": "0.1.0-s2.2",
   "size_units": 5,
   "size_budget": 128
 }
