@@ -271,8 +271,8 @@ cargo xtask golden --bless              # accepts them
 
   Four cases are new: `i0005_avoiding_threats_with_none_sighted`,
   `i0003_a_defend_beacons_omitted_roe`, `i0003_an_attack_beacons_omitted_roe`
-  and `e0101_an_area_missing_a_corner`. The Attack case also carries `E0013`
-  until S2's `atk` lifts it, and is re-blessed then.
+  and `e0101_an_area_missing_a_corner`. They were re-blessed over `main` after
+  S2's `atk` merged, so the Attack case carries no `E0013`.
 
 **The sightings, for the cases that read them (S2).** The cases named in
 `verifier.rs`'s `SIGHT_CASES` (`e0418_an_attack_target_seen_too_long_ago`,

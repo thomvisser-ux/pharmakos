@@ -410,8 +410,8 @@ fn walk_defend(defend: &DefendSettings, at: &str, visitor: &mut dyn Visit) {
 }
 
 /// S2's Attack settings (`con4`): the target, the staging point and the avoid
-/// areas. Refused as a whole until S2's `atk` lane (`E0013`), and walked for
-/// the reason [`walk_defend`] gives.
+/// areas. Refused as a whole until S2's `atk` lane built it (`E0013`, raised
+/// by nothing now), and walked for the reason [`walk_defend`] gives.
 fn walk_attack(attack: &AttackSettings, at: &str, visitor: &mut dyn Visit) {
     if let Some(target) = attack.target.as_ref() {
         let target_at = pointer::child(at, "target");

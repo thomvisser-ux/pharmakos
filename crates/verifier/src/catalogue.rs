@@ -905,8 +905,7 @@ pub const CATALOGUE: &[Entry] = &[
     // `seam_choice`, `pillar_spacing` or `terraform` reads as its named
     // default, and the report says so; from S2 (decision 4, task `vfy2`) an
     // omitted `roe` too, read by writ (decisions-log item 148 (2), task
-    // `vfy3`): FREE_FIRE on Defend and Attack, RETURN_FIRE on the others, the
-    // Attack arm the sim's once S2's `atk` lifts `E0013`.
+    // `vfy3`): FREE_FIRE on Defend and Attack, RETURN_FIRE on the others.
     Entry {
         code: "I0003",
         family: Family::Information,

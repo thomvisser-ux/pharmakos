@@ -70,8 +70,7 @@
 //! lane (the S1 pattern of `tgtw` filling what `tgtv` laid out). A view with
 //! no sightings is legal and is what every gateway builds until then: an
 //! Attack target then rests on nothing, and is refused as having no sighting,
-//! which is the truth about that view. The Attack arm is refused as a whole
-//! until S2's `atk` lane (`E0013`) in any case.
+//! which is the truth about that view.
 
 use pharmakos_proto::gp::v1::Voxel;
 use pharmakos_proto::gp::v1::beacon_filter::MandateKind;

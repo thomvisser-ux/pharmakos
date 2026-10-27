@@ -820,7 +820,7 @@ gp.v1.Playbook.Kind
 
 ## Diagnostics
 
-97 codes. A code is language-neutral, append-only and never
+98 codes. A code is language-neutral, append-only and never
 reused; only an ERROR stops a playbook qualifying. `none at the skeleton` names the
 task that owes the emitter, which is honesty about coverage rather than a gap.
 

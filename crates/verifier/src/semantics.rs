@@ -41,7 +41,7 @@
 //! # Avoiding known threats with none sighted (task `vfy3`)
 //!
 //! A move paced `AVOID_KNOWN_THREATS` adds the rules row's surcharge per step
-//! inside a known threat's range (decision 12, the sim's from S2's `atk`), and
+//! inside a known threat's range (decision 12, built by S2's `atk`), and
 //! a known threat is an armed enemy the seat sees when the step starts. A view
 //! with no enemy beacon in live vision shows none, so `I0005` says the move
 //! goes as `DIRECT` does unless one is seen when it starts: the editor's

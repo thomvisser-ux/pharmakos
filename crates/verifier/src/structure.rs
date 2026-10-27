@@ -464,9 +464,8 @@ impl Visit for Sites<'_> {
     }
 
     /// A half-written area has no voxels to protect, probe or avoid, and the
-    /// sim refuses a protected or probe area at compile
-    /// (`MissingBlock("area.min")`; an avoid area falls under `E0013`'s
-    /// whole-arm refusal until S2's `atk`), so each missing corner is `E0101`,
+    /// sim refuses one at compile (`compile_area`'s
+    /// `MissingBlock("area.min")`), so each missing corner is `E0101`,
     /// as a wall's box already is (decisions-log item 146 (4)). A wall's box
     /// is [`Sites::wall`]'s, which names it so.
     fn area(&mut self, at: &str, area: &Area, of: AreaOf) {
@@ -563,7 +562,7 @@ impl Visit for Sites<'_> {
         // S2's plan, decision 4, as decisions-log item 148 (2) amends it: an
         // omitted `roe` reads by writ, FREE_FIRE on a Defend or an Attack
         // beacon and RETURN_FIRE on the others (the sim's `Roe::of_setting`,
-        // whose Attack arm is S2's `atk`'s; until it lands the arm is `E0013`),
+        // whose Defend and Attack arms are S2's `dfnd`'s and `atk`'s),
         // said where the settings start from nothing and the block names a
         // writ (a block with none is `E0502`'s).
         if let Some(mandate) = settings.mandate.as_ref()
@@ -703,11 +702,10 @@ impl Sites<'_> {
     /// **Requiredness follows the carrier.** An empty arm writes no field, so
     /// nothing is required of it here. Whether it is legal is the sim's refusal
     /// table's, which `crate::refusals` mirrors: an empty arm in a switch is a
-    /// choice of writ the sim accepts (`compile_switch_settings`), and an empty
-    /// arm in a deploy's `initial` the sim refuses today for both writs
-    /// (`E0012`, `E0013`). Only Defend's empty `initial` is ruled legal for
-    /// later (decisions-log item 145 (5), `dfnd` lifts it); Attack's is `atk`'s
-    /// to settle. An arm that
+    /// choice of writ the sim accepts (`compile_switch_settings`), and so,
+    /// since S2's `dfnd` and `atk`, is an empty arm in a deploy's `initial`
+    /// (decisions-log items 145 (5) and 146 (3) (j); `E0012` and `E0013` are
+    /// raised by nothing now). An arm that
     /// writes anything in a deploy or a switch starts the beacon's settings
     /// from nothing, so it must write every required field. An edit
     /// (`set_mandate_settings`) writes only what it changes, so nothing is
