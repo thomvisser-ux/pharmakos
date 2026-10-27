@@ -29,7 +29,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use pharmakos_operator::easy::{
-    CORE_DIG_MAX_DEPTH, EASY_ADVISOR_CALL_BUDGET, EASY_CALL_BUDGET, PAGES_MAX, SAFE_MAX_RAISED,
+    CORE_DIG_MAX_DEPTH, EASY_ADVISOR_CALL_BUDGET, EASY_CALL_BUDGET, PAGES_MAX, RAID_FORCE_SIZE,
+    SAFE_MAX_RAISED,
 };
 use pharmakos_operator::{Easy, Submitted};
 use pharmakos_proto::json::{Json, read, write};
@@ -157,6 +158,11 @@ struct Script {
     /// Where the seat's nearest Defend beacon stands, if one does: what an
     /// `estimate_route` to `nearest {filter: {mandate: DEFEND}}` reaches.
     defend_post: Option<[i32; 3]>,
+    /// The sighting age `list_beacons` answers for another seat's beacon, by
+    /// id; 0, in live vision, for one not named here.
+    sighting_ages: BTreeMap<String, i64>,
+    /// Another seat's beacons answered with no sighting age, by id.
+    ageless: BTreeSet<String>,
     transcript: Vec<String>,
 }
 
@@ -200,6 +206,8 @@ impl Script {
             malformed_feature: false,
             feed_deaths: Vec::new(),
             defend_post: None,
+            sighting_ages: BTreeMap::new(),
+            ageless: BTreeSet::new(),
             transcript: Vec::new(),
         }
     }
@@ -441,6 +449,9 @@ impl Script {
                         row.push(("core", Json::Bool(beacon.core)));
                         row.push(("priority", Json::String(beacon.priority.to_owned())));
                         row.push(("powered", Json::Bool(beacon.powered)));
+                    } else if !self.ageless.contains(&beacon.id) {
+                        let age = self.sighting_ages.get(&beacon.id).copied().unwrap_or(0);
+                        row.push(("sighting_age_ms", num(age)));
                     }
                     obj(row)
                 })
@@ -520,6 +531,7 @@ impl Script {
                 "defend_the_core",
                 "expand_and_mine",
                 "hold_and_build",
+                "raid_an_enemy_beacon",
                 "safe_playbook",
             ]
             .iter()
@@ -1272,7 +1284,7 @@ fn the_seed_is_recorded_in_every_why() {
         played.why
     );
     let (_, advice) = advise(Script::busy(0));
-    assert_eq!(advice.suggestions.len(), 4);
+    assert_eq!(advice.suggestions.len(), 5);
     for suggestion in &advice.suggestions {
         assert!(
             suggestion.why.contains("seed 0x0000000000005eed"),
@@ -2211,4 +2223,220 @@ fn a_post_already_beside_the_core_is_not_placed_again() {
             .any(|line| line.starts_with("estimate_route") && line.contains("seam_36_34")),
         "no guard site is estimated"
     );
+}
+
+/// A seat with its starting seam covered and nothing else to place, and the
+/// enemy beacon `e_01` it saw 20 s ago, 40 voxels north of its core.
+fn raid_world() -> Script {
+    let mut world = Script::new(0);
+    let mut start = Feature::new("seam", "standard", [36, 34]);
+    start.covered = true;
+    world.features.push(start);
+    world.beacons.push(Beacon {
+        id: String::from("e_01"),
+        at: [32, 72, GROUND],
+        owner: 1,
+        core: false,
+        powered: false,
+        priority: "",
+    });
+    world.sighting_ages.insert(String::from("e_01"), 20_000);
+    world
+}
+
+/// The raid's target, staging and post seam, as the composing patch writes
+/// them into the Raid template's place step.
+fn raid_ops(transcript: &[String]) -> (Option<String>, Option<String>, Option<String>) {
+    let ops = composing_ops(transcript);
+    let at = |pointer: &str| {
+        op_value(
+            &ops,
+            "replace",
+            &format!("/declarative/route/1/place_beacon/{pointer}"),
+        )
+        .map(|value| compact(&value))
+    };
+    (
+        at("initial/mandate/attack/target"),
+        at("initial/mandate/attack/staging"),
+        at("at/covering"),
+    )
+}
+
+/// S2's `opra`: an enemy beacon the seat saw inside the reach window is
+/// raided by its `e_NN`, from an Attack beacon covering the seam beside the
+/// core, its raiders staged at the site the estimate answered.
+#[test]
+fn easy_raids_the_nearest_enemy_beacon_it_knows_of_by_name() {
+    let (script, played) = play(raid_world());
+    assert_eq!(played.submitted, Submitted::Own, "{:#?}", script.transcript);
+    let (target, staging, covering) = raid_ops(&script.transcript);
+    assert_eq!(
+        target.as_deref(),
+        Some(r#"{ "beacon": { "beacon_id": "e_01" } }"#)
+    );
+    assert_eq!(
+        covering.as_deref(),
+        Some(r#"{ "feature_id": "seam_36_34" }"#)
+    );
+    // The scripted site of a `covering` waypoint is four voxels west of the
+    // seam's anchor.
+    assert_eq!(
+        staging,
+        Some(format!(r#"{{ "x": 32, "y": 34, "z": {GROUND} }}"#))
+    );
+    let note = composed_template(&script.transcript);
+    assert!(note.contains("raid the enemy beacon e_01"), "{note}");
+}
+
+/// A sighting older than `verifier.reach_memory_ms` is E0418's refusal at
+/// the seal, so it is never weighed: no estimate goes to it.
+#[test]
+fn a_stale_sighting_is_not_raided() {
+    let mut world = raid_world();
+    world.sighting_ages.insert(String::from("e_01"), 180_001);
+    let (script, _) = play(world);
+    assert!(
+        !script
+            .transcript
+            .iter()
+            .any(|line| line.starts_with("estimate_route") && line.contains("e_01")),
+        "{:#?}",
+        script.transcript
+    );
+}
+
+/// Another seat's beacon with no sighting age is an answer the operator
+/// cannot tell fresh from stale: the round is not read, and ready is said.
+#[test]
+fn an_enemy_beacon_with_no_sighting_age_is_a_round_not_read() {
+    let mut world = raid_world();
+    world.ageless.insert(String::from("e_01"));
+    let (_, played) = play(world);
+    assert_eq!(
+        played.refused.map(|refused| refused.code).as_deref(),
+        Some("MALFORMED")
+    );
+    assert!(played.ready);
+}
+
+/// Spec section 14: Easy "scores enemy-commander raids like any other
+/// target". One rule weighs both kinds, so the threat in sight beside a
+/// target costs a commander what it costs a beacon: whichever of the two is
+/// defended by two raiders loses to the undefended one, the nearer or not.
+#[test]
+fn an_enemy_commander_is_raided_by_its_seat_and_scored_like_a_beacon() {
+    let raided = |defended: [i32; 3]| {
+        let mut world = raid_world();
+        world.entities.push(Entity {
+            id: String::from("u_7"),
+            kind: "unit",
+            subtype: "commander",
+            owner: 1,
+            at: [62, 40, GROUND],
+        });
+        for (n, dx) in [-2, 2].into_iter().enumerate() {
+            let [x, y, z] = defended;
+            world.entities.push(Entity {
+                id: format!("u_8{n}"),
+                kind: "unit",
+                subtype: "raider",
+                owner: 1,
+                at: [x + dx, y, z],
+            });
+        }
+        let (script, played) = play(world);
+        assert_eq!(played.submitted, Submitted::Own, "{}", played.why);
+        raid_ops(&script.transcript).0
+    };
+    assert_eq!(
+        raided([32, 72, GROUND]).as_deref(),
+        Some(r#"{ "enemy_commander": { "seat": 1 } }"#),
+        "the beacon is defended: the commander, by its seat"
+    );
+    assert_eq!(
+        raided([62, 40, GROUND]).as_deref(),
+        Some(r#"{ "beacon": { "beacon_id": "e_01" } }"#),
+        "the commander is defended: the beacon, though it is further"
+    );
+}
+
+/// Two enemy commanders the same distance from the core: ties go to the
+/// lowest seat (the owner's answer of 2026-10-26), as the sim's hunt breaks
+/// them.
+#[test]
+fn a_tie_between_two_commanders_goes_to_the_lowest_seat() {
+    let mut world = raid_world();
+    world.sighting_ages.insert(String::from("e_01"), 180_001);
+    for (owner, x) in [(2, 62), (1, 2)] {
+        world.entities.push(Entity {
+            id: format!("u_{owner}"),
+            kind: "unit",
+            subtype: "commander",
+            owner,
+            at: [x, 32, GROUND],
+        });
+    }
+    let (script, played) = play(world);
+    assert_eq!(played.submitted, Submitted::Own, "{:#?}", script.transcript);
+    assert_eq!(
+        raid_ops(&script.transcript).0.as_deref(),
+        Some(r#"{ "enemy_commander": { "seat": 1 } }"#)
+    );
+}
+
+/// The advisor offers the nearest raid to the wizard's Raid an Enemy Beacon
+/// page: its post seam, its target by name and its staging at the post's
+/// site.
+#[test]
+fn the_advisor_suggests_the_nearest_raid_by_name() {
+    let (_, advice) = advise(raid_world());
+    let raid = advice
+        .suggestions
+        .iter()
+        .find(|suggestion| suggestion.template_id == "raid_an_enemy_beacon")
+        .expect("a Raid an Enemy Beacon suggestion");
+    let value = |pointer: &str| {
+        raid.parameters
+            .iter()
+            .find(|value| value.pointer == format!("/declarative/route/1/place_beacon/{pointer}"))
+            .map(|value| value.value.clone())
+    };
+    assert_eq!(
+        value("initial/mandate/attack/target").as_deref(),
+        Some(r#"{"beacon":{"beacon_id":"e_01"}}"#),
+        "{raid:#?}"
+    );
+    assert_eq!(
+        value("initial/mandate/attack/staging"),
+        Some(format!(r#"{{"x":32,"y":34,"z":{GROUND}}}"#))
+    );
+    assert_eq!(
+        value("at/covering").as_deref(),
+        Some(r#"{"feature_id":"seam_36_34"}"#)
+    );
+    // With nothing known, the template's own values stand and the why says
+    // what a raid needs.
+    let (_, advice) = advise(Script::busy(0));
+    let raid = advice
+        .suggestions
+        .iter()
+        .find(|suggestion| suggestion.template_id == "raid_an_enemy_beacon")
+        .expect("a Raid an Enemy Beacon suggestion");
+    assert!(raid.parameters.is_empty(), "{raid:#?}");
+    assert!(raid.why.contains("No raid was weighed"), "{}", raid.why);
+}
+
+/// A raid's price counts the raiders the Raid template's own launch waits
+/// for, so [`RAID_FORCE_SIZE`] is that template's `force_size`.
+#[test]
+fn the_raid_force_is_the_templates_own() {
+    let (text, _) = template("raid_an_enemy_beacon").expect("the Raid template");
+    let body = read(&strip_comments(&text)).expect("it reads");
+    let force = pointer_get(
+        &body,
+        "/declarative/route/1/place_beacon/initial/mandate/attack/launch/force_size",
+    )
+    .map(compact);
+    assert_eq!(force, Some(RAID_FORCE_SIZE.to_string()));
 }

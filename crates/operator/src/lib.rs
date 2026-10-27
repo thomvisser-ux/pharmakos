@@ -59,7 +59,10 @@
 //! Easy (decisions-log item 111, section A6). Its Defend guard is: S2's plan,
 //! decision 35, moved it from S5 to S2, and `oprd` built it (a guard post in
 //! the round after a Push in which the commander died, scored by decision
-//! 12's threat model; [`easy`]'s Defend the Core).
+//! 12's threat model; [`easy`]'s Defend the Core). So are its raids, S2's
+//! `opra`: an Attack beacon beside the core raiding the nearest fixed target
+//! the seat knows of, an enemy beacon or an enemy commander in sight, scored
+//! alike (Raid an Enemy Beacon).
 //!
 //! PLACEHOLDER: Easy's Survey post, chatter and target spread — owner, S5, with Normal and Hard
 
