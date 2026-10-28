@@ -964,6 +964,19 @@ fn feature(
 /// nobody covers, a live vent the core covers (inside the core's sphere, where
 /// a clean run's voxels sit, so W0706 fires), a lost vent and a seam.
 fn scope() -> Scope {
+    scope_aged(0, WINDOW)
+}
+
+/// [`scope`] with no enemy beacon seen inside the window (S2's `atk2`): the
+/// two fresh beacon sightings aged past it, so the nearest known enemy beacon
+/// as an Attack target meets `W0709`, which [`scope`]'s fresh `e_01`
+/// silences.
+fn stale_scope() -> Scope {
+    scope_aged(WINDOW.saturating_add(1), WINDOW.saturating_add(2))
+}
+
+/// The fuzz scope with `e_01` and `e_02` seen `first` and `second` ms ago.
+fn scope_aged(first: u32, second: u32) -> Scope {
     Scope::new(
         SeatId::new(0),
         SeatEconomy {
@@ -994,8 +1007,8 @@ fn scope() -> Scope {
     .with_beacon(enemy("e_02", 1))
     .with_beacon(enemy("e_03", 2))
     .with_beacon(enemy("e_04", 3))
-    .with_sighting(seen(Sighted::Beacon("e_01".to_owned()), 0))
-    .with_sighting(seen(Sighted::Beacon("e_02".to_owned()), WINDOW))
+    .with_sighting(seen(Sighted::Beacon("e_01".to_owned()), first))
+    .with_sighting(seen(Sighted::Beacon("e_02".to_owned()), second))
     .with_sighting(seen(
         Sighted::Beacon("e_03".to_owned()),
         WINDOW.saturating_add(1),
@@ -1269,6 +1282,7 @@ fn the_generator_still_produces_shapes_the_verifier_reads() {
 fn ten_thousand_playbooks_come_back_as_reports() {
     let rules = rules();
     let scope = scope();
+    let stale = stale_scope();
     let snapshot = snapshot();
     let mut lints: Vec<String> = Vec::new();
     let mut estimates: Vec<String> = Vec::new();
@@ -1284,7 +1298,9 @@ fn ten_thousand_playbooks_come_back_as_reports() {
         "the fuzz scope's ages straddle the committed reach window"
     );
     for index in 0..RUNS {
-        let (report, held) = check(index, &rules, &scope, &snapshot);
+        // One run in four against the stale scope, so `W0709` is reachable.
+        let view = if index % 4 == 3 { &stale } else { &scope };
+        let (report, held) = check(index, &rules, view, &snapshot);
         applied = applied.saturating_add(u32::from(held));
         for diagnostic in report.diagnostics {
             let code = diagnostic.code;
