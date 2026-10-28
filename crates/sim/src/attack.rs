@@ -1192,8 +1192,8 @@ fn launch_target(world: &World, row: &AttackRow, post: &Post) -> Option<(u32, [F
             Some((asset.raw(), place))
         }
         Aim::Commander(seat) => nearest_commander(world, post.seat, seat, post.staging),
-        // No beacon is excluded at launch: `NO_TARGET` names no asset.
-        Aim::NearestKnownBeacon => nearest_known_beacon(world, post.seat, NO_TARGET, post.staging),
+        // No beacon is excluded at launch.
+        Aim::NearestKnownBeacon => nearest_known_beacon(world, post.seat, None, post.staging),
     }
 }
 
@@ -1282,19 +1282,20 @@ fn nearest_commander(
 }
 
 /// The nearest enemy beacon `seat` holds a fresh sighting of, nearest `from`,
-/// ties to the lowest id, other than `not` and other than one the seat sees
-/// is gone: `NEAREST_KNOWN`'s retarget, and [`Aim::NearestKnownBeacon`]'s
-/// launch, with `not` as [`NO_TARGET`].
+/// ties to the lowest id, other than `not` when it names one and other than
+/// one the seat sees is gone: `NEAREST_KNOWN`'s retarget, which excludes the
+/// lost target, and [`Aim::NearestKnownBeacon`]'s launch, which excludes
+/// nothing.
 fn nearest_known_beacon(
     world: &World,
     seat: SeatId,
-    not: u32,
+    not: Option<u32>,
     from: [Fx; 3],
 ) -> Option<(u32, [Fx; 3])> {
     let mut best: Option<((Sq, u32), [Fx; 3])> = None;
     for_each_sighting(world, seat, |seen| {
         if seen.kind != AssetKind::Beacon.id()
-            || seen.asset == not
+            || not == Some(seen.asset)
             || !crate::defend::enemy(seat, seen.owner)
             || !fresh(world, seen.tick)
         {
@@ -1518,7 +1519,7 @@ fn press(world: &mut World, row: &mut AttackRow, post: &Post) {
     if lost {
         let retarget = match row.settings.retarget_reading() {
             Retarget::NearestKnown => {
-                nearest_known_beacon(world, post.seat, row.target, row.aim_at)
+                nearest_known_beacon(world, post.seat, Some(row.target), row.aim_at)
             }
             Retarget::None | Retarget::Unset => None,
         };

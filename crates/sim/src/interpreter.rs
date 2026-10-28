@@ -2580,10 +2580,11 @@ pub enum PlanError {
     /// A row would take longer than a signed 32-bit count of game
     /// milliseconds to commit, which is longer than any segment.
     RowTooLong,
-    /// An Attack target that is not an enemy beacon's `e_NN` handle, a voxel
-    /// or the enemy commander (S2's `atk`): an own `b_NN`, `safest`, or a
-    /// selector, which until S3 ranks only the seat's own beacons. The
-    /// verifier refuses it as E0414 or E0415 at the seal.
+    /// An Attack target that is not an enemy beacon's `e_NN` handle, a voxel,
+    /// the enemy commander (S2's `atk`) or the nearest known enemy beacon
+    /// (S2's `atk2`): an own `b_NN`, `safest`, or a selector ranking the
+    /// seat's own beacons. The verifier refuses it as E0414 or E0415 at the
+    /// seal.
     AttackTargetNotEnemy,
     /// An Attack target's `enemy_commander.seat` past any seat a match can
     /// hold, a byte (S2's `atk`; the owner's answer of 2026-10-26), which the
@@ -2907,8 +2908,8 @@ impl core::fmt::Display for PlanError {
             ),
             PlanError::AttackTargetNotEnemy => write!(
                 f,
-                "an Attack target names no enemy beacon: it is an enemy beacon's `e_NN`, a voxel \
-                 or the enemy commander"
+                "an Attack target names no enemy beacon: it is an enemy beacon's `e_NN`, a voxel, \
+                 the enemy commander or the nearest known enemy beacon"
             ),
             PlanError::CommanderSeatOutOfRange { found } => write!(
                 f,

@@ -561,6 +561,12 @@ impl Semantics<'_> {
     /// The nearest known enemy beacon as an Attack target (S2's `atk2`):
     /// `W0709` when no enemy beacon is sighted inside the reach window. Any
     /// other selector says nothing here.
+    ///
+    /// Advice, and an approximation of the sim's choice on one side only:
+    /// the view carries no "seen gone" mark, so a fresh sighting of a beacon
+    /// the seat has since seen destroyed silences the warning although the
+    /// sim, which skips such a beacon, holds the force. The verdict is the
+    /// same either way: the file qualifies.
     fn nearest_known_beacon(&mut self, beacon: &BeaconRef, target_at: &str, window: i64) {
         if !crate::refusals::is_nearest_known_enemy_beacon(beacon) {
             return;

@@ -889,6 +889,46 @@ fn only_the_nearest_known_enemy_beacon_is_lifted_and_it_is_warned_unseen() {
     }
 }
 
+/// The sim and the verifier name the lifted shape with a predicate each
+/// (S2's `atk2`): the verifier's `E0015` stands exactly where the sim's
+/// compile refuses `side: ENEMY_KNOWN`, at an Attack target and elsewhere.
+#[test]
+fn the_verifier_lifts_e0015_exactly_where_the_sim_compiles_the_selector() {
+    let rules = rules();
+    let snapshot = fixture_snapshot();
+    let scope = fixture_scope();
+    let lifted = String::from_utf8(case_bytes(
+        "w0709_a_raid_on_the_nearest_known_beacon_with_no_sighting",
+    ))
+    .expect("UTF-8");
+    let filter = "\"side\": \"ENEMY_KNOWN\"";
+    let elsewhere = lifted.replace(
+        "\"safest\": {}",
+        "\"nearest\": {\"filter\": {\"side\": \"ENEMY_KNOWN\"}}",
+    );
+    assert_ne!(elsewhere, lifted, "the fallback's hold names the selector");
+    for (text, compiles) in [
+        (lifted.clone(), true),
+        (lifted.replace("\"nearest\"", "\"weakest\""), false),
+        (lifted.replace("\"nearest\"", "\"most_threatened\""), false),
+        (
+            lifted.replace(filter, &format!("{filter}, \"mandate\": \"DEFEND\"")),
+            false,
+        ),
+        (elsewhere, false),
+    ] {
+        let playbook: pharmakos_proto::gp::v1::Playbook = json::decode(&text).expect("a playbook");
+        let sim = pharmakos_sim::interpreter::Plan::compile(&playbook, &rules);
+        assert_eq!(sim.is_ok(), compiles, "{text}");
+        let input = Input::new(text.as_bytes(), &snapshot, &scope, &rules).expect("an input");
+        let e0015 = verify(&input, Depth::Quick)
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "E0015");
+        assert_eq!(e0015, !compiles, "{text}");
+    }
+}
+
 #[test]
 fn every_estimate_case_exists_and_its_fixture_changes_one_thing() {
     let names = cases();

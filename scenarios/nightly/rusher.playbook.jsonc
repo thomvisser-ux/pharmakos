@@ -20,8 +20,10 @@
 // seat has seen inside `verifier.reach_memory_ms`, nearest the staging point,
 // ties to the lowest id, and holds the force, counted, while the seat knows
 // none (the verifier says so with W0709 and still qualifies the file). When
-// that beacon falls, `retarget: NEAREST_KNOWN` takes the next one the seat
-// knows of, the core among them once it has been seen. The staging point is
+// that beacon falls, `retarget: NEAREST_KNOWN` takes the next nearest one
+// the seat knows of, which is the core only when the core is the nearest:
+// no Attack target names an enemy's core in v1, so "then the core" is not
+// written separately. The staging point is
 // the map's centre, the one voxel that means the same thing from every
 // spawn, so "nearest" is measured from there rather than from the post.
 {
