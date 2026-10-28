@@ -9,10 +9,10 @@
       "beginner": "A rule needs something to watch for."
     }
   ],
-  "report_hash": "be43nwGu6BI=",
+  "report_hash": "JIaP9/2p93Q=",
   "rules_hash": "gCjUE4Tm3i8=",
   "plan_fingerprint": "9Y4phmUXbvw=",
-  "verifier_version": "0.1.0-s2.3",
+  "verifier_version": "0.1.0-s2.4",
   "size_units": 3,
   "size_budget": 128
 }

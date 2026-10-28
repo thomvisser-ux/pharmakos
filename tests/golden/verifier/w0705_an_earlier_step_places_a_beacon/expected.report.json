@@ -20,10 +20,10 @@
       "beginner": "A description is read when its step starts, and a beacon placed before then can change what it picks."
     }
   ],
-  "report_hash": "uVaVE5A7SP0=",
+  "report_hash": "hY70D1+A9NA=",
   "rules_hash": "gCjUE4Tm3i8=",
   "plan_fingerprint": "QfHubneHKUY=",
-  "verifier_version": "0.1.0-s2.3",
+  "verifier_version": "0.1.0-s2.4",
   "size_units": 2,
   "size_budget": 128
 }

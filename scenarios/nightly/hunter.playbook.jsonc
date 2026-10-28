@@ -1,0 +1,76 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// The Hunter arm's playbook (S2's plan, task `arms`; spec sections 4 and 15):
+// a Survey beacon whose scouts look for the enemy, and an Attack beacon,
+// played against Easy over scenarios/nightly/seeds.txt.
+// scenarios/nightly/README.md says what it can and cannot do in v1 as built,
+// and gives its band.
+//
+// One file plays every round of every seed, from either seat, and must
+// qualify every time (a refusal fails the night), so it names nothing that
+// belongs to one seat or one map, and each placement is guarded so that a
+// later round places no second beacon of the same kind.
+//
+// The target is the archetype's: spec section 15's Hunter attacks
+// `enemy_commander`, with no seat named. The force gathers at the map's
+// centre, the one voxel that means the same from every spawn, and launches
+// at the nearest enemy commander the seat has seen within
+// `verifier.reach_memory_ms`, nearest the staging point, ties to the lowest
+// seat id, chosen at launch (the owner's ruling of 2026-10-26). With no such
+// sighting the sim holds the force, counted, until one exists, so the file
+// qualifies in round 1 with the verifier's warning W0708 rather than E0418
+// (the owner's ruling of 2026-10-27, S2's `vfy4`). The scouts, placed
+// first, are what give it a sighting; the raiders' own sight is the rest.
+// When the hunted commander is lost (seen dead, its sighting stale, or gone
+// when the force reaches it), `NEAREST_KNOWN` retargets the nearest enemy
+// beacon the seat holds a fresh sighting of, nearest where the commander
+// was.
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {"title": "Nightly Hunter", "author_kind": "HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {"label": "to_safety", "move": {"to": {"safest": {}}}},
+      // Two scouts over the whole map. Skipped once the seat has a Survey
+      // beacon.
+      {"label": "look",
+        "skip_if": {"beacon_hp_pct": {"beacon": {"nearest": {"filter": {"mandate": "SURVEY"}}}, "pct": {"op": "GE", "value": 0}}},
+        "place_beacon": {"at": {"covering": {"seam": {"rank": "NEAREST", "coverage": "ANY"}}}, "tags": ["look"],
+          "initial": {"priority": "HIGH", "mandate": {"survey": {
+            "probe_areas": [{"min": {"x": 0, "y": 0, "z": 0}, "max": {"x": 383, "y": 383, "z": 63}}],
+            "scout_count": 2}}}},
+        "timeout_ms": 60000, "on_fail": {"action": "SKIP"}},
+      // The hunting party: three raiders launch together at the nearest
+      // enemy commander seen. Skipped once the seat has an Attack beacon.
+      {"label": "hunt",
+        "skip_if": {"beacon_hp_pct": {"beacon": {"nearest": {"filter": {"mandate": "ATTACK"}}}, "pct": {"op": "GE", "value": 0}}},
+        "place_beacon": {"at": {"covering": {"seam": {"rank": "NEAREST", "coverage": "ANY"}}}, "tags": ["hunt"],
+          "initial": {"priority": "HIGH", "mandate": {"roe": "FREE_FIRE", "attack": {
+            "target": {"enemy_commander": {}},
+            "retarget": "NEAREST_KNOWN",
+            "staging": {"x": 192, "y": 192, "z": 0},
+            "launch": {"force_size": 3},
+            "after_action": "REGROUP_AT_STAGING",
+            "waves": 1}}}},
+        "timeout_ms": 60000, "on_fail": {"action": "SKIP"}},
+      // A generator on the nearest free vent while the grid has under 4 kW to
+      // spare.
+      {"label": "power",
+        "skip_if": {"kw_headroom": {"kw": {"op": "GE", "value": 4}}},
+        "place_beacon": {"at": {"covering": {"vent": {"rank": "NEAREST", "coverage": "UNCOVERED"}}},
+          "initial": {"mandate": {"build": {"targets": [
+            {"blueprint_id": "generator", "anchor": {"on": {"covered": {}}}}
+          ]}}}},
+        "timeout_ms": 90000, "on_fail": {"action": "SKIP"}},
+      {"label": "home", "move": {"to": {"safest": {}}}}
+    ],
+    "handlers": [],
+    // A beacon placed past supply waits dark rather than refusing the file:
+    // the verifier's power projection does not read the guards above.
+    "options": {"allow_dormant_beacons": true}
+  },
+  "on_death": {"on_respawn": "CONTINUE"},
+  "fallback": {"hold": {"at": {"safest": {}}}}
+}

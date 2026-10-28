@@ -416,8 +416,8 @@ pub const VERIFIER_STRINGS: &[Text] = &[
     },
     Text {
         code: "E0418",
-        message: "{what}; an Attack target must have been seen within the reach window, {max} \
-                  ms, when the playbook is sealed.",
+        message: "{what}; this Attack target must have been seen within the reach window, \
+                  {max} ms, when the playbook is sealed.",
         beginner: "An Attack beacon attacks what the seat has seen recently. Look again with a \
                    scout, or choose a target the seat has seen.",
     },
@@ -595,6 +595,14 @@ pub const VERIFIER_STRINGS: &[Text] = &[
         beginner: "The game could not check this route's timing. That is a fault in the game, not \
                    in the playbook.",
     },
+    Text {
+        code: "W0708",
+        message: "{what}, and the reach window is {max} ms; with no seat named, the Attack \
+                  hunts the enemy commander seen within it nearest its staging point when its \
+                  force is ready to launch, and the force waits until there is one.",
+        beginner: "This Attack beacon's raiders wait until your side has recently seen an enemy \
+                   commander, then hunt the nearest one. Scouts help them find one sooner.",
+    },
     // --- I...: information ---------------------------------------------------
     Text {
         code: "I0001",
@@ -709,7 +717,7 @@ pub const ANCHOR_NOT_A_VOXEL: &str = "this anchor is not a voxel";
 pub const WALL_BOX_COLUMN: &str = "the wall box's";
 /// E0416's `{what}` for a Build target's anchor.
 pub const ANCHOR_COLUMN: &str = "the anchor's";
-/// E0418's `{what}`: no enemy commander has been sighted.
+/// W0708's `{what}`: no enemy commander has been sighted.
 pub const NO_COMMANDER_SIGHTED: &str = "the seat has no sighting of an enemy commander";
 /// E0419's `{why}` for the playbook's own seat.
 pub const SEAT_IS_OWN: &str = "which is this playbook's own seat";
@@ -741,13 +749,13 @@ pub fn never_sighted(beacon_id: &str) -> String {
     format!("the seat has no sighting of `{beacon_id}`")
 }
 
-/// E0418's `{what}` for a sighting older than the window.
+/// E0418's and W0708's `{what}` for a sighting older than the window.
 #[must_use]
 pub fn sighted_ago(what: &str, age_ms: u32) -> String {
     format!("{what} was last seen {age_ms} ms ago")
 }
 
-/// The enemy commander, as E0418's `{what}` names it.
+/// The enemy commander, as W0708's `{what}` names it.
 pub const THE_ENEMY_COMMANDER: &str = "the enemy commander";
 
 /// The row for one code, or `None` if the table does not have it.

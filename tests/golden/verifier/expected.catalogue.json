@@ -508,7 +508,7 @@
     "family": "references and placement",
     "severity": "ERROR",
     "emitter": "semantics",
-    "message": "{what}; an Attack target must have been seen within the reach window, {max} ms, when the playbook is sealed.",
+    "message": "{what}; this Attack target must have been seen within the reach window, {max} ms, when the playbook is sealed.",
     "beginner": "An Attack beacon attacks what the seat has seen recently. Look again with a scout, or choose a target the seat has seen."
   },
   {
@@ -742,6 +742,14 @@
     "emitter": "estimate",
     "message": "the snapshot this report is about does not decode, so whether the route fits the coming segment was not checked.",
     "beginner": "The game could not check this route's timing. That is a fault in the game, not in the playbook."
+  },
+  {
+    "code": "W0708",
+    "family": "schedule, conflicts and staleness",
+    "severity": "WARNING",
+    "emitter": "semantics",
+    "message": "{what}, and the reach window is {max} ms; with no seat named, the Attack hunts the enemy commander seen within it nearest its staging point when its force is ready to launch, and the force waits until there is one.",
+    "beginner": "This Attack beacon's raiders wait until your side has recently seen an enemy commander, then hunt the nearest one. Scouts help them find one sooner."
   },
   {
     "code": "I0001",
