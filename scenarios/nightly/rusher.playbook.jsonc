@@ -26,6 +26,12 @@
 // written separately. The staging point is
 // the map's centre, the one voxel that means the same thing from every
 // spawn, so "nearest" is measured from there rather than from the post.
+//
+// Measured on the first six seeds of seeds.txt (S2's `atk2`, by hand): the
+// seat never sights an enemy beacon, so the force never launches, and the
+// band reads a floor again. The arm fields no scout, and its raiders wait at
+// the centre, out of sight of every enemy beacon.
+// PLACEHOLDER: how the Rusher comes to know an enemy beacon, without which its force never launches on the seeds measured — owner, S2, at demo2
 {
   "schema_version": {"major": 1, "minor": 0},
   "meta": {"title": "Nightly Rusher", "author_kind": "HUMAN"},
