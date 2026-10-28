@@ -37,12 +37,22 @@
             }
           ],
           "map_refs": []
+        },
+        {
+          "code": "W0709",
+          "severity": "warning",
+          "path": "/declarative/route/1/place_beacon/initial/mandate/attack/target/beacon/nearest",
+          "related_paths": [],
+          "message": "the seat has no sighting of an enemy beacon, and the reach window is 180000 ms; the Attack raids the enemy beacon seen within it nearest its staging point when its force is ready to launch, and the force waits until there is one.",
+          "beginner": "This Attack beacon's raiders wait until your side has recently seen an enemy beacon, then raid the nearest one. Scouts help them find one sooner.",
+          "suggestions": [],
+          "map_refs": []
         }
       ],
-      "report_hash": "C4ptRmTXTXs=",
+      "report_hash": "497eZD1d4Nk=",
       "rules_hash": "VQGfykahqEM=",
-      "plan_fingerprint": "d93AgMI3GIU=",
-      "verifier_version": "0.1.0-s2.4",
+      "plan_fingerprint": "E0a6S8j8dqg=",
+      "verifier_version": "0.1.0-s2.5",
       "size_units": 6,
       "size_budget": 128
     },

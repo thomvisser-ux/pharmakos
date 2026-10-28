@@ -15,15 +15,20 @@
 // is left -- with two raiders, as soon as one is lost -- and the survivors
 // regroup at the staging point.
 //
-// What to raid is yours to say: an enemy beacon by the name your beacon list
-// gives it, such as {"beacon": {"beacon_id": "e_01"}}; the enemy commander,
-// {"enemy_commander": {}}, the nearest one you have a fresh sighting of, or
-// {"enemy_commander": {"seat": 1}} for one seat's; or a voxel. A target you
-// have never seen, or not seen recently, is refused at the seal. The wizard
-// offers the nearest enemy beacon you know of, which is what the built-in
-// operator suggests; until you know of one, the template's own target and
-// staging point are the middle of the map: the raiders gather there, sweep it
-// and regroup there, which is why the wizard asks for both.
+// What to raid is yours to say: the nearest enemy beacon you know of,
+// {"beacon": {"nearest": {"filter": {"side": "ENEMY_KNOWN"}}}}, which is the
+// template's own; an enemy beacon by the name your beacon list gives it, such
+// as {"beacon": {"beacon_id": "e_01"}}; the enemy commander,
+// {"enemy_commander": {}}, or {"enemy_commander": {"seat": 1}} for one
+// seat's; or a voxel. A beacon by name, or one seat's commander, that you
+// have never seen or not seen recently is refused at the seal. The nearest
+// enemy beacon, and the enemy commander with no seat named, are chosen when
+// the force is ready to launch, from the sightings you have then: nearest the
+// staging point, among those seen recently. Until you have one the raiders
+// wait at the staging point, and the checks say so. The wizard offers the
+// nearest enemy beacon you know of by name, which is what the built-in
+// operator suggests. The template's own staging point is the middle of the
+// map, which is why the wizard asks for it.
 //
 // Where the beacon goes is a description, as in Defend the Core: "the nearest
 // scrap seam to you", read once your commander stands at the core, which is
@@ -37,8 +42,9 @@
       // is.
       {"pointer": "/declarative/route/1/place_beacon/at/covering", "label": "Which scrap seam the raid post covers: the nearest one to your core, or one by name"},
       // Why: the target is the raid. A name is a fixed target, pinned at the
-      // seal; the enemy commander is followed while any of your units sees it.
-      {"pointer": "/declarative/route/1/place_beacon/initial/mandate/attack/target", "label": "What to raid: an enemy beacon by name, the enemy commander, or a voxel"},
+      // seal; the nearest enemy beacon is chosen at launch; the enemy commander
+      // is followed while any of your units sees it.
+      {"pointer": "/declarative/route/1/place_beacon/initial/mandate/attack/target", "label": "What to raid: the nearest enemy beacon you know of, an enemy beacon by name, the enemy commander, or a voxel"},
       // Why: the raiders gather here before they launch, and regroup here
       // after the raid.
       {"pointer": "/declarative/route/1/place_beacon/initial/mandate/attack/staging", "label": "Where the raiders gather before they launch: a voxel"},
@@ -60,10 +66,11 @@
       // walk as well as the deploy. Two raiders launch together, fewer than
       // half of them left (51 %: one of two lost) breaks the raid off, and one
       // wave goes out a segment.
-      // PLACEHOLDER: the Raid template's own target and staging, the middle of the 384 x 384 map, until a description of the nearest known enemy beacon qualifies — owner, S3, with E0015's lift for selectors
+      // The staging point is the middle of the 384 x 384 map, the one voxel
+      // that means the same from either seat's core.
       {"label": "place_raid", "place_beacon": {"at": {"covering": {"seam": {"rank": "NEAREST", "coverage": "ANY"}}}, "tags": ["raid"],
         "initial": {"priority": "NORMAL", "mandate": {"roe": "FREE_FIRE", "attack": {
-          "target": {"voxel": {"x": 192, "y": 192, "z": 0}},
+          "target": {"beacon": {"nearest": {"filter": {"side": "ENEMY_KNOWN"}}}},
           "retarget": "NEAREST_KNOWN",
           "staging": {"x": 192, "y": 192, "z": 0},
           "launch": {"force_size": 2},

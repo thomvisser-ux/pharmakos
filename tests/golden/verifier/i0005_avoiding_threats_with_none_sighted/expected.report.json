@@ -10,10 +10,10 @@
       "beginner": "Avoiding threats needs an enemy your side can see. None is in sight now, so unless one is when the walk starts, it goes straight."
     }
   ],
-  "report_hash": "etQxlb2VhoY=",
+  "report_hash": "YAQ5bBlRzds=",
   "rules_hash": "VQGfykahqEM=",
   "plan_fingerprint": "pUsyKTckUJQ=",
-  "verifier_version": "0.1.0-s2.4",
+  "verifier_version": "0.1.0-s2.5",
   "size_units": 1,
   "size_budget": 128
 }

@@ -899,6 +899,16 @@ pub const CATALOGUE: &[Entry] = &[
         severity: Severity::Warning,
         emitter: Emitter::Stage(Stage::Semantics),
     },
+    // S2's `atk2` (decisions-log item 150 (2)): the nearest known enemy
+    // beacon as an Attack target with no enemy beacon sighted inside the
+    // reach window. The sim chooses the beacon at launch and holds the force
+    // until the seat knows one, so this is W0708's advice for a beacon raid.
+    Entry {
+        code: "W0709",
+        family: Family::ScheduleConflictsAndStaleness,
+        severity: Severity::Warning,
+        emitter: Emitter::Stage(Stage::Semantics),
+    },
     // --- I...: information ---------------------------------------------------
     Entry {
         code: "I0001",

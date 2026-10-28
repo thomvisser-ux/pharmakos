@@ -9,8 +9,8 @@
 // decision 18: the arm the sole winner in more than 13 of the 20 seeds (65 %)
 // opens a tuning task.
 //
-// The arm's playbook is scenarios/nightly/rusher.playbook.jsonc, which says where
-// it departs from the archetype in v1 as built and why;
+// The arm's playbook is scenarios/nightly/rusher.playbook.jsonc, which says what
+// it targets and from where;
 // scenarios/nightly/README.md gives the band and what it reads.
 //
 // An arm, not a committed scenario (scenarios/nightly/README.md; S2's plan,
@@ -22,7 +22,7 @@
 {
   "format": "pharmakos.scenario.v1",
   "name": "rusher",
-  "summary": "The Rusher arm against Easy: seat 0 seals scenarios/nightly/rusher.playbook.jsonc, an Attack beacon first that launches two raiders at the map centre, and seat 1 is Easy.",
+  "summary": "The Rusher arm against Easy: seat 0 seals scenarios/nightly/rusher.playbook.jsonc, an Attack beacon first that launches two raiders at the nearest enemy beacon the seat knows of, and seat 1 is Easy.",
 
   "map": {
     "seed": "0x00000000ca5caded",

@@ -48,7 +48,9 @@
 //! rest on a sighting inside the reach window when the playbook is sealed
 //! (`E0418`; spec section 6). The enemy commander with no seat named
 //! qualifies without one, with `W0708`: the sim chooses it at launch and holds
-//! the force until a fresh sighting exists (S2's `vfy4`). A `wall` target's
+//! the force until a fresh sighting exists (S2's `vfy4`), and so does the
+//! nearest known enemy beacon, `nearest` with the filter `side: ENEMY_KNOWN`
+//! and nothing else, with `W0709` (S2's `atk2`). A `wall` target's
 //! box is required, unturned, anchored inside itself, tall enough and inside
 //! its beacon's sphere
 //! (`E0101`, `E0511`, `E0417`, `E0512`, `E0416`). The sim's handler ceiling is
@@ -204,8 +206,12 @@ pub use walking::Walk;
 /// not comparable with `0.1.0-s2.2`'s. `0.1.0-s2.4` from S2's `vfy4`: this
 /// build qualifies an `enemy_commander` Attack target with no seat named and
 /// no fresh sighting, with `W0708` in place of `E0418`, so its reports are not
-/// comparable with `0.1.0-s2.3`'s.
-pub const VERIFIER_VERSION: &str = "0.1.0-s2.4";
+/// comparable with `0.1.0-s2.3`'s. `0.1.0-s2.5` from S2's `atk2`: this build
+/// qualifies the nearest known enemy beacon (`nearest` with the filter
+/// `side: ENEMY_KNOWN` and nothing else) as an Attack target, lifting `E0015`
+/// for that one selector, and warns of one with no fresh sighting (`W0709`),
+/// so its reports are not comparable with `0.1.0-s2.4`'s.
+pub const VERIFIER_VERSION: &str = "0.1.0-s2.5";
 
 /// Everything one verification is a function of, apart from the depth.
 ///

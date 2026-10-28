@@ -10,10 +10,10 @@
       "beginner": "A repair threshold of 0 means never. Write a percentage to have damaged structures repaired."
     }
   ],
-  "report_hash": "6aHYmjQppWw=",
+  "report_hash": "KbVfBlgm/e8=",
   "rules_hash": "VQGfykahqEM=",
   "plan_fingerprint": "df8VaYlfY8U=",
-  "verifier_version": "0.1.0-s2.4",
+  "verifier_version": "0.1.0-s2.5",
   "size_units": 1,
   "size_budget": 128
 }

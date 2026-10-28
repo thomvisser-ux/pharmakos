@@ -927,3 +927,250 @@ fn an_empty_attack_table_hashes_nothing() {
         "no wall, no breach"
     );
 }
+
+/// A playbook whose one step deploys an Attack beacon whose target is the
+/// beacon reference `reference`, spelt as canonical JSON.
+fn deploy_against_ref(reference: &str) -> gp::v1::Playbook {
+    let text = format!(
+        r#"{{"schema_version":{{"major":1}},"meta":{{"title":"t","author_kind":"HUMAN"}},
+        "kind":"PLAYBOOK","declarative":{{"route":[{{"label":"s","place_beacon":{{
+        "at":{{"voxel":{{"x":96,"y":11,"z":62}}}},"initial":{{"mandate":{{"attack":{{
+        "target":{{"beacon":{reference}}},"retarget":"NONE",
+        "staging":{{"x":96,"y":11,"z":62}},"launch":{{"segment_ms":0}},
+        "after_action":"RETURN_HOME","waves":1}}}}}}}}}}]}},
+        "on_death":{{"on_respawn":"CONTINUE","max_deaths_before_fallback":1}},
+        "fallback":{{"hold":{{"at":{{"beacon_anchor":{{"safest":{{}}}}}}}}}}}}"#
+    );
+    pharmakos_proto::json::decode(&text).expect("a playbook")
+}
+
+#[test]
+fn only_the_nearest_known_enemy_beacon_compiles_as_a_selector_target() {
+    let rules = rules();
+    let plan = Plan::compile(
+        &deploy_against_ref(r#"{"nearest":{"filter":{"side":"ENEMY_KNOWN"}}}"#),
+        &rules,
+    )
+    .expect("the one lifted selector compiles");
+    assert_eq!(deployed_target(&plan), Some(TargetSpec::NearestKnownBeacon));
+    // Every other selector stays refused: one ranking the seat's own
+    // beacons is no enemy, and every other enemy selector, or this one with
+    // a further filter field, is the filter's refusal until S3.
+    assert_eq!(
+        Plan::compile(&deploy_against_ref(r#"{"nearest":{}}"#), &rules).err(),
+        Some(pharmakos_sim::interpreter::PlanError::AttackTargetNotEnemy)
+    );
+    let enemy_known = pharmakos_sim::interpreter::REFUSE_ENEMY_KNOWN.error();
+    for refused in [
+        r#"{"weakest":{"filter":{"side":"ENEMY_KNOWN"}}}"#,
+        r#"{"most_threatened":{"filter":{"side":"ENEMY_KNOWN"}}}"#,
+        r#"{"nearest":{"filter":{"side":"ENEMY_KNOWN","mandate":"DEFEND"}}}"#,
+        r#"{"nearest":{"filter":{"side":"ENEMY_KNOWN","tags":["x"]}}}"#,
+    ] {
+        assert_eq!(
+            Plan::compile(&deploy_against_ref(refused), &rules).err(),
+            Some(enemy_known.clone()),
+            "{refused}"
+        );
+    }
+}
+
+/// A raid on the nearest known enemy beacon from a beacon in the field, its
+/// force of one standing at it.
+fn nearest_known_raid(fixture: &mut World) -> BeaconId {
+    let here = field(fixture);
+    let post = attack(
+        fixture,
+        seat(0),
+        here,
+        FREE_FIRE,
+        raid(Aim::NearestKnownBeacon, 1),
+    );
+    unit(fixture, seat(0), post, UnitKind::Raider, here);
+    post
+}
+
+#[test]
+fn a_raid_on_the_nearest_known_beacon_launches_at_the_nearest_sighting() {
+    let mut fixture = world();
+    let post = nearest_known_raid(&mut fixture);
+    let here = field(&fixture);
+    // Two of seat 1's beacons inside the Attack beacon's sphere, so the seat
+    // sights both at its first decision tick: the nearer is the target.
+    let (near_at, far_at) = (
+        ground(&fixture, here, 10, 0),
+        ground(&fixture, here, -16, 0),
+    );
+    // The farther is placed first, so it holds the lower id: distance, not
+    // the tie rule, chooses.
+    let far = beacon(&mut fixture, seat(1), far_at, MandateKind::Build, 0);
+    let near = beacon(&mut fixture, seat(1), near_at, MandateKind::Build, 0);
+    assert!(far < near);
+    let mut runner = pushing(fixture);
+    let mut log = Vec::new();
+    let launched = play_until(&mut runner, 100, &mut log, |world, _| {
+        world
+            .attack()
+            .row_of(post)
+            .is_some_and(|row| row.phase == Phase::Launched)
+    });
+    assert!(launched, "a fresh sighting launches the raid");
+    let row = row(runner.world(), post);
+    assert_eq!(row.target, AssetId::of_beacon(near).unwrap().raw());
+    assert_ne!(row.target, AssetId::of_beacon(far).unwrap().raw());
+    assert_eq!(fired(&log, EventKind::AttackLaunched), 1);
+    // A decision before the first sighting may have held, under its own
+    // reason; the commander hunt's never moves.
+    let counts = runner.world().attack_counts();
+    assert!(counts.launch_without_known_beacon <= 1);
+    assert_eq!(counts.launch_without_target, 0);
+}
+
+#[test]
+fn a_raid_on_the_nearest_known_beacon_retargets_when_its_choice_falls() {
+    let mut fixture = world();
+    let here = field(&fixture);
+    let post = attack(
+        &mut fixture,
+        seat(0),
+        here,
+        FREE_FIRE,
+        AttackSettings {
+            retarget: pharmakos_sim::attack::Retarget::NearestKnown,
+            ..raid(Aim::NearestKnownBeacon, 1)
+        },
+    );
+    unit(&mut fixture, seat(0), post, UnitKind::Raider, here);
+    let (near_at, far_at) = (
+        ground(&fixture, here, 10, 0),
+        ground(&fixture, here, -16, 0),
+    );
+    let far = beacon(&mut fixture, seat(1), far_at, MandateKind::Build, 0);
+    let near = beacon(&mut fixture, seat(1), near_at, MandateKind::Build, 0);
+    let mut runner = pushing(fixture);
+    let mut log = Vec::new();
+    let launched = play_until(&mut runner, 100, &mut log, |world, _| {
+        world
+            .attack()
+            .row_of(post)
+            .is_some_and(|row| row.phase == Phase::Launched)
+    });
+    assert!(launched, "launched at the nearer");
+    assert_eq!(
+        row(runner.world(), post).target,
+        AssetId::of_beacon(near).unwrap().raw()
+    );
+    // The chosen beacon falls where the seat sees it: `NEAREST_KNOWN` takes
+    // the next one the seat knows of, never the fallen one again.
+    hit(
+        runner.world_mut(),
+        DamageTarget::Beacon(near),
+        1_000_000,
+        seat(1),
+    );
+    let far_raw = AssetId::of_beacon(far).unwrap().raw();
+    let moved_on = play_until(&mut runner, 200, &mut log, |world, _| {
+        world
+            .attack()
+            .row_of(post)
+            .is_some_and(|row| row.target == far_raw)
+    });
+    assert!(moved_on, "retargeted to the other known beacon");
+}
+
+#[test]
+fn a_settings_row_compiles_the_nearest_known_enemy_beacon_too() {
+    let text = r#"{"schema_version":{"major":1},"meta":{"title":"t","author_kind":"HUMAN"},
+        "kind":"PLAYBOOK","declarative":{"route":[{"label":"s","interface":{
+        "beacon":{"beacon_id":"b_01"},"rows":[{"set_mandate_settings":{"attack":{
+        "target":{"beacon":{"nearest":{"filter":{"side":"ENEMY_KNOWN"}}}}}}}]}}]},
+        "on_death":{"on_respawn":"CONTINUE","max_deaths_before_fallback":1},
+        "fallback":{"hold":{"at":{"beacon_anchor":{"safest":{}}}}}}"#;
+    let playbook: gp::v1::Playbook = pharmakos_proto::json::decode(text).unwrap();
+    let plan = Plan::compile(&playbook, &rules()).expect("it compiles");
+    let Action::Interface { rows, .. } = &plan.route()[0].action else {
+        panic!("an interface step");
+    };
+    assert!(rows.iter().any(|row| matches!(
+        row,
+        Row::Settings {
+            attack: Some(edit),
+            ..
+        } if edit.target == Some(TargetSpec::NearestKnownBeacon)
+    )));
+}
+
+#[test]
+fn a_restored_nearest_known_aim_carries_no_value() {
+    let mut world = world();
+    let here = field(&world);
+    let post = attack(
+        &mut world,
+        seat(0),
+        here,
+        FREE_FIRE,
+        raid(Aim::NearestKnownBeacon, 1),
+    );
+    let columns = pharmakos_sim::attack::AttackColumns::of(world.attack());
+    let beacons = [post.raw()];
+    assert!(columns.restore(|_| true, &beacons, 2).is_ok());
+    let mut valued = columns.clone();
+    valued.aim_value[0] = 1;
+    assert_eq!(
+        valued.restore(|_| true, &beacons, 2).err(),
+        Some("attack_aim")
+    );
+    let mut placed = columns;
+    placed.aim_voxel[0] = 1;
+    assert_eq!(
+        placed.restore(|_| true, &beacons, 2).err(),
+        Some("attack_aim")
+    );
+}
+
+#[test]
+fn a_raid_on_the_nearest_known_beacon_holds_and_counts_with_none_known() {
+    let mut fixture = world();
+    let post = nearest_known_raid(&mut fixture);
+    let mut runner = pushing(fixture);
+    let mut log = Vec::new();
+    play(&mut runner, 40, &mut log);
+    let row = row(runner.world(), post);
+    assert_eq!(row.phase, Phase::Gathering, "held, never sent to a default");
+    assert_eq!(row.target, pharmakos_sim::attack::NO_TARGET);
+    assert_eq!(fired(&log, EventKind::AttackLaunched), 0);
+    let counts = runner.world().attack_counts();
+    assert!(
+        counts.launch_without_known_beacon > 0,
+        "each held decision is counted"
+    );
+    assert_eq!(
+        counts.launch_without_target, 0,
+        "under its own reason, not the commander hunt's"
+    );
+}
+
+#[test]
+fn the_nearest_known_beacon_aim_is_hashed_and_survives_save_and_restore() {
+    let settle = |aim: Aim| {
+        let mut world = world();
+        let here = field(&world);
+        attack(&mut world, seat(0), here, FREE_FIRE, raid(aim, 1));
+        world
+    };
+    let beacon_raid = settle(Aim::NearestKnownBeacon);
+    let hunt = settle(Aim::Commander(None));
+    assert_ne!(
+        beacon_raid.state_hash(),
+        hunt.state_hash(),
+        "the aim's tag is hashed apart from the seatless hunt's"
+    );
+    let bytes = Snapshot::capture(&beacon_raid).to_bytes().unwrap();
+    let mut copy = settle(Aim::Commander(None));
+    Snapshot::from_bytes(&bytes)
+        .unwrap()
+        .restore_into(&mut copy)
+        .unwrap();
+    assert_eq!(copy.attack(), beacon_raid.attack());
+    assert_eq!(copy.state_hash(), beacon_raid.state_hash());
+}

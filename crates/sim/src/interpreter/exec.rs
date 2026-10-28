@@ -1500,6 +1500,7 @@ fn attack_aim(target: crate::attack::TargetSpec) -> Result<crate::attack::Aim, S
         }
         crate::attack::TargetSpec::Voxel(at) => crate::attack::Aim::Voxel(at),
         crate::attack::TargetSpec::Commander(seat) => crate::attack::Aim::Commander(seat),
+        crate::attack::TargetSpec::NearestKnownBeacon => crate::attack::Aim::NearestKnownBeacon,
     })
 }
 

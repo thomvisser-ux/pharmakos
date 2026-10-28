@@ -10,10 +10,10 @@
       "beginner": "The least time the walking can take; going round anything in the way takes longer."
     }
   ],
-  "report_hash": "eM5lqP+hi3Y=",
+  "report_hash": "HEt8CQmH1qQ=",
   "rules_hash": "VQGfykahqEM=",
   "plan_fingerprint": "gtDggFmq7KI=",
-  "verifier_version": "0.1.0-s2.4",
+  "verifier_version": "0.1.0-s2.5",
   "size_units": 2,
   "size_budget": 128
 }

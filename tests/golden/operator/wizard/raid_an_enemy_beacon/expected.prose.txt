@@ -4,7 +4,7 @@ Walk to your core, place an Attack beacon beside it, and send its raiders agains
 
 Route
   1. to_core: walk to beacon "b_00".
-  2. place_raid: place a beacon at a site covering the nearest scrap seam (nearest by travel, read when the step starts), tagged "raid", on an Attack mandate: attacking voxel 192, 192, 0, retargeting the nearest known enemy beacon, gathering at voxel 192, 192, 0, launching once 2 raiders stand there, breaking off once fewer than 51% of the force remain, then regrouping at the staging point and in 1 wave, at normal Quartermaster priority (19 s on site).
+  2. place_raid: place a beacon at a site covering the nearest scrap seam (nearest by travel, read when the step starts), tagged "raid", on an Attack mandate: attacking the nearest known enemy beacon (chosen when the force launches), retargeting the nearest known enemy beacon, gathering at voxel 192, 192, 0, launching once 2 raiders stand there, breaking off once fewer than 51% of the force remain, then regrouping at the staging point and in 1 wave, at normal Quartermaster priority (19 s on site).
     Give up after 1:00.
     On failure, move on to the next step.
   3. hold: hold for 30 s.

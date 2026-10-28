@@ -13,20 +13,25 @@
 // safest beacon" rather than to one by name, and each placement is guarded so that a later round, which
 // replays the route from the top, places no second beacon of the same kind.
 //
-// The target is the one departure from the archetype. Spec section 15's
-// Rusher goes for the nearest known enemy beacon, then the core. In S2 an
-// Attack target is a handle, a voxel or the enemy commander: the verifier's
-// E0015 refuses a selector, and the sim compiles none as an Attack target,
-// so lifting it for "the nearest known enemy beacon" is S2's `atk2`, a sim
-// and verifier lane after `tune2`. A handle needs a fresh sighting when the
-// playbook is sealed (E0418), which round 1 never has, and the enemy
-// commander is the Hunter's archetype, not this one. So the target is a
-// voxel, the map's centre, the one voxel that means the same thing from
-// every spawn. The force parks there: a voxel raid ends once the force
-// stands at the voxel with no enemy in reach, and a voxel target is never
-// lost, so `retarget` and `breach_allowed` never act; they say what the
-// archetype would do once its target is a beacon.
-// PLACEHOLDER: the Rusher's target, the map's centre, until `atk2` lets an Attack target name the nearest known enemy beacon — owner, S2, at demo2
+// The target is spec section 15's: the nearest known enemy beacon, then the
+// core. Since S2's `atk2` (decisions-log item 150 (2)) an Attack target may
+// be `nearest` with the filter `side: ENEMY_KNOWN`: the sim chooses the
+// beacon when the force is ready to launch, the nearest enemy beacon the
+// seat has seen inside `verifier.reach_memory_ms`, nearest the staging point,
+// ties to the lowest id, and holds the force, counted, while the seat knows
+// none (the verifier says so with W0709 and still qualifies the file). When
+// that beacon falls, `retarget: NEAREST_KNOWN` takes the next nearest one
+// the seat knows of, which is the core only when the core is the nearest:
+// no Attack target names an enemy's core in v1, so "then the core" is not
+// written separately. The staging point is
+// the map's centre, the one voxel that means the same thing from every
+// spawn, so "nearest" is measured from there rather than from the post.
+//
+// Measured on the first six seeds of seeds.txt (S2's `atk2`, by hand): the
+// seat never sights an enemy beacon, so the force never launches, and the
+// band reads a floor again. The arm fields no scout, and its raiders wait at
+// the centre, out of sight of every enemy beacon.
+// PLACEHOLDER: how the Rusher comes to know an enemy beacon, without which its force never launches on the seeds measured — owner, S2, at demo2
 {
   "schema_version": {"major": 1, "minor": 0},
   "meta": {"title": "Nightly Rusher", "author_kind": "HUMAN"},
@@ -44,7 +49,7 @@
         "skip_if": {"beacon_hp_pct": {"beacon": {"nearest": {"filter": {"mandate": "ATTACK"}}}, "pct": {"op": "GE", "value": 0}}},
         "place_beacon": {"at": {"covering": {"seam": {"rank": "NEAREST", "coverage": "ANY"}}}, "tags": ["rush"],
           "initial": {"priority": "HIGH", "mandate": {"roe": "FREE_FIRE", "attack": {
-            "target": {"voxel": {"x": 192, "y": 192, "z": 0}},
+            "target": {"beacon": {"nearest": {"filter": {"side": "ENEMY_KNOWN"}}}},
             "retarget": "NEAREST_KNOWN",
             "staging": {"x": 192, "y": 192, "z": 0},
             "launch": {"force_size": 2},

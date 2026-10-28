@@ -206,6 +206,14 @@ use serde::{Deserialize, Serialize};
 /// carries no Attack settings, and a world restored from it would launch no
 /// force where the unbroken run did. The gateway's save refuses a
 /// version-13 snapshot by its stamp first.
+///
+/// S2's `atk2` added a value, not a column: an Attack target's aim tag 5,
+/// the nearest known enemy beacon ([`crate::attack::Aim::NearestKnownBeacon`]),
+/// written with a zero value and a zero voxel. Every column and every older
+/// tag is written as before, so the version stays 14: a version-14 file
+/// written before `atk2` restores as the same world, and a build before
+/// `atk2` refuses a file carrying tag 5 by its `attack_aim` column error
+/// rather than misreading it.
 pub const SNAPSHOT_VERSION: u32 = 14;
 
 /// A flat, fixed-width projection of the world.

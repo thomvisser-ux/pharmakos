@@ -9,10 +9,10 @@
       "beginner": "This condition is nested too deeply to be read at a glance. Flatten it."
     }
   ],
-  "report_hash": "u+ouGUm47IU=",
+  "report_hash": "rog7la8rXY0=",
   "rules_hash": "VQGfykahqEM=",
   "plan_fingerprint": "/sKdUaULGck=",
-  "verifier_version": "0.1.0-s2.4",
+  "verifier_version": "0.1.0-s2.5",
   "size_units": 3,
   "size_budget": 128
 }

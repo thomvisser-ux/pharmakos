@@ -9,10 +9,10 @@
       "beginner": "A Defend beacon protects your own beacons, and an Attack beacon attacks an enemy's, so a selector there has to look among the right side's beacons."
     }
   ],
-  "report_hash": "TUGM0x4qcbs=",
+  "report_hash": "AyBa9PODZ84=",
   "rules_hash": "VQGfykahqEM=",
   "plan_fingerprint": "spscYEjmU3c=",
-  "verifier_version": "0.1.0-s2.4",
+  "verifier_version": "0.1.0-s2.5",
   "size_units": 1,
   "size_budget": 128
 }

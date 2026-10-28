@@ -9,10 +9,10 @@
       "beginner": "Tags on a beacon are kept, but nothing can pick a beacon by its tags yet."
     }
   ],
-  "report_hash": "LBOj5tZtRIw=",
+  "report_hash": "qdOzurb5UG4=",
   "rules_hash": "VQGfykahqEM=",
   "plan_fingerprint": "ACtPIlKE0zI=",
-  "verifier_version": "0.1.0-s2.4",
+  "verifier_version": "0.1.0-s2.5",
   "size_units": 1,
   "size_budget": 128
 }

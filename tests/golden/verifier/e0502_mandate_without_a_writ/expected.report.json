@@ -9,10 +9,10 @@
       "beginner": "Say which writ the beacon is on."
     }
   ],
-  "report_hash": "Mxsx4LgA9K0=",
+  "report_hash": "TAv3YZQgoHI=",
   "rules_hash": "VQGfykahqEM=",
   "plan_fingerprint": "ka4O0qFw7LI=",
-  "verifier_version": "0.1.0-s2.4",
+  "verifier_version": "0.1.0-s2.5",
   "size_units": 1,
   "size_budget": 128
 }

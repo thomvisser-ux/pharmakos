@@ -9,10 +9,10 @@
       "beginner": "There is no rule by that name in this playbook."
     }
   ],
-  "report_hash": "GnVcatoSAz0=",
+  "report_hash": "yBllF7ponFo=",
   "rules_hash": "VQGfykahqEM=",
   "plan_fingerprint": "16keD7vK0Bc=",
-  "verifier_version": "0.1.0-s2.4",
+  "verifier_version": "0.1.0-s2.5",
   "size_units": 3,
   "size_budget": 128
 }
