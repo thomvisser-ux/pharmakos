@@ -888,6 +888,17 @@ pub const CATALOGUE: &[Entry] = &[
         severity: Severity::Warning,
         emitter: Emitter::Stage(Stage::Estimate),
     },
+    // S2's `vfy4` (the owner's ruling of 2026-10-27): an `enemy_commander`
+    // Attack target with no seat named and no enemy commander sighted inside
+    // the reach window. The sim chooses the target at launch and holds the
+    // force until a fresh sighting exists, so this is advice, never E0418.
+    // It reads the seat's view, so it is the semantics stage's, beside E0418.
+    Entry {
+        code: "W0708",
+        family: Family::ScheduleConflictsAndStaleness,
+        severity: Severity::Warning,
+        emitter: Emitter::Stage(Stage::Semantics),
+    },
     // --- I...: information ---------------------------------------------------
     Entry {
         code: "I0001",

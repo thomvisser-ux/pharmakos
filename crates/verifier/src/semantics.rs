@@ -423,8 +423,11 @@ impl Semantics<'_> {
     }
 
     /// S2's Attack target against the seat's view: a handle names an enemy
-    /// beacon (`E0414`), and a target named by its handle, or the enemy
-    /// commander, rests on a sighting inside the reach window (`E0418`).
+    /// beacon (`E0414`), and a target named by its handle, or one seat's
+    /// commander, rests on a sighting inside the reach window (`E0418`); the
+    /// enemy commander with no seat named qualifies without one, with a
+    /// warning (`W0708`), because the sim chooses it at launch and holds the
+    /// force until a fresh sighting exists.
     ///
     /// **Freshness is a plan-time test** (spec section 6: "Freshness is a
     /// qualification test at plan time only; the target is pinned at the
@@ -484,9 +487,9 @@ impl Semantics<'_> {
                 let here = pointer::child(&target_at, "enemy_commander");
                 // The owner's answer of 2026-10-26: unset, the target hunts
                 // the nearest enemy commander the seat has a fresh sighting
-                // of at launch, so it qualifies while any enemy commander's
-                // freshest sighting is inside the window; set, that seat's
-                // commander only, and never the playbook's own seat or one
+                // of at launch, so it qualifies with or without one (below);
+                // set, that seat's commander only, and never the playbook's
+                // own seat or one
                 // past any match's (E0419). An age is compared and nothing is
                 // ranked: which commander is nearest is the sim's, at launch.
                 let named = commander.seat;
@@ -526,14 +529,20 @@ impl Semantics<'_> {
                         strings::THE_ENEMY_COMMANDER.to_owned(),
                     ),
                 };
+                // Set, a seat with no fresh sighting is refused (`E0418`):
+                // the file names one commander, and the seat has not seen it.
+                // Unset, the owner's ruling of 2026-10-27 (S2's `vfy4`): the
+                // target is the nearest fresh sighting *at launch*, and the
+                // sim holds the force, counted, until one exists, so the file
+                // qualifies and says so (`W0708`). Same ages, same window;
+                // only the severity differs.
+                let code = if named.is_some() { "E0418" } else { "W0708" };
                 match freshest {
-                    None => self.out.emit(
-                        Diag::new("E0418", here)
-                            .arg("what", never)
-                            .arg("max", window),
-                    ),
+                    None => self
+                        .out
+                        .emit(Diag::new(code, here).arg("what", never).arg("max", window)),
                     Some(sighting) if i64::from(sighting.age_ms) > window => self.out.emit(
-                        Diag::new("E0418", here)
+                        Diag::new(code, here)
                             .arg("what", strings::sighted_ago(&subject, sighting.age_ms))
                             .arg("max", window)
                             .map_ref(sighting.at),

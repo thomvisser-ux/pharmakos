@@ -820,7 +820,7 @@ gp.v1.Playbook.Kind
 
 ## Diagnostics
 
-98 codes. A code is language-neutral, append-only and never
+99 codes. A code is language-neutral, append-only and never
 reused; only an ERROR stops a playbook qualifying. `none at the skeleton` names the
 task that owes the emitter, which is honesty about coverage rather than a gap.
 
@@ -1078,7 +1078,7 @@ E0417  ERROR  references and placement  raised at: structure
   A wall is found by its anchor, so the anchor has to be one of the wall's own voxels.
 
 E0418  ERROR  references and placement  raised at: semantics
-  {what}; an Attack target must have been seen within the reach window, {max} ms, when the playbook is sealed.
+  {what}; this Attack target must have been seen within the reach window, {max} ms, when the playbook is sealed.
   An Attack beacon attacks what the seat has seen recently. Look again with a scout, or choose a target the seat has seen.
 
 E0419  ERROR  references and placement  raised at: semantics
@@ -1196,6 +1196,10 @@ W0706  WARNING  schedule, conflicts and staleness  raised at: lint
 W0707  WARNING  schedule, conflicts and staleness  raised at: estimate
   the snapshot this report is about does not decode, so whether the route fits the coming segment was not checked.
   The game could not check this route's timing. That is a fault in the game, not in the playbook.
+
+W0708  WARNING  schedule, conflicts and staleness  raised at: semantics
+  {what}, and the reach window is {max} ms; with no seat named, the Attack hunts the enemy commander seen within it nearest its staging point when its force is ready to launch, and the force waits until there is one.
+  This Attack beacon's raiders wait until your side has recently seen an enemy commander, then hunt the nearest one. Scouts help them find one sooner.
 
 I0001  INFO  information  raised at: estimate
   the route is at least {found} ms of walking, between the places it names.

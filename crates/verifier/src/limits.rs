@@ -212,9 +212,10 @@ impl Limits {
     ///
     /// The one reach window of spec section 10: Attack target selectors take
     /// their freshness from it rather than declaring their own. From S2 an
-    /// Attack target named by id, or the enemy commander, is compared against
-    /// it (`E0418`), and so is every other reference to an enemy beacon
-    /// (`W0703`), each over the sightings the view carries.
+    /// Attack target named by id, or one seat's commander, is compared
+    /// against it (`E0418`), as are the enemy commander with no seat named
+    /// (`W0708`) and every other reference to an enemy beacon (`W0703`), each
+    /// over the sightings the view carries.
     ///
     /// PLACEHOLDER: the reach window's tuning — owner, S3 (item 90).
     #[must_use]

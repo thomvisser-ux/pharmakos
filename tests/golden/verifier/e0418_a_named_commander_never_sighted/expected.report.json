@@ -5,14 +5,14 @@
       "code": "E0418",
       "severity": "ERROR",
       "path": "/declarative/route/0/place_beacon/initial/mandate/attack/target/enemy_commander",
-      "message": "the seat has no sighting of seat 1's commander; an Attack target must have been seen within the reach window, 180000 ms, when the playbook is sealed.",
+      "message": "the seat has no sighting of seat 1's commander; this Attack target must have been seen within the reach window, 180000 ms, when the playbook is sealed.",
       "beginner": "An Attack beacon attacks what the seat has seen recently. Look again with a scout, or choose a target the seat has seen."
     }
   ],
-  "report_hash": "KsB6725KMFw=",
+  "report_hash": "Ia1hjbnIu40=",
   "rules_hash": "gCjUE4Tm3i8=",
   "plan_fingerprint": "vTsS3gB0vcE=",
-  "verifier_version": "0.1.0-s2.3",
+  "verifier_version": "0.1.0-s2.4",
   "size_units": 1,
   "size_budget": 128
 }

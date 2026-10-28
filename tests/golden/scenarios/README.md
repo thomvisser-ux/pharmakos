@@ -306,8 +306,10 @@ moved for it.
 
 * `hunt-the-commander`: seat 0's Attack beacon by its core, aimed at the enemy
   commander, launches when seat 1's commander walks into its sphere, and its
-  raiders kill it. It seals through the harness door: no commander is
-  sighted when the seat seals, which the verifier refuses as E0418.
+  raiders kill it. No commander is sighted when the seat seals; it sealed
+  through the harness door, which the verifier refused as E0418, until S2's
+  `vfy4` qualified a seatless commander target with W0708, and it now seals
+  through `submit_plan`.
 * `raid-on-a-mortar`: seat 0's raiders walk the map at the voxel of the mortar
   seat 1's core builds, and seat 1's guns kill them, leaving wrecks.
 * `mortar-breaks-wall`: seat 0 walls in ground past its core's sphere from a

@@ -59,9 +59,11 @@
 //! section 6: "Freshness is a qualification test at plan time only; the
 //! target is pinned at the seal", and spec section 10 takes an Attack
 //! target's freshness from the seat's one reach window,
-//! `verifier.reach_memory_ms`. So an Attack target named by id, or the enemy
-//! commander, must rest on a sighting inside that window (`E0418`), and any
-//! other reference to an enemy beacon resting on an older one is `W0703`.
+//! `verifier.reach_memory_ms`. So an Attack target named by id, or one seat's
+//! commander, must rest on a sighting inside that window (`E0418`); the enemy
+//! commander with no seat named, which the sim chooses at launch, is only
+//! warned of without one (`W0708`); and any other reference to an enemy
+//! beacon resting on an older one is `W0703`.
 //! The verifier **reads ages and nothing else**: it never ranks the
 //! sightings, never guesses where an asset went, and never models what an
 //! enemy does (AGENTS.md section 3 rule 2).
