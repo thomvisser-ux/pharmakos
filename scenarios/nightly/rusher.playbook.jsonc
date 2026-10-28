@@ -15,16 +15,18 @@
 //
 // The target is the one departure from the archetype. Spec section 15's
 // Rusher goes for the nearest known enemy beacon, then the core. In S2 an
-// Attack target is a handle, a voxel or the enemy commander (the verifier's
-// E0015 refuses a selector until S3), and a handle or the commander needs a
-// fresh sighting when the playbook is sealed (E0418), which round 1 never
-// has. A voxel is the only target that qualifies on every seed and seat, and
-// the map's centre is the one voxel that means the same thing from every
-// spawn. The force parks there: a voxel raid ends once the force stands at
-// the voxel with no enemy in reach, and a voxel target is never lost, so
-// `retarget` and `breach_allowed` never act; they say what the archetype
-// would do once its target is a beacon.
-// PLACEHOLDER: the Rusher's target, the map's centre, until an Attack target can name the nearest known enemy beacon and still qualify in round 1 — owner, S2, at demo2
+// Attack target is a handle, a voxel or the enemy commander: the verifier's
+// E0015 refuses a selector, and the sim compiles none as an Attack target,
+// so lifting it for "the nearest known enemy beacon" is S2's `atk2`, a sim
+// and verifier lane after `tune2`. A handle needs a fresh sighting when the
+// playbook is sealed (E0418), which round 1 never has, and the enemy
+// commander is the Hunter's archetype, not this one. So the target is a
+// voxel, the map's centre, the one voxel that means the same thing from
+// every spawn. The force parks there: a voxel raid ends once the force
+// stands at the voxel with no enemy in reach, and a voxel target is never
+// lost, so `retarget` and `breach_allowed` never act; they say what the
+// archetype would do once its target is a beacon.
+// PLACEHOLDER: the Rusher's target, the map's centre, until `atk2` lets an Attack target name the nearest known enemy beacon — owner, S2, at demo2
 {
   "schema_version": {"major": 1, "minor": 0},
   "meta": {"title": "Nightly Rusher", "author_kind": "HUMAN"},
