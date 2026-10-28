@@ -12,17 +12,20 @@
 // belongs to one seat or one map, and each placement is guarded so that a
 // later round places no second beacon of the same kind.
 //
-// The target is the departure from the archetype, and it is the whole of the
-// Hunter. Spec section 15's Hunter attacks `enemy_commander`. The verifier
-// qualifies that target only on a sighting of an enemy commander inside
-// `verifier.reach_memory_ms` when the playbook is sealed (E0418), which round
-// 1 never has and no later round is sure to have, so a file that wrote it
-// would fail the night on every seed. Until that changes the force goes to
-// the map's centre, the one voxel that means the same from every spawn, and
-// parks there: a voxel raid ends once the force stands at the voxel with no
-// enemy in reach, and a voxel is never lost, so `retarget` never acts. The
-// scouts, placed first, find an enemy beacon on some seeds, late.
-// PLACEHOLDER: the Hunter's target, the map's centre, until an `enemy_commander` target with no fresh sighting can qualify — owner, S2, at demo2
+// The target is the archetype's: spec section 15's Hunter attacks
+// `enemy_commander`, with no seat named. The force gathers at the map's
+// centre, the one voxel that means the same from every spawn, and launches
+// at the nearest enemy commander the seat has seen within
+// `verifier.reach_memory_ms`, nearest the staging point, ties to the lowest
+// seat id, chosen at launch (the owner's ruling of 2026-10-26). With no such
+// sighting the sim holds the force, counted, until one exists, so the file
+// qualifies in round 1 with the verifier's warning W0708 rather than E0418
+// (the owner's ruling of 2026-10-27, S2's `vfy4`). The scouts, placed
+// first, are what give it a sighting; the raiders' own sight is the rest.
+// When the hunted commander is lost (seen dead, its sighting stale, or gone
+// when the force reaches it), `NEAREST_KNOWN` retargets the nearest enemy
+// beacon the seat holds a fresh sighting of, nearest where the commander
+// was.
 {
   "schema_version": {"major": 1, "minor": 0},
   "meta": {"title": "Nightly Hunter", "author_kind": "HUMAN"},
@@ -39,13 +42,13 @@
             "probe_areas": [{"min": {"x": 0, "y": 0, "z": 0}, "max": {"x": 383, "y": 383, "z": 63}}],
             "scout_count": 2}}}},
         "timeout_ms": 60000, "on_fail": {"action": "SKIP"}},
-      // The hunting party: three raiders launch together. Skipped once the
-      // seat has an Attack beacon.
+      // The hunting party: three raiders launch together at the nearest
+      // enemy commander seen. Skipped once the seat has an Attack beacon.
       {"label": "hunt",
         "skip_if": {"beacon_hp_pct": {"beacon": {"nearest": {"filter": {"mandate": "ATTACK"}}}, "pct": {"op": "GE", "value": 0}}},
         "place_beacon": {"at": {"covering": {"seam": {"rank": "NEAREST", "coverage": "ANY"}}}, "tags": ["hunt"],
           "initial": {"priority": "HIGH", "mandate": {"roe": "FREE_FIRE", "attack": {
-            "target": {"voxel": {"x": 192, "y": 192, "z": 0}},
+            "target": {"enemy_commander": {}},
             "retarget": "NEAREST_KNOWN",
             "staging": {"x": 192, "y": 192, "z": 0},
             "launch": {"force_size": 3},

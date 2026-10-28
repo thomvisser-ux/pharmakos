@@ -44,10 +44,13 @@
 //! Defend's and Attack's settings are checked for what they must write and
 //! the ranges of what they write (the structure stage), for the side of the
 //! beacons they name (`E0414`, `E0415`) and, for an Attack target, for its
-//! freshness: a target named by its handle, or the enemy commander, must rest
-//! on a sighting inside the reach window when the playbook is sealed
-//! (`E0418`; spec section 6). A `wall` target's box is required, unturned,
-//! anchored inside itself, tall enough and inside its beacon's sphere
+//! freshness: a target named by its handle, or one seat's commander, must
+//! rest on a sighting inside the reach window when the playbook is sealed
+//! (`E0418`; spec section 6). The enemy commander with no seat named
+//! qualifies without one, with `W0708`: the sim chooses it at launch and holds
+//! the force until a fresh sighting exists (S2's `vfy4`). A `wall` target's
+//! box is required, unturned, anchored inside itself, tall enough and inside
+//! its beacon's sphere
 //! (`E0101`, `E0511`, `E0417`, `E0512`, `E0416`). The sim's handler ceiling is
 //! `E0113`. Defend's and Attack's are refused today by the arm's own refusal as
 //! well (`E0012`, `E0013`), until the S2 lanes that give them an effect lift
@@ -198,8 +201,11 @@ pub use walking::Walk;
 /// threat model's verifier lane (task `vfy3`): this build notes a move that
 /// avoids known threats with no enemy beacon in sight (`I0005`), reads an
 /// omitted `roe` by writ, and refuses a half-written area, so its reports are
-/// not comparable with `0.1.0-s2.2`'s.
-pub const VERIFIER_VERSION: &str = "0.1.0-s2.3";
+/// not comparable with `0.1.0-s2.2`'s. `0.1.0-s2.4` from S2's `vfy4`: this
+/// build qualifies an `enemy_commander` Attack target with no seat named and
+/// no fresh sighting, with `W0708` in place of `E0418`, so its reports are not
+/// comparable with `0.1.0-s2.3`'s.
+pub const VERIFIER_VERSION: &str = "0.1.0-s2.4";
 
 /// Everything one verification is a function of, apart from the depth.
 ///

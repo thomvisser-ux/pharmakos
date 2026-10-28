@@ -1,0 +1,60 @@
+{
+  "schema_version": {
+    "major": 1
+  },
+  "meta": {
+    "title": "case",
+    "author_kind": "HUMAN"
+  },
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {
+        "label": "s1",
+        "place_beacon": {
+          "at": {
+            "voxel": {
+              "x": 96,
+              "y": 11,
+              "z": 62
+            }
+          },
+          "initial": {
+            "mandate": {
+              "roe": "FREE_FIRE",
+              "attack": {
+                "target": {
+                  "enemy_commander": {}
+                },
+                "retarget": "NONE",
+                "staging": {
+                  "x": 100,
+                  "y": 20,
+                  "z": 58
+                },
+                "launch": {
+                  "segment_ms": 0
+                },
+                "after_action": "RETURN_HOME",
+                "waves": 1
+              }
+            }
+          }
+        }
+      }
+    ]
+  },
+  "on_death": {
+    "on_respawn": "CONTINUE",
+    "max_deaths_before_fallback": 1
+  },
+  "fallback": {
+    "hold": {
+      "at": {
+        "beacon_anchor": {
+          "safest": {}
+        }
+      }
+    }
+  }
+}

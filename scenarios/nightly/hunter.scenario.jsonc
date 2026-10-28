@@ -21,7 +21,7 @@
 {
   "format": "pharmakos.scenario.v1",
   "name": "hunter",
-  "summary": "The Hunter arm against Easy: seat 0 seals scenarios/nightly/hunter.playbook.jsonc, a Survey beacon over the whole map and an Attack beacon that launches three raiders at the map centre, and seat 1 is Easy.",
+  "summary": "The Hunter arm against Easy: seat 0 seals scenarios/nightly/hunter.playbook.jsonc, a Survey beacon over the whole map and an Attack beacon that gathers three raiders at the map centre and launches them at the nearest enemy commander seen, and seat 1 is Easy.",
 
   "map": {
     "seed": "0x00000000ca5caded",

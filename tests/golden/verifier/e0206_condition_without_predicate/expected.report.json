@@ -9,10 +9,10 @@
       "beginner": "This condition is empty."
     }
   ],
-  "report_hash": "IUy2wEXwtXk=",
+  "report_hash": "eU0FZ1BSrOM=",
   "rules_hash": "gCjUE4Tm3i8=",
   "plan_fingerprint": "2RZBg0QgeXo=",
-  "verifier_version": "0.1.0-s2.3",
+  "verifier_version": "0.1.0-s2.4",
   "size_units": 3,
   "size_budget": 128
 }

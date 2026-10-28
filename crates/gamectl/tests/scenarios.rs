@@ -165,13 +165,14 @@ const TERRAFORM_LEVELS_A_FOOTPRINT: &str =
 /// landed and accepted `covering` and `on`; `submit_plan` now takes the file,
 /// so its entry came off.
 ///
-/// S2's `atk` adds two, each for a reason no client could avoid in a round
-/// played from the opening Lull: `hunt-the-commander` targets the enemy
-/// commander, which the verifier qualifies on a fresh sighting (E0418) and
-/// which no seat has before its commander has walked; `mortar-breaks-wall`
-/// recycles the beacon it deploys, named `b_01`, which does not exist when
-/// the seat seals (E0401).
-const HARNESS_DOOR: &[&str] = &[REFUSING, HUNT_THE_COMMANDER, MORTAR_BREAKS_WALL];
+/// S2's `atk` added two, each for a reason no client could avoid in a round
+/// played from the opening Lull; one is left. `mortar-breaks-wall` recycles
+/// the beacon it deploys, named `b_01`, which does not exist when the seat
+/// seals (E0401). `hunt-the-commander`'s entry came off with S2's `vfy4`: its
+/// target, the enemy commander with no seat named, now qualifies with no
+/// sighting at the seal (W0708, the owner's ruling of 2026-10-27), so
+/// `submit_plan` takes the file.
+const HARNESS_DOOR: &[&str] = &[REFUSING, MORTAR_BREAKS_WALL];
 
 /// What a doctored copy is named.
 ///

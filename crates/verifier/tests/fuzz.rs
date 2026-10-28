@@ -116,11 +116,11 @@ const NAMES: &[&str] = &[
 /// table's.
 const WINDOW: u32 = 180_000;
 
-/// S2's `vfy2` codes, and S2's `atk`'s E0419, in code order: the ten
-/// thousand runs reach every one.
-const S2_CODES: [&str; 14] = [
+/// S2's `vfy2` codes, S2's `atk`'s E0419 and S2's `vfy4`'s W0708, in code
+/// order: the ten thousand runs reach every one.
+const S2_CODES: [&str; 15] = [
     "E0113", "E0414", "E0415", "E0416", "E0417", "E0418", "E0419", "E0508", "E0510", "E0511",
-    "E0512", "W0502", "W0703", "I0004",
+    "E0512", "W0502", "W0703", "W0708", "I0004",
 ];
 
 /// The codes for what the sim refuses at the seal (E0009 to E0016; S2's base
@@ -726,7 +726,7 @@ impl Shape {
             1 => Json::Object(vec![("voxel".to_owned(), self.wild_voxel())]),
             _ => {
                 // Unset, or a seat: the playbook's own, an enemy's, or past any
-                // match's (S2's `atk`; E0419 and E0418).
+                // match's (S2's `atk`; E0419 and E0418, and W0708 unset).
                 let seat = match self.below(4) {
                     0 => Vec::new(),
                     1 => vec![("seat".to_owned(), Json::Number("0".to_owned()))],

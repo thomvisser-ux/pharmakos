@@ -41,15 +41,17 @@ power projection does not read those guards.
 
 | Arm | What it does | Where it departs from spec section 15, and why |
 | --- | --- | --- |
-| **Rusher** | An Attack beacon first, at HIGH priority beside the core; it launches on two raiders (`force_size: 2`), `FREE_FIRE`, no retreat; a generator only while the grid has under 4 kW to spare, which on the twenty seeds it never is. | Its target. The archetype goes for the nearest known enemy beacon and then the core. In S2 an Attack target is a handle, a voxel or the enemy commander (`E0015` refuses a selector until S3), and a handle needs a fresh sighting at the seal (`E0418`), which round 1 never has. So the target and the staging point are the map's centre (192, 192), the one voxel that means the same from every spawn. A voxel raid ends as soon as the force stands at the voxel with no enemy in reach, so the force **parks at the centre** and fights only what comes into reach; `retarget: NEAREST_KNOWN` and `breach_allowed` never act, because a voxel target is never lost. |
+| **Rusher** | An Attack beacon first, at HIGH priority beside the core; it launches on two raiders (`force_size: 2`), `FREE_FIRE`, no retreat; a generator only while the grid has under 4 kW to spare, which on the twenty seeds it never is. | Its target. The archetype goes for the nearest known enemy beacon and then the core. In S2 an Attack target is a handle, a voxel or the enemy commander: `E0015` refuses a selector, and the sim compiles none as an Attack target, so "the nearest known enemy beacon" waits for S2's `atk2`, a sim and verifier lane after `tune2`; a handle needs a fresh sighting at the seal (`E0418`), which round 1 never has. So the target and the staging point are the map's centre (192, 192), the one voxel that means the same from every spawn. A voxel raid ends as soon as the force stands at the voxel with no enemy in reach, so the force **parks at the centre** and fights only what comes into reach; `retarget: NEAREST_KNOWN` and `breach_allowed` never act, because a voxel target is never lost. |
 | **Turtle** | A Defend beacon beside the core guarding the core and "my commander" (`FREE_FIRE`, the whole sphere, one picket); the core and every Build beacon repair below 75 % and rebuild, which fields repair drones; a generator on the nearest free vent while the grid has under 6 kW to spare, otherwise an autocannon `on` the nearest free vent; no Attack beacon and no raider of its own, so the treasury hoards what the guns and repairs leave. | The walls. A `wall` target is a box of fixed voxels, one map's and one seat's, so no wall goes up. The guns stand at the nearest free vents, not at the core, whose only gun is its own built-in autocannon. |
-| **Hunter** | A Survey beacon with two scouts over the whole map, placed first; an Attack beacon launching three raiders, which the seat can afford from round 2. | Its target, which is the whole of the archetype. `enemy_commander` qualifies only on a sighting of an enemy commander inside `verifier.reach_memory_ms` at the seal (`E0418`), which round 1 never has and no later round is sure to have. So the force parks at the map's centre, as the Rusher's does. The scouts find an enemy beacon on some seeds and late in the match, and never in time to aim anything. |
+| **Hunter** | A Survey beacon with two scouts over the whole map, placed first; an Attack beacon launching three raiders, which the seat can afford from round 2, at `enemy_commander` with no seat named: the nearest enemy commander the seat has seen inside `verifier.reach_memory_ms`, nearest the staging point at the map's centre, ties to the lowest seat id, chosen at launch; then `NEAREST_KNOWN`. | None in its target since S2's `vfy4`: with no sighting at the seal the verifier qualifies the target with `W0708` rather than `E0418` (the owner's ruling of 2026-10-27), and the sim holds the gathered force, counted, until a fresh sighting exists. The staging point is the centre, the one voxel that means the same from every spawn, rather than a place the archetype names. |
 
-Each departure is a `PLACEHOLDER` in its playbook, for the owner. While they
-stand, each band below still reads as decision 18 writes it, but it measures
-the arm as built, a raid parked at the centre or a guarded core without walls,
-not the archetype spec section 15 names, so a low rate is a floor these
-departures set and not a balance reading. On the run the `arms` lane attached
+Each departure is a `PLACEHOLDER` in its playbook, for the owner: the
+Rusher's target and the Turtle's walls. While they stand, the Rusher's and the
+Turtle's bands still read as decision 18 writes them, but each measures the arm
+as built, a raid parked at the centre or a guarded core without walls, not the
+archetype spec section 15 names, so a low rate there is a floor these
+departures set and not a balance reading. The Hunter's band, since S2's
+`vfy4`, reads its archetype: a hunt for the enemy commander. On the run the `arms` lane attached
 (its pull request), every match of the sixty ended on the round limit, so every
 result was the final audit's; none ended by elimination.
 
@@ -131,7 +133,10 @@ Written per S2's plan, decisions 18 and 29 (ruled by decisions-log item
   final audit's — in more than 13 of the 20 seeds (65 %) against Easy opens a
   tuning task. It watches "commander hunting dominates", whose counters
   (armour, decoys, a self-defence weapon) are added only if this band shows it
-  (spec section 4).
+  (spec section 4). From S2's `vfy4` the arm hunts the enemy commander itself,
+  so this band is a reading of the archetype, not a floor a departure sets.
+  A seed on which no round gives the seat a sighting never launches the hunt,
+  and the result does not say which seeds those were.
 
 At S2 every band reads against Easy, which carries the Balanced weighting
 (item 144 (6)); each is re-baselined against Normal at S5. A shared win counts
@@ -142,7 +147,7 @@ the committed `seeds.txt`: a manual run on another seed file (the workflow's
 gate: `.github/workflows/nightly-scenarios.yml`'s band step warns and fails
 nothing, and a breach is a tuning task, never a tuning change in the pull
 request that saw it. S2's close acknowledges the three bands as Easy's (item
-144 (6)), with the departures above stated beside them.
+144 (6)), with the two departures above stated beside them.
 
 ## The seed set
 

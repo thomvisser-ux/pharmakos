@@ -697,7 +697,7 @@ fn every_sight_case_exists_and_the_sightings_are_all_it_adds() {
 /// Freshness reads ages and nothing else (spec section 6; AGENTS.md section 3
 /// rule 2): the same Attack target qualifies on its freshness when the
 /// sighting is inside the window, and is `E0418` when it is not, or when the
-/// view holds none; a commander target reads the commander sightings alone.
+/// view holds none.
 #[test]
 fn an_attack_targets_freshness_is_its_sightings_age_against_the_window() {
     let rules = rules();
@@ -735,15 +735,47 @@ fn an_attack_targets_freshness_is_its_sightings_age_against_the_window() {
     assert!(!refused(&with_age(Some(window)), &playbook), "at the edge");
     assert!(refused(&with_age(Some(window + 1)), &playbook), "past it");
     assert!(refused(&with_age(None), &playbook), "never seen");
+}
 
-    let commander = String::from_utf8(playbook).expect("UTF-8").replace(
-        "\"beacon\": {\n                    \"beacon_id\": \"e_01\"\n                  }",
-        "\"enemy_commander\": {}",
-    );
+/// A commander target reads the commander sightings alone, with the same ages
+/// against the same window. Set, that seat's commander must rest on a fresh
+/// sighting (`E0418`); unset, the target is chosen at launch and the sim holds
+/// the force until a fresh sighting exists, so the file qualifies and is
+/// warned (`W0708`) exactly where a named seat would be refused (the owner's
+/// ruling of 2026-10-27, S2's `vfy4`).
+#[test]
+fn a_commander_targets_freshness_warns_unset_and_refuses_set() {
+    let rules = rules();
+    let window = u32::try_from(
+        pharmakos_verifier::Limits::from_rules(&rules)
+            .expect("the limits")
+            .reach_memory_ms(),
+    )
+    .expect("a window is not negative");
+    let snapshot = fixture_snapshot();
+    // (qualifies, E0418, W0708)
+    let verdict = |scope: &Scope, bytes: &[u8]| -> (bool, bool, bool) {
+        let input = Input::new(bytes, &snapshot, scope, &rules).expect("an input");
+        let report = verify(&input, Depth::Quick);
+        let has = |code: &str| report.diagnostics.iter().any(|d| d.code == code);
+        (report.qualifies, has("E0418"), has("W0708"))
+    };
+    let seatless = String::from_utf8(case_bytes("e0418_an_attack_target_seen_too_long_ago"))
+        .expect("UTF-8")
+        .replace(
+            "\"beacon\": {\n                    \"beacon_id\": \"e_01\"\n                  }",
+            "\"enemy_commander\": {}",
+        );
     assert!(
-        commander.contains("enemy_commander"),
+        seatless.contains("enemy_commander"),
         "the target was swapped"
     );
+    let named = |seat: u32| {
+        seatless.replace(
+            "\"enemy_commander\": {}",
+            &format!("\"enemy_commander\": {{\"seat\": {seat}}}"),
+        )
+    };
     let seen_commander = |age_ms: u32| {
         fixture_scope().with_sighting(Sighting {
             what: Sighted::Commander(SeatId::new(1)),
@@ -751,18 +783,41 @@ fn an_attack_targets_freshness_is_its_sightings_age_against_the_window() {
             age_ms,
         })
     };
-    assert!(refused(&fixture_scope(), commander.as_bytes()), "none seen");
-    assert!(!refused(&seen_commander(10), commander.as_bytes()));
-    assert!(refused(&seen_commander(window + 1), commander.as_bytes()));
+    let one = named(1);
+    for (scope, stale, why) in [
+        (fixture_scope(), true, "none seen"),
+        (seen_commander(10), false, "seen"),
+        (seen_commander(window), false, "at the edge"),
+        (seen_commander(window + 1), true, "past it"),
+    ] {
+        assert_eq!(
+            verdict(&scope, seatless.as_bytes()),
+            (true, false, stale),
+            "seatless, {why}"
+        );
+        assert_eq!(
+            verdict(&scope, one.as_bytes()),
+            (!stale, stale, false),
+            "seat 1, {why}"
+        );
+    }
     // A stale beacon sighting says nothing about a commander target.
-    assert!(!refused(
-        &seen_commander(10).with_sighting(Sighting {
-            what: Sighted::Beacon("e_01".to_owned()),
-            at: Voxel { x: 1, y: 1, z: 1 },
-            age_ms: window + 1,
-        }),
-        commander.as_bytes()
-    ));
+    let fresh_and_stale_beacon = seen_commander(10).with_sighting(Sighting {
+        what: Sighted::Beacon("e_01".to_owned()),
+        at: Voxel { x: 1, y: 1, z: 1 },
+        age_ms: window + 1,
+    });
+    assert_eq!(
+        verdict(&fresh_and_stale_beacon, seatless.as_bytes()),
+        (true, false, false)
+    );
+    // A fresh sighting of another seat's commander says nothing about the
+    // seat named: still E0418, and still no W0708.
+    assert_eq!(
+        verdict(&seen_commander(10), named(2).as_bytes()),
+        (false, true, false),
+        "another seat seen"
+    );
 }
 
 #[test]
