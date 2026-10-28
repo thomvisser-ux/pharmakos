@@ -1445,6 +1445,15 @@ impl World {
             self.attack_counts.launch_without_target.saturating_add(1);
     }
 
+    /// Count a launch condition that held for a raid on the nearest known
+    /// enemy beacon when the seat knew of none (E4).
+    pub(crate) const fn count_launch_without_known_beacon(&mut self) {
+        self.attack_counts.launch_without_known_beacon = self
+            .attack_counts
+            .launch_without_known_beacon
+            .saturating_add(1);
+    }
+
     /// Count a charge's cut the edit queue refused (E4).
     pub(crate) const fn count_cut_refused(&mut self) {
         self.attack_counts.cut_refused = self.attack_counts.cut_refused.saturating_add(1);

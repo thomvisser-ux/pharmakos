@@ -31,7 +31,13 @@
 //!   the lowest seat -- or, with `seat` set, that seat's commander only (the
 //!   owner's answer of 2026-10-26). It is read from the seat's own sighting
 //!   table, never from ground truth. With no such sighting the force does not
-//!   launch.
+//!   launch. **The nearest known enemy beacon** (`nearest` with the filter
+//!   `side: ENEMY_KNOWN`, S2's `atk2`, decisions-log item 150 (2)) is chosen
+//!   the same way: at launch, the nearest enemy beacon the seat holds a fresh
+//!   sighting of and does not see gone, nearest the staging point, ties to the
+//!   lowest id. With none the force does not launch either, and each such
+//!   decision is counted (`launch_without_known_beacon`), never sent to a
+//!   default.
 //! * **Launched.** The raiders walk to the target and fight it. A beacon
 //!   target is attacked at its **weak point** (decision 14): the target
 //!   beacon's lowest-HP finished structure inside its sphere that the seat
@@ -152,6 +158,9 @@ pub enum Aim {
     Voxel([i16; 3]),
     /// The enemy commander: any enemy seat's, or the one seat named.
     Commander(Option<u8>),
+    /// The nearest enemy beacon the seat knows of, chosen at launch (S2's
+    /// `atk2`).
+    NearestKnownBeacon,
 }
 
 impl Aim {
@@ -164,6 +173,7 @@ impl Aim {
             Aim::Voxel(_) => 2,
             Aim::Commander(None) => 3,
             Aim::Commander(Some(_)) => 4,
+            Aim::NearestKnownBeacon => 5,
         }
     }
 }
@@ -693,7 +703,7 @@ fn encode_row(enc: &mut crate::encoding::Enc, row: &AttackRow) {
     enc.u32(row.beacon.raw());
     enc.u8(settings.aim.tag());
     match settings.aim {
-        Aim::Unset | Aim::Commander(None) => {}
+        Aim::Unset | Aim::Commander(None) | Aim::NearestKnownBeacon => {}
         Aim::Beacon(beacon) => enc.u32(beacon.raw()),
         Aim::Voxel(at) => {
             for axis in at {
@@ -774,6 +784,10 @@ pub enum TargetSpec {
     Voxel([i16; 3]),
     /// The enemy commander, of the seat named or any.
     Commander(Option<u8>),
+    /// The nearest enemy beacon the seat knows of, chosen at launch: the
+    /// selector `nearest` with the filter `side: ENEMY_KNOWN` and nothing
+    /// else (S2's `atk2`).
+    NearestKnownBeacon,
 }
 
 /// The Attack settings a committed settings row writes, each only when the
@@ -851,6 +865,10 @@ pub struct AttackCounts {
     /// A launch condition that held with nothing to launch at: a hunt with
     /// no fresh sighting of an enemy commander, counted per decision.
     pub launch_without_target: u64,
+    /// A launch condition that held for a raid on the nearest known enemy
+    /// beacon ([`Aim::NearestKnownBeacon`]) while the seat held no fresh
+    /// sighting of one it does not see gone, counted per decision.
+    pub launch_without_known_beacon: u64,
 }
 
 /// The rows the Attack mandate reads, typed at load (S2's `atk`).
@@ -1126,8 +1144,13 @@ fn gather(world: &mut World, row: &mut AttackRow, post: &Post) {
         return;
     }
     let Some((target, aim)) = launch_target(world, row, post) else {
-        // Counted, never silent (E4): a hunt with no fresh sighting waits.
-        world.count_launch_without_target();
+        // Counted, never silent (E4): a hunt or a raid on the nearest known
+        // beacon with no fresh sighting waits, each under its own reason.
+        if row.settings.aim == Aim::NearestKnownBeacon {
+            world.count_launch_without_known_beacon();
+        } else {
+            world.count_launch_without_target();
+        }
         return;
     };
     let tick = world.tick();
@@ -1151,8 +1174,8 @@ fn gather(world: &mut World, row: &mut AttackRow, post: &Post) {
 }
 
 /// What a launch goes after and where: the pinned beacon where the seat last
-/// saw it, a voxel, or the nearest enemy commander the seat has a fresh
-/// sighting of. `None` when there is nothing to launch at.
+/// saw it, a voxel, or the nearest enemy commander or enemy beacon the seat
+/// has a fresh sighting of. `None` when there is nothing to launch at.
 fn launch_target(world: &World, row: &AttackRow, post: &Post) -> Option<(u32, [Fx; 3])> {
     match row.settings.aim {
         Aim::Unset => None,
@@ -1169,6 +1192,8 @@ fn launch_target(world: &World, row: &AttackRow, post: &Post) -> Option<(u32, [F
             Some((asset.raw(), place))
         }
         Aim::Commander(seat) => nearest_commander(world, post.seat, seat, post.staging),
+        // No beacon is excluded at launch: `NO_TARGET` names no asset.
+        Aim::NearestKnownBeacon => nearest_known_beacon(world, post.seat, NO_TARGET, post.staging),
     }
 }
 
@@ -1258,7 +1283,8 @@ fn nearest_commander(
 
 /// The nearest enemy beacon `seat` holds a fresh sighting of, nearest `from`,
 /// ties to the lowest id, other than `not` and other than one the seat sees
-/// is gone: `NEAREST_KNOWN`'s retarget.
+/// is gone: `NEAREST_KNOWN`'s retarget, and [`Aim::NearestKnownBeacon`]'s
+/// launch, with `not` as [`NO_TARGET`].
 fn nearest_known_beacon(
     world: &World,
     seat: SeatId,
@@ -1461,7 +1487,7 @@ fn press(world: &mut World, row: &mut AttackRow, post: &Post) {
             }
             None => true,
         },
-        Aim::Beacon(_) | Aim::Commander(_) => {
+        Aim::Beacon(_) | Aim::Commander(_) | Aim::NearestKnownBeacon => {
             if alive(world, row.target) {
                 if let Some(mark) = weak_point(
                     world,
@@ -2239,7 +2265,7 @@ impl AttackColumns {
             out.beacon.push(row.beacon.raw());
             out.aim.push(settings.aim.tag());
             let (value, voxel) = match settings.aim {
-                Aim::Unset | Aim::Commander(None) => (0, [0; 3]),
+                Aim::Unset | Aim::Commander(None) | Aim::NearestKnownBeacon => (0, [0; 3]),
                 Aim::Beacon(beacon) => (beacon.raw(), [0; 3]),
                 Aim::Voxel(at) => (0, widen(at)),
                 Aim::Commander(Some(seat)) => (u32::from(seat), [0; 3]),
@@ -2417,6 +2443,7 @@ impl AttackColumns {
             4 if zero_voxel => {
                 Aim::Commander(Some(u8::try_from(value).map_err(|_| "attack_aim_value")?))
             }
+            5 if value == 0 && zero_voxel => Aim::NearestKnownBeacon,
             _ => return Err("attack_aim"),
         };
         // An unset optional is written as zero: anything else is an edited

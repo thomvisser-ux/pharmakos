@@ -1514,16 +1514,18 @@ fn compile_settings_row(
 }
 
 /// The Attack settings a row names (S2's `atk`): the target -- an enemy
-/// beacon by its `e_NN` handle, pinned at the seal, a voxel, or the enemy
-/// commander with its seat -- the retarget rule, the staging point, the
+/// beacon by its `e_NN` handle, pinned at the seal, a voxel, the enemy
+/// commander with its seat, or the nearest known enemy beacon (S2's `atk2`)
+/// -- the retarget rule, the staging point, the
 /// launch and retreat conditions, the after-action, the avoid areas,
 /// `breach_allowed` and `waves`. Each is written only when the row names it.
 ///
 /// # Errors
 ///
 /// [`PlanError::AttackTargetNotEnemy`] for a target that is not an enemy
-/// beacon's handle (an own name, `safest`, or a selector, which until S3
-/// ranks only the seat's own beacons), [`PlanError::CommanderSeatOutOfRange`]
+/// beacon's handle or the nearest known enemy beacon (an own name, `safest`,
+/// or a selector ranking the seat's own beacons; every other enemy selector
+/// is the filter's own refusal until S3), [`PlanError::CommanderSeatOutOfRange`]
 /// for a seat past any match's, [`PlanError::UnknownEnum`],
 /// [`PlanError::ForceBelowOutOfRange`], [`PlanError::NegativeDuration`],
 /// [`PlanError::MissingBlock`] for a target naming nothing, and a voxel's,
@@ -1540,6 +1542,11 @@ fn compile_attack_settings(
     let target = match attack.target.as_ref() {
         None => None,
         Some(target) => Some(match target.target.as_ref() {
+            Some(gp::v1::attack_target::Target::Beacon(beacon))
+                if nearest_known_enemy_beacon(beacon) =>
+            {
+                TargetSpec::NearestKnownBeacon
+            }
             Some(gp::v1::attack_target::Target::Beacon(beacon)) => {
                 match compile_beacon_ref(Some(beacon), names)? {
                     BeaconSpec::Foreign(handle) => TargetSpec::Foreign {
@@ -2263,6 +2270,26 @@ pub fn beacon_spec_of(
         times: InterfaceTimes::from_rules(rules)?,
     };
     compile_beacon_ref(Some(reference), &names)
+}
+
+/// Whether an Attack target's beacon reference is the one selector the sim
+/// lifts before S3 (S2's `atk2`, decisions-log item 150 (2)): `nearest` with
+/// the filter `side: ENEMY_KNOWN` and no other filter field, which
+/// [`crate::attack::TargetSpec::NearestKnownBeacon`] chooses at launch. Every
+/// other enemy selector, and this one anywhere but an Attack target, is still
+/// refused by [`compile_filter`] as [`REFUSE_ENEMY_KNOWN`].
+fn nearest_known_enemy_beacon(beacon: &gp::v1::BeaconRef) -> bool {
+    let Some(gp::v1::beacon_ref::Ref::Nearest(nearest)) = beacon.r#ref.as_ref() else {
+        return false;
+    };
+    nearest.filter.as_ref().is_some_and(|filter| {
+        // Read raw, as `compile_filter` reads them: a number `Side` or
+        // `MandateKind` does not name is not this selector.
+        gp::v1::beacon_filter::Side::try_from(filter.side)
+            == Ok(gp::v1::beacon_filter::Side::EnemyKnown)
+            && filter.mandate == 0
+            && filter.tags.is_empty()
+    })
 }
 
 fn compile_filter(filter: Option<&gp::v1::BeaconFilter>) -> Result<Filter, PlanError> {
