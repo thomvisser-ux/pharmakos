@@ -1174,3 +1174,221 @@ fn the_nearest_known_beacon_aim_is_hashed_and_survives_save_and_restore() {
     assert_eq!(copy.attack(), beacon_raid.attack());
     assert_eq!(copy.state_hash(), beacon_raid.state_hash());
 }
+
+// The nearest known enemy beacon's edge cases (S2's `rush`, the gaps `atk2`'s
+// review listed): a tie, a stale sighting and a second wave.
+
+/// Two ground points near `centre`, at least 6 columns apart, whose squared
+/// distances from `centre` are equal: heights differ, so the pair is searched
+/// for among the columns 6 to 12 out rather than taken from a mirror.
+fn tied_pair(world: &World, centre: [Fx; 3]) -> ([Fx; 3], [Fx; 3]) {
+    let mut seen: Vec<(Sq, [Fx; 3])> = Vec::new();
+    for dy in -12..=12 {
+        for dx in -12..=12 {
+            if !(36..=144).contains(&(dx * dx + dy * dy)) {
+                continue;
+            }
+            let here = ground(world, centre, dx, dy);
+            let d2 = Sq::between(here, centre);
+            let [x, y] = column(here);
+            if let Some((_, there)) = seen.iter().find(|(other, there)| {
+                let [ox, oy] = column(*there);
+                *other == d2 && (x - ox).abs().max((y - oy).abs()) >= 6
+            }) {
+                return (*there, here);
+            }
+            seen.push((d2, here));
+        }
+    }
+    panic!("no two ground points tie round the field on this seed");
+}
+
+#[test]
+fn a_tie_between_two_equally_near_known_beacons_goes_to_the_lowest_id() {
+    let mut fixture = world();
+    let post = nearest_known_raid(&mut fixture);
+    // Staging is the beacon itself, so "nearest" is measured from there.
+    let from = beacon_at(&fixture, post);
+    let (first_at, second_at) = tied_pair(&fixture, from);
+    let first = beacon(&mut fixture, seat(1), first_at, MandateKind::Build, 0);
+    let second = beacon(&mut fixture, seat(1), second_at, MandateKind::Build, 0);
+    assert!(first < second);
+    assert_eq!(
+        Sq::between(beacon_at(&fixture, first), from),
+        Sq::between(beacon_at(&fixture, second), from),
+        "the two stand equally near the staging point"
+    );
+    let mut runner = pushing(fixture);
+    let mut log = Vec::new();
+    let launched = play_until(&mut runner, 100, &mut log, |world, _| {
+        world
+            .attack()
+            .row_of(post)
+            .is_some_and(|row| row.phase == Phase::Launched)
+    });
+    assert!(launched, "both are sighted at once, so the raid launches");
+    assert_eq!(
+        row(runner.world(), post).target,
+        AssetId::of_beacon(first).unwrap().raw(),
+        "ties to the lowest id"
+    );
+    assert_eq!(fired(&log, EventKind::AttackLaunched), 1);
+}
+
+#[test]
+fn a_stale_sighting_of_an_enemy_beacon_holds_the_force() {
+    let mut fixture = world();
+    let here = field(&fixture);
+    // `RETURN_FIRE` gathers and never launches, so the force stands ready
+    // while the sighting ages; `FREE_FIRE` is set once it is stale.
+    let post = attack(
+        &mut fixture,
+        seat(0),
+        here,
+        RETURN_FIRE,
+        raid(Aim::NearestKnownBeacon, 1),
+    );
+    unit(&mut fixture, seat(0), post, UnitKind::Raider, here);
+    // A scout of seat 0's beside seat 1's core, on the field's side of it:
+    // the only sensor of seat 0's that ever sees an enemy beacon.
+    let enemy = core(&fixture, seat(1));
+    let enemy_at = beacon_at(&fixture, enemy);
+    let [ex, ey] = column(enemy_at);
+    let [hx, hy] = column(here);
+    let scout_at = ground(
+        &fixture,
+        enemy_at,
+        (hx - ex).signum() * 10,
+        (hy - ey).signum() * 10,
+    );
+    let home = core(&fixture, seat(0));
+    let scout = unit(&mut fixture, seat(0), home, UnitKind::Scout, scout_at);
+    let enemy_raw = AssetId::of_beacon(enemy).unwrap().raw();
+    let sighted = |world: &World| {
+        let table = world.sightings();
+        table
+            .seats()
+            .iter()
+            .zip(table.assets())
+            .any(|(by, of)| *by == seat(0).raw() && *of == enemy_raw)
+    };
+    let mut runner = pushing(fixture);
+    let mut log = Vec::new();
+    assert!(
+        play_until(&mut runner, 100, &mut log, |world, _| sighted(world)),
+        "the scout sights the enemy core"
+    );
+    hit(
+        runner.world_mut(),
+        DamageTarget::Unit(scout),
+        1_000_000,
+        seat(1),
+    );
+    // Past the reach window, with nothing of seat 0's in sight of the core.
+    let window = runner.world().rules().attack().reach_memory.to_ticks_ceil();
+    play(&mut runner, window + 40, &mut log);
+    assert!(
+        runner.world().units().row_of(scout).is_err(),
+        "the scout is dead"
+    );
+    assert!(
+        sighted(runner.world()),
+        "the sighting is still held, only stale"
+    );
+    assert_eq!(row(runner.world(), post).phase, Phase::Gathering);
+    let held_before = runner.world().attack_counts().launch_without_known_beacon;
+    runner.world_mut().set_common(
+        post,
+        Common {
+            roe: FREE_FIRE,
+            retreat_hp_pct: 0,
+        },
+    );
+    play(&mut runner, 100, &mut log);
+    let row = row(runner.world(), post);
+    assert_eq!(
+        row.phase,
+        Phase::Gathering,
+        "held, never sent to a stale sighting"
+    );
+    assert_eq!(row.target, pharmakos_sim::attack::NO_TARGET);
+    assert_eq!(fired(&log, EventKind::AttackLaunched), 0);
+    assert!(
+        runner.world().attack_counts().launch_without_known_beacon > held_before,
+        "each held decision is counted"
+    );
+}
+
+#[test]
+fn a_second_wave_launches_at_the_nearest_known_beacon_left() {
+    let mut fixture = world();
+    let here = field(&fixture);
+    let post = attack(
+        &mut fixture,
+        seat(0),
+        here,
+        FREE_FIRE,
+        AttackSettings {
+            waves: 2,
+            ..raid(Aim::NearestKnownBeacon, 1)
+        },
+    );
+    unit(&mut fixture, seat(0), post, UnitKind::Raider, here);
+    let (near_at, far_at) = (
+        ground(&fixture, here, 10, 0),
+        ground(&fixture, here, -16, 0),
+    );
+    let far = beacon(&mut fixture, seat(1), far_at, MandateKind::Build, 0);
+    let near = beacon(&mut fixture, seat(1), near_at, MandateKind::Build, 0);
+    let mut runner = pushing(fixture);
+    let mut log = Vec::new();
+    let first = play_until(&mut runner, 100, &mut log, |world, _| {
+        world
+            .attack()
+            .row_of(post)
+            .is_some_and(|row| row.phase == Phase::Launched)
+    });
+    assert!(first, "the first wave launches");
+    assert_eq!(
+        row(runner.world(), post).target,
+        AssetId::of_beacon(near).unwrap().raw()
+    );
+    // The first wave's target falls where the seat sees it: with no
+    // retarget written the attack ends, the force regroups at staging, and
+    // the second wave chooses again at its own launch, never the fallen one.
+    hit(
+        runner.world_mut(),
+        DamageTarget::Beacon(near),
+        1_000_000,
+        seat(1),
+    );
+    let second = play_until(&mut runner, 1_000, &mut log, |world, _| {
+        world
+            .attack()
+            .row_of(post)
+            .is_some_and(|row| row.waves_used == 2 && row.phase == Phase::Launched)
+    });
+    assert!(second, "the second wave launches");
+    assert_eq!(
+        row(runner.world(), post).target,
+        AssetId::of_beacon(far).unwrap().raw()
+    );
+    assert_eq!(fired(&log, EventKind::AttackLaunched), 2);
+    assert!(
+        fired(&log, EventKind::AttackEnded) >= 1,
+        "the first wave ended before the second"
+    );
+    // No third: `waves` is read.
+    hit(
+        runner.world_mut(),
+        DamageTarget::Beacon(far),
+        1_000_000,
+        seat(1),
+    );
+    play(&mut runner, 600, &mut log);
+    assert_eq!(
+        fired(&log, EventKind::AttackLaunched),
+        2,
+        "at most two waves"
+    );
+}
