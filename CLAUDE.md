@@ -56,16 +56,17 @@ Do not use bypass-permissions mode in this repository, and never against a real 
 contract-file rule depends on approval prompts actually happening; bypass mode removes the
 mechanism rather than speeding it up.
 
-**Owner's delegation for the walking skeleton, S1 and S2 (decisions-log §2.7 items 85, 86, 116 (2)
-and (9), and 120, from 2026-09-14; renewed for S1 by item 126 (2) (g), 2026-09-29, and for S2 by
-item 141, 2026-10-14).** Two relaxations apply to the owner's own Claude Code session only (the
+**Owner's delegation for the walking skeleton, S1, S2 and S3 (decisions-log §2.7 items 85, 86, 116 (2)
+and (9), and 120, from 2026-09-14; renewed for S1 by item 126 (2) (g), 2026-09-29, for S2 by
+item 141, 2026-10-14, and for S3 by item 152, 2026-10-28).** Two relaxations apply to the owner's own Claude Code session only (the
 second also to the agents it launches), for the duration of the walking skeleton; of S1, which runs
 from the skeleton's close (item 126) to S1's stage demo; and of S2, which runs from S1's close (items
 139 and 143: S1 closed on 2026-10-16, when its last lane, `fixd`, had merged and `main`'s push run
 on it was green) to S2's stage demo. They are revoked by the owner's word
 at any time. The owner made the renewal effective on its word of 2026-10-14, so there is no gap
-between S1's stage demo and S1's close (item 141 (1)). At S2's stage demo the delegation returns to
-the owner, who says then whether it runs on into S3:
+between S1's stage demo and S1's close (item 141 (1)). On 2026-10-28, with S2's demo ready, the owner
+said the delegation runs into S3 (item 152), so it now runs on through S3 to S3's stage demo. At S3's
+stage demo the delegation returns to the owner, who says then whether it runs on into S4:
 
 - The main assistant session may **merge** any PR while the delegation runs, whatever stage first
   planned its work (stage lanes, carries from earlier stages, docs and harness PRs, Dependabot's),

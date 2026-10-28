@@ -638,9 +638,9 @@ of that premise.
 - **Never run an agent in bypass-permissions mode against a real seat**, and do not use it in this
   repository. The contract-file rule in §5 depends on approval prompts actually happening. Game
   tools are reached through pre-approved allow rules; bypass mode is not a shortcut, it is the
-  removal of the mechanism. The owner's one exception, for the walking skeleton, S1 and S2 only,
+  removal of the mechanism. The owner's one exception, for the walking skeleton, S1, S2 and S3 only,
   is in CLAUDE.md: bypass mode in the owner's own session and the agents it launches, never against
-  a real seat (decisions-log items 86, 116 (9), 126 and 141).
+  a real seat (decisions-log items 86, 116 (9), 126, 141 and 152).
 - Rate limits and an audit log on the gateway are part of the feature, not a later hardening task.
 
 ## 8. Commits
