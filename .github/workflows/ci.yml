@@ -74,8 +74,8 @@
 #     job-level `if:`: they run whenever their package job succeeded, which it does on a
 #     prose-only pull request, print the notice, and skip every other step (decisions-log
 #     item 117 (8)). The package jobs compute their own answer like the building jobs;
-#   * the `perf alarms` job, which is not required, copies the pattern: it skips its
-#     steps and prints the notice on a prose-only pull request;
+#   * the `perf alarms` and `g3 budget` jobs, which are not required, copy the pattern:
+#     each skips its steps and prints the notice on a prose-only pull request;
 #   * the scope step answers full in bash, before it builds xtask, whenever the commit
 #     changes xtask/, .github/ or .cargo/: a pull request that breaks the decider must not
 #     be judged by the broken copy, whose tests are among the steps it would skip. What
@@ -1304,9 +1304,14 @@ jobs:
     # the walled crate AGENTS.md section 4.5 sanctions to read a clock while driving the
     # verifier and the sim from outside (decisions-log item 131); and the allocations per
     # tick as a notice only — crates/sim/tests/allocations.rs asserts zero in every leg's
-    # `test` step, so it is not run again here. The tick-minus-pathing mean the bench could
-    # now produce stays S2's G3′-real gate's. The budgets come with S1's P1 and S2's
-    # G3′-real gates, which set them.
+    # `test` step, so it is not run again here; and G3′-real's figures (crates/bench/tests/
+    # g3_real.rs: the 8-minute segment at the gate's load phase by phase, the
+    # tick-minus-pathing mean of item 116 (6)(b) among them, the support search's
+    # adversarial tick and a fourth seat's cost; S2's plan, tasks `g3h` and `g3r`). Each
+    # alarm is its own step, `cargo xtask perf-alarms <name>`, because GitHub annotates only
+    # the first ten notices of a step and the four together print more (item 149 (4)). The
+    # G3′ budget is not gated here: the gate is certified on the owner's machine, and its
+    # loose CI alarm is the `g3 budget (ubuntu-24.04)` job below (S2's plan, E18).
     #
     # No cache step: the repository's cache store is past GitHub's 10 GB cap already. The
     # release test builds are the mesher's and the bench's, and the bench's links the sim,
@@ -1315,7 +1320,10 @@ jobs:
     # path like the building jobs: a prose-only pull request skips its steps and prints the
     # notice.
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    # Above the sum of the timed steps' own timeouts (the scope step's 10 and the four
+    # measuring steps' 75), so a step that times out under continue-on-error never brings
+    # the job to its timeout, which would be red.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -1334,8 +1342,10 @@ jobs:
 
       - name: Decide whether anything but prose changed
         # The docs-only fast path (see this file's header), as in the `ci-shard-<os>` jobs.
+        # Timed, so a hung xtask build cannot bring the job to its own timeout.
         id: scope
         continue-on-error: true
+        timeout-minutes: 10
         shell: bash
         env:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -1356,16 +1366,100 @@ jobs:
         shell: bash
         run: echo "::notice title=docs-only fast path::Only prose changed (docs/**, AGENTS.md, CLAUDE.md, .claude/**, top-level *.md), so the perf alarms did not run in this job. They run in full on main's push (decisions-log item 115 (4))."
 
-      - name: cargo xtask perf-alarms
-        # An alarm, not a gate: continue on error, so even a failure to build cannot turn
-        # this job red. Its own timeout sits below the job's: a job that reaches its
-        # timeout-minutes concludes as failure, while a step that times out under
-        # continue-on-error leaves the job green.
+      # An alarm, not a gate: each step continues on error, so even a failure to build
+      # cannot turn this job red. Each step's own timeout sits below the job's: a job that
+      # reaches its timeout-minutes concludes as failure, while a step that times out under
+      # continue-on-error leaves the job green.
+      - name: cargo xtask perf-alarms mesher
         if: steps.scope.outputs.prose_only != 'true'
         continue-on-error: true
         timeout-minutes: 20
         shell: bash
-        run: cargo xtask perf-alarms
+        run: cargo xtask perf-alarms mesher
+
+      - name: cargo xtask perf-alarms p1
+        if: steps.scope.outputs.prose_only != 'true'
+        continue-on-error: true
+        timeout-minutes: 20
+        shell: bash
+        run: cargo xtask perf-alarms p1
+
+      - name: cargo xtask perf-alarms g3
+        if: steps.scope.outputs.prose_only != 'true'
+        continue-on-error: true
+        timeout-minutes: 30
+        shell: bash
+        run: cargo xtask perf-alarms g3
+
+      - name: cargo xtask perf-alarms allocations
+        if: steps.scope.outputs.prose_only != 'true'
+        continue-on-error: true
+        timeout-minutes: 5
+        shell: bash
+        run: cargo xtask perf-alarms allocations
+
+  g3-budget:
+    name: g3 budget (ubuntu-24.04)
+    # G3′-real's CI alarm (S2's plan, E18, task `g3r`; decision 31). The gate itself, spec
+    # §16's tick p99 of at most 25 ms and at least 4x real time (a mean of at most 12.5 ms),
+    # is certified by recorded runs on the owner's machine under Windows and WSL2 Linux, the
+    # slower deciding, because a wall-clock budget is a property of the machine. This job
+    # runs the same load (crates/bench/tests/g3_real.rs's `g3_budget_segment`: the gate's
+    # layout under the bench rules for one 8-minute segment) on a hosted runner and fails
+    # only when its tick p99 exceeds the whole 50 ms tick or its mean exceeds 25 ms, the
+    # gate's numbers doubled: a regression that doubles the tick reddens it, a shared
+    # runner's noise does not. It also fails whenever it gives no verdict (the build or the
+    # measurement failed, or the report line is missing or malformed), never green by
+    # default. Unlike `perf alarms`, it CAN go red, and `scripts/merge-train.sh` stops on it
+    # like any other check; whether it joins the ruleset's required checks is the owner's
+    # (decision 31: five passes first). Every timing is taken in the walled bench; xtask
+    # only runs it and reads the report (xtask/src/g3.rs). The Windows and macOS figures
+    # are the `perf alarms` legs' notices. It follows the docs-only fast path.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Both parents of a pull request's merge commit, for `cargo xtask ci-scope`.
+          fetch-depth: 2
+
+      - name: Install the Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (branch)
+        with:
+          toolchain: 1.98.1
+
+      - name: Decide whether anything but prose changed
+        # The docs-only fast path (see this file's header), as in the `ci-shard-<os>` jobs.
+        # Timed, so a hung xtask build cannot bring the job to its own timeout.
+        id: scope
+        continue-on-error: true
+        timeout-minutes: 10
+        shell: bash
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # A change to the decider itself (xtask/, the workflows, or the `cargo xtask`
+          # alias under .cargo/) is never judged by its own copy: that copy could be the
+          # broken one, and the tests that would catch it are among the steps it skips.
+          # `git diff --quiet` exits 1 on a difference and 128 on an error; both answer full.
+          if ! git diff --quiet --no-renames HEAD^1 HEAD -- xtask .github .cargo; then
+            echo "full: the commit changes xtask/, .github/ or .cargo/ (or git failed), so the decider does not judge its own change"
+            echo "prose_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          cargo xtask ci-scope
+
+      - name: Only prose changed, so nothing is measured
+        if: steps.scope.outputs.prose_only == 'true'
+        shell: bash
+        run: echo "::notice title=docs-only fast path::Only prose changed (docs/**, AGENTS.md, CLAUDE.md, .claude/**, top-level *.md), so the G3' budget did not run in this job. It runs in full on main's push (decisions-log item 115 (4))."
+
+      - name: cargo xtask g3-budget
+        if: steps.scope.outputs.prose_only != 'true'
+        timeout-minutes: 30
+        shell: bash
+        run: cargo xtask g3-budget
 
   # ---------------------------------------------------------------------------------------
   # T21: the unsigned zips (skeleton plan T21; decisions-log item 117 (8)). Four plain jobs,

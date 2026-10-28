@@ -683,6 +683,20 @@ pub enum VoxelEdit {
         /// The seat whose edit it is, or `None`.
         by: Option<SeatId>,
     },
+    /// A demolition charge's flat cut ([`VoxelStore::cut`]; S2's `atk`,
+    /// decision 40): every voxel of the vertical cylinder of `radius` whole
+    /// voxels about `centre`'s column, above `centre`'s `z` (the wall's
+    /// footing), is removed whatever its level, sparing bedrock and every
+    /// footing. A charge's detonation files one, carrying its carrier's seat.
+    Cut {
+        /// The breach column at the wall's footing, in whole voxels.
+        centre: [i32; 3],
+        /// The disc's radius, in whole voxels. A filed cut's is never
+        /// negative ([`crate::world::FileRefused::OffTheMap`]).
+        radius: i32,
+        /// The seat whose edit it is, or `None`.
+        by: Option<SeatId>,
+    },
 }
 
 impl VoxelEdit {
@@ -690,7 +704,9 @@ impl VoxelEdit {
     #[must_use]
     pub const fn by(&self) -> Option<SeatId> {
         match *self {
-            VoxelEdit::Set { by, .. } | VoxelEdit::Crater { by, .. } => by,
+            VoxelEdit::Set { by, .. }
+            | VoxelEdit::Crater { by, .. }
+            | VoxelEdit::Cut { by, .. } => by,
         }
     }
 }
@@ -870,7 +886,7 @@ impl VoxelStore {
     pub fn edit_is_on_the_map(&self, edit: &VoxelEdit) -> bool {
         match *edit {
             VoxelEdit::Set { at, .. } => self.address(at).is_some(),
-            VoxelEdit::Crater { radius, .. } => radius >= 0,
+            VoxelEdit::Crater { radius, .. } | VoxelEdit::Cut { radius, .. } => radius >= 0,
         }
     }
 
@@ -1214,6 +1230,99 @@ impl VoxelStore {
                 dy = dy.saturating_add(1);
             }
             dz = dz.saturating_add(1);
+        }
+        for chunk in touched.iter() {
+            if let Ok(index) = usize::try_from(*chunk)
+                && let Some(flag) = self.touch_flag.get_mut(index)
+            {
+                *flag = false;
+            }
+        }
+        // item 62: the key IS the chunk index, unique in this list by the
+        // `touch_flag` guard above, so the order is total.
+        touched.sort_unstable();
+        changed
+    }
+
+    /// A demolition charge's flat cut (S2's `atk`; decisions 10 and 40):
+    /// remove every voxel of the vertical cylinder of `radius` whole voxels
+    /// about the column of `centre`, from one above `centre`'s `z` (the wall's
+    /// footing) to the top of the map, **whatever its level**, cracked or
+    /// whole, wall or terrain, stone included, so the gap is a flat floor
+    /// level with the footing. Bedrock is never removed, and every voxel of a
+    /// footing -- the core's bore and every live building's footprint
+    /// columns ([`crate::footing`], the owner's ruling of 2026-10-20) -- is
+    /// skipped and counted.
+    ///
+    /// The disc is `dx^2 + dy^2 <= r^2`, walked `z`, then `y`, then `x`
+    /// ascending, a total order; every write goes through
+    /// [`VoxelStore::set`], so every chunk it changes is marked and its digest
+    /// refreshed at the next settle (AGENTS.md section 4.8's fourth place).
+    /// `touched` and `removed` are [`VoxelStore::blast`]'s, and the return
+    /// value is how many voxels it removed.
+    pub fn cut(
+        &mut self,
+        centre: [i32; 3],
+        radius: i32,
+        footings: &crate::footing::Footings<'_>,
+        touched: &mut Vec<u32>,
+        removed: &mut impl FnMut([i32; 3]),
+    ) -> u32 {
+        touched.clear();
+        if radius < 0 {
+            return 0;
+        }
+        let Some(r2) = radius.checked_mul(radius) else {
+            return 0;
+        };
+        let [cx, cy, floor] = centre;
+        let top = self
+            .size
+            .get(2)
+            .and_then(|z| i32::try_from(*z).ok())
+            // E7: cannot miss: the store holds three axes, and a map's height is a voxel coordinate
+            .unwrap_or(0);
+        let near = footings.touches(
+            [cx.saturating_sub(radius), cy.saturating_sub(radius)],
+            [cx.saturating_add(radius), cy.saturating_add(radius)],
+        );
+        let mut changed: u32 = 0;
+        let mut z = floor.saturating_add(1).max(0);
+        while z < top {
+            let mut dy = -radius;
+            while dy <= radius {
+                let mut dx = -radius;
+                while dx <= radius {
+                    let d2 = dx.saturating_mul(dx).saturating_add(dy.saturating_mul(dy));
+                    let at = [cx.saturating_add(dx), cy.saturating_add(dy), z];
+                    dx = dx.saturating_add(1);
+                    if d2 > r2 || (near && footings.contains(at)) {
+                        continue;
+                    }
+                    let Some(material) = self.get(at) else {
+                        continue;
+                    };
+                    if material.is_air() || material.is_bedrock() {
+                        continue;
+                    }
+                    if let Some((chunk, _)) = self.address(at)
+                        && self.set(at, Material::AIR)
+                    {
+                        changed = changed.saturating_add(1);
+                        removed(at);
+                        if let Ok(index) = usize::try_from(chunk)
+                            && matches!(self.touch_flag.get(index), Some(false))
+                        {
+                            if let Some(flag) = self.touch_flag.get_mut(index) {
+                                *flag = true;
+                            }
+                            touched.push(chunk);
+                        }
+                    }
+                }
+                dy = dy.saturating_add(1);
+            }
+            z = z.saturating_add(1);
         }
         for chunk in touched.iter() {
             if let Ok(index) = usize::try_from(*chunk)

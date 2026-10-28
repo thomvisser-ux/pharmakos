@@ -1,0 +1,35 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// S2's `atk`: deploy a Build beacon at its core's sphere edge, towards seat 0,
+// that walls itself in: four wall boxes, a ring nine columns a side round the
+// beacon, filled from the ground to z = 31. See
+// breach-and-raze.scenario.jsonc.
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {"title": "Wall in", "author_kind": "HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {"label": "keep", "timeout_ms": 120000,
+        "place_beacon": {"at": {"voxel": {"x": 357, "y": 336, "z": 29}},
+          "initial": {"priority": "NORMAL", "mandate": {"build": {"targets": [
+            {"blueprint_id": "wall", "anchor": {"voxel": {"x": 357, "y": 332, "z": 27}},
+              "wall_box": {"min": {"x": 353, "y": 332, "z": 25}, "max": {"x": 361, "y": 332, "z": 31}}},
+            {"blueprint_id": "wall", "anchor": {"voxel": {"x": 357, "y": 340, "z": 29}},
+              "wall_box": {"min": {"x": 353, "y": 340, "z": 25}, "max": {"x": 361, "y": 340, "z": 31}},
+              "order": 1},
+            {"blueprint_id": "wall", "anchor": {"voxel": {"x": 353, "y": 336, "z": 29}},
+              "wall_box": {"min": {"x": 353, "y": 333, "z": 25}, "max": {"x": 353, "y": 339, "z": 31}},
+              "order": 2},
+            {"blueprint_id": "wall", "anchor": {"voxel": {"x": 361, "y": 336, "z": 28}},
+              "wall_box": {"min": {"x": 361, "y": 333, "z": 25}, "max": {"x": 361, "y": 339, "z": 31}},
+              "order": 3}
+          ]}}}},
+        "on_fail": {"action": "ABORT_ROUTE"}}
+    ],
+    "handlers": []
+  },
+  "on_death": {"on_respawn": "CONTINUE", "max_deaths_before_fallback": 2},
+  "fallback": {"hold": {"at": {"safest": {}}}}
+}

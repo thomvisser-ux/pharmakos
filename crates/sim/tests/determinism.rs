@@ -37,12 +37,12 @@ use pharmakos_sim::{RulesError, RulesTable, World, WorldConfig};
 /// Keep it in step with `DETERMINISM_TICKS` in `xtask/src/main.rs`.
 const GOLDEN_TICKS: u32 = 3_600;
 
-/// Walkers per seat for the tests below that need a wide, moving unit table:
+/// Raiders per seat for the tests below that need a wide, moving unit table:
 /// the knob tests, the snapshot tests and the broadphase test. The chain's
 /// own harness fields none since S1's real segment (decision 16), so these
-/// tests field their own through `WorldConfig::units_per_seat`, at the fifty a
-/// seat the harness used to.
-const TEST_WALKERS: u32 = 50;
+/// tests field their own through `World::field_movers_directly`, at the fifty
+/// a seat the harness walkers fielded until S2-16 removed them.
+const TEST_MOVERS: u32 = 50;
 
 /// The repository root, found by probing relative paths.
 fn repo_root() -> PathBuf {
@@ -64,6 +64,18 @@ fn target_dir() -> Option<PathBuf> {
 fn rules() -> RulesTable {
     RulesTable::load(&repo_root().join("rules").join("rules.v1.json"))
         .expect("the committed rules table loads")
+}
+
+/// `rules` with each core's surplus raised to 100 kW and the map's power
+/// ceiling to 1 000 kW, so that the raiders `World::field_movers_directly`
+/// homes to the cores draw no seat dark: a dark core parks its units, and
+/// these tests want a table that moves.
+fn powered(rules: &RulesTable) -> RulesTable {
+    let mut message = rules.message().clone();
+    let power = message.power.as_mut().expect("a power block");
+    power.core_surplus_kw = 100;
+    power.map_ceiling_kw = 1_000;
+    RulesTable::from_message(&message).expect("the powered table is a table")
 }
 
 /// The committed table with one edit made to the **message**.
@@ -95,19 +107,23 @@ fn harness(rules: RulesTable) -> World {
     world_of(rules, 0)
 }
 
-/// The harness world with [`TEST_WALKERS`] walkers a seat.
+/// The harness world with [`TEST_MOVERS`] raiders a seat.
 fn world_with(rules: RulesTable) -> World {
-    world_of(rules, TEST_WALKERS)
+    world_of(rules, TEST_MOVERS)
 }
 
 /// The harness world at a chosen size: every seat seals the harness playbook
 /// as `pharmakos_sim::determinism_world` has it, on the rules table's own
-/// ladder, with `units_per_seat` walkers a seat.
-fn world_of(rules: RulesTable, units_per_seat: u32) -> World {
+/// ladder, with `movers` raiders a seat fielded and walking home from across the map
+/// (`World::field_movers_directly`, which replaced the harness walkers when
+/// S2-16 removed them).
+fn world_of(rules: RulesTable, movers: u32) -> World {
+    // The harness's own world (no movers) is the committed table, as the
+    // chain has it; a world with movers powers them.
+    let rules = if movers > 0 { powered(&rules) } else { rules };
     let mut world = World::new(&WorldConfig {
         match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED,
         seats: pharmakos_sim::DETERMINISM_SEATS,
-        units_per_seat,
         rules,
         match_settings: MatchSettings::default(),
     })
@@ -115,6 +131,11 @@ fn world_of(rules: RulesTable, units_per_seat: u32) -> World {
     let sealed = pharmakos_sim::seal_determinism_playbooks(&mut world, &harness_playbook())
         .expect("the harness playbook compiles");
     assert_eq!(sealed, pharmakos_sim::DETERMINISM_SEATS, "every seat seals");
+    if movers > 0 {
+        world
+            .field_movers_directly(movers)
+            .expect("the movers fit every seat's share");
+    }
     world
 }
 
@@ -358,26 +379,6 @@ fn a_snapshot_written_by_one_process_continues_the_chain_in_another() {
 }
 
 #[test]
-fn a_snapshot_over_the_receiving_worlds_unit_ceiling_is_refused() {
-    let big = world_of(rules(), 100);
-    let mut small = world_of(rules(), 1);
-    let before = small.state_hash();
-    let units = big.units().len();
-    let limit = small.unit_limit();
-    assert!(units > limit, "the fixture is over the ceiling");
-    assert_eq!(
-        Snapshot::capture(&big).restore_into(&mut small),
-        Err(SnapshotError::OverCeiling { units, limit }),
-        "a file saved under another configuration is refused, and says why"
-    );
-    assert_eq!(
-        small.state_hash(),
-        before,
-        "and the world is left as it was"
-    );
-}
-
-#[test]
 fn a_restore_resizes_the_derived_index_to_the_restored_world() {
     // `World::restore_tables` replaces the unit table wholesale, so the
     // broadphase must index the restored units rather than the ones the
@@ -394,7 +395,8 @@ fn a_restore_resizes_the_derived_index_to_the_restored_world() {
     }
     let expected_units = big.units().len();
 
-    let mut small = world_of(rules(), 1);
+    // The same powered table the movers are fielded on, with none of them.
+    let mut small = world_of(powered(&rules()), 0);
     assert!(small.units().len() < expected_units);
     Snapshot::capture(&big)
         .restore_into(&mut small)
@@ -808,9 +810,14 @@ fn the_rules_hash_is_pinned_to_the_committed_table() {
     // table's `note`: two grid rulings no row holds (S1-35's commander in a
     // blackout and S1-22's swap) and the economy rows' status after the
     // balance check. No value and not `revision` moved, so the chain did not.
+    // It moved from 8028d41384e6de2f with revision 6 (S2's `tune2`): decision
+    // 17's vision rows (scout 24, raider 12, commander 10, autocannon 20,
+    // mortar 12) and the note. Vision gates every weapon's choice and every
+    // sighting, so the chain moved with it, beside S2-16's removal of the
+    // harness walkers' wander, which moved it first.
     assert_eq!(
         hex(rules().rules_hash()),
-        "8028d41384e6de2f",
+        "55019fca46a1a843",
         "the rules hash moved; say in the pull request which row changed and why"
     );
 }
@@ -1441,14 +1448,16 @@ fn the_map_is_inside_the_hash_and_not_merely_beside_it() {
     // Two worlds on two seeds differ in the chain from tick zero, because the
     // map reaches hashed state through the per-chunk digests AND through where
     // every unit is standing.
-    let alternative = World::new(&WorldConfig {
+    let mut alternative = World::new(&WorldConfig {
         match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED ^ 1,
         seats: pharmakos_sim::DETERMINISM_SEATS,
-        units_per_seat: TEST_WALKERS,
-        rules: rules(),
+        rules: powered(&rules()),
         match_settings: MatchSettings::default(),
     })
     .expect("a world on another seed");
+    alternative
+        .field_movers_directly(TEST_MOVERS)
+        .expect("the movers fit every seat's share");
     let mut base = world_with(rules());
     assert_ne!(base.state_hash(), alternative.state_hash());
 
@@ -1572,11 +1581,11 @@ fn the_wire_ids_of_the_new_enums_are_dense_and_unique() {
 
 #[test]
 fn a_table_without_a_raider_row_is_refused_before_any_world_is_built() {
-    // `fill_unit_table` gives the scaffolding walkers a raider's hit points
-    // from the rules table. Since S2's `base` lane every unit kind's row is
-    // read typed when the table loads (decisions-log item 136 (5)), so a table
-    // with no `units.raider` row is refused there, naming the row, and no world
-    // is ever built on an invented number.
+    // A raider's hit points come from the rules table. Since S2's `base`
+    // lane every unit kind's row is read typed when the table loads
+    // (decisions-log item 136 (5)), so a table with no `units.raider` row is
+    // refused there, naming the row, and no world is ever built on an
+    // invented number.
     let text = std::fs::read_to_string(repo_root().join("rules").join("rules.v1.json"))
         .expect("the committed rules table exists");
     let mut message: gp::v1::RulesTable =
@@ -1690,7 +1699,6 @@ fn a_zero_round_limit_is_refused() {
     let config = |settings: MatchSettings| WorldConfig {
         match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED,
         seats: pharmakos_sim::DETERMINISM_SEATS,
-        units_per_seat: 0,
         rules: rules_edited(|_| {}),
         match_settings: settings,
     };
@@ -1741,4 +1749,28 @@ fn a_zero_or_negative_damage_cannot_be_built() {
         "repair stops at the maximum"
     );
     assert_eq!(Hp::new(50).repaired_by(repair, Hp::new(100)), Hp::new(80));
+}
+
+/// The tests above that want a wide, moving unit table get one: the raiders
+/// `World::field_movers_directly` fields walk home to their cores, on a table
+/// that powers them, rather than standing parked. Without this, a knob or a
+/// snapshot test could pass on a table nothing moves in.
+#[test]
+fn the_movers_walk() {
+    let mut world = world_with(rules());
+    let start = world.units().positions().to_vec();
+    let mut enc = Enc::with_capacity(64 * 1024);
+    for _ in 0..40 {
+        let _ = world.step(&mut enc).unwrap();
+    }
+    let moved = start
+        .iter()
+        .zip(world.units().positions())
+        .filter(|(was, now)| was != now)
+        .count();
+    let movers = usize::try_from(TEST_MOVERS).expect("fits") * 3;
+    assert!(
+        moved * 2 >= movers,
+        "{moved} units moved of {movers} movers: the table should move"
+    );
 }

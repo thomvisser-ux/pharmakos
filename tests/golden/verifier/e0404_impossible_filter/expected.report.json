@@ -19,8 +19,8 @@
       "code": "E0015",
       "severity": "ERROR",
       "path": "/declarative/route/0/move/to/beacon_anchor/nearest/filter/side",
-      "message": "selector filter `side: ENEMY_KNOWN` has no effect until S3, with the seat's knowledge store; it is refused rather than ignored.",
-      "beginner": "Picking among enemy beacons comes later. For now a selector picks among your own."
+      "message": "selector filter `side: ENEMY_KNOWN` has no effect until S3, with the seat's knowledge store, except in `nearest` with no other filter field as an Attack target; it is refused rather than ignored.",
+      "beginner": "Picking among enemy beacons comes later. For now only an Attack beacon can pick one, the nearest your side knows of; any other selector picks among your own."
     },
     {
       "code": "E0016",
@@ -47,10 +47,10 @@
       ]
     }
   ],
-  "report_hash": "mYEL+odLIVI=",
-  "rules_hash": "gCjUE4Tm3i8=",
+  "report_hash": "ddym6tdNSuM=",
+  "rules_hash": "VQGfykahqEM=",
   "plan_fingerprint": "xVJqfV5ZLUk=",
-  "verifier_version": "0.1.0-s2.2",
+  "verifier_version": "0.1.0-s2.5",
   "size_units": 1,
   "size_budget": 128
 }

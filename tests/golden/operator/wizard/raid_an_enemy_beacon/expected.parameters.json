@@ -1,0 +1,29 @@
+{
+  "parameters": [
+    {
+      "pointer": "/declarative/route/1/place_beacon/at/covering",
+      "label": "Which scrap seam the raid post covers: the nearest one to your core, or one by name",
+      "value": "{\"seam\":{\"rank\":\"NEAREST\",\"coverage\":\"ANY\"}}",
+      "suggested": false
+    },
+    {
+      "pointer": "/declarative/route/1/place_beacon/initial/mandate/attack/target",
+      "label": "What to raid: the nearest enemy beacon you know of, an enemy beacon by name, the enemy commander, or a voxel",
+      "value": "{\"beacon\":{\"nearest\":{\"filter\":{\"side\":\"ENEMY_KNOWN\"}}}}",
+      "suggested": false
+    },
+    {
+      "pointer": "/declarative/route/1/place_beacon/initial/mandate/attack/staging",
+      "label": "Where the raiders gather before they launch: a voxel",
+      "value": "{\"x\":192,\"y\":192,\"z\":0}",
+      "suggested": false
+    },
+    {
+      "pointer": "/declarative/route/2/hold/ms",
+      "label": "How long to stand by the raid post, in game milliseconds",
+      "value": "30000",
+      "suggested": false
+    }
+  ],
+  "why": "Easy, seat 0, round 1, seed 0x00000000ca5caded (recorded; Easy draws nothing at random). No raid was weighed this round: it needs your core and your commander in view, a live scrap seam inside your core's sphere for the post, the treasury for the post and its raiders, and an enemy beacon you saw within the reach window or an enemy commander in sight that a route reaches, so this template's own values stand."
+}

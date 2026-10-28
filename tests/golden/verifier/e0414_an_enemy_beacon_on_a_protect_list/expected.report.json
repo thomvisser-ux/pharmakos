@@ -9,10 +9,10 @@
       "beginner": "A Defend beacon protects your own beacons, and an Attack beacon attacks an enemy's."
     }
   ],
-  "report_hash": "w6E1wTotlco=",
-  "rules_hash": "gCjUE4Tm3i8=",
+  "report_hash": "MQurjsuIxr0=",
+  "rules_hash": "VQGfykahqEM=",
   "plan_fingerprint": "FrHQr/IENP8=",
-  "verifier_version": "0.1.0-s2.2",
+  "verifier_version": "0.1.0-s2.5",
   "size_units": 2,
   "size_budget": 128
 }

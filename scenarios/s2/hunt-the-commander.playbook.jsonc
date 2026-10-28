@@ -1,0 +1,34 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// S2's `atk`: deploy an Attack beacon twenty voxels north of the core whose
+// target is the enemy commander, and hold. See
+// hunt-the-commander.scenario.jsonc for what is asserted.
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {"title": "Hunt the commander", "author_kind": "HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      // An Attack beacon from its first tick. Its target is the enemy
+      // commander, unset: the nearest one the seat has a fresh sighting of
+      // when the force launches (the owner's answer of 2026-10-26).
+      {"label": "post", "timeout_ms": 60000,
+        "place_beacon": {"at": {"voxel": {"x": 358, "y": 44, "z": 36}},
+          "initial": {"priority": "NORMAL", "mandate": {"attack": {
+            "target": {"enemy_commander": {}},
+            "retarget": "NONE",
+            "staging": {"x": 358, "y": 44, "z": 36},
+            "launch": {"force_size": 2},
+            "after_action": "REGROUP_AT_STAGING",
+            "waves": 1}}}},
+        "on_fail": {"action": "ABORT_ROUTE"}},
+      {"label": "stand", "timeout_ms": 470000,
+        "wait_until": {"condition": {"segment_elapsed": {"ms": {"op": "GE", "value": 470000}}}},
+        "on_fail": {"action": "SKIP"}}
+    ],
+    "handlers": []
+  },
+  "on_death": {"on_respawn": "CONTINUE", "max_deaths_before_fallback": 2},
+  "fallback": {"hold": {"at": {"safest": {}}}}
+}

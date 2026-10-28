@@ -1,0 +1,56 @@
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "report": {
+      "qualifies": true,
+      "depth": "full",
+      "diagnostics": [
+        {
+          "code": "I0003",
+          "severity": "info",
+          "path": "/declarative/route/0/move/pace",
+          "related_paths": [],
+          "message": "`pace` is omitted and reads as DIRECT.",
+          "beginner": "A setting left out takes its named default.",
+          "suggestions": [
+            {
+              "title": "Write the default out",
+              "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/move/pace\",\"value\":\"DIRECT\"}]",
+              "applicability": "machine_applicable"
+            }
+          ],
+          "map_refs": []
+        },
+        {
+          "code": "I0003",
+          "severity": "info",
+          "path": "/declarative/handlers/0/body/0/move/pace",
+          "related_paths": [],
+          "message": "`pace` is omitted and reads as DIRECT.",
+          "beginner": "A setting left out takes its named default.",
+          "suggestions": [
+            {
+              "title": "Write the default out",
+              "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/0/body/0/move/pace\",\"value\":\"DIRECT\"}]",
+              "applicability": "machine_applicable"
+            }
+          ],
+          "map_refs": []
+        }
+      ],
+      "report_hash": "/E3+m2YS76c=",
+      "rules_hash": "VQGfykahqEM=",
+      "plan_fingerprint": "SHatUjY2/7E=",
+      "verifier_version": "0.1.0-s2.5",
+      "size_units": 8,
+      "size_budget": 128
+    },
+    "_status": {
+      "phase": "lull",
+      "phase_remaining_ms": 600000,
+      "segment_length_ms": 180000,
+      "round": 1
+    }
+  }
+}

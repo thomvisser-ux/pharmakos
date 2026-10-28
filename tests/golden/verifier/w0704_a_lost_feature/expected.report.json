@@ -10,10 +10,10 @@
       "beginner": "Unless the map changes before this step starts, it finds nothing and fails."
     }
   ],
-  "report_hash": "MvRHpBqKwUI=",
-  "rules_hash": "gCjUE4Tm3i8=",
+  "report_hash": "e5Ouurbf7ko=",
+  "rules_hash": "VQGfykahqEM=",
   "plan_fingerprint": "q0gWYzv5jLg=",
-  "verifier_version": "0.1.0-s2.2",
+  "verifier_version": "0.1.0-s2.5",
   "size_units": 1,
   "size_budget": 128
 }

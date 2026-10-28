@@ -13,10 +13,10 @@
       "beginner": "This asset is already on the list. Naming it again changes nothing."
     }
   ],
-  "report_hash": "Ow+MKYRqW58=",
-  "rules_hash": "gCjUE4Tm3i8=",
+  "report_hash": "xP3Xgcqn6jU=",
+  "rules_hash": "VQGfykahqEM=",
   "plan_fingerprint": "EL6v9jvwY+I=",
-  "verifier_version": "0.1.0-s2.2",
+  "verifier_version": "0.1.0-s2.5",
   "size_units": 4,
   "size_budget": 128
 }

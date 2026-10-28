@@ -9,10 +9,10 @@
       "beginner": "This playbook is larger than the seal allows. Take something out of it."
     }
   ],
-  "report_hash": "oxIjOC6zYDg=",
-  "rules_hash": "gCjUE4Tm3i8=",
+  "report_hash": "WaWd6fkBz8E=",
+  "rules_hash": "VQGfykahqEM=",
   "plan_fingerprint": "j8nHFwTazgo=",
-  "verifier_version": "0.1.0-s2.2",
+  "verifier_version": "0.1.0-s2.5",
   "size_units": 130,
   "size_budget": 128
 }

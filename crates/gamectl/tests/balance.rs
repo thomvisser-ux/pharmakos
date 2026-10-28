@@ -133,7 +133,7 @@ use pharmakos_gateway::token::{Subject, Token};
 use pharmakos_proto::json::Json;
 use pharmakos_sim::math::quantity::{Ms, TICK_HZ};
 use pharmakos_sim::rules::RulesTable;
-use pharmakos_sim::tables::SeatId;
+use pharmakos_sim::tables::{SeatId, UnitKind};
 
 // ---------------------------------------------------------------------------
 // The matches
@@ -166,49 +166,134 @@ const GOLDEN_RATIO_64: u64 = 0x9e37_79b9_7f4a_7c15;
 /// rules' 3 / 5 / 8 ladder and a 6-round one 48 000.
 const ROUND_COUNTS: [u32; 2] = [3, 6];
 
-/// Two seats: a one-seat match is decided at its first Push tick, because the
-/// last seat standing wins (decisions-log item 114 (2)).
-const SEATS: u32 = 2;
-
-/// The seat the Hold & Build match-up plays the template with.
+/// The seat a template match-up plays the template with.
 const TEMPLATE_SEAT: u8 = 0;
 
-/// The template it plays.
-const TEMPLATE_ID: &str = "hold_and_build";
+/// The rounds the three-seat run plays: the longer of [`ROUND_COUNTS`], so the
+/// kingmaking figure reads the most fighting the check plays.
+const THREE_SEAT_ROUNDS: u32 = 6;
+
+/// A wizard template, as `library/` names it.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+enum Template {
+    HoldAndBuild,
+    ExpandAndMine,
+    DefendTheCore,
+    Raid,
+}
+
+impl Template {
+    /// Every template the wizard offers (`library/`, the safe playbook aside,
+    /// which no seat chooses).
+    const ALL: [Template; 4] = [
+        Template::HoldAndBuild,
+        Template::ExpandAndMine,
+        Template::DefendTheCore,
+        Template::Raid,
+    ];
+
+    /// The template's id, its file's stem.
+    const fn id(self) -> &'static str {
+        match self {
+            Template::HoldAndBuild => "hold_and_build",
+            Template::ExpandAndMine => "expand_and_mine",
+            Template::DefendTheCore => "defend_the_core",
+            Template::Raid => "raid_an_enemy_beacon",
+        }
+    }
+
+    /// The seal's word in the report: `<word>` with Easy's suggestion,
+    /// `<word>-standins` with the template's own, `<word>-refused`.
+    const fn word(self) -> &'static str {
+        match self {
+            Template::HoldAndBuild => "h&b",
+            Template::ExpandAndMine => "e&m",
+            Template::DefendTheCore => "dtc",
+            Template::Raid => "raid",
+        }
+    }
+
+    /// The seat's role in the report.
+    const fn role(self) -> &'static str {
+        match self {
+            Template::HoldAndBuild => "hold & build",
+            Template::ExpandAndMine => "expand & mine",
+            Template::DefendTheCore => "defend the core",
+            Template::Raid => "raid",
+        }
+    }
+
+    const fn name(self) -> &'static str {
+        match self {
+            Template::HoldAndBuild => "hold-and-build-vs-easy",
+            Template::ExpandAndMine => "expand-and-mine-vs-easy",
+            Template::DefendTheCore => "defend-the-core-vs-easy",
+            Template::Raid => "raid-vs-easy",
+        }
+    }
+}
 
 /// Who plays the match.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 enum Matchup {
     /// Both seats Easy.
     EasyVsEasy,
-    /// Seat 0 the Hold & Build template as Easy suggests it; seat 1 Easy.
-    HoldAndBuildVsEasy,
+    /// Seat 0 a template as Easy suggests it; seat 1 Easy.
+    TemplateVsEasy(Template),
+    /// Three Easy seats: decision 36's kingmaking run.
+    ThreeSeats,
 }
 
 impl Matchup {
-    const ALL: [Matchup; 2] = [Matchup::EasyVsEasy, Matchup::HoldAndBuildVsEasy];
+    /// The two-seat match-ups, each played on every seed at both lengths:
+    /// Easy against Easy and each template against Easy (S2's plan, `tune2`).
+    const TWO_SEAT: [Matchup; 5] = [
+        Matchup::EasyVsEasy,
+        Matchup::TemplateVsEasy(Template::ALL[0]),
+        Matchup::TemplateVsEasy(Template::ALL[1]),
+        Matchup::TemplateVsEasy(Template::ALL[2]),
+        Matchup::TemplateVsEasy(Template::ALL[3]),
+    ];
 
     const fn name(self) -> &'static str {
         match self {
             Matchup::EasyVsEasy => "easy-vs-easy",
-            Matchup::HoldAndBuildVsEasy => "hold-and-build-vs-easy",
+            Matchup::TemplateVsEasy(template) => template.name(),
+            Matchup::ThreeSeats => "three-easy",
+        }
+    }
+
+    /// How many seats share the match. Two at least: a one-seat match is
+    /// decided at its first Push tick, because the last seat standing wins
+    /// (decisions-log item 114 (2)).
+    const fn seats(self) -> u32 {
+        match self {
+            Matchup::EasyVsEasy | Matchup::TemplateVsEasy(_) => 2,
+            Matchup::ThreeSeats => 3,
+        }
+    }
+
+    /// The template, if this match-up plays one.
+    const fn template(self) -> Option<Template> {
+        match self {
+            Matchup::TemplateVsEasy(template) => Some(template),
+            Matchup::EasyVsEasy | Matchup::ThreeSeats => None,
         }
     }
 
     /// The seat the template plays, if this match-up has one.
     const fn template_seat(self) -> Option<u8> {
         match self {
-            Matchup::EasyVsEasy => None,
-            Matchup::HoldAndBuildVsEasy => Some(TEMPLATE_SEAT),
+            Matchup::TemplateVsEasy(_) => Some(TEMPLATE_SEAT),
+            Matchup::EasyVsEasy | Matchup::ThreeSeats => None,
         }
     }
 
     /// What plays `seat`.
     fn role(self, seat: u8) -> &'static str {
-        if self.template_seat() == Some(seat) {
-            "hold & build"
-        } else {
-            "easy"
+        match self.template() {
+            Some(template) if self.template_seat() == Some(seat) => template.role(),
+            _ => "easy",
         }
     }
 }
@@ -236,8 +321,8 @@ fn match_id(label: &str) -> String {
     format!("balance-{label}-{}", std::process::id())
 }
 
-fn seat_ids() -> Vec<SeatId> {
-    (0..SEATS)
+fn seat_ids(seats: u32) -> Vec<SeatId> {
+    (0..seats)
         .filter_map(|raw| u8::try_from(raw).ok())
         .map(SeatId::new)
         .collect()
@@ -273,15 +358,20 @@ fn generator_cost(table: &RulesTable) -> i64 {
 
 /// A match in its opening Lull, hosted as `serve::run` hosts one, on the
 /// rules table's own ladder.
-fn open(label: &str, seed: u64, rules: &str, rounds: u32, ladder: Vec<i32>) -> Surface {
+fn open(
+    label: &str,
+    seed: u64,
+    rules: &str,
+    (rounds, seats): (u32, u32),
+    ladder: Vec<i32>,
+) -> Surface {
     let host = Host::open_from(
         rules,
         seed,
-        SEATS,
+        seats,
         &Settings {
             segment_lengths_ms: ladder,
             round_limit: rounds,
-            units_per_seat: 0,
         },
         Some(root().join(LIBRARY_PATH)),
     )
@@ -293,7 +383,7 @@ fn open(label: &str, seed: u64, rules: &str, rounds: u32, ladder: Vec<i32>) -> S
         seed,
         table,
         FogPolicy::fogged(),
-        &seat_ids(),
+        &seat_ids(seats),
     )
     .expect("a surface");
     surface.attach(host).expect("attached");
@@ -664,6 +754,44 @@ fn read_seat(surface: &mut Surface, seat: u8, with_standing: bool) -> (Reading, 
 // One match
 // ---------------------------------------------------------------------------
 
+/// One seat's combat counters (S2's plan, E15): the sim's hashed tally, which
+/// the recap's kills, losses and shared kills read and the final audit's
+/// enemy-value term is. Read cumulatively, so a round's figure is the
+/// difference between two readings.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+struct Combat {
+    /// Enemy assets destroyed with a share of their credit.
+    kills: u32,
+    /// Of those, the ones whose credit was split with another seat.
+    shared: u32,
+    /// Own assets destroyed.
+    losses: u32,
+    /// Enemy value destroyed, whole `$`: the seat's settled share.
+    destroyed: i64,
+    /// Own scouts lost, which S2's `surv` (#145) asked this report for, a
+    /// scout walking enemy beacons first: tick by tick, the drop in the seat's
+    /// live scouts, capped by the rise in its `losses` that tick, so a scout
+    /// recycled rather than destroyed is not counted. A lower bound: a scout
+    /// fabricated on the tick another dies hides that loss.
+    scouts_lost: u32,
+}
+
+impl Combat {
+    /// What happened between `self` and the later reading `after`. Every
+    /// counter only grows over a match, so a later reading below an earlier
+    /// one is a reader's bug and fails the run.
+    fn until(self, after: Combat) -> Combat {
+        let grew = "a combat counter only grows over a match";
+        Combat {
+            kills: after.kills.checked_sub(self.kills).expect(grew),
+            shared: after.shared.checked_sub(self.shared).expect(grew),
+            losses: after.losses.checked_sub(self.losses).expect(grew),
+            destroyed: after.destroyed.checked_sub(self.destroyed).expect(grew),
+            scouts_lost: after.scouts_lost.checked_sub(self.scouts_lost).expect(grew),
+        }
+    }
+}
+
 /// One round of one seat.
 #[derive(Clone, Debug)]
 struct Round {
@@ -671,6 +799,11 @@ struct Round {
     seal: String,
     /// The reading at this round's Lull.
     start: Reading,
+    /// The seat's combat counters at this round's Lull.
+    combat: Combat,
+    /// The tick of this round's Push on which the seat's first kill of the
+    /// round settled.
+    first_kill: Option<u32>,
     /// What the feed said about this round's Push and recap.
     tally: Tally,
 }
@@ -683,6 +816,11 @@ struct SeatRun {
     rounds: Vec<Round>,
     /// The reading after the last recap.
     end: Reading,
+    /// The combat counters after the last recap.
+    end_combat: Combat,
+    /// The Push tick, counted over the whole match, on which the seat's first
+    /// kill settled, and the round it fell in.
+    first_kill: Option<(u32, u32)>,
 }
 
 impl SeatRun {
@@ -711,6 +849,18 @@ impl SeatRun {
             .saturating_sub(*after)
     }
 
+    /// Round `index`'s combat: its Lull's counters to the next reading's.
+    fn combat_in(&self, index: usize) -> Combat {
+        let Some(round) = self.rounds.get(index) else {
+            return Combat::default();
+        };
+        let after = self
+            .rounds
+            .get(index.saturating_add(1))
+            .map_or(self.end_combat, |next| next.combat);
+        round.combat.until(after)
+    }
+
     /// Whether a Generator of the seat's stood at any reading.
     fn built_a_generator(&self) -> bool {
         self.rounds
@@ -718,6 +868,51 @@ impl SeatRun {
             .map(|round| &round.start)
             .chain(std::iter::once(&self.end))
             .any(|reading| reading.structures.get("generator").is_some_and(|n| *n > 0))
+    }
+}
+
+/// Decision 36's kingmaking figure for one three-seat match: the hit points
+/// dealt seat against seat (`World::damage_dealt`, `fire`'s unhashed counter,
+/// E15), and how much of it was aimed at the seat trailing in the Ledger's
+/// standing when it was dealt.
+///
+/// "Trailing" is the final audit's order (`audit::final_audit`, the order the
+/// gateway's standing reads, decisions-log item 135 (2) (e)) as it stood at
+/// the end of the tick before: the seats whose line ranks last. While every
+/// audited seat ties there is no trailing seat, and what is dealt then is
+/// counted apart. `expected_milli` is what the trailing seats would have taken
+/// had every attacker spread its damage evenly over the other seats still on
+/// the audit, in thousandths of a hit point: the figure to read the share
+/// against.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+struct Kingmaking {
+    /// Every hit point dealt seat against seat.
+    dealt: u64,
+    /// Of it, the hit points dealt while no seat trailed.
+    no_trailing: u64,
+    /// Of the rest, the hit points aimed at a trailing seat.
+    at_trailing: u64,
+    /// The even-spread figure for `at_trailing`, in thousandths.
+    expected_milli: u64,
+}
+
+impl Kingmaking {
+    fn add(self, other: Kingmaking) -> Kingmaking {
+        Kingmaking {
+            dealt: self.dealt.saturating_add(other.dealt),
+            no_trailing: self.no_trailing.saturating_add(other.no_trailing),
+            at_trailing: self.at_trailing.saturating_add(other.at_trailing),
+            expected_milli: self.expected_milli.saturating_add(other.expected_milli),
+        }
+    }
+
+    /// The share of the damage dealt while a seat trailed that was aimed at
+    /// it, and the even-spread share, both in tenths of a percent.
+    fn shares(self) -> Option<(u64, u64)> {
+        let scored = self.dealt.saturating_sub(self.no_trailing);
+        let share = self.at_trailing.saturating_mul(1_000).checked_div(scored)?;
+        let expected = self.expected_milli.checked_div(scored)?;
+        Some((share, expected))
     }
 }
 
@@ -735,26 +930,32 @@ struct MatchRun {
     /// `get_recap`'s prose after the last recap: how the match ended, and
     /// whom the gateway names.
     recap: String,
+    /// How the match ended, from the runner's outcome: the reason, the winner
+    /// and the tick.
+    ended: String,
+    /// Decision 36's figure, for a match of three seats.
+    kingmaking: Option<Kingmaking>,
     seats: Vec<SeatRun>,
 }
 
-/// What the template seat sealed: Hold & Build with Easy's suggestion, with
+/// What the template seat sealed: the template with Easy's suggestion, with
 /// the template's own stand-ins, or a refusal (by `instantiate_template` or
 /// by `submit_plan`), which leaves the seat to whatever the gateway files.
-fn submit_template(surface: &mut Surface) -> String {
+fn submit_template(surface: &mut Surface, template: Template) -> String {
     let token = in_process_token(surface, TEMPLATE_SEAT);
+    let word = template.word();
     let Some(made) = call(
         surface,
         &token,
         "instantiate_template",
         object(vec![
-            ("template_id", Json::String(String::from(TEMPLATE_ID))),
+            ("template_id", Json::String(String::from(template.id()))),
             ("suggested", Json::Bool(true)),
         ]),
     )
     .get("result")
     .cloned() else {
-        return String::from("h&b-refused");
+        return format!("{word}-refused");
     };
     let suggested = array(&made, "parameters")
         .iter()
@@ -771,9 +972,9 @@ fn submit_template(surface: &mut Surface) -> String {
         .and_then(|answer| answer.get("accepted"))
         == Some(&Json::Bool(true));
     match (accepted, suggested) {
-        (true, true) => String::from("h&b"),
-        (true, false) => String::from("h&b-standins"),
-        (false, _) => String::from("h&b-refused"),
+        (true, true) => word.to_owned(),
+        (true, false) => format!("{word}-standins"),
+        (false, _) => format!("{word}-refused"),
     }
 }
 
@@ -799,34 +1000,208 @@ fn seal_of(surface: &Surface, seat: u8, round: u32, template: Option<&str>) -> S
     }
 }
 
+/// Every seat's combat counters as the sim holds them. A read of the hosted
+/// world through `Host::world`, which hands out a `&World` whose every
+/// stepping method needs `&mut` (`scenario/run.rs`'s reading of the outcome
+/// and the audit is the same reach): the tally is the hashed state the recap
+/// reads (E15), and the scouts are counted tick by tick by [`play`].
+fn combat_now(surface: &Surface, seats: u32, scouts_lost: &[u32]) -> Vec<Combat> {
+    let world = surface.host().expect("a hosted match").world();
+    (0..seats)
+        .map(|raw| {
+            let seat = SeatId::new(u8::try_from(raw).expect("a seat id"));
+            let tally = world.tally(seat).expect("every seat has a tally");
+            Combat {
+                kills: tally.kills,
+                shared: tally.shared_kills,
+                losses: tally.losses,
+                destroyed: tally.destroyed.raw(),
+                scouts_lost: scouts_lost
+                    .get(usize::try_from(raw).expect("a seat index"))
+                    .copied()
+                    .expect("a scout count per seat"),
+            }
+        })
+        .collect()
+}
+
+/// Each seat's `losses` counter (E15).
+fn losses_of(world: &pharmakos_sim::World, seats: u32) -> Vec<u32> {
+    (0..seats)
+        .map(|raw| {
+            let seat = SeatId::new(u8::try_from(raw).expect("a seat id"));
+            world.tally(seat).expect("every seat has a tally").losses
+        })
+        .collect()
+}
+
+/// Each seat's live scouts.
+fn live_scouts(world: &pharmakos_sim::World, seats: u32) -> Vec<u32> {
+    let units = world.units();
+    let mut held = vec![0_u32; usize::try_from(seats).expect("a seat count")];
+    for ((kind, owner), hp) in units
+        .kinds()
+        .iter()
+        .zip(units.seats())
+        .zip(units.hit_points())
+    {
+        if *kind == UnitKind::Scout.id()
+            && hp.raw() > 0
+            && let Some(slot) = held.get_mut(usize::from(*owner))
+        {
+            *slot = slot.saturating_add(1);
+        }
+    }
+    held
+}
+
+/// The seats trailing in the final audit's order, or none while every
+/// audited seat ties; and the seats still on the audit.
+fn trailing(world: &pharmakos_sim::World) -> (Vec<u8>, Vec<u8>) {
+    let audit = pharmakos_sim::audit::final_audit(world);
+    let audited: Vec<u8> = audit.lines.iter().map(|line| line.seat.raw()).collect();
+    let Some(lowest) = audit
+        .lines
+        .iter()
+        .map(pharmakos_sim::audit::AuditLine::key)
+        .min()
+    else {
+        return (Vec::new(), audited);
+    };
+    let last: Vec<u8> = audit
+        .lines
+        .iter()
+        .filter(|line| line.key() == lowest)
+        .map(|line| line.seat.raw())
+        .collect();
+    if last.len() == audited.len() {
+        (Vec::new(), audited)
+    } else {
+        (last, audited)
+    }
+}
+
+/// Add one tick's seat-against-seat damage to `figure`: `before` is the
+/// counter matrix (`by * seats + owner`) at the last tick's end, read again
+/// now; `standing` the trailing and audited seats at the last tick's end.
+fn count_kingmaking(
+    world: &pharmakos_sim::World,
+    seats: u32,
+    before: &mut [u64],
+    standing: &(Vec<u8>, Vec<u8>),
+    figure: &mut Kingmaking,
+) {
+    let (behind, audited) = standing;
+    for by in 0..seats {
+        for owner in 0..seats {
+            if by == owner {
+                continue;
+            }
+            let by_id = SeatId::new(u8::try_from(by).expect("a seat id"));
+            let owner_id = SeatId::new(u8::try_from(owner).expect("a seat id"));
+            let now = world.damage_dealt(by_id, owner_id);
+            let cell =
+                usize::try_from(by.saturating_mul(seats).saturating_add(owner)).expect("an index");
+            let slot = before.get_mut(cell).expect("a cell per pair");
+            let dealt = now.saturating_sub(*slot);
+            *slot = now;
+            if dealt == 0 {
+                continue;
+            }
+            figure.dealt = figure.dealt.saturating_add(dealt);
+            if behind.is_empty() {
+                figure.no_trailing = figure.no_trailing.saturating_add(dealt);
+                continue;
+            }
+            if behind.contains(&owner_id.raw()) {
+                figure.at_trailing = figure.at_trailing.saturating_add(dealt);
+            }
+            // An even spread over the other seats still on the audit.
+            let others: Vec<u8> = audited
+                .iter()
+                .copied()
+                .filter(|seat| *seat != by_id.raw())
+                .collect();
+            let eligible = u64::try_from(others.len()).expect("a count");
+            let trailing_others =
+                u64::try_from(others.iter().filter(|seat| behind.contains(seat)).count())
+                    .expect("a count");
+            if let Some(share) = dealt
+                .saturating_mul(1_000)
+                .saturating_mul(trailing_others)
+                .checked_div(eligible)
+            {
+                figure.expected_milli = figure.expected_milli.saturating_add(share);
+            }
+        }
+    }
+}
+
+/// How the match ended, from the runner's outcome.
+fn ended(surface: &Surface) -> String {
+    surface
+        .host()
+        .expect("hosted")
+        .runner()
+        .outcome()
+        .map_or_else(
+            || String::from("not ended"),
+            |outcome| {
+                format!(
+                    "{:?}, {} at tick {}",
+                    outcome.reason,
+                    outcome.winner.map_or_else(
+                        || String::from("a shared win"),
+                        |seat| format!("seat {} won", seat.raw())
+                    ),
+                    outcome.at.raw()
+                )
+            },
+        )
+}
+
 /// Play one match through the gateway and read every seat at every Lull and
 /// once at the end.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one loop over the rounds and the ticks, reading every figure the report needs as it goes; split, each piece would take the whole state as parameters"
+)]
 fn play(seed: u64, matchup: Matchup, rounds: u32, rules: &str, ladder: Vec<i32>) -> MatchRun {
     let label = format!("{}-{rounds}-{seed:016x}", matchup.name());
-    let mut surface = open(&label, seed, rules, rounds, ladder);
+    let count = matchup.seats();
+    let mut surface = open(&label, seed, rules, (rounds, count), ladder);
     let table = RulesTable::from_canonical_json(rules).expect("a rules table");
     let mut factory = EasyOperators::new(rules).expect("the operator reads the rules text");
     let mut easy = InProcessSeats::open(
         &mut surface,
-        &seat_ids(),
+        &seat_ids(count),
         matchup.template_seat(),
         &mut factory,
     )
     .expect("in-process seats");
 
-    let mut seats: Vec<SeatRun> = seat_ids()
+    let mut seats: Vec<SeatRun> = seat_ids(count)
         .iter()
         .map(|seat| SeatRun {
             seat: seat.raw(),
             role: matchup.role(seat.raw()),
             rounds: Vec::new(),
             end: Reading::default(),
+            end_combat: Combat::default(),
+            first_kill: None,
         })
         .collect();
+    let width = usize::try_from(count).expect("a seat count");
+    let mut scouts_lost = vec![0_u32; width];
+    let mut scouts = live_scouts(surface.host().expect("hosted").world(), count);
+    let mut losses = losses_of(surface.host().expect("hosted").world(), count);
+    let mut dealt = vec![0_u64; width.saturating_mul(width)];
+    let mut kingmaking = (count >= 3).then(Kingmaking::default);
     let mut ticks = 0_u32;
     let mut played = 0_u32;
     let mut decided = false;
     for round in 1..=rounds {
+        let combat = combat_now(&surface, count, &scouts_lost);
         for run in &mut seats {
             let (reading, tally) = read_seat(&mut surface, run.seat, false);
             // The feed the gateway holds in a Lull is the segment that has
@@ -837,14 +1212,19 @@ fn play(seed: u64, matchup: Matchup, rounds: u32, rules: &str, ladder: Vec<i32>)
             run.rounds.push(Round {
                 seal: String::new(),
                 start: reading,
+                combat: combat
+                    .get(usize::from(run.seat))
+                    .copied()
+                    .expect("a tally per seat"),
+                first_kill: None,
                 tally: Tally::default(),
             });
         }
 
         easy.plan(&mut surface);
         let template = matchup
-            .template_seat()
-            .map(|_| submit_template(&mut surface));
+            .template()
+            .map(|template| submit_template(&mut surface, template));
         assert!(
             surface.begin_push().expect("the Push opens"),
             "{label}: round {round} would not open"
@@ -857,9 +1237,48 @@ fn play(seed: u64, matchup: Matchup, rounds: u32, rules: &str, ladder: Vec<i32>)
                 last.seal = seal_of(&surface, run.seat, round, word);
             }
         }
+        let mut standing = if kingmaking.is_some() {
+            trailing(surface.host().expect("hosted").world())
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        let mut round_ticks = 0_u32;
         while let Some(report) = surface.step().expect("a tick") {
             ticks = ticks.saturating_add(1);
+            round_ticks = round_ticks.saturating_add(1);
             decided |= report.match_ended;
+            let world = surface.host().expect("hosted").world();
+            // The scouts each seat lost this tick: the drop in its live count,
+            // capped by the rise in its losses (a recycled scout is no loss).
+            let now = live_scouts(world, count);
+            let losses_now = losses_of(world, count);
+            for (index, lost) in scouts_lost.iter_mut().enumerate() {
+                let at = |list: &[u32]| list.get(index).copied().expect("a count per seat");
+                let dropped = at(&scouts).saturating_sub(at(&now));
+                let died = at(&losses_now).saturating_sub(at(&losses));
+                *lost = lost.saturating_add(dropped.min(died));
+            }
+            scouts = now;
+            losses = losses_now;
+            for run in &mut seats {
+                let kills = world
+                    .tally(SeatId::new(run.seat))
+                    .expect("every seat has a tally")
+                    .kills;
+                if run.first_kill.is_none() && kills > 0 {
+                    run.first_kill = Some((ticks, round));
+                }
+                if let Some(last) = run.rounds.last_mut()
+                    && last.first_kill.is_none()
+                    && kills > last.combat.kills
+                {
+                    last.first_kill = Some(round_ticks);
+                }
+            }
+            if let Some(figure) = kingmaking.as_mut() {
+                count_kingmaking(world, count, &mut dealt, &standing, figure);
+                standing = trailing(world);
+            }
             if report.segment_ended {
                 break;
             }
@@ -872,13 +1291,19 @@ fn play(seed: u64, matchup: Matchup, rounds: u32, rules: &str, ladder: Vec<i32>)
         surface.set_phase_remaining_ms(lull_ms(&table, round.saturating_add(1)));
         surface.open_lull().expect("the next Lull");
     }
+    let combat = combat_now(&surface, count, &scouts_lost);
     for run in &mut seats {
         let (reading, tally) = read_seat(&mut surface, run.seat, true);
         if let Some(last) = run.rounds.last_mut() {
             last.tally = tally;
         }
         run.end = reading;
+        run.end_combat = combat
+            .get(usize::from(run.seat))
+            .copied()
+            .expect("a tally per seat");
     }
+    let ended = ended(&surface);
     let token = in_process_token(&mut surface, 0);
     let recap = result(
         &call(&mut surface, &token, "get_recap", object(vec![])),
@@ -891,6 +1316,8 @@ fn play(seed: u64, matchup: Matchup, rounds: u32, rules: &str, ladder: Vec<i32>)
         ticks,
         played,
         recap: string(&recap, "prose").to_owned(),
+        ended,
+        kingmaking,
         seats,
     }
 }
@@ -986,6 +1413,10 @@ fn counts(map: &BTreeMap<String, u32>) -> String {
 }
 
 /// One match's block of the report.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one table per seat, each column written where it is labelled; split, the header and the rows would drift apart"
+)]
 fn render_match(out: &mut String, run: &MatchRun, generator_cost: i64) {
     let _ = writeln!(
         out,
@@ -997,6 +1428,10 @@ fn render_match(out: &mut String, run: &MatchRun, generator_cost: i64) {
         run.ticks
     );
     let _ = writeln!(out, "  recap: {}", run.recap);
+    let _ = writeln!(out, "  ended: {}", run.ended);
+    if let Some(figure) = run.kingmaking {
+        let _ = writeln!(out, "  kingmaking: {}", kingmaking_words(figure));
+    }
     for seat in &run.seats {
         let flags = flags_of_run(seat, generator_cost);
         // Ranks count from one; `get_briefing` answers rank 0 until the
@@ -1020,9 +1455,23 @@ fn render_match(out: &mut String, run: &MatchRun, generator_cost: i64) {
             },
             flags.words()
         );
+        let combat = seat
+            .rounds
+            .first()
+            .map_or(seat.end_combat, |first| first.combat.until(seat.end_combat));
         let _ = writeln!(
             out,
-            "    {:<5} {:<13} {:>8} {:>6} {:>7} {:>7} {:>7} {:>5} {:>6} {:>6} {:>4} {:>3}  {:<5} {:<24} {:<36} new(b/s/u)",
+            "    combat: {} kills ({} shared), {} losses, $ {} enemy value destroyed, {} scouts lost; first kill {}",
+            combat.kills,
+            combat.shared,
+            combat.losses,
+            combat.destroyed,
+            combat.scouts_lost,
+            first_kill_words(seat.first_kill),
+        );
+        let _ = writeln!(
+            out,
+            "    {:<5} {:<13} {:>8} {:>6} {:>7} {:>7} {:>7} {:>5} {:>6} {:>6} {:>4} {:>3}  {:<5} {:<24} {:<36} new(b/s/u) kills/shared/losses $destroyed first-kill",
             "round",
             "seal",
             "treasury",
@@ -1041,9 +1490,10 @@ fn render_match(out: &mut String, run: &MatchRun, generator_cost: i64) {
         );
         for (index, round) in seat.rounds.iter().enumerate() {
             let tally = &round.tally;
+            let combat = seat.combat_in(index);
             let _ = writeln!(
                 out,
-                "    {:<5} {:<13} {:>8} {:>6} {:>7} {:>7} {:>7} {:>5} {:>6} {:>6} {:>4} {:>3}  {:<5} {:<24} {:<36} {}/{}/{}",
+                "    {:<5} {:<13} {:>8} {:>6} {:>7} {:>7} {:>7} {:>5} {:>6} {:>6} {:>4} {:>3}  {:<5} {:<24} {:<36} {}/{}/{} {}/{}/{} $ {} {}",
                 index.saturating_add(1),
                 round.seal,
                 round.start.treasury,
@@ -1062,6 +1512,14 @@ fn render_match(out: &mut String, run: &MatchRun, generator_cost: i64) {
                 tally.beacons_placed,
                 tally.structures_queued,
                 tally.units_fabricated,
+                combat.kills,
+                combat.shared,
+                combat.losses,
+                combat.destroyed,
+                round.first_kill.map_or_else(
+                    || String::from("-"),
+                    |tick| format!("{} s", tick_seconds(tick))
+                ),
             );
         }
         let _ = writeln!(
@@ -1142,6 +1600,10 @@ impl Usage {
 }
 
 /// The summary: per match-up and length, how many seats raised each flag.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one summary block after another, each a few lines; splitting it would only rename the sections"
+)]
 fn render_summary(out: &mut String, runs: &[MatchRun], generator_cost: i64) {
     let _ = writeln!(
         out,
@@ -1204,15 +1666,18 @@ fn render_summary(out: &mut String, runs: &[MatchRun], generator_cost: i64) {
             format!("{low}..{high}"),
         );
     }
-    // The template seat on its own, since it is the one the plan pairs
+    // Each template seat on its own, since it is the one the plan pairs
     // against Easy.
-    let template: Vec<&SeatRun> = runs
-        .iter()
-        .filter(|run| run.matchup == Matchup::HoldAndBuildVsEasy)
-        .flat_map(|run| run.seats.iter())
-        .filter(|seat| seat.seat == TEMPLATE_SEAT)
-        .collect();
-    if !template.is_empty() {
+    for kind in Template::ALL {
+        let template: Vec<&SeatRun> = runs
+            .iter()
+            .filter(|run| run.matchup == Matchup::TemplateVsEasy(kind))
+            .flat_map(|run| run.seats.iter())
+            .filter(|seat| seat.seat == TEMPLATE_SEAT)
+            .collect();
+        if template.is_empty() {
+            continue;
+        }
         let seals: BTreeMap<&str, usize> = template
             .iter()
             .flat_map(|seat| seat.rounds.iter())
@@ -1221,8 +1686,9 @@ fn render_summary(out: &mut String, runs: &[MatchRun], generator_cost: i64) {
                 *slot = slot.saturating_add(1);
                 map
             });
-        let _ = writeln!(out, "hold & build seat's seals by round: {seals:?}");
+        let _ = writeln!(out, "{} seat's seals by round: {seals:?}", kind.role());
     }
+    render_combat_summary(out, runs);
     // The per-seat share of the fielding limits (register S1-37): the most
     // one seat placed, paid for and fabricated over a whole match, and the
     // most beacons, structures and units it held at any reading.
@@ -1252,6 +1718,295 @@ fn render_summary(out: &mut String, runs: &[MatchRun], generator_cost: i64) {
     );
 }
 
+/// A seat's first kill, as the report words it.
+fn first_kill_words(first: Option<(u32, u32)>) -> String {
+    first.map_or_else(
+        || String::from("never"),
+        |(tick, round)| {
+            format!(
+                "in round {round}, {} s into the match's Pushes",
+                tick_seconds(tick)
+            )
+        },
+    )
+}
+
+/// Decision 36's figure, as the report words it.
+fn kingmaking_words(figure: Kingmaking) -> String {
+    let shares = figure.shares().map_or_else(
+        || String::from("no damage was dealt while a seat trailed"),
+        |(share, expected)| {
+            format!(
+                "{}% of it aimed at the trailing seat (an even spread over the other seats would \
+                 give {}%)",
+                tenths(i64::try_from(share).expect("a share")),
+                tenths(i64::try_from(expected).expect("a share")),
+            )
+        },
+    );
+    format!(
+        "{} HP dealt seat against seat, {} of it while no seat trailed; of the rest, {} HP, {shares}",
+        figure.dealt, figure.no_trailing, figure.at_trailing,
+    )
+}
+
+/// Combat per match-up, length and role: the plan's per-seat figures summed
+/// over the seeds, the first kill's spread, and how the matches ended.
+fn render_combat_summary(out: &mut String, runs: &[MatchRun]) {
+    let _ = writeln!(
+        out,
+        "\n{:<24} {:<16} {:>6} {:>6} {:>6} {:>7} {:>7} {:>10} {:>7} {:>14} {:>10}",
+        "combat: match-up",
+        "seat",
+        "rounds",
+        "seats",
+        "kills",
+        "shared",
+        "losses",
+        "$ destroyed",
+        "scouts",
+        "killed (seats)",
+        "first kill"
+    );
+    let groups: BTreeSet<(Matchup, u32, &str)> = runs
+        .iter()
+        .flat_map(|run| {
+            run.seats
+                .iter()
+                .map(move |seat| (run.matchup, run.rounds, seat.role))
+        })
+        .collect();
+    for (matchup, rounds, role) in groups {
+        let seats: Vec<&SeatRun> = runs
+            .iter()
+            .filter(|run| run.matchup == matchup && run.rounds == rounds)
+            .flat_map(|run| run.seats.iter())
+            .filter(|seat| seat.role == role)
+            .collect();
+        let total = seats.iter().fold(Combat::default(), |sum, seat| {
+            let combat = seat
+                .rounds
+                .first()
+                .map_or(seat.end_combat, |first| first.combat.until(seat.end_combat));
+            Combat {
+                kills: sum.kills.saturating_add(combat.kills),
+                shared: sum.shared.saturating_add(combat.shared),
+                losses: sum.losses.saturating_add(combat.losses),
+                destroyed: sum.destroyed.saturating_add(combat.destroyed),
+                scouts_lost: sum.scouts_lost.saturating_add(combat.scouts_lost),
+            }
+        });
+        let mut firsts: Vec<u32> = seats
+            .iter()
+            .filter_map(|seat| seat.first_kill.map(|(tick, _)| tick))
+            .collect();
+        firsts.sort_unstable();
+        let median = firsts
+            .get(firsts.len().checked_div(2).expect("two"))
+            .map_or_else(
+                || String::from("-"),
+                |tick| format!("{} s", tick_seconds(*tick)),
+            );
+        let _ = writeln!(
+            out,
+            "{:<24} {:<16} {:>6} {:>6} {:>6} {:>7} {:>7} {:>10} {:>7} {:>14} {:>10}",
+            matchup.name(),
+            role,
+            rounds,
+            seats.len(),
+            total.kills,
+            total.shared,
+            total.losses,
+            total.destroyed,
+            total.scouts_lost,
+            firsts.len(),
+            median,
+        );
+    }
+    let fought = runs.iter().any(|run| {
+        run.seats.iter().any(|seat| {
+            let combat = seat
+                .rounds
+                .first()
+                .map_or(seat.end_combat, |first| first.combat.until(seat.end_combat));
+            combat.kills > 0 || combat.losses > 0
+        }) || run.kingmaking.is_some_and(|figure| figure.dealt > 0)
+    });
+    if !fought {
+        let _ = writeln!(
+            out,
+            "NO MATCH FOUGHT: every combat figure above is zero, and no seat dealt another any \
+             damage. Read the seals: a seat that seals its safe playbook, or a template on its \
+             own stand-ins, never sends a force at an enemy, so these matches say nothing about \
+             the combat rows; the duel report (`crates/sim/tests/duels.rs`) does."
+        );
+    }
+    let _ = writeln!(
+        out,
+        "(sums over the seeds; `killed (seats)` = seats that made a kill; `first kill` = the median \
+         seat's, in seconds of Push played)"
+    );
+    render_endings(out, runs);
+}
+
+/// How the matches of each match-up and length ended, from the runner's
+/// outcome: the reason, and whether seat 0, another seat or nobody alone won.
+fn render_endings(out: &mut String, runs: &[MatchRun]) {
+    let endings: BTreeSet<(Matchup, u32)> =
+        runs.iter().map(|run| (run.matchup, run.rounds)).collect();
+    for (matchup, rounds) in endings {
+        let by_reason: BTreeMap<String, usize> = runs
+            .iter()
+            .filter(|run| run.matchup == matchup && run.rounds == rounds)
+            .fold(BTreeMap::new(), |mut map, run| {
+                let reason = run
+                    .ended
+                    .split(", ")
+                    .next()
+                    .unwrap_or(run.ended.as_str())
+                    .to_owned();
+                let winner = if run.ended == "not ended" {
+                    "not ended"
+                } else if run.ended.contains("shared") {
+                    "shared"
+                } else if run.ended.contains("seat 0 won") {
+                    "seat 0"
+                } else {
+                    "another seat"
+                };
+                let slot = map.entry(format!("{reason} ({winner})")).or_default();
+                *slot = slot.saturating_add(1);
+                map
+            });
+        let _ = writeln!(
+            out,
+            "how {} / {rounds} rounds ended: {by_reason:?}",
+            matchup.name()
+        );
+    }
+}
+
+/// Decision 36's section: the three-seat run, per seed and in sum.
+fn render_kingmaking(out: &mut String, runs: &[MatchRun]) {
+    let three: Vec<&MatchRun> = runs.iter().filter(|run| run.kingmaking.is_some()).collect();
+    if three.is_empty() {
+        return;
+    }
+    let _ = writeln!(
+        out,
+        "\nKingmaking (S2's plan, decision 36; spec section 19): {} three-seat matches of Easy, \
+         Easy and Easy. The share of all seat-against-seat damage aimed at the seat trailing in \
+         the Ledger's standing (the final audit's order) when it was dealt; damage dealt while \
+         every seat tied is counted apart. No alarm band: a figure for the owner to read.",
+        three.len()
+    );
+    let mut sum = Kingmaking::default();
+    for run in &three {
+        let figure = run.kingmaking.unwrap_or_default();
+        sum = sum.add(figure);
+        let _ = writeln!(
+            out,
+            "  seed 0x{:016x}: {}",
+            run.seed,
+            kingmaking_words(figure)
+        );
+    }
+    let _ = writeln!(out, "  in sum: {}", kingmaking_words(sum));
+}
+
+/// The spawn travel distance between the generator's spawn pairs, in raider
+/// and commander time (the generator's own `MapReport`), against spec section
+/// 19's "about 1.5 early Pushes".
+fn render_spawn_travel(out: &mut String, table: &RulesTable) {
+    let block = table
+        .message()
+        .r#match
+        .as_ref()
+        .expect("the rules table's match block");
+    let early_ms = i64::from(
+        block
+            .segment_lengths_ms
+            .first()
+            .copied()
+            .expect("a segment ladder"),
+    );
+    let target_s = early_ms
+        .saturating_mul(3)
+        .checked_div(2_000)
+        .expect("a divisor");
+    let _ = writeln!(
+        out,
+        "\nSpawn travel (spec section 19: spawns about 1.5 early Pushes of raider travel apart; an \
+         early Push is {} s, so {target_s} s): the closest occupied pair, from the generator's own \
+         report: the octile ground cost between the spawn centres at each kind's speed, a lower \
+         bound on a walked route",
+        early_ms.checked_div(1_000).expect("a divisor")
+    );
+    for seats in [2_u32, 3] {
+        let mut raider: Vec<i64> = Vec::new();
+        let mut commander: Vec<i64> = Vec::new();
+        for seed in seeds() {
+            let report = pharmakos_sim::mapgen::generate(seed, table, seats)
+                .expect("the map generates")
+                .report;
+            raider.push(report.separation_raider_seconds);
+            commander.push(report.separation_commander_seconds);
+        }
+        let range = |values: &[i64]| {
+            format!(
+                "{}..{} s",
+                values.iter().min().copied().expect("twenty seeds"),
+                values.iter().max().copied().expect("twenty seeds")
+            )
+        };
+        let short = raider.iter().filter(|value| **value < target_s).count();
+        let _ = writeln!(
+            out,
+            "  {seats} seats, {} seeds: raider {} ({} below {target_s} s), commander {}",
+            raider.len(),
+            range(&raider),
+            short,
+            range(&commander),
+        );
+    }
+}
+
+/// Reach memory against Survey's refresh interval, and Survey's cell against
+/// the scout's vision (decisions-log item 13; `surv`'s two markers).
+fn render_survey(out: &mut String, table: &RulesTable) {
+    let reach = table
+        .message()
+        .verifier
+        .as_ref()
+        .map(|block| i64::from(block.reach_memory_ms))
+        .expect("verifier.reach_memory_ms");
+    let refresh = pharmakos_sim::survey::REFRESH_INTERVAL.raw();
+    let refresh_s = i64::from(refresh).checked_div(1_000).expect("a divisor");
+    let scout = table
+        .unit(pharmakos_sim::tables::UnitKind::Scout)
+        .vision_radius_voxels;
+    let cell = pharmakos_sim::survey::CELL_VOXELS;
+    // Twice the half-diagonal, squared: 2 * cell^2, against (2 * vision)^2.
+    let covered = i64::from(cell)
+        .saturating_mul(i64::from(cell))
+        .saturating_mul(2)
+        <= i64::from(scout)
+            .saturating_mul(i64::from(scout))
+            .saturating_mul(4);
+    let _ = writeln!(
+        out,
+        "\nSurvey: a sighting is due a refresh at {} s and forgotten at `verifier.reach_memory_ms` \
+         {} s, so reach memory holds {} refresh intervals; the explored cell is {cell} \
+         columns square, and a scout of vision {scout} on its centre {} all of it",
+        refresh_s,
+        reach.checked_div(1_000).expect("a divisor"),
+        reach
+            .checked_div(i64::from(refresh))
+            .expect("a refresh interval above zero"),
+        if covered { "sees" } else { "does not see" },
+    );
+}
+
 /// The whole report: a header, the summary, decision 16's `expand_east`
 /// column when it was measured, then every match.
 fn render(
@@ -1259,11 +2014,13 @@ fn render(
     generator_cost: i64,
     rules_hash: &str,
     expand_east: Option<&ExpandEast>,
+    table: Option<&RulesTable>,
 ) -> String {
     let mut out = String::new();
     let _ = writeln!(
         out,
-        "Pharmakos headless balance check (S1's plan, task `check`; decisions-log item 127 (3))."
+        "Pharmakos headless balance check (S1's plan, task `check`; decisions-log item 127 (3)), \
+         extended to combat by S2's `tune2` (decisions 17 and 36)."
     );
     let _ = writeln!(
         out,
@@ -1281,6 +2038,11 @@ fn render(
     );
     out.push('\n');
     render_summary(&mut out, runs, generator_cost);
+    render_kingmaking(&mut out, runs);
+    if let Some(table) = table {
+        render_spawn_travel(&mut out, table);
+        render_survey(&mut out, table);
+    }
     if let Some(column) = expand_east {
         out.push('\n');
         render_expand_east(&mut out, column);
@@ -1460,8 +2222,8 @@ fn expand_east(rules: &str, table: &RulesTable) -> ExpandEast {
 /// `None` when the answer says the site is unreachable.
 fn expand_east_estimates(rules: &str, seed: u64, site: [i32; 3]) -> Vec<(u8, Option<i64>)> {
     let [x, y, z] = site;
-    let mut surface = open("expand-east", seed, rules, 1, Vec::new());
-    seat_ids()
+    let mut surface = open("expand-east", seed, rules, (1, 2), Vec::new());
+    seat_ids(2)
         .iter()
         .map(|seat| {
             let token = in_process_token(&mut surface, seat.raw());
@@ -1599,36 +2361,73 @@ fn render_expand_east(out: &mut String, column: &ExpandEast) {
 // The check, and its smoke test
 // ---------------------------------------------------------------------------
 
-/// The 80 matches. Writes the report and prints its summary; asserts only
+/// How many matches the check plays at once: two, which the box it was
+/// written on holds beside the other lanes' builds. The report is the same
+/// whatever the number, since each match is its own pure run and the results
+/// are put back in the list's order.
+const WORKERS: usize = 2;
+
+/// Every match the check plays: each two-seat match-up on every seed at both
+/// lengths, then the three-seat run on every seed.
+fn schedule() -> Vec<(u64, Matchup, u32)> {
+    let mut list = Vec::new();
+    for matchup in Matchup::TWO_SEAT {
+        for rounds in ROUND_COUNTS {
+            for seed in seeds() {
+                list.push((seed, matchup, rounds));
+            }
+        }
+    }
+    for seed in seeds() {
+        list.push((seed, Matchup::ThreeSeats, THREE_SEAT_ROUNDS));
+    }
+    list
+}
+
+/// The 220 matches. Writes the report and prints its summary; asserts only
 /// what makes the report trustworthy (every match was played, every reading
 /// was answered), never a balance condition -- a flag, or a match decided
 /// before its round limit, is the owner's evidence, not a red test.
 #[test]
-#[ignore = "the headless balance check: 80 matches, minutes in release; run it by name"]
+#[ignore = "the headless balance check: 220 matches, an hour or more in release; run it by name"]
 fn balance_check_writes_its_report() {
     let rules = rules_json();
     let table = RulesTable::from_canonical_json(&rules).expect("a rules table");
     let cost = generator_cost(&table);
-    let mut runs: Vec<MatchRun> = Vec::new();
-    for matchup in Matchup::ALL {
-        for rounds in ROUND_COUNTS {
-            for seed in seeds() {
-                let run = play(seed, matchup, rounds, &rules, Vec::new());
-                eprintln!(
-                    "{} / {rounds} rounds / seed 0x{seed:016x}: {} ticks",
-                    matchup.name(),
-                    run.ticks
-                );
-                runs.push(run);
-            }
+    let list = schedule();
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let done = std::sync::Mutex::new(Vec::<(usize, MatchRun)>::new());
+    std::thread::scope(|scope| {
+        for _ in 0..WORKERS {
+            scope.spawn(|| {
+                loop {
+                    let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let Some((seed, matchup, rounds)) = list.get(index).copied() else {
+                        break;
+                    };
+                    let run = play(seed, matchup, rounds, &rules, Vec::new());
+                    eprintln!(
+                        "[{}/{}] {} / {rounds} rounds / seed 0x{seed:016x}: {} ticks",
+                        index.saturating_add(1),
+                        list.len(),
+                        matchup.name(),
+                        run.ticks
+                    );
+                    done.lock().expect("no worker panicked").push((index, run));
+                }
+            });
         }
-    }
+    });
+    let mut done = done.into_inner().expect("no worker panicked");
+    done.sort_by_key(|(index, _)| *index);
+    let runs: Vec<MatchRun> = done.into_iter().map(|(_, run)| run).collect();
     let column = expand_east(&rules, &table);
     let text = render(
         &runs,
         cost,
         &pharmakos_sim::hex(table.rules_hash()),
         Some(&column),
+        Some(&table),
     );
     let path = report_path();
     std::fs::create_dir_all(path.parent().expect("a folder")).expect("the report folder");
@@ -1636,13 +2435,13 @@ fn balance_check_writes_its_report() {
     let summary: String = text
         .split("\n\n")
         .skip(1)
-        .take(2)
+        .take(6)
         .collect::<Vec<_>>()
         .join("\n\n");
     eprintln!("{summary}\nthe report: {}", path.display());
     assert_eq!(
         runs.len(),
-        SEED_COUNT * Matchup::ALL.len() * ROUND_COUNTS.len()
+        SEED_COUNT * (Matchup::TWO_SEAT.len() * ROUND_COUNTS.len() + 1)
     );
     for run in &runs {
         assert!(
@@ -1681,7 +2480,7 @@ fn one_short_match_reports_through_the_gateway() {
     let seed = SCENARIO_SEED;
     let run = play(
         seed,
-        Matchup::HoldAndBuildVsEasy,
+        Matchup::TemplateVsEasy(Template::HoldAndBuild),
         2,
         &rules,
         vec![SMOKE_PUSH_MS, SMOKE_PUSH_MS],
@@ -1752,6 +2551,7 @@ fn one_short_match_reports_through_the_gateway() {
         cost,
         &pharmakos_sim::hex(table.rules_hash()),
         None,
+        None,
     );
     assert!(
         text.contains("== hold-and-build-vs-easy / 2 rounds"),
@@ -1775,13 +2575,13 @@ fn one_short_match_reports_through_the_gateway() {
 #[test]
 fn easy_seals_its_own_playbook_in_round_1() {
     let rules = rules_json();
-    let mut surface = open("easy-own", SCENARIO_SEED, &rules, 1, Vec::new());
+    let mut surface = open("easy-own", SCENARIO_SEED, &rules, (1, 2), Vec::new());
     let mut factory = EasyOperators::new(&rules).expect("the operator reads the rules text");
-    let mut easy = InProcessSeats::open(&mut surface, &seat_ids(), None, &mut factory)
+    let mut easy = InProcessSeats::open(&mut surface, &seat_ids(2), None, &mut factory)
         .expect("in-process seats");
     easy.plan(&mut surface);
     assert!(surface.begin_push().expect("the Push opens"));
-    for seat in seat_ids() {
+    for seat in seat_ids(2) {
         assert_eq!(
             seal_of(&surface, seat.raw(), 1, None),
             "easy-own",
@@ -1875,7 +2675,7 @@ fn the_expand_east_column_asks_each_seats_estimate_route() {
     let estimates = expand_east_estimates(&rules_json(), scenario.seed, site);
     assert_eq!(
         estimates.iter().map(|(seat, _)| *seat).collect::<Vec<u8>>(),
-        seat_ids()
+        seat_ids(2)
             .iter()
             .map(|seat| seat.raw())
             .collect::<Vec<u8>>(),
@@ -1887,4 +2687,89 @@ fn the_expand_east_column_asks_each_seats_estimate_route() {
             "seat {seat}: the site is reachable from the core on this map, at a positive time;              got {estimate_ms:?}"
         );
     }
+}
+
+/// The positive control for the combat columns and decision 36's figure: a
+/// short match staged to fight, so that the readers are shown to count what
+/// the check's own matches did not do. Six raiders of seat 1 are laid out in
+/// the lobby on an Attack beacon 3 voxels from seat 0's core (an unset `roe`
+/// reads `FREE_FIRE` on an Attack beacon), inside their own reach of it and
+/// the core's autocannon's of them, and the Push plays 30 s.
+#[test]
+fn the_combat_readers_count_a_staged_fight() {
+    use pharmakos_sim::runner::{Layout, LayoutBeacon};
+    use pharmakos_sim::seams::MandateKind;
+    let rules = rules_json();
+    let table = RulesTable::from_canonical_json(&rules).expect("a rules table");
+    let mut host = Host::open_from(
+        &rules,
+        SCENARIO_SEED,
+        2,
+        &Settings {
+            segment_lengths_ms: vec![SMOKE_PUSH_MS],
+            round_limit: 1,
+        },
+        Some(root().join(LIBRARY_PATH)),
+    )
+    .expect("a match");
+    let core_at = {
+        let beacons = host.world().beacons();
+        let row = beacons
+            .ids()
+            .iter()
+            .zip(beacons.seats())
+            .enumerate()
+            .filter(|(_, (_, seat))| **seat == 0)
+            .min_by_key(|(_, (id, _))| **id)
+            .map(|(row, _)| row)
+            .expect("seat 0 has a core");
+        beacons.positions().get(row).copied().expect("a position")
+    };
+    let [x, y] = [core_at[0].floor_voxels(), core_at[1].floor_voxels()];
+    host.seed_layout(&Layout {
+        beacons: vec![LayoutBeacon {
+            seat: SeatId::new(1),
+            column: [x.saturating_add(3), y],
+            mandate: MandateKind::Attack,
+            units: vec![(UnitKind::Raider, 6)],
+        }],
+    })
+    .expect("the raid is laid out");
+    let mut surface = Surface::new(
+        &match_id("staged-fight"),
+        SCENARIO_SEED,
+        table.clone(),
+        FogPolicy::fogged(),
+        &seat_ids(2),
+    )
+    .expect("a surface");
+    surface.attach(host).expect("attached");
+    surface.set_phase_remaining_ms(lull_ms(&table, 1));
+    surface.open_lull().expect("the opening Lull");
+    assert!(surface.begin_push().expect("the Push opens"));
+
+    let mut dealt = vec![0_u64; 4];
+    let mut figure = Kingmaking::default();
+    let mut standing = trailing(surface.host().expect("hosted").world());
+    while let Some(report) = surface.step().expect("a tick") {
+        let world = surface.host().expect("hosted").world();
+        count_kingmaking(world, 2, &mut dealt, &standing, &mut figure);
+        standing = trailing(world);
+        if report.segment_ended {
+            break;
+        }
+    }
+    let combat = combat_now(&surface, 2, &[0, 0]);
+    let [core, raid] = [
+        *combat.first().expect("seat 0"),
+        *combat.get(1).expect("seat 1"),
+    ];
+    assert!(
+        figure.dealt > 0,
+        "the staged raid dealt damage seat against seat: {figure:?}"
+    );
+    assert!(
+        core.kills > 0 && raid.losses > 0,
+        "the core's autocannon killed raiders and the tally counted it: {combat:?}"
+    );
 }

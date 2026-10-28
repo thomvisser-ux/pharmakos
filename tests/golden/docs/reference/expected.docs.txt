@@ -215,6 +215,8 @@ gp.v1.DefendSettings
   reserved auto_fortify, unit_mix
 
 gp.v1.EnemyCommander
+  oneof: _seat
+  seat                         1   uint32
 
 gp.v1.Fallback
   oneof: posture
@@ -818,7 +820,7 @@ gp.v1.Playbook.Kind
 
 ## Diagnostics
 
-96 codes. A code is language-neutral, append-only and never
+100 codes. A code is language-neutral, append-only and never
 reused; only an ERROR stops a playbook qualifying. `none at the skeleton` names the
 task that owes the emitter, which is honesty about coverage rather than a gap.
 
@@ -832,7 +834,7 @@ E0002  ERROR  decode and version  raised at: decode
   There is a name here that the playbook vocabulary does not have. Nothing is removed for you: correct the name or take the line out yourself.
 
 E0003  ERROR  decode and version  raised at: decode
-  `{field}` is held back to a later version and is not part of the v1 vocabulary.
+  `{field}` is reserved: the schema holds it back for a later stage or version, and this build does not read it.
   This is a word the game keeps for later. It is refused rather than quietly ignored, so nothing you wrote disappears without you seeing it.
 
 E0004  ERROR  decode and version  raised at: decode
@@ -868,36 +870,36 @@ E0011  ERROR  decode and version  raised at: structure
   A building is placed on a spot on the map, not on whichever beacon a selector picks. Pick the spot.
 
 E0012  ERROR  decode and version  raised at: none at the skeleton (retired by S2's `dfnd`, which built Defend's settings)
-  Defend mandate settings have no effect until S2's Defend mandate lands; they are refused rather than ignored.
-  A Defend beacon cannot be given settings in this build yet.
+  Defend mandate settings had no effect until S2's Defend mandate landed; this code is retired and raised by nothing.
+  A Defend beacon takes its settings in this build.
 
-E0013  ERROR  decode and version  raised at: structure
-  Attack mandate settings have no effect until S2's Attack mandate lands; they are refused rather than ignored.
-  An Attack beacon cannot be given settings in this build yet.
+E0013  ERROR  decode and version  raised at: none at the skeleton (retired by S2's `atk`, which built Attack's settings)
+  Attack mandate settings had no effect until S2's Attack mandate landed; this code is retired and raised by nothing.
+  An Attack beacon takes its settings in this build.
 
 E0014  ERROR  decode and version  raised at: none at the skeleton (retired by S2's `dfnd`, which built `most_threatened`)
-  selector `most_threatened` has no effect until S2's threat model, which is what it ranks by; it is refused rather than ignored.
-  "Most threatened" needs threats to weigh, and this build has none yet. Name the beacon, or pick it another way.
+  selector `most_threatened` had no effect until S2's threat model landed; this code is retired and raised by nothing.
+  "Most threatened" picks your own beacon with the most enemy firepower seen inside its sphere.
 
 E0015  ERROR  decode and version  raised at: structure
-  selector filter `side: ENEMY_KNOWN` has no effect until S3, with the seat's knowledge store; it is refused rather than ignored.
-  Picking among enemy beacons comes later. For now a selector picks among your own.
+  selector filter `side: ENEMY_KNOWN` has no effect until S3, with the seat's knowledge store, except in `nearest` with no other filter field as an Attack target; it is refused rather than ignored.
+  Picking among enemy beacons comes later. For now only an Attack beacon can pick one, the nearest your side knows of; any other selector picks among your own.
 
 E0016  ERROR  decode and version  raised at: structure
   selector filter `tags` has no effect until S3: a beacon has no tag column to read yet, so writing tags is legal and filtering on them is not.
   Tags on a beacon are kept, but nothing can pick a beacon by its tags yet.
 
 E0017  ERROR  decode and version  raised at: none at the skeleton (retired by S2's `dfnd`, which built `beacon_under_attack`)
-  predicate `beacon_under_attack` has no effect until S2's combat gives a beacon a damage history to ask about; it is refused rather than read as true or false.
-  Asking whether a beacon is under attack comes with combat. Until then the question has no answer, so it cannot be asked.
+  predicate `beacon_under_attack` had no effect until S2's combat gave a beacon a damage history to ask about; this code is retired and raised by nothing.
+  Asking whether a beacon is under attack works in this build.
 
 E0018  ERROR  decode and version  raised at: decode
   `{field}` carries {value}, which is not a value this build names; it is refused rather than read as a default.
   This setting holds a number the game does not know. Nothing is guessed for you: write one of the setting's names instead.
 
 E0019  ERROR  decode and version  raised at: none at the skeleton (retired by S2's `site`, which built the base kit)
-  a Build target names `{id}`, one of S2's base kit, which has no effect until S2's base kit lands; it is refused rather than ignored.
-  Autocannons, mortars and walls cannot be built in this build yet.
+  a Build target naming one of S2's base kit had no effect until S2's base kit landed; this code is retired and raised by nothing.
+  Autocannons, mortars and walls can be built in this build.
 
 E0101  ERROR  limits and required blocks  raised at: structure
   {what} is required and is missing.
@@ -1076,8 +1078,12 @@ E0417  ERROR  references and placement  raised at: structure
   A wall is found by its anchor, so the anchor has to be one of the wall's own voxels.
 
 E0418  ERROR  references and placement  raised at: semantics
-  {what}; an Attack target must have been seen within the reach window, {max} ms, when the playbook is sealed.
+  {what}; this Attack target must have been seen within the reach window, {max} ms, when the playbook is sealed.
   An Attack beacon attacks what the seat has seen recently. Look again with a scout, or choose a target the seat has seen.
+
+E0419  ERROR  references and placement  raised at: semantics
+  `enemy_commander` names seat {seat}, {why}; it hunts another seat's commander in this match, or, without a seat, the nearest the seat has seen.
+  An Attack beacon hunts an enemy's commander. Name an enemy seat, or leave the seat out to hunt the nearest enemy commander seen.
 
 E0501  ERROR  settings and recycle  raised at: semantics
   `{field}` is {found}; it must be between 0 and 100.
@@ -1128,8 +1134,8 @@ E0512  ERROR  settings and recycle  raised at: structure
   A wall lower than this is climbable and blocks nothing. Raise the top of the box.
 
 W0501  WARNING  settings and recycle  raised at: none at the skeleton (retired by S2's `dfnd`, which built the threat model)
-  `seam_choice` SAFEST reads as NEAREST until S2's threat model arrives.
-  "Safest" needs threats to weigh, and they come later. Until then this beacon digs the nearest seam.
+  `seam_choice` SAFEST read as NEAREST until S2's threat model landed; it digs the nearest seam no known threat's weapon reaches, and this code is retired and raised by nothing.
+  "Safest" digs the nearest seam that no enemy weapon your side sees can reach.
 
 W0502  WARNING  settings and recycle  raised at: structure
   `{name}` is on this protect list more than once; its guards escort it once, and the repeat only adds a field to the edit.
@@ -1191,6 +1197,14 @@ W0707  WARNING  schedule, conflicts and staleness  raised at: estimate
   the snapshot this report is about does not decode, so whether the route fits the coming segment was not checked.
   The game could not check this route's timing. That is a fault in the game, not in the playbook.
 
+W0708  WARNING  schedule, conflicts and staleness  raised at: semantics
+  {what}, and the reach window is {max} ms; with no seat named, the Attack hunts the enemy commander seen within it nearest its staging point when its force is ready to launch, and the force waits until there is one.
+  This Attack beacon's raiders wait until your side has recently seen an enemy commander, then hunt the nearest one. Scouts help them find one sooner.
+
+W0709  WARNING  schedule, conflicts and staleness  raised at: semantics
+  {what}, and the reach window is {max} ms; the Attack raids the enemy beacon seen within it nearest its staging point when its force is ready to launch, and the force waits until there is one.
+  This Attack beacon's raiders wait until your side has recently seen an enemy beacon, then raid the nearest one. Scouts help them find one sooner.
+
 I0001  INFO  information  raised at: estimate
   the route is at least {found} ms of walking, between the places it names.
   The least time the walking can take; going round anything in the way takes longer.
@@ -1206,3 +1220,7 @@ I0003  INFO  information  raised at: structure
 I0004  INFO  information  raised at: structure
   `repair_threshold_pct` is 0, so this Build beacon's drones never repair a structure; its units and the commander are still repaired.
   A repair threshold of 0 means never. Write a percentage to have damaged structures repaired.
+
+I0005  INFO  information  raised at: semantics
+  `pace` is AVOID_KNOWN_THREATS, and the seat's view holds no enemy beacon in sight; unless the seat sees an armed enemy when the move starts, it goes as DIRECT does.
+  Avoiding threats needs an enemy your side can see. None is in sight now, so unless one is when the walk starts, it goes straight.

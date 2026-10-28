@@ -101,7 +101,6 @@ fn case_world(rules: RulesTable) -> World {
     World::new(&WorldConfig {
         match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED,
         seats: 3,
-        units_per_seat: 0,
         rules,
         match_settings: MatchSettings {
             segment_lengths_ms: vec![60_000],
@@ -1779,11 +1778,6 @@ fn the_refusal_table_and_the_arms_agree() {
             String::new(),
         ),
         (
-            "attack_settings",
-            interface(r#"{"set_mandate_settings": {"attack": {}}}"#),
-            String::new(),
-        ),
-        (
             "filter_side_enemy_known",
             walk(r#"{"beacon_anchor": {"nearest": {"filter": {"side": "ENEMY_KNOWN"}}}}"#),
             String::new(),
@@ -1876,7 +1870,6 @@ fn the_refusal_table_and_the_arms_agree() {
         "REFUSE_QUEUE_STRUCTURE",
         "REFUSE_BUILD_BLUEPRINT",
         "REFUSE_BUILD_BEACON_ANCHOR",
-        "REFUSE_ATTACK_SETTINGS",
         "REFUSE_ENEMY_KNOWN",
         "REFUSE_FILTER_TAGS",
     ] {
@@ -1888,12 +1881,12 @@ fn the_refusal_table_and_the_arms_agree() {
     }
 }
 
-/// S2's wire (task `con4`): each new construct is refused at the seal with
-/// its own entry, whatever it holds, until the lane that gives it an effect.
-/// Attack's arm is refused whole however many of its new fields it writes;
-/// Defend's compiles since S2's `dfnd`, in an edit, a switch and a deploy's
-/// `initial`, an empty one included (decisions-log item 145 (5)); and the
-/// arm-less switch stays legal. The base kit, refused
+/// S2's wire (task `con4`): each new construct was refused at the seal with
+/// its own entry until the lane that gave it an effect. Defend's arm compiles
+/// since S2's `dfnd` and Attack's since S2's `atk`, in an edit, a switch and
+/// a deploy's `initial`, an empty one included (decisions-log items 145 (5)
+/// and 146 (3) (j)), each held to its ranges; and the arm-less switch stays
+/// legal. The base kit, refused
 /// here until S2's `site` built it, now compiles: a turret as a structure
 /// target and a wall with the box it needs, a wall without one refused.
 #[test]
@@ -1902,10 +1895,6 @@ fn s2s_wire_is_refused_construct_by_construct() {
         format!(
             r#"{{"label": "q", "interface": {{"beacon": {{"safest": {{}}}}, "rows": [{row}]}}}}"#
         )
-    };
-    let refused = |row: &str| {
-        let error = compile(&refusal_case(&interface(row), "")).unwrap_err();
-        pharmakos_sim::interpreter::Refusal::of(&error).map(|refusal| refusal.name)
     };
     for row in [
         r#"{"set_mandate_settings": {"defend": {"protect": [{"my_commander": {}}], "engagement_radius_pct": 80, "pursue": "SPHERE_EDGE", "picket_scouts": 2}}}"#,
@@ -1942,9 +1931,41 @@ fn s2s_wire_is_refused_construct_by_construct() {
     }
     for row in [
         r#"{"set_mandate_settings": {"attack": {"target": {"enemy_commander": {}}, "retarget": "NEAREST_KNOWN", "staging": {"x": 10, "y": 10, "z": 10}, "launch": {"force_size": 4}, "after_action": "RETURN_HOME", "breach_allowed": true, "waves": 1}}}"#,
+        r#"{"set_mandate_settings": {"attack": {"target": {"enemy_commander": {"seat": 2}}}}}"#,
         r#"{"set_mandate": {"attack": {"waves": 1}}}"#,
+        r#"{"set_mandate": {"attack": {}}}"#,
     ] {
-        assert_eq!(refused(row), Some("attack_settings"), "{row}");
+        assert!(compile(&refusal_case(&interface(row), "")).is_ok(), "{row}");
+    }
+    // An Attack arm's own refusals: an own beacon as its target, a retreat
+    // percentage past 100, a seat past a byte, and a number an enum does not
+    // name.
+    for (row, error) in [
+        (
+            r#"{"set_mandate_settings": {"attack": {"target": {"beacon": {"beacon_id": "b_01"}}}}}"#,
+            PlanError::AttackTargetNotEnemy,
+        ),
+        (
+            r#"{"set_mandate_settings": {"attack": {"retreat": {"force_below_pct": 101}}}}"#,
+            PlanError::ForceBelowOutOfRange { found: 101 },
+        ),
+        (
+            r#"{"set_mandate_settings": {"attack": {"target": {"enemy_commander": {"seat": 256}}}}}"#,
+            PlanError::CommanderSeatOutOfRange { found: 256 },
+        ),
+        (
+            r#"{"set_mandate_settings": {"attack": {"after_action": 7}}}"#,
+            PlanError::UnknownEnum {
+                field: "attack.after_action",
+                value: 7,
+            },
+        ),
+    ] {
+        assert_eq!(
+            compile(&refusal_case(&interface(row), "")).unwrap_err(),
+            error,
+            "{row}"
+        );
     }
     for blueprint in ["autocannon", "mortar"] {
         let row = format!(

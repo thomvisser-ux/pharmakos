@@ -51,20 +51,23 @@
 
 use pharmakos_proto::json::Json;
 
-use crate::candidates::{Candidate, Goal, NoVent, route_index, tap_step};
-use crate::easy::{CORE_DIG_MAX_DEPTH, EASY_ROUTE_FILL_PERCENT, EXPAND_AND_MINE, HOLD_AND_BUILD};
+use crate::candidates::{Candidate, Goal, NoVent, RaidTarget, core_threat, route_index, tap_step};
+use crate::easy::{CORE_DIG_MAX_DEPTH, DEFEND_THE_CORE, EASY_ROUTE_FILL_PERCENT};
 use crate::playbook::{Declared, op, pointer_get, with_member, with_pointer};
-use crate::situation::{Kind, Situation};
+use crate::situation::{Kind, LastPush, Situation};
 use crate::tuning::Tuning;
-use crate::wire::{number, object, string};
+use crate::wire::{number, object, string, voxel_json};
 
 /// A composed round: the template, its goals, and the patch that fills it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) struct Composed {
     /// Which template.
     pub(crate) template_id: &'static str,
-    /// The goals, in insertion order.
+    /// The goals, in insertion order. With no goal but the guard post, the
+    /// guard is the one goal of the Defend the Core template.
     pub(crate) goals: Vec<Candidate>,
+    /// The guard post added beside the goals of another template, if one is.
+    pub(crate) guard: Option<Candidate>,
     /// The JSON Patch, applied to the template's own instantiation.
     pub(crate) patch: Vec<Json>,
     /// For each goal after the first, the patch that takes it out again:
@@ -149,57 +152,146 @@ fn greedy(top: &[Candidate], share: i64, treasury: i64) -> Vec<Candidate> {
     goals
 }
 
-/// Compose the round from the top-k, or `None` when nothing fits.
+/// Compose the round from the top-k and the guard post, or `None` when
+/// nothing fits.
+///
+/// The guard, when there is one worth placing ([`crate::candidates::guard`]),
+/// is **added** beside the goals rather than ranked among them (spec section
+/// 14: Easy "adds a Defend guard on its commander"): its time comes out of the
+/// share and its price out of the treasury before the greedy insertion, and
+/// its step goes into the route right after the core's, beside the core where
+/// the commander opens the route. With no goal beside it, the Defend the Core
+/// template is the round's playbook. A guard the library has no Defend the
+/// Core template for is not placed.
 pub(crate) fn compose(
     situation: &Situation,
     tuning: &Tuning,
     top: &[Candidate],
+    guard: Option<&Candidate>,
     declared: &[Declared],
 ) -> Option<Composed> {
     let fill = fill_ms(situation)?;
     let core = situation.core().map(|core| core.id.clone());
+    let defend = declared
+        .iter()
+        .find(|held| held.template_id == DEFEND_THE_CORE);
+    let guard = guard.filter(|_| defend.is_some());
     // The walk to the core is one estimate's first leg, the same for every
     // candidate; the largest is taken so no reading of it is under-held. No
     // candidate at all is nothing to compose.
-    let lead = top.iter().map(|candidate| candidate.lead_ms).max()?;
+    let lead = top
+        .iter()
+        .chain(guard)
+        .map(|candidate| candidate.lead_ms)
+        .max()?;
     let held_back = match core {
         Some(_) => tuning.edit_settings_base_ms.checked_add(lead)?,
         None => 0,
     };
-    let goals = greedy(top, fill, situation.economy.treasury);
-    let first = goals.first()?;
-    let template_id = match first.goal {
-        Goal::Mine { .. } => EXPAND_AND_MINE,
-        Goal::Generator { .. } | Goal::Tap { .. } => HOLD_AND_BUILD,
+    // A post that does not fit the share is not placed: the share bounds the
+    // whole route, the post included.
+    let guard = guard.filter(|guard| guard.time_ms <= fill);
+    let (guard_ms, guard_dollars) = match guard {
+        Some(guard) => (guard.time_ms, guard.cost_dollars),
+        None => (0, 0),
     };
+    let top = beside_the_guard(top, guard);
+    let goals = greedy(
+        &top,
+        fill.checked_sub(guard_ms)?,
+        situation.economy.treasury.checked_sub(guard_dollars)?,
+    );
+    // The core's step goes in at route 0 as the patch's last operation, and
+    // the guard's just before it, so every pointer above them is the
+    // template's; the removals are applied to the patched text, where each
+    // step stands one further on for each of them.
+    let core_shift = usize::from(core.is_some());
+    let (template_id, goals, guard_step, patch_parts) = match (goals.first(), guard) {
+        (Some(first), _) => {
+            let template_id = first.goal.template();
+            let template = declared
+                .iter()
+                .find(|held| held.template_id == template_id)?;
+            let guard_step = match (guard, defend) {
+                (Some(guard), Some(defend)) => Some((guard.clone(), guard_copy(defend, guard)?)),
+                _ => None,
+            };
+            let shift = core_shift.checked_add(usize::from(guard_step.is_some()))?;
+            let parts = place_patch(
+                template,
+                &goals,
+                fill,
+                held_back.checked_add(guard_ms)?,
+                shift,
+            )?;
+            (template_id, goals, guard_step, parts)
+        }
+        (None, Some(guard)) => {
+            let template = defend?;
+            let goals = vec![guard.clone()];
+            let parts = place_patch(template, &goals, fill, held_back, core_shift)?;
+            (DEFEND_THE_CORE, goals, None, parts)
+        }
+        (None, None) => return None,
+    };
+    let (mut patch, mut removals) = patch_parts;
     let template = declared
         .iter()
         .find(|held| held.template_id == template_id)?;
-    // The core's step goes in at route 0 as the patch's last operation, so
-    // every pointer above it is the template's; the removals are applied to
-    // the patched text, where each step stands one further on.
-    let shift = usize::from(core.is_some());
-    let (mut patch, removals) = place_patch(template, &goals, fill, held_back, shift)?;
-    let note = format!(
-        "{} {}",
-        seed_note(situation),
-        why_for(first, goals.len(), fill)
-    );
+    let first = goals.first()?;
+    let mut why = why_for(first, goals.len(), fill);
+    if let Some((guard, _)) = &guard_step {
+        why = format!("{why} {}", why_for(guard, 1, fill));
+    }
+    if guard_step.is_some() || first.goal.template() == DEFEND_THE_CORE {
+        why = format!("{why} {}", guard_reason(situation, tuning));
+    }
+    let note = with_seed(situation, &why);
     let kind = if pointer_get(&template.body, "/meta/note").is_some() {
         "replace"
     } else {
         "add"
     };
     patch.push(op(kind, "/meta/note", Some(string(&note))));
+    let guard = match guard_step {
+        Some((guard, step)) => {
+            patch.push(op("add", "/declarative/route/0", Some(step)));
+            // Taken out last of all: the repair of last resort removes the
+            // goals inserted after the first before it removes the guard.
+            removals.insert(
+                0,
+                vec![op(
+                    "remove",
+                    &format!("/declarative/route/{core_shift}"),
+                    None,
+                )],
+            );
+            Some(guard)
+        }
+        None => None,
+    };
     if let Some(core) = core {
         patch.push(op("add", "/declarative/route/0", Some(deepen_core(&core))));
     }
     Some(Composed {
         template_id,
         goals,
+        guard,
         patch,
         removals,
     })
+}
+
+/// The top-k less any goal on the guard's seam: a raid post covers the seam
+/// the guard post does, beside the core, so with a guard placed the two would
+/// contend for one site, and the round makes no raid.
+fn beside_the_guard(top: &[Candidate], guard: Option<&Candidate>) -> Vec<Candidate> {
+    top.iter()
+        .filter(|candidate| {
+            guard.is_none_or(|guard| guard.goal.feature() != candidate.goal.feature())
+        })
+        .cloned()
+        .collect()
 }
 
 /// `{"feature_id": "<name>"}`: a feature reference by name.
@@ -210,9 +302,24 @@ fn named(feature: &str) -> Json {
 /// A copy of the template's place step naming `feature`, its label given the
 /// goal's number: `place_mine` becomes `place_mine_2`.
 fn place_copy(step: &Json, below: &str, feature: &str, n: usize) -> Option<Json> {
-    let label = crate::wire::text_of(step, "label");
+    let label = crate::wire::text_of(step, "label").ok()?;
     let out = with_member(step, "label", string(&format!("{label}_{n}")));
     with_pointer(&out, below, named(feature))
+}
+
+/// The Defend the Core template's place step, naming the guard's seam, as
+/// the template writes it: what a route of another template gains for the
+/// guard post.
+fn guard_copy(defend: &Declared, guard: &Candidate) -> Option<Json> {
+    let covering = defend.pointer_ending("/place_beacon/at/covering")?;
+    let index = route_index(covering)?;
+    let prefix = format!("/declarative/route/{index}");
+    let step = pointer_get(&defend.body, &prefix)?;
+    with_pointer(
+        step,
+        covering.strip_prefix(&prefix)?,
+        named(guard.goal.feature()),
+    )
 }
 
 /// The goals into the template: the first replaces the declared place
@@ -239,6 +346,11 @@ fn place_patch(
     let place_prefix = format!("/declarative/route/{place_index}");
     let place_step = pointer_get(&template.body, &place_prefix)?.clone();
     let below = covering.strip_prefix(&place_prefix)?.to_owned();
+    // A raid's two more settings, which only the Raid template declares.
+    let raid_target = template.pointer_ending("/attack/target").map(str::to_owned);
+    let raid_staging = template
+        .pointer_ending("/attack/staging")
+        .map(str::to_owned);
     let mut patch: Vec<Json> = Vec::new();
     let mut removals: Vec<Vec<Json>> = Vec::new();
     if let Some(hold) = template.pointer_ending("/hold/ms") {
@@ -261,12 +373,42 @@ fn place_patch(
     for (k, goal) in goals.iter().enumerate() {
         let n = k.checked_add(1)?;
         let step = match &goal.goal {
-            Goal::Mine { seam: name, .. } | Goal::Generator { vent: name, .. } => {
+            Goal::Mine { seam: name, .. }
+            | Goal::Generator { vent: name, .. }
+            | Goal::Guard { seam: name } => {
                 if k == 0 {
                     patch.push(op("replace", &covering, Some(named(name))));
                     continue;
                 }
                 place_copy(&place_step, &below, name, n)?
+            }
+            Goal::Raid { seam, target } => {
+                // The post's seam, its target, and its staging at the site
+                // the estimate answered, so the raiders gather at home.
+                // Easy's targets are fixed (spec section 14's Easy column:
+                // "Fixed only", retargeting a rule of Normal's), so it seals
+                // `NONE` where the template says `NEAREST_KNOWN`.
+                let retarget = format!(
+                    "{}/retarget",
+                    raid_target.as_deref()?.strip_suffix("/target")?
+                );
+                let settings = [
+                    (covering.as_str(), named(seam)),
+                    (raid_target.as_deref()?, target.json()),
+                    (raid_staging.as_deref()?, voxel_json(goal.place)),
+                    (retarget.as_str(), string("NONE")),
+                ];
+                if k == 0 {
+                    for (pointer, value) in settings {
+                        patch.push(op("replace", pointer, Some(value)));
+                    }
+                    continue;
+                }
+                let mut step = place_copy(&place_step, &below, seam, n)?;
+                for (pointer, value) in settings.into_iter().skip(1) {
+                    step = with_pointer(&step, pointer.strip_prefix(&place_prefix)?, value)?;
+                }
+                step
             }
             Goal::Tap { beacon, vent, .. } => {
                 let label = if k == 0 {
@@ -329,20 +471,31 @@ pub(crate) fn seed_note(situation: &Situation) -> String {
 }
 
 /// A "why" with the seed line in front of it: every "why" Easy gives, for a
-/// plan it seals and for each suggestion, records the seed (decision C15).
+/// plan it seals and for each suggestion, records the seed (decision C15),
+/// and says so when the last Push's feed was not read far enough to tell
+/// whether the commander died, which is why no guard post was added for it.
 pub(crate) fn with_seed(situation: &Situation, why: &str) -> String {
-    format!("{} {why}", seed_note(situation))
+    match situation.last_push {
+        LastPush::Unread => format!(
+            "{} {why} (A commander died where you could see in the last Push, and the feed was \
+             not read within {} pages far enough to say whose, so no guard post was added for \
+             it.)",
+            seed_note(situation),
+            crate::easy::PAGES_MAX
+        ),
+        LastPush::Survived | LastPush::Died => format!("{} {why}", seed_note(situation)),
+    }
 }
 
 /// One sentence for why a goal was chosen.
 ///
 /// PLACEHOLDER: the wording is the operator's, in English, until the one string table exists — owner, S6
 pub(crate) fn why_for(candidate: &Candidate, goals: usize, fill: i64) -> String {
-    let more = goals
-        .checked_sub(1)
-        .filter(|others| *others > 0)
-        .map(|others| format!(" and {others} more like it"))
-        .unwrap_or_default();
+    // One goal says nothing more; each further one is counted.
+    let more = match goals.checked_sub(1) {
+        Some(others) if others > 0 => format!(" and {others} more like it"),
+        Some(_) | None => String::new(),
+    };
     let tail = format!(
         ": {} points for {} of route (Easy fills {} of the segment).",
         candidate.utility,
@@ -351,7 +504,7 @@ pub(crate) fn why_for(candidate: &Candidate, goals: usize, fill: i64) -> String 
     );
     match &candidate.goal {
         Goal::Mine { seam, grade } => format!(
-            "A Mine beacon covering the {} ore seam {seam}, at {} as its site reads \
+            "A Mine beacon covering the {} scrap seam {seam}, at {} as its site reads \
              now{more}{tail}",
             grade.name(),
             place(candidate.place),
@@ -371,7 +524,76 @@ pub(crate) fn why_for(candidate: &Candidate, goals: usize, fill: i64) -> String 
              whose sphere holds it{more}{tail}",
             grade.name(),
         ),
+        Goal::Guard { seam } => format!(
+            "A Defend beacon beside the core, covering the scrap seam {seam}, at {} as its site \
+             reads now, guarding the core and your commander{more}{tail}",
+            place(candidate.place),
+        ),
+        Goal::Raid { seam, target } => format!(
+            "An Attack beacon beside the core, covering the scrap seam {seam}, at {} as its site \
+             reads now, whose raiders gather there and raid {}{more}{tail}",
+            place(candidate.place),
+            raid_words(target),
+        ),
     }
+}
+
+/// Why a guard post is worth placing: decision 35's death and decision 12's
+/// threat, as the operator read them.
+///
+/// PLACEHOLDER: the wording is the operator's, in English, until the one string table exists — owner, S6
+pub(crate) fn guard_reason(situation: &Situation, tuning: &Tuning) -> String {
+    let died = match situation.last_push {
+        LastPush::Died => Some("your commander died in the last Push"),
+        LastPush::Survived | LastPush::Unread => None,
+    };
+    let threat = core_threat(situation, tuning)
+        .filter(|threat| *threat > 0)
+        .map(|threat| {
+            format!(
+                "the enemies in sight inside your core's sphere deal {} HP a second",
+                threat.div_ceil(1_000)
+            )
+        });
+    match (died, threat) {
+        (Some(died), Some(threat)) => format!("It guards because {died}, and {threat}."),
+        (Some(died), None) => format!("It guards because {died}."),
+        (None, Some(threat)) => format!("It guards because {threat}."),
+        (None, None) => match situation.last_push {
+            LastPush::Unread => String::from(
+                "No threat is in sight inside your core's sphere, and the last Push's feed was not \
+                 read far enough to say whether your commander died.",
+            ),
+            LastPush::Survived | LastPush::Died => String::from(
+                "No threat is in sight inside your core's sphere and your commander did not die \
+                 in the last Push.",
+            ),
+        },
+    }
+}
+
+/// A raid's target, in words.
+///
+/// PLACEHOLDER: the wording is the operator's, in English, until the one string table exists — owner, S6
+pub(crate) fn raid_words(target: &RaidTarget) -> String {
+    match target {
+        RaidTarget::Beacon { id, at } => {
+            format!("the enemy beacon {id}, last seen at {}", place(*at))
+        }
+        RaidTarget::Commander { seat, at } => {
+            format!("the commander of seat {seat}, in sight at {}", place(*at))
+        }
+    }
+}
+
+/// Why Raid an Enemy Beacon has no suggestion this round.
+pub(crate) fn why_no_raid() -> String {
+    String::from(
+        "No raid was weighed this round: it needs your core and your commander in view, a live \
+         scrap seam inside your core's sphere for the post, the treasury for the post and its \
+         raiders, and an enemy beacon you saw within the reach window or an enemy commander in \
+         sight that a route reaches, so this template's own values stand.",
+    )
 }
 
 /// Why a template has no suggestion this round.
@@ -380,6 +602,16 @@ pub(crate) fn why_none(kind: Kind) -> String {
         "No {} you do not cover yet is within reach and worth a beacon this round, so this \
          template's own values stand.",
         kind.name()
+    )
+}
+
+/// Why Defend the Core has no suggestion this round.
+pub(crate) fn why_no_guard() -> String {
+    String::from(
+        "No guard post was weighed this round: it needs your core and your commander in view, a \
+         live scrap seam inside your core's sphere, no Defend beacon of yours beside the core \
+         already, and the treasury for the post and its picket, so this template's own values \
+         stand.",
     )
 }
 

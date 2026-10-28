@@ -369,7 +369,7 @@ const KEPT_FALLBACKS: &[(&str, &str, &str)] = &[
     ),
     (
         "scenario.rs",
-        "(units_per_seat, round_limit.unwrap_or(default_limit))",
+        "round_limit.unwrap_or(default_limit)",
         "never read: an absent key is already the default, and a bad one is a problem \
          recorded above, so `load` returns no scenario",
     ),

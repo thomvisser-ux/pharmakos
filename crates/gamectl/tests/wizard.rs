@@ -72,7 +72,13 @@ const HUMAN: u8 = 0;
 const ROUND_LIMIT: u32 = 3;
 
 /// The templates the library ships, in the order the wizard lists them.
-const TEMPLATES: [&str; 3] = ["expand_and_mine", "hold_and_build", "safe_playbook"];
+const TEMPLATES: [&str; 5] = [
+    "defend_the_core",
+    "expand_and_mine",
+    "hold_and_build",
+    "raid_an_enemy_beacon",
+    "safe_playbook",
+];
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -104,7 +110,6 @@ fn lobby() -> Surface {
             // Empty is the rules table's own ladder: the lobby's `-`.
             segment_lengths_ms: Vec::new(),
             round_limit: ROUND_LIMIT,
-            units_per_seat: 0,
         },
         Some(root().join(LIBRARY_PATH)),
     )
@@ -393,7 +398,6 @@ fn a_seat_nobody_edits_is_still_earning_in_the_lobbys_third_round() {
         &Settings {
             segment_lengths_ms: Vec::new(),
             round_limit: ROUND_LIMIT,
-            units_per_seat: 0,
         },
         Some(root().join(LIBRARY_PATH)),
     )

@@ -54,7 +54,7 @@ its "why", which is not part of the playbook).
 
 | Case | Files | What it pins |
 | --- | --- | --- |
-| `wizard/expand_and_mine/`, `wizard/hold_and_build/`, `wizard/safe_playbook/` | `expected.playbook.jsonc`, `expected.parameters.json`, `expected.report.json`, `expected.prose.txt` | The wizard's live answer for the human seat of a match hosted as the lobby hosts it (seed `0x00000000ca5caded`, two seats, the rules table's own segment ladder), with the real Easy advising it |
+| `wizard/defend_the_core/`, `wizard/expand_and_mine/`, `wizard/hold_and_build/`, `wizard/raid_an_enemy_beacon/`, `wizard/safe_playbook/` | `expected.playbook.jsonc`, `expected.parameters.json`, `expected.report.json`, `expected.prose.txt` | The wizard's live answer for the human seat of a match hosted as the lobby hosts it (seed `0x00000000ca5caded`, two seats, the rules table's own segment ladder), with the real Easy advising it |
 
 Produced by `the_wizards_live_suggestion_qualifies_and_is_goldened_for_every_template`
 in `crates/gamectl/tests/wizard.rs` (decisions-log item 124 (5) (l)): for
@@ -77,9 +77,12 @@ moves, and the pull request says which:
 * **the templates** (`library/`), which every playbook here is filled from;
 * **the rules text** (`rules/rules.v1.json`) rows it scores with -- costs, kW
   ratings, yields, interface times, the sphere radius;
-* **what the wire shows a seat**: the map's named features
+* **what the wire shows a seat**: the last Push's segment feed
+  (`get_segment_feed`: whether the seat's commander died, which adds the
+  Defend the Core guard post, S2's plan, decision 35), the map's named features
   (`get_map_summary.features`), the beacons and the commander
-  (`list_beacons`, `get_view`), the economy (`get_economy_forecast`), travel
+  (`list_beacons`, `get_view`, with the other seats' beacons and commanders a
+  raid aims at), the economy (`get_economy_forecast`), travel
   and the covering site (`estimate_route`), and whether an `on` reads
   (`resolve_refs`). A change to the
   view's fog rule, for instance, moves it only if it changes what a seat sees

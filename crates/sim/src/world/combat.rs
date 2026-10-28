@@ -34,8 +34,9 @@
 //! window, read from the attacker memory every applied order fills
 //! ([`crate::tables::Arms`]), and an asset in range of the firer. `FREE_FIRE`
 //! fires at any enemy in range, by the asset's targeting rule. An unset `roe`
-//! reads as `RETURN_FIRE`, except on a Defend beacon, where it reads as
-//! `FREE_FIRE` (item 148 (2); S2's `dfnd`). The core's autocannon, which has no mandate of its
+//! reads as `RETURN_FIRE`, except on a Defend or an Attack beacon, where it
+//! reads as `FREE_FIRE` (item 148 (2); S2's `dfnd` and `atk`). The core's
+//! autocannon, which has no mandate of its
 //! own, fires as `FREE_FIRE` (decision 8); every other armed asset follows its
 //! home beacon's Common settings. Return fire is announced
 //! (`returned_fire`), once per engagement rather than once per shot: the shot
@@ -58,13 +59,20 @@
 //!   when it is in range, else the enemy unit in range with the highest
 //!   threat, ties nearest then lowest id (decisions 12 and 21); under
 //!   `RETURN_FIRE`, only an attacker.
+//! * **A raider of an Attack beacon's force** (S2's `atk`): its hunted
+//!   commander, else its weak point (decision 14), when in range and seen,
+//!   then the raider's own rule.
+//! * **A breach** (S2's `atk`; decision 41): a mortar under `FREE_FIRE`
+//!   shells the top wall voxel of its seat's first breach in range and in
+//!   sight, before any clump, when its splash there holds nothing of its
+//!   seat's ([`crate::attack::breach_aim`]).
 //!
 //! Every weapon chooses only a target its seat sees this tick
 //! (`World::seen_by`; the owner's answer of 2026-10-20).
 //!
 //! Ties everywhere are the squared distance, then the lowest id (E12). Enemy
-//! wall voxels are no asset and no `FREE_FIRE` target: a breach shells them,
-//! and the breach is S2's `atk` (decision 41).
+//! wall voxels are no asset and no `FREE_FIRE` target: only a breach shells
+//! them (decision 41).
 //!
 //! # Deaths (E2, E15, E16)
 //!
@@ -124,13 +132,14 @@ impl Roe {
     /// 2026-10-20): an unset `0` reads as `RETURN_FIRE` (decision 4, the fifth
     /// omitted-setting default) on Build, Mine and Survey, and as `FREE_FIRE`
     /// on Defend and Attack (the owner's rulings of 2026-10-20). S2's `dfnd`
-    /// added the Defend arm with the Defend mandate; the Attack arm is `atk`'s,
-    /// beside the mandate it builds, and until it lands an Attack beacon reads
-    /// unset as `RETURN_FIRE`.
+    /// added the Defend arm with the Defend mandate, and S2's `atk` the Attack
+    /// arm with the Attack mandate.
     #[must_use]
     pub const fn of_setting(roe: u8, mandate: crate::seams::MandateKind) -> Option<Roe> {
         match (roe, mandate) {
-            (0, crate::seams::MandateKind::Defend) | (3, _) => Some(Roe::Free),
+            (0, crate::seams::MandateKind::Defend | crate::seams::MandateKind::Attack) | (3, _) => {
+                Some(Roe::Free)
+            }
             (0 | 2, _) => Some(Roe::Return),
             (1, _) => Some(Roe::Hold),
             _ => None,
@@ -301,6 +310,9 @@ struct Gun {
     /// The beacon it is homed to when that beacon is on the Defend writ: a
     /// guard (S2's `dfnd`).
     guarding: Option<BeaconId>,
+    /// The beacon it is homed to when that beacon is on the Attack writ: a
+    /// raider of its force (S2's `atk`).
+    raiding: Option<BeaconId>,
 }
 
 /// Which targets a gun's rule reaches.
@@ -316,6 +328,10 @@ enum Rule {
     /// beacon's quarry, else the highest threat among the enemy units in
     /// range, ties nearest then lowest id (decision 12).
     Guard(BeaconId),
+    /// A raider of an Attack beacon's force (S2's `atk`; decision 14): its
+    /// hunted commander or its weak point in range, then the raider's own
+    /// rule.
+    Raid(BeaconId),
     /// The mortar: the biggest clump, never over an own asset.
     Clump,
 }
@@ -525,8 +541,8 @@ impl World {
         if tick < arms.ready_at {
             return None;
         }
-        let (roe, guarding) = match home {
-            None => (Roe::Free, None),
+        let (roe, guarding, raiding) = match home {
+            None => (Roe::Free, None, None),
             Some(home) => {
                 if !crate::power::beacon_is_live(self, home) {
                     return None;
@@ -534,12 +550,15 @@ impl World {
                 let row = self.beacons.row_of(home).ok()?;
                 let mandate =
                     crate::seams::MandateKind::from_id(*self.beacons.mandates().get(row.index())?)?;
-                let guarding = (mandate == crate::seams::MandateKind::Defend
-                    && armament == Armament::Unit(UnitKind::Raider))
-                .then_some(home);
+                let raider = armament == Armament::Unit(UnitKind::Raider);
+                let guarding =
+                    (mandate == crate::seams::MandateKind::Defend && raider).then_some(home);
+                let raiding =
+                    (mandate == crate::seams::MandateKind::Attack && raider).then_some(home);
                 (
                     Roe::of_setting(self.beacons.commons().get(row.index())?.roe, mandate)?,
                     guarding,
+                    raiding,
                 )
             }
         };
@@ -559,6 +578,7 @@ impl World {
             armament,
             roe,
             guarding,
+            raiding,
         })
     }
 
@@ -575,20 +595,40 @@ impl World {
         };
         let rule = match gun.armament {
             Armament::Core => Rule::UnitsOnly,
-            Armament::Unit(_) => match gun.guarding {
-                Some(home) => Rule::Guard(home),
-                None => Rule::SitesThenAttackers,
+            Armament::Unit(_) => match (gun.guarding, gun.raiding) {
+                (Some(home), _) => Rule::Guard(home),
+                (None, Some(home)) => Rule::Raid(home),
+                (None, None) => Rule::SitesThenAttackers,
             },
             Armament::Structure(_) if gun.weapon.projectile.is_some() => Rule::Clump,
             Armament::Structure(_) => Rule::UnitsThenSites,
         };
         let only = (gun.roe == Roe::Return).then_some(attackers);
-        let Some(mark) = self.choose(&gun, rule, only, rows, splash) else {
+        // A breach's wall first, for a mortar under `FREE_FIRE` (S2's `atk`;
+        // decision 41): an enemy wall is a target for a breach only, and
+        // `RETURN_FIRE` is literal (item 148 (2)), so it never shells one.
+        let breach = if rule == Rule::Clump && gun.roe == Roe::Free {
+            self.breach_shell(&gun, splash)
+        } else {
+            None
+        };
+        let mark = if breach.is_some() {
+            None
+        } else {
+            let Some(mark) = self.choose(&gun, rule, only, rows, splash) else {
+                return;
+            };
+            Some(mark)
+        };
+        let Some(point) = breach.or_else(|| mark.map(|mark| mark.at)) else {
             return;
         };
         let tick = self.tick.raw();
         let shot_away = match gun.weapon.projectile {
             None => {
+                let Some(mark) = mark else {
+                    return;
+                };
                 let order = DamageOrder {
                     target: mark.target,
                     amount: gun.weapon.damage,
@@ -604,12 +644,12 @@ impl World {
                 }
             }
             Some(shell) => {
-                let flight = distance(gun.at, mark.at).and_then(|d| shell.flight_ticks(d));
+                let flight = distance(gun.at, point).and_then(|d| shell.flight_ticks(d));
                 let lands = flight.and_then(|flight| tick.checked_add(flight));
                 let filed = lands.is_some_and(|lands| {
                     self.shells
                         .push(
-                            mark.at,
+                            point,
                             lands,
                             (gun.at, tick),
                             SeatId::new(gun.seat),
@@ -635,7 +675,10 @@ impl World {
         // Return fire is announced, once per engagement: the shot that opens
         // it, after the weapon stood ready for a tick or more (spec section
         // 6's Common row).
-        if gun.roe == Roe::Return && self.set_engaged(firer, mark.asset) {
+        if gun.roe == Roe::Return
+            && let Some(mark) = mark
+            && self.set_engaged(firer, mark.asset)
+        {
             self.emit(
                 self.tick,
                 Emission::of(EventKind::ReturnedFire)
@@ -707,7 +750,47 @@ impl World {
             },
             Rule::Clump => self.clump(gun, range, only, rows, splash),
             Rule::Guard(home) => self.guard_mark(gun, home, range, only, rows),
+            Rule::Raid(home) => self
+                .raid_mark(gun, home, range, only)
+                .or_else(|| self.choose(gun, Rule::SitesThenAttackers, only, rows, splash)),
         }
+    }
+
+    /// An Attack raider's first choice (S2's `atk`): its force's hunted
+    /// commander, else its weak point, when it is in range, seen and allowed.
+    fn raid_mark(
+        &self,
+        gun: &Gun,
+        home: BeaconId,
+        range: Fx,
+        only: Option<&[(u8, u32)]>,
+    ) -> Option<Mark> {
+        let (asset, at) = crate::attack::raid_target(self, home, gun.at, range)?;
+        if !Self::may_target(gun.seat, asset, only) {
+            return None;
+        }
+        let target = match asset.tag() {
+            AssetId::TAG_UNIT => DamageTarget::Unit(UnitId::new(asset.index())),
+            AssetId::TAG_STRUCTURE => DamageTarget::Structure(StructureId::new(asset.index())),
+            AssetId::TAG_BEACON => DamageTarget::Beacon(BeaconId::new(asset.index())),
+            _ => return None,
+        };
+        Some(Mark {
+            target,
+            asset,
+            at,
+            d2: Sq::between(gun.at, at),
+        })
+    }
+
+    /// The breach point a mortar is asked to shell (decision 41;
+    /// [`crate::attack::breach_aim`]), when its splash there holds nothing of
+    /// its seat's (spec section 9's friendly-fire avoidance).
+    fn breach_shell(&self, gun: &Gun, splash: &mut Vec<Row>) -> Option<[Fx; 3]> {
+        let shell = gun.weapon.projectile?;
+        let aim = crate::attack::breach_aim(self, gun.seat, gun.at, gun.weapon.range())?;
+        self.splash_is_clear(gun.seat, aim, shell.splash(), splash)
+            .then_some(aim)
     }
 
     /// A guard's target (decision 21; S2's `dfnd`): its beacon's quarry when
@@ -1906,8 +1989,8 @@ impl World {
     /// 41). The shot is the mortar's own: in a Push, its home lit, in range,
     /// off cooldown, its weapon's flight, and its cooldown spent. It does
     /// **not** avoid the firer's own assets, so a test can shell one; the
-    /// breach that uses it is owed the friendly-fire test of
-    /// [`World::wall_owner`] and the mortar's own aim (spec section 9).
+    /// breach's own shot is the fire step's (`breach_shell`), which holds
+    /// its splash to nothing of the seat's (spec section 9).
     ///
     /// # Errors
     ///

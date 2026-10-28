@@ -697,7 +697,7 @@ fn every_sight_case_exists_and_the_sightings_are_all_it_adds() {
 /// Freshness reads ages and nothing else (spec section 6; AGENTS.md section 3
 /// rule 2): the same Attack target qualifies on its freshness when the
 /// sighting is inside the window, and is `E0418` when it is not, or when the
-/// view holds none; a commander target reads the commander sightings alone.
+/// view holds none.
 #[test]
 fn an_attack_targets_freshness_is_its_sightings_age_against_the_window() {
     let rules = rules();
@@ -735,15 +735,47 @@ fn an_attack_targets_freshness_is_its_sightings_age_against_the_window() {
     assert!(!refused(&with_age(Some(window)), &playbook), "at the edge");
     assert!(refused(&with_age(Some(window + 1)), &playbook), "past it");
     assert!(refused(&with_age(None), &playbook), "never seen");
+}
 
-    let commander = String::from_utf8(playbook).expect("UTF-8").replace(
-        "\"beacon\": {\n                    \"beacon_id\": \"e_01\"\n                  }",
-        "\"enemy_commander\": {}",
-    );
+/// A commander target reads the commander sightings alone, with the same ages
+/// against the same window. Set, that seat's commander must rest on a fresh
+/// sighting (`E0418`); unset, the target is chosen at launch and the sim holds
+/// the force until a fresh sighting exists, so the file qualifies and is
+/// warned (`W0708`) exactly where a named seat would be refused (the owner's
+/// ruling of 2026-10-27, S2's `vfy4`).
+#[test]
+fn a_commander_targets_freshness_warns_unset_and_refuses_set() {
+    let rules = rules();
+    let window = u32::try_from(
+        pharmakos_verifier::Limits::from_rules(&rules)
+            .expect("the limits")
+            .reach_memory_ms(),
+    )
+    .expect("a window is not negative");
+    let snapshot = fixture_snapshot();
+    // (qualifies, E0418, W0708)
+    let verdict = |scope: &Scope, bytes: &[u8]| -> (bool, bool, bool) {
+        let input = Input::new(bytes, &snapshot, scope, &rules).expect("an input");
+        let report = verify(&input, Depth::Quick);
+        let has = |code: &str| report.diagnostics.iter().any(|d| d.code == code);
+        (report.qualifies, has("E0418"), has("W0708"))
+    };
+    let seatless = String::from_utf8(case_bytes("e0418_an_attack_target_seen_too_long_ago"))
+        .expect("UTF-8")
+        .replace(
+            "\"beacon\": {\n                    \"beacon_id\": \"e_01\"\n                  }",
+            "\"enemy_commander\": {}",
+        );
     assert!(
-        commander.contains("enemy_commander"),
+        seatless.contains("enemy_commander"),
         "the target was swapped"
     );
+    let named = |seat: u32| {
+        seatless.replace(
+            "\"enemy_commander\": {}",
+            &format!("\"enemy_commander\": {{\"seat\": {seat}}}"),
+        )
+    };
     let seen_commander = |age_ms: u32| {
         fixture_scope().with_sighting(Sighting {
             what: Sighted::Commander(SeatId::new(1)),
@@ -751,18 +783,150 @@ fn an_attack_targets_freshness_is_its_sightings_age_against_the_window() {
             age_ms,
         })
     };
-    assert!(refused(&fixture_scope(), commander.as_bytes()), "none seen");
-    assert!(!refused(&seen_commander(10), commander.as_bytes()));
-    assert!(refused(&seen_commander(window + 1), commander.as_bytes()));
+    let one = named(1);
+    for (scope, stale, why) in [
+        (fixture_scope(), true, "none seen"),
+        (seen_commander(10), false, "seen"),
+        (seen_commander(window), false, "at the edge"),
+        (seen_commander(window + 1), true, "past it"),
+    ] {
+        assert_eq!(
+            verdict(&scope, seatless.as_bytes()),
+            (true, false, stale),
+            "seatless, {why}"
+        );
+        assert_eq!(
+            verdict(&scope, one.as_bytes()),
+            (!stale, stale, false),
+            "seat 1, {why}"
+        );
+    }
     // A stale beacon sighting says nothing about a commander target.
-    assert!(!refused(
-        &seen_commander(10).with_sighting(Sighting {
+    let fresh_and_stale_beacon = seen_commander(10).with_sighting(Sighting {
+        what: Sighted::Beacon("e_01".to_owned()),
+        at: Voxel { x: 1, y: 1, z: 1 },
+        age_ms: window + 1,
+    });
+    assert_eq!(
+        verdict(&fresh_and_stale_beacon, seatless.as_bytes()),
+        (true, false, false)
+    );
+    // A fresh sighting of another seat's commander says nothing about the
+    // seat named: still E0418, and still no W0708.
+    assert_eq!(
+        verdict(&seen_commander(10), named(2).as_bytes()),
+        (false, true, false),
+        "another seat seen"
+    );
+}
+
+/// The nearest known enemy beacon as an Attack target (S2's `atk2`,
+/// decisions-log item 150 (2)): `nearest` with the filter
+/// `side: ENEMY_KNOWN` and nothing else qualifies, warned (`W0709`) while no
+/// enemy beacon is seen inside the window, because the sim chooses it at
+/// launch and holds the force until one is. Every other enemy selector, and
+/// this one with a further filter field or anywhere but an Attack target, is
+/// still `E0015`.
+#[test]
+fn only_the_nearest_known_enemy_beacon_is_lifted_and_it_is_warned_unseen() {
+    let rules = rules();
+    let window = u32::try_from(
+        pharmakos_verifier::Limits::from_rules(&rules)
+            .expect("the limits")
+            .reach_memory_ms(),
+    )
+    .expect("a window is not negative");
+    let snapshot = fixture_snapshot();
+    // (qualifies, E0015, W0709)
+    let verdict = |scope: &Scope, bytes: &[u8]| -> (bool, bool, bool) {
+        let input = Input::new(bytes, &snapshot, scope, &rules).expect("an input");
+        let report = verify(&input, Depth::Quick);
+        let has = |code: &str| report.diagnostics.iter().any(|d| d.code == code);
+        (report.qualifies, has("E0015"), has("W0709"))
+    };
+    let lifted = String::from_utf8(case_bytes(
+        "w0709_a_raid_on_the_nearest_known_beacon_with_no_sighting",
+    ))
+    .expect("UTF-8");
+    let filter = "\"side\": \"ENEMY_KNOWN\"";
+    assert!(lifted.contains(filter), "the case names the selector");
+    let seen_beacon = |age_ms: u32| {
+        fixture_scope().with_sighting(Sighting {
             what: Sighted::Beacon("e_01".to_owned()),
             at: Voxel { x: 1, y: 1, z: 1 },
-            age_ms: window + 1,
-        }),
-        commander.as_bytes()
-    ));
+            age_ms,
+        })
+    };
+    for (scope, unseen, why) in [
+        (fixture_scope(), true, "none seen"),
+        (seen_beacon(10), false, "seen"),
+        (seen_beacon(window), false, "at the edge"),
+        (seen_beacon(window + 1), true, "past it"),
+    ] {
+        assert_eq!(
+            verdict(&scope, lifted.as_bytes()),
+            (true, false, unseen),
+            "{why}"
+        );
+    }
+    // A fresh commander sighting says nothing about a beacon raid.
+    let commander = fixture_scope().with_sighting(Sighting {
+        what: Sighted::Commander(SeatId::new(1)),
+        at: Voxel { x: 1, y: 1, z: 1 },
+        age_ms: 10,
+    });
+    assert_eq!(verdict(&commander, lifted.as_bytes()), (true, false, true));
+    // Every other shape stays refused, seen or not.
+    for refused in [
+        lifted.replace("\"nearest\"", "\"weakest\""),
+        lifted.replace("\"nearest\"", "\"most_threatened\""),
+        lifted.replace(filter, &format!("{filter}, \"mandate\": \"DEFEND\"")),
+        lifted.replace(filter, &format!("{filter}, \"tags\": [\"east\"]")),
+    ] {
+        assert_ne!(refused, lifted, "the shape was changed");
+        let (qualifies, e0015, w0709) = verdict(&seen_beacon(10), refused.as_bytes());
+        assert!(!qualifies && e0015 && !w0709, "{refused}");
+    }
+}
+
+/// The sim and the verifier name the lifted shape with a predicate each
+/// (S2's `atk2`): the verifier's `E0015` stands exactly where the sim's
+/// compile refuses `side: ENEMY_KNOWN`, at an Attack target and elsewhere.
+#[test]
+fn the_verifier_lifts_e0015_exactly_where_the_sim_compiles_the_selector() {
+    let rules = rules();
+    let snapshot = fixture_snapshot();
+    let scope = fixture_scope();
+    let lifted = String::from_utf8(case_bytes(
+        "w0709_a_raid_on_the_nearest_known_beacon_with_no_sighting",
+    ))
+    .expect("UTF-8");
+    let filter = "\"side\": \"ENEMY_KNOWN\"";
+    let elsewhere = lifted.replace(
+        "\"safest\": {}",
+        "\"nearest\": {\"filter\": {\"side\": \"ENEMY_KNOWN\"}}",
+    );
+    assert_ne!(elsewhere, lifted, "the fallback's hold names the selector");
+    for (text, compiles) in [
+        (lifted.clone(), true),
+        (lifted.replace("\"nearest\"", "\"weakest\""), false),
+        (lifted.replace("\"nearest\"", "\"most_threatened\""), false),
+        (
+            lifted.replace(filter, &format!("{filter}, \"mandate\": \"DEFEND\"")),
+            false,
+        ),
+        (elsewhere, false),
+    ] {
+        let playbook: pharmakos_proto::gp::v1::Playbook = json::decode(&text).expect("a playbook");
+        let sim = pharmakos_sim::interpreter::Plan::compile(&playbook, &rules);
+        assert_eq!(sim.is_ok(), compiles, "{text}");
+        let input = Input::new(text.as_bytes(), &snapshot, &scope, &rules).expect("an input");
+        let e0015 = verify(&input, Depth::Quick)
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "E0015");
+        assert_eq!(e0015, !compiles, "{text}");
+    }
 }
 
 #[test]
@@ -1026,6 +1190,10 @@ fn the_worked_example_qualifies_and_is_six_units() {
             ),
             ("I0003", "/declarative/route/2/move/pace"),
             ("I0003", "/declarative/handlers/0/body/0/move/pace"),
+            // The semantics stage (S2's plan, decision 12, task `vfy3`): the
+            // first move avoids known threats, and the plain fixture holds no
+            // sighting of another seat, so it would go as DIRECT does now.
+            ("I0005", "/declarative/route/0/move/pace"),
             // The estimate stage: the one leg whose two ends the view names,
             // from the deploy at (96, 11) to the core `b_01` at (80, 11),
             // sixteen voxels less the four of interface range the deploy
@@ -1345,15 +1513,15 @@ fn the_snapshot_fixture_is_a_snapshot() {
 fn a_missing_rules_block_is_refused_rather_than_defaulted() {
     let rules = rules();
     let mut message = rules.message().clone();
-    message.verifier = None;
+    message.interface_times = None;
     let gapped = RulesTable::from_message(&message).expect("the sim's own view still builds");
     let scope = fixture_scope();
     let snapshot = fixture_snapshot();
     let playbook = case_bytes("expand_east");
     let error = Input::new(&playbook, &snapshot, &scope, &gapped)
-        .expect_err("a verifier with no size budget rejects every playbook ever written");
+        .expect_err("a verifier with no rate card would price every visit at nothing");
     assert!(
-        error.to_string().contains("verifier"),
+        error.to_string().contains("interface_times"),
         "the gap names the block: {error}"
     );
 }
@@ -1398,17 +1566,14 @@ fn the_limits_are_the_rules_table_and_not_constants() {
 // S2's wire (task `con4`)
 // ---------------------------------------------------------------------------
 
-/// Attack's settings arrived with S2's wire and are refused as a whole until
-/// S2's `atk` lane (`E0013`), as the sim refuses them at the seal; Defend's
-/// were too until S2's `dfnd` built them (`E0012`, raised by nothing now).
-/// Their leaves are walked like any others, so the checks that hold
-/// everywhere hold under them too: a name the seat does not know, a voxel off
-/// the map, an area inside out, an enum number this build does not name. A
-/// selector under a refused Attack arm is not judged as a refusal, because the
-/// sim refuses the arm before it reads one; under a Defend arm it is judged
-/// like any other, and `most_threatened` is legal.
+/// Attack's and Defend's settings arrived with S2's wire and were refused as a
+/// whole until S2's `atk` and `dfnd` built them (`E0013`, `E0012`, raised by
+/// nothing now). Their leaves are walked like any others, so the checks that
+/// hold everywhere hold under them too: a name the seat does not know, a
+/// voxel off the map, an area inside out, an enum number this build does not
+/// name, and a selector is judged like any other.
 #[test]
-fn s2s_settings_are_refused_and_their_leaves_are_still_checked() {
+fn s2s_settings_are_built_and_their_leaves_are_checked() {
     let scope = fixture_scope();
     let snapshot = fixture_snapshot();
 
@@ -1441,12 +1606,16 @@ fn s2s_settings_are_refused_and_their_leaves_are_still_checked() {
         "\"waves\":1}}}"
     );
     let codes = codes_of(&one_visit("b_01", attack), &scope, &snapshot);
-    for wanted in ["E0013", "E0402", "E0406", "E0018"] {
+    for wanted in ["E0402", "E0406", "E0018"] {
         assert!(
             codes.iter().any(|code| code == wanted),
             "{wanted}: {codes:?}"
         );
     }
+    assert!(
+        !codes.iter().any(|code| code == "E0013"),
+        "Attack's settings are built (S2's `atk`): {codes:?}"
+    );
     assert_eq!(
         codes.iter().filter(|code| *code == "E0402").count(),
         2,
@@ -1549,12 +1718,16 @@ fn which_missing_blocks_the_sim_refuses_first_is_measured() {
     }
     assert_eq!(
         verifier_refuses,
-        ["verifier", "interface_times"],
+        ["interface_times"],
         "the blocks only the verifier reads, which only it can refuse"
     );
     assert_eq!(
         sim_refuses,
         [
+            // S2's `atk` reads `verifier.reach_memory_ms` at load (an Attack
+            // target's sighting counts for the reach window), so the sim
+            // refuses the block's absence first.
+            "verifier",
             "map",
             "beacon",
             "match",
@@ -1568,4 +1741,90 @@ fn which_missing_blocks_the_sim_refuses_first_is_measured() {
         ],
         "the blocks the sim's loader refuses first, whose verifier branch no caller reaches"
     );
+}
+
+// ---------------------------------------------------------------------------
+// S2's threat model (task `vfy3`)
+// ---------------------------------------------------------------------------
+
+/// `I0005` reads whether the view holds an enemy beacon in live vision, and
+/// nothing more: a beacon seen now silences it, while a beacon seen earlier
+/// or a commander (which carries no weapon) does not, because the sim's known
+/// threats are armed enemies seen when the move starts (S2's plan, decision
+/// 12; `crates/sim/src/defend.rs`).
+#[test]
+fn avoiding_threats_is_noted_only_with_no_enemy_beacon_in_sight() {
+    let text = String::from_utf8(case_bytes("i0005_avoiding_threats_with_none_sighted"))
+        .expect("a case is UTF-8");
+    let snapshot = fixture_snapshot();
+    let noted = |scope: &Scope| {
+        codes_of(&text, scope, &snapshot)
+            .iter()
+            .any(|c| c == "I0005")
+    };
+    assert!(noted(&fixture_scope()), "no sighting: the note");
+    for (what, age_ms, wanted) in [
+        (Sighted::Beacon("e_01".to_owned()), 0, false),
+        (Sighted::Beacon("e_01".to_owned()), 1, true),
+        (Sighted::Beacon("e_01".to_owned()), u32::MAX, true),
+        (Sighted::Commander(SeatId::new(1)), 0, true),
+        (Sighted::Commander(SeatId::new(1)), u32::MAX, true),
+    ] {
+        let scope = fixture_scope().with_sighting(Sighting {
+            what: what.clone(),
+            at: Voxel { x: 1, y: 1, z: 1 },
+            age_ms,
+        });
+        assert_eq!(noted(&scope), wanted, "{what:?} seen {age_ms} ms ago");
+    }
+    let direct = text.replace("AVOID_KNOWN_THREATS", "DIRECT");
+    assert!(
+        !codes_of(&direct, &fixture_scope(), &snapshot)
+            .iter()
+            .any(|c| c == "I0005"),
+        "a DIRECT move is never noted"
+    );
+}
+
+/// A half-written area is `E0101` in each field that holds one (decisions-log
+/// item 146 (4)), a corner per code, and a wall's box keeps its own wording.
+#[test]
+fn every_half_written_area_is_refused_as_missing_a_corner() {
+    let scope = fixture_scope();
+    let snapshot = fixture_snapshot();
+    let corner = "{\"min\":{\"x\":90,\"y\":5,\"z\":50}}";
+    for (mandate, field) in [
+        (
+            format!("\"build\":{{\"terraform\":\"NONE\",\"protected_areas\":[{corner}]}}"),
+            "protected_areas",
+        ),
+        (
+            format!("\"survey\":{{\"scout_count\":1,\"probe_areas\":[{corner},{{}}]}}"),
+            "probe_areas",
+        ),
+        (
+            format!("\"attack\":{{\"avoid_areas\":[{corner}]}}"),
+            "avoid_areas",
+        ),
+    ] {
+        let row = format!("{{\"set_mandate_settings\":{{{mandate}}}}}");
+        let text = one_visit("b_01", &row);
+        let rules = rules();
+        let input = Input::new(text.as_bytes(), &snapshot, &scope, &rules)
+            .unwrap_or_else(|error| panic!("assembling the input: {error}"));
+        let missing: Vec<String> = verify(&input, Depth::Quick)
+            .diagnostics
+            .into_iter()
+            .filter(|found| found.code == "E0101" && found.path.starts_with("/declarative"))
+            .map(|found| found.path)
+            .collect();
+        let at = "/declarative/route/0/interface/rows/0/set_mandate_settings";
+        let arm = mandate.split('"').nth(1).expect("the arm's name");
+        let mut wanted = vec![format!("{at}/{arm}/{field}/0/max")];
+        if field == "probe_areas" {
+            wanted.push(format!("{at}/{arm}/{field}/1/min"));
+            wanted.push(format!("{at}/{arm}/{field}/1/max"));
+        }
+        assert_eq!(missing, wanted, "{field}");
+    }
 }

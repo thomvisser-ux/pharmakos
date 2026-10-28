@@ -11,18 +11,19 @@
     "route": [
       {
         "label": "s1",
-        "interface": {
-          "beacon": {
-            "beacon_id": "b_01"
-          },
-          "rows": [
-            {
-              "set_mandate_settings": {
-                "roe": "FREE_FIRE",
-                "attack": {}
-              }
+        "place_beacon": {
+          "at": {
+            "voxel": {
+              "x": 96,
+              "y": 11,
+              "z": 62
             }
-          ]
+          },
+          "initial": {
+            "mandate": {
+              "defend": {}
+            }
+          }
         }
       }
     ]

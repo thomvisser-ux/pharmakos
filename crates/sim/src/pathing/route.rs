@@ -41,9 +41,95 @@
 
 use crate::pathing::clusters::Clusters;
 use crate::pathing::estimate::{Fog, Speed, fog_price};
-use crate::pathing::search::{Bound, Item, Scratch, astar, dijkstra_bounded};
+use crate::pathing::search::{Bound, Item, Scratch, astar_costed, dijkstra_bounded};
 use crate::pathing::surface::{Node, Surface};
 use crate::pathing::{MAX_ROUTE_NODES, SMOOTH_LOOKAHEAD};
+
+/// One stretch of ground a route pays a surcharge to cross (S2's `atk`): a
+/// known threat's weapon range, or an Attack beacon's avoid area.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Zone {
+    /// The columns within `limit` of `centre` on the map's plane: a threat's
+    /// reach (decision 12's `AVOID_KNOWN_THREATS`).
+    Disc {
+        /// The threat's column, `z` zero.
+        centre: [crate::math::fixed::Fx; 3],
+        /// Its weapon's range, squared.
+        limit: crate::math::fixed::Sq,
+    },
+    /// The columns of a box: an avoid area.
+    Box(crate::tables::ColumnBox),
+}
+
+impl Zone {
+    /// Whether the column `node` stands on lies inside the zone.
+    #[must_use]
+    pub fn holds(self, surface: &Surface, node: Node) -> bool {
+        let (x, y) = surface.coord_of(node);
+        match self {
+            Zone::Disc { centre, limit } => {
+                let (Ok(x), Ok(y)) = (i16::try_from(x), i16::try_from(y)) else {
+                    return false;
+                };
+                let at = [
+                    crate::math::fixed::Fx::from_voxels(x),
+                    crate::math::fixed::Fx::from_voxels(y),
+                    crate::math::fixed::Fx::from_raw(0),
+                ];
+                crate::math::fixed::Sq::between(at, centre) <= limit
+            }
+            Zone::Box(area) => area.contains(x, y),
+        }
+    }
+}
+
+/// The route surcharge one walker pays (S2's `atk`; register S2-03): every
+/// step onto a column inside one of `zones` costs `multiplier` times its
+/// ordinary cost, so the route goes round them when a way round is cheaper.
+/// [`Surcharge::NONE`] charges nothing, and a route under it is exactly the
+/// route [`route`] has always walked.
+#[derive(Clone, Copy, Debug)]
+pub struct Surcharge<'a> {
+    zones: &'a [Zone],
+    multiplier: i32,
+}
+
+impl<'a> Surcharge<'a> {
+    /// No surcharge.
+    pub const NONE: Surcharge<'static> = Surcharge {
+        zones: &[],
+        multiplier: 1,
+    };
+
+    /// A surcharge of `multiplier` inside `zones`.
+    #[must_use]
+    pub const fn new(zones: &'a [Zone], multiplier: i32) -> Surcharge<'a> {
+        Surcharge { zones, multiplier }
+    }
+
+    /// Whether it charges nothing.
+    #[must_use]
+    pub const fn is_none(self) -> bool {
+        self.zones.is_empty() || self.multiplier <= 1
+    }
+
+    /// Whether the column `node` stands on is surcharged.
+    #[must_use]
+    pub fn holds(self, surface: &Surface, node: Node) -> bool {
+        !self.is_none() && self.zones.iter().any(|zone| zone.holds(surface, node))
+    }
+
+    /// What a step onto `to` costs that would cost `cost` ordinarily.
+    #[must_use]
+    pub fn step(self, surface: &Surface, to: Node, cost: i32) -> i32 {
+        if self.holds(surface, to) {
+            // E7: rule: a surcharged step past `i32::MAX` is no step a route takes; the search compares it as the dearest
+            cost.saturating_mul(self.multiplier)
+        } else {
+            cost
+        }
+    }
+}
 
 /// What an abstract search found.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -81,6 +167,29 @@ pub fn abstract_search(
     goal: Node,
     fog: Fog<'_>,
     speed: Speed,
+) -> Option<AbstractResult> {
+    abstract_search_with(
+        surface,
+        clusters,
+        scratch,
+        (start, goal),
+        fog,
+        speed,
+        Surcharge::NONE,
+    )
+}
+
+/// [`abstract_search`] under a route surcharge (S2's `atk`): an abstract
+/// edge either end of which is surcharged costs the multiplier times its
+/// price.
+fn abstract_search_with(
+    surface: &Surface,
+    clusters: &Clusters,
+    scratch: &mut Scratch,
+    (start, goal): (Node, Node),
+    fog: Fog<'_>,
+    speed: Speed,
+    surcharge: Surcharge<'_>,
 ) -> Option<AbstractResult> {
     scratch.abstract_path.clear();
     if !surface.walkable(start) || !surface.walkable(goal) {
@@ -124,6 +233,7 @@ pub fn abstract_search(
         goal,
         fog,
         speed,
+        surcharge,
     };
 
     abstract_begin(scratch);
@@ -167,6 +277,7 @@ struct Query<'a> {
     goal: Node,
     fog: Fog<'a>,
     speed: Speed,
+    surcharge: Surcharge<'a>,
 }
 
 impl Query<'_> {
@@ -300,7 +411,15 @@ fn relax_edge(
     edge: Edge,
 ) {
     let to_cell = query.cell_of(clusters, edge.target);
-    let priced = price(edge.cost, edge.from_cell, to_cell, query.fog, query.speed);
+    let fogged = price(edge.cost, edge.from_cell, to_cell, query.fog, query.speed);
+    let priced = if query.surcharge.holds(surface, edge.from_cell)
+        || query.surcharge.holds(surface, to_cell)
+    {
+        // E7: rule: as `Surcharge::step`, the dearest edge at worst
+        fogged.saturating_mul(query.surcharge.multiplier)
+    } else {
+        fogged
+    };
     abstract_relax(
         surface,
         scratch,
@@ -400,6 +519,37 @@ pub fn route(
     goal: Node,
     out: &mut Vec<Node>,
 ) -> Result<RouteOutcome, NoPath> {
+    route_with(
+        surface,
+        clusters,
+        scratch,
+        (start, goal),
+        Surcharge::NONE,
+        out,
+    )
+}
+
+/// [`route`] under a route surcharge (S2's `atk`; register S2-03): the
+/// abstract search, each leg's refinement and the smoother all price a step
+/// onto a surcharged column at the multiplier, so the walk goes round the
+/// zones where a way round is cheaper. Under [`Surcharge::NONE`] it is
+/// [`route`].
+///
+/// # Errors
+///
+/// As [`route`].
+#[allow(
+    clippy::too_many_lines,
+    reason = "route's body under a surcharge: the abstract search, the leg refinement and the smoother in the order they run"
+)]
+pub fn route_with(
+    surface: &Surface,
+    clusters: &Clusters,
+    scratch: &mut Scratch,
+    (start, goal): (Node, Node),
+    surcharge: Surcharge<'_>,
+    out: &mut Vec<Node>,
+) -> Result<RouteOutcome, NoPath> {
     out.clear();
     // A route is walked over terrain the sim can see in full, so nothing on it
     // is priced through fog and the multiplier is never reached. Fog belongs to
@@ -409,8 +559,16 @@ pub fn route(
         fog_numerator: 1,
         fog_denominator: 1,
     };
-    let result = abstract_search(surface, clusters, scratch, start, goal, Fog::Clear, speed)
-        .ok_or(NoPath::Unreachable)?;
+    let result = abstract_search_with(
+        surface,
+        clusters,
+        scratch,
+        (start, goal),
+        Fog::Clear,
+        speed,
+        surcharge,
+    )
+    .ok_or(NoPath::Unreachable)?;
     if result.legs == 0 {
         out.push(start);
         return Ok(RouteOutcome {
@@ -446,12 +604,12 @@ pub fn route(
         let ca = clusters.cluster_of(a);
         let cb = clusters.cluster_of(b);
         if ca == cb {
-            if astar(
+            if astar_costed(
                 surface,
                 Bound::Cluster(clusters.of_node(), ca),
                 scratch,
-                a,
-                b,
+                (a, b),
+                surcharge,
                 &mut leg,
             )
             .is_none()
@@ -491,7 +649,7 @@ pub fn route(
 
     let mut line = core::mem::take(&mut scratch.line);
     let mut prefix = core::mem::take(&mut scratch.prefix);
-    smooth_into(surface, &raw, out, &mut line, &mut prefix);
+    smooth_costed(surface, &raw, out, &mut line, &mut prefix, surcharge);
     scratch.raw = raw;
     scratch.line = line;
     scratch.prefix = prefix;
@@ -662,7 +820,13 @@ fn abstract_relax(
 /// The greedy octile walk from `from` to `to`: diagonal while both axes need
 /// covering, then straight. Validated step by step, so it can only ever return
 /// a legal walk.
-fn straight_walk(surface: &Surface, from: Node, to: Node, out: &mut Vec<Node>) -> Option<i32> {
+fn straight_walk(
+    surface: &Surface,
+    from: Node,
+    to: Node,
+    out: &mut Vec<Node>,
+    surcharge: Surcharge<'_>,
+) -> Option<i32> {
     out.clear();
     out.push(from);
     let (tx, ty) = surface.coord_of(to);
@@ -682,7 +846,8 @@ fn straight_walk(surface: &Surface, from: Node, to: Node, out: &mut Vec<Node>) -
             x.saturating_add(tx.saturating_sub(x).signum()),
             y.saturating_add(ty.saturating_sub(y).signum()),
         )?;
-        total = total.checked_add(surface.step_cost_between(current, next)?)?;
+        let step = surcharge.step(surface, next, surface.step_cost_between(current, next)?);
+        total = total.checked_add(step)?;
         out.push(next);
         current = next;
     }
@@ -702,6 +867,20 @@ pub fn smooth_into(
     line: &mut Vec<Node>,
     prefix: &mut Vec<i32>,
 ) {
+    smooth_costed(surface, path, out, line, prefix, Surcharge::NONE);
+}
+
+/// [`smooth_into`] under a route surcharge: a shortcut is priced, and the
+/// sub-path it replaces, at the surcharge, so smoothing never cuts back into
+/// a zone the refinement went round.
+fn smooth_costed(
+    surface: &Surface,
+    path: &[Node],
+    out: &mut Vec<Node>,
+    line: &mut Vec<Node>,
+    prefix: &mut Vec<i32>,
+    surcharge: Surcharge<'_>,
+) {
     out.clear();
     let Some(first) = path.first().copied() else {
         return;
@@ -718,7 +897,7 @@ pub fn smooth_into(
             out.clear();
             return;
         };
-        total = total.saturating_add(step);
+        total = total.saturating_add(surcharge.step(surface, to, step));
         prefix.push(total);
     }
     out.push(first);
@@ -741,7 +920,7 @@ pub fn smooth_into(
                 .unwrap_or(0)
                 // E7: cannot miss: as above
                 .saturating_sub(prefix.get(index).copied().unwrap_or(0));
-            if let Some(cost) = straight_walk(surface, from, to, line)
+            if let Some(cost) = straight_walk(surface, from, to, line, surcharge)
                 && cost <= budget
             {
                 for node in line.iter().skip(1) {

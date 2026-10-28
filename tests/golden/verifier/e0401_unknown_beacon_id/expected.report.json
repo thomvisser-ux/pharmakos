@@ -23,10 +23,10 @@
       "beginner": "The seat does not know a beacon by that name."
     }
   ],
-  "report_hash": "eYCSaxsSrC0=",
-  "rules_hash": "gCjUE4Tm3i8=",
+  "report_hash": "rrKW4zyyMYw=",
+  "rules_hash": "VQGfykahqEM=",
   "plan_fingerprint": "uzFJWnIzy6s=",
-  "verifier_version": "0.1.0-s2.2",
+  "verifier_version": "0.1.0-s2.5",
   "size_units": 1,
   "size_budget": 128
 }

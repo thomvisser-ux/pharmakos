@@ -3,7 +3,7 @@
 //
 // expand_and_mine.jsonc: the Expand & Mine template (decisions-log item 81).
 //
-// It teaches the route and the economy: put a Mine beacon down covering an ore
+// It teaches the route and the economy: put a Mine beacon down covering a scrap
 // seam your spheres do not reach yet, and walk home while its drones dig. Spec
 // section 10's worked example, expand_east, is one filled-in copy of it.
 //
@@ -23,7 +23,7 @@
   "meta": {
     "title": "Expand & Mine",
     "author_kind": "BUILTIN",
-    "note": "Place a Mine beacon covering an ore seam you do not cover yet, and walk home while it digs."
+    "note": "Place a Mine beacon covering a scrap seam you do not cover yet, and walk home while it digs."
   },
   "kind": "PLAYBOOK",
   "declarative": {

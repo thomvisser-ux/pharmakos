@@ -1,0 +1,64 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// S2's `atk` (S2's plan, task `atk`, the scenario `fire` staged as
+// crates/sim/tests/combat.rs's `a_mortar_breaks_a_wall`): an Attack beacon
+// with `breach_allowed` whose way a wall seals asks its seat's mortar to
+// shell the wall's first column, through the playbook door, on the golden
+// seed, in one eight-minute segment.
+//
+//   seat 0  seals scenarios/s2/mortar-breaks-wall.playbook.jsonc;
+//   seat 1  seals nothing, so it files the safe playbook.
+//
+// **Why the wall is seat 0's own, turned neutral.** A breach takes another
+// seat's wall or a neutral one, never the seat's own (spec section 9), and a
+// beacon is placed only inside one of its seat's own spheres, so on the golden
+// seed, whose cores stand 335 voxels apart, no seat's mortar comes within its
+// 40 voxels of another seat's wall inside one segment. So seat 0 builds the
+// wall itself from a Build beacon, the ring standing past its core's sphere,
+// and recycles the beacon: the walls then lie outside every live sphere of
+// seat 0 and read as nobody's (decision 42; E14). The Attack beacon is
+// the core itself, switched to Attack, whose sphere stops short of the ring,
+// and the commander stands in sight of the ring. When the force launches,
+// the oracle says the walled ground is cut off: the breach search finds the
+// ring's first column, the core's mortar (FREE_FIRE) shells it, the first
+// shell cracking its voxels and the second breaking them, and the gap the
+// craters leave opens the way before the raider, carrying the charge the
+// beacon bought for it, reaches the wall; the force walks in and the attack
+// on the voxel ends there. The charge's own cut is breach-and-raze's.
+{
+  "format": "pharmakos.scenario.v1",
+  "name": "mortar-breaks-wall",
+  "summary": "Seat 0's Attack beacon breaches a neutral wall ring: its mortar shells the first column, its charge follows.",
+
+  "map": {
+    "seed": "0x00000000ca5caded",
+    "generator": "skeleton"
+  },
+
+  "rules": "rules/rules.v1.json",
+  "round_limit": 1,
+
+  "seats": [
+    { "seat": 0, "kind": "playbook", "playbook": "scenarios/s2/mortar-breaks-wall.playbook.jsonc" },
+    { "seat": 1, "kind": "safe" }
+  ],
+
+  "segments": [
+    { "index": 0, "length_ms": 480000, "note": "The walls, the recycle, the launch and the breach." }
+  ],
+
+  "assertions": [
+    { "assert": "event_fired", "event": "beacon_recycled", "seat": 0, "by_tick": 3900,
+      "note": "The mason is recycled once its walls stand." },
+    { "assert": "event_fired", "event": "attack_launched", "seat": 0, "by_tick": 5650,
+      "note": "The force launches at the walled ground." },
+    { "assert": "event_fired", "event": "shell_landed", "seat": 0, "by_tick": 5700,
+      "note": "The breach asks the mortar to shell the wall: two shells land on the wall's first column, the second breaking what the first cracked." },
+    { "assert": "event_fired", "event": "attack_ended", "seat": 0, "by_tick": 6100,
+      "note": "Through the shells' gap, the raider reaches the walled ground." },
+    { "assert": "hash_chain_equals",
+      "golden": "tests/golden/scenarios/mortar-breaks-wall/expected.hashes.txt",
+      "note": "Byte-identical on Windows, Linux and macOS; pins the breach, the shells and their craters. Re-blessed with `cargo xtask golden --bless`, and never to turn a red build green." }
+  ]
+}

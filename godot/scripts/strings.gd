@@ -211,7 +211,7 @@ const TEXT := {
 	"attack_voxel": "Step {step}: attacks the ground at ({x}, {y}, {z})",
 	"attack_beacon": "Step {step}: attacks {id}, marked on the map while it is in sight",
 	"attack_selector": "Step {step}: attacks the enemy beacon its selector picks when the attack runs",
-	"attack_enemy_commander": "Step {step}: attacks the enemy commander, from its last sighting",
+	"attack_enemy_commander": "Step {step}: hunts an enemy commander your side has seen recently, chosen when the force launches; it waits until there is one",
 	"attack_unknown": "Step {step}: an attack target this panel cannot read; the checks say what is wrong",
 	"chip_next": "; next {feature}, {ms} ms",
 	"chip_how_description_covering": " - nearest by travel from the commander, read when the step starts",

@@ -19,7 +19,7 @@
 //! | "An earlier step places a beacon; this may read differently" | `W0705` | **S1**, here |
 //! | A fixed site beside a vent the seat already covers, with a Fix that swaps in the description | `W0706` | **S1**, here |
 //! | A handler that can never fire because an earlier one always wins | `W0702` | **S3**, with the rule list at full depth |
-//! | A reference to an enemy beacon resting on a sighting older than the reach window, an Attack target aside (`E0418` refuses that) | `W0703` | **S2**, here (task `vfy2`) |
+//! | A reference to an enemy beacon resting on a sighting older than the reach window, an Attack target aside (`E0418` refuses a stale one, `W0708` warns of a seatless commander) | `W0703` | **S2**, here (task `vfy2`) |
 //! | Selector previews — "if this resolved now, it would pick…" | `I0002` | **S3** |
 //!
 //! A lint is **advice**, never a refusal: everything this stage can raise is a

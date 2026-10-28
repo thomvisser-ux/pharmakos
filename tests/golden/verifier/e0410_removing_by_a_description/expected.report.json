@@ -9,10 +9,10 @@
       "beginner": "To take a building off the list, name the vent it stands on."
     }
   ],
-  "report_hash": "eiLWyhcTcqQ=",
-  "rules_hash": "gCjUE4Tm3i8=",
+  "report_hash": "1trx6IL7aDY=",
+  "rules_hash": "VQGfykahqEM=",
   "plan_fingerprint": "TG3cKIFK+7c=",
-  "verifier_version": "0.1.0-s2.2",
+  "verifier_version": "0.1.0-s2.5",
   "size_units": 1,
   "size_budget": 128
 }

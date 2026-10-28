@@ -89,6 +89,18 @@ fn rules() -> RulesTable {
         .expect("the committed rules table loads")
 }
 
+/// `rules` with each core's surplus raised to 100 kW and the map's power
+/// ceiling to 1 000 kW, so that the raiders `World::field_movers_directly`
+/// homes to the cores draw no seat dark: a dark core parks its units, and
+/// these tests want a table that moves.
+fn powered(rules: &RulesTable) -> RulesTable {
+    let mut message = rules.message().clone();
+    let power = message.power.as_mut().expect("a power block");
+    power.core_surplus_kw = 100;
+    power.map_ceiling_kw = 1_000;
+    RulesTable::from_message(&message).expect("the powered table is a table")
+}
+
 /// A map, its surface graph, its decomposition and one scratch — everything a
 /// query needs, without a [`World`] around it.
 struct Fixture {
@@ -1121,12 +1133,21 @@ fn a_walker_arrives_on_the_tick_the_estimate_promised() {
     // computations of "when" are the same number.
     let mut world = harness_world(0);
     let mut enc = pharmakos_sim::encoding::Enc::with_capacity(64 * 1024);
-    // One tick to serve the first repaths, so every unit has a route.
     let _ = world.step(&mut enc).unwrap();
     let _ = world.step(&mut enc).unwrap();
-    let unit = (0..world.router().len())
-        .find(|unit| world.router().state(*unit) == WalkState::Walking)
-        .expect("a unit is walking by the second tick");
+    // Seat 0's commander (unit 0), which no program moves, sent across the
+    // map between ticks: the next tick serves its route, and it walks from
+    // the tick after, as a harness walker's fresh destination used to.
+    let unit = 0_u32;
+    // The map's middle, far from every core.
+    let far = world.standing_point([192, 192, 0]);
+    world.send_unit_directly(unit, far);
+    let _ = world.step(&mut enc).unwrap();
+    assert_eq!(
+        world.router().state(unit),
+        WalkState::Walking,
+        "the commander walks once its route is served"
+    );
     let route = world.router().route(unit).to_vec();
     let kind = UnitKind::from_id(world.units().kinds()[usize::try_from(unit).expect("fits")])
         .expect("a unit kind");
@@ -1161,16 +1182,15 @@ fn a_sealed_in_walker_parks_and_is_re_armed_when_the_graph_changes() {
     let _ = world.step(&mut enc).unwrap();
     let _ = world.step(&mut enc).unwrap();
 
-    // Wall the first unit in: a solid voxel five above each of its eight
-    // neighbours' surfaces. The columns stay walkable, and every step out of
-    // the middle one is a five-voxel climb, which the one-voxel rule refuses.
-    // Unit **1**, not unit 0: unit 0 is seat 0's commander, and since T11 a
-    // commander's destination is its playbook's to set — the harness draw does
-    // not reach one, so a commander with no playbook stands still and is
-    // `Idle` rather than `Sealed`. Unit 1 is a starting build drone, which the
-    // harness still walks.
-    let unit = 1_u32;
-    let position = world.units().positions()[1];
+    // Wall seat 0's commander in (unit 0): a solid voxel five above each of
+    // its eight neighbours' surfaces. The columns stay walkable, and every step
+    // out of the middle one is a five-voxel climb, which the one-voxel rule
+    // refuses. The commander, because no program sends it anywhere: with no
+    // playbook it stands still until it is sent across the map below, while a
+    // drone's program would walk it home and park it, and nothing has walked a
+    // unit at random since S2-16 removed the harness's wander.
+    let unit = 0_u32;
+    let position = world.units().positions()[0];
     let (x, y) = (position[0].floor_voxels(), position[1].floor_voxels());
     let mut wall: Vec<[i32; 3]> = Vec::new();
     for dy in -1..=1_i32 {
@@ -1200,6 +1220,9 @@ fn a_sealed_in_walker_parks_and_is_re_armed_when_the_graph_changes() {
                 .is_ok()
         );
     }
+    // The map's middle, far from every core.
+    let far = world.standing_point([192, 192, 0]);
+    world.send_unit_directly(unit, far);
     let mut tick = 0;
     while tick < 12 {
         let _ = world.step(&mut enc).unwrap();
@@ -1222,7 +1245,7 @@ fn a_sealed_in_walker_parks_and_is_re_armed_when_the_graph_changes() {
         (reported[0].1, reported[0].2),
         (
             AssetId::of_unit(UnitId::new(unit)).expect("a unit id"),
-            Some(world.units().positions()[1])
+            Some(world.units().positions()[0])
         ),
         "the line names the unit that parked and where it stopped — which is what the gateway's \
          fog filter decides on"
@@ -1687,14 +1710,26 @@ fn run_segment(units: u32, cap: u32, ticks: u32) -> (bool, Vec<i64>, u32, u64, u
     )
 }
 
-/// The determinism harness's world, at a chosen number of extra walkers.
-fn harness_world(units_per_seat: u32) -> World {
-    World::new(&WorldConfig {
+/// The determinism harness's world, with `movers` raiders a seat walking home
+/// from across the map on a table that powers them
+/// (`World::field_movers_directly`, which replaced the harness walkers when
+/// S2-16 removed them).
+fn harness_world(movers: u32) -> World {
+    let mut world = World::new(&WorldConfig {
         match_seed: SEED,
         seats: SEATS,
-        units_per_seat,
-        rules: rules(),
+        rules: if movers > 0 {
+            powered(&rules())
+        } else {
+            rules()
+        },
         match_settings: MatchSettings::default(),
     })
-    .expect("the committed rules table describes a world")
+    .expect("the committed rules table describes a world");
+    if movers > 0 {
+        world
+            .field_movers_directly(movers)
+            .expect("the movers fit every seat's share");
+    }
+    world
 }

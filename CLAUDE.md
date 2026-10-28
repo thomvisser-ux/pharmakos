@@ -121,8 +121,10 @@ If `cargo xtask ci` is green locally and a `cargo xtask ci` leg is red in CI, th
 `xtask` bug worth fixing, not a reason to run a different command. It is complete for harness parts
 1 and 2 (`xtask/src/main.rs`, sixteen steps, covering AGENTS.md §9 items 1–10) and green; a failure
 in it is a bug to fix rather than a reason to reach for another command. `cargo xtask ci-scope`,
-`cargo xtask perf-alarms` and `cargo xtask package` sit outside the step table; `perf-alarms` never
-fails, and `package` runs alone (AGENTS.md §9). `cargo xtask placeholders` lists the register and never
+`cargo xtask perf-alarms`, `cargo xtask g3-budget` and `cargo xtask package` sit outside the step
+table; `perf-alarms [mesher|p1|g3|allocations]` never fails on a measurement (an unknown alarm name is a usage error), `g3-budget` (G3′-real's CI alarm, in the
+`g3 budget (ubuntu-24.04)` job, not required) **can** fail, at the gate's numbers doubled or on a
+missing verdict, and `scripts/merge-train.sh` stops on it, and `package` runs alone (AGENTS.md §9). `cargo xtask placeholders` lists the register and never
 fails; its `--check` is one of the sixteen steps, `placeholders`, run after `reuse`, and fails on any
 marker off the register's grammar (decisions-log item 137).
 

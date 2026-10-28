@@ -85,7 +85,7 @@ editor UI. Nothing else executes. Directories are under `crates/`; package names
 | `crates/gamectl` — `pharmakos-gamectl` (bin `gamectl`) | CLI: `verify`, `schema`, `docs`, `scenario run`, `seat doctor`, `host`. No `connect` in v1. `scenario run` hosts a headless match and `host` serves one to the Godot client over its own stdio pipe (the config line in on stdin, the announce line with the port and the tokens out on stdout, exit when stdin ends), which is why the gateway is on the list. From T18, `host` links the built-in operator and adapts its client to the gateway's in-process seats (decisions-log item 111); from T18b, `scenario run` seats a `builtin` seat with Easy through `serve::InProcessSeats` (decisions-log item 113). | `pharmakos-proto`, `pharmakos-plan-core`, `pharmakos-verifier`, `pharmakos-gateway`, `pharmakos-operator`, and `pharmakos-sim` *only* as `default-features = false`, because the gateway's API is written in the sim's types. `gamectl` drives a match only through the gateway's `Host` and `Surface`, never through the sim's `Runner` (decisions-log item 109) |
 | `crates/mesher` — `pharmakos-mesher` | The **walled** greedy mesher: integer chunk data and `.vox` models in, vertex and index buffers out, under the per-frame upload budget the client applies. Links without gdext, so the headless CPU proxy and the CI geometry check reuse it. | `dot_vox` later; nothing from the sim. Never depended on by `sim`, `plan-core`, `verifier`, `operator`, `gateway` or `gamectl` — `cargo xtask wall-guard` fails the build over it (`WALL_GUARDED_PACKAGES`, §4.9) |
 | `crates/client-gdext` — `pharmakos-client-gdext` | **Thin** gdext bridge (`cdylib` + `rlib`): marshals gateway calls and mesh buffers between Godot 4.7 and Rust. It marshals; it does not decide, and rule 4 names the pieces that schedule or draw without deciding. | `godot` (gdext), `pharmakos-proto`, `pharmakos-mesher` |
-| `crates/bench` — `pharmakos-bench` | The **walled** timing harness for P1 (decisions-log item 131): QUICK's p50 and p99 over the committed verifier cases and `budget_128`, and the wall-clock cost of a decision tick per size unit from a hosted match whose playbooks sit at the size budget, published by `cargo xtask perf-alarms`. Never shipped. It restates the verifier goldens' fixture, and `tests/harness.rs` holds the restatement to the committed reports. | `pharmakos-proto`, `pharmakos-verifier`, `pharmakos-gateway`, and `pharmakos-sim` *only* as `default-features = false`. It takes no `CLIENT_WALL` line, because it exists to drive the sim from outside; no deterministic crate may depend on it (`WALL_GUARDED_PACKAGES`, §4.9) |
+| `crates/bench` — `pharmakos-bench` | The **walled** timing harness for P1 (decisions-log item 131): QUICK's p50 and p99 over the committed verifier cases and `budget_128`, and the wall-clock cost of a decision tick per size unit from a hosted match whose playbooks sit at the size budget; and, from S2's `g3h` and `g3r` (decisions-log items 149 and 151), G3′-real's 8-minute segment at the gate's load with its phase, repath, drift, combat, footing and support-search figures, and the power sweep run by hand with the certifying runs. Published by `cargo xtask perf-alarms`, and the segment's tick read by `cargo xtask g3-budget`. Never shipped. It restates the verifier goldens' fixture, and `tests/harness.rs` holds the restatement to the committed reports. | `pharmakos-proto`, `pharmakos-verifier`, `pharmakos-gateway`, and `pharmakos-sim` *only* as `default-features = false`. It takes no `CLIENT_WALL` line, because it exists to drive the sim from outside; no deterministic crate may depend on it (`WALL_GUARDED_PACKAGES`, §4.9) |
 | `xtask` | `cargo xtask ci` and friends. Dev-only, never shipped, std-only, no dependencies. | nothing |
 
 > **Internal boundaries — decided (decisions-log items 56 and 70).** There is **no `math` crate**:
@@ -736,7 +736,9 @@ merge train's local check.
 > 116 (6)(g)). A test that needs a tool (`crates/proto/tests/generated.rs` needs buf and
 > `protoc-gen-prost`) still skips, and lets its step report `ok`, unless
 > `PHARMAKOS_REQUIRE_TOOLS=1` is set, as it is in CI and in the merge train's local check. Item 11's budgets arrive with the gates that
-> set them, S1's P1 and S2's G3′-real; until then performance is published, never gated. The owner
+> set them, S1's P1 and S2's G3′-real. G3′-real's gate is certified by recorded runs on the
+> owner's machine, and its CI alarm, `cargo xtask g3-budget`, sits outside the step table (item 11);
+> every other figure is published, never gated. The owner
 > signs off the final step list, and the numeric budgets are Tuning values that the gates in spec
 > section 16 set.
 
@@ -798,17 +800,25 @@ merge train's local check.
     `gamectl host`) runs only in CI's `client extension` jobs, outside `cargo xtask ci`, so a change to
     `godot/scripts/` can be green locally and red there; the lane that makes one runs it by hand with the
     job's command (decisions-log item 143 (2)). The adversarial scenarios are nightly (below) and gated off until S2.
-11. **Perf budgets** *(added per gate, not in `cargo xtask ci` today)* — the G3′ CI budget check
-    (tick p99 within budget) lands with S2's exit measurement, and the verifier's QUICK ≤5 ms p99
-    and FULL ≤50 ms p99 at the playbook size budget (P1) land with the verifier's gate. Until then,
-    `cargo xtask perf-alarms`, which is not a step, publishes the mesher p99, the allocations per
-    tick (the count `crates/sim/tests/allocations.rs` asserts) and P1's figures from
-    `pharmakos-bench` (QUICK's p50 and p99 over the committed cases and at `budget_128`, and ns per
-    size unit per decision tick) as `::notice::` annotations per runner, with no threshold and never
-    compared across operating systems, in the `perf alarms (…)` jobs, which are not required and
-    turn a failed measurement into a `::warning::` rather than a red check (decisions-log items 116
-    (6)(b) and 131). `pharmakos-bench` is the walled harness that drives the sim from outside
-    (§4.5); the tick-minus-pathing mean it could now produce stays S2's G3′-real gate's.
+11. **Perf budgets** *(added per gate, not in `cargo xtask ci`)* — G3′-real (spec §16's G3′ row:
+    a tick p99 of at most 25 ms and a mean of at most 12.5 ms) is certified by recorded runs on the
+    owner's machine under Windows and WSL2 Linux, the slower deciding (S2's plan, section 5; `g3r`
+    #147, re-certified on `tune2`'s rules by `demo2`, decisions-log item 151). Its CI alarm is
+    `cargo xtask g3-budget` (`xtask/src/g3.rs`, E18), which is not a step: it plays the segment once
+    on a hosted runner and fails only at the gate's numbers doubled (a p99 over 50 ms or a mean over
+    25 ms) or on any missing verdict, in the `g3 budget (ubuntu-24.04)` job, which is not required
+    but **can go red**, and `scripts/merge-train.sh` stops on it. The verifier's QUICK ≤5 ms p99 and
+    FULL ≤50 ms p99 at the playbook size budget (P1) land with the verifier's gate. Beside them,
+    `cargo xtask perf-alarms [mesher|p1|g3|allocations]`, which is not a step, publishes the mesher
+    p99, P1's figures from `pharmakos-bench` (QUICK's p50 and p99 over the committed cases and at
+    `budget_128`, and ns per size unit per decision tick), G3′-real's figures, and the allocations
+    per tick (the count `crates/sim/tests/allocations.rs` asserts) as `::notice::` annotations per
+    runner, with no threshold and never compared across operating systems, in the `perf alarms (…)`
+    jobs: one step per alarm, because GitHub annotates only a step's first ten notices (decisions-log
+    item 149 (4)), each continuing on error, so a failed measurement is a `::warning::` and the job,
+    which is not required, never goes red (decisions-log items 116 (6)(b) and 131). With no name it
+    runs all four. `pharmakos-bench` is the walled harness that drives the sim from outside
+    (§4.5).
 
 **The docs-only fast path.** A pull request whose merge commit changes only `docs/**`, `AGENTS.md`,
 `CLAUDE.md`, `.claude/**` and top-level `*.md` runs the DCO walk and the `reuse` step in place of the
@@ -818,8 +828,8 @@ job's scope step decides (each shard, not the leg's `cargo xtask ci (<os>)` job,
 only when every one of its shards' reports says so): it answers `full` in bash,
 before it builds `xtask`, for a merge commit that changes `xtask/`, `.github/` or `.cargo/`, so the
 decider never judges its own change; otherwise `cargo xtask ci-scope` decides, and answers `full` on
-any event but `pull_request` and on any error. Nothing can force it. The `perf alarms (…)` jobs,
-which are not required, follow the same pattern. The full suite runs on `main`'s push
+any event but `pull_request` and on any error. Nothing can force it. The `perf alarms (…)` jobs and
+the `g3 budget (ubuntu-24.04)` job, which are not required, follow the same pattern. The full suite runs on `main`'s push
 (decisions-log items 115 (4) and 116).
 
 **The package.** `cargo xtask package` is not a step either: `cargo xtask ci` never runs it, and it

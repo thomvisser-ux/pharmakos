@@ -2,17 +2,10 @@
   "depth": "FULL",
   "diagnostics": [
     {
-      "code": "E0013",
-      "severity": "ERROR",
-      "path": "/declarative/route/0/place_beacon/initial/mandate/attack",
-      "message": "Attack mandate settings have no effect until S2's Attack mandate lands; they are refused rather than ignored.",
-      "beginner": "An Attack beacon cannot be given settings in this build yet."
-    },
-    {
       "code": "E0418",
       "severity": "ERROR",
       "path": "/declarative/route/0/place_beacon/initial/mandate/attack/target/beacon/beacon_id",
-      "message": "`e_01` was last seen 240000 ms ago; an Attack target must have been seen within the reach window, 180000 ms, when the playbook is sealed.",
+      "message": "`e_01` was last seen 240000 ms ago; this Attack target must have been seen within the reach window, 180000 ms, when the playbook is sealed.",
       "beginner": "An Attack beacon attacks what the seat has seen recently. Look again with a scout, or choose a target the seat has seen.",
       "map_refs": [
         {
@@ -23,10 +16,10 @@
       ]
     }
   ],
-  "report_hash": "2OoIw9A/9gI=",
-  "rules_hash": "gCjUE4Tm3i8=",
+  "report_hash": "FQCkoZjIDTs=",
+  "rules_hash": "VQGfykahqEM=",
   "plan_fingerprint": "TLWiCds94bE=",
-  "verifier_version": "0.1.0-s2.2",
+  "verifier_version": "0.1.0-s2.5",
   "size_units": 1,
   "size_budget": 128
 }

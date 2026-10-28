@@ -1357,7 +1357,11 @@
       "type": "object",
       "description": "gp.v1.EnemyCommander",
       "additionalProperties": false,
-      "properties": {}
+      "properties": {
+        "seat": {
+          "type": "integer"
+        }
+      }
     },
     "Fallback": {
       "type": "object",

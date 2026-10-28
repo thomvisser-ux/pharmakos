@@ -5,9 +5,9 @@
 #
 # Every job here but the last is gated on the repository variable
 # NIGHTLY_SCENARIOS_ENABLED, which only the owner sets: once S2's `arms` lane has
-# merged and its forced run is attached (S2's plan, decision 30). Until then the
-# three arms are placeholders (scenarios/nightly/README.md). A manual run forces
-# every job on with the `force` input.
+# merged and its forced run is attached (S2's plan, decision 30). The three arms are
+# written (`arms` #150, `vfy4` #151, `atk2` #154, `rush` #155; scenarios/nightly/README.md).
+# A manual run forces every job on with the `force` input.
 #
 # What it does (spec section 15, "Adversarial scenarios"; AGENTS.md sections 9 and 10
 # item 5; S2's plan, task `night`):

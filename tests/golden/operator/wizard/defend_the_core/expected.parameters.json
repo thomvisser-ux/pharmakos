@@ -1,0 +1,17 @@
+{
+  "parameters": [
+    {
+      "pointer": "/declarative/route/1/place_beacon/at/covering",
+      "label": "Which scrap seam the guard post covers: the nearest one to your core, or one by name",
+      "value": "{\"feature_id\":\"seam_348_31\"}",
+      "suggested": true
+    },
+    {
+      "pointer": "/declarative/route/2/hold/ms",
+      "label": "How long to stand by the guard post, in game milliseconds",
+      "value": "94100",
+      "suggested": true
+    }
+  ],
+  "why": "Easy, seat 0, round 1, seed 0x00000000ca5caded (recorded; Easy draws nothing at random). A Defend beacon beside the core, covering the scrap seam seam_348_31, at (351, 29, 36) as its site reads now, guarding the core and your commander: -70 points for 32 s of route (Easy fills 126 s of the segment). No threat is in sight inside your core's sphere and your commander did not die in the last Push."
+}

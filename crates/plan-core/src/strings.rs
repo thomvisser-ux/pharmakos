@@ -155,6 +155,9 @@ pub const TAGGED: &str = "tagged";
 pub const BEACON_NONE: &str = "no beacon the file names";
 /// Reminds the reader when a selector resolves (spec section 13's chip text).
 pub const SELECTOR_NOTE: &str = "resolves when the step starts";
+/// The same for an Attack target's selector, which the sim reads when the
+/// force is ready to launch (S2's `atk2`).
+pub const ATTACK_SELECTOR_NOTE: &str = "chosen when the force launches";
 
 // --- Targeting's sites and features -----------------------------------------
 //

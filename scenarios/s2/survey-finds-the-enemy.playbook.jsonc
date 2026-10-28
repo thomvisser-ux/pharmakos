@@ -1,0 +1,24 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// S2's `surv`, seat 0: deploy a Survey beacon beside the core whose probe area
+// is a strip of ground just outside the enemy core's reach, beside the beacon
+// seat 1 deploys, and field one scout. See survey-finds-the-enemy.scenario.jsonc.
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {"title": "Watch the enemy", "author_kind": "HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {"label": "watch_post", "timeout_ms": 30000,
+        "place_beacon": {"at": {"voxel": {"x": 360, "y": 30, "z": 36}},
+          "initial": {"priority": "NORMAL", "mandate": {"survey": {
+            "probe_areas": [{"min": {"x": 337, "y": 343, "z": 0}, "max": {"x": 337, "y": 345, "z": 63}}],
+            "scout_count": 1}}}},
+        "on_fail": {"action": "ABORT_ROUTE"}}
+    ],
+    "handlers": []
+  },
+  "on_death": {"on_respawn": "CONTINUE", "max_deaths_before_fallback": 2},
+  "fallback": {"hold": {"at": {"safest": {}}}}
+}

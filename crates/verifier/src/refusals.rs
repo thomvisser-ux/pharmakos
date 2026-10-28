@@ -33,13 +33,25 @@
 //!
 //! * a `broadcast`'s place is not compiled at all (radio is S4's), so nothing
 //!   under one is judged;
-//! * the selector in a Build target's `beacon_anchor` and every selector in an
-//!   Attack arm are never compiled, because the construct around them is
-//!   refused first, so they are not judged either;
-//! * a `set_mandate` row whose Attack arm is empty writes nothing the sim
-//!   refuses (`compile_switch_settings`): only an arm in a
-//!   `set_mandate_settings` row, a `place_beacon`'s `initial`, or a non-empty
-//!   one in a switch, is `E0013`.
+//! * the selector in a Build target's `beacon_anchor` is never compiled,
+//!   because the construct around it is refused first, so it is not judged
+//!   either.
+//!
+//! S2's `atk` lifted `E0013` (Attack's settings), which the sim compiles now:
+//! an Attack arm is legal wherever it is written, an empty one in a deploy's
+//! `initial` included (decisions-log item 146 (3) (j)), and the selectors in
+//! it are judged like any other (an Attack target's selector ranking own
+//! beacons is the structure stage's `E0415`, and `side: ENEMY_KNOWN` is still
+//! `E0015`, so until S3 an Attack target is a handle, a voxel or the enemy
+//! commander).
+//!
+//! S2's `atk2` (decisions-log item 150 (2)) lifted `E0015` for exactly one
+//! shape, which the sim compiles now: `nearest` with the filter
+//! `side: ENEMY_KNOWN` and no other filter field, as an Attack target
+//! ([`is_nearest_known_enemy_beacon`]). The sim chooses that beacon at launch;
+//! nothing here ranks it. `weakest` and `most_threatened` over enemy beacons,
+//! this filter with a `mandate` or `tags`, and `side: ENEMY_KNOWN` anywhere
+//! but an Attack target are still `E0015`, as the sim still refuses them.
 //!
 //! S2's `dfnd` lifted `E0012` (Defend's settings), `E0014` (`most_threatened`)
 //! and `E0017` (`beacon_under_attack`), which the sim compiles now: a Defend
@@ -54,13 +66,13 @@
 
 use pharmakos_proto::gp::v1::beacon_filter::Side;
 use pharmakos_proto::gp::v1::{
-    AttackSettings, BeaconFilter, BuildTarget, InterfaceStep, Location, MandateSettings, Playbook,
-    interface_row, location, mandate_settings,
+    BeaconFilter, BeaconRef, BuildTarget, InterfaceStep, Location, Playbook, beacon_ref,
+    interface_row, location,
 };
 
 use crate::pointer;
 use crate::report::{Builder, Diag};
-use crate::walk::{self, Carrier, Slot, Visit};
+use crate::walk::{self, Slot, Visit};
 
 /// Every construct the sim refuses at the seal today, as the sim's
 /// `PlanError::NotAtThisStage` spells it, with the code this crate refuses it
@@ -79,7 +91,6 @@ pub const REFUSED_CONSTRUCTS: &[(&str, &str)] = &[
         "a Build target anchored on a beacon selector rather than on a voxel or `on` a vent",
         "E0011",
     ),
-    ("Attack mandate settings", "E0013"),
     ("selector filter `side: ENEMY_KNOWN`", "E0015"),
     ("selector filter `tags`", "E0016"),
 ];
@@ -115,25 +126,48 @@ struct Refusals<'a> {
 ///
 /// * under a `broadcast` step, whose place the sim never compiles;
 /// * under a Build target's (or a removal's) `beacon_anchor`, which the sim
-///   refuses before it reads the selector in it;
-/// * under an Attack arm, whose settings the sim refuses as a whole (`E0013`)
-///   before it reads a selector in them (S2's wire, `con4`).
+///   refuses before it reads the selector in it.
 ///
-/// **For the lane that lifts `E0013` (S2's `atk`).** Once the sim compiles an
-/// arm, it reads the selectors in it, so `/attack/` leaves this list in the
-/// same pull request, as `/defend/` and `/beacon_under_attack/` left it with
-/// S2's `dfnd`. An Attack target's
-/// selector must rank known enemy beacons (`E0415`, the structure stage), and
-/// `side: ENEMY_KNOWN` is itself `E0015` until S3's knowledge store, so from
-/// then until S3 an Attack target is a handle, a voxel or the enemy
-/// commander, never a selector.
+/// S2's `atk` took `/attack/` out of this list as it lifted `E0013`, as S2's
+/// `dfnd` took `/defend/` and `/beacon_under_attack/` out with `E0012` and
+/// `E0017`: the sim reads the selectors in an Attack arm now.
 ///
-/// A pointer token is a field name or an index, and each of `broadcast`,
-/// `attack` and the pair `anchor`/`beacon_anchor` names exactly one place in
-/// `gp.v1`, so the segments are unambiguous (`/attack/` is not
-/// `/beacon_under_attack/`, which a pointer token never contains whole).
+/// A pointer token is a field name or an index, and `broadcast` and the pair
+/// `anchor`/`beacon_anchor` each name exactly one place in `gp.v1`, so the
+/// segments are unambiguous.
 fn not_compiled(at: &str) -> bool {
-    at.contains("/broadcast/") || at.contains("/anchor/beacon_anchor") || at.contains("/attack/")
+    at.contains("/broadcast/") || at.contains("/anchor/beacon_anchor")
+}
+
+/// Whether a beacon reference is "the nearest known enemy beacon": `nearest`
+/// with the filter `side: ENEMY_KNOWN` and no other filter field, the one
+/// selector the sim takes as an Attack target before S3 (S2's `atk2`; the
+/// sim's `nearest_known_enemy_beacon` in `interpreter.rs` reads the same
+/// fields the same way). It names the selector; which beacon it is, is the
+/// sim's, at launch.
+#[must_use]
+pub(crate) fn is_nearest_known_enemy_beacon(beacon: &BeaconRef) -> bool {
+    let Some(beacon_ref::Ref::Nearest(nearest)) = beacon.r#ref.as_ref() else {
+        return false;
+    };
+    nearest.filter.as_ref().is_some_and(lifted_filter)
+}
+
+/// The filter half of [`is_nearest_known_enemy_beacon`], read raw: a number
+/// `Side` or `MandateKind` does not name is not this filter.
+fn lifted_filter(filter: &BeaconFilter) -> bool {
+    Side::try_from(filter.side) == Ok(Side::EnemyKnown)
+        && filter.mandate == 0
+        && filter.tags.is_empty()
+}
+
+/// Whether a filter at `at` is the filter of an Attack target's `nearest`
+/// selector. A pointer token is a field name or an index, `attack` names
+/// exactly one place in `gp.v1` (`MandateSettings.attack`), and `target`,
+/// `beacon` and `nearest` under it name one path each, so the suffix is
+/// unambiguous.
+fn attack_target_nearest(at: &str) -> bool {
+    at.ends_with("/attack/target/beacon/nearest/filter")
 }
 
 impl Visit for Refusals<'_> {
@@ -180,28 +214,17 @@ impl Visit for Refusals<'_> {
             .emit(Diag::new("E0011", pointer::child(at, arm)).arg("arm", arm));
     }
 
-    fn mandate(&mut self, at: &str, settings: &MandateSettings, carrier: Carrier) {
-        let (code, arm, empty) = match settings.mandate.as_ref() {
-            Some(mandate_settings::Mandate::Attack(attack)) => {
-                ("E0013", "attack", *attack == AttackSettings::default())
-            }
-            _ => return,
-        };
-        // A switch to an S2 writ with nothing in its arm writes nothing the
-        // sim refuses: the switch alone is legal (the module doc).
-        if carrier == Carrier::Switch && empty {
-            return;
-        }
-        self.out.emit(Diag::new(code, pointer::child(at, arm)));
-    }
-
     fn filter(&mut self, at: &str, filter: &BeaconFilter) {
         // In the places `not_compiled` names the sim reads no filter.
         if not_compiled(at) {
             return;
         }
         // Read raw: a number `Side` does not name is `E0018`'s, never `OWN`.
-        if Side::try_from(filter.side) == Ok(Side::EnemyKnown) {
+        // The nearest known enemy beacon as an Attack target is the one
+        // shape the sim compiles (S2's `atk2`).
+        if Side::try_from(filter.side) == Ok(Side::EnemyKnown)
+            && !(attack_target_nearest(at) && lifted_filter(filter))
+        {
             self.out
                 .emit(Diag::new("E0015", pointer::child(at, "side")));
         }

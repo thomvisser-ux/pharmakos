@@ -97,7 +97,6 @@ fn play(
     let world = World::new(&WorldConfig {
         match_seed: seed,
         seats,
-        units_per_seat: 0,
         rules: rules.clone(),
         match_settings: MatchSettings {
             segment_lengths_ms: vec![segment_ms],

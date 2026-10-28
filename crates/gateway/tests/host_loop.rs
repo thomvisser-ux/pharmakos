@@ -1422,7 +1422,6 @@ fn the_replay_files_reproduce_the_matchs_chain() {
         &pharmakos_gateway::host::Settings {
             segment_lengths_ms: lengths,
             round_limit,
-            units_per_seat: 0,
         },
         None,
     )

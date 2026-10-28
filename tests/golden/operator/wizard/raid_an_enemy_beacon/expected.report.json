@@ -1,0 +1,54 @@
+{
+  "qualifies": true,
+  "depth": "full",
+  "diagnostics": [
+    {
+      "code": "I0003",
+      "severity": "info",
+      "path": "/declarative/route/0/move/pace",
+      "related_paths": [],
+      "message": "`pace` is omitted and reads as DIRECT.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/move/pace\",\"value\":\"DIRECT\"}]",
+          "applicability": "machine_applicable"
+        }
+      ],
+      "map_refs": []
+    },
+    {
+      "code": "I0003",
+      "severity": "info",
+      "path": "/declarative/handlers/0/body/0/move/pace",
+      "related_paths": [],
+      "message": "`pace` is omitted and reads as DIRECT.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/0/body/0/move/pace\",\"value\":\"DIRECT\"}]",
+          "applicability": "machine_applicable"
+        }
+      ],
+      "map_refs": []
+    },
+    {
+      "code": "W0709",
+      "severity": "warning",
+      "path": "/declarative/route/1/place_beacon/initial/mandate/attack/target/beacon/nearest",
+      "related_paths": [],
+      "message": "the seat has no sighting of an enemy beacon, and the reach window is 180000 ms; the Attack raids the enemy beacon seen within it nearest its staging point when its force is ready to launch, and the force waits until there is one.",
+      "beginner": "This Attack beacon's raiders wait until your side has recently seen an enemy beacon, then raid the nearest one. Scouts help them find one sooner.",
+      "suggestions": [],
+      "map_refs": []
+    }
+  ],
+  "report_hash": "497eZD1d4Nk=",
+  "rules_hash": "VQGfykahqEM=",
+  "plan_fingerprint": "E0a6S8j8dqg=",
+  "verifier_version": "0.1.0-s2.5",
+  "size_units": 6,
+  "size_budget": 128
+}

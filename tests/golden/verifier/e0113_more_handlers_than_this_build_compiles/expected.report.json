@@ -9,10 +9,10 @@
       "beginner": "A playbook can carry only so many rules, however small each one is. Take some out."
     }
   ],
-  "report_hash": "9DfPyKAk4mM=",
-  "rules_hash": "gCjUE4Tm3i8=",
+  "report_hash": "xj2mmFfnA9s=",
+  "rules_hash": "VQGfykahqEM=",
   "plan_fingerprint": "Wax4RBZe5xE=",
-  "verifier_version": "0.1.0-s2.2",
+  "verifier_version": "0.1.0-s2.5",
   "size_units": 66,
   "size_budget": 128
 }

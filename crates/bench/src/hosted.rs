@@ -82,9 +82,6 @@ pub fn open_host(opening: &Opening<'_>) -> Result<Host, Error> {
         &WorldConfig {
             match_seed: opening.seed,
             seats: opening.seats,
-            // The harness walkers stay at 0, as every committed chain has them;
-            // the gate's load is the layout (S2's plan, E30 and decision 23).
-            units_per_seat: 0,
             rules: opening.rules.clone(),
             match_settings: MatchSettings {
                 segment_lengths_ms: vec![opening.segment_ms],

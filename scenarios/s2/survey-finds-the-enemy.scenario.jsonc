@@ -1,0 +1,58 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// S2's `surv` (S2's plan, task `surv`): full Survey through the playbook door,
+// on the golden seed, in one Push of five minutes.
+//
+//   seat 0  seals scenarios/s2/survey-finds-the-enemy.playbook.jsonc: it
+//           deploys a Survey beacon beside its core with one probe area, a
+//           strip of ground beside seat 1's outpost and just outside the reach
+//           of seat 1's core, and one scout. The scout walks the length of the
+//           map to the strip's unexplored cell, marks it, and from there sees
+//           the outpost;
+//   seat 1  seals scenarios/s2/survey-finds-the-enemy-seat1.playbook.jsonc: it
+//           deploys an outpost beacon inside its core's sphere.
+//
+// The scan's order, the refresh pass, enemy beacons first and the forgetting
+// of a re-check that finds nothing are crates/sim/tests/survey.rs, played
+// headless with the sightings placed by the fixture. This scenario pins the
+// explored table's hashing, the scout's walk and the `enemy_beacon_found`
+// report through a sealed playbook.
+{
+  "format": "pharmakos.scenario.v1",
+  "name": "survey-finds-the-enemy",
+  "summary": "Seat 0's Survey scout scans a probe area beside seat 1's outpost and finds it.",
+
+  "map": {
+    "seed": "0x00000000ca5caded",
+    "generator": "skeleton"
+  },
+
+  "rules": "rules/rules.v1.json",
+  "round_limit": 1,
+
+  "seats": [
+    { "seat": 0, "kind": "playbook", "playbook": "scenarios/s2/survey-finds-the-enemy.playbook.jsonc" },
+    { "seat": 1, "kind": "playbook", "playbook": "scenarios/s2/survey-finds-the-enemy-seat1.playbook.jsonc" }
+  ],
+
+  "segments": [
+    { "index": 0, "length_ms": 300000, "note": "The deploys, the scout's walk, its scan and its find." }
+  ],
+
+  "assertions": [
+    { "assert": "event_fired", "event": "beacon_placed", "seat": 0, "by_tick": 600,
+      "note": "The Survey beacon is placed with its probe area." },
+    { "assert": "event_fired", "event": "beacon_placed", "seat": 1, "by_tick": 1600,
+      "note": "Seat 1's outpost is placed." },
+    { "assert": "event_fired", "event": "unit_fabricated", "seat": 0, "by_tick": 1200,
+      "note": "The Survey beacon fields its scout." },
+    { "assert": "event_fired", "event": "area_surveyed", "seat": 0, "by_tick": 6000,
+      "note": "The scout marks the probe area's one cell." },
+    { "assert": "event_fired", "event": "enemy_beacon_found", "seat": 0, "by_tick": 6000,
+      "note": "From there it sees seat 1's outpost, a beacon seat 0 had never seen." },
+    { "assert": "hash_chain_equals",
+      "golden": "tests/golden/scenarios/survey-finds-the-enemy/expected.hashes.txt",
+      "note": "Byte-identical on Windows, Linux and macOS; pins the explored table and the scout's walk. Re-blessed with `cargo xtask golden --bless`, and never to turn a red build green." }
+  ]
+}

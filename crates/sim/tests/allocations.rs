@@ -122,9 +122,8 @@ fn a_tick_allocates_nothing() {
         // both allocation assertions below, but not the fixed-stride one: with
         // walkers wandering through the steady window the encoding's length
         // changed between ticks, so the window is no longer steady. The
-        // wide-table coverage lives in `tests/determinism.rs` (`TEST_WALKERS`);
+        // wide-table coverage lives in `tests/determinism.rs` (`TEST_MOVERS`);
         // this test covers the real playbook's in-tick growth instead.
-        units_per_seat: 0,
         rules,
         match_settings: MatchSettings {
             // Long enough that the measured loop never reaches the segment's
@@ -263,6 +262,116 @@ fn a_tick_allocates_nothing() {
         "the canonical encoding changed length between ticks, which means the encoder is not \
          fixed-stride after all"
     );
+
+    crowd_allocates_nothing(&mut runner, &mut enc);
+}
+
+/// The attacking crowds' half of [`a_tick_allocates_nothing`].
+fn crowd_allocates_nothing(runner: &mut Runner, enc: &mut Enc) {
+    // **A moving crowd under combat** (S2's `atk`; decisions-log item 137 (2)
+    // (j)): two Attack beacons' forces, launched at each other's staging
+    // ground across open terrain, one round the other's avoid area, so the
+    // Attack update, the surcharged routes, the raiders' fire, the damage,
+    // the kill credit, the deaths and the wrecks all run inside the counted
+    // window. Laid out between ticks, where a placement may allocate. The
+    // fixed-stride check above is not repeated here: a damaged asset books a
+    // credit row and a dead one leaves a wreck, rows of tables sized at
+    // construction, so the encoding grows by design while nothing allocates.
+    let lanes = crowd(runner.world_mut());
+    for _ in 0..20 {
+        runner
+            .step()
+            .unwrap()
+            .expect("the segment outlasts this test");
+        runner.clear_events();
+        runner.world().encode(enc);
+    }
+    let before_crowd = allocations();
+    let shots_before = runner.world().combat_counts().shots();
+    for _ in 0..CROWD_TICKS {
+        runner
+            .step()
+            .unwrap()
+            .expect("the segment outlasts this test");
+        runner.clear_events();
+        runner.world().encode(enc);
+    }
+    let crowded = allocations() - before_crowd;
+    let launched = lanes.iter().all(|beacon| {
+        runner
+            .world()
+            .attack()
+            .row_of(*beacon)
+            .is_some_and(|row| row.waves_used > 0)
+    });
+    assert!(launched, "both forces launched");
+    assert!(
+        runner.world().combat_counts().shots() > shots_before,
+        "the crowds fought inside the counted window"
+    );
+    assert_eq!(
+        crowded, 0,
+        "{CROWD_TICKS} ticks of two attacking crowds allocated {crowded} times"
+    );
+}
+
+/// The ticks the attacking crowds are counted over.
+const CROWD_TICKS: u32 = 400;
+
+/// Raiders each crowd fields.
+const CROWD: u32 = 10;
+
+/// Lay out two Attack beacons, of seats 0 and 1, sixty voxels apart in open
+/// ground, each with [`CROWD`] raiders and aimed at the other's beacon; seat
+/// 0's force routes round an avoid area between them. Returns the two
+/// beacons.
+fn crowd(world: &mut World) -> [pharmakos_sim::tables::BeaconId; 2] {
+    use pharmakos_sim::attack::{Aim, AttackSettings};
+    use pharmakos_sim::seams::MandateKind;
+    use pharmakos_sim::tables::{ColumnBox, PRIORITY_NORMAL, SeatId, UnitKind};
+    let size = world.voxels().size();
+    let mid_x = i32::try_from(size[0].div_euclid(2)).expect("a column");
+    let mid_y = i32::try_from(size[1].div_euclid(2)).expect("a column");
+    let west = world.standing_point([mid_x - 12, mid_y, 0]);
+    let east = world.standing_point([mid_x + 12, mid_y, 0]);
+    let voxel = |at: [pharmakos_sim::math::fixed::Fx; 3]| {
+        at.map(|axis| i16::try_from(axis.floor_voxels()).expect("a voxel coordinate"))
+    };
+    let mut lanes = Vec::new();
+    for (seat, here, there) in [(0_u8, west, east), (1_u8, east, west)] {
+        let beacon = world
+            .place_beacon_directly(
+                SeatId::new(seat),
+                here,
+                MandateKind::Attack,
+                PRIORITY_NORMAL,
+            )
+            .expect("an Attack beacon");
+        let avoid = if seat == 0 {
+            let x = i16::try_from(mid_x).expect("a column");
+            let y = i16::try_from(mid_y).expect("a column");
+            vec![ColumnBox::new([x - 4, y - 4], [x + 4, y + 4]).expect("a box")]
+        } else {
+            Vec::new()
+        };
+        assert!(world.set_attack(
+            beacon,
+            AttackSettings {
+                aim: Aim::Voxel(voxel(there)),
+                force_size: Some(CROWD),
+                waves: 1,
+                ..AttackSettings::default()
+            },
+            &avoid,
+        ));
+        for _ in 0..CROWD {
+            world
+                .field_unit(SeatId::new(seat), beacon, UnitKind::Raider, here)
+                .expect("a raider");
+        }
+        lanes.push(beacon);
+    }
+    <[pharmakos_sim::tables::BeaconId; 2]>::try_from(lanes).expect("two lanes")
 }
 
 /// The ticks counted for table growth, after the 50-tick warm-up: long enough

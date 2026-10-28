@@ -73,6 +73,7 @@
 //! against `tests/golden/determinism/expected.hashes.txt`.
 
 pub mod arms;
+pub mod attack;
 pub mod audit;
 pub mod bore;
 pub mod chunks;
@@ -298,7 +299,7 @@ pub fn determinism_world(
 }
 
 /// [`determinism_world`] on another match seed: [`DETERMINISM_SEATS`] seats,
-/// no harness walkers, the rules table's own segment ladder and round limit
+/// the rules table's own segment ladder and round limit
 /// ([`MatchSettings::default`]), and every seat sealing the playbook at
 /// `playbook_path`.
 ///
@@ -317,7 +318,6 @@ pub fn determinism_world_at(
     let mut world = World::new(&WorldConfig {
         match_seed: seed,
         seats: DETERMINISM_SEATS,
-        units_per_seat: 0,
         rules,
         match_settings: MatchSettings::default(),
     })?;

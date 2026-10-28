@@ -35,7 +35,17 @@
 //! over vents alone, and S1's only blueprint is the Generator.
 //! `seam_choice: SAFEST` read as NEAREST until S2's threat model and was
 //! `W0501` (decisions-log item 127 (9), S1's plan's decision 6); S2's `dfnd`
-//! built the model, so nothing raises it now.
+//! built the model, so nothing raises it now: SAFEST digs the nearest seam no
+//! known threat's weapon reaches (S2's plan, decision 12).
+//!
+//! # Avoiding known threats with none sighted (task `vfy3`)
+//!
+//! A move paced `AVOID_KNOWN_THREATS` adds the rules row's surcharge per step
+//! inside a known threat's range (decision 12, built by S2's `atk`), and
+//! a known threat is an armed enemy the seat sees when the step starts. A view
+//! with no enemy beacon in live vision shows none, so `I0005` says the move
+//! goes as `DIRECT` does unless one is seen when it starts: the editor's
+//! explanation and no more.
 //!
 //! # S2's Defend and Attack, and the wall's sphere (task `vfy2`)
 //!
@@ -58,21 +68,22 @@ use pharmakos_proto::gp::api::v1::patch_suggestion::Applicability;
 use pharmakos_proto::gp::v1::beacon_filter::{MandateKind, Side};
 use pharmakos_proto::gp::v1::feature_ref;
 use pharmakos_proto::gp::v1::handler::Resume;
+use pharmakos_proto::gp::v1::move_step::Pace;
 use pharmakos_proto::gp::v1::on_fail::Action;
 use pharmakos_proto::gp::v1::{
-    Area, AttackSettings, BeaconFilter, BuildTarget, DefendSettings, FeatureRef, InterfaceStep,
-    Location, MandateSettings, Playbook, Step, Voxel, attack_target, beacon_ref, interface_row,
-    location, mandate_settings, protected_asset,
+    Area, AttackSettings, BeaconFilter, BeaconRef, BuildTarget, DefendSettings, FeatureRef,
+    InterfaceStep, Location, MandateSettings, Playbook, Step, Voxel, attack_target, beacon_ref,
+    interface_row, location, mandate_settings, protected_asset, step,
 };
 
 use crate::limits::Limits;
 use crate::pointer;
 use crate::report::{Builder, Diag, number, patch_add, patch_replace};
 use crate::resolve::Symbols;
-use crate::scope::{FeatureKind, Ownership, Scope};
+use crate::scope::{FeatureKind, Ownership, Scope, Sighted};
 use crate::strings;
 use crate::structure::arm_name;
-use crate::walk::{self, Carrier, Holder, List, Slot, Visit};
+use crate::walk::{self, AreaOf, Carrier, Holder, List, Slot, Visit};
 
 /// Run the stage.
 pub(crate) fn run(
@@ -103,6 +114,39 @@ pub(crate) fn run(
     }
 }
 
+impl Semantics<'_> {
+    /// `I0005` (S2's plan, decision 12): a move paced `AVOID_KNOWN_THREATS`
+    /// prices the known threats, the armed enemies the seat sees when the step
+    /// starts (`crates/sim/src/defend.rs`). The view carries sightings of
+    /// other seats' beacons and commanders and no other enemy asset, so the
+    /// note reads the one thing it holds that can be armed and seen now: an
+    /// enemy beacon in live vision (age 0), whose core or structures may be
+    /// armed. A commander carries no weapon, and an older sighting is not
+    /// seen now, so neither counts. With none, the note says the move goes as
+    /// `DIRECT` does unless an armed enemy is seen when it starts; it claims
+    /// nothing about the units the view does not carry. It ranks nothing,
+    /// prices no route and guesses at no threat the Push may bring (AGENTS.md
+    /// section 3 rule 2).
+    fn pace(&mut self, at: &str, entry: &Step) {
+        let Some(step::Kind::Move(walk_to)) = entry.kind.as_ref() else {
+            return;
+        };
+        let beacon_in_sight = self.scope.sightings().iter().any(|sighting| {
+            sighting.age_ms == 0
+                && match sighting.what {
+                    Sighted::Beacon(_) => true,
+                    Sighted::Commander(_) => false,
+                }
+        });
+        if walk_to.pace == i32::from(Pace::AvoidKnownThreats) && !beacon_in_sight {
+            self.out.emit(Diag::new(
+                "I0005",
+                pointer::child(&pointer::child(at, "move"), "pace"),
+            ));
+        }
+    }
+}
+
 struct Semantics<'a> {
     scope: &'a Scope,
     limits: &'a Limits,
@@ -114,6 +158,7 @@ impl Visit for Semantics<'_> {
     fn entry(&mut self, at: &str, entry: &Step, list: List, index: usize) {
         self.jump(at, entry, list, index);
         self.waits(at, entry);
+        self.pace(at, entry);
     }
 
     fn interface(&mut self, at: &str, interface: &InterfaceStep) {
@@ -232,7 +277,7 @@ impl Visit for Semantics<'_> {
         }
     }
 
-    fn area(&mut self, at: &str, area: &Area) {
+    fn area(&mut self, at: &str, area: &Area, _of: AreaOf) {
         let (Some(low), Some(high)) = (area.min.as_ref(), area.max.as_ref()) else {
             // A half-written area is `E0101`'s business, not this check's.
             return;
@@ -378,8 +423,14 @@ impl Semantics<'_> {
     }
 
     /// S2's Attack target against the seat's view: a handle names an enemy
-    /// beacon (`E0414`), and a target named by its handle, or the enemy
-    /// commander, rests on a sighting inside the reach window (`E0418`).
+    /// beacon (`E0414`), and a target named by its handle, or one seat's
+    /// commander, rests on a sighting inside the reach window (`E0418`); the
+    /// enemy commander with no seat named qualifies without one, with a
+    /// warning (`W0708`), because the sim chooses it at launch and holds the
+    /// force until a fresh sighting exists. The nearest known enemy beacon
+    /// (S2's `atk2`) is the same: chosen at launch, so it qualifies with or
+    /// without a fresh sighting of an enemy beacon, and is warned without one
+    /// (`W0709`).
     ///
     /// **Freshness is a plan-time test** (spec section 6: "Freshness is a
     /// qualification test at plan time only; the target is pinned at the
@@ -399,6 +450,7 @@ impl Semantics<'_> {
         match target.target.as_ref() {
             Some(attack_target::Target::Beacon(beacon)) => {
                 let Some(beacon_ref::Ref::BeaconId(id)) = beacon.r#ref.as_ref() else {
+                    self.nearest_known_beacon(beacon, &target_at, window);
                     return;
                 };
                 let here = pointer::child(&pointer::child(&target_at, "beacon"), "beacon_id");
@@ -435,27 +487,67 @@ impl Semantics<'_> {
                     Some(_) => {}
                 }
             }
-            Some(attack_target::Target::EnemyCommander(_)) => {
+            Some(attack_target::Target::EnemyCommander(commander)) => {
                 let here = pointer::child(&target_at, "enemy_commander");
-                // The freshest sighting of any enemy commander: an age is
-                // compared, nothing is ranked, and which commander the target
-                // pins is the sim's rule (S2's `atk`).
+                // The owner's answer of 2026-10-26: unset, the target hunts
+                // the nearest enemy commander the seat has a fresh sighting
+                // of at launch, so it qualifies with or without one (below);
+                // set, that seat's commander only, and never the playbook's
+                // own seat or one
+                // past any match's (E0419). An age is compared and nothing is
+                // ranked: which commander is nearest is the sim's, at launch.
+                let named = commander.seat;
+                if let Some(seat) = named {
+                    let why = if seat == u32::from(self.scope.seat().raw()) {
+                        Some(strings::SEAT_IS_OWN)
+                    } else if u8::try_from(seat).is_err() {
+                        Some(strings::SEAT_PAST_ANY_MATCH)
+                    } else {
+                        None
+                    };
+                    if let Some(why) = why {
+                        self.out.emit(
+                            Diag::new("E0419", pointer::child(&here, "seat"))
+                                .arg("seat", seat)
+                                .arg("why", why),
+                        );
+                        return;
+                    }
+                }
                 let freshest = self
                     .scope
                     .commander_sightings()
+                    .filter(|seen| match (named, &seen.what) {
+                        (Some(seat), crate::Sighted::Commander(of)) => u32::from(of.raw()) == seat,
+                        (None, _) => true,
+                        (Some(_), crate::Sighted::Beacon(_)) => false,
+                    })
                     .min_by_key(|seen| seen.age_ms);
-                match freshest {
-                    None => self.out.emit(
-                        Diag::new("E0418", here)
-                            .arg("what", strings::NO_COMMANDER_SIGHTED)
-                            .arg("max", window),
+                let (never, subject) = match named {
+                    Some(seat) => (
+                        strings::commander_never_sighted(seat),
+                        strings::seats_commander(seat),
                     ),
+                    None => (
+                        strings::NO_COMMANDER_SIGHTED.to_owned(),
+                        strings::THE_ENEMY_COMMANDER.to_owned(),
+                    ),
+                };
+                // Set, a seat with no fresh sighting is refused (`E0418`):
+                // the file names one commander, and the seat has not seen it.
+                // Unset, the owner's ruling of 2026-10-27 (S2's `vfy4`): the
+                // target is the nearest fresh sighting *at launch*, and the
+                // sim holds the force, counted, until one exists, so the file
+                // qualifies and says so (`W0708`). Same ages, same window;
+                // only the severity differs.
+                let code = if named.is_some() { "E0418" } else { "W0708" };
+                match freshest {
+                    None => self
+                        .out
+                        .emit(Diag::new(code, here).arg("what", never).arg("max", window)),
                     Some(sighting) if i64::from(sighting.age_ms) > window => self.out.emit(
-                        Diag::new("E0418", here)
-                            .arg(
-                                "what",
-                                strings::sighted_ago(strings::THE_ENEMY_COMMANDER, sighting.age_ms),
-                            )
+                        Diag::new(code, here)
+                            .arg("what", strings::sighted_ago(&subject, sighting.age_ms))
                             .arg("max", window)
                             .map_ref(sighting.at),
                     ),
@@ -463,6 +555,68 @@ impl Semantics<'_> {
                 }
             }
             Some(attack_target::Target::Voxel(_)) | None => {}
+        }
+    }
+
+    /// The nearest known enemy beacon as an Attack target (S2's `atk2`):
+    /// `W0709` when no enemy beacon is sighted inside the reach window. Any
+    /// other selector says nothing here.
+    ///
+    /// Advice, and an approximation of the sim's choice on one side only:
+    /// the view carries no "seen gone" mark, so a fresh sighting of a beacon
+    /// the seat has since seen destroyed silences the warning although the
+    /// sim, which skips such a beacon, holds the force. The verdict is the
+    /// same either way: the file qualifies.
+    fn nearest_known_beacon(&mut self, beacon: &BeaconRef, target_at: &str, window: i64) {
+        if !crate::refusals::is_nearest_known_enemy_beacon(beacon) {
+            return;
+        }
+        let here = pointer::child(&pointer::child(target_at, "beacon"), "nearest");
+        // Decisions-log item 150 (2), S2's `atk2`: the sim chooses
+        // the beacon at launch, nearest the staging point, and holds
+        // the force, counted, until the seat knows one, so the file
+        // qualifies; with no enemy beacon seen inside the window it
+        // says so. An age is compared and nothing is ranked: the
+        // freshest sighting is read only to say how old it is, and
+        // which beacon is nearest is the sim's (AGENTS.md section 3
+        // rule 2).
+        let freshest = self
+            .scope
+            .sightings()
+            .iter()
+            .filter_map(|seen| match &seen.what {
+                Sighted::Beacon(id)
+                    if self
+                        .scope
+                        .beacon(id)
+                        .is_none_or(|known| known.side != Ownership::Own) =>
+                {
+                    Some((id, seen))
+                }
+                Sighted::Beacon(_) | Sighted::Commander(_) => None,
+            })
+            .min_by_key(|(_, seen)| seen.age_ms);
+        match freshest {
+            None => self.out.emit(
+                Diag::new("W0709", here)
+                    .arg("what", strings::NO_BEACON_SIGHTED)
+                    .arg("max", window),
+            ),
+            Some((id, sighting)) if i64::from(sighting.age_ms) > window => {
+                self.out.emit(
+                    Diag::new("W0709", here)
+                        .arg(
+                            "what",
+                            strings::sighted_ago(
+                                &strings::freshest_enemy_beacon(id),
+                                sighting.age_ms,
+                            ),
+                        )
+                        .arg("max", window)
+                        .map_ref(sighting.at),
+                );
+            }
+            Some(_) => {}
         }
     }
 

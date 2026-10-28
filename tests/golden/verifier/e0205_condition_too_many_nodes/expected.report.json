@@ -9,10 +9,10 @@
       "beginner": "This condition has too many parts."
     }
   ],
-  "report_hash": "x4l+aS+X56c=",
-  "rules_hash": "gCjUE4Tm3i8=",
+  "report_hash": "yBBQmtMp7N8=",
+  "rules_hash": "VQGfykahqEM=",
   "plan_fingerprint": "yZVkQZbwtDE=",
-  "verifier_version": "0.1.0-s2.2",
+  "verifier_version": "0.1.0-s2.5",
   "size_units": 3,
   "size_budget": 128
 }

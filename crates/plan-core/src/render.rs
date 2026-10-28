@@ -400,7 +400,11 @@ fn attack_parts(attack: &AttackSettings) -> Vec<String> {
     let mut parts = Vec::new();
     if let Some(target) = attack.target.as_ref() {
         let what = match target.target.as_ref() {
-            Some(attack_target::Target::Beacon(reference)) => beacon(Some(reference)),
+            // An Attack target's selector is read when the force launches
+            // (S2's `atk2`), not when the step starts.
+            Some(attack_target::Target::Beacon(reference)) => {
+                beacon_noted(Some(reference), s::ATTACK_SELECTOR_NOTE)
+            }
             Some(attack_target::Target::Voxel(at)) => voxel(at),
             Some(attack_target::Target::EnemyCommander(_)) => s::ATTACK_ENEMY_COMMANDER.to_owned(),
             None => s::ATTACK_NOTHING.to_owned(),
@@ -591,20 +595,29 @@ fn corner(at: Option<&Voxel>) -> String {
 }
 
 fn beacon(reference: Option<&BeaconRef>) -> String {
+    beacon_noted(reference, s::SELECTOR_NOTE)
+}
+
+/// [`beacon`], with `note` saying when a selector is read.
+fn beacon_noted(reference: Option<&BeaconRef>, note: &str) -> String {
     match reference.and_then(|reference| reference.r#ref.as_ref()) {
         None => s::BEACON_NONE.to_owned(),
         Some(beacon_ref::Ref::BeaconId(id)) => format!("{} \"{id}\"", s::BEACON_NOUN),
         Some(beacon_ref::Ref::Safest(_)) => s::BEACON_SAFEST.to_owned(),
-        Some(beacon_ref::Ref::Nearest(pick)) => selector(s::BEACON_NEAREST, pick.filter.as_ref()),
-        Some(beacon_ref::Ref::Weakest(pick)) => selector(s::BEACON_WEAKEST, pick.filter.as_ref()),
+        Some(beacon_ref::Ref::Nearest(pick)) => {
+            selector(s::BEACON_NEAREST, pick.filter.as_ref(), note)
+        }
+        Some(beacon_ref::Ref::Weakest(pick)) => {
+            selector(s::BEACON_WEAKEST, pick.filter.as_ref(), note)
+        }
         Some(beacon_ref::Ref::MostThreatened(pick)) => {
-            selector(s::BEACON_MOST_THREATENED, pick.filter.as_ref())
+            selector(s::BEACON_MOST_THREATENED, pick.filter.as_ref(), note)
         }
     }
 }
 
 /// A selector, with the chip text spec section 13 asks for.
-fn selector(superlative: &str, filter: Option<&BeaconFilter>) -> String {
+fn selector(superlative: &str, filter: Option<&BeaconFilter>, note: &str) -> String {
     let mut sentence = superlative.to_owned();
     let side = match filter.map(BeaconFilter::side) {
         Some(beacon_filter::Side::EnemyKnown) => s::SIDE_ENEMY,
@@ -633,7 +646,7 @@ fn selector(superlative: &str, filter: Option<&BeaconFilter>) -> String {
         let quoted: Vec<String> = tags.iter().map(|tag| format!("\"{tag}\"")).collect();
         let _ = write!(sentence, " {} {}", s::TAGGED, join(&quoted));
     }
-    format!("{sentence} ({})", s::SELECTOR_NOTE)
+    format!("{sentence} ({note})")
 }
 
 // ---------------------------------------------------------------------------

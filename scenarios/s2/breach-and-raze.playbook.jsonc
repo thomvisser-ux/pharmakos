@@ -1,0 +1,33 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// S2's `atk`: deploy an Attack beacon twenty voxels north of the core with
+// `breach_allowed`, aimed at the column of the beacon seat 1 walls in at the
+// far end of the map. See breach-and-raze.scenario.jsonc for what is
+// asserted.
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {"title": "Breach and raze", "author_kind": "HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {"label": "post", "timeout_ms": 60000,
+        "place_beacon": {"at": {"voxel": {"x": 358, "y": 44, "z": 36}},
+          "initial": {"priority": "NORMAL", "mandate": {"attack": {
+            "target": {"voxel": {"x": 357, "y": 336, "z": 29}},
+            "retarget": "NONE",
+            "staging": {"x": 358, "y": 44, "z": 36},
+            "launch": {"force_size": 3},
+            "after_action": "REGROUP_AT_STAGING",
+            "breach_allowed": true,
+            "waves": 1}}}},
+        "on_fail": {"action": "ABORT_ROUTE"}},
+      {"label": "stand", "timeout_ms": 470000,
+        "wait_until": {"condition": {"segment_elapsed": {"ms": {"op": "GE", "value": 470000}}}},
+        "on_fail": {"action": "SKIP"}}
+    ],
+    "handlers": []
+  },
+  "on_death": {"on_respawn": "CONTINUE", "max_deaths_before_fallback": 2},
+  "fallback": {"hold": {"at": {"safest": {}}}}
+}

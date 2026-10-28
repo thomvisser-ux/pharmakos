@@ -294,11 +294,48 @@ pub enum EventKind {
     /// (S2's `site`; decisions-log item 144 (5)). `at` is the voxel filled,
     /// `seat` the refilling seat.
     GroundRefilled,
+    /// Every scannable cell of a Survey beacon's probe areas is explored for
+    /// its seat (S2's `surv`): the scan is done, and its scouts turn to the
+    /// refresh pass. `subject` is the beacon, `seat` its owner.
+    AreaSurveyed,
+    /// A Survey scout saw an enemy beacon its seat had no sighting of (S2's
+    /// `surv`). `subject` is the enemy beacon, `seat` the seeing seat, `at`
+    /// where it stands.
+    EnemyBeaconFound,
+    /// A Survey scout renewed a sighting older than Survey's refresh
+    /// interval (S2's `surv`; item 13). `subject` is the
+    /// asset seen, `seat` the seeing seat, `at` where it is now, `value` the
+    /// age in game milliseconds of the memory it replaced.
+    SightingRefreshed,
+    /// An Attack beacon's force launched (S2's `atk`). `seat` is its owner,
+    /// `subject` the beacon, `at` where the force is going, and `value` how
+    /// many raiders launched.
+    AttackLaunched,
+    /// An Attack beacon's attack ended and its after-action applies (S2's
+    /// `atk`). `seat` is its owner, `subject` the beacon, `at` where its
+    /// target was last known, and `value` why ([`crate::attack::Ended::id`]):
+    /// 1 the target is gone, 2 a retreat condition held, 3 the force was lost,
+    /// 4 the way is sealed, 5 a voxel target reached, 6 stood down off
+    /// `FREE_FIRE`.
+    AttackEnded,
+    /// A raider planted a demolition charge at a breach (S2's `atk`;
+    /// decision 9). `seat` is its owner, `subject` the carrier, `at` where it
+    /// was planted, and `value` the tick its fuse runs out on.
+    ChargePlanted,
+    /// A demolition charge detonated and cut its breach flat to the wall's
+    /// footing (S2's `atk`; decision 40). `seat` is the carrier's, `at` the
+    /// breach column just above the footing, and `value` the cut's radius in
+    /// whole voxels.
+    ChargeDetonated,
+    /// A breach's carrier was killed before it planted: its charge never
+    /// fires (S2's `atk`; decision 9). `seat` is its owner, `subject` the
+    /// Attack beacon, `at` the plant point the carrier was walking to.
+    ChargeLost,
 }
 
 impl EventKind {
     /// Every kind, in ascending [`EventKind::id`] order.
-    pub const ALL: [EventKind; 50] = [
+    pub const ALL: [EventKind; 58] = [
         EventKind::MatchStarted,
         EventKind::LullOpened,
         EventKind::PushStarted,
@@ -349,6 +386,14 @@ impl EventKind {
         EventKind::AssetRepaired,
         EventKind::StructureRecycled,
         EventKind::GroundRefilled,
+        EventKind::AreaSurveyed,
+        EventKind::EnemyBeaconFound,
+        EventKind::SightingRefreshed,
+        EventKind::AttackLaunched,
+        EventKind::AttackEnded,
+        EventKind::ChargePlanted,
+        EventKind::ChargeDetonated,
+        EventKind::ChargeLost,
     ];
 
     /// The wire id. Additive only: never reuse, never renumber.
@@ -405,6 +450,14 @@ impl EventKind {
             EventKind::AssetRepaired => 48,
             EventKind::StructureRecycled => 49,
             EventKind::GroundRefilled => 50,
+            EventKind::AreaSurveyed => 51,
+            EventKind::EnemyBeaconFound => 52,
+            EventKind::SightingRefreshed => 53,
+            EventKind::AttackLaunched => 54,
+            EventKind::AttackEnded => 55,
+            EventKind::ChargePlanted => 56,
+            EventKind::ChargeDetonated => 57,
+            EventKind::ChargeLost => 58,
         }
     }
 
@@ -462,6 +515,14 @@ impl EventKind {
             48 => Some(EventKind::AssetRepaired),
             49 => Some(EventKind::StructureRecycled),
             50 => Some(EventKind::GroundRefilled),
+            51 => Some(EventKind::AreaSurveyed),
+            52 => Some(EventKind::EnemyBeaconFound),
+            53 => Some(EventKind::SightingRefreshed),
+            54 => Some(EventKind::AttackLaunched),
+            55 => Some(EventKind::AttackEnded),
+            56 => Some(EventKind::ChargePlanted),
+            57 => Some(EventKind::ChargeDetonated),
+            58 => Some(EventKind::ChargeLost),
             _ => None,
         }
     }
@@ -522,6 +583,14 @@ impl EventKind {
             EventKind::AssetRepaired => "asset_repaired",
             EventKind::StructureRecycled => "structure_recycled",
             EventKind::GroundRefilled => "ground_refilled",
+            EventKind::AreaSurveyed => "area_surveyed",
+            EventKind::EnemyBeaconFound => "enemy_beacon_found",
+            EventKind::SightingRefreshed => "sighting_refreshed",
+            EventKind::AttackLaunched => "attack_launched",
+            EventKind::AttackEnded => "attack_ended",
+            EventKind::ChargePlanted => "charge_planted",
+            EventKind::ChargeDetonated => "charge_detonated",
+            EventKind::ChargeLost => "charge_lost",
         }
     }
 

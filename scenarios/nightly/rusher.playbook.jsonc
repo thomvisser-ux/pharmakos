@@ -1,0 +1,106 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// The Rusher arm's playbook (S2's plan, task `arms`; spec section 15): two
+// scouts to find the enemy, then an early Attack beacon that launches on a
+// small force, played against Easy
+// over scenarios/nightly/seeds.txt. scenarios/nightly/README.md says what it
+// can and cannot do in v1 as built, and gives its band.
+//
+// One file plays every round of every seed, from seat 0 on some seeds and
+// seat 1 on others, and must qualify every time (a refusal fails the night).
+// So it names nothing that belongs to one seat or one map: places are
+// descriptions read when their step starts, the commander goes to "the
+// safest beacon" rather than to one by name, and each placement is guarded so that a later round, which
+// replays the route from the top, places no second beacon of the same kind.
+//
+// The target is spec section 15's: the nearest known enemy beacon, then the
+// core. Since S2's `atk2` (decisions-log item 150 (2)) an Attack target may
+// be `nearest` with the filter `side: ENEMY_KNOWN`: the sim chooses the
+// beacon when the force is ready to launch, the nearest enemy beacon the
+// seat has seen inside `verifier.reach_memory_ms`, nearest the staging point,
+// ties to the lowest id, and holds the force, counted, while the seat knows
+// none (the verifier says so with W0709 and still qualifies the file). When
+// that beacon falls, `retarget: NEAREST_KNOWN` takes the next nearest one
+// the seat knows of, which is the core only when the core is the nearest:
+// no Attack target names an enemy's core in v1, so "then the core" is not
+// written separately. The staging point is
+// the map's centre, the one voxel that means the same thing from every
+// spawn, so "nearest" is measured from there rather than from the post.
+//
+// The seat comes to know an enemy beacon through a Survey beacon placed
+// first, whose two scouts visit the eight columns from which a scout sees
+// any core the map generator can place (S2's `rush`). Measured over all twenty seeds of seeds.txt, from the
+// seat each seed gives the arm: the raid launches in round 2 on every seed,
+// between ticks 4 768 and 5 792 (round 2 opens at tick 3 600). Without the
+// scouts it launched on none; with one scout, in round 3 on four seeds.
+// Round 1 is spent placing the two posts and walking the raiders to the
+// centre: aimed at a fixed voxel instead, the raid launches in round 1 on two
+// seeds only. The scouts go first because the order barely matters: with the
+// Attack beacon first, the raid still launches in round 2 on every seed,
+// between ticks 4 393 and 6 117, earlier on seven seeds and later on
+// thirteen.
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {"title": "Nightly Rusher", "author_kind": "HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      // The post's description reads from where the commander stands: the
+      // safest beacon, which is the core in round 1.
+      {"label": "to_safety", "move": {"to": {"safest": {}}}},
+      // The scouts, placed first so that the seat comes to know an enemy
+      // beacon early: two scouts sent to the generator's eight spawn
+      // points, each coordinate of 24 or 359 moved 16 voxels towards the
+      // centre, which keeps a core there inside a scout's 24-voxel sight. Skipped once the seat
+      // has a Survey beacon.
+      {"label": "look",
+        "skip_if": {"beacon_hp_pct": {"beacon": {"nearest": {"filter": {"mandate": "SURVEY"}}}, "pct": {"op": "GE", "value": 0}}},
+        "place_beacon": {"at": {"covering": {"seam": {"rank": "NEAREST", "coverage": "ANY"}}}, "tags": ["look"],
+          "initial": {"mandate": {"survey": {
+            "probe_areas": [
+              {"min": {"x": 40, "y": 40, "z": 0}, "max": {"x": 40, "y": 40, "z": 63}},
+              {"min": {"x": 192, "y": 40, "z": 0}, "max": {"x": 192, "y": 40, "z": 63}},
+              {"min": {"x": 343, "y": 40, "z": 0}, "max": {"x": 343, "y": 40, "z": 63}},
+              {"min": {"x": 40, "y": 192, "z": 0}, "max": {"x": 40, "y": 192, "z": 63}},
+              {"min": {"x": 343, "y": 192, "z": 0}, "max": {"x": 343, "y": 192, "z": 63}},
+              {"min": {"x": 40, "y": 343, "z": 0}, "max": {"x": 40, "y": 343, "z": 63}},
+              {"min": {"x": 192, "y": 343, "z": 0}, "max": {"x": 192, "y": 343, "z": 63}},
+              {"min": {"x": 343, "y": 343, "z": 0}, "max": {"x": 343, "y": 343, "z": 63}}
+            ],
+            "scout_count": 2}}}},
+        "timeout_ms": 60000, "on_fail": {"action": "SKIP"}},
+      // The rush post, at HIGH priority, beside the core. Two raiders launch
+      // together and fight on until the attack is over (no retreat is
+      // written). Skipped once the seat has an Attack beacon.
+      {"label": "rush_post",
+        "skip_if": {"beacon_hp_pct": {"beacon": {"nearest": {"filter": {"mandate": "ATTACK"}}}, "pct": {"op": "GE", "value": 0}}},
+        "place_beacon": {"at": {"covering": {"seam": {"rank": "NEAREST", "coverage": "ANY"}}}, "tags": ["rush"],
+          "initial": {"priority": "HIGH", "mandate": {"roe": "FREE_FIRE", "attack": {
+            "target": {"beacon": {"nearest": {"filter": {"side": "ENEMY_KNOWN"}}}},
+            "retarget": "NEAREST_KNOWN",
+            "staging": {"x": 192, "y": 192, "z": 0},
+            "launch": {"force_size": 2},
+            "after_action": "REGROUP_AT_STAGING",
+            "breach_allowed": true,
+            "waves": 1}}}},
+        "timeout_ms": 60000, "on_fail": {"action": "SKIP"}},
+      // Only as much economy as the raiders need: a generator on the nearest
+      // free vent while the grid has under 4 kW to spare.
+      {"label": "power",
+        "skip_if": {"kw_headroom": {"kw": {"op": "GE", "value": 4}}},
+        "place_beacon": {"at": {"covering": {"vent": {"rank": "NEAREST", "coverage": "UNCOVERED"}}},
+          "initial": {"mandate": {"build": {"targets": [
+            {"blueprint_id": "generator", "anchor": {"on": {"covered": {}}}}
+          ]}}}},
+        "timeout_ms": 90000, "on_fail": {"action": "SKIP"}},
+      {"label": "home", "move": {"to": {"safest": {}}}}
+    ],
+    "handlers": [],
+    // A beacon placed past supply waits dark rather than refusing the file:
+    // the verifier's power projection does not read the guards above.
+    "options": {"allow_dormant_beacons": true}
+  },
+  "on_death": {"on_respawn": "CONTINUE"},
+  "fallback": {"hold": {"at": {"safest": {}}}}
+}

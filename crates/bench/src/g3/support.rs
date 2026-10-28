@@ -565,7 +565,13 @@ fn delta(now: u64, was: u64) -> Result<u64, Error> {
 /// fit the map, the build does not stand, or the tick does not fall as built.
 pub fn measure(root: &Path, seed: u64) -> Result<SupportReport, Error> {
     // A minute: room for the settling ticks, the build and the tick.
-    let mut gate = segment::open_gate(root, seed, 60_000, super::stream::CRATERS_PER_SECOND)?;
+    let mut gate = segment::open_gate(
+        root,
+        seed,
+        60_000,
+        super::stream::CRATERS_PER_SECOND,
+        super::layout::Quarters::FULL,
+    )?;
     let mut played: u64 = 0;
     for _ in 0..SETTLE_TICKS {
         tick(&mut gate, &mut played)?;
@@ -615,4 +621,111 @@ pub fn measure(root: &Path, seed: u64) -> Result<SupportReport, Error> {
             before.skipped(CollapseSkip::RegionBound),
         )?,
     })
+}
+
+/// How far from the second seat's core the fill's grid reaches, in voxels.
+const FILL_REACH: i32 = 48;
+
+/// The fill's grid step, in voxels: one footing a column, no two touching.
+const FILL_STEP: usize = 3;
+
+/// The footing query at its worst case over **full tables** (item 148 (4),
+/// #133's figure): the gate's world, freshly generated, with its beacon table
+/// filled to the world's 40 and its structure table to every row it has (the
+/// seats' shares and the ruin reserve), so each miss walks the most rows a
+/// match can hold. The segment cannot reach this through play: the gate
+/// layout carries no Build targets (item 149 (4)), so its Build beacons
+/// place nothing.
+///
+/// The fill is the sim's fixture API (`World::place_beacon_directly`,
+/// `World::raise_structure`), on a world of the bench's own that no match
+/// plays and no hash chain reads: the query is a pure read of the tables, so
+/// what put the rows there does not change what a miss walks. The rows stand
+/// around the second seat's core, far from the first live beacon whose
+/// footing [`footing_query`]'s ball meets.
+///
+/// # Errors
+///
+/// When the world cannot be built, the grid finds no ground, or as
+/// [`footing_query`].
+pub fn footing_at_room(root: &Path, seed: u64) -> Result<FootingQuery, Error> {
+    use pharmakos_sim::runner::MatchSettings;
+    use pharmakos_sim::seams::MandateKind;
+    use pharmakos_sim::tables::StructureKind;
+    use pharmakos_sim::world::WorldConfig;
+
+    use super::layout::{GATE_SEATS, Quarters};
+
+    let bench = super::variant::bench_rules(root, GATE_SEATS, segment::gate_load(Quarters::FULL)?)?;
+    let mut world = World::new(&WorldConfig {
+        match_seed: seed,
+        seats: GATE_SEATS,
+        rules: bench.rules,
+        match_settings: MatchSettings {
+            segment_lengths_ms: vec![super::G3_SEGMENT_MS],
+            round_limit: 1,
+        },
+    })
+    .map_err(|error| Error::Sim {
+        during: "building the footing query's world",
+        reason: error.to_string(),
+    })?;
+    let [cx, cy] = world
+        .beacons()
+        .seats()
+        .iter()
+        .zip(world.beacons().positions())
+        .find(|(seat, _)| **seat == 1)
+        .map(|(_, at)| pharmakos_sim::targeting::column_of(*at))
+        .ok_or_else(|| Error::Layout("the map has no second core".to_owned()))?;
+    let mut sites: Vec<[pharmakos_sim::math::fixed::Fx; 3]> = Vec::new();
+    for dy in (-FILL_REACH..=FILL_REACH).step_by(FILL_STEP) {
+        for dx in (-FILL_REACH..=FILL_REACH).step_by(FILL_STEP) {
+            if dx == 0 && dy == 0 {
+                continue;
+            }
+            if let Some(at) = world.ground().standing(cx + dx, cy + dy) {
+                sites.push(at);
+            }
+        }
+    }
+    let mut sites = sites.into_iter();
+    let mut next = || {
+        sites
+            .next()
+            .ok_or_else(|| Error::Layout("the fill's grid ran out of ground".to_owned()))
+    };
+    let mut homes = Vec::new();
+    for seat in 0..GATE_SEATS {
+        let seat = pharmakos_sim::tables::SeatId::new(
+            u8::try_from(seat).map_err(|_| Error::Overflow("a seat id"))?,
+        );
+        while let Some(home) = world.place_beacon_directly(seat, next()?, MandateKind::Build, 0) {
+            homes.push((seat, home));
+        }
+    }
+    let homes_held = homes.len();
+    let mut placed: usize = 0;
+    'fill: loop {
+        for (seat, home) in &homes {
+            if world
+                .raise_structure(*seat, *home, StructureKind::Autocannon, next()?)
+                .is_none()
+            {
+                break 'fill;
+            }
+            placed = placed
+                .checked_add(1)
+                .ok_or(Error::Overflow("the structures raised"))?;
+        }
+        if homes_held == 0 {
+            return Err(Error::Layout(
+                "no seat had room for a beacon to home the fill's structures".to_owned(),
+            ));
+        }
+    }
+    if placed == 0 {
+        return Err(Error::Layout("the structure table took no row".to_owned()));
+    }
+    footing_query(&world)
 }

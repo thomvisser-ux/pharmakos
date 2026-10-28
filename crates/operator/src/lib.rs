@@ -55,10 +55,16 @@
 //!
 //! # What Easy does not do yet
 //!
-//! Spec section 14's Survey post, Defend guard, chatter and target spread are
-//! not built at Easy (decisions-log item 111, section A6).
+//! Spec section 14's Survey post, chatter and target spread are not built at
+//! Easy (decisions-log item 111, section A6). Its Defend guard is: S2's plan,
+//! decision 35, moved it from S5 to S2, and `oprd` built it (a guard post in
+//! the round after a Push in which the commander died, scored by decision
+//! 12's threat model; [`easy`]'s Defend the Core). So are its raids, S2's
+//! `opra`: an Attack beacon beside the core raiding the nearest fixed target
+//! the seat knows of, an enemy beacon or an enemy commander in sight, scored
+//! alike (Raid an Enemy Beacon).
 //!
-//! PLACEHOLDER: Easy's Survey post, Defend guard, chatter and target spread — owner, S5, with Normal and Hard
+//! PLACEHOLDER: Easy's Survey post, chatter and target spread — owner, S5, with Normal and Hard
 
 pub mod easy;
 pub mod wire;
@@ -73,3 +79,13 @@ mod tuning;
 pub use easy::{Advice, Easy, Played, Submitted, SuggestedValue, Suggestion};
 pub use tuning::RulesError;
 pub use wire::{Call, Refused};
+
+/// Whether the operator reads a view entity of this kind (`UNIT` or
+/// `STRUCTURE`, as the proto spells them) and subtype as an asset whose
+/// threat it can weigh. `crates/gamectl/tests/operator_host.rs` holds it to
+/// every subtype the gateway writes, so a kind added later cannot turn every
+/// round that sees one into a refused read.
+#[must_use]
+pub fn reads_view_subtype(kind: &str, subtype: &str) -> bool {
+    matches!(situation::Asset::of(Some(kind), subtype), Ok(Some(_)))
+}

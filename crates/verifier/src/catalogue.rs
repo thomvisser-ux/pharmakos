@@ -40,7 +40,9 @@
 //! (Defend's and Attack's references, a wall box's place, and an Attack
 //! target's freshness), `E0510` to `E0512` (Defend's and Attack's ranges and
 //! a wall's rotation and height) and `I0004` (a repair threshold of 0), each
-//! at the end of its family, and gives `W0703` its emitter.
+//! at the end of its family, and gives `W0703` its emitter. S2's threat
+//! model's verifier lane (task `vfy3`) adds `I0005` (`AVOID_KNOWN_THREATS`
+//! with no sighting to route around) at the end of the information codes.
 //!
 //! The label an unemitted row prints, `none at the skeleton (…)`, is kept as
 //! it was spelt when the table shipped, because `gamectl docs` quotes it; the
@@ -330,7 +332,7 @@ pub const CATALOGUE: &[Entry] = &[
         code: "E0013",
         family: Family::DecodeAndVersion,
         severity: Severity::Error,
-        emitter: Emitter::Stage(Stage::Structure),
+        emitter: Emitter::NoneYet("retired by S2's `atk`, which built Attack's settings"),
     },
     Entry {
         code: "E0014",
@@ -666,6 +668,15 @@ pub const CATALOGUE: &[Entry] = &[
         severity: Severity::Error,
         emitter: Emitter::Stage(Stage::Semantics),
     },
+    // S2's `atk`: an `enemy_commander` target naming the playbook's own seat,
+    // or a seat past any a match holds (the owner's answer of 2026-10-26).
+    // The seat's own number is in its view, so it is the semantics stage's.
+    Entry {
+        code: "E0419",
+        family: Family::ReferencesAndPlacement,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Semantics),
+    },
     // --- E05xx: settings and recycle -----------------------------------------
     Entry {
         code: "E0501",
@@ -750,8 +761,9 @@ pub const CATALOGUE: &[Entry] = &[
     // A warning in the settings family, spelt with the `W` the spec gives a
     // family's warnings, as `W06xx` beside `E06xx`. Decisions-log item 127 (9)
     // and S1's plan's decision 6: `seam_choice: SAFEST` read as NEAREST until
-    // S2's threat model, and the verifier said so. S2's `dfnd` built the model,
-    // so the code keeps its number, raised by nothing.
+    // S2's threat model, and the verifier said so. S2's `dfnd` built the model
+    // (decision 12: SAFEST digs the nearest seam no known threat's weapon
+    // reaches), so the code keeps its number, raised by nothing.
     Entry {
         code: "W0501",
         family: Family::SettingsAndRecycle,
@@ -876,6 +888,27 @@ pub const CATALOGUE: &[Entry] = &[
         severity: Severity::Warning,
         emitter: Emitter::Stage(Stage::Estimate),
     },
+    // S2's `vfy4` (the owner's ruling of 2026-10-27): an `enemy_commander`
+    // Attack target with no seat named and no enemy commander sighted inside
+    // the reach window. The sim chooses the target at launch and holds the
+    // force until a fresh sighting exists, so this is advice, never E0418.
+    // It reads the seat's view, so it is the semantics stage's, beside E0418.
+    Entry {
+        code: "W0708",
+        family: Family::ScheduleConflictsAndStaleness,
+        severity: Severity::Warning,
+        emitter: Emitter::Stage(Stage::Semantics),
+    },
+    // S2's `atk2` (decisions-log item 150 (2)): the nearest known enemy
+    // beacon as an Attack target with no enemy beacon sighted inside the
+    // reach window. The sim chooses the beacon at launch and holds the force
+    // until the seat knows one, so this is W0708's advice for a beacon raid.
+    Entry {
+        code: "W0709",
+        family: Family::ScheduleConflictsAndStaleness,
+        severity: Severity::Warning,
+        emitter: Emitter::Stage(Stage::Semantics),
+    },
     // --- I...: information ---------------------------------------------------
     Entry {
         code: "I0001",
@@ -892,7 +925,8 @@ pub const CATALOGUE: &[Entry] = &[
     // S1-39, S1's plan's decision 11 (item 128): an omitted `pace`,
     // `seam_choice`, `pillar_spacing` or `terraform` reads as its named
     // default, and the report says so; from S2 (decision 4, task `vfy2`) an
-    // omitted `roe` too, as RETURN_FIRE.
+    // omitted `roe` too, read by writ (decisions-log item 148 (2), task
+    // `vfy3`): FREE_FIRE on Defend and Attack, RETURN_FIRE on the others.
     Entry {
         code: "I0003",
         family: Family::Information,
@@ -906,6 +940,16 @@ pub const CATALOGUE: &[Entry] = &[
         family: Family::Information,
         severity: Severity::Info,
         emitter: Emitter::Stage(Stage::Structure),
+    },
+    // S2's plan, decision 12 (task `vfy3`): a move paced AVOID_KNOWN_THREATS
+    // while the seat's view holds no enemy beacon in live vision goes as
+    // DIRECT does unless an armed enemy is seen when it starts. The editor's
+    // explanation and no more; whether a threat is seen then is the Push's.
+    Entry {
+        code: "I0005",
+        family: Family::Information,
+        severity: Severity::Info,
+        emitter: Emitter::Stage(Stage::Semantics),
     },
 ];
 

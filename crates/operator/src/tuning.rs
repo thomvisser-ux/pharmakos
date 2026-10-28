@@ -26,7 +26,12 @@
 //! which S1's plan, decision 14 (ruled by item 128), made the reading of the
 //! register's S1-14 rather than a guess.
 
+use pharmakos_proto::gp::v1::rules_table::{
+    StructureKind as StructureRow, Structures, UnitKind as UnitRow, Units, Weapon,
+};
 use pharmakos_proto::gp::v1::{ByRichness, RulesTable};
+
+use crate::situation::{Asset, StructureKind, UnitKind};
 
 /// A rules text the operator cannot score with.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -115,6 +120,134 @@ pub(crate) struct Tuning {
     pub(crate) build_target_ms: i64,
     /// `interface_times.place_beacon_deploy_ms`.
     pub(crate) place_beacon_deploy_ms: i64,
+    /// `interface_times.set_priority_ms`: the priority row of a placed
+    /// beacon's `initial`.
+    pub(crate) set_priority_ms: i64,
+    /// `interface_times.edit_settings_max_ms`: the most one settings row
+    /// costs, which is what the guard post's Defend row is costed at, an upper
+    /// bound ([`crate::candidates`]).
+    pub(crate) edit_settings_max_ms: i64,
+    /// What a guard goal spends, whole $: the Defend beacon and the one
+    /// picket scout the Defend the Core template fields
+    /// (`structures.beacon.cost_dollars` plus `units.scout.cost_dollars`).
+    /// The raiders it fields as guards are bought only when a threat is seen
+    /// in its sphere, which no Lull can know, so they are not counted.
+    pub(crate) guard_cost_dollars: i64,
+    /// What a raid goal spends, whole $: the Attack beacon and the raiders
+    /// its launch waits for, the Raid template's own `force_size`
+    /// ([`crate::easy::RAID_FORCE_SIZE`]; `structures.beacon.cost_dollars`
+    /// plus that many `units.raider.cost_dollars`).
+    pub(crate) raid_cost_dollars: i64,
+    /// `verifier.reach_memory_ms`: how long a sighting stays fresh, the
+    /// window an Attack target's sighting must fall inside (E0418).
+    pub(crate) reach_memory_ms: i64,
+    /// Each armed kind's threat (S2's plan, decision 12): its weapon's damage
+    /// per second, in thousandths of a hit point per second, as the sim's own
+    /// threat model computes it from the same row.
+    threats: Threats,
+}
+
+/// The threat of every kind the rules table gives a row, in thousandths of a
+/// hit point per second; zero for a row with no weapon.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct Threats {
+    build_drone: u64,
+    mining_drone: u64,
+    repair_drone: u64,
+    raider: u64,
+    scout: u64,
+    generator: u64,
+    autocannon: u64,
+    mortar: u64,
+    survey_post: u64,
+    resonance_spire: u64,
+}
+
+impl Threats {
+    /// Every row's threat.
+    ///
+    /// # Errors
+    ///
+    /// [`RulesError`] for an absent row, and for a weapon [`threat_of`]
+    /// refuses.
+    fn read(units: &Units, structures: &Structures) -> Result<Threats, RulesError> {
+        let missing = |row: &str| RulesError(format!("the rules text has no `{row}` row"));
+        let unit = |name: &str, row: Option<UnitRow>| {
+            let row = row.ok_or_else(|| missing(&format!("units.{name}")))?;
+            threat_of(&format!("units.{name}"), row.weapon)
+        };
+        let structure = |name: &str, row: Option<StructureRow>| {
+            let row = row.ok_or_else(|| missing(&format!("structures.{name}")))?;
+            threat_of(&format!("structures.{name}"), row.weapon)
+        };
+        Ok(Threats {
+            build_drone: unit("build_drone", units.build_drone)?,
+            mining_drone: unit("mining_drone", units.mining_drone)?,
+            repair_drone: unit("repair_drone", units.repair_drone)?,
+            raider: unit("raider", units.raider)?,
+            scout: unit("scout", units.scout)?,
+            generator: structure("generator", structures.generator)?,
+            autocannon: structure("autocannon", structures.autocannon)?,
+            mortar: structure("mortar", structures.mortar)?,
+            survey_post: structure("survey_post", structures.survey_post)?,
+            resonance_spire: structure("resonance_spire", structures.resonance_spire)?,
+        })
+    }
+}
+
+/// One row's weapon as a threat: `damage * 1 000 000 / cooldown_ms`, rounded
+/// down, the sim's own formula; zero for a row with no weapon.
+///
+/// # Errors
+///
+/// [`RulesError`] for a weapon whose cooldown is not positive, which fires no
+/// shot at any rate a threat can be.
+fn threat_of(row: &str, weapon: Option<Weapon>) -> Result<u64, RulesError> {
+    let Some(weapon) = weapon else {
+        return Ok(0);
+    };
+    let cooldown = u64::try_from(weapon.cooldown_ms)
+        .ok()
+        .filter(|cooldown| *cooldown > 0)
+        .ok_or_else(|| RulesError(format!("`{row}`'s weapon has no positive cooldown")))?;
+    u64::from(weapon.damage_hp)
+        .checked_mul(1_000_000)
+        .and_then(|scaled| scaled.checked_div(cooldown))
+        .ok_or_else(|| RulesError(format!("`{row}`'s weapon's threat does not fit")))
+}
+
+/// The two rows a raid reads: its price, the Attack beacon and
+/// [`crate::easy::RAID_FORCE_SIZE`] raiders, and `verifier.reach_memory_ms`,
+/// refused at zero or below, where it means nothing.
+///
+/// # Errors
+///
+/// [`RulesError`] for a missing row, a window that is not positive, or a
+/// price that does not fit.
+fn attack_rows(
+    table: &RulesTable,
+    raider: Option<UnitRow>,
+    beacon_cost_dollars: u32,
+) -> Result<(i64, i64), RulesError> {
+    let missing = |row: &str| RulesError(format!("the rules text has no `{row}` row"));
+    let raider = raider.ok_or_else(|| missing("units.raider"))?;
+    let reach_memory_ms = i64::from(
+        table
+            .verifier
+            .as_ref()
+            .ok_or_else(|| missing("verifier"))?
+            .reach_memory_ms,
+    );
+    if reach_memory_ms <= 0 {
+        return Err(RulesError(String::from(
+            "the rules text's `verifier.reach_memory_ms` row is not positive",
+        )));
+    }
+    let raid_cost_dollars = i64::from(raider.cost_dollars)
+        .checked_mul(i64::from(crate::easy::RAID_FORCE_SIZE))
+        .and_then(|raiders| raiders.checked_add(i64::from(beacon_cost_dollars)))
+        .ok_or_else(|| RulesError(String::from("a raid's price does not fit a whole $ figure")))?;
+    Ok((raid_cost_dollars, reach_memory_ms))
 }
 
 impl Tuning {
@@ -142,10 +275,12 @@ impl Tuning {
         let times = table
             .interface_times
             .ok_or_else(|| missing("interface_times"))?;
-        let build_drone = table
-            .units
-            .and_then(|units| units.build_drone)
+        let units = table.units.ok_or_else(|| missing("units"))?;
+        let threats = Threats::read(&units, &structures)?;
+        let build_drone = units
+            .build_drone
             .ok_or_else(|| missing("units.build_drone"))?;
+        let scout = units.scout.ok_or_else(|| missing("units.scout"))?;
         // Zero (or, for a time, below it) where zero means nothing: refused.
         for (row, value) in [
             (
@@ -166,6 +301,14 @@ impl Tuning {
                 i64::from(times.edit_settings_base_ms),
             ),
             (
+                "interface_times.edit_settings_max_ms",
+                i64::from(times.edit_settings_max_ms),
+            ),
+            (
+                "interface_times.set_priority_ms",
+                i64::from(times.set_priority_ms),
+            ),
+            (
                 "interface_times.place_beacon_deploy_ms",
                 i64::from(times.place_beacon_deploy_ms),
             ),
@@ -178,8 +321,8 @@ impl Tuning {
                 return Err(missing(row));
             }
         }
-        // The two route prices, summed once here: rows are `u32`, so the sums
-        // fit an `i64`, and a sum that did not would be a table refused
+        // The three route prices, summed once here: rows are `u32`, so the
+        // sums fit an `i64`, and a sum that did not would be a table refused
         // rather than a price saturated.
         let too_dear = || {
             RulesError(String::from(
@@ -192,9 +335,17 @@ impl Tuning {
         let vent_cost_dollars = tap_cost_dollars
             .checked_add(i64::from(beacon_row.cost_dollars))
             .ok_or_else(too_dear)?;
+        let guard_cost_dollars = i64::from(beacon_row.cost_dollars)
+            .checked_add(i64::from(scout.cost_dollars))
+            .ok_or_else(too_dear)?;
+        let (raid_cost_dollars, reach_memory_ms) =
+            attack_rows(&table, units.raider, beacon_row.cost_dollars)?;
         Ok(Tuning {
             tap_cost_dollars,
+            raid_cost_dollars,
+            reach_memory_ms,
             vent_cost_dollars,
+            guard_cost_dollars,
             sphere_radius_voxels: i64::from(beacon.sphere_radius_voxels),
             beacon_cost_dollars: i64::from(beacon_row.cost_dollars),
             generator_output_kw: power
@@ -205,9 +356,39 @@ impl Tuning {
                 .ok_or_else(|| missing("economy.ore_yield_per_voxel_dollars"))?,
             seam_voxels: i64::from(economy.seam_voxels),
             edit_settings_base_ms: i64::from(times.edit_settings_base_ms),
+            edit_settings_max_ms: i64::from(times.edit_settings_max_ms),
+            set_priority_ms: i64::from(times.set_priority_ms),
             place_beacon_deploy_ms: i64::from(times.place_beacon_deploy_ms),
             build_target_ms: i64::from(times.build_target_ms),
+            threats,
         })
+    }
+
+    /// An asset's threat (S2's plan, decision 12), in thousandths of a hit
+    /// point per second: its kind's weapon from its row, and zero for a kind
+    /// with no weapon. A commander carries none (spec section 4) and a wall
+    /// is ground, not a gun. A beacon is read as unarmed: the core's gun is
+    /// the one a beacon carries, and whether another seat's beacon is its core
+    /// is on no wire (`gateway.proto`'s `BeaconSummary.core`), so the model is
+    /// blind to an enemy core's gun, which stands inside that seat's own
+    /// sphere.
+    pub(crate) const fn threat(&self, asset: Asset) -> u64 {
+        let t = &self.threats;
+        match asset {
+            Asset::Unit(UnitKind::Commander)
+            | Asset::Structure(StructureKind::Wall)
+            | Asset::Beacon => 0,
+            Asset::Unit(UnitKind::BuildDrone) => t.build_drone,
+            Asset::Unit(UnitKind::MiningDrone) => t.mining_drone,
+            Asset::Unit(UnitKind::RepairDrone) => t.repair_drone,
+            Asset::Unit(UnitKind::Raider) => t.raider,
+            Asset::Unit(UnitKind::Scout) => t.scout,
+            Asset::Structure(StructureKind::Generator) => t.generator,
+            Asset::Structure(StructureKind::Autocannon) => t.autocannon,
+            Asset::Structure(StructureKind::Mortar) => t.mortar,
+            Asset::Structure(StructureKind::SurveyPost) => t.survey_post,
+            Asset::Structure(StructureKind::ResonanceSpire) => t.resonance_spire,
+        }
     }
 
     /// `power.generator_output_kw` for one grade.
@@ -248,6 +429,11 @@ mod tests {
                 "interface_times.edit_settings_base_ms",
                 "\"edit_settings_base_ms\": 2000",
                 "\"edit_settings_base_ms\": 0",
+            ),
+            (
+                "verifier.reach_memory_ms",
+                "\"reach_memory_ms\": 180000",
+                "\"reach_memory_ms\": 0",
             ),
         ] {
             let text = committed();

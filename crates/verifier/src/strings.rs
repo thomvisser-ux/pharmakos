@@ -66,7 +66,8 @@ pub const VERIFIER_STRINGS: &[Text] = &[
     },
     Text {
         code: "E0003",
-        message: "`{field}` is held back to a later version and is not part of the v1 vocabulary.",
+        message: "`{field}` is reserved: the schema holds it back for a later stage or version, \
+                  and this build does not read it.",
         beginner: "This is a word the game keeps for later. It is refused rather than quietly \
                    ignored, so nothing you wrote disappears without you seeing it.",
     },
@@ -123,28 +124,30 @@ pub const VERIFIER_STRINGS: &[Text] = &[
     },
     Text {
         code: "E0012",
-        message: "Defend mandate settings have no effect until S2's Defend mandate lands; they \
-                  are refused rather than ignored.",
-        beginner: "A Defend beacon cannot be given settings in this build yet.",
+        message: "Defend mandate settings had no effect until S2's Defend mandate landed; this \
+                  code is retired and raised by nothing.",
+        beginner: "A Defend beacon takes its settings in this build.",
     },
     Text {
         code: "E0013",
-        message: "Attack mandate settings have no effect until S2's Attack mandate lands; they \
-                  are refused rather than ignored.",
-        beginner: "An Attack beacon cannot be given settings in this build yet.",
+        message: "Attack mandate settings had no effect until S2's Attack mandate landed; this \
+                  code is retired and raised by nothing.",
+        beginner: "An Attack beacon takes its settings in this build.",
     },
     Text {
         code: "E0014",
-        message: "selector `most_threatened` has no effect until S2's threat model, which is what \
-                  it ranks by; it is refused rather than ignored.",
-        beginner: "\"Most threatened\" needs threats to weigh, and this build has none yet. Name \
-                   the beacon, or pick it another way.",
+        message: "selector `most_threatened` had no effect until S2's threat model landed; this \
+                  code is retired and raised by nothing.",
+        beginner: "\"Most threatened\" picks your own beacon with the most enemy firepower seen \
+                   inside its sphere.",
     },
     Text {
         code: "E0015",
         message: "selector filter `side: ENEMY_KNOWN` has no effect until S3, with the seat's \
-                  knowledge store; it is refused rather than ignored.",
-        beginner: "Picking among enemy beacons comes later. For now a selector picks among your \
+                  knowledge store, except in `nearest` with no other filter field as an Attack \
+                  target; it is refused rather than ignored.",
+        beginner: "Picking among enemy beacons comes later. For now only an Attack beacon can \
+                   pick one, the nearest your side knows of; any other selector picks among your \
                    own.",
     },
     Text {
@@ -155,10 +158,9 @@ pub const VERIFIER_STRINGS: &[Text] = &[
     },
     Text {
         code: "E0017",
-        message: "predicate `beacon_under_attack` has no effect until S2's combat gives a beacon \
-                  a damage history to ask about; it is refused rather than read as true or false.",
-        beginner: "Asking whether a beacon is under attack comes with combat. Until then the \
-                   question has no answer, so it cannot be asked.",
+        message: "predicate `beacon_under_attack` had no effect until S2's combat gave a beacon \
+                  a damage history to ask about; this code is retired and raised by nothing.",
+        beginner: "Asking whether a beacon is under attack works in this build.",
     },
     Text {
         code: "E0018",
@@ -169,9 +171,9 @@ pub const VERIFIER_STRINGS: &[Text] = &[
     },
     Text {
         code: "E0019",
-        message: "a Build target names `{id}`, one of S2's base kit, which has no effect until \
-                  S2's base kit lands; it is refused rather than ignored.",
-        beginner: "Autocannons, mortars and walls cannot be built in this build yet.",
+        message: "a Build target naming one of S2's base kit had no effect until S2's base kit \
+                  landed; this code is retired and raised by nothing.",
+        beginner: "Autocannons, mortars and walls can be built in this build.",
     },
     // --- E01xx: limits and required blocks -----------------------------------
     Text {
@@ -416,10 +418,17 @@ pub const VERIFIER_STRINGS: &[Text] = &[
     },
     Text {
         code: "E0418",
-        message: "{what}; an Attack target must have been seen within the reach window, {max} \
-                  ms, when the playbook is sealed.",
+        message: "{what}; this Attack target must have been seen within the reach window, \
+                  {max} ms, when the playbook is sealed.",
         beginner: "An Attack beacon attacks what the seat has seen recently. Look again with a \
                    scout, or choose a target the seat has seen.",
+    },
+    Text {
+        code: "E0419",
+        message: "`enemy_commander` names seat {seat}, {why}; it hunts another seat's commander \
+                  in this match, or, without a seat, the nearest the seat has seen.",
+        beginner: "An Attack beacon hunts an enemy's commander. Name an enemy seat, or leave \
+                   the seat out to hunt the nearest enemy commander seen.",
     },
     // --- E05xx: settings and recycle -----------------------------------------
     Text {
@@ -490,9 +499,11 @@ pub const VERIFIER_STRINGS: &[Text] = &[
     },
     Text {
         code: "W0501",
-        message: "`seam_choice` SAFEST reads as NEAREST until S2's threat model arrives.",
-        beginner: "\"Safest\" needs threats to weigh, and they come later. Until then this beacon \
-                   digs the nearest seam.",
+        message: "`seam_choice` SAFEST read as NEAREST until S2's threat model landed; it digs \
+                  the nearest seam no known threat's weapon reaches, and this code is retired \
+                  and raised by nothing.",
+        beginner: "\"Safest\" digs the nearest seam that no enemy weapon your side sees can \
+                   reach.",
     },
     Text {
         code: "W0502",
@@ -586,6 +597,22 @@ pub const VERIFIER_STRINGS: &[Text] = &[
         beginner: "The game could not check this route's timing. That is a fault in the game, not \
                    in the playbook.",
     },
+    Text {
+        code: "W0708",
+        message: "{what}, and the reach window is {max} ms; with no seat named, the Attack \
+                  hunts the enemy commander seen within it nearest its staging point when its \
+                  force is ready to launch, and the force waits until there is one.",
+        beginner: "This Attack beacon's raiders wait until your side has recently seen an enemy \
+                   commander, then hunt the nearest one. Scouts help them find one sooner.",
+    },
+    Text {
+        code: "W0709",
+        message: "{what}, and the reach window is {max} ms; the Attack raids the enemy beacon \
+                  seen within it nearest its staging point when its force is ready to launch, \
+                  and the force waits until there is one.",
+        beginner: "This Attack beacon's raiders wait until your side has recently seen an enemy \
+                   beacon, then raid the nearest one. Scouts help them find one sooner.",
+    },
     // --- I...: information ---------------------------------------------------
     Text {
         code: "I0001",
@@ -609,6 +636,14 @@ pub const VERIFIER_STRINGS: &[Text] = &[
                   structure; its units and the commander are still repaired.",
         beginner: "A repair threshold of 0 means never. Write a percentage to have damaged \
                    structures repaired.",
+    },
+    Text {
+        code: "I0005",
+        message: "`pace` is AVOID_KNOWN_THREATS, and the seat's view holds no enemy beacon in \
+                  sight; unless the seat sees an armed enemy when the move starts, it goes as \
+                  DIRECT does.",
+        beginner: "Avoiding threats needs an enemy your side can see. None is in sight now, so \
+                   unless one is when the walk starts, it goes straight.",
     },
 ];
 
@@ -692,8 +727,25 @@ pub const ANCHOR_NOT_A_VOXEL: &str = "this anchor is not a voxel";
 pub const WALL_BOX_COLUMN: &str = "the wall box's";
 /// E0416's `{what}` for a Build target's anchor.
 pub const ANCHOR_COLUMN: &str = "the anchor's";
-/// E0418's `{what}`: no enemy commander has been sighted.
+/// W0708's `{what}`: no enemy commander has been sighted.
 pub const NO_COMMANDER_SIGHTED: &str = "the seat has no sighting of an enemy commander";
+/// E0419's `{why}` for the playbook's own seat.
+pub const SEAT_IS_OWN: &str = "which is this playbook's own seat";
+/// E0419's `{why}` for a seat past any match's.
+pub const SEAT_PAST_ANY_MATCH: &str = "which is past any seat a match holds";
+
+/// E0418's `{what}` for a named seat whose commander the view holds no
+/// sighting of.
+#[must_use]
+pub fn commander_never_sighted(seat: u32) -> String {
+    format!("the seat has no sighting of seat {seat}'s commander")
+}
+
+/// E0418's `{what}` subject for a named seat's commander.
+#[must_use]
+pub fn seats_commander(seat: u32) -> String {
+    format!("seat {seat}'s commander")
+}
 /// W0502's `{name}` for a repeated `my_commander`.
 pub const MY_COMMANDER: &str = "my_commander";
 /// E0101's `{what}` for a launch with no condition.
@@ -707,13 +759,23 @@ pub fn never_sighted(beacon_id: &str) -> String {
     format!("the seat has no sighting of `{beacon_id}`")
 }
 
-/// E0418's `{what}` for a sighting older than the window.
+/// E0418's and W0708's `{what}` for a sighting older than the window.
 #[must_use]
 pub fn sighted_ago(what: &str, age_ms: u32) -> String {
     format!("{what} was last seen {age_ms} ms ago")
 }
 
-/// The enemy commander, as E0418's `{what}` names it.
+/// W0709's `{what}`: no enemy beacon has been sighted.
+pub const NO_BEACON_SIGHTED: &str = "the seat has no sighting of an enemy beacon";
+
+/// W0709's subject for the most recently seen enemy beacon, whose sighting is
+/// older than the window.
+#[must_use]
+pub fn freshest_enemy_beacon(id: &str) -> String {
+    format!("the most recently seen enemy beacon, `{id}`,")
+}
+
+/// The enemy commander, as W0708's `{what}` names it.
 pub const THE_ENEMY_COMMANDER: &str = "the enemy commander";
 
 /// The row for one code, or `None` if the table does not have it.

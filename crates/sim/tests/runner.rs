@@ -51,6 +51,18 @@ fn rules() -> RulesTable {
         .expect("the committed rules table loads")
 }
 
+/// `rules` with each core's surplus raised to 100 kW and the map's power
+/// ceiling to 1 000 kW, so that the raiders `World::field_movers_directly`
+/// homes to the cores draw no seat dark: a dark core parks its units, and
+/// these tests want a table that moves.
+fn powered(rules: &RulesTable) -> RulesTable {
+    let mut message = rules.message().clone();
+    let power = message.power.as_mut().expect("a power block");
+    power.core_surplus_kw = 100;
+    power.map_ceiling_kw = 1_000;
+    RulesTable::from_message(&message).expect("the powered table is a table")
+}
+
 /// The committed table with one edit to the message, the same path a tuning
 /// pull request takes.
 fn rules_edited(edit: impl FnOnce(&mut gp::v1::RulesTable)) -> RulesTable {
@@ -72,7 +84,6 @@ fn world_on(rules: RulesTable, seats: u32, lengths: &[i32]) -> World {
     World::new(&WorldConfig {
         match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED,
         seats,
-        units_per_seat: 0,
         rules,
         match_settings: MatchSettings {
             segment_lengths_ms: lengths.to_vec(),
@@ -235,7 +246,6 @@ fn a_degenerate_ladder_is_refused_on_the_way_in_and_floored_on_the_way_back() {
         World::new(&WorldConfig {
             match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED,
             seats: 2,
-            units_per_seat: 0,
             rules: rules(),
             match_settings: MatchSettings {
                 segment_lengths_ms: vec![0, -5_000, 1],
@@ -510,7 +520,6 @@ fn an_unplaced_seat_is_neither_eliminated_nor_counted() {
         World::new(&WorldConfig {
             match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED,
             seats: 4,
-            units_per_seat: 0,
             rules: rules(),
             match_settings: MatchSettings {
                 segment_lengths_ms: vec![SHORT_MS],
@@ -542,7 +551,6 @@ fn the_round_limit_is_decided_at_the_last_rounds_final_tick() {
     world = World::new(&WorldConfig {
         match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED,
         seats: 2,
-        units_per_seat: 0,
         rules: rules(),
         match_settings: MatchSettings {
             segment_lengths_ms: vec![1_000],
@@ -899,24 +907,27 @@ fn a_host_that_drains_never_meets_a_full_bus() {
     // size, a host draining once a tick stays under the capacity **including on
     // the tick the capacity was sized against**, which is a seat's elimination
     // — one line per beacon of that seat plus one per structure homed to it.
-    // So this runs at fifty walkers a seat and kills a
+    // So this runs at fifty raiders a seat and kills a
     // seat's core inside the measured loop rather than measuring a handful of
     // phase transitions.
-    let mut runner = Runner::new(
-        World::new(&WorldConfig {
-            match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED,
-            seats: 3,
-            // Fifty walkers a seat, the determinism harness's size until S1's
-            // real segment (decision 16) took them out of its chain.
-            units_per_seat: 50,
-            rules: rules(),
-            match_settings: MatchSettings {
-                segment_lengths_ms: vec![SHORT_MS],
-                round_limit: DEFAULT_ROUND_LIMIT,
-            },
-        })
-        .expect("a three-seat world at the harness's size"),
-    );
+    let mut world = World::new(&WorldConfig {
+        match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED,
+        seats: 3,
+        rules: powered(&rules()),
+        match_settings: MatchSettings {
+            segment_lengths_ms: vec![SHORT_MS],
+            round_limit: DEFAULT_ROUND_LIMIT,
+        },
+    })
+    .expect("a three-seat world");
+    // Fifty raiders a seat walking home from across the map, the size the harness walkers
+    // gave until S2-16 removed them.
+    world
+        .field_movers_directly(50)
+        .expect("fifty raiders fit every seat's share");
+    let mut runner = Runner::new(world);
+    // The fixture's fabrications are not a tick's lines: drain them first.
+    runner.clear_events();
     let capacity = runner.world().event_bus().capacity();
     assert!(runner.begin_push().unwrap());
 
@@ -1049,7 +1060,6 @@ fn a_playbook_is_sealed_during_a_lull_and_refused_in_every_other_phase() {
         World::new(&WorldConfig {
             match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED,
             seats: 2,
-            units_per_seat: 0,
             rules: rules(),
             match_settings: MatchSettings {
                 segment_lengths_ms: vec![SHORT_MS],

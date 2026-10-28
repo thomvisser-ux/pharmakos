@@ -47,13 +47,60 @@
 //! it. Nothing looks ahead: the only evaluation is the estimate, which is an
 //! allowed estimate and not a dry run (AGENTS.md section 3 rule 2).
 //!
-//! # The terms that are zero at Easy, and why
+//! # Defence, and the guard post (S2's `oprd`)
 //!
-//! **Defence** (a Defend guard is section 14's "Vision and hunting" and S5's),
-//! **capability** (no licence or capability is on any wire until S4) and
-//! **attack** (fixed targets only; aiming at an enemy is S2's) are zero for
-//! every candidate. They are in the sum, with their weights, so S2 to S5 fill
-//! a term rather than change a formula. A placed beacon adds no draw (since
+//! **A guard goal** (Defend the Core): place a Defend beacon `covering` the
+//! live seam the seat covers nearest its core -- its starting seam, inside
+//! the core's sphere -- that protects the core and "my commander". It is
+//! enumerated every round the seat can afford one, first, so the cut never
+//! drops it and the wizard is offered its site; it is **added** to a built-in
+//! seat's route beside the round's goals, not ranked among them, whenever its
+//! utility is above zero ([`guard`]; [`crate::compose`]).
+//!
+//! Its **defence** term is the threat model's (S2's plan, decision 12): the
+//! summed threat of the other seats' assets the view shows inside the core's
+//! sphere, each its weapon's damage per second from the rules rows and zero
+//! if unarmed ([`core_threat`]), at [`DEFENCE_POINTS_PER_HP_PER_SECOND`]; and
+//! [`COMMANDER_DIED_POINTS`] in the round after a Push in which the seat's
+//! commander died (spec section 14, "adds a Defend guard on its commander when
+//! the commander has died recently", which decision 35 reads as the previous
+//! round's Push). Its economy is its price, negated, its expansion nothing,
+//! and it is charged no risk: the enemies near it are what it guards against.
+//! Every other goal's defence is zero.
+//!
+//! # Attack, and the raid (S2's `opra`)
+//!
+//! **A raid goal** (Raid an Enemy Beacon): place an Attack beacon `covering`
+//! the same seam a guard post would, beside the core, whose raiders gather at
+//! its site and raid one **fixed** target (Easy's row: "fixed targets only"):
+//! an enemy beacon by the `e_NN` the seat's own listing gives it, with a
+//! sighting inside the rules table's `verifier.reach_memory_ms`, or an enemy
+//! commander the view shows now, by its seat (`enemy_commander.seat`, the
+//! owner's answer of 2026-10-26, which pins one seat's commander). Spec
+//! section 14: Easy "scores enemy-commander raids like any other target", so
+//! both kinds are one list, ordered by ground distance from the core, ties to
+//! the lowest seat, then the beacon's name, cut at [`RAID_TARGETS_MAX`] and
+//! enumerated right after the guard post, so the cut never drops them
+//! ([`raid_goals`]).
+//!
+//! Each costs one estimate, from the commander by way of the core and the
+//! post's `covering` site to the target: the last leg is the raiders' march,
+//! and a target no route reaches is dropped. Its **attack** term is
+//! [`RAID_POINTS`], less the threat the view shows within one sphere radius
+//! of the target at [`DEFENCE_POINTS_PER_HP_PER_SECOND`] -- the same model as
+//! the guard's defence, so a defended target is worth less, by the same rule
+//! for a beacon and a commander. Its economy is its price negated (the
+//! beacon and [`crate::easy::RAID_FORCE_SIZE`] raiders), its expansion
+//! nothing, and its risk the usual one near its site. A raid is ranked among
+//! the round's goals like any other ([`top_k`]); every raid names the same
+//! post seam, so the composition's one-goal-per-feature rule places at most
+//! one a round. Every other goal's attack is zero.
+//!
+//! # The term that is zero at Easy, and why
+//!
+//! **Capability** (no licence or capability is on any wire until S4) is zero
+//! for every candidate. It is in the sum, with its weight, so a later stage
+//! fills a term rather than change a formula. A placed beacon adds no draw (since
 //! T14b a beacon is net zero through its own key-core, decisions-log item 113
 //! (5)), which S1's plan, decision 14, made the reading of the register's
 //! S1-14, so no goal is charged a kW shortfall.
@@ -61,12 +108,16 @@
 use pharmakos_proto::json::Json;
 
 use crate::easy::{
-    BALANCED, DOLLARS_PER_KW, EASY_CANDIDATES, EASY_TOP_K, EXPANSION_POINTS_PER_BEACON,
+    BALANCED, COMMANDER_DIED_POINTS, DEFENCE_POINTS_PER_HP_PER_SECOND, DOLLARS_PER_KW,
+    EASY_CANDIDATES, EASY_TOP_K, EXPANSION_POINTS_PER_BEACON, RAID_POINTS, RAID_TARGETS_MAX,
     RISK_POINTS_PER_ENEMY,
 };
-use crate::situation::{Feature, Kind, Situation};
+use crate::situation::{Asset, Feature, Kind, LastPush, Situation, UnitKind};
 use crate::tuning::{Richness, Tuning};
-use crate::wire::{Wire, array_of, bool_of, int_of, location_voxel, object, string, text_of};
+use crate::wire::{
+    Misread, Refused, Wire, array_of, bool_of, int_of, location_voxel, malformed, object, string,
+    text_of,
+};
 
 /// One goal a template can be filled with.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -96,6 +147,74 @@ pub(crate) enum Goal {
         /// Its grade.
         grade: Richness,
     },
+    /// Place a Defend beacon covering the seam `seam`, beside the core, that
+    /// guards the core and the commander (the Defend the Core template; spec
+    /// section 14's Defend guard, decision 35).
+    Guard {
+        /// The seam's name, `seam_<x>_<y>`: the live seam the seat covers
+        /// nearest its core, which is its starting seam.
+        seam: String,
+    },
+    /// Place an Attack beacon covering the seam `seam`, beside the core,
+    /// whose raiders raid `target` (the Raid an Enemy Beacon template).
+    Raid {
+        /// The seam's name: the guard post's seam, beside the core.
+        seam: String,
+        /// What the raiders raid.
+        target: RaidTarget,
+    },
+}
+
+/// A raid's fixed target.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) enum RaidTarget {
+    /// An enemy beacon, by the `e_NN` the seat's own listing gives it.
+    Beacon {
+        /// Its `e_NN`.
+        id: String,
+        /// Where the seat last saw it.
+        at: [i32; 3],
+    },
+    /// The commander of one enemy seat, which the view shows now.
+    Commander {
+        /// Its seat.
+        seat: u8,
+        /// Where the view shows it.
+        at: [i32; 3],
+    },
+}
+
+impl RaidTarget {
+    /// Where it is, as the seat knows it.
+    pub(crate) const fn at(&self) -> [i32; 3] {
+        match self {
+            RaidTarget::Beacon { at, .. } | RaidTarget::Commander { at, .. } => *at,
+        }
+    }
+
+    /// The `gp.v1.AttackTarget` a playbook writes for it.
+    pub(crate) fn json(&self) -> Json {
+        match self {
+            RaidTarget::Beacon { id, .. } => {
+                object(vec![("beacon", object(vec![("beacon_id", string(id))]))])
+            }
+            RaidTarget::Commander { seat, .. } => object(vec![(
+                "enemy_commander",
+                object(vec![("seat", crate::wire::number(i64::from(*seat)))]),
+            )]),
+        }
+    }
+
+    /// The waypoint an estimate walks to.
+    fn waypoint(&self) -> Json {
+        match self {
+            RaidTarget::Beacon { id, .. } => object(vec![(
+                "beacon_anchor",
+                object(vec![("beacon_id", string(id))]),
+            )]),
+            RaidTarget::Commander { at, .. } => crate::wire::voxel_location(*at),
+        }
+    }
 }
 
 impl Goal {
@@ -104,6 +223,8 @@ impl Goal {
         match self {
             Goal::Mine { .. } => crate::easy::EXPAND_AND_MINE,
             Goal::Generator { .. } | Goal::Tap { .. } => crate::easy::HOLD_AND_BUILD,
+            Goal::Guard { .. } => crate::easy::DEFEND_THE_CORE,
+            Goal::Raid { .. } => crate::easy::RAID_AN_ENEMY_BEACON,
         }
     }
 
@@ -111,7 +232,7 @@ impl Goal {
     /// composed route.
     pub(crate) fn feature(&self) -> &str {
         match self {
-            Goal::Mine { seam, .. } => seam,
+            Goal::Mine { seam, .. } | Goal::Guard { seam } | Goal::Raid { seam, .. } => seam,
             Goal::Generator { vent, .. } | Goal::Tap { vent, .. } => vent,
         }
     }
@@ -308,9 +429,10 @@ pub(crate) fn route_index(pointer: &str) -> Option<usize> {
 /// (`resolve_refs`: the sim's own `on_vent` rules) and the verifier raises no
 /// `E0503` at its step (the beacon is on the Build mandate). A refusal of
 /// either call leaves no tap: the operator cannot then say a tap would hold,
-/// so it composes none. An answer to `verify_plan` that carries no `report`
-/// is read as a refusal too: without one the operator cannot say no `E0503`
-/// was raised.
+/// so it composes none. An answer that does not read ([`Misread`]), and an
+/// answer to `verify_plan` that carries no `report`, are refusals too:
+/// without them the operator cannot say the `on` reads or no `E0503` was
+/// raised.
 pub(crate) fn legal_taps(
     wire: &mut Wire<'_, '_>,
     situation: &Situation,
@@ -320,59 +442,75 @@ pub(crate) fn legal_taps(
     if pairs.is_empty() {
         return Vec::new();
     }
-    let text = probe_text(&pairs);
-    let Ok(resolved) = wire.call(
+    match probe(wire, &pairs) {
+        Ok(legal) => pairs
+            .into_iter()
+            .zip(legal)
+            .filter(|(_, legal)| *legal)
+            .map(|((beacon, vent), _)| Tap { beacon, vent })
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// The probe's two calls, and which pairs they leave legal.
+///
+/// # Errors
+///
+/// The first refusal, and `MALFORMED` for an answer that does not read.
+fn probe(wire: &mut Wire<'_, '_>, pairs: &[(String, Feature)]) -> Result<Vec<bool>, Refused> {
+    let text = probe_text(pairs);
+    let resolved = wire.call(
         "resolve_refs",
         object(vec![("playbook_jsonc", string(&text))]),
-    ) else {
-        return Vec::new();
-    };
+    )?;
+    let refs = |misread: Misread| misread.refused("resolve_refs");
     let mut legal = vec![false; pairs.len()];
-    for reference in array_of(&resolved, "refs") {
-        let Some(index) = route_index(text_of(reference, "pointer")) else {
+    for reference in array_of(&resolved, "refs").map_err(refs)? {
+        let Some(index) = route_index(text_of(reference, "pointer").map_err(refs)?) else {
             continue;
         };
-        let reads = text_of(reference, "feature_id");
+        let reads = text_of(reference, "feature_id").map_err(refs)?;
+        let failure = text_of(reference, "failure").map_err(refs)?;
         if let (Some(slot), Some((_, vent))) = (legal.get_mut(index), pairs.get(index)) {
-            *slot =
-                !reads.is_empty() && reads == vent.id && text_of(reference, "failure").is_empty();
+            *slot = !reads.is_empty() && reads == vent.id && failure.is_empty();
         }
     }
-    let Ok(verified) = wire.call(
+    let verified = wire.call(
         "verify_plan",
         object(vec![
             ("playbook_jsonc", string(&text)),
             ("depth", string("quick")),
         ]),
-    ) else {
-        return Vec::new();
-    };
-    let Some(report) = verified.get("report") else {
-        return Vec::new();
-    };
-    for diagnostic in array_of(report, "diagnostics") {
-        if text_of(diagnostic, "code") != "E0503" {
+    )?;
+    let report = verified
+        .get("report")
+        .ok_or_else(|| malformed("verify_plan", "the answer carries no report"))?;
+    let diagnostics = |misread: Misread| misread.refused("verify_plan");
+    for diagnostic in array_of(report, "diagnostics").map_err(diagnostics)? {
+        if text_of(diagnostic, "code").map_err(diagnostics)? != "E0503" {
             continue;
         }
-        if let Some(slot) =
-            route_index(text_of(diagnostic, "path")).and_then(|index| legal.get_mut(index))
+        if let Some(slot) = route_index(text_of(diagnostic, "path").map_err(diagnostics)?)
+            .and_then(|index| legal.get_mut(index))
         {
             *slot = false;
         }
     }
-    pairs
-        .into_iter()
-        .zip(legal)
-        .filter(|(_, legal)| *legal)
-        .map(|((beacon, vent), _)| Tap { beacon, vent })
-        .collect()
+    Ok(legal)
 }
 
 /// The goals the map offers this seat, before any estimate: live, affordable,
 /// reachable, and in a total order -- the feature's travel from the commander
 /// (the feature list's own "nearest"), then the feature's name, then a tap's
 /// beacon -- cut at Easy's candidate count.
-pub(crate) fn enumerate(situation: &Situation, tuning: &Tuning, taps: &[Tap]) -> Vec<Goal> {
+pub(crate) fn enumerate(
+    situation: &Situation,
+    tuning: &Tuning,
+    taps: &[Tap],
+    post: Post,
+    raid: Post,
+) -> Vec<Goal> {
     if situation.commander.is_none() {
         return Vec::new();
     }
@@ -415,9 +553,233 @@ pub(crate) fn enumerate(situation: &Situation, tuning: &Tuning, taps: &[Tap]) ->
         ));
     }
     keyed.sort_by(|(a, _), (b, _)| a.cmp(b));
-    first(keyed, EASY_CANDIDATES)
+    // The guard goes first, so that the cut never drops it, and the rest are
+    // cut to the room it leaves.
+    let guard = guard_goal(situation, tuning, post);
+    let raids = if raid == Post::None {
+        raid_goals(situation, tuning)
+    } else {
+        Vec::new()
+    };
+    // The guard and the raids go first, so that the cut never drops them, and
+    // the rest are cut to the room they leave.
+    let goals: Vec<Goal> = guard
         .into_iter()
-        .map(|(_, goal)| goal)
+        .chain(raids)
+        .chain(keyed.into_iter().map(|(_, goal)| goal))
+        .collect();
+    first(goals, EASY_CANDIDATES)
+}
+
+/// Whether a Defend post already stands beside the core.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Post {
+    /// No Defend beacon of the seat's stands inside the core's sphere.
+    None,
+    /// One does: no second post is enumerated, so posts never stack.
+    Stands,
+    /// The probe was refused or did not read: whether one stands is unknown,
+    /// and no post is enumerated, since a second one would be a beacon's
+    /// price spent on a guess.
+    Unknown,
+}
+
+/// The guard probe: one `estimate_route` from the commander to "the nearest
+/// own Defend beacon" (`beacon_anchor` by the `nearest` selector filtered to
+/// the Defend mandate), the sim's own ranking through the gateway. A
+/// `NOT_FOUND` is the gateway's answer that the selector ranks nothing, so no
+/// Defend beacon stands; a reached anchor inside the core's sphere is a post
+/// beside the core. One call when the seat is shown its commander and its
+/// core and the library lists the template, none otherwise
+/// ([`crate::easy::GUARD_PROBE_CALLS`]).
+pub(crate) fn defend_post(wire: &mut Wire<'_, '_>, situation: &Situation, tuning: &Tuning) -> Post {
+    post_beside_core(
+        wire,
+        situation,
+        tuning,
+        "DEFEND",
+        crate::easy::DEFEND_THE_CORE,
+    )
+}
+
+/// The raid probe, the guard probe's twin for "the nearest own Attack
+/// beacon": a raid post beside the core already regroups and relaunches
+/// every segment, so a second one is never enumerated while one stands, nor
+/// while the probe cannot say ([`crate::easy::RAID_PROBE_CALLS`]).
+pub(crate) fn raid_post(wire: &mut Wire<'_, '_>, situation: &Situation, tuning: &Tuning) -> Post {
+    post_beside_core(
+        wire,
+        situation,
+        tuning,
+        "ATTACK",
+        crate::easy::RAID_AN_ENEMY_BEACON,
+    )
+}
+
+/// Whether an own beacon on `mandate` stands inside the core's sphere: one
+/// estimate to the nearest such beacon, when the seat is shown its commander
+/// and its core and the library lists `template`, and none otherwise.
+fn post_beside_core(
+    wire: &mut Wire<'_, '_>,
+    situation: &Situation,
+    tuning: &Tuning,
+    mandate: &str,
+    template: &str,
+) -> Post {
+    let (Some(commander), Some(core)) = (situation.commander, situation.core()) else {
+        return Post::Unknown;
+    };
+    if !lists(situation, template) {
+        return Post::Unknown;
+    }
+    let nearest_defend = object(vec![(
+        "beacon_anchor",
+        object(vec![(
+            "nearest",
+            object(vec![("filter", object(vec![("mandate", string(mandate))]))]),
+        )]),
+    )]);
+    let params = object(vec![(
+        "waypoints",
+        Json::Array(vec![crate::wire::voxel_location(commander), nearest_defend]),
+    )]);
+    match wire.call("estimate_route", params) {
+        Err(refused) if refused.code == "NOT_FOUND" => Post::None,
+        Err(_) => Post::Unknown,
+        Ok(estimate) => {
+            let anchor = array_of(&estimate, "legs")
+                .ok()
+                .and_then(|legs| legs.last())
+                .and_then(|leg| leg.get("to"))
+                .map(location_voxel);
+            match anchor {
+                Some(Ok(at)) if within(core.at, at, tuning.sphere_radius_voxels) => Post::Stands,
+                Some(Ok(_)) => Post::None,
+                // An answer that does not say where the beacon stands.
+                Some(Err(_)) | None => Post::Unknown,
+            }
+        }
+    }
+}
+
+/// The guard post a round could place: the Defend the Core template's step,
+/// covering the live seam the seat covers nearest its core by ground
+/// distance, ties to the lower anchor `y`, then `x` -- the starting seam,
+/// which the core's sphere holds at every seed. `None` when the library lists
+/// no Defend the Core template, the seat is shown no core, covers no live seam
+/// inside the core's sphere or has a beacon there beside the core already, or
+/// the treasury cannot carry the post. It is enumerated every round,
+/// so the wizard is offered its site; whether a built-in seat places it is
+/// its utility's ([`guard`]).
+fn guard_goal(situation: &Situation, tuning: &Tuning, post: Post) -> Option<Goal> {
+    if !lists(situation, crate::easy::DEFEND_THE_CORE)
+        || tuning.guard_cost_dollars > situation.economy.treasury
+        || post != Post::None
+    {
+        return None;
+    }
+    post_seam(situation, tuning).map(|seam| Goal::Guard {
+        seam: seam.id.clone(),
+    })
+}
+
+/// True when the library lists the template.
+fn lists(situation: &Situation, template: &str) -> bool {
+    situation.templates.iter().any(|listed| listed == template)
+}
+
+/// The seam a post beside the core covers: the live seam the seat covers
+/// nearest its core by ground distance, inside the core's sphere, ties to the
+/// lower anchor `y`, then `x` -- the starting seam, which the core's sphere
+/// holds at every seed. `None` when the seat is shown no core or covers no
+/// live seam inside its sphere.
+fn post_seam<'s>(situation: &'s Situation, tuning: &Tuning) -> Option<&'s Feature> {
+    let core = situation.core()?;
+    let [cx, cy, _] = core.at;
+    let radius = tuning.sphere_radius_voxels;
+    situation
+        .features
+        .iter()
+        .filter(|feature| feature.kind == Kind::Seam && feature.live && feature.covered)
+        .filter_map(|feature| {
+            let [x, y] = feature.anchor;
+            // Only a seam inside the core's sphere: a post anywhere else would
+            // not stand beside the core it guards.
+            let d2 = distance2([x, y, 0], [cx, cy, 0])?;
+            (d2 <= radius.checked_mul(radius)?).then_some(((d2, y, x), feature))
+        })
+        .min_by_key(|(key, _)| *key)
+        .map(|(_, feature)| feature)
+}
+
+/// A raid target's place in [`raid_goals`]' order: whether its distance does
+/// not fit, the distance, the seat, the beacon's name.
+type RaidKey = (bool, Option<i64>, u8, String);
+
+/// The raids a round could make: one goal per fixed target, the post beside
+/// the core ([`post_seam`]) for all of them. A target is an enemy beacon with
+/// a sighting inside `verifier.reach_memory_ms` (an older one is E0418's
+/// refusal at the seal), or an enemy commander the view shows now, which is
+/// a sighting of age 0 -- a remembered commander is on no seat-facing wire,
+/// so Easy raids only one it sees. One list, ordered by ground distance from
+/// the core, ties to the lowest seat, then a seat's commander before its
+/// beacons (its key's name is empty), then the beacon's name, cut at
+/// [`RAID_TARGETS_MAX`]. Nothing when the library lists no Raid template, the
+/// seat has no post seam, or the treasury cannot carry the beacon and its
+/// raiders.
+fn raid_goals(situation: &Situation, tuning: &Tuning) -> Vec<Goal> {
+    let (Some(core), Some(seam)) = (situation.core(), post_seam(situation, tuning)) else {
+        return Vec::new();
+    };
+    if !lists(situation, crate::easy::RAID_AN_ENEMY_BEACON)
+        || tuning.raid_cost_dollars > situation.economy.treasury
+    {
+        return Vec::new();
+    }
+    let ground = |at: [i32; 3]| {
+        let ([x, y, _], [cx, cy, _]) = (at, core.at);
+        distance2([x, y, 0], [cx, cy, 0])
+    };
+    // (whether the distance does not fit, the distance, the seat, the
+    // beacon's name): a distance that does not fit sorts after every one that
+    // does.
+    let mut keyed: Vec<(RaidKey, RaidTarget)> = Vec::new();
+    for beacon in situation.beacons.iter().filter(|beacon| !beacon.own) {
+        let Some(age) = beacon.sighting_age_ms else {
+            continue;
+        };
+        if age > tuning.reach_memory_ms {
+            continue;
+        }
+        let d2 = ground(beacon.at);
+        keyed.push((
+            (d2.is_none(), d2, beacon.seat, beacon.id.clone()),
+            RaidTarget::Beacon {
+                id: beacon.id.clone(),
+                at: beacon.at,
+            },
+        ));
+    }
+    for enemy in &situation.enemies {
+        if enemy.asset != Asset::Unit(UnitKind::Commander) {
+            continue;
+        }
+        let d2 = ground(enemy.at);
+        keyed.push((
+            (d2.is_none(), d2, enemy.seat, String::new()),
+            RaidTarget::Commander {
+                seat: enemy.seat,
+                at: enemy.at,
+            },
+        ));
+    }
+    keyed.sort_by(|(a, _), (b, _)| a.cmp(b));
+    first(keyed, RAID_TARGETS_MAX)
+        .into_iter()
+        .map(|(_, target)| Goal::Raid {
+            seam: seam.id.clone(),
+            target,
+        })
         .collect()
 }
 
@@ -487,17 +849,79 @@ pub(crate) fn no_vent(situation: &Situation, tuning: &Tuning) -> NoVent {
     }
 }
 
-/// The place an `estimate_route` answer's last leg ends on, as a voxel.
-fn last_leg_to(estimate: &Json) -> Option<[i32; 3]> {
-    array_of(estimate, "legs")
-        .last()
-        .and_then(|leg| leg.get("to"))
-        .and_then(location_voxel)
+/// What one `estimate_route` answer says of a goal: the place its last leg
+/// ends on, that leg's travel, and the travel before it; `None` when the
+/// route does not reach.
+///
+/// # Errors
+///
+/// [`Misread`] for an answer that does not read, and for a reachable route
+/// with no leg, a leg with no place, or a figure below zero.
+fn reading(estimate: &Json) -> Result<Option<([i32; 3], i64, i64)>, Misread> {
+    if !bool_of(estimate, "reachable")? {
+        return Ok(None);
+    }
+    let legs = array_of(estimate, "legs")?;
+    let last = legs.last().ok_or_else(|| Misread {
+        key: String::from("legs"),
+        wanted: "a route with a leg",
+    })?;
+    let place = location_voxel(last.get("to").ok_or_else(|| Misread {
+        key: String::from("to"),
+        wanted: "a leg's place",
+    })?)?;
+    let travel = int_of(last, "ms")?;
+    let lead = int_of(estimate, "ms")?
+        .checked_sub(travel)
+        .filter(|lead| *lead >= 0 && travel >= 0)
+        .ok_or_else(|| Misread {
+            key: String::from("ms"),
+            wanted: "a route's travel at least its last leg's",
+        })?;
+    Ok(Some((place, travel, lead)))
+}
+
+/// What one raid's `estimate_route` answer says: its post's site, the
+/// commander's travel to it from the waypoint before, and the travel before
+/// that; `None` when the route does not reach the target. The last leg, the
+/// raiders' march from the site to the target, is what makes the target
+/// reachable or not, and is not otherwise scored.
+///
+/// # Errors
+///
+/// [`Misread`] for an answer that does not read, and for a reachable route
+/// with fewer than two legs, a leg with no place, or a figure below zero.
+fn raid_reading(estimate: &Json) -> Result<Option<([i32; 3], i64, i64)>, Misread> {
+    if !bool_of(estimate, "reachable")? {
+        return Ok(None);
+    }
+    let short = || Misread {
+        key: String::from("legs"),
+        wanted: "a raid's route with a leg to its post and one to its target",
+    };
+    let legs = array_of(estimate, "legs")?;
+    let (march, before) = legs.split_last().ok_or_else(short)?;
+    let to_post = before.last().ok_or_else(short)?;
+    let site = location_voxel(to_post.get("to").ok_or_else(|| Misread {
+        key: String::from("to"),
+        wanted: "a leg's place",
+    })?)?;
+    let travel = int_of(to_post, "ms")?;
+    let march = int_of(march, "ms")?;
+    let lead = int_of(estimate, "ms")?
+        .checked_sub(travel)
+        .and_then(|rest| rest.checked_sub(march))
+        .filter(|lead| *lead >= 0 && travel >= 0 && march >= 0)
+        .ok_or_else(|| Misread {
+            key: String::from("ms"),
+            wanted: "a route's travel at least its legs' to the post and the target",
+        })?;
+    Ok(Some((site, travel, lead)))
 }
 
 /// Evaluate every goal: one `estimate_route` each, then the Balanced
-/// utility. A goal the estimate refuses or calls unreachable is dropped; the
-/// call still counts.
+/// utility. A goal the estimate refuses, answers unreadably or calls
+/// unreachable is dropped; the call still counts.
 ///
 /// A composed route visits the core first ([`crate::compose::deepen_core`]),
 /// so when the seat is shown a core each estimate's waypoints are the
@@ -520,13 +944,21 @@ pub(crate) fn evaluate(
         let to = match &goal {
             // The site the beacon would stand on, chosen by the sim's own
             // `cover` (the register's S1-20): the last leg ends there.
-            Goal::Mine { seam: name, .. } | Goal::Generator { vent: name, .. } => object(vec![(
+            Goal::Mine { seam: name, .. }
+            | Goal::Generator { vent: name, .. }
+            | Goal::Guard { seam: name } => object(vec![(
                 "covering",
                 object(vec![("feature_id", string(name))]),
             )]),
             Goal::Tap { beacon, .. } => object(vec![(
                 "beacon_anchor",
                 object(vec![("beacon_id", string(beacon))]),
+            )]),
+            // The post's site, then the target: the raiders' march is the
+            // last leg.
+            Goal::Raid { seam, .. } => object(vec![(
+                "covering",
+                object(vec![("feature_id", string(seam))]),
             )]),
         };
         let mut waypoints = vec![crate::wire::voxel_location(commander)];
@@ -537,26 +969,22 @@ pub(crate) fn evaluate(
             )]));
         }
         waypoints.push(to);
+        if let Goal::Raid { target, .. } = &goal {
+            waypoints.push(target.waypoint());
+        }
         let params = object(vec![("waypoints", Json::Array(waypoints))]);
         let Ok(estimate) = wire.call("estimate_route", params) else {
             continue;
         };
-        if !bool_of(&estimate, "reachable") {
-            continue;
-        }
-        let Some(place) = last_leg_to(&estimate) else {
+        let read = match goal {
+            Goal::Raid { .. } => raid_reading(&estimate),
+            Goal::Mine { .. } | Goal::Generator { .. } | Goal::Tap { .. } | Goal::Guard { .. } => {
+                reading(&estimate)
+            }
+        };
+        let Ok(Some((place, travel, lead))) = read else {
             continue;
         };
-        let Some(last) = array_of(&estimate, "legs").last() else {
-            continue;
-        };
-        let travel = int_of(last, "ms");
-        let Some(lead) = int_of(&estimate, "ms").checked_sub(travel) else {
-            continue;
-        };
-        if travel < 0 || lead < 0 {
-            continue;
-        }
         if let Some(mut candidate) = score(situation, tuning, id, goal, place, travel) {
             candidate.lead_ms = lead;
             out.push(candidate);
@@ -565,8 +993,78 @@ pub(crate) fn evaluate(
     out
 }
 
+/// The summed threat of the other seats' assets the view shows inside the
+/// core's sphere, in thousandths of a hit point per second (decision 12's
+/// model: each asset's weapon's damage per second, zero if unarmed); `None`
+/// when the seat is shown no core, or a sum does not fit.
+pub(crate) fn core_threat(situation: &Situation, tuning: &Tuning) -> Option<u64> {
+    threat_near(situation, tuning, situation.core()?.at)
+}
+
+/// The summed threat of the other seats' assets the view shows within one
+/// sphere radius of `at`, in thousandths of a hit point per second (decision
+/// 12's model, as [`core_threat`] reads it); `None` when a sum does not fit.
+fn threat_near(situation: &Situation, tuning: &Tuning, at: [i32; 3]) -> Option<u64> {
+    situation
+        .enemies
+        .iter()
+        .filter(|enemy| within(at, enemy.at, tuning.sphere_radius_voxels))
+        .try_fold(0_u64, |sum, enemy| {
+            sum.checked_add(tuning.threat(enemy.asset))
+        })
+}
+
+/// A raid's attack, in points: [`RAID_POINTS`], less the threat that defends
+/// its target at [`DEFENCE_POINTS_PER_HP_PER_SECOND`], by one rule for a
+/// beacon and a commander (spec section 14); `None` when a figure does not
+/// fit, which no rules table the operator reads can produce.
+///
+/// PLACEHOLDER: "defends" is within one sphere radius of the target, the sphere radius reused as a threat radius — owner, S5, with the Balanced weights
+///
+/// An enemy core's own weapon is not charged: no seat-facing wire says which
+/// enemy beacon is a core (`gateway.proto`'s `BeaconSummary.core` is own
+/// beacons only), so a raid on a core is weighed as a raid on any beacon.
+///
+/// PLACEHOLDER: a raid on an enemy core is not charged the core's weapon, which no seat-facing field reveals — owner, S5, with Normal and Hard
+fn raid_attack(situation: &Situation, tuning: &Tuning, target: &RaidTarget) -> Option<i64> {
+    let threat = i64::try_from(threat_near(situation, tuning, target.at())?).ok()?;
+    RAID_POINTS.checked_sub(
+        threat
+            .checked_mul(DEFENCE_POINTS_PER_HP_PER_SECOND)?
+            .checked_div(1_000)?,
+    )
+}
+
+/// A guard post's defence, in points: the threat inside the core's sphere at
+/// [`DEFENCE_POINTS_PER_HP_PER_SECOND`], and [`COMMANDER_DIED_POINTS`] when
+/// the commander died in the last Push (decision 35); `None` when a figure
+/// does not fit.
+fn guard_defence(situation: &Situation, tuning: &Tuning) -> Option<i64> {
+    let threat = i64::try_from(core_threat(situation, tuning)?).ok()?;
+    let from_threat = threat
+        .checked_mul(DEFENCE_POINTS_PER_HP_PER_SECOND)?
+        .checked_div(1_000)?;
+    let from_death = match situation.last_push {
+        LastPush::Died => COMMANDER_DIED_POINTS,
+        LastPush::Survived | LastPush::Unread => 0,
+    };
+    from_threat.checked_add(from_death)
+}
+
+/// The time a post beside the core costs the route: there, place, then the
+/// priority row and the mandate's own row (Defend's or Attack's), costed at
+/// the edit's cap, an upper bound.
+fn post_ms(tuning: &Tuning, travel_ms: i64) -> Option<i64> {
+    travel_ms
+        .checked_add(tuning.place_beacon_deploy_ms)?
+        .checked_add(tuning.set_priority_ms)?
+        .checked_add(tuning.edit_settings_max_ms)
+}
+
 /// One goal's features and Balanced utility; `None` when a figure does not
-/// fit an `i64`, which no rules table the operator reads can produce.
+/// fit an `i64`, which no rules table the operator reads can produce, or the
+/// goal takes no time, which no row the operator reads can make it (every
+/// interface time is refused at zero, [`Tuning::read`]).
 fn score(
     situation: &Situation,
     tuning: &Tuning,
@@ -575,7 +1073,7 @@ fn score(
     place: [i32; 3],
     travel_ms: i64,
 ) -> Option<Candidate> {
-    let (cost, economy, expansion, time_ms) = match &goal {
+    let (cost, economy, expansion, defence, time_ms) = match &goal {
         Goal::Mine { grade, .. } => {
             let cost = tuning.beacon_cost_dollars;
             let ore = tuning.ore_yield(*grade).checked_mul(tuning.seam_voxels)?;
@@ -583,6 +1081,7 @@ fn score(
                 cost,
                 ore.checked_sub(cost)?,
                 EXPANSION_POINTS_PER_BEACON,
+                0,
                 // There, place, and back: the template's route returns home.
                 // PLACEHOLDER: the way back costed as the way there (travel x 2), not estimated — owner, S5, with Normal and Hard
                 travel_ms
@@ -597,6 +1096,7 @@ fn score(
                 cost,
                 power.checked_sub(cost)?,
                 EXPANSION_POINTS_PER_BEACON,
+                0,
                 // There, place, and commit the initial Build target -- its own
                 // row since decision 15 -- on site; the commander then holds
                 // by the new beacon while its drone builds.
@@ -613,23 +1113,61 @@ fn score(
                 power.checked_sub(cost)?,
                 // No new beacon, so no new sphere.
                 0,
+                0,
                 travel_ms.checked_add(tuning.build_target_ms)?,
+            )
+        }
+        Goal::Raid { .. } => {
+            let cost = tuning.raid_cost_dollars;
+            (
+                cost,
+                // A raid earns nothing the economy term counts: its worth is
+                // its attack term.
+                cost.checked_neg()?,
+                // Beside the core, inside its sphere: no reach it adds.
+                0,
+                0,
+                // As the guard's: the Attack row in place of the Defend row.
+                post_ms(tuning, travel_ms)?,
+            )
+        }
+        Goal::Guard { .. } => {
+            let cost = tuning.guard_cost_dollars;
+            (
+                cost,
+                // A guard post earns nothing: its worth is its defence.
+                cost.checked_neg()?,
+                // Beside the core, inside its sphere: no reach it adds.
+                0,
+                guard_defence(situation, tuning)?,
+                post_ms(tuning, travel_ms)?,
             )
         }
     };
     // Risk: what the seat can see of other seats near the goal.
     //
     // PLACEHOLDER: "near" is within one sphere radius of the goal, the sphere radius reused as a threat radius — owner, S5, with the Balanced weights
-    let near = situation
-        .enemies
-        .iter()
-        .filter(|enemy| within(place, **enemy, tuning.sphere_radius_voxels))
-        .count();
+    // A guard post is charged none: the enemies near it are what it guards
+    // against, and they are its defence term already.
+    let near = match goal {
+        Goal::Guard { .. } => 0,
+        Goal::Mine { .. } | Goal::Generator { .. } | Goal::Tap { .. } | Goal::Raid { .. } => {
+            situation
+                .enemies
+                .iter()
+                .filter(|enemy| within(place, enemy.at, tuning.sphere_radius_voxels))
+                .count()
+        }
+    };
     let risk = i64::try_from(near)
         .ok()?
         .checked_mul(RISK_POINTS_PER_ENEMY)?;
-    // Defence, capability and attack are zero at Easy (module docs).
-    let (defence, capability, attack) = (0_i64, 0_i64, 0_i64);
+    // Capability is zero at Easy, and attack is a raid's alone (module docs).
+    let capability = 0_i64;
+    let attack = match &goal {
+        Goal::Raid { target, .. } => raid_attack(situation, tuning, target)?,
+        Goal::Mine { .. } | Goal::Generator { .. } | Goal::Tap { .. } | Goal::Guard { .. } => 0,
+    };
     let w = BALANCED;
     let utility = w
         .defence
@@ -639,7 +1177,7 @@ fn score(
         .checked_add(w.capability.checked_mul(capability)?)?
         .checked_add(w.attack.checked_mul(attack)?)?
         .checked_sub(w.risk.checked_mul(risk)?)?;
-    let rate = utility.checked_mul(1_000)?.checked_div(time_ms.max(1))?;
+    let rate = utility.checked_mul(1_000)?.checked_div(time_ms)?;
     Some(Candidate {
         id,
         goal,
@@ -653,16 +1191,45 @@ fn score(
 }
 
 /// The top-k by utility per second, ties to the lowest id, less any
-/// candidate worth nothing.
+/// candidate worth nothing and less the guard, which is added beside the
+/// goals rather than ranked among them ([`guard`]).
 pub(crate) fn top_k(candidates: &[Candidate]) -> Vec<Candidate> {
     let mut ranked: Vec<Candidate> = candidates
         .iter()
         .filter(|candidate| candidate.utility > 0)
+        .filter(|candidate| !matches!(candidate.goal, Goal::Guard { .. }))
         .cloned()
         .collect();
     ranked.sort_by_key(|candidate| (std::cmp::Reverse(candidate.rate), candidate.id));
     ranked.truncate(EASY_TOP_K);
     ranked
+}
+
+/// The guard post, when it was evaluated: what the wizard's Defend the Core
+/// page is pre-filled with, whatever it is worth.
+pub(crate) fn guard_site(candidates: &[Candidate]) -> Option<&Candidate> {
+    candidates
+        .iter()
+        .find(|candidate| matches!(candidate.goal, Goal::Guard { .. }))
+}
+
+/// The guard post Easy adds to its route: the evaluated one, when it is worth
+/// something. Spec section 14: Easy "adds a Defend guard on its commander when
+/// the commander has died recently", which decision 35 reads as the round
+/// after a Push in which its commander died, and decision 12's threat inside
+/// the core's sphere scores it too.
+pub(crate) fn guard(candidates: &[Candidate]) -> Option<&Candidate> {
+    guard_site(candidates).filter(|candidate| candidate.utility > 0)
+}
+
+/// The raid the wizard's Raid an Enemy Beacon page is pre-filled with: the
+/// first evaluated, which is the nearest target any route reaches (the
+/// template's own "nearest enemy beacon you know of", with a commander in
+/// sight weighed like one), whatever it is worth this round.
+pub(crate) fn raid_site(candidates: &[Candidate]) -> Option<&Candidate> {
+    candidates
+        .iter()
+        .find(|candidate| matches!(candidate.goal, Goal::Raid { .. }))
 }
 
 /// The best placement for one template among all that were evaluated, ties

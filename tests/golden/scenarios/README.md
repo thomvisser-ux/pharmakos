@@ -282,6 +282,48 @@ pursue, the fall-back to a repair drone -- is headless
 Defend beacon within a minute and a Defend beacon fields guards only on a
 threat it sees.
 
+**S2's `surv`** adds `survey-finds-the-enemy`, one segment of 300 s on the
+golden seed with both seats sealing playbooks: seat 1 deploys an outpost
+beacon inside its core's sphere, and seat 0 deploys a Survey beacon beside its
+core whose one probe area is a strip of ground beside that outpost, just
+outside the reach of seat 1's core, with one scout. The scout walks the length
+of the map, stands on the strip's cell, marks it (`area_surveyed`) and sees the
+outpost (`enemy_beacon_found`). Its chain pins the explored table, which no
+older committed run fills: the table hashes nothing while it is empty (S2's
+plan, E29). The scan's order, the refresh pass, enemy beacons first and the
+forgetting of a re-check that finds nothing are headless
+(`crates/sim/tests/survey.rs`). One older chain moved with it,
+`brownout-by-recycle`, from tick 4007, the first tick its round-2 Survey
+beacon's seven scouts are driven: a scout now decides on decision ticks only,
+re-checks only a sighting due a re-check, and otherwise idles at its beacon,
+where before it walked to its seat's stalest sighting on every tick. Its event
+assertions hold as they were. `round-limit-audit` and `unaffordable-deploy`
+seal Survey beacons with no scouts, and did not move.
+**S2's `atk`** adds four, each one segment of 480 s on the golden seed. Their
+chains pin the Attack table, which no older committed scenario fills: the
+table hashes nothing while it is empty (S2's plan, E29), so no older chain
+moved for it.
+
+* `hunt-the-commander`: seat 0's Attack beacon by its core, aimed at the enemy
+  commander, launches when seat 1's commander walks into its sphere, and its
+  raiders kill it. No commander is sighted when the seat seals; it sealed
+  through the harness door, which the verifier refused as E0418, until S2's
+  `vfy4` qualified a seatless commander target with W0708, and it now seals
+  through `submit_plan`.
+* `raid-on-a-mortar`: seat 0's raiders walk the map at the voxel of the mortar
+  seat 1's core builds, and seat 1's guns kill them, leaving wrecks.
+* `mortar-breaks-wall`: seat 0 walls in ground past its core's sphere from a
+  Build beacon it then recycles, so the walls read as neutral, and switches
+  its core to Attack with `breach_allowed`: the breach asks the core's mortar
+  to shell the ring's first column, which two shells crack and break before
+  the charge-carrying raider reaches it. Harness door: it recycles `b_01`,
+  which does not exist when the seat seals (E0401).
+* `breach-and-raze`: seat 1 walls in a Build beacon at its core's sphere
+  edge; seat 0's raiders walk the map, plant a demolition charge at the
+  ring, walk the cut and destroy the beacon. The plan's elimination is not
+  played (the scenario's header says why); `crates/sim/tests/attack.rs`'
+  `the_last_beacon_lost_ends_the_match_that_tick` plays it headless.
+
 `expand-east-segment` carries one more thing worth knowing before its chain is
 read. The playbook it seals **does not qualify against either seat's own frozen
 snapshot** on this map: `E0401` for `b_01`, which since S1 names each seat's own

@@ -1,0 +1,19 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0101",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/place_beacon/initial/mandate/survey/probe_areas/0/max",
+      "message": "`probe_areas.max` is required and is missing.",
+      "beginner": "A part that every playbook must have is not here."
+    }
+  ],
+  "report_hash": "Bk73zOC1dSs=",
+  "rules_hash": "VQGfykahqEM=",
+  "plan_fingerprint": "qzD9uGQd8ns=",
+  "verifier_version": "0.1.0-s2.5",
+  "size_units": 1,
+  "size_budget": 128
+}
+

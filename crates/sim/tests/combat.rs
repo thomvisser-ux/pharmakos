@@ -73,7 +73,6 @@ fn world_of(rules: RulesTable, seats: u32) -> World {
     World::new(&WorldConfig {
         match_seed: SEED,
         seats,
-        units_per_seat: 0,
         rules,
         match_settings: MatchSettings {
             segment_lengths_ms: vec![600_000],
@@ -1046,10 +1045,19 @@ fn a_raider_raids_on_free_fire_and_not_on_return_fire() {
 #[test]
 fn a_target_in_range_but_unseen_is_not_fired_at_until_a_scout_sees_it() {
     // The owner's answer of 2026-10-20: every weapon chooses only what its
-    // seat sees. The autocannon's own vision is short of its range, and its
-    // home's sphere is far away, so a raider inside its range goes unseen
-    // until a scout of the seat walks up to it.
-    let row = rules().structure(StructureKind::Autocannon).expect("a row");
+    // seat sees. The autocannon's own vision is put short of its range (the
+    // committed table gives it its range, decision 17), and its home's sphere
+    // is far away, so a raider inside its range goes unseen until a scout of
+    // the seat walks up to it.
+    let table = edited(|message| {
+        message
+            .structures
+            .as_mut()
+            .and_then(|block| block.autocannon.as_mut())
+            .expect("an autocannon row")
+            .vision_radius_voxels = 8;
+    });
+    let row = table.structure(StructureKind::Autocannon).expect("a row");
     let range = i32::from(row.weapon.expect("armed").range_voxels);
     let vision = i32::from(row.vision_radius_voxels);
     let sphere = i32::from(rules().sphere_radius_voxels());
@@ -1058,7 +1066,7 @@ fn a_target_in_range_but_unseen_is_not_fired_at_until_a_scout_sees_it() {
         gap > vision,
         "the test needs a target inside range and outside the gun's own sight"
     );
-    let mut world = world(2);
+    let mut world = world_of(table, 2);
     let here = field(&world);
     let home_spot = ground(&world, here, -(sphere + 4), 0);
     let home = beacon(&mut world, seat(0), home_spot, FREE_FIRE);

@@ -116,20 +116,22 @@ const NAMES: &[&str] = &[
 /// table's.
 const WINDOW: u32 = 180_000;
 
-/// S2's `vfy2` codes, in code order: the ten thousand runs reach every one.
-const S2_CODES: [&str; 13] = [
-    "E0113", "E0414", "E0415", "E0416", "E0417", "E0418", "E0508", "E0510", "E0511", "E0512",
-    "W0502", "W0703", "I0004",
+/// S2's `vfy2` codes, S2's `atk`'s E0419, S2's `vfy4`'s W0708 and S2's
+/// `atk2`'s W0709, in code order: the ten thousand runs reach every one.
+const S2_CODES: [&str; 16] = [
+    "E0113", "E0414", "E0415", "E0416", "E0417", "E0418", "E0419", "E0508", "E0510", "E0511",
+    "E0512", "W0502", "W0703", "W0708", "W0709", "I0004",
 ];
 
 /// The codes for what the sim refuses at the seal (E0009 to E0016; S2's base
-/// kit's E0019 is retired, since S2's `site` built it, and E0012, E0014 and
+/// kit's E0019 is retired, since S2's `site` built it, E0012, E0014 and
 /// E0017, since S2's `dfnd` built Defend's settings, `most_threatened` and
-/// `beacon_under_attack`), for an enum number this build does not name (E0018)
-/// and for a `wall_box` on a target that is not a wall (E0509), in code order:
-/// the ten thousand runs reach every one.
-const REFUSALS: [&str; 8] = [
-    "E0009", "E0010", "E0011", "E0013", "E0015", "E0016", "E0018", "E0509",
+/// `beacon_under_attack`, and E0013, since S2's `atk` built Attack's
+/// settings), for an enum number this build does not name (E0018) and for a
+/// `wall_box` on a target that is not a wall (E0509), in code order: the ten
+/// thousand runs reach every one.
+const REFUSALS: [&str; 7] = [
+    "E0009", "E0010", "E0011", "E0015", "E0016", "E0018", "E0509",
 ];
 
 /// The coordinates at the ends of the field, so the walk and the semantics
@@ -618,8 +620,8 @@ impl Shape {
     /// holds: Mine with nothing set, Survey with a scout count, or Build with
     /// one to three targets.
     fn mandate(&mut self) -> (String, Json) {
-        // Attack settings (E0013) are refused until S2's `atk`, except an
-        // empty arm in a switch; Defend's are legal since S2's `dfnd`.
+        // Attack's settings are legal since S2's `atk`, and Defend's since
+        // S2's `dfnd`.
         if self.damage(6) {
             let arm = if self.rarely(2) { "defend" } else { "attack" };
             // Empty, or filled with S2's fields, damaged as a hand editor would.
@@ -722,10 +724,17 @@ impl Shape {
         let target = match self.below(3) {
             0 => Json::Object(vec![("beacon".to_owned(), self.beacon_ref())]),
             1 => Json::Object(vec![("voxel".to_owned(), self.wild_voxel())]),
-            _ => Json::Object(vec![(
-                "enemy_commander".to_owned(),
-                Json::Object(Vec::new()),
-            )]),
+            _ => {
+                // Unset, or a seat: the playbook's own, an enemy's, or past any
+                // match's (S2's `atk`; E0419 and E0418, and W0708 unset).
+                let seat = match self.below(4) {
+                    0 => Vec::new(),
+                    1 => vec![("seat".to_owned(), Json::Number("0".to_owned()))],
+                    2 => vec![("seat".to_owned(), Json::Number("1".to_owned()))],
+                    _ => vec![("seat".to_owned(), Json::Number("256".to_owned()))],
+                };
+                Json::Object(vec![("enemy_commander".to_owned(), Json::Object(seat))])
+            }
         };
         let retarget = self.wild_enum(&["NONE", "NEAREST_KNOWN"]);
         let after = self.wild_enum(&["REGROUP_AT_STAGING", "RETURN_HOME"]);
@@ -955,6 +964,19 @@ fn feature(
 /// nobody covers, a live vent the core covers (inside the core's sphere, where
 /// a clean run's voxels sit, so W0706 fires), a lost vent and a seam.
 fn scope() -> Scope {
+    scope_aged(0, WINDOW)
+}
+
+/// [`scope`] with no enemy beacon seen inside the window (S2's `atk2`): the
+/// two fresh beacon sightings aged past it, so the nearest known enemy beacon
+/// as an Attack target meets `W0709`, which [`scope`]'s fresh `e_01`
+/// silences.
+fn stale_scope() -> Scope {
+    scope_aged(WINDOW.saturating_add(1), WINDOW.saturating_add(2))
+}
+
+/// The fuzz scope with `e_01` and `e_02` seen `first` and `second` ms ago.
+fn scope_aged(first: u32, second: u32) -> Scope {
     Scope::new(
         SeatId::new(0),
         SeatEconomy {
@@ -985,8 +1007,8 @@ fn scope() -> Scope {
     .with_beacon(enemy("e_02", 1))
     .with_beacon(enemy("e_03", 2))
     .with_beacon(enemy("e_04", 3))
-    .with_sighting(seen(Sighted::Beacon("e_01".to_owned()), 0))
-    .with_sighting(seen(Sighted::Beacon("e_02".to_owned()), WINDOW))
+    .with_sighting(seen(Sighted::Beacon("e_01".to_owned()), first))
+    .with_sighting(seen(Sighted::Beacon("e_02".to_owned()), second))
     .with_sighting(seen(
         Sighted::Beacon("e_03".to_owned()),
         WINDOW.saturating_add(1),
@@ -1260,6 +1282,7 @@ fn the_generator_still_produces_shapes_the_verifier_reads() {
 fn ten_thousand_playbooks_come_back_as_reports() {
     let rules = rules();
     let scope = scope();
+    let stale = stale_scope();
     let snapshot = snapshot();
     let mut lints: Vec<String> = Vec::new();
     let mut estimates: Vec<String> = Vec::new();
@@ -1275,7 +1298,9 @@ fn ten_thousand_playbooks_come_back_as_reports() {
         "the fuzz scope's ages straddle the committed reach window"
     );
     for index in 0..RUNS {
-        let (report, held) = check(index, &rules, &scope, &snapshot);
+        // One run in four against the stale scope, so `W0709` is reachable.
+        let view = if index % 4 == 3 { &stale } else { &scope };
+        let (report, held) = check(index, &rules, view, &snapshot);
         applied = applied.saturating_add(u32::from(held));
         for diagnostic in report.diagnostics {
             let code = diagnostic.code;
