@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // The Rusher arm of the nightly adversarial scenarios (AGENTS.md section 10
-// item 5; spec section 15): a hand-written playbook that raises an Attack
-// beacon first and launches on a small force, played against Easy over
+// item 5; spec section 15): a hand-written playbook that sends two scouts
+// to find the enemy, then raises an Attack beacon that launches on a small
+// force, played against Easy over
 // scenarios/nightly/seeds.txt by
 // .github/workflows/nightly-scenarios.yml, with the alarm band of S2's plan,
 // decision 18: the arm the sole winner in more than 13 of the 20 seeds (65 %)
@@ -22,7 +23,7 @@
 {
   "format": "pharmakos.scenario.v1",
   "name": "rusher",
-  "summary": "The Rusher arm against Easy: seat 0 seals scenarios/nightly/rusher.playbook.jsonc, an Attack beacon first that launches two raiders at the nearest enemy beacon the seat knows of, and seat 1 is Easy.",
+  "summary": "The Rusher arm against Easy: seat 0 seals scenarios/nightly/rusher.playbook.jsonc, two scouts and then an Attack beacon that launches two raiders at the nearest enemy beacon the seat knows of, and seat 1 is Easy.",
 
   "map": {
     "seed": "0x00000000ca5caded",

@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Pharmakos contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// The Rusher arm's playbook (S2's plan, task `arms`; spec section 15): an
-// early Attack beacon that launches on a small force, played against Easy
+// The Rusher arm's playbook (S2's plan, task `arms`; spec section 15): two
+// scouts to find the enemy, then an early Attack beacon that launches on a
+// small force, played against Easy
 // over scenarios/nightly/seeds.txt. scenarios/nightly/README.md says what it
 // can and cannot do in v1 as built, and gives its band.
 //
@@ -27,11 +28,18 @@
 // the map's centre, the one voxel that means the same thing from every
 // spawn, so "nearest" is measured from there rather than from the post.
 //
-// Measured on the first six seeds of seeds.txt (S2's `atk2`, by hand): the
-// seat never sights an enemy beacon, so the force never launches, and the
-// band reads a floor again. The arm fields no scout, and its raiders wait at
-// the centre, out of sight of every enemy beacon.
-// PLACEHOLDER: how the Rusher comes to know an enemy beacon, without which its force never launches on the seeds measured — owner, S2, at demo2
+// The seat comes to know an enemy beacon through a Survey beacon placed
+// first, whose two scouts visit the eight columns from which a scout sees
+// any core the map generator can place (S2's `rush`). Measured over all twenty seeds of seeds.txt, from the
+// seat each seed gives the arm: the raid launches in round 2 on every seed,
+// between ticks 4 768 and 5 792 (round 2 opens at tick 3 600). Without the
+// scouts it launched on none; with one scout, in round 3 on four seeds.
+// Round 1 is spent placing the two posts and walking the raiders to the
+// centre: aimed at a fixed voxel instead, the raid launches in round 1 on two
+// seeds only. The scouts go first because the order barely matters: with the
+// Attack beacon first, the raid still launches in round 2 on every seed,
+// between ticks 4 393 and 6 117, earlier on seven seeds and later on
+// thirteen.
 {
   "schema_version": {"major": 1, "minor": 0},
   "meta": {"title": "Nightly Rusher", "author_kind": "HUMAN"},
@@ -41,10 +49,30 @@
       // The post's description reads from where the commander stands: the
       // safest beacon, which is the core in round 1.
       {"label": "to_safety", "move": {"to": {"safest": {}}}},
-      // The rush post, first and at HIGH priority, beside the core. Two
-      // raiders launch together and fight on until the attack is over (no
-      // retreat is written). Skipped once the seat has
-      // an Attack beacon.
+      // The scouts, placed first so that the seat comes to know an enemy
+      // beacon early: two scouts sent to the generator's eight spawn
+      // points, each coordinate of 24 or 359 moved 16 voxels towards the
+      // centre, which keeps a core there inside a scout's 24-voxel sight. Skipped once the seat
+      // has a Survey beacon.
+      {"label": "look",
+        "skip_if": {"beacon_hp_pct": {"beacon": {"nearest": {"filter": {"mandate": "SURVEY"}}}, "pct": {"op": "GE", "value": 0}}},
+        "place_beacon": {"at": {"covering": {"seam": {"rank": "NEAREST", "coverage": "ANY"}}}, "tags": ["look"],
+          "initial": {"mandate": {"survey": {
+            "probe_areas": [
+              {"min": {"x": 40, "y": 40, "z": 0}, "max": {"x": 40, "y": 40, "z": 63}},
+              {"min": {"x": 192, "y": 40, "z": 0}, "max": {"x": 192, "y": 40, "z": 63}},
+              {"min": {"x": 343, "y": 40, "z": 0}, "max": {"x": 343, "y": 40, "z": 63}},
+              {"min": {"x": 40, "y": 192, "z": 0}, "max": {"x": 40, "y": 192, "z": 63}},
+              {"min": {"x": 343, "y": 192, "z": 0}, "max": {"x": 343, "y": 192, "z": 63}},
+              {"min": {"x": 40, "y": 343, "z": 0}, "max": {"x": 40, "y": 343, "z": 63}},
+              {"min": {"x": 192, "y": 343, "z": 0}, "max": {"x": 192, "y": 343, "z": 63}},
+              {"min": {"x": 343, "y": 343, "z": 0}, "max": {"x": 343, "y": 343, "z": 63}}
+            ],
+            "scout_count": 2}}}},
+        "timeout_ms": 60000, "on_fail": {"action": "SKIP"}},
+      // The rush post, at HIGH priority, beside the core. Two raiders launch
+      // together and fight on until the attack is over (no retreat is
+      // written). Skipped once the seat has an Attack beacon.
       {"label": "rush_post",
         "skip_if": {"beacon_hp_pct": {"beacon": {"nearest": {"filter": {"mandate": "ATTACK"}}}, "pct": {"op": "GE", "value": 0}}},
         "place_beacon": {"at": {"covering": {"seam": {"rank": "NEAREST", "coverage": "ANY"}}}, "tags": ["rush"],
