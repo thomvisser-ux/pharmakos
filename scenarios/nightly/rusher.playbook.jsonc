@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Pharmakos contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// The Rusher arm's playbook (S2's plan, task `arms`; spec section 15): an
-// early Attack beacon that launches on a small force, played against Easy
+// The Rusher arm's playbook (S2's plan, task `arms`; spec section 15): two
+// scouts to find the enemy, then an early Attack beacon that launches on a
+// small force, played against Easy
 // over scenarios/nightly/seeds.txt. scenarios/nightly/README.md says what it
 // can and cannot do in v1 as built, and gives its band.
 //
@@ -28,14 +29,17 @@
 // spawn, so "nearest" is measured from there rather than from the post.
 //
 // The seat comes to know an enemy beacon through a Survey beacon placed
-// first, whose two scouts visit the eight places a core can stand on this
-// map (S2's `rush`). Measured over all twenty seeds of seeds.txt, from the
+// first, whose two scouts visit the eight columns from which a scout sees
+// any core the map generator can place (S2's `rush`). Measured over all twenty seeds of seeds.txt, from the
 // seat each seed gives the arm: the raid launches in round 2 on every seed,
 // between ticks 4 768 and 5 792 (round 2 opens at tick 3 600). Without the
 // scouts it launched on none; with one scout, in round 3 on four seeds.
 // Round 1 is spent placing the two posts and walking the raiders to the
 // centre: aimed at a fixed voxel instead, the raid launches in round 1 on two
-// seeds only.
+// seeds only. The scouts go first because the order barely matters: with the
+// Attack beacon first, the raid still launches in round 2 on every seed,
+// between ticks 4 393 and 6 117, earlier on seven seeds and later on
+// thirteen.
 {
   "schema_version": {"major": 1, "minor": 0},
   "meta": {"title": "Nightly Rusher", "author_kind": "HUMAN"},
@@ -46,9 +50,9 @@
       // safest beacon, which is the core in round 1.
       {"label": "to_safety", "move": {"to": {"safest": {}}}},
       // The scouts, placed first so that the seat comes to know an enemy
-      // beacon early: two scouts sent to the eight places a core can stand
-      // on this map, each sixteen voxels in from a spawn point towards the
-      // centre, inside a scout's sight of the core. Skipped once the seat
+      // beacon early: two scouts sent to the generator's eight spawn
+      // points, each coordinate of 24 or 359 moved 16 voxels towards the
+      // centre, which keeps a core there inside a scout's 24-voxel sight. Skipped once the seat
       // has a Survey beacon.
       {"label": "look",
         "skip_if": {"beacon_hp_pct": {"beacon": {"nearest": {"filter": {"mandate": "SURVEY"}}}, "pct": {"op": "GE", "value": 0}}},
