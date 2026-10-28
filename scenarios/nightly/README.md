@@ -41,24 +41,29 @@ power projection does not read those guards.
 
 | Arm | What it does | Where it departs from spec section 15, and why |
 | --- | --- | --- |
-| **Rusher** | An Attack beacon first, at HIGH priority beside the core; it launches on two raiders (`force_size: 2`), `FREE_FIRE`, no retreat, at the nearest known enemy beacon (`nearest` with the filter `side: ENEMY_KNOWN`): the nearest enemy beacon the seat has seen inside `verifier.reach_memory_ms` and does not see gone, nearest the staging point at the map's centre, ties to the lowest id, chosen at launch; then `NEAREST_KNOWN`, the next nearest enemy beacon the seat knows of; a generator only while the grid has under 4 kW to spare, which on the twenty seeds it never is. | Only in what comes after the first target. The archetype then goes for the core; `NEAREST_KNOWN` takes the next nearest enemy beacon the seat knows of, which is the core only when the core is the nearest known one, because no Attack target names an enemy's core in v1. Its first target is the archetype's since S2's `atk2` (decisions-log item 150 (2)): with no sighting at the seal the verifier qualifies the target with `W0709`, and the sim holds the gathered force, counted, until the seat knows an enemy beacon. The staging point is the centre (192, 192), the one voxel that means the same from every spawn, so "nearest" is measured from there rather than from the post. The arm fields no scout, so its force launches only once something of its own has seen an enemy beacon, and on the first six seeds, measured by hand on `atk2`'s branch, nothing does: the force never launches. How the arm comes to know a beacon is a `PLACEHOLDER` for the owner. |
+| **Rusher** | A Survey beacon first, whose two scouts visit the eight places a core can stand on the map (each 16 voxels in from a spawn point towards the centre, inside a scout's 24-voxel sight of a core there); then an Attack beacon, at HIGH priority beside the core; it launches on two raiders (`force_size: 2`), `FREE_FIRE`, no retreat, at the nearest known enemy beacon (`nearest` with the filter `side: ENEMY_KNOWN`): the nearest enemy beacon the seat has seen inside `verifier.reach_memory_ms` and does not see gone, nearest the staging point at the map's centre, ties to the lowest id, chosen at launch; then `NEAREST_KNOWN`, the next nearest enemy beacon the seat knows of; a generator only while the grid has under 4 kW to spare, which on the twenty seeds it never is. | Only in what comes after the first target. The archetype then goes for the core; `NEAREST_KNOWN` takes the next nearest enemy beacon the seat knows of, which is the core only when the core is the nearest known one, because no Attack target names an enemy's core in v1. Its first target is the archetype's since S2's `atk2` (decisions-log item 150 (2)): with no sighting at the seal the verifier qualifies the target with `W0709`, and the sim holds the gathered force, counted, until the seat knows an enemy beacon. The staging point is the centre (192, 192), the one voxel that means the same from every spawn, so "nearest" is measured from there rather than from the post. The scouts are the archetype's means of knowing a target, not a departure: since S2's `rush`, measured over the twenty seeds, the raid launches in round 2 on every seed (ticks 4 768 to 5 792; round 2 opens at tick 3 600), where without scouts it launched on none. |
 | **Turtle** | A Defend beacon beside the core guarding the core and "my commander" (`FREE_FIRE`, the whole sphere, one picket); the core and every Build beacon repair below 75 % and rebuild, which fields repair drones; a generator on the nearest free vent while the grid has under 6 kW to spare, otherwise an autocannon `on` the nearest free vent; no Attack beacon and no raider of its own, so the treasury hoards what the guns and repairs leave. | The walls. A `wall` target is a box of fixed voxels, one map's and one seat's, so no wall goes up. The guns stand at the nearest free vents, not at the core, whose only gun is its own built-in autocannon. |
 | **Hunter** | A Survey beacon with two scouts over the whole map, placed first; an Attack beacon launching three raiders, which the seat can afford from round 2, at `enemy_commander` with no seat named: the nearest enemy commander the seat has seen inside `verifier.reach_memory_ms`, nearest the staging point at the map's centre, ties to the lowest seat id, chosen at launch; then `NEAREST_KNOWN`. | None in its target since S2's `vfy4`: with no sighting at the seal the verifier qualifies the target with `W0708` rather than `E0418` (the owner's ruling of 2026-10-27), and the sim holds the gathered force, counted, until a fresh sighting exists. The staging point is the centre, the one voxel that means the same from every spawn, rather than a place the archetype names. |
 
-Two `PLACEHOLDER`s in the playbooks are for the owner: the Turtle's walls
-(decisions-log item 150 (3)), and how the Rusher comes to know an enemy
-beacon. While they stand, the two bands still read as decision 18 writes them,
-but each measures the arm as built, a guarded core without walls or a raid
-that never launches, not the archetype spec section 15 names, so a low rate
-there is a floor and not a balance reading. The Hunter's band, since S2's
-`vfy4`, reads its archetype: a hunt for the enemy commander. On the run the `arms` lane attached
+One `PLACEHOLDER` in the playbooks is for the owner: the Turtle's walls
+(decisions-log item 150 (3)). While it stands, the Turtle's band still reads
+as decision 18 writes it, but it measures the arm as built, a guarded core
+without walls, not the archetype spec section 15 names, so a low rate there is
+a floor and not a balance reading. The Hunter's band, since S2's `vfy4`, reads
+its archetype: a hunt for the enemy commander; the Rusher's, since S2's
+`rush`, reads its own: an early raid on the nearest known enemy beacon. On the run the `arms` lane attached
 (its pull request), every match of the sixty ended on the round limit, so every
 result was the final audit's; none ended by elimination.
 
-Four literals in the playbooks come from the rules table's map, 384 x 384 x 64:
-the centre (192, 192) and the Hunter's probe box (0, 0, 0) to (383, 383, 63).
-A change to the map's size moves what they mean, and one that puts them off
-the map is refused, which `crates/gamectl/tests/nightly.rs` reports on the
+Literals in the playbooks come from the rules table's map, 384 x 384 x 64:
+the centre (192, 192), the Hunter's probe box (0, 0, 0) to (383, 383, 63), and
+the Rusher's eight probe columns at 40, 192 and 343 on each axis, which are
+the generator's eight spawn points (`map.spawn_zone_radius_voxels` 24 in from
+each edge, at the corners and the edges' midpoints) moved 16 voxels towards
+the centre. A change to the map's size or the spawn radius moves what they
+mean, and a change to the scouts' `vision_radius_voxels` row below 23 (the
+distance from a corner's column to its core) leaves the scouts short of a core.
+A literal that a change puts off the map is refused, which `crates/gamectl/tests/nightly.rs` reports on the
 pull request that makes it. The `kw_headroom` thresholds (4 and 6 kW) are
 behaviour, not refusals: a change to the power rows (S2's `tune2`) moves which
 step runs, and `demo2`'s forced run on those numbers is where that shows.
@@ -125,11 +130,14 @@ Written per S2's plan, decisions 18 and 29 (ruled by decisions-log item
   final audit's — in more than 13 of the 20 seeds (65 %) against Easy opens a
   tuning task. It watches spec section 19's "an early rush ends matches before
   authoring matters" and the core's HP and turret strength. From S2's `atk2`
-  the arm's target is the nearest known enemy beacon itself, but a seed on
-  which no round gives the seat a sighting of one never launches the raid,
-  the result does not say which seeds those were, and on the six seeds
-  measured by hand none launched: until the owner rules on how the arm
-  comes to know a beacon, this band is a floor.
+  the arm's target is the nearest known enemy beacon itself, and from S2's
+  `rush` its scouts give it one: measured over the twenty seeds, the raid
+  launches in round 2 on every seed, so this band is a reading of the
+  archetype, not a floor. The result does not say whether or when a seed's
+  raid launched; the measurement was `attack_launched` asserted per round on
+  each seed. Measured at `rush`, the arm was the sole winner of 8 of the 20
+  seeds (40 %), every match ending on the round limit, against 0 of 20 with no
+  scouts.
 * **Turtle:** an arm that is the sole winner — last seat standing, or the
   final audit's — in more than 13 of the 20 seeds (65 %) against Easy opens a
   tuning task. It watches "hoarding or turtling wins, now that value follows
