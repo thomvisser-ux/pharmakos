@@ -1994,6 +1994,9 @@ chain moved.
 
 ### `surv` — named place in `crates/sim`: full Survey
 
+**Merged as #145 (`41b4dbe`, head `c991d37`) (decisions-log item 151 (1)).** Its four operator
+questions go to the owner at S2's demo (item 151 (5)).
+
 - **Owns:** `crates/sim/src/survey.rs`, the Survey half of `crates/sim/src/sight.rs`, a new
   `crates/sim/tests/survey.rs`, its kinds at the end of `EventKind` with their gateway arms (E17),
   and its scenario's entries. It writes the explored-cell table `dfnd` laid out, through that
@@ -2014,6 +2017,9 @@ chain moved.
   whose hashing `dfnd`'s contract PR set). **Agent-days:** 3–4.
 
 ### `vfy3` — `crates/verifier`: the threat model's lints
+
+**Merged as #149 (`eaf90da`, head `c3e9edf`) (decisions-log item 151 (1) and (2) (e)).**
+`VERIFIER_VERSION` `0.1.0-s2.3`; I0005 kept.
 
 - **Owns:** `crates/verifier`, its goldens, except `atk`'s named places while `atk` is open
   (decisions-log item 146 (4): E0418's commander rule and E0013's entry, with `/attack/` in
@@ -2040,6 +2046,9 @@ chain moved.
   **Agent-days:** 1.5–2.
 
 ### `atk` — `crates/sim`: Attack, hunting, breach and the demolition charge
+
+**Merged as #146 (`dcb742a`, head `cf3eb04`) (decisions-log item 151 (1) and (5)).**
+`SNAPSHOT_VERSION` 14, event kinds 54 to 58, no chain moved.
 
 - **Owns:** `crates/sim` except `surv`'s named places, every golden it moves, the preamble's named
   places (the Attack row of `mandate_and_rule_gaps()`), `crates/sim/tests/allocations.rs`, its
@@ -2127,6 +2136,9 @@ chain moved.
 
 ### `oprd` → `opra` — `crates/operator` + `library/`: Easy under combat, one lane in two PRs
 
+**Merged as `oprd` #144 (`ebc835b`, head `e67018e`) and `opra` #148 (`7711dce`, head `3639ec2`)
+(decisions-log item 151 (1), (2) (d) and (5)).**
+
 - **Owns:** `crates/operator`, `library/`, `tests/golden/operator`, and the named places AGENTS.md
   §6 grants a lane that changes the operator's output: `crates/gamectl/tests/{operator.rs,
   operator_host.rs, wizard.rs}`, `crates/gateway/tests/advice.rs`,
@@ -2164,6 +2176,9 @@ chain moved.
 
 ### `arms` — the three nightly arms and their bands
 
+**Merged as #150 (`b6ee485`, head `b6ba577`) (decisions-log items 150 (2) and 151 (1)),** then
+carried by three added lanes: `vfy4`, `atk2` and `rush`, below `demo2`.
+
 - **Owns:** `scenarios/nightly/` (after `night`). **Branch** `feat/scenarios-nightly-arms`, worktree
   `../pharmakos-arms`.
 - **Builds:** Rusher (an early Attack beacon, launch on a small force size against the nearest known
@@ -2179,6 +2194,10 @@ chain moved.
   forced run's three results; every band written. **Contract PR:** no. **Agent-days:** 2–3.
 
 ### `g3r` — the certifying runs, the alarm job and the re-derived power rows
+
+**Merged as #147 (`dad35b4`, head `da99290`) (decisions-log item 151 (1)).** Certified tick p99
+13.05 ms and mean 5.34 ms; re-certified by `demo2` on `tune2`'s rules at 12.43 ms and 5.17 ms
+(item 151 (6)).
 
 - **Owns:** `crates/bench` (after `g3h`), `xtask/src/main.rs` (`g3-budget`),
   `.github/workflows/ci.yml` (the new job and the perf-alarms comment, ~986). **Branch**
@@ -2201,6 +2220,9 @@ chain moved.
   in the PR body. **Contract PR:** yes (`xtask`, a workflow). **Agent-days:** 2.5–3.5.
 
 ### `tune2` — the numbers, the power budget and the walkers
+
+**Merged as #153 (`c1fae23`, head `70cf0e6`) (decisions-log item 151 (1) and (2) (c)).** Rules
+revision 6, every chain moved.
 
 - **Owns:** `rules/rules.v1.json` values and `rules/README.md`; `crates/gamectl/tests/balance.rs`
   and a new `#[ignore]`d `crates/gamectl/tests/duels.rs`; S2-16's walker removal as named places —
@@ -2240,6 +2262,9 @@ chain moved.
 
 ### `demo2` — the run sheet, the certification and the register
 
+**Opened as the main session's docs pull request for decisions-log item 151**, with the run
+sheet `docs/demo/s2-run-sheet.md`.
+
 - **Owns:** `docs/demo/s2-run-sheet.md` and the register's S2 section (the main session's docs PR).
   **Builds:** the run sheet for §1.1, with `FREE_FIRE` set on the owner's Build beacon in round 1's
   Lull (step 1), and decision 39's collapse beat shown staged: `fall`'s `collapse_credits_the_blast`
@@ -2250,6 +2275,21 @@ chain moved.
   nightly report with each band acknowledged as Easy's; the register's S2 rows closed or moved with
   their owners. **Implements:** AGENTS.md §10 items 5, 6 and 8. **Needs:** `tune2` and `arms`
   merged. **Agent-days:** 2–3.
+
+
+### Added lanes: `vfy4`, `atk2` and `rush` (decisions-log item 150 (2))
+
+The owner ruled on 2026-10-27 that the nightly arms play their archetypes before S2 closes, so three
+lanes were added after `arms`:
+
+- **`vfy4`** — `crates/verifier`: a seatless `enemy_commander` with no fresh sighting qualifies with
+  W0708 in place of E0418. **Merged as #151 (`4af77d8`, head `fe6933d`)** (item 151 (1)).
+- **`atk2`** — `crates/sim` and `crates/verifier`: the nearest known enemy beacon as an Attack
+  target, E0015 lifted for that one shape, W0709. A contract pull request (determinism code, the
+  snapshot format). **Merged as #154 (`43581c6`, head `6ef7720`)** (item 151 (1), (2) (a), (b) and
+  (f)).
+- **`rush`** — `scenarios/nightly/`: the Rusher's Survey beacon and two scouts, so its raid
+  launches. **Merged as #155 (`b7d2b0b`, head `de17029`)** (item 151 (1) and (2) (g)).
 
 ---
 
@@ -2442,7 +2482,7 @@ harness, lints, firewall-runner and CI shard PRs. The main session's docs PRs (s
 `docs/design/`, contract paths too, are counted apart: they are the record's own PRs, take the
 docs-only fast path and queue on no lane. Each body names its paths; each new hashed field goes into
 the state hash, the snapshot round-trip and the goldens in the same PR (§4.8); each snapshot change
-bumps `SNAPSHOT_VERSION` (13 since `dfnd` #140, 12 at `site` #133 and 11 at `fire` #129, `crates/sim/src/snapshot.rs`) and refuses an older snapshot
+bumps `SNAPSHOT_VERSION` (14 since `atk` #146, which `atk2` #154 kept, 13 at `dfnd` #140, 12 at `site` #133 and 11 at `fire` #129, `crates/sim/src/snapshot.rs`) and refuses an older snapshot
 with a clear message. `SAVE_FORMAT_VERSION` (2, `crates/gateway/src/save.rs` ~99) moves only if a
 lane changes the save container itself, which none is planned to; a save holding an older snapshot
 is refused through the snapshot's own version. Event kinds and step failures are added at the end
@@ -2471,13 +2511,16 @@ with new names, their ids taken at the merge of `main` (E17, E33).
 | 15 | `opra` | `tests/golden/package/`'s manifests |
 | 16 | `g3r` | `cargo xtask g3-budget`, `.github/workflows/ci.yml`'s new job |
 | 17 | `tune2` | the rules' values (`rules_hash`), the scenario format (the walkers' key removed), `xtask/src/scenario.rs` |
+| 18 | `atk2` (added, item 150 (2)) | determinism code: the Attack row's new aim tag 5 in the state hash and the snapshot columns, `SNAPSHOT_VERSION` kept at 14 |
 
 As merged so far: `msrv`, `con3`, `base`, `night` (decisions-log item 145 (1)), then `con4` #120,
 the harness PR #122, `ids` #123 and `vfy2` #125 (decisions-log item 146 (1)), then `wgw` #128,
 `fire` #129, `wgw`'s second PR #131 and `fall` #132 (decisions-log item 148 (1); `wgw`'s two are
 not rows of the table), then the timeout stopgap #135, `wgw`'s view kinds #136, `view` #137, the CI
 shard PR #138, `site` #133, `g3h` #139, `dfnd` #140 and `wgw`'s shell flight #141 (decisions-log
-item 149 (1); #135, #136, #137 and #141 are not rows of the table).
+item 149 (1); #135, #136, #137 and #141 are not rows of the table), then `surv` #145, `oprd` #144, `atk` #146, `g3r` #147, `opra` #148,
+`vfy3` #149, `arms` #150, `vfy4` #151, `tune2` #153, `atk2` #154 and `rush` #155 (decisions-log item
+151 (1); `surv`, `vfy3`, `arms`, `vfy4` and `rush` are not rows of the table).
 
 `NIGHTLY_SCENARIOS_ENABLED` is not a PR: it is a repository variable the owner sets (decision 30).
 
