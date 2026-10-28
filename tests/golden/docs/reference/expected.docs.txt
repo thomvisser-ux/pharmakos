@@ -820,7 +820,7 @@ gp.v1.Playbook.Kind
 
 ## Diagnostics
 
-99 codes. A code is language-neutral, append-only and never
+100 codes. A code is language-neutral, append-only and never
 reused; only an ERROR stops a playbook qualifying. `none at the skeleton` names the
 task that owes the emitter, which is honesty about coverage rather than a gap.
 
@@ -882,8 +882,8 @@ E0014  ERROR  decode and version  raised at: none at the skeleton (retired by S2
   "Most threatened" picks your own beacon with the most enemy firepower seen inside its sphere.
 
 E0015  ERROR  decode and version  raised at: structure
-  selector filter `side: ENEMY_KNOWN` has no effect until S3, with the seat's knowledge store; it is refused rather than ignored.
-  Picking among enemy beacons comes later. For now a selector picks among your own.
+  selector filter `side: ENEMY_KNOWN` has no effect until S3, with the seat's knowledge store, except in `nearest` with no other filter field as an Attack target; it is refused rather than ignored.
+  Picking among enemy beacons comes later. For now only an Attack beacon can pick one, the nearest your side knows of; any other selector picks among your own.
 
 E0016  ERROR  decode and version  raised at: structure
   selector filter `tags` has no effect until S3: a beacon has no tag column to read yet, so writing tags is legal and filtering on them is not.
@@ -1200,6 +1200,10 @@ W0707  WARNING  schedule, conflicts and staleness  raised at: estimate
 W0708  WARNING  schedule, conflicts and staleness  raised at: semantics
   {what}, and the reach window is {max} ms; with no seat named, the Attack hunts the enemy commander seen within it nearest its staging point when its force is ready to launch, and the force waits until there is one.
   This Attack beacon's raiders wait until your side has recently seen an enemy commander, then hunt the nearest one. Scouts help them find one sooner.
+
+W0709  WARNING  schedule, conflicts and staleness  raised at: semantics
+  {what}, and the reach window is {max} ms; the Attack raids the enemy beacon seen within it nearest its staging point when its force is ready to launch, and the force waits until there is one.
+  This Attack beacon's raiders wait until your side has recently seen an enemy beacon, then raid the nearest one. Scouts help them find one sooner.
 
 I0001  INFO  information  raised at: estimate
   the route is at least {found} ms of walking, between the places it names.

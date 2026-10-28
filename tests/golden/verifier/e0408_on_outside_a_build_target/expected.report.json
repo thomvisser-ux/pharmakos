@@ -9,10 +9,10 @@
       "beginner": "\"On a vent\" says where a building goes, so it belongs in a Build target."
     }
   ],
-  "report_hash": "zOIbCZuC5qY=",
+  "report_hash": "XcQaN0xkyeg=",
   "rules_hash": "VQGfykahqEM=",
   "plan_fingerprint": "b0sp8BeRSfA=",
-  "verifier_version": "0.1.0-s2.4",
+  "verifier_version": "0.1.0-s2.5",
   "size_units": 1,
   "size_budget": 128
 }

@@ -55,10 +55,10 @@
           "map_refs": []
         }
       ],
-      "report_hash": "1tPmuM7nXs8=",
+      "report_hash": "2sKTqRHrrY8=",
       "rules_hash": "VQGfykahqEM=",
       "plan_fingerprint": "w+zW5krEWDo=",
-      "verifier_version": "0.1.0-s2.4",
+      "verifier_version": "0.1.0-s2.5",
       "size_units": 6,
       "size_budget": 128
     },

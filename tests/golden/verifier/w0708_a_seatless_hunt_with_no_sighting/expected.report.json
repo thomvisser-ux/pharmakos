@@ -10,10 +10,10 @@
       "beginner": "This Attack beacon's raiders wait until your side has recently seen an enemy commander, then hunt the nearest one. Scouts help them find one sooner."
     }
   ],
-  "report_hash": "BrkBP20mKus=",
+  "report_hash": "fZbOL4TRiZg=",
   "rules_hash": "VQGfykahqEM=",
   "plan_fingerprint": "0VyTDFUiWPg=",
-  "verifier_version": "0.1.0-s2.4",
+  "verifier_version": "0.1.0-s2.5",
   "size_units": 1,
   "size_budget": 128
 }

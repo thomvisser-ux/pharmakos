@@ -9,10 +9,10 @@
       "beginner": "This setting holds a number the game does not know. Nothing is guessed for you: write one of the setting's names instead."
     }
   ],
-  "report_hash": "PJxctUH9Kag=",
+  "report_hash": "dY/xZ5rAAsY=",
   "rules_hash": "VQGfykahqEM=",
   "plan_fingerprint": "eh0et2NlZZA=",
-  "verifier_version": "0.1.0-s2.4",
+  "verifier_version": "0.1.0-s2.5",
   "size_units": 1,
   "size_budget": 128
 }

@@ -9,10 +9,10 @@
       "beginner": "An Attack beacon attacks what the seat has seen recently. Look again with a scout, or choose a target the seat has seen."
     }
   ],
-  "report_hash": "HIUfZkyonJs=",
+  "report_hash": "GUpEUAErs/0=",
   "rules_hash": "VQGfykahqEM=",
   "plan_fingerprint": "vTsS3gB0vcE=",
-  "verifier_version": "0.1.0-s2.4",
+  "verifier_version": "0.1.0-s2.5",
   "size_units": 1,
   "size_budget": 128
 }

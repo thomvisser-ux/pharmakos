@@ -8,8 +8,8 @@
     },
     {
       "pointer": "/declarative/route/1/place_beacon/initial/mandate/attack/target",
-      "label": "What to raid: an enemy beacon by name, the enemy commander, or a voxel",
-      "value": "{\"voxel\":{\"x\":192,\"y\":192,\"z\":0}}",
+      "label": "What to raid: the nearest enemy beacon you know of, an enemy beacon by name, the enemy commander, or a voxel",
+      "value": "{\"beacon\":{\"nearest\":{\"filter\":{\"side\":\"ENEMY_KNOWN\"}}}}",
       "suggested": false
     },
     {
