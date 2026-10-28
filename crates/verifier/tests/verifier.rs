@@ -820,6 +820,75 @@ fn a_commander_targets_freshness_warns_unset_and_refuses_set() {
     );
 }
 
+/// The nearest known enemy beacon as an Attack target (S2's `atk2`,
+/// decisions-log item 150 (2)): `nearest` with the filter
+/// `side: ENEMY_KNOWN` and nothing else qualifies, warned (`W0709`) while no
+/// enemy beacon is seen inside the window, because the sim chooses it at
+/// launch and holds the force until one is. Every other enemy selector, and
+/// this one with a further filter field or anywhere but an Attack target, is
+/// still `E0015`.
+#[test]
+fn only_the_nearest_known_enemy_beacon_is_lifted_and_it_is_warned_unseen() {
+    let rules = rules();
+    let window = u32::try_from(
+        pharmakos_verifier::Limits::from_rules(&rules)
+            .expect("the limits")
+            .reach_memory_ms(),
+    )
+    .expect("a window is not negative");
+    let snapshot = fixture_snapshot();
+    // (qualifies, E0015, W0709)
+    let verdict = |scope: &Scope, bytes: &[u8]| -> (bool, bool, bool) {
+        let input = Input::new(bytes, &snapshot, scope, &rules).expect("an input");
+        let report = verify(&input, Depth::Quick);
+        let has = |code: &str| report.diagnostics.iter().any(|d| d.code == code);
+        (report.qualifies, has("E0015"), has("W0709"))
+    };
+    let lifted = String::from_utf8(case_bytes(
+        "w0709_a_raid_on_the_nearest_known_beacon_with_no_sighting",
+    ))
+    .expect("UTF-8");
+    let filter = "\"side\": \"ENEMY_KNOWN\"";
+    assert!(lifted.contains(filter), "the case names the selector");
+    let seen_beacon = |age_ms: u32| {
+        fixture_scope().with_sighting(Sighting {
+            what: Sighted::Beacon("e_01".to_owned()),
+            at: Voxel { x: 1, y: 1, z: 1 },
+            age_ms,
+        })
+    };
+    for (scope, unseen, why) in [
+        (fixture_scope(), true, "none seen"),
+        (seen_beacon(10), false, "seen"),
+        (seen_beacon(window), false, "at the edge"),
+        (seen_beacon(window + 1), true, "past it"),
+    ] {
+        assert_eq!(
+            verdict(&scope, lifted.as_bytes()),
+            (true, false, unseen),
+            "{why}"
+        );
+    }
+    // A fresh commander sighting says nothing about a beacon raid.
+    let commander = fixture_scope().with_sighting(Sighting {
+        what: Sighted::Commander(SeatId::new(1)),
+        at: Voxel { x: 1, y: 1, z: 1 },
+        age_ms: 10,
+    });
+    assert_eq!(verdict(&commander, lifted.as_bytes()), (true, false, true));
+    // Every other shape stays refused, seen or not.
+    for refused in [
+        lifted.replace("\"nearest\"", "\"weakest\""),
+        lifted.replace("\"nearest\"", "\"most_threatened\""),
+        lifted.replace(filter, &format!("{filter}, \"mandate\": \"DEFEND\"")),
+        lifted.replace(filter, &format!("{filter}, \"tags\": [\"east\"]")),
+    ] {
+        assert_ne!(refused, lifted, "the shape was changed");
+        let (qualifies, e0015, w0709) = verdict(&seen_beacon(10), refused.as_bytes());
+        assert!(!qualifies && e0015 && !w0709, "{refused}");
+    }
+}
+
 #[test]
 fn every_estimate_case_exists_and_its_fixture_changes_one_thing() {
     let names = cases();

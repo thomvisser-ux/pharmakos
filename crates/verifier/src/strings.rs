@@ -144,8 +144,10 @@ pub const VERIFIER_STRINGS: &[Text] = &[
     Text {
         code: "E0015",
         message: "selector filter `side: ENEMY_KNOWN` has no effect until S3, with the seat's \
-                  knowledge store; it is refused rather than ignored.",
-        beginner: "Picking among enemy beacons comes later. For now a selector picks among your \
+                  knowledge store, except in `nearest` with no other filter field as an Attack \
+                  target; it is refused rather than ignored.",
+        beginner: "Picking among enemy beacons comes later. For now only an Attack beacon can \
+                   pick one, the nearest your side knows of; any other selector picks among your \
                    own.",
     },
     Text {
@@ -603,6 +605,14 @@ pub const VERIFIER_STRINGS: &[Text] = &[
         beginner: "This Attack beacon's raiders wait until your side has recently seen an enemy \
                    commander, then hunt the nearest one. Scouts help them find one sooner.",
     },
+    Text {
+        code: "W0709",
+        message: "{what}, and the reach window is {max} ms; the Attack raids the enemy beacon \
+                  seen within it nearest its staging point when its force is ready to launch, \
+                  and the force waits until there is one.",
+        beginner: "This Attack beacon's raiders wait until your side has recently seen an enemy \
+                   beacon, then raid the nearest one. Scouts help them find one sooner.",
+    },
     // --- I...: information ---------------------------------------------------
     Text {
         code: "I0001",
@@ -753,6 +763,16 @@ pub fn never_sighted(beacon_id: &str) -> String {
 #[must_use]
 pub fn sighted_ago(what: &str, age_ms: u32) -> String {
     format!("{what} was last seen {age_ms} ms ago")
+}
+
+/// W0709's `{what}`: no enemy beacon has been sighted.
+pub const NO_BEACON_SIGHTED: &str = "the seat has no sighting of an enemy beacon";
+
+/// W0709's subject for the most recently seen enemy beacon, whose sighting is
+/// older than the window.
+#[must_use]
+pub fn freshest_enemy_beacon(id: &str) -> String {
+    format!("the most recently seen enemy beacon, `{id}`,")
 }
 
 /// The enemy commander, as W0708's `{what}` names it.

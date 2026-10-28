@@ -71,9 +71,9 @@ use pharmakos_proto::gp::v1::handler::Resume;
 use pharmakos_proto::gp::v1::move_step::Pace;
 use pharmakos_proto::gp::v1::on_fail::Action;
 use pharmakos_proto::gp::v1::{
-    Area, AttackSettings, BeaconFilter, BuildTarget, DefendSettings, FeatureRef, InterfaceStep,
-    Location, MandateSettings, Playbook, Step, Voxel, attack_target, beacon_ref, interface_row,
-    location, mandate_settings, protected_asset, step,
+    Area, AttackSettings, BeaconFilter, BeaconRef, BuildTarget, DefendSettings, FeatureRef,
+    InterfaceStep, Location, MandateSettings, Playbook, Step, Voxel, attack_target, beacon_ref,
+    interface_row, location, mandate_settings, protected_asset, step,
 };
 
 use crate::limits::Limits;
@@ -427,7 +427,10 @@ impl Semantics<'_> {
     /// commander, rests on a sighting inside the reach window (`E0418`); the
     /// enemy commander with no seat named qualifies without one, with a
     /// warning (`W0708`), because the sim chooses it at launch and holds the
-    /// force until a fresh sighting exists.
+    /// force until a fresh sighting exists. The nearest known enemy beacon
+    /// (S2's `atk2`) is the same: chosen at launch, so it qualifies with or
+    /// without a fresh sighting of an enemy beacon, and is warned without one
+    /// (`W0709`).
     ///
     /// **Freshness is a plan-time test** (spec section 6: "Freshness is a
     /// qualification test at plan time only; the target is pinned at the
@@ -447,6 +450,7 @@ impl Semantics<'_> {
         match target.target.as_ref() {
             Some(attack_target::Target::Beacon(beacon)) => {
                 let Some(beacon_ref::Ref::BeaconId(id)) = beacon.r#ref.as_ref() else {
+                    self.nearest_known_beacon(beacon, &target_at, window);
                     return;
                 };
                 let here = pointer::child(&pointer::child(&target_at, "beacon"), "beacon_id");
@@ -551,6 +555,62 @@ impl Semantics<'_> {
                 }
             }
             Some(attack_target::Target::Voxel(_)) | None => {}
+        }
+    }
+
+    /// The nearest known enemy beacon as an Attack target (S2's `atk2`):
+    /// `W0709` when no enemy beacon is sighted inside the reach window. Any
+    /// other selector says nothing here.
+    fn nearest_known_beacon(&mut self, beacon: &BeaconRef, target_at: &str, window: i64) {
+        if !crate::refusals::is_nearest_known_enemy_beacon(beacon) {
+            return;
+        }
+        let here = pointer::child(&pointer::child(target_at, "beacon"), "nearest");
+        // Decisions-log item 150 (2), S2's `atk2`: the sim chooses
+        // the beacon at launch, nearest the staging point, and holds
+        // the force, counted, until the seat knows one, so the file
+        // qualifies; with no enemy beacon seen inside the window it
+        // says so. An age is compared and nothing is ranked: the
+        // freshest sighting is read only to say how old it is, and
+        // which beacon is nearest is the sim's (AGENTS.md section 3
+        // rule 2).
+        let freshest = self
+            .scope
+            .sightings()
+            .iter()
+            .filter_map(|seen| match &seen.what {
+                Sighted::Beacon(id)
+                    if self
+                        .scope
+                        .beacon(id)
+                        .is_none_or(|known| known.side != Ownership::Own) =>
+                {
+                    Some((id, seen))
+                }
+                Sighted::Beacon(_) | Sighted::Commander(_) => None,
+            })
+            .min_by_key(|(_, seen)| seen.age_ms);
+        match freshest {
+            None => self.out.emit(
+                Diag::new("W0709", here)
+                    .arg("what", strings::NO_BEACON_SIGHTED)
+                    .arg("max", window),
+            ),
+            Some((id, sighting)) if i64::from(sighting.age_ms) > window => {
+                self.out.emit(
+                    Diag::new("W0709", here)
+                        .arg(
+                            "what",
+                            strings::sighted_ago(
+                                &strings::freshest_enemy_beacon(id),
+                                sighting.age_ms,
+                            ),
+                        )
+                        .arg("max", window)
+                        .map_ref(sighting.at),
+                );
+            }
+            Some(_) => {}
         }
     }
 

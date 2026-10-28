@@ -62,7 +62,8 @@
 //! `verifier.reach_memory_ms`. So an Attack target named by id, or one seat's
 //! commander, must rest on a sighting inside that window (`E0418`); the enemy
 //! commander with no seat named, which the sim chooses at launch, is only
-//! warned of without one (`W0708`); and any other reference to an enemy
+//! warned of without one (`W0708`), as is the nearest known enemy beacon
+//! (`W0709`); and any other reference to an enemy
 //! beacon resting on an older one is `W0703`.
 //! The verifier **reads ages and nothing else**: it never ranks the
 //! sightings, never guesses where an asset went, and never models what an
