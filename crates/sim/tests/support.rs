@@ -1731,9 +1731,9 @@ fn collapse_credits_the_blast() {
     assert_eq!(
         pinned,
         vec![
-            (CUT_TICK - 1, 0x6285_6f9e_da95_3c1a),
-            (CUT_TICK, 0x7746_1ffc_5168_cbae),
-            (CUT_TICK + 1, 0x28e6_ef7d_2466_e17a),
+            (CUT_TICK - 1, 0x587d_cd40_e04b_1202),
+            (CUT_TICK, 0x3c2d_c182_2e05_9669),
+            (CUT_TICK + 1, 0x5e5b_6acc_6546_e74b),
         ],
         "the staged blast's chain at the cut"
     );

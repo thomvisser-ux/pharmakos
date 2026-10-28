@@ -80,16 +80,19 @@ fn rules() -> RulesTable {
     RulesTable::load(&path).unwrap_or_else(|error| panic!("loading the rules table: {error}"))
 }
 
-/// The committed table with each core's surplus raised to 100 kW, so that no
-/// staged beacon, structure or unit goes dark: power is not what a duel tests,
-/// and a dark asset is no sensor and fires at nothing.
+/// The committed table with each core's surplus raised to 100 kW (and the
+/// map's power ceiling to 1 000 kW, which the generator checks the supply
+/// against), so that no staged beacon, structure or unit goes dark: power is
+/// not what a duel tests, and a dark asset is no sensor and fires at nothing.
+/// Every other row is the committed one.
 fn powered() -> RulesTable {
     let mut message = rules().message().clone();
-    message
+    let power = message
         .power
         .as_mut()
-        .expect("the committed table has a power block")
-        .core_surplus_kw = 100;
+        .expect("the committed table has a power block");
+    power.core_surplus_kw = 100;
+    power.map_ceiling_kw = 1_000;
     RulesTable::from_message(&message).unwrap_or_else(|error| panic!("the powered table: {error}"))
 }
 
@@ -185,6 +188,8 @@ fn unit_alive(world: &World, id: UnitId) -> bool {
         .is_ok_and(|row| world.units().hit_points()[row.index()].raw() > 0)
 }
 
+/// A structure's hit points; one whose row is gone (destroyed, and its row
+/// freed) reads 0, as dead.
 fn structure_hp(world: &World, id: StructureId) -> i32 {
     world
         .structures()
@@ -260,6 +265,7 @@ fn raiders_raid(kind: StructureKind, n: u32) -> String {
     let mut runner = pushing(world);
     let mut counts = Counts::default();
     let mut first_kill: Option<u32> = None;
+    let mut shots_by_then: u64 = 0;
     let mut first_hit: Option<u32> = None;
     let mut fell: Option<u32> = None;
     for at in 1..=DUEL_TICKS {
@@ -267,6 +273,7 @@ fn raiders_raid(kind: StructureKind, n: u32) -> String {
         let world = runner.world();
         if first_kill.is_none() && raiders.iter().any(|id| !unit_alive(world, *id)) {
             first_kill = Some(at);
+            shots_by_then = world.combat_counts().shots();
         }
         if first_hit.is_none() && structure_hp(world, target) < max_hp {
             first_hit = Some(at);
@@ -282,8 +289,9 @@ fn raiders_raid(kind: StructureKind, n: u32) -> String {
     let world = runner.world();
     let alive = raiders.iter().filter(|id| unit_alive(world, **id)).count();
     format!(
-        "{n} raider(s) 3 voxels from a {kind:?} ({} HP): first raider down {}, first hit on it {}, it {}; \
-         {} of {n} raiders left, {} HP left on it, {} shells landed",
+        "{n} raider(s) 3 voxels from a {kind:?} ({} HP): first raider down {} ({shots_by_then} \
+         direct shots fired by then, every seat's), first hit on it {}, it {}; {} of {n} raiders \
+         left, {} HP left on it, {} shells landed",
         max_hp,
         first_kill.map_or_else(|| String::from("never"), seconds),
         first_hit.map_or_else(|| String::from("never"), seconds),
@@ -318,8 +326,8 @@ fn mortar_against_autocannon(spotter: bool) -> String {
     );
     if spotter {
         let scout_at = ground(&world, here, 8, 0);
+        // Its home where it stands, so it stays there.
         let scout_home = beacon(&mut world, seat(0), scout_at, HOLD_FIRE);
-        world.set_writ(scout_home, MandateKind::Survey);
         let _ = unit(&mut world, seat(0), scout_home, UnitKind::Scout, scout_at);
     }
     let mut runner = pushing(world);
@@ -422,16 +430,23 @@ fn crater_in(material: Material, name: &str, levels: u32) -> String {
     }
     let mut enc = pharmakos_sim::Enc::with_capacity(64 * 1024);
     world.step(&mut enc).expect("the slab is laid");
-    let aim = world.standing_point([x, y, 0]);
     let mut runner = pushing(world);
     let mut counts = Counts::default();
     let mut lines = Vec::new();
     let cooldown = weapon(StructureKind::Mortar).cooldown_ticks();
-    let centre_top = |world: &World| world.voxels().top_solid_z(x, y).unwrap_or(0);
+    let centre_top = |world: &World| {
+        world
+            .voxels()
+            .top_solid_z(x, y)
+            .expect("bedrock is never removed, so the column keeps a floor")
+    };
     for shell in 1..=4_u32 {
         for _ in 0..cooldown {
             tick(&mut runner, &mut counts);
         }
+        // Each shell aims at the column's standing point as it is now, so a
+        // later shell lands in the crater the last one left.
+        let aim = runner.world().standing_point([x, y, 0]);
         runner
             .world_mut()
             .order_shell(mortar, aim)
@@ -454,72 +469,98 @@ fn crater_in(material: Material, name: &str, levels: u32) -> String {
     )
 }
 
-/// Seat 0's mortar against a lone seat-1 raider at `distance`, under three
-/// sights: the mortar's own vision only (its home beacon far behind it), its
-/// home beacon's sphere at the mortar, and a scout of its seat 16 voxels out.
-fn effective_range() -> Vec<String> {
-    let distances = [10_i32, 20, 30, 38];
-    let sights = [
-        "own vision only",
-        "home sphere at the mortar",
-        "a scout 16 out",
-    ];
-    let mut lines = Vec::new();
-    for sight in sights {
-        let mut fired_at = Vec::new();
-        for distance in distances {
-            let mut world = world();
-            let here = field(&world);
-            let home_at = match sight {
-                "home sphere at the mortar" => ground(&world, here, 0, 2),
-                _ => ground(&world, here, -40, 0),
-            };
-            let home = beacon(&mut world, seat(0), home_at, FREE_FIRE);
-            let mortar = raise(&mut world, seat(0), home, StructureKind::Mortar, here);
-            if sight == "a scout 16 out" {
-                let scout_at = ground(&world, here, 16, 3);
-                let scout_home_at = ground(&world, here, -40, 4);
-                let scout_home = beacon(&mut world, seat(0), scout_home_at, HOLD_FIRE);
-                world.set_writ(scout_home, MandateKind::Survey);
-                let _ = unit(&mut world, seat(0), scout_home, UnitKind::Scout, scout_at);
-            }
-            let raider_at = ground(&world, here, distance, 0);
-            // Its home where it stands, so it stays there.
-            let raider_home_at = raider_at;
-            let raider_home = beacon(&mut world, seat(1), raider_home_at, HOLD_FIRE);
-            let _ = unit(
-                &mut world,
-                seat(1),
-                raider_home,
-                UnitKind::Raider,
-                raider_at,
-            );
-            let _ = mortar;
-            let mut runner = pushing(world);
-            let mut counts = Counts::default();
-            let mut fired = false;
-            for _ in 0..(10 * TICK_HZ) {
-                tick(&mut runner, &mut counts);
-                if runner.world().combat_counts().shells_fired() > 0 {
-                    fired = true;
-                    break;
-                }
-            }
-            fired_at.push(format!(
-                "{distance}: {}",
-                if fired { "fires" } else { "holds" }
-            ));
-        }
-        lines.push(format!(
-            "mortar (range {}, vision {}) against a raider at distance, {sight}: {}",
-            weapon(StructureKind::Mortar).range_voxels,
-            rules()
-                .structure(StructureKind::Mortar)
-                .map_or(0, |row| row.vision_radius_voxels),
-            fired_at.join(", ")
-        ));
+/// Whether seat 0's mortar fires within ten seconds at a lone seat-1 raider
+/// standing `distance` voxels off, under `sight`.
+fn mortar_fires_at(distance: i32, sight: Sight) -> bool {
+    let mut world = world();
+    let here = field(&world);
+    let home_at = match sight {
+        Sight::HomeSphere => ground(&world, here, 0, 2),
+        Sight::OwnVision | Sight::ForwardScout => ground(&world, here, -40, 0),
+    };
+    let home = beacon(&mut world, seat(0), home_at, FREE_FIRE);
+    let _mortar = raise(&mut world, seat(0), home, StructureKind::Mortar, here);
+    if sight == Sight::ForwardScout {
+        // A scout 16 voxels out, on a beacon of its own where it stands, so it
+        // stays there.
+        let scout_at = ground(&world, here, 16, 3);
+        let scout_home = beacon(&mut world, seat(0), scout_at, HOLD_FIRE);
+        let _ = unit(&mut world, seat(0), scout_home, UnitKind::Scout, scout_at);
     }
-    lines
+    // The raider's home where it stands, so it stays there.
+    let raider_at = ground(&world, here, distance, 0);
+    let raider_home = beacon(&mut world, seat(1), raider_at, HOLD_FIRE);
+    let _ = unit(
+        &mut world,
+        seat(1),
+        raider_home,
+        UnitKind::Raider,
+        raider_at,
+    );
+    let mut runner = pushing(world);
+    let mut counts = Counts::default();
+    for _ in 0..(10 * TICK_HZ) {
+        tick(&mut runner, &mut counts);
+        if runner.world().combat_counts().shells_fired() > 0 {
+            return true;
+        }
+    }
+    false
+}
+
+/// What seat 0 sees with, in [`effective_range`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Sight {
+    /// The mortar's own vision only: its home beacon 40 voxels behind it.
+    OwnVision,
+    /// Its home beacon's sphere at the mortar.
+    HomeSphere,
+    /// A scout of its seat 16 voxels out (vision 24, so it sees to 40).
+    ForwardScout,
+}
+
+impl Sight {
+    const fn words(self) -> &'static str {
+        match self {
+            Sight::OwnVision => "its own vision only",
+            Sight::HomeSphere => "its home beacon's sphere at the mortar",
+            Sight::ForwardScout => "a scout of its seat 16 voxels out",
+        }
+    }
+}
+
+/// Item 148 (2)'s figure: the mortar's effective range under seat sight,
+/// found by placing a lone raider at every distance from 2 to 44 voxels and
+/// asking whether the mortar fires, under three sights.
+fn effective_range() -> Vec<String> {
+    let shell = weapon(StructureKind::Mortar);
+    let vision = rules()
+        .structure(StructureKind::Mortar)
+        .expect("a mortar row")
+        .vision_radius_voxels;
+    [Sight::OwnVision, Sight::HomeSphere, Sight::ForwardScout]
+        .into_iter()
+        .map(|sight| {
+            let fired: Vec<i32> = (2..=44)
+                .filter(|distance| mortar_fires_at(*distance, sight))
+                .collect();
+            let span = match (fired.first(), fired.last()) {
+                (Some(near), Some(far)) => {
+                    let gaps = i32::try_from(fired.len()).expect("few") != far - near + 1;
+                    format!(
+                        "fires from {near} to {far} voxels{}",
+                        if gaps { ", with gaps" } else { "" }
+                    )
+                }
+                _ => String::from("never fires"),
+            };
+            format!(
+                "the mortar's effective range (range {}, vision {vision}) with {}: {span}",
+                shell.range_voxels,
+                sight.words(),
+            )
+        })
+        .collect()
 }
 
 /// Milliseconds as seconds to a tenth, for the arithmetic lines.
@@ -626,9 +667,12 @@ fn the_duel_report_holds_the_kits_counter_relations() {
     let mut out = String::new();
     let _ = writeln!(
         out,
-        "Pharmakos duel report (S2's plan, task `tune2`; decision 17). Rules hash {}. Each line is \
-         a staged fight on seed 0x{SEED:016x}, read by the owner, never a gate.",
-        pharmakos_sim::hex(table.rules_hash())
+        "Pharmakos duel report (S2's plan, task `tune2`; decision 17). Committed rules hash {}; \
+         the fights play it with each core's surplus raised to 100 kW and the map's ceiling to \
+         1 000 kW, so nothing staged goes dark (rules hash {}). Each line is a staged fight on \
+         seed 0x{SEED:016x}, read by the owner, never a gate.",
+        pharmakos_sim::hex(table.rules_hash()),
+        pharmakos_sim::hex(powered().rules_hash()),
     );
     out.push('\n');
     let mut lines = arithmetic(&table);

@@ -1584,12 +1584,12 @@ fn a_mortar_duel_repairs_and_salvages() {
             &[EventKind::ShellLanded, EventKind::AssetRepaired]
         ),
         vec![
-            (104, 0xd31e_5706_a205_18bc),
-            (105, 0x5dab_15db_ee4e_c131),
-            (106, 0x2557_fde0_84c2_a5a9),
-            (181, 0x04b1_5819_5071_b35c),
-            (182, 0x2b50_7f1b_ffa1_3f75),
-            (183, 0xb08f_dcac_11b2_0592)
+            (104, 0xad5e_7c1b_e1af_e0a8),
+            (105, 0xf343_98f2_7feb_7279),
+            (106, 0xbc6b_2894_e1ba_ab6d),
+            (181, 0x49f5_4247_3002_50e9),
+            (182, 0xb59f_8156_30f9_72ef),
+            (183, 0x16f6_78ee_b10d_0873)
         ],
         "the duel's chain at its first shell and its first repair"
     );
@@ -1616,12 +1616,12 @@ fn a_mortar_duel_refills_its_craters() {
             &[EventKind::ShellLanded, EventKind::GroundRefilled]
         ),
         vec![
-            (104, 0x4474_f128_54fc_d46a),
-            (105, 0x250e_22f4_ae20_c44a),
-            (106, 0xe6c3_d7ee_8edc_0415),
-            (138, 0xed35_e4a8_3587_6fc6),
-            (139, 0x5287_6dc1_f45f_17f8),
-            (140, 0x0ceb_d776_7c8b_ab02)
+            (104, 0xb519_3d09_8659_c0ed),
+            (105, 0x6bf6_9573_d5c1_9b16),
+            (106, 0x475b_0751_5ef0_7b94),
+            (138, 0x8fa0_b9c1_e603_b9ec),
+            (139, 0xdaa3_c6ac_37df_824a),
+            (140, 0x586f_8750_342c_2117)
         ],
         "the duel's chain at its first shell and its first refill"
     );

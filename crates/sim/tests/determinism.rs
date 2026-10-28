@@ -66,6 +66,18 @@ fn rules() -> RulesTable {
         .expect("the committed rules table loads")
 }
 
+/// `rules` with each core's surplus raised to 100 kW and the map's power
+/// ceiling to 1 000 kW, so that the raiders `World::field_movers_directly`
+/// homes to the cores draw no seat dark: a dark core parks its units, and
+/// these tests want a table that moves.
+fn powered(rules: &RulesTable) -> RulesTable {
+    let mut message = rules.message().clone();
+    let power = message.power.as_mut().expect("a power block");
+    power.core_surplus_kw = 100;
+    power.map_ceiling_kw = 1_000;
+    RulesTable::from_message(&message).expect("the powered table is a table")
+}
+
 /// The committed table with one edit made to the **message**.
 ///
 /// A `RulesTable` has no public fields, because a field mutated after
@@ -102,10 +114,13 @@ fn world_with(rules: RulesTable) -> World {
 
 /// The harness world at a chosen size: every seat seals the harness playbook
 /// as `pharmakos_sim::determinism_world` has it, on the rules table's own
-/// ladder, with `movers` raiders a seat fielded and sent across the map
+/// ladder, with `movers` raiders a seat fielded and walking home from across the map
 /// (`World::field_movers_directly`, which replaced the harness walkers when
 /// S2-16 removed them).
 fn world_of(rules: RulesTable, movers: u32) -> World {
+    // The harness's own world (no movers) is the committed table, as the
+    // chain has it; a world with movers powers them.
+    let rules = if movers > 0 { powered(&rules) } else { rules };
     let mut world = World::new(&WorldConfig {
         match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED,
         seats: pharmakos_sim::DETERMINISM_SEATS,
@@ -380,7 +395,8 @@ fn a_restore_resizes_the_derived_index_to_the_restored_world() {
     }
     let expected_units = big.units().len();
 
-    let mut small = world_of(rules(), 0);
+    // The same powered table the movers are fielded on, with none of them.
+    let mut small = world_of(powered(&rules()), 0);
     assert!(small.units().len() < expected_units);
     Snapshot::capture(&big)
         .restore_into(&mut small)
@@ -794,9 +810,14 @@ fn the_rules_hash_is_pinned_to_the_committed_table() {
     // table's `note`: two grid rulings no row holds (S1-35's commander in a
     // blackout and S1-22's swap) and the economy rows' status after the
     // balance check. No value and not `revision` moved, so the chain did not.
+    // It moved from 8028d41384e6de2f with revision 6 (S2's `tune2`): decision
+    // 17's vision rows (scout 24, raider 12, commander 10, autocannon 20,
+    // mortar 12) and the note. Vision gates every weapon's choice and every
+    // sighting, so the chain moved with it, beside S2-16's removal of the
+    // harness walkers' wander, which moved it first.
     assert_eq!(
         hex(rules().rules_hash()),
-        "8028d41384e6de2f",
+        "55019fca46a1a843",
         "the rules hash moved; say in the pull request which row changed and why"
     );
 }
@@ -1430,7 +1451,7 @@ fn the_map_is_inside_the_hash_and_not_merely_beside_it() {
     let mut alternative = World::new(&WorldConfig {
         match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED ^ 1,
         seats: pharmakos_sim::DETERMINISM_SEATS,
-        rules: rules(),
+        rules: powered(&rules()),
         match_settings: MatchSettings::default(),
     })
     .expect("a world on another seed");
@@ -1728,4 +1749,28 @@ fn a_zero_or_negative_damage_cannot_be_built() {
         "repair stops at the maximum"
     );
     assert_eq!(Hp::new(50).repaired_by(repair, Hp::new(100)), Hp::new(80));
+}
+
+/// The tests above that want a wide, moving unit table get one: the raiders
+/// `World::field_movers_directly` fields walk home to their cores, on a table
+/// that powers them, rather than standing parked. Without this, a knob or a
+/// snapshot test could pass on a table nothing moves in.
+#[test]
+fn the_movers_walk() {
+    let mut world = world_with(rules());
+    let start = world.units().positions().to_vec();
+    let mut enc = Enc::with_capacity(64 * 1024);
+    for _ in 0..40 {
+        let _ = world.step(&mut enc).unwrap();
+    }
+    let moved = start
+        .iter()
+        .zip(world.units().positions())
+        .filter(|(was, now)| was != now)
+        .count();
+    let movers = usize::try_from(TEST_MOVERS).expect("fits") * 3;
+    assert!(
+        moved * 2 >= movers,
+        "{moved} units moved of {movers} movers: the table should move"
+    );
 }

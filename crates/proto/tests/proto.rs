@@ -1075,9 +1075,9 @@ fn gun(weapon: Option<rules_table::Weapon>, name: &str) -> (u32, u32, i32) {
 fn the_rules_table_carries_s2s_rows() {
     let table = committed_rules_table();
     assert_eq!(
-        table.revision, 5,
-        "rules.proto: `revision` is bumped whenever a value changes, and revision 5 added \
-         S2's rows"
+        table.revision, 6,
+        "rules.proto: `revision` is bumped whenever a value changes; revision 5 added S2's \
+         rows and revision 6 set decision 17's vision"
     );
 
     let locomotion = table.locomotion.expect("the locomotion block");

@@ -1270,7 +1270,7 @@ fn the_entity_list_at_the_gate_load_is_measured_and_reported() {
     let bytes = pharmakos_proto::json::write(&Json::Array(entities.clone())).len();
     let per_entity = bytes.checked_div(entities.len()).expect("a list of some");
     println!(
-        "::notice::full entity list at the gate load (seed 0x{SEED:016x}, {UNITS_PER_SEAT} walkers \
+        "::notice::full entity list at the gate load (seed 0x{SEED:016x}, {UNITS_PER_SEAT} raiders \
          a seat, casual): {} entities, {units} of them units, {bytes} bytes of JSON, about \
          {per_entity} bytes an entity",
         entities.len(),

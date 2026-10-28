@@ -768,21 +768,26 @@ struct Combat {
     losses: u32,
     /// Enemy value destroyed, whole `$`: the seat's settled share.
     destroyed: i64,
-    /// Own scouts lost: the drops in its live scout count, tick by tick
-    /// (decisions-log item 145's `surv` asked for them, item 148 (2)'s seat
-    /// sight putting a scout at 8 voxels inside every enemy weapon's range).
+    /// Own scouts lost, which S2's `surv` (#145) asked this report for, a
+    /// scout walking enemy beacons first: tick by tick, the drop in the seat's
+    /// live scouts, capped by the rise in its `losses` that tick, so a scout
+    /// recycled rather than destroyed is not counted. A lower bound: a scout
+    /// fabricated on the tick another dies hides that loss.
     scouts_lost: u32,
 }
 
 impl Combat {
-    /// What happened between `self` and the later reading `after`.
+    /// What happened between `self` and the later reading `after`. Every
+    /// counter only grows over a match, so a later reading below an earlier
+    /// one is a reader's bug and fails the run.
     fn until(self, after: Combat) -> Combat {
+        let grew = "a combat counter only grows over a match";
         Combat {
-            kills: after.kills.saturating_sub(self.kills),
-            shared: after.shared.saturating_sub(self.shared),
-            losses: after.losses.saturating_sub(self.losses),
-            destroyed: after.destroyed.saturating_sub(self.destroyed),
-            scouts_lost: after.scouts_lost.saturating_sub(self.scouts_lost),
+            kills: after.kills.checked_sub(self.kills).expect(grew),
+            shared: after.shared.checked_sub(self.shared).expect(grew),
+            losses: after.losses.checked_sub(self.losses).expect(grew),
+            destroyed: after.destroyed.checked_sub(self.destroyed).expect(grew),
+            scouts_lost: after.scouts_lost.checked_sub(self.scouts_lost).expect(grew),
         }
     }
 }
@@ -796,6 +801,9 @@ struct Round {
     start: Reading,
     /// The seat's combat counters at this round's Lull.
     combat: Combat,
+    /// The tick of this round's Push on which the seat's first kill of the
+    /// round settled.
+    first_kill: Option<u32>,
     /// What the feed said about this round's Push and recap.
     tally: Tally,
 }
@@ -1017,6 +1025,16 @@ fn combat_now(surface: &Surface, seats: u32, scouts_lost: &[u32]) -> Vec<Combat>
         .collect()
 }
 
+/// Each seat's `losses` counter (E15).
+fn losses_of(world: &pharmakos_sim::World, seats: u32) -> Vec<u32> {
+    (0..seats)
+        .map(|raw| {
+            let seat = SeatId::new(u8::try_from(raw).expect("a seat id"));
+            world.tally(seat).expect("every seat has a tally").losses
+        })
+        .collect()
+}
+
 /// Each seat's live scouts.
 fn live_scouts(world: &pharmakos_sim::World, seats: u32) -> Vec<u32> {
     let units = world.units();
@@ -1176,6 +1194,7 @@ fn play(seed: u64, matchup: Matchup, rounds: u32, rules: &str, ladder: Vec<i32>)
     let width = usize::try_from(count).expect("a seat count");
     let mut scouts_lost = vec![0_u32; width];
     let mut scouts = live_scouts(surface.host().expect("hosted").world(), count);
+    let mut losses = losses_of(surface.host().expect("hosted").world(), count);
     let mut dealt = vec![0_u64; width.saturating_mul(width)];
     let mut kingmaking = (count >= 3).then(Kingmaking::default);
     let mut ticks = 0_u32;
@@ -1197,6 +1216,7 @@ fn play(seed: u64, matchup: Matchup, rounds: u32, rules: &str, ladder: Vec<i32>)
                     .get(usize::from(run.seat))
                     .copied()
                     .expect("a tally per seat"),
+                first_kill: None,
                 tally: Tally::default(),
             });
         }
@@ -1222,23 +1242,37 @@ fn play(seed: u64, matchup: Matchup, rounds: u32, rules: &str, ladder: Vec<i32>)
         } else {
             (Vec::new(), Vec::new())
         };
+        let mut round_ticks = 0_u32;
         while let Some(report) = surface.step().expect("a tick") {
             ticks = ticks.saturating_add(1);
+            round_ticks = round_ticks.saturating_add(1);
             decided |= report.match_ended;
             let world = surface.host().expect("hosted").world();
-            // The scouts each seat lost this tick: a drop in its live count.
+            // The scouts each seat lost this tick: the drop in its live count,
+            // capped by the rise in its losses (a recycled scout is no loss).
             let now = live_scouts(world, count);
-            for ((lost, was), is) in scouts_lost.iter_mut().zip(&scouts).zip(&now) {
-                *lost = lost.saturating_add(was.saturating_sub(*is));
+            let losses_now = losses_of(world, count);
+            for (index, lost) in scouts_lost.iter_mut().enumerate() {
+                let at = |list: &[u32]| list.get(index).copied().expect("a count per seat");
+                let dropped = at(&scouts).saturating_sub(at(&now));
+                let died = at(&losses_now).saturating_sub(at(&losses));
+                *lost = lost.saturating_add(dropped.min(died));
             }
             scouts = now;
+            losses = losses_now;
             for run in &mut seats {
-                if run.first_kill.is_none()
-                    && world
-                        .tally(SeatId::new(run.seat))
-                        .is_some_and(|tally| tally.kills > 0)
-                {
+                let kills = world
+                    .tally(SeatId::new(run.seat))
+                    .expect("every seat has a tally")
+                    .kills;
+                if run.first_kill.is_none() && kills > 0 {
                     run.first_kill = Some((ticks, round));
+                }
+                if let Some(last) = run.rounds.last_mut()
+                    && last.first_kill.is_none()
+                    && kills > last.combat.kills
+                {
+                    last.first_kill = Some(round_ticks);
                 }
             }
             if let Some(figure) = kingmaking.as_mut() {
@@ -1437,7 +1471,7 @@ fn render_match(out: &mut String, run: &MatchRun, generator_cost: i64) {
         );
         let _ = writeln!(
             out,
-            "    {:<5} {:<13} {:>8} {:>6} {:>7} {:>7} {:>7} {:>5} {:>6} {:>6} {:>4} {:>3}  {:<5} {:<24} {:<36} new(b/s/u) kills/shared/losses $destroyed",
+            "    {:<5} {:<13} {:>8} {:>6} {:>7} {:>7} {:>7} {:>5} {:>6} {:>6} {:>4} {:>3}  {:<5} {:<24} {:<36} new(b/s/u) kills/shared/losses $destroyed first-kill",
             "round",
             "seal",
             "treasury",
@@ -1459,7 +1493,7 @@ fn render_match(out: &mut String, run: &MatchRun, generator_cost: i64) {
             let combat = seat.combat_in(index);
             let _ = writeln!(
                 out,
-                "    {:<5} {:<13} {:>8} {:>6} {:>7} {:>7} {:>7} {:>5} {:>6} {:>6} {:>4} {:>3}  {:<5} {:<24} {:<36} {}/{}/{} {}/{}/{} $ {}",
+                "    {:<5} {:<13} {:>8} {:>6} {:>7} {:>7} {:>7} {:>5} {:>6} {:>6} {:>4} {:>3}  {:<5} {:<24} {:<36} {}/{}/{} {}/{}/{} $ {} {}",
                 index.saturating_add(1),
                 round.seal,
                 round.start.treasury,
@@ -1482,6 +1516,10 @@ fn render_match(out: &mut String, run: &MatchRun, generator_cost: i64) {
                 combat.shared,
                 combat.losses,
                 combat.destroyed,
+                round.first_kill.map_or_else(
+                    || String::from("-"),
+                    |tick| format!("{} s", tick_seconds(tick))
+                ),
             );
         }
         let _ = writeln!(
@@ -1785,6 +1823,24 @@ fn render_combat_summary(out: &mut String, runs: &[MatchRun]) {
             median,
         );
     }
+    let fought = runs.iter().any(|run| {
+        run.seats.iter().any(|seat| {
+            let combat = seat
+                .rounds
+                .first()
+                .map_or(seat.end_combat, |first| first.combat.until(seat.end_combat));
+            combat.kills > 0 || combat.losses > 0
+        }) || run.kingmaking.is_some_and(|figure| figure.dealt > 0)
+    });
+    if !fought {
+        let _ = writeln!(
+            out,
+            "NO MATCH FOUGHT: every combat figure above is zero, and no seat dealt another any \
+             damage. Read the seals: a seat that seals its safe playbook, or a template on its \
+             own stand-ins, never sends a force at an enemy, so these matches say nothing about \
+             the combat rows; the duel report (`crates/sim/tests/duels.rs`) does."
+        );
+    }
     let _ = writeln!(
         out,
         "(sums over the seeds; `killed (seats)` = seats that made a kill; `first kill` = the median \
@@ -1809,7 +1865,9 @@ fn render_endings(out: &mut String, runs: &[MatchRun]) {
                     .next()
                     .unwrap_or(run.ended.as_str())
                     .to_owned();
-                let winner = if run.ended.contains("shared") {
+                let winner = if run.ended == "not ended" {
+                    "not ended"
+                } else if run.ended.contains("shared") {
                     "shared"
                 } else if run.ended.contains("seat 0 won") {
                     "seat 0"
@@ -1880,7 +1938,8 @@ fn render_spawn_travel(out: &mut String, table: &RulesTable) {
         out,
         "\nSpawn travel (spec section 19: spawns about 1.5 early Pushes of raider travel apart; an \
          early Push is {} s, so {target_s} s): the closest occupied pair, from the generator's own \
-         report",
+         report: the octile ground cost between the spawn centres at each kind's speed, a lower \
+         bound on a walked route",
         early_ms.checked_div(1_000).expect("a divisor")
     );
     for seats in [2_u32, 3] {
@@ -1896,8 +1955,8 @@ fn render_spawn_travel(out: &mut String, table: &RulesTable) {
         let range = |values: &[i64]| {
             format!(
                 "{}..{} s",
-                values.iter().min().copied().unwrap_or(0),
-                values.iter().max().copied().unwrap_or(0)
+                values.iter().min().copied().expect("twenty seeds"),
+                values.iter().max().copied().expect("twenty seeds")
             )
         };
         let short = raider.iter().filter(|value| **value < target_s).count();
@@ -1937,7 +1996,7 @@ fn render_survey(out: &mut String, table: &RulesTable) {
     let _ = writeln!(
         out,
         "\nSurvey: a sighting is due a refresh at {} s and forgotten at `verifier.reach_memory_ms` \
-         {} s, so it is due {} times before it leaves reach memory; the explored cell is {cell} \
+         {} s, so reach memory holds {} refresh intervals; the explored cell is {cell} \
          columns square, and a scout of vision {scout} on its centre {} all of it",
         refresh_s,
         reach.checked_div(1_000).expect("a divisor"),
@@ -1960,7 +2019,8 @@ fn render(
     let mut out = String::new();
     let _ = writeln!(
         out,
-        "Pharmakos headless balance check (S1's plan, task `check`; decisions-log item 127 (3))."
+        "Pharmakos headless balance check (S1's plan, task `check`; decisions-log item 127 (3)), \
+         extended to combat by S2's `tune2` (decisions 17 and 36)."
     );
     let _ = writeln!(
         out,
@@ -2627,4 +2687,89 @@ fn the_expand_east_column_asks_each_seats_estimate_route() {
             "seat {seat}: the site is reachable from the core on this map, at a positive time;              got {estimate_ms:?}"
         );
     }
+}
+
+/// The positive control for the combat columns and decision 36's figure: a
+/// short match staged to fight, so that the readers are shown to count what
+/// the check's own matches did not do. Six raiders of seat 1 are laid out in
+/// the lobby on an Attack beacon 3 voxels from seat 0's core (an unset `roe`
+/// reads `FREE_FIRE` on an Attack beacon), inside their own reach of it and
+/// the core's autocannon's of them, and the Push plays 30 s.
+#[test]
+fn the_combat_readers_count_a_staged_fight() {
+    use pharmakos_sim::runner::{Layout, LayoutBeacon};
+    use pharmakos_sim::seams::MandateKind;
+    let rules = rules_json();
+    let table = RulesTable::from_canonical_json(&rules).expect("a rules table");
+    let mut host = Host::open_from(
+        &rules,
+        SCENARIO_SEED,
+        2,
+        &Settings {
+            segment_lengths_ms: vec![SMOKE_PUSH_MS],
+            round_limit: 1,
+        },
+        Some(root().join(LIBRARY_PATH)),
+    )
+    .expect("a match");
+    let core_at = {
+        let beacons = host.world().beacons();
+        let row = beacons
+            .ids()
+            .iter()
+            .zip(beacons.seats())
+            .enumerate()
+            .filter(|(_, (_, seat))| **seat == 0)
+            .min_by_key(|(_, (id, _))| **id)
+            .map(|(row, _)| row)
+            .expect("seat 0 has a core");
+        beacons.positions().get(row).copied().expect("a position")
+    };
+    let [x, y] = [core_at[0].floor_voxels(), core_at[1].floor_voxels()];
+    host.seed_layout(&Layout {
+        beacons: vec![LayoutBeacon {
+            seat: SeatId::new(1),
+            column: [x.saturating_add(3), y],
+            mandate: MandateKind::Attack,
+            units: vec![(UnitKind::Raider, 6)],
+        }],
+    })
+    .expect("the raid is laid out");
+    let mut surface = Surface::new(
+        &match_id("staged-fight"),
+        SCENARIO_SEED,
+        table.clone(),
+        FogPolicy::fogged(),
+        &seat_ids(2),
+    )
+    .expect("a surface");
+    surface.attach(host).expect("attached");
+    surface.set_phase_remaining_ms(lull_ms(&table, 1));
+    surface.open_lull().expect("the opening Lull");
+    assert!(surface.begin_push().expect("the Push opens"));
+
+    let mut dealt = vec![0_u64; 4];
+    let mut figure = Kingmaking::default();
+    let mut standing = trailing(surface.host().expect("hosted").world());
+    while let Some(report) = surface.step().expect("a tick") {
+        let world = surface.host().expect("hosted").world();
+        count_kingmaking(world, 2, &mut dealt, &standing, &mut figure);
+        standing = trailing(world);
+        if report.segment_ended {
+            break;
+        }
+    }
+    let combat = combat_now(&surface, 2, &[0, 0]);
+    let [core, raid] = [
+        *combat.first().expect("seat 0"),
+        *combat.get(1).expect("seat 1"),
+    ];
+    assert!(
+        figure.dealt > 0,
+        "the staged raid dealt damage seat against seat: {figure:?}"
+    );
+    assert!(
+        core.kills > 0 && raid.losses > 0,
+        "the core's autocannon killed raiders and the tally counted it: {combat:?}"
+    );
 }

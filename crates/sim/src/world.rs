@@ -814,24 +814,56 @@ impl core::fmt::Display for FileRefused {
 
 impl std::error::Error for FileRefused {}
 
-/// Why [`World::field_movers_directly`] stopped: `seat`'s share of the unit
-/// room cannot hold another raider. `fielded` is how many of
-/// that seat's raiders were already fielded.
+/// Why [`World::field_movers_directly`] stopped. Nothing it fielded before
+/// stopping is undone.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct MoversRefused {
-    /// The seat that could not be given its raiders.
-    pub seat: u8,
-    /// How many of its raiders were fielded before it stopped.
-    pub fielded: u32,
+pub enum MoversRefused {
+    /// The seat's share of [`UNIT_TABLE_ROOM`] cannot hold another raider,
+    /// after `fielded` of its own.
+    ShareFull {
+        /// The seat.
+        seat: u8,
+        /// How many of its raiders were fielded before it stopped.
+        fielded: u32,
+    },
+    /// The world seats more seats than a seat id names.
+    SeatOutOfRange {
+        /// The seat's index.
+        index: u32,
+    },
+    /// The seat's core has no position the beacon table can read.
+    CoreUnreadable {
+        /// The seat.
+        seat: u8,
+    },
+    /// A raider's place on the stride is past what an `i32` column holds:
+    /// more raiders than a map has columns to spread them over.
+    StrideOverflow {
+        /// The seat.
+        seat: u8,
+        /// How many of its raiders were fielded before it stopped.
+        fielded: u32,
+    },
 }
 
 impl core::fmt::Display for MoversRefused {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(
-            f,
-            "seat {} could not field another raider after {}: its unit share is full",
-            self.seat, self.fielded
-        )
+        match self {
+            MoversRefused::ShareFull { seat, fielded } => write!(
+                f,
+                "seat {seat} could not field another raider after {fielded}: its unit share is full"
+            ),
+            MoversRefused::CoreUnreadable { seat } => {
+                write!(f, "seat {seat}'s core has no position to send a raider to")
+            }
+            MoversRefused::SeatOutOfRange { index } => {
+                write!(f, "seat index {index} is past what a seat id names")
+            }
+            MoversRefused::StrideOverflow { seat, fielded } => write!(
+                f,
+                "seat {seat}'s raider {fielded} has no place on the stride an i32 column holds"
+            ),
+        }
     }
 }
 
@@ -2716,75 +2748,80 @@ impl World {
         Some(id)
     }
 
-    /// Field `per_seat` raiders for every seat, homed to its core and each
-    /// sent across the map: the wide, moving unit table the sim's own tests
-    /// once took from the harness walkers, which S2-16 removed (S2's plan,
-    /// decision 23). Each raider stands on, and is sent to, a ground point
-    /// spread over the map by a fixed stride, so no random stream is drawn.
-    /// They are real units: they draw `kW`, follow the core's mandate and are
-    /// parked by its dormancy.
+    /// Field `per_seat` raiders for every placed seat, homed to its core and
+    /// standing on ground points spread over the map by a fixed stride, so
+    /// that each is sent home to its core: the wide, moving unit table the
+    /// sim's own tests once took from the harness walkers, which S2-16
+    /// removed (S2's plan, decision 23). No random stream is drawn. They are
+    /// real units: they draw `kW`, follow the core's mandate (a raider with
+    /// nothing to do idles at home, [`crate::programs`]) and are parked by its
+    /// dormancy, so a caller that wants them walking gives the core the
+    /// supply to carry them. Answers how many raiders it fielded.
     ///
     /// Fixture API; see the block comment above.
     ///
     /// # Errors
     ///
-    /// [`MoversRefused`] when a placed seat's share of [`UNIT_TABLE_ROOM`]
-    /// cannot hold them, naming the seat and how many of its raiders were
-    /// fielded; nothing is undone. A seat the map left unplaced has no core
-    /// and fields none, as it fields no starting force.
-    pub fn field_movers_directly(&mut self, per_seat: u32) -> Result<(), MoversRefused> {
+    /// [`MoversRefused`]: a placed seat's share of [`UNIT_TABLE_ROOM`] cannot
+    /// hold them, a seat index past a seat id, or a stride position past an
+    /// `i32`. A seat the map left unplaced (see [`crate::mapgen`]) has no core
+    /// and fields none, as it fields no starting force; the count answered
+    /// shows it.
+    pub fn field_movers_directly(&mut self, per_seat: u32) -> Result<u32, MoversRefused> {
         let [max_x, max_y, _] = self.rules.map_last_voxel();
-        let (width, depth) = (
-            i32::from(max_x).saturating_add(1),
-            i32::from(max_y).saturating_add(1),
-        );
-        let point = |index: i32, stride: [i32; 2], world: &World| {
-            let x = index.saturating_mul(stride[0]).rem_euclid(width.max(1));
-            let y = index.saturating_mul(stride[1]).rem_euclid(depth.max(1));
-            world.standing_point([x, y, 0])
-        };
+        // A map's last voxel is at least 0 on each axis, so the extent is at
+        // least one column.
+        let width = i32::from(max_x).saturating_add(1);
+        let depth = i32::from(max_y).saturating_add(1);
+        let mut total: u32 = 0;
         let mut seat_index: u32 = 0;
         while seat_index < self.seats.len() {
-            let raw = u8::try_from(seat_index).map_err(|_| MoversRefused {
-                seat: u8::MAX,
-                fielded: 0,
-            })?;
+            let raw = u8::try_from(seat_index)
+                .map_err(|_| MoversRefused::SeatOutOfRange { index: seat_index })?;
             let seat = SeatId::new(raw);
-            // A seat beyond the map's zones is seated but unplaced (see
-            // [`crate::mapgen`]): it has no core to home a raider to, and
-            // fields none, as it fields no starting force.
+            seat_index = seat_index.saturating_add(1);
+            // A seat beyond the map's zones is seated but unplaced: it has no
+            // core to home a raider to.
             let Some(core) = crate::power::core_of(self, seat) else {
-                seat_index = seat_index.saturating_add(1);
                 continue;
             };
+            let home = self
+                .beacons
+                .row_of(core)
+                .ok()
+                .and_then(|row| self.beacons.positions().get(row.index()).copied())
+                .ok_or(MoversRefused::CoreUnreadable { seat: raw })?;
             let mut n: u32 = 0;
             while n < per_seat {
-                let index = i32::try_from(
-                    n.saturating_mul(self.seats.len())
-                        .saturating_add(seat_index),
-                )
-                .map_err(|_| MoversRefused {
+                let overflow = MoversRefused::StrideOverflow {
                     seat: raw,
                     fielded: n,
-                })?;
-                let at = point(index.saturating_add(1), [97, 61], self);
-                let to = point(index.saturating_add(7), [53, 131], self);
-                let unit =
-                    self.field_unit(seat, core, UnitKind::Raider, at)
-                        .ok_or(MoversRefused {
-                            seat: raw,
-                            fielded: n,
-                        })?;
-                let row = self.units.row_of(unit).map_err(|_| MoversRefused {
+                };
+                let index = n
+                    .checked_mul(self.seats.len())
+                    .and_then(|base| base.checked_add(u32::from(raw)))
+                    .and_then(|place| place.checked_add(1))
+                    .and_then(|place| i32::try_from(place).ok())
+                    .ok_or(overflow)?;
+                let x = index.checked_mul(97).ok_or(overflow)?.rem_euclid(width);
+                let y = index.checked_mul(61).ok_or(overflow)?.rem_euclid(depth);
+                let at = self.standing_point([x, y, 0]);
+                let full = MoversRefused::ShareFull {
                     seat: raw,
                     fielded: n,
-                })?;
-                self.send_unit_directly(row.raw(), to);
+                };
+                let unit = self
+                    .field_unit(seat, core, UnitKind::Raider, at)
+                    .ok_or(full)?;
+                let row = self.units.row_of(unit).map_err(|_| full)?;
+                // Sent home now: a program walks a raider home only inside a
+                // Push, and these tests step the world directly.
+                self.send_unit_directly(row.raw(), home);
                 n = n.saturating_add(1);
+                total = total.saturating_add(1);
             }
-            seat_index = seat_index.saturating_add(1);
         }
-        Ok(())
+        Ok(total)
     }
 
     /// Write a Defend beacon's settings directly, and its protect list's
@@ -7602,6 +7639,26 @@ mod ids_tests {
         assert_eq!(core(&world, SEAT).raw(), 0);
     }
 
+    #[test]
+    fn a_room_over_4095_rows_is_refused() {
+        // A starting force past an id's row: the only way left to ask for one
+        // since S2-16 removed the walkers.
+        let refused = world_of(
+            edited(|message| {
+                message
+                    .units
+                    .as_mut()
+                    .must("a units block")
+                    .starting_build_drones = 2_000;
+            }),
+            2,
+        );
+        assert!(
+            matches!(refused, Err(MapError::RoomTooLarge { table: "unit", .. })),
+            "a unit table past an id's row is refused at load: {refused:?}"
+        );
+    }
+
     /// A snapshot holding more units than the receiving world's ceiling is
     /// refused and leaves the world as it was. No configuration builds two
     /// such worlds since the harness walkers went (S2-16), so the receiving
@@ -7954,7 +8011,11 @@ mod ids_tests {
             let mut world = World::new(&WorldConfig {
                 match_seed: seed,
                 seats: 2,
-                rules: rules(),
+                rules: edited(|message| {
+                    let power = message.power.as_mut().must("a power block");
+                    power.core_surplus_kw = 100;
+                    power.map_ceiling_kw = 1_000;
+                }),
                 match_settings: MatchSettings::default(),
             })
             .must("a world");
@@ -7962,6 +8023,7 @@ mod ids_tests {
                 .field_movers_directly(12)
                 .must("twelve raiders a seat");
             let pad = crate::math::fixed::Sq::of_radius(world.query_pad());
+            let start = world.units.positions().to_vec();
             for _ in 0..200 {
                 let before = world.units.positions().to_vec();
                 world.step(&mut enc).must("a tick");
@@ -7978,6 +8040,15 @@ mod ids_tests {
                     }
                 }
             }
+            let moved = start
+                .iter()
+                .zip(world.units.positions())
+                .filter(|(was, now)| was != now)
+                .count();
+            assert!(
+                moved >= 12,
+                "seed {seed}: the movers walk ({moved} units moved)"
+            );
         }
     }
 

@@ -35,16 +35,28 @@ fn world() -> World {
     let mut world = World::new(&WorldConfig {
         match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED,
         seats: pharmakos_sim::DETERMINISM_SEATS,
-        rules,
+        rules: powered(&rules),
         match_settings: MatchSettings::default(),
     })
     .expect("the rules table describes a map and a broadphase grid");
-    // Fifty raiders a seat sent across the map: the wide moving table the
+    // Fifty raiders a seat walking home from across the map: the wide moving table the
     // harness walkers gave until S2-16 removed them.
     world
         .field_movers_directly(50)
         .expect("fifty raiders fit every seat's share");
     world
+}
+
+/// `rules` with each core's surplus raised to 100 kW and the map's power
+/// ceiling to 1 000 kW, so that the raiders `World::field_movers_directly`
+/// homes to the cores draw no seat dark: a dark core parks its units, and
+/// these tests want a table that moves.
+fn powered(rules: &RulesTable) -> RulesTable {
+    let mut message = rules.message().clone();
+    let power = message.power.as_mut().expect("a power block");
+    power.core_surplus_kw = 100;
+    power.map_ceiling_kw = 1_000;
+    RulesTable::from_message(&message).expect("the powered table is a table")
 }
 
 #[test]

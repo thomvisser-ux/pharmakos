@@ -102,18 +102,40 @@ adds what S2's combat lanes read, so that no lane writes a number of its own:
   The vision markers carry decision 17's proposals for `tune2` to apply (E26
   keeps the headroom at 2; decision 17 proposes nothing for it). S2's `ids`
   #123 reads both rows and deleted both constants (decisions-log item 146);
-  every kind still holds the constant's value;
-- **rows nothing reads yet, at the plan's proposals:** a `weapon` on
+  revision 6 (below) set decision 17's vision rows;
+- **rows nothing read then, at the plan's proposals:** a `weapon` on
   `units.raider`, `structures.autocannon` and `structures.mortar` (whose
   `projectile` makes it indirect) and `beacon.core_weapon`; the `combat` block; the
   `defend` block's picket radius (spec §19); the `collapse` block (decision
   11); and the `materials` block, the terrain's blast levels (decision 10,
   ruled per material by item 144 (11)), the wall's minimum height (decision
-  40) and the bedrock layers (E14).
+  40) and the bedrock layers (E14). S2's `fire`, `dfnd`, `atk`, `fall` and `site`
+  read them since.
 
 Each is a PLACEHOLDER, the owner's at S2's demo with `tune2`'s reports. The
 sim refuses a blast level outside 1 to 3 and zero bedrock layers at load, from
-the lane that reads the row (`fire`); until then nothing reads them.
+the lane that reads the row (`fire`).
+
+Revision 6 (S2's numbers, S2's plan task `tune2`; decisions 17, 23 and 36,
+item 144 (8)) sets decision 17's vision rows, scout 24, raider 12, commander
+10, autocannon 20 and mortar 12, every other kind keeping 8, and moves no
+other value. Each row below says what it was kept on:
+
+- **G3′-real's measurements** (`g3r` #147) for the power rows, the repath cap,
+  the broadphase cell, the fielding totals and the collapse bounds;
+- **the duel report** (`crates/sim/tests/duels.rs`, `#[ignore]`d, a report and
+  never a gate) for the weapons and the blast levels;
+- **nothing** for the rest of the `combat` block, the picket radius and
+  `fall_damage_hp`, which no duel stages. The balance check, extended to
+  combat (`crates/gamectl/tests/balance.rs`: Easy and each template against
+  Easy, and three Easy seats for decision 36's kingmaking figure), played 220
+  headless matches in which **no seat dealt another any damage**: Easy seals
+  its safe playbook after round 1 and the templates seal their stand-ins, so
+  nothing sends a force at an enemy. Its combat figures are evidence only of
+  that, and its positive control (`the_combat_readers_count_a_staged_fight`)
+  shows the readers count a fight when one happens.
+
+Every value is still a PLACEHOLDER, the owner's at S2's demo.
 
 Revision 3 fills the table out: decisions-log **items 90, 91 and 94** fix every
 value the walking skeleton's three lanes need, in one sitting, so that no task
@@ -210,12 +232,12 @@ so it is the first place the omission is visible.
 | `verifier.reach_memory_ms` 180000 | item 90 | **PLACEHOLDER** — tuning, owner, S3 (item 90 marks it S2/S3) |
 | `locomotion.headroom_voxels` 2 | S2-05, S2's plan E26 | **PLACEHOLDER** — tuning, owner, at S2's demo, with `tune2`'s report. The sim's `HEADROOM_VOXELS` given a row at its own value (revision 5); S2's `ids` #123 reads the row and deleted the constant (decisions-log item 146). E26 keeps today's 2; decision 17 proposes nothing for it |
 | `units.*.vision_radius_voxels`, `structures.*.vision_radius_voxels`, `commander.vision_radius_voxels`: scout 24, raider 12, commander 10, the drones 8, autocannon 20, mortar 12, Generator, survey post, beacon and resonance spire 8 | S1-34, item 144 (4), S2's plan decisions 17 and 22 | **PLACEHOLDER** — tuning, owner, at S2's demo, with `tune2`'s reports. Revision 6 (`tune2`) applies decision 17's proposals; a beacon, which sees by its sphere, and the resonance spire, for which decision 17 proposes nothing, keep 8. At scout vision 24 a scout on an explored cell's centre sees the whole 16-column cell (its half-diagonal is about 11.3) |
-| `units.raider.weapon` 4 / 8 / 500, `structures.autocannon.weapon` 20 / 12 / 250, `beacon.core_weapon` 24 / 12 / 250 (range voxels, HP, cooldown ms) | S2's plan decision 17 | **PLACEHOLDER** — tuning, owner, at S2's demo, with `tune2`'s duel report. Direct fire: no `projectile`, so the damage lands in the tick it is dealt (E2). Read from S2's `fire` |
-| `structures.mortar.weapon` 40 / 60 / 4000, projectile 8 voxels/s, splash 3, crater 2 | S2's plan decision 17 | **PLACEHOLDER** — tuning, owner, at S2's demo, with `tune2`'s duel report. The `projectile` (the shell) is what makes it indirect (E13); the splash has no falloff. Read from S2's `fire` |
-| `combat.under_attack_window_ms` 10000, `threat_step_cost_multiplier` 4, `charge_radius_voxels` 4, `charge_fuse_ms` 5000, `repair_hp_per_second` 20, `terraform_ms_per_voxel` 1000 | S2's plan decision 17 | **PLACEHOLDER** — tuning, owner, at S2's demo, with `tune2`'s reports. Nothing reads them until the S2 lane that builds each rule |
-| `defend.picket_radius_voxels` 6 | spec §19, S2's plan decision 17 | **PLACEHOLDER** — tuning, owner, at S2's demo, with `tune2`'s report. Beyond the sphere's edge; read from S2's `dfnd` |
-| `collapse.max_region_voxels` 4096, `fall_damage_hp` 100, `max_visits_per_tick` 16384 | item 138 (3), S2's plan decision 11 | **PLACEHOLDER** — tuning, owner, at S2's demo. Read from S2's `fall` |
-| `materials.blast_levels` dirt 1, stone 2, ore 1, vent 1 | item 144 (11), S2's plan decision 10 | **PLACEHOLDER** — tuning, owner, at S2's demo, with `tune2`'s duel report. Each from 1 to the catalogue's 3 (E14); the ore and vent grades share their kind's row; a wall's two levels are the ruling's, not a row. Read from S2's `fire` |
+| `units.raider.weapon` 4 / 8 / 500, `structures.autocannon.weapon` 20 / 12 / 250, `beacon.core_weapon` 24 / 12 / 250 (range voxels, HP, cooldown ms) | S2's plan decision 17 | **PLACEHOLDER** — tuning, owner, at S2's demo, with `tune2`'s duel report. Direct fire: no `projectile`, so the damage lands in the tick it is dealt (E2). Read from S2's `fire`. Kept by revision 6 on the duel report (`crates/sim/tests/duels.rs`): the autocannon kills a raider in 2.2 s by the rows (4.0 s staged), one raider kills it in 31 s, four in 10 s and eight in 4 s, and a raider walks the 16 voxels from the autocannon's range to its own in 13.3 s under fire, so a dive needs several raiders, as spec §9's table has it. The core's autocannon has no duel line of its own: no staged fight separates its 24 from the autocannon's 20 |
+| `structures.mortar.weapon` 40 / 60 / 4000, projectile 8 voxels/s, splash 3, crater 2 | S2's plan decision 17 | **PLACEHOLDER** — tuning, owner, at S2's demo, with `tune2`'s duel report. The `projectile` (the shell) is what makes it indirect (E13); the splash has no falloff. Read from S2's `fire`. Kept by revision 6 on the duel report: with a scout of its seat in sight of the target the mortar kills an autocannon 30 voxels off in 40 s untouched (9 shells), and without one it never fires; raiders that dive it kill it (one in 25 s, four in 6.5 s) and it kills none of them; a clump of five raiders 12 voxels off is gone in 21.6 s (5 shells). Its effective range under seat sight (item 148 (2)) is 11 voxels on its own vision of 12, 23 with its home beacon's sphere at it, and 39 with a scout 16 voxels out (with gaps): its 40 reaches its length only where another sensor sees |
+| `combat.under_attack_window_ms` 10000, `threat_step_cost_multiplier` 4, `charge_radius_voxels` 4, `charge_fuse_ms` 5000, `repair_hp_per_second` 20, `terraform_ms_per_voxel` 1000 | S2's plan decision 17 | **PLACEHOLDER** — tuning, owner, at S2's demo, with `tune2`'s reports. Read by S2's `dfnd`, `atk` and `site`. Kept at decision 17's proposals by revision 6 with no evidence for or against: no duel stages them, and the balance check's matches never fought. The charge damages voxels only, as built; spec §9's damage to the carrier's own units and structures has no row (an owner question in `tune2`'s pull request) |
+| `defend.picket_radius_voxels` 6 | spec §19, S2's plan decision 17 | **PLACEHOLDER** — tuning, owner, at S2's demo, with `tune2`'s report. Beyond the sphere's edge; read from S2's `dfnd`. Kept by revision 6 with no evidence: no duel stages a picket, and no balance match fought |
+| `collapse.max_region_voxels` 4096, `fall_damage_hp` 100, `max_visits_per_tick` 16384 | item 138 (3), S2's plan decision 11 | **PLACEHOLDER** — tuning, owner, at S2's demo. Read from S2's `fall`. Kept by revision 6: G3′-real's adversarial support tick took 3.66 ms and used 4 915 of the 16 384 visits, with no seed labelled supported by either bound (`g3r` #147); `fall_damage_hp` has no evidence, since ordinary play cannot detach a region yet |
+| `materials.blast_levels` dirt 1, stone 2, ore 1, vent 1 | item 144 (11), S2's plan decision 10 | **PLACEHOLDER** — tuning, owner, at S2's demo, with `tune2`'s duel report. Each from 1 to the catalogue's 3 (E14); the ore and vent grades share their kind's row; a wall's two levels are the ruling's, not a row. Read from S2's `fire`. Kept by revision 6 on the duel report: four shells at one point cut dirt 2, 3, 4 and 5 voxels deep, one more a shell; stone and a seat wall take two shells for their first 2 voxels and 4 deep after four |
 | `materials.wall_min_height_voxels` 2, `bedrock_layers_voxels` 1 | S2's plan decision 40, E14 | **PLACEHOLDER** — tuning, owner, at S2's demo. Bedrock is never removed, and 0 layers is refused at load, because the support rule needs a floor. Read from S2's lanes: bedrock from `fire`, the wall's height from `site` and `vfy2` |
 
 ## Editing it

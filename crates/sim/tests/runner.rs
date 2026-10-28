@@ -51,6 +51,18 @@ fn rules() -> RulesTable {
         .expect("the committed rules table loads")
 }
 
+/// `rules` with each core's surplus raised to 100 kW and the map's power
+/// ceiling to 1 000 kW, so that the raiders `World::field_movers_directly`
+/// homes to the cores draw no seat dark: a dark core parks its units, and
+/// these tests want a table that moves.
+fn powered(rules: &RulesTable) -> RulesTable {
+    let mut message = rules.message().clone();
+    let power = message.power.as_mut().expect("a power block");
+    power.core_surplus_kw = 100;
+    power.map_ceiling_kw = 1_000;
+    RulesTable::from_message(&message).expect("the powered table is a table")
+}
+
 /// The committed table with one edit to the message, the same path a tuning
 /// pull request takes.
 fn rules_edited(edit: impl FnOnce(&mut gp::v1::RulesTable)) -> RulesTable {
@@ -901,19 +913,21 @@ fn a_host_that_drains_never_meets_a_full_bus() {
     let mut world = World::new(&WorldConfig {
         match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED,
         seats: 3,
-        rules: rules(),
+        rules: powered(&rules()),
         match_settings: MatchSettings {
             segment_lengths_ms: vec![SHORT_MS],
             round_limit: DEFAULT_ROUND_LIMIT,
         },
     })
     .expect("a three-seat world");
-    // Fifty raiders a seat sent across the map, the size the harness walkers
+    // Fifty raiders a seat walking home from across the map, the size the harness walkers
     // gave until S2-16 removed them.
     world
         .field_movers_directly(50)
         .expect("fifty raiders fit every seat's share");
     let mut runner = Runner::new(world);
+    // The fixture's fabrications are not a tick's lines: drain them first.
+    runner.clear_events();
     let capacity = runner.world().event_bus().capacity();
     assert!(runner.begin_push().unwrap());
 
