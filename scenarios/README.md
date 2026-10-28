@@ -123,7 +123,6 @@ that asserts something the build cannot do teaches the wrong thing twice over.)
 | `map.seed` | yes | The 64-bit map seed, as `"0x"` + **16 lowercase hex digits**. |
 | `map.generator` | yes | The generator's name, so a scenario written against one generation rule is not silently replayed against another. |
 | `rules` | no | The rules table, repository-relative. Defaults to `rules/rules.v1.json` — see below. |
-| `units_per_seat` | no | Harness walkers each seat fields, an integer from 0 to **256**. Defaults to **0** — see below. |
 | `round_limit` | no | The round the match ends on, an integer of 1 or more and never fewer than `segments`. Defaults to the sim's `DEFAULT_ROUND_LIMIT` (6, spec §3) — see below. |
 | `seats` | yes | One to three seats (spec §3), `seat` counting from 0 in array order. |
 | `seats[].kind` | yes | `playbook` (seals the named file), `safe` (files the safe playbook), `builtin` (the built-in operator, playing Easy). |
@@ -161,21 +160,14 @@ without saying so is the failure AGENTS.md §4.8 is about.
 
 ### The match settings
 
-Two keys name a match's settings beyond the triple, and both were added in
-S1's first contract pull request (the register's S1-41), additively, under the
-same format string:
+One key names a match's settings beyond the triple, added in S1's first
+contract pull request (the register's S1-41), additively, under the same format
+string. Its sibling `units_per_seat`, the harness walkers each seat fielded,
+left the format with the walkers (the register's S2-16; S2's plan, decision
+23): G3′-real measures its load from E30's layout, never from them, so a file
+that still names the key is refused as an unknown key, and a load test lays
+out its beacons and units through `Host::seed_layout` instead.
 
-* **`units_per_seat`** — the harness walkers each seat fields. Absent, it is
-  0, which is what both producers of a committed chain outside this runner use
-  (`crates/sim/tests/scenario.rs`, `crates/gateway/tests/methods.rs`). At
-  most 256, for the reason a segment is capped below: the sim sizes its unit
-  table from the key before the first tick, so an unbounded count aborted the
-  runner on an allocation with no pointer. The number is a guess, first set
-  well above the fifty walkers a seat the determinism harness then fielded,
-  which `tune` #101 deleted (decisions-log item 137). The cap and the walkers'
-  removal are the register's S2-16 now, a PLACEHOLDER for the owner at S2's
-  G3′-real measurement, and `crates/gamectl/tests/parity.rs` holds both
-  readers to it.
 * **`round_limit`** — the round the match ends on. Absent, it is the sim's
   default of six (spec §3), a lobby setting rather than a tuning row
   (decisions-log item 102 (7)). A scenario that plays a match to its end names

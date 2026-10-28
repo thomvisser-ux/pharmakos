@@ -178,8 +178,6 @@ pub struct Settings {
     pub segment_lengths_ms: Vec<i32>,
     /// How many rounds the match runs at most.
     pub round_limit: u32,
-    /// How many units each seat starts with beyond its commander.
-    pub units_per_seat: u32,
 }
 
 /// The match, its search graph and the folder the templates are read from.
@@ -248,7 +246,6 @@ impl Host {
         let config = WorldConfig {
             match_seed: seed,
             seats,
-            units_per_seat: settings.units_per_seat,
             rules,
             match_settings: MatchSettings {
                 segment_lengths_ms: settings.segment_lengths_ms.clone(),
@@ -840,7 +837,6 @@ mod tests {
         WorldConfig {
             match_seed: 0x0000_0000_ca5c_aded,
             seats: 2,
-            units_per_seat: 0,
             rules: rules(),
             match_settings: settings,
         }
@@ -1066,7 +1062,6 @@ mod seams {
             &WorldConfig {
                 match_seed: 0x0000_0000_ca5c_aded,
                 seats: 2,
-                units_per_seat: 0,
                 rules,
                 match_settings: MatchSettings {
                     segment_lengths_ms: vec![2_000],

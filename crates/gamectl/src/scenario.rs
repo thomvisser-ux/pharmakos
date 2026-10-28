@@ -117,7 +117,6 @@ const TOP_LEVEL_KEYS: &[&str] = &[
     "summary",
     "map",
     "rules",
-    "units_per_seat",
     "round_limit",
     "seats",
     "segments",
@@ -131,25 +130,6 @@ const MAP_KEYS: &[&str] = &["seed", "generator"];
 /// `xtask/src/scenario.rs`'s `MAX_SEGMENT_MS` holds the same number, so the two
 /// readers refuse the same files.
 pub const MAX_SEGMENT_MS: i32 = 480_000;
-
-/// Harness walkers per seat when a scenario names none: none, which is what
-/// every chain committed before the key existed was produced with.
-pub const DEFAULT_UNITS_PER_SEAT: u32 = 0;
-
-/// The most harness walkers a scenario may give one seat. The cap is the
-/// format's, for the reason [`MAX_SEGMENT_MS`] is: the sim sizes its unit table
-/// from the key before the first tick, so an unbounded count asked the runner
-/// for gigabytes and aborted it with no pointer. The determinism harness
-/// fielded 50 until S1's real segment (decision 16; register S1-26) and fields
-/// none now; the walkers are scaffolding due to go with this key.
-/// `xtask/src/scenario.rs`'s `MAX_UNITS_PER_SEAT` holds the same number, and
-/// `tests/parity.rs` pins the pair.
-// PLACEHOLDER: 256 harness walkers per seat — owner, at S2's G3'-real measurement
-// A guess well above the 50 the determinism harness used to field; the cap
-// goes with the walkers when they go, which
-// `pharmakos_sim::WorldConfig::units_per_seat`'s marker puts at the same
-// measurement.
-pub const MAX_UNITS_PER_SEAT: u32 = 256;
 const SEAT_KEYS: &[&str] = &["seat", "kind", "playbook"];
 const SEGMENT_KEYS: &[&str] = &["index", "length_ms", "note"];
 const EVENT_FIRED_KEYS: &[&str] = &["assert", "event", "seat", "by_tick", "note"];
@@ -235,9 +215,6 @@ pub struct Scenario {
     pub generator: String,
     /// The rules table, as a path from the repository root.
     pub rules: String,
-    /// Harness walkers each seat fields: the `units_per_seat` key, or
-    /// [`DEFAULT_UNITS_PER_SEAT`].
-    pub units_per_seat: u32,
     /// The round the match ends on: the `round_limit` key, or the sim's
     /// `DEFAULT_ROUND_LIMIT`. Never fewer than the segments.
     pub round_limit: u32,
@@ -436,7 +413,7 @@ fn read(
         check_arm_seats(&seats, problems);
     }
     let segments = read_segments(json, problems);
-    let (units_per_seat, round_limit) = read_match_settings(json, segments.len(), problems);
+    let round_limit = read_match_settings(json, segments.len(), problems);
     let assertions = read_assertions(root, json, nightly, problems);
 
     Some(Scenario {
@@ -446,7 +423,6 @@ fn read(
         seed: seed?,
         generator: generator?,
         rules,
-        units_per_seat,
         round_limit,
         seats,
         segments,
@@ -682,36 +658,13 @@ fn read_segments(json: &Json, problems: &mut Problems) -> Vec<Segment> {
     read
 }
 
-/// The two match settings a scenario may name (the register's S1-41, taken in
-/// S1's first contract pull request): `units_per_seat` and `round_limit`, each
-/// optional, and absent what every chain committed before the keys existed
-/// was produced with, so adding them moves no chain.
-fn read_match_settings(json: &Json, segments: usize, problems: &mut Problems) -> (u32, u32) {
-    let units_per_seat = match json.get("units_per_seat") {
-        None => DEFAULT_UNITS_PER_SEAT,
-        Some(value) => {
-            if let Some(Ok(units)) = integer_as::<u32>(Some(value)) {
-                if units > MAX_UNITS_PER_SEAT {
-                    problems.at(
-                        "/units_per_seat",
-                        format!(
-                            "a seat fields at most {MAX_UNITS_PER_SEAT} harness walkers; found {units}"
-                        ),
-                    );
-                    DEFAULT_UNITS_PER_SEAT
-                } else {
-                    units
-                }
-            } else {
-                problems.at(
-                    "/units_per_seat",
-                    "optional, but when present it is the walkers each seat fields: an integer of \
-                     0 or more",
-                );
-                DEFAULT_UNITS_PER_SEAT
-            }
-        }
-    };
+/// The match setting a scenario may name (the register's S1-41, taken in S1's
+/// first contract pull request): `round_limit`, optional, and absent what every
+/// chain committed before the key existed was produced with, so adding it moved
+/// no chain. Its sibling `units_per_seat`, the harness walkers, went with them
+/// (S2-16, S2's plan decision 23): a file that still names it is refused as an
+/// unknown key.
+fn read_match_settings(json: &Json, segments: usize, problems: &mut Problems) -> u32 {
     let default_limit = pharmakos_sim::runner::DEFAULT_ROUND_LIMIT;
     let round_limit = match json.get("round_limit") {
         None => Some(default_limit),
@@ -741,7 +694,7 @@ fn read_match_settings(json: &Json, segments: usize, problems: &mut Problems) ->
             ),
         );
     }
-    (units_per_seat, round_limit.unwrap_or(default_limit))
+    round_limit.unwrap_or(default_limit)
 }
 
 fn read_assertions(
@@ -1050,8 +1003,8 @@ fn check_path(
 #[cfg(test)]
 mod tests {
     use super::{
-        ASSERTIONS, DEFAULT_UNITS_PER_SEAT, Json, MAX_SEGMENT_MS, MAX_UNITS_PER_SEAT, Problems,
-        RESERVED_ASSERTIONS, parse_seed, read_match_settings, read_segments, ticks_of,
+        ASSERTIONS, Json, MAX_SEGMENT_MS, Problems, RESERVED_ASSERTIONS, TOP_LEVEL_KEYS,
+        parse_seed, read_match_settings, read_segments, ticks_of,
     };
 
     fn object(text: &str) -> Json {
@@ -1066,53 +1019,44 @@ mod tests {
             .collect()
     }
 
-    /// The register's S1-41: the two keys are optional, and absent they are
+    /// The register's S1-41: the round limit is optional, and absent it is
     /// what every committed chain was produced with.
     #[test]
     fn the_match_settings_default_to_what_every_chain_was_produced_with() {
         let mut problems = Problems(Vec::new());
         assert_eq!(
             read_match_settings(&object("{}"), 3, &mut problems),
-            (
-                DEFAULT_UNITS_PER_SEAT,
-                pharmakos_sim::runner::DEFAULT_ROUND_LIMIT
-            )
+            pharmakos_sim::runner::DEFAULT_ROUND_LIMIT
         );
-        assert_eq!(DEFAULT_UNITS_PER_SEAT, 0);
         assert!(problems.0.is_empty());
 
         let mut problems = Problems(Vec::new());
         assert_eq!(
-            read_match_settings(
-                &object(r#"{"units_per_seat": 50, "round_limit": 3}"#),
-                3,
-                &mut problems
-            ),
-            (50, 3)
+            read_match_settings(&object(r#"{"round_limit": 3}"#), 3, &mut problems),
+            3
         );
         assert!(problems.0.is_empty());
+    }
+
+    /// S2-16 (S2's plan, decision 23): the walkers' key left the format with
+    /// the walkers, so a file that still names it is refused as an unknown
+    /// key rather than read.
+    #[test]
+    fn the_walkers_key_is_no_longer_part_of_the_format() {
+        assert!(!TOP_LEVEL_KEYS.contains(&"units_per_seat"));
     }
 
     #[test]
     fn a_bad_match_setting_is_refused_with_a_pointer() {
         for (text, pointer) in [
-            (r#"{"units_per_seat": -1}"#, "/units_per_seat"),
-            (r#"{"units_per_seat": "50"}"#, "/units_per_seat"),
-            (r#"{"units_per_seat": 257}"#, "/units_per_seat"),
-            (r#"{"units_per_seat": 4294967295}"#, "/units_per_seat"),
             (r#"{"round_limit": 0}"#, "/round_limit"),
+            (r#"{"round_limit": "3"}"#, "/round_limit"),
             (r#"{"round_limit": 2}"#, "/round_limit"), // below the 3 segments
         ] {
             let mut problems = Problems(Vec::new());
             let _ = read_match_settings(&object(text), 3, &mut problems);
             assert_eq!(pointers(&problems), vec![pointer], "{text}");
         }
-        let mut problems = Problems(Vec::new());
-        assert_eq!(
-            read_match_settings(&object(r#"{"units_per_seat": 256}"#), 3, &mut problems).0,
-            MAX_UNITS_PER_SEAT
-        );
-        assert!(problems.0.is_empty());
     }
 
     /// The default round limit holds a file to its segment count as a named

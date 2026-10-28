@@ -79,7 +79,6 @@ fn world(segments: &[i32]) -> World {
     World::new(&WorldConfig {
         match_seed: SEED,
         seats: SEATS,
-        units_per_seat: 0,
         rules: rules(),
         match_settings: MatchSettings {
             segment_lengths_ms: segments.to_vec(),
@@ -333,7 +332,6 @@ fn midpoint(choice: SeamChoice, carved: &[(&str, Option<usize>)]) -> (Runner, Be
     let mut fixture = World::new(&WorldConfig {
         match_seed: SEED,
         seats: SEATS,
-        units_per_seat: 0,
         rules: wide_rules(),
         match_settings: MatchSettings {
             segment_lengths_ms: vec![180_000],

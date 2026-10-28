@@ -126,16 +126,17 @@ use crate::world::World;
 ///
 /// A scout standing on a cell's centre sees all of it while its vision radius
 /// is at least the cell's half-diagonal, about 11.3 columns here: true at
-/// decision 17's proposed scout vision of 24, not at the rules table's 8 of
-/// today, under which a cell's corners can be marked unseen.
-// PLACEHOLDER: Survey's coarse cell, 16 columns square, sized against the scout's vision — tune2, at S2's demo
+/// decision 17's scout vision of 24, which the rules table holds since its
+/// revision 6 (`tune2`); at the 8 it held before, a cell's corners could be
+/// marked unseen.
+// PLACEHOLDER: Survey's coarse cell, 16 columns square, which a scout of vision 24 sees whole from its centre — owner, at S2's demo, with `tune2`'s balance report
 pub const CELL_VOXELS: i32 = 16;
 
 // PLACEHOLDER: whether an explored cell is ever scanned again, and on what clock — owner, at S3, with the reach filters
 
 /// Survey's refresh interval: a sighting this old is due a re-check, and a
 /// Push's last this-long is the refresh pass (decisions-log item 13).
-// PLACEHOLDER: Survey's refresh interval, 60 s of game time — tune2, at S2's demo
+// PLACEHOLDER: Survey's refresh interval, 60 s of game time, a third of reach memory's 180 s — owner, at S2's demo, with `tune2`'s balance report
 pub const REFRESH_INTERVAL: Ms = Ms::new(60_000);
 
 /// The cell id's stride between two rows of cells: the id packs the cell row

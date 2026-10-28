@@ -24,7 +24,7 @@
 //! for the skeleton, not tuning values: they are not in the rules table
 //! because they are not rules, and each names the stage that sizes it. S1's
 //! real determinism segment (decision 16; register S1-26) took the harness's
-//! walkers out of the chain and left the rest where they were.
+//! walkers out of the chain, and S2-16 (S2's plan, decision 23) removed them.
 //!
 //! # The phase order is fixed
 //!
@@ -63,7 +63,6 @@ use crate::knowledge::{AssetId, Position};
 use crate::mapgen::{self, MapError};
 use crate::math::fixed::{Fx, Sq};
 use crate::math::quantity::{Damage, Hp, Money, Ms, Tick};
-use crate::math::random::{Stream, StreamRng};
 use crate::pathing::clusters::Clusters;
 use crate::pathing::repair::{RepairReport, Repairer, repair};
 use crate::pathing::router::{Router, ServeReport, WalkState};
@@ -144,7 +143,7 @@ pub const PHASE_ORDER: [Phase; 12] = [
 /// in evaluation units.
 const HARNESS_WORK_BUDGET: u32 = 1_000_000;
 
-/// PLACEHOLDER: the world total of beacons a match may place on top of the cores, shared equally per seat — owner, at S2's G3'-real measurement, with `tune2`'s totals (ruling 7 of S1's stage demo, decisions-log item 139 (1), kept the total and the per-seat split for S1; register S1-37).
+/// PLACEHOLDER: the world total of beacons a match may place on top of the cores, shared equally per seat — owner, at S2's demo, with `tune2`'s totals, which keep G3'-real's certified 300 / 40 / 120 (g3r #147; ruling 7 of S1's stage demo, decisions-log item 139 (1), kept the total and the per-seat split for S1; register S1-37).
 ///
 /// Forty is item 63's world total. Since S1 the room is **per seat**: each
 /// seat may place [`room_per_seat`] of the total, the total divided by the
@@ -164,7 +163,7 @@ const HARNESS_WORK_BUDGET: u32 = 1_000_000;
 /// and not in the rules table.
 const BEACON_TABLE_ROOM: u32 = 40;
 
-/// PLACEHOLDER: the world total of units a match may fabricate on top of the starting force, shared equally per seat — owner, at S2's G3'-real measurement, with `tune2`'s totals (ruling 7 of S1's stage demo, decisions-log item 139 (1), kept the total and the per-seat split for S1; register S1-37).
+/// PLACEHOLDER: the world total of units a match may fabricate on top of the starting force, shared equally per seat — owner, at S2's demo, with `tune2`'s totals, which keep G3'-real's certified 300 / 40 / 120 (g3r #147; ruling 7 of S1's stage demo, decisions-log item 139 (1), kept the total and the per-seat split for S1; register S1-37).
 ///
 /// Item 63 fixes the world total at **300 units**; since S1 each seat may
 /// field [`room_per_seat`] of it on top of its own starting force (100 a seat
@@ -179,7 +178,7 @@ const BEACON_TABLE_ROOM: u32 = 40;
 /// Generators can power", which this only bounds.
 pub(crate) const UNIT_TABLE_ROOM: u32 = 300;
 
-/// PLACEHOLDER: the world total of structures a match may build, shared equally per seat since S1 ("Build targets and structures follow", `docs/design/targeting.md`) — owner, at S2's G3'-real measurement, with `tune2`'s totals for the per-seat split (ruling 7 of S1's stage demo, decisions-log item 139 (1), kept it for S1; register S1-37); the total is the owner's at S2 with the capability catalogue (register S2-08).
+/// PLACEHOLDER: the world total of structures a match may build, shared equally per seat since S1 ("Build targets and structures follow", `docs/design/targeting.md`) — owner, at S2's demo, with `tune2`'s totals for the per-seat split, which keep G3'-real's certified 300 / 40 / 120 (g3r #147; ruling 7 of S1's stage demo, decisions-log item 139 (1), kept it for S1; register S1-37); the total is the owner's at S2 with the capability catalogue (register S2-08).
 ///
 /// Three a beacon at [`BEACON_TABLE_ROOM`], which covers a Generator on every
 /// vent a map carries plus the Survey posts and turrets S2 adds. A seat's
@@ -338,17 +337,6 @@ pub struct WorldConfig {
     /// occupies spawn zone `i`; a seat beyond the map's zones is seated but
     /// unplaced (see [`crate::mapgen`]).
     pub seats: u32,
-    /// How many extra walking units each seat fields on top of its starting
-    /// force: raiders homed to nobody, wandering on [`Stream::Spawn`]
-    /// ([`World::draw_new_destinations`]), scaffolding that widens the unit
-    /// table. A real match passes zero, and since S1's real determinism
-    /// segment so does the determinism harness, whose chain covers a real
-    /// playbook instead (decision 16 of S1's plan; register S1-26). The
-    /// scenario format's `units_per_seat` key and the sim's own tests still
-    /// field them.
-    ///
-    /// PLACEHOLDER: the walkers' removal, with the scenario format's `units_per_seat` key — owner, at S2's G3'-real measurement, which measures load without them.
-    pub units_per_seat: u32,
     /// The rules table, an **input** to the sim and never hashed state.
     pub rules: RulesTable,
     /// What the lobby decided: the per-round segment length list and the round
@@ -466,9 +454,6 @@ pub struct World {
     repair_report: RepairReport,
     /// What the last tick's serving did. Diagnostic; never hashed.
     serve_report: ServeReport,
-    /// Scratch for the arrived-unit list, so a tick's destination draws
-    /// allocate nothing.
-    arrivals: Vec<u32>,
     /// This tick's voxel edits, drained by [`Phase::Voxels`].
     edits: Vec<VoxelEdit>,
     /// The two queues' rooms (S2's plan, E5). Derived at construction from
@@ -613,11 +598,11 @@ pub struct World {
     /// How many unit rows the table may ever hold. Derived and not hashed, and
     /// not merely an allocation size — see [`World::unit_limit`].
     unit_limit: u32,
-    /// How many unit rows the world was built with: the starting force and
-    /// the harness walkers. Derived from the match configuration and kept by a
+    /// How many unit rows the world was built with: the starting force.
+    /// Derived from the match configuration and kept by a
     /// restore, as `unit_limit` is; read by [`World::is_laid_out`].
     unit_start: u32,
-    /// Each seat's starting force, the harness walkers included: how many unit
+    /// Each seat's starting force: how many unit
     /// rows it held when the world was built. A seat may hold that many and its
     /// share of [`UNIT_TABLE_ROOM`] at once (S2's plan, E1). Derived from the
     /// match configuration and kept by a restore, as `unit_limit` is.
@@ -829,6 +814,61 @@ impl core::fmt::Display for FileRefused {
 
 impl std::error::Error for FileRefused {}
 
+/// Why [`World::field_movers_directly`] stopped. Nothing it fielded before
+/// stopping is undone.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MoversRefused {
+    /// The seat's share of [`UNIT_TABLE_ROOM`] cannot hold another raider,
+    /// after `fielded` of its own.
+    ShareFull {
+        /// The seat.
+        seat: u8,
+        /// How many of its raiders were fielded before it stopped.
+        fielded: u32,
+    },
+    /// The world seats more seats than a seat id names.
+    SeatOutOfRange {
+        /// The seat's index.
+        index: u32,
+    },
+    /// The seat's core has no position the beacon table can read.
+    CoreUnreadable {
+        /// The seat.
+        seat: u8,
+    },
+    /// A raider's place on the stride is past what an `i32` column holds:
+    /// more raiders than a map has columns to spread them over.
+    StrideOverflow {
+        /// The seat.
+        seat: u8,
+        /// How many of its raiders were fielded before it stopped.
+        fielded: u32,
+    },
+}
+
+impl core::fmt::Display for MoversRefused {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            MoversRefused::ShareFull { seat, fielded } => write!(
+                f,
+                "seat {seat} could not field another raider after {fielded}: its unit share is full"
+            ),
+            MoversRefused::CoreUnreadable { seat } => {
+                write!(f, "seat {seat}'s core has no position to send a raider to")
+            }
+            MoversRefused::SeatOutOfRange { index } => {
+                write!(f, "seat index {index} is past what a seat id names")
+            }
+            MoversRefused::StrideOverflow { seat, fielded } => write!(
+                f,
+                "seat {seat}'s raider {fielded} has no place on the stride an i32 column holds"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for MoversRefused {}
+
 /// Why a tick could not be begun, run or finished (S2's plan, E7 and E30).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TickError {
@@ -992,8 +1032,7 @@ impl World {
     /// Generate the map for `config.match_seed` and build the world on it.
     ///
     /// The generator places each occupied seat's core beacon, commander and
-    /// starting drones; the harness's `units_per_seat` extra walkers are
-    /// appended after them, so unit ids stay dense and in seat order.
+    /// starting drones, so unit ids start dense and in seat order.
     ///
     /// # Errors
     ///
@@ -1023,18 +1062,14 @@ impl World {
         }
         let generated = mapgen::generate(config.match_seed, &config.rules, config.seats)?;
         let [width, depth, _] = config.rules.map_size_voxels();
-        let [max_x, max_y, _] = config.rules.map_last_voxel();
 
         let too_large = |table: &'static str, room: u64| MapError::RoomTooLarge {
             table,
             // E7: rule: a room past `u32` is past `ids::ROOM_LIMIT` too, and is reported at the most a `u32` holds
             room: u32::try_from(room).unwrap_or(u32::MAX),
         };
-        let harness_units =
-            u64::from(config.seats).saturating_mul(u64::from(config.units_per_seat));
-        let starting = u64::try_from(generated.starting_units.len())
+        let unit_count = u64::try_from(generated.starting_units.len())
             .map_err(|_| too_large("unit", u64::MAX))?;
-        let unit_count = starting.saturating_add(harness_units);
         // Every derived index that is sized per unit is sized for the room a
         // fabricator may fill as well, because those indexes are not rows: the
         // broadphase and the scratch buffers can be built once at the ceiling,
@@ -1082,7 +1117,7 @@ impl World {
             });
         }
 
-        let units = fill_unit_table(config, &generated, unit_count, [max_x, max_y])?;
+        let units = fill_unit_table(&generated, unit_count)?;
         let unit_start_of = held_by_seat(units.seats(), config.seats);
 
         let mut voxels = generated.voxels;
@@ -1113,10 +1148,9 @@ impl World {
         router.reserve(unit_ceiling.saturating_sub(unit_count));
         let mut unit = 0;
         while unit < unit_count {
-            // Every unit starts by asking for a route: the harness's walkers
-            // have a destination drawn on the map, and a starting unit's
+            // Every unit starts by asking for a route: a starting unit's
             // destination is where it already stands, which the router answers
-            // with "arrived" and the tick answers with a fresh destination.
+            // with "arrived", and it stands until something sends it on.
             router.request(unit);
             unit = unit.saturating_add(1);
         }
@@ -1217,7 +1251,6 @@ impl World {
             work: WorkCounter::with_budget(HARNESS_WORK_BUDGET),
             repair_report: RepairReport::default(),
             serve_report: ServeReport::default(),
-            arrivals: Vec::with_capacity(crate::math::index::row(unit_ceiling)),
             edits: Vec::with_capacity(QueueRooms::capacity(rooms.edits, "voxel edit")?),
             rooms,
             damage_drops: DamageDrops::default(),
@@ -2715,6 +2748,82 @@ impl World {
         Some(id)
     }
 
+    /// Field `per_seat` raiders for every placed seat, homed to its core and
+    /// standing on ground points spread over the map by a fixed stride, so
+    /// that each is sent home to its core: the wide, moving unit table the
+    /// sim's own tests once took from the harness walkers, which S2-16
+    /// removed (S2's plan, decision 23). No random stream is drawn. They are
+    /// real units: they draw `kW`, follow the core's mandate (a raider with
+    /// nothing to do idles at home, [`crate::programs`]) and are parked by its
+    /// dormancy, so a caller that wants them walking gives the core the
+    /// supply to carry them. Answers how many raiders it fielded.
+    ///
+    /// Fixture API; see the block comment above.
+    ///
+    /// # Errors
+    ///
+    /// [`MoversRefused`]: a placed seat's share of [`UNIT_TABLE_ROOM`] cannot
+    /// hold them, a seat index past a seat id, or a stride position past an
+    /// `i32`. A seat the map left unplaced (see [`crate::mapgen`]) has no core
+    /// and fields none, as it fields no starting force; the count answered
+    /// shows it.
+    pub fn field_movers_directly(&mut self, per_seat: u32) -> Result<u32, MoversRefused> {
+        let [max_x, max_y, _] = self.rules.map_last_voxel();
+        // A map's last voxel is at least 0 on each axis, so the extent is at
+        // least one column.
+        let width = i32::from(max_x).saturating_add(1);
+        let depth = i32::from(max_y).saturating_add(1);
+        let mut total: u32 = 0;
+        let mut seat_index: u32 = 0;
+        while seat_index < self.seats.len() {
+            let raw = u8::try_from(seat_index)
+                .map_err(|_| MoversRefused::SeatOutOfRange { index: seat_index })?;
+            let seat = SeatId::new(raw);
+            seat_index = seat_index.saturating_add(1);
+            // A seat beyond the map's zones is seated but unplaced: it has no
+            // core to home a raider to.
+            let Some(core) = crate::power::core_of(self, seat) else {
+                continue;
+            };
+            let home = self
+                .beacons
+                .row_of(core)
+                .ok()
+                .and_then(|row| self.beacons.positions().get(row.index()).copied())
+                .ok_or(MoversRefused::CoreUnreadable { seat: raw })?;
+            let mut n: u32 = 0;
+            while n < per_seat {
+                let overflow = MoversRefused::StrideOverflow {
+                    seat: raw,
+                    fielded: n,
+                };
+                let index = n
+                    .checked_mul(self.seats.len())
+                    .and_then(|base| base.checked_add(u32::from(raw)))
+                    .and_then(|place| place.checked_add(1))
+                    .and_then(|place| i32::try_from(place).ok())
+                    .ok_or(overflow)?;
+                let x = index.checked_mul(97).ok_or(overflow)?.rem_euclid(width);
+                let y = index.checked_mul(61).ok_or(overflow)?.rem_euclid(depth);
+                let at = self.standing_point([x, y, 0]);
+                let full = MoversRefused::ShareFull {
+                    seat: raw,
+                    fielded: n,
+                };
+                let unit = self
+                    .field_unit(seat, core, UnitKind::Raider, at)
+                    .ok_or(full)?;
+                let row = self.units.row_of(unit).map_err(|_| full)?;
+                // Sent home now: a program walks a raider home only inside a
+                // Push, and these tests step the world directly.
+                self.send_unit_directly(row.raw(), home);
+                n = n.saturating_add(1);
+                total = total.saturating_add(1);
+            }
+        }
+        Ok(total)
+    }
+
     /// Write a Defend beacon's settings directly, and its protect list's
     /// beacons (S2's `dfnd`). `false`, writing nothing, for a beacon with no
     /// Defend row.
@@ -4106,10 +4215,10 @@ impl World {
     /// walks the route [`Phase::Pathing`] gave it, one legal step at a time,
     /// and asks for another the moment a step stops being legal.
     ///
-    /// What is *not* here is where a unit decides to go. The harness still
-    /// draws a destination at random from [`Stream::Spawn`] when a unit arrives
-    /// (see [`World::draw_new_destinations`]); T11's interpreter replaces that
-    /// with the playbook, and the walking below does not change when it does.
+    /// What is *not* here is where a unit decides to go: the playbook, the
+    /// mandates and the programs say that. A unit that has arrived stands
+    /// until one of them sends it on; the harness's random wander on
+    /// [`Stream::Spawn`] went with the walkers (S2-16, S2's plan decision 23).
     fn phase_movement(&mut self) {
         let MovementColumns {
             ids: _,
@@ -4467,7 +4576,6 @@ impl World {
             },
         );
         self.repair_report = report;
-        self.draw_new_destinations();
     }
 
     /// The route surcharges of every unit waiting for a route (S2's `atk`;
@@ -4535,55 +4643,6 @@ impl World {
             return (at(start), at(end));
         }
         (0, 0)
-    }
-
-    /// Give every unit that reached the end of a route somewhere new to be —
-    /// **except a commander**.
-    ///
-    /// The destination is drawn from [`Stream::Spawn`] at `(tick, seat, unit
-    /// id)`, which is the wandering T2 introduced so that the hash chain
-    /// covered a moving table. It moves the walkers of
-    /// `WorldConfig::units_per_seat` and goes with them (see that field's
-    /// PLACEHOLDER); the determinism harness fields none since S1's real
-    /// segment (decision 16; register S1-26).
-    ///
-    /// **A commander is not drawn for** (T11): where the commander goes is the
-    /// playbook's to say, and a seat that has sealed none leaves its commander
-    /// standing where it is rather than wandering. That is the half of the
-    /// wandering the interpreter discharged, and it is one of the two reasons
-    /// the determinism chain moved in T11's pull request.
-    fn draw_new_destinations(&mut self) {
-        if self.router.arrived().is_empty() {
-            return;
-        }
-        self.arrivals.clear();
-        self.arrivals.extend_from_slice(self.router.arrived());
-        let match_seed = self.match_seed;
-        let tick = self.tick.raw();
-        let [max_x, max_y, _] = self.rules.map_last_voxel();
-        let mut at = 0;
-        while at < self.arrivals.len() {
-            let Some(unit) = self.arrivals.get(at).copied() else {
-                break;
-            };
-            at = at.saturating_add(1);
-            let index = crate::math::index::row(unit);
-            if self.units.kinds().get(index).copied() == Some(UnitKind::Commander.id()) {
-                continue;
-            }
-            let (Some(seat), Some(id)) = (
-                self.units.seats().get(index).copied(),
-                self.units.ids().get(index).copied(),
-            ) else {
-                continue;
-            };
-            let mut rng = StreamRng::new(match_seed, Stream::Spawn, tick, seat, id);
-            let point = ground_point(&self.voxels, &mut rng, max_x, max_y);
-            if let Some(slot) = self.units.destinations_mut().get_mut(index) {
-                *slot = point;
-            }
-            self.router.request(unit);
-        }
     }
 
     /// Apply this tick's voxel edits, then refresh the digest of every chunk
@@ -6406,7 +6465,6 @@ impl World {
         self.surface.refresh_all(&self.voxels);
         self.clusters.rebuild_all(&self.surface, &mut self.scratch);
         self.repairer = Repairer::new(self.clusters.cluster_count());
-        self.arrivals = Vec::with_capacity(crate::math::index::row(self.unit_limit));
         self.repair_report = RepairReport::default();
         self.serve_report = ServeReport::default();
         // A restore lands between ticks: no tick is open, and the queues are
@@ -6612,29 +6670,22 @@ fn query_pad_of(rules: &RulesTable) -> Fx {
     Fx::from_voxels(rules.query_pad_voxels())
 }
 
-/// The unit table: the generator's starting force first, then the extra
-/// walkers of `WorldConfig::units_per_seat`, seat by seat.
+/// The unit table: the generator's starting force, seat by seat.
 ///
 /// One pass, in that order, so the starting rows are dense and in seat order,
 /// each at generation 0 so its id is its row (S2's plan, E1). A sort key that
 /// ends in a unit id is a total order (item 62) whatever rows are reused later,
-/// because an id is unique.
-///
-/// Refuses with [`MapError::MissingBlock`] when walkers are asked for and the
-/// rules table has no `units.raider` row to give them hit points from, rather
-/// than inventing a number.
+/// because an id is unique. The harness walkers that once followed them went
+/// with S2-16 (S2's plan, decision 23): G3'-real's load is E30's layout.
 fn fill_unit_table(
-    config: &WorldConfig,
     generated: &crate::mapgen::GeneratedMap,
     capacity: u32,
-    extent: [i16; 2],
 ) -> Result<UnitTable, MapError> {
     let mut units = UnitTable::with_capacity(capacity.saturating_add(UNIT_TABLE_ROOM));
     units.reserve(UNIT_TABLE_ROOM);
-    let mut next_id: u32 = 0;
     for unit in &generated.starting_units {
-        // A starting unit begins where it stands: the harness walk gives it a
-        // destination the moment it notices it has arrived.
+        // A starting unit begins where it stands, its destination its own
+        // position, until its program or its beacon's mandate sends it on.
         //
         // Its home is the seat's **core**, because "every unit is bound to its
         // home beacon (the one whose fabricator produced it) and follows that
@@ -6649,52 +6700,6 @@ fn fill_unit_table(
                 table: "unit",
                 room: full.room,
             })?;
-        next_id = next_id.saturating_add(1);
-    }
-
-    // The extra walkers are raiders because a raider is the cheapest kind with
-    // a rules-table HP row that is not part of a seat's starting force, so
-    // they cannot be mistaken for one. The determinism harness fields none
-    // since S1's real segment (decision 16; register S1-26), whose chain
-    // covers a real playbook's fabrication instead; the scenario format's
-    // `units_per_seat` key and the sim's own tests still ask for them.
-    //
-    // They are homed to **nobody** ([`BeaconId::NONE`]): a unit with no home
-    // beacon draws no kW, no mandate drives it and no dormancy parks it, which
-    // is what keeps scaffolding out of the economy. Nothing a fabricator builds
-    // is ever unhomed, so the state is unreachable in a real match.
-    if config.units_per_seat == 0 {
-        return Ok(units);
-    }
-    let walker_hp = config.rules.unit_hp(UnitKind::Raider);
-    let [max_x, max_y] = extent;
-    let mut seat_index: u32 = 0;
-    while seat_index < config.seats {
-        let seat = SeatId::new(u8::try_from(seat_index).map_err(|_| MapError::OutOfRange {
-            field: "seats",
-            why: format!("seat {seat_index} is past the {} a seat id holds", u8::MAX),
-        })?);
-        let mut n: u32 = 0;
-        while n < config.units_per_seat {
-            let mut rng = StreamRng::new(
-                config.match_seed,
-                Stream::Spawn,
-                Tick::ZERO.raw(),
-                seat.raw(),
-                next_id,
-            );
-            let pos = ground_point(&generated.voxels, &mut rng, max_x, max_y);
-            let dest = ground_point(&generated.voxels, &mut rng, max_x, max_y);
-            units
-                .push(seat, UnitKind::Raider, pos, dest, walker_hp, BeaconId::NONE)
-                .map_err(|full| MapError::RoomTooLarge {
-                    table: "unit",
-                    room: full.room,
-                })?;
-            next_id = next_id.saturating_add(1);
-            n = n.saturating_add(1);
-        }
-        seat_index = seat_index.saturating_add(1);
     }
     Ok(units)
 }
@@ -6786,16 +6791,6 @@ fn encode_point(enc: &mut Enc, point: &[Fx; 3]) {
     }
 }
 
-/// A point drawn uniformly over the map footprint, standing on the surface of
-/// whatever column it landed in.
-fn ground_point(voxels: &VoxelStore, rng: &mut StreamRng, max_x: i16, max_y: i16) -> [Fx; 3] {
-    let x = rng.range_i32(0, i32::from(max_x));
-    let y = rng.range_i32(0, i32::from(max_y));
-    let z = voxels.standing_z(x, y);
-    // E7: cannot miss: `x` and `y` are drawn inside the map's last voxel and `z` stands on it, all coordinates
-    [x, y, z].map(|v| Fx::from_voxels(i16::try_from(v).unwrap_or(0)))
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
@@ -6821,7 +6816,6 @@ mod tests {
         World::new(&WorldConfig {
             match_seed: crate::DETERMINISM_MATCH_SEED,
             seats: 2,
-            units_per_seat: 0,
             rules,
             match_settings: MatchSettings::default(),
         })
@@ -7130,11 +7124,10 @@ mod ids_tests {
         RulesTable::from_message(&message).must("the edited table is a table")
     }
 
-    fn world_of(rules: RulesTable, seats: u32, units_per_seat: u32) -> Result<World, MapError> {
+    fn world_of(rules: RulesTable, seats: u32) -> Result<World, MapError> {
         World::new(&WorldConfig {
             match_seed: crate::DETERMINISM_MATCH_SEED,
             seats,
-            units_per_seat,
             rules,
             match_settings: MatchSettings::default(),
         })
@@ -7142,7 +7135,7 @@ mod ids_tests {
 
     fn world() -> World {
         static BASE: std::sync::OnceLock<World> = std::sync::OnceLock::new();
-        BASE.get_or_init(|| world_of(rules(), 2, 0).must("a world"))
+        BASE.get_or_init(|| world_of(rules(), 2).must("a world"))
             .clone()
     }
 
@@ -7648,14 +7641,46 @@ mod ids_tests {
 
     #[test]
     fn a_room_over_4095_rows_is_refused() {
-        let refused = world_of(rules(), 2, 2_000);
+        // A starting force past an id's row: the only way left to ask for one
+        // since S2-16 removed the walkers.
+        let refused = world_of(
+            edited(|message| {
+                message
+                    .units
+                    .as_mut()
+                    .must("a units block")
+                    .starting_build_drones = 2_000;
+            }),
+            2,
+        );
         assert!(
             matches!(refused, Err(MapError::RoomTooLarge { table: "unit", .. })),
             "a unit table past an id's row is refused at load: {refused:?}"
         );
-        assert!(
-            world_of(rules(), 2, 1_000).is_ok(),
-            "and one inside it is not"
+    }
+
+    /// A snapshot holding more units than the receiving world's ceiling is
+    /// refused and leaves the world as it was. No configuration builds two
+    /// such worlds since the harness walkers went (S2-16), so the receiving
+    /// world's ceiling is lowered here, as a foreign or hand-edited file would
+    /// present it.
+    #[test]
+    fn a_snapshot_over_the_receiving_worlds_unit_ceiling_is_refused() {
+        let big = world();
+        let mut small = world();
+        small.unit_limit = 1;
+        let before = small.state_hash();
+        let units = big.units().len();
+        assert!(units > small.unit_limit, "the fixture is over the ceiling");
+        assert_eq!(
+            crate::snapshot::Snapshot::capture(&big).restore_into(&mut small),
+            Err(crate::snapshot::SnapshotError::OverCeiling { units, limit: 1 }),
+            "a file saved under another configuration is refused, and says why"
+        );
+        assert_eq!(
+            small.state_hash(),
+            before,
+            "and the world is left as it was"
         );
     }
 
@@ -7681,7 +7706,7 @@ mod ids_tests {
         assert_eq!(world.beacons.ordinal(SEAT, 3, placed), Ordinal::NeverPlaced);
 
         let saved = Snapshot::capture(&world);
-        let mut resumed = world_of(rules(), 2, 0).must("a world");
+        let mut resumed = world_of(rules(), 2).must("a world");
         saved.restore_into(&mut resumed).must("the save restores");
         assert_eq!(resumed.seats.placed(), world.seats.placed());
         assert_eq!(resumed.state_hash(), world.state_hash());
@@ -7692,7 +7717,7 @@ mod ids_tests {
         // A file naming a beacon at or past its seat's counter is refused.
         let mut bad = saved;
         bad.seat_placed[0] = 2;
-        let mut target = world_of(rules(), 2, 0).must("a world");
+        let mut target = world_of(rules(), 2).must("a world");
         assert_eq!(
             bad.restore_into(&mut target),
             Err(crate::snapshot::SnapshotError::OutOfRange("beacon_ordinal"))
@@ -7704,7 +7729,7 @@ mod ids_tests {
         let small_cells = edited(|message| {
             message.broadphase.get_or_insert_default().cell_size_voxels = 1;
         });
-        let mut world = world_of(small_cells, 2, 0).must("a world");
+        let mut world = world_of(small_cells, 2).must("a world");
         assert!(
             world.query_pad() >= Fx::from_voxels(2),
             "a tick's walk is at least two voxels of pad"
@@ -7747,7 +7772,7 @@ mod ids_tests {
                 generator.vision_radius_voxels = 17;
             }
         });
-        let mut world = world_of(rules, 2, 0).must("a world");
+        let mut world = world_of(rules, 2).must("a world");
         let home = core(&world, SEAT);
         let at = at_of(&world, home);
         assert!(
@@ -7856,7 +7881,7 @@ mod ids_tests {
         world.free_settled_rows();
         let good = Snapshot::capture(&world);
         assert!(
-            good.restore_into(&mut world_of(rules(), 2, 0).must("a world"))
+            good.restore_into(&mut world_of(rules(), 2).must("a world"))
                 .is_ok()
         );
         let unit = drone.row().must("a row").index();
@@ -7894,7 +7919,7 @@ mod ids_tests {
             let mut bad = good.clone();
             spoil(&mut bad, unit, ruin, commander);
             assert_eq!(
-                bad.restore_into(&mut world_of(rules(), 2, 0).must("a world")),
+                bad.restore_into(&mut world_of(rules(), 2).must("a world")),
                 Err(SnapshotError::OutOfRange(column)),
                 "a spoiled {column} is refused by name"
             );
@@ -7961,7 +7986,7 @@ mod ids_tests {
         // match would.
         let mut saved = Snapshot::capture(&world);
         saved.unit_id[row.index()] = UnitId::of(row, Generation::new(u16::MAX)).raw();
-        let mut world = world_of(rules(), 2, 0).must("a world");
+        let mut world = world_of(rules(), 2).must("a world");
         saved.restore_into(&mut world).must("the save restores");
         let last = UnitId::of(row, Generation::new(u16::MAX));
         kill_unit(&mut world, last);
@@ -7986,12 +8011,19 @@ mod ids_tests {
             let mut world = World::new(&WorldConfig {
                 match_seed: seed,
                 seats: 2,
-                units_per_seat: 12,
-                rules: rules(),
+                rules: edited(|message| {
+                    let power = message.power.as_mut().must("a power block");
+                    power.core_surplus_kw = 100;
+                    power.map_ceiling_kw = 1_000;
+                }),
                 match_settings: MatchSettings::default(),
             })
             .must("a world");
+            world
+                .field_movers_directly(12)
+                .must("twelve raiders a seat");
             let pad = crate::math::fixed::Sq::of_radius(world.query_pad());
+            let start = world.units.positions().to_vec();
             for _ in 0..200 {
                 let before = world.units.positions().to_vec();
                 world.step(&mut enc).must("a tick");
@@ -8008,6 +8040,15 @@ mod ids_tests {
                     }
                 }
             }
+            let moved = start
+                .iter()
+                .zip(world.units.positions())
+                .filter(|(was, now)| was != now)
+                .count();
+            assert!(
+                moved >= 12,
+                "seed {seed}: the movers walk ({moved} units moved)"
+            );
         }
     }
 

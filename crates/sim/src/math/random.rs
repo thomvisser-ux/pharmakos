@@ -45,7 +45,10 @@ const GOLDEN: u64 = 0x9E37_79B9_7F4A_7C15;
 pub enum Stream {
     /// Combat rolls: spread, critical effects, damage jitter. Used from S2.
     Combat,
-    /// Spawning and placement: initial unit positions, respawn sites.
+    /// Spawning and placement: initial unit positions, respawn sites. Drawn
+    /// by nothing since S2-16 removed the harness walkers and their wander
+    /// (S2's plan, decision 23); the id stays reserved for this purpose, as
+    /// every id does.
     Spawn,
     /// Map generation, used by the seeded generator (T5).
     Map,

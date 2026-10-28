@@ -137,7 +137,6 @@ fn hosted() -> Surface {
         &pharmakos_sim::world::WorldConfig {
             match_seed: 0x00ca_5cad_ed00_0001,
             seats: 2,
-            units_per_seat: 0,
             rules: rules(),
             match_settings: pharmakos_sim::runner::MatchSettings {
                 segment_lengths_ms: vec![1_000],
@@ -806,7 +805,6 @@ fn a_playbook_submitted_over_the_transport_is_executed() {
         &pharmakos_sim::world::WorldConfig {
             match_seed: 0x00ca_5cad_ed00_0001,
             seats: 2,
-            units_per_seat: 0,
             rules: rules(),
             match_settings: pharmakos_sim::runner::MatchSettings {
                 // Twelve seconds: a commander walks a voxel a second at the

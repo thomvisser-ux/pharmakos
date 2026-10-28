@@ -146,7 +146,6 @@ pub fn hosted_with(
         &WorldConfig {
             match_seed: SEED,
             seats,
-            units_per_seat: 0,
             rules: rules(),
             match_settings: MatchSettings {
                 segment_lengths_ms: vec![segment_ms],

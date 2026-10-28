@@ -2355,7 +2355,6 @@ mod tests {
         let mut world = World::new(&WorldConfig {
             match_seed: 0x0000_0000_ca5c_aded,
             seats: 3,
-            units_per_seat: 0,
             rules,
             match_settings: MatchSettings {
                 segment_lengths_ms: vec![60_000],

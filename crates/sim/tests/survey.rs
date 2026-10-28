@@ -43,8 +43,32 @@ fn world() -> World {
     World::new(&WorldConfig {
         match_seed: SEED,
         seats: 2,
-        units_per_seat: 0,
         rules: rules(),
+        match_settings: MatchSettings {
+            segment_lengths_ms: vec![600_000],
+            round_limit: 1,
+        },
+    })
+    .unwrap_or_else(|error| panic!("generating the world: {error}"))
+}
+
+/// The world with the scout's vision put back to 8: the two refresh-order
+/// tests below stage two sightings 16 voxels either side of the post, and a
+/// scout of the committed vision 24 (decision 17, rules revision 6) sees both
+/// from the post at once, so it could not show which it re-checks first.
+fn short_sighted_world() -> World {
+    let mut message = rules().message().clone();
+    message
+        .units
+        .as_mut()
+        .and_then(|units| units.scout.as_mut())
+        .expect("a scout row")
+        .vision_radius_voxels = 8;
+    World::new(&WorldConfig {
+        match_seed: SEED,
+        seats: 2,
+        rules: RulesTable::from_message(&message)
+            .unwrap_or_else(|error| panic!("the edited table: {error}")),
         match_settings: MatchSettings {
             segment_lengths_ms: vec![600_000],
             round_limit: 1,
@@ -97,7 +121,6 @@ fn world_with(push_ms: i32) -> World {
     World::new(&WorldConfig {
         match_seed: SEED,
         seats: 2,
-        units_per_seat: 0,
         rules: rules(),
         match_settings: MatchSettings {
             segment_lengths_ms: vec![push_ms],
@@ -264,7 +287,7 @@ fn scouts_scan_unexplored_ground_first() {
 
 #[test]
 fn the_stalest_sighting_is_refreshed_next() {
-    let mut world = world();
+    let mut world = short_sighted_world();
     let post = survey_post(&mut world);
     let at = beacon_at(&world, post);
     let east = ground(&world, at, 16, 0);
@@ -308,7 +331,7 @@ fn the_stalest_sighting_is_refreshed_next() {
 
 #[test]
 fn enemy_beacons_come_first() {
-    let mut world = world();
+    let mut world = short_sighted_world();
     let post = survey_post(&mut world);
     let at = beacon_at(&world, post);
     // An enemy raider seen first, so its sighting is the older one...

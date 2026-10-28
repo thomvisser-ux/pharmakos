@@ -53,7 +53,6 @@ fn world() -> World {
     World::new(&WorldConfig {
         match_seed: SEED,
         seats: SEATS,
-        units_per_seat: 0,
         rules: rules(),
         match_settings: MatchSettings {
             segment_lengths_ms: vec![120_000, 120_000, 120_000],

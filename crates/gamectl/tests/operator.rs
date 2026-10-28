@@ -133,7 +133,6 @@ fn open_under(
         &Settings {
             segment_lengths_ms: vec![SEGMENT_MS],
             round_limit: rounds,
-            units_per_seat: 0,
         },
         Some(root().join(LIBRARY_PATH)),
     )
@@ -1222,7 +1221,6 @@ fn open_as_scenario(
         &Settings {
             segment_lengths_ms: vec![length],
             round_limit: 2,
-            units_per_seat: 0,
         },
         Some(root().join(LIBRARY_PATH)),
     )

@@ -846,7 +846,6 @@ fn host_for(
         &Settings {
             segment_lengths_ms: config.segment_lengths_ms.clone(),
             round_limit: config.round_limit,
-            units_per_seat: 0,
         },
         library,
     )?;

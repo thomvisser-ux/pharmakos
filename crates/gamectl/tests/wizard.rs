@@ -110,7 +110,6 @@ fn lobby() -> Surface {
             // Empty is the rules table's own ladder: the lobby's `-`.
             segment_lengths_ms: Vec::new(),
             round_limit: ROUND_LIMIT,
-            units_per_seat: 0,
         },
         Some(root().join(LIBRARY_PATH)),
     )
@@ -399,7 +398,6 @@ fn a_seat_nobody_edits_is_still_earning_in_the_lobbys_third_round() {
         &Settings {
             segment_lengths_ms: Vec::new(),
             round_limit: ROUND_LIMIT,
-            units_per_seat: 0,
         },
         Some(root().join(LIBRARY_PATH)),
     )

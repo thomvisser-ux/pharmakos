@@ -479,8 +479,8 @@ pub struct StartingUnit {
 
 /// Everything a generated map hands to [`crate::world::World::new`].
 ///
-/// The unit **table** is not built here: the world knows how many rows it needs
-/// for the harness walkers it adds on top, and a `SoA` table fixes its count at
+/// The unit **table** is not built here: the world sizes it for the room a fabricator
+/// may fill on top of the starting force, and a `SoA` table fixes its count at
 /// construction (item 67).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct GeneratedMap {

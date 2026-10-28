@@ -603,9 +603,8 @@ impl UnitTable {
     /// and follows that beacon's mandate, even outside the sphere (spec section
     /// 5, "Units"). [`BeaconId::NONE`] means the unit is on no grid at all: it
     /// draws no `kW`, no mandate drives it and no dormancy parks it. Nothing in
-    /// a real match produces one — the value exists for the harness walkers
-    /// [`crate::world::WorldConfig::units_per_seat`] fields, which are
-    /// scaffolding rather than a seat's force, and for a freed row. A home is a
+    /// a real match produces one since S2-16 removed the harness walkers (S2's
+    /// plan, decision 23); the value exists for a freed row. A home is a
     /// reference into the beacon table, read through
     /// [`BeaconTable::row_of`], which refuses the sentinel and a beacon since
     /// freed.

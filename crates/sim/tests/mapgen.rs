@@ -633,7 +633,6 @@ fn the_world_takes_its_map_from_the_generator() {
     let world = World::new(&WorldConfig {
         match_seed: SEEDS[2],
         seats: GOLDEN_SEATS,
-        units_per_seat: 0,
         rules: rules(),
         match_settings: MatchSettings::default(),
     })

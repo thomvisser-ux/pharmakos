@@ -64,7 +64,6 @@ fn world_with(rules: RulesTable, segments: &[i32]) -> World {
     World::new(&WorldConfig {
         match_seed: SEED,
         seats: SEATS,
-        units_per_seat: 0,
         rules,
         match_settings: MatchSettings {
             segment_lengths_ms: segments.to_vec(),

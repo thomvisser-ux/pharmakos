@@ -120,7 +120,6 @@ fn hosted_as(segment_ms: i32, fog: FogPolicy, library: Option<PathBuf>) -> Surfa
         &pharmakos_sim::world::WorldConfig {
             match_seed: SEED,
             seats: 2,
-            units_per_seat: 0,
             rules: rules(),
             match_settings: MatchSettings {
                 segment_lengths_ms: vec![segment_ms],
