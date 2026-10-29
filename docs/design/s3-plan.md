@@ -273,6 +273,8 @@ may reach them, and by `sim3a`, `nite3` and `opr3` in their own files.
 | The G3′ gate load's Attack seam | item 152 (1) 10 | `sim3a`, `bench3`, `cert3` (E13) |
 | `BeaconRef.nearest`'s proto comment | item 151 (2) (a) | `con5` |
 | `combat.charge_damage_hp` | item 151 (2) (c) (3) | `con5`, `lic`, `tune3` |
+| The S2 demo's findings 1 to 7 (panel overflow, stale Undo line, wizard left open, camera zoom, the unnamed fallback lines, the feed's order and flood, the match-end tally) | item 155 (3) | `ed3a` (1 to 4, 6, 7's client half), `gwp` (5, 6, 7) |
+| The S2 demo's finding 8, the raid lost and the flat treasury | item 155 (3) 8 | `tune3` |
 | A verifier note for a `RETURN_FIRE` breach | item 151 (2) (c) (4) | `vfy5` |
 | The stale S2-03 marker | item 151 (4) | `sim3a` |
 | `nightly-scenarios.yml`'s `not-yet-enabled` summary text that still calls the arms placeholders | item 151 (4) | `cert3`, the stage's one `.github/**` lane |
