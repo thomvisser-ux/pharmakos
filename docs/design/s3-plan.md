@@ -3,18 +3,20 @@
 
 # S3, authoring — plan for spec section 17, the wk-34.5 row
 
-**Not yet adopted.** This is a draft, written on 2026-10-28 under decisions-log §2.7 item 153 (5)
-from the owner's four kickoff answers (item 153 (1) to (4)) and the register's S3 rows. As S2's plan
-was under item 144 (8), it is reviewed twice by adversarial agents, merged by the main session
-under the delegation item 152 (2) renewed for S3, and adopted on the owner's bulk answer: every
-decision of sections 6 and 7 stands as its **(Recommended)** option unless the owner overrules it.
-**[play]** marks a play-shaping decision, put first; **[risk]** marks a risk the owner accepts or
-refuses. The reviews are AI reviews, not independent review.
+**Adopted 2026-10-28 under decisions-log §2.7 item 154.** Drafted under item 153 (5) from the
+owner's four kickoff answers (item 153 (1) to (4)) and the register's S3 rows, reviewed twice by
+adversarial agents and the reviews applied, and merged by the main session under the delegation
+item 152 (2) renewed for S3. The owner answered decisions 13, 3 and 10 by name, each with its
+**(Recommended)** option (item 154 (1) to (3)), and the rest of section 6 in bulk, "Take all as
+recommended" (item 154 (4)): every decision of section 6 stands as its **(Recommended)** option,
+open to the owner's overrule. Section 7's decisions stay open for the stage. **[play]** marks a
+play-shaping decision; **[risk]** marks a risk the owner accepted or refused. The reviews are AI
+reviews, not independent review.
 
 **S2 is not closed.** Its demo (#156, `docs/demo/s2-run-sheet.md`) is ready and its thirteen
 rulings are made (item 152 (1)), but the owner has not yet reviewed the demo itself (AGENTS.md §10
-item 8). Item 153 says S3's first lanes start once that review has happened, unless the owner says
-otherwise. Nothing in this plan assumes the review moves a number; if it does, the lane that owns
+item 8). Items 153 and 154 (6) say S3's first lanes start once that review has happened, unless
+the owner says otherwise. Nothing in this plan assumes the review moves a number; if it does, the lane that owns
 the number takes the ruling in its brief.
 
 Precedence throughout: `docs/design/decisions-log.md` §2.7 > `docs/spec/pharmakos-spec-v0.6.html` >
@@ -1214,8 +1216,9 @@ miss at P6b goes into `prob` or a short added lane, after cut 1.
 Recommendation first, marked **(Recommended)**, every option with its downside. **[play]** marks a
 play-shaping decision, **[risk]** a risk accepted or refused, **[policy]** a grant of authority.
 Hygiene and engineering are not asked here; they are section 2.3's. Decisions 13 to 15 came from the
-plan's two reviews. A lane that finds one of these wrong in the code raises it with the owner rather
-than building around it.
+plan's two reviews. **All ruled on 2026-10-28 (item 154):** decisions 13, 3 and 10 by name and the
+rest in bulk, each as its **(Recommended)** option, open to the owner's overrule. A lane that finds
+one of these wrong in the code raises it with the owner rather than building around it.
 
 **1. S3's size and schedule.** *Governs everything.*
 - **(Recommended) Keep the whole row and the carries as section 2 places them, about 7
