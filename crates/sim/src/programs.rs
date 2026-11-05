@@ -407,7 +407,10 @@ impl Program for MineProgram {
         //    pit-safe stand) -- which is also what decides whether the hands
         //    are full, because the load is a number of **voxels** and a
         //    voxel's worth depends on the seam's grade.
-        let Some(dig) = world.next_dig(me.home) else {
+        let work = world
+            .next_dig(me.home)
+            .and_then(|dig| full_load(world, dig.ore).map(|full| (dig, full)));
+        let Some((dig, full)) = work else {
             // No work left in the seam, or no seam held: take home whatever is
             // in hand rather than standing over it.
             if me.carried.raw() > 0 {
@@ -420,7 +423,7 @@ impl Program for MineProgram {
         // 4. A full load goes home. "Delivered ore is credited to the seat
         //    treasury immediately" (spec section 6), so the credit lands on
         //    arrival and not at the seam.
-        if me.carried.raw() >= full_load(world, dig.ore) {
+        if me.carried.raw() >= full {
             deliver(world, unit, EventKind::OreDelivered);
             return;
         }
@@ -502,15 +505,15 @@ fn flees(world: &World, seat: SeatId, home: BeaconId) -> bool {
 /// trip crosses from one grade to another, and [`crate::mapgen`] stamps a seam
 /// at one grade.
 ///
-/// A voxel that is not ore — the seam went while the drone walked — falls back
-/// to the standard yield, so the test stays a number rather than a panic.
-fn full_load(world: &World, ore: [i32; 3]) -> i64 {
-    let per_voxel = world.ore_yield_at(ore).map_or_else(
-        || i64::from(world.rules().ore_yield_per_voxel().standard),
-        Money::raw,
-    );
+/// `None` for a voxel that is not ore, which the caller reads as no work left.
+/// A [`crate::mining::Dig`] names a voxel its search has just read as ore, in
+/// the same program step, so the caller's `ore` always holds some; this used to
+/// answer the standard yield for that case, for a seam that went while the
+/// drone walked, which the fresh search rules out (S3's plan, E22).
+fn full_load(world: &World, ore: [i32; 3]) -> Option<i64> {
+    let per_voxel = world.ore_yield_at(ore)?.raw();
     let carry = world.rules().mining_carry_voxels().get();
-    per_voxel.saturating_mul(i64::from(carry))
+    Some(per_voxel.saturating_mul(i64::from(carry)))
 }
 
 /// The eight columns around one, in the order [`current_dig`] looks.

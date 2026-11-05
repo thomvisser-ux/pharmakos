@@ -363,6 +363,23 @@ fn midpoint(choice: SeamChoice, carved: &[(&str, Option<usize>)]) -> (Runner, Be
     (runner, beacon)
 }
 
+/// A dig names ore: `next_dig` reads the voxel it answers from the store, so
+/// the mining program's load test, which asks that voxel's yield in the same
+/// step and treats none as no work left, always has one (S3's plan, E22).
+#[test]
+fn a_dig_always_names_a_voxel_with_a_yield() {
+    let (mut runner, beacon) = midpoint(SeamChoice::Nearest, &[]);
+    let mut digs = 0_u32;
+    for _ in 0..40 {
+        runner.step().unwrap();
+        if let Some(dig) = runner.world().next_dig(beacon) {
+            digs += 1;
+            assert!(runner.world().ore_yield_at(dig.ore).is_some(), "{dig:?}");
+        }
+    }
+    assert!(digs > 0, "the beacon held a seam, so the test read a dig");
+}
+
 /// Take `count` ore voxels out of `seam` (all of them for `None`), from the top
 /// down so none is left hanging, through the voxel phase.
 fn carve(runner: &mut Runner, seam: usize, count: Option<usize>) {
