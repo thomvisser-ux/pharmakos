@@ -54,6 +54,8 @@ static func fill(container: Container, title: String, wizard: Dictionary, on_sen
 		var heading := Label.new()
 		heading.text = Strings.text("wizard_heading", {"title": title})
 		heading.accessibility_name = heading.text
+		heading.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		heading.custom_minimum_size = Vector2(TEXT_WIDTH, 0)
 		container.add_child(heading)
 	if not wizard.get("answered", false):
 		var waiting := Label.new()
@@ -166,6 +168,8 @@ static func _page(page: Dictionary, on_send: Callable) -> Control:
 	mark.text = Strings.text("wizard_mark")
 	mark.accessibility_name = mark.text
 	mark.add_theme_color_override("font_color", MARK_COLOUR)
+	mark.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	mark.custom_minimum_size = Vector2(TEXT_WIDTH, 0)
 	mark.visible = bool(page.get("suggested", false))
 	box.add_child(mark)
 	box.set_meta("mark", mark)

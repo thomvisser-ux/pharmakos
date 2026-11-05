@@ -16,7 +16,9 @@
 # timed by the rules table's `first_lull_ms` and every later one by `lull_ms`, and the status
 # line shows no countdown while the admin footer says the phase has none (`_status.untimed`;
 # the bridge's `timer` is then empty; decisions-log item 135). Ready is this seat's
-# `set_ready`. Continue leaves the recap.
+# `set_ready`, and its label and the line under it, shown in a Lull, say what it does: with
+# nothing sealed the gateway files the safe playbook (decisions-log item 143 (4)). Continue
+# leaves the recap.
 #
 # THE RECAP (S1's plan, task `ui`): in a recap and once the match has ended, the column
 # shows `get_recap`'s prose as the gateway wrote it - the settlement's line, the shortfall's
@@ -85,6 +87,8 @@ const REMEMBERED := "user://last_match.txt"
 
 var _status: Label
 var _recap: Label
+## The line under the watch strip that says what Ready does, in a Lull.
+var _ready_help: Label
 var _events: Label
 var _rows: Array[String] = []
 var _follow: Button
@@ -180,6 +184,7 @@ func _process(_delta: float) -> void:
 	if _forgotten:
 		parts.append(Strings.text("lobby_forgotten"))
 	_status.text = "  ".join(parts)
+	_ready_help.visible = String(state.get("phase", "")) == "lull"
 	_draw_recap(String(state.get("phase", "")))
 
 
@@ -195,8 +200,21 @@ func _draw_recap(phase: String) -> void:
 		if refusal != "":
 			_recap.text = Strings.text("lobby_recap_refused", {"refusal": refusal})
 		else:
-			_recap.text = Strings.text("lobby_recap", {"round": recap.get("round", 0), "prose": recap.get("prose", "")})
+			_recap.text = recap_text_of(recap)
 		_recap.accessibility_name = _recap.text
+
+
+## The recap's words: the gateway's prose under its heading, then every seat's tally when the
+## answer carries them, which it does once the match is decided (item 145 (7)). Each number is
+## put into its frame as it came.
+static func recap_text_of(recap: Dictionary) -> String:
+	var lines: PackedStringArray = [Strings.text("lobby_recap", {"round": recap.get("round", 0), "prose": recap.get("prose", "")})]
+	var seats: Array = recap.get("seat_tallies", [])
+	if not seats.is_empty():
+		lines.append(Strings.text("lobby_recap_tallies"))
+	for seat in seats:
+		lines.append(Strings.text("lobby_recap_tally", {"seat": seat.get("seat", ""), "kills": seat.get("kills", 0), "shared_kills": seat.get("shared_kills", 0), "value": seat.get("value_destroyed_dollars", 0), "losses": seat.get("losses", 0)}))
+	return "\n".join(lines)
 
 
 ## The recap as drawn, for a check to read.
@@ -292,6 +310,11 @@ func _build_ui() -> void:
 	_follow = _button(buttons, Strings.text("lobby_follow"), _toggle_follow)
 	_follow.toggle_mode = true
 	_button(buttons, Strings.text("lobby_whole_map"), func() -> void: vista.frame_whole_map())
+	_ready_help = Label.new()
+	_ready_help.text = Strings.text("lobby_ready_help")
+	_ready_help.accessibility_name = _ready_help.text
+	_ready_help.visible = false
+	column.add_child(_ready_help)
 	_events = Label.new()
 	column.add_child(_events)
 

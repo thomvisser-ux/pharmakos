@@ -30,6 +30,10 @@ use std::path::{Path, PathBuf};
 /// Words that would be the beginning of a client-side visibility rule.
 const NEEDLES: &[&str] = &["fog", "reveal", "unlock", "spectat"];
 
+/// `scripts/instance_log.gd` releasing its `Mutex`, the one line where the word means that. The
+/// exemption is the whole line, so a rule named `unlock` anywhere else still trips the scan.
+const MUTEX_RELEASE: &str = "_lock.unlock()";
+
 fn crate_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
@@ -83,6 +87,9 @@ fn offences(paths: &[PathBuf], gdscript: bool) -> Vec<String> {
         let text = fs::read_to_string(path).expect("a source file");
         for (number, line) in text.lines().enumerate() {
             let code = without_comment(line, gdscript).to_ascii_lowercase();
+            if code.trim() == MUTEX_RELEASE {
+                continue;
+            }
             for needle in NEEDLES {
                 if code.contains(needle) {
                     found.push(format!(

@@ -109,14 +109,14 @@ const QUANTITIES: &[&str] = &[
 const EXEMPT: &[&str] = &[
     // `DrainBudget`'s three rows are per-FRAME upload limits, and the bridge copies them
     // from the rules table into the mesher's parameter type without touching them. The
-    // scan sees "budget", "frame" and "bytes_per_frame"; there is no arithmetic on any
-    // of them in this crate, and if one ever appears this exemption does not hide it,
-    // because the exemption is by IDENTIFIER and the operator check still runs on the
-    // rest of the line.
+    // scan sees "frame" and "bytes_per_frame"; there is no arithmetic on any of them in this
+    // crate, and if one ever appears this exemption does not hide it, because the exemption
+    // is by IDENTIFIER and the operator check still runs on the rest of the line. The bare
+    // word `budget` is not exempt: the size meter's `budget` is the verifier's number (S3's
+    // plan, E9), and a sum on it must trip the scan.
     "age_frames",
     "surfaces_per_frame",
     "bytes_per_frame",
-    "budget",
     // `framework`-shaped words and Godot's own frame callbacks. `_process(delta)` is a
     // frame hook, not a duration the bridge computes with.
     "frame_post_draw",
@@ -916,6 +916,44 @@ fn the_editor_makes_no_time_arithmetic_of_its_own() {
         "the editor does arithmetic on something the gateway owns — a duration, `$` or `kW`. \
          Ask the gateway for the number instead, and show it as it came back.\n{}",
         found.join("\n")
+    );
+}
+
+/// **The size meter computes nothing** (S3's plan, E9): the bar's fill is the `ProgressBar`'s own
+/// ratio, the line is the verifier's numbers put into a frame or its sentence, and what the meter
+/// draws has no operator in it at all, whatever its operands are named.
+#[test]
+fn the_size_meter_has_no_arithmetic_operator() {
+    let path = godot_root().join("scripts").join("editor.gd");
+    let text = fs::read_to_string(&path).expect("the editor's script");
+    let mut lines = text
+        .lines()
+        .skip_while(|line| !line.starts_with("func _draw_size("));
+    assert!(lines.next().is_some(), "editor.gd has no `_draw_size`");
+    let body: Vec<String> = lines
+        .take_while(|line| line.is_empty() || line.starts_with('\t'))
+        .map(code_of)
+        .filter(|code| !code.trim().is_empty())
+        .collect();
+    assert!(
+        body.iter().any(|code| code.contains("_size_bar.value")),
+        "the scan read `_draw_size`'s body: {body:?}"
+    );
+    for code in &body {
+        assert!(
+            !has_arithmetic(code),
+            "`_draw_size` computes something: {code}"
+        );
+    }
+    assert!(
+        has_arithmetic(&code_of(
+            "_size_bar.value = size[\"units\"] / size[\"budget\"]"
+        )),
+        "the check would see a ratio written here"
+    );
+    assert!(
+        !quantities_in(&code_of("size[\"units\"] / size[\"budget\"]")).is_empty(),
+        "and the whole-source scan names the budget"
     );
 }
 
