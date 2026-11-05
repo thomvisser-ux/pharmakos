@@ -64,7 +64,8 @@ use pharmakos_sim::interpreter::Plan;
 use pharmakos_sim::math::quantity::MS_PER_TICK;
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::runner::{
-    Layout, LayoutRefused, MatchPhase, MatchSettings, PhasedTick, Runner, TickReport,
+    Layout, LayoutRefused, LayoutSettings, MatchPhase, MatchSettings, PhasedTick, Runner,
+    TickReport,
 };
 use pharmakos_sim::sight::{Sensor, Sight};
 use pharmakos_sim::snapshot::Snapshot;
@@ -534,8 +535,25 @@ impl Host {
     /// [`crate::error::Code::InvalidArgument`] for a layout the world refuses
     /// (a seat it has not got, a site off the map, no room).
     pub fn seed_layout(&mut self, layout: &Layout) -> Result<(), Error> {
+        self.seed_layout_with_settings(layout, &[])
+    }
+
+    /// [`Host::seed_layout`], with mandate settings for the layout's beacons
+    /// (S3's plan, E13): the gate load's Attack beacons launch. The walled
+    /// harness's seam as the layout is; no method of the wire reaches it
+    /// (`crates/gateway/tests/confinement.rs`).
+    ///
+    /// # Errors
+    ///
+    /// As [`Host::seed_layout`], and [`crate::error::Code::InvalidArgument`]
+    /// for a settings row the world refuses.
+    pub fn seed_layout_with_settings(
+        &mut self,
+        layout: &Layout,
+        settings: &[LayoutSettings],
+    ) -> Result<(), Error> {
         self.runner
-            .seed_layout(layout)
+            .seed_layout_with_settings(layout, settings)
             .map_err(|refused| match refused {
                 LayoutRefused::NotInTheLobby | LayoutRefused::AfterASeal => Error::phase_closed(format!(
                     "a layout is placed in the lobby, before the first Lull is planned: {refused}"
@@ -543,7 +561,11 @@ impl Host {
                 LayoutRefused::Commander
                 | LayoutRefused::NoSuchSeat { .. }
                 | LayoutRefused::OffTheMap { .. }
-                | LayoutRefused::NoRoom { .. } => {
+                | LayoutRefused::NoRoom { .. }
+                | LayoutRefused::NoSuchLayoutBeacon { .. }
+                | LayoutRefused::WrongWrit { .. }
+                | LayoutRefused::SettingsTwice { .. }
+                | LayoutRefused::BadSetting { .. } => {
                     Error::invalid(format!("this match would not take the layout: {refused}"))
                 }
             })
@@ -1044,7 +1066,7 @@ mod seams {
     use crate::error::Code;
     use pharmakos_sim::math::quantity::Damage;
     use pharmakos_sim::rules::RulesTable;
-    use pharmakos_sim::runner::{Layout, LayoutBeacon, MatchSettings};
+    use pharmakos_sim::runner::{Layout, LayoutBeacon, LayoutSettings, MatchSettings};
     use pharmakos_sim::seams::MandateKind;
     use pharmakos_sim::tables::{SeatId, UnitId, UnitKind};
     use pharmakos_sim::world::{DamageOrder, DamageTarget, FileRefused, WorldConfig};
@@ -1218,6 +1240,73 @@ mod seams {
             playing.seed_layout(&layout(0)).map_err(|error| error.code),
             Err(Code::PhaseClosed),
             "and never once the match has moved"
+        );
+    }
+
+    /// S3's plan, E13: the host's door to a layout's mandate settings, which
+    /// is how the walled harness's gate load launches. A row the world refuses
+    /// is the host's `INVALID_ARGUMENT`; the sim's own tests
+    /// (`crates/sim/tests/layout_settings.rs`) hold each refusal and the launch.
+    #[test]
+    fn the_layout_seam_takes_mandate_settings_through_the_host() {
+        use pharmakos_sim::attack::{Aim, AttackSettings, Phase};
+        use pharmakos_sim::runner::LayoutMandateSettings;
+        let layout = Layout {
+            beacons: vec![LayoutBeacon {
+                seat: SeatId::new(0),
+                column: [200, 200],
+                mandate: MandateKind::Attack,
+                units: vec![(UnitKind::Raider, 2)],
+            }],
+        };
+        let raid = |retreat_pct: Option<u8>| LayoutSettings {
+            beacon: 0,
+            settings: LayoutMandateSettings::Attack(AttackSettings {
+                aim: Aim::Commander(Some(1)),
+                force_size: Some(2),
+                waves: 1,
+                retreat_pct,
+                ..AttackSettings::default()
+            }),
+        };
+        let mut lobby = host();
+        let beacons = lobby.world().beacons().len();
+        assert_eq!(
+            lobby
+                .seed_layout_with_settings(&layout, &[raid(Some(0))])
+                .map_err(|error| error.code),
+            Err(Code::InvalidArgument),
+            "a percentage of nothing"
+        );
+        assert_eq!(
+            lobby.world().beacons().len(),
+            beacons,
+            "a refused row places nothing"
+        );
+        assert!(
+            lobby
+                .seed_layout_with_settings(&layout, &[raid(None)])
+                .is_ok(),
+            "the lobby takes it"
+        );
+        assert_eq!(
+            lobby
+                .seed_layout_with_settings(&layout, &[raid(None)])
+                .map_err(|error| error.code),
+            Err(Code::PhaseClosed),
+            "once"
+        );
+        let world = lobby.world();
+        let beacon = world
+            .attack()
+            .rows()
+            .first()
+            .map(|row| row.beacon)
+            .expect("the layout's Attack beacon");
+        assert_eq!(
+            world.attack().row_of(beacon).map(|row| row.phase),
+            Some(Phase::Gathering),
+            "it gathers until its Push"
         );
     }
 }

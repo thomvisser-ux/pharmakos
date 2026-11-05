@@ -31,7 +31,7 @@
 //! latest elimination tick are the ones the audit decides between — the seats
 //! that were still in until the tick that ended the match.
 //!
-//! PLACEHOLDER: who the audit decides between — owner, at S2's demo, with `fire`'s destroyed-value term (ruling 9 of S1's stage demo, decisions-log item 139 (1), settled this reading for S1; register X-08).
+//! PLACEHOLDER: who the audit decides between — owner, at S3's demo (item 152 (1) 2), with `fire`'s destroyed-value term (ruling 9 of S1's stage demo, decisions-log item 139 (1), settled this reading for S1; register X-08).
 //! It decides between the seats still in (on a
 //! no-survivor end, the seats that fell on the latest elimination tick). The
 //! spec does not spell it out; this is the reading that keeps an eliminated or

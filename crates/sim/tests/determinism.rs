@@ -1638,6 +1638,25 @@ fn a_table_missing_the_economy_block_is_refused() {
     );
 }
 
+/// S3's plan, E22: a table with no ore yield used to pay nothing for ore,
+/// silently, because the two readers answered zero for the missing row. It
+/// does not load now.
+#[test]
+fn a_table_missing_the_ore_yield_is_refused() {
+    let mut message = committed_message();
+    message
+        .economy
+        .as_mut()
+        .expect("the committed table has an economy block")
+        .ore_yield_per_voxel_dollars = None;
+    assert_eq!(
+        RulesTable::from_message(&message),
+        Err(pharmakos_sim::rules::RulesError::MissingBlock(
+            "economy.ore_yield_per_voxel_dollars"
+        ))
+    );
+}
+
 #[test]
 fn a_row_out_of_range_is_refused_at_load() {
     let refused = |edit: &dyn Fn(&mut gp::v1::RulesTable), field: &str| {
@@ -1690,6 +1709,31 @@ fn a_row_out_of_range_is_refused_at_load() {
         },
         "commander.respawn_base_ms",
     );
+    refused(
+        &|message| {
+            if let Some(economy) = message.economy.as_mut() {
+                economy.recycle_refund_percent = 101;
+            }
+        },
+        "economy.recycle_refund_percent",
+    );
+    refused(
+        &|message| {
+            if let Some(economy) = message.economy.as_mut() {
+                economy.award_fund_percent_of_bmi = i32::MAX.unsigned_abs() + 1;
+            }
+        },
+        "economy.award_fund_percent_of_bmi",
+    );
+    // Each bound is the last value that loads, not one short of it.
+    let mut message = committed_message();
+    let economy = message
+        .economy
+        .as_mut()
+        .expect("the committed table has an economy block");
+    economy.recycle_refund_percent = 100;
+    economy.award_fund_percent_of_bmi = i32::MAX.unsigned_abs();
+    assert!(RulesTable::from_message(&message).is_ok());
 }
 
 #[test]

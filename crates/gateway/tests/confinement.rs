@@ -243,6 +243,11 @@ const STEPPING: &[(&str, &str)] = &[
         "seed_layout",
         "the walled harness's layout seam (S2's plan, E30) belongs to the match host",
     ),
+    (
+        "seed_layout_with_settings",
+        "the walled harness's layout seam with its mandate settings (S3's plan, E13) belongs to \
+         the match host",
+    ),
 ];
 
 /// The two modules every method handler lives in.
@@ -701,6 +706,10 @@ fn no_wire_method_reaches_the_phase_stepper_or_the_layout_seam() {
     const SEAMS: &[(&str, &str)] = &[
         ("phased_tick", "the host's phase stepper"),
         ("seed_layout", "the host's layout seam"),
+        (
+            "seed_layout_with_settings",
+            "the host's layout seam with its mandate settings",
+        ),
         ("phased_step", "the surface's entry to the phase stepper"),
         ("SurfaceTick", "the surface's phased tick"),
     ];
@@ -719,6 +728,12 @@ fn no_wire_method_reaches_the_phase_stepper_or_the_layout_seam() {
         "the surface names a harness seam outside the stepper's entry:\n{}",
         stray.join("\n")
     );
+
+    // S3's plan, E13: a seat cannot reach the layout's mandate settings. The
+    // needles match whole words, so the settings' door needs one of its own.
+    let call = "self.host_mut()?.seed_layout_with_settings(&layout, &rows);";
+    assert!(uses(call, "seed_layout_with_settings"));
+    assert!(!uses(call, "seed_layout"));
 
     // A positive control: the same scan over a planted copy reports a seam
     // named outside the two windows, and nothing inside them.

@@ -1496,6 +1496,7 @@ impl VoxelStore {
     pub fn standing_z(&self, x: i32, y: i32) -> i32 {
         self.top_solid_z(x, y)
             .and_then(|z| z.checked_add(1))
+            // E7: rule: this function's own, a column with no floor stands at zero
             .unwrap_or(0)
     }
 
