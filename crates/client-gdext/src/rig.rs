@@ -265,11 +265,29 @@ impl LullLengths {
     }
 }
 
-/// The recap: the last `get_recap` answer's prose, as the gateway wrote it.
+/// One seat's tally in the recap once the match is decided, as the gateway counted it
+/// (`gp.api.v1.SeatTally`; decisions-log item 145 (7)).
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct SeatTallyRow {
+    /// The seat, spelt as the gateway spells a seat: `seat.0`.
+    pub seat: String,
+    /// Enemy assets destroyed with a share of the credit.
+    pub kills: u32,
+    /// Of `kills`, those whose credit was split.
+    pub shared_kills: u32,
+    /// Its own assets destroyed.
+    pub losses: u32,
+    /// The enemy value it destroyed, whole dollars.
+    pub value_destroyed_dollars: i32,
+}
+
+/// The recap: the last `get_recap` answer's prose, as the gateway wrote it, and every seat's
+/// tally once the match is decided.
 ///
 /// The settlement's line, the shortfall's and why a step found nothing ("3 matched, none
 /// reachable") are all sentences of that prose (`econ`, decisions-log item 135 (1)); the
-/// client draws them and words none of them.
+/// client draws them and words none of them. The prose's own tally is the calling seat's;
+/// every seat's is on the answer's `seat_tallies` and nowhere in the prose (item 155 (3) 7).
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct Recap {
     /// How many answers the recap has taken; zero before the first.
@@ -278,6 +296,8 @@ pub struct Recap {
     pub round: u32,
     /// The prose, exactly as it came.
     pub prose: String,
+    /// Every seat's tally, ascending by seat as it came; empty between rounds.
+    pub seat_tallies: Vec<SeatTallyRow>,
     /// The gateway's refusal of this recap's `get_recap`, `code: message` as it came, or
     /// empty. A recap whose feed lost a `segment_ended` is refused with `INTERNAL` naming
     /// the loss (decisions-log item 135 (1)), and that is the line the player is owed.
@@ -794,6 +814,12 @@ impl Rig {
                 if !feed.next_cursor.is_empty() {
                     self.feed_cursor = feed.next_cursor;
                 }
+                // A page is at most the gateway's budget. In a Push the next advance asks
+                // again; outside one nothing would, so a backlog left at the Push's end is
+                // read out here, until a page comes back empty.
+                if !feed.events.is_empty() && self.phase != Phase::Push {
+                    self.due.feed = true;
+                }
             }
             Purpose::Advance => {
                 let ran = match proto3_integer(result, "advanced_ms").and_then(|ran| {
@@ -881,10 +907,29 @@ impl Rig {
         let recap: GetRecapResponse =
             json::decode_json(&enums::canonical("gp.api.v1.GetRecapResponse", &body))?;
         let round = served_status(footer.as_ref(), "get_recap")?.round;
+        // A seat with no tally is not a seat that destroyed nothing: the gateway writes every
+        // field, so one without it is refused rather than drawn as zeros.
+        let seat_tallies = recap
+            .seat_tallies
+            .into_iter()
+            .map(|one| {
+                let tally = one.tally.ok_or_else(|| {
+                    BridgeError::Rpc(format!("`seat_tallies` names {} with no tally", one.seat))
+                })?;
+                Ok(SeatTallyRow {
+                    seat: one.seat,
+                    kills: tally.kills,
+                    shared_kills: tally.shared_kills,
+                    losses: tally.losses,
+                    value_destroyed_dollars: tally.value_destroyed_dollars,
+                })
+            })
+            .collect::<Result<Vec<_>, BridgeError>>()?;
         self.recap = Recap {
             answers: self.recap.answers.saturating_add(1),
             round,
             prose: recap.prose,
+            seat_tallies,
             refusal: String::new(),
         };
         Ok(())
@@ -2359,6 +2404,106 @@ mod tests {
         assert_eq!(asked, 1, "once per recap, not in a loop");
         assert_eq!(rig.recap().prose, prose);
         assert_eq!(rig.recap().round, 1);
+        assert!(
+            rig.recap().seat_tallies.is_empty(),
+            "between rounds a seat learns only its own tally"
+        );
+    }
+
+    /// A Push's end can leave more events than one page holds: outside a Push nothing else
+    /// asks for the next page, so the list stopped short of them. Each page with events asks
+    /// again, from its own cursor, until one comes back empty; the rows stay in the feed's order.
+    #[test]
+    fn a_backlog_at_the_pushs_end_is_read_out_after_it() {
+        let mut rig = in_push();
+        let sent = rig.poll(1 + PACER_PERIOD_US);
+        let advance = sent
+            .iter()
+            .find(|frame| frame.link == ADMIN)
+            .expect("an advance");
+        rig.receive(
+            ADMIN,
+            &answer(id_of(advance), r#"{"advanced_ms":400}"#, "recap"),
+        )
+        .expect("reads");
+        let mut cursors = Vec::new();
+        let mut rows = Vec::new();
+        for step in 2..16_u64 {
+            rig.seat_calls_left = SEAT_CALLS_PER_REFILL;
+            let now = PACER_PERIOD_US.saturating_add(step);
+            for frame in rig.poll(now) {
+                let result = match method_of(&frame).as_str() {
+                    "get_segment_feed" => {
+                        cursors.push(rig.feed_cursor.clone());
+                        match cursors.len() {
+                            1 => r#"{"events":[{"at_ms":1000,"kind":"unit_destroyed","text":"a"}],"next_cursor":"f1"}"#,
+                            2 => r#"{"events":[{"at_ms":2000,"kind":"unit_destroyed","text":"b"}],"next_cursor":"f2"}"#,
+                            _ => r#"{"events":[],"next_cursor":"f2"}"#,
+                        }
+                        .to_owned()
+                    }
+                    "get_view" => r#"{"next_cursor":"c9","complete":true}"#.to_owned(),
+                    "get_recap" => r#"{"prose":"p"}"#.to_owned(),
+                    _ => "{}".to_owned(),
+                };
+                let answered = rig
+                    .receive(frame.link, &answer(id_of(&frame), &result, "recap"))
+                    .expect("reads");
+                rows.extend(answered.events);
+            }
+        }
+        assert_eq!(cursors.len(), 3, "two pages and the empty one: {cursors:?}");
+        assert_eq!(cursors.last().map(String::as_str), Some("f2"));
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert!(
+            rows.first().is_some_and(|row| row.ends_with('a')),
+            "{rows:?}"
+        );
+        assert!(
+            rows.get(1).is_some_and(|row| row.ends_with('b')),
+            "{rows:?}"
+        );
+    }
+
+    /// Once the match is decided the answer carries every seat's tally beside the prose
+    /// (item 145 (7)), in the gateway's own shape, the zeros written. The client kept only
+    /// the prose, whose tally is the calling seat's, so the demo's match-end recap showed one
+    /// seat's (item 155 (3) 7).
+    #[test]
+    fn the_recap_keeps_every_seats_tally_as_it_came() {
+        let mut rig = in_push();
+        let recap = r#"{"prose":"The match ended.","seat_tallies":[
+            {"seat":"seat.0","tally":{"kills":3,"shared_kills":1,"losses":2,"value_destroyed_dollars":60}},
+            {"seat":"seat.1","tally":{"kills":0,"shared_kills":0,"losses":3,"value_destroyed_dollars":0}}
+        ],"_status":{"phase":"ended","round":3}}"#;
+        rig.take_recap(&json::read(recap).expect("json"))
+            .expect("reads");
+        let seats = &rig.recap().seat_tallies;
+        assert_eq!(seats.len(), 2);
+        assert_eq!(
+            seats.first(),
+            Some(&SeatTallyRow {
+                seat: "seat.0".to_owned(),
+                kills: 3,
+                shared_kills: 1,
+                losses: 2,
+                value_destroyed_dollars: 60,
+            })
+        );
+        assert_eq!(seats.get(1).map(|one| one.losses), Some(3));
+        assert_eq!(rig.recap().prose, "The match ended.");
+        assert_eq!(rig.recap().round, 3);
+
+        let no_tally = r#"{"prose":"x","seat_tallies":[{"seat":"seat.0"}],"_status":{"phase":"ended","round":3}}"#;
+        let refused = rig
+            .take_recap(&json::read(no_tally).expect("json"))
+            .expect_err("a seat with no tally is refused, not drawn as zeros");
+        assert!(refused.to_string().contains("seat.0"), "{refused}");
+        assert_eq!(
+            rig.recap().seat_tallies.len(),
+            2,
+            "a refused answer leaves the last one"
+        );
     }
 
     /// A refused `get_recap` is kept, as the gateway wrote it, for the recap column to

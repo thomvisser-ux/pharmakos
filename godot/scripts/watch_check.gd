@@ -92,6 +92,12 @@
 #     the editor owes is left waiting, and a submission is refused at once. Its positive
 #     control, `_map_click_opens_a_menu`, frames the whole map as the lobby does and makes
 #     the same click in round 1's Lull, where the ghost is asked for and comes back;
+#   * THE PANEL'S LINES (S3's `ed3a`; `_panel_lines`, items 139 (2) H, 143 (3), 155 (3) 2 and 3):
+#     a template's playbook used, then Undo: the status line says "Undone." and not "Undo takes
+#     it back", and Undo is disabled; Load opening another file closes the wizard; the Load
+#     dialog's box is empty; and the size meter says what the last report counted;
+#   * ESCAPE CLOSES THE MAP MENU (finding I; in `_map_click_opens_a_menu`): the key, through the
+#     engine's input as a keyboard would send it, closes the menu the click opened;
 #   * Ready (`set_ready`) ends the Lull: the host is a two-seat match whose other seat the
 #     built-in operator plays and readies at every Lull's start (T18), so this seat's Ready
 #     completes every seat's, the host clock's answer says `all_ready`, and the admin
@@ -304,6 +310,9 @@ func _run() -> void:
 		_finish()
 		return
 	if not await _templates():
+		_finish()
+		return
+	if not await _panel_lines():
 		_finish()
 		return
 	if not await _pin():
@@ -625,6 +634,52 @@ func _verify(id: String, saved: String) -> void:
 	print("[watch-check] %s: submitted and accepted; the bytes are the gateway's last text; gamectl verify exit %d%s" % [id, code, (" (errors: %s)" % ", ".join(errors)) if not errors.is_empty() else ""])
 
 
+## What the panel says after Undo and after Load (see the header). Returns false when a step
+## failed, with the reason recorded.
+func _panel_lines() -> bool:
+	editor.open_template(PINNED_TEMPLATE)
+	if not await _editor_until(func(s: Dictionary) -> bool: return s.get("wizard", {}).get("template_id", "") == PINNED_TEMPLATE and s.get("wizard", {}).get("current", false), "the panel lines: the template never answered"):
+		return false
+	var depth := int(_editor().get("undo_depth", 0))
+	var used := int(_editor().get("revision", 0))
+	vista.bridge.editor_wizard_use()
+	if not await _editor_until(func(s: Dictionary) -> bool: return int(s.get("revision", 0)) > used and not s.get("busy", true) and not s.get("pending", true), "the panel lines: Use never put the playbook in"):
+		return false
+	editor.refresh()
+	if editor.status_text() != Strings.text("status_wizard_used"):
+		_failures.append("after Use the status line says `%s`" % editor.status_text())
+	var unused := int(_editor().get("revision", 0))
+	vista.bridge.editor_undo()
+	if not await _editor_until(func(s: Dictionary) -> bool: return int(s.get("revision", 0)) > unused and int(s.get("undo_depth", 0)) == depth and not s.get("busy", true), "the panel lines: Undo never came back"):
+		return false
+	editor.refresh()
+	if editor.status_text() != Strings.text("status_undone"):
+		_failures.append("after Undo the status line says `%s`, not that it was undone" % editor.status_text())
+	print("[watch-check] Undo of a template's playbook says: %s" % editor.status_text())
+	if not _editor().get("wizard", {}).is_empty():
+		editor.load_file(COMMITTED)
+	else:
+		_failures.append("Undo closed the wizard")
+		return false
+	if not await _editor_until(func(s: Dictionary) -> bool: return String(s.get("status_key", "")) == "loaded" and s.get("rows_current", false) and not s.get("busy", true), "the panel lines: the committed playbook never opened"):
+		return false
+	editor.refresh()
+	if not _editor().get("wizard", {}).is_empty() or not editor.wizard_page_controls().is_empty():
+		_failures.append("the wizard stayed open after Load opened another file")
+	editor.open_load()
+	var box: String = editor.load_dialog().current_file
+	editor.load_dialog().hide()
+	await get_tree().process_frame
+	if box != "":
+		_failures.append("the Load dialog opened with `%s` in its box" % box)
+	var size: Dictionary = _editor().get("size", {})
+	var counted := Strings.text("size_meter", {"units": size.get("units"), "budget": size.get("budget")})
+	if size.is_empty() or int(size.get("budget", 0)) <= 0 or editor.size_text() != counted:
+		_failures.append("the size meter says `%s` for the report's %s" % [editor.size_text(), size])
+	print("[watch-check] Load closed the wizard; its box is empty; the size meter says: %s" % editor.size_text())
+	return true
+
+
 ## Hold & Build with every parameter the fixture lists typed explicitly, read from the
 ## fixture: the instantiated text is the fixture's `playbook_jsonc`, byte for byte. Only
 ## instantiated; never used or submitted.
@@ -718,6 +773,7 @@ func _camera_keys() -> bool:
 	var window_size := get_window().size
 	get_window().size = Vector2i(ProjectSettings.get_setting("display/window/size/viewport_width"), ProjectSettings.get_setting("display/window/size/viewport_height"))
 	await get_tree().process_frame
+	print("[watch-check] the camera's keys: the window %s, the view %s, the panel %s" % [get_window().size, get_viewport().get_visible_rect().size, editor.panel_rect()])
 	var notes: TextEdit = editor._notes
 	var kept := notes.text
 	notes.grab_focus()
@@ -807,10 +863,15 @@ func _map_click_opens_a_menu() -> bool:
 		return false
 	var taken: bool = editor.map_click(at, false)
 	var opened: bool = editor.menu_open()
+	# Finding I: Escape, through the engine's input, closes it.
+	await _hold_key(KEY_ESCAPE)
+	var escaped: bool = not editor.menu_open()
 	editor.close_menu()
 	if not taken or not opened:
 		_failures.append("the positive control: a click on the map at %s opened no menu in the Lull (taken %s)" % [at, taken])
 		return false
+	if not escaped:
+		_failures.append("Escape did not close the map menu")
 	if not await _editor_until(func(s: Dictionary) -> bool: return String(s.get("ghost", {}).get("state", "")) != "waiting" and not s.get("pending", true), "the positive control's ghost never came back"):
 		return false
 	print("[watch-check] the Lull: a click on the map at %s opened its menu" % at)

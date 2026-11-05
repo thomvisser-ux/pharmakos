@@ -133,6 +133,36 @@ const DORMANT_KEYS: &[&str] = &["allow_dormant_beacons", "allowDormantBeacons"];
 /// verifier's, as it would [`LOAD_REFUSALS`].
 pub const DORMANT_CODES: &[&str] = &["E0601", "W0603"];
 
+/// The verifier's refusal of a playbook over the size budget (`crates/verifier/src/structure.rs`,
+/// `budget`): the size meter says this row's sentence, not a sentence of its own (S3's plan,
+/// E9). The meter's reading of the verifier's catalogue, as [`DORMANT_CODES`] is the checkbox's.
+pub const SIZE_REFUSAL: &str = "E0110";
+
+/// The size meter: what the verifier counted, from the last report on the text on screen
+/// (S3's plan, E9). Nothing here is counted or compared by the client.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct SizeMeter {
+    /// `VerifyReport.size_units`, as it came.
+    pub units: u32,
+    /// `VerifyReport.size_budget`, as it came.
+    pub budget: u32,
+    /// The sentence of the verifier's own size refusal, when that report made one.
+    pub refusal: Option<String>,
+}
+
+/// The size meter from one report's numbers and its rows; `None` when the report names no
+/// budget, which proto3 writes as 0 and which no bar can be drawn against.
+fn size_meter_of(report: &VerifyReport, rows: &[Row]) -> Option<SizeMeter> {
+    (report.size_budget > 0).then(|| SizeMeter {
+        units: report.size_units,
+        budget: report.size_budget,
+        refusal: rows
+            .iter()
+            .find(|row| row.code == SIZE_REFUSAL)
+            .map(|row| row.sentence.clone()),
+    })
+}
+
 /// The `allow_dormant_beacons` checkbox as the panel draws it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct Dormant {
@@ -591,9 +621,10 @@ pub struct Route {
 
 /// The placement ghost's verdict (spec section 13, "a live legality ghost").
 ///
-/// PLACEHOLDER: the ghost per click, not live on hover — OWNER, S3/S6. The skeleton's
+/// PLACEHOLDER: the ghost per click, not live on hover — OWNER, S6. The skeleton's
 /// ghost is per click (plan T19 amendment, `skeleton-plan-w6-notes.md` A4); a
-/// live-on-hover legality ghost is S3/S6's (A4 item 5).
+/// live-on-hover legality ghost is S6's, with the full editor (A4 item 5; S3's plan's
+/// register row S3-02: not on any P6 path, a ghost per click still answers).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum GhostState {
     /// The patched draft is being checked.
@@ -665,8 +696,17 @@ struct Preview {
     step: Option<usize>,
     patched: String,
     inverse: String,
-    /// QUICK's rows for the patched draft, and whether it qualified, once answered.
-    checked: Option<(Vec<Row>, bool, Option<String>)>,
+    /// What QUICK said about the patched draft, once answered.
+    checked: Option<CheckedPreview>,
+}
+
+/// QUICK's report on a patched draft, kept until the placement is taken or dropped.
+#[derive(Clone, PartialEq, Eq, Debug)]
+struct CheckedPreview {
+    rows: Vec<Row>,
+    qualifies: bool,
+    dormant: Option<String>,
+    size: Option<SizeMeter>,
 }
 
 /// One planning call the editor owes, before it is sent.
@@ -920,6 +960,8 @@ pub struct Editor {
     /// The gateway's `safe_playbook_filed` line, when it filed this seat's safe playbook for
     /// the round under way (the line comes in the seat's own feed; finding J).
     filed: Option<String>,
+    /// What the verifier counted, from the last report on the text on screen (E9).
+    size: Option<SizeMeter>,
 }
 
 impl Editor {
@@ -971,7 +1013,7 @@ impl Editor {
     pub fn saved_to(&mut self, file: &str) {
         if self.text.is_some() {
             self.file = Some(file.to_owned());
-            self.touch();
+            self.say("saved_file", file);
         }
     }
 
@@ -1060,14 +1102,16 @@ impl Editor {
         if ready && let Some(preview) = self.preview.take() {
             self.undo.push(Undo::Patch(preview.inverse));
             self.accept_text(preview.patched);
-            if let Some((rows, qualifies, dormant)) = preview.checked {
-                self.rows = rows;
-                self.dormant_patch = dormant;
+            if let Some(checked) = preview.checked {
+                self.rows = checked.rows;
+                self.dormant_patch = checked.dormant;
+                self.size = checked.size;
                 self.verdict = Verdict::Quick;
                 self.rows_revision = self.revision;
-                self.qualifies = qualifies;
+                self.qualifies = checked.qualifies;
                 self.owed.quick = false;
             }
+            self.say("", "");
             return true;
         }
         if self.text.is_none() {
@@ -1364,10 +1408,14 @@ impl Editor {
         self.round = round;
         if new_round {
             // Last round's sentence and features describe last round's map, and a filing
-            // was last round's.
+            // was last round's: so is its line, which no carried draft replaces, because the
+            // gateway carries nothing after a round it filed (item 143 (3)).
             self.this_round = None;
             self.features.clear();
             self.filed = None;
+            if self.status.key == "safe_filed" {
+                self.say("", "");
+            }
         }
         // The briefing every Lull, not only the first: besides the notebook it carries the
         // Lull's "this round" sentence (item 133 (3) (i)), which the new snapshot changes.
@@ -1415,6 +1463,10 @@ impl Editor {
         let was_open = self.door == Door::Open;
         self.door = door;
         if door == Door::Open {
+            // The line that said the door was shut is not true any more.
+            if self.status.key.starts_with("closed_") {
+                self.say("", "");
+            }
             if self.text.is_some() {
                 self.owe_checks();
             }
@@ -1422,6 +1474,13 @@ impl Editor {
             self.say(&format!("closed_{}", door.name()), "");
         }
         self.touch();
+    }
+
+    /// What the verifier counted, from the last report on the text on screen, or `None`
+    /// with no text or before the first report (S3's plan, E9).
+    #[must_use]
+    pub const fn size_meter(&self) -> Option<&SizeMeter> {
+        self.size.as_ref()
     }
 
     /// The door, as the rig last set it.
@@ -2060,6 +2119,7 @@ impl Editor {
                 if let Some(Undo::Restore { text, file }) = self.undo.pop() {
                     self.drop_settled_ghost();
                     self.restore(text, file);
+                    self.say("undone", "");
                 }
                 return None;
             }
@@ -2178,6 +2238,7 @@ impl Editor {
                     self.undo.pop();
                     self.drop_settled_ghost();
                     self.accept_text(answer.playbook_jsonc);
+                    self.say("undone", "");
                 }
             }
             Sent::Preview { at, base, step } => {
@@ -2194,22 +2255,7 @@ impl Editor {
                     self.queue.push_front(Job::PreviewCheck);
                 }
             }
-            Sent::PreviewCheck => {
-                let report = report_of(result)?;
-                if let Some(preview) = self.preview.as_mut() {
-                    let (state, sentence) = placement_verdict(&report, preview.step);
-                    self.ghost = Some(Ghost {
-                        at: preview.at,
-                        state,
-                        sentence,
-                    });
-                    preview.checked = Some((
-                        rows_of(&report),
-                        report.qualifies,
-                        dormant_patch_of(&report),
-                    ));
-                }
-            }
+            Sent::PreviewCheck => self.settle_preview_check(&report_of(result)?),
             Sent::Quick { revision } => {
                 let report = report_of(result)?;
                 if revision == self.revision {
@@ -2268,6 +2314,26 @@ impl Editor {
             | Sent::MapSummary) => self.settle_pr2(sent, result)?,
         }
         Ok(())
+    }
+
+    /// QUICK's report on the draft with a beacon patched in: the ghost's verdict, and what is
+    /// taken at once if the placement is.
+    fn settle_preview_check(&mut self, report: &VerifyReport) {
+        if let Some(preview) = self.preview.as_mut() {
+            let (state, sentence) = placement_verdict(report, preview.step);
+            self.ghost = Some(Ghost {
+                at: preview.at,
+                state,
+                sentence,
+            });
+            let rows = rows_of(report);
+            preview.checked = Some(CheckedPreview {
+                size: size_meter_of(report, &rows),
+                rows,
+                qualifies: report.qualifies,
+                dormant: dormant_patch_of(report),
+            });
+        }
     }
 
     /// Pull request 2's answers: the rule list, the template list, the wizard's
@@ -2335,7 +2401,9 @@ impl Editor {
                 Job::Edit { .. } => self.say("fixed", ""),
                 Job::SetOption { on: true, .. } => self.say("dormant_allowed", ""),
                 Job::SetOption { on: false, .. } => self.say("dormant_disallowed", ""),
-                _ => {}
+                // A map action has no line of its own, and the last one (a submission, a
+                // Fix, a template's playbook) no longer describes the text on screen.
+                _ => self.say("", ""),
             }
         }
         Ok(())
@@ -2363,6 +2431,9 @@ impl Editor {
             self.preview = None;
             self.ghost = None;
             self.file = file;
+            // Another file is on screen: a template's pages describe a different playbook
+            // (item 155 (3) 3).
+            self.wizard_close();
             self.accept_text(candidate);
             self.take_rows(report, Verdict::Quick);
             self.owed.quick = false;
@@ -2461,6 +2532,7 @@ impl Editor {
             return;
         }
         self.text = None;
+        self.size = None;
         self.attack.clear();
         self.revision = self.revision.wrapping_add(1);
         self.rows.clear();
@@ -2509,6 +2581,7 @@ impl Editor {
 
     fn take_rows(&mut self, report: &VerifyReport, verdict: Verdict) {
         self.rows = rows_of(report);
+        self.size = size_meter_of(report, &self.rows);
         self.dormant_patch = dormant_patch_of(report);
         self.verdict = verdict;
         self.rows_revision = self.revision;
@@ -4186,6 +4259,170 @@ mod tests {
         assert!(!editor.route().readable);
         assert!(editor.route().points.is_empty(), "no point is invented");
         assert_eq!(editor.route().legs, vec![8000, 1000], "the times stay");
+    }
+
+    /// Answers every call the editor owes, so a test can go on with an idle editor.
+    fn drain_checks(editor: &mut Editor) {
+        while let Some(call) = editor.next_call(false) {
+            let answer = match call.method {
+                "verify_plan" => quick_report("", true),
+                "render_plan" => read(r#"{"prose":"","_status":{"phase":"lull"}}"#),
+                _ => read(r#"{"_status":{"phase":"lull"}}"#),
+            };
+            editor.answered(Ok(&answer)).expect("an answer");
+        }
+    }
+
+    /// Finding H (item 139 (2); item 155 (3) 2): after Undo took the wizard's playbook back the
+    /// status line still said "Undo takes it back", with nothing left to undo. Both ways of
+    /// undoing say so, and a map action clears a line that no longer describes the text.
+    #[test]
+    fn undo_and_a_map_action_leave_no_stale_status_line() {
+        let mut editor = loaded("{}");
+        drain_checks(&mut editor);
+        editor.queue.push_back(Job::UseWizard {
+            text: "{\"a\":1}".to_owned(),
+        });
+        drain_checks(&mut editor);
+        assert_eq!(editor.status().key, "wizard_used");
+        assert_eq!(editor.undo_depth(), 1);
+        assert!(editor.undo());
+        drain_checks(&mut editor);
+        assert_eq!(
+            editor.undo_depth(),
+            0,
+            "the wizard's playbook is taken back"
+        );
+        assert_eq!(editor.status().key, "undone");
+        assert_eq!(editor.text.as_deref(), Some("{}"));
+
+        // A patched edit's Undo says the same, and the map action before it cleared the line.
+        editor.say("submitted", "");
+        assert!(editor.act(Action::Go, &Target::Voxel([1, 2, 3])));
+        let call = editor.next_call(false).expect("the map action's patch");
+        assert_eq!(call.method, "patch_plan");
+        editor
+            .answered(Ok(&patched("{\"b\":1}", "[]")))
+            .expect("the patched text");
+        assert_eq!(
+            editor.status().key,
+            "",
+            "the submission's line is stale now"
+        );
+        drain_checks(&mut editor);
+        assert!(editor.undo());
+        let call = editor.next_call(false).expect("the inverse patch");
+        assert_eq!(call.method, "patch_plan");
+        editor
+            .answered(Ok(&patched("{}", "[]")))
+            .expect("the patched text");
+        assert_eq!(editor.status().key, "undone");
+    }
+
+    /// Item 155 (3) 3: Load opening a different file closes the wizard, whose pages describe
+    /// another playbook; a Load the verifier refuses opens nothing and leaves it.
+    #[test]
+    fn load_opening_a_file_closes_the_wizard_and_a_refused_load_does_not() {
+        let mut editor = loaded("{}");
+        drain_checks(&mut editor);
+        editor.wizard = Some(Wizard::new("hold_and_build", 1));
+        assert!(editor.load(b"not a playbook"));
+        let call = editor.next_call(false).expect("Load's QUICK");
+        assert_eq!(call.method, "verify_plan");
+        editor
+            .answered(Ok(&quick_report(
+                r#"{"code":"E0002","severity":"error","path":"/x","message":"m"}"#,
+                false,
+            )))
+            .expect("the refusal");
+        assert_eq!(editor.verdict(), Verdict::Refused);
+        assert!(editor.wizard().is_some(), "nothing was opened");
+
+        assert!(editor.load(b"{\"other\":1}"));
+        let call = editor.next_call(false).expect("Load's QUICK");
+        assert_eq!(call.method, "verify_plan");
+        editor
+            .answered(Ok(&quick_report("", true)))
+            .expect("the file opens");
+        assert_eq!(editor.text.as_deref(), Some("{\"other\":1}"));
+        assert!(editor.wizard().is_none(), "the wizard closes with the file");
+        assert_eq!(editor.status().key, "loaded");
+    }
+
+    /// Item 143 (3): round 2's safe-playbook line stayed into round 3's Lull. A line about a
+    /// filing goes at the new round, and a line about a shut door when the door opens.
+    #[test]
+    fn a_filing_line_and_a_shut_door_line_do_not_outlive_them() {
+        let mut editor = loaded("{}");
+        editor.lull_opened(2);
+        editor.set_door(Door::Push);
+        editor.safe_playbook_filed("The Lull ran out.");
+        assert_eq!(editor.status().key, "safe_filed");
+        editor.set_door(Door::Open);
+        assert_eq!(editor.status().key, "safe_filed", "still round 2's");
+        editor.lull_opened(3);
+        assert_eq!(editor.status().key, "", "round 3 has no filing");
+        assert!(!editor.filed());
+
+        editor.set_door(Door::Push);
+        assert!(!editor.submit());
+        assert_eq!(editor.status().key, "closed_push");
+        editor.set_door(Door::Open);
+        assert_eq!(editor.status().key, "", "the door is open again");
+    }
+
+    /// Saving says where, from the editor's own status (so a redraw cannot wipe it).
+    #[test]
+    fn a_save_says_where_on_the_status_line() {
+        let mut editor = loaded("{}");
+        editor.saved_to("round1.jsonc");
+        assert_eq!(editor.status().key, "saved_file");
+        assert_eq!(editor.status().detail, "round1.jsonc");
+    }
+
+    fn sized_report(units: u32, budget: u32, diagnostics: &str) -> Json {
+        read(&format!(
+            r#"{{"report":{{"qualifies":false,"depth":"quick","size_units":{units},"size_budget":{budget},"diagnostics":[{diagnostics}]}},"_status":{{"phase":"lull"}}}}"#
+        ))
+    }
+
+    /// E9: the meter draws what the verifier counted. Over budget it holds the verifier's own
+    /// refusal sentence, the client compares nothing, and a report with no budget draws no
+    /// meter at all.
+    #[test]
+    fn the_size_meter_holds_what_the_verifier_counted() {
+        let mut editor = loaded("{}");
+        assert_eq!(editor.size_meter(), None, "no report has named a budget");
+        let report = |result: &Json| report_of(result).expect("a report");
+        editor.take_rows(&report(&sized_report(40, 128, "")), Verdict::Quick);
+        assert_eq!(
+            editor.size_meter(),
+            Some(&SizeMeter {
+                units: 40,
+                budget: 128,
+                refusal: None,
+            })
+        );
+        let over = sized_report(
+            130,
+            128,
+            r#"{"code":"E0110","severity":"error","path":"/declarative","message":"the playbook is 130 size units; the budget is 128.","beginner":"This playbook is larger than the seal allows."}"#,
+        );
+        editor.take_rows(&report(&over), Verdict::Quick);
+        assert_eq!(
+            editor.size_meter(),
+            Some(&SizeMeter {
+                units: 130,
+                budget: 128,
+                refusal: Some("This playbook is larger than the seal allows.".to_owned()),
+            })
+        );
+        editor.take_rows(&report(&quick_report("", true)), Verdict::Quick);
+        assert_eq!(
+            editor.size_meter(),
+            None,
+            "a report with no budget names none"
+        );
     }
 
     #[test]

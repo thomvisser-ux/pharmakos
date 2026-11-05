@@ -18,7 +18,7 @@
 #   * click one of your beacons: Visit & change (a priority row), Go here, or Recycle;
 #   * click the ground: Go here, or Place beacon - the ghost shows QUICK's verdict for this
 #     click (per click at the skeleton, not live on hover: plan T19 amendment).
-#     PLACEHOLDER: the ghost per click, not live on hover — OWNER, S3/S6 (w6 notes A4 item 5);
+#     PLACEHOLDER: the ghost per click, not live on hover — OWNER, S6 (w6 notes A4 item 5);
 #   * Alt-click a beacon: the step's target becomes a selector - nearest, weakest, safest
 #     or most threatened own beacon, chosen when the step starts;
 #   * click a heat vent: "Place beacon covering this vent", a place-beacon step whose site
@@ -35,8 +35,8 @@
 # Files: Load and Save read and write the player's own JSONC file, byte for byte; Save writes
 # the file the text on screen came from (finding G, below). The only
 # files the client writes at all are that JSONC file, the lobby's one remembered config
-# line (`user://`, no token; scripts/lobby.gd) and the headless watch check's own `user://`
-# files. A file is opened only after QUICK has seen it; an out-of-vocabulary construct is
+# line (`user://`, no token; scripts/lobby.gd), each instance's own log (`user://logs/`;
+# scripts/instance_log.gd) and the checks' own `user://` files. A file is opened only after QUICK has seen it; an out-of-vocabulary construct is
 # refused with the verifier's code and pointer and nothing is stripped (spec section 13).
 #
 # Pull request 2 (skeleton-plan-w6-notes.md section A4, as decisions-log item 112 amends
@@ -94,6 +94,20 @@
 #     gateway, PHASE_CLOSED included, or shut out - says why on its own line in place of
 #     "Checking...", "Estimating...", "Rendering..." or "Reading the map...".
 #
+# S2'S STAGE DEMO AND THE REST OF S1'S (decisions-log items 139 (2), 143 (3), 155 (3)):
+#   * D, THE PANEL STAYS ON SCREEN: every sentence wraps inside the panel, and should its
+#     contents ever ask for more than its width it widens over the map, never off the window;
+#   * H, THE STATUS LINE IS NOT STALE: Undo says "Undone." (the bridge's editor), a map action
+#     clears the line, and a line about a shut door or a filing goes when the door opens or
+#     the round turns;
+#   * I, ESCAPE closes the map menus (`close_menu_on_escape`), both ways a key can arrive: to
+#     the window, and to a menu that holds the focus;
+#   * M, THE UNTICKED BOX IS DRAWN: Godot's default icon is a faint outline under the Pall's
+#     panel, so the checkbox has a box of its own (`unticked_box`);
+#   * THE SIZE METER (S3's plan, E9): the verifier's `size_units` over `size_budget`, from the
+#     last report on the text on screen; the bar's fill is the ProgressBar's own ratio, and over
+#     budget the line under it is the verifier's refusal sentence, never one of the client's.
+#
 # Every button on the panel takes no keyboard focus. Run the game with `-- --log-input` and
 # the editor prints every press (button_down) and every handled click (pressed) on Submit,
 # Fix and Save, and the lobby every mouse button it sees in `_input`: the logging the owner
@@ -104,12 +118,12 @@
 # panel's, the menu's wording and the ghost's look are the skeleton's; the real editor's
 # layout is S6's (skeleton plan T19).
 #
-# PLACEHOLDER: the segment clock, the "fits" pill and a rendered travel time — OWNER, S3/S6.
-# The segment clock and the "fits" pill are S3/S6's and are not built
-# (skeleton plan T19, PLACEHOLDERs line). So is a rendered travel time: legs and the
-# whole route are shown as the raw game milliseconds the estimator answered, not the
-# generously rounded or whole-second figure decisions-log items 57 and 61 ask for, until the
-# gateway answers one (see strings.gd's `leg`), OWNER with plan-core/T18a, S3.
+# PLACEHOLDER: the segment clock and the "fits" pill — OWNER, S6.
+# Neither is built (skeleton plan T19, PLACEHOLDERs line; S3's plan's register row S3-16). A
+# rendered travel time is S3's: legs and the whole route are shown as the raw game
+# milliseconds the estimator answered, not the generously rounded or whole-second figure
+# decisions-log items 57 and 61 ask for, until the gateway answers one (see strings.gd's `leg`,
+# whose marker carries it).
 
 extends CanvasLayer
 
@@ -130,6 +144,12 @@ const GHOST_COLOURS := {
 	"legal": Color(0.3, 0.9, 0.4, 0.5),
 	"illegal": Color(0.95, 0.25, 0.2, 0.5),
 }
+## The unticked box: its side in pixels, its outline's width, and its colour, shown or disabled.
+## PLACEHOLDER: the checkbox's box — OWNER, at S6's art pass.
+const BOX_SIDE := 16
+const BOX_LINE := 2
+const BOX_COLOUR := Color(0.92, 0.92, 0.92)
+const BOX_COLOUR_DISABLED := Color(0.92, 0.92, 0.92, 0.4)
 ## How far above the ground the route is drawn, in voxels. PLACEHOLDER: the lift — OWNER, at S6.
 const ROUTE_LIFT := 1.2
 ## An Attack target's mark: its colour, and how far over a voxel target and over a named
@@ -172,6 +192,9 @@ var _notes: TextEdit
 var _notes_status: Label
 var _drafts: Label
 var _undo_button: Button
+var _size_box: VBoxContainer
+var _size_bar: ProgressBar
+var _size_line: Label
 var _load_dialog: FileDialog
 var _save_dialog: FileDialog
 var _menu: PopupMenu
@@ -255,8 +278,9 @@ func save_file(path: String) -> bool:
 		return false
 	file.store_buffer(bytes)
 	file.close()
+	# The bridge's editor keeps the file and says so; a line said here alone would be gone at the
+	# next redraw, which that call causes.
 	bridge.editor_saved_to(path)
-	_say_local("status_saved_file", {"path": path})
 	return true
 
 
@@ -278,6 +302,18 @@ func open_save_as() -> void:
 	else:
 		_save_dialog.current_path = file
 	_save_dialog.popup_centered_ratio(0.6)
+
+
+## Opens Load, with no name in its box (item 143 (3): it once showed a stray word). The native
+## dialog is the operating system's, and this is the one thing about its box the client holds.
+func open_load() -> void:
+	_load_dialog.current_file = ""
+	_load_dialog.popup_centered_ratio(0.6)
+
+
+## The Load dialog, for a check to read its box and close it.
+func load_dialog() -> FileDialog:
+	return _load_dialog
 
 
 ## A map action on a target: `go`, `visit_low`, `visit_normal`, `visit_high`, `recycle` or
@@ -429,12 +465,27 @@ func _process(_delta: float) -> void:
 
 
 ## A press on the panel closes the map menus before any control takes it, so a menu is
-## never left open behind the click that meant to leave it (F1).
+## never left open behind the click that meant to leave it (F1). Escape closes them too.
 func _input(event: InputEvent) -> void:
-	if _panel == null or not (event is InputEventMouseButton) or not event.pressed:
+	if _panel == null:
+		return
+	if close_menu_on_escape(event):
+		get_viewport().set_input_as_handled()
+		return
+	if not (event is InputEventMouseButton) or not event.pressed:
 		return
 	if menu_open() and _panel.get_global_rect().has_point(event.position):
 		close_menu()
+
+
+## Closes a map menu that is open when `event` is Escape going down, and says whether it did
+## (finding I). Called from the window's `_input` and from each menu's own `window_input`, since
+## a key reaches the one or the other as the menu holds the focus or does not.
+func close_menu_on_escape(event: InputEvent) -> bool:
+	if not (event is InputEventKey) or not event.pressed or event.keycode != KEY_ESCAPE or not menu_open():
+		return false
+	close_menu()
+	return true
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -639,6 +690,7 @@ func _draw_state(state: Dictionary) -> void:
 	_draw_chips(state.get("chips", []), state.get("chips_current", false), state.get("has_text", false), unchecked_text(state, "chips"))
 	_draw_attack(state.get("attack_targets", []))
 	_draw_dormant(state.get("dormant", {}))
+	_draw_size(state.get("size", {}))
 
 
 ## Why `check` (`rows`, `route`, `prose` or `chips`) of the text on screen will not come, as
@@ -741,6 +793,25 @@ func _draw_dormant(dormant: Dictionary) -> void:
 	_dormant.disabled = not dormant.get("enabled", false)
 
 
+## The size meter: the verifier's two numbers as they came, and its refusal in its own words
+## over budget (S3's plan, E9). The bar's fill is a display ratio, the ProgressBar's own, and a
+## count past the budget draws it full. Hidden until a report names a budget.
+func _draw_size(size: Dictionary) -> void:
+	_size_box.visible = not size.is_empty()
+	if size.is_empty():
+		return
+	_size_bar.max_value = size["budget"]
+	_size_bar.value = size["units"]
+	var refusal := String(size.get("refusal", ""))
+	_size_line.text = refusal if refusal != "" else Strings.text("size_meter", {"units": size["units"], "budget": size["budget"]})
+	_size_line.accessibility_name = _size_line.text
+
+
+## The size meter's line as drawn, for a check to read.
+func size_text() -> String:
+	return _size_line.text
+
+
 func _draw_templates(templates: Array) -> void:
 	var drawn := var_to_str(templates)
 	if drawn == _templates_drawn:
@@ -757,6 +828,7 @@ func _draw_templates(templates: Array) -> void:
 	for template in templates:
 		var id := String(template.get("id", ""))
 		var button := _button(_templates_box, "", func() -> void: open_template(id))
+		button.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		button.text = Strings.text("template_button", {"title": template.get("title", "")})
 		button.accessibility_name = button.text
 		button.tooltip_text = String(template.get("summary", ""))
@@ -935,6 +1007,9 @@ func _build_panel() -> void:
 	_panel.anchor_right = 1.0
 	_panel.anchor_bottom = 1.0
 	_panel.offset_left = -PANEL_WIDTH
+	# Should its contents ever ask for more than the panel's width, it widens to the left, over
+	# the map, and never off the window's right edge (items 139 (2) D, 155 (3) 1).
+	_panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	add_child(_panel)
 	var scroll := ScrollContainer.new()
@@ -947,7 +1022,7 @@ func _build_panel() -> void:
 	_heading(column, "editor_title")
 	var buttons := HBoxContainer.new()
 	column.add_child(buttons)
-	_button(buttons, "load", func() -> void: _load_dialog.popup_centered_ratio(0.6))
+	_button(buttons, "load", open_load)
 	_count(_button(buttons, "save", _save), "save")
 	_button(buttons, "save_as", open_save_as)
 	_undo_button = _button(buttons, "undo", func() -> void: bridge.editor_undo())
@@ -976,9 +1051,24 @@ func _build_panel() -> void:
 	_dormant.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_dormant.custom_minimum_size = Vector2(PANEL_WIDTH - 40.0, 0)
 	_dormant.focus_mode = Control.FOCUS_NONE
+	_dormant.add_theme_icon_override("unchecked", ImageTexture.create_from_image(unticked_box(BOX_COLOUR)))
+	_dormant.add_theme_icon_override("unchecked_disabled", ImageTexture.create_from_image(unticked_box(BOX_COLOUR_DISABLED)))
 	_dormant.visible = false
 	_dormant.toggled.connect(func(on: bool) -> void: bridge.editor_set_allow_dormant(on))
 	column.add_child(_dormant)
+
+	# Below the rows, so their Fix buttons keep their place at the panel's top.
+	_size_box = VBoxContainer.new()
+	_size_box.visible = false
+	column.add_child(_size_box)
+	_heading(_size_box, "size_heading")
+	_size_bar = ProgressBar.new()
+	_size_bar.min_value = 0.0
+	_size_bar.step = 1.0
+	_size_bar.show_percentage = false
+	_size_bar.custom_minimum_size = Vector2(0, 10)
+	_size_box.add_child(_size_bar)
+	_size_line = _label(_size_box)
 
 	_heading(column, "rules_heading")
 	_rules_status = _label(column)
@@ -1012,10 +1102,10 @@ func _build_panel() -> void:
 	_notes.custom_minimum_size = Vector2(0, 90)
 	_notes.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
 	column.add_child(_notes)
-	var notes_row := HBoxContainer.new()
-	column.add_child(notes_row)
-	_button(notes_row, "save_notes", func() -> void: bridge.editor_save_notes(_notes.text))
-	_notes_status = _label(notes_row)
+	_button(column, "save_notes", func() -> void: bridge.editor_save_notes(_notes.text))
+	# Under its button: a text field's full width beside a button is wider than the panel, which
+	# is what pushed the whole panel off the window's right edge (finding D).
+	_notes_status = _label(column)
 
 	_heading(column, "drafts_heading")
 	_drafts = _label(column)
@@ -1031,13 +1121,23 @@ func _build_menus() -> void:
 	_menu = PopupMenu.new()
 	_menu.hide_on_checkable_item_selection = false
 	_menu.id_pressed.connect(_on_menu)
+	_menu.window_input.connect(close_menu_on_escape)
 	add_child(_menu)
 	_visit_menu = PopupMenu.new()
 	_visit_menu.add_item(Strings.text("menu_priority_low"), ITEM_LOW)
 	_visit_menu.add_item(Strings.text("menu_priority_normal"), ITEM_NORMAL)
 	_visit_menu.add_item(Strings.text("menu_priority_high"), ITEM_HIGH)
 	_visit_menu.id_pressed.connect(_on_menu)
+	_visit_menu.window_input.connect(close_menu_on_escape)
 	_menu.add_child(_visit_menu)
+
+
+## An unticked checkbox's box: a square outline in `colour`, clear inside.
+static func unticked_box(colour: Color) -> Image:
+	var box := Image.create_empty(BOX_SIDE, BOX_SIDE, false, Image.FORMAT_RGBA8)
+	box.fill_rect(Rect2i(0, 0, BOX_SIDE, BOX_SIDE), colour)
+	box.fill_rect(Rect2i(BOX_LINE, BOX_LINE, BOX_SIDE - BOX_LINE * 2, BOX_SIDE - BOX_LINE * 2), Color(0.0, 0.0, 0.0, 0.0))
+	return box
 
 
 func _build_map_nodes() -> void:

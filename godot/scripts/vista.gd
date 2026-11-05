@@ -29,6 +29,10 @@
 # never an empty one. A wreck and a ruin are nobody's (the wire's owner is ""), so they
 # draw in nobody's colour. An id the view keeps but whose kind, subtype or owner changed
 # is drawn afresh, because the marker's shape and colour are read from those three.
+#
+# S3 (S2's stage demo, decisions-log item 155 (3) 4): every structure is the same cube until the
+# art pass, so a structure carries its `subtype`, as the gateway spelt it, over it. The name is
+# drawn only when the camera is close enough to read it, and it decides nothing.
 
 extends Node3D
 
@@ -64,6 +68,12 @@ const BAR_FILL := Color(0.30, 0.90, 0.35)
 ## How far the fill floats in front of the back, in voxels, so the two never fight for
 ## the same depth at a distance.
 const BAR_GAP := 0.03
+## A structure's name: how far over its bar it floats, how large it is drawn, and how far off the
+## camera still draws it, all in voxels (past that it could not be read).
+## PLACEHOLDER: the structure name's size and range — OWNER, at S6.
+const NAME_LIFT := 1.0
+const NAME_PIXEL := 0.04
+const NAME_RANGE := 90.0
 
 ## The seat this client plays, as the gateway spells a seat: `seat.0`. Empty for a
 ## spectator. Own against other is `owner == my_seat` and nothing more.
@@ -85,6 +95,7 @@ var _markers := {}
 ## Reads the mesher's rules rows into the bridge. Returns whether it has a world to draw
 ## into.
 func configure() -> bool:
+	rig.ground_under = ground_under
 	var report: Dictionary = bridge.configure(0, MesherRules.RULES_JSON)
 	if not report.get("configured", false):
 		printerr("[vista] configure refused: %s" % report.get("reason", ""))
@@ -96,6 +107,16 @@ func configure() -> bool:
 func take_view(view: Dictionary) -> void:
 	if view.has("entities"):
 		_show(view["entities"], false)
+
+
+## The ground the view has under a ray, for the camera's wheel: `hit`, and `at` in the world's
+## axes (x, y up, z north), at the foot of the voxel `view_pick` answered, as a marker stands.
+func ground_under(origin: Vector3, normal: Vector3) -> Dictionary:
+	var picked: Dictionary = bridge.view_pick(origin, normal)
+	if not picked.get("hit", false):
+		return {"hit": false}
+	var at: Vector3i = picked["at"]
+	return {"hit": true, "at": Vector3(at.x + 0.5, at.z, at.y + 0.5)}
 
 
 ## Places every marker at once, with no easing: for a still frame.
@@ -291,7 +312,22 @@ func _marker_for(entity: Dictionary) -> Node3D:
 		node.add_child(nose)
 	if entity.has("hp"):
 		node.add_child(_bar(size.y + BAR_LIFT))
+	if kind == "structure" and String(entity["subtype"]) != "":
+		node.add_child(_name(String(entity["subtype"]), size.y + BAR_LIFT + NAME_LIFT))
 	return node
+
+
+## A structure's name as the gateway spelt it, `lift` voxels over its feet, facing the camera and
+## drawn only within NAME_RANGE of it.
+func _name(subtype: String, lift: float) -> Label3D:
+	var label := Label3D.new()
+	label.name = "Name"
+	label.text = subtype
+	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	label.pixel_size = NAME_PIXEL
+	label.position = Vector3(0.0, lift, 0.0)
+	label.visibility_range_end = NAME_RANGE
+	return label
 
 
 ## A hit-point bar `lift` voxels over the marker's feet: a back and a fill, both facing

@@ -39,10 +39,15 @@
 ;
 ; run/flush_stdout_on_print = true is F3's (decisions-log item 126 (3); S1's plan, task
 ; `fixc`): an exported (release) build otherwise flushes its standard output and its
-; `user://logs/godot.log` only on an error or at a clean exit, so an instance that hangs and
-; is ended by hand leaves an EMPTY log - which is what the demo's hung second instance left,
-; and what every session ended by `taskkill` leaves. Flushed on every print, the next hang
-; leaves the lines it printed before it hung. The game prints little, so the cost is small.
+; its log file only on an error or at a clean exit, so an instance that hangs and is ended by
+; hand leaves an EMPTY log - which is what the demo's hung second instance left, and what every
+; session ended by `taskkill` leaves. Flushed on every print, the next hang leaves the lines it
+; printed before it hung. The game prints little, so the cost is small.
+;
+; file_logging/enable_file_logging=false, and its `.pc` override, are finding N's (S1's stage
+; demo, decisions-log item 139 (2)): the engine's one `user://logs/godot.log` is rotated by every
+; instance's start, under any instance already writing it. Each instance keeps a file of its
+; own instead, `user://logs/client-<process id>.log` (scripts/instance_log.gd).
 
 config_version=5
 
@@ -59,6 +64,8 @@ run/flush_stdout_on_print=true
 
 [debug]
 
+file_logging/enable_file_logging=false
+file_logging/enable_file_logging.pc=false
 settings/stdout/print_fps=false
 settings/fps/force_fps=0
 

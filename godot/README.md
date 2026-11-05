@@ -84,7 +84,8 @@ two tokens it announced. The tokens live in `scripts/host_link.gd`'s variables a
 else. Closing the window closes the host's standard input, which ends the host.
 
 The watch rig is what spec section 3 names for a Push and nothing more: free-look (WASD or
-the arrows, Q and E, the wheel, the right mouse button), a follow-commander toggle, the live
+the arrows, Q and E, the wheel, which zooms on what is under the cursor, the right mouse
+button), a follow-commander toggle, the live
 event list, 1x, 2x and 4x, and Skip. There is no pause (decisions-log item 108 (3)). The
 Lull ends when every seat is ready or its timer runs out; Ready is this seat's `set_ready`,
 and Continue leaves the recap. What each connection sends and when — the pacer, the host
@@ -149,13 +150,20 @@ prints `[lobby] _input: ...` for every mouse button it sees. A swallowed click s
 press with no `pressed` after it, or as a click the lobby saw and no button did.
 
 **F3, a second instance.** A second `Pharmakos.exe` hung at the demo with an empty log. The
-empty log is explained: a release build flushed its standard output and
-`user://logs/godot.log` only on an error or a clean exit, so any instance ended by hand
-leaves an empty log. `project.godot` now sets `application/run/flush_stdout_on_print`, so
-the next hang leaves the lines printed before it. The hang itself was not reproduced (the
-pull request of task `fixc` records every attempt), so it has no fix yet (S1's plan,
-decision 19). Two instances do share `user://`: the second renames the first's live
-`godot.log` aside when it starts, and both then write the new one.
+empty log is explained: a release build flushed its standard output and its log file only on
+an error or a clean exit, so any instance ended by hand leaves an empty log.
+`project.godot` now sets `application/run/flush_stdout_on_print`, so the next hang leaves the
+lines printed before it. The hang itself was not reproduced (the pull request of task `fixc`
+records every attempt), and the owner closed F3 with no guard (decisions-log item 139 (1),
+ruling 11).
+
+**Each instance's log (finding N, decisions-log item 139 (2)).** Two instances share
+`user://`, and the engine's one `user://logs/godot.log` was rotated by every start, under any
+instance already writing it, so the first one's log ended there. The engine's file logging is
+off, and the main scene adds `scripts/instance_log.gd`: each instance writes
+`user://logs/client-<process id>.log`, and a start keeps the newest five. What the engine says
+before the main scene runs goes to the standard streams only; `--log-file <path>` still
+gives the engine's own log for a run that needs it.
 
 **F6.** The chooser alone shows before a match: the watch strip and the editor's panel appear
 once the host has announced one, and the status line names the speed only in a Push. The
@@ -204,7 +212,7 @@ match ends the lobby forgets it (decisions-log item 113 (11)), and its status li
 After a refused Resume the chooser stays hidden and the line stays remembered, so picking
 New match means restarting the client (a PLACEHOLDER in `scripts/lobby.gd`, with the
 New/Resume layout, S6). The only files the client writes are the player's JSONC, that one
-remembered line, and the watch check's own `user://` files.
+remembered line, each instance's own log, and the checks' own `user://` files.
 
 One check drives the lobby with a host: the shipped smoke check (below), which presses New
 match and never Resume. The watch check drives `host_link.gd` directly and never touches the
