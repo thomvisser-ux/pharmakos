@@ -102,13 +102,12 @@ impl Threat {
         let Some(weapon) = weapon else {
             return Threat::NONE;
         };
-        // A loaded weapon's damage and cooldown are both positive, so the
-        // quotient exists and fits: at most `i32::MAX * 10^6`.
         let damage = u64::from(weapon.damage.raw().unsigned_abs());
         let cooldown = u64::from(weapon.cooldown_ms.raw().unsigned_abs());
         damage
             .checked_mul(1_000_000)
             .and_then(|scaled| scaled.checked_div(cooldown))
+            // E7: cannot miss: a loaded weapon's damage and cooldown are both positive, so the quotient exists and fits, at most `i32::MAX * 10^6`
             .map_or(Threat::NONE, Threat)
     }
 }
