@@ -1347,6 +1347,9 @@ pub enum LayoutSetting {
     /// commander's seat this match has not got or the beacon's own, or a voxel
     /// off the map.
     Aim,
+    /// The row names no launch condition, neither a force nor a segment time,
+    /// so its force would gather and never raid, the gap this seam ends.
+    Launch,
     /// The staging point is off the map.
     Staging,
     /// The launch's segment time is negative.
@@ -1363,6 +1366,7 @@ impl LayoutSetting {
     pub const fn name(self) -> &'static str {
         match self {
             LayoutSetting::Aim => "target",
+            LayoutSetting::Launch => "launch condition",
             LayoutSetting::Staging => "staging point",
             LayoutSetting::LaunchMs => "launch time",
             LayoutSetting::RetreatPct => "retreat percentage",

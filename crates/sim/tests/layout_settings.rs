@@ -289,6 +289,13 @@ fn a_row_the_world_cannot_take_is_refused_and_places_nothing() {
             bad(LayoutSetting::Aim),
         ),
         (
+            edited(&|s| {
+                s.force_size = None;
+                s.launch_ms = None;
+            }),
+            bad(LayoutSetting::Launch),
+        ),
+        (
             edited(&|s| s.staging = Some([-1, 0, 0])),
             bad(LayoutSetting::Staging),
         ),
@@ -335,6 +342,22 @@ fn a_row_the_world_cannot_take_is_refused_and_places_nothing() {
     assert_eq!(
         bad(LayoutSetting::RetreatMs).to_string(),
         "beacon 0's retreat time cannot be taken"
+    );
+}
+
+/// A segment time alone is a launch condition, as a force alone is.
+#[test]
+fn a_segment_time_alone_is_taken() {
+    let mut lobby = runner();
+    let (layout, target) = gate_shape(lobby.world());
+    let settings = AttackSettings {
+        force_size: None,
+        launch_ms: Some(0),
+        ..raid_on(target)
+    };
+    assert_eq!(
+        lobby.seed_layout_with_settings(&layout, &[row(0, settings)]),
+        Ok(())
     );
 }
 

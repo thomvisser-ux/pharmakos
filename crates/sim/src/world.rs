@@ -2579,9 +2579,11 @@ impl World {
     // reasoning that makes [`World::request_damage`] public while the firing
     // half is S2's.
     //
-    // They are **not game actions**, and nothing outside a test or a scenario
-    // fixture may call them: the only way a player changes a beacon is to walk
-    // the commander to it and interface on site (AGENTS.md §1).
+    // They are **not game actions**, and nothing outside a test, a scenario
+    // fixture or the host's lobby layout ([`World::seed_layout`], S3's plan,
+    // E13, which no seat reaches) may call them: the only way a player changes
+    // a beacon is to walk the commander to it and interface on site (AGENTS.md
+    // §1).
     // -----------------------------------------------------------------
 
     /// Put a beacon in the world directly, with a writ and a priority.
@@ -2739,7 +2741,9 @@ impl World {
 
     /// What the compile refuses of a playbook's Attack row
     /// (`compile_attack_settings`), asked of a layout's, with its target read
-    /// against this world.
+    /// against this world. A playbook's empty Attack arm is legal, and a
+    /// layout's is not: a row exists to make a force raid, so one with no target
+    /// or no launch condition is refused.
     fn check_layout_attack(
         &self,
         seat: SeatId,
@@ -2775,6 +2779,9 @@ impl World {
         };
         if !aimed {
             return Err(LayoutSetting::Aim);
+        }
+        if attack.force_size.is_none() && attack.launch_ms.is_none() {
+            return Err(LayoutSetting::Launch);
         }
         if attack.staging.is_some_and(|at| !on_the_map(at)) {
             return Err(LayoutSetting::Staging);
