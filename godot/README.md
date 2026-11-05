@@ -158,12 +158,14 @@ records every attempt), and the owner closed F3 with no guard (decisions-log ite
 ruling 11).
 
 **Each instance's log (finding N, decisions-log item 139 (2)).** Two instances share
-`user://`, and the engine's one `user://logs/godot.log` was rotated by every start, under any
-instance already writing it, so the first one's log ended there. The engine's file logging is
-off, and the main scene adds `scripts/instance_log.gd`: each instance writes
-`user://logs/client-<process id>.log`, and a start keeps the newest five. What the engine says
-before the main scene runs goes to the standard streams only; `--log-file <path>` still
-gives the engine's own log for a run that needs it.
+`user://`, and the engine's one `user://logs/godot.log` is rotated by every start, under any
+instance already writing it, so that file only ever tells the latest start. It stays on,
+because on a double-clicked Windows game it is the only record of a start that fails before
+the main scene runs. Beside it the main scene adds `scripts/instance_log.gd`: each instance also
+writes `user://logs/client-<process id>.log`, whole from boot, and a start keeps the newest
+five (on Linux and macOS that can unlink the log of an instance still running, if five later
+instances have started since; `instance_log.gd` says why that is accepted). The smoke check
+asserts the file holds the boot line.
 
 **F6.** The chooser alone shows before a match: the watch strip and the editor's panel appear
 once the host has announced one, and the status line names the speed only in a Push. The

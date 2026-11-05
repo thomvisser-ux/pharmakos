@@ -1462,11 +1462,12 @@ impl Editor {
         }
         let was_open = self.door == Door::Open;
         self.door = door;
+        // A line about the door that just changed is not true any more, shut to shut as much as
+        // shut to open: "You pressed Ready" in the Push, "closed during the Push" at the end.
+        if self.status.key.starts_with("closed_") {
+            self.say("", "");
+        }
         if door == Door::Open {
-            // The line that said the door was shut is not true any more.
-            if self.status.key.starts_with("closed_") {
-                self.say("", "");
-            }
             if self.text.is_some() {
                 self.owe_checks();
             }
@@ -4371,6 +4372,42 @@ mod tests {
         assert_eq!(editor.status().key, "", "the door is open again");
     }
 
+    /// A shut door's line goes when the door moves on to another shut door: an ask after Ready
+    /// says nothing about the Push, nor one in the Push about the match's end.
+    #[test]
+    fn a_shut_doors_line_does_not_outlive_it_at_another_shut_door() {
+        let mut editor = loaded("{}");
+        editor.lull_opened(1);
+        editor.set_door(Door::Ready);
+        assert!(!editor.submit());
+        assert_eq!(editor.status().key, "closed_ready");
+        editor.set_door(Door::Push);
+        assert_eq!(
+            editor.status().key,
+            "",
+            "Ready's line does not survive into the Push"
+        );
+
+        assert!(!editor.submit());
+        assert_eq!(editor.status().key, "closed_push");
+        editor.set_door(Door::Recap);
+        assert_eq!(editor.status().key, "", "nor the Push's into the recap");
+
+        assert!(!editor.submit());
+        assert_eq!(editor.status().key, "closed_recap");
+        editor.set_door(Door::Ended);
+        assert_eq!(
+            editor.status().key,
+            "",
+            "nor the recap's past the match's end"
+        );
+
+        // Any other line stays: the filing is still what happened this round.
+        editor.safe_playbook_filed("The Lull ran out.");
+        editor.set_door(Door::Recap);
+        assert_eq!(editor.status().key, "safe_filed");
+    }
+
     /// Saving says where, from the editor's own status (so a redraw cannot wipe it).
     #[test]
     fn a_save_says_where_on_the_status_line() {
@@ -4384,6 +4421,29 @@ mod tests {
         read(&format!(
             r#"{{"report":{{"qualifies":false,"depth":"quick","size_units":{units},"size_budget":{budget},"diagnostics":[{diagnostics}]}},"_status":{{"phase":"lull"}}}}"#
         ))
+    }
+
+    /// The size refusal the meter looks for is the one the verifier writes, read out of its
+    /// source because the client may not depend on the verifier (`CLIENT_WALL`).
+    #[test]
+    fn the_size_refusal_is_the_one_the_verifier_writes() {
+        let read = |file: &str| {
+            let path = format!("{}/../verifier/src/{file}", env!("CARGO_MANIFEST_DIR"));
+            std::fs::read_to_string(path)
+                .expect("the verifier's source")
+                .replace("\r\n", "\n")
+        };
+        assert!(
+            read("strings.rs").contains(&format!(
+                "code: \"{SIZE_REFUSAL}\",\n        message: \"the playbook is {{found}} size units;"
+            )),
+            "the verifier's size refusal is not `{SIZE_REFUSAL}`"
+        );
+        assert!(
+            read("structure.rs")
+                .contains(&format!("Diag::new(\"{SIZE_REFUSAL}\", \"/declarative\")")),
+            "the size budget's check does not emit `{SIZE_REFUSAL}`"
+        );
     }
 
     /// E9: the meter draws what the verifier counted. Over budget it holds the verifier's own

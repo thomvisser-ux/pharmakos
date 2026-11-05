@@ -21,7 +21,8 @@
 #      bridge call around the lobby) and wait, up to START_WAIT, for the host's announce and
 #      for the watch rig's phase to read `lull` (it reads `unknown` long before);
 #   4. check the bridge is the real class and has caught no panic, as the client check
-#      does;
+#      does, and that this instance's own log (`scripts/instance_log.gd`, which `boot.gd` adds)
+#      holds the boot line, so the logger is seen writing in a real run and in the export;
 #   5. end through the lobby's own path: read the host's pid from the link, free the lobby
 #      (queued, so its PREDELETE closes the host's standard input at the frame's end), and
 #      wait, up to EXIT_WAIT, until that process has exited.
@@ -38,6 +39,7 @@ extends Node
 
 const Strings := preload("res://scripts/strings.gd")
 const LobbyScene := preload("res://scenes/lobby.tscn")
+const InstanceLog := preload("res://scripts/instance_log.gd")
 
 ## Frames the lobby runs idle before anything is pressed, and between the overlay's steps.
 const IDLE_WAITS := 10
@@ -97,6 +99,10 @@ func _ready() -> void:
 	var caught: int = bridge.caught_panics()
 	if caught != 0:
 		_fail("the bridge caught %d panic(s)" % caught)
+		return
+	var own_log := FileAccess.get_file_as_string(InstanceLog.path_of(OS.get_process_id()))
+	if not own_log.contains("[boot]"):
+		_fail("this instance's own log holds no boot line: `%s`" % own_log)
 		return
 
 	# 5. End through the lobby's own path.

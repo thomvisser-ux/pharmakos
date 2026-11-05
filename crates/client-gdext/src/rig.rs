@@ -903,6 +903,22 @@ impl Rig {
     ///
     /// [`BridgeError`] for an answer, or a footer, this build cannot read.
     fn take_recap(&mut self, result: &Json) -> Result<(), BridgeError> {
+        match self.read_recap(result) {
+            Ok(recap) => {
+                self.recap = recap;
+                Ok(())
+            }
+            Err(error) => {
+                // An answer this build cannot read is shown in the column, as a refusal is:
+                // left to the log alone, the column would go on showing the last round's.
+                self.recap.refusal = error.to_string();
+                Err(error)
+            }
+        }
+    }
+
+    /// A `get_recap` answer, read.
+    fn read_recap(&self, result: &Json) -> Result<Recap, BridgeError> {
         let (body, footer) = split_footer(result);
         let recap: GetRecapResponse =
             json::decode_json(&enums::canonical("gp.api.v1.GetRecapResponse", &body))?;
@@ -925,14 +941,13 @@ impl Rig {
                 })
             })
             .collect::<Result<Vec<_>, BridgeError>>()?;
-        self.recap = Recap {
+        Ok(Recap {
             answers: self.recap.answers.saturating_add(1),
             round,
             prose: recap.prose,
             seat_tallies,
             refusal: String::new(),
-        };
-        Ok(())
+        })
     }
 
     /// The bridge could not decode or apply a `get_view` page the rig had already read.
@@ -2499,11 +2514,26 @@ mod tests {
             .take_recap(&json::read(no_tally).expect("json"))
             .expect_err("a seat with no tally is refused, not drawn as zeros");
         assert!(refused.to_string().contains("seat.0"), "{refused}");
-        assert_eq!(
-            rig.recap().seat_tallies.len(),
-            2,
-            "a refused answer leaves the last one"
+        assert!(
+            rig.recap().refusal.contains("seat.0"),
+            "the column says why, rather than go on showing the last answer: {:?}",
+            rig.recap().refusal
         );
+
+        // So does an answer this build cannot decode at all, and a good one clears it.
+        let unreadable = r#"{"nope":1,"_status":{"phase":"ended","round":3}}"#;
+        assert!(
+            rig.take_recap(&json::read(unreadable).expect("json"))
+                .is_err()
+        );
+        assert!(
+            rig.recap().refusal.contains("nope"),
+            "{:?}",
+            rig.recap().refusal
+        );
+        rig.take_recap(&json::read(recap).expect("json"))
+            .expect("reads");
+        assert_eq!(rig.recap().refusal, "");
     }
 
     /// A refused `get_recap` is kept, as the gateway wrote it, for the recap column to

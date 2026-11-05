@@ -69,11 +69,13 @@ const BAR_FILL := Color(0.30, 0.90, 0.35)
 ## the same depth at a distance.
 const BAR_GAP := 0.03
 ## A structure's name: how far over its bar it floats, how large it is drawn, and how far off the
-## camera still draws it, all in voxels (past that it could not be read).
+## camera still draws it, all in voxels. The size keeps `autocannon` inside the kit's 4-voxel
+## anchor spacing, and past the range a name is under 10 px tall at the owner's window; both are
+## measured by `client_check.gd`'s `_check_the_name`.
 ## PLACEHOLDER: the structure name's size and range — OWNER, at S6.
 const NAME_LIFT := 1.0
-const NAME_PIXEL := 0.04
-const NAME_RANGE := 90.0
+const NAME_PIXEL := 0.02
+const NAME_RANGE := 55.0
 
 ## The seat this client plays, as the gateway spells a seat: `seat.0`. Empty for a
 ## spectator. Own against other is `owner == my_seat` and nothing more.

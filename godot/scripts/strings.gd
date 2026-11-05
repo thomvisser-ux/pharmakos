@@ -114,7 +114,6 @@ const TEXT := {
 	"meter_waiting": "Not read yet.",
 	# The size meter (S3's plan, E9): the verifier's two numbers, as they came. Over budget the
 	# panel shows the verifier's own sentence instead of this frame.
-	"size_heading": "Size",
 	"size_meter": "{units} of {budget} size units",
 	"forecast_heading": "Your next settlement",
 	# The next BMI is a prediction, and says so (decisions-log item 135 (2) (g)): the BMI at

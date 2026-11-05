@@ -61,6 +61,9 @@ var pitch := -0.9
 var distance := 420.0
 ## What the camera follows, or null for free-look.
 var target: Node3D = null
+## The map's size as last framed (x, up, north), or zero before a view has said: what the wheel's
+## plane fallback may pivot on (`_pivot_at`).
+var map_extent := Vector3.ZERO
 ## The ground under a ray, for the wheel to zoom on: called with the ray's origin and normal,
 ## answers `{"hit": bool, "at": Vector3}`. The vista binds it to the view's own pick.
 var ground_under := Callable()
@@ -75,6 +78,7 @@ func _ready() -> void:
 ## Looks at the whole of a map `extent` voxels across (x, up, north), from above its
 ## north-east corner (largest x and north nearest the camera).
 func frame_extent(extent: Vector3) -> void:
+	map_extent = extent
 	# A little past the centre towards the camera, so perspective does not cut the near
 	# corner off the bottom of the frame.
 	focus = Vector3(extent.x * 0.58, extent.y * 0.25, extent.z * 0.58)
@@ -168,8 +172,9 @@ func zoom_at(at: Vector2, notches: float) -> void:
 
 
 ## What the wheel zooms on at the screen point `at`: the ground the view has there; with none
-## there (the sky, or a view not yet whole), the level plane through the focus; and the focus
-## itself when the ray never meets that plane.
+## there (the sky, or a view not yet whole), the level plane through the focus, where the ray
+## meets it over the map; otherwise the focus itself. A cursor just below the horizon meets that
+## plane far off the map, and one notch on such a point would throw the focus off it.
 func _pivot_at(at: Vector2) -> Vector3:
 	var origin := camera.project_ray_origin(at)
 	var normal := camera.project_ray_normal(at)
@@ -180,7 +185,14 @@ func _pivot_at(at: Vector2) -> Vector3:
 			# is off the ray by up to half a voxel, and that would show at the closest zoom.
 			return origin + normal * normal.dot(picked["at"] - origin)
 	var crossing: Variant = Plane(Vector3.UP, focus).intersects_ray(origin, normal)
-	return crossing if crossing != null else focus
+	if crossing == null or not _over_the_map(crossing):
+		return focus
+	return crossing
+
+
+## Whether `point` is over the map as last framed; nothing is before a map is known.
+func _over_the_map(point: Vector3) -> bool:
+	return point.x >= 0.0 and point.z >= 0.0 and point.x <= map_extent.x and point.z <= map_extent.z
 
 
 func _place() -> void:

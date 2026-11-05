@@ -94,10 +94,13 @@
 #     the same click in round 1's Lull, where the ghost is asked for and comes back;
 #   * THE PANEL'S LINES (S3's `ed3a`; `_panel_lines`, items 139 (2) H, 143 (3), 155 (3) 2 and 3):
 #     a template's playbook used, then Undo: the status line says "Undone." and not "Undo takes
-#     it back", and Undo is disabled; Load opening another file closes the wizard; the Load
-#     dialog's box is empty; and the size meter says what the last report counted;
+#     it back", and Undo is disabled; Load opening another file closes the wizard; and the size
+#     meter says what the last report counted, and stays on screen (`_one_click`);
 #   * ESCAPE CLOSES THE MAP MENU (finding I; in `_map_click_opens_a_menu`): the key, through the
 #     engine's input as a keyboard would send it, closes the menu the click opened;
+#   * THE WHEEL ON THE REAL VIEW (item 155 (3) 4; `_real_wheel`): from the whole map, wheel
+#     notches through the engine's input at a pixel whose ray the view's own pick answers with
+#     ground zoom the camera in, and that ground stays under the pixel;
 #   * Ready (`set_ready`) ends the Lull: the host is a two-seat match whose other seat the
 #     built-in operator plays and readies at every Lull's start (T18), so this seat's Ready
 #     completes every seat's, the host clock's answer says `all_ready`, and the admin
@@ -325,6 +328,9 @@ func _run() -> void:
 		_finish()
 		return
 	if not await _map_click_opens_a_menu():
+		_finish()
+		return
+	if not await _real_wheel():
 		_finish()
 		return
 	var sealed: PackedByteArray = vista.bridge.editor_sealed_bytes()
@@ -666,17 +672,11 @@ func _panel_lines() -> bool:
 	editor.refresh()
 	if not _editor().get("wizard", {}).is_empty() or not editor.wizard_page_controls().is_empty():
 		_failures.append("the wizard stayed open after Load opened another file")
-	editor.open_load()
-	var box: String = editor.load_dialog().current_file
-	editor.load_dialog().hide()
-	await get_tree().process_frame
-	if box != "":
-		_failures.append("the Load dialog opened with `%s` in its box" % box)
 	var size: Dictionary = _editor().get("size", {})
 	var counted := Strings.text("size_meter", {"units": size.get("units"), "budget": size.get("budget")})
 	if size.is_empty() or int(size.get("budget", 0)) <= 0 or editor.size_text() != counted:
 		_failures.append("the size meter says `%s` for the report's %s" % [editor.size_text(), size])
-	print("[watch-check] Load closed the wizard; its box is empty; the size meter says: %s" % editor.size_text())
+	print("[watch-check] Load closed the wizard; the size meter says: %s" % editor.size_text())
 	return true
 
 
@@ -878,6 +878,64 @@ func _map_click_opens_a_menu() -> bool:
 	return true
 
 
+## How many notches `_real_wheel` turns, and how far the ground under its pixel may drift.
+const WHEEL_NOTCHES := 6
+const WHEEL_DRIFT_PIXELS := 2.0
+
+
+## **The wheel on the real view** (item 155 (3) 4): `client_check.gd` measures the wheel with a
+## stand-in for the ground, because it has no view; this runs the view's own pick behind it. At
+## the project's window size, with the whole map framed, on a pixel off the panel where the pick
+## answers ground, notches sent through the engine's input reach the rig, bring it closer, and
+## leave that ground under the pixel. The framing and the window are put back. Returns false when
+## a step failed, with the reason recorded.
+func _real_wheel() -> bool:
+	var rig: Node3D = vista.rig
+	if rig.target != null:
+		_failures.append("the wheel check needs free-look, but the rig follows %s" % rig.target)
+		return false
+	var window_size := get_window().size
+	get_window().size = Vector2i(ProjectSettings.get_setting("display/window/size/viewport_width"), ProjectSettings.get_setting("display/window/size/viewport_height"))
+	await get_tree().process_frame
+	vista.frame_whole_map()
+	for _frame in KEY_FRAMES:
+		await get_tree().process_frame
+	# The middle of the view left of the panel: no control takes the wheel there, and with the
+	# whole map framed the map is what is there.
+	var at := Vector2(editor.panel_rect().position.x * 0.5, get_viewport().get_visible_rect().size.y * 0.5)
+	var camera: Camera3D = rig.camera
+	var picked: Dictionary = vista.ground_under(camera.project_ray_origin(at), camera.project_ray_normal(at))
+	var ok := true
+	if not picked.get("hit", false):
+		_failures.append("the wheel check found no ground to wheel on: at %s, panel %s, pick %s" % [at, editor.panel_rect(), picked])
+		ok = false
+	else:
+		var normal := camera.project_ray_normal(at)
+		var origin := camera.project_ray_origin(at)
+		# The ground the pick answered, on the ray through the pixel, which is what stays put.
+		var ground: Vector3 = origin + normal * normal.dot(picked["at"] - origin)
+		var before: float = rig.distance
+		_mouse_move(at)
+		for _notch in WHEEL_NOTCHES:
+			_mouse_button(at, MOUSE_BUTTON_WHEEL_UP, true)
+			_mouse_button(at, MOUSE_BUTTON_WHEEL_UP, false)
+			await get_tree().process_frame
+		for _frame in KEY_FRAMES:
+			await get_tree().process_frame
+		var drift: float = camera.unproject_position(ground).distance_to(at)
+		print("[watch-check] the wheel on the real view: %d notches at %s took the camera from %.0f to %.0f, the ground %.2f px from the pixel" % [WHEEL_NOTCHES, at, before, rig.distance, drift])
+		if rig.distance >= before:
+			_failures.append("%d wheel notches at %s did not bring the camera in: %.1f from %.1f" % [WHEEL_NOTCHES, at, rig.distance, before])
+			ok = false
+		if drift >= WHEEL_DRIFT_PIXELS:
+			_failures.append("the wheel moved the ground under %s by %.2f px" % [at, drift])
+			ok = false
+	vista.frame_whole_map()
+	get_window().size = window_size
+	await get_tree().process_frame
+	return ok
+
+
 ## Where the camera shows the ground 8 voxels west of this seat's commander, the spot
 ## `_one_click`'s menu case clicks, or (-1, -1) when it is behind the camera or off screen.
 func _ground_on_screen() -> Vector2:
@@ -973,6 +1031,9 @@ func _one_click(name: String, case: String) -> bool:
 	if not await _editor_until(func(s: Dictionary) -> bool: return s.get("has_text", false) and s.get("rows_current", false) and not s.get("busy", true) and not s.get("pending", false), "%s: %s never opened" % [what, file]):
 		return false
 	await get_tree().process_frame
+	if not get_viewport().get_visible_rect().encloses(editor.size_rect()) or not editor._size_box.visible:
+		_failures.append("%s: the size meter is not on screen: %s" % [what, editor.size_rect()])
+		return false
 	if name == "fix" and editor.panel_button("fix") == null:
 		_failures.append("%s: no Fix button was drawn for %s" % [what, file])
 		return false

@@ -3,16 +3,17 @@
 #
 # Each running client's own log file (S1's stage demo, finding N; decisions-log item 139 (2)).
 #
-# Godot's file logging has one path per project. A second instance's start rotated the first's
-# `user://logs/godot.log` under it and both then wrote the new one, so a tester who ran two
-# instances lost the first one's log. No setting names a path per process, and the rotation
-# happens before any script runs, so `project.godot` turns the engine's file logging off and
-# the main scene (`scripts/boot.gd`) adds this logger instead: every print and every error goes
-# to `user://logs/client-<process id>.log`, and no two running instances share a file.
+# Godot's file logging has one path per project. A second instance's start rotates the first's
+# `user://logs/godot.log` under it and both then write the new one, so a tester who runs two
+# instances loses the first one's log. No setting names a path per process, and the rotation
+# happens before any script runs, so the main scene (`scripts/boot.gd`) adds this logger beside
+# the engine's: every print and every error also goes to
+# `user://logs/client-<process id>.log`, and no two running instances share that file.
 #
-# What it does not hold: whatever the engine says before the main scene runs, which still goes
-# to the standard streams and to no file (a run of `godot --log-file <path>` keeps the engine's
-# own log, if that is wanted). It decides nothing and reaches nothing of the match.
+# What it does not hold: whatever the engine says before the main scene runs. That is the
+# engine's own `godot.log`, which stays on because on a double-clicked Windows game it is the only
+# record of a start that fails that early. This logger decides nothing and reaches nothing of
+# the match. `smoke_check.gd` asserts it writes in a real run.
 #
 # PLACEHOLDER: how many instance logs are kept — OWNER, at S6.
 
@@ -64,8 +65,11 @@ func _write(text: String) -> void:
 	_lock.unlock()
 
 
-## Removes all but the KEPT newest logs in `folder`, oldest first. A log another instance still
-## holds open cannot be removed on Windows; that removal fails, which is harmless.
+## Removes all but the KEPT newest logs in `folder`, oldest first. On Windows a log another
+## instance still holds open cannot be removed, and that removal fails, which is harmless. On
+## Linux and macOS `remove_absolute` unlinks it, and that instance writes on into a file nobody
+## can read. That is accepted: it takes KEPT later starts while the instance still runs, and
+## its log is the oldest of them.
 static func prune(folder: String) -> void:
 	var logs: Array = []
 	for name in DirAccess.get_files_at(folder):

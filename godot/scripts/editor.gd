@@ -105,9 +105,11 @@
 #   * M, THE UNTICKED BOX IS DRAWN: Godot's default icon is a near-black square at half alpha
 #     (measured on 4.7.2), which hardly shows on the panel, so the checkbox has a box of its own
 #     (`unticked_box`);
-#   * THE SIZE METER (S3's plan, E9): the verifier's `size_units` over `size_budget`, from the
-#     last report on the text on screen; the bar's fill is the ProgressBar's own ratio, and over
-#     budget the line under it is the verifier's refusal sentence, never one of the client's.
+#   * THE SIZE METER (S3's plan, E9), on the title's row: the verifier's `size_units` over
+#     `size_budget`, from the last report on the text on screen; the bar's fill is the
+#     ProgressBar's own ratio, over budget the line beside it is the verifier's refusal sentence,
+#     never one of the client's, and while the report describes an older text it says what the
+#     verdict's line says.
 #
 # Every button on the panel takes no keyboard focus. Run the game with `-- --log-input` and
 # the editor prints every press (button_down) and every handled click (pressed) on Submit,
@@ -145,6 +147,10 @@ const GHOST_COLOURS := {
 	"legal": Color(0.3, 0.9, 0.4, 0.5),
 	"illegal": Color(0.95, 0.25, 0.2, 0.5),
 }
+## The size meter's bar, in pixels, and how far it fades while its numbers describe an older text.
+## PLACEHOLDER: the size meter's look — OWNER, at S6.
+const SIZE_BAR := Vector2(64, 10)
+const SIZE_STALE_ALPHA := 0.35
 ## The unticked box: its side in pixels, its outline's width, and its colour, shown or disabled.
 ## PLACEHOLDER: the checkbox's box — OWNER, at S6's art pass.
 const BOX_SIDE := 16
@@ -193,7 +199,7 @@ var _notes: TextEdit
 var _notes_status: Label
 var _drafts: Label
 var _undo_button: Button
-var _size_box: VBoxContainer
+var _size_box: HBoxContainer
 var _size_bar: ProgressBar
 var _size_line: Label
 var _load_dialog: FileDialog
@@ -310,11 +316,6 @@ func open_save_as() -> void:
 func open_load() -> void:
 	_load_dialog.current_file = ""
 	_load_dialog.popup_centered_ratio(0.6)
-
-
-## The Load dialog, for a check to read its box and close it.
-func load_dialog() -> FileDialog:
-	return _load_dialog
 
 
 ## A map action on a target: `go`, `visit_low`, `visit_normal`, `visit_high`, `recycle` or
@@ -691,7 +692,10 @@ func _draw_state(state: Dictionary) -> void:
 	_draw_chips(state.get("chips", []), state.get("chips_current", false), state.get("has_text", false), unchecked_text(state, "chips"))
 	_draw_attack(state.get("attack_targets", []))
 	_draw_dormant(state.get("dormant", {}))
-	_draw_size(state.get("size", {}))
+	# The report the meter draws describes the text on screen only while the rows do. A Load the
+	# verifier refused opened nothing, so the text on screen is still the one it counted.
+	var counted: bool = state.get("rows_current", false) or verdict == "refused"
+	_draw_size(state.get("size", {}), counted, unchecked if unchecked != "" else Strings.text("verdict_checking"))
 
 
 ## Why `check` (`rows`, `route`, `prose` or `chips`) of the text on screen will not come, as
@@ -796,21 +800,34 @@ func _draw_dormant(dormant: Dictionary) -> void:
 
 ## The size meter: the verifier's two numbers as they came, and its refusal in its own words
 ## over budget (S3's plan, E9). The bar's fill is a display ratio, the ProgressBar's own, and a
-## count past the budget draws it full. Hidden until a report names a budget.
-func _draw_size(size: Dictionary) -> void:
+## count past the budget draws it full. Hidden until a report names a budget. While the report
+## describes an older text (`current` false) the bar fades and the line says `waiting`, the
+## words the verdict's line says for the same wait, never the old count.
+func _draw_size(size: Dictionary, current: bool, waiting: String) -> void:
 	_size_box.visible = not size.is_empty()
 	if size.is_empty():
 		return
 	_size_bar.max_value = size["budget"]
 	_size_bar.value = size["units"]
+	_size_bar.modulate.a = 1.0 if current else SIZE_STALE_ALPHA
 	var refusal := String(size.get("refusal", ""))
-	_size_line.text = refusal if refusal != "" else Strings.text("size_meter", {"units": size["units"], "budget": size["budget"]})
+	if not current:
+		_size_line.text = waiting
+	elif refusal != "":
+		_size_line.text = refusal
+	else:
+		_size_line.text = Strings.text("size_meter", {"units": size["units"], "budget": size["budget"]})
 	_size_line.accessibility_name = _size_line.text
 
 
 ## The size meter's line as drawn, for a check to read.
 func size_text() -> String:
 	return _size_line.text
+
+
+## The size meter on screen, for a check to see it stays in sight.
+func size_rect() -> Rect2:
+	return _size_box.get_global_rect()
 
 
 func _draw_templates(templates: Array) -> void:
@@ -1020,7 +1037,26 @@ func _build_panel() -> void:
 	column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(column)
 
-	_heading(column, "editor_title")
+	# The title's row holds the size meter, so the meter stays in sight however many rows the
+	# checks open, and adds no height, so the Fix buttons keep their place.
+	var title_row := HBoxContainer.new()
+	column.add_child(title_row)
+	_heading(title_row, "editor_title")
+	_size_box = HBoxContainer.new()
+	_size_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_size_box.visible = false
+	title_row.add_child(_size_box)
+	_size_bar = ProgressBar.new()
+	_size_bar.min_value = 0.0
+	_size_bar.step = 1.0
+	_size_bar.show_percentage = false
+	_size_bar.custom_minimum_size = SIZE_BAR
+	_size_bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_size_box.add_child(_size_bar)
+	_size_line = Label.new()
+	_size_line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_size_line.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_size_box.add_child(_size_line)
 	var buttons := HBoxContainer.new()
 	column.add_child(buttons)
 	_button(buttons, "load", open_load)
@@ -1057,19 +1093,6 @@ func _build_panel() -> void:
 	_dormant.visible = false
 	_dormant.toggled.connect(func(on: bool) -> void: bridge.editor_set_allow_dormant(on))
 	column.add_child(_dormant)
-
-	# Below the rows, so their Fix buttons keep their place at the panel's top.
-	_size_box = VBoxContainer.new()
-	_size_box.visible = false
-	column.add_child(_size_box)
-	_heading(_size_box, "size_heading")
-	_size_bar = ProgressBar.new()
-	_size_bar.min_value = 0.0
-	_size_bar.step = 1.0
-	_size_bar.show_percentage = false
-	_size_bar.custom_minimum_size = Vector2(0, 10)
-	_size_box.add_child(_size_bar)
-	_size_line = _label(_size_box)
 
 	_heading(column, "rules_heading")
 	_rules_status = _label(column)

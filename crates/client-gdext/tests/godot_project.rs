@@ -121,6 +121,11 @@ fn the_check_script_asks_for_the_class_by_the_name_this_crate_registers() {
 #[test]
 fn the_project_pins_the_settings_item_56_rests_on() {
     let project = read("project.godot");
+    assert!(
+        !project.contains("enable_file_logging=false")
+            && !project.contains("enable_file_logging.pc=false"),
+        "the engine's own log is the only record of a start that fails before the main scene"
+    );
     for (setting, why) in [
         (
             "driver/threads/thread_model=1",
@@ -150,15 +155,10 @@ fn the_project_pins_the_settings_item_56_rests_on() {
              an empty log, as the demo's hung second instance did",
         ),
         (
-            "file_logging/enable_file_logging=false",
-            "finding N (decisions-log item 139 (2)): every instance's start rotates the engine's \
-             one log file under any instance already writing it, so each keeps its own \
-             (scripts/instance_log.gd)",
-        ),
-        (
-            "file_logging/enable_file_logging.pc=false",
-            "the engine's `.pc` override of the same setting defaults to true and wins on a \
-             desktop, so finding N's setting needs both",
+            "file_logging/enable_file_logging.pc=true",
+            "a start that fails before the main scene leaves its only record in the engine's \
+             log on a double-clicked Windows game, whose standard streams go nowhere; finding \
+             N's per-instance log sits beside it (scripts/instance_log.gd)",
         ),
         (
             "common/physics_jitter_fix=0.0",
