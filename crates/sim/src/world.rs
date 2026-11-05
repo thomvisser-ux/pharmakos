@@ -5855,7 +5855,8 @@ impl World {
 
     /// The respawn delay curve: `commander.respawn_base_ms` plus
     /// `commander.respawn_growth_ms` per earlier death in the same Push
-    /// (item 90's rows, both PLACEHOLDER tuning re-derived by the owner at S2).
+    /// (item 90's rows, both PLACEHOLDER tuning the owner re-reads at S3's demo,
+    /// items 152 (1) 1 and 2).
     ///
     /// Read from the rules table and never from a constant (AGENTS.md §12),
     /// which is also what makes the curve a tuning question rather than a code
