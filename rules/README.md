@@ -133,7 +133,7 @@ other value. Each row below says what it was kept on:
   that, and its positive control (`the_combat_readers_count_a_staged_fight`)
   shows the readers count a fight when one happens.
 
-Every value is still a PLACEHOLDER: S2's demo kept them all, and `tune3`
+Every value is still a PLACEHOLDER. S2's demo kept them all, and `tune3`
 re-reads them once Easy fights (decisions-log item 152 (1) 1).
 
 Revision 7 (S3's rows, S3's plan task `con5`; decisions-log items 151 (2) (c)
