@@ -463,7 +463,7 @@ func _check_the_size_meter(editor: CanvasLayer, failures: Array[String]) -> void
 ## **The unticked box is drawn** (finding M): an outline a player can see, clear inside.
 func _check_the_box(editor: CanvasLayer, failures: Array[String]) -> void:
 	if not editor._dormant.has_theme_icon_override("unchecked"):
-		failures.append("the dormant checkbox draws Godot's faint default box")
+		failures.append("the dormant checkbox draws Godot's default box, which hardly shows")
 	var box: Image = EditorPanel.unticked_box(EditorPanel.BOX_COLOUR)
 	if box.get_pixel(0, 0).a < 0.9 or box.get_pixel(box.get_width() / 2, box.get_height() / 2).a > 0.0:
 		failures.append("the unticked box is not an outline, clear inside")
@@ -477,8 +477,9 @@ func _check_escape(editor: CanvasLayer, failures: Array[String]) -> void:
 	escape.pressed = true
 	if editor.close_menu_on_escape(escape):
 		failures.append("Escape with no menu open was taken")
-	# The key reaching the window with the menu not holding the focus: Godot's own handling of
-	# Escape in a popup needs the focus, and a menu that holds it closes itself (watch_check.gd).
+	# The key reaching the window itself. A menu that gets the key closes itself, as a headless
+	# run measures (watch_check.gd's step passes with or without this path), so this is the path
+	# only this check holds.
 	editor._menu.clear()
 	editor._menu.add_item("x", EditorPanel.ITEM_GO)
 	editor._menu.popup()

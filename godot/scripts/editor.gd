@@ -102,8 +102,9 @@
 #     the round turns;
 #   * I, ESCAPE closes the map menus (`close_menu_on_escape`), both ways a key can arrive: to
 #     the window, and to a menu that holds the focus;
-#   * M, THE UNTICKED BOX IS DRAWN: Godot's default icon is a faint outline under the Pall's
-#     panel, so the checkbox has a box of its own (`unticked_box`);
+#   * M, THE UNTICKED BOX IS DRAWN: Godot's default icon is a near-black square at half alpha
+#     (measured on 4.7.2), which hardly shows on the panel, so the checkbox has a box of its own
+#     (`unticked_box`);
 #   * THE SIZE METER (S3's plan, E9): the verifier's `size_units` over `size_budget`, from the
 #     last report on the text on screen; the bar's fill is the ProgressBar's own ratio, and over
 #     budget the line under it is the verifier's refusal sentence, never one of the client's.
