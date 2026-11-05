@@ -86,10 +86,12 @@ For each timing, at each sitting:
 - each mis-click you name;
 - your words on the re-check and the redraw after each edit. **At P6a nothing typed feeds the re-check,
   so this is edit feel, not typing feel, and the gate's typing clause stays open until P6b;**
-- at P6a, four hand checks, each a failure fixed in `ed3b`: whether Alt-click on a vent showed the
+- at P6a, five hand checks, each a failure fixed in `ed3b`: whether Alt-click on a vent showed the
   description menu (the check `s3-plan.md` owes for item 139 (2) C); and, from `ed3a`, whether Escape
-  closes a menu on a real window, whether Load's dialog opens with an empty box, and whether the
-  unticked checkbox reads as unticked. The last three come after the timings, untimed.
+  closes a menu on a real window, whether Load's dialog opens with an empty box, whether the
+  unticked checkbox reads as unticked, and whether you can read each structure's name and tell an
+  autocannon, a wall and a mortar apart, close up and from about 50 voxels (names draw within 55). The last four come after
+  the timings, untimed.
 
 After each scratch run the main session reads `seats\0\sealed\1.jsonc` in the match's cache
 (`%LOCALAPPDATA%\Pharmakos\matches\<match-id>\`) and checks the route against the card: the template's

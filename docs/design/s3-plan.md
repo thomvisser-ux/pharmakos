@@ -77,15 +77,17 @@ while the owner watches, and presses Ready to end a Lull.
    it above, and the connector goes away. The owner adds a condition through family → predicate →
    parameters (own beacon → has a structure → Generator). One entry, *queue a Resonance Spire*, is
    greyed with a lock and its reason: "needs the Resonance licence: run Generators on two vents at
-   a settlement". The owner adds a `toward` placement at the second vent the run sheet names.
+   a settlement". The owner adds a beacon covering the start vent, with a Generator target on it.
 3. **Save and Load.** The owner saves the playbook as a JSONC file, closes it, loads it back, and
    the comment typed in step 2's file is still there. A file holding a `set_flag` is refused on
    Load with its code and pointer.
 4. **Round 1's Push, the first memo.** A Generator is built ahead of its supply and a beacon sheds;
    the event list shows the Ledger's power-shortfall memo in its deadpan voice (decision 4). The
-   commander places the `toward` beacon, a stepping stone toward the second vent.
-5. **Round 2, the licence.** The owner carries the playbook with one more `toward` step, which
-   places a beacon covering the second vent, and a Generator target on it. At round 2's settlement
+   commander places the beacon covering the start vent, and the Generator goes up on it. No route to
+   this brownout is known on this seed's budget: see the paragraph below this list.
+5. **Round 2, the licence.** The owner carries the playbook with two more placements: a `toward`
+   step, the stone toward the second vent the run sheet names, and a beacon covering that vent, with
+   a Generator target on it. At round 2's settlement
    the seat runs Generators on two vents: the recap shows "Licence awarded: Resonance Spire", and
    the first-licence memo explains what it now allows.
 6. **Round 3's Lull.** The lock is gone. To the route's visit at the core the owner adds a
@@ -108,6 +110,29 @@ while the owner watches, and presses Ready to end a Lull.
    is sure to destroy it. If decision 13 takes its second option, the licence beat (steps 4 to 8's
    stepping stones, licence, queue and growth) is shown the same way, from `lic`'s
    `resonance-spire` scenario, and the live demo plays the golden seed's three rounds.
+
+**Three placements, on decision 13's seed (`sim3a` #163; item 156).** The seed is 20, unless a
+re-pinning lane's PR says otherwise and the main session amends this. Its second vent is 80 voxels
+from the core, and two placements reach 72 at best. The beat takes three placements: the beacon
+covering the start vent, one stone, and the beacon covering the second vent. This is not the chain
+`probation_seed.rs` pins: that one measures reach, and a start-vent Generator can't be placed from its
+first site, so it would cost a fourth beacon.
+
+**The schedule is one placement in round 1 and two in round 2.** Any schedule that lands the cover by
+round 2 keeps the fourth round's Lull, but only this one needs no hold for ore, and only this one
+`submit_plan` takes before `toward` can be sealed. One placement in each of rounds 1 to 3 brings the
+licence at round 3's settlement and leaves no Lull to hold the larger sphere.
+
+**The money is tight, and ore pays for it.** Three beacons ($180), two Generators ($160) and a build
+drone at each placed Generator's beacon ($40) come to $380. Against that stand the $200 start, one
+settlement of $95 or $110 before the licence, and the starting drone's two $64 loads (ticks 1489 and
+about 3026 on this seed, measured headless). With both loads, $43 to $58 is left; with one, it is
+short by $6 to $21. `lic`'s `resonance-spire` is the first whole proof.
+
+**Step 4's brownout has no known route.** No headless probe of this beat browned out: a Generator has
+no draw row, a placed beacon is net zero, and fabrication is held at headroom. The known route
+recycles a Generator's beacon, which costs money this beat hasn't got. `lic` or `demo3` looks for one.
+If there is none, changing the beat or decision 4's trigger is the owner's ruling.
 
 **Why the fourth round (a finding, checked for this fix pass).** On every three-seat line of
 `tests/golden/mapgen/expected.features.txt`, read against the cores in `expected.bore.txt`, each
@@ -310,7 +335,7 @@ puts that reading to the owner.
   encodes nothing while empty (AGENTS.md §4.8, item 136's rule), so a chain whose seats earn nothing
   does not move. The three places in one PR: the state hash, the snapshot (`SNAPSHOT_VERSION` 14 →
   15, an older snapshot refused with its typed version error), the goldens. The licence is one
-  proto enum, `gp.v1.Licence` (`LICENCE_UNSPECIFIED` 0, `LICENCE_RESONANCE_SPIRE` 1), added by `con5`
+  proto enum, `gp.v1.Licence` (`LICENCE_UNSPECIFIED` 0, `RESONANCE_SPIRE` 1), added by `con5`
   and shared by the sim, the verifier and the gateway's wire, so no layer spells a licence as a
   string; the sim's table stores its value, and S4 adds values at the end. The check runs once per
   settlement, after income, in seat order; an eliminated seat's rows are removed on the tick it is
@@ -389,8 +414,8 @@ puts that reading to the owner.
   moves, verifier error rows shown. `godot/` draws the end-of-match survey and **Export playtest
   bundle**, which writes one zip through Godot's `ZIPPacker` to a path the tester picks:
   `survey.json`, `metrics.json`, `diagnostics.log`, and a `manifest.json` that lists them and says
-  the recording is absent until S7's recordings exist. **The raw `godot.log` is never shipped:** it
-  can hold absolute paths, and with them the tester's user name. `diagnostics.log` is a log the
+  the recording is absent until S7's recordings exist. **The raw `godot.log` and `client-*.log` are never shipped:**
+  they can hold absolute paths, and with them the tester's user name. `diagnostics.log` is a log the
   client writes itself while Playtest mode is on, of its own typed lines (event, refusal code,
   phase, host-clock milliseconds), with no absolute path, user name, machine name, playbook text or
   notebook text in it; a test pins its lines' shape and fails on a line that holds a path
@@ -455,7 +480,7 @@ puts that reading to the owner.
 - **E20. The mandate messages stay in `playbook.proto`.** M-14's `mandate.proto` move would renumber
   nothing but would move every generated path and the schema goldens for no reader; both copies of
   the marker are closed by `con5` with that reason.
-- **E21. One `proto/**` PR, one `xtask` or `.github/**` PR, at a time.** `con5`, then `con6`, then
+- **E21. One `proto/**` PR, one `xtask` or `.github/**` PR, at a time.** `con5`, then `con5b`, then `con6`, then
   `tune3` (its `rules.proto` marker re-dates) for `proto/**`; `bench3` (xtask), then `cert3` (xtask
   and `.github/**`) for the harness. A lane that finds it needs another such edit stops and asks to
   be sequenced.
@@ -601,7 +626,8 @@ change moves `report_hash` is granted, for the re-bless alone, `tests/golden/gat
   ~132, ~139; `world.rs` ~146, ~166, ~181; `world/site.rs` ~2122; `rules.rs` ~175, ~180, ~198;
   `audit.rs` ~34); E22's sweep over whatever `base` and `ids` left in the sim; under decision 13's
   recommendation, the Probation seed: a test-only, deterministic search over seeds for a two-seat
-  map whose second vent lies within three stepping stones of seat 0's core, its criterion and its
+  map whose second vent lies within three stepping stones (the covering beacon among them) of seat
+  0's core, its criterion and its
   answer recorded in the PR (the test pins the answer, so the generator cannot drift under it).
 - **Implements:** items 151 (4), 152 (1) 10; decision 13. **Needs:** this plan adopted.
   **Acceptance:** no chain, no golden moves; a layout with an Attack row seeds and launches in a
@@ -625,6 +651,22 @@ change moves `report_hash` is granted, for the re-bless alone, `tests/golden/gat
   **Needs:** nothing new on the wire. **Acceptance:** `crates/client-gdext/tests/no_arithmetic.rs`
   and `no_sim.rs` green; the screenshot goldens re-blessed with the panel's new layout, named; the
   headless watch check run by hand. **Contract PR:** no. **PLACEHOLDERs:** none. **Agent-days:** 4.
+
+### `con5b` — `proto/**`, `crates/sim`, `crates/verifier`: the three `optional` settings
+
+- **Owns:** `proto/gp/v1/playbook.proto`, the generated tree, and as named places the five files
+  `con5`'s PR lists in `crates/sim` and `crates/verifier`. **Branch** `feat/proto-optional-settings`.
+- **Builds:** `MineSettings.flee_on_threat`, `BuildSettings.rebuild_destroyed` and
+  `repair_threshold_pct` as `optional`. Today an edit row writing `false` or `0` verifies, costs no
+  fields and silently does nothing. After this lane the written value takes effect and is priced as
+  one field; an omitted one leaves the setting alone; I0004 stays on `None | Some(0)`. The failing
+  tests come first.
+- **When:** after `sim3a` #163 and `con5` #167 merge and before `lic` and `con6` start, the only gap
+  before about day 19 when both crates are free. `con5` built it, so its agent runs it.
+- **Implements:** item 148 (4); item 146 (3) (l), which accepted the gap only until S3. **Acceptance:**
+  `buf breaking` green in `WIRE_JSON` mode with no `ignore_only` (the reviews ran this); no chain and no
+  `report_hash` golden moves, because no committed JSONC writes these as `false` or `0`; the docs golden
+  moves by its `oneof` lines, named in the PR. **Contract PR:** yes. **Agent-days:** 0.5.
 
 ### `con6` — the second `proto/**` pull request: the rule list's wire, predicates and `toward`
 
@@ -685,6 +727,23 @@ change moves `report_hash` is granted, for the re-bless alone, `tests/golden/gat
   Generators on two vents, the licence at a settlement, the queue, the growth, a target beyond the
   old radius built the round after) and `spire-lost` (staged by its two playbooks: the other seat's
   Attack destroys the Spire, the radius returns, the event log shows it).
+- **The seed's proof (item 156).** `resonance-spire` is the first proof that seed 20 can be earned, on
+  section 1.1's schedule: round 1's beacon by `covering`, round 2's stone by voxel, because `toward`
+  can't be sealed until `pred` and `vfy6`, and round 2's cover by `covering`. A money shortfall is cured
+  first by dig depth, then by `tune3`'s rows; a re-pin can't cure it, because the next seeds in order
+  (48, 55 and 64) take three placements too. A re-pin answers a geometry failure only: it adds the
+  failed clause to the search's criterion, so `no_earlier_seed_passes` still holds, and it changes
+  `probation_seed.rs`, `host_link.gd`'s `MATCH_SEED` and this scenario in one commit, the lane's last,
+  after `gwp` merges. If neither cures it, this lane stops and the main session puts decision 13 to
+  the owner.
+- **Load refusals and audience (item 156).** Once this lane reads `con5`'s rows, load refuses a missing
+  `pathing` or `licences` block; `long_run` below 1, because a one-cell run emits two transitions and a
+  comb of them silently drops transitions (`clusters.rs` ~650, ~526), giving a route that exists and
+  can't be found; `resonance_vents` below 1, which would earn every seat the licence at its first
+  settlement; `smooth_lookahead` above `MAX_ROUTE_NODES`; and a base plus bonus past `i16`, checked as
+  `picket_radius_of` does. Each takes a line in `a_row_out_of_range_is_refused_at_load`.
+  `licence_awarded`'s arm in `audience_of` is the owning seat only, because a `Public` audience would
+  announce a seat's licence between rounds (item 145 (7)).
 - **Named places, sequenced (B3 of the reviews).** The two event kinds and `spire_present` need
   their arms in the gateway's exhaustive `audience_of` (`crates/gateway/src/surface.rs` ~2104) and
   `event_text` for the branch to build. `gwp` owns the gateway while `lic` runs, so `lic` makes those
@@ -704,11 +763,14 @@ change moves `report_hash` is granted, for the re-bless alone, `tests/golden/gat
 ### `gwp` — `crates/gateway`: Probation, the memos and the save
 
 - **Owns:** `crates/gateway`, and as a named place in its own PR (E6) `godot/scripts/host_link.gd`'s
-  `config_line` and its pins in `crates/client-gdext/tests/godot_project.rs`. It runs when no client
+  `config_line`, `MATCH_SEED` and its comment, and their pins in
+  `crates/client-gdext/tests/godot_project.rs`. It runs when no client
   lane is open: after `ed3a` merges, before `ed3b` starts. **Branch** `feat/gateway-probation`.
 - **Builds:** E6's `preset` on the config line, with the lobby writing it in the same PR, and, under
   decision 13, `host_link.gd`'s `MATCH_SEED` set to `sim3a`'s Probation seed (the watch check's own
-  seed unchanged); E7's
+  seed unchanged), with a test in `godot_project.rs` that reads `PROBATION_SEED` from
+  `crates/sim/tests/probation_seed.rs` as text and compares it with `MATCH_SEED`, restating neither,
+  so a re-pin can't leave the lobby on a stale seed (item 156); E7's
   untimed Lulls and the refusal of a reported countdown in a Probation match; E5's memos for
   decision 4's power-shortfall, dark-Stake and first-death triggers, on the feed and the recap, their
   copy in `strings.rs` (the first-licence memo is `gwr`'s, once `lic`'s event kind exists); E1's
@@ -717,11 +779,18 @@ change moves `report_hash` is granted, for the re-bless alone, `tests/golden/gat
   template to start with and carries its reason, from the advisor's suggestion); E18's seed
   withheld from seat tokens; strings E (the fallback's internal names "Shadow" and "Hold" in the
   event list replaced by the player's words), F (steps numbered from 1 in the event list, as the
-  route numbers them), item 143 (3)'s first (after the match ends a refused ask no longer says
-  planning opens in the next Lull), and item 143 (4)'s `safe_playbook_filed` line (`strings.rs`
+  route numbers them), and item 143 (4)'s `safe_playbook_filed` line (`strings.rs`
   ~460), which says "The Lull ran out" even when Ready ended it, reworded to say which ended it;
   the markers it owns re-dated (`viewfeed.rs` ~63 to S4, `crates/gateway/src/surface/knowledge.rs`
-  ~677 to S6).
+  ~677 to S6, `watch.rs` ~150 to S7 as decision 14 rules). The memo event's audience is the seat it
+  was issued to. **The S2 demo's findings (item 155 (3) 5, 6 and 7; `ed3a` #166):** a seat named on
+  `fallback_engaged`'s line; `SegmentFeed::page` (`crates/gateway/src/feed.rs`), which re-filters the
+  bus by the viewer's vision at each read while its cursor indexes the filtered list, so sight that
+  grows re-delivers earlier rows and sight that shrinks loses events, its regression tests being the
+  probe's cases in #166's body plus a fog-lift case (`FogPolicy::unfogged` turns true on `ended`, so
+  the match's end grows every seat's list, and elimination lifts that seat's fog the same way); the `sighting_refreshed` flood thinned; and "This match
+  so far" reworded at the match's end (`strings.rs` ~609). `ed3a` did the client halves and item
+  143 (3)'s first, which was the client's own string.
 - **Implements:** items 152 (1) 4, 153 (2); E1, E5–E7, E18, E25; register S1-40 (gateway half);
   items 139 (2) E, F; 143 (3), (4). **Needs:** `con5`, `ed3a` and `sim3a` merged; decisions 4, 5 and 13.
   **Acceptance:** a resumed match names its `e_NN` as before (the test written first and red on
@@ -753,7 +822,9 @@ change moves `report_hash` is granted, for the re-bless alone, `tests/golden/gat
     "count carried to S3").
   - **The G3′ load with raids** (E13): the gate's layout with Attack beacons and their launch
     settings, and a variant with every seat's playbook at size B (E24's test (c)); `cert3` re-runs
-    both.
+    both. A test asserts `attack_launched` above zero on the hosted segment, because `sim3a`'s row
+    test drives `Runner::step` with no seals (item 156). The claim that the seam carries no settings is
+    rewritten here: `g3/layout.rs` ~35, `g3.rs` ~35 and the report string at `g3.rs` ~127.
   - `perf-alarms` gains the figures as notices (one step per alarm, GitHub's ten-notice limit);
     `p3-budget` and `p1-budget` fail at E12's doubled numbers or on a missing verdict;
     `tests/harness.rs`' list of restated items extended.
@@ -765,6 +836,8 @@ change moves `report_hash` is granted, for the re-bless alone, `tests/golden/gat
 
 ### `gwr` — `crates/gateway` + `crates/plan-core`: the rule list's reads and the licences on the wire
 
+- **Fog (item 156).** A test holds `sphere_radius_voxels` unset on another seat's beacon, and `Scope`'s
+  radii are filled for own beacons only, because that table is a `report_hash` input.
 - **Owns:** `crates/gateway`, `crates/plan-core`. **Branch** `feat/gateway-rule-list`.
 - **Builds:** E8's chips in `render.rs`, with their own golden under `tests/golden/plan-core/`;
   `get_vocabulary` (scope `docs`), every entry from the schema and the rules table, its locks from
@@ -789,11 +862,18 @@ change moves `report_hash` is granted, for the re-bless alone, `tests/golden/gat
   Survey's re-scan as decision 7 rules (`survey.rs` ~135), with the per-cell explore time it needs
   as a hashed, snapshotted column (`SNAPSHOT_VERSION` 16); the refusal-table lifts, with the
   verifier's E-codes left for `vfy6`; two scenarios on decision 13's seed: `toward-stepping-stone` (a
-  beacon placed toward a far vent in round 1, from it the vent covered in round 2) and
+  stone placed toward the far vent, and from it the vent covered, on section 1.1's schedule) and
   `enemy-known-rule` (a Defend handler fires on `enemy_units_near` with a fresh sighting and not on
   a stale one).
 - **Implements:** register U-07 (sim half), S1's decision 3; item 152 (1) 6. **Needs:** `con6`, `lic`
-  merged; decisions 2, 7 and 13. **Acceptance:** each predicate has an interpreter transcript case;
+  merged; decisions 2, 7 and 13. **Acceptance:** `probation_seed.rs`'s `stone` restatement replaced by
+  a call to the sim's own `toward`. A moved site or walk is re-pinned here, with `resonance-spire`'s
+  playbook if it names the site. A moved seed is reported when `toward`'s commit shows it: `ed3b` then
+  starts after `pred` merges, and `pred` re-pins the seed, `MATCH_SEED` and every committed scenario on
+  that seed and names the chains that moved; if `ed3b` is already open, `pred` stops and the main
+  session sequences it. E23's "the terrain the seat knows" reads `Fog::Clear` until S3-05's mask at S4
+  (decision 2), and `pred` writes that down (item 156); each
+  predicate has an interpreter transcript case;
   no committed scenario's chain moves except where the re-scan changes a Survey beacon's scouting; a
   predicate never reads another seat's state (a confinement test); §4.8's three places for the
   explore-time column. **Contract PR:** yes (the state hash and `SNAPSHOT_VERSION` 16, under
@@ -826,7 +906,9 @@ change moves `report_hash` is granted, for the re-bless alone, `tests/golden/gat
   beacon's mandate and Build targets, from `get_beacon`'s detail (cut 1); S3-18's rendered travel
   figure drawn in place of the raw milliseconds (`strings.gd` ~183); and finding C (item 139 (2),
   (5)): a client test that Alt-click on a vent composes the description, `covering {vent {NEAREST,
-  UNCOVERED}}`, with the owner's hand check at P6a and any failure fixed here. Nothing here
+  UNCOVERED}}`, with the owner's hand check at P6a and any failure fixed here; and two findings of
+  `docs/demo/p6-run-sheet.md`, weighed with P6a's result in this lane's brief: the editor has no way
+  to start an empty playbook, and the first framing leaves the core at the panel's edge. Nothing here
   validates, ranks or computes (rule 4); the main session's docs PR names the new pieces in
   AGENTS.md §3 rule 4.
 - **Implements:** register S3-17, S3-01, S3-18 (client half); item 139 (2) C. **Needs:** `gwr` and
@@ -914,7 +996,11 @@ change moves `report_hash` is granted, for the re-bless alone, `tests/golden/gat
 ### `tune3` — the size budget, the rooms and the re-read rows
 
 - **Owns:** `rules/rules.v1.json`, `rules/README.md`, `proto/gp/v1/rules.proto`'s comments (the
-  third `proto/**` PR, E21), and as named places the constants E17 lists in `crates/sim/src/world.rs`
+  third `proto/**` PR, E21), and as named places, if a row it moves reds the pin or
+  `resonance-spire`'s licence, the re-pin: `probation_seed.rs`, `host_link.gd`'s `MATCH_SEED` and the
+  committed scenarios on that seed, in one commit. `prob` owns `godot/` over the same days, so that
+  commit is `tune3`'s last, made after `prob` merges with `main` merged in first, and `tune3` holds its
+  PR open until then (item 156). Also the constants E17 lists in `crates/sim/src/world.rs`
   and `interpreter.rs` and the budget's reader in `crates/verifier/src/limits.rs` (~175–184), while
   no lane owns those crates; the balance check `crates/gamectl/tests/balance.rs`; the nightly result
   golden's re-bless. **Branch** `feat/rules-s3-tune`.
@@ -960,7 +1046,8 @@ protocol.
 ### 4.1 Waves
 
 Three slots, never more (AGENTS.md §6). `crates/sim`, `crates/gateway` and `crates/client-gdext`
-each have one author at a time. Three named places cross a running owner, and each is sequenced
+each have one author at a time. Three named places cross a running owner, and three conditional re-pins of
+the Probation seed may (`lic`'s, `pred`'s and `tune3`'s, each in its own section). Each is sequenced
 rather than run beside it: `lic`'s gateway arms and its verifier narrowing are its last commits,
 made after `gwp` and `vfy5` merge, so `lic` merges after `gwp`; `gwp`'s lobby edit lands while no
 client lane is open, between `ed3a` and `ed3b`; and `opr3`'s client pins are its last commit, made
@@ -1032,8 +1119,9 @@ S3 lanes pay (`scripts/merge-train.sh`'s `MATRIX_ONLY` paths: `crates/sim/`, `cr
   `cargo xtask determinism --bless` names `tune3` alone.
 - **Briefs** carry: the operator's global rules on errors and the no-personal-data rule; the lane's
   decisions as ruled; `CARGO_TARGET_DIR` on every cargo and commit command; a commit-message file of
-  the lane's own (item 151 (3)); and, for `lic`, `gwp` and `opr3`, the sequenced last commit of
-  section 4.1.
+  the lane's own (item 151 (3)); for each `crates/sim` lane, that it classifies the `saturating_*`
+  and `let ... else` sites it touches in money and hashed state (item 156); and, for `lic`, `gwp`, `opr3`
+  and `tune3`, the sequenced last commit of section 4.1.
 - **The main session's docs PRs** carry, beside the rulings: spec §3's Probation paragraph (the
   memos as decision 4 rules, untimed Lulls by preset, the map as decision 13 rules), §8 (one licence
   from S3, the mechanism general, decision 6's readings), §13 (the chips, the vocabulary read, the
@@ -1049,7 +1137,7 @@ S3 lanes pay (`scripts/merge-train.sh`'s `MATRIX_ONLY` paths: `crates/sim/`, `cr
   `docs/demo/p6-run-sheet.md` before `ed3a` merges; `scripts/merge-train.sh` stopping on the
   authoring alarm (E12).
 - **Packaged locally before merging:** `con5` (`rules/` ships), `ed3a`, `gwp` (its lobby edit),
-  `ed3b`, `opr3`, `prob`, `tune3`.
+  `ed3b`, `opr3`, `prob`, `tune3`, and `lic` or `pred` if either re-pins the seed.
 
 ### 4.5 The cut order, written before the stage starts
 
@@ -1409,7 +1497,8 @@ golden seed it is about 230 voxels, about nine stepping stones, beyond a three-r
 - **(Recommended) Keep spec §8's trigger and make it reachable: `toward` is never cut (section 4.5),
   and the Probation preset uses a fixed map seed of its own, chosen by a deterministic search over
   seeds (in `sim3a`, recorded in its PR; `gwp` writes it into the lobby's line) for a two-seat map
-  whose second vent lies within three stepping stones of the human seat's core; the golden seed
+  whose second vent lies within three stepping stones (the covering beacon among them) of the human
+  seat's core; the golden seed
   stays every test's fixture.** The demo plays four rounds to show the licence and the Spire live
   (section 1.1); the fun gate's three rounds make it earnable by a seat that expands, not given.
   *Downside:* the Probation map differs from the golden fixture the vista and the S1 and S2 demos
@@ -1513,7 +1602,7 @@ that moved it, a client that validates or computes, an invented rule where the s
 | R10 | P3's accuracy holds on the spike's terrain but not on the generated map's slopes | E11's three seeds; `climb_surcharge` reported against walked slopes | `cert3`, `tune3` | Section 5.1's ranges |
 | R11 | Easy's raids (decision 3) make the fun gate's match feel punishing | The balance re-run's round-2 and round-3 lines; the owner at S3's demo | `tune3`, `demo3` | Cut 3, or the owner's word before the gate |
 | R12 | Thirteen contract PRs (one conditional, section 4.6) queue on review | E21's one-at-a-time rule; the week of float | section 4 | Decision 1's schedule grows |
-| R14 | The Probation map chosen for decision 13 plays differently from the golden fixture the earlier demos showed | The search's criterion recorded; the balance check re-run on that seed too; the owner at S3's demo | `sim3a`, `tune3`, `demo3` | Decision 13's second option |
+| R14 | The Probation map chosen for decision 13 plays differently from the golden fixture the earlier demos showed | The search's criterion recorded; the balance check re-run on that seed too; `resonance-spire` the first proof it can be earned (item 156); the owner at S3's demo | `sim3a`, `lic`, `pred`, `tune3`, `demo3` | Decision 13's second option |
 | R13 | The certified figures differ between Windows and WSL2 by more than the codegen's 10–20 % | Both measured, the slower deciding | `cert3`, `demo3` | The slower sets the figure, the gap recorded |
 
 ---
