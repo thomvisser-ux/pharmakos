@@ -90,7 +90,7 @@ For each timing, at each sitting:
   description menu (the check `s3-plan.md` owes for item 139 (2) C); and, from `ed3a`, whether Escape
   closes a menu on a real window, whether Load's dialog opens with an empty box, whether the
   unticked checkbox reads as unticked, and whether you can read each structure's name and tell an
-  autocannon, a wall and a mortar apart, close up and from about 60 voxels. The last four come after
+  autocannon, a wall and a mortar apart, close up and from about 50 voxels (names draw within 55). The last four come after
   the timings, untimed.
 
 After each scratch run the main session reads `seats\0\sealed\1.jsonc` in the match's cache

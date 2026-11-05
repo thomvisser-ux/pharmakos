@@ -788,7 +788,7 @@ change moves `report_hash` is granted, for the re-bless alone, `tests/golden/gat
   bus by the viewer's vision at each read while its cursor indexes the filtered list, so sight that
   grows re-delivers earlier rows and sight that shrinks loses events, its regression tests being the
   probe's cases in #166's body plus a fog-lift case (`FogPolicy::unfogged` turns true on `ended`, so
-  the match's end grows every seat's list); the `sighting_refreshed` flood thinned; and "This match
+  the match's end grows every seat's list, and elimination lifts that seat's fog the same way); the `sighting_refreshed` flood thinned; and "This match
   so far" reworded at the match's end (`strings.rs` ~609). `ed3a` did the client halves and item
   143 (3)'s first, which was the client's own string.
 - **Implements:** items 152 (1) 4, 153 (2); E1, E5–E7, E18, E25; register S1-40 (gateway half);
