@@ -20,6 +20,9 @@
 //     "author_kind": "HUMAN", not "AUTHOR_KIND_HUMAN". Bare value names are
 //     only unique if each enum has its own scope, hence the nesting. The
 //     buf lint exceptions this needs are recorded in proto/buf.yaml.
+//     ONE ENUM IS TOP LEVEL, BY NAME: `Licence`, which the sim, the verifier
+//     and the gateway's wire share and no one message owns. Every value of it
+//     carries the full prefix, so it spends no bare name in this package.
 //   * Zero values keep a full prefix (AUTHOR_KIND_UNSPECIFIED). They are
 //     sentinels; an unset enum is a verifier error (E000x), never a default.
 //     ONE MESSAGE IS EXCEPTED, BY NAME: BeaconFilter. Both of its enums are
@@ -484,6 +487,24 @@ message RemoveBuildTargetRow {
   Location anchor = 1;
 }
 
+// The Ledger's licences (spec section 8; decisions-log item 153 (3); S3's plan,
+// E2). One enum, so that no layer spells a licence as a string: the sim's
+// per-seat table stores its value, the verifier checks it and the gateway's
+// wire answers it, lower case without its prefix as every enum there is
+// (`resonance_spire`; item 80). S3 has the one entry; S4 adds values at the end,
+// and a value is never renumbered or reused.
+//
+// A player's playbook does not name a licence: it queues a blueprint, and the
+// licence is what lets it. So this enum needs no bare names, and is top level
+// under the rule this file's header states.
+enum Licence {
+  LICENCE_UNSPECIFIED = 0;
+
+  // Earned at a settlement (`rules_table.licences.resonance_vents`); lets a seat
+  // queue `resonance_spire` at any of its beacons.
+  LICENCE_RESONANCE_SPIRE = 1;
+}
+
 // Queues one licensed capability structure on the beacon's fabricator. The
 // licence check is the verifier's (spec section 8).
 message QueueStructureRow {
@@ -492,6 +513,11 @@ message QueueStructureRow {
   // and its licences land at S4. A string id until then, exactly like
   // seams.proto's builtin ids — it becomes a nested enum when that contract
   // is written.
+  //
+  // `resonance_spire` is the one S3 accepts, for a seat that holds
+  // `LICENCE_RESONANCE_SPIRE` (decisions-log item 153 (3); S3's plan, E4). The
+  // verifier and the sim refuse every other id until S4, and until S3's `lic`
+  // and `vfy5` have merged they refuse this one too.
   string blueprint_id = 1;
 }
 
@@ -537,10 +563,13 @@ message BuildTarget {
   // and 40, ruled by decisions-log item 144 (11)). Every column of the box is
   // filled from the ground's top up to the box's top (`max.z`), so no wall
   // voxel has air under it, and the box stands at least the rules table's
-  // `materials.wall_min_height_voxels` above the ground in every column; a
-  // lower one is a verifier error. `min.z` says only that the box reaches the
-  // ground: it lies at or below the ground's top in every column, and
-  // nothing below the ground is filled. Every column of the box lies inside
+  // `materials.wall_min_height_voxels` above the ground in every column. The
+  // verifier, which never reads the ground, refuses only a box too short in its
+  // own extent (E0512); the height over the ground is the sim's to refuse, at
+  // the target's run (S2's `site`; decisions-log item 146 (4)). `min.z` says
+  // only that the box reaches the ground: it lies at or below the ground's top
+  // in every column, and nothing below the ground is filled. Every column of
+  // the box lies inside
   // the sphere of the beacon whose mandate holds the target, the sphere being
   // building's only range (decisions-log item 12).
   //
@@ -1191,7 +1220,13 @@ message BeaconRef {
     // Safest first. Own beacons only; the one the fixed 20% reflex walks to.
     Safest safest = 2;
 
-    // Least travel from the commander first.
+    // Least travel first. In a route step or a condition: from the commander,
+    // by octile ground distance, a lower bound on the walk, ties to the lowest
+    // id (the sim's `interpreter/cond.rs`). As an Attack target, the same word
+    // is straight-line: the seatless enemy commander, the nearest known enemy
+    // beacon and the `NEAREST_KNOWN` retarget all rank by squared distance from
+    // the Attack beacon's staging point, ties to the lowest id (decisions-log
+    // item 151 (2) (a)).
     Nearest nearest = 10;
 
     // Lowest HP first (the beacon's own HP, not the structures homed to it).
@@ -1281,12 +1316,10 @@ message BeaconFilter {
 // The five mandates and their settings are spec section 6's contract, which
 // grows with the stages (Defend and Attack at S2, below).
 //
-// PLACEHOLDER: the move to gp/v1/mandate.proto — owner, S3, the next proto PR after S2's.
-// The register's M-14. Not in S1 (decisions-log item 128, S1's plan's
-// decision 11) and not in S2's wire (S2's plan, task `con4`, which added
-// Defend's and Attack's fields here; the main session's ruling on that pull
-// request): the move changes no wire or JSON name, because the package stays
-// gp.v1, and nothing in S1 or S2 needs it.
+// They stay in this file (the register's M-14, closed by S3's plan, E20): a move
+// to gp/v1/mandate.proto would change no wire or JSON name, because the package
+// stays gp.v1, and it would move every generated path and the schema goldens
+// for no reader.
 //
 // Only the fields the spec's expand_east example uses are filled in. The
 // mandate oneof numbers (10-14) and the five names are safe: they are the

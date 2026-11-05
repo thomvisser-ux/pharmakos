@@ -556,6 +556,11 @@ pub struct QueueStructureRow {
     /// and its licences land at S4. A string id until then, exactly like
     /// seams.proto's builtin ids — it becomes a nested enum when that contract
     /// is written.
+    ///
+    /// `resonance_spire` is the one S3 accepts, for a seat that holds
+    /// `LICENCE_RESONANCE_SPIRE` (decisions-log item 153 (3); S3's plan, E4). The
+    /// verifier and the sim refuse every other id until S4, and until S3's `lic`
+    /// and `vfy5` have merged they refuse this one too.
     #[prost(string, tag="1")]
     pub blueprint_id: ::prost::alloc::string::String,
 }
@@ -606,10 +611,13 @@ pub struct BuildTarget {
     /// and 40, ruled by decisions-log item 144 (11)). Every column of the box is
     /// filled from the ground's top up to the box's top (`max.z`), so no wall
     /// voxel has air under it, and the box stands at least the rules table's
-    /// `materials.wall_min_height_voxels` above the ground in every column; a
-    /// lower one is a verifier error. `min.z` says only that the box reaches the
-    /// ground: it lies at or below the ground's top in every column, and
-    /// nothing below the ground is filled. Every column of the box lies inside
+    /// `materials.wall_min_height_voxels` above the ground in every column. The
+    /// verifier, which never reads the ground, refuses only a box too short in its
+    /// own extent (E0512); the height over the ground is the sim's to refuse, at
+    /// the target's run (S2's `site`; decisions-log item 146 (4)). `min.z` says
+    /// only that the box reaches the ground: it lies at or below the ground's top
+    /// in every column, and nothing below the ground is filled. Every column of
+    /// the box lies inside
     /// the sphere of the beacon whose mandate holds the target, the sphere being
     /// building's only range (decisions-log item 12).
     ///
@@ -1664,7 +1672,13 @@ pub mod beacon_ref {
         /// Safest first. Own beacons only; the one the fixed 20% reflex walks to.
         #[prost(message, tag="2")]
         Safest(super::Safest),
-        /// Least travel from the commander first.
+        /// Least travel first. In a route step or a condition: from the commander,
+        /// by octile ground distance, a lower bound on the walk, ties to the lowest
+        /// id (the sim's `interpreter/cond.rs`). As an Attack target, the same word
+        /// is straight-line: the seatless enemy commander, the nearest known enemy
+        /// beacon and the `NEAREST_KNOWN` retarget all rank by squared distance from
+        /// the Attack beacon's staging point, ties to the lowest id (decisions-log
+        /// item 151 (2) (a)).
         #[prost(message, tag="10")]
         Nearest(super::Nearest),
         /// Lowest HP first (the beacon's own HP, not the structures homed to it).
@@ -1833,12 +1847,10 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.BeaconFilter".into() }
 /// The five mandates and their settings are spec section 6's contract, which
 /// grows with the stages (Defend and Attack at S2, below).
 ///
-/// PLACEHOLDER: the move to gp/v1/mandate.proto — owner, S3, the next proto PR after S2's.
-/// The register's M-14. Not in S1 (decisions-log item 128, S1's plan's
-/// decision 11) and not in S2's wire (S2's plan, task `con4`, which added
-/// Defend's and Attack's fields here; the main session's ruling on that pull
-/// request): the move changes no wire or JSON name, because the package stays
-/// gp.v1, and nothing in S1 or S2 needs it.
+/// They stay in this file (the register's M-14, closed by S3's plan, E20): a move
+/// to gp/v1/mandate.proto would change no wire or JSON name, because the package
+/// stays gp.v1, and it would move every generated path and the schema goldens
+/// for no reader.
 ///
 /// Only the fields the spec's expand_east example uses are filled in. The
 /// mandate oneof numbers (10-14) and the five names are safe: they are the
@@ -2423,6 +2435,44 @@ impl ::prost::Name for MineSettings {
 const NAME: &'static str = "MineSettings";
 const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.MineSettings".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.MineSettings".into() }}
+/// The Ledger's licences (spec section 8; decisions-log item 153 (3); S3's plan,
+/// E2). One enum, so that no layer spells a licence as a string: the sim's
+/// per-seat table stores its value, the verifier checks it and the gateway's
+/// wire answers it, lower case without its prefix as every enum there is
+/// (`resonance_spire`; item 80). S3 has the one entry; S4 adds values at the end,
+/// and a value is never renumbered or reused.
+///
+/// A player's playbook does not name a licence: it queues a blueprint, and the
+/// licence is what lets it. So this enum needs no bare names, and is top level
+/// under the rule this file's header states.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum Licence {
+    Unspecified = 0,
+    /// Earned at a settlement (`rules_table.licences.resonance_vents`); lets a seat
+    /// queue `resonance_spire` at any of its beacons.
+    ResonanceSpire = 1,
+}
+impl Licence {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "LICENCE_UNSPECIFIED",
+            Self::ResonanceSpire => "LICENCE_RESONANCE_SPIRE",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "LICENCE_UNSPECIFIED" => Some(Self::Unspecified),
+            "LICENCE_RESONANCE_SPIRE" => Some(Self::ResonanceSpire),
+            _ => None,
+        }
+    }
+}
 /// A value that varies with the richness of the feature it is read off
 /// (decisions-log item 90). Three rows rather than a proto map: lean, standard
 /// and rich are the whole domain — spec sections 7 and 9 name those three
@@ -2460,8 +2510,9 @@ pub struct ByRichness {
 pub mod by_richness {
     /// Which grade the map generator places a feature at (item 90's map rows).
     ///
-    /// Nested, like every enum in `gp.v1` without exception, because proto enum
-    /// values live in the PARENT scope: a top-level enum here would put the bare
+    /// Nested, like every enum in `gp.v1` but `Licence` (whose values carry a full
+    /// prefix; playbook.proto's header), because proto enum values live in the
+    /// PARENT scope: a top-level enum here would put the bare
     /// names LEAN, STANDARD and RICH into `gp.v1` itself, where canonical JSON
     /// needs them to stay unique, and no other enum in the package could ever
     /// spell them (proto/buf.yaml's `ENUM_VALUE_PREFIX` exception says why the
@@ -2553,6 +2604,11 @@ pub struct RulesTable {
     pub collapse: ::core::option::Option<rules_table::Collapse>,
     #[prost(message, optional, tag="26")]
     pub materials: ::core::option::Option<rules_table::Materials>,
+    /// S3's blocks (S3's plan, task con5; decisions-log items 153 (3) and 154).
+    #[prost(message, optional, tag="27")]
+    pub pathing: ::core::option::Option<rules_table::Pathing>,
+    #[prost(message, optional, tag="28")]
+    pub licences: ::core::option::Option<rules_table::Licences>,
 }
 /// Nested message and enum types in `RulesTable`.
 pub mod rules_table {
@@ -2576,8 +2632,7 @@ pub mod rules_table {
         /// The gateway and `gamectl` time every Lull after the first with this
         /// row, and the first with `first_lull_ms` (S1's `econ`, #92).
         ///
-        /// PLACEHOLDER: value is Tuning — owner, at S2's demo (decisions-log item
-        /// 139 (1) ruling 6: the two Lull rows stand for S1).
+        /// PLACEHOLDER: value is Tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         #[prost(int32, tag="2")]
         pub lull_ms: i32,
         /// The interpreter's decision tick, in game milliseconds: how often a
@@ -2595,8 +2650,7 @@ pub mod rules_table {
         /// Lull a different one. Read by the host and the editor, never by the
         /// sim, like `lull_ms`.
         ///
-        /// PLACEHOLDER: value is Tuning — owner, at S2's demo (item 139 (1) ruling
-        /// 6: the two Lull rows stand for S1).
+        /// PLACEHOLDER: value is Tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         #[prost(int32, tag="4")]
         pub first_lull_ms: i32,
     }
@@ -2638,8 +2692,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Match".into
         /// which unit repaths on which tick, so it has to be the same number
         /// everywhere.
         ///
-        /// PLACEHOLDER: 16 is item 69's value — owner, at S2's exit, re-derived once
-        /// the burst frequency is a measurement rather than a spike's estimate.
+        /// PLACEHOLDER: 16 is item 69's value, kept by `tune2` on `g3r`'s measurement — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         #[prost(uint32, tag="5")]
         pub repath_cap_per_tick: u32,
         /// Fog multiplier on an abstract edge, as a fraction: an unseen edge costs
@@ -2667,9 +2720,8 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Match".into
         /// keeps item 59's ceiling property — an estimate is never optimistic
         /// (item 61).
         ///
-        /// PLACEHOLDER: tuning — owner, at S2's demo, with `tune2`'s balance report,
-        /// whose spawn travel line reads this speed (item 139 (1) ruling 6: it
-        /// stands for S1, after it stood at the skeleton's demo and at S1's).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
+        /// The balance report's spawn travel line reads this speed.
         /// `commander.cost_per_second` restates it, and the two move together.
         ///
         /// item 90: 10 — 1.0 voxels/s
@@ -2677,22 +2729,19 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Match".into
         pub commander_cost_per_second: u32,
         /// Build, mining and repair-reclaim drones all walk at the same speed.
         ///
-        /// PLACEHOLDER: tuning — owner, at S3, with the balance check re-run once
-        /// `toward` lets Easy reach past one beacon (item 139 (1) ruling 6: it stands
-        /// for S1, after `tune`'s report kept item 90's seed). The three drone
-        /// kinds' `cost_per_second` restate it: if `tune2` moves
-        /// `units.repair_drone`'s speed in S2, this row and the other two drones'
-        /// move with it there.
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
+        /// The three drone kinds' `cost_per_second` restate it: if `tune3` moves one,
+        /// this row and the other two drones' move with it.
         ///
         /// item 90: 10
         #[prost(uint32, tag="10")]
         pub drone_cost_per_second: u32,
-        /// PLACEHOLDER: tuning — owner, S2.
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 12
         #[prost(uint32, tag="11")]
         pub raider_cost_per_second: u32,
-        /// PLACEHOLDER: tuning — owner, S2.
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 20 — 2.0 voxels/s
         #[prost(uint32, tag="12")]
@@ -2700,14 +2749,13 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Match".into
         /// Voxels of clear air a walker needs above the column it stands on: a
         /// column whose surface is within this many voxels of the world ceiling is
         /// not walkable. The locomotion rule, not a performance knob (the
-        /// register's S2-05; S2's plan, E26). The sim held it as a named constant
-        /// (`pathing.rs`' `HEADROOM_VOXELS`); this is that constant's row, at its
-        /// own value, so a table that carries it moves no chain until S2's `ids`
-        /// swaps the constant for the row.
+        /// register's S2-05; S2's plan, E26). The sim held it as a named constant,
+        /// `HEADROOM_VOXELS`, and this row was that constant's at its own value;
+        /// S2's `ids` #123 reads the row, and the constant is gone (decisions-log
+        /// item 146).
         ///
-        /// PLACEHOLDER: tuning, today's constant — owner, at S2's demo, with
-        /// `tune2`'s report. E26 keeps today's 2; decision 17 proposes nothing for
-        /// it.
+        /// PLACEHOLDER: tuning, the old constant's value — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
+        /// E26 keeps 2; decision 17 proposes nothing for it.
         ///
         /// S2-05: 2
         #[prost(uint32, tag="13")]
@@ -2722,9 +2770,9 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Locomotion"
     pub struct Broadphase {
         /// Cell edge in voxels.
         ///
-        /// PLACEHOLDER: Tuning, tied to unit density — owner, at S2's exit. Item
-        /// 67's caveat: the broadphase is super-linear in density, so this number
-        /// is a real tuning value and not a constant anybody may guess.
+        /// PLACEHOLDER: Tuning, tied to unit density — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
+        /// Item 67's caveat: the broadphase is super-linear in density, so this
+        /// number is a real tuning value and not a constant anybody may guess.
         #[prost(uint32, tag="1")]
         pub cell_size_voxels: u32,
     }
@@ -2821,9 +2869,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Mesher".int
         /// Basic Minimum Income (BMI): the `$` a seat is paid per settlement
         /// (spec section 7).
         ///
-        /// PLACEHOLDER: tuning — owner, at S3, with the balance check re-run once
-        /// `toward` lets Easy reach past one beacon (item 139 (1) ruling 6: it stands
-        /// for S1, after `tune`'s report kept item 90's seed).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 100
         #[prost(uint32, tag="1")]
@@ -2832,9 +2878,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Mesher".int
         /// money is two indemnities" — stays a rule rather than being flattened
         /// into a second number that can drift away from the first.
         ///
-        /// PLACEHOLDER: tuning — owner, at S3, with the balance check re-run once
-        /// `toward` lets Easy reach past one beacon (item 139 (1) ruling 6: it stands
-        /// for S1, after `tune`'s report kept item 90's seed).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 2, so $ 200
         #[prost(uint32, tag="2")]
@@ -2843,16 +2887,12 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Mesher".int
         /// this many percent more, the leader this many percent less, linear
         /// between.
         ///
-        /// PLACEHOLDER: tuning — owner, at S3, with the balance check re-run once
-        /// `toward` lets Easy reach past one beacon (item 139 (1) ruling 6: it stands
-        /// for S1, after `tune`'s report kept item 90's seed).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 10
         #[prost(uint32, tag="3")]
         pub scaling_last_place_bonus_percent: u32,
-        /// PLACEHOLDER: tuning — owner, at S3, with the balance check re-run once
-        /// `toward` lets Easy reach past one beacon (item 139 (1) ruling 6: it stands
-        /// for S1, after `tune`'s report kept item 90's seed).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 5
         #[prost(uint32, tag="4")]
@@ -2868,9 +2908,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Mesher".int
         /// Recycling a standing asset refunds this percentage of its REMAINING
         /// value (spec section 7).
         ///
-        /// PLACEHOLDER: tuning — owner, at S3, with the balance check re-run once
-        /// `toward` lets Easy reach past one beacon (item 139 (1) ruling 6: it stands
-        /// for S1, after `tune`'s report kept item 90's seed).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 50
         #[prost(uint32, tag="6")]
@@ -2878,7 +2916,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Mesher".int
         /// A wreck or a ruin salvages this percentage of the thing's build cost
         /// (S2's destruction).
         ///
-        /// PLACEHOLDER: tuning — owner, S2.
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 25
         #[prost(uint32, tag="7")]
@@ -2886,9 +2924,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Mesher".int
         /// The fabricator's backlog warning: outstanding work items per available
         /// drone, above which the Quartermaster reports a backlog.
         ///
-        /// PLACEHOLDER: tuning — owner, at S3, with the balance check re-run once
-        /// `toward` lets Easy reach past one beacon (item 139 (1) ruling 6: it stands
-        /// for S1, after `tune`'s report kept item 90's seed).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 2
         #[prost(uint32, tag="8")]
@@ -2897,27 +2933,21 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Mesher".int
         /// out of (item 90). With `seam_voxels` below, a seam is worth 300 / 600 /
         /// 1 200 `$`.
         ///
-        /// PLACEHOLDER: tuning — owner, at S3, with the balance check re-run once
-        /// `toward` lets Easy reach past one beacon (item 139 (1) ruling 6: it stands
-        /// for S1, after `tune`'s report kept item 90's seed).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 2 / 4 / 8
         #[prost(message, optional, tag="9")]
         pub ore_yield_per_voxel_dollars: ::core::option::Option<super::ByRichness>,
         /// Ore voxels in one scrap seam, whatever its richness.
         ///
-        /// PLACEHOLDER: tuning — owner, at S3, with the balance check re-run once
-        /// `toward` lets Easy reach past one beacon (item 139 (1) ruling 6: it stands
-        /// for S1, after `tune`'s report kept item 90's seed).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 150
         #[prost(uint32, tag="10")]
         pub seam_voxels: u32,
         /// Game milliseconds one mining drone spends per ore voxel.
         ///
-        /// PLACEHOLDER: tuning — owner, at S3, with the balance check re-run once
-        /// `toward` lets Easy reach past one beacon (item 139 (1) ruling 6: it stands
-        /// for S1, after `tune`'s report kept item 90's seed).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 2000
         #[prost(int32, tag="11")]
@@ -2937,9 +2967,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Mesher".int
         /// refuses any `gp.*` field named with the word `load`, which reads as
         /// loading code or a file (AGENTS.md section 7).
         ///
-        /// PLACEHOLDER: tuning — owner, at S3, with the balance check re-run once
-        /// `toward` lets Easy reach past one beacon (item 139 (1) ruling 6: it stands
-        /// for S1, after `tune`'s report kept revision 4's value).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// S1-25: 16
         #[prost(uint32, tag="12")]
@@ -2956,26 +2984,23 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Economy".in
     /// Field numbers 8-15 stay held for S1's dormancy and S2's brownout
     /// tie-breaks, so those rows keep the one-byte tag range.
     ///
-    /// The supply rows marked for S3 below wait for S3 unless S2's exit lowers
-    /// `map_ceiling_kw` below the map's supply (mapgen's supply-fits-ceiling
-    /// rule, item 91): then they move with it, under `g3r` and `tune2`.
+    /// The whole block is re-read with the map rows in `tune3`'s balance re-run
+    /// (decisions-log items 151 (2) (c) (2) and 152 (1) 1). `tune2` kept
+    /// `map_ceiling_kw` at 190; if `tune3` lowers it below the map's supply,
+    /// mapgen's supply-fits-ceiling rule (item 91) moves the supply rows with it.
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Power {
         /// The pre-placed key core's deep-bore surplus: supply a seat has before
         /// it builds anything.
         ///
-        /// PLACEHOLDER: tuning — owner, at S3, with the balance check re-run once
-        /// `toward` lets Easy reach past one beacon (item 139 (1) ruling 6: it stands
-        /// for S1, after `tune`'s report kept item 90's seed).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 10
         #[prost(uint32, tag="1")]
         pub core_surplus_kw: u32,
         /// A Generator's output, by the richness of the heat vent it sits on.
         ///
-        /// PLACEHOLDER: tuning — owner, at S3, with the balance check re-run once
-        /// `toward` lets Easy reach past one beacon (item 139 (1) ruling 6: it stands
-        /// for S1, after `tune`'s report kept item 90's seed).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 20 / 30 / 40
         #[prost(message, optional, tag="2")]
@@ -2984,15 +3009,16 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Economy".in
         /// row in `Units` is this same 1, so item 65's average and the per-kind
         /// draws agree at the skeleton.
         ///
-        /// PLACEHOLDER: tuning — owner, at S2's exit (item 91 moves all three of
-        /// this, `reserve_percent` and `map_ceiling_kw` together).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with the map rows, in `tune3`'s balance re-run once Easy fights (items 151 (2) (c) (2) and 152 (1) 1).
+        /// Item 91 moves all three of this, `reserve_percent` and `map_ceiling_kw`
+        /// together.
         ///
         /// item 91: 1
         #[prost(uint32, tag="3")]
         pub kw_per_unit: u32,
         /// The headroom item 65 keeps free inside the ceiling, as a percentage.
         ///
-        /// PLACEHOLDER: tuning — owner, at S2's exit (item 91).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with the map rows, in `tune3`'s balance re-run once Easy fights (items 151 (2) (c) (2) and 152 (1) 1).
         ///
         /// item 91: 40
         #[prost(uint32, tag="4")]
@@ -3007,7 +3033,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Economy".in
         /// total against this row: three seats supply 3 x 10 + 3 x 20 + 2 x 30 +
         /// 40 = 190 kW, exactly the ceiling; two seats, 160.
         ///
-        /// PLACEHOLDER: tuning — owner, at S2's exit (item 91).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with the map rows, in `tune3`'s balance re-run once Easy fights (items 151 (2) (c) (2) and 152 (1) 1).
         ///
         /// item 91: 190
         #[prost(uint32, tag="5")]
@@ -3015,9 +3041,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Economy".in
         /// Headroom a dormant asset needs before it may revive, so a grid on the
         /// edge does not oscillate.
         ///
-        /// PLACEHOLDER: tuning — owner, at S3, with the balance check re-run once
-        /// `toward` lets Easy reach past one beacon (item 139 (1) ruling 6: it stands
-        /// for S1, after `tune`'s report kept item 90's seed).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 2
         #[prost(uint32, tag="6")]
@@ -3025,9 +3049,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Economy".in
         /// A beacon's own draw. Net zero through its own key-core, which is why it
         /// is stated rather than assumed (item 90, spec section 5).
         ///
-        /// PLACEHOLDER: tuning — owner, at S3, with the balance check re-run once
-        /// `toward` lets Easy reach past one beacon (item 139 (1) ruling 6: it stands
-        /// for S1, after `tune`'s report kept item 90's seed).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         /// `structures.beacon.draw_kw` restates it, and moves with it.
         ///
         /// item 90: 2
@@ -3043,7 +3065,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Power".into
     /// walking speed is felt directly by the player.
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Commander {
-        /// PLACEHOLDER: tuning — owner, S2.
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 300
         #[prost(uint32, tag="1")]
@@ -3051,9 +3073,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Power".into
         /// Cost units per second, the same unit as `locomotion.*_cost_per_second`
         /// and repeated here because the commander is not a unit kind.
         ///
-        /// PLACEHOLDER: tuning — owner, at S2's demo, with `tune2`'s balance report
-        /// (item 139 (1) ruling 6: it stands for S1, after it stood at the
-        /// skeleton's demo and at S1's).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 10
         #[prost(uint32, tag="2")]
@@ -3062,21 +3082,19 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Power".into
         /// earlier death in the same Push, always completing by segment end (the
         /// spec's "for example 30 s, growing with each death").
         ///
-        /// PLACEHOLDER: tuning — owner, S2.
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 30000
         #[prost(int32, tag="3")]
         pub respawn_base_ms: i32,
-        /// PLACEHOLDER: tuning — owner, S2.
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 15000
         #[prost(int32, tag="4")]
         pub respawn_growth_ms: i32,
         /// How close a walked route has to get before it counts as arrived.
         ///
-        /// PLACEHOLDER: tuning — owner, at S2's demo, with `tune2`'s balance report
-        /// (item 139 (1) ruling 6: it stands for S1, after it stood at the
-        /// skeleton's demo and at S1's).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 2
         #[prost(uint32, tag="5")]
@@ -3091,18 +3109,14 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Power".into
         /// schema, as `locomotion.move_cost_per_tick` does, because deleting a
         /// field is a `buf breaking` failure in WIRE_JSON mode.
         ///
-        /// PLACEHOLDER: tuning — owner, at S2's demo, with `tune2`'s balance report
-        /// (item 139 (1) ruling 6: it stands for S1, after it stood at the
-        /// skeleton's demo and at S1's).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 12
         #[prost(uint32, tag="6")]
         pub placement_range_voxels: u32,
         /// Item 11's "roughly 4-voxel" interface range: touch to change.
         ///
-        /// PLACEHOLDER: tuning — owner, at S2's demo, with `tune2`'s balance report
-        /// (item 139 (1) ruling 6: it stands for S1, after it stood at the
-        /// skeleton's demo and at S1's).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 4
         #[prost(uint32, tag="7")]
@@ -3110,14 +3124,13 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Power".into
         /// How far the commander sees, in voxels: everything within this radius,
         /// with no line of sight (decisions-log item 144 (4); the register's
         /// S1-34). A row beside the per-kind `vision_radius_voxels` of `UnitKind`
-        /// and `StructureKind`, because the commander is not a unit kind. No
-        /// vision constant covers the commander today; S2's `ids` reads the row
-        /// through the one sensor interface (S2's plan, E10).
+        /// and `StructureKind`, because the commander is not a unit kind. S2's
+        /// `ids` #123 reads the row through the one sensor interface (S2's plan,
+        /// E10), and revision 6 set it to decision 17's proposal.
         ///
-        /// PLACEHOLDER: tuning, the scouts' constant 8 — owner, at S2's demo, with
-        /// `tune2`'s report: decision 17 proposes 10.
+        /// PLACEHOLDER: tuning, decision 17's proposal — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
-        /// S1-34: 8
+        /// decision 17: 10
         #[prost(uint32, tag="8")]
         pub vision_radius_voxels: u32,
     }
@@ -3131,10 +3144,12 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Commander".
     /// `interface_times.place_beacon_deploy_ms`, already in the table.
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Beacon {
-        /// The sphere of authority around a beacon, in voxels.
+        /// The sphere of authority around a beacon, in voxels: its BASE radius. A
+        /// finished Resonance Spire on the beacon adds
+        /// `structures.resonance_spire_sphere_bonus_voxels` (S3's plan, E3 and
+        /// decision 6, from `lic`).
         ///
-        /// PLACEHOLDER: tuning — owner, at S2's demo (item 139 (1) ruling 6: it
-        /// stands for S1, after it stood at the skeleton's demo and at S1's).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 24
         #[prost(uint32, tag="1")]
@@ -3142,16 +3157,15 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Commander".
         /// The pre-placed key core's HP. Not purchasable, so it is not a
         /// `Structures` row.
         ///
-        /// PLACEHOLDER: tuning — owner, S2.
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 3000
         #[prost(uint32, tag="2")]
         pub core_hp: u32,
         /// The core's own autocannon (spec section 4: "so a single early raid
-        /// can't eliminate" a seat). Nothing reads it until S2's `fire`.
+        /// can't eliminate" a seat). Read from S2's `fire`.
         ///
-        /// PLACEHOLDER: tuning, decision 17's proposal — owner, at S2's demo, with
-        /// `tune2`'s duel report.
+        /// PLACEHOLDER: tuning, decision 17's proposal — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// range 24, 12 HP, 250 ms
         #[prost(message, optional, tag="3")]
@@ -3165,31 +3179,25 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Beacon".int
     /// item 55's 32 and is not a row: it is the snapshot and state-hash layout,
     /// not a tuning value.
     ///
-    /// The grade and count rows marked for S3 below wait for S3 unless S2's exit
-    /// lowers `power.map_ceiling_kw` below the map's supply (the
-    /// supply-fits-ceiling rule, item 91): then they move with it, under `g3r`
-    /// and `tune2`.
+    /// The grade and count rows are re-read with the power rows in `tune3`'s
+    /// balance re-run (decisions-log items 151 (2) (c) (2) and 152 (1) 1); if it
+    /// lowers `power.map_ceiling_kw` below the map's supply, the
+    /// supply-fits-ceiling rule (item 91) moves them with it.
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Map {
         /// Map extent in voxels. 384 x 384 x 64 — twelve chunks square, two high.
         ///
-        /// PLACEHOLDER: tuning — owner, at S2's demo, with `tune2`'s balance report
-        /// (item 139 (1) ruling 6: it stands for S1, after it stood at the
-        /// skeleton's demo and at S1's).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 384
         #[prost(uint32, tag="1")]
         pub size_x: u32,
-        /// PLACEHOLDER: tuning — owner, at S2's demo, with `tune2`'s balance report
-        /// (item 139 (1) ruling 6: it stands for S1, after it stood at the
-        /// skeleton's demo and at S1's).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 384
         #[prost(uint32, tag="2")]
         pub size_y: u32,
-        /// PLACEHOLDER: tuning — owner, at S2's demo, with `tune2`'s balance report
-        /// (item 139 (1) ruling 6: it stands for S1, after it stood at the
-        /// skeleton's demo and at S1's).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 64
         #[prost(uint32, tag="3")]
@@ -3197,16 +3205,12 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Beacon".int
         /// Spawn zones generated, and their radius. Only OCCUPIED zones are
         /// realised — an unoccupied zone is terrain and nothing else.
         ///
-        /// PLACEHOLDER: tuning — owner, at S2's demo, with `tune2`'s balance report
-        /// (item 139 (1) ruling 6: it stands for S1, after it stood at the
-        /// skeleton's demo and at S1's).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 3
         #[prost(uint32, tag="4")]
         pub spawn_zones: u32,
-        /// PLACEHOLDER: tuning — owner, at S2's demo, with `tune2`'s balance report
-        /// (item 139 (1) ruling 6: it stands for S1, after it stood at the
-        /// skeleton's demo and at S1's).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 24
         #[prost(uint32, tag="5")]
@@ -3229,23 +3233,17 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Beacon".int
         /// the band against 2 x sphere_radius_voxels, not against the placement
         /// range.
         ///
-        /// PLACEHOLDER: tuning — owner, at S3, with the balance check re-run once
-        /// `toward` lets Easy reach past one beacon (item 139 (1) ruling 6: it stands
-        /// for S1, after `tune`'s report kept item 90's seed).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: LEAN
         #[prost(enumeration="super::by_richness::Richness", tag="6")]
         pub start_vent_richness: i32,
-        /// PLACEHOLDER: tuning — owner, at S2's demo, with `tune2`'s balance report
-        /// (item 139 (1) ruling 6: it stands for S1, after it stood at the
-        /// skeleton's demo and at S1's).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 28
         #[prost(uint32, tag="7")]
         pub vent_min_distance_voxels: u32,
-        /// PLACEHOLDER: tuning — owner, at S2's demo, with `tune2`'s balance report
-        /// (item 139 (1) ruling 6: it stands for S1, after it stood at the
-        /// skeleton's demo and at S1's).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 44
         #[prost(uint32, tag="8")]
@@ -3253,23 +3251,17 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Beacon".int
         /// The one starting scrap seam in an occupied spawn zone. Inside the
         /// core's sphere, so the starting mining drone digs from tick one.
         ///
-        /// PLACEHOLDER: tuning — owner, at S3, with the balance check re-run once
-        /// `toward` lets Easy reach past one beacon (item 139 (1) ruling 6: it stands
-        /// for S1, after `tune`'s report kept item 90's seed).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: STANDARD
         #[prost(enumeration="super::by_richness::Richness", tag="9")]
         pub start_seam_richness: i32,
-        /// PLACEHOLDER: tuning — owner, at S2's demo, with `tune2`'s balance report
-        /// (item 139 (1) ruling 6: it stands for S1, after it stood at the
-        /// skeleton's demo and at S1's).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 8
         #[prost(uint32, tag="10")]
         pub seam_min_distance_voxels: u32,
-        /// PLACEHOLDER: tuning — owner, at S2's demo, with `tune2`'s balance report
-        /// (item 139 (1) ruling 6: it stands for S1, after it stood at the
-        /// skeleton's demo and at S1's).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 20
         #[prost(uint32, tag="11")]
@@ -3277,23 +3269,17 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Beacon".int
         /// Contested features, toward the centre of the map: what expansion is
         /// for.
         ///
-        /// PLACEHOLDER: tuning — owner, at S3, with the balance check re-run once
-        /// `toward` lets Easy reach past one beacon (item 139 (1) ruling 6: it stands
-        /// for S1, after `tune`'s report kept item 90's seed).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 2
         #[prost(uint32, tag="12")]
         pub contested_standard_vents: u32,
-        /// PLACEHOLDER: tuning — owner, at S3, with the balance check re-run once
-        /// `toward` lets Easy reach past one beacon (item 139 (1) ruling 6: it stands
-        /// for S1, after `tune`'s report kept item 90's seed).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 1
         #[prost(uint32, tag="13")]
         pub contested_rich_vents: u32,
-        /// PLACEHOLDER: tuning — owner, at S3, with the balance check re-run once
-        /// `toward` lets Easy reach past one beacon (item 139 (1) ruling 6: it stands
-        /// for S1, after `tune`'s report kept item 90's seed).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 3
         #[prost(uint32, tag="14")]
@@ -3314,16 +3300,12 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Beacon".int
         /// segment rather than to 3/2 of it; 3 240 is the separation's number, not
         /// one segment's.)
         ///
-        /// PLACEHOLDER: tuning — owner, at S2's demo, with `tune2`'s balance report
-        /// (item 139 (1) ruling 6: it stands for S1, after it stood at the
-        /// skeleton's demo and at S1's).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 3
         #[prost(uint32, tag="15")]
         pub spawn_separation_pushes_numerator: u32,
-        /// PLACEHOLDER: tuning — owner, at S2's demo, with `tune2`'s balance report
-        /// (item 139 (1) ruling 6: it stands for S1, after it stood at the
-        /// skeleton's demo and at S1's).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 2
         #[prost(uint32, tag="16")]
@@ -3350,11 +3332,9 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Map".into()
         pub cost_per_second: u32,
         /// How far the kind sees, in voxels: everything within this radius, with
         /// no line of sight (decisions-log item 144 (4); the register's S1-34).
-        /// Every kind holds 8, the scouts' constant (the sim's
-        /// `UNIT_VISION_RADIUS_VOXELS`), so the sim's answer is unchanged until
-        /// S2's `ids` reads the rows through the one sensor interface (S2's plan,
-        /// E10) and `tune2` sets them to decision 17's proposal. Each kind's
-        /// marker is on its row in `Units`.
+        /// S2's `ids` #123 reads the rows through the one sensor interface (S2's
+        /// plan, E10) and deleted the sim's old constant; revision 6 set them to
+        /// decision 17's proposal. The marker is on `Units`.
         #[prost(uint32, tag="5")]
         pub vision_radius_voxels: u32,
         /// The kind's gun, on an armed kind only (the raider's, in S2). Absent on
@@ -3377,24 +3357,20 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.UnitKind".i
     /// tuning.
     ///
     /// Each restated half moves with its pair: a kind's `draw_kw` restates
-    /// `power.kw_per_unit` (moving at S2's exit under `g3r` and `tune2`), and the
-    /// drones' `cost_per_second` restates `locomotion.drone_cost_per_second`.
+    /// `power.kw_per_unit`, and the drones' `cost_per_second` restates
+    /// `locomotion.drone_cost_per_second`.
     ///
-    /// PLACEHOLDER: unit vision, today's 8 — owner, at S2's demo, with `tune2`'s
-    /// report. Every kind's `vision_radius_voxels`: decision 17 proposes scout
-    /// 24, raider 12 and the three drones 8 (S1-34; S2's plan, decision 22).
+    /// PLACEHOLDER: unit vision, decision 17's proposals — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
+    /// Every kind's `vision_radius_voxels`: scout 24, raider 12 and the three
+    /// drones 8 (S1-34; S2's plan, decision 22).
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Units {
-        /// PLACEHOLDER: tuning — owner, at S3, with the balance check re-run once
-        /// `toward` lets Easy reach past one beacon (item 139 (1) ruling 6: it stands
-        /// for S1, after `tune`'s report kept item 90's seed).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 20 / 100 / 1 / 10
         #[prost(message, optional, tag="1")]
         pub build_drone: ::core::option::Option<UnitKind>,
-        /// PLACEHOLDER: tuning — owner, at S3, with the balance check re-run once
-        /// `toward` lets Easy reach past one beacon (item 139 (1) ruling 6: it stands
-        /// for S1, after `tune`'s report kept item 90's seed).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 20 / 100 / 1 / 10
         #[prost(message, optional, tag="2")]
@@ -3403,37 +3379,32 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.UnitKind".i
         /// sixth unit kind; the field name is the JSON key and `buf breaking`
         /// makes it permanent, so the equivalence is stated rather than inferred.
         ///
-        /// PLACEHOLDER: tuning — owner, S2.
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 25 / 100 / 1 / 10
         #[prost(message, optional, tag="3")]
         pub repair_drone: ::core::option::Option<UnitKind>,
-        /// PLACEHOLDER: tuning — owner, S2.
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
-        /// PLACEHOLDER: the raider's gun — owner, at S2's demo, with `tune2`'s duel
-        /// report. Decision 17's proposal: range 4, 8 HP, 500 ms (a mortar in 25 s
-        /// alone).
+        /// PLACEHOLDER: the raider's gun — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
+        /// Decision 17's proposal: range 4, 8 HP, 500 ms (a mortar in 25 s alone).
         ///
         /// item 90: 30 / 120 / 1 / 12; gun 4 / 8 / 500
         #[prost(message, optional, tag="4")]
         pub raider: ::core::option::Option<UnitKind>,
-        /// PLACEHOLDER: tuning — owner, S2.
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 10 / 60 / 1 / 20
         #[prost(message, optional, tag="5")]
         pub scout: ::core::option::Option<UnitKind>,
         /// Build drones each occupied seat starts with (item 95: 2).
         ///
-        /// PLACEHOLDER: tuning — owner, at S3, with the balance check re-run once
-        /// `toward` lets Easy reach past one beacon (item 139 (1) ruling 6: it stands
-        /// for S1, after `tune`'s report kept item 90's seed).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         #[prost(uint32, tag="6")]
         pub starting_build_drones: u32,
         /// Mining drones each occupied seat starts with (item 95: 1).
         ///
-        /// PLACEHOLDER: tuning — owner, at S3, with the balance check re-run once
-        /// `toward` lets Easy reach past one beacon (item 139 (1) ruling 6: it stands
-        /// for S1, after `tune`'s report kept item 90's seed).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         #[prost(uint32, tag="7")]
         pub starting_mining_drones: u32,
     }
@@ -3452,8 +3423,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Units".into
         #[prost(uint32, tag="3")]
         pub draw_kw: u32,
         /// How far the structure sees, in voxels, as `UnitKind`'s row reads (item
-        /// 144 (4); S1-34): every kind 8 in revision 5, and nothing reads it until
-        /// S2's `ids`.
+        /// 144 (4); S1-34). The marker is on `Structures`.
         #[prost(uint32, tag="4")]
         pub vision_radius_voxels: u32,
         /// The structure's weapon, on an armed kind only (the autocannon and the
@@ -3466,9 +3436,8 @@ const NAME: &'static str = "StructureKind";
 const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.StructureKind".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.RulesTable.StructureKind".into() }}
     /// One weapon (spec sections 4 and 9; S2's plan, decision 17, E2 and E13).
-    /// Nothing reads it until S2's `fire`. Every value is decision 17's
-    /// proposal, the owner's at S2's demo with `tune2`'s duel report; each
-    /// armed row's marker says so where the weapon is declared.
+    /// Read from S2's `fire`. Every value is decision 17's proposal; each armed
+    /// row's marker says so where the weapon is declared.
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Weapon {
         /// How far it reaches, in voxels: a target counts as in range when its
@@ -3522,11 +3491,10 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Weapon".int
     /// The buildable structures, plus the two things priced per voxel or per
     /// charge rather than per building.
     ///
-    /// PLACEHOLDER: structure vision, today's 8 — owner, at S2's demo, with
-    /// `tune2`'s report. Every kind's `vision_radius_voxels`: decision 17
-    /// proposes autocannon 20, mortar 12, Generator and survey post 8; it
-    /// proposes none for a beacon, which sees by its sphere, or for the
-    /// resonance spire (S3).
+    /// PLACEHOLDER: structure vision, decision 17's proposals — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
+    /// Every kind's `vision_radius_voxels`: autocannon 20, mortar 12, Generator
+    /// and survey post 8; decision 17 proposes none for a beacon, which sees by
+    /// its sphere, or for the resonance spire, and both keep 8.
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Structures {
         /// A placed beacon. Its draw is `power.beacon_base_draw_kw` restated here
@@ -3540,10 +3508,8 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Weapon".int
         /// out). A reader pricing a new beacon's effect on headroom counts 0 kW,
         /// not this row.
         ///
-        /// PLACEHOLDER: tuning — owner, at S2's demo, for the cost and HP only, with
-        /// `tune2`'s balance report (item 139 (1) ruling 6: it stands for S1, after
-        /// it stood at the skeleton's demo and at S1's). `draw_kw` restates
-        /// `power.beacon_base_draw_kw` and moves with it.
+        /// PLACEHOLDER: tuning, the cost and HP only — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
+        /// `draw_kw` restates `power.beacon_base_draw_kw` and moves with it.
         ///
         /// item 90: 60 / 800 / 2
         #[prost(message, optional, tag="1")]
@@ -3554,34 +3520,30 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Weapon".int
         /// than three — the decoded row is still 80 / 600 / 0. First zero-valued
         /// row in the table, so it is said once here and once in rules/README.md.
         ///
-        /// PLACEHOLDER: tuning — owner, at S3, with the balance check re-run once
-        /// `toward` lets Easy reach past one beacon (item 139 (1) ruling 6: it stands
-        /// for S1, after `tune`'s report kept item 90's seed).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 80 / 600 / 0
         #[prost(message, optional, tag="2")]
         pub generator: ::core::option::Option<StructureKind>,
-        /// PLACEHOLDER: tuning — owner, S2.
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
-        /// PLACEHOLDER: the autocannon's gun — owner, at S2's demo, with `tune2`'s
-        /// duel report. Decision 17's proposal: range 20, 12 HP, 250 ms, 48 HP a
-        /// second, a raider in 2.5 s.
+        /// PLACEHOLDER: the autocannon's gun — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
+        /// Decision 17's proposal: range 20, 12 HP, 250 ms, 48 HP a second, a raider
+        /// in 2.5 s.
         ///
         /// item 90: 60 / 500 / 2; gun 20 / 12 / 250
         #[prost(message, optional, tag="3")]
         pub autocannon: ::core::option::Option<StructureKind>,
-        /// PLACEHOLDER: tuning — owner, S2.
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
-        /// PLACEHOLDER: the mortar's shell — owner, at S2's demo, with `tune2`'s
-        /// duel report. Decision 17's proposal: range 40, 60 HP flat within a
-        /// splash of 3, crater 2, 4 000 ms, 8 voxels a second (5 s at full range).
+        /// PLACEHOLDER: the mortar's shell — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
+        /// Decision 17's proposal: range 40, 60 HP flat within a splash of 3, crater
+        /// 2, 4 000 ms, 8 voxels a second (5 s at full range).
         ///
         /// item 90: 90 / 400 / 3; 40 / 60 / 4000
         #[prost(message, optional, tag="4")]
         pub mortar: ::core::option::Option<StructureKind>,
-        /// PLACEHOLDER: tuning — owner, at S3, with the balance check re-run once
-        /// `toward` lets Easy reach past one beacon (item 139 (1) ruling 6: it stands
-        /// for S1, after `tune`'s report kept item 90's seed).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 30 / 200 / 1
         #[prost(message, optional, tag="5")]
@@ -3594,14 +3556,14 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Weapon".int
         /// Wall, priced per voxel; HP is by material rather than by structure,
         /// which is why a wall is not a `StructureKind`.
         ///
-        /// PLACEHOLDER: tuning — owner, S2.
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 1
         #[prost(uint32, tag="7")]
         pub wall_cost_per_voxel: u32,
         /// One demolition charge.
         ///
-        /// PLACEHOLDER: tuning — owner, S2.
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// item 90: 15
         #[prost(uint32, tag="8")]
@@ -3619,13 +3581,26 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Weapon".int
         /// unless it is a positive multiple of the tick rate, so it moves in steps
         /// of 20; the constant is gone.
         ///
-        /// PLACEHOLDER: tuning — owner, at S3, with the balance check re-run once
-        /// `toward` lets Easy reach past one beacon (item 139 (1) ruling 6: it stands
-        /// for S1, after `tune`'s report kept revision 4's value).
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// S1-24: 60
         #[prost(uint32, tag="9")]
         pub build_hp_per_second: u32,
+        /// How far a finished Resonance Spire grows its own beacon's sphere, in
+        /// voxels (spec section 8: "a larger sphere for its own beacon"). S3's plan,
+        /// decision 6, ruled by decisions-log item 154 (4): the sphere grows by HALF
+        /// ITS BASE RADIUS, 24 to 36 at today's `beacon.sphere_radius_voxels`. A row
+        /// in voxels rather than a ratio, because the arithmetic is integer and the
+        /// rounding of an odd base has to be somebody's decision;
+        /// `crates/proto/tests/proto.rs` holds it to half the base, so a pull
+        /// request that tunes one moves the other. The radius is derived, never
+        /// stored (E3). Nothing reads it until S3's `lic`.
+        ///
+        /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights.
+        ///
+        /// decision 6: 12
+        #[prost(uint32, tag="10")]
+        pub resonance_spire_sphere_bonus_voxels: u32,
     }
 impl ::prost::Name for Structures {
 const NAME: &'static str = "Structures";
@@ -3686,16 +3661,13 @@ const NAME: &'static str = "Verifier";
 const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Verifier".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.RulesTable.Verifier".into() }}
     /// Combat's numbers that are not a weapon's (S2's plan, decision 17, ruled
-    /// by decisions-log item 144 (11)). Nothing reads them until the S2 lane
-    /// that builds each rule; each value is decision 17's proposal, the owner's at
-    /// S2's demo with `tune2`'s duel and balance reports.
+    /// by decisions-log item 144 (11)). S2's `dfnd`, `atk` and `site` read them.
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Combat {
         /// How long after its last damage a beacon counts as under attack, game
         /// milliseconds: the window Defend's urgency band reads.
         ///
-        /// PLACEHOLDER: tuning, decision 17's proposal — owner, at S2's demo, with
-        /// `tune2`'s report.
+        /// PLACEHOLDER: tuning, decision 17's proposal — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// decision 17: 10000
         #[prost(int32, tag="1")]
@@ -3703,8 +3675,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Verifier".i
         /// The threat-route surcharge: a step inside a known threat's range costs
         /// this many times its ordinary cost.
         ///
-        /// PLACEHOLDER: tuning, decision 17's proposal — owner, at S2's demo, with
-        /// `tune2`'s report.
+        /// PLACEHOLDER: tuning, decision 17's proposal — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// decision 17: 4
         #[prost(uint32, tag="2")]
@@ -3713,16 +3684,14 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Verifier".i
         /// this radius down to the wall's footing, whatever its level (decision
         /// 40).
         ///
-        /// PLACEHOLDER: tuning, decision 17's proposal — owner, at S2's demo, with
-        /// `tune2`'s report.
+        /// PLACEHOLDER: tuning, decision 17's proposal — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// decision 17: 4
         #[prost(uint32, tag="3")]
         pub charge_radius_voxels: u32,
         /// Game milliseconds from a charge's planting to its blast.
         ///
-        /// PLACEHOLDER: tuning, decision 17's proposal — owner, at S2's demo, with
-        /// `tune2`'s report.
+        /// PLACEHOLDER: tuning, decision 17's proposal — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// decision 17: 5000
         #[prost(int32, tag="4")]
@@ -3730,8 +3699,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Verifier".i
         /// Hit points one working repair drone restores per second of game time
         /// (decision 43 prices it).
         ///
-        /// PLACEHOLDER: tuning, decision 17's proposal — owner, at S2's demo, with
-        /// `tune2`'s report.
+        /// PLACEHOLDER: tuning, decision 17's proposal — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// decision 17: 20
         #[prost(uint32, tag="5")]
@@ -3739,12 +3707,22 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Verifier".i
         /// Game milliseconds a build drone spends levelling or refilling one voxel
         /// (terraform, decisions-log item 144 (5)).
         ///
-        /// PLACEHOLDER: tuning, decision 17's proposal — owner, at S2's demo, with
-        /// `tune2`'s report.
+        /// PLACEHOLDER: tuning, decision 17's proposal — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// decision 17: 1000
         #[prost(int32, tag="6")]
         pub terraform_ms_per_voxel: i32,
+        /// The hit points a demolition charge's blast takes from each unit and
+        /// structure inside `charge_radius_voxels` (decisions-log item 151 (2) (c)
+        /// (3)). In S2 the charge cuts voxels only. Proposed at the mortar's splash
+        /// damage, the one blast the table already prices. Nothing reads it until
+        /// S3's `lic`, and `tune3` sets its value.
+        ///
+        /// PLACEHOLDER: tuning, the mortar's 60 — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights.
+        ///
+        /// item 151 (2) (c) (3): 60
+        #[prost(uint32, tag="7")]
+        pub charge_damage_hp: u32,
     }
 impl ::prost::Name for Combat {
 const NAME: &'static str = "Combat";
@@ -3756,8 +3734,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Combat".int
         /// How far beyond its sphere's edge a Defend beacon's pickets stand, in
         /// voxels (spec section 19's picket radius).
         ///
-        /// PLACEHOLDER: tuning, decision 17's proposal — owner, at S2's demo, with
-        /// `tune2`'s report.
+        /// PLACEHOLDER: tuning, decision 17's proposal — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// decision 17: 6
         #[prost(uint32, tag="1")]
@@ -3775,7 +3752,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Defend".int
         /// The largest region the support search follows, in voxels. A region
         /// larger than this does not fall.
         ///
-        /// PLACEHOLDER: tuning, decision 11's proposal — owner, at S2's demo.
+        /// PLACEHOLDER: tuning, decision 11's proposal — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// decision 11: 4096
         #[prost(uint32, tag="1")]
@@ -3783,7 +3760,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Defend".int
         /// The flat damage a falling region deals to each asset on it or under
         /// where it lands.
         ///
-        /// PLACEHOLDER: tuning, decision 11's proposal — owner, at S2's demo.
+        /// PLACEHOLDER: tuning, decision 11's proposal — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// decision 11: 100
         #[prost(uint32, tag="2")]
@@ -3791,7 +3768,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Defend".int
         /// The support search's budget per tick, in voxels visited: four regions'
         /// worth, so the search is bounded and its worst case measured in G3'.
         ///
-        /// PLACEHOLDER: tuning, decision 11's proposal — owner, at S2's demo.
+        /// PLACEHOLDER: tuning, decision 11's proposal — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// decision 11: 16384
         #[prost(uint32, tag="3")]
@@ -3802,9 +3779,8 @@ const NAME: &'static str = "Collapse";
 const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Collapse".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.RulesTable.Collapse".into() }}
     /// The terrain's and the walls' materials (S2's plan, decisions 10 and 40,
-    /// ruled by item 144 (11); E14). Nothing reads them until S2's `fire`; a
-    /// wall's two levels (whole, cracked) are the ruling's and the catalogue's,
-    /// not a row.
+    /// ruled by item 144 (11); E14). Read from S2's `fire`; a wall's two levels
+    /// (whole, cracked) are the ruling's and the catalogue's, not a row.
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Materials {
         /// How many blasts a terrain voxel takes, by kind: each blast inside a
@@ -3817,7 +3793,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Collapse".i
         /// The lowest wall a Build target may ask for, in voxels: a one-voxel wall
         /// is climbable, so it blocks nothing (decision 40).
         ///
-        /// PLACEHOLDER: tuning, decision 40's proposal — owner, at S2's demo.
+        /// PLACEHOLDER: tuning, decision 40's proposal — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// decision 40: 2
         #[prost(uint32, tag="2")]
@@ -3827,7 +3803,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Collapse".i
         /// never removed, mined or levelled; 0 is refused at load, by the sim lane
         /// that reads the row, because the support rule needs a floor (E14).
         ///
-        /// PLACEHOLDER: tuning, E14's proposal — owner, at S2's demo.
+        /// PLACEHOLDER: tuning, E14's proposal — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
         ///
         /// E14: 1
         #[prost(uint32, tag="3")]
@@ -3837,9 +3813,9 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Collapse".i
     pub mod materials {
         /// One terrain kind's blast levels each.
         ///
-        /// PLACEHOLDER: tuning, decision 10's proposal — owner, at S2's demo, with
-        /// `tune2`'s duel report. A mortar shell clears dirt, ore and vent at once
-        /// and cracks the stone beneath, so a crater in rock costs two shells.
+        /// PLACEHOLDER: tuning, decision 10's proposal — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights (item 152 (1) 1).
+        /// A mortar shell clears dirt, ore and vent at once and cracks the stone
+        /// beneath, so a crater in rock costs two shells.
         #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct BlastLevels {
             /// decision 10: 1
@@ -3864,6 +3840,55 @@ impl ::prost::Name for Materials {
 const NAME: &'static str = "Materials";
 const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Materials".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.RulesTable.Materials".into() }}
+    /// The sim's two pathing shape values given rows (the register's S3-10, spike
+    /// G2's section 9.9; S3's plan, E16). Each row holds the named constant's own
+    /// value (`crates/sim/src/pathing.rs`), so a table that carries them moves no
+    /// chain. S3's `lic` reads them in place of the constants, and `cert3`
+    /// measures them with P3.
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+    pub struct Pathing {
+        /// A cluster border's open run longer than this many cells takes two
+        /// entrances, one at each end; a run no longer takes one, in its middle
+        /// (`LONG_RUN`).
+        ///
+        /// PLACEHOLDER: tuning, the constant's value — owner, at S3's demo, with `cert3`'s P3 measurement.
+        ///
+        /// S3-10: 6
+        #[prost(uint32, tag="1")]
+        pub long_run: u32,
+        /// How many route nodes ahead of its current one a walker's smoothing looks
+        /// for a straight line (`SMOOTH_LOOKAHEAD`).
+        ///
+        /// PLACEHOLDER: tuning, the constant's value — owner, at S3's demo, with `cert3`'s P3 measurement.
+        ///
+        /// S3-10: 16
+        #[prost(uint32, tag="2")]
+        pub smooth_lookahead: u32,
+    }
+impl ::prost::Name for Pathing {
+const NAME: &'static str = "Pathing";
+const PACKAGE: &'static str = "gp.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Pathing".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.RulesTable.Pathing".into() }}
+    /// What the Ledger's licences ask for (spec section 8). One row per trigger
+    /// the stage builds: S3's Spire alone (decisions-log item 153 (3)); S4 adds
+    /// the others. The licences themselves are `gp.v1.Licence`.
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+    pub struct Licences {
+        /// A seat earns the Resonance Spire's licence when, at a settlement, this
+        /// many of its finished, powered Generators stand on this many DIFFERENT
+        /// vents (spec section 8's "Running Generators on 2 vents at a settlement";
+        /// S3's plan, decision 6). Nothing reads it until S3's `lic`.
+        ///
+        /// PLACEHOLDER: tuning, the spec's 2 — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights.
+        ///
+        /// spec section 8: 2
+        #[prost(uint32, tag="1")]
+        pub resonance_vents: u32,
+    }
+impl ::prost::Name for Licences {
+const NAME: &'static str = "Licences";
+const PACKAGE: &'static str = "gp.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Licences".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.RulesTable.Licences".into() }}
 }
 impl ::prost::Name for RulesTable {
 const NAME: &'static str = "RulesTable";
@@ -3957,10 +3982,11 @@ const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.Mandate".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.Mandate".into() }}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BuiltinMandate {
-    /// PLACEHOLDER: the mandate id, a string rather than an enum — owner, when section 6's mandate catalogue is written.
     /// A string id rather than an enum, for the same reason as
     /// BuiltinOperator. The five writs are Build, Defend, Attack, Mine and
-    /// Survey; naming them is section 6's contract.
+    /// Survey; naming them is section 6's contract. It stays here, as the mandate
+    /// messages stay in playbook.proto (the register's M-14, closed by S3's plan,
+    /// E20): nothing reads this seam, and moving it would serve no reader.
     #[prost(string, tag="1")]
     pub builtin_id: ::prost::alloc::string::String,
     /// The built-in program this mandate runs. Kept as an explicit field because

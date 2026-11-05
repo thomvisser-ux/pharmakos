@@ -83,6 +83,7 @@ fn generate() -> Vec<(&'static str, &'static str, String)> {
         }),
         segment_length_ms: 180_000,
         prose: "Round 1. You hold the core and one Generator.".to_owned(),
+        licences_held: Vec::new(),
     };
     // `gp.api.v1.BeaconSummary` gains fields in wave 6 (decisions-log item 111), and
     // canonical JSON omits a field at its default, so this fixture's bytes do not move
@@ -149,6 +150,7 @@ fn feed_fixture() -> GetSegmentFeedResponse {
         kind: kind.to_owned(),
         text: text.to_owned(),
         at: None,
+        ledger_memo: None,
     };
     GetSegmentFeedResponse {
         events: vec![

@@ -41,7 +41,7 @@ host                      serve one match to the game client over this process's
 
 ## The playbook vocabulary (gp.v1)
 
-106 messages. A field's name is the one the canonical form writes, which is
+108 messages. A field's name is the one the canonical form writes, which is
 the .proto spelling and not lowerCamelCase. A reserved number is one held on
 purpose: field numbers are added, never renumbered or reused.
 
@@ -422,6 +422,8 @@ gp.v1.RulesTable
   defend                       24  gp.v1.RulesTable.Defend
   collapse                     25  gp.v1.RulesTable.Collapse
   materials                    26  gp.v1.RulesTable.Materials
+  pathing                      27  gp.v1.RulesTable.Pathing
+  licences                     28  gp.v1.RulesTable.Licences
 
 gp.v1.RulesTable.Beacon
   sphere_radius_voxels         1   uint32
@@ -443,6 +445,7 @@ gp.v1.RulesTable.Combat
   charge_fuse_ms               4   int32
   repair_hp_per_second         5   uint32
   terraform_ms_per_voxel       6   int32
+  charge_damage_hp             7   uint32
 
 gp.v1.RulesTable.Commander
   hp                           1   uint32
@@ -483,6 +486,9 @@ gp.v1.RulesTable.InterfaceTimes
   switch_mandate_ms            8   int32
   recycle_ms                   9   int32
   place_beacon_deploy_ms       10  int32
+
+gp.v1.RulesTable.Licences
+  resonance_vents              1   uint32
 
 gp.v1.RulesTable.Locomotion
   step_cost_cardinal           1   uint32
@@ -541,6 +547,10 @@ gp.v1.RulesTable.Mesher
   light_max                    4   uint32
   light_atten                  5   uint32
 
+gp.v1.RulesTable.Pathing
+  long_run                     1   uint32
+  smooth_lookahead             2   uint32
+
 gp.v1.RulesTable.Power
   core_surplus_kw              1   uint32
   generator_output_kw          2   gp.v1.ByRichness
@@ -568,6 +578,7 @@ gp.v1.RulesTable.Structures
   wall_cost_per_voxel          7   uint32
   demolition_charge_cost_dollars 8   uint32
   build_hp_per_second          9   uint32
+  resonance_spire_sphere_bonus_voxels 10  uint32
 
 gp.v1.RulesTable.UnitKind
   cost_dollars                 1   uint32
@@ -688,7 +699,7 @@ gp.v1.Weakest
 
 ## The enumerations (gp.v1)
 
-21 of them. JSON spells an enum by value name.
+22 of them. JSON spells an enum by value name.
 
 
 gp.v1.AttackSettings.AfterAction
@@ -777,6 +788,10 @@ gp.v1.InterfaceRow.QuartermasterPriority
   LOW                              1
   NORMAL                           2
   HIGH                             3
+
+gp.v1.Licence
+  LICENCE_UNSPECIFIED              0
+  LICENCE_RESONANCE_SPIRE          1
 
 gp.v1.MandateSettings.Roe
   ROE_UNSPECIFIED                  0

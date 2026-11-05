@@ -1074,12 +1074,6 @@ fn gun(weapon: Option<rules_table::Weapon>, name: &str) -> (u32, u32, i32) {
 #[test]
 fn the_rules_table_carries_s2s_rows() {
     let table = committed_rules_table();
-    assert_eq!(
-        table.revision, 6,
-        "rules.proto: `revision` is bumped whenever a value changes; revision 5 added S2's \
-         rows and revision 6 set decision 17's vision"
-    );
-
     let locomotion = table.locomotion.expect("the locomotion block");
     assert_eq!(
         locomotion.headroom_voxels, 2,
@@ -1227,6 +1221,86 @@ fn the_rules_table_carries_s2s_new_blocks() {
         materials.bedrock_layers_voxels, 1,
         "E14's proposal: never 0, because the support rule needs a floor"
     );
+}
+
+#[test]
+fn the_rules_table_carries_s3s_rows() {
+    let table = committed_rules_table();
+    assert_eq!(
+        table.revision, 7,
+        "rules.proto: `revision` is bumped whenever a value changes; revision 7 added S3's rows"
+    );
+
+    let pathing = table.pathing.expect("the pathing block");
+    assert_eq!(
+        (pathing.long_run, pathing.smooth_lookahead),
+        (6, 16),
+        "S3-10: the sim's LONG_RUN and SMOOTH_LOOKAHEAD, at their own values"
+    );
+    assert_eq!(
+        table.combat.expect("the combat block").charge_damage_hp,
+        60,
+        "item 151 (2) (c) (3): proposed at the mortar's splash damage"
+    );
+    assert_eq!(
+        table
+            .structures
+            .expect("the structures block")
+            .resonance_spire_sphere_bonus_voxels,
+        12,
+        "S3's plan, decision 6: 24 to 36"
+    );
+    assert_eq!(
+        table.licences.expect("the licences block").resonance_vents,
+        2,
+        "spec section 8: Generators on 2 vents"
+    );
+}
+
+#[test]
+fn the_spire_bonus_is_half_the_base_sphere() {
+    // S3's plan, decision 6, ruled by decisions-log item 154 (4): "the sphere
+    // grows by half its base radius". The row is in voxels, so nothing else
+    // keeps the ruling true when the base sphere is tuned.
+    let table = committed_rules_table();
+    let base = table.beacon.expect("the beacon block").sphere_radius_voxels;
+    let bonus = table
+        .structures
+        .expect("the structures block")
+        .resonance_spire_sphere_bonus_voxels;
+    assert_eq!(
+        bonus.checked_mul(2),
+        Some(base),
+        "structures.resonance_spire_sphere_bonus_voxels {bonus} is not half \
+         beacon.sphere_radius_voxels {base}; move the two together"
+    );
+}
+
+#[test]
+fn every_s3_row_has_its_readme_line() {
+    // S3's plan, `con5`'s acceptance: a row nobody can look up is a number
+    // nobody can question. Each new row opens a line of the table in
+    // rules/README.md under its full name, with its value, and is a marked
+    // PLACEHOLDER there as it is in rules.proto.
+    let readme = fs::read_to_string(workspace_root().join("rules").join("README.md"))
+        .expect("reading rules/README.md");
+    for row in [
+        "pathing.long_run` 6",
+        "pathing.smooth_lookahead` 16",
+        "combat.charge_damage_hp` 60",
+        "structures.resonance_spire_sphere_bonus_voxels` 12",
+        "licences.resonance_vents` 2",
+    ] {
+        let opening = format!("| `{row} |");
+        let line = readme
+            .lines()
+            .find(|line| line.starts_with(&opening))
+            .unwrap_or_else(|| panic!("rules/README.md has no table row opening {opening}"));
+        assert!(
+            line.contains("**PLACEHOLDER**"),
+            "rules/README.md's line for `{row} is not marked a PLACEHOLDER"
+        );
+    }
 }
 
 #[test]
@@ -1737,6 +1811,8 @@ fn the_s1_economy_wire_round_trips_in_its_documented_spellings() {
             }),
             tally: None,
             seat_tallies: Vec::new(),
+            licences_awarded: Vec::new(),
+            ledger_memos: Vec::new(),
         },
         concat!(
             r#"{"prose":"Round 1 settled.","settlement":{"bmi_dollars":105,"band_rank":2,"#,
@@ -2138,6 +2214,134 @@ fn the_s2_recap_tallies_round_trip_in_their_documented_spellings() {
         ),
         &["seat_tallies", "seat"],
     );
+}
+
+#[test]
+fn the_s3_licence_wire_round_trips_in_its_documented_spellings() {
+    // S3's plan, E2 and E3; decisions-log item 153 (3).
+    use gp_api::{BeaconSummary, GetBriefingResponse, GetRecapResponse, LicenceAward};
+    use gp_v1::Licence;
+
+    round_trips(
+        &GetBriefingResponse {
+            licences_held: vec![Licence::ResonanceSpire.into()],
+            ..GetBriefingResponse::default()
+        },
+        r#"{"licences_held":["LICENCE_RESONANCE_SPIRE"]}"#,
+        &["licences_held"],
+    );
+
+    // Each row names its seat, because the list at match end is every seat's.
+    round_trips(
+        &GetRecapResponse {
+            licences_awarded: vec![
+                LicenceAward {
+                    seat: "seat.0".to_owned(),
+                    licence: Licence::ResonanceSpire.into(),
+                    round_awarded: 2,
+                },
+                LicenceAward {
+                    seat: "seat.1".to_owned(),
+                    licence: Licence::ResonanceSpire.into(),
+                    round_awarded: 3,
+                },
+            ],
+            ..GetRecapResponse::default()
+        },
+        concat!(
+            r#"{"licences_awarded":["#,
+            r#"{"seat":"seat.0","licence":"LICENCE_RESONANCE_SPIRE","round_awarded":2},"#,
+            r#"{"seat":"seat.1","licence":"LICENCE_RESONANCE_SPIRE","round_awarded":3}]}"#
+        ),
+        &["licences_awarded", "seat", "licence", "round_awarded"],
+    );
+
+    // The radius has presence: another seat's beacon leaves it unset, which is
+    // not a radius of 0.
+    round_trips(
+        &BeaconSummary {
+            beacon_id: "b_00".to_owned(),
+            sphere_radius_voxels: Some(36),
+            ..BeaconSummary::default()
+        },
+        r#"{"beacon_id":"b_00","sphere_radius_voxels":36}"#,
+        &["sphere_radius_voxels"],
+    );
+
+    // The wire drops the prefix, as it does for every enum (item 80), and the
+    // spelling it answers is the blueprint's own id.
+    assert_eq!(
+        scope::wire_name("gp.v1.Licence", "LICENCE_RESONANCE_SPIRE"),
+        "resonance_spire"
+    );
+    assert_eq!(
+        scope::from_wire_name("gp.v1.Licence", "resonance_spire").as_deref(),
+        Some("LICENCE_RESONANCE_SPIRE")
+    );
+}
+
+#[test]
+fn the_s3_ledger_memos_round_trip_in_their_documented_spellings() {
+    // S3's plan, E5: on the feed as a kind of its own, and listed on the recap.
+    use gp_api::ledger_memo::Id;
+    use gp_api::{Event, GetRecapResponse, LedgerMemo};
+
+    let memo = LedgerMemo {
+        id: Id::PowerShortfall.into(),
+        text: "Notice of shortfall.".to_owned(),
+    };
+    round_trips(
+        &Event {
+            at_ms: 42_000,
+            kind: "ledger_memo".to_owned(),
+            text: "Notice of shortfall.".to_owned(),
+            at: None,
+            ledger_memo: Some(memo.clone()),
+        },
+        concat!(
+            r#"{"at_ms":42000,"kind":"ledger_memo","text":"Notice of shortfall.","#,
+            r#""ledger_memo":{"id":"POWER_SHORTFALL","text":"Notice of shortfall."}}"#
+        ),
+        &["ledger_memo", "id"],
+    );
+    round_trips(
+        &GetRecapResponse {
+            ledger_memos: vec![memo],
+            ..GetRecapResponse::default()
+        },
+        concat!(
+            r#"{"ledger_memos":[{"id":"POWER_SHORTFALL","#,
+            r#""text":"Notice of shortfall."}]}"#
+        ),
+        &["ledger_memos"],
+    );
+
+    // Decision 4's four triggers, each with its wire spelling, and a sentinel.
+    for (value, wire) in [
+        ("POWER_SHORTFALL", "power_shortfall"),
+        ("DARK_STAKE", "dark_stake"),
+        ("FIRST_DEATH", "first_death"),
+        ("FIRST_LICENCE", "first_licence"),
+    ] {
+        assert_eq!(scope::wire_name("gp.api.v1.LedgerMemo.Id", value), wire);
+    }
+}
+
+#[test]
+fn s3s_unspecified_values_keep_their_full_prefix() {
+    for (enum_name, zero) in [
+        ("gp.v1.Licence", "LICENCE_UNSPECIFIED"),
+        ("gp.api.v1.LedgerMemo.Id", "ID_UNSPECIFIED"),
+    ] {
+        let declared = schema()
+            .enumeration(enum_name)
+            .unwrap_or_else(|| panic!("{enum_name} is in the schema"));
+        assert_eq!(
+            declared.value_by_name(zero).map(|value| value.number),
+            Some(0),
+            "{enum_name}'s zero is {zero}"
+        );
+    }
 }
 
 #[test]
