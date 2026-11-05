@@ -14,7 +14,10 @@
 //! # The criterion
 //!
 //! The seats are two, and the human is seat 0. A seed passes when all of this
-//! holds, each read from the real generator and the real resolver:
+//! holds, read from the real generator and the sim's own site rules, except
+//! the stepping stones of clause 3: `toward` is not built yet, so [`stone`]
+//! restates E23 over clear terrain, and `pred` replaces it with the real
+//! resolver.
 //!
 //! 1. **The second vent** is the vent nearest seat 0's core, by squared column
 //!    distance with ties to the lowest `(y, x)`, that is not the vent the
@@ -23,10 +26,10 @@
 //! 2. **It is not given.** With nothing placed, no site covers it, so a seat
 //!    that never expands never earns the licence (decision 13's "earnable by a
 //!    seat that expands, not given").
-//! 3. **At most [`MOST_PLACEMENTS`] beacons reach it.** Each stone is the site
-//!    `toward` will choose (S3's plan, E23): the legal site inside the seat's
-//!    spheres nearest the vent by the item-61 estimator, ties to the lowest
-//!    `(y, x)`. The placement that covers the vent is the sim's own
+//! 3. **At most [`MOST_PLACEMENTS`] beacons reach it.** Each stone is this
+//!    file's restatement of `toward` (S3's plan, E23): the legal site inside the
+//!    seat's spheres nearest the vent by the item-61 estimator, ties to the
+//!    lowest `(y, x)`. The placement that covers the vent is the sim's own
 //!    [`covering_site`], and it counts: "three stepping stones" is three
 //!    beacons, the third of them covering the vent. A beacon stands inside
 //!    another's 24-voxel sphere and covers 24 more, so three reach 96 voxels at
@@ -52,6 +55,7 @@
 )]
 
 use pharmakos_sim::features::FeatureKind;
+use pharmakos_sim::interpreter::StepFailure;
 use pharmakos_sim::math::fixed::Fx;
 use pharmakos_sim::math::quantity::Ms;
 use pharmakos_sim::pathing::estimate::{Fog, Speed, estimate};
@@ -60,7 +64,7 @@ use pharmakos_sim::pathing::surface::Node;
 use pharmakos_sim::seams::MandateKind;
 use pharmakos_sim::tables::{PRIORITY_NORMAL, SeatId};
 use pharmakos_sim::targeting::{
-    Ground, anchor_in_sphere, column_of, covering_site, spiral_offsets,
+    FeatureSpec, Ground, column_of, covering_site, on_vent_counted, spiral_offsets,
 };
 use pharmakos_sim::{MatchSettings, RulesTable, World, WorldConfig, default_rules_path, mapgen};
 use std::path::PathBuf;
@@ -128,9 +132,23 @@ fn squared(from: [i32; 2], to: [i32; 2]) -> i64 {
     dx * dx + dy * dy
 }
 
-/// The second vent's anchor, by the criterion's first clause, from the map the
-/// generator made. Cheap beside the resolver, so it rules out most seeds.
-fn second_vent(seed: u64, rules: &RulesTable) -> Result<[i32; 2], Miss> {
+/// The vent nearest seat 0's core that is not its start vent, with its squared
+/// column distances from each core.
+struct NearestVent {
+    anchor: [i32; 2],
+    own: i64,
+    enemy: i64,
+}
+
+impl NearestVent {
+    /// Its column distance from seat 0's core, in whole voxels, rounded down.
+    fn voxels(&self) -> i64 {
+        self.own.isqrt()
+    }
+}
+
+/// [`NearestVent`], from the map the generator made.
+fn nearest_other_vent(seed: u64, rules: &RulesTable) -> Result<NearestVent, Miss> {
     let map = mapgen::generate(seed, rules, 2).expect("the committed rules table makes a map");
     let zone = |seat: u8| {
         map.report
@@ -146,7 +164,7 @@ fn second_vent(seed: u64, rules: &RulesTable) -> Result<[i32; 2], Miss> {
         .as_ref()
         .map(|vent| [vent.at[0], vent.at[1]])
         .expect("an occupied zone has its vent");
-    let vent = map
+    let anchor = map
         .features
         .features()
         .iter()
@@ -155,16 +173,27 @@ fn second_vent(seed: u64, rules: &RulesTable) -> Result<[i32; 2], Miss> {
         // item 62: the key ends in `(y, x)`, unique per anchor, so it is total.
         .min_by_key(|anchor| (squared(*anchor, own), anchor[1], anchor[0]))
         .ok_or(Miss::NoSecondVent)?;
-    if squared(vent, enemy) <= squared(vent, own) {
+    Ok(NearestVent {
+        anchor,
+        own: squared(anchor, own),
+        enemy: squared(anchor, enemy),
+    })
+}
+
+/// The second vent's anchor, by the criterion's first clause. Cheap beside the
+/// resolver, so it rules out most seeds.
+fn second_vent(seed: u64, rules: &RulesTable) -> Result<[i32; 2], Miss> {
+    let near = nearest_other_vent(seed, rules)?;
+    if near.enemy <= near.own {
         return Err(Miss::NearerTheEnemy);
     }
     let sphere = i64::from(rules.sphere_radius_voxels());
     let placements = i64::try_from(MOST_PLACEMENTS).expect("three");
     let reach = sphere * (placements + 1);
-    if squared(vent, own) > reach * reach {
+    if near.own > reach * reach {
         return Err(Miss::TooFar);
     }
-    Ok(vent)
+    Ok(near.anchor)
 }
 
 /// The ladder's first Push, in game milliseconds, read from the rules.
@@ -200,10 +229,11 @@ fn walk(ground: &Ground<'_>, scratch: &mut Scratch, from: Node, to: Node) -> Opt
     .map(|found| (i64::from(found.cost), found.ticks))
 }
 
-/// The stone E23's `toward` picks: the legal site inside the seat's spheres
-/// with the least estimated travel to the vent's anchor, ties to the lowest
-/// `(y, x)`. The candidates are walked in the order of the estimator's own
-/// lower bound, so the answer is exact and most of them are never estimated.
+/// A restatement of E23's `toward`, which `pred` builds and then replaces this
+/// with: the legal site inside the seat's spheres with the least estimated
+/// travel over clear terrain to the vent's anchor, ties to the lowest `(y, x)`.
+/// The candidates are walked in the order of the estimator's own lower bound,
+/// so most of them are never estimated.
 fn stone(
     ground: &Ground<'_>,
     scratch: &mut Scratch,
@@ -363,11 +393,11 @@ fn the_golden_seed_does_not_pass() {
     assert_eq!(probe(GOLDEN_SEED, &rules()), Err(Miss::TooFar));
 }
 
-/// The third placement is the sim's own `covering`, and the vent's anchor is
-/// inside the sphere of the beacon it names: the licence's second vent is
-/// covered by the rule a playbook's `covered {}` will read.
+/// A Generator can stand on the second vent from the third placement: the vent
+/// is live, and the sim's own `on`, which a playbook's Build target reads,
+/// names it from there and from no earlier placement.
 #[test]
-fn the_last_placement_covers_the_vent_by_the_sims_own_test() {
+fn a_build_target_can_name_the_vent_from_the_third_placement() {
     let rules = rules();
     let mut world = world_of(PROBATION_SEED, &rules);
     let seat = SeatId::new(0);
@@ -375,15 +405,36 @@ fn the_last_placement_covers_the_vent_by_the_sims_own_test() {
         .features()
         .index_of(FeatureKind::Vent, PINNED_VENT)
         .expect("the pinned vent");
-    for [x, y] in PINNED_SITES {
+    let mut scratch = {
+        let ground = world.ground();
+        Scratch::for_map(ground.surface, ground.rules.hpa_cluster_voxels())
+            .expect("the map takes a search")
+    };
+    let spec = FeatureSpec::Name {
+        kind: FeatureKind::Vent,
+        anchor: PINNED_VENT,
+    };
+    for (placement, [x, y]) in PINNED_SITES.into_iter().enumerate() {
         let point = world.ground().standing(x, y).expect("a pinned site stands");
+        let found = on_vent_counted(&world.ground(), &mut scratch, seat, point, None, None, spec);
+        if placement + 1 == PINNED_SITES.len() {
+            let site = found.expect("the third placement names the vent");
+            assert_eq!(site.feature, feature);
+        } else {
+            assert_eq!(
+                found.map_err(|failed| failed.reason),
+                Err(StepFailure::NoTarget),
+                "placement {placement} is a stone and does not reach the vent"
+            );
+        }
         world
             .place_beacon_directly(seat, point, MandateKind::None, PRIORITY_NORMAL)
             .expect("room for a stone");
     }
-    let [x, y] = PINNED_SITES[2];
-    let last = world.ground().standing(x, y).expect("the third site");
-    assert!(anchor_in_sphere(&world.ground(), last, feature));
+    assert!(
+        world.ground().is_live(feature),
+        "the vent is there to build on"
+    );
 }
 
 #[test]
@@ -391,10 +442,11 @@ fn the_last_placement_covers_the_vent_by_the_sims_own_test() {
 fn every_passing_seed_is_listed() {
     let rules = rules();
     for seed in 0..SURVEY_SEEDS {
+        let distance = nearest_other_vent(seed, &rules)
+            .map_or_else(|miss| format!("{miss:?}"), |near| near.voxels().to_string());
         match probe(seed, &rules) {
-            Ok(chain) => println!("{seed} passes: {chain:?}"),
-            Err(Miss::TooFar) => {}
-            Err(miss) => println!("{seed} misses: {miss:?}"),
+            Ok(chain) => println!("{seed} at {distance} passes: {chain:?}"),
+            Err(miss) => println!("{seed} at {distance} misses: {miss:?}"),
         }
     }
 }
