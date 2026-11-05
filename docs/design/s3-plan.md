@@ -77,15 +77,16 @@ while the owner watches, and presses Ready to end a Lull.
    it above, and the connector goes away. The owner adds a condition through family → predicate →
    parameters (own beacon → has a structure → Generator). One entry, *queue a Resonance Spire*, is
    greyed with a lock and its reason: "needs the Resonance licence: run Generators on two vents at
-   a settlement". The owner adds a `toward` placement at the second vent the run sheet names.
+   a settlement". The owner adds the `toward` placements at the second vent the run sheet names.
 3. **Save and Load.** The owner saves the playbook as a JSONC file, closes it, loads it back, and
    the comment typed in step 2's file is still there. A file holding a `set_flag` is refused on
    Load with its code and pointer.
 4. **Round 1's Push, the first memo.** A Generator is built ahead of its supply and a beacon sheds;
    the event list shows the Ledger's power-shortfall memo in its deadpan voice (decision 4). The
-   commander places the `toward` beacon, a stepping stone toward the second vent.
-5. **Round 2, the licence.** The owner carries the playbook with one more `toward` step, which
-   places a beacon covering the second vent, and a Generator target on it. At round 2's settlement
+   commander places the `toward` beacons, the stepping stones toward the second vent, on the schedule
+   the paragraph below this list gives.
+5. **Round 2, the licence.** The owner carries the playbook with its last placement, the beacon
+   covering the second vent, and a Generator target on it. At round 2's settlement
    the seat runs Generators on two vents: the recap shows "Licence awarded: Resonance Spire", and
    the first-licence memo explains what it now allows.
 6. **Round 3's Lull.** The lock is gone. To the route's visit at the core the owner adds a
@@ -108,6 +109,14 @@ while the owner watches, and presses Ready to end a Lull.
    is sure to destroy it. If decision 13 takes its second option, the licence beat (steps 4 to 8's
    stepping stones, licence, queue and growth) is shown the same way, from `lic`'s
    `resonance-spire` scenario, and the live demo plays the golden seed's three rounds.
+
+**Three placements, on decision 13's seed (`sim3a` #163; item 156).** The seed is 20. Its second vent
+is 80 voxels from the core, and two placements reach 72 at best, so the beat takes three placements,
+the covering beacon among them. Only two schedules keep the fourth round's Lull: two stones in round
+1 and the cover in round 2, or one stone in round 1 and two placements in round 2. One placement in
+each of rounds 1 to 3 brings the licence at round 3's settlement and leaves no Lull to hold the
+larger sphere. `lic`'s `resonance-spire` scenario chooses between the two by what the money allows,
+and `demo3`'s sheet plays what it chose.
 
 **Why the fourth round (a finding, checked for this fix pass).** On every three-seat line of
 `tests/golden/mapgen/expected.features.txt`, read against the cores in `expected.bore.txt`, each
@@ -685,6 +694,11 @@ change moves `report_hash` is granted, for the re-bless alone, `tests/golden/gat
   Generators on two vents, the licence at a settlement, the queue, the growth, a target beyond the
   old radius built the round after) and `spire-lost` (staged by its two playbooks: the other seat's
   Attack destroys the Spire, the radius returns, the event log shows it).
+- **The seed's money (item 156).** `resonance-spire` is the first proof that seed 20 can be earned: at
+  least $340 for three beacons and two Generators, against a $200 start and $100 a settlement before
+  the standing band, with a beacon's deploy charged at its start. If it can't be, this lane re-pins
+  `crates/sim/tests/probation_seed.rs` and `host_link.gd`'s `MATCH_SEED` together, trying 48, 55 and 64
+  in that order, and says why in its PR.
 - **Named places, sequenced (B3 of the reviews).** The two event kinds and `spire_present` need
   their arms in the gateway's exhaustive `audience_of` (`crates/gateway/src/surface.rs` ~2104) and
   `event_text` for the branch to build. `gwp` owns the gateway while `lic` runs, so `lic` makes those
@@ -708,7 +722,8 @@ change moves `report_hash` is granted, for the re-bless alone, `tests/golden/gat
   lane is open: after `ed3a` merges, before `ed3b` starts. **Branch** `feat/gateway-probation`.
 - **Builds:** E6's `preset` on the config line, with the lobby writing it in the same PR, and, under
   decision 13, `host_link.gd`'s `MATCH_SEED` set to `sim3a`'s Probation seed (the watch check's own
-  seed unchanged); E7's
+  seed unchanged), with a test that holds it to the pin in `probation_seed.rs`, so a re-pin can't
+  leave the lobby on a stale seed (item 156); E7's
   untimed Lulls and the refusal of a reported countdown in a Probation match; E5's memos for
   decision 4's power-shortfall, dark-Stake and first-death triggers, on the feed and the recap, their
   copy in `strings.rs` (the first-licence memo is `gwr`'s, once `lic`'s event kind exists); E1's
@@ -753,7 +768,9 @@ change moves `report_hash` is granted, for the re-bless alone, `tests/golden/gat
     "count carried to S3").
   - **The G3′ load with raids** (E13): the gate's layout with Attack beacons and their launch
     settings, and a variant with every seat's playbook at size B (E24's test (c)); `cert3` re-runs
-    both.
+    both. A test asserts `attack_launched` above zero on the hosted segment, because `sim3a`'s row
+    test drives `Runner::step` with no seals (item 156). `g3/layout.rs`' comment that the seam carries
+    no settings is rewritten here.
   - `perf-alarms` gains the figures as notices (one step per alarm, GitHub's ten-notice limit);
     `p3-budget` and `p1-budget` fail at E12's doubled numbers or on a missing verdict;
     `tests/harness.rs`' list of restated items extended.
@@ -788,12 +805,16 @@ change moves `report_hash` is granted, for the re-bless alone, `tests/golden/gat
   only (the enemy predicates the sighting table, with its freshness); `toward`'s site (E23);
   Survey's re-scan as decision 7 rules (`survey.rs` ~135), with the per-cell explore time it needs
   as a hashed, snapshotted column (`SNAPSHOT_VERSION` 16); the refusal-table lifts, with the
-  verifier's E-codes left for `vfy6`; two scenarios on decision 13's seed: `toward-stepping-stone` (a
-  beacon placed toward a far vent in round 1, from it the vent covered in round 2) and
+  verifier's E-codes left for `vfy6`; two scenarios on decision 13's seed: `toward-stepping-stone` (the
+  stones placed toward the far vent, and from them the vent covered by round 2, on section 1.1's
+  schedule) and
   `enemy-known-rule` (a Defend handler fires on `enemy_units_near` with a fresh sighting and not on
   a stale one).
 - **Implements:** register U-07 (sim half), S1's decision 3; item 152 (1) 6. **Needs:** `con6`, `lic`
-  merged; decisions 2, 7 and 13. **Acceptance:** each predicate has an interpreter transcript case;
+  merged; decisions 2, 7 and 13. **Acceptance:** `probation_seed.rs`'s `stone` restatement replaced by
+  a call to the sim's own `toward`, its pins kept or re-pinned with the cause named, and E23's "over
+  the terrain the seat knows" settled there, with the fog reading written down (item 156); each
+  predicate has an interpreter transcript case;
   no committed scenario's chain moves except where the re-scan changes a Survey beacon's scouting; a
   predicate never reads another seat's state (a confinement test); §4.8's three places for the
   explore-time column. **Contract PR:** yes (the state hash and `SNAPSHOT_VERSION` 16, under
@@ -826,7 +847,9 @@ change moves `report_hash` is granted, for the re-bless alone, `tests/golden/gat
   beacon's mandate and Build targets, from `get_beacon`'s detail (cut 1); S3-18's rendered travel
   figure drawn in place of the raw milliseconds (`strings.gd` ~183); and finding C (item 139 (2),
   (5)): a client test that Alt-click on a vent composes the description, `covering {vent {NEAREST,
-  UNCOVERED}}`, with the owner's hand check at P6a and any failure fixed here. Nothing here
+  UNCOVERED}}`, with the owner's hand check at P6a and any failure fixed here; and two findings of
+  `docs/demo/p6-run-sheet.md`, weighed with P6a's result in this lane's brief: the editor has no way
+  to start an empty playbook, and the first framing leaves the core at the panel's edge. Nothing here
   validates, ranks or computes (rule 4); the main session's docs PR names the new pieces in
   AGENTS.md §3 rule 4.
 - **Implements:** register S3-17, S3-01, S3-18 (client half); item 139 (2) C. **Needs:** `gwr` and
@@ -914,7 +937,9 @@ change moves `report_hash` is granted, for the re-bless alone, `tests/golden/gat
 ### `tune3` — the size budget, the rooms and the re-read rows
 
 - **Owns:** `rules/rules.v1.json`, `rules/README.md`, `proto/gp/v1/rules.proto`'s comments (the
-  third `proto/**` PR, E21), and as named places the constants E17 lists in `crates/sim/src/world.rs`
+  third `proto/**` PR, E21), and as named places `probation_seed.rs`' pins with `host_link.gd`'s
+  `MATCH_SEED`, when a row it moves reds the pin (`prob` owns that file over the same days, so
+  whichever of the two merges second carries the re-pin; item 156), and the constants E17 lists in `crates/sim/src/world.rs`
   and `interpreter.rs` and the budget's reader in `crates/verifier/src/limits.rs` (~175–184), while
   no lane owns those crates; the balance check `crates/gamectl/tests/balance.rs`; the nightly result
   golden's re-bless. **Branch** `feat/rules-s3-tune`.
@@ -1032,8 +1057,9 @@ S3 lanes pay (`scripts/merge-train.sh`'s `MATRIX_ONLY` paths: `crates/sim/`, `cr
   `cargo xtask determinism --bless` names `tune3` alone.
 - **Briefs** carry: the operator's global rules on errors and the no-personal-data rule; the lane's
   decisions as ruled; `CARGO_TARGET_DIR` on every cargo and commit command; a commit-message file of
-  the lane's own (item 151 (3)); and, for `lic`, `gwp` and `opr3`, the sequenced last commit of
-  section 4.1.
+  the lane's own (item 151 (3)); for each `crates/sim` lane, that it classifies the `saturating_*`
+  and `let ... else` sites it touches in money and hashed state (item 156); and, for `lic`, `gwp` and
+  `opr3`, the sequenced last commit of section 4.1.
 - **The main session's docs PRs** carry, beside the rulings: spec §3's Probation paragraph (the
   memos as decision 4 rules, untimed Lulls by preset, the map as decision 13 rules), §8 (one licence
   from S3, the mechanism general, decision 6's readings), §13 (the chips, the vocabulary read, the
