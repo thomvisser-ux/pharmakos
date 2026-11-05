@@ -94,8 +94,7 @@ or an enum value breaks files on disk even when the wire tags are untouched.
    fills it: `DefendSettings` and `AttackSettings` (S2, with combat), the
    broadcast message bodies (S4, with radio), the rest of the predicate
    catalogue (S3), and the blueprint and capability catalogues (spec section
-   8). Whether the mandate messages eventually move to
-   `proto/gp/v1/mandate.proto` is still the section-6 contract's call.
+   8). The mandate messages stay where they are (S3's plan, E20).
 
 4. **A written-out default does not survive the canonical encoder.** Line 26
    of `expand_east.jsonc` writes `"schema_version": {"major":1,"minor":0}`;

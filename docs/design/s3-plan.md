@@ -335,7 +335,7 @@ puts that reading to the owner.
   encodes nothing while empty (AGENTS.md §4.8, item 136's rule), so a chain whose seats earn nothing
   does not move. The three places in one PR: the state hash, the snapshot (`SNAPSHOT_VERSION` 14 →
   15, an older snapshot refused with its typed version error), the goldens. The licence is one
-  proto enum, `gp.v1.Licence` (`LICENCE_UNSPECIFIED` 0, `LICENCE_RESONANCE_SPIRE` 1), added by `con5`
+  proto enum, `gp.v1.Licence` (`LICENCE_UNSPECIFIED` 0, `RESONANCE_SPIRE` 1), added by `con5`
   and shared by the sim, the verifier and the gateway's wire, so no layer spells a licence as a
   string; the sim's table stores its value, and S4 adds values at the end. The check runs once per
   settlement, after income, in seat order; an eliminated seat's rows are removed on the tick it is
@@ -480,7 +480,7 @@ puts that reading to the owner.
 - **E20. The mandate messages stay in `playbook.proto`.** M-14's `mandate.proto` move would renumber
   nothing but would move every generated path and the schema goldens for no reader; both copies of
   the marker are closed by `con5` with that reason.
-- **E21. One `proto/**` PR, one `xtask` or `.github/**` PR, at a time.** `con5`, then `con6`, then
+- **E21. One `proto/**` PR, one `xtask` or `.github/**` PR, at a time.** `con5`, then `con5b`, then `con6`, then
   `tune3` (its `rules.proto` marker re-dates) for `proto/**`; `bench3` (xtask), then `cert3` (xtask
   and `.github/**`) for the harness. A lane that finds it needs another such edit stops and asks to
   be sequenced.
@@ -652,6 +652,22 @@ change moves `report_hash` is granted, for the re-bless alone, `tests/golden/gat
   and `no_sim.rs` green; the screenshot goldens re-blessed with the panel's new layout, named; the
   headless watch check run by hand. **Contract PR:** no. **PLACEHOLDERs:** none. **Agent-days:** 4.
 
+### `con5b` — `proto/**`, `crates/sim`, `crates/verifier`: the three `optional` settings
+
+- **Owns:** `proto/gp/v1/playbook.proto`, the generated tree, and as named places the five files
+  `con5`'s PR lists in `crates/sim` and `crates/verifier`. **Branch** `feat/proto-optional-settings`.
+- **Builds:** `MineSettings.flee_on_threat`, `BuildSettings.rebuild_destroyed` and
+  `repair_threshold_pct` as `optional`. Today an edit row writing `false` or `0` verifies, costs no
+  fields and silently does nothing. After this lane the written value takes effect and is priced as
+  one field; an omitted one leaves the setting alone; I0004 stays on `None | Some(0)`. The failing
+  tests come first.
+- **When:** after `sim3a` #163 and `con5` #167 merge and before `lic` and `con6` start, the only gap
+  before about day 19 when both crates are free. `con5` built it, so its agent runs it.
+- **Implements:** item 148 (4); item 146 (3) (l), which accepted the gap only until S3. **Acceptance:**
+  `buf breaking` green in `WIRE_JSON` mode with no `ignore_only` (the reviews ran this); no chain and no
+  `report_hash` golden moves, because no committed JSONC writes these as `false` or `0`; the docs golden
+  moves by its `oneof` lines, named in the PR. **Contract PR:** yes. **Agent-days:** 0.5.
+
 ### `con6` — the second `proto/**` pull request: the rule list's wire, predicates and `toward`
 
 - **Owns:** as `con5`. **Branch** `feat/proto-s3-vocabulary`.
@@ -720,6 +736,14 @@ change moves `report_hash` is granted, for the re-bless alone, `tests/golden/gat
   `probation_seed.rs`, `host_link.gd`'s `MATCH_SEED` and this scenario in one commit, the lane's last,
   after `gwp` merges. If neither cures it, this lane stops and the main session puts decision 13 to
   the owner.
+- **Load refusals and audience (item 156).** Once this lane reads `con5`'s rows, load refuses a missing
+  `pathing` or `licences` block; `long_run` below 1, because a one-cell run emits two transitions and a
+  comb of them silently drops transitions (`clusters.rs` ~650, ~526), giving a route that exists and
+  can't be found; `resonance_vents` below 1, which would earn every seat the licence at its first
+  settlement; `smooth_lookahead` above `MAX_ROUTE_NODES`; and a base plus bonus past `i16`, checked as
+  `picket_radius_of` does. Each takes a line in `a_row_out_of_range_is_refused_at_load`.
+  `licence_awarded`'s arm in `audience_of` is the owning seat only, because a `Public` audience would
+  announce a seat's licence between rounds (item 145 (7)).
 - **Named places, sequenced (B3 of the reviews).** The two event kinds and `spire_present` need
   their arms in the gateway's exhaustive `audience_of` (`crates/gateway/src/surface.rs` ~2104) and
   `event_text` for the branch to build. `gwp` owns the gateway while `lic` runs, so `lic` makes those
@@ -758,7 +782,8 @@ change moves `report_hash` is granted, for the re-bless alone, `tests/golden/gat
   route numbers them), and item 143 (4)'s `safe_playbook_filed` line (`strings.rs`
   ~460), which says "The Lull ran out" even when Ready ended it, reworded to say which ended it;
   the markers it owns re-dated (`viewfeed.rs` ~63 to S4, `crates/gateway/src/surface/knowledge.rs`
-  ~677 to S6). **The S2 demo's findings (item 155 (3) 5, 6 and 7; `ed3a` #166):** a seat named on
+  ~677 to S6, `watch.rs` ~150 to S7 as decision 14 rules). The memo event's audience is the seat it
+  was issued to. **The S2 demo's findings (item 155 (3) 5, 6 and 7; `ed3a` #166):** a seat named on
   `fallback_engaged`'s line; `SegmentFeed::page` (`crates/gateway/src/feed.rs`), which re-filters the
   bus by the viewer's vision at each read while its cursor indexes the filtered list, so sight that
   grows re-delivers earlier rows and sight that shrinks loses events, its regression tests being the
@@ -811,6 +836,8 @@ change moves `report_hash` is granted, for the re-bless alone, `tests/golden/gat
 
 ### `gwr` — `crates/gateway` + `crates/plan-core`: the rule list's reads and the licences on the wire
 
+- **Fog (item 156).** A test holds `sphere_radius_voxels` unset on another seat's beacon, and `Scope`'s
+  radii are filled for own beacons only, because that table is a `report_hash` input.
 - **Owns:** `crates/gateway`, `crates/plan-core`. **Branch** `feat/gateway-rule-list`.
 - **Builds:** E8's chips in `render.rs`, with their own golden under `tests/golden/plan-core/`;
   `get_vocabulary` (scope `docs`), every entry from the schema and the rules table, its locks from

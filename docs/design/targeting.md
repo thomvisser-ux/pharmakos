@@ -332,8 +332,8 @@ distance) put it nearer 14 to 16. S1's plan confirms the figure.
 - The non-hashed `target_bound` event for replay readers.
 - The fallback latch.
 - Publishing `resolve_refs`, `extract_template` and rebind (v1.1).
-- Aligning `BeaconRef.nearest`, which is octile distance today, with this page's "nearest", before
-  the public v0.1.
+- Aligning `BeaconRef.nearest` with this page's "nearest". It stays octile distance through the public
+  v0.1, for `cond.rs`'s stated cost reason (item 156).
 - Withholding the seed from seat tokens (S3, item 127 (13)). A local agent with file access can
   still read `match.json`, and the docs say so.
 - Basing liveness, reachability and the estimator's connectivity oracle on the seat's terrain
