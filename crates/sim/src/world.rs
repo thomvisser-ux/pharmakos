@@ -143,7 +143,7 @@ pub const PHASE_ORDER: [Phase; 12] = [
 /// in evaluation units.
 const HARNESS_WORK_BUDGET: u32 = 1_000_000;
 
-/// PLACEHOLDER: the world total of beacons a match may place on top of the cores, shared equally per seat — owner, at S2's demo, with `tune2`'s totals, which keep G3'-real's certified 300 / 40 / 120 (g3r #147; ruling 7 of S1's stage demo, decisions-log item 139 (1), kept the total and the per-seat split for S1; register S1-37).
+/// PLACEHOLDER: the world total of beacons a match may place on top of the cores, shared equally per seat — owner, at S3's demo (item 152 (1) 2), with `tune3`'s totals, which keep G3'-real's certified 300 / 40 / 120 (g3r #147; ruling 7 of S1's stage demo, decisions-log item 139 (1), kept the total and the per-seat split for S1; register S1-37).
 ///
 /// Forty is item 63's world total. Since S1 the room is **per seat**: each
 /// seat may place [`room_per_seat`] of the total, the total divided by the
@@ -163,7 +163,7 @@ const HARNESS_WORK_BUDGET: u32 = 1_000_000;
 /// and not in the rules table.
 const BEACON_TABLE_ROOM: u32 = 40;
 
-/// PLACEHOLDER: the world total of units a match may fabricate on top of the starting force, shared equally per seat — owner, at S2's demo, with `tune2`'s totals, which keep G3'-real's certified 300 / 40 / 120 (g3r #147; ruling 7 of S1's stage demo, decisions-log item 139 (1), kept the total and the per-seat split for S1; register S1-37).
+/// PLACEHOLDER: the world total of units a match may fabricate on top of the starting force, shared equally per seat — owner, at S3's demo (item 152 (1) 2), with `tune3`'s totals, which keep G3'-real's certified 300 / 40 / 120 (g3r #147; ruling 7 of S1's stage demo, decisions-log item 139 (1), kept the total and the per-seat split for S1; register S1-37).
 ///
 /// Item 63 fixes the world total at **300 units**; since S1 each seat may
 /// field [`room_per_seat`] of it on top of its own starting force (100 a seat
@@ -178,7 +178,7 @@ const BEACON_TABLE_ROOM: u32 = 40;
 /// Generators can power", which this only bounds.
 pub(crate) const UNIT_TABLE_ROOM: u32 = 300;
 
-/// PLACEHOLDER: the world total of structures a match may build, shared equally per seat since S1 ("Build targets and structures follow", `docs/design/targeting.md`) — owner, at S2's demo, with `tune2`'s totals for the per-seat split, which keep G3'-real's certified 300 / 40 / 120 (g3r #147; ruling 7 of S1's stage demo, decisions-log item 139 (1), kept it for S1; register S1-37); the total is the owner's at S2 with the capability catalogue (register S2-08).
+/// PLACEHOLDER: the world total of structures a match may build, shared equally per seat since S1 ("Build targets and structures follow", `docs/design/targeting.md`) — owner, at S3's demo (item 152 (1) 2), with `tune3`'s totals for the per-seat split, which keep G3'-real's certified 300 / 40 / 120 (g3r #147; ruling 7 of S1's stage demo, decisions-log item 139 (1), kept it for S1; register S1-37); the total's own row, register S2-08, closed on `g3r` #147's measurement (item 152 (1) 2).
 ///
 /// Three a beacon at [`BEACON_TABLE_ROOM`], which covers a Generator on every
 /// vent a map carries plus the Survey posts and turrets S2 adds. A seat's

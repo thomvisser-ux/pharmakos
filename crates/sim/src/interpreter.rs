@@ -630,14 +630,10 @@ pub enum Action {
     Move {
         /// Where to.
         to: Place,
-        /// The pace the author asked for.
-        ///
-        /// PLACEHOLDER: `AVOID_KNOWN_THREATS` routes as `DIRECT` — owner, at S2.
-        /// `AVOID_KNOWN_THREATS` routes exactly as `DIRECT` does
-        /// at the skeleton, because there are no known threats to avoid — the
-        /// knowledge store and the threat weighting are S2's and S3's. Kept in
-        /// the compiled plan so that the day it means something, nothing about
-        /// the playbook has to change (owner, at S2).
+        /// The pace the author asked for: `AVOID_KNOWN_THREATS` prices the
+        /// reach of the seat's known threats into the commander's route (S2's
+        /// `atk`, decision 12; `World::gather_route_zones`), and every other
+        /// pace routes direct.
         avoid_known_threats: bool,
     },
     /// Interface with a beacon. Completes when all rows are committed.

@@ -130,7 +130,7 @@ pub const NO_CARRIER: u32 = u32::MAX;
 /// What one wall column costs the breach search to pass, on top of the step
 /// onto it: the demolition cost of E23's second cost mode.
 ///
-/// PLACEHOLDER: the breach search's demolition cost per wall column, ten cardinal steps — owner, at S2's demo, with `tune2`'s report.
+/// PLACEHOLDER: the breach search's demolition cost per wall column, ten cardinal steps — owner, at S3's demo (item 152 (1) 2), with `tune3`'s balance re-run.
 pub const BREACH_COLUMN_COST: i32 = 100;
 
 /// How many columns one breach search may close before it gives up, counted
@@ -280,7 +280,7 @@ impl AttackSettings {
     /// The retarget rule the force reads: the one written, or
     /// [`Retarget::None`] when none is (an empty Attack arm).
     ///
-    /// PLACEHOLDER: an empty Attack arm reads its retarget as NONE, its after-action as `REGROUP_AT_STAGING`, its staging as the beacon and its waves as one — owner, S2 demo.
+    /// PLACEHOLDER: an empty Attack arm reads its retarget as NONE, its after-action as `REGROUP_AT_STAGING`, its staging as the beacon and its waves as one — owner, at S3's demo (item 152 (1) 2).
     #[must_use]
     pub const fn retarget_reading(self) -> Retarget {
         match self.retarget {
