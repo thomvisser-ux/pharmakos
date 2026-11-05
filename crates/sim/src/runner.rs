@@ -1157,6 +1157,23 @@ impl Runner {
     /// a layout puts there at tick 0. So a save of a laid-out match, resumed
     /// at round 1 tick 0, cannot take a second layout.
     pub fn seed_layout(&mut self, layout: &Layout) -> Result<(), LayoutRefused> {
+        self.seed_layout_with_settings(layout, &[])
+    }
+
+    /// [`Runner::seed_layout`], with mandate settings for the layout's beacons
+    /// (S3's plan, E13): an Attack beacon with a target and a launch raids,
+    /// where a plain layout's gathers and never launches. A seat never reaches
+    /// this: it is the match host's, as the layout itself is.
+    ///
+    /// # Errors
+    ///
+    /// As [`Runner::seed_layout`], and the world's refusals of a row
+    /// ([`LayoutRefused`]), which leave the world as it was.
+    pub fn seed_layout_with_settings(
+        &mut self,
+        layout: &Layout,
+        settings: &[LayoutSettings],
+    ) -> Result<(), LayoutRefused> {
         let lobby = self.phase() == MatchPhase::Lull
             && self.round() == 1
             && self.tick() == Tick::ZERO
@@ -1168,7 +1185,7 @@ impl Runner {
         if self.world.interpreter().any_sealed() {
             return Err(LayoutRefused::AfterASeal);
         }
-        self.world.seed_layout(layout)?;
+        self.world.seed_layout(layout, settings)?;
         self.frozen = FrozenSnapshot::of(&self.world);
         Ok(())
     }
@@ -1302,6 +1319,58 @@ pub struct LayoutBeacon {
     pub units: Vec<(crate::tables::UnitKind, u32)>,
 }
 
+/// One beacon's mandate settings in a layout (S3's plan, E13): the list sits
+/// beside a [`Layout`] rather than in it, so every `Layout` and `LayoutBeacon`
+/// literal already written means what it meant, and a layout with no rows
+/// places exactly the world it always did.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct LayoutSettings {
+    /// The beacon, as an index into [`Layout::beacons`].
+    pub beacon: usize,
+    /// What it is set to.
+    pub settings: LayoutMandateSettings,
+}
+
+/// The settings a [`LayoutSettings`] row writes: one arm per mandate that takes
+/// them from a layout. Item 152 (1) 10 asks for the Attack arm alone; another
+/// mandate's is added here when a load needs it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LayoutMandateSettings {
+    /// An Attack beacon's settings, which a beacon on any other writ refuses.
+    Attack(crate::attack::AttackSettings),
+}
+
+/// Which setting of a [`LayoutSettings`] row a world refused.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LayoutSetting {
+    /// The target names nothing, a beacon that is not an enemy's living one, a
+    /// commander's seat this match has not got or the beacon's own, or a voxel
+    /// off the map.
+    Aim,
+    /// The staging point is off the map.
+    Staging,
+    /// The launch's segment time is negative.
+    LaunchMs,
+    /// The retreat's percentage is outside 1 to 100.
+    RetreatPct,
+    /// The retreat's time is negative.
+    RetreatMs,
+}
+
+impl LayoutSetting {
+    /// The setting's name, for a refusal's words.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            LayoutSetting::Aim => "target",
+            LayoutSetting::Staging => "staging point",
+            LayoutSetting::LaunchMs => "launch time",
+            LayoutSetting::RetreatPct => "retreat percentage",
+            LayoutSetting::RetreatMs => "retreat time",
+        }
+    }
+}
+
 /// Why [`Runner::seed_layout`] refused a layout.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum LayoutRefused {
@@ -1328,6 +1397,28 @@ pub enum LayoutRefused {
     NoRoom {
         /// `beacon` or `unit`.
         what: &'static str,
+    },
+    /// A settings row names a beacon the layout has not got.
+    NoSuchLayoutBeacon {
+        /// The index named.
+        index: usize,
+    },
+    /// A settings row's arm is not the writ of the beacon it names.
+    WrongWrit {
+        /// The beacon's index in the layout.
+        index: usize,
+    },
+    /// Two settings rows name one beacon: neither is taken over the other.
+    SettingsTwice {
+        /// The beacon's index in the layout.
+        index: usize,
+    },
+    /// A settings row holds a value the world cannot take.
+    BadSetting {
+        /// The beacon's index in the layout.
+        index: usize,
+        /// Which setting.
+        setting: LayoutSetting,
     },
 }
 
@@ -1358,6 +1449,21 @@ impl core::fmt::Display for LayoutRefused {
                     f,
                     "a seat's share of the world's {what}s cannot hold the layout"
                 )
+            }
+            LayoutRefused::NoSuchLayoutBeacon { index } => {
+                write!(
+                    f,
+                    "a settings row names beacon {index}, which the layout has not got"
+                )
+            }
+            LayoutRefused::WrongWrit { index } => {
+                write!(f, "a settings row's mandate is not beacon {index}'s writ")
+            }
+            LayoutRefused::SettingsTwice { index } => {
+                write!(f, "two settings rows name beacon {index}")
+            }
+            LayoutRefused::BadSetting { index, setting } => {
+                write!(f, "beacon {index}'s {} cannot be taken", setting.name())
             }
         }
     }

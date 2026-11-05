@@ -69,7 +69,10 @@ use crate::pathing::router::{Router, ServeReport, WalkState};
 use crate::pathing::search::Scratch;
 use crate::pathing::surface::{StepCosts, Surface};
 use crate::rules::RulesTable;
-use crate::runner::{Layout, LayoutRefused, MatchEndReason, MatchPhase, MatchSettings, MatchState};
+use crate::runner::{
+    Layout, LayoutMandateSettings, LayoutRefused, LayoutSetting, LayoutSettings, MatchEndReason,
+    MatchPhase, MatchSettings, MatchState,
+};
 use crate::seams::{BeaconMandate, MandateKind, ProgramId, WorkCounter};
 use crate::tables::{
     AreaKind, BeaconId, BeaconStart, BeaconTable, BuildOrder, ColumnBox, CreditTable, Csr,
@@ -2602,10 +2605,10 @@ impl World {
         Some(id)
     }
 
-    /// Place a lobby layout: every beacon of it, with its mandate, and its
-    /// starting units fabricated at it, or nothing (S2's plan, E30). The
-    /// runner is the caller, and checks the lobby
-    /// ([`crate::runner::Runner::seed_layout`]).
+    /// Place a lobby layout: every beacon of it, with its mandate, its settings
+    /// rows (S3's plan, E13) and its starting units fabricated at it, or
+    /// nothing (S2's plan, E30). The runner is the caller, and checks the lobby
+    /// ([`crate::runner::Runner::seed_layout_with_settings`]).
     ///
     /// Through the constructors play uses -- [`World::place_beacon`] and
     /// [`World::fabricate`] -- so a layout's beacons and units are rows like
@@ -2615,9 +2618,15 @@ impl World {
     ///
     /// # Errors
     ///
-    /// [`LayoutRefused`]'s three world refusals: a seat this match has not
-    /// got, a column with no ground to stand on, a share that cannot hold it.
-    pub(crate) fn seed_layout(&mut self, layout: &Layout) -> Result<(), LayoutRefused> {
+    /// [`LayoutRefused`]'s world refusals: a seat this match has not got, a
+    /// column with no ground to stand on, a share that cannot hold it, and a
+    /// settings row it cannot take ([`World::check_layout_settings`]).
+    pub(crate) fn seed_layout(
+        &mut self,
+        layout: &Layout,
+        settings: &[LayoutSettings],
+    ) -> Result<(), LayoutRefused> {
+        self.check_layout_settings(layout, settings)?;
         let seats = self.seats.len();
         let beacon_share = room_per_seat(BEACON_TABLE_ROOM, seats);
         let no_room = |what: &'static str| LayoutRefused::NoRoom { what };
@@ -2680,16 +2689,112 @@ impl World {
         if beacons > self.beacon_limit {
             return Err(no_room("beacon"));
         }
-        for (beacon, site) in layout.beacons.iter().zip(sites) {
+        for (index, (beacon, site)) in layout.beacons.iter().zip(sites).enumerate() {
             let id = self
                 .place_beacon(beacon.seat, site, beacon.mandate)
                 .map_err(|_| no_room("beacon"))?;
+            if let Some(row) = settings.iter().find(|row| row.beacon == index) {
+                let LayoutMandateSettings::Attack(attack) = row.settings;
+                if !self.set_attack(id, attack, &[]) {
+                    return Err(LayoutRefused::WrongWrit { index });
+                }
+            }
             for (kind, count) in &beacon.units {
                 for _ in 0..*count {
                     self.fabricate(beacon.seat, id, *kind)
                         .ok_or(no_room("unit"))?;
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// Every settings row of a layout checked against the layout and this
+    /// world, before anything is placed. The target a row names is a beacon the
+    /// world already holds, a core for a lobby layout: another row's beacon has
+    /// no id until it is placed.
+    ///
+    /// # Errors
+    ///
+    /// [`LayoutRefused::NoSuchLayoutBeacon`], [`LayoutRefused::SettingsTwice`],
+    /// [`LayoutRefused::WrongWrit`] and [`LayoutRefused::BadSetting`].
+    fn check_layout_settings(
+        &self,
+        layout: &Layout,
+        settings: &[LayoutSettings],
+    ) -> Result<(), LayoutRefused> {
+        for (at, row) in settings.iter().enumerate() {
+            let index = row.beacon;
+            let beacon = layout
+                .beacons
+                .get(index)
+                .ok_or(LayoutRefused::NoSuchLayoutBeacon { index })?;
+            if settings.iter().take(at).any(|other| other.beacon == index) {
+                return Err(LayoutRefused::SettingsTwice { index });
+            }
+            let LayoutMandateSettings::Attack(attack) = row.settings;
+            if beacon.mandate != MandateKind::Attack {
+                return Err(LayoutRefused::WrongWrit { index });
+            }
+            self.check_layout_attack(beacon.seat, attack)
+                .map_err(|setting| LayoutRefused::BadSetting { index, setting })?;
+        }
+        Ok(())
+    }
+
+    /// What the compile refuses of a playbook's Attack row
+    /// (`compile_attack_settings`), asked of a layout's, with its target read
+    /// against this world.
+    fn check_layout_attack(
+        &self,
+        seat: SeatId,
+        attack: crate::attack::AttackSettings,
+    ) -> Result<(), LayoutSetting> {
+        use crate::attack::Aim;
+        let last = self.rules.map_last_voxel();
+        let on_the_map = |at: [i16; 3]| {
+            at.iter()
+                .zip(last)
+                .all(|(axis, limit)| (0..=limit).contains(axis))
+        };
+        let seats = self.seats.len();
+        let aimed = match attack.aim {
+            Aim::Unset => false,
+            Aim::Commander(None) | Aim::NearestKnownBeacon => true,
+            Aim::Commander(Some(target)) => target != seat.raw() && u32::from(target) < seats,
+            Aim::Voxel(at) => on_the_map(at),
+            Aim::Beacon(target) => self.beacons.row_of(target).is_ok_and(|row| {
+                let index = row.index();
+                let enemy = self
+                    .beacons
+                    .seats()
+                    .get(index)
+                    .is_some_and(|owner| *owner != seat.raw());
+                let alive = self
+                    .beacons
+                    .hit_points()
+                    .get(index)
+                    .is_some_and(|hp| hp.is_alive());
+                enemy && alive
+            }),
+        };
+        if !aimed {
+            return Err(LayoutSetting::Aim);
+        }
+        if attack.staging.is_some_and(|at| !on_the_map(at)) {
+            return Err(LayoutSetting::Staging);
+        }
+        if attack.launch_ms.is_some_and(|ms| ms < 0) {
+            return Err(LayoutSetting::LaunchMs);
+        }
+        if attack
+            .retreat_pct
+            .is_some_and(|pct| !(1..=100).contains(&pct))
+        {
+            return Err(LayoutSetting::RetreatPct);
+        }
+        if attack.retreat_ms.is_some_and(|ms| ms < 0) {
+            return Err(LayoutSetting::RetreatMs);
         }
         Ok(())
     }
