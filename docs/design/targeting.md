@@ -142,7 +142,8 @@ Nothing substitutes silently.
   - The seat order of the decision phase cannot change a result.
   - Feature liveness and reachability read the live world, so an unseen enemy mining out a contested
     seam, or cratering a path, changes a seat's answer. This is accepted for S1, as item 108 (1)
-    accepted unseen voxel edits. S3 bases both on the seat's terrain knowledge.
+    accepted unseen voxel edits. S3-05's mask at S4 bases both on the seat's terrain knowledge (S3's
+    plan, decision 2).
 
 ### Nearest
 
