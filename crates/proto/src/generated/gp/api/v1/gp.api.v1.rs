@@ -778,8 +778,9 @@ pub struct BeaconSummary {
     /// draws a ring it never computes: the rules table's base, plus the Resonance
     /// Spire's bonus while a finished Spire stands on this beacon (S3's plan, E3
     /// and decision 6; the sim's one function answers it). Unset on another seat's
-    /// beacon, because decision 5 shows nothing there beyond position, HP and age,
-    /// and a radius would show whether its Spire stands. Filled from S3's `gwr`.
+    /// beacon, because S2's plan's decision 5 shows nothing there beyond position,
+    /// HP and age, and a radius would show whether its Spire stands. Filled from
+    /// S3's `gwr`.
     #[prost(uint32, optional, tag="10")]
     pub sphere_radius_voxels: ::core::option::Option<u32>,
 }
@@ -1761,11 +1762,25 @@ pub struct Event {
     /// Where it happened, when it happened somewhere.
     #[prost(message, optional, tag="4")]
     pub at: ::core::option::Option<super::super::v1::Voxel>,
-    /// On an event of kind `ledger_memo` and no other: which memo, and its text,
-    /// the same text as `text` above, so a reader that only draws the feed needs
-    /// no branch (S3's plan, E5). Filled from S3's `gwp`.
-    #[prost(message, optional, tag="5")]
-    pub ledger_memo: ::core::option::Option<LedgerMemo>,
+    /// The one payload an event of a kind that has one carries. A oneof, so that
+    /// the types refuse an event with two; each later kind joins it with a number
+    /// from the range held below.
+    #[prost(oneof="event::Payload", tags="5")]
+    pub payload: ::core::option::Option<event::Payload>,
+}
+/// Nested message and enum types in `Event`.
+pub mod event {
+    /// The one payload an event of a kind that has one carries. A oneof, so that
+    /// the types refuse an event with two; each later kind joins it with a number
+    /// from the range held below.
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Payload {
+        /// On an event of kind `ledger_memo` and no other: which memo, and its text,
+        /// the same text as `text` above, so a reader that only draws the feed needs
+        /// no branch (S3's plan, E5). Filled from S3's `gwp`.
+        #[prost(message, tag="5")]
+        LedgerMemo(super::LedgerMemo),
+    }
 }
 impl ::prost::Name for Event {
 const NAME: &'static str = "Event";

@@ -1260,8 +1260,8 @@ fn the_rules_table_carries_s3s_rows() {
 #[test]
 fn the_spire_bonus_is_half_the_base_sphere() {
     // S3's plan, decision 6, ruled by decisions-log item 154 (4): "the sphere
-    // grows by half its base radius". The row is in voxels, so nothing else
-    // keeps the ruling true when the base sphere is tuned.
+    // grows by half its base radius", rounded down, because the row is whole
+    // voxels. Nothing else keeps the ruling true when the base sphere is tuned.
     let table = committed_rules_table();
     let base = table.beacon.expect("the beacon block").sphere_radius_voxels;
     let bonus = table
@@ -1269,10 +1269,11 @@ fn the_spire_bonus_is_half_the_base_sphere() {
         .expect("the structures block")
         .resonance_spire_sphere_bonus_voxels;
     assert_eq!(
-        bonus.checked_mul(2),
-        Some(base),
-        "structures.resonance_spire_sphere_bonus_voxels {bonus} is not half \
-         beacon.sphere_radius_voxels {base}; move the two together"
+        base.checked_div(2),
+        Some(bonus),
+        "S3's plan, decision 6: structures.resonance_spire_sphere_bonus_voxels is half of \
+         beacon.sphere_radius_voxels, rounded down. The base is {base} and the bonus is {bonus}: \
+         set both in rules/rules.v1.json, or say in the pull request why the ruling changed"
     );
 }
 
@@ -2227,7 +2228,7 @@ fn the_s3_licence_wire_round_trips_in_its_documented_spellings() {
             licences_held: vec![Licence::ResonanceSpire.into()],
             ..GetBriefingResponse::default()
         },
-        r#"{"licences_held":["LICENCE_RESONANCE_SPIRE"]}"#,
+        r#"{"licences_held":["RESONANCE_SPIRE"]}"#,
         &["licences_held"],
     );
 
@@ -2250,8 +2251,8 @@ fn the_s3_licence_wire_round_trips_in_its_documented_spellings() {
         },
         concat!(
             r#"{"licences_awarded":["#,
-            r#"{"seat":"seat.0","licence":"LICENCE_RESONANCE_SPIRE","round_awarded":2},"#,
-            r#"{"seat":"seat.1","licence":"LICENCE_RESONANCE_SPIRE","round_awarded":3}]}"#
+            r#"{"seat":"seat.0","licence":"RESONANCE_SPIRE","round_awarded":2},"#,
+            r#"{"seat":"seat.1","licence":"RESONANCE_SPIRE","round_awarded":3}]}"#
         ),
         &["licences_awarded", "seat", "licence", "round_awarded"],
     );
@@ -2271,18 +2272,21 @@ fn the_s3_licence_wire_round_trips_in_its_documented_spellings() {
     // The wire drops the prefix, as it does for every enum (item 80), and the
     // spelling it answers is the blueprint's own id.
     assert_eq!(
-        scope::wire_name("gp.v1.Licence", "LICENCE_RESONANCE_SPIRE"),
+        scope::wire_name("gp.v1.Licence", "RESONANCE_SPIRE"),
         "resonance_spire"
     );
     assert_eq!(
         scope::from_wire_name("gp.v1.Licence", "resonance_spire").as_deref(),
-        Some("LICENCE_RESONANCE_SPIRE")
+        Some("RESONANCE_SPIRE")
     );
 }
 
 #[test]
 fn the_s3_ledger_memos_round_trip_in_their_documented_spellings() {
     // S3's plan, E5: on the feed as a kind of its own, and listed on the recap.
+    // `Payload` is the oneof later kinds join, so an event carries one payload,
+    // and the JSON key is still the arm's own name.
+    use gp_api::event::Payload;
     use gp_api::ledger_memo::Id;
     use gp_api::{Event, GetRecapResponse, LedgerMemo};
 
@@ -2296,7 +2300,7 @@ fn the_s3_ledger_memos_round_trip_in_their_documented_spellings() {
             kind: "ledger_memo".to_owned(),
             text: "Notice of shortfall.".to_owned(),
             at: None,
-            ledger_memo: Some(memo.clone()),
+            payload: Some(Payload::LedgerMemo(memo.clone())),
         },
         concat!(
             r#"{"at_ms":42000,"kind":"ledger_memo","text":"Notice of shortfall.","#,

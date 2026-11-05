@@ -558,7 +558,7 @@ pub struct QueueStructureRow {
     /// is written.
     ///
     /// `resonance_spire` is the one S3 accepts, for a seat that holds
-    /// `LICENCE_RESONANCE_SPIRE` (decisions-log item 153 (3); S3's plan, E4). The
+    /// `Licence.RESONANCE_SPIRE` (decisions-log item 153 (3); S3's plan, E4). The
     /// verifier and the sim refuse every other id until S4, and until S3's `lic`
     /// and `vfy5` have merged they refuse this one too.
     #[prost(string, tag="1")]
@@ -1674,11 +1674,13 @@ pub mod beacon_ref {
         Safest(super::Safest),
         /// Least travel first. In a route step or a condition: from the commander,
         /// by octile ground distance, a lower bound on the walk, ties to the lowest
-        /// id (the sim's `interpreter/cond.rs`). As an Attack target, the same word
-        /// is straight-line: the seatless enemy commander, the nearest known enemy
-        /// beacon and the `NEAREST_KNOWN` retarget all rank by squared distance from
-        /// the Attack beacon's staging point, ties to the lowest id (decisions-log
-        /// item 151 (2) (a)).
+        /// id (the sim's `interpreter/cond.rs`). As an Attack target, the nearest
+        /// known enemy beacon, the word is straight-line: squared distance from the
+        /// Attack beacon's staging point, ties to the lowest id (decisions-log item
+        /// 151 (2) (a)). Two rankings beside it are not this field: the seatless
+        /// enemy commander also ranks from the staging point, and the `NEAREST_KNOWN`
+        /// retarget ranks known beacons from where the lost target was, never from
+        /// the staging point (the sim's `attack.rs`).
         #[prost(message, tag="10")]
         Nearest(super::Nearest),
         /// Lowest HP first (the beacon's own HP, not the structures homed to it).
@@ -2442,9 +2444,14 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.MineSettings".into() }
 /// (`resonance_spire`; item 80). S3 has the one entry; S4 adds values at the end,
 /// and a value is never renumbered or reused.
 ///
-/// A player's playbook does not name a licence: it queues a blueprint, and the
-/// licence is what lets it. So this enum needs no bare names, and is top level
-/// under the rule this file's header states.
+/// A playbook names none in S3: it queues a blueprint, and the licence is what
+/// lets it. From S4 it does, because Condition's 80-89 are held for a capability
+/// licence predicate (S3's plan, decision 2). So the values are bare, as
+/// proto/buf.yaml's "the bare names win" asks: a player writes
+/// "licence": "RESONANCE_SPIRE" beside "roe": "HOLD_FIRE", and `buf breaking`
+/// would not let the name change later. The zero keeps its full prefix, as every
+/// zero does, because it is a sentinel. Top level under the rule this file's
+/// header states.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum Licence {
@@ -2461,14 +2468,14 @@ impl Licence {
     pub fn as_str_name(&self) -> &'static str {
         match self {
             Self::Unspecified => "LICENCE_UNSPECIFIED",
-            Self::ResonanceSpire => "LICENCE_RESONANCE_SPIRE",
+            Self::ResonanceSpire => "RESONANCE_SPIRE",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
     pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
         match value {
             "LICENCE_UNSPECIFIED" => Some(Self::Unspecified),
-            "LICENCE_RESONANCE_SPIRE" => Some(Self::ResonanceSpire),
+            "RESONANCE_SPIRE" => Some(Self::ResonanceSpire),
             _ => None,
         }
     }
@@ -2510,8 +2517,8 @@ pub struct ByRichness {
 pub mod by_richness {
     /// Which grade the map generator places a feature at (item 90's map rows).
     ///
-    /// Nested, like every enum in `gp.v1` but `Licence` (whose values carry a full
-    /// prefix; playbook.proto's header), because proto enum values live in the
+    /// Nested, like every enum in `gp.v1` but `Licence` (playbook.proto's header
+    /// names that one), because proto enum values live in the
     /// PARENT scope: a top-level enum here would put the bare
     /// names LEAN, STANDARD and RICH into `gp.v1` itself, where canonical JSON
     /// needs them to stay unique, and no other enum in the package could ever
@@ -3590,10 +3597,10 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Weapon".int
         /// voxels (spec section 8: "a larger sphere for its own beacon"). S3's plan,
         /// decision 6, ruled by decisions-log item 154 (4): the sphere grows by HALF
         /// ITS BASE RADIUS, 24 to 36 at today's `beacon.sphere_radius_voxels`. A row
-        /// in voxels rather than a ratio, because the arithmetic is integer and the
-        /// rounding of an odd base has to be somebody's decision;
-        /// `crates/proto/tests/proto.rs` holds it to half the base, so a pull
-        /// request that tunes one moves the other. The radius is derived, never
+        /// in voxels rather than a ratio, because the arithmetic is integer: half,
+        /// rounded down, which an odd base makes a real choice.
+        /// `crates/proto/tests/proto.rs` holds it to that, so a pull request that
+        /// tunes one moves the other. The radius is derived, never
         /// stored (E3). Nothing reads it until S3's `lic`.
         ///
         /// PLACEHOLDER: tuning — owner, at S3's demo, with `tune3`'s balance re-run once Easy fights.

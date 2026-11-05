@@ -791,7 +791,7 @@ gp.v1.InterfaceRow.QuartermasterPriority
 
 gp.v1.Licence
   LICENCE_UNSPECIFIED              0
-  LICENCE_RESONANCE_SPIRE          1
+  RESONANCE_SPIRE                  1
 
 gp.v1.MandateSettings.Roe
   ROE_UNSPECIFIED                  0

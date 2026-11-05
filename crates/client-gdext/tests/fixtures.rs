@@ -150,7 +150,7 @@ fn feed_fixture() -> GetSegmentFeedResponse {
         kind: kind.to_owned(),
         text: text.to_owned(),
         at: None,
-        ledger_memo: None,
+        payload: None,
     };
     GetSegmentFeedResponse {
         events: vec![

@@ -21,8 +21,10 @@
 //     only unique if each enum has its own scope, hence the nesting. The
 //     buf lint exceptions this needs are recorded in proto/buf.yaml.
 //     ONE ENUM IS TOP LEVEL, BY NAME: `Licence`, which the sim, the verifier
-//     and the gateway's wire share and no one message owns. Every value of it
-//     carries the full prefix, so it spends no bare name in this package.
+//     and the gateway's wire share and no one message owns. Its values are
+//     bare like every other enum's, because a playbook will spell them, so
+//     they spend their names in this package's own scope, and no other
+//     top-level name may spell RESONANCE_SPIRE or any value added after it.
 //   * Zero values keep a full prefix (AUTHOR_KIND_UNSPECIFIED). They are
 //     sentinels; an unset enum is a verifier error (E000x), never a default.
 //     ONE MESSAGE IS EXCEPTED, BY NAME: BeaconFilter. Both of its enums are
@@ -494,15 +496,20 @@ message RemoveBuildTargetRow {
 // (`resonance_spire`; item 80). S3 has the one entry; S4 adds values at the end,
 // and a value is never renumbered or reused.
 //
-// A player's playbook does not name a licence: it queues a blueprint, and the
-// licence is what lets it. So this enum needs no bare names, and is top level
-// under the rule this file's header states.
+// A playbook names none in S3: it queues a blueprint, and the licence is what
+// lets it. From S4 it does, because Condition's 80-89 are held for a capability
+// licence predicate (S3's plan, decision 2). So the values are bare, as
+// proto/buf.yaml's "the bare names win" asks: a player writes
+// "licence": "RESONANCE_SPIRE" beside "roe": "HOLD_FIRE", and `buf breaking`
+// would not let the name change later. The zero keeps its full prefix, as every
+// zero does, because it is a sentinel. Top level under the rule this file's
+// header states.
 enum Licence {
   LICENCE_UNSPECIFIED = 0;
 
   // Earned at a settlement (`rules_table.licences.resonance_vents`); lets a seat
   // queue `resonance_spire` at any of its beacons.
-  LICENCE_RESONANCE_SPIRE = 1;
+  RESONANCE_SPIRE = 1;
 }
 
 // Queues one licensed capability structure on the beacon's fabricator. The
@@ -515,7 +522,7 @@ message QueueStructureRow {
   // is written.
   //
   // `resonance_spire` is the one S3 accepts, for a seat that holds
-  // `LICENCE_RESONANCE_SPIRE` (decisions-log item 153 (3); S3's plan, E4). The
+  // `Licence.RESONANCE_SPIRE` (decisions-log item 153 (3); S3's plan, E4). The
   // verifier and the sim refuse every other id until S4, and until S3's `lic`
   // and `vfy5` have merged they refuse this one too.
   string blueprint_id = 1;
@@ -1222,11 +1229,13 @@ message BeaconRef {
 
     // Least travel first. In a route step or a condition: from the commander,
     // by octile ground distance, a lower bound on the walk, ties to the lowest
-    // id (the sim's `interpreter/cond.rs`). As an Attack target, the same word
-    // is straight-line: the seatless enemy commander, the nearest known enemy
-    // beacon and the `NEAREST_KNOWN` retarget all rank by squared distance from
-    // the Attack beacon's staging point, ties to the lowest id (decisions-log
-    // item 151 (2) (a)).
+    // id (the sim's `interpreter/cond.rs`). As an Attack target, the nearest
+    // known enemy beacon, the word is straight-line: squared distance from the
+    // Attack beacon's staging point, ties to the lowest id (decisions-log item
+    // 151 (2) (a)). Two rankings beside it are not this field: the seatless
+    // enemy commander also ranks from the staging point, and the `NEAREST_KNOWN`
+    // retarget ranks known beacons from where the lost target was, never from
+    // the staging point (the sim's `attack.rs`).
     Nearest nearest = 10;
 
     // Lowest HP first (the beacon's own HP, not the structures homed to it).

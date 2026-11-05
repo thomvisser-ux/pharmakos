@@ -828,8 +828,9 @@ message BeaconSummary {
   // draws a ring it never computes: the rules table's base, plus the Resonance
   // Spire's bonus while a finished Spire stands on this beacon (S3's plan, E3
   // and decision 6; the sim's one function answers it). Unset on another seat's
-  // beacon, because decision 5 shows nothing there beyond position, HP and age,
-  // and a radius would show whether its Spire stands. Filled from S3's `gwr`.
+  // beacon, because S2's plan's decision 5 shows nothing there beyond position,
+  // HP and age, and a radius would show whether its Spire stands. Filled from
+  // S3's `gwr`.
   optional uint32 sphere_radius_voxels = 10;
 
   // RESERVED — the rest of the tail, held for a further field.
@@ -1505,10 +1506,15 @@ message Event {
   // Where it happened, when it happened somewhere.
   gp.v1.Voxel at = 4;
 
-  // On an event of kind `ledger_memo` and no other: which memo, and its text,
-  // the same text as `text` above, so a reader that only draws the feed needs
-  // no branch (S3's plan, E5). Filled from S3's `gwp`.
-  LedgerMemo ledger_memo = 5;
+  // The one payload an event of a kind that has one carries. A oneof, so that
+  // the types refuse an event with two; each later kind joins it with a number
+  // from the range held below.
+  oneof payload {
+    // On an event of kind `ledger_memo` and no other: which memo, and its text,
+    // the same text as `text` above, so a reader that only draws the feed needs
+    // no branch (S3's plan, E5). Filled from S3's `gwp`.
+    LedgerMemo ledger_memo = 5;
+  }
 
   // PLACEHOLDER: the per-kind structured payload — owner, after S4, with
   // `kind`'s enum above (decisions-log item 128, S1's plan's decision 9).
@@ -1747,7 +1753,7 @@ message ViewEntity {
   optional uint32 heading = 8;
 
   // RESERVED — a seat's OWN assets' power state and build progress, which no
-  // client draws yet and another seat's assets never carry (decision 5), and
+  // client draws yet and another seat's assets never carry (S2's plan's decision 5), and
   // sub-voxel position (S7, with recordings). Each returns with the proto
   // pull request of the lane that draws it.
   reserved 9 to 15;

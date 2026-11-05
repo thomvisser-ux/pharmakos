@@ -46,8 +46,8 @@ lint:
     # To keep the bare names unique inside a package, every enum in gp.v1 is
     # nested inside the message that owns it (proto enum values live in the
     # parent scope, so two top-level enums could not both spell CONTINUE). One
-    # is top level, `gp.v1.Licence`, and every value of it carries the full
-    # prefix, so it spends no bare name (playbook.proto's header).
+    # is top level by name, `gp.v1.Licence`, whose bare values spend their names
+    # in the package's own scope (playbook.proto's header).
     # Zero values keep a full prefix — AUTHOR_KIND_UNSPECIFIED — because they
     # are sentinels that never appear in a valid playbook; that is what
     # ENUM_ZERO_VALUE_SUFFIX is excepted for.
@@ -87,7 +87,8 @@ breaking:
     #   * `BeaconSummary`: 10-15 were held for a further field of the tail. 10
     #     takes `sphere_radius_voxels` (E3); 11-15 stay held.
     #   * `Event`: 5-15 were held for the per-kind structured payload. 5 takes
-    #     `ledger_memo`, the first kind to have one; 6-15 stay held.
+    #     `ledger_memo`, the first kind to have one, in the oneof `payload` the
+    #     later kinds join; 6-15 stay held.
     #
     # buf sees each old range go away and cannot tell a discharge from an
     # un-reservation; tests/golden/proto/expected.reserved.txt shows each
