@@ -708,13 +708,7 @@ fn most_due(
     going: [Fx; 3],
     open: &dyn Fn([Fx; 3]) -> bool,
 ) -> Option<[Fx; 3]> {
-    // E7: rule: the interpreter refuses a playbook whose rules carry no `verifier` block (`PlanError::MissingBlock`), so no Survey beacon stands without one; with none, no sighting is inside a window
-    let window = world
-        .rules()
-        .message()
-        .verifier
-        .as_ref()
-        .map(|block| Ms::new(block.reach_memory_ms).to_ticks_floor())?;
+    let window = world.rules().attack().reach_memory.to_ticks_floor();
     let tick = world.tick().raw();
     let table = world.sightings();
     let rows = table
