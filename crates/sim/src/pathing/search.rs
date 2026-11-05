@@ -395,6 +395,7 @@ impl Scratch {
         out.clear();
         let mut current = goal;
         let mut guard: u32 = 0;
+        // E7: cannot miss: one entry per node of a map, whose node ids are `u32`s
         let limit = self.came.len().try_into().unwrap_or(u32::MAX);
         loop {
             out.push(current);

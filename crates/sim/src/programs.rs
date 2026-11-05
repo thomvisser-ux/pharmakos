@@ -506,15 +506,7 @@ fn flees(world: &World, seat: SeatId, home: BeaconId) -> bool {
 /// to the standard yield, so the test stays a number rather than a panic.
 fn full_load(world: &World, ore: [i32; 3]) -> i64 {
     let per_voxel = world.ore_yield_at(ore).map_or_else(
-        || {
-            world
-                .rules()
-                .message()
-                .economy
-                .as_ref()
-                .and_then(|economy| economy.ore_yield_per_voxel_dollars)
-                .map_or(0, |by| i64::from(by.standard))
-        },
+        || i64::from(world.rules().ore_yield_per_voxel().standard),
         Money::raw,
     );
     let carry = world.rules().mining_carry_voxels().get();

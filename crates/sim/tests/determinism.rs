@@ -1638,6 +1638,25 @@ fn a_table_missing_the_economy_block_is_refused() {
     );
 }
 
+/// S3's plan, E22: a table with no ore yield used to pay nothing for ore,
+/// silently, because the two readers answered zero for the missing row. It
+/// does not load now.
+#[test]
+fn a_table_missing_the_ore_yield_is_refused() {
+    let mut message = committed_message();
+    message
+        .economy
+        .as_mut()
+        .expect("the committed table has an economy block")
+        .ore_yield_per_voxel_dollars = None;
+    assert_eq!(
+        RulesTable::from_message(&message),
+        Err(pharmakos_sim::rules::RulesError::MissingBlock(
+            "economy.ore_yield_per_voxel_dollars"
+        ))
+    );
+}
+
 #[test]
 fn a_row_out_of_range_is_refused_at_load() {
     let refused = |edit: &dyn Fn(&mut gp::v1::RulesTable), field: &str| {

@@ -96,6 +96,7 @@ pub fn apportion(total: i64, shares: &[(u8, i32)], out: &mut Vec<(u8, i64)>) {
     let mut handed: i64 = 0;
     for (seat, amount) in shares {
         let exact = total.saturating_mul(i64::from(*amount));
+        // E7: cannot miss: `dealt` is positive, checked above
         let floor = exact.checked_div(dealt).unwrap_or(0);
         handed = handed.saturating_add(floor);
         out.push((*seat, floor));
@@ -115,6 +116,7 @@ pub fn apportion(total: i64, shares: &[(u8, i32)], out: &mut Vec<(u8, i64)>) {
                 continue;
             }
             let exact = total.saturating_mul(i64::from(*amount));
+            // E7: cannot miss: `dealt` is positive, checked above
             let floor = exact.checked_div(dealt).unwrap_or(0);
             let remainder = exact.saturating_sub(floor.saturating_mul(dealt));
             // Largest remainder wins; a tie goes to the **lowest seat id**,

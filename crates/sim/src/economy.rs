@@ -239,6 +239,7 @@ pub fn value_of(cost: Money, hp: i32, max_hp: i32) -> Money {
     cost.raw()
         .checked_mul(held)
         .and_then(|scaled| scaled.checked_div(full))
+        // E7: cannot miss: `full` is positive, checked above, and a rules row's cost and hit points are each a 32-bit figure, so the product fits `i64`
         .map_or(Money::ZERO, Money::new)
 }
 
@@ -253,6 +254,7 @@ pub fn percent_of(amount: Money, percent: u32) -> Money {
         .raw()
         .checked_mul(percent)
         .and_then(|scaled| scaled.checked_div(100))
+        // E7: cannot miss: an asset's value is at most a rules row's 32-bit cost, and a rules percent is 32 bits, so the product fits `i64`
         .map_or(Money::ZERO, Money::new)
 }
 
@@ -287,18 +289,12 @@ pub fn percent_of(amount: Money, percent: u32) -> Money {
 ///
 /// # Errors
 ///
-/// [`SettlementReadError::MissingEconomy`] when the table has no `economy`
-/// block, [`SettlementReadError::RankOffLadder`] when `rank` is not below
-/// `living`, and [`SettlementReadError::PercentOutOfRange`] when the band's
-/// arithmetic leaves its type.
+/// [`SettlementReadError::RankOffLadder`] when `rank` is not below `living`,
+/// and [`SettlementReadError::PercentOutOfRange`] when the band's arithmetic
+/// leaves its type.
 pub fn bmi_for(rules: &RulesTable, rank: u32, living: u32) -> Result<Money, SettlementReadError> {
-    let economy = rules
-        .message()
-        .economy
-        .as_ref()
-        .ok_or(SettlementReadError::MissingEconomy)?;
     let percent = band_percent(rules, rank, living)?;
-    let base = i64::from(economy.bmi_dollars);
+    let base = i64::from(rules.economy().bmi_dollars);
     base.checked_mul(i64::from(percent))
         .and_then(|scaled| scaled.checked_div(100))
         .and_then(|adjustment| base.checked_add(adjustment))
@@ -319,11 +315,6 @@ pub struct LadderPlace {
 /// Why a settlement read refused ([`ladder_place`], [`band_percent`]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SettlementReadError {
-    /// The rules table carries no `economy` block, so there is no band to
-    /// read. A table loaded through [`RulesTable::from_message`] always has
-    /// one (it refuses a table without), so this answers a hand-built message
-    /// only.
-    MissingEconomy,
     /// The seat at this index is not on the ladder: past its end, or
     /// eliminated.
     SeatOffLadder {
@@ -348,9 +339,6 @@ pub enum SettlementReadError {
 impl core::fmt::Display for SettlementReadError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            SettlementReadError::MissingEconomy => {
-                write!(f, "the rules table has no `economy` block")
-            }
             SettlementReadError::SeatOffLadder { index } => {
                 write!(f, "seat index {index} is not on the settlement's ladder")
             }
@@ -422,20 +410,15 @@ pub fn ladder_place(
 ///
 /// # Errors
 ///
-/// [`SettlementReadError::MissingEconomy`] when the table has no `economy`
-/// block; [`SettlementReadError::RankOffLadder`] when `rank` is not below
-/// `living`; [`SettlementReadError::PercentOutOfRange`] when the arithmetic
-/// overflows or the percent does not fit an `i32`.
+/// [`SettlementReadError::RankOffLadder`] when `rank` is not below `living`;
+/// [`SettlementReadError::PercentOutOfRange`] when the arithmetic overflows or
+/// the percent does not fit an `i32`.
 pub fn band_percent(
     rules: &RulesTable,
     rank: u32,
     living: u32,
 ) -> Result<i32, SettlementReadError> {
-    let economy = rules
-        .message()
-        .economy
-        .as_ref()
-        .ok_or(SettlementReadError::MissingEconomy)?;
+    let economy = rules.economy();
     if rank >= living {
         return Err(SettlementReadError::RankOffLadder { rank, living });
     }
@@ -468,9 +451,7 @@ pub fn band_percent(
 /// rule the spec does not have (owner, at S4).
 #[must_use]
 pub fn award_fund(rules: &RulesTable) -> Money {
-    let Some(economy) = rules.message().economy.as_ref() else {
-        return Money::ZERO;
-    };
+    let economy = rules.economy();
     percent_of(
         Money::new(i64::from(economy.bmi_dollars)),
         economy.award_fund_percent_of_bmi,
@@ -485,9 +466,7 @@ pub fn award_fund(rules: &RulesTable) -> Money {
 /// BMI it is a multiple of.
 #[must_use]
 pub fn starting_treasury(rules: &RulesTable) -> Money {
-    let Some(economy) = rules.message().economy.as_ref() else {
-        return Money::ZERO;
-    };
+    let economy = rules.economy();
     let base = i64::from(economy.bmi_dollars);
     let multiple = i64::from(economy.starting_bmi_multiplier);
     Money::new(base.saturating_mul(multiple))

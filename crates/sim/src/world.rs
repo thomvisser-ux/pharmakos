@@ -2188,12 +2188,7 @@ impl World {
     #[must_use]
     pub fn ore_yield_at(&self, at: [i32; 3]) -> Option<Money> {
         let grade = self.voxels.get(at).and_then(Material::ore_richness)?;
-        let by = self
-            .rules
-            .message()
-            .economy
-            .as_ref()
-            .and_then(|economy| economy.ore_yield_per_voxel_dollars)?;
+        let by = self.rules.ore_yield_per_voxel();
         let dollars = match grade {
             crate::voxels::Richness::Lean => by.lean,
             crate::voxels::Richness::Standard => by.standard,
@@ -4598,6 +4593,7 @@ impl World {
                 crate::mining::refresh_seams(self, SeatId::new(id));
             }
             let mut spent = WorkCounter::with_budget(u32::MAX);
+            // Cannot refuse: a budget of `u32::MAX` holds any one `u32` charge.
             let _ = spent.charge(self.decision_units.get());
             if let Some(slot) = self.decision_work.get_mut(seat) {
                 *slot = spent;

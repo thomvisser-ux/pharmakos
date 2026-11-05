@@ -126,6 +126,13 @@ pub const MAX_SEGMENT_LENGTHS: usize = 8;
 pub struct RulesTable {
     /// The whole decoded table, kept so `rules_hash` can cover all of it.
     message: gp::v1::RulesTable,
+    /// The `economy` block, which a table without one does not load, so a
+    /// reader has no missing block to invent a default for (S3's plan, E22).
+    economy: gp::v1::rules_table::Economy,
+    /// What a voxel of ore is worth by grade. From
+    /// `economy.ore_yield_per_voxel_dollars`; a table without the row does not
+    /// load (S3's plan, E22: a missing row used to pay nothing for ore).
+    ore_yield_per_voxel: gp::v1::ByRichness,
     /// `message` rendered back through the canonical JSON codec, once, at
     /// construction. These are the bytes [`RulesTable::encode`] hashes.
     canonical: String,
@@ -558,6 +565,19 @@ impl RulesTable {
         self.csr_cell_size_voxels
     }
 
+    /// The `economy` block, which every loaded table holds.
+    #[must_use]
+    pub const fn economy(&self) -> &gp::v1::rules_table::Economy {
+        &self.economy
+    }
+
+    /// What a voxel of ore is worth by grade
+    /// (`economy.ore_yield_per_voxel_dollars`), which every loaded table holds.
+    #[must_use]
+    pub const fn ore_yield_per_voxel(&self) -> gp::v1::ByRichness {
+        self.ore_yield_per_voxel
+    }
+
     /// The voxels a mining drone digs before it carries its load home
     /// (`economy.mining_carry_voxels`), never zero.
     #[must_use]
@@ -875,6 +895,12 @@ impl RulesTable {
             .as_ref()
             .ok_or(RulesError::MissingBlock("economy"))?;
         band_rows_of(economy)?;
+        let ore_yield_per_voxel =
+            economy
+                .ore_yield_per_voxel_dollars
+                .ok_or(RulesError::MissingBlock(
+                    "economy.ore_yield_per_voxel_dollars",
+                ))?;
         let mining_carry_voxels =
             NonZeroU32::new(economy.mining_carry_voxels).ok_or_else(|| RulesError::OutOfRange {
                 field: "economy.mining_carry_voxels".to_owned(),
@@ -896,6 +922,8 @@ impl RulesTable {
 
         Ok(RulesTable {
             message: message.clone(),
+            economy: *economy,
+            ore_yield_per_voxel,
             canonical,
             mesher_drain_surfaces: mesher.surfaces_per_frame,
             mesher_drain_bytes: mesher.bytes_per_frame,
