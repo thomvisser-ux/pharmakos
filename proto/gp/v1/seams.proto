@@ -90,10 +90,11 @@ message Mandate {
 }
 
 message BuiltinMandate {
-  // PLACEHOLDER: the mandate id, a string rather than an enum — owner, when section 6's mandate catalogue is written.
   // A string id rather than an enum, for the same reason as
   // BuiltinOperator. The five writs are Build, Defend, Attack, Mine and
-  // Survey; naming them is section 6's contract.
+  // Survey; naming them is section 6's contract. It stays here, as the mandate
+  // messages stay in playbook.proto (the register's M-14, closed by S3's plan,
+  // E20): nothing reads this seam, and moving it would serve no reader.
   string builtin_id = 1;
 
   // The built-in program this mandate runs. Kept as an explicit field because

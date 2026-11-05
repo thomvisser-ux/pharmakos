@@ -452,6 +452,11 @@ pub struct GetBriefingResponse {
     /// structured JSON plus prose).
     #[prost(string, tag="4")]
     pub prose: ::prost::alloc::string::String,
+    /// The licences this seat holds, in ascending value (decisions-log item 153
+    /// (3); S3's plan, E2). The seat's OWN: no seat reads another seat's set here.
+    /// Empty until a licence is earned. Filled from S3's `gwr`.
+    #[prost(enumeration="super::super::v1::Licence", repeated, tag="5")]
+    pub licences_held: ::prost::alloc::vec::Vec<i32>,
 }
 impl ::prost::Name for GetBriefingResponse {
 const NAME: &'static str = "GetBriefingResponse";
@@ -504,11 +509,103 @@ pub struct GetRecapResponse {
     /// Between rounds a seat learns only its own tally, above.
     #[prost(message, repeated, tag="5")]
     pub seat_tallies: ::prost::alloc::vec::Vec<SeatTally>,
+    /// The recap's licence line (spec section 8: "announced in the recap";
+    /// decisions-log item 153 (3)), under the tally's fog rule (item 145 (7)): at a
+    /// recap between rounds, what the calling seat was awarded at THIS settlement,
+    /// and no other seat's; once the match has ended, every seat's award of the
+    /// whole match that still stands. In ascending seat order, then licence. Each
+    /// row names its seat, because the list at match end has to say whose. Empty
+    /// when there is nothing to announce. Filled from S3's `gwr`.
+    #[prost(message, repeated, tag="6")]
+    pub licences_awarded: ::prost::alloc::vec::Vec<LicenceAward>,
+    /// The Ledger's memos issued to the calling seat over the match so far, in the
+    /// order they were issued (S3's plan, E5). Each is on the feed as well, as an
+    /// Event of kind `ledger_memo`. Empty outside a Probation match. Filled from
+    /// S3's `gwp`.
+    #[prost(message, repeated, tag="7")]
+    pub ledger_memos: ::prost::alloc::vec::Vec<LedgerMemo>,
 }
 impl ::prost::Name for GetRecapResponse {
 const NAME: &'static str = "GetRecapResponse";
 const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.GetRecapResponse".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.GetRecapResponse".into() }}
+/// One licence awarded, for the recap's line (GetRecapResponse.licences_awarded).
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct LicenceAward {
+    /// The seat, spelt as ViewEntity.owner spells a seat: `seat.0`.
+    #[prost(string, tag="1")]
+    pub seat: ::prost::alloc::string::String,
+    #[prost(enumeration="super::super::v1::Licence", tag="2")]
+    pub licence: i32,
+    /// The round whose settlement awarded it.
+    #[prost(uint32, tag="3")]
+    pub round_awarded: u32,
+}
+impl ::prost::Name for LicenceAward {
+const NAME: &'static str = "LicenceAward";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.LicenceAward".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.LicenceAward".into() }}
+/// One of the Ledger's memos: a deterministic note to a newcomer, issued at most
+/// once a match on its trigger's first event (spec section 3; S3's plan, E5 and
+/// decision 4). The gateway derives it from the event bus; the sim knows nothing
+/// of it. Only the human seat of a Probation match is issued any.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct LedgerMemo {
+    #[prost(enumeration="ledger_memo::Id", tag="1")]
+    pub id: i32,
+    /// English, from the one string table, drawn as sent.
+    #[prost(string, tag="2")]
+    pub text: ::prost::alloc::string::String,
+}
+/// Nested message and enum types in `LedgerMemo`.
+pub mod ledger_memo {
+    /// Which memo. On the JSON-RPC wire it is lower case, as every enum this
+    /// surface answers with is (item 80): "power_shortfall".
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Id {
+        Unspecified = 0,
+        /// The seat's first brownout that sheds a load.
+        PowerShortfall = 1,
+        /// One of the seat's beacons first destroyed. A powered-down beacon is the
+        /// shortfall's, so the two never fire on one event.
+        DarkStake = 2,
+        /// The commander's first death.
+        FirstDeath = 3,
+        /// The seat's first licence awarded.
+        FirstLicence = 4,
+    }
+    impl Id {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "ID_UNSPECIFIED",
+                Self::PowerShortfall => "POWER_SHORTFALL",
+                Self::DarkStake => "DARK_STAKE",
+                Self::FirstDeath => "FIRST_DEATH",
+                Self::FirstLicence => "FIRST_LICENCE",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "ID_UNSPECIFIED" => Some(Self::Unspecified),
+                "POWER_SHORTFALL" => Some(Self::PowerShortfall),
+                "DARK_STAKE" => Some(Self::DarkStake),
+                "FIRST_DEATH" => Some(Self::FirstDeath),
+                "FIRST_LICENCE" => Some(Self::FirstLicence),
+                _ => None,
+            }
+        }
+    }
+}
+impl ::prost::Name for LedgerMemo {
+const NAME: &'static str = "LedgerMemo";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.LedgerMemo".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.LedgerMemo".into() }}
 /// One seat's tally, named by its seat, for the recap after the match has
 /// ended (GetRecapResponse.seat_tallies).
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -677,6 +774,15 @@ pub struct BeaconSummary {
     /// true age; unset on the seat's own beacons, which it never sights.
     #[prost(int32, optional, tag="9")]
     pub sighting_age_ms: ::core::option::Option<i32>,
+    /// OWN beacons only: the sphere's radius now, in whole voxels, so a client
+    /// draws a ring it never computes: the rules table's base, plus the Resonance
+    /// Spire's bonus while a finished Spire stands on this beacon (S3's plan, E3
+    /// and decision 6; the sim's one function answers it). Unset on another seat's
+    /// beacon, because S2's plan's decision 5 shows nothing there beyond position,
+    /// HP and age, and a radius would show whether its Spire stands. Filled from
+    /// S3's `gwr`.
+    #[prost(uint32, optional, tag="10")]
+    pub sphere_radius_voxels: ::core::option::Option<u32>,
 }
 impl ::prost::Name for BeaconSummary {
 const NAME: &'static str = "BeaconSummary";
@@ -731,7 +837,12 @@ pub struct GetMapSummaryResponse {
     #[prost(string, tag="3")]
     pub prose: ::prost::alloc::string::String,
     /// The seed the map was generated from, as a quoted hexadecimal string:
-    /// "0x00000000ca5caded". Part of the match, not a secret.
+    /// "0x00000000ca5caded". From S3's `gwp` it is left unset (empty) for a seat's
+    /// token; the spectator's and the admin's tokens keep it (decisions-log item
+    /// 127 (13); S3's plan, E18). That is a courtesy to the player and not a secret
+    /// kept: the generated map is still served whole (item 107 (1)), and a local
+    /// agent with file access can read the seed from `match.json`. The field number
+    /// stays.
     ///
     /// A STRING, for the reason scenarios/README.md gives about the same number:
     /// a JSON number is a double in half the world's parsers and a 64-bit seed
@@ -746,9 +857,9 @@ pub struct GetMapSummaryResponse {
     /// `travel_ms` and `reachable` read the world as it stands (the frozen
     /// snapshot in a Lull or a recap, the live world in a Push), unfogged in S1
     /// as targeting.md's ranking already is, so a seam another seat has mined
-    /// out shows here as not live. The list is fog-filtered from S3, with the
-    /// knowledge store (docs/design/targeting.md, "Descriptions (S1)" and
-    /// "Surfaces").
+    /// out shows here as not live. The list is fog-filtered from S4, with real
+    /// terrain fog (S3's plan, decision 2, register S3-05; docs/design/targeting.md,
+    /// "Descriptions (S1)" and "Surfaces").
     #[prost(message, repeated, tag="5")]
     pub features: ::prost::alloc::vec::Vec<MapFeature>,
 }
@@ -842,9 +953,9 @@ impl ::prost::Name for GetEconomyForecastRequest {
 const NAME: &'static str = "GetEconomyForecastRequest";
 const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.GetEconomyForecastRequest".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.GetEconomyForecastRequest".into() }}
-/// PLACEHOLDER: the what-if vocabulary — owner, S3 (decisions-log item 128,
-/// S1's plan's decision 12): place a beacon here, queue this structure, field
-/// these units. 1-15 are held.
+/// PLACEHOLDER: the what-if vocabulary — owner, at S6, with the segment clock (S3's plan, decision 2).
+/// The register's S1-46 (item 128, S1's plan's decision 12): place a beacon here,
+/// queue this structure, field these units. 1-15 are held.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct WhatIf {
 }
@@ -1651,6 +1762,25 @@ pub struct Event {
     /// Where it happened, when it happened somewhere.
     #[prost(message, optional, tag="4")]
     pub at: ::core::option::Option<super::super::v1::Voxel>,
+    /// The one payload an event of a kind that has one carries. A oneof, so that
+    /// the types refuse an event with two; each later kind joins it with a number
+    /// from the range held below.
+    #[prost(oneof="event::Payload", tags="5")]
+    pub payload: ::core::option::Option<event::Payload>,
+}
+/// Nested message and enum types in `Event`.
+pub mod event {
+    /// The one payload an event of a kind that has one carries. A oneof, so that
+    /// the types refuse an event with two; each later kind joins it with a number
+    /// from the range held below.
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Payload {
+        /// On an event of kind `ledger_memo` and no other: which memo, and its text,
+        /// the same text as `text` above, so a reader that only draws the feed needs
+        /// no branch (S3's plan, E5). Filled from S3's `gwp`.
+        #[prost(message, tag="5")]
+        LedgerMemo(super::LedgerMemo),
+    }
 }
 impl ::prost::Name for Event {
 const NAME: &'static str = "Event";
@@ -1751,11 +1881,11 @@ pub struct GetViewResponse {
     /// arrives, as a new field of GetViewRequest that a client opts into, so that
     /// the meaning of this field never changes under a client that did not ask.
     ///
-    /// PLACEHOLDER: the opt-in delta mode for entities — owner, S2, when a full
-    /// entity list per view is 20-30 KB a poll at S2's 300 units and has to be
-    /// decided rather than deferred. The other half of the same question,
-    /// ViewEntity.at's whole-voxel positions, is the owner's at S7, with
-    /// recording-grade positions.
+    /// PLACEHOLDER: the opt-in delta mode for entities — owner, at S7, with scrub and recordings, on `cert3`'s measurement (S3's plan, decision 14).
+    /// A full entity list per view is 20-30 KB a poll at S2's 300 units by S2-12's
+    /// estimate; S3's `cert3` publishes the figure. The other half of the same
+    /// question, ViewEntity.at's whole-voxel positions, is the owner's at S7 too,
+    /// with recording-grade positions.
     #[prost(message, repeated, tag="3")]
     pub entities: ::prost::alloc::vec::Vec<ViewEntity>,
     /// Where to read from next. Opaque.
@@ -1861,15 +1991,18 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.ViewChunk".into() 
 /// progress are never shown for another seat's asset.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ViewEntity {
-    /// OPAQUE, and scoped to the viewer this answer was built for. A beacon is
-    /// `b_NN`, which is already public through list_beacons and is what a
-    /// playbook names; a unit or a structure is a handle this viewer was given in
-    /// the order it first saw the thing, because a dense table row id would be a
-    /// count of everything the match has ever made.
+    /// OPAQUE, and scoped to the viewer this answer was built for. A seat's own
+    /// beacon is `b_NN`, which is already public through list_beacons and is what
+    /// a playbook names. Another seat's beacon is `e_NN`, this viewer's handle for
+    /// it, or `v_N` until the viewer holds one: `v_N` names it to get_view alone,
+    /// and the beacon takes its `e_NN` at the next Lull. A unit is `u_N`, a
+    /// structure `s_N`, a wreck or a ruin `w_N` and a shell `p_N`: each a handle
+    /// this viewer was given in the order it first saw the thing, because a dense
+    /// table row id would be a count of everything the match has ever made.
     ///
     /// It is stable for one viewer for as long as the match is attached, and it
     /// means nothing to any other viewer or to any other method — except a `b_NN`
-    /// id, which get_beacon takes.
+    /// or an `e_NN` id, which get_beacon takes.
     #[prost(string, tag="1")]
     pub id: ::prost::alloc::string::String,
     #[prost(enumeration="view_entity::Kind", tag="2")]
