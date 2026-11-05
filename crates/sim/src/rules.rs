@@ -895,6 +895,7 @@ impl RulesTable {
             .as_ref()
             .ok_or(RulesError::MissingBlock("economy"))?;
         band_rows_of(economy)?;
+        percent_rows_of(economy)?;
         let ore_yield_per_voxel =
             economy
                 .ore_yield_per_voxel_dollars
@@ -1162,6 +1163,34 @@ fn segment_lengths_of(matched: &gp::v1::rules_table::Match) -> Result<Vec<i32>, 
         });
     }
     Ok(matched.segment_lengths_ms.clone())
+}
+
+/// The two percents `economy::percent_of` reads from `economy` that nothing
+/// else bounds (`economy.salvage_percent` is read and bounded with the combat
+/// rows): a `uint32` amount times either must fit `i64`, or `percent_of` could
+/// not answer.
+fn percent_rows_of(economy: &gp::v1::rules_table::Economy) -> Result<(), RulesError> {
+    if economy.recycle_refund_percent > 100 {
+        return Err(RulesError::OutOfRange {
+            field: "economy.recycle_refund_percent".to_owned(),
+            value: format!(
+                "{}; a refund worth more than the thing recycled would make every recycle pay",
+                economy.recycle_refund_percent
+            ),
+        });
+    }
+    // Not a game rule: the bound the arithmetic needs. (2^32 - 1) x (2^31 - 1)
+    // is below 2^63. A fund of many times the BMI is the owner's to tune.
+    if economy.award_fund_percent_of_bmi > i32::MAX.unsigned_abs() {
+        return Err(RulesError::OutOfRange {
+            field: "economy.award_fund_percent_of_bmi".to_owned(),
+            value: format!(
+                "{}; a percent past `i32::MAX` of a 32-bit BMI does not fit the `$` type",
+                economy.award_fund_percent_of_bmi
+            ),
+        });
+    }
+    Ok(())
 }
 
 /// The settlement band's two percents as `economy::band_percent` and

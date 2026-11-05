@@ -239,7 +239,7 @@ pub fn value_of(cost: Money, hp: i32, max_hp: i32) -> Money {
     cost.raw()
         .checked_mul(held)
         .and_then(|scaled| scaled.checked_div(full))
-        // E7: cannot miss: `full` is positive, checked above, and a rules row's cost and hit points are each a 32-bit figure, so the product fits `i64`
+        // E7: cannot miss: `full` is positive, checked above, and a rules row's cost is a `uint32` and its hit points an `i32`, so the product is below 2^63
         .map_or(Money::ZERO, Money::new)
 }
 
@@ -254,7 +254,7 @@ pub fn percent_of(amount: Money, percent: u32) -> Money {
         .raw()
         .checked_mul(percent)
         .and_then(|scaled| scaled.checked_div(100))
-        // E7: cannot miss: an asset's value is at most a rules row's 32-bit cost, and a rules percent is 32 bits, so the product fits `i64`
+        // E7: cannot miss: `amount` is at most a `uint32` rules figure (a cost, a value scaled down from one, or the BMI), and `RulesTable::from_message` bounds every percent read here (salvage and the recycle refund at 100, the award fund at `i32::MAX`), so the product is below 2^63
         .map_or(Money::ZERO, Money::new)
 }
 
@@ -476,6 +476,22 @@ pub fn starting_treasury(rules: &RulesTable) -> Money {
 mod tests {
     use super::{Urgency, percent_of, value_of};
     use crate::math::quantity::Money;
+
+    /// The bounds `RulesTable::from_message` holds the percents to are what
+    /// keeps `percent_of` from its `Money::ZERO`: the largest amount at the
+    /// largest percent still answers the sum.
+    #[test]
+    fn the_largest_amount_at_the_largest_percent_it_loads_is_paid() {
+        let amount = i64::from(u32::MAX);
+        let percent = i32::MAX.unsigned_abs();
+        let expected = (amount * i64::from(percent))
+            .checked_div(100)
+            .unwrap_or_else(|| panic!("a hundred divides"));
+        assert_eq!(
+            percent_of(Money::new(amount), percent),
+            Money::new(expected)
+        );
+    }
 
     #[test]
     fn value_is_build_cost_scaled_by_condition() {

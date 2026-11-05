@@ -1709,6 +1709,31 @@ fn a_row_out_of_range_is_refused_at_load() {
         },
         "commander.respawn_base_ms",
     );
+    refused(
+        &|message| {
+            if let Some(economy) = message.economy.as_mut() {
+                economy.recycle_refund_percent = 101;
+            }
+        },
+        "economy.recycle_refund_percent",
+    );
+    refused(
+        &|message| {
+            if let Some(economy) = message.economy.as_mut() {
+                economy.award_fund_percent_of_bmi = i32::MAX.unsigned_abs() + 1;
+            }
+        },
+        "economy.award_fund_percent_of_bmi",
+    );
+    // Each bound is the last value that loads, not one short of it.
+    let mut message = committed_message();
+    let economy = message
+        .economy
+        .as_mut()
+        .expect("the committed table has an economy block");
+    economy.recycle_refund_percent = 100;
+    economy.award_fund_percent_of_bmi = i32::MAX.unsigned_abs();
+    assert!(RulesTable::from_message(&message).is_ok());
 }
 
 #[test]
