@@ -414,8 +414,8 @@ puts that reading to the owner.
   moves, verifier error rows shown. `godot/` draws the end-of-match survey and **Export playtest
   bundle**, which writes one zip through Godot's `ZIPPacker` to a path the tester picks:
   `survey.json`, `metrics.json`, `diagnostics.log`, and a `manifest.json` that lists them and says
-  the recording is absent until S7's recordings exist. **The raw `godot.log` is never shipped:** it
-  can hold absolute paths, and with them the tester's user name. `diagnostics.log` is a log the
+  the recording is absent until S7's recordings exist. **The raw `godot.log` and `client-*.log` are never shipped:**
+  they can hold absolute paths, and with them the tester's user name. `diagnostics.log` is a log the
   client writes itself while Playtest mode is on, of its own typed lines (event, refusal code,
   phase, host-clock milliseconds), with no absolute path, user name, machine name, playbook text or
   notebook text in it; a test pins its lines' shape and fails on a line that holds a path
@@ -755,11 +755,17 @@ change moves `report_hash` is granted, for the re-bless alone, `tests/golden/gat
   template to start with and carries its reason, from the advisor's suggestion); E18's seed
   withheld from seat tokens; strings E (the fallback's internal names "Shadow" and "Hold" in the
   event list replaced by the player's words), F (steps numbered from 1 in the event list, as the
-  route numbers them), item 143 (3)'s first (after the match ends a refused ask no longer says
-  planning opens in the next Lull), and item 143 (4)'s `safe_playbook_filed` line (`strings.rs`
+  route numbers them), and item 143 (4)'s `safe_playbook_filed` line (`strings.rs`
   ~460), which says "The Lull ran out" even when Ready ended it, reworded to say which ended it;
   the markers it owns re-dated (`viewfeed.rs` ~63 to S4, `crates/gateway/src/surface/knowledge.rs`
-  ~677 to S6).
+  ~677 to S6). **The S2 demo's findings (item 155 (3) 5, 6 and 7; `ed3a` #166):** a seat named on
+  `fallback_engaged`'s line; `SegmentFeed::page` (`crates/gateway/src/feed.rs`), which re-filters the
+  bus by the viewer's vision at each read while its cursor indexes the filtered list, so sight that
+  grows re-delivers earlier rows and sight that shrinks loses events, its regression tests being the
+  probe's cases in #166's body plus a fog-lift case (`FogPolicy::unfogged` turns true on `ended`, so
+  the match's end grows every seat's list); the `sighting_refreshed` flood thinned; and "This match
+  so far" reworded at the match's end (`strings.rs` ~609). `ed3a` did the client halves and item
+  143 (3)'s first, which was the client's own string.
 - **Implements:** items 152 (1) 4, 153 (2); E1, E5–E7, E18, E25; register S1-40 (gateway half);
   items 139 (2) E, F; 143 (3), (4). **Needs:** `con5`, `ed3a` and `sim3a` merged; decisions 4, 5 and 13.
   **Acceptance:** a resumed match names its `e_NN` as before (the test written first and red on
