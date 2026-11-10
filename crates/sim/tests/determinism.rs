@@ -815,9 +815,13 @@ fn the_rules_hash_is_pinned_to_the_committed_table() {
     // mortar 12) and the note. Vision gates every weapon's choice and every
     // sighting, so the chain moved with it, beside S2-16's removal of the
     // harness walkers' wander, which moved it first.
+    // It moved from 55019fca46a1a843 with revision 7 (S3's `con5`): five rows
+    // nothing reads yet (`pathing.*`, `combat.charge_damage_hp`,
+    // `structures.resonance_spire_sphere_bonus_voxels` and
+    // `licences.resonance_vents`) and the note, so the chain did not move.
     assert_eq!(
         hex(rules().rules_hash()),
-        "55019fca46a1a843",
+        "1b26c525068bff61",
         "the rules hash moved; say in the pull request which row changed and why"
     );
 }

@@ -53,6 +53,10 @@ the result is pinned here (`expected.expand_east.json` and its siblings).
   `GetEconomyForecastResponse`'s 5 and 6 for the next BMI and the committed
   spend, and added three reservations of its own: `VentPick` and `SeamPick`
   3-15 (the deferred filters) and `FeatureRef.Rank` 2-9 (the deferred ranks).
+  S3's first proto pull request (`con5`) discharged `GetBriefingResponse`'s 5
+  for the held licences, `GetRecapResponse`'s 6 and 7 for the licences awarded
+  and the Ledger's memos, `BeaconSummary`'s 10 for the sphere's radius and
+  `Event`'s 5 for a memo's payload.
 * **`expected.rules.v1.json`**: the rules table's canonical JSON, so a row was
   added or a value re-tuned. The table is hashed into `rules_hash`, so the same
   pull request re-blesses every verifier `report_hash` golden, the gateway's
