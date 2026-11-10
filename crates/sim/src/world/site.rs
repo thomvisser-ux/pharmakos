@@ -275,8 +275,10 @@ impl BuildSettings {
     };
 }
 
-/// The Build settings a settings row writes, each only when the row names it
-/// (a proto3 scalar is named when it is not its default), as
+/// The Build settings a settings row writes, each only when the row names it:
+/// the threshold and the rebuild flag when they are written, a written 0 or
+/// `false` included, because they carry presence (S3's plan, task `con5b`), and
+/// `terraform`, a proto3 enum, when it is not `TERRAFORM_UNSPECIFIED`; as
 /// [`crate::mining::MineEdit`] is for Mine.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct BuildEdit {

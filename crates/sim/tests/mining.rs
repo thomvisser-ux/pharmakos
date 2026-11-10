@@ -867,6 +867,76 @@ fn a_set_mandate_row_writes_the_settings_it_carries() {
 }
 
 #[test]
+fn an_edit_row_writing_false_turns_flee_on_threat_off() {
+    // S3's plan, task `con5b`: `flee_on_threat` carries presence, so an edit
+    // row's written `false` takes effect, and an edit row that leaves it out
+    // leaves it alone. Whether a fleeing beacon's drones run home is
+    // `a_mine_drone_flees_a_threat`'s, which reads the same setting.
+    let off = concat!(
+        r#"{"label":"switch","interface":{"beacon":{"beacon_id":"b_00"},"rows":["#,
+        r#"{"set_mandate":{"mine":{"flee_on_threat":true}}},"#,
+        r#"{"set_mandate_settings":{"mine":{"flee_on_threat":false}}}"#,
+        r#"]},"timeout_ms":120000}"#
+    );
+    let after = visit(off);
+    assert_eq!(
+        settings_at(&after, row_of(core(&after))),
+        Some(MineSettings::default()),
+        "the written false is the beacon's setting once the row commits"
+    );
+
+    let untouched = concat!(
+        r#"{"label":"switch","interface":{"beacon":{"beacon_id":"b_00"},"rows":["#,
+        r#"{"set_mandate":{"mine":{"flee_on_threat":true}}},"#,
+        r#"{"set_mandate_settings":{"mine":{"dig_max_depth":2}}}"#,
+        r#"]},"timeout_ms":120000}"#
+    );
+    let after = visit(untouched);
+    assert_eq!(
+        settings_at(&after, row_of(core(&after))),
+        Some(MineSettings {
+            dig_max_depth: 2,
+            flee_on_threat: true,
+            ..MineSettings::default()
+        }),
+        "an edit that leaves the setting out leaves it alone"
+    );
+}
+
+#[test]
+fn a_written_false_in_a_switch_is_one_field_of_its_edit() {
+    // S3's plan, task `con5b`: a written `false` in a switch's settings costs
+    // one field, the edit's base time, beside the switch, as the verifier's
+    // `count` prices it. It changes nothing, since a switch starts from the
+    // defaults, and it matches S2's rule that a present `optional` counts.
+    let route = concat!(
+        r#"{"label":"switch","interface":{"beacon":{"beacon_id":"b_00"},"rows":["#,
+        r#"{"set_mandate":{"mine":{"flee_on_threat":false}}},"#,
+        r#"{"set_mandate":{"build":{"rebuild_destroyed":false,"repair_threshold_pct":0}}}"#,
+        r#"]},"timeout_ms":120000}"#
+    );
+    let compiled = Plan::compile(&playbook(route), &rules()).expect("compiles");
+    let rows = match compiled.route().first().map(|step| &step.action) {
+        Some(pharmakos_sim::interpreter::Action::Interface { rows, .. }) => rows,
+        other => panic!("an interface step: {other:?}"),
+    };
+    let times = rules().message().interface_times.expect("interface times");
+    let card = compiled.interface_times();
+    assert_eq!(
+        rows.first().expect("a row").duration_ms(card),
+        Ok(times.switch_mandate_ms + times.edit_settings_base_ms),
+        "the switch and one field"
+    );
+    assert_eq!(
+        rows.get(1).expect("a row").duration_ms(card),
+        Ok(times.switch_mandate_ms
+            + times.edit_settings_base_ms
+            + times.edit_settings_per_field_ms),
+        "the switch and two fields"
+    );
+}
+
+#[test]
 fn a_switch_to_an_empty_s2_writ_prices_the_fields_beside_it() {
     // An empty Defend arm writes nothing of its own, but `retreat_hp_pct`
     // beside it is a field of the edit, priced as it is beside any other arm

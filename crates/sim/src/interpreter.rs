@@ -471,8 +471,11 @@ pub enum Row {
         /// only the settings cost time; **not** written by a committed row.
         kind: Option<MandateKind>,
         /// How many settings fields the row writes: each scalar field set to a
-        /// non-default value, and **each element** of a protected-area or
-        /// probe-area list (decision 15; the register's S1-23 and S1-51). The
+        /// non-default value, each field with presence that is written, its
+        /// default included (`repair_threshold_pct`, `rebuild_destroyed`,
+        /// `flee_on_threat` and S2's `optional` fields; S3's plan, task
+        /// `con5b`), and **each element** of a protected-area or probe-area
+        /// list (decision 15; the register's S1-23 and S1-51). The
         /// first costs the base time and each further one the per-field time,
         /// capped at the maximum. Build targets are not fields.
         fields: u32,
@@ -1721,8 +1724,10 @@ fn compile_defend_settings(
 /// The Build settings a row names (S2's `site`): `repair_threshold_pct`,
 /// refused past 100; `rebuild_destroyed`; and `terraform`, refused when it is
 /// a number this build does not name. Each is written only when the row names
-/// it -- a proto3 scalar at its default is silent -- so an omitted terraform
-/// leaves the beacon's as it is, which a new beacon holds as `NONE`.
+/// it, so an omitted one leaves the beacon's as it is. The threshold and the
+/// rebuild flag carry presence (S3's plan, task `con5b`), so a written 0 or
+/// `false` is written too; `terraform` is a proto3 enum at its default when
+/// silent, which a new beacon holds as `NONE`.
 ///
 /// # Errors
 ///
@@ -1731,8 +1736,8 @@ fn compile_build_settings(
     build: &gp::v1::BuildSettings,
 ) -> Result<crate::site::BuildEdit, PlanError> {
     let repair_threshold_pct = match build.repair_threshold_pct {
-        0 => None,
-        pct => Some(
+        None => None,
+        Some(pct) => Some(
             u8::try_from(pct)
                 .ok()
                 .filter(|pct| *pct <= 100)
@@ -1752,7 +1757,7 @@ fn compile_build_settings(
     };
     Ok(crate::site::BuildEdit {
         repair_threshold_pct,
-        rebuild_destroyed: build.rebuild_destroyed.then_some(true),
+        rebuild_destroyed: build.rebuild_destroyed,
         terraform,
     })
 }
@@ -2103,7 +2108,8 @@ fn compile_feature_ref(
 /// section 5 gives targets a row of their own at `build_target_ms` each,
 /// which [`Row::duration_ms`] charges apart, outside the cap. A scalar counts
 /// when it is set to a non-default value, which is what proto3's canonical
-/// JSON keeps and so what the author wrote. This is the verifier's `count`,
+/// JSON keeps and so what the author wrote; a field with presence counts
+/// whenever it is written, its default included. This is the verifier's `count`,
 /// field for field, so the Push charges a visit what the editor quotes.
 fn mandate_fields(mandate: &gp::v1::mandate_settings::Mandate) -> Result<u32, PlanError> {
     let each = |list: usize| u32::try_from(list).map_err(|_| PlanError::RowTooLong);
@@ -2116,8 +2122,8 @@ fn mandate_fields(mandate: &gp::v1::mandate_settings::Mandate) -> Result<u32, Pl
     };
     match mandate {
         gp::v1::mandate_settings::Mandate::Build(build) => sum(&[
-            set(build.repair_threshold_pct != 0),
-            set(build.rebuild_destroyed),
+            set(build.repair_threshold_pct.is_some()),
+            set(build.rebuild_destroyed.is_some()),
             set(build.terraform != 0),
             each(build.protected_areas.len())?,
         ]),
@@ -2127,7 +2133,7 @@ fn mandate_fields(mandate: &gp::v1::mandate_settings::Mandate) -> Result<u32, Pl
         ]),
         gp::v1::mandate_settings::Mandate::Mine(mine) => sum(&[
             set(mine.dig_max_depth != 0),
-            set(mine.flee_on_threat),
+            set(mine.flee_on_threat.is_some()),
             set(mine.seam_choice != 0),
             set(mine.pillar_spacing != 0),
         ]),
@@ -2998,3 +3004,87 @@ impl core::fmt::Display for PlanError {
 }
 
 impl std::error::Error for PlanError {}
+
+#[cfg(test)]
+mod tests {
+    //! S3's plan, task `con5b`: `repair_threshold_pct`, `rebuild_destroyed`
+    //! and `flee_on_threat` have presence. A written `0` or `false` takes
+    //! effect and is one field of the edit, as the verifier's `count` prices
+    //! it; an omitted one leaves the setting alone and costs nothing.
+
+    use super::{PlanError, compile_build_settings, mandate_fields};
+    use crate::site::BuildSettings;
+    use pharmakos_proto::gp;
+    use pharmakos_proto::gp::v1::mandate_settings::Mandate;
+
+    fn build(threshold: Option<u32>, rebuild: Option<bool>) -> gp::v1::BuildSettings {
+        gp::v1::BuildSettings {
+            repair_threshold_pct: threshold,
+            rebuild_destroyed: rebuild,
+            ..gp::v1::BuildSettings::default()
+        }
+    }
+
+    fn repairing() -> BuildSettings {
+        BuildSettings {
+            repair_threshold_pct: 50,
+            rebuild_destroyed: true,
+            ..BuildSettings::DEFAULT
+        }
+    }
+
+    fn mine(flee_on_threat: Option<bool>) -> Mandate {
+        Mandate::Mine(gp::v1::MineSettings {
+            flee_on_threat,
+            ..gp::v1::MineSettings::default()
+        })
+    }
+
+    // The sim's source holds no `.expect(` (`tests/confinement.rs`), so each
+    // result is compared whole.
+
+    #[test]
+    fn a_written_zero_and_false_turn_the_build_settings_off() {
+        let edit = compile_build_settings(&build(Some(0), Some(false)));
+        assert_eq!(
+            edit.as_ref().map(|edit| (
+                edit.repair_threshold_pct,
+                edit.rebuild_destroyed,
+                edit.writes()
+            )),
+            Ok((Some(0), Some(false), true)),
+            "a written 0 and false are an edit"
+        );
+        let after = edit.map(|edit| edit.over(repairing()));
+        assert_eq!(
+            after.map(|after| (after.repair_threshold_pct, after.rebuild_destroyed)),
+            Ok((0, false))
+        );
+    }
+
+    #[test]
+    fn omitted_build_settings_are_left_alone() {
+        let edit = compile_build_settings(&build(None, None));
+        assert_eq!(edit.as_ref().map(|edit| edit.writes()), Ok(false));
+        assert_eq!(edit.map(|edit| edit.over(repairing())), Ok(repairing()));
+    }
+
+    #[test]
+    fn a_written_threshold_past_100_is_still_refused() {
+        assert_eq!(
+            compile_build_settings(&build(Some(101), None)),
+            Err(PlanError::RepairThresholdOutOfRange { found: 101 })
+        );
+    }
+
+    #[test]
+    fn each_written_setting_is_one_field_and_an_omitted_one_is_none() {
+        assert_eq!(
+            mandate_fields(&Mandate::Build(build(Some(0), Some(false)))),
+            Ok(2)
+        );
+        assert_eq!(mandate_fields(&Mandate::Build(build(None, None))), Ok(0));
+        assert_eq!(mandate_fields(&mine(Some(false))), Ok(1));
+        assert_eq!(mandate_fields(&mine(None)), Ok(0));
+    }
+}

@@ -353,11 +353,14 @@ impl Visit for Semantics<'_> {
             _ => {}
         }
         self.percent(at, "retreat_hp_pct", settings.retreat_hp_pct);
-        if let Some(mandate_settings::Mandate::Build(build)) = settings.mandate.as_ref() {
+        // An omitted threshold has nothing to check (S3's plan, task `con5b`).
+        if let Some(mandate_settings::Mandate::Build(build)) = settings.mandate.as_ref()
+            && let Some(threshold) = build.repair_threshold_pct
+        {
             self.percent(
                 &pointer::child(at, "build"),
                 "repair_threshold_pct",
-                build.repair_threshold_pct,
+                threshold,
             );
         }
     }
@@ -879,4 +882,76 @@ fn squared_distance(a: &Voxel, b: &Voxel) -> i64 {
     axis(a.x, b.x)
         .saturating_add(axis(a.y, b.y))
         .saturating_add(axis(a.z, b.z))
+}
+
+#[cfg(test)]
+mod tests {
+    //! S3's plan, task `con5b`: E0501 checks a written threshold, and an
+    //! omitted one has nothing to check.
+
+    use crate::limits::Limits;
+    use crate::report::{Builder, number, patch_replace};
+    use crate::resolve::Symbols;
+    use crate::scope::Scope;
+    use pharmakos_proto::gp::api::v1::Diagnostic;
+    use pharmakos_proto::gp::v1::Playbook;
+    use pharmakos_proto::json;
+    use pharmakos_sim::knowledge::SeatEconomy;
+    use pharmakos_sim::rules::RulesTable;
+    use pharmakos_sim::tables::SeatId;
+
+    const AT: &str =
+        "/declarative/route/0/interface/rows/0/set_mandate_settings/build/repair_threshold_pct";
+
+    fn e0501(build: &str) -> Vec<Diagnostic> {
+        let text = format!(
+            concat!(
+                "{{\"schema_version\":{{\"major\":1}},",
+                "\"meta\":{{\"title\":\"e0501\",\"author_kind\":\"HUMAN\"}},",
+                "\"declarative\":{{\"route\":[",
+                r#"{{"label":"v","interface":{{"beacon":{{"beacon_id":"b_00"}},"rows":["#,
+                r#"{{"set_mandate_settings":{{"build":{build}}}}}]}},"timeout_ms":120000}}"#,
+                "]}},",
+                "\"on_death\":{{\"on_respawn\":\"CONTINUE\",\"max_deaths_before_fallback\":3}},",
+                "\"fallback\":{{\"hold\":{{\"at\":{{\"safest\":{{}}}}}}}},",
+                "\"kind\":\"PLAYBOOK\"}}"
+            ),
+            build = build
+        );
+        let playbook: Playbook =
+            json::decode(&text).unwrap_or_else(|error| panic!("the case decodes: {error}\n{text}"));
+        let rules = RulesTable::load(std::path::Path::new("../../rules/rules.v1.json"))
+            .expect("the committed rules table");
+        let limits = Limits::from_rules(&rules).expect("the committed limits");
+        let scope = Scope::new(SeatId::new(0), SeatEconomy::default());
+        let symbols = Symbols::of(&playbook);
+        let mut out = Builder::default();
+        super::run(&playbook, &scope, &limits, &symbols, &mut out);
+        out.into_diagnostics()
+            .into_iter()
+            .filter(|diagnostic| diagnostic.code == "E0501")
+            .collect()
+    }
+
+    #[test]
+    fn a_written_threshold_past_100_is_refused_with_its_fix() {
+        let found = e0501(r#"{"repair_threshold_pct":101}"#);
+        assert_eq!(found.len(), 1, "{found:?}");
+        let diagnostic = found.first().expect("one E0501");
+        assert_eq!(diagnostic.path, AT);
+        assert_eq!(
+            diagnostic
+                .suggestions
+                .iter()
+                .map(|suggestion| suggestion.json_patch.as_str())
+                .collect::<Vec<_>>(),
+            vec![patch_replace(AT, &number(100)).as_str()]
+        );
+    }
+
+    #[test]
+    fn a_written_zero_and_an_omitted_threshold_are_not_refused() {
+        assert!(e0501(r#"{"repair_threshold_pct":0}"#).is_empty());
+        assert!(e0501("{}").is_empty());
+    }
 }

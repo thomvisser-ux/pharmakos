@@ -347,7 +347,10 @@ fn each<T>(list: &[T]) -> u32 {
 ///
 /// A field counts when the author set it — a non-default value, which is the
 /// same rule the canonical form, the size meter and the sim's compile count
-/// by. The mandate *type* is free (spec section 5) and is never a field.
+/// by; a field with presence counts whenever it is written, its default
+/// included (S3's plan, task `con5b`, for `repair_threshold_pct`,
+/// `rebuild_destroyed` and `flee_on_threat`). The mandate *type* is free (spec
+/// section 5) and is never a field.
 ///
 /// **What "one field" means for a list (S1-23, ruled).** Spec section 5 writes
 /// "2 s + 0.5 s per extra field" without saying what a field is when a setting
@@ -388,8 +391,8 @@ pub fn count(settings: &MandateSettings) -> Counted {
                 protected_areas,
             } = build;
             (
-                set(*repair_threshold_pct != 0)
-                    .saturating_add(set(*rebuild_destroyed))
+                set(repair_threshold_pct.is_some())
+                    .saturating_add(set(rebuild_destroyed.is_some()))
                     .saturating_add(set(*terraform != 0))
                     .saturating_add(each(protected_areas)),
                 each(targets),
@@ -411,7 +414,7 @@ pub fn count(settings: &MandateSettings) -> Counted {
             } = mine;
             (
                 set(*dig_max_depth != 0)
-                    .saturating_add(set(*flee_on_threat))
+                    .saturating_add(set(flee_on_threat.is_some()))
                     .saturating_add(set(*seam_choice != 0))
                     .saturating_add(set(*pillar_spacing != 0)),
                 0,
@@ -612,7 +615,7 @@ mod tests {
                     retreat_hp_pct: 0,
                     mandate: Some(mandate_settings::Mandate::Mine(MineSettings {
                         dig_max_depth: 4,
-                        flee_on_threat: true,
+                        flee_on_threat: Some(true),
                         seam_choice: 0,
                         pillar_spacing: 0,
                     })),
@@ -672,8 +675,8 @@ mod tests {
             retreat_hp_pct: 0,
             mandate: Some(mandate_settings::Mandate::Build(BuildSettings {
                 targets: vec![target.clone(), target.clone(), target],
-                repair_threshold_pct: 0,
-                rebuild_destroyed: false,
+                repair_threshold_pct: None,
+                rebuild_destroyed: None,
                 terraform: 0,
                 protected_areas: vec![area(), area()],
             })),
@@ -690,6 +693,53 @@ mod tests {
         };
         // 2 s + 0.5 s for the two areas, then 3 x 2.5 s for the targets.
         assert_eq!(row_ms(&row, &rates()), Ms::new(10_000));
+    }
+
+    /// S3's plan, task `con5b`: `repair_threshold_pct`, `rebuild_destroyed`
+    /// and `flee_on_threat` have presence, so a written 0 or false is one
+    /// field, as the sim's `mandate_fields` charges it, and an omitted one is
+    /// none. The canonical form keeps the written value.
+    #[test]
+    fn a_written_zero_or_false_is_one_field_and_survives_canonicalisation() {
+        let build = |threshold: Option<u32>, rebuild: Option<bool>| MandateSettings {
+            roe: 0,
+            retreat_hp_pct: 0,
+            mandate: Some(mandate_settings::Mandate::Build(BuildSettings {
+                repair_threshold_pct: threshold,
+                rebuild_destroyed: rebuild,
+                ..BuildSettings::default()
+            })),
+        };
+        let mine = |flee: Option<bool>| MandateSettings {
+            roe: 0,
+            retreat_hp_pct: 0,
+            mandate: Some(mandate_settings::Mandate::Mine(MineSettings {
+                flee_on_threat: flee,
+                ..MineSettings::default()
+            })),
+        };
+        let fields = |settings: &MandateSettings| count(settings).fields;
+        assert_eq!(fields(&build(Some(0), Some(false))), 2);
+        assert_eq!(fields(&build(None, None)), 0);
+        assert_eq!(fields(&mine(Some(false))), 1);
+        assert_eq!(fields(&mine(None)), 0);
+
+        for (message, text) in [
+            ("gp.v1.MineSettings", r#"{"flee_on_threat":false}"#),
+            ("gp.v1.BuildSettings", r#"{"repair_threshold_pct":0}"#),
+            ("gp.v1.BuildSettings", r#"{"rebuild_destroyed":false}"#),
+        ] {
+            let canonical =
+                pharmakos_proto::json::canonicalise(message, text).expect("canonicalises");
+            let key = text.split('"').nth(1).expect("the key");
+            assert!(
+                canonical.contains(&format!("\"{key}\"")),
+                "{message}: a written `{key}` was dropped: {canonical}"
+            );
+        }
+        let decoded: MineSettings =
+            pharmakos_proto::json::decode(r#"{"flee_on_threat":false}"#).expect("decodes");
+        assert_eq!(decoded.flee_on_threat, Some(false));
     }
 
     /// S2's `vfy2`: Defend's and Attack's fields at decision 15's rule. A
