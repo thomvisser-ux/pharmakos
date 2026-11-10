@@ -15,7 +15,7 @@ use godot::meta::ToGodot;
 use pharmakos_proto::gp::api::v1::VerifyReport;
 use pharmakos_proto::json;
 
-use crate::editor::{Check, Editor, Route, Row, Selector, Target, Unchecked, rows_of};
+use crate::editor::{Check, Editor, Route, Row, Selector, SizeMeter, Target, Unchecked, rows_of};
 use crate::error::BridgeError;
 use crate::rig::{Meter, Recap};
 use crate::targeting::{AttackAim, AttackMark, Chip, ChipFeature, FeatureKind, FeatureName};
@@ -198,6 +198,7 @@ pub(crate) fn state_dictionary(editor: &Editor) -> VarDictionary {
         "this_round",
         text_or_empty(editor.this_round()).to_variant(),
     );
+    put("size", size_dictionary(editor.size_meter()).to_variant());
     put("door", editor.door().name().to_variant());
     // Why each check will not come, by its line: `{"rows": {"key", "detail"}, ...}`, the
     // key "" while the check is on its way (finding K; a refusal is its own check's).
@@ -224,6 +225,22 @@ pub(crate) fn state_dictionary(editor: &Editor) -> VarDictionary {
     option.set(&"enabled".to_variant(), &dormant.enabled.to_variant());
     put("dormant", option.to_variant());
     state
+}
+
+/// The size meter as a dictionary: empty before a report names a budget; otherwise `units`
+/// and `budget`, as the verifier counted them, and `refusal`, its sentence or empty (S3's
+/// plan, E9).
+fn size_dictionary(size: Option<&SizeMeter>) -> VarDictionary {
+    let mut out = VarDictionary::new();
+    if let Some(size) = size {
+        out.set(&"units".to_variant(), &i64::from(size.units).to_variant());
+        out.set(&"budget".to_variant(), &i64::from(size.budget).to_variant());
+        out.set(
+            &"refusal".to_variant(),
+            &text_or_empty(size.refusal.as_deref()).to_variant(),
+        );
+    }
+    out
 }
 
 /// One chip as a dictionary: `pointer`, `step` (from 1; 0 for a reference outside the
@@ -325,6 +342,23 @@ pub(crate) fn recap_dictionary(recap: &Recap) -> VarDictionary {
     out.set(&"round".to_variant(), &i64::from(recap.round).to_variant());
     out.set(&"prose".to_variant(), &recap.prose.to_variant());
     out.set(&"refusal".to_variant(), &recap.refusal.to_variant());
+    let mut tallies = VarArray::new();
+    for seat in &recap.seat_tallies {
+        let mut one = VarDictionary::new();
+        one.set(&"seat".to_variant(), &seat.seat.to_variant());
+        one.set(&"kills".to_variant(), &i64::from(seat.kills).to_variant());
+        one.set(
+            &"shared_kills".to_variant(),
+            &i64::from(seat.shared_kills).to_variant(),
+        );
+        one.set(&"losses".to_variant(), &i64::from(seat.losses).to_variant());
+        one.set(
+            &"value_destroyed_dollars".to_variant(),
+            &i64::from(seat.value_destroyed_dollars).to_variant(),
+        );
+        tallies.push(&one.to_variant());
+    }
+    out.set(&"seat_tallies".to_variant(), &tallies.to_variant());
     out
 }
 

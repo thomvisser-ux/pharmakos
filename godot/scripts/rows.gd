@@ -138,6 +138,7 @@ static func _row(row: Dictionary, index: int, on_fix: Callable, fixes_enabled: b
 	for fix in row.get("fixes", []):
 		var button := Button.new()
 		button.text = Strings.text("fix", {"title": fix.get("title", "")})
+		button.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		button.accessibility_name = button.text
 		button.disabled = not fixes_enabled
 		button.focus_mode = Control.FOCUS_NONE

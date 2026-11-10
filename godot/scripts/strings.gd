@@ -31,7 +31,10 @@ const TEXT := {
 	"lobby_all_ready": "all ready",
 	"lobby_speed": "speed {speed}x",
 	"lobby_skip": "Skip",
-	"lobby_ready": "Ready",
+	"lobby_ready": "Ready — end the Lull",
+	# Under the button, in a Lull (decisions-log item 143 (4)). Ready ends the Lull once every
+	# seat is ready, and with nothing sealed the gateway files the safe playbook.
+	"lobby_ready_help": "With nothing sealed, Ready files the safe playbook for you.",
 	"lobby_continue": "Continue",
 	"lobby_follow": "Follow",
 	"lobby_whole_map": "Whole map",
@@ -47,6 +50,10 @@ const TEXT := {
 	"lobby_recap": "Recap of round {round}: {prose}",
 	# A refused get_recap: the gateway's refusal, code and message, as it came.
 	"lobby_recap_refused": "The recap could not be read: {refusal}",
+	# Every seat's tally once the match is decided (item 145 (7)), one frame a seat, each number
+	# as the gateway counted it.
+	"lobby_recap_tallies": "Every seat's tally:",
+	"lobby_recap_tally": "{seat}: destroyed {kills}, {shared_kills} of them shared, worth ${value}; lost {losses}.",
 
 	# --- The credits overlay (scripts/credits.gd; decisions-log item 117 (11)) ------
 	# The game's licences by area are written here, never read from files at run time.
@@ -105,6 +112,9 @@ const TEXT := {
 	# never supply minus draw: nothing here adds or subtracts anything.
 	"meter": "${treasury}   supply {supply} kW   draw {draw} kW   headroom {headroom} kW",
 	"meter_waiting": "Not read yet.",
+	# The size meter (S3's plan, E9): the verifier's two numbers, as they came. Over budget the
+	# panel shows the verifier's own sentence instead of this frame.
+	"size_meter": "{units} of {budget} size units",
 	"forecast_heading": "Your next settlement",
 	# The next BMI is a prediction, and says so (decisions-log item 135 (2) (g)): the BMI at
 	# the band held now, ignoring committed spend. Each line is left out when the answer
@@ -130,7 +140,7 @@ const TEXT := {
 	# "Rendering..." and "Reading the map..." (finding K): the gateway refused it, with the
 	# gateway's words, or the planning door is shut.
 	"unchecked_refused": "Not checked: the gateway refused ({detail}).",
-	"unchecked_ready": "Not checked: you are ready, so your orders are final for this Lull.",
+	"unchecked_ready": "Not checked: after Ready this client sends no planning call for the rest of this Lull.",
 	"unchecked_push": "Not checked: planning is closed during the Push.",
 	"unchecked_recap": "Not checked: planning is closed during the recap.",
 	"unchecked_ended": "Not checked: the match has ended.",
@@ -150,6 +160,7 @@ const TEXT := {
 	"status_load_refused": "Load refused: {detail}. Nothing was opened and nothing in the file was changed.",
 	"status_load_refused_by_gateway": "The gateway would not check that file: {detail}",
 	"status_loaded": "Opened.",
+	"status_undone": "Undone.",
 	"status_no_playbook": "Open a playbook first.",
 	"status_gateway_refused": "The gateway refused: {detail}",
 	"status_submitting": "Submitting...",
@@ -161,7 +172,7 @@ const TEXT := {
 	"status_draft_saved": "Draft saved.",
 	"status_carried": "Last round's orders are loaded again and checked against the new map ({detail}).",
 	"status_not_yours": "That beacon is not yours.",
-	"status_saved_file": "Saved to {path}.",
+	"status_saved_file": "Saved to {detail}.",
 	"status_save_failed": "Could not write {path}.",
 	"status_open_failed": "Could not read {path}.",
 	"status_wizard_used": "The template's playbook is in the editor. Undo takes it back.",
@@ -171,9 +182,10 @@ const TEXT := {
 	"status_dormant_disallowing": "No longer allowing dormant beacons...",
 	"status_dormant_disallowed": "Dormant beacons no longer allowed.",
 	# An ask the editor did not send, because the planning door is shut (finding K).
-	"status_closed_ready": "You are ready: your orders are final for this Lull.",
-	"status_closed_push": "Planning is closed during the Push; it opens again in the next Lull.",
-	"status_closed_recap": "Planning is closed during the recap; it opens again in the next Lull.",
+	"status_closed_ready": "You pressed Ready: this client sends no planning call for the rest of this Lull.",
+	# Neither promises a next Lull: the last Push and the final recap have none (item 143 (3)).
+	"status_closed_push": "Planning is closed during the Push. If another round follows, its Lull opens it again.",
+	"status_closed_recap": "Planning is closed during the recap. If another round follows, its Lull opens it again.",
 	"status_closed_ended": "The match has ended: there is nothing left to plan.",
 	# The gateway's own line from this seat's feed, as it came, and what it means for the
 	# text on screen (finding J).

@@ -9,7 +9,8 @@
 # 107 (5)); the camera holds no visibility rule of its own and has no way to show more.
 #
 # Free-look: WASD or the arrow keys pan over the ground, Q and E lower and raise, the mouse
-# wheel zooms, and the right mouse button held down turns the view. The lobby's Follow
+# wheel zooms on what is under the cursor, and the right mouse button held down turns the view.
+# The lobby's Follow
 # button (`lobby.gd`'s `_toggle_follow`) toggles following the commander; no key does. All
 # of it is presentation - floats, easing and a camera - and none of it reaches the match.
 #
@@ -20,6 +21,16 @@
 # left-click that `editor.gd` does not take as a beacon or ground click - releases that
 # focus, so the keys come back without a restart. Godot 4.7 keeps a text field's focus
 # through a click on empty space, which is why the rig releases it.
+#
+# THE WHEEL (S2's stage demo, decisions-log item 155 (3) 4). It used to zoom about the focus,
+# the map's middle from the whole map's framing, by an eighth a notch, so a base in a corner
+# slid off screen before it grew and the demo's base kit could not be told apart. Now each
+# notch takes about a quarter off the distance, and the point under the cursor stays under it
+# (`_pivot_at`, `zoom_at`), so a dozen or so notches on a structure make it readable. While the
+# rig follows something the wheel zooms about the focus, which stays on what is followed. A
+# wheel that reports a fractional notch (`factor`, a precision wheel or a touchpad) moves the
+# camera by that fraction. `client_check.gd`'s `_check_the_wheel` measures it through the real
+# camera at the owner's window.
 
 extends Node3D
 
@@ -29,7 +40,7 @@ extends Node3D
 ## They are Tuning, and walled floats (decisions-log item 126 (2) (b); register D-21).
 const PAN_RATE := 90.0
 ## How much one wheel notch zooms, as a factor on the distance. PLACEHOLDER, as above.
-const ZOOM_STEP := 1.12
+const ZOOM_STEP := 1.3
 ## Radians of turn per pixel of mouse travel. PLACEHOLDER, as above.
 const TURN_RATE := 0.005
 ## How quickly the camera closes on what it follows, per second. PLACEHOLDER, as above.
@@ -50,6 +61,12 @@ var pitch := -0.9
 var distance := 420.0
 ## What the camera follows, or null for free-look.
 var target: Node3D = null
+## The map's size as last framed (x, up, north), or zero before a view has said: what the wheel's
+## plane fallback may pivot on (`_pivot_at`).
+var map_extent := Vector3.ZERO
+## The ground under a ray, for the wheel to zoom on: called with the ray's origin and normal,
+## answers `{"hit": bool, "at": Vector3}`. The vista binds it to the view's own pick.
+var ground_under := Callable()
 
 @onready var camera: Camera3D = $Camera
 
@@ -61,6 +78,7 @@ func _ready() -> void:
 ## Looks at the whole of a map `extent` voxels across (x, up, north), from above its
 ## north-east corner (largest x and north nearest the camera).
 func frame_extent(extent: Vector3) -> void:
+	map_extent = extent
 	# A little past the centre towards the camera, so perspective does not cut the near
 	# corner off the bottom of the frame.
 	focus = Vector3(extent.x * 0.58, extent.y * 0.25, extent.z * 0.58)
@@ -127,12 +145,54 @@ func _unhandled_input(event: InputEvent) -> void:
 		# A press on the view that no control took gives the keys back to the camera.
 		get_viewport().gui_release_focus()
 		if event.button_index == MOUSE_BUTTON_WHEEL_UP:
-			distance = clampf(distance / ZOOM_STEP, NEAREST, FARTHEST)
+			zoom_at(event.position, -notches_of(event))
 		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-			distance = clampf(distance * ZOOM_STEP, NEAREST, FARTHEST)
+			zoom_at(event.position, notches_of(event))
 	elif event is InputEventMouseMotion and Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT):
 		yaw -= event.relative.x * TURN_RATE
 		pitch = clampf(pitch - event.relative.y * TURN_RATE, -1.5, -0.1)
+
+
+## How many notches one wheel event is: its `factor` where the platform reports one, a whole
+## notch where it reports none (0).
+static func notches_of(event: InputEventMouseButton) -> float:
+	return event.factor if event.factor > 0.0 else 1.0
+
+
+## `notches` of the wheel at the screen point `at`, in by a negative count and out by a positive
+## one. With the camera's turn unchanged, moving the focus towards the pivot by the share the
+## distance changes keeps the pivot where it is on screen.
+func zoom_at(at: Vector2, notches: float) -> void:
+	var wanted := clampf(distance * pow(ZOOM_STEP, notches), NEAREST, FARTHEST)
+	if target == null or not is_instance_valid(target):
+		var pivot := _pivot_at(at)
+		focus = pivot + (focus - pivot) * (wanted / distance)
+	distance = wanted
+	_place()
+
+
+## What the wheel zooms on at the screen point `at`: the ground the view has there; with none
+## there (the sky, or a view not yet whole), the level plane through the focus, where the ray
+## meets it over the map; otherwise the focus itself. A cursor just below the horizon meets that
+## plane far off the map, and one notch on such a point would throw the focus off it.
+func _pivot_at(at: Vector2) -> Vector3:
+	var origin := camera.project_ray_origin(at)
+	var normal := camera.project_ray_normal(at)
+	if ground_under.is_valid():
+		var picked: Dictionary = ground_under.call(origin, normal)
+		if picked.get("hit", false):
+			# On the ray itself, at the ground's depth: the pick is the middle of a voxel, which
+			# is off the ray by up to half a voxel, and that would show at the closest zoom.
+			return origin + normal * normal.dot(picked["at"] - origin)
+	var crossing: Variant = Plane(Vector3.UP, focus).intersects_ray(origin, normal)
+	if crossing == null or not _over_the_map(crossing):
+		return focus
+	return crossing
+
+
+## Whether `point` is over the map as last framed; nothing is before a map is known.
+func _over_the_map(point: Vector3) -> bool:
+	return point.x >= 0.0 and point.z >= 0.0 and point.x <= map_extent.x and point.z <= map_extent.z
 
 
 func _place() -> void:

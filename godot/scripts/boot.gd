@@ -10,13 +10,20 @@
 #
 # so the main scene is this one, which honours `--scene=` and leaves `--shot=` to the scene
 # that takes it. With no `--scene=`, the run is the game, and the game starts at the lobby.
+#
+# First it gives this instance its own log file (`scripts/instance_log.gd`, S1's stage demo,
+# finding N), so a second instance's start cannot take the first's log away.
 
 extends Node
 
 const LOBBY := "res://scenes/lobby.tscn"
+const InstanceLog := preload("res://scripts/instance_log.gd")
 
 
 func _ready() -> void:
+	OS.add_logger(InstanceLog.new(InstanceLog.path_of(OS.get_process_id())))
+	InstanceLog.prune(InstanceLog.FOLDER)
+	print("[boot] Godot %s, process %d" % [Engine.get_version_info()["string"], OS.get_process_id()])
 	var target := LOBBY
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--scene="):

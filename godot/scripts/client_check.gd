@@ -15,8 +15,13 @@
 #
 # GDScript here is a VIEW and a REPORT and nothing else (AGENTS.md section 3 rule 4): it
 # reads what the bridge returns and prints it. There is no rule, no arithmetic on $, kW or
-# a duration, and no decision in this file — the one comparison it makes is
+# a duration, and no decision in this file — the one comparison it makes of the bridge's work is
 # `caught_panics == 0`, which is the assertion itself.
+#
+# Since S3's `ed3a` it also draws the camera and the editor's panel at the owner's window, off
+# screen in a SubViewport (`_check_the_view`), and measures them: walled floats and pixels, of
+# the view and nothing else (decisions-log items 139 (2) and 155 (3)). `cargo xtask ci`'s
+# `stage-client` step runs this scene, so these run locally as well as in CI.
 #
 # Exit codes: 0 when everything held, 1 when it did not. The CI leg reads that and nothing
 # else, because a Godot run that prints a failure and exits 0 is the silent-catch problem
@@ -49,6 +54,47 @@ const BITE_TO := 20
 
 ## Full light, so the bake the mesher folds into the vertex colour is not zero everywhere.
 const FULL_LIGHT := 15
+
+## The vista and the editor, drawn off screen at the owner's window (S2's stage demo,
+## decisions-log item 155 (3): about 1456 by 819). A SubViewport has the size it is given
+## whatever the display server says, which a headless window may not (item 143 (2)).
+const VistaScene := preload("res://scenes/vista.tscn")
+const EditorPanel := preload("res://scripts/editor.gd")
+const Lobby := preload("res://scripts/lobby.gd")
+const InstanceLog := preload("res://scripts/instance_log.gd")
+const Strings := preload("res://scripts/strings.gd")
+const OWNERS_WINDOW := Vector2i(1456, 819)
+## A map as wide as the golden seed's, in voxels (x, up, north).
+const MAP_EXTENT := Vector3(384.0, 64.0, 384.0)
+## A structure in the map's far corner, where the whole-map framing draws it smallest, in the
+## sim's axes (x east, y north, z up).
+const FAR_STRUCTURE := Vector3i(40, 40, 10)
+## How wide a structure's marker must be on screen, in pixels, to be told from its neighbour,
+## and how many wheel notches may get from the whole map to that. Item 155 (3) 4: the demo's
+## base kit could not be told apart at any zoom it reached.
+const READABLE_PIXELS := 120.0
+const NOTCHES_TO_READABLE := 16
+## How far the point under the cursor may drift on screen while the wheel zooms on it, in
+## pixels.
+const CURSOR_DRIFT_PIXELS := 2.0
+## The least one notch must change the camera's distance by, as a share: "the scroll wheel
+## barely moves the view".
+const ONE_NOTCH_SHARE := 0.2
+## A low look across the map, where the plane under the focus runs out before the horizon.
+const LOW_PITCH := -0.1
+## The structure kinds as the gateway spells them (`crates/gateway/src/view.rs`), the base kit's
+## anchor spacing in voxels, the one kind that stands apart from the kit (one to a beacon, S3's
+## plan E4), and the least height a name may be read at, in pixels.
+const KIT := ["generator", "autocannon", "mortar", "survey_post", "resonance_spire", "wall"]
+const ANCHOR_SPACING := 4.0
+const LONE_KIND := "resonance_spire"
+const NAME_PIXELS_TALL := 10.0
+## The S2 demo playbook's warnings, about as many rows as it opens, and the project's own window
+## height, the smallest the panel is drawn at.
+const OPEN_ROWS := 6
+const SMALL_WINDOW_HEIGHT := 720.0
+## Frames the panel's containers get to lay out before they are read.
+const SETTLE_FRAMES := 5
 
 func _ready() -> void:
 	# G1 section 10.12: the physics jitter fix rewrites `delta` into a quantised estimate.
@@ -120,6 +166,9 @@ func _ready() -> void:
 		_drive_the_engine_upload(bridge, failures)
 	else:
 		print("[client-check] no 3D world on this node, so the engine-side upload was not driven")
+
+	# 6b. The vista and the panel, drawn at the owner's window (item 155 (3)).
+	await _check_the_view(failures)
 
 	# 7. The count the whole instrument exists for. gdext's catch at the `#[func]`
 	#    boundary is silent, so a healthy-looking run with a non-zero count here is
@@ -232,3 +281,388 @@ func _sim_chunk(bite: bool) -> PackedByteArray:
 func _fail(message: String) -> void:
 	printerr("[client-check] FAILED: %s" % message)
 	get_tree().quit(1)
+
+
+## The camera and the panel at the owner's window, in a SubViewport (see OWNERS_WINDOW).
+func _check_the_view(failures: Array[String]) -> void:
+	var stage := SubViewport.new()
+	stage.size = OWNERS_WINDOW
+	stage.own_world_3d = true
+	stage.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	add_child(stage)
+	var vista: Node3D = VistaScene.instantiate()
+	stage.add_child(vista)
+	# Nothing here drains a view or eases a marker: this check moves them by hand.
+	vista.set_process(false)
+	vista.my_seat = "seat.0"
+	_check_the_wheel(vista, failures)
+	await _check_the_name(vista, failures)
+	var editor: CanvasLayer = CanvasLayer.new()
+	editor.set_script(EditorPanel)
+	stage.add_child(editor)
+	editor.setup(vista)
+	await _check_the_panel(editor, failures)
+	await _check_the_size_meter(editor, failures)
+	_check_the_box(editor, failures)
+	_check_escape(editor, failures)
+	stage.queue_free()
+	_check_the_recap_words(failures)
+	_check_the_logs(failures)
+
+
+## **The wheel reaches a readable structure** (item 155 (3) 4). From the whole map's framing,
+## with the cursor on a structure in the far corner: one notch moves the view, the point under
+## the cursor stays under it, and within NOTCHES_TO_READABLE notches the structure is
+## READABLE_PIXELS wide. Measured through the real camera at the owner's window, not computed
+## from the rig's constants.
+func _check_the_wheel(vista: Node3D, failures: Array[String]) -> void:
+	var rig: Node3D = vista.rig
+	var camera: Camera3D = rig.camera
+	rig.set_process(false)
+	rig.frame_extent(MAP_EXTENT)
+	var world := Vector3(FAR_STRUCTURE.x + 0.5, FAR_STRUCTURE.z, FAR_STRUCTURE.y + 0.5)
+	# Level ground at the structure's feet, in place of a view this check has not fed. With no
+	# ground answered the rig falls back on the plane through the focus: `_check_no_ground`.
+	var ground := Plane(Vector3.UP, world)
+	rig.ground_under = func(origin: Vector3, normal: Vector3) -> Dictionary:
+		var met: Variant = ground.intersects_ray(origin, normal)
+		return {"hit": met != null, "at": met}
+	var whole := _structure_pixels(camera, world)
+	var cursor := camera.unproject_position(world)
+	if not Rect2(Vector2.ZERO, Vector2(OWNERS_WINDOW)).has_point(cursor):
+		failures.append("the whole map's framing does not show the far structure: %s" % cursor)
+		return
+	print("[client-check] the whole map at %s: distance %.0f, the structure %.1f px wide at %s" % [OWNERS_WINDOW, rig.distance, whole, cursor])
+	if whole >= READABLE_PIXELS:
+		failures.append("the whole map already draws the structure %.1f px wide: the check below says nothing" % whole)
+	var before: float = rig.distance
+	_wheel_notch(rig, cursor, MOUSE_BUTTON_WHEEL_UP)
+	if before - rig.distance < before * ONE_NOTCH_SHARE:
+		failures.append("one wheel notch moved the camera from %.1f to %.1f, under %.0f%%" % [before, rig.distance, ONE_NOTCH_SHARE * 100.0])
+	var notches := 1
+	while _structure_pixels(camera, world) < READABLE_PIXELS and notches < NOTCHES_TO_READABLE:
+		_wheel_notch(rig, cursor, MOUSE_BUTTON_WHEEL_UP)
+		notches += 1
+	var close := _structure_pixels(camera, world)
+	var drift := camera.unproject_position(world).distance_to(cursor)
+	print("[client-check] %d notch(es) on it: distance %.1f, the structure %.1f px wide, %.1f px from the cursor" % [notches, rig.distance, close, drift])
+	if close < READABLE_PIXELS:
+		failures.append("%d wheel notches left the structure %.1f px wide, under %.0f" % [notches, close, READABLE_PIXELS])
+	if drift > CURSOR_DRIFT_PIXELS:
+		failures.append("the wheel zoomed the structure %.1f px away from the cursor" % drift)
+	# Its name is drawn at that distance, as the gateway spelt it, and not from the whole map.
+	vista.take_view({"entities": [{"id": "s_1", "kind": "structure", "subtype": "autocannon", "owner": "seat.0", "at": FAR_STRUCTURE}]})
+	var name_label: Label3D = vista.marker_node("s_1").get_node_or_null("Name")
+	if name_label == null or name_label.text != "autocannon":
+		failures.append("the structure's marker carries no name: %s" % name_label)
+	elif name_label.visibility_range_end < rig.distance or name_label.visibility_range_end >= before:
+		failures.append("the name is drawn out to %.0f voxels, with the camera at %.1f and the whole map at %.0f" % [name_label.visibility_range_end, rig.distance, before])
+	# A notch out moves the camera the other way; a fractional notch by its fraction.
+	var near_here: float = rig.distance
+	_wheel_notch(rig, cursor, MOUSE_BUTTON_WHEEL_DOWN)
+	if rig.distance <= near_here:
+		failures.append("a notch out did not move the camera out: %.1f from %.1f" % [rig.distance, near_here])
+	_check_no_ground(rig, failures)
+	var precise := InputEventMouseButton.new()
+	precise.factor = 0.25
+	if not is_equal_approx(rig.notches_of(precise), 0.25):
+		failures.append("a quarter of a notch is read as %s" % rig.notches_of(precise))
+	precise.factor = 0.0
+	if not is_equal_approx(rig.notches_of(precise), 1.0):
+		failures.append("a wheel that reports no factor is read as %s notches" % rig.notches_of(precise))
+
+
+## Over the sky, or before the view is whole, there is no ground to zoom on: the wheel still
+## zooms, on the level plane through the focus where the ray meets it over the map. Just below
+## the horizon the ray meets that plane far off the map, and there the wheel zooms on the focus,
+## which a notch must not throw off the map. Walks the screen's middle column up to find both.
+func _check_no_ground(rig: Node3D, failures: Array[String]) -> void:
+	rig.ground_under = func(_origin: Vector3, _normal: Vector3) -> Dictionary: return {"hit": false}
+	rig.frame_extent(MAP_EXTENT)
+	rig.pitch = LOW_PITCH
+	rig._place()
+	var over_map := Vector2(-1, -1)
+	var off_map := Vector2(-1, -1)
+	var plane := Plane(Vector3.UP, rig.focus)
+	var column := OWNERS_WINDOW.x / 2
+	for row in range(OWNERS_WINDOW.y - 1, -1, -1):
+		var at := Vector2(column, row)
+		var met: Variant = plane.intersects_ray(rig.camera.project_ray_origin(at), rig.camera.project_ray_normal(at))
+		if met == null:
+			continue
+		if rig._over_the_map(met):
+			over_map = at
+		elif over_map.y >= 0.0:
+			off_map = at
+			break
+	if over_map.y < 0.0 or off_map.y < 0.0:
+		failures.append("the low camera found no row over the map (%s) or past it (%s)" % [over_map, off_map])
+		return
+	var pivot: Vector3 = rig._pivot_at(over_map)
+	if not is_equal_approx(pivot.y, rig.focus.y) or not rig._over_the_map(pivot):
+		failures.append("over the map with no ground the wheel zooms on %s" % pivot)
+	if rig._pivot_at(off_map) != rig.focus:
+		failures.append("past the map the wheel zooms on %s, not the focus %s" % [rig._pivot_at(off_map), rig.focus])
+	var before: float = rig.distance
+	var kept: Vector3 = rig.focus
+	_wheel_notch(rig, off_map, MOUSE_BUTTON_WHEEL_UP)
+	if rig.distance >= before:
+		failures.append("with no ground the wheel did not zoom: %.1f from %.1f" % [rig.distance, before])
+	if rig.focus != kept:
+		failures.append("a notch just below the horizon threw the focus from %s to %s" % [kept, rig.focus])
+	print("[client-check] the low camera: row %d is over the map, row %d is past it, and a notch there leaves the focus at %s" % [over_map.y, off_map.y, rig.focus])
+	rig.frame_extent(MAP_EXTENT)
+	rig.ground_under = Callable()
+	var unframed := Vector3.ZERO
+	rig.map_extent = unframed
+	if rig._pivot_at(Vector2(OWNERS_WINDOW) * 0.5) != rig.focus:
+		failures.append("with no map known the wheel zooms on %s, not the focus" % rig._pivot_at(Vector2(OWNERS_WINDOW) * 0.5))
+	rig.map_extent = MAP_EXTENT
+
+
+## **A structure's name fits its neighbour's and can be read** (item 155 (3) 4), for the kit's
+## names as the gateway spells them: measured off the label itself, with the base kit's anchors
+## ANCHOR_SPACING voxels apart, and, for the height, through the camera at the name's farthest
+## drawn distance. PNG goldens are not this check's: how it looks is P6a's hand check.
+func _check_the_name(vista: Node3D, failures: Array[String]) -> void:
+	var entities := []
+	for index in KIT.size():
+		entities.append({"id": "s_%d" % index, "kind": "structure", "subtype": KIT[index], "owner": "seat.0", "at": Vector3i(100 + index * 4, 100, 10)})
+	vista.take_view({"entities": entities})
+	vista.settle_markers()
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var rig: Node3D = vista.rig
+	rig.frame_extent(MAP_EXTENT)
+	for index in KIT.size():
+		var label: Label3D = vista.marker_node("s_%d" % index).get_node("Name")
+		# A billboard's box is as tall as it is wide, whichever way it turns, so its width is the
+		# label's and its height is not: that is the font's line, read through the camera.
+		var box: AABB = label.get_aabb()
+		var line: float = ThemeDB.fallback_font.get_height(label.font_size) * label.pixel_size
+		rig.focus = label.global_position
+		rig.distance = label.visibility_range_end
+		rig._place()
+		var bottom: Vector2 = rig.camera.unproject_position(label.global_position)
+		var top: Vector2 = rig.camera.unproject_position(label.global_position + rig.camera.global_basis.y * line)
+		var pixels: float = bottom.distance_to(top)
+		print("[client-check] the name `%s`: %.2f voxels wide, %.1f px tall at %.0f voxels off" % [KIT[index], box.size.x, pixels, label.visibility_range_end])
+		if box.size.x <= 0.0:
+			failures.append("the name `%s` has no size: %s" % [KIT[index], box])
+		elif KIT[index] != LONE_KIND and box.size.x > ANCHOR_SPACING:
+			failures.append("the name `%s` is %.2f voxels wide, over its neighbour's at %.0f" % [KIT[index], box.size.x, ANCHOR_SPACING])
+		if pixels < NAME_PIXELS_TALL:
+			failures.append("the name `%s` is %.1f px tall at its farthest, under %.0f" % [KIT[index], pixels, NAME_PIXELS_TALL])
+	vista.take_view({"entities": []})
+
+
+## One wheel notch at `at`, as the rig's `_unhandled_input` gets it.
+func _wheel_notch(rig: Node3D, at: Vector2, button: MouseButton) -> void:
+	var event := InputEventMouseButton.new()
+	event.button_index = button
+	event.pressed = true
+	event.factor = 1.0
+	event.position = at
+	event.global_position = at
+	rig._unhandled_input(event)
+
+
+## How wide the vista's structure marker (three voxels across) is on screen, standing at `world`.
+func _structure_pixels(camera: Camera3D, world: Vector3) -> float:
+	var left := camera.unproject_position(world + Vector3(-1.5, 1.5, 0.0))
+	var right := camera.unproject_position(world + Vector3(1.5, 1.5, 0.0))
+	return left.distance_to(right)
+
+
+## **The panel stays on screen** (item 139 (2) D, item 155 (3) 1): with the wizard open, a long
+## refusal on the status line and rows with Fix buttons, the panel is its own width against the
+## window's right edge, every control in it stays inside it, and a long sentence wraps.
+func _check_the_panel(editor: CanvasLayer, failures: Array[String]) -> void:
+	var long_words := "A sentence as long as the gateway may write one, with many ordinary words in it, so that it has to wrap inside the panel and may never run off the window's edge."
+	var wizard := {
+		"template_id": "a_template",
+		"answered": true,
+		"current": true,
+		"why": long_words,
+		"refusal": long_words,
+		"pages": [{"pointer": "/seed", "label": long_words, "value": "{\"feature_id\":\"vent_150_13\"}", "suggested": true}],
+	}
+	var rows := [{"severity": "warning", "sentence": long_words, "code": "W0709", "pointer": "/declarative/route/0/place_beacon/at/voxel", "fixes": [{"title": long_words, "index": 0}]}]
+	var state := {
+		"changes": 1,
+		"has_text": true,
+		"status_key": "gateway_refused",
+		"status_detail": long_words,
+		"verdict": "quick",
+		"rows": rows,
+		"rows_current": true,
+		"wizard": wizard,
+		"templates": [{"id": "a_template", "title": long_words, "summary": long_words}],
+		"prose": PackedStringArray([long_words]),
+		"prose_current": true,
+		"dormant": {"shown": true, "checked": false, "enabled": true},
+		"this_round": long_words,
+		"route": {"current": true, "reachable": true},
+	}
+	editor._draw_state(state)
+	for _frame in SETTLE_FRAMES:
+		await get_tree().process_frame
+	var panel: Rect2 = editor.panel_rect()
+	print("[client-check] the panel at %s: %s" % [OWNERS_WINDOW, panel])
+	if not is_equal_approx(panel.end.x, float(OWNERS_WINDOW.x)) or not is_equal_approx(panel.size.x, EditorPanel.PANEL_WIDTH):
+		failures.append("the panel is not its own width against the window's right edge: %s" % panel)
+	for control in editor._panel.find_children("*", "Control", true, false):
+		if not control.is_visible_in_tree():
+			continue
+		var rect: Rect2 = control.get_global_rect()
+		if rect.position.x < panel.position.x - 0.5 or rect.end.x > panel.end.x + 0.5:
+			failures.append("%s (%s) runs out of the panel: %s" % [control.get_class(), control.name, rect])
+	if editor._status.get_line_count() < 2:
+		failures.append("the status line's long sentence did not wrap")
+	var fixes: Array = editor._rows.find_children("*", "Button", true, false)
+	if fixes.is_empty() or fixes[0].size.y <= editor.panel_button("save").size.y:
+		failures.append("a long Fix title did not wrap inside its button: %s" % [fixes])
+
+
+## **The size meter** (S3's plan, E9): hidden with no budget; the verifier's numbers as they came;
+## over budget the verifier's sentence; the bar's fill is the ProgressBar's own ratio, full past
+## the budget.
+func _check_the_size_meter(editor: CanvasLayer, failures: Array[String]) -> void:
+	editor._draw_size({}, true, "")
+	if editor._size_box.visible:
+		failures.append("the size meter is drawn with no budget named")
+	editor._draw_size({"units": 32, "budget": 128, "refusal": ""}, true, "")
+	if not editor._size_box.visible or editor.size_text() != Strings.text("size_meter", {"units": 32, "budget": 128}):
+		failures.append("the size meter says `%s`" % editor.size_text())
+	if not is_equal_approx(editor._size_bar.ratio, 0.25):
+		failures.append("the size bar's fill is %s at 32 of 128" % editor._size_bar.ratio)
+	var said := "This playbook is larger than the seal allows."
+	editor._draw_size({"units": 140, "budget": 128, "refusal": said}, true, "")
+	if editor.size_text() != said:
+		failures.append("over budget the size meter says `%s`, not the verifier's sentence" % editor.size_text())
+	if not is_equal_approx(editor._size_bar.ratio, 1.0):
+		failures.append("over budget the size bar is not full: %s" % editor._size_bar.ratio)
+	# A report on an older text: the meter says what the verdict's line says for that wait, and
+	# neither its count nor its refusal.
+	var waiting := Strings.text("verdict_checking")
+	editor._draw_size({"units": 140, "budget": 128, "refusal": said}, false, waiting)
+	if editor.size_text() != waiting or editor._size_bar.modulate.a >= 1.0:
+		failures.append("the size meter says `%s` of an older text" % editor.size_text())
+	# Through the panel's own redraw: rows that describe an older text, rows the gateway
+	# refused, and a Load refused, which leaves the text on screen the one that was counted.
+	var size := {"units": 32, "budget": 128, "refusal": ""}
+	var counted := Strings.text("size_meter", {"units": 32, "budget": 128})
+	var refused := Strings.text("unchecked_refused", {"detail": "INTERNAL: no"})
+	for case in [
+		[{"has_text": true, "rows_current": false, "verdict": "quick", "size": size}, waiting],
+		[{"has_text": true, "rows_current": false, "verdict": "quick", "size": size, "unchecked": {"rows": {"key": "refused", "detail": "INTERNAL: no"}}}, refused],
+		[{"has_text": true, "rows_current": false, "verdict": "refused", "size": size}, counted],
+		[{"has_text": true, "rows_current": true, "verdict": "quick", "size": size}, counted],
+	]:
+		editor._draw_state(case[0])
+		if editor.size_text() != case[1]:
+			failures.append("the panel's redraw of %s says `%s`, not `%s`" % [case[0], editor.size_text(), case[1]])
+	# In sight with the rows open, at the top of a window smaller than the owner's.
+	var rows := []
+	for index in OPEN_ROWS:
+		rows.append({"severity": "warning", "sentence": "A warning with enough words in it to take up the two lines most of them do on this panel.", "code": "W0709", "pointer": "/declarative/route/%d" % index, "fixes": []})
+	editor._draw_state({"has_text": true, "rows_current": true, "verdict": "quick", "size": size, "rows": rows})
+	for _frame in SETTLE_FRAMES:
+		await get_tree().process_frame
+	print("[client-check] the size meter ends %.0f px down" % editor.size_rect().end.y)
+	if editor.size_rect().end.y > SMALL_WINDOW_HEIGHT:
+		failures.append("with %d rows open the size meter ends at %.0f px, under a %.0f px window" % [OPEN_ROWS, editor.size_rect().end.y, SMALL_WINDOW_HEIGHT])
+	var with_meter: float = editor._rows.get_global_rect().position.y
+	editor._draw_state({"has_text": true, "rows_current": true, "verdict": "quick", "rows": rows})
+	for _frame in SETTLE_FRAMES:
+		await get_tree().process_frame
+	if not is_equal_approx(editor._rows.get_global_rect().position.y, with_meter):
+		failures.append("the size meter pushes the rows from %.0f px to %.0f" % [editor._rows.get_global_rect().position.y, with_meter])
+	print("[client-check] with %d rows open the rows start %.0f px down, with the meter or without it" % [OPEN_ROWS, with_meter])
+
+
+## **The unticked box is drawn** (finding M): an outline a player can see, clear inside.
+func _check_the_box(editor: CanvasLayer, failures: Array[String]) -> void:
+	if not editor._dormant.has_theme_icon_override("unchecked"):
+		failures.append("the dormant checkbox draws Godot's default box, which hardly shows")
+	var box: Image = EditorPanel.unticked_box(EditorPanel.BOX_COLOUR)
+	if box.get_pixel(0, 0).a < 0.9 or box.get_pixel(box.get_width() / 2, box.get_height() / 2).a > 0.0:
+		failures.append("the unticked box is not an outline, clear inside")
+
+
+## **Escape closes the map menus** (finding I), through the one function both input paths call.
+## `watch_check.gd` sends the key through the engine's input on a live menu.
+func _check_escape(editor: CanvasLayer, failures: Array[String]) -> void:
+	var escape := InputEventKey.new()
+	escape.keycode = KEY_ESCAPE
+	escape.pressed = true
+	if editor.close_menu_on_escape(escape):
+		failures.append("Escape with no menu open was taken")
+	# The key reaching the window itself. A menu that gets the key closes itself, as a headless
+	# run measures (watch_check.gd's step passes with or without this path), so this is the path
+	# only this check holds.
+	editor._menu.clear()
+	editor._menu.add_item("x", EditorPanel.ITEM_GO)
+	editor._menu.popup()
+	if not editor.menu_open():
+		failures.append("the map menu did not open for the Escape check")
+		return
+	var other := InputEventKey.new()
+	other.keycode = KEY_A
+	other.pressed = true
+	if editor.close_menu_on_escape(other) or not editor.menu_open():
+		failures.append("a key that is not Escape closed the map menu")
+	editor._input(escape)
+	if editor.menu_open():
+		failures.append("Escape reaching the window did not close the map menu")
+
+
+## **Every seat's tally at the match's end** (item 155 (3) 7): the gateway's prose, then one frame
+## a seat, each number as it came; between rounds, the prose alone.
+func _check_the_recap_words(failures: Array[String]) -> void:
+	var between := {"round": 2, "prose": "Words.", "seat_tallies": []}
+	if Lobby.recap_text_of(between) != Strings.text("lobby_recap", {"round": 2, "prose": "Words."}):
+		failures.append("the recap between rounds says `%s`" % Lobby.recap_text_of(between))
+	var ended := {"round": 3, "prose": "Words.", "seat_tallies": [
+		{"seat": "seat.0", "kills": 3, "shared_kills": 1, "value_destroyed_dollars": 60, "losses": 2},
+		{"seat": "seat.1", "kills": 0, "shared_kills": 0, "value_destroyed_dollars": 0, "losses": 3},
+	]}
+	var words := Lobby.recap_text_of(ended)
+	for seat in ended["seat_tallies"]:
+		var line := Strings.text("lobby_recap_tally", {"seat": seat["seat"], "kills": seat["kills"], "shared_kills": seat["shared_kills"], "value": seat["value_destroyed_dollars"], "losses": seat["losses"]})
+		if not words.contains(line):
+			failures.append("the match's end does not say `%s`: `%s`" % [line, words])
+
+
+## **Each instance keeps its own log** (finding N): a second logger starting leaves the first's
+## file whole and still written, each process's path is its own, and the prune keeps KEPT.
+func _check_the_logs(failures: Array[String]) -> void:
+	var folder := "user://client_check_logs"
+	DirAccess.make_dir_recursive_absolute(folder)
+	var first_path := "%s/client-1.log" % folder
+	var second_path := "%s/client-2.log" % folder
+	var first := InstanceLog.new(first_path)
+	first._log_message("first, before\n", false)
+	var second := InstanceLog.new(second_path)
+	second._log_message("second\n", false)
+	first._log_message("first, after\n", false)
+	first._log_error("f", "file", 1, "code", "said", false, 0, [])
+	var first_says := FileAccess.get_file_as_string(first_path)
+	var second_says := FileAccess.get_file_as_string(second_path)
+	if not ("first, before" in first_says and "first, after" in first_says and "ERROR: said" in first_says) or "second" in first_says:
+		failures.append("the first instance's log is not its own whole: `%s`" % first_says)
+	if second_says.strip_edges() != "second":
+		failures.append("the second instance's log is not its own: `%s`" % second_says)
+	if InstanceLog.path_of(1) == InstanceLog.path_of(2):
+		failures.append("two processes name one log file")
+	first = null
+	second = null
+	for number in InstanceLog.KEPT + 2:
+		FileAccess.open("%s/client-%d.log" % [folder, number + 10], FileAccess.WRITE).close()
+	InstanceLog.prune(folder)
+	var left := DirAccess.get_files_at(folder)
+	if left.size() != InstanceLog.KEPT:
+		failures.append("the prune left %d logs, not %d: %s" % [left.size(), InstanceLog.KEPT, left])
+	for name in left:
+		DirAccess.remove_absolute("%s/%s" % [folder, name])
+	DirAccess.remove_absolute(folder)
