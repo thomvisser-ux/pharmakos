@@ -471,8 +471,11 @@ pub enum Row {
         /// only the settings cost time; **not** written by a committed row.
         kind: Option<MandateKind>,
         /// How many settings fields the row writes: each scalar field set to a
-        /// non-default value, and **each element** of a protected-area or
-        /// probe-area list (decision 15; the register's S1-23 and S1-51). The
+        /// non-default value, each field with presence that is written, its
+        /// default included (`repair_threshold_pct`, `rebuild_destroyed`,
+        /// `flee_on_threat` and S2's `optional` fields; S3's plan, task
+        /// `con5b`), and **each element** of a protected-area or probe-area
+        /// list (decision 15; the register's S1-23 and S1-51). The
         /// first costs the base time and each further one the per-field time,
         /// capped at the maximum. Build targets are not fields.
         fields: u32,
@@ -3009,7 +3012,7 @@ mod tests {
     //! effect and is one field of the edit, as the verifier's `count` prices
     //! it; an omitted one leaves the setting alone and costs nothing.
 
-    use super::{compile_build_settings, mandate_fields};
+    use super::{PlanError, compile_build_settings, mandate_fields};
     use crate::site::BuildSettings;
     use pharmakos_proto::gp;
     use pharmakos_proto::gp::v1::mandate_settings::Mandate;
@@ -3068,7 +3071,10 @@ mod tests {
 
     #[test]
     fn a_written_threshold_past_100_is_still_refused() {
-        assert!(compile_build_settings(&build(Some(101), None)).is_err());
+        assert_eq!(
+            compile_build_settings(&build(Some(101), None)),
+            Err(PlanError::RepairThresholdOutOfRange { found: 101 })
+        );
     }
 
     #[test]

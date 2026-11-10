@@ -1444,3 +1444,77 @@ fn percent(out: &mut Builder, at: &str, found: i64) {
         Applicability::MaybeIncorrect,
     ));
 }
+
+#[cfg(test)]
+mod tests {
+    //! S3's plan, task `con5b`: I0004 still reads an omitted threshold and a
+    //! written 0 alike where the beacon's settings start from nothing, and an
+    //! edit row, which changes only what it writes, gets no note.
+
+    use crate::limits::Limits;
+    use crate::report::Builder;
+    use pharmakos_proto::gp::v1::Playbook;
+    use pharmakos_proto::json;
+    use pharmakos_sim::rules::RulesTable;
+
+    fn playbook(route: &str) -> Playbook {
+        let text = format!(
+            concat!(
+                "{{\"schema_version\":{{\"major\":1}},",
+                "\"meta\":{{\"title\":\"i0004\",\"author_kind\":\"HUMAN\"}},",
+                "\"declarative\":{{\"route\":[{route}]}},",
+                "\"on_death\":{{\"on_respawn\":\"CONTINUE\",\"max_deaths_before_fallback\":3}},",
+                "\"fallback\":{{\"hold\":{{\"at\":{{\"safest\":{{}}}}}}}},",
+                "\"kind\":\"PLAYBOOK\"}}"
+            ),
+            route = route
+        );
+        json::decode(&text).unwrap_or_else(|error| panic!("the case decodes: {error}\n{text}"))
+    }
+
+    fn i0004_paths(route: &str) -> Vec<String> {
+        let rules = RulesTable::load(std::path::Path::new("../../rules/rules.v1.json"))
+            .expect("the committed rules table");
+        let limits = Limits::from_rules(&rules).expect("the committed limits");
+        let mut out = Builder::default();
+        super::run(&playbook(route), &limits, &mut out);
+        out.into_diagnostics()
+            .into_iter()
+            .filter(|diagnostic| diagnostic.code == "I0004")
+            .map(|diagnostic| diagnostic.path)
+            .collect()
+    }
+
+    fn placed(build: &str) -> String {
+        format!(
+            concat!(
+                r#"{{"label":"p","place_beacon":{{"at":{{"voxel":{{"x":96,"y":11,"z":62}}}},"#,
+                r#""initial":{{"priority":"NORMAL","mandate":{{"roe":"RETURN_FIRE","build":{build}}}}}}}}}"#
+            ),
+            build = build
+        )
+    }
+
+    const PLACED_AT: &str =
+        "/declarative/route/0/place_beacon/initial/mandate/build/repair_threshold_pct";
+
+    #[test]
+    fn a_written_zero_in_a_new_beacons_settings_is_noted() {
+        assert_eq!(
+            i0004_paths(&placed(r#"{"repair_threshold_pct":0}"#)),
+            vec![PLACED_AT.to_owned()]
+        );
+        assert_eq!(i0004_paths(&placed("{}")), vec![PLACED_AT.to_owned()]);
+        assert!(i0004_paths(&placed(r#"{"repair_threshold_pct":50}"#)).is_empty());
+    }
+
+    #[test]
+    fn a_written_zero_in_an_edit_row_is_not_noted() {
+        let edit = concat!(
+            r#"{"label":"v","interface":{"beacon":{"beacon_id":"b_00"},"rows":["#,
+            r#"{"set_mandate_settings":{"build":{"repair_threshold_pct":0}}}"#,
+            r#"]},"timeout_ms":120000}"#
+        );
+        assert!(i0004_paths(edit).is_empty());
+    }
+}
