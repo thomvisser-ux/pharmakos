@@ -1968,12 +1968,19 @@ pub struct BuildSettings {
     /// means never, and the verifier notes it. Own units and the commander are
     /// repaired below full whatever this says (spec section 4), and so is a
     /// cracked wall voxel of yours inside the sphere (S2's plan's decision 42).
-    #[prost(uint32, tag="2")]
-    pub repair_threshold_pct: u32,
+    /// `optional`, so that a `set_mandate_settings` row can write 0 (stop
+    /// repairing) and be told apart from a row that leaves the threshold alone;
+    /// a written value is one field of the edit (S3's plan, task con5b; item 148
+    /// (4)). In a new beacon's or a switched mandate's settings, omitted is 0.
+    #[prost(uint32, optional, tag="2")]
+    pub repair_threshold_pct: ::core::option::Option<u32>,
     /// Rebuild a destroyed target from the list. A destroyed CAPABILITY
     /// structure is never rebuilt automatically whatever this says (section 8).
-    #[prost(bool, tag="3")]
-    pub rebuild_destroyed: bool,
+    /// `optional`, so that an edit row can write false and be told apart from a
+    /// row that leaves it alone, as `repair_threshold_pct` is; omitted in a new
+    /// beacon's or a switched mandate's settings, it is false.
+    #[prost(bool, optional, tag="3")]
+    pub rebuild_destroyed: ::core::option::Option<bool>,
     /// Whether the mandate may reshape terrain to place a target. Omitted, it
     /// reads as NONE with an I-level note: one of the five named defaults in
     /// this file's header (decisions-log item 128, decision 11).
@@ -2374,10 +2381,13 @@ pub struct MineSettings {
     /// the exposed rim only.
     #[prost(uint32, tag="1")]
     pub dig_max_depth: u32,
-    /// Stored in S1 and does nothing until S2, which brings the threats to flee
-    /// from.
-    #[prost(bool, tag="2")]
-    pub flee_on_threat: bool,
+    /// Walk the beacon's mining drones home while a known threat is inside its
+    /// sphere (S2's plan's decision 12). `optional`, so that an edit row can
+    /// write false and be told apart from a row that leaves it alone (S3's plan,
+    /// task con5b; item 146 (3) (l)); omitted in a new beacon's or a switched
+    /// mandate's settings, it is false.
+    #[prost(bool, optional, tag="2")]
+    pub flee_on_threat: ::core::option::Option<bool>,
     /// Which seam of the ones the mandate can reach. A choice inside the Mine
     /// program, held until the seam is spent; a Mine beacon may dig a seam other
     /// than the one it was placed to cover (docs/design/targeting.md, "Three

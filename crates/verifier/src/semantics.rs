@@ -353,11 +353,14 @@ impl Visit for Semantics<'_> {
             _ => {}
         }
         self.percent(at, "retreat_hp_pct", settings.retreat_hp_pct);
-        if let Some(mandate_settings::Mandate::Build(build)) = settings.mandate.as_ref() {
+        // An omitted threshold has nothing to check (S3's plan, task `con5b`).
+        if let Some(mandate_settings::Mandate::Build(build)) = settings.mandate.as_ref()
+            && let Some(threshold) = build.repair_threshold_pct
+        {
             self.percent(
                 &pointer::child(at, "build"),
                 "repair_threshold_pct",
-                build.repair_threshold_pct,
+                threshold,
             );
         }
     }

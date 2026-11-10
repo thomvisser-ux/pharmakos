@@ -70,30 +70,7 @@ breaking:
   # the next proto change that discharges nothing deletes it again, so an
   # un-reservation nobody intended never passes unnoticed (decisions-log items
   # 100 (10), 109 and 111).
-  ignore_only:
-    # S3's first proto pull request (S3's plan, task con5; decisions-log item 153
-    # (3); AGENTS.md section 5). One rule, one file, four held ranges, each number
-    # taken by a field of what it was held for and the rest held again. Every
-    # other new number (the rules rows and blocks, `Licence`, `LicenceAward`,
-    # `LedgerMemo`) comes from no `reserved` statement, so it discharges nothing.
-    #
-    # gp/api/v1/gateway.proto:
-    #   * `GetBriefingResponse`: 5-15 were held for the structured payload (the
-    #     register's X-15). 5 takes `licences_held`, the first of that knowledge
-    #     to have a stage; 6-15 stay held.
-    #   * `GetRecapResponse`: 6-15 were held for the rest of the recap. 6 takes
-    #     `licences_awarded` and 7 `ledger_memos`; 8-15 stay held, for the awards
-    #     (S4) and the highlights (S7).
-    #   * `BeaconSummary`: 10-15 were held for a further field of the tail. 10
-    #     takes `sphere_radius_voxels` (E3); 11-15 stay held.
-    #   * `Event`: 5-15 were held for the per-kind structured payload. 5 takes
-    #     `ledger_memo`, the first kind to have one, in the oneof `payload` the
-    #     later kinds join; 6-15 stay held.
-    #
-    # buf sees each old range go away and cannot tell a discharge from an
-    # un-reservation; tests/golden/proto/expected.reserved.txt shows each
-    # narrowing, which is the reviewable half. Inert once this change is on
-    # main. The next proto pull request replaces this block with its own, or
-    # deletes it if it discharges nothing.
-    RESERVED_MESSAGE_NO_DELETE:
-      - gp/api/v1/gateway.proto
+  #
+  # There is no block today. S3's `con5` (#167) held one for
+  # gp/api/v1/gateway.proto; `con5b` discharges nothing (it adds `optional` to
+  # three fields and takes no number), so it deleted it.

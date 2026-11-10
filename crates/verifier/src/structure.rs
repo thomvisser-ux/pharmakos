@@ -579,7 +579,7 @@ impl Visit for Sites<'_> {
                 // S2's plan, decision 38: the threshold is read as written, and
                 // 0 (omitted or written) means a structure is never repaired.
                 // No Fix: what percentage to repair at is the author's call.
-                if build.repair_threshold_pct == 0 {
+                if matches!(build.repair_threshold_pct, None | Some(0)) {
                     self.out.emit(Diag::new(
                         "I0004",
                         pointer::child(&here, "repair_threshold_pct"),

@@ -182,7 +182,9 @@ pub struct MineSettings {
 /// One `Option` per setting, because an **edit** writes only the settings it
 /// names (`set_mandate_settings`: "changes settings within the current
 /// mandate"), and proto3 cannot tell an omitted scalar from its zero: a zero
-/// here is a setting the row is silent about, and is left alone. A mandate
+/// here is a setting the row is silent about, and is left alone. The one
+/// exception is `flee_on_threat`, which carries presence (S3's plan, task
+/// `con5b`), so a written `false` is an edit like any other. A mandate
 /// switch and a new beacon start from [`MineSettings::default`] first, which
 /// is how an omitted setting there reads as its default.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -193,7 +195,7 @@ pub struct MineEdit {
     pub pillar_spacing: Option<u32>,
     /// `seam_choice`, when the row writes one.
     pub seam_choice: Option<SeamChoice>,
-    /// `flee_on_threat`, when the row writes `true`.
+    /// `flee_on_threat`, when the row writes it, `false` included.
     pub flee_on_threat: Option<bool>,
 }
 
@@ -208,7 +210,7 @@ impl MineEdit {
             dig_max_depth: (message.dig_max_depth != 0).then_some(message.dig_max_depth),
             pillar_spacing: (message.pillar_spacing != 0).then_some(message.pillar_spacing),
             seam_choice: SeamChoice::from_wire(message.seam_choice)?,
-            flee_on_threat: message.flee_on_threat.then_some(true),
+            flee_on_threat: message.flee_on_threat,
         })
     }
 
@@ -908,4 +910,46 @@ fn choose_seam(world: &mut World, row: usize, settings: MineSettings) -> u32 {
     best.and_then(|(index, _)| u32::try_from(index).ok())
         // E7: rule: no seam found is `NO_FEATURE`; a feature index past `u32` names no feature a beacon can hold
         .unwrap_or(NO_FEATURE)
+}
+
+#[cfg(test)]
+mod tests {
+    //! S3's plan, task `con5b`: `flee_on_threat` has presence, so an edit row
+    //! that writes `false` turns it off, and one that omits it leaves it.
+
+    use super::{MineEdit, MineSettings};
+    use pharmakos_proto::gp;
+
+    fn fleeing() -> MineSettings {
+        MineSettings {
+            flee_on_threat: true,
+            ..MineSettings::default()
+        }
+    }
+
+    /// The edit, and what it leaves of a beacon that flees. The sim's source
+    /// holds no `.expect(` (`tests/confinement.rs`), so the result is compared
+    /// whole.
+    fn edit(flee_on_threat: Option<bool>) -> Result<(Option<bool>, bool), i32> {
+        MineEdit::of(&gp::v1::MineSettings {
+            flee_on_threat,
+            ..gp::v1::MineSettings::default()
+        })
+        .map(|edit| {
+            (
+                edit.flee_on_threat,
+                edit.applied_to(fleeing()).flee_on_threat,
+            )
+        })
+    }
+
+    #[test]
+    fn a_written_false_turns_flee_on_threat_off() {
+        assert_eq!(edit(Some(false)), Ok((Some(false), false)));
+    }
+
+    #[test]
+    fn an_omitted_flee_on_threat_leaves_the_setting_alone() {
+        assert_eq!(edit(None), Ok((None, true)));
+    }
 }

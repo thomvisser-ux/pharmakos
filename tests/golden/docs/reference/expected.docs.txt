@@ -123,6 +123,7 @@ gp.v1.BroadcastStep
   rally                        4   gp.v1.Rally
 
 gp.v1.BuildSettings
+  oneof: _repair_threshold_pct, _rebuild_destroyed
   targets                      1   repeated gp.v1.BuildTarget
   repair_threshold_pct         2   uint32
   rebuild_destroyed            3   bool
@@ -325,6 +326,7 @@ gp.v1.Meta
   reserved team_id
 
 gp.v1.MineSettings
+  oneof: _flee_on_threat
   dig_max_depth                1   uint32
   flee_on_threat               2   bool
   seam_choice                  3   gp.v1.MineSettings.SeamChoice

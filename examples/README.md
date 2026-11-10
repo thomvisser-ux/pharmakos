@@ -94,8 +94,7 @@ or an enum value breaks files on disk even when the wire tags are untouched.
    fills it: `DefendSettings` and `AttackSettings` (S2, with combat), the
    broadcast message bodies (S4, with radio), the rest of the predicate
    catalogue (S3), and the blueprint and capability catalogues (spec section
-   8). Whether the mandate messages eventually move to
-   `proto/gp/v1/mandate.proto` is still the section-6 contract's call.
+   8). The mandate messages stay where they are (S3's plan, E20).
 
 4. **A written-out default does not survive the canonical encoder.** Line 26
    of `expand_east.jsonc` writes `"schema_version": {"major":1,"minor":0}`;
@@ -107,7 +106,12 @@ or an enum value breaks files on disk even when the wire tags are untouched.
    (section 13, "comments survive a load-and-save unchanged") is the JSONC
    layer's, which preserves the author's text and uses the canonical form only
    to compare and verify. `crates/proto/src/json/codec.rs` lists this beside
-   its other mapping notes.
+   its other mapping notes. A setting a player must be able to write as
+   `false` or `0` in an edit carries presence instead, so the canonical form
+   keeps it: `MineSettings.flee_on_threat` (which this example writes `true`),
+   `BuildSettings.repair_threshold_pct` and `rebuild_destroyed` (S3's plan,
+   task `con5b`), beside S2's `DefendSettings.picket_scouts` and
+   `AttackSettings.breach_allowed`.
    PLACEHOLDER: whether the canonical encoder must emit a written default — owner, at plan-core's text-preserving layer (T8, decisions-log item 74).
    T8 (plan-core) owns the
    text-preserving layer and is where the byte-for-byte claim is tested
