@@ -121,6 +121,11 @@ fn the_check_script_asks_for_the_class_by_the_name_this_crate_registers() {
 #[test]
 fn the_project_pins_the_settings_item_56_rests_on() {
     let project = read("project.godot");
+    assert!(
+        !project.contains("enable_file_logging=false")
+            && !project.contains("enable_file_logging.pc=false"),
+        "the engine's own log is the only record of a start that fails before the main scene"
+    );
     for (setting, why) in [
         (
             "driver/threads/thread_model=1",
@@ -148,6 +153,12 @@ fn the_project_pins_the_settings_item_56_rests_on() {
             "F3 (decisions-log item 126 (3)): a release build otherwise flushes its log only on \
              an error or a clean exit, so an instance that hangs and is ended by hand leaves \
              an empty log, as the demo's hung second instance did",
+        ),
+        (
+            "file_logging/enable_file_logging.pc=true",
+            "a start that fails before the main scene leaves its only record in the engine's \
+             log on a double-clicked Windows game, whose standard streams go nowhere; finding \
+             N's per-instance log sits beside it (scripts/instance_log.gd)",
         ),
         (
             "common/physics_jitter_fix=0.0",
@@ -281,6 +292,7 @@ const SCRIPTS: &[&str] = &[
     "credits.gd",
     "editor.gd",
     "host_link.gd",
+    "instance_log.gd",
     "lobby.gd",
     "mesher_rules.gd",
     "rows.gd",
@@ -863,6 +875,58 @@ fn the_camera_ignores_its_keys_while_a_control_has_focus() {
     ] {
         assert!(!read(script).contains("KEY_F)"), "{script} binds no F key");
     }
+}
+
+/// **Ready says what it does** (decisions-log item 143 (4)): its label names the Lull's end, the
+/// line under it, shown in a Lull only (a branch on the bridge's phase string), says what
+/// happens with nothing sealed, and the client's two lines about Ready state the rig's own gate
+/// rather than a gateway rule.
+#[test]
+fn ready_says_what_it_does_and_the_gate_is_the_clients() {
+    let strings = read("scripts/strings.gd");
+    assert!(string_row(&strings, "lobby_ready").contains("Ready — end the Lull"));
+    assert!(string_row(&strings, "lobby_ready_help").contains("safe playbook"));
+    let lobby = read("scripts/lobby.gd");
+    assert!(
+        gd_code(&lobby, "_process").iter().any(|line| line
+            .contains("_ready_help.visible = String(state.get(\"phase\", \"\")) == \"lull\"")),
+        "the explanation is for the Lull"
+    );
+    for key in ["status_closed_ready", "unchecked_ready"] {
+        let row = string_row(&strings, key);
+        assert!(!row.contains("final"), "{key} claims a gateway rule: {row}");
+        assert!(
+            row.contains("this client sends no planning call"),
+            "{key}: {row}"
+        );
+    }
+    for key in ["status_closed_push", "status_closed_recap"] {
+        let row = string_row(&strings, key);
+        assert!(
+            !row.contains("opens again in the next Lull"),
+            "{key} promises a Lull the final recap does not have (item 143 (3)): {row}"
+        );
+    }
+}
+
+/// **Each instance keeps its own log** (finding N, decisions-log item 139 (2)): the main scene
+/// adds the logger before anything else happens, on a path named by this process; the check's
+/// own run, `client_check.gd`'s `_check_the_logs`, writes through two of them.
+#[test]
+fn every_instance_logs_to_its_own_file() {
+    let boot_script = read("scripts/boot.gd");
+    let boot = gd_code(&boot_script, "_ready");
+    assert!(
+        boot.first().is_some_and(|line| line
+            .contains("OS.add_logger(InstanceLog.new(InstanceLog.path_of(OS.get_process_id())))")),
+        "the main scene's first act names the log by this process: {boot:?}"
+    );
+    assert!(
+        gd_code(&read("scripts/client_check.gd"), "_check_the_logs")
+            .iter()
+            .any(|line| line.contains("InstanceLog.new(")),
+        "the client check writes through the logger"
+    );
 }
 
 /// **The lobby hosts three rounds** (decisions-log item 123 (2) 3): skeleton-plan section
@@ -1451,14 +1515,27 @@ fn the_lobby_draws_the_bridges_countdown_and_the_gateways_recap() {
     assert!(
         recap
             .iter()
-            .any(|line| line.contains("phase == \"recap\" or phase == \"ended\"")),
-        "shown in a recap and after the match has ended: {recap:?}"
+            .any(|line| line.contains("_recap.text = recap_text_of(recap)")),
+        "drawn through the one function that writes its words: {recap:?}"
     );
     assert!(
         recap
             .iter()
+            .any(|line| line.contains("phase == \"recap\" or phase == \"ended\"")),
+        "shown in a recap and after the match has ended: {recap:?}"
+    );
+    let words = gd_code(&lobby, "recap_text_of");
+    assert!(
+        words
+            .iter()
             .any(|line| line.contains("\"prose\": recap.get(\"prose\", \"\")")),
-        "the prose as it came: {recap:?}"
+        "the prose as it came: {words:?}"
+    );
+    assert!(
+        words
+            .iter()
+            .any(|line| line.contains("recap.get(\"seat_tallies\", [])")),
+        "and every seat's tally when the answer carries it (item 155 (3) 7): {words:?}"
     );
     let process = gd_code(&lobby, "_process");
     assert!(
