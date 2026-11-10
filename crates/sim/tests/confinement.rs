@@ -461,11 +461,12 @@ fn shipped(text: &str) -> &str {
     text
 }
 
-/// Every unsanctioned fallback of E7's two patterns in `text`, as line
-/// numbers: a `.unwrap_or` (or its `_default` and `_else` forms) whose
-/// expression -- the text back to the statement's start, comments blanked --
-/// converts with `try_from` or reads with `.get`, `.get_mut`, `.first` or
-/// `.last`.
+/// Every unsanctioned fallback of E7's patterns in `text`, as line numbers: a
+/// `.unwrap_or` (or its `_default` and `_else` forms) whose expression -- the
+/// text back to the statement's start, comments blanked -- converts with
+/// `try_from` or `try_into`, computes with a `checked_` operation (S3's plan,
+/// E22: the same fallback in two spellings the first scan did not read), or
+/// reads with `.get`, `.get_mut`, `.first` or `.last`.
 fn fallbacks(text: &str) -> Vec<usize> {
     let code: Vec<String> = shipped(text)
         .lines()
@@ -497,11 +498,12 @@ fn fallbacks(text: &str) -> Vec<usize> {
             .and_then(|before| before.rfind([';', '{', '}']))
             .map_or(0, |boundary| boundary.saturating_add(1));
         let chain = joined.get(start..at).unwrap_or_default();
-        let converts = chain.contains("try_from(");
+        let converts = chain.contains("try_from(") || chain.contains("try_into(");
+        let computes = chain.contains(".checked_");
         let reads = [".get(", ".get_mut(", ".first()", ".last()"]
             .iter()
             .any(|read| chain.contains(read));
-        if !(converts || reads) {
+        if !(converts || computes || reads) {
             continue;
         }
         let line = joined
@@ -616,6 +618,12 @@ fn no_silent_fallback_is_left() {
 fn the_fallback_scan_finds_what_it_is_for() {
     let positive = "fn f(v: &[u32], n: i64) -> u32 {\n    let a = v.get(3).copied().unwrap_or(0);\n    let b = u32::try_from(n).unwrap_or(u32::MAX);\n    a + b\n}\n";
     assert_eq!(fallbacks(positive), vec![2, 3], "both patterns are found");
+    let respelled = "fn f(n: usize, m: i64) -> (u32, i64) {\n    let a = n.try_into().unwrap_or(u32::MAX);\n    let b = m.checked_div(n).unwrap_or(0);\n    (a, b)\n}\n";
+    assert_eq!(
+        fallbacks(respelled),
+        vec![2, 3],
+        "a `try_into` and a `checked_` operation are the same fallback (S3's plan, E22)"
+    );
     let marked = "fn f(v: &[u32]) -> u32 {\n    // E7: rule: an empty list reads as zero\n    v.first().copied().unwrap_or(0)\n}\n";
     assert!(fallbacks(marked).is_empty(), "a marked site is sanctioned");
     let widened = "fn f(v: &[u32]) -> (u32, u32, u32, u32) {\n    (v.get(1).map_or(0, |x| *x),\n    v.get(2).map_or(v.len(), |x| *x),\n    v.first().copied().unwrap_or_default(),\n    v.last().map_or_else(|| u32::MAX, |x| *x))\n}\n";

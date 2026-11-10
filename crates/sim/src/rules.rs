@@ -126,6 +126,13 @@ pub const MAX_SEGMENT_LENGTHS: usize = 8;
 pub struct RulesTable {
     /// The whole decoded table, kept so `rules_hash` can cover all of it.
     message: gp::v1::RulesTable,
+    /// The `economy` block, which a table without one does not load, so a
+    /// reader has no missing block to invent a default for (S3's plan, E22).
+    economy: gp::v1::rules_table::Economy,
+    /// What a voxel of ore is worth by grade. From
+    /// `economy.ore_yield_per_voxel_dollars`; a table without the row does not
+    /// load (S3's plan, E22: a missing row used to pay nothing for ore).
+    ore_yield_per_voxel: gp::v1::ByRichness,
     /// `message` rendered back through the canonical JSON codec, once, at
     /// construction. These are the bytes [`RulesTable::encode`] hashes.
     canonical: String,
@@ -172,12 +179,12 @@ pub struct RulesTable {
     /// Repaths served per tick, round-robin by `(seat, beacon, unit)`. `16`
     /// (item 69). From `locomotion.repath_cap_per_tick`.
     ///
-    /// PLACEHOLDER: the repath cap — owner, at S2's exit, once the burst frequency is a measurement (item 69).
+    /// PLACEHOLDER: the repath cap — owner, at S3's demo (items 152 (1) 1 and 2), once the burst frequency is a measurement (item 69).
     repath_cap_per_tick: u32,
     /// The broadphase's cell edge, in whole voxels. From
     /// `broadphase.cell_size_voxels`.
     ///
-    /// PLACEHOLDER: the cell edge, tied to unit density — owner, at S2's exit (item 67's caveat).
+    /// PLACEHOLDER: the cell edge, tied to unit density — owner, at S3's demo (items 152 (1) 1 and 2; item 67's caveat).
     /// A performance knob, so it must never reach hashed state; the
     /// broadphase takes its query radius in voxels and filters it exactly,
     /// precisely so that it cannot.
@@ -195,7 +202,7 @@ pub struct RulesTable {
     /// The commander's walking speed in cost units per second. `10` (item 90).
     /// From `commander.cost_per_second`.
     ///
-    /// PLACEHOLDER: the commander's speed — owner, at S2's demo, with `tune2`'s report of the spawn travel distance (item 90; the skeleton's demo kept it, and ruling 6 of S1's stage demo, decisions-log item 139 (1), kept it for S1).
+    /// PLACEHOLDER: the commander's speed — owner, at S3's demo (item 152 (1) 2), with `tune3`'s report of the spawn travel distance (item 90; the skeleton's demo kept it, and ruling 6 of S1's stage demo, decisions-log item 139 (1), kept it for S1).
     commander_cost_per_second: i32,
     /// The HPA\* cluster edge in voxels. `32` — one chunk footprint, a single
     /// abstract level (item 58). From `locomotion.hpa_cluster_voxels`.
@@ -558,6 +565,19 @@ impl RulesTable {
         self.csr_cell_size_voxels
     }
 
+    /// The `economy` block, which every loaded table holds.
+    #[must_use]
+    pub const fn economy(&self) -> &gp::v1::rules_table::Economy {
+        &self.economy
+    }
+
+    /// What a voxel of ore is worth by grade
+    /// (`economy.ore_yield_per_voxel_dollars`), which every loaded table holds.
+    #[must_use]
+    pub const fn ore_yield_per_voxel(&self) -> gp::v1::ByRichness {
+        self.ore_yield_per_voxel
+    }
+
     /// The voxels a mining drone digs before it carries its load home
     /// (`economy.mining_carry_voxels`), never zero.
     #[must_use]
@@ -875,6 +895,13 @@ impl RulesTable {
             .as_ref()
             .ok_or(RulesError::MissingBlock("economy"))?;
         band_rows_of(economy)?;
+        percent_rows_of(economy)?;
+        let ore_yield_per_voxel =
+            economy
+                .ore_yield_per_voxel_dollars
+                .ok_or(RulesError::MissingBlock(
+                    "economy.ore_yield_per_voxel_dollars",
+                ))?;
         let mining_carry_voxels =
             NonZeroU32::new(economy.mining_carry_voxels).ok_or_else(|| RulesError::OutOfRange {
                 field: "economy.mining_carry_voxels".to_owned(),
@@ -896,6 +923,8 @@ impl RulesTable {
 
         Ok(RulesTable {
             message: message.clone(),
+            economy: *economy,
+            ore_yield_per_voxel,
             canonical,
             mesher_drain_surfaces: mesher.surfaces_per_frame,
             mesher_drain_bytes: mesher.bytes_per_frame,
@@ -1134,6 +1163,34 @@ fn segment_lengths_of(matched: &gp::v1::rules_table::Match) -> Result<Vec<i32>, 
         });
     }
     Ok(matched.segment_lengths_ms.clone())
+}
+
+/// The two percents `economy::percent_of` reads from `economy` that nothing
+/// else bounds (`economy.salvage_percent` is read and bounded with the combat
+/// rows): a `uint32` amount times either must fit `i64`, or `percent_of` could
+/// not answer.
+fn percent_rows_of(economy: &gp::v1::rules_table::Economy) -> Result<(), RulesError> {
+    if economy.recycle_refund_percent > 100 {
+        return Err(RulesError::OutOfRange {
+            field: "economy.recycle_refund_percent".to_owned(),
+            value: format!(
+                "{}; a refund worth more than the thing recycled would make every recycle pay",
+                economy.recycle_refund_percent
+            ),
+        });
+    }
+    // Not a game rule: the bound the arithmetic needs. (2^32 - 1) x (2^31 - 1)
+    // is below 2^63. A fund of many times the BMI is the owner's to tune.
+    if economy.award_fund_percent_of_bmi > i32::MAX.unsigned_abs() {
+        return Err(RulesError::OutOfRange {
+            field: "economy.award_fund_percent_of_bmi".to_owned(),
+            value: format!(
+                "{}; a percent past `i32::MAX` of a 32-bit BMI does not fit the `$` type",
+                economy.award_fund_percent_of_bmi
+            ),
+        });
+    }
+    Ok(())
 }
 
 /// The settlement band's two percents as `economy::band_percent` and

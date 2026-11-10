@@ -815,9 +815,13 @@ fn the_rules_hash_is_pinned_to_the_committed_table() {
     // mortar 12) and the note. Vision gates every weapon's choice and every
     // sighting, so the chain moved with it, beside S2-16's removal of the
     // harness walkers' wander, which moved it first.
+    // It moved from 55019fca46a1a843 with revision 7 (S3's `con5`): five rows
+    // nothing reads yet (`pathing.*`, `combat.charge_damage_hp`,
+    // `structures.resonance_spire_sphere_bonus_voxels` and
+    // `licences.resonance_vents`) and the note, so the chain did not move.
     assert_eq!(
         hex(rules().rules_hash()),
-        "55019fca46a1a843",
+        "1b26c525068bff61",
         "the rules hash moved; say in the pull request which row changed and why"
     );
 }
@@ -1638,6 +1642,25 @@ fn a_table_missing_the_economy_block_is_refused() {
     );
 }
 
+/// S3's plan, E22: a table with no ore yield used to pay nothing for ore,
+/// silently, because the two readers answered zero for the missing row. It
+/// does not load now.
+#[test]
+fn a_table_missing_the_ore_yield_is_refused() {
+    let mut message = committed_message();
+    message
+        .economy
+        .as_mut()
+        .expect("the committed table has an economy block")
+        .ore_yield_per_voxel_dollars = None;
+    assert_eq!(
+        RulesTable::from_message(&message),
+        Err(pharmakos_sim::rules::RulesError::MissingBlock(
+            "economy.ore_yield_per_voxel_dollars"
+        ))
+    );
+}
+
 #[test]
 fn a_row_out_of_range_is_refused_at_load() {
     let refused = |edit: &dyn Fn(&mut gp::v1::RulesTable), field: &str| {
@@ -1690,6 +1713,31 @@ fn a_row_out_of_range_is_refused_at_load() {
         },
         "commander.respawn_base_ms",
     );
+    refused(
+        &|message| {
+            if let Some(economy) = message.economy.as_mut() {
+                economy.recycle_refund_percent = 101;
+            }
+        },
+        "economy.recycle_refund_percent",
+    );
+    refused(
+        &|message| {
+            if let Some(economy) = message.economy.as_mut() {
+                economy.award_fund_percent_of_bmi = i32::MAX.unsigned_abs() + 1;
+            }
+        },
+        "economy.award_fund_percent_of_bmi",
+    );
+    // Each bound is the last value that loads, not one short of it.
+    let mut message = committed_message();
+    let economy = message
+        .economy
+        .as_mut()
+        .expect("the committed table has an economy block");
+    economy.recycle_refund_percent = 100;
+    economy.award_fund_percent_of_bmi = i32::MAX.unsigned_abs();
+    assert!(RulesTable::from_message(&message).is_ok());
 }
 
 #[test]

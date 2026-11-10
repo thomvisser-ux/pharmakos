@@ -129,14 +129,14 @@ use crate::world::World;
 /// decision 17's scout vision of 24, which the rules table holds since its
 /// revision 6 (`tune2`); at the 8 it held before, a cell's corners could be
 /// marked unseen.
-// PLACEHOLDER: Survey's coarse cell, 16 columns square, which a scout of vision 24 sees whole from its centre — owner, at S2's demo, with `tune2`'s balance report
+// PLACEHOLDER: Survey's coarse cell, 16 columns square, which a scout of vision 24 sees whole from its centre — owner, at S3's demo (item 152 (1) 2), with `tune3`'s balance re-run
 pub const CELL_VOXELS: i32 = 16;
 
 // PLACEHOLDER: whether an explored cell is ever scanned again, and on what clock — owner, at S3, with the reach filters
 
 /// Survey's refresh interval: a sighting this old is due a re-check, and a
 /// Push's last this-long is the refresh pass (decisions-log item 13).
-// PLACEHOLDER: Survey's refresh interval, 60 s of game time, a third of reach memory's 180 s — owner, at S2's demo, with `tune2`'s balance report
+// PLACEHOLDER: Survey's refresh interval, 60 s of game time, a third of reach memory's 180 s — owner, at S3's demo (item 152 (1) 2), with `tune3`'s balance re-run
 pub const REFRESH_INTERVAL: Ms = Ms::new(60_000);
 
 /// The cell id's stride between two rows of cells: the id packs the cell row
@@ -708,13 +708,7 @@ fn most_due(
     going: [Fx; 3],
     open: &dyn Fn([Fx; 3]) -> bool,
 ) -> Option<[Fx; 3]> {
-    // E7: rule: the interpreter refuses a playbook whose rules carry no `verifier` block (`PlanError::MissingBlock`), so no Survey beacon stands without one; with none, no sighting is inside a window
-    let window = world
-        .rules()
-        .message()
-        .verifier
-        .as_ref()
-        .map(|block| Ms::new(block.reach_memory_ms).to_ticks_floor())?;
+    let window = world.rules().attack().reach_memory.to_ticks_floor();
     let tick = world.tick().raw();
     let table = world.sightings();
     let rows = table

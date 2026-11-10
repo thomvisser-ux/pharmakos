@@ -589,10 +589,10 @@ fn next_leg(world: &World, row: &DefendRow, post: &Post) -> u8 {
             }
         });
     if arrived {
-        // E7: rule: a leg is below `PICKET_LEGS`, so the next one wraps to 0
         row.leg
             .saturating_add(1)
             .checked_rem(PICKET_LEGS)
+            // E7: cannot miss: `PICKET_LEGS` is not zero, so a next leg wraps to 0
             .unwrap_or(0)
     } else {
         row.leg

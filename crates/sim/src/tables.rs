@@ -4707,7 +4707,7 @@ impl DefendSettings {
     /// one written, or the whole sphere when none is (an empty Defend arm,
     /// legal at a deploy and a switch, decisions-log item 145 (5)).
     ///
-    /// PLACEHOLDER: an empty Defend arm reads its engagement radius as the whole sphere and its pursue as NEVER — owner, S2 demo.
+    /// PLACEHOLDER: an empty Defend arm reads its engagement radius as the whole sphere and its pursue as NEVER — owner, at S3's demo (item 152 (1) 2).
     #[must_use]
     pub const fn engagement_reading(self) -> u8 {
         if self.engagement_pct == 0 {
