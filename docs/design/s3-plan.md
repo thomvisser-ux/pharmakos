@@ -750,6 +750,13 @@ change moves `report_hash` is granted, for the re-bless alone, `tests/golden/gat
   arms as its last commit **after `gwp` merges**, merging `main` in first; likewise the verifier's
   E0009 narrowing after `vfy5` merges, and the gateway's `mandate_and_rule_gaps()` row. `lic` merges
   after `gwp`, and `gwr` starts after `lic`.
+- **The verifier scope's licence half, a named place (item 157).** In the same last commit, the
+  gateway's scope builder (`crates/gateway/src/surface.rs` ~3378) calls `vfy5`'s setters for the
+  seat's own facts: `grant_licence` from the sim's licence table, `set_sphere_radius` from the sim's
+  one radius function (set only where the radius is above the base row, so that unset means base) and
+  `set_spire` where a Spire stands, each after its beacon is pushed. Without it, `submit_plan` refuses
+  `resonance-spire`'s queue with E0507 and its target beyond the old radius with E0416, and the
+  scenario fails. `gwr` keeps the sighted enemy beacons.
 - **Implements:** item 153 (3); register S3-10 (sim half). **Needs:** `con5`, `sim3a` merged;
   decisions 6 and 13. **Acceptance:** §4.8's three places for the licence table; a save/restore
   round-trip with a licence held; a chain that earns nothing does not move (E2); the radius
@@ -819,7 +826,14 @@ change moves `report_hash` is granted, for the re-bless alone, `tests/golden/gat
     Build targets, all protected areas, the longest route) at 64, 96, 128, 192 and 256 units (E24);
     the decision tick's cost per size unit (S1's `decision.rs`) at the same sizes, **in nanoseconds
     and in counted evaluation units**, the count added to `pharmakos-bench`'s notice (item 139 (5):
-    "count carried to S3").
+    "count carried to S3"). **The worst case (item 157):** a condition costs no size units, so the
+    shapes include `vfy5`'s review's `worst_64`: 63 handlers whose conditions are 24-node
+    `any(any(any(21)))` and `all(all(all(21)))` over distinct leaves, plus one route step, 127 units.
+    On `main` at `c8f8ca3` its QUICK p99 was 10–12 ms against the 5 ms bar, which `budget_128` (16
+    identical handlers, now carrying 15 W0702s) never reaches; FULL after `vfy5`'s memo measured
+    16.4/26.1 ms p50/p99. P1 is re-certified at S3's exit over these shapes. If QUICK still misses,
+    a verifier performance task follows; charging conditions in size units would be a rules change
+    and the owner's.
   - **The G3′ load with raids** (E13): the gate's layout with Attack beacons and their launch
     settings, and a variant with every seat's playbook at size B (E24's test (c)); `cert3` re-runs
     both. A test asserts `attack_launched` above zero on the hosted segment, because `sim3a`'s row
@@ -847,7 +861,11 @@ change moves `report_hash` is granted, for the re-bless alone, `tests/golden/gat
   scope's sighted beacons (S3-04) and its per-beacon radii through `Scope`'s setter; the
   first-licence memo (E5); E22's sweep over both crates.
 - **Implements:** E3 (gateway half), E5 (the fourth memo), E8; register X-17, S3-04, S3-18 (gateway
-  half). **Needs:** `con6`, `vfy5` and `lic` merged. **Acceptance:** `crates/gateway/tests/methods.rs`
+  half). **The scope's sightings (item 157).** The gateway pushes no enemy `KnownBeacon` today, so
+  `gwr` adds that push (a new literal, `Ownership::EnemyKnown`, beside its `Sighting`), fogged as the
+  briefing is; the licence, radius and Spire setters for own beacons are `lic`'s (its named place),
+  and `gwr` keeps them filled as `lic` left them. **Needs:** `con6`, `vfy5` and `lic` merged.
+  **Acceptance:** `crates/gateway/tests/methods.rs`
   pins each new answer; `confinement.rs` green (no handler steps or seals); the chips' golden
   human-readable; the fog rule on the recap's licence line held by a test. **Contract PR:** no beyond
   the goldens (the wire is `con5`'s and `con6`'s). **Moves:** the gateway's and plan-core's render
@@ -860,13 +878,22 @@ change moves `report_hash` is granted, for the re-bless alone, `tests/golden/gat
 - **Builds:** each `con6` predicate's evaluation in the interpreter, reading the seat's knowledge
   only (the enemy predicates the sighting table, with its freshness); `toward`'s site (E23);
   Survey's re-scan as decision 7 rules (`survey.rs` ~135), with the per-cell explore time it needs
-  as a hashed, snapshotted column (`SNAPSHOT_VERSION` 16); the refusal-table lifts, with the
-  verifier's E-codes left for `vfy6`; two scenarios on decision 13's seed: `toward-stepping-stone` (a
+  as a hashed, snapshotted column (`SNAPSHOT_VERSION` 16); the refusal-table lifts and, in the same
+  PR, the verifier's E0020–E0028 retired, because the cross-check tests in
+  `crates/verifier/tests/refusals.rs` go red the moment the sim lifts a refusal the verifier keeps
+  (item 157): their catalogue rows to `NoneYet`, their strings marked retired, their nine cases and
+  goldens removed, the catalogue and the docs reference re-blessed, the two cross-place tests
+  rewritten as agreement tests over the lifted constructs. `vfy6`'s checks already stand behind those
+  codes, so retiring them uncovers checks rather than a gap. As its last commit, after `gwr` merges,
+  `pred` lifts the nine `closed` rows in `crates/gateway/tests/methods.rs` and gives `toward` its
+  gateway readings (named places): `read_placement`'s arm in `crates/gateway/src/targeting.rs` (now
+  a typed `INTERNAL`), the briefing's round read through it, and an `estimate_route` arm like
+  `covering`'s in `surface/knowledge.rs`; two scenarios on decision 13's seed: `toward-stepping-stone` (a
   stone placed toward the far vent, and from it the vent covered, on section 1.1's schedule) and
   `enemy-known-rule` (a Defend handler fires on `enemy_units_near` with a fresh sighting and not on
   a stale one).
 - **Implements:** register U-07 (sim half), S1's decision 3; item 152 (1) 6. **Needs:** `con6`, `lic`
-  merged; decisions 2, 7 and 13. **Acceptance:** `probation_seed.rs`'s `stone` restatement replaced by
+  and `vfy6` merged, and `gwr` merged before its last commit; decisions 2, 7 and 13. **Acceptance:** `probation_seed.rs`'s `stone` restatement replaced by
   a call to the sim's own `toward`. A moved site or walk is re-pinned here, with `resonance-spire`'s
   playbook if it names the site. A moved seed is reported when `toward`'s commit shows it: `ed3b` then
   starts after `pred` merges, and `pred` re-pins the seed, `MATCH_SEED` and every committed scenario on
@@ -926,10 +953,16 @@ change moves `report_hash` is granted, for the re-bless alone, `tests/golden/gat
   zero `max_deaths_before_fallback`; the fuzz generator (`tests/fuzz.rs`) extended to the new
   constructs and to sizes at and past 256 units, so P1's "10k fuzzed playbooks" covers any budget
   `tune3` can choose; S3-15's marker closed (the spec's limits are technical); `VERIFIER_VERSION`
-  `0.1.0-s3.2`.
-- **Implements:** register U-07 (verifier half), S3-08, S3-09, S3-15; E0209. **Needs:** `pred`
-  merged. **Acceptance:** every new construct's verdict agrees with the sim's compile (S2's E8
-  test); `the_verifier_never_ranks` green. **Contract PR:** yes (`VERIFIER_VERSION` moves every
+  `0.1.0-s3.2`. **Built behind E0020–E0028, before `pred` (item 157):** as `vfy5` built E0507 behind
+  E0009 ahead of `lic`, every check here is built and tested while the codes `con6` added still
+  refuse each construct, so that when `pred` lifts the sim's refusals and retires the codes, no
+  playbook is called qualifying that the sim's compile then refuses (risk R4 the other way round:
+  `{"kw_supply": {}}`, `role: 0`, `toward` in a `move`, an unknown `side`). The checks include a
+  required radius in `enemy_units_near` and `enemy_structure_near`, the `structure` oneof's absence,
+  and `BeaconMandate`'s `MANDATE_KIND_UNSPECIFIED` (`con6`'s comments).
+- **Implements:** register U-07 (verifier half), S3-08, S3-09, S3-15; E0209. **Needs:** `con6`
+  merged; it merges before `pred`. **Acceptance:** every new construct's verdict agrees with the
+  sim's compile (S2's E8 test) once `pred` lifts the refusals, shown on `pred`'s branch; `the_verifier_never_ranks` green. **Contract PR:** yes (`VERIFIER_VERSION` moves every
   `report_hash`). **PLACEHOLDERs:** none. **Agent-days:** 2.5.
 
 ### `opr3` — `crates/operator` + `library/`: Easy in S3
@@ -1063,6 +1096,13 @@ names the decisions it builds on.
 | 2 | 11–24.5 | **pred** (5.5, from 11) → **opr3** (4, from 16.5; merges at 24.5, after `ed3b`) | **gwr** (5, from 11) → **vfy6** (2.5, from 16.5) → **cert3** (2, from 19) | **bench3** (5, to 13) → **nite3** (2.5, from 13) → **ed3b** (8, from 16) | the rule list; the P3 and P1 reports; P6b at day 24 |
 | 3 | 24.5–31 | **tune3** (4, from 24.5) → **demo3** (2.5, from 28.5) | — | **prob** (4, from 24.5) | Playtest mode; the S3 demo of §1.1 |
 
+**One lane at a time, from 2026-11-09 (item 157).** The owner ruled that lanes run one at a time while
+D: is short of space, so the table above is the dependency order, not the calendar. The order from
+`gwp` on is `gwp` → `lic` → `bench3` → `gwr` → `nite3` → `vfy6` → `pred` → `ed3b` (after P6a) →
+`opr3` → `cert3` → `prob` → `tune3` → `demo3`, each lane starting when the one before it merges.
+The named places above stay as written: under serial running they cross no open lane. The
+critical path is now the sum of the lanes' days, not the longer of two chains.
+
 **Totals.** 19 tasks, **about 74.5 ad** (65–84), including about 1.5 ad of re-blesses after merges
 of `main`; 73.5 without decision 3's Survey post. **Two critical paths of about 31 working days:**
 the client's `con5` → `con6` → `gwp` → `gwr` → `ed3b` → (`opr3`'s merge) → `prob` → `demo3`, and
@@ -1079,20 +1119,20 @@ and S2's waves), 74.5 ad is about **14–18 M** tokens.
 |---|---|---|---|---|
 | `con5` (rows nothing reads yet) | — | — | all (`rules_hash`) | the nightly result (its `rules_hash`) |
 | `ed3a` | — | — | — | the client's screenshots |
-| `con6` | — | — | — | the schema and docs |
-| `vfy5` (`VERIFIER_VERSION` 0.1.0-s3.1; `Scope`'s new fields) | — | — | all | — |
+| `con6` | — | — | — | the schema and docs; the diagnostic catalogue and the docs reference (E0020–E0028); nine new verifier cases and plan-core's `predicates_and_toward`; `expected.reserved.txt` |
+| `vfy5` (`VERIFIER_VERSION` 0.1.0-s3.1; `Scope`'s new fields) | — | — | all | the catalogue and the docs reference (E0513, I0006, W0702); `budget_128`'s diagnostics (15 W0702) |
 | `gwp` (the save, the preset, the seed withheld) | — | — | — | the gateway's recap, walkthrough and map summary |
 | `lic` (the licence table, empty until earned; the charge's damage; S3-10's rows at their constants) | its two new ones; any whose seats run Generators on two vents at a settlement; any with a charge (`atk`'s) | — expected (the determinism playbook places one Generator) | all (snapshot 15) | — |
 | `gwr` (chips; the scope's sightings and radii) | — | — | the gateway's | the render goldens gain chips |
 | `nite3` | — | — | — | the nightly result (new keys) |
-| `pred` (snapshot 16 under decision 7) | its two new ones; a Survey beacon's where the re-scan changes its scouting | — expected | all (snapshot 16) | — |
-| `vfy6` (0.1.0-s3.2) | — | — | all | — |
+| `vfy6` (0.1.0-s3.2; its checks behind E0020–E0028) | — | — | all | its new cases |
+| `pred` (snapshot 16 under decision 7; E0020–E0028 retired) | its two new ones; a Survey beacon's where the re-scan changes its scouting | — expected | all (snapshot 16) | the catalogue and the docs reference; the nine retired cases removed |
 | `opr3` (Easy's output; Hold & Build's settings written) | `against-easy*` | — | the operator's and the `demo_*` | the nightly result; the wizard pins |
 | `tune3` (the budget, the rooms, the re-read rows) | all | **moved** | all (`rules_hash`) | the nightly result |
 
 Over the stage the scenario chains move twice for certain (`lic`'s, `tune3`) and up to twice more
 (`pred`, `opr3`); **the determinism chain once** (`tune3`); every `report_hash` golden **six times**
-(`con5`, `vfy5`, `lic`, `pred`, `vfy6`, `tune3`) and the gateway's a seventh (`gwr`); the nightly
+(`con5`, `vfy5`, `lic`, `vfy6`, `pred`, `tune3`) and the gateway's a seventh (`gwr`); the nightly
 result golden four times (`con5`, `nite3`, `opr3`, `tune3`), each naming its cause. Where two
 running lanes move one set, the second to merge re-blesses after its merge of `main` and names the
 lane it followed.
@@ -1184,8 +1224,8 @@ end with new names and ids taken at the merge of `main`. Thirteen PRs, one of th
 | 5 | `lic` | determinism code: the licence table in the state hash, `SNAPSHOT_VERSION` 15; the event vocabulary (`licence_awarded`, `licence_voided`); `StepFailure` (`spire_present`) |
 | 6 | `bench3` | `xtask/src/main.rs`' perf-alarm list, `xtask/src/budget.rs` |
 | 7 | `nite3` | the nightly result golden's format (additive) |
-| 8 | `pred` | determinism code: the explore-time column, `SNAPSHOT_VERSION` 16 (under decision 7's recommendation) |
-| 9 | `vfy6` | `VERIFIER_VERSION` |
+| 8 | `vfy6` | `VERIFIER_VERSION` |
+| 9 | `pred` | determinism code: the explore-time column, `SNAPSHOT_VERSION` 16 (under decision 7's recommendation); the verifier's E0020–E0028 retired |
 | 10 | `cert3` | `.github/workflows/ci.yml` (the new job, the cross-OS guard's list), `nightly-scenarios.yml` (a summary text), `xtask` |
 | 11 | `opr3` | `tests/golden/package/`'s manifests, only if a `library/` file is added or renamed (the conditional one) |
 | 12 | `tune3` | the rules' values (`rules_hash`), `rules.proto`'s comments, the generated tree |
@@ -1593,7 +1633,7 @@ that moved it, a client that validates or computes, an invented rule where the s
 | R1 | Two critical paths of equal length, so a slip on either moves the stage | Cuts on both paths (cut 1 on the client's, cuts 2 and 3 on the sim's); checkpoints | section 4.5 | The owner's word past the last cut |
 | R2 | The rule list (`ed3b`, 8 ad) is the largest client lane the project has run | Its split seam; P6a before it starts; the chips' golden and the patch tests | `ed3b` | Cut 1, then P6's "simplify" |
 | R3 | The licence table or the derived sphere misses one of §4.8's places, or a reader reads the row directly | E2's three places in one PR; E3's single function and its test; a save/restore round-trip with a licence and a Spire | `lic` | The cross-OS guard and the resume tests catch it as a bisect |
-| R4 | The verifier's verdict runs ahead of the sim's compile while lanes interleave | `queue_structure` and each predicate refused in both until the sim lane lifts them; S2's E8 agreement test | `vfy5`, `vfy6`, `lic`, `pred` | — |
+| R4 | The verifier's verdict runs ahead of the sim's compile while lanes interleave | `queue_structure` and each predicate refused in both until the sim lane lifts them; S2's E8 agreement test; each verifier lane builds its checks behind the refusal codes before the sim lane lifts them, and the sim lane retires the codes in its own PR (item 157) | `vfy5`, `vfy6`, `lic`, `pred` | — |
 | R5 | P6 is judged by a tester who is not new (item 153 (4)) | Said in the run sheet and the record; the fun gate's testers are the first true newcomers | section 5.3 | The gate's own "a tester who cannot file a playbook is a wizard bug" |
 | R6 | The playtest bundle leaks a playbook, draft, notebook, cache file, or a path or user name | E10's entry-list test; the client's own diagnostics log and its shape test, never the raw `godot.log`; the no-network check extended to `crates/client-gdext` and `godot/` | `prob` | — |
 | R7 | The save bump strands an S2 save mid-match | A version-2 save is refused with both versions named; S2 saves are development saves on the owner's disk only | `gwp` | — |
