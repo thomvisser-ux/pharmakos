@@ -264,6 +264,10 @@ pub enum InputError {
     /// An input has no encoding for `report_hash`: a byte string or a list
     /// past the encoding's `u32` length prefix.
     Unhashable(HashError),
+    /// The seat's view holds a fact that cannot hold against the rules table
+    /// ([`Scope::check`]): a radius at or below the base sphere, or a radius
+    /// or Spire left behind for a beacon that is no longer the seat's own.
+    View(ScopeError),
 }
 
 impl core::fmt::Display for InputError {
@@ -271,6 +275,7 @@ impl core::fmt::Display for InputError {
         match self {
             InputError::Rules(gap) => write!(formatter, "{gap}"),
             InputError::Unhashable(error) => write!(formatter, "{error}"),
+            InputError::View(error) => write!(formatter, "{error}"),
         }
     }
 }
@@ -307,9 +312,11 @@ impl<'a> Input<'a> {
     ///
     /// [`InputError::Rules`] when the rules table does not carry a block the
     /// checks read — the verifier's limits, the interface rates, the prices
-    /// and the commander's walking rows — or carries one out of range; and
+    /// and the commander's walking rows — or carries one out of range;
     /// [`InputError::Unhashable`] when the playbook, the snapshot or a list or
-    /// string in the view is past `report_hash`'s `u32` length prefix.
+    /// string in the view is past `report_hash`'s `u32` length prefix; and
+    /// [`InputError::View`] when the view's per-beacon facts do not hold
+    /// against the rules table's base sphere ([`Scope::check`]).
     pub fn new(
         playbook: &'a [u8],
         snapshot: &'a [u8],
@@ -317,13 +324,17 @@ impl<'a> Input<'a> {
         rules: &'a RulesTable,
     ) -> Result<Input<'a>, InputError> {
         let rules_hash = rules.rules_hash();
+        let limits = Limits::from_rules(rules)?;
+        scope
+            .check(limits.beacon_sphere_radius_voxels())
+            .map_err(InputError::View)?;
         Ok(Input {
             playbook,
             snapshot,
             scope,
             rules,
             rules_hash,
-            limits: Limits::from_rules(rules)?,
+            limits,
             rates: Rates::from_rules(rules)?,
             prices: Prices::from_rules(rules)?,
             walk: Walk::from_rules(rules)?,

@@ -11,6 +11,9 @@
     "route": [
       {
         "label": "s1",
+        "on_fail": {
+          "action": "ABORT_ROUTE"
+        },
         "interface": {
           "beacon": {
             "beacon_id": "b_01"

@@ -59,8 +59,8 @@ use pharmakos_sim::snapshot::{SNAPSHOT_VERSION, Snapshot};
 use pharmakos_sim::tables::SeatId;
 use pharmakos_verifier::catalogue::{CATALOGUE, Emitter, Stage, catalogue_json};
 use pharmakos_verifier::{
-    FeatureKind, Input, KnownBeacon, KnownFeature, Ownership, Scope, Sighted, Sighting,
-    VERIFIER_VERSION, hash, verify,
+    FeatureKind, Input, InputError, KnownBeacon, KnownFeature, Ownership, Scope, ScopeError,
+    Sighted, Sighting, VERIFIER_VERSION, hash, verify,
 };
 
 // ---------------------------------------------------------------------------
@@ -2065,21 +2065,54 @@ fn a_breach_is_noted_only_where_it_is_allowed() {
     assert!(noted("").is_empty());
 }
 
-/// W0702 is conservative: it names a later rule only where its condition
-/// implies an earlier rule's, read from the two trees and their constants.
-/// Each row below is `(earlier, later, warned)`.
-#[test]
-fn a_rule_is_warned_unreachable_only_when_its_condition_implies_an_earlier_one() {
-    let hp =
-        |cmp: &str, pct: u32| format!("{{\"cmdr_hp_pct\":{{\"cmp\":\"{cmp}\",\"pct\":{pct}}}}}");
-    let treasury = |op: &str, value: i32| {
-        format!("{{\"treasury\":{{\"dollars\":{{\"op\":\"{op}\",\"value\":{value}}}}}}}")
-    };
-    let hit = |ms: i32| format!("{{\"cmdr_took_damage_within\":{{\"ms\":{ms}}}}}");
-    let all = |items: &[String]| format!("{{\"all\":{{\"items\":[{}]}}}}", items.join(","));
-    let any = |items: &[String]| format!("{{\"any\":{{\"items\":[{}]}}}}", items.join(","));
-    let not = |item: &str| format!("{{\"not\":{{\"item\":{item}}}}}");
-    let rows: Vec<(String, String, bool)> = vec![
+/// The implication table's leaves and groups, as canonical JSON.
+fn hp(cmp: &str, pct: u32) -> String {
+    format!("{{\"cmdr_hp_pct\":{{\"cmp\":\"{cmp}\",\"pct\":{pct}}}}}")
+}
+
+fn treasury(op: &str, value: i32) -> String {
+    int("treasury", "dollars", op, value)
+}
+
+fn hit(ms: i32) -> String {
+    format!("{{\"cmdr_took_damage_within\":{{\"ms\":{ms}}}}}")
+}
+
+fn all(items: &[String]) -> String {
+    format!("{{\"all\":{{\"items\":[{}]}}}}", items.join(","))
+}
+
+fn any(items: &[String]) -> String {
+    format!("{{\"any\":{{\"items\":[{}]}}}}", items.join(","))
+}
+
+fn not(item: &str) -> String {
+    format!("{{\"not\":{{\"item\":{item}}}}}")
+}
+
+fn int(predicate: &str, field: &str, op: &str, value: i32) -> String {
+    format!("{{\"{predicate}\":{{\"{field}\":{{\"op\":\"{op}\",\"value\":{value}}}}}}}")
+}
+
+fn by_id(id: &str) -> String {
+    format!("{{\"beacon_id\":\"{id}\"}}")
+}
+
+const NEAREST_OWN: &str = r#"{"nearest":{"filter":{"side":"OWN"}}}"#;
+
+fn beacon_hp(beacon: &str, op: &str, value: i32) -> String {
+    format!(
+        "{{\"beacon_hp_pct\":{{\"beacon\":{beacon},\"pct\":{{\"op\":\"{op}\",\"value\":{value}}}}}}}"
+    )
+}
+
+fn attacked(beacon: &str, ms: i32) -> String {
+    format!("{{\"beacon_under_attack\":{{\"beacon\":{beacon},\"within_ms\":{ms}}}}}")
+}
+
+/// The table's first rows: the commander's, the treasury and the groups.
+fn first_rows() -> Vec<(String, String, bool)> {
+    vec![
         (hp("LE", 40), hp("LE", 40), true),
         (hp("LE", 40), hp("LT", 40), true),
         (hp("LE", 40), hp("EQ", 12), true),
@@ -2109,7 +2142,135 @@ fn a_rule_is_warned_unreachable_only_when_its_condition_implies_an_earlier_one()
         ),
         (not(&hp("GE", 50)), not(&hp("GE", 40)), true),
         (not(&hp("GE", 40)), not(&hp("GE", 50)), false),
-    ];
+    ]
+}
+
+/// The rows the reviews of vfy5 added: references, the other integer
+/// predicates and `not` over a group.
+fn review_rows() -> Vec<(String, String, bool)> {
+    let nearest = NEAREST_OWN.to_owned();
+    vec![
+        // Two different beacons, or a selector and a handle, are never the
+        // same reading, whatever the constants (the reviews of vfy5).
+        (
+            beacon_hp(&by_id("b_01"), "LE", 50),
+            beacon_hp(&by_id("b_01"), "LE", 40),
+            true,
+        ),
+        (
+            beacon_hp(&by_id("b_01"), "LE", 50),
+            beacon_hp(&by_id("b_02"), "LE", 40),
+            false,
+        ),
+        (
+            beacon_hp(&nearest, "LE", 50),
+            beacon_hp(&by_id("b_01"), "LE", 40),
+            false,
+        ),
+        (
+            beacon_hp(&by_id("b_01"), "LE", 50),
+            beacon_hp(&nearest, "LE", 40),
+            false,
+        ),
+        (
+            beacon_hp(&nearest, "LE", 50),
+            beacon_hp(&nearest, "LE", 40),
+            true,
+        ),
+        (
+            attacked(&by_id("b_01"), 5000),
+            attacked(&by_id("b_01"), 3000),
+            true,
+        ),
+        (
+            attacked(&by_id("b_01"), 5000),
+            attacked(&by_id("b_01"), 8000),
+            false,
+        ),
+        (
+            attacked(&by_id("b_01"), 5000),
+            attacked(&by_id("b_02"), 3000),
+            false,
+        ),
+        (
+            attacked(&nearest, 5000),
+            attacked(&by_id("b_01"), 3000),
+            false,
+        ),
+    ]
+}
+
+/// The reviews' rows for the other integer predicates and `not` over a group.
+fn review_integer_rows() -> Vec<(String, String, bool)> {
+    vec![
+        // The other integer predicates.
+        (
+            int("segment_elapsed", "ms", "GE", 60_000),
+            int("segment_elapsed", "ms", "GE", 90_000),
+            true,
+        ),
+        (
+            int("segment_elapsed", "ms", "GE", 90_000),
+            int("segment_elapsed", "ms", "GE", 60_000),
+            false,
+        ),
+        (
+            int("kw_headroom", "kw", "LT", 0),
+            int("kw_headroom", "kw", "LT", -5),
+            true,
+        ),
+        (
+            int("kw_headroom", "kw", "LT", -5),
+            int("kw_headroom", "kw", "LT", 0),
+            false,
+        ),
+        (
+            int("cmdr_deaths", "deaths", "GE", 1),
+            int("cmdr_deaths", "deaths", "EQ", 2),
+            true,
+        ),
+        (
+            int("cmdr_deaths", "deaths", "GE", 2),
+            int("cmdr_deaths", "deaths", "GE", 1),
+            false,
+        ),
+        (
+            int("cmdr_deaths", "deaths", "GE", 1),
+            int("segment_elapsed", "ms", "GE", 1),
+            false,
+        ),
+        // `not` over a group: `not X` gives `not Y` when `Y` gives `X`.
+        (
+            not(&any(&[hp("LE", 30), treasury("LT", 5)])),
+            not(&any(&[hp("LE", 40), treasury("LT", 10)])),
+            true,
+        ),
+        (
+            not(&any(&[hp("LE", 40), treasury("LT", 10)])),
+            not(&any(&[hp("LE", 30), treasury("LT", 5)])),
+            false,
+        ),
+        (
+            not(&all(&[hp("LE", 40), hit(3000)])),
+            not(&all(&[hp("LE", 40), hit(3000)])),
+            true,
+        ),
+        (
+            not(&all(&[hp("LE", 40), hit(3000)])),
+            not(&all(&[hp("LE", 30), hit(3000)])),
+            false,
+        ),
+    ]
+}
+
+/// W0702 is conservative: it names a later rule only where its condition
+/// implies an earlier rule's, read from the two trees and their constants.
+/// Each row below is `(earlier, later, warned)`.
+#[test]
+fn a_rule_is_warned_unreachable_only_when_its_condition_implies_an_earlier_one() {
+    let mut rows = first_rows();
+    rows.extend(review_rows());
+    rows.extend(review_integer_rows());
     for (earlier, later, warned) in rows {
         let text = route_of(
             r#"{"label":"s1","hold":{"ms":1000}}"#,
@@ -2147,4 +2308,211 @@ fn only_an_earlier_rule_can_shadow_a_later_one() {
         &format!("{},{}", handler("narrow", narrow), handler("wide", wide)),
     );
     assert!(with_code(&found_in(&text, &fixture_scope()), "W0702").is_empty());
+}
+
+/// A visit to `beacon` queuing one Spire, labelled `label`, with `guards`
+/// (`skip_if`, `on_fail`) written out before the action.
+fn spire_visit(label: &str, beacon: &str, guards: &str) -> String {
+    format!(
+        "{{\"label\":\"{label}\",{guards}\"interface\":{{\"beacon\":{{\"beacon_id\":\
+         \"{beacon}\"}},\"rows\":[{SPIRE_ROW}]}}}}"
+    )
+}
+
+const ABORTS: &str = r#""on_fail":{"action":"ABORT_ROUTE"},"#;
+const GUARDED_ABORTS: &str =
+    r#""skip_if":{"cmdr_hp_pct":{"cmp":"LE","pct":10}},"on_fail":{"action":"ABORT_ROUTE"},"#;
+const SKIPS: &str = r#""on_fail":{"action":"SKIP"},"#;
+
+/// E0513 counts an earlier queue only where it queued for certain before the
+/// later one could run (the reviews of vfy5): so that, once S3's `lic`
+/// lifts E0009, a playbook that queues a Spire again after a guarded or
+/// skippable first try is never refused. Each row is `(the route, the
+/// handlers, refused)`, every queue at `b_01`, where no Spire stands.
+#[test]
+fn a_second_spire_is_one_only_where_the_first_queued_for_certain() {
+    let scope = licensed_scope();
+    let hold = r#"{"label":"w","hold":{"ms":1000}}"#;
+    let rows: Vec<(String, String, bool)> = vec![
+        // The first ends the route when it fails: the second is a second.
+        (
+            format!("{},{}", spire_visit("a", "b_01", ABORTS), spire_visit("b", "b_01", "")),
+            String::new(),
+            true,
+        ),
+        // A step between the two changes nothing.
+        (
+            format!(
+                "{},{hold},{}",
+                spire_visit("a", "b_01", ABORTS),
+                spire_visit("b", "b_01", "")
+            ),
+            String::new(),
+            true,
+        ),
+        // The first is guarded: it may not have run.
+        (
+            format!(
+                "{},{}",
+                spire_visit("a", "b_01", GUARDED_ABORTS),
+                spire_visit("b", "b_01", "")
+            ),
+            String::new(),
+            false,
+        ),
+        // The first skips on failure, written or omitted: the route goes on
+        // without it.
+        (
+            format!("{},{}", spire_visit("a", "b_01", SKIPS), spire_visit("b", "b_01", "")),
+            String::new(),
+            false,
+        ),
+        (
+            format!("{},{}", spire_visit("a", "b_01", ""), spire_visit("b", "b_01", "")),
+            String::new(),
+            false,
+        ),
+        // A jump lands between them, so the first can be stepped over.
+        (
+            format!(
+                "{{\"label\":\"j\",\"hold\":{{\"ms\":1000}},\"on_fail\":{{\"action\":\
+                 \"JUMP_FORWARD\",\"jump_to_label\":\"w\"}}}},{},{hold},{}",
+                spire_visit("a", "b_01", ABORTS),
+                spire_visit("b", "b_01", "")
+            ),
+            String::new(),
+            false,
+        ),
+        // A handler that resumes by skipping the step in flight can skip the
+        // first.
+        (
+            format!("{},{}", spire_visit("a", "b_01", ABORTS), spire_visit("b", "b_01", "")),
+            r#"{"id":"dodge","when":{"cmdr_hp_pct":{"cmp":"LE","pct":20}},"body":[{"label":"d1","hold":{"ms":1000}}],"resume":"SKIP_STEP","cooldown_ms":5000,"max_fires":1}"#
+                .to_owned(),
+            false,
+        ),
+        // A handler that resumes by continuing does not.
+        (
+            format!("{},{}", spire_visit("a", "b_01", ABORTS), spire_visit("b", "b_01", "")),
+            r#"{"id":"dodge","when":{"cmdr_hp_pct":{"cmp":"LE","pct":20}},"body":[{"label":"d1","hold":{"ms":1000}}],"resume":"CONTINUE","cooldown_ms":5000,"max_fires":1}"#
+                .to_owned(),
+            true,
+        ),
+        // Two rows in one guarded step: they run together or not at all.
+        (
+            format!(
+                "{{\"label\":\"a\",\"skip_if\":{{\"cmdr_hp_pct\":{{\"cmp\":\"LE\",\"pct\":10}}}},\
+                 \"interface\":{{\"beacon\":{{\"beacon_id\":\"b_01\"}},\"rows\":\
+                 [{SPIRE_ROW},{SPIRE_ROW}]}}}}"
+            ),
+            String::new(),
+            true,
+        ),
+    ];
+    for (route, handlers, refused) in rows {
+        let text = route_of(&route, &handlers);
+        let found = found_in(&text, &scope);
+        let e0513 = with_code(&found, "E0513");
+        assert_eq!(
+            !e0513.is_empty(),
+            refused,
+            "{route} / {handlers}: {found:?}"
+        );
+        assert!(e0513.len() <= 1, "{route}: {found:?}");
+    }
+}
+
+/// A route's queue where the view holds a Spire is refused unless its step is
+/// guarded by `skip_if`, which may be the author's own test for the Spire.
+#[test]
+fn a_guarded_queue_where_a_spire_stands_is_not_refused() {
+    let scope = spire_scope();
+    let plain = route_of(&spire_visit("a", "b_02", ""), "");
+    let guarded = route_of(&spire_visit("a", "b_02", GUARDED_ABORTS), "");
+    assert_eq!(with_code(&found_in(&plain, &scope), "E0513").len(), 1);
+    assert!(with_code(&found_in(&guarded, &scope), "E0513").is_empty());
+}
+
+/// A view's radius is a grown one or none (the reviews of vfy5): the input
+/// refuses a radius at or below the base row (24 voxels), so "unset" is the
+/// view's one spelling of the base, and the view refuses one past the sim's
+/// `i16` load bound when it is set.
+#[test]
+fn a_radius_is_grown_or_unset_and_inside_the_sims_bound() {
+    let rules = rules();
+    let snapshot = fixture_snapshot();
+    let playbook = case_bytes("expand_east");
+    let radius = |voxels: u32| {
+        core::num::NonZeroU32::new(voxels).unwrap_or_else(|| panic!("a test radius is not zero"))
+    };
+    let assembled = |scope: &Scope| Input::new(&playbook, &snapshot, scope, &rules).map(|_| ());
+    for (voxels, refused) in [(1, true), (24, true), (25, false), (36, false)] {
+        let scope = fixture_scope()
+            .with_sphere_radius("b_01", radius(voxels))
+            .unwrap_or_else(|error| panic!("{voxels} voxels join the view: {error}"));
+        let result = assembled(&scope);
+        if refused {
+            assert_eq!(
+                result,
+                Err(InputError::View(ScopeError::RadiusNotGrown {
+                    beacon: "b_01".to_owned(),
+                    radius: voxels,
+                    base: 24,
+                })),
+                "{voxels} voxels"
+            );
+        } else {
+            assert_eq!(result, Ok(()), "{voxels} voxels");
+        }
+    }
+    let past = u32::from(i16::MAX.unsigned_abs()).saturating_add(1);
+    assert_eq!(
+        fixture_scope().with_sphere_radius("b_01", radius(past)),
+        Err(ScopeError::RadiusPastBound {
+            beacon: "b_01".to_owned(),
+            radius: past,
+        })
+    );
+    let most = u32::from(i16::MAX.unsigned_abs());
+    let at_most = fixture_scope()
+        .with_sphere_radius("b_01", radius(most))
+        .unwrap_or_else(|error| panic!("the bound itself joins the view: {error}"));
+    assert_eq!(assembled(&at_most), Ok(()));
+}
+
+/// A radius or a Spire set for one of the seat's beacons, then left behind
+/// when `push_beacon` replaces that beacon with another seat's, is refused
+/// when the input is assembled, rather than hashed and never read.
+#[test]
+fn a_fact_left_behind_by_a_replaced_beacon_is_refused() {
+    let rules = rules();
+    let snapshot = fixture_snapshot();
+    let playbook = case_bytes("expand_east");
+    let enemy = beacon(
+        "b_02",
+        Ownership::EnemyKnown,
+        MandateKind::Unspecified,
+        (100, 20, 58),
+        false,
+        &[],
+    );
+    let grown = fixture_scope()
+        .with_sphere_radius(
+            "b_02",
+            core::num::NonZeroU32::new(36).unwrap_or_else(|| panic!("36 is not zero")),
+        )
+        .unwrap_or_else(|error| panic!("b_02 is the seat's own: {error}"))
+        .with_beacon(enemy.clone());
+    let spire = fixture_scope()
+        .with_spire("b_02")
+        .unwrap_or_else(|error| panic!("b_02 is the seat's own: {error}"))
+        .with_beacon(enemy);
+    for scope in [grown, spire] {
+        assert_eq!(
+            Input::new(&playbook, &snapshot, &scope, &rules).map(|_| ()),
+            Err(InputError::View(ScopeError::NotOwnBeacon(
+                "b_02".to_owned()
+            )))
+        );
+    }
 }

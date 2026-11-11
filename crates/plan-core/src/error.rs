@@ -92,6 +92,10 @@ impl From<pharmakos_verifier::InputError> for Error {
                 "",
                 format!("the playbook or the seat's view has no report hash: {cause}"),
             ),
+            pharmakos_verifier::InputError::View(cause) => Self::at(
+                "",
+                format!("the seat's view does not hold against the rules table: {cause}"),
+            ),
         }
     }
 }
@@ -230,6 +234,16 @@ mod tests {
             unhashable.message
         );
         assert!(!unhashable.message.contains("rules table"));
+        let view: Error = InputError::View(pharmakos_verifier::ScopeError::NotOwnBeacon(
+            "b_02".to_owned(),
+        ))
+        .into();
+        assert!(
+            view.message
+                .starts_with("the seat's view does not hold against the rules table: "),
+            "{}",
+            view.message
+        );
     }
 
     #[test]

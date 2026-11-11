@@ -326,7 +326,9 @@ and `W0702` gaining their emitters (semantics and lint), by `E0507`'s and
 `W0702`'s wordings, and by the new rows `E0513` and `I0006`, each at the end
 of its family. Four cases are new, each on the plain fixture:
 `e0507_a_spire_without_its_licence`, `e0513_a_second_spire_at_one_beacon`
-(which carries `E0507` too, since the plain seat holds no licence, and the
+(its first visit ends the route when it fails, so the second queue is
+certainly a second Spire: the reviews' fix pass counts an earlier queue only
+then; it carries `E0507` too, since the plain seat holds no licence, and the
 estimate stage's `W0602` for two Spires' price), `i0006_a_breach_with_no_free_fire_mortar`
 and `w0702_a_rule_an_earlier_rule_always_wins`. Both Spire cases carry `E0009`
 as well: it refuses every `queue_structure` row until S3's `lic`, so the

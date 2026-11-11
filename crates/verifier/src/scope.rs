@@ -101,7 +101,13 @@
 //! Each setter refuses, with a [`ScopeError`], a fact about a beacon the view
 //! does not hold as one of the seat's own: no reader reads another seat's
 //! sphere or Spire, and a fact nothing reads would still move `report_hash`.
-//! Each is a `report_hash` input, and an empty one encodes as an empty list.
+//! A radius past the sim's `i16` load bound is refused when it is set, and
+//! [`crate::Input::new`], which sees the rules table too, refuses through
+//! [`Scope::check`] a radius at or below the base row (an unset radius is the
+//! only way the view says "base", so one view has one encoding) and a fact
+//! left behind for a beacon [`Scope::push_beacon`] has since replaced with
+//! another seat's. Each is a `report_hash` input, and an empty one encodes as
+//! an empty list.
 //!
 //! # Sighted enemy beacons (the register's S3-04)
 //!
@@ -285,6 +291,24 @@ pub enum ScopeError {
     /// The view holds this beacon as another seat's: its sphere and its
     /// structures are no part of this seat's view.
     NotOwnBeacon(String),
+    /// A sphere radius past the sim's `i16` load bound, which no rules table
+    /// the sim loads can grow a sphere to.
+    RadiusPastBound {
+        /// The beacon.
+        beacon: String,
+        /// The radius, in voxels.
+        radius: u32,
+    },
+    /// A sphere radius at or below the rules table's base radius: only a
+    /// Spire grows a sphere, and the base is said by setting nothing.
+    RadiusNotGrown {
+        /// The beacon.
+        beacon: String,
+        /// The radius, in voxels.
+        radius: u32,
+        /// The base row, `beacon.sphere_radius_voxels`.
+        base: i32,
+    },
 }
 
 impl core::fmt::Display for ScopeError {
@@ -304,6 +328,20 @@ impl core::fmt::Display for ScopeError {
                 formatter,
                 "`{id}` is another seat's beacon in this view, and the view carries its sphere \
                  and its structures for the seat's own beacons only"
+            ),
+            ScopeError::RadiusPastBound { beacon, radius } => write!(
+                formatter,
+                "`{beacon}`'s sphere radius of {radius} voxels is past the {} the sim loads",
+                i16::MAX
+            ),
+            ScopeError::RadiusNotGrown {
+                beacon,
+                radius,
+                base,
+            } => write!(
+                formatter,
+                "`{beacon}`'s sphere radius of {radius} voxels is not above the base row's \
+                 {base}: a base sphere is said by setting no radius"
             ),
         }
     }
@@ -567,14 +605,22 @@ impl Scope {
     /// # Errors
     ///
     /// [`ScopeError::UnknownBeacon`] when the view holds no beacon `beacon_id`
-    /// (add the beacon first), and [`ScopeError::NotOwnBeacon`] when it holds
-    /// it as another seat's.
+    /// (add the beacon first), [`ScopeError::NotOwnBeacon`] when it holds it
+    /// as another seat's, and [`ScopeError::RadiusPastBound`] for a radius
+    /// past the sim's `i16` load bound. A radius at or below the base row is
+    /// [`Scope::check`]'s, since the base is the rules table's.
     pub fn set_sphere_radius(
         &mut self,
         beacon_id: &str,
         radius_voxels: NonZeroU32,
     ) -> Result<(), ScopeError> {
         self.own(beacon_id)?;
+        if i16::try_from(radius_voxels.get()).is_err() {
+            return Err(ScopeError::RadiusPastBound {
+                beacon: beacon_id.to_owned(),
+                radius: radius_voxels.get(),
+            });
+        }
         match self
             .sphere_radii
             .binary_search_by(|(held, _)| held.as_str().cmp(beacon_id))
@@ -664,6 +710,34 @@ impl Scope {
     #[must_use]
     pub fn spires(&self) -> &[String] {
         &self.spires
+    }
+
+    /// Whether the view's per-beacon facts still hold against the rules
+    /// table's base radius: every radius is above `base_radius_voxels`, and
+    /// every radius and Spire is about a beacon the view still holds as the
+    /// seat's own ([`Scope::push_beacon`] replaces a beacon whole, so one set
+    /// before can be left behind). [`crate::Input::new`] asks this.
+    ///
+    /// # Errors
+    ///
+    /// The first fact that does not hold, in the encoding's order:
+    /// [`ScopeError::UnknownBeacon`], [`ScopeError::NotOwnBeacon`] or
+    /// [`ScopeError::RadiusNotGrown`].
+    pub fn check(&self, base_radius_voxels: i32) -> Result<(), ScopeError> {
+        for (beacon_id, radius) in &self.sphere_radii {
+            self.own(beacon_id)?;
+            if i64::from(radius.get()) <= i64::from(base_radius_voxels) {
+                return Err(ScopeError::RadiusNotGrown {
+                    beacon: beacon_id.clone(),
+                    radius: radius.get(),
+                    base: base_radius_voxels,
+                });
+            }
+        }
+        for beacon_id in &self.spires {
+            self.own(beacon_id)?;
+        }
+        Ok(())
     }
 
     /// The beacon with this id, when the view holds it as the seat's own.
