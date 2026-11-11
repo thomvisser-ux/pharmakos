@@ -3982,6 +3982,17 @@ mod tests {
         let token = seat_token(&mut surface, 0);
         let response = surface.call(Some(&token), &request("get_briefing", "{}"), &Blind);
         assert_eq!(code(&response), "INTERNAL");
+        // On the wire from S3's `con6`, served from S3's `gwr`: until then the
+        // same answer, naming the method, and never the caller's fault.
+        let response = surface.call(Some(&token), &request("get_vocabulary", "{}"), &Blind);
+        assert_eq!(code(&response), "INTERNAL");
+        assert!(
+            matches!(
+                response.get("error").and_then(|error| error.get("message")),
+                Some(Json::String(message)) if message.contains("get_vocabulary")
+            ),
+            "{response:?}"
+        );
     }
 
     #[test]

@@ -41,6 +41,12 @@
         }
       }
     },
+    "AnyStructure": {
+      "type": "object",
+      "description": "gp.v1.AnyStructure",
+      "additionalProperties": false,
+      "properties": {}
+    },
     "Area": {
       "type": "object",
       "description": "gp.v1.Area",
@@ -2609,8 +2615,21 @@
         },
         "freshness": {
           "$ref": "#/$defs/Freshness"
+        },
+        "any_kind": {
+          "$ref": "#/$defs/AnyStructure"
         }
-      }
+      },
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "blueprint_id",
+              "any_kind"
+            ]
+          }
+        }
+      ]
     },
     "EnemyUnitsNear": {
       "type": "object",

@@ -1017,9 +1017,29 @@ fn read_placement(
                 point.is_none().then_some(StepFailure::NoTarget),
             )
         }
-        // `toward` is out of reach here until S3's `pred`: the compile refuses
-        // the playbook before this reads it.
-        Some(Place::On(_) | Place::Toward(_)) | None => (None, None, Some(StepFailure::NoTarget)),
+        // Out of reach: the compile refuses each before this reads it, and a
+        // made-up `no_target` would hide the day that stops being true.
+        // `toward` is refused until S3's `pred`, which must give it a reading
+        // here when it lifts the refusal; `on` is a misplaced site and an
+        // absent `at` a missing block, for good.
+        Some(Place::Toward(_)) => {
+            return Err(Error::internal(format!(
+                "{base}/at/toward reached the gateway's placement reader, which does not read \
+                 `toward` yet: the compile refuses it until S3's stepping-stone site search"
+            )));
+        }
+        Some(Place::On(_)) => {
+            return Err(Error::internal(format!(
+                "{base}/at/on reached the gateway's placement reader, and the compile refuses \
+                 `on` in a placement's `at`"
+            )));
+        }
+        None => {
+            return Err(Error::internal(format!(
+                "{base}/at reached the gateway's placement reader with no place, and the \
+                 compile refuses a placement without one"
+            )));
+        }
     };
     // The sim's `site_is_legal`, checked before any initial row is read: a
     // site inside one of the seat's own spheres, not on the column of one of

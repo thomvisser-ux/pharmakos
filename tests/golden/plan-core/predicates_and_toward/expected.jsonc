@@ -144,7 +144,8 @@
                   "freshness": {
                     "kind": "KNOWN_WITHIN",
                     "known_within_ms": 60000
-                  }
+                  },
+                  "any_kind": {}
                 }
               }
             ]

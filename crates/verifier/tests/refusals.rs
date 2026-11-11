@@ -65,6 +65,15 @@ fn every_code_names_a_construct_the_sim_refuses() {
 
 /// A playbook holding `step` and the handlers in `handlers`, as canonical JSON.
 fn playbook(step: &str, handlers: &str) -> String {
+    playbook_with(
+        step,
+        handlers,
+        r#"{"hold": {"at": {"beacon_anchor": {"safest": {}}}}}"#,
+    )
+}
+
+/// [`playbook`], with `fallback` written out.
+fn playbook_with(step: &str, handlers: &str, fallback: &str) -> String {
     format!(
         r#"{{
   "schema_version": {{"major": 1}},
@@ -72,7 +81,7 @@ fn playbook(step: &str, handlers: &str) -> String {
   "kind": "PLAYBOOK",
   "declarative": {{"route": [{step}], "handlers": [{handlers}]}},
   "on_death": {{"on_respawn": "CONTINUE", "max_deaths_before_fallback": 1}},
-  "fallback": {{"hold": {{"at": {{"beacon_anchor": {{"safest": {{}}}}}}}}}}
+  "fallback": {fallback}
 }}"#
     )
 }
@@ -102,76 +111,223 @@ fn codes(text: &str, rules: &RulesTable) -> Vec<(String, String)> {
         .collect()
 }
 
-/// S3's `con6`: wherever the compile reads a predicate or `toward` the sim
-/// refuses it by its table's entry, and the verifier by that entry's code at
-/// the construct's own pointer, so neither can be half-used.
+/// S3's `con6`, held on both sides by one table: every construct `con6` put on
+/// the wire, written in every place it can stand, is refused by the sim's
+/// compile with its own table entry and by the verifier with that entry's code
+/// at the construct's own pointer. So none of them can be half-used, wherever it
+/// is written, until S3's `pred` lifts it.
 #[test]
-fn the_verifier_and_the_sim_refuse_s3s_constructs_in_the_same_places() {
-    let hold = r#"{"label": "s", "hold": {"ms": 1000}}"#;
-    let toward = r#"{"toward": {"feature": {"feature_id": "vent_1_2"}}}"#;
-    let supply = r#"{"kw_supply": {"kw": {"op": "GE", "value": 1}}}"#;
-    let interface = |row: String| {
+fn every_s3_construct_is_refused_in_every_place_it_can_stand() {
+    let mut cases = predicate_cases();
+    cases.append(&mut toward_cases());
+    assert_eq!(cases.len(), 8 * 5 + 9, "every construct in every place");
+
+    let rules = rules();
+    for (step, handlers, fallback, at, code) in cases {
+        let text = playbook_with(&step, &handlers, &fallback);
+        let found = codes(&text, &rules);
+        assert!(
+            found.contains(&(code.to_owned(), at.clone())),
+            "{code} at {at}, among {found:?}"
+        );
+        assert!(
+            found
+                .iter()
+                .all(|(other, _)| !other.starts_with("E002") || other == code),
+            "only {code} of con6's codes at {at}: {found:?}"
+        );
+        let decoded: Playbook = json::decode(&text).expect("the case decodes");
+        let error = Plan::compile(&decoded, &rules).expect_err("the sim refuses it too");
+        let refused = Refusal::of(&error)
+            .unwrap_or_else(|| panic!("{at}: refused as a table entry, not as {error}"));
+        assert_eq!(code_for_construct(refused.construct), Some(code), "{at}");
+    }
+}
+
+/// One place case: the step, the handlers, the fallback, the construct's
+/// pointer and the code it is refused by.
+type PlaceCase = (String, String, String, String, &'static str);
+
+/// The fallback every case not about the fallback carries.
+const SAFEST: &str = r#"{"hold": {"at": {"safest": {}}}}"#;
+
+/// A step that does nothing, for the cases whose construct is elsewhere.
+const HOLD: &str = r#"{"label": "s", "hold": {"ms": 1000}}"#;
+
+/// Each predicate in each place a condition is read.
+fn predicate_cases() -> Vec<PlaceCase> {
+    let hold = HOLD;
+    let safest = SAFEST;
+    let rule = |when: &str, body: &str| {
         format!(
-            r#"{{"label": "q", "interface": {{"beacon": {{"beacon_id": "b_01"}}, "rows": [{row}]}}, "timeout_ms": 30000}}"#
+            r#"{{"id": "h", "when": {when}, "body": [{body}], "resume": "CONTINUE", "cooldown_ms": 5000, "max_fires": 1}}"#
         )
     };
-    let cases: Vec<(String, String, &str, &str)> = vec![
+    let predicates: [(&str, &str, &str); 8] = [
+        (
+            "beacon_units_by_role",
+            "E0020",
+            r#"{"beacon": {"safest": {}}, "role": "SCOUT", "count": {"op": "GE", "value": 1}}"#,
+        ),
+        (
+            "beacon_mandate",
+            "E0021",
+            r#"{"beacon": {"safest": {}}, "mandate": "BUILD"}"#,
+        ),
+        (
+            "beacon_has_structure",
+            "E0022",
+            r#"{"beacon": {"safest": {}}, "blueprint_id": "generator"}"#,
+        ),
+        (
+            "enemy_units_near",
+            "E0023",
+            r#"{"near": {"safest": {}}, "radius_voxels": 24, "count": {"op": "GE", "value": 1}, "freshness": {"kind": "VISIBLE_NOW"}}"#,
+        ),
+        (
+            "enemy_beacon_known",
+            "E0024",
+            r#"{"freshness": {"kind": "VISIBLE_NOW"}}"#,
+        ),
+        (
+            "enemy_structure_near",
+            "E0025",
+            r#"{"near": {"safest": {}}, "radius_voxels": 24, "any_kind": {}, "freshness": {"kind": "VISIBLE_NOW"}}"#,
+        ),
+        ("kw_supply", "E0026", r#"{"kw": {"op": "GE", "value": 1}}"#),
+        ("kw_draw", "E0027", r#"{"kw": {"op": "GE", "value": 1}}"#),
+    ];
+    // (step, handlers, fallback, pointer, code)
+    let mut cases: Vec<PlaceCase> = Vec::new();
+    for (name, code, body) in predicates {
+        let predicate = format!(r#"{{"{name}": {body}}}"#);
+        let places: [(String, String, String); 5] = [
+            (
+                format!(r#"{{"label": "s", "hold": {{"ms": 1000}}, "skip_if": {predicate}}}"#),
+                String::new(),
+                "/declarative/route/0/skip_if".to_owned(),
+            ),
+            (
+                format!(
+                    r#"{{"label": "w", "wait_until": {{"condition": {predicate}}}, "timeout_ms": 1000}}"#
+                ),
+                String::new(),
+                "/declarative/route/0/wait_until/condition".to_owned(),
+            ),
+            (
+                hold.to_owned(),
+                rule(&predicate, hold),
+                "/declarative/handlers/0/when".to_owned(),
+            ),
+            (
+                hold.to_owned(),
+                rule(
+                    &format!(r#"{{"not": {{"item": {{"any": {{"items": [{predicate}]}}}}}}}}"#),
+                    hold,
+                ),
+                "/declarative/handlers/0/when/not/item/any/items/0".to_owned(),
+            ),
+            (
+                hold.to_owned(),
+                rule(
+                    r#"{"kw_headroom": {"kw": {"op": "LT", "value": 0}}}"#,
+                    &format!(r#"{{"label": "b", "hold": {{"ms": 1000}}, "skip_if": {predicate}}}"#),
+                ),
+                "/declarative/handlers/0/body/0/skip_if".to_owned(),
+            ),
+        ];
+        for (step, handlers, at) in places {
+            cases.push((
+                step,
+                handlers,
+                safest.to_owned(),
+                format!("{at}/{name}"),
+                code,
+            ));
+        }
+    }
+    cases
+}
+
+/// `toward` in each place a `Location` is compiled.
+fn toward_cases() -> Vec<PlaceCase> {
+    let hold = HOLD;
+    let safest = SAFEST;
+    let toward = r#"{"toward": {"feature": {"feature_id": "vent_1_2"}}}"#;
+    let target = format!(r#"{{"blueprint_id": "generator", "anchor": {toward}}}"#);
+    let interface = |row: String| {
+        format!(
+            r#"{{"label": "q", "interface": {{"beacon": {{"safest": {{}}}}, "rows": [{row}]}}, "timeout_ms": 30000}}"#
+        )
+    };
+    let rows = "/declarative/route/0/interface/rows/0";
+    let sites: [(String, String, String); 9] = [
         (
             format!(r#"{{"label": "m", "move": {{"to": {toward}, "pace": "DIRECT"}}}}"#),
-            String::new(),
-            "E0028",
-            "/declarative/route/0/move/to/toward",
+            safest.to_owned(),
+            "/declarative/route/0/move/to".to_owned(),
         ),
         (
             format!(r#"{{"label": "p", "place_beacon": {{"at": {toward}}}}}"#),
-            String::new(),
-            "E0028",
-            "/declarative/route/0/place_beacon/at/toward",
+            safest.to_owned(),
+            "/declarative/route/0/place_beacon/at".to_owned(),
         ),
         (
-            interface(format!(
-                r#"{{"add_build_target": {{"target": {{"blueprint_id": "generator", "anchor": {toward}}}}}}}"#
-            )),
-            String::new(),
-            "E0028",
-            "/declarative/route/0/interface/rows/0/add_build_target/target/anchor/toward",
+            format!(
+                r#"{{"label": "p", "place_beacon": {{"at": {{"voxel": {{"x": 80, "y": 11, "z": 55}}}}, "initial": {{"mandate": {{"build": {{"targets": [{target}]}}}}}}}}}}"#
+            ),
+            safest.to_owned(),
+            "/declarative/route/0/place_beacon/initial/mandate/build/targets/0/anchor".to_owned(),
+        ),
+        (
+            interface(format!(r#"{{"add_build_target": {{"target": {target}}}}}"#)),
+            safest.to_owned(),
+            format!("{rows}/add_build_target/target/anchor"),
         ),
         (
             interface(format!(
                 r#"{{"remove_build_target": {{"anchor": {toward}}}}}"#
             )),
-            String::new(),
-            "E0028",
-            "/declarative/route/0/interface/rows/0/remove_build_target/anchor/toward",
+            safest.to_owned(),
+            format!("{rows}/remove_build_target/anchor"),
         ),
         (
-            format!(r#"{{"label": "s", "hold": {{"ms": 1000}}, "skip_if": {supply}}}"#),
-            String::new(),
-            "E0026",
-            "/declarative/route/0/skip_if/kw_supply",
+            interface(format!(
+                r#"{{"set_mandate": {{"build": {{"targets": [{target}]}}}}}}"#
+            )),
+            safest.to_owned(),
+            format!("{rows}/set_mandate/build/targets/0/anchor"),
+        ),
+        (
+            interface(format!(
+                r#"{{"set_mandate_settings": {{"build": {{"targets": [{target}]}}}}}}"#
+            )),
+            safest.to_owned(),
+            format!("{rows}/set_mandate_settings/build/targets/0/anchor"),
         ),
         (
             hold.to_owned(),
-            format!(
-                r#"{{"id": "h", "when": {{"not": {{"item": {supply}}}}}, "body": [{hold}], "resume": "CONTINUE", "cooldown_ms": 5000, "max_fires": 1}}"#
-            ),
-            "E0026",
-            "/declarative/handlers/0/when/not/item/kw_supply",
+            format!(r#"{{"hold": {{"at": {toward}}}}}"#),
+            "/fallback/hold/at".to_owned(),
+        ),
+        (
+            hold.to_owned(),
+            format!(r#"{{"patrol": {{"waypoints": [{{"safest": {{}}}}, {toward}]}}}}"#),
+            "/fallback/patrol/waypoints/1".to_owned(),
         ),
     ];
-    let rules = rules();
-    for (step, handlers, code, at) in cases {
-        let text = playbook(&step, &handlers);
-        let found = codes(&text, &rules);
-        assert!(
-            found.contains(&(code.to_owned(), at.to_owned())),
-            "{code} at {at}, among {found:?}"
-        );
-        let decoded: Playbook = json::decode(&text).expect("the case decodes");
-        let error = Plan::compile(&decoded, &rules).expect_err("the sim refuses it too");
-        let refused = Refusal::of(&error).expect("as a refusal of its table");
-        assert_eq!(code_for_construct(refused.construct), Some(code));
-    }
+    sites
+        .into_iter()
+        .map(|(step, fallback, at)| {
+            (
+                step,
+                String::new(),
+                fallback,
+                format!("{at}/toward"),
+                "E0028",
+            )
+        })
+        .collect()
 }
 
 /// The sim never compiles a `broadcast`'s place, so `toward` there is not judged:

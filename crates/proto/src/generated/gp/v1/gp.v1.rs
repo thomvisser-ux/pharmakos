@@ -935,11 +935,12 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.Handler".into() }fn ty
 ///      (43-45); economy's kW supply and kW draw (72, 73); enemy knowledge's
 ///      units near, beacon known and structure near (60-62), each with a
 ///      required Freshness.
-///    S4 fills: capability licence and mast coverage (80-89), with reach and
-///      radio.
+///    S4 fills: capability licence and structure state and mast coverage
+///      (80-89), with reach and radio.
 ///    S6 fills, with the full editor: commander position (23-29), the rest of
 ///      the clock (31-39), own beacon's reports since (46-49), aggregates
-///      (50-59), the income forecast (74-79) and posture (92-99).
+///      (50-59), the rest of enemy knowledge (63-69), the income forecast
+///      (74-79) and posture (92-99).
 ///
 /// The numbers S3 fills are on the wire from S3's `con6`, and a predicate has
 /// its effect only from S3's `pred`. Until then the sim's compile refuses each
@@ -1301,6 +1302,8 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.BeaconUnitsByRole".int
 pub struct BeaconMandate {
     #[prost(message, optional, tag="1")]
     pub beacon: ::core::option::Option<BeaconRef>,
+    /// MANDATE_KIND_UNSPECIFIED is a verifier error here: reading it as "any writ"
+    /// is BeaconFilter.mandate's exception alone.
     #[prost(enumeration="beacon_filter::MandateKind", tag="2")]
     pub mandate: i32,
 }
@@ -1330,6 +1333,8 @@ pub struct EnemyUnitsNear {
     #[prost(message, optional, tag="1")]
     pub near: ::core::option::Option<NearPlace>,
     /// Whole voxels from `near`, inclusive, as a straight-line distance.
+    /// Required: 0 is no radius, and an omitted radius is not one of the header's
+    /// named defaults, so it is a verifier error.
     #[prost(uint32, tag="2")]
     pub radius_voxels: u32,
     /// A count of whole units.
@@ -1349,7 +1354,8 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.EnemyUnitsNear".into()
 /// say where a thing is built, which is no place to measure from, and a condition
 /// that could name a feature would have to rank one, which a condition never does.
 ///
-/// Numbers 4-15 are free for a further place.
+/// A further arm takes Location's number for the same arm, so the two messages
+/// never spell one place two ways. Location's site range is held here too.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct NearPlace {
     #[prost(oneof="near_place::Place", tags="1, 2, 3")]
@@ -1390,20 +1396,48 @@ pub struct EnemyStructureNear {
     #[prost(message, optional, tag="1")]
     pub near: ::core::option::Option<NearPlace>,
     /// Whole voxels from `near`, inclusive, as a straight-line distance.
+    /// Required: 0 is no radius, and an omitted radius is not one of the header's
+    /// named defaults, so it is a verifier error.
     #[prost(uint32, tag="2")]
     pub radius_voxels: u32,
-    /// A blueprint, spelt as BuildTarget.blueprint_id spells one. Empty means a
-    /// structure of any kind.
-    #[prost(string, tag="3")]
-    pub blueprint_id: ::prost::alloc::string::String,
     /// Required, as EnemyUnitsNear.freshness is.
     #[prost(message, optional, tag="4")]
     pub freshness: ::core::option::Option<Freshness>,
+    /// Which structure: one blueprint, or any kind, said explicitly so that no
+    /// empty value stands for a default. Required: a predicate with neither arm is
+    /// refused (the sim's compile until S3's `pred`; S3's `vfy6` gives it a code of
+    /// its own).
+    #[prost(oneof="enemy_structure_near::Structure", tags="3, 5")]
+    pub structure: ::core::option::Option<enemy_structure_near::Structure>,
+}
+/// Nested message and enum types in `EnemyStructureNear`.
+pub mod enemy_structure_near {
+    /// Which structure: one blueprint, or any kind, said explicitly so that no
+    /// empty value stands for a default. Required: a predicate with neither arm is
+    /// refused (the sim's compile until S3's `pred`; S3's `vfy6` gives it a code of
+    /// its own).
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Structure {
+        /// A blueprint, spelt as BuildTarget.blueprint_id spells one.
+        #[prost(string, tag="3")]
+        BlueprintId(::prost::alloc::string::String),
+        /// A structure of any kind.
+        #[prost(message, tag="5")]
+        AnyKind(super::AnyStructure),
+    }
 }
 impl ::prost::Name for EnemyStructureNear {
 const NAME: &'static str = "EnemyStructureNear";
 const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.EnemyStructureNear".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.EnemyStructureNear".into() }}
+/// "a structure of any kind" — EnemyStructureNear.any_kind.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AnyStructure {
+}
+impl ::prost::Name for AnyStructure {
+const NAME: &'static str = "AnyStructure";
+const PACKAGE: &'static str = "gp.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.v1.AnyStructure".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.AnyStructure".into() }}
 /// The seat treasury in whole $.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Treasury {

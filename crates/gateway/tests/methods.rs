@@ -2550,7 +2550,7 @@ fn mandate_and_rule_gaps() -> Vec<Case> {
         closed(
             "a rule asking about an enemy structure near a place",
             s3_rule(
-                r#"{"enemy_structure_near": {"near": {"safest": {}}, "radius_voxels": 24, "freshness": {"kind": "VISIBLE_NOW"}}}"#,
+                r#"{"enemy_structure_near": {"near": {"safest": {}}, "radius_voxels": 24, "any_kind": {}, "freshness": {"kind": "VISIBLE_NOW"}}}"#,
             ),
             "predicate `enemy_structure_near`",
             "S3",

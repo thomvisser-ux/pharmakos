@@ -69,6 +69,9 @@ gp.v1.Meta
   numbers: 5
   names:   team_id
 
+gp.v1.NearPlace
+  numbers: 10-49
+
 gp.v1.Options
   numbers: 2
   names:   reflex_hp_pct

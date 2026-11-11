@@ -65,9 +65,9 @@ use pharmakos_proto::gp::v1::{
     AttackSettings, BeaconFilter, BeaconRef, Condition, DefendSettings, Fallback, FeatureRef,
     Freshness, Handler, InterfaceRow, Location, MandateSettings, NearPlace, OnDeath, Options,
     Playbook, Step, Voxel, attack_settings, attack_target, beacon_filter, beacon_ref,
-    beacon_units_by_role, cmdr_hp_pct, condition, defend_settings, fallback, freshness, handler,
-    int_compare, interface_row, location, mandate_settings, meta, near_place, on_death, on_fail,
-    playbook, protected_asset, step,
+    beacon_units_by_role, cmdr_hp_pct, condition, defend_settings, enemy_structure_near, fallback,
+    freshness, handler, int_compare, interface_row, location, mandate_settings, meta, near_place,
+    on_death, on_fail, playbook, protected_asset, step,
 };
 use std::fmt::Write as _;
 
@@ -740,10 +740,10 @@ fn condition(node: Option<&Condition>) -> String {
         ),
         condition::Node::EnemyStructureNear(test) => format!(
             "the seat knows of an enemy {} within {} voxels of {}, {}",
-            if test.blueprint_id.is_empty() {
-                s::ANY_STRUCTURE
-            } else {
-                test.blueprint_id.as_str()
+            match test.structure.as_ref() {
+                Some(enemy_structure_near::Structure::BlueprintId(id)) => id.as_str(),
+                Some(enemy_structure_near::Structure::AnyKind(_)) => s::ANY_STRUCTURE,
+                None => s::STRUCTURE_NONE,
             },
             test.radius_voxels,
             near_place(test.near.as_ref()),

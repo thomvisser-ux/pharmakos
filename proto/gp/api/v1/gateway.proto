@@ -890,7 +890,9 @@ message BeaconSettingRow {
   // The setting's name in the player's words.
   string title = 2;
 
-  // The value now, as JSON text.
+  // The value now, as JSON text in the playbook's canonical spelling, as
+  // EnumShape.values spells a value: `"RETURN_FIRE"` with its quotes, `true`
+  // without.
   string value_json = 3;
 
   // What may be written there.
@@ -1232,11 +1234,17 @@ message ValueShape {
   }
 }
 
-// A whole number, within the rules table's bounds, inclusive. An unset bound is
-// one the rules table does not set.
+// A whole number, within bounds, inclusive. The bounds are the effective ones
+// the verifier enforces at this pointer: the rules table's, the field type's
+// floor and the unit's own limits (a percentage is 0-100), whichever is
+// tighter. An unset bound is one nothing sets.
 message IntegerShape {
   optional int32 min = 1;
   optional int32 max = 2;
+
+  // The unit the number is in: `ms`, `%`, `$`, `kW` or `voxels`, or empty for a
+  // bare count. Drawn beside the value; the client converts nothing.
+  string unit = 3;
 }
 
 // A closed list. Each value is the JSON text to write: `"LE"` with its quotes,
@@ -1248,6 +1256,13 @@ message EnumShape {
 // A value picked from the world or the playbook rather than typed.
 message ReferenceShape {
   Kind kind = 1;
+
+  // The oneof arm names legal at this pointer, filled by the gateway so that
+  // no client holds the per-position rules (AGENTS.md section 3 rule 4). A
+  // gp.v1.NearPlace takes no `on`, `covering` or `toward`; `on` is legal only in
+  // a BuildTarget.anchor; `covering` and `toward` only in a
+  // PlaceBeaconStep.at.
+  repeated string arms = 2;
 
   enum Kind {
     KIND_UNSPECIFIED = 0;
@@ -1485,7 +1500,8 @@ message RenderPlanResponse {
 // One rule or route step of a rendering: where it stands in the file, which
 // lines of `prose` are its own, and the chips on them.
 message RenderedRule {
-  // RFC 6901 JSON Pointer of the rule or step in the playbook: "/handlers/2",
+  // RFC 6901 JSON Pointer of the rule or step in the playbook:
+  // "/declarative/handlers/2",
   // which is what a reordering's JSON Patch `move` names.
   string pointer = 1;
 
@@ -1517,6 +1533,11 @@ message Chip {
 
   // What may be written there.
   ValueShape shape = 5;
+
+  // The value now, as JSON text in the playbook's canonical spelling, as
+  // BeaconSettingRow.value_json is, so the editor pre-fills from the answer
+  // and never reads its own file. Filled by the gateway.
+  string value_json = 6;
 }
 
 message PatchPlanRequest {

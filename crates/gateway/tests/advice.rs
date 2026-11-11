@@ -771,7 +771,13 @@ fn an_advisor_is_refused_every_method_off_its_allow_list() {
                         held.push((method.to_owned(), outcome(&response)));
                     }
                 }
-                for method in ["get_status", "get_segment_feed", "end_lull", "query_area"] {
+                for method in [
+                    "get_status",
+                    "get_segment_feed",
+                    "end_lull",
+                    "query_area",
+                    "get_vocabulary",
+                ] {
                     let response = call(&ask(method, "{}"));
                     if let Ok(mut held) = kept.lock() {
                         held.push((method.to_owned(), outcome(&response)));
@@ -796,6 +802,11 @@ fn an_advisor_is_refused_every_method_off_its_allow_list() {
             (String::from("get_segment_feed"), String::from("ok")),
             (String::from("end_lull"), String::from("FORBIDDEN_SCOPE")),
             (String::from("query_area"), String::from("FORBIDDEN_SCOPE")),
+            // Off the list until S3's `gwr` serves it.
+            (
+                String::from("get_vocabulary"),
+                String::from("FORBIDDEN_SCOPE"),
+            ),
         ])
         .collect();
     assert_eq!(answers, expected);
@@ -816,6 +827,7 @@ fn an_advisor_is_refused_every_method_off_its_allow_list() {
         .collect();
     wanted.push(String::from("call end_lull"));
     wanted.push(String::from("call query_area"));
+    wanted.push(String::from("call get_vocabulary"));
     assert_eq!(refusals, wanted);
 
     // And the seat's store is exactly as it was, but for the advice itself.

@@ -288,8 +288,11 @@ pub const POWERED: &str = "powered";
 pub const DORMANT: &str = "dormant";
 /// The unit `enemy_units_near` counts in.
 pub const ENEMY_UNITS_UNIT: &str = "enemy units";
-/// `enemy_structure_near` with no blueprint named.
+/// `enemy_structure_near`'s `any_kind`.
 pub const ANY_STRUCTURE: &str = "structure";
+/// `enemy_structure_near` with neither a blueprint nor `any_kind`, which is
+/// refused.
+pub const STRUCTURE_NONE: &str = "structure of no kind the file names";
 /// `beacon_units_by_role`'s `BUILD_DRONE`.
 pub const ROLE_BUILD_DRONE: &str = "build drones";
 /// `beacon_units_by_role`'s `MINING_DRONE`.

@@ -24,7 +24,7 @@
         {"enemy_beacon_known":{"freshness":{"kind":"KNOWN_WITHIN","known_within_ms":30000}}},
         {"enemy_structure_near":{"near":{"safest":{}},"radius_voxels":16,"blueprint_id":"mortar",
           "freshness":{"kind":"VISIBLE_NOW"}}},
-        {"enemy_structure_near":{"near":{"safest":{}},"radius_voxels":16,
+        {"enemy_structure_near":{"near":{"safest":{}},"radius_voxels":16,"any_kind":{},
           "freshness":{"kind":"KNOWN_WITHIN","known_within_ms":60000}}}
       ]}},"body":[{"label":"enemy step","hold":{"ms":1000}}],"resume":"CONTINUE","cooldown_ms":5000,"max_fires":1},
       {"id":"grid","when":{"all":{"items":[

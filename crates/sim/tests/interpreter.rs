@@ -1829,7 +1829,7 @@ fn the_refusal_table_and_the_arms_agree() {
             "predicate_enemy_structure_near",
             String::new(),
             when(
-                r#"{"enemy_structure_near": {"near": {"safest": {}}, "radius_voxels": 24, "freshness": {"kind": "KNOWN_WITHIN", "known_within_ms": 30000}}}"#,
+                r#"{"enemy_structure_near": {"near": {"safest": {}}, "radius_voxels": 24, "any_kind": {}, "freshness": {"kind": "KNOWN_WITHIN", "known_within_ms": 30000}}}"#,
             ),
         ),
         (
@@ -2092,52 +2092,6 @@ fn stray_refusals(text: &str) -> Vec<String> {
         }
     }
     stray
-}
-
-/// S3's `con6` puts `toward` on the wire before `pred` gives it an effect, so
-/// every place the compile reads a `Location` refuses it by the table's entry,
-/// not only the one place it will be legal, and a predicate is refused wherever
-/// a condition is read.
-#[test]
-fn s3s_constructs_are_refused_wherever_the_compile_reads_them() {
-    use pharmakos_sim::interpreter::REFUSE_TOWARD;
-    let toward = r#"{"toward": {"feature": {"feature_id": "vent_1_2"}}}"#;
-    let interface = |row: String| {
-        format!(
-            r#"{{"label": "q", "interface": {{"beacon": {{"safest": {{}}}}, "rows": [{row}]}}}}"#
-        )
-    };
-    for step in [
-        format!(r#"{{"label": "m", "move": {{"to": {toward}, "pace": "DIRECT"}}}}"#),
-        format!(r#"{{"label": "p", "place_beacon": {{"at": {toward}}}}}"#),
-        interface(format!(
-            r#"{{"add_build_target": {{"target": {{"blueprint_id": "generator", "anchor": {toward}}}}}}}"#
-        )),
-        interface(format!(
-            r#"{{"remove_build_target": {{"anchor": {toward}}}}}"#
-        )),
-    ] {
-        assert_eq!(
-            compile(&refusal_case(&step, "")).unwrap_err(),
-            REFUSE_TOWARD.error(),
-            "{step}"
-        );
-    }
-    let supply = r#"{"kw_supply": {"kw": {"op": "GE", "value": 1}}}"#;
-    for step in [
-        format!(r#"{{"label": "s", "hold": {{"ms": 1000}}, "skip_if": {supply}}}"#),
-        format!(r#"{{"label": "w", "wait_until": {{"condition": {supply}}}, "timeout_ms": 1000}}"#),
-        format!(
-            r#"{{"label": "n", "hold": {{"ms": 1000}}, "skip_if": {{"not": {{"item": {{"any": {{"items": [{supply}]}}}}}}}}}}"#
-        ),
-    ] {
-        let error = compile(&refusal_case(&step, "")).unwrap_err();
-        assert_eq!(
-            pharmakos_sim::interpreter::Refusal::of(&error).map(|refusal| refusal.name),
-            Some("predicate_kw_supply"),
-            "{step}: {error}"
-        );
-    }
 }
 
 /// The reverse scan's positive control (S2's #116 reviews, D): a planted

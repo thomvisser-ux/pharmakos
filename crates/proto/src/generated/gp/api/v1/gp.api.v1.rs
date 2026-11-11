@@ -840,7 +840,9 @@ pub struct BeaconSettingRow {
     /// The setting's name in the player's words.
     #[prost(string, tag="2")]
     pub title: ::prost::alloc::string::String,
-    /// The value now, as JSON text.
+    /// The value now, as JSON text in the playbook's canonical spelling, as
+    /// EnumShape.values spells a value: `"RETURN_FIRE"` with its quotes, `true`
+    /// without.
     #[prost(string, tag="3")]
     pub value_json: ::prost::alloc::string::String,
     /// What may be written there.
@@ -1306,14 +1308,20 @@ impl ::prost::Name for ValueShape {
 const NAME: &'static str = "ValueShape";
 const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.ValueShape".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.ValueShape".into() }}
-/// A whole number, within the rules table's bounds, inclusive. An unset bound is
-/// one the rules table does not set.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+/// A whole number, within bounds, inclusive. The bounds are the effective ones
+/// the verifier enforces at this pointer: the rules table's, the field type's
+/// floor and the unit's own limits (a percentage is 0-100), whichever is
+/// tighter. An unset bound is one nothing sets.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct IntegerShape {
     #[prost(int32, optional, tag="1")]
     pub min: ::core::option::Option<i32>,
     #[prost(int32, optional, tag="2")]
     pub max: ::core::option::Option<i32>,
+    /// The unit the number is in: `ms`, `%`, `$`, `kW` or `voxels`, or empty for a
+    /// bare count. Drawn beside the value; the client converts nothing.
+    #[prost(string, tag="3")]
+    pub unit: ::prost::alloc::string::String,
 }
 impl ::prost::Name for IntegerShape {
 const NAME: &'static str = "IntegerShape";
@@ -1331,10 +1339,17 @@ const NAME: &'static str = "EnumShape";
 const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.EnumShape".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.EnumShape".into() }}
 /// A value picked from the world or the playbook rather than typed.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ReferenceShape {
     #[prost(enumeration="reference_shape::Kind", tag="1")]
     pub kind: i32,
+    /// The oneof arm names legal at this pointer, filled by the gateway so that
+    /// no client holds the per-position rules (AGENTS.md section 3 rule 4). A
+    /// gp.v1.NearPlace takes no `on`, `covering` or `toward`; `on` is legal only in
+    /// a BuildTarget.anchor; `covering` and `toward` only in a
+    /// PlaceBeaconStep.at.
+    #[prost(string, repeated, tag="2")]
+    pub arms: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 /// Nested message and enum types in `ReferenceShape`.
 pub mod reference_shape {
@@ -1708,7 +1723,8 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.RenderPlanResponse
 /// lines of `prose` are its own, and the chips on them.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RenderedRule {
-    /// RFC 6901 JSON Pointer of the rule or step in the playbook: "/handlers/2",
+    /// RFC 6901 JSON Pointer of the rule or step in the playbook:
+    /// "/declarative/handlers/2",
     /// which is what a reordering's JSON Patch `move` names.
     #[prost(string, tag="1")]
     pub pointer: ::prost::alloc::string::String,
@@ -1747,6 +1763,11 @@ pub struct Chip {
     /// What may be written there.
     #[prost(message, optional, tag="5")]
     pub shape: ::core::option::Option<ValueShape>,
+    /// The value now, as JSON text in the playbook's canonical spelling, as
+    /// BeaconSettingRow.value_json is, so the editor pre-fills from the answer
+    /// and never reads its own file. Filled by the gateway.
+    #[prost(string, tag="6")]
+    pub value_json: ::prost::alloc::string::String,
 }
 impl ::prost::Name for Chip {
 const NAME: &'static str = "Chip";
