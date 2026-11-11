@@ -56,7 +56,9 @@ the result is pinned here (`expected.expand_east.json` and its siblings).
   S3's first proto pull request (`con5`) discharged `GetBriefingResponse`'s 5
   for the held licences, `GetRecapResponse`'s 6 and 7 for the licences awarded
   and the Ledger's memos, `BeaconSummary`'s 10 for the sphere's radius and
-  `Event`'s 5 for a memo's payload.
+  `Event`'s 5 for a memo's payload. S3's second (`con6`) discharged
+  `Condition`'s 43 to 45, 60 to 62, 72 and 73 for S3's predicates, `Location`'s
+  12 for `toward` and `GetBeaconResponse`'s 3 to 5 for the per-beacon detail.
 * **`expected.rules.v1.json`**: the rules table's canonical JSON, so a row was
   added or a value re-tuned. The table is hashed into `rules_hash`, so the same
   pull request re-blesses every verifier `report_hash` golden, the gateway's
@@ -65,6 +67,7 @@ the result is pinned here (`expected.expand_east.json` and its siblings).
   row the sim reads moves the hash chains as well.
 * **`expected.method-scopes.txt`**: a gateway method was added or its
   `required_scope` annotation changed, which is a `gp.api.v1` contract change.
-  S1's targeting proto added `resolve_refs`, under `plan`.
+  S1's targeting proto added `resolve_refs`, under `plan`; S3's `con6` added
+  `get_vocabulary`, under `docs`.
 * **`expected.expand_east.json`**: the canonical codec's output for a committed
   playbook, as the section above describes.

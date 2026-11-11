@@ -303,3 +303,9 @@ wall box's checks -- whether `min.z` reaches the ground, the height over the
 ground in every column, and the 3-D sphere test -- are the sim's, refused when
 the row commits (`wall_off_the_ground`, `wall_too_low`, `wall_outside_sphere`),
 because the verifier's view carries no terrain (decisions-log item 146 (4)).
+
+S3's `con6` adds the cases `e0020_...` to `e0028_...`, one for each construct it
+put on the wire before S3's `pred` gives it an effect. Adding them moves
+`expected.catalogue.json` by those nine rows and moves no existing report: a new
+catalogue row is not one of `report_hash`'s five inputs. `pred` lifts them, as
+`site` lifted `E0019`: each row keeps its number, and its case goes.

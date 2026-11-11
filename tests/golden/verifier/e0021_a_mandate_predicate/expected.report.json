@@ -1,0 +1,19 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0021",
+      "severity": "ERROR",
+      "path": "/declarative/handlers/0/when/beacon_mandate",
+      "message": "predicate `beacon_mandate` has no effect until S3's predicate catalogue lands; it is refused rather than ignored.",
+      "beginner": "Which job a beacon has can't be asked about yet."
+    }
+  ],
+  "report_hash": "zO5QevU+i44=",
+  "rules_hash": "GybFJQaL/2E=",
+  "plan_fingerprint": "OtZ57W7mGxQ=",
+  "verifier_version": "0.1.0-s2.5",
+  "size_units": 3,
+  "size_budget": 128
+}
+

@@ -592,10 +592,10 @@ message BuildTarget {
 // avoid areas, Survey probe areas and a wall target's `wall_box` are all of
 // this shape.
 //
-// PLACEHOLDER: an area's shape, a box — owner, if a polygon or a sphere is wanted.
-// The spec says "areas" without fixing their shape. A box
-// is what the editor's drag-select produces and what an integer sim can test
-// in three comparisons; a polygon or a sphere would be an owner decision.
+// Ruled, not guessed: the spec says "areas" without fixing their shape, and an
+// area is a box (S3's plan, decision 8, ruled by decisions-log item 154 (4); the
+// register's M-12). A box is what the editor's drag-select produces and what an
+// integer sim can test in three comparisons.
 message Area {
   Voxel min = 1;
   Voxel max = 2;
@@ -756,6 +756,25 @@ message Handler {
 // stage that fills it. A construct outside the vocabulary is rejected on Load
 // with a code and a JSON Pointer and is never silently stripped, so a block
 // that is reserved is a block a player cannot half-use.
+//
+// THE CATALOGUE, BY STAGE (the register's U-07; S3's plan, decision 2, ruled by
+// decisions-log item 154 (4)). Spec section 10's families are not all built at
+// once:
+//
+//   S3 fills: own beacon's units by role, mandate and finished structure
+//     (43-45); economy's kW supply and kW draw (72, 73); enemy knowledge's
+//     units near, beacon known and structure near (60-62), each with a
+//     required Freshness.
+//   S4 fills: capability licence and mast coverage (80-89), with reach and
+//     radio.
+//   S6 fills, with the full editor: commander position (23-29), the rest of
+//     the clock (31-39), own beacon's reports since (46-49), aggregates
+//     (50-59), the income forecast (74-79) and posture (92-99).
+//
+// The numbers S3 fills are on the wire from S3's `con6`, and a predicate has
+// its effect only from S3's `pred`. Until then the sim's compile refuses each
+// one with `NotAtThisStage` and the verifier with a code of its own
+// (`E0020` to `E0027`), so none of them can be half-used.
 message Condition {
   oneof node {
     All all = 1;
@@ -774,10 +793,20 @@ message Condition {
     BeaconHpPct beacon_hp_pct = 40;
     BeaconUnderAttack beacon_under_attack = 41;
     BeaconPowered beacon_powered = 42;
+    BeaconUnitsByRole beacon_units_by_role = 43;
+    BeaconMandate beacon_mandate = 44;
+    BeaconHasStructure beacon_has_structure = 45;
+
+    // --- enemy knowledge (60-69) ------------------------------------------
+    EnemyUnitsNear enemy_units_near = 60;
+    EnemyBeaconKnown enemy_beacon_known = 61;
+    EnemyStructureNear enemy_structure_near = 62;
 
     // --- economy (70-79) --------------------------------------------------
     Treasury treasury = 70;
     KwHeadroom kw_headroom = 71;
+    KwSupply kw_supply = 72;
+    KwDraw kw_draw = 73;
 
     // --- playbook state (90-99) -------------------------------------------
     StepReached step_reached = 90;
@@ -785,34 +814,33 @@ message Condition {
   }
 
   // RESERVED — the rest of the commander family: position, and the "own
-  // beacon" reports-since predicate's commander twin. S3, with the full
-  // predicate catalogue.
+  // beacon" reports-since predicate's commander twin. S6, with the full
+  // editor (S3's plan, decision 2).
   reserved 23 to 29;
 
-  // RESERVED — the rest of the clock family. S3.
+  // RESERVED — the rest of the clock family. S6 (decision 2).
   reserved 31 to 39;
 
-  // RESERVED — own beacon: units by role, mandate, structures, reports since.
-  // Units by role and structures need S1's fabricator and S2's combat.
-  reserved 43 to 49;
+  // RESERVED — the rest of own beacon: reports since. S6 (decision 2).
+  reserved 46 to 49;
 
-  // RESERVED — aggregates. S3.
+  // RESERVED — aggregates. S6 (decision 2).
   reserved 50 to 59;
 
-  // RESERVED — enemy knowledge: units near, beacon known, structure near.
-  // Every one of them carries a Freshness, and all of them need S2's combat
-  // and S3's knowledge store to mean anything.
-  reserved 60 to 69;
+  // RESERVED — the rest of enemy knowledge, held for a further predicate. Any
+  // that lands carries a Freshness, as 60-62 do. S6 (decision 2).
+  reserved 63 to 69;
 
-  // RESERVED — the rest of the economy family: income forecast, kW supply,
-  // kW draw. S1, with the economy.
-  reserved 72 to 79;
+  // RESERVED — the rest of the economy family: income forecast. S6 (decision
+  // 2).
+  reserved 74 to 79;
 
   // RESERVED — capability licence and structure state (S4, with licences) and
   // mast coverage (S4, with radio).
   reserved 80 to 89;
 
-  // RESERVED — the rest of the playbook-state family: posture. S3.
+  // RESERVED — the rest of the playbook-state family: posture. S6 (decision
+  // 2).
   reserved 92 to 99;
 
   // RESERVED — flag predicates, held back to v1.1 with set_flag/clear_flag
@@ -934,6 +962,96 @@ message BeaconPowered {
   bool powered = 2;
 }
 
+// How many units of one role are homed to a beacon. Reads the seat's own
+// beacon (spec section 10, "own beacon").
+message BeaconUnitsByRole {
+  BeaconRef beacon = 1;
+  Role role = 2;
+
+  // A count of whole units.
+  IntCompare count = 3;
+
+  // The roles a beacon's units have. The commander has no beacon, so it has no
+  // role here.
+  enum Role {
+    ROLE_UNSPECIFIED = 0;
+    BUILD_DRONE = 1;
+    MINING_DRONE = 2;
+    REPAIR_DRONE = 3;
+    RAIDER = 4;
+    SCOUT = 5;
+  }
+}
+
+// Whether a beacon carries a given writ (spec section 10, "own beacon").
+message BeaconMandate {
+  BeaconRef beacon = 1;
+  BeaconFilter.MandateKind mandate = 2;
+}
+
+// Whether a beacon has a finished structure of a kind. A structure still under
+// construction does not count.
+message BeaconHasStructure {
+  BeaconRef beacon = 1;
+
+  // A blueprint, spelt as BuildTarget.blueprint_id spells one.
+  string blueprint_id = 2;
+}
+
+// How many enemy units the seat knows of within a radius of a place, under a
+// freshness window (spec section 10, "enemy knowledge"). Reads the seat's own
+// sightings, never the world: a unit the seat has not seen is not counted.
+message EnemyUnitsNear {
+  NearPlace near = 1;
+
+  // Whole voxels from `near`, inclusive, as a straight-line distance.
+  uint32 radius_voxels = 2;
+
+  // A count of whole units.
+  IntCompare count = 3;
+
+  // Required: "enemy predicates must declare freshness" (spec section 10).
+  // Leaving it out is E0209.
+  Freshness freshness = 4;
+}
+
+// The place an enemy predicate measures from. It spells Location's three fixed
+// arms on Location's numbers, and has no site arm: `on`, `covering` and `toward`
+// say where a thing is built, which is no place to measure from, and a condition
+// that could name a feature would have to rank one, which a condition never does.
+//
+// Numbers 4-15 are free for a further place.
+message NearPlace {
+  oneof place {
+    Voxel voxel = 1;
+    BeaconRef beacon_anchor = 2;
+    Safest safest = 3;
+  }
+}
+
+// Whether the seat knows of any enemy beacon under a freshness window (spec
+// section 10, "enemy knowledge").
+message EnemyBeaconKnown {
+  // Required, as EnemyUnitsNear.freshness is.
+  Freshness freshness = 1;
+}
+
+// Whether the seat knows of an enemy structure within a radius of a place,
+// under a freshness window (spec section 10, "enemy knowledge").
+message EnemyStructureNear {
+  NearPlace near = 1;
+
+  // Whole voxels from `near`, inclusive, as a straight-line distance.
+  uint32 radius_voxels = 2;
+
+  // A blueprint, spelt as BuildTarget.blueprint_id spells one. Empty means a
+  // structure of any kind.
+  string blueprint_id = 3;
+
+  // Required, as EnemyUnitsNear.freshness is.
+  Freshness freshness = 4;
+}
+
 // The seat treasury in whole $.
 message Treasury {
   IntCompare dollars = 1;
@@ -942,6 +1060,16 @@ message Treasury {
 // Supply minus draw, in whole kW. Negative means the grid is short and the
 // brownout order is running.
 message KwHeadroom {
+  IntCompare kw = 1;
+}
+
+// The seat's whole power supply, in whole kW.
+message KwSupply {
+  IntCompare kw = 1;
+}
+
+// The seat's whole power draw, in whole kW.
+message KwDraw {
   IntCompare kw = 1;
 }
 
@@ -1021,10 +1149,9 @@ message FallbackShadow {
 }
 
 message FallbackPatrol {
-  // PLACEHOLDER: the patrol route's shape, a list of locations — owner, when the spec specifies it.
-  // The patrol route shape is not specified. A list of
-  // locations is the obvious reading of "patrol" and is what the editor's map
-  // route would produce.
+  // Ruled, not guessed: the spec does not give a patrol route's shape, and it is
+  // a list of locations (S3's plan, decision 8, ruled by decisions-log item 154
+  // (4); the register's M-13), which is what the editor's map route produces.
   repeated Location waypoints = 1;
 }
 
@@ -1079,14 +1206,33 @@ message Location {
     //
     // Built in S1 with `on`, by the same lane (`tgt`, #81; item 131).
     FeatureRef covering = 11;
+
+    // "a stepping stone toward a vent": the legal site, inside the seat's
+    // spheres, nearest the named feature, for a beacon that cannot yet cover
+    // it (S1's plan, decision 3; decisions-log item 128 (3) (c)). Legal only
+    // in PlaceBeaconStep.at. A `toward` that finds no site fails its step and
+    // says why, with how many sites it weighed.
+    //
+    // "Nearest" is targeting's (docs/design/targeting.md, "Nearest"; S3's
+    // plan, E23): the least estimated travel, the item-61 estimator's integer
+    // cost, from the candidate site to the feature's anchor column, over the
+    // terrain the seat knows. Unreachable candidates are skipped, and ties go
+    // to the lowest anchor y, then x. Straight-line distance is not used.
+    //
+    // On the wire from S3's `con6`. Until S3's `pred` builds it the sim's
+    // compile answers NotAtThisStage and the verifier E0028.
+    Toward toward = 12;
   }
 
-  // RESERVED — the rest of the site range. 12 is held for `toward`, a site
-  // for stepping-stone expansion that S1's plan's decision 3 deferred to S3
-  // with the rest of the catalogue (decisions-log item 128 (3) (c)); 13-49
-  // for whatever S3's design pass adds. Held so a later form cannot land on a
-  // number a hand-written file already used.
-  reserved 12 to 49;
+  // RESERVED — the rest of the site range, 13-49, for a further site. Held so
+  // a later form cannot land on a number a hand-written file already used.
+  reserved 13 to 49;
+}
+
+// A site that steps toward a feature: Location.toward.
+message Toward {
+  // Which feature the site steps toward, named or described.
+  FeatureRef feature = 1;
 }
 
 // A feature — a heat vent or a scrap seam — named or described

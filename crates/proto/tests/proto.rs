@@ -1647,8 +1647,8 @@ fn targetings_unspecified_values_keep_their_full_prefix() {
         [("COVERAGE_UNSPECIFIED", 0), ("ANY", 1), ("UNCOVERED", 2)]
     );
 
-    // And the two sites sit on the numbers targeting.md fixed, with 12 to 49
-    // still held (`toward` is 12, deferred to S3).
+    // And the three sites sit on the numbers targeting.md fixed (`toward`, 12,
+    // deferred to S3 and on the wire from S3's `con6`), with 13 to 49 still held.
     let location = schema()
         .message("gp.v1.Location")
         .expect("Location is in the schema");
@@ -1664,10 +1664,132 @@ fn targetings_unspecified_values_keep_their_full_prefix() {
             ("beacon_anchor", 2),
             ("safest", 3),
             ("on", 10),
-            ("covering", 11)
+            ("covering", 11),
+            ("toward", 12)
         ]
     );
-    assert_eq!(location.reserved_ranges, [(12, 49)]);
+    assert_eq!(location.reserved_ranges, [(13, 49)]);
+}
+
+/// S3's `con6`: each predicate and `toward` on the numbers the register holds,
+/// in the spellings a hand-written file uses, and what stays held.
+#[test]
+fn the_s3_predicates_and_toward_round_trip_on_their_numbers() {
+    let condition = schema()
+        .message("gp.v1.Condition")
+        .expect("Condition is in the schema");
+    for (name, number) in [
+        ("beacon_units_by_role", 43),
+        ("beacon_mandate", 44),
+        ("beacon_has_structure", 45),
+        ("enemy_units_near", 60),
+        ("enemy_beacon_known", 61),
+        ("enemy_structure_near", 62),
+        ("kw_supply", 72),
+        ("kw_draw", 73),
+    ] {
+        assert!(
+            condition
+                .fields
+                .iter()
+                .any(|field| field.name == name && field.number == number),
+            "{name} is {number}"
+        );
+    }
+    for held in [(46, 49), (63, 69), (74, 79)] {
+        assert!(
+            condition.reserved_ranges.contains(&held),
+            "{held:?} is still held: {:?}",
+            condition.reserved_ranges
+        );
+    }
+    for text in [
+        r#"{"beacon_units_by_role":{"beacon":{"beacon_id":"b_00"},"role":"SCOUT","count":{"op":"GE","value":2}}}"#,
+        r#"{"beacon_mandate":{"beacon":{"safest":{}},"mandate":"BUILD"}}"#,
+        r#"{"beacon_has_structure":{"beacon":{"safest":{}},"blueprint_id":"generator"}}"#,
+        r#"{"enemy_units_near":{"near":{"voxel":{"x":1,"y":2,"z":3}},"radius_voxels":24,"count":{"op":"GE","value":1},"freshness":{"kind":"VISIBLE_NOW"}}}"#,
+        r#"{"enemy_beacon_known":{"freshness":{"kind":"KNOWN_WITHIN","known_within_ms":30000}}}"#,
+        r#"{"enemy_structure_near":{"near":{"beacon_anchor":{"beacon_id":"b_00"}},"radius_voxels":16,"blueprint_id":"mortar","freshness":{"kind":"VISIBLE_NOW"}}}"#,
+        r#"{"kw_supply":{"kw":{"op":"GE","value":40}}}"#,
+        r#"{"kw_draw":{"kw":{"op":"LT","value":30}}}"#,
+    ] {
+        let decoded: gp_v1::Condition = json::decode(text).expect(text);
+        let encoded = json::encode(&decoded).expect(text);
+        let again: gp_v1::Condition = json::decode(&encoded).expect(text);
+        assert_eq!(decoded, again, "{text}");
+        assert!(decoded.node.is_some(), "{text}");
+    }
+    let toward = r#"{"toward":{"feature":{"feature_id":"vent_120_88"}}}"#;
+    let decoded: gp_v1::Location = json::decode(toward).expect("toward decodes");
+    assert!(matches!(
+        decoded.place,
+        Some(gp_v1::location::Place::Toward(_))
+    ));
+    // A site is no place to measure from, so the type cannot hold one.
+    let site = r#"{"toward":{"feature":{"feature_id":"vent_120_88"}}}"#;
+    assert!(json::decode::<gp_v1::NearPlace>(site).is_err());
+}
+
+/// S3's `con6`: the rule list's reads, in their documented spellings, and the
+/// per-beacon detail on the numbers the register held.
+#[test]
+fn the_s3_rule_list_wire_round_trips_in_its_documented_spellings() {
+    use gp_api::{
+        EstimateRouteResponse, GetBeaconResponse, GetVocabularyResponse, ListTemplatesResponse,
+        RenderPlanResponse,
+    };
+    let render = r#"{"prose":"Rules\n","rules":[{"pointer":"/declarative/handlers/0","line":1,"line_count":2,"chips":[{"pointer":"/declarative/handlers/0/when/treasury/dollars/value","line":1,"start":4,"end":7,"shape":{"integer":{"min":0,"max":100}}},{"pointer":"/declarative/handlers/0/when/treasury/dollars/op","line":1,"start":8,"end":9,"shape":{"choice":{"values":["\"LE\"","\"GE\""]}}},{"pointer":"/declarative/handlers/0/when/step_reached/label","line":1,"start":10,"end":12,"shape":{"reference":{"kind":"STEP_LABEL"}}}]}]}"#;
+    let decoded: RenderPlanResponse = json::decode(render).expect("the chips decode");
+    assert_eq!(
+        json::decode::<RenderPlanResponse>(&json::encode(&decoded).expect("encodes"))
+            .expect("decodes"),
+        decoded
+    );
+    let chips = &decoded.rules.first().expect("a rule").chips;
+    assert_eq!(chips.len(), 3);
+
+    // A bound of zero is a bound, so it is present.
+    let zero = r#"{"min":0}"#;
+    let shape: gp_api::IntegerShape = json::decode(zero).expect("a bound");
+    assert_eq!((shape.min, shape.max), (Some(0), None));
+
+    let vocabulary = r#"{"families":[{"family":"own_beacon","title":"Own beacon","predicates":[{"name":"beacon_mandate","title":"Mandate","parameters":[{"pointer":"/mandate","title":"Writ","shape":{"choice":{"values":["\"BUILD\""]}}}],"skeleton_json":"{}"}]},{"family":"aggregates","title":"Aggregates","locked":"from S6"}],"blueprints":[{"name":"resonance_spire","title":"Resonance Spire","locked":"needs its licence"}]}"#;
+    let decoded: GetVocabularyResponse = json::decode(vocabulary).expect("the vocabulary decodes");
+    assert_eq!(
+        decoded
+            .families
+            .get(1)
+            .and_then(|family| family.locked.as_deref()),
+        Some("from S6")
+    );
+    assert!(
+        decoded
+            .families
+            .first()
+            .is_some_and(|family| family.locked.is_none())
+    );
+
+    let beacon = r#"{"prose":"b","mandate":"BUILD","settings":[{"pointer":"/build/rebuild_destroyed","title":"Rebuild","value_json":"true","shape":{"choice":{"values":["true","false"]}}}],"build_targets":[{"blueprint_id":"generator"}]}"#;
+    let decoded: GetBeaconResponse = json::decode(beacon).expect("the detail decodes");
+    assert_eq!(decoded.settings.len(), 1);
+    assert_eq!(decoded.build_targets.len(), 1);
+    let message = schema()
+        .message("gp.api.v1.GetBeaconResponse")
+        .expect("GetBeaconResponse is in the schema");
+    assert_eq!(message.reserved_ranges, [(6, 15)]);
+
+    let route = r#"{"reachable":true,"ms":84000,"legs":[{"ms":84000,"travel_text":"1 min 24 s"}],"travel_text":"1 min 24 s"}"#;
+    let decoded: EstimateRouteResponse = json::decode(route).expect("the route decodes");
+    assert_eq!(decoded.travel_text, "1 min 24 s");
+
+    let templates = r#"{"templates":[{"template_id":"t","guided_pick":true,"guided_pick_reason":"Start here."}]}"#;
+    let decoded: ListTemplatesResponse = json::decode(templates).expect("the list decodes");
+    assert!(
+        decoded
+            .templates
+            .first()
+            .is_some_and(|template| template.guided_pick)
+    );
 }
 
 #[test]

@@ -94,16 +94,15 @@ pub fn document(part: &str) -> Result<Json, Error> {
     // definitions come out in name order so two machines write the same bytes
     // (AGENTS.md section 4.6).
     let mut defs: BTreeMap<String, Json> = BTreeMap::new();
-    // Which full name each `$defs` key came from. A key is the full name's last
-    // segment, which is short and readable and is what every `$ref` in the
-    // document spells -- and which is **not unique inside `gp.v1`**:
-    // `playbook.proto` already declares two enums called `Kind`. Today only one
-    // of them is reachable from any root, so nothing collides; the day a field
-    // references the other, one definition would quietly overwrite the other
-    // and every `$ref: "#/$defs/Kind"` would point at the wrong type, with the
-    // golden agreeing because the golden is the output. So the walk records
-    // where each key came from and refuses to write a second type under a key
-    // another type already holds.
+    // Which full name each `$defs` key came from. A key is the full name less
+    // its package ([`def_key`]), and is what every `$ref` in the document
+    // spells. The last segment alone is **not unique inside `gp.v1`**:
+    // `playbook.proto` declares two enums called `Kind`, both reachable since
+    // S3's `con6` gave a predicate a `Freshness`, so a nested type keeps its
+    // owner's name. A definition overwritten by another would leave `$ref`s
+    // pointing at the wrong type, with the golden agreeing because the golden
+    // is the output, so the walk still records where each key came from and
+    // refuses to write a second type under a key another type already holds.
     let mut source: BTreeMap<String, String> = BTreeMap::new();
     let mut enums: BTreeSet<String> = BTreeSet::new();
     let mut pending: Vec<String> = vec![message.full_name.clone()];
@@ -130,7 +129,7 @@ pub fn document(part: &str) -> Result<Json, Error> {
             }
         }
         claim(&mut source, &name)?;
-        defs.insert(short(&name), message_schema(schema, nested)?);
+        defs.insert(def_key(&name), message_schema(schema, nested)?);
     }
     for name in &enums {
         {
@@ -146,7 +145,7 @@ pub fn document(part: &str) -> Result<Json, Error> {
                 .map(|value| Json::String(value.name.clone()))
                 .collect();
             defs.insert(
-                short(name),
+                def_key(name),
                 Json::Object(vec![
                     (String::from("type"), Json::String(String::from("string"))),
                     (
@@ -184,7 +183,7 @@ pub fn document(part: &str) -> Result<Json, Error> {
         ),
         (
             String::from("$ref"),
-            Json::String(format!("#/$defs/{}", short(&message.full_name))),
+            Json::String(format!("#/$defs/{}", def_key(&message.full_name))),
         ),
         (String::from("$defs"), Json::Object(definitions)),
     ]))
@@ -313,7 +312,7 @@ fn scalar_schema(_schema: &Schema, field: &Field) -> Json {
     match field.kind {
         ScalarKind::Message | ScalarKind::Enum => Json::Object(vec![(
             String::from("$ref"),
-            Json::String(format!("#/$defs/{}", short(&field.type_name))),
+            Json::String(format!("#/$defs/{}", def_key(&field.type_name))),
         )]),
         ScalarKind::Bool => simple("boolean"),
         ScalarKind::String => simple("string"),
@@ -350,19 +349,30 @@ fn scalar_schema(_schema: &Schema, field: &Field) -> Json {
 ///
 /// # Errors
 ///
-/// [`crate::error::Code::Internal`] when two different `gp.v1` types share a
-/// last segment and both are reachable from this root. It is `INTERNAL` and not
-/// a client's fault by construction: it means the schema grew a name clash the
-/// generator cannot render, and the answer is to key `$defs` by something
-/// longer -- not to serve a document whose `$ref`s point at the wrong type.
+/// [`crate::error::Code::Internal`] when two different types share a key and
+/// both are reachable from this root. It is `INTERNAL` and not a client's fault
+/// by construction: it means the schema grew a name clash the generator cannot
+/// render, and the answer is to key `$defs` by something longer -- not to serve
+/// a document whose `$ref`s point at the wrong type.
 fn claim(source: &mut BTreeMap<String, String>, full_name: &str) -> Result<(), Error> {
-    match source.insert(short(full_name), full_name.to_owned()) {
+    match source.insert(def_key(full_name), full_name.to_owned()) {
         Some(held) if held != full_name => Err(Error::internal(format!(
             "`{held}` and `{full_name}` would both be written as `$defs/{}`, so one would \
              overwrite the other and every reference to it would name the wrong type",
-            short(full_name)
+            def_key(full_name)
         ))),
         _ => Ok(()),
+    }
+}
+
+/// A type's `$defs` key, its full name less the package:
+/// `gp.v1.BeaconFilter.MandateKind` -> `BeaconFilter.MandateKind`. Full names are
+/// unique, so two types of the package can never share one.
+fn def_key(full_name: &str) -> String {
+    // A name outside the package keeps all of it, which is just as unique.
+    match full_name.strip_prefix(PACKAGE) {
+        Some(rest) => rest.to_owned(),
+        None => full_name.to_owned(),
     }
 }
 
@@ -492,7 +502,7 @@ mod tests {
         // the whole vocabulary still renders -- and the assertion that makes it
         // a test of the KEYS rather than of nothing: as many `$defs` entries as
         // the document has distinct `$ref` targets, with no key written twice.
-        let whole = document("").expect("the vocabulary renders under short keys");
+        let whole = document("").expect("the vocabulary renders under its keys");
         let mut names = defs(&whole);
         let written = names.len();
         names.sort();
@@ -501,6 +511,21 @@ mod tests {
         for part in ["step", "meta", "schema_version"] {
             let _ = document(part).expect("every part renders too");
         }
+    }
+
+    #[test]
+    fn the_two_enums_called_kind_keep_their_owners_names() {
+        // Both are reachable since S3's `con6`, and the last segment alone
+        // would have written one over the other.
+        let whole = document("").expect("the vocabulary renders");
+        let names = defs(&whole);
+        for key in ["Playbook.Kind", "Freshness.Kind"] {
+            assert!(
+                names.iter().any(|name| name == key),
+                "{key} among {names:?}"
+            );
+        }
+        assert!(!names.iter().any(|name| name == "Kind"), "{names:?}");
     }
 
     #[test]

@@ -43,6 +43,9 @@
 //! at the end of its family, and gives `W0703` its emitter. S2's threat
 //! model's verifier lane (task `vfy3`) adds `I0005` (`AVOID_KNOWN_THREATS`
 //! with no sighting to route around) at the end of the information codes.
+//! S3's second wire (task `con6`) adds `E0020` to `E0028` at the end of the
+//! decode family, one per predicate and for `toward`, each refused until S3's
+//! `pred` gives it an effect.
 //!
 //! The label an unemitted row prints, `none at the skeleton (…)`, is kept as
 //! it was spelt when the table shipped, because `gamectl docs` quotes it; the
@@ -376,6 +379,63 @@ pub const CATALOGUE: &[Entry] = &[
         severity: Severity::Error,
         emitter: Emitter::NoneYet("retired by S2's `site`, which built the base kit"),
     },
+    // S3's second wire (task `con6`): eight predicates and the site `toward`,
+    // on the wire before S3's `pred` gives them an effect, one code each, as
+    // `E0009` to `E0017` are ([`crate::refusals`]; S2's plan, E8).
+    Entry {
+        code: "E0020",
+        family: Family::DecodeAndVersion,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Structure),
+    },
+    Entry {
+        code: "E0021",
+        family: Family::DecodeAndVersion,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Structure),
+    },
+    Entry {
+        code: "E0022",
+        family: Family::DecodeAndVersion,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Structure),
+    },
+    Entry {
+        code: "E0023",
+        family: Family::DecodeAndVersion,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Structure),
+    },
+    Entry {
+        code: "E0024",
+        family: Family::DecodeAndVersion,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Structure),
+    },
+    Entry {
+        code: "E0025",
+        family: Family::DecodeAndVersion,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Structure),
+    },
+    Entry {
+        code: "E0026",
+        family: Family::DecodeAndVersion,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Structure),
+    },
+    Entry {
+        code: "E0027",
+        family: Family::DecodeAndVersion,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Structure),
+    },
+    Entry {
+        code: "E0028",
+        family: Family::DecodeAndVersion,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Structure),
+    },
     // --- E01xx: limits and required blocks -----------------------------------
     Entry {
         code: "E0101",
@@ -514,8 +574,9 @@ pub const CATALOGUE: &[Entry] = &[
         code: "E0209",
         family: Family::Conditions,
         severity: Severity::Error,
-        // The enemy-knowledge predicate block (60-69) is reserved in the schema;
-        // nothing in the v1 vocabulary can carry a Freshness yet.
+        // S3's `con6` put the enemy-knowledge predicates on the wire, and they
+        // are refused whole (E0023 to E0025) until S3's `pred`, so nothing can
+        // carry a Freshness yet: S3's `vfy6` lifts this row.
         emitter: Emitter::NoneYet("S2/S3, with the enemy-knowledge predicates"),
     },
     // --- E03xx: control flow -------------------------------------------------

@@ -799,17 +799,58 @@ impl ::prost::Name for GetBeaconRequest {
 const NAME: &'static str = "GetBeaconRequest";
 const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.GetBeaconRequest".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.GetBeaconRequest".into() }}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetBeaconResponse {
     #[prost(message, optional, tag="1")]
     pub summary: ::core::option::Option<BeaconSummary>,
     #[prost(string, tag="2")]
     pub prose: ::prost::alloc::string::String,
+    // Fields 3 to 5 are the per-beacon detail the Visit & change rows draw (the
+    // register's X-17 and S3-01; filled from S3's `gwr`). OWN beacons only: a
+    // beacon's mandate and build progress are never shown for another seat's
+    // beacon (S2's plan's decision 5, ruled by decisions-log item 144 (11)), so
+    // all three are empty on one.
+
+    /// The writ this beacon carries. MANDATE_KIND_UNSPECIFIED on a beacon with
+    /// none and on another seat's beacon. On the JSON-RPC wire it is lower case
+    /// (decisions-log item 80): "build".
+    #[prost(enumeration="super::super::v1::beacon_filter::MandateKind", tag="3")]
+    pub mandate: i32,
+    /// The settings this beacon's mandate has now, one row per setting that is
+    /// set, in the schema's field order.
+    #[prost(message, repeated, tag="4")]
+    pub settings: ::prost::alloc::vec::Vec<BeaconSettingRow>,
+    /// A Build beacon's targets, in the order the Quartermaster reads them. Empty
+    /// on any other mandate.
+    #[prost(message, repeated, tag="5")]
+    pub build_targets: ::prost::alloc::vec::Vec<super::super::v1::BuildTarget>,
 }
 impl ::prost::Name for GetBeaconResponse {
 const NAME: &'static str = "GetBeaconResponse";
 const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.GetBeaconResponse".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.GetBeaconResponse".into() }}
+/// One setting of a beacon's mandate, as sent to be drawn and edited: the client
+/// composes a `set_mandate_settings` row from it and decides nothing.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct BeaconSettingRow {
+    /// RFC 6901 JSON Pointer of the setting inside gp.v1.MandateSettings:
+    /// "/build/rebuild_destroyed".
+    #[prost(string, tag="1")]
+    pub pointer: ::prost::alloc::string::String,
+    /// The setting's name in the player's words.
+    #[prost(string, tag="2")]
+    pub title: ::prost::alloc::string::String,
+    /// The value now, as JSON text.
+    #[prost(string, tag="3")]
+    pub value_json: ::prost::alloc::string::String,
+    /// What may be written there.
+    #[prost(message, optional, tag="4")]
+    pub shape: ::core::option::Option<ValueShape>,
+}
+impl ::prost::Name for BeaconSettingRow {
+const NAME: &'static str = "BeaconSettingRow";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.BeaconSettingRow".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.BeaconSettingRow".into() }}
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetMapSummaryRequest {
     #[prost(message, optional, tag="1")]
@@ -1041,6 +1082,12 @@ pub struct EstimateRouteResponse {
     pub ms: i32,
     #[prost(message, repeated, tag="3")]
     pub legs: ::prost::alloc::vec::Vec<Leg>,
+    /// Whole-route travel as the player reads it: "1 min 24 s". The gateway
+    /// renders the figure, so the editor draws it and does no time maths (the
+    /// register's S3-18, items 57 and 61). Says it is a bound when any leg is
+    /// fogged. Empty when `reachable` is false. Filled from S3's `gwr`.
+    #[prost(string, tag="4")]
+    pub travel_text: ::prost::alloc::string::String,
 }
 impl ::prost::Name for EstimateRouteResponse {
 const NAME: &'static str = "EstimateRouteResponse";
@@ -1062,6 +1109,10 @@ pub struct Leg {
     /// labels it as a bound (item 57).
     #[prost(bool, tag="3")]
     pub fogged: bool,
+    /// This leg's travel as the player reads it, already labelled as a bound when
+    /// `fogged` is true. Filled from S3's `gwr`.
+    #[prost(string, tag="4")]
+    pub travel_text: ::prost::alloc::string::String,
 }
 impl ::prost::Name for Leg {
 const NAME: &'static str = "Leg";
@@ -1127,11 +1178,214 @@ pub struct TemplateSummary {
     /// One sentence, from the template file itself.
     #[prost(string, tag="4")]
     pub summary: ::prost::alloc::string::String,
+    /// True on the one template a Probation match's first Lull marks as the place
+    /// to start, from the advisor's suggestion the gateway already files for a
+    /// human seat (S3's plan, E25). False everywhere else. No client names a
+    /// template. Filled from S3's `gwp`.
+    #[prost(bool, tag="5")]
+    pub guided_pick: bool,
+    /// The sentence that says why, set exactly when `guided_pick` is true.
+    #[prost(string, tag="6")]
+    pub guided_pick_reason: ::prost::alloc::string::String,
 }
 impl ::prost::Name for TemplateSummary {
 const NAME: &'static str = "TemplateSummary";
 const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.TemplateSummary".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.TemplateSummary".into() }}
+/// The vocabulary a playbook may name (S3's plan, E8; "get_vocabulary"). It takes
+/// no parameters: the answer is for the calling seat.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetVocabularyRequest {
+}
+impl ::prost::Name for GetVocabularyRequest {
+const NAME: &'static str = "GetVocabularyRequest";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.GetVocabularyRequest".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.GetVocabularyRequest".into() }}
+/// Every entry is drawn as sent, and locked entries are greyed with their reason,
+/// so the pickers hold no list and no rule of their own. Built from the schema and
+/// the rules table, in schema order, from S3's `gwr`.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetVocabularyResponse {
+    /// Spec section 10's condition families.
+    #[prost(message, repeated, tag="1")]
+    pub families: ::prost::alloc::vec::Vec<VocabularyFamily>,
+    /// The mandates a beacon may carry.
+    #[prost(message, repeated, tag="2")]
+    pub mandates: ::prost::alloc::vec::Vec<VocabularyEntry>,
+    /// The route steps.
+    #[prost(message, repeated, tag="3")]
+    pub steps: ::prost::alloc::vec::Vec<VocabularyEntry>,
+    /// The blueprints a Build target or a queued structure may name.
+    #[prost(message, repeated, tag="4")]
+    pub blueprints: ::prost::alloc::vec::Vec<VocabularyEntry>,
+}
+impl ::prost::Name for GetVocabularyResponse {
+const NAME: &'static str = "GetVocabularyResponse";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.GetVocabularyResponse".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.GetVocabularyResponse".into() }}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct VocabularyFamily {
+    /// A stable id, lower_snake_case: "own_beacon".
+    #[prost(string, tag="1")]
+    pub family: ::prost::alloc::string::String,
+    /// The family's name in the player's words.
+    #[prost(string, tag="2")]
+    pub title: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="3")]
+    pub predicates: ::prost::alloc::vec::Vec<VocabularyEntry>,
+    /// Why the whole family cannot be used, when it cannot: "from S6" for a block
+    /// the schema still reserves. Unset when it can be picked.
+    #[prost(string, optional, tag="4")]
+    pub locked: ::core::option::Option<::prost::alloc::string::String>,
+}
+impl ::prost::Name for VocabularyFamily {
+const NAME: &'static str = "VocabularyFamily";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.VocabularyFamily".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.VocabularyFamily".into() }}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct VocabularyEntry {
+    /// The word a playbook writes, as a field name or a blueprint id. Empty on an
+    /// entry the schema does not hold yet, which always carries `locked`.
+    #[prost(string, tag="1")]
+    pub name: ::prost::alloc::string::String,
+    /// The entry's name in the player's words.
+    #[prost(string, tag="2")]
+    pub title: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="3")]
+    pub parameters: ::prost::alloc::vec::Vec<VocabularyParameter>,
+    /// What a picker inserts, as JSON text, with each parameter at a legal
+    /// starting value. Empty on a locked entry.
+    #[prost(string, tag="4")]
+    pub skeleton_json: ::prost::alloc::string::String,
+    /// Why this seat cannot use the entry yet: a licence it does not hold, or
+    /// "from S6". Unset when it can.
+    #[prost(string, optional, tag="5")]
+    pub locked: ::core::option::Option<::prost::alloc::string::String>,
+}
+impl ::prost::Name for VocabularyEntry {
+const NAME: &'static str = "VocabularyEntry";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.VocabularyEntry".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.VocabularyEntry".into() }}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct VocabularyParameter {
+    /// RFC 6901 JSON Pointer of the parameter inside the entry's own object:
+    /// "/freshness/known_within_ms".
+    #[prost(string, tag="1")]
+    pub pointer: ::prost::alloc::string::String,
+    /// The parameter's name in the player's words.
+    #[prost(string, tag="2")]
+    pub title: ::prost::alloc::string::String,
+    /// What may be written there.
+    #[prost(message, optional, tag="3")]
+    pub shape: ::core::option::Option<ValueShape>,
+}
+impl ::prost::Name for VocabularyParameter {
+const NAME: &'static str = "VocabularyParameter";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.VocabularyParameter".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.VocabularyParameter".into() }}
+/// What an editable value may hold: the one description a chip, a picker's
+/// parameter and a beacon's setting share, so a client has one editor per shape.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ValueShape {
+    #[prost(oneof="value_shape::Shape", tags="1, 2, 3")]
+    pub shape: ::core::option::Option<value_shape::Shape>,
+}
+/// Nested message and enum types in `ValueShape`.
+pub mod value_shape {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Shape {
+        #[prost(message, tag="1")]
+        Integer(super::IntegerShape),
+        #[prost(message, tag="2")]
+        Choice(super::EnumShape),
+        #[prost(message, tag="3")]
+        Reference(super::ReferenceShape),
+    }
+}
+impl ::prost::Name for ValueShape {
+const NAME: &'static str = "ValueShape";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.ValueShape".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.ValueShape".into() }}
+/// A whole number, within the rules table's bounds, inclusive. An unset bound is
+/// one the rules table does not set.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct IntegerShape {
+    #[prost(int32, optional, tag="1")]
+    pub min: ::core::option::Option<i32>,
+    #[prost(int32, optional, tag="2")]
+    pub max: ::core::option::Option<i32>,
+}
+impl ::prost::Name for IntegerShape {
+const NAME: &'static str = "IntegerShape";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.IntegerShape".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.IntegerShape".into() }}
+/// A closed list. Each value is the JSON text to write: `"LE"` with its quotes,
+/// `true` without, so a client composes the patch without knowing the type.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct EnumShape {
+    #[prost(string, repeated, tag="1")]
+    pub values: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+impl ::prost::Name for EnumShape {
+const NAME: &'static str = "EnumShape";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.EnumShape".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.EnumShape".into() }}
+/// A value picked from the world or the playbook rather than typed.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ReferenceShape {
+    #[prost(enumeration="reference_shape::Kind", tag="1")]
+    pub kind: i32,
+}
+/// Nested message and enum types in `ReferenceShape`.
+pub mod reference_shape {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Kind {
+        Unspecified = 0,
+        /// A gp.v1.BeaconRef.
+        Beacon = 1,
+        /// A gp.v1.Location, or the gp.v1.NearPlace that spells its fixed arms.
+        Location = 2,
+        /// A gp.v1.FeatureRef.
+        Feature = 3,
+        /// A Step.label of this playbook's route.
+        StepLabel = 4,
+        /// A Handler.id of this playbook.
+        HandlerId = 5,
+    }
+    impl Kind {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "KIND_UNSPECIFIED",
+                Self::Beacon => "BEACON",
+                Self::Location => "LOCATION",
+                Self::Feature => "FEATURE",
+                Self::StepLabel => "STEP_LABEL",
+                Self::HandlerId => "HANDLER_ID",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "KIND_UNSPECIFIED" => Some(Self::Unspecified),
+                "BEACON" => Some(Self::Beacon),
+                "LOCATION" => Some(Self::Location),
+                "FEATURE" => Some(Self::Feature),
+                "STEP_LABEL" => Some(Self::StepLabel),
+                "HANDLER_ID" => Some(Self::HandlerId),
+                _ => None,
+            }
+        }
+    }
+}
+impl ::prost::Name for ReferenceShape {
+const NAME: &'static str = "ReferenceShape";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.ReferenceShape".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.ReferenceShape".into() }}
 // =============================================================================
 // Planning
 // =============================================================================
@@ -1420,7 +1674,7 @@ impl ::prost::Name for RenderPlanRequest {
 const NAME: &'static str = "RenderPlanRequest";
 const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.RenderPlanRequest".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.RenderPlanRequest".into() }}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RenderPlanResponse {
     /// Deterministic template prose. Reads the coming segment's length from the
     /// frozen snapshot, never from a constant.
@@ -1441,11 +1695,63 @@ pub struct RenderPlanResponse {
     /// goldens (tests/golden/plan-core) pin the layout.
     #[prost(string, tag="1")]
     pub prose: ::prost::alloc::string::String,
+    /// Each rule and step of `prose`, in file order, with its editable values
+    /// (S3's plan, E8). `prose` itself does not change. Filled from S3's `gwr`.
+    #[prost(message, repeated, tag="2")]
+    pub rules: ::prost::alloc::vec::Vec<RenderedRule>,
 }
 impl ::prost::Name for RenderPlanResponse {
 const NAME: &'static str = "RenderPlanResponse";
 const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.RenderPlanResponse".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.RenderPlanResponse".into() }}
+/// One rule or route step of a rendering: where it stands in the file, which
+/// lines of `prose` are its own, and the chips on them.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RenderedRule {
+    /// RFC 6901 JSON Pointer of the rule or step in the playbook: "/handlers/2",
+    /// which is what a reordering's JSON Patch `move` names.
+    #[prost(string, tag="1")]
+    pub pointer: ::prost::alloc::string::String,
+    /// The zero-based line of `prose` that is its sentence.
+    #[prost(uint32, tag="2")]
+    pub line: u32,
+    /// How many lines it takes, its sentence and what is indented under it: at
+    /// least 1.
+    #[prost(uint32, tag="3")]
+    pub line_count: u32,
+    #[prost(message, repeated, tag="4")]
+    pub chips: ::prost::alloc::vec::Vec<Chip>,
+}
+impl ::prost::Name for RenderedRule {
+const NAME: &'static str = "RenderedRule";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.RenderedRule".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.RenderedRule".into() }}
+/// One editable value in a rendered sentence. The gateway places it, so a client
+/// draws the span and parses no sentence.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct Chip {
+    /// RFC 6901 JSON Pointer of the value in the playbook: the path of a patch's
+    /// `replace`.
+    #[prost(string, tag="1")]
+    pub pointer: ::prost::alloc::string::String,
+    /// The zero-based line of RenderPlanResponse.prose the chip stands on.
+    #[prost(uint32, tag="2")]
+    pub line: u32,
+    /// The span it occupies on that line, in Unicode code points from the line's
+    /// start, `start` inclusive and `end` exclusive. Code points rather than bytes,
+    /// because the client's own strings index by them.
+    #[prost(uint32, tag="3")]
+    pub start: u32,
+    #[prost(uint32, tag="4")]
+    pub end: u32,
+    /// What may be written there.
+    #[prost(message, optional, tag="5")]
+    pub shape: ::core::option::Option<ValueShape>,
+}
+impl ::prost::Name for Chip {
+const NAME: &'static str = "Chip";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.Chip".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.Chip".into() }}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PatchPlanRequest {
     #[prost(string, tag="1")]
@@ -2232,8 +2538,11 @@ pub enum Scope {
     /// Seal: submit_plan and set_ready. Separate from SCOPE_PLAN because filing
     /// an order is the irrevocable act the whole game is about.
     PlanSubmit = 3,
-    /// Generated schema and template listings. Carries no match state at all,
-    /// which is why it is its own scope.
+    /// Generated schema, the vocabulary and template listings. Carries no match
+    /// state, which is why it is its own scope, with two exceptions, each about
+    /// the calling seat alone: `get_vocabulary`'s `locked` reasons read its own
+    /// licences (S3's plan, E8), and `list_templates`' guided pick is the advisor's
+    /// suggestion for it (E25).
     Docs = 4,
     /// Spectator only. A seat token can never hold it.
     SpectateNofog = 5,
@@ -2337,6 +2646,13 @@ pub enum Method {
     GetSchema = 40,
     /// "list_templates"
     ListTemplates = 41,
+    /// "get_vocabulary" — what a playbook may name, as the rule list's pickers
+    /// draw it: the condition families with their predicates and parameters, and
+    /// the mandates, steps and blueprints, each with why this seat cannot use it
+    /// yet, if it cannot (S3's plan, E8). Read-only and agent-shaped. Served from
+    /// S3's `gwr`; until then the gateway answers INTERNAL, as for a method it
+    /// does not serve.
+    GetVocabulary = 42,
     // --- Planning ------------------------------------------------------------
 
     /// "instantiate_template"
@@ -2440,6 +2756,7 @@ impl Method {
             Self::EstimateRoute => "METHOD_ESTIMATE_ROUTE",
             Self::GetSchema => "METHOD_GET_SCHEMA",
             Self::ListTemplates => "METHOD_LIST_TEMPLATES",
+            Self::GetVocabulary => "METHOD_GET_VOCABULARY",
             Self::InstantiateTemplate => "METHOD_INSTANTIATE_TEMPLATE",
             Self::VerifyPlan => "METHOD_VERIFY_PLAN",
             Self::RenderPlan => "METHOD_RENDER_PLAN",
@@ -2479,6 +2796,7 @@ impl Method {
             "METHOD_ESTIMATE_ROUTE" => Some(Self::EstimateRoute),
             "METHOD_GET_SCHEMA" => Some(Self::GetSchema),
             "METHOD_LIST_TEMPLATES" => Some(Self::ListTemplates),
+            "METHOD_GET_VOCABULARY" => Some(Self::GetVocabulary),
             "METHOD_INSTANTIATE_TEMPLATE" => Some(Self::InstantiateTemplate),
             "METHOD_VERIFY_PLAN" => Some(Self::VerifyPlan),
             "METHOD_RENDER_PLAN" => Some(Self::RenderPlan),

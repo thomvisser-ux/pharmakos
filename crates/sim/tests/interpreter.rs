@@ -1757,6 +1757,11 @@ fn the_refusal_table_and_the_arms_agree() {
         )
     };
     let walk = |to: &str| format!(r#"{{"label": "m", "move": {{"to": {to}, "pace": "DIRECT"}}}}"#);
+    let when = |predicate: &str| {
+        format!(
+            r#"{{"id": "h", "when": {predicate}, "body": [{{"label": "b", "hold": {{"ms": 1000}}}}], "resume": "CONTINUE", "cooldown_ms": 5000, "max_fires": 1}}"#
+        )
+    };
     let cases: Vec<(&str, String, String)> = vec![
         (
             "queue_structure",
@@ -1787,6 +1792,60 @@ fn the_refusal_table_and_the_arms_agree() {
             walk(
                 r#"{"beacon_anchor": {"nearest": {"filter": {"side": "OWN", "tags": ["east"]}}}}"#,
             ),
+            String::new(),
+        ),
+        (
+            "predicate_beacon_units_by_role",
+            String::new(),
+            when(
+                r#"{"beacon_units_by_role": {"beacon": {"safest": {}}, "role": "SCOUT", "count": {"op": "GE", "value": 1}}}"#,
+            ),
+        ),
+        (
+            "predicate_beacon_mandate",
+            String::new(),
+            when(r#"{"beacon_mandate": {"beacon": {"safest": {}}, "mandate": "BUILD"}}"#),
+        ),
+        (
+            "predicate_beacon_has_structure",
+            String::new(),
+            when(
+                r#"{"beacon_has_structure": {"beacon": {"safest": {}}, "blueprint_id": "generator"}}"#,
+            ),
+        ),
+        (
+            "predicate_enemy_units_near",
+            String::new(),
+            when(
+                r#"{"enemy_units_near": {"near": {"safest": {}}, "radius_voxels": 24, "count": {"op": "GE", "value": 1}, "freshness": {"kind": "VISIBLE_NOW"}}}"#,
+            ),
+        ),
+        (
+            "predicate_enemy_beacon_known",
+            String::new(),
+            when(r#"{"enemy_beacon_known": {"freshness": {"kind": "VISIBLE_NOW"}}}"#),
+        ),
+        (
+            "predicate_enemy_structure_near",
+            String::new(),
+            when(
+                r#"{"enemy_structure_near": {"near": {"safest": {}}, "radius_voxels": 24, "freshness": {"kind": "KNOWN_WITHIN", "known_within_ms": 30000}}}"#,
+            ),
+        ),
+        (
+            "predicate_kw_supply",
+            String::new(),
+            when(r#"{"kw_supply": {"kw": {"op": "GE", "value": 1}}}"#),
+        ),
+        (
+            "predicate_kw_draw",
+            String::new(),
+            when(r#"{"kw_draw": {"kw": {"op": "GE", "value": 1}}}"#),
+        ),
+        (
+            "site_toward",
+            r#"{"label": "p", "place_beacon": {"at": {"toward": {"feature": {"vent": {"rank": "NEAREST", "coverage": "UNCOVERED"}}}}}}"#
+                .to_owned(),
             String::new(),
         ),
     ];
@@ -2033,6 +2092,52 @@ fn stray_refusals(text: &str) -> Vec<String> {
         }
     }
     stray
+}
+
+/// S3's `con6` puts `toward` on the wire before `pred` gives it an effect, so
+/// every place the compile reads a `Location` refuses it by the table's entry,
+/// not only the one place it will be legal, and a predicate is refused wherever
+/// a condition is read.
+#[test]
+fn s3s_constructs_are_refused_wherever_the_compile_reads_them() {
+    use pharmakos_sim::interpreter::REFUSE_TOWARD;
+    let toward = r#"{"toward": {"feature": {"feature_id": "vent_1_2"}}}"#;
+    let interface = |row: String| {
+        format!(
+            r#"{{"label": "q", "interface": {{"beacon": {{"safest": {{}}}}, "rows": [{row}]}}}}"#
+        )
+    };
+    for step in [
+        format!(r#"{{"label": "m", "move": {{"to": {toward}, "pace": "DIRECT"}}}}"#),
+        format!(r#"{{"label": "p", "place_beacon": {{"at": {toward}}}}}"#),
+        interface(format!(
+            r#"{{"add_build_target": {{"target": {{"blueprint_id": "generator", "anchor": {toward}}}}}}}"#
+        )),
+        interface(format!(
+            r#"{{"remove_build_target": {{"anchor": {toward}}}}}"#
+        )),
+    ] {
+        assert_eq!(
+            compile(&refusal_case(&step, "")).unwrap_err(),
+            REFUSE_TOWARD.error(),
+            "{step}"
+        );
+    }
+    let supply = r#"{"kw_supply": {"kw": {"op": "GE", "value": 1}}}"#;
+    for step in [
+        format!(r#"{{"label": "s", "hold": {{"ms": 1000}}, "skip_if": {supply}}}"#),
+        format!(r#"{{"label": "w", "wait_until": {{"condition": {supply}}}, "timeout_ms": 1000}}"#),
+        format!(
+            r#"{{"label": "n", "hold": {{"ms": 1000}}, "skip_if": {{"not": {{"item": {{"any": {{"items": [{supply}]}}}}}}}}}}"#
+        ),
+    ] {
+        let error = compile(&refusal_case(&step, "")).unwrap_err();
+        assert_eq!(
+            pharmakos_sim::interpreter::Refusal::of(&error).map(|refusal| refusal.name),
+            Some("predicate_kw_supply"),
+            "{step}: {error}"
+        );
+    }
 }
 
 /// The reverse scan's positive control (S2's #116 reviews, D): a planted

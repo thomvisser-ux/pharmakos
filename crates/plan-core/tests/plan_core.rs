@@ -376,6 +376,50 @@ fn defend_and_attack() -> String {
 }
 
 #[test]
+fn s3s_constructs_round_trip_canonicalise_and_render_to_their_goldens() {
+    // The eight predicates and `toward`, on the wire from S3's `con6`.
+    let text = read(
+        &Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("cases")
+            .join("predicates_and_toward.jsonc"),
+    );
+    let document = Document::parse(&text).expect("the S3 fixture parses");
+    assert_eq!(document.to_text(), text, "load-and-save lost a byte");
+    let canonical = canonicalise_text(&text).expect("the S3 fixture canonicalises");
+    assert!(
+        canonical.relocated.is_empty(),
+        "nothing in the fixture is written at a default: {:?}",
+        canonical.relocated
+    );
+    assert_golden("predicates_and_toward", "jsonc", &canonical.text);
+    let again = canonicalise_text(&canonical.text).expect("the canonical text canonicalises");
+    assert_eq!(
+        again.text, canonical.text,
+        "the canonical form is a fixed point"
+    );
+    let prose = render_plan(&canonical.playbook, &context(), &rules())
+        .expect("the committed rules table is complete");
+    for said in [
+        "a site toward the nearest heat vent you do not cover yet",
+        "a site toward Heat vent (120, 88)",
+        "has at or above 2 scouts",
+        "carries Build",
+        "has a finished generator",
+        "the seat knows of at or above 3 enemy units within 24 voxels of",
+        "in sight now",
+        "the seat knows of an enemy beacon, seen in the last 30 s",
+        "the seat knows of an enemy mortar within 16 voxels of",
+        "the seat knows of an enemy structure within 16 voxels of",
+        "the grid's supply is at or above 40 kW",
+        "the grid's draw is below 30 kW",
+    ] {
+        assert!(prose.contains(said), "the prose says `{said}`:\n{prose}");
+    }
+    assert_golden("predicates_and_toward", "prose.txt", &prose);
+}
+
+#[test]
 fn s2s_constructs_round_trip_canonicalise_and_render_to_their_goldens() {
     // A Defend arm and an Attack arm with every field, an edit writing a
     // present `false`, an empty switch, and a wall target with its box.

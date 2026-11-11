@@ -1,0 +1,19 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0025",
+      "severity": "ERROR",
+      "path": "/declarative/handlers/0/when/enemy_structure_near",
+      "message": "predicate `enemy_structure_near` has no effect until S3's predicate catalogue lands; it is refused rather than ignored.",
+      "beginner": "Enemy buildings near a place can't be asked about yet."
+    }
+  ],
+  "report_hash": "LPPD9Z2AF+c=",
+  "rules_hash": "GybFJQaL/2E=",
+  "plan_fingerprint": "kOQd/R6sO9s=",
+  "verifier_version": "0.1.0-s2.5",
+  "size_units": 3,
+  "size_budget": 128
+}
+

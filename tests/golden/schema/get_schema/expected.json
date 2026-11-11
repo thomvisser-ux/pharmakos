@@ -5,16 +5,6 @@
   "description": "Canonical proto3 JSON for the Pharmakos playbook vocabulary, generated from the checked-in descriptor set. Property names are the .proto spelling, which is what the canonical form writes and what a player hand-edits; a reader also accepts the lowerCamelCase alternates the proto3 JSON mapping defines. An unknown field is rejected and never stripped.",
   "$ref": "#/$defs/Playbook",
   "$defs": {
-    "Action": {
-      "type": "string",
-      "description": "`gp.v1.OnFail.Action`. A playbook on disk carries the value name verbatim.",
-      "enum": [
-        "ON_FAIL_UNSPECIFIED",
-        "SKIP",
-        "ABORT_ROUTE",
-        "JUMP_FORWARD"
-      ]
-    },
     "AddBuildTargetRow": {
       "type": "object",
       "description": "gp.v1.AddBuildTargetRow",
@@ -24,15 +14,6 @@
           "$ref": "#/$defs/BuildTarget"
         }
       }
-    },
-    "AfterAction": {
-      "type": "string",
-      "description": "`gp.v1.AttackSettings.AfterAction`. A playbook on disk carries the value name verbatim.",
-      "enum": [
-        "AFTER_ACTION_UNSPECIFIED",
-        "REGROUP_AT_STAGING",
-        "RETURN_HOME"
-      ]
     },
     "All": {
       "type": "object",
@@ -108,7 +89,7 @@
           "$ref": "#/$defs/AttackTarget"
         },
         "retarget": {
-          "$ref": "#/$defs/Retarget"
+          "$ref": "#/$defs/AttackSettings.Retarget"
         },
         "staging": {
           "$ref": "#/$defs/Voxel"
@@ -120,7 +101,7 @@
           "$ref": "#/$defs/AttackRetreat"
         },
         "after_action": {
-          "$ref": "#/$defs/AfterAction"
+          "$ref": "#/$defs/AttackSettings.AfterAction"
         },
         "avoid_areas": {
           "type": "array",
@@ -135,6 +116,24 @@
           "type": "integer"
         }
       }
+    },
+    "AttackSettings.AfterAction": {
+      "type": "string",
+      "description": "`gp.v1.AttackSettings.AfterAction`. A playbook on disk carries the value name verbatim.",
+      "enum": [
+        "AFTER_ACTION_UNSPECIFIED",
+        "REGROUP_AT_STAGING",
+        "RETURN_HOME"
+      ]
+    },
+    "AttackSettings.Retarget": {
+      "type": "string",
+      "description": "`gp.v1.AttackSettings.Retarget`. A playbook on disk carries the value name verbatim.",
+      "enum": [
+        "RETARGET_UNSPECIFIED",
+        "NONE",
+        "NEAREST_KNOWN"
+      ]
     },
     "AttackTarget": {
       "type": "object",
@@ -178,32 +177,56 @@
         }
       ]
     },
-    "AuthorKind": {
-      "type": "string",
-      "description": "`gp.v1.Meta.AuthorKind`. A playbook on disk carries the value name verbatim.",
-      "enum": [
-        "AUTHOR_KIND_UNSPECIFIED",
-        "HUMAN",
-        "BUILTIN",
-        "SCRIPT"
-      ]
-    },
     "BeaconFilter": {
       "type": "object",
       "description": "gp.v1.BeaconFilter",
       "additionalProperties": false,
       "properties": {
         "side": {
-          "$ref": "#/$defs/Side"
+          "$ref": "#/$defs/BeaconFilter.Side"
         },
         "mandate": {
-          "$ref": "#/$defs/MandateKind"
+          "$ref": "#/$defs/BeaconFilter.MandateKind"
         },
         "tags": {
           "type": "array",
           "items": {
             "type": "string"
           }
+        }
+      }
+    },
+    "BeaconFilter.MandateKind": {
+      "type": "string",
+      "description": "`gp.v1.BeaconFilter.MandateKind`. A playbook on disk carries the value name verbatim.",
+      "enum": [
+        "MANDATE_KIND_UNSPECIFIED",
+        "BUILD",
+        "DEFEND",
+        "ATTACK",
+        "SURVEY",
+        "MINE"
+      ]
+    },
+    "BeaconFilter.Side": {
+      "type": "string",
+      "description": "`gp.v1.BeaconFilter.Side`. A playbook on disk carries the value name verbatim.",
+      "enum": [
+        "SIDE_UNSPECIFIED",
+        "OWN",
+        "ENEMY_KNOWN"
+      ]
+    },
+    "BeaconHasStructure": {
+      "type": "object",
+      "description": "gp.v1.BeaconHasStructure",
+      "additionalProperties": false,
+      "properties": {
+        "beacon": {
+          "$ref": "#/$defs/BeaconRef"
+        },
+        "blueprint_id": {
+          "type": "string"
         }
       }
     },
@@ -217,6 +240,19 @@
         },
         "pct": {
           "$ref": "#/$defs/IntCompare"
+        }
+      }
+    },
+    "BeaconMandate": {
+      "type": "object",
+      "description": "gp.v1.BeaconMandate",
+      "additionalProperties": false,
+      "properties": {
+        "beacon": {
+          "$ref": "#/$defs/BeaconRef"
+        },
+        "mandate": {
+          "$ref": "#/$defs/BeaconFilter.MandateKind"
         }
       }
     },
@@ -350,6 +386,34 @@
         }
       }
     },
+    "BeaconUnitsByRole": {
+      "type": "object",
+      "description": "gp.v1.BeaconUnitsByRole",
+      "additionalProperties": false,
+      "properties": {
+        "beacon": {
+          "$ref": "#/$defs/BeaconRef"
+        },
+        "role": {
+          "$ref": "#/$defs/BeaconUnitsByRole.Role"
+        },
+        "count": {
+          "$ref": "#/$defs/IntCompare"
+        }
+      }
+    },
+    "BeaconUnitsByRole.Role": {
+      "type": "string",
+      "description": "`gp.v1.BeaconUnitsByRole.Role`. A playbook on disk carries the value name verbatim.",
+      "enum": [
+        "ROLE_UNSPECIFIED",
+        "BUILD_DRONE",
+        "MINING_DRONE",
+        "REPAIR_DRONE",
+        "RAIDER",
+        "SCOUT"
+      ]
+    },
     "BroadcastStep": {
       "type": "object",
       "description": "gp.v1.BroadcastStep",
@@ -437,7 +501,7 @@
           "type": "boolean"
         },
         "terraform": {
-          "$ref": "#/$defs/Terraform"
+          "$ref": "#/$defs/BuildSettings.Terraform"
         },
         "protected_areas": {
           "type": "array",
@@ -446,6 +510,17 @@
           }
         }
       }
+    },
+    "BuildSettings.Terraform": {
+      "type": "string",
+      "description": "`gp.v1.BuildSettings.Terraform`. A playbook on disk carries the value name verbatim.",
+      "enum": [
+        "TERRAFORM_UNSPECIFIED",
+        "NONE",
+        "FILL",
+        "DIG",
+        "BOTH"
+      ]
     },
     "BuildTarget": {
       "type": "object",
@@ -485,24 +560,14 @@
       "additionalProperties": false,
       "properties": {
         "cmp": {
-          "$ref": "#/$defs/Cmp"
+          "$ref": "#/$defs/CmdrHpPct.Cmp"
         },
         "pct": {
           "type": "integer"
         }
       }
     },
-    "CmdrTookDamageWithin": {
-      "type": "object",
-      "description": "gp.v1.CmdrTookDamageWithin",
-      "additionalProperties": false,
-      "properties": {
-        "ms": {
-          "type": "integer"
-        }
-      }
-    },
-    "Cmp": {
+    "CmdrHpPct.Cmp": {
       "type": "string",
       "description": "`gp.v1.CmdrHpPct.Cmp`. A playbook on disk carries the value name verbatim.",
       "enum": [
@@ -514,6 +579,16 @@
         "GE",
         "GT"
       ]
+    },
+    "CmdrTookDamageWithin": {
+      "type": "object",
+      "description": "gp.v1.CmdrTookDamageWithin",
+      "additionalProperties": false,
+      "properties": {
+        "ms": {
+          "type": "integer"
+        }
+      }
     },
     "Condition": {
       "type": "object",
@@ -550,11 +625,35 @@
         "beacon_powered": {
           "$ref": "#/$defs/BeaconPowered"
         },
+        "beacon_units_by_role": {
+          "$ref": "#/$defs/BeaconUnitsByRole"
+        },
+        "beacon_mandate": {
+          "$ref": "#/$defs/BeaconMandate"
+        },
+        "beacon_has_structure": {
+          "$ref": "#/$defs/BeaconHasStructure"
+        },
+        "enemy_units_near": {
+          "$ref": "#/$defs/EnemyUnitsNear"
+        },
+        "enemy_beacon_known": {
+          "$ref": "#/$defs/EnemyBeaconKnown"
+        },
+        "enemy_structure_near": {
+          "$ref": "#/$defs/EnemyStructureNear"
+        },
         "treasury": {
           "$ref": "#/$defs/Treasury"
         },
         "kw_headroom": {
           "$ref": "#/$defs/KwHeadroom"
+        },
+        "kw_supply": {
+          "$ref": "#/$defs/KwSupply"
+        },
+        "kw_draw": {
+          "$ref": "#/$defs/KwDraw"
         },
         "step_reached": {
           "$ref": "#/$defs/StepReached"
@@ -640,6 +739,54 @@
           "not": {
             "required": [
               "all",
+              "beacon_units_by_role"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "all",
+              "beacon_mandate"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "all",
+              "beacon_has_structure"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "all",
+              "enemy_units_near"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "all",
+              "enemy_beacon_known"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "all",
+              "enemy_structure_near"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "all",
               "treasury"
             ]
           }
@@ -649,6 +796,22 @@
             "required": [
               "all",
               "kw_headroom"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "all",
+              "kw_supply"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "all",
+              "kw_draw"
             ]
           }
         },
@@ -736,6 +899,54 @@
           "not": {
             "required": [
               "any",
+              "beacon_units_by_role"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "any",
+              "beacon_mandate"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "any",
+              "beacon_has_structure"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "any",
+              "enemy_units_near"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "any",
+              "enemy_beacon_known"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "any",
+              "enemy_structure_near"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "any",
               "treasury"
             ]
           }
@@ -745,6 +956,22 @@
             "required": [
               "any",
               "kw_headroom"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "any",
+              "kw_supply"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "any",
+              "kw_draw"
             ]
           }
         },
@@ -824,6 +1051,54 @@
           "not": {
             "required": [
               "not",
+              "beacon_units_by_role"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "not",
+              "beacon_mandate"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "not",
+              "beacon_has_structure"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "not",
+              "enemy_units_near"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "not",
+              "enemy_beacon_known"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "not",
+              "enemy_structure_near"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "not",
               "treasury"
             ]
           }
@@ -833,6 +1108,22 @@
             "required": [
               "not",
               "kw_headroom"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "not",
+              "kw_supply"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "not",
+              "kw_draw"
             ]
           }
         },
@@ -904,6 +1195,54 @@
           "not": {
             "required": [
               "cmdr_hp_pct",
+              "beacon_units_by_role"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_hp_pct",
+              "beacon_mandate"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_hp_pct",
+              "beacon_has_structure"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_hp_pct",
+              "enemy_units_near"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_hp_pct",
+              "enemy_beacon_known"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_hp_pct",
+              "enemy_structure_near"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_hp_pct",
               "treasury"
             ]
           }
@@ -913,6 +1252,22 @@
             "required": [
               "cmdr_hp_pct",
               "kw_headroom"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_hp_pct",
+              "kw_supply"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_hp_pct",
+              "kw_draw"
             ]
           }
         },
@@ -976,6 +1331,54 @@
           "not": {
             "required": [
               "cmdr_took_damage_within",
+              "beacon_units_by_role"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_took_damage_within",
+              "beacon_mandate"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_took_damage_within",
+              "beacon_has_structure"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_took_damage_within",
+              "enemy_units_near"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_took_damage_within",
+              "enemy_beacon_known"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_took_damage_within",
+              "enemy_structure_near"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_took_damage_within",
               "treasury"
             ]
           }
@@ -985,6 +1388,22 @@
             "required": [
               "cmdr_took_damage_within",
               "kw_headroom"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_took_damage_within",
+              "kw_supply"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_took_damage_within",
+              "kw_draw"
             ]
           }
         },
@@ -1040,6 +1459,54 @@
           "not": {
             "required": [
               "cmdr_deaths",
+              "beacon_units_by_role"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_deaths",
+              "beacon_mandate"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_deaths",
+              "beacon_has_structure"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_deaths",
+              "enemy_units_near"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_deaths",
+              "enemy_beacon_known"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_deaths",
+              "enemy_structure_near"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_deaths",
               "treasury"
             ]
           }
@@ -1049,6 +1516,22 @@
             "required": [
               "cmdr_deaths",
               "kw_headroom"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_deaths",
+              "kw_supply"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_deaths",
+              "kw_draw"
             ]
           }
         },
@@ -1096,6 +1579,54 @@
           "not": {
             "required": [
               "segment_elapsed",
+              "beacon_units_by_role"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "segment_elapsed",
+              "beacon_mandate"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "segment_elapsed",
+              "beacon_has_structure"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "segment_elapsed",
+              "enemy_units_near"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "segment_elapsed",
+              "enemy_beacon_known"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "segment_elapsed",
+              "enemy_structure_near"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "segment_elapsed",
               "treasury"
             ]
           }
@@ -1105,6 +1636,22 @@
             "required": [
               "segment_elapsed",
               "kw_headroom"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "segment_elapsed",
+              "kw_supply"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "segment_elapsed",
+              "kw_draw"
             ]
           }
         },
@@ -1144,6 +1691,54 @@
           "not": {
             "required": [
               "beacon_hp_pct",
+              "beacon_units_by_role"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_hp_pct",
+              "beacon_mandate"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_hp_pct",
+              "beacon_has_structure"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_hp_pct",
+              "enemy_units_near"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_hp_pct",
+              "enemy_beacon_known"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_hp_pct",
+              "enemy_structure_near"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_hp_pct",
               "treasury"
             ]
           }
@@ -1153,6 +1748,22 @@
             "required": [
               "beacon_hp_pct",
               "kw_headroom"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_hp_pct",
+              "kw_supply"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_hp_pct",
+              "kw_draw"
             ]
           }
         },
@@ -1184,6 +1795,54 @@
           "not": {
             "required": [
               "beacon_under_attack",
+              "beacon_units_by_role"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_under_attack",
+              "beacon_mandate"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_under_attack",
+              "beacon_has_structure"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_under_attack",
+              "enemy_units_near"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_under_attack",
+              "enemy_beacon_known"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_under_attack",
+              "enemy_structure_near"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_under_attack",
               "treasury"
             ]
           }
@@ -1193,6 +1852,22 @@
             "required": [
               "beacon_under_attack",
               "kw_headroom"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_under_attack",
+              "kw_supply"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_under_attack",
+              "kw_draw"
             ]
           }
         },
@@ -1216,6 +1891,54 @@
           "not": {
             "required": [
               "beacon_powered",
+              "beacon_units_by_role"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_powered",
+              "beacon_mandate"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_powered",
+              "beacon_has_structure"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_powered",
+              "enemy_units_near"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_powered",
+              "enemy_beacon_known"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_powered",
+              "enemy_structure_near"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_powered",
               "treasury"
             ]
           }
@@ -1232,6 +1955,22 @@
           "not": {
             "required": [
               "beacon_powered",
+              "kw_supply"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_powered",
+              "kw_draw"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_powered",
               "step_reached"
             ]
           }
@@ -1240,6 +1979,414 @@
           "not": {
             "required": [
               "beacon_powered",
+              "rule_fired"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_units_by_role",
+              "beacon_mandate"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_units_by_role",
+              "beacon_has_structure"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_units_by_role",
+              "enemy_units_near"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_units_by_role",
+              "enemy_beacon_known"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_units_by_role",
+              "enemy_structure_near"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_units_by_role",
+              "treasury"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_units_by_role",
+              "kw_headroom"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_units_by_role",
+              "kw_supply"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_units_by_role",
+              "kw_draw"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_units_by_role",
+              "step_reached"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_units_by_role",
+              "rule_fired"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_mandate",
+              "beacon_has_structure"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_mandate",
+              "enemy_units_near"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_mandate",
+              "enemy_beacon_known"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_mandate",
+              "enemy_structure_near"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_mandate",
+              "treasury"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_mandate",
+              "kw_headroom"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_mandate",
+              "kw_supply"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_mandate",
+              "kw_draw"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_mandate",
+              "step_reached"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_mandate",
+              "rule_fired"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_has_structure",
+              "enemy_units_near"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_has_structure",
+              "enemy_beacon_known"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_has_structure",
+              "enemy_structure_near"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_has_structure",
+              "treasury"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_has_structure",
+              "kw_headroom"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_has_structure",
+              "kw_supply"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_has_structure",
+              "kw_draw"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_has_structure",
+              "step_reached"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_has_structure",
+              "rule_fired"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "enemy_units_near",
+              "enemy_beacon_known"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "enemy_units_near",
+              "enemy_structure_near"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "enemy_units_near",
+              "treasury"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "enemy_units_near",
+              "kw_headroom"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "enemy_units_near",
+              "kw_supply"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "enemy_units_near",
+              "kw_draw"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "enemy_units_near",
+              "step_reached"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "enemy_units_near",
+              "rule_fired"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "enemy_beacon_known",
+              "enemy_structure_near"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "enemy_beacon_known",
+              "treasury"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "enemy_beacon_known",
+              "kw_headroom"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "enemy_beacon_known",
+              "kw_supply"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "enemy_beacon_known",
+              "kw_draw"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "enemy_beacon_known",
+              "step_reached"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "enemy_beacon_known",
+              "rule_fired"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "enemy_structure_near",
+              "treasury"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "enemy_structure_near",
+              "kw_headroom"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "enemy_structure_near",
+              "kw_supply"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "enemy_structure_near",
+              "kw_draw"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "enemy_structure_near",
+              "step_reached"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "enemy_structure_near",
               "rule_fired"
             ]
           }
@@ -1249,6 +2396,22 @@
             "required": [
               "treasury",
               "kw_headroom"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "treasury",
+              "kw_supply"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "treasury",
+              "kw_draw"
             ]
           }
         },
@@ -1272,6 +2435,22 @@
           "not": {
             "required": [
               "kw_headroom",
+              "kw_supply"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "kw_headroom",
+              "kw_draw"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "kw_headroom",
               "step_reached"
             ]
           }
@@ -1280,6 +2459,46 @@
           "not": {
             "required": [
               "kw_headroom",
+              "rule_fired"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "kw_supply",
+              "kw_draw"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "kw_supply",
+              "step_reached"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "kw_supply",
+              "rule_fired"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "kw_draw",
+              "step_reached"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "kw_draw",
               "rule_fired"
             ]
           }
@@ -1292,15 +2511,6 @@
             ]
           }
         }
-      ]
-    },
-    "Coverage": {
-      "type": "string",
-      "description": "`gp.v1.FeatureRef.Coverage`. A playbook on disk carries the value name verbatim.",
-      "enum": [
-        "COVERAGE_UNSPECIFIED",
-        "ANY",
-        "UNCOVERED"
       ]
     },
     "Covered": {
@@ -1346,10 +2556,30 @@
           "type": "integer"
         },
         "pursue": {
-          "$ref": "#/$defs/Pursue"
+          "$ref": "#/$defs/DefendSettings.Pursue"
         },
         "picket_scouts": {
           "type": "integer"
+        }
+      }
+    },
+    "DefendSettings.Pursue": {
+      "type": "string",
+      "description": "`gp.v1.DefendSettings.Pursue`. A playbook on disk carries the value name verbatim.",
+      "enum": [
+        "PURSUE_UNSPECIFIED",
+        "NEVER",
+        "SPHERE_EDGE",
+        "WHILE_IN_REACH"
+      ]
+    },
+    "EnemyBeaconKnown": {
+      "type": "object",
+      "description": "gp.v1.EnemyBeaconKnown",
+      "additionalProperties": false,
+      "properties": {
+        "freshness": {
+          "$ref": "#/$defs/Freshness"
         }
       }
     },
@@ -1360,6 +2590,44 @@
       "properties": {
         "seat": {
           "type": "integer"
+        }
+      }
+    },
+    "EnemyStructureNear": {
+      "type": "object",
+      "description": "gp.v1.EnemyStructureNear",
+      "additionalProperties": false,
+      "properties": {
+        "near": {
+          "$ref": "#/$defs/NearPlace"
+        },
+        "radius_voxels": {
+          "type": "integer"
+        },
+        "blueprint_id": {
+          "type": "string"
+        },
+        "freshness": {
+          "$ref": "#/$defs/Freshness"
+        }
+      }
+    },
+    "EnemyUnitsNear": {
+      "type": "object",
+      "description": "gp.v1.EnemyUnitsNear",
+      "additionalProperties": false,
+      "properties": {
+        "near": {
+          "$ref": "#/$defs/NearPlace"
+        },
+        "radius_voxels": {
+          "type": "integer"
+        },
+        "count": {
+          "$ref": "#/$defs/IntCompare"
+        },
+        "freshness": {
+          "$ref": "#/$defs/Freshness"
         }
       }
     },
@@ -1507,6 +2775,45 @@
         }
       ]
     },
+    "FeatureRef.Coverage": {
+      "type": "string",
+      "description": "`gp.v1.FeatureRef.Coverage`. A playbook on disk carries the value name verbatim.",
+      "enum": [
+        "COVERAGE_UNSPECIFIED",
+        "ANY",
+        "UNCOVERED"
+      ]
+    },
+    "FeatureRef.Rank": {
+      "type": "string",
+      "description": "`gp.v1.FeatureRef.Rank`. A playbook on disk carries the value name verbatim.",
+      "enum": [
+        "RANK_UNSPECIFIED",
+        "NEAREST"
+      ]
+    },
+    "Freshness": {
+      "type": "object",
+      "description": "gp.v1.Freshness",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/Freshness.Kind"
+        },
+        "known_within_ms": {
+          "type": "integer"
+        }
+      }
+    },
+    "Freshness.Kind": {
+      "type": "string",
+      "description": "`gp.v1.Freshness.Kind`. A playbook on disk carries the value name verbatim.",
+      "enum": [
+        "FRESHNESS_UNSPECIFIED",
+        "VISIBLE_NOW",
+        "KNOWN_WITHIN"
+      ]
+    },
     "GoCode": {
       "type": "object",
       "description": "gp.v1.GoCode",
@@ -1535,7 +2842,7 @@
           }
         },
         "resume": {
-          "$ref": "#/$defs/Resume"
+          "$ref": "#/$defs/Handler.Resume"
         },
         "cooldown_ms": {
           "type": "integer"
@@ -1550,6 +2857,17 @@
           "type": "string"
         }
       }
+    },
+    "Handler.Resume": {
+      "type": "string",
+      "description": "`gp.v1.Handler.Resume`. A playbook on disk carries the value name verbatim.",
+      "enum": [
+        "RESUME_UNSPECIFIED",
+        "CONTINUE",
+        "SKIP_STEP",
+        "JUMP_FORWARD",
+        "END_ROUTE"
+      ]
     },
     "HoldStep": {
       "type": "object",
@@ -1567,7 +2885,7 @@
       "additionalProperties": false,
       "properties": {
         "priority": {
-          "$ref": "#/$defs/QuartermasterPriority"
+          "$ref": "#/$defs/InterfaceRow.QuartermasterPriority"
         },
         "mandate": {
           "$ref": "#/$defs/MandateSettings"
@@ -1580,12 +2898,25 @@
       "additionalProperties": false,
       "properties": {
         "op": {
-          "$ref": "#/$defs/Op"
+          "$ref": "#/$defs/IntCompare.Op"
         },
         "value": {
           "type": "integer"
         }
       }
+    },
+    "IntCompare.Op": {
+      "type": "string",
+      "description": "`gp.v1.IntCompare.Op`. A playbook on disk carries the value name verbatim.",
+      "enum": [
+        "OP_UNSPECIFIED",
+        "LT",
+        "LE",
+        "EQ",
+        "NE",
+        "GE",
+        "GT"
+      ]
     },
     "InterfaceRow": {
       "type": "object",
@@ -1599,7 +2930,7 @@
           "$ref": "#/$defs/MandateSettings"
         },
         "set_priority": {
-          "$ref": "#/$defs/QuartermasterPriority"
+          "$ref": "#/$defs/InterfaceRow.QuartermasterPriority"
         },
         "recycle": {
           "$ref": "#/$defs/RecycleRow"
@@ -1785,6 +3116,16 @@
         }
       ]
     },
+    "InterfaceRow.QuartermasterPriority": {
+      "type": "string",
+      "description": "`gp.v1.InterfaceRow.QuartermasterPriority`. A playbook on disk carries the value name verbatim.",
+      "enum": [
+        "QUARTERMASTER_PRIORITY_UNSPECIFIED",
+        "LOW",
+        "NORMAL",
+        "HIGH"
+      ]
+    },
     "InterfaceStep": {
       "type": "object",
       "description": "gp.v1.InterfaceStep",
@@ -1801,19 +3142,29 @@
         }
       }
     },
-    "Kind": {
-      "type": "string",
-      "description": "`gp.v1.Playbook.Kind`. A playbook on disk carries the value name verbatim.",
-      "enum": [
-        "KIND_UNSPECIFIED",
-        "PLAYBOOK",
-        "TEMPLATE",
-        "SAMPLE"
-      ]
+    "KwDraw": {
+      "type": "object",
+      "description": "gp.v1.KwDraw",
+      "additionalProperties": false,
+      "properties": {
+        "kw": {
+          "$ref": "#/$defs/IntCompare"
+        }
+      }
     },
     "KwHeadroom": {
       "type": "object",
       "description": "gp.v1.KwHeadroom",
+      "additionalProperties": false,
+      "properties": {
+        "kw": {
+          "$ref": "#/$defs/IntCompare"
+        }
+      }
+    },
+    "KwSupply": {
+      "type": "object",
+      "description": "gp.v1.KwSupply",
       "additionalProperties": false,
       "properties": {
         "kw": {
@@ -1840,6 +3191,9 @@
         },
         "covering": {
           "$ref": "#/$defs/FeatureRef"
+        },
+        "toward": {
+          "$ref": "#/$defs/Toward"
         }
       },
       "allOf": [
@@ -1878,6 +3232,14 @@
         {
           "not": {
             "required": [
+              "voxel",
+              "toward"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
               "beacon_anchor",
               "safest"
             ]
@@ -1902,6 +3264,14 @@
         {
           "not": {
             "required": [
+              "beacon_anchor",
+              "toward"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
               "safest",
               "on"
             ]
@@ -1918,23 +3288,35 @@
         {
           "not": {
             "required": [
+              "safest",
+              "toward"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
               "on",
               "covering"
             ]
           }
+        },
+        {
+          "not": {
+            "required": [
+              "on",
+              "toward"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "covering",
+              "toward"
+            ]
+          }
         }
-      ]
-    },
-    "MandateKind": {
-      "type": "string",
-      "description": "`gp.v1.BeaconFilter.MandateKind`. A playbook on disk carries the value name verbatim.",
-      "enum": [
-        "MANDATE_KIND_UNSPECIFIED",
-        "BUILD",
-        "DEFEND",
-        "ATTACK",
-        "SURVEY",
-        "MINE"
       ]
     },
     "MandateSettings": {
@@ -1943,7 +3325,7 @@
       "additionalProperties": false,
       "properties": {
         "roe": {
-          "$ref": "#/$defs/Roe"
+          "$ref": "#/$defs/MandateSettings.Roe"
         },
         "retreat_hp_pct": {
           "type": "integer"
@@ -2047,6 +3429,16 @@
         }
       ]
     },
+    "MandateSettings.Roe": {
+      "type": "string",
+      "description": "`gp.v1.MandateSettings.Roe`. A playbook on disk carries the value name verbatim.",
+      "enum": [
+        "ROE_UNSPECIFIED",
+        "HOLD_FIRE",
+        "RETURN_FIRE",
+        "FREE_FIRE"
+      ]
+    },
     "MarkTarget": {
       "type": "object",
       "description": "gp.v1.MarkTarget",
@@ -2066,7 +3458,7 @@
           "type": "string"
         },
         "author_kind": {
-          "$ref": "#/$defs/AuthorKind"
+          "$ref": "#/$defs/Meta.AuthorKind"
         },
         "fingerprint": {
           "type": "string",
@@ -2083,6 +3475,16 @@
         }
       }
     },
+    "Meta.AuthorKind": {
+      "type": "string",
+      "description": "`gp.v1.Meta.AuthorKind`. A playbook on disk carries the value name verbatim.",
+      "enum": [
+        "AUTHOR_KIND_UNSPECIFIED",
+        "HUMAN",
+        "BUILTIN",
+        "SCRIPT"
+      ]
+    },
     "MineSettings": {
       "type": "object",
       "description": "gp.v1.MineSettings",
@@ -2095,12 +3497,22 @@
           "type": "boolean"
         },
         "seam_choice": {
-          "$ref": "#/$defs/SeamChoice"
+          "$ref": "#/$defs/MineSettings.SeamChoice"
         },
         "pillar_spacing": {
           "type": "integer"
         }
       }
+    },
+    "MineSettings.SeamChoice": {
+      "type": "string",
+      "description": "`gp.v1.MineSettings.SeamChoice`. A playbook on disk carries the value name verbatim.",
+      "enum": [
+        "SEAM_CHOICE_UNSPECIFIED",
+        "RICHEST",
+        "NEAREST",
+        "SAFEST"
+      ]
     },
     "MostThreatened": {
       "type": "object",
@@ -2121,15 +3533,66 @@
           "$ref": "#/$defs/Location"
         },
         "pace": {
-          "$ref": "#/$defs/Pace"
+          "$ref": "#/$defs/MoveStep.Pace"
         }
       }
+    },
+    "MoveStep.Pace": {
+      "type": "string",
+      "description": "`gp.v1.MoveStep.Pace`. A playbook on disk carries the value name verbatim.",
+      "enum": [
+        "PACE_UNSPECIFIED",
+        "DIRECT",
+        "AVOID_KNOWN_THREATS"
+      ]
     },
     "MyCommander": {
       "type": "object",
       "description": "gp.v1.MyCommander",
       "additionalProperties": false,
       "properties": {}
+    },
+    "NearPlace": {
+      "type": "object",
+      "description": "gp.v1.NearPlace",
+      "additionalProperties": false,
+      "properties": {
+        "voxel": {
+          "$ref": "#/$defs/Voxel"
+        },
+        "beacon_anchor": {
+          "$ref": "#/$defs/BeaconRef"
+        },
+        "safest": {
+          "$ref": "#/$defs/Safest"
+        }
+      },
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "voxel",
+              "beacon_anchor"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "voxel",
+              "safest"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_anchor",
+              "safest"
+            ]
+          }
+        }
+      ]
     },
     "Nearest": {
       "type": "object",
@@ -2157,27 +3620,14 @@
       "additionalProperties": false,
       "properties": {
         "on_respawn": {
-          "$ref": "#/$defs/OnRespawn"
+          "$ref": "#/$defs/OnDeath.OnRespawn"
         },
         "max_deaths_before_fallback": {
           "type": "integer"
         }
       }
     },
-    "OnFail": {
-      "type": "object",
-      "description": "gp.v1.OnFail",
-      "additionalProperties": false,
-      "properties": {
-        "action": {
-          "$ref": "#/$defs/Action"
-        },
-        "jump_to_label": {
-          "type": "string"
-        }
-      }
-    },
-    "OnRespawn": {
+    "OnDeath.OnRespawn": {
       "type": "string",
       "description": "`gp.v1.OnDeath.OnRespawn`. A playbook on disk carries the value name verbatim.",
       "enum": [
@@ -2185,17 +3635,27 @@
         "CONTINUE"
       ]
     },
-    "Op": {
+    "OnFail": {
+      "type": "object",
+      "description": "gp.v1.OnFail",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/OnFail.Action"
+        },
+        "jump_to_label": {
+          "type": "string"
+        }
+      }
+    },
+    "OnFail.Action": {
       "type": "string",
-      "description": "`gp.v1.IntCompare.Op`. A playbook on disk carries the value name verbatim.",
+      "description": "`gp.v1.OnFail.Action`. A playbook on disk carries the value name verbatim.",
       "enum": [
-        "OP_UNSPECIFIED",
-        "LT",
-        "LE",
-        "EQ",
-        "NE",
-        "GE",
-        "GT"
+        "ON_FAIL_UNSPECIFIED",
+        "SKIP",
+        "ABORT_ROUTE",
+        "JUMP_FORWARD"
       ]
     },
     "Options": {
@@ -2207,15 +3667,6 @@
           "type": "boolean"
         }
       }
-    },
-    "Pace": {
-      "type": "string",
-      "description": "`gp.v1.MoveStep.Pace`. A playbook on disk carries the value name verbatim.",
-      "enum": [
-        "PACE_UNSPECIFIED",
-        "DIRECT",
-        "AVOID_KNOWN_THREATS"
-      ]
     },
     "PlaceBeaconStep": {
       "type": "object",
@@ -2257,9 +3708,19 @@
           "$ref": "#/$defs/Fallback"
         },
         "kind": {
-          "$ref": "#/$defs/Kind"
+          "$ref": "#/$defs/Playbook.Kind"
         }
       }
+    },
+    "Playbook.Kind": {
+      "type": "string",
+      "description": "`gp.v1.Playbook.Kind`. A playbook on disk carries the value name verbatim.",
+      "enum": [
+        "KIND_UNSPECIFIED",
+        "PLAYBOOK",
+        "TEMPLATE",
+        "SAMPLE"
+      ]
     },
     "ProtectedAsset": {
       "type": "object",
@@ -2284,26 +3745,6 @@
         }
       ]
     },
-    "Pursue": {
-      "type": "string",
-      "description": "`gp.v1.DefendSettings.Pursue`. A playbook on disk carries the value name verbatim.",
-      "enum": [
-        "PURSUE_UNSPECIFIED",
-        "NEVER",
-        "SPHERE_EDGE",
-        "WHILE_IN_REACH"
-      ]
-    },
-    "QuartermasterPriority": {
-      "type": "string",
-      "description": "`gp.v1.InterfaceRow.QuartermasterPriority`. A playbook on disk carries the value name verbatim.",
-      "enum": [
-        "QUARTERMASTER_PRIORITY_UNSPECIFIED",
-        "LOW",
-        "NORMAL",
-        "HIGH"
-      ]
-    },
     "QueueStructureRow": {
       "type": "object",
       "description": "gp.v1.QueueStructureRow",
@@ -2324,14 +3765,6 @@
         }
       }
     },
-    "Rank": {
-      "type": "string",
-      "description": "`gp.v1.FeatureRef.Rank`. A playbook on disk carries the value name verbatim.",
-      "enum": [
-        "RANK_UNSPECIFIED",
-        "NEAREST"
-      ]
-    },
     "RecycleRow": {
       "type": "object",
       "description": "gp.v1.RecycleRow",
@@ -2347,36 +3780,6 @@
           "$ref": "#/$defs/Location"
         }
       }
-    },
-    "Resume": {
-      "type": "string",
-      "description": "`gp.v1.Handler.Resume`. A playbook on disk carries the value name verbatim.",
-      "enum": [
-        "RESUME_UNSPECIFIED",
-        "CONTINUE",
-        "SKIP_STEP",
-        "JUMP_FORWARD",
-        "END_ROUTE"
-      ]
-    },
-    "Retarget": {
-      "type": "string",
-      "description": "`gp.v1.AttackSettings.Retarget`. A playbook on disk carries the value name verbatim.",
-      "enum": [
-        "RETARGET_UNSPECIFIED",
-        "NONE",
-        "NEAREST_KNOWN"
-      ]
-    },
-    "Roe": {
-      "type": "string",
-      "description": "`gp.v1.MandateSettings.Roe`. A playbook on disk carries the value name verbatim.",
-      "enum": [
-        "ROE_UNSPECIFIED",
-        "HOLD_FIRE",
-        "RETURN_FIRE",
-        "FREE_FIRE"
-      ]
     },
     "RuleFired": {
       "type": "object",
@@ -2407,26 +3810,16 @@
         }
       }
     },
-    "SeamChoice": {
-      "type": "string",
-      "description": "`gp.v1.MineSettings.SeamChoice`. A playbook on disk carries the value name verbatim.",
-      "enum": [
-        "SEAM_CHOICE_UNSPECIFIED",
-        "RICHEST",
-        "NEAREST",
-        "SAFEST"
-      ]
-    },
     "SeamPick": {
       "type": "object",
       "description": "gp.v1.SeamPick",
       "additionalProperties": false,
       "properties": {
         "rank": {
-          "$ref": "#/$defs/Rank"
+          "$ref": "#/$defs/FeatureRef.Rank"
         },
         "coverage": {
-          "$ref": "#/$defs/Coverage"
+          "$ref": "#/$defs/FeatureRef.Coverage"
         }
       }
     },
@@ -2439,15 +3832,6 @@
           "$ref": "#/$defs/IntCompare"
         }
       }
-    },
-    "Side": {
-      "type": "string",
-      "description": "`gp.v1.BeaconFilter.Side`. A playbook on disk carries the value name verbatim.",
-      "enum": [
-        "SIDE_UNSPECIFIED",
-        "OWN",
-        "ENEMY_KNOWN"
-      ]
     },
     "Step": {
       "type": "object",
@@ -2650,17 +4034,6 @@
         }
       }
     },
-    "Terraform": {
-      "type": "string",
-      "description": "`gp.v1.BuildSettings.Terraform`. A playbook on disk carries the value name verbatim.",
-      "enum": [
-        "TERRAFORM_UNSPECIFIED",
-        "NONE",
-        "FILL",
-        "DIG",
-        "BOTH"
-      ]
-    },
     "ThreatAt": {
       "type": "object",
       "description": "gp.v1.ThreatAt",
@@ -2668,6 +4041,16 @@
       "properties": {
         "at": {
           "$ref": "#/$defs/Location"
+        }
+      }
+    },
+    "Toward": {
+      "type": "object",
+      "description": "gp.v1.Toward",
+      "additionalProperties": false,
+      "properties": {
+        "feature": {
+          "$ref": "#/$defs/FeatureRef"
         }
       }
     },
@@ -2687,10 +4070,10 @@
       "additionalProperties": false,
       "properties": {
         "rank": {
-          "$ref": "#/$defs/Rank"
+          "$ref": "#/$defs/FeatureRef.Rank"
         },
         "coverage": {
-          "$ref": "#/$defs/Coverage"
+          "$ref": "#/$defs/FeatureRef.Coverage"
         }
       }
     },

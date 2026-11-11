@@ -637,10 +637,10 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.BuildTarget".into() }f
 /// avoid areas, Survey probe areas and a wall target's `wall_box` are all of
 /// this shape.
 ///
-/// PLACEHOLDER: an area's shape, a box — owner, if a polygon or a sphere is wanted.
-/// The spec says "areas" without fixing their shape. A box
-/// is what the editor's drag-select produces and what an integer sim can test
-/// in three comparisons; a polygon or a sphere would be an owner decision.
+/// Ruled, not guessed: the spec says "areas" without fixing their shape, and an
+/// area is a box (S3's plan, decision 8, ruled by decisions-log item 154 (4); the
+/// register's M-12). A box is what the editor's drag-select produces and what an
+/// integer sim can test in three comparisons.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Area {
     #[prost(message, optional, tag="1")]
@@ -926,9 +926,28 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.Handler".into() }fn ty
 /// stage that fills it. A construct outside the vocabulary is rejected on Load
 /// with a code and a JSON Pointer and is never silently stripped, so a block
 /// that is reserved is a block a player cannot half-use.
+///
+/// THE CATALOGUE, BY STAGE (the register's U-07; S3's plan, decision 2, ruled by
+/// decisions-log item 154 (4)). Spec section 10's families are not all built at
+/// once:
+///
+///    S3 fills: own beacon's units by role, mandate and finished structure
+///      (43-45); economy's kW supply and kW draw (72, 73); enemy knowledge's
+///      units near, beacon known and structure near (60-62), each with a
+///      required Freshness.
+///    S4 fills: capability licence and mast coverage (80-89), with reach and
+///      radio.
+///    S6 fills, with the full editor: commander position (23-29), the rest of
+///      the clock (31-39), own beacon's reports since (46-49), aggregates
+///      (50-59), the income forecast (74-79) and posture (92-99).
+///
+/// The numbers S3 fills are on the wire from S3's `con6`, and a predicate has
+/// its effect only from S3's `pred`. Until then the sim's compile refuses each
+/// one with `NotAtThisStage` and the verifier with a code of its own
+/// (`E0020` to `E0027`), so none of them can be half-used.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Condition {
-    #[prost(oneof="condition::Node", tags="1, 2, 3, 20, 21, 22, 30, 40, 41, 42, 70, 71, 90, 91")]
+    #[prost(oneof="condition::Node", tags="1, 2, 3, 20, 21, 22, 30, 40, 41, 42, 43, 44, 45, 60, 61, 62, 70, 71, 72, 73, 90, 91")]
     pub node: ::core::option::Option<condition::Node>,
 }
 /// Nested message and enum types in `Condition`.
@@ -958,11 +977,28 @@ pub mod condition {
         BeaconUnderAttack(super::BeaconUnderAttack),
         #[prost(message, tag="42")]
         BeaconPowered(super::BeaconPowered),
+        #[prost(message, tag="43")]
+        BeaconUnitsByRole(super::BeaconUnitsByRole),
+        #[prost(message, tag="44")]
+        BeaconMandate(super::BeaconMandate),
+        #[prost(message, tag="45")]
+        BeaconHasStructure(super::BeaconHasStructure),
+        /// --- enemy knowledge (60-69) ------------------------------------------
+        #[prost(message, tag="60")]
+        EnemyUnitsNear(super::EnemyUnitsNear),
+        #[prost(message, tag="61")]
+        EnemyBeaconKnown(super::EnemyBeaconKnown),
+        #[prost(message, tag="62")]
+        EnemyStructureNear(super::EnemyStructureNear),
         /// --- economy (70-79) --------------------------------------------------
         #[prost(message, tag="70")]
         Treasury(super::Treasury),
         #[prost(message, tag="71")]
         KwHeadroom(super::KwHeadroom),
+        #[prost(message, tag="72")]
+        KwSupply(super::KwSupply),
+        #[prost(message, tag="73")]
+        KwDraw(super::KwDraw),
         /// --- playbook state (90-99) -------------------------------------------
         #[prost(message, tag="90")]
         StepReached(super::StepReached),
@@ -1201,6 +1237,173 @@ impl ::prost::Name for BeaconPowered {
 const NAME: &'static str = "BeaconPowered";
 const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.BeaconPowered".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.BeaconPowered".into() }}
+/// How many units of one role are homed to a beacon. Reads the seat's own
+/// beacon (spec section 10, "own beacon").
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct BeaconUnitsByRole {
+    #[prost(message, optional, tag="1")]
+    pub beacon: ::core::option::Option<BeaconRef>,
+    #[prost(enumeration="beacon_units_by_role::Role", tag="2")]
+    pub role: i32,
+    /// A count of whole units.
+    #[prost(message, optional, tag="3")]
+    pub count: ::core::option::Option<IntCompare>,
+}
+/// Nested message and enum types in `BeaconUnitsByRole`.
+pub mod beacon_units_by_role {
+    /// The roles a beacon's units have. The commander has no beacon, so it has no
+    /// role here.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Role {
+        Unspecified = 0,
+        BuildDrone = 1,
+        MiningDrone = 2,
+        RepairDrone = 3,
+        Raider = 4,
+        Scout = 5,
+    }
+    impl Role {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "ROLE_UNSPECIFIED",
+                Self::BuildDrone => "BUILD_DRONE",
+                Self::MiningDrone => "MINING_DRONE",
+                Self::RepairDrone => "REPAIR_DRONE",
+                Self::Raider => "RAIDER",
+                Self::Scout => "SCOUT",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "ROLE_UNSPECIFIED" => Some(Self::Unspecified),
+                "BUILD_DRONE" => Some(Self::BuildDrone),
+                "MINING_DRONE" => Some(Self::MiningDrone),
+                "REPAIR_DRONE" => Some(Self::RepairDrone),
+                "RAIDER" => Some(Self::Raider),
+                "SCOUT" => Some(Self::Scout),
+                _ => None,
+            }
+        }
+    }
+}
+impl ::prost::Name for BeaconUnitsByRole {
+const NAME: &'static str = "BeaconUnitsByRole";
+const PACKAGE: &'static str = "gp.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.v1.BeaconUnitsByRole".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.BeaconUnitsByRole".into() }}
+/// Whether a beacon carries a given writ (spec section 10, "own beacon").
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct BeaconMandate {
+    #[prost(message, optional, tag="1")]
+    pub beacon: ::core::option::Option<BeaconRef>,
+    #[prost(enumeration="beacon_filter::MandateKind", tag="2")]
+    pub mandate: i32,
+}
+impl ::prost::Name for BeaconMandate {
+const NAME: &'static str = "BeaconMandate";
+const PACKAGE: &'static str = "gp.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.v1.BeaconMandate".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.BeaconMandate".into() }}
+/// Whether a beacon has a finished structure of a kind. A structure still under
+/// construction does not count.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct BeaconHasStructure {
+    #[prost(message, optional, tag="1")]
+    pub beacon: ::core::option::Option<BeaconRef>,
+    /// A blueprint, spelt as BuildTarget.blueprint_id spells one.
+    #[prost(string, tag="2")]
+    pub blueprint_id: ::prost::alloc::string::String,
+}
+impl ::prost::Name for BeaconHasStructure {
+const NAME: &'static str = "BeaconHasStructure";
+const PACKAGE: &'static str = "gp.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.v1.BeaconHasStructure".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.BeaconHasStructure".into() }}
+/// How many enemy units the seat knows of within a radius of a place, under a
+/// freshness window (spec section 10, "enemy knowledge"). Reads the seat's own
+/// sightings, never the world: a unit the seat has not seen is not counted.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct EnemyUnitsNear {
+    #[prost(message, optional, tag="1")]
+    pub near: ::core::option::Option<NearPlace>,
+    /// Whole voxels from `near`, inclusive, as a straight-line distance.
+    #[prost(uint32, tag="2")]
+    pub radius_voxels: u32,
+    /// A count of whole units.
+    #[prost(message, optional, tag="3")]
+    pub count: ::core::option::Option<IntCompare>,
+    /// Required: "enemy predicates must declare freshness" (spec section 10).
+    /// Leaving it out is E0209.
+    #[prost(message, optional, tag="4")]
+    pub freshness: ::core::option::Option<Freshness>,
+}
+impl ::prost::Name for EnemyUnitsNear {
+const NAME: &'static str = "EnemyUnitsNear";
+const PACKAGE: &'static str = "gp.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.v1.EnemyUnitsNear".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.EnemyUnitsNear".into() }}
+/// The place an enemy predicate measures from. It spells Location's three fixed
+/// arms on Location's numbers, and has no site arm: `on`, `covering` and `toward`
+/// say where a thing is built, which is no place to measure from, and a condition
+/// that could name a feature would have to rank one, which a condition never does.
+///
+/// Numbers 4-15 are free for a further place.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct NearPlace {
+    #[prost(oneof="near_place::Place", tags="1, 2, 3")]
+    pub place: ::core::option::Option<near_place::Place>,
+}
+/// Nested message and enum types in `NearPlace`.
+pub mod near_place {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Place {
+        #[prost(message, tag="1")]
+        Voxel(super::Voxel),
+        #[prost(message, tag="2")]
+        BeaconAnchor(super::BeaconRef),
+        #[prost(message, tag="3")]
+        Safest(super::Safest),
+    }
+}
+impl ::prost::Name for NearPlace {
+const NAME: &'static str = "NearPlace";
+const PACKAGE: &'static str = "gp.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.v1.NearPlace".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.NearPlace".into() }}
+/// Whether the seat knows of any enemy beacon under a freshness window (spec
+/// section 10, "enemy knowledge").
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct EnemyBeaconKnown {
+    /// Required, as EnemyUnitsNear.freshness is.
+    #[prost(message, optional, tag="1")]
+    pub freshness: ::core::option::Option<Freshness>,
+}
+impl ::prost::Name for EnemyBeaconKnown {
+const NAME: &'static str = "EnemyBeaconKnown";
+const PACKAGE: &'static str = "gp.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.v1.EnemyBeaconKnown".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.EnemyBeaconKnown".into() }}
+/// Whether the seat knows of an enemy structure within a radius of a place,
+/// under a freshness window (spec section 10, "enemy knowledge").
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct EnemyStructureNear {
+    #[prost(message, optional, tag="1")]
+    pub near: ::core::option::Option<NearPlace>,
+    /// Whole voxels from `near`, inclusive, as a straight-line distance.
+    #[prost(uint32, tag="2")]
+    pub radius_voxels: u32,
+    /// A blueprint, spelt as BuildTarget.blueprint_id spells one. Empty means a
+    /// structure of any kind.
+    #[prost(string, tag="3")]
+    pub blueprint_id: ::prost::alloc::string::String,
+    /// Required, as EnemyUnitsNear.freshness is.
+    #[prost(message, optional, tag="4")]
+    pub freshness: ::core::option::Option<Freshness>,
+}
+impl ::prost::Name for EnemyStructureNear {
+const NAME: &'static str = "EnemyStructureNear";
+const PACKAGE: &'static str = "gp.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.v1.EnemyStructureNear".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.EnemyStructureNear".into() }}
 /// The seat treasury in whole $.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Treasury {
@@ -1222,6 +1425,26 @@ impl ::prost::Name for KwHeadroom {
 const NAME: &'static str = "KwHeadroom";
 const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.KwHeadroom".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.KwHeadroom".into() }}
+/// The seat's whole power supply, in whole kW.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct KwSupply {
+    #[prost(message, optional, tag="1")]
+    pub kw: ::core::option::Option<IntCompare>,
+}
+impl ::prost::Name for KwSupply {
+const NAME: &'static str = "KwSupply";
+const PACKAGE: &'static str = "gp.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.v1.KwSupply".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.KwSupply".into() }}
+/// The seat's whole power draw, in whole kW.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct KwDraw {
+    #[prost(message, optional, tag="1")]
+    pub kw: ::core::option::Option<IntCompare>,
+}
+impl ::prost::Name for KwDraw {
+const NAME: &'static str = "KwDraw";
+const PACKAGE: &'static str = "gp.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.v1.KwDraw".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.KwDraw".into() }}
 /// Whether the route has reached a step, by label. True from the moment the
 /// step starts and stays true for the rest of the segment.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -1387,10 +1610,9 @@ const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.FallbackShadow".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.FallbackShadow".into() }}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FallbackPatrol {
-    /// PLACEHOLDER: the patrol route's shape, a list of locations — owner, when the spec specifies it.
-    /// The patrol route shape is not specified. A list of
-    /// locations is the obvious reading of "patrol" and is what the editor's map
-    /// route would produce.
+    /// Ruled, not guessed: the spec does not give a patrol route's shape, and it is
+    /// a list of locations (S3's plan, decision 8, ruled by decisions-log item 154
+    /// (4); the register's M-13), which is what the editor's map route produces.
     #[prost(message, repeated, tag="1")]
     pub waypoints: ::prost::alloc::vec::Vec<Location>,
 }
@@ -1423,7 +1645,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.FallbackPatrol".into()
 /// Numbers 4-9 are free for a further fixed form.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Location {
-    #[prost(oneof="location::Place", tags="1, 2, 3, 10, 11")]
+    #[prost(oneof="location::Place", tags="1, 2, 3, 10, 11, 12")]
     pub place: ::core::option::Option<location::Place>,
 }
 /// Nested message and enum types in `Location`.
@@ -1458,12 +1680,39 @@ pub mod location {
         /// Built in S1 with `on`, by the same lane (`tgt`, #81; item 131).
         #[prost(message, tag="11")]
         Covering(super::FeatureRef),
+        /// "a stepping stone toward a vent": the legal site, inside the seat's
+        /// spheres, nearest the named feature, for a beacon that cannot yet cover
+        /// it (S1's plan, decision 3; decisions-log item 128 (3) (c)). Legal only
+        /// in PlaceBeaconStep.at. A `toward` that finds no site fails its step and
+        /// says why, with how many sites it weighed.
+        ///
+        /// "Nearest" is targeting's (docs/design/targeting.md, "Nearest"; S3's
+        /// plan, E23): the least estimated travel, the item-61 estimator's integer
+        /// cost, from the candidate site to the feature's anchor column, over the
+        /// terrain the seat knows. Unreachable candidates are skipped, and ties go
+        /// to the lowest anchor y, then x. Straight-line distance is not used.
+        ///
+        /// On the wire from S3's `con6`. Until S3's `pred` builds it the sim's
+        /// compile answers NotAtThisStage and the verifier E0028.
+        #[prost(message, tag="12")]
+        Toward(super::Toward),
     }
 }
 impl ::prost::Name for Location {
 const NAME: &'static str = "Location";
 const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.Location".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.Location".into() }}
+/// A site that steps toward a feature: Location.toward.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct Toward {
+    /// Which feature the site steps toward, named or described.
+    #[prost(message, optional, tag="1")]
+    pub feature: ::core::option::Option<FeatureRef>,
+}
+impl ::prost::Name for Toward {
+const NAME: &'static str = "Toward";
+const PACKAGE: &'static str = "gp.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.v1.Toward".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.Toward".into() }}
 /// A feature — a heat vent or a scrap seam — named or described
 /// (docs/design/targeting.md, "The model" and "Descriptions (S1)").
 ///

@@ -87,6 +87,13 @@ or an Attack arm's fields are said after its writ, and every other writ still
 reads as its name alone. Like the targeting fixture it carries no SPDX header,
 and its golden is in the permissive tier.
 
+`predicates_and_toward/` (S3's `con6`) pins S3's constructs the same way, from
+`crates/plan-core/tests/cases/predicates_and_toward.jsonc`: the eight predicates
+and the site `toward`, named and described. The sim and the verifier refuse each
+of them until S3's `pred`, but a refused file still round-trips and renders, and
+that is what this case holds. It too carries no SPDX header, and its golden is in
+the permissive tier.
+
 ## Licensing
 
 The whole area is `MIT OR Apache-2.0` but one file,

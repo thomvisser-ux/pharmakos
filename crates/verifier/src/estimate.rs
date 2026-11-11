@@ -410,7 +410,10 @@ fn place(at: Option<&Location>, scope: &Scope) -> Option<Voxel> {
     match at?.place.as_ref()? {
         location::Place::Voxel(voxel) => Some(*voxel),
         location::Place::BeaconAnchor(reference) => beacon(Some(reference), scope),
-        location::Place::Safest(_) | location::Place::On(_) | location::Place::Covering(_) => None,
+        location::Place::Safest(_)
+        | location::Place::On(_)
+        | location::Place::Covering(_)
+        | location::Place::Toward(_) => None,
     }
 }
 

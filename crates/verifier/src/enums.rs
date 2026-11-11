@@ -16,18 +16,20 @@
 //! on the `i32`, and refuses a number the enum does not name, with a pointer
 //! to the field. It reads every enum field of `gp.v1`'s playbook vocabulary,
 //! not only the ones the sim's compile reads today, so a field that gains a
-//! reader later is already covered. (`Freshness.kind` is held for S3's
-//! enemy-knowledge predicates and no field of the v1 vocabulary carries one.)
+//! reader later is already covered. S3's `con6` predicates and `toward` are
+//! read here while the sim refuses them; a selector inside one is not, because
+//! the walk does not enter a refused predicate until S3's `vfy6`.
 //! An unset enum (zero) is the stages' own business: `E0005`, `E0007`, `E0111`
 //! and the omitted-setting notes say what it means where it stands.
 //!
 //! It runs with the decode stage, before any stage reads an enum.
 
 use pharmakos_proto::gp::v1::{
-    BeaconFilter, Condition, FeatureRef, IntCompare, InterfaceStep, Location, MandateSettings,
-    Playbook, Step, attack_settings, beacon_filter, build_settings, cmdr_hp_pct, condition,
-    defend_settings, feature_ref, handler, int_compare, interface_row, location, mandate_settings,
-    meta, mine_settings, move_step, on_death, on_fail, playbook, step,
+    BeaconFilter, Condition, FeatureRef, Freshness, IntCompare, InterfaceStep, Location,
+    MandateSettings, Playbook, Step, attack_settings, beacon_filter, beacon_units_by_role,
+    build_settings, cmdr_hp_pct, condition, defend_settings, feature_ref, freshness, handler,
+    int_compare, interface_row, location, mandate_settings, meta, mine_settings, move_step,
+    on_death, on_fail, playbook, step,
 };
 
 use crate::pointer;
@@ -77,6 +79,14 @@ impl Enums<'_> {
     fn compare(&mut self, at: &str, compare: Option<&IntCompare>) {
         if let Some(compare) = compare {
             self.raw::<int_compare::Op>(&pointer::child(at, "op"), "op", compare.op);
+        }
+    }
+
+    /// An enemy predicate's freshness, under the predicate at `at`.
+    fn freshness(&mut self, at: &str, window: Option<&Freshness>) {
+        if let Some(window) = window {
+            let here = pointer::child(&pointer::child(at, "freshness"), "kind");
+            self.raw::<freshness::Kind>(&here, "kind", window.kind);
         }
     }
 
@@ -151,6 +161,12 @@ impl Visit for Enums<'_> {
             Some(location::Place::On(feature)) => self.feature(&pointer::child(at, "on"), feature),
             Some(location::Place::Covering(feature)) => {
                 self.feature(&pointer::child(at, "covering"), feature);
+            }
+            Some(location::Place::Toward(toward)) => {
+                if let Some(feature) = toward.feature.as_ref() {
+                    let here = pointer::child(&pointer::child(at, "toward"), "feature");
+                    self.feature(&here, feature);
+                }
             }
             _ => {}
         }
@@ -237,6 +253,43 @@ impl Visit for Enums<'_> {
             ),
             Some(condition::Node::KwHeadroom(predicate)) => self.compare(
                 &pointer::child(&pointer::child(at, "kw_headroom"), "kw"),
+                predicate.kw.as_ref(),
+            ),
+            Some(condition::Node::BeaconUnitsByRole(predicate)) => {
+                let here = pointer::child(at, "beacon_units_by_role");
+                self.raw::<beacon_units_by_role::Role>(
+                    &pointer::child(&here, "role"),
+                    "role",
+                    predicate.role,
+                );
+                self.compare(&pointer::child(&here, "count"), predicate.count.as_ref());
+            }
+            Some(condition::Node::BeaconMandate(predicate)) => {
+                self.raw::<beacon_filter::MandateKind>(
+                    &pointer::child(&pointer::child(at, "beacon_mandate"), "mandate"),
+                    "mandate",
+                    predicate.mandate,
+                );
+            }
+            Some(condition::Node::EnemyUnitsNear(predicate)) => {
+                let here = pointer::child(at, "enemy_units_near");
+                self.compare(&pointer::child(&here, "count"), predicate.count.as_ref());
+                self.freshness(&here, predicate.freshness.as_ref());
+            }
+            Some(condition::Node::EnemyBeaconKnown(predicate)) => {
+                let here = pointer::child(at, "enemy_beacon_known");
+                self.freshness(&here, predicate.freshness.as_ref());
+            }
+            Some(condition::Node::EnemyStructureNear(predicate)) => {
+                let here = pointer::child(at, "enemy_structure_near");
+                self.freshness(&here, predicate.freshness.as_ref());
+            }
+            Some(condition::Node::KwSupply(predicate)) => self.compare(
+                &pointer::child(&pointer::child(at, "kw_supply"), "kw"),
+                predicate.kw.as_ref(),
+            ),
+            Some(condition::Node::KwDraw(predicate)) => self.compare(
+                &pointer::child(&pointer::child(at, "kw_draw"), "kw"),
                 predicate.kw.as_ref(),
             ),
             _ => {}

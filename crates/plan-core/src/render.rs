@@ -63,10 +63,11 @@
 use pharmakos_proto::gp::v1::feature_ref::{self, Coverage, Rank};
 use pharmakos_proto::gp::v1::{
     AttackSettings, BeaconFilter, BeaconRef, Condition, DefendSettings, Fallback, FeatureRef,
-    Handler, InterfaceRow, Location, MandateSettings, OnDeath, Options, Playbook, Step, Voxel,
-    attack_settings, attack_target, beacon_filter, beacon_ref, cmdr_hp_pct, condition,
-    defend_settings, fallback, handler, int_compare, interface_row, location, mandate_settings,
-    meta, on_death, on_fail, playbook, protected_asset, step,
+    Freshness, Handler, InterfaceRow, Location, MandateSettings, NearPlace, OnDeath, Options,
+    Playbook, Step, Voxel, attack_settings, attack_target, beacon_filter, beacon_ref,
+    beacon_units_by_role, cmdr_hp_pct, condition, defend_settings, fallback, freshness, handler,
+    int_compare, interface_row, location, mandate_settings, meta, near_place, on_death, on_fail,
+    playbook, protected_asset, step,
 };
 use std::fmt::Write as _;
 
@@ -532,6 +533,20 @@ fn location(place: Option<&Location>) -> String {
         Some(location::Place::Covering(feature)) => {
             format!("{} {}", s::SITE_COVERING, feature_ref(feature))
         }
+        Some(location::Place::Toward(toward)) => match toward.feature.as_ref() {
+            Some(feature) => format!("{} {}", s::SITE_TOWARD, feature_ref(feature)),
+            None => format!("{} {}", s::SITE_TOWARD, s::FEATURE_NONE),
+        },
+    }
+}
+
+/// The place an enemy predicate measures from.
+fn near_place(place: Option<&NearPlace>) -> String {
+    match place.and_then(|place| place.place.as_ref()) {
+        None => s::PLACE_NOWHERE.to_owned(),
+        Some(near_place::Place::Voxel(at)) => voxel(at),
+        Some(near_place::Place::BeaconAnchor(reference)) => beacon(Some(reference)),
+        Some(near_place::Place::Safest(_)) => s::BEACON_SAFEST.to_owned(),
     }
 }
 
@@ -629,14 +644,7 @@ fn selector(superlative: &str, filter: Option<&BeaconFilter>, note: &str) -> Str
         && writ != beacon_filter::MandateKind::Unspecified
     {
         sentence.push(' ');
-        sentence.push_str(match writ {
-            beacon_filter::MandateKind::Build => s::MANDATE_BUILD,
-            beacon_filter::MandateKind::Defend => s::MANDATE_DEFEND,
-            beacon_filter::MandateKind::Attack => s::MANDATE_ATTACK,
-            beacon_filter::MandateKind::Survey => s::MANDATE_SURVEY,
-            beacon_filter::MandateKind::Mine => s::MANDATE_MINE,
-            beacon_filter::MandateKind::Unspecified => "",
-        });
+        sentence.push_str(writ_word(writ));
     }
     sentence.push(' ');
     sentence.push_str(s::BEACON_NOUN);
@@ -704,6 +712,86 @@ fn condition(node: Option<&Condition>) -> String {
         condition::Node::RuleFired(test) => {
             format!("rule \"{}\" has fired", test.handler_id)
         }
+        condition::Node::BeaconUnitsByRole(test) => format!(
+            "{} has {}",
+            beacon(test.beacon.as_ref()),
+            compare(test.count.as_ref(), role_noun(test.role()))
+        ),
+        condition::Node::BeaconMandate(test) => format!(
+            "{} carries {}",
+            beacon(test.beacon.as_ref()),
+            writ_word(test.mandate())
+        ),
+        condition::Node::BeaconHasStructure(test) => format!(
+            "{} has a finished {}",
+            beacon(test.beacon.as_ref()),
+            test.blueprint_id
+        ),
+        condition::Node::EnemyUnitsNear(test) => format!(
+            "the seat knows of {} within {} voxels of {}, {}",
+            compare(test.count.as_ref(), s::ENEMY_UNITS_UNIT),
+            test.radius_voxels,
+            near_place(test.near.as_ref()),
+            fresh_words(test.freshness.as_ref())
+        ),
+        condition::Node::EnemyBeaconKnown(test) => format!(
+            "the seat knows of an enemy beacon, {}",
+            fresh_words(test.freshness.as_ref())
+        ),
+        condition::Node::EnemyStructureNear(test) => format!(
+            "the seat knows of an enemy {} within {} voxels of {}, {}",
+            if test.blueprint_id.is_empty() {
+                s::ANY_STRUCTURE
+            } else {
+                test.blueprint_id.as_str()
+            },
+            test.radius_voxels,
+            near_place(test.near.as_ref()),
+            fresh_words(test.freshness.as_ref())
+        ),
+        condition::Node::KwSupply(test) => {
+            format!("the grid's supply is {}", compare(test.kw.as_ref(), "kW"))
+        }
+        condition::Node::KwDraw(test) => {
+            format!("the grid's draw is {}", compare(test.kw.as_ref(), "kW"))
+        }
+    }
+}
+
+fn writ_word(writ: beacon_filter::MandateKind) -> &'static str {
+    match writ {
+        beacon_filter::MandateKind::Build => s::MANDATE_BUILD,
+        beacon_filter::MandateKind::Defend => s::MANDATE_DEFEND,
+        beacon_filter::MandateKind::Attack => s::MANDATE_ATTACK,
+        beacon_filter::MandateKind::Survey => s::MANDATE_SURVEY,
+        beacon_filter::MandateKind::Mine => s::MANDATE_MINE,
+        beacon_filter::MandateKind::Unspecified => s::MANDATE_NONE,
+    }
+}
+
+fn role_noun(role: beacon_units_by_role::Role) -> &'static str {
+    match role {
+        beacon_units_by_role::Role::BuildDrone => s::ROLE_BUILD_DRONE,
+        beacon_units_by_role::Role::MiningDrone => s::ROLE_MINING_DRONE,
+        beacon_units_by_role::Role::RepairDrone => s::ROLE_REPAIR_DRONE,
+        beacon_units_by_role::Role::Raider => s::ROLE_RAIDER,
+        beacon_units_by_role::Role::Scout => s::ROLE_SCOUT,
+        beacon_units_by_role::Role::Unspecified => s::ROLE_NONE,
+    }
+}
+
+fn fresh_words(window: Option<&Freshness>) -> String {
+    let Some(window) = window else {
+        return s::FRESH_NONE.to_owned();
+    };
+    match window.kind() {
+        freshness::Kind::VisibleNow => s::FRESH_NOW.to_owned(),
+        freshness::Kind::KnownWithin => format!(
+            "{} {}",
+            s::FRESH_WITHIN,
+            duration(Ms::new(window.known_within_ms))
+        ),
+        freshness::Kind::FreshnessUnspecified => s::FRESH_NONE.to_owned(),
     }
 }
 

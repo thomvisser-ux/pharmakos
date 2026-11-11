@@ -175,6 +175,63 @@ pub const VERIFIER_STRINGS: &[Text] = &[
                   landed; this code is retired and raised by nothing.",
         beginner: "Autocannons, mortars and walls can be built in this build.",
     },
+    // E0020 to E0028: S3's predicates and `toward`, on the wire before they
+    // have an effect, as E0009 to E0017 are.
+    Text {
+        code: "E0020",
+        message: "predicate `beacon_units_by_role` has no effect until S3's predicate catalogue lands; it is \
+                  refused rather than ignored.",
+        beginner: "How many units of a role a beacon has can't be asked about yet.",
+    },
+    Text {
+        code: "E0021",
+        message: "predicate `beacon_mandate` has no effect until S3's predicate catalogue lands; it is \
+                  refused rather than ignored.",
+        beginner: "Which job a beacon has can't be asked about yet.",
+    },
+    Text {
+        code: "E0022",
+        message: "predicate `beacon_has_structure` has no effect until S3's predicate catalogue lands; it is \
+                  refused rather than ignored.",
+        beginner: "Whether a beacon has a finished building can't be asked about yet.",
+    },
+    Text {
+        code: "E0023",
+        message: "predicate `enemy_units_near` has no effect until S3's predicate catalogue lands; it is \
+                  refused rather than ignored.",
+        beginner: "Enemy units near a place can't be asked about yet.",
+    },
+    Text {
+        code: "E0024",
+        message: "predicate `enemy_beacon_known` has no effect until S3's predicate catalogue lands; it is \
+                  refused rather than ignored.",
+        beginner: "Whether you know of an enemy beacon can't be asked about yet.",
+    },
+    Text {
+        code: "E0025",
+        message: "predicate `enemy_structure_near` has no effect until S3's predicate catalogue lands; it is \
+                  refused rather than ignored.",
+        beginner: "Enemy buildings near a place can't be asked about yet.",
+    },
+    Text {
+        code: "E0026",
+        message: "predicate `kw_supply` has no effect until S3's predicate catalogue lands; it is \
+                  refused rather than ignored.",
+        beginner: "Your power supply can't be asked about yet. Asking about headroom works.",
+    },
+    Text {
+        code: "E0027",
+        message: "predicate `kw_draw` has no effect until S3's predicate catalogue lands; it is \
+                  refused rather than ignored.",
+        beginner: "Your power draw can't be asked about yet. Asking about headroom works.",
+    },
+    Text {
+        code: "E0028",
+        message: "site `toward` has no effect until S3's stepping-stone site search lands; it is \
+                  refused rather than ignored.",
+        beginner: "A beacon can't yet be placed as a stepping stone toward a feature. Pick a spot, \
+                   or cover a feature you can reach.",
+    },
     // --- E01xx: limits and required blocks -----------------------------------
     Text {
         code: "E0101",

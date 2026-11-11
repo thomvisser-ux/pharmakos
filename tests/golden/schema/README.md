@@ -35,10 +35,10 @@ the `.proto` files it comes from (AGENTS.md §9 item 8).
   for generated, exactly so it cannot drift.
 
 One thing this file cannot catch, and so does not have to: **a `$defs` key
-written twice.** The keys are last segments of full names (`Step`, `Meta`) and
-`gp.v1` already declares two enums called `Kind`; if both were ever reachable
-from one root, one definition would overwrite the other and every `$ref` to it
-would name the wrong type — with this golden agreeing, because this golden *is*
-the output. `crates/gateway/src/schema.rs` therefore refuses a second claimant
-on a key rather than overwriting, so that day is a failed build and not a
-blessed diff.
+written twice.** The keys are full names less the package (`Step`,
+`Freshness.Kind`), because `gp.v1` declares two enums called `Kind` and S3's
+`con6` made both reachable from one root; had one definition overwritten the
+other, every `$ref` to it would name the wrong type — with this golden agreeing,
+because this golden *is* the output. `crates/gateway/src/schema.rs` therefore
+still refuses a second claimant on a key rather than overwriting, so that day
+is a failed build and not a blessed diff.

@@ -880,7 +880,8 @@ fn build_anchors<'a>(
                 Place::Voxel(_)
                 | Place::BeaconAnchor(_)
                 | Place::Safest(_)
-                | Place::Covering(_) => None,
+                | Place::Covering(_)
+                | Place::Toward(_) => None,
             },
         )
         .collect()
@@ -897,7 +898,8 @@ fn row_anchors<'a>(row: &'a InterfaceRow, at: &str) -> Vec<(String, &'a FeatureR
                 Place::Voxel(_)
                 | Place::BeaconAnchor(_)
                 | Place::Safest(_)
-                | Place::Covering(_) => None,
+                | Place::Covering(_)
+                | Place::Toward(_) => None,
             }
         };
     match row.row.as_ref() {
@@ -1015,7 +1017,9 @@ fn read_placement(
                 point.is_none().then_some(StepFailure::NoTarget),
             )
         }
-        Some(Place::On(_)) | None => (None, None, Some(StepFailure::NoTarget)),
+        // `toward` is out of reach here until S3's `pred`: the compile refuses
+        // the playbook before this reads it.
+        Some(Place::On(_) | Place::Toward(_)) | None => (None, None, Some(StepFailure::NoTarget)),
     };
     // The sim's `site_is_legal`, checked before any initial row is read: a
     // site inside one of the seat's own spheres, not on the column of one of
@@ -1126,7 +1130,7 @@ fn beacon_place(
     let spec = match placement? {
         Place::BeaconAnchor(reference) => beacon_spec_of(reference, reader.world.rules()).ok()?,
         Place::Safest(_) => BeaconSpec::Safest,
-        Place::Voxel(_) | Place::On(_) | Place::Covering(_) => return None,
+        Place::Voxel(_) | Place::On(_) | Place::Covering(_) | Place::Toward(_) => return None,
     };
     let id = resolve_beacon_in(snapshot, reader.world.rules(), reader.seat, spec, None)?;
     beacon_point(reader.world, id)

@@ -1,0 +1,66 @@
+{
+  "schema_version": {
+    "major": 1
+  },
+  "meta": {
+    "title": "case",
+    "author_kind": "HUMAN"
+  },
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {
+        "label": "s1",
+        "hold": {
+          "ms": 1000
+        }
+      }
+    ],
+    "handlers": [
+      {
+        "id": "h1",
+        "when": {
+          "enemy_units_near": {
+            "near": {
+              "beacon_anchor": {
+                "beacon_id": "b_01"
+              }
+            },
+            "radius_voxels": 24,
+            "count": {
+              "op": "GE",
+              "value": 1
+            },
+            "freshness": {
+              "kind": "VISIBLE_NOW"
+            }
+          }
+        },
+        "body": [
+          {
+            "label": "b1",
+            "hold": {
+              "ms": 1000
+            }
+          }
+        ],
+        "resume": "CONTINUE",
+        "cooldown_ms": 5000,
+        "max_fires": 1
+      }
+    ]
+  },
+  "on_death": {
+    "on_respawn": "CONTINUE",
+    "max_deaths_before_fallback": 1
+  },
+  "fallback": {
+    "hold": {
+      "at": {
+        "beacon_anchor": {
+          "safest": {}
+        }
+      }
+    }
+  }
+}

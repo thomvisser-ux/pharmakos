@@ -1964,6 +1964,7 @@ fn compile_anchor(
         Some(gp::v1::location::Place::Covering(_)) => Err(PlanError::MisplacedTarget(
             "`covering` is legal only in a `place_beacon`'s `at`; a Build target stands `on` a vent",
         )),
+        Some(gp::v1::location::Place::Toward(_)) => Err(REFUSE_TOWARD.error()),
         None => Err(PlanError::MissingBlock("location.place")),
     }
 }
@@ -1996,6 +1997,7 @@ fn compile_removal(
         Some(gp::v1::location::Place::Covering(_)) => Err(PlanError::MisplacedTarget(
             "`covering` is legal only in a `place_beacon`'s `at`",
         )),
+        Some(gp::v1::location::Place::Toward(_)) => Err(REFUSE_TOWARD.error()),
         None => Err(PlanError::MissingBlock("location.place")),
     }
 }
@@ -2219,6 +2221,7 @@ fn compile_place(
         Some(gp::v1::location::Place::On(_)) => Err(PlanError::MisplacedTarget(
             "`on` is legal only as a Build target's anchor (and, by name, a removal's)",
         )),
+        Some(gp::v1::location::Place::Toward(_)) => Err(REFUSE_TOWARD.error()),
         None => Err(PlanError::MissingBlock("location.place")),
     }
 }
@@ -2416,6 +2419,10 @@ fn compile_fallback(fallback: &gp::v1::Fallback, names: &Names<'_>) -> Result<Po
 }
 
 /// Compile one condition, enforcing spec section 10's depth and node limits.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one arm per predicate of the closed catalogue, each its own compile or refusal; split, the match would no longer be exhaustive in one place"
+)]
 fn compile_cond(
     condition: &gp::v1::Condition,
     names: &Names<'_>,
@@ -2518,6 +2525,14 @@ fn compile_cond(
                 .ok_or_else(|| PlanError::UnknownHandler(predicate.handler_id.clone()))?;
             Ok(Cond::RuleFired(index))
         }
+        gp::v1::condition::Node::BeaconUnitsByRole(_) => Err(REFUSE_BEACON_UNITS_BY_ROLE.error()),
+        gp::v1::condition::Node::BeaconMandate(_) => Err(REFUSE_BEACON_MANDATE.error()),
+        gp::v1::condition::Node::BeaconHasStructure(_) => Err(REFUSE_BEACON_HAS_STRUCTURE.error()),
+        gp::v1::condition::Node::EnemyUnitsNear(_) => Err(REFUSE_ENEMY_UNITS_NEAR.error()),
+        gp::v1::condition::Node::EnemyBeaconKnown(_) => Err(REFUSE_ENEMY_BEACON_KNOWN.error()),
+        gp::v1::condition::Node::EnemyStructureNear(_) => Err(REFUSE_ENEMY_STRUCTURE_NEAR.error()),
+        gp::v1::condition::Node::KwSupply(_) => Err(REFUSE_KW_SUPPLY.error()),
+        gp::v1::condition::Node::KwDraw(_) => Err(REFUSE_KW_DRAW.error()),
     }
 }
 
@@ -2735,6 +2750,8 @@ pub enum PlanError {
     /// | a Build target (or a removal) anchored on a beacon selector rather than on a voxel or `on` a vent | S3 |
     /// | selector filter `side: ENEMY_KNOWN` | S3 |
     /// | selector filter `tags` | S3 |
+    /// | predicates `beacon_units_by_role`, `beacon_mandate`, `beacon_has_structure`, `enemy_units_near`, `enemy_beacon_known`, `enemy_structure_near`, `kw_supply` and `kw_draw` | S3 (`pred`) |
+    /// | site `toward`, wherever a `Location` is read | S3 (`pred`) |
     ///
     /// S2's `dfnd` lifted Defend's settings, `most_threatened` and
     /// `beacon_under_attack`, and S2's `atk` Attack's settings, which have
@@ -2835,14 +2852,90 @@ pub const REFUSE_FILTER_TAGS: Refusal = Refusal {
             writing tags is legal, reading them is not)",
 };
 
+/// The stage S3's predicates take their reading at: on the wire from `con6`,
+/// evaluated from `pred`.
+const PREDICATE_STAGE: &str = "S3 (the predicate catalogue, which gives it a reading)";
+
+/// The predicate `beacon_units_by_role`: S3.
+pub const REFUSE_BEACON_UNITS_BY_ROLE: Refusal = Refusal {
+    name: "predicate_beacon_units_by_role",
+    construct: "predicate `beacon_units_by_role`",
+    stage: PREDICATE_STAGE,
+};
+
+/// The predicate `beacon_mandate`: S3.
+pub const REFUSE_BEACON_MANDATE: Refusal = Refusal {
+    name: "predicate_beacon_mandate",
+    construct: "predicate `beacon_mandate`",
+    stage: PREDICATE_STAGE,
+};
+
+/// The predicate `beacon_has_structure`: S3.
+pub const REFUSE_BEACON_HAS_STRUCTURE: Refusal = Refusal {
+    name: "predicate_beacon_has_structure",
+    construct: "predicate `beacon_has_structure`",
+    stage: PREDICATE_STAGE,
+};
+
+/// The predicate `enemy_units_near`: S3.
+pub const REFUSE_ENEMY_UNITS_NEAR: Refusal = Refusal {
+    name: "predicate_enemy_units_near",
+    construct: "predicate `enemy_units_near`",
+    stage: PREDICATE_STAGE,
+};
+
+/// The predicate `enemy_beacon_known`: S3.
+pub const REFUSE_ENEMY_BEACON_KNOWN: Refusal = Refusal {
+    name: "predicate_enemy_beacon_known",
+    construct: "predicate `enemy_beacon_known`",
+    stage: PREDICATE_STAGE,
+};
+
+/// The predicate `enemy_structure_near`: S3.
+pub const REFUSE_ENEMY_STRUCTURE_NEAR: Refusal = Refusal {
+    name: "predicate_enemy_structure_near",
+    construct: "predicate `enemy_structure_near`",
+    stage: PREDICATE_STAGE,
+};
+
+/// The predicate `kw_supply`: S3.
+pub const REFUSE_KW_SUPPLY: Refusal = Refusal {
+    name: "predicate_kw_supply",
+    construct: "predicate `kw_supply`",
+    stage: PREDICATE_STAGE,
+};
+
+/// The predicate `kw_draw`: S3.
+pub const REFUSE_KW_DRAW: Refusal = Refusal {
+    name: "predicate_kw_draw",
+    construct: "predicate `kw_draw`",
+    stage: PREDICATE_STAGE,
+};
+
+/// The site `toward`: S3.
+pub const REFUSE_TOWARD: Refusal = Refusal {
+    name: "site_toward",
+    construct: "site `toward`",
+    stage: "S3 (the stepping-stone site search, which chooses the site)",
+};
+
 /// Every construct the compile refuses for its stage, in the order
 /// [`PlanError::NotAtThisStage`]'s documentation lists them (E8).
-pub const REFUSALS: [Refusal; 5] = [
+pub const REFUSALS: [Refusal; 14] = [
     REFUSE_QUEUE_STRUCTURE,
     REFUSE_BUILD_BLUEPRINT,
     REFUSE_BUILD_BEACON_ANCHOR,
     REFUSE_ENEMY_KNOWN,
     REFUSE_FILTER_TAGS,
+    REFUSE_BEACON_UNITS_BY_ROLE,
+    REFUSE_BEACON_MANDATE,
+    REFUSE_BEACON_HAS_STRUCTURE,
+    REFUSE_ENEMY_UNITS_NEAR,
+    REFUSE_ENEMY_BEACON_KNOWN,
+    REFUSE_ENEMY_STRUCTURE_NEAR,
+    REFUSE_KW_SUPPLY,
+    REFUSE_KW_DRAW,
+    REFUSE_TOWARD,
 ];
 
 /// [`PlanError::WallBoxOffAWall`]'s words, apart so that `Display`'s match
