@@ -1757,6 +1757,11 @@ fn the_refusal_table_and_the_arms_agree() {
         )
     };
     let walk = |to: &str| format!(r#"{{"label": "m", "move": {{"to": {to}, "pace": "DIRECT"}}}}"#);
+    let when = |predicate: &str| {
+        format!(
+            r#"{{"id": "h", "when": {predicate}, "body": [{{"label": "b", "hold": {{"ms": 1000}}}}], "resume": "CONTINUE", "cooldown_ms": 5000, "max_fires": 1}}"#
+        )
+    };
     let cases: Vec<(&str, String, String)> = vec![
         (
             "queue_structure",
@@ -1787,6 +1792,60 @@ fn the_refusal_table_and_the_arms_agree() {
             walk(
                 r#"{"beacon_anchor": {"nearest": {"filter": {"side": "OWN", "tags": ["east"]}}}}"#,
             ),
+            String::new(),
+        ),
+        (
+            "predicate_beacon_units_by_role",
+            String::new(),
+            when(
+                r#"{"beacon_units_by_role": {"beacon": {"safest": {}}, "role": "SCOUT", "count": {"op": "GE", "value": 1}}}"#,
+            ),
+        ),
+        (
+            "predicate_beacon_mandate",
+            String::new(),
+            when(r#"{"beacon_mandate": {"beacon": {"safest": {}}, "mandate": "BUILD"}}"#),
+        ),
+        (
+            "predicate_beacon_has_structure",
+            String::new(),
+            when(
+                r#"{"beacon_has_structure": {"beacon": {"safest": {}}, "blueprint_id": "generator"}}"#,
+            ),
+        ),
+        (
+            "predicate_enemy_units_near",
+            String::new(),
+            when(
+                r#"{"enemy_units_near": {"near": {"safest": {}}, "radius_voxels": 24, "count": {"op": "GE", "value": 1}, "freshness": {"kind": "VISIBLE_NOW"}}}"#,
+            ),
+        ),
+        (
+            "predicate_enemy_beacon_known",
+            String::new(),
+            when(r#"{"enemy_beacon_known": {"freshness": {"kind": "VISIBLE_NOW"}}}"#),
+        ),
+        (
+            "predicate_enemy_structure_near",
+            String::new(),
+            when(
+                r#"{"enemy_structure_near": {"near": {"safest": {}}, "radius_voxels": 24, "any_kind": {}, "freshness": {"kind": "KNOWN_WITHIN", "known_within_ms": 30000}}}"#,
+            ),
+        ),
+        (
+            "predicate_kw_supply",
+            String::new(),
+            when(r#"{"kw_supply": {"kw": {"op": "GE", "value": 1}}}"#),
+        ),
+        (
+            "predicate_kw_draw",
+            String::new(),
+            when(r#"{"kw_draw": {"kw": {"op": "GE", "value": 1}}}"#),
+        ),
+        (
+            "site_toward",
+            r#"{"label": "p", "place_beacon": {"at": {"toward": {"feature": {"vent": {"rank": "NEAREST", "coverage": "UNCOVERED"}}}}}}"#
+                .to_owned(),
             String::new(),
         ),
     ];

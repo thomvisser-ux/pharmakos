@@ -20,6 +20,7 @@ get_capabilities         observe
 estimate_route           observe
 get_schema               docs
 list_templates           docs
+get_vocabulary           docs
 instantiate_template     plan
 verify_plan              plan
 render_plan              plan

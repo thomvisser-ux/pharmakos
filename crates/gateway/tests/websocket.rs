@@ -248,7 +248,15 @@ fn server_frame(bytes: &[u8]) -> Result<Option<((Opcode, Vec<u8>), usize)>, ()> 
             wide.copy_from_slice(raw);
             (usize::from(u16::from_be_bytes(wide)), 4)
         }
-        127 => return Err(()),
+        127 => {
+            let raw = bytes.get(2..10).ok_or(())?;
+            let mut wide = [0_u8; 8];
+            wide.copy_from_slice(raw);
+            (
+                usize::try_from(u64::from_be_bytes(wide)).map_err(|_| ())?,
+                10,
+            )
+        }
         short => (usize::from(short), 2),
     };
     let payload = bytes

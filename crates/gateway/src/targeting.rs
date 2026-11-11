@@ -880,7 +880,8 @@ fn build_anchors<'a>(
                 Place::Voxel(_)
                 | Place::BeaconAnchor(_)
                 | Place::Safest(_)
-                | Place::Covering(_) => None,
+                | Place::Covering(_)
+                | Place::Toward(_) => None,
             },
         )
         .collect()
@@ -897,7 +898,8 @@ fn row_anchors<'a>(row: &'a InterfaceRow, at: &str) -> Vec<(String, &'a FeatureR
                 Place::Voxel(_)
                 | Place::BeaconAnchor(_)
                 | Place::Safest(_)
-                | Place::Covering(_) => None,
+                | Place::Covering(_)
+                | Place::Toward(_) => None,
             }
         };
     match row.row.as_ref() {
@@ -1015,7 +1017,29 @@ fn read_placement(
                 point.is_none().then_some(StepFailure::NoTarget),
             )
         }
-        Some(Place::On(_)) | None => (None, None, Some(StepFailure::NoTarget)),
+        // Out of reach: the compile refuses each before this reads it, and a
+        // made-up `no_target` would hide the day that stops being true.
+        // `toward` is refused until S3's `pred`, which must give it a reading
+        // here when it lifts the refusal; `on` is a misplaced site and an
+        // absent `at` a missing block, for good.
+        Some(Place::Toward(_)) => {
+            return Err(Error::internal(format!(
+                "{base}/at/toward reached the gateway's placement reader, which does not read \
+                 `toward` yet: the compile refuses it until S3's stepping-stone site search"
+            )));
+        }
+        Some(Place::On(_)) => {
+            return Err(Error::internal(format!(
+                "{base}/at/on reached the gateway's placement reader, and the compile refuses \
+                 `on` in a placement's `at`"
+            )));
+        }
+        None => {
+            return Err(Error::internal(format!(
+                "{base}/at reached the gateway's placement reader with no place, and the \
+                 compile refuses a placement without one"
+            )));
+        }
     };
     // The sim's `site_is_legal`, checked before any initial row is read: a
     // site inside one of the seat's own spheres, not on the column of one of
@@ -1126,7 +1150,7 @@ fn beacon_place(
     let spec = match placement? {
         Place::BeaconAnchor(reference) => beacon_spec_of(reference, reader.world.rules()).ok()?,
         Place::Safest(_) => BeaconSpec::Safest,
-        Place::Voxel(_) | Place::On(_) | Place::Covering(_) => return None,
+        Place::Voxel(_) | Place::On(_) | Place::Covering(_) | Place::Toward(_) => return None,
     };
     let id = resolve_beacon_in(snapshot, reader.world.rules(), reader.seat, spec, None)?;
     beacon_point(reader.world, id)

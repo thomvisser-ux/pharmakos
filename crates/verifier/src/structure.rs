@@ -426,7 +426,8 @@ fn check_location(place: Option<&Location>, at: &str, what: &str, out: &mut Buil
             location::Place::Voxel(_)
             | location::Place::Safest(_)
             | location::Place::On(_)
-            | location::Place::Covering(_),
+            | location::Place::Covering(_)
+            | location::Place::Toward(_),
         ) => {}
     }
 }
@@ -1319,22 +1320,12 @@ fn walk_predicate(node: &condition::Node, at: &str, out: &mut Builder) {
             }
         }
         condition::Node::CmdrDeaths(predicate) => {
-            compare(
-                predicate.deaths.as_ref(),
-                &pointer::child(at, "cmdr_deaths"),
-                "deaths",
-                false,
-                out,
-            );
+            let here = pointer::child(at, "cmdr_deaths");
+            compare(predicate.deaths.as_ref(), &here, "deaths", false, out);
         }
         condition::Node::SegmentElapsed(predicate) => {
-            compare(
-                predicate.ms.as_ref(),
-                &pointer::child(at, "segment_elapsed"),
-                "ms",
-                false,
-                out,
-            );
+            let here = pointer::child(at, "segment_elapsed");
+            compare(predicate.ms.as_ref(), &here, "ms", false, out);
         }
         condition::Node::BeaconHpPct(predicate) => {
             let here = pointer::child(at, "beacon_hp_pct");
@@ -1395,7 +1386,19 @@ fn walk_predicate(node: &condition::Node, at: &str, out: &mut Builder) {
                 );
             }
         }
-        condition::Node::All(_) | condition::Node::Any(_) | condition::Node::Not(_) => {}
+        // The groups are walked by the caller. S3's `con6` predicates are refused
+        // whole by [`crate::refusals`] until S3's `vfy6` checks their parameters.
+        condition::Node::All(_)
+        | condition::Node::Any(_)
+        | condition::Node::Not(_)
+        | condition::Node::BeaconUnitsByRole(_)
+        | condition::Node::BeaconMandate(_)
+        | condition::Node::BeaconHasStructure(_)
+        | condition::Node::EnemyUnitsNear(_)
+        | condition::Node::EnemyBeaconKnown(_)
+        | condition::Node::EnemyStructureNear(_)
+        | condition::Node::KwSupply(_)
+        | condition::Node::KwDraw(_) => {}
     }
 }
 

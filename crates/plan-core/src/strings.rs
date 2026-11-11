@@ -168,6 +168,8 @@ pub const ATTACK_SELECTOR_NOTE: &str = "chosen when the force launches";
 
 /// `Location.covering`: "a site covering the nearest heat vent ...".
 pub const SITE_COVERING: &str = "a site covering";
+/// `Location.toward`: "a site toward the nearest heat vent ...".
+pub const SITE_TOWARD: &str = "a site toward";
 /// `Location.on`: "a spot on Heat vent (120, 88)".
 pub const SITE_ON: &str = "a spot on";
 /// A vent's display name, before its anchor: "Heat vent (120, 88)".
@@ -284,6 +286,31 @@ pub const DEATHS_UNIT: &str = "times";
 pub const POWERED: &str = "powered";
 /// `beacon_powered` false.
 pub const DORMANT: &str = "dormant";
+/// The unit `enemy_units_near` counts in.
+pub const ENEMY_UNITS_UNIT: &str = "enemy units";
+/// `enemy_structure_near`'s `any_kind`.
+pub const ANY_STRUCTURE: &str = "structure";
+/// `enemy_structure_near` with neither a blueprint nor `any_kind`, which is
+/// refused.
+pub const STRUCTURE_NONE: &str = "structure of no kind the file names";
+/// `beacon_units_by_role`'s `BUILD_DRONE`.
+pub const ROLE_BUILD_DRONE: &str = "build drones";
+/// `beacon_units_by_role`'s `MINING_DRONE`.
+pub const ROLE_MINING_DRONE: &str = "mining drones";
+/// `beacon_units_by_role`'s `REPAIR_DRONE`.
+pub const ROLE_REPAIR_DRONE: &str = "repair drones";
+/// `beacon_units_by_role`'s `RAIDER`.
+pub const ROLE_RAIDER: &str = "raiders";
+/// `beacon_units_by_role`'s `SCOUT`.
+pub const ROLE_SCOUT: &str = "scouts";
+/// A role left unspecified, which S3's verifier rejects.
+pub const ROLE_NONE: &str = "units of no role the file names";
+/// `Freshness.VISIBLE_NOW`.
+pub const FRESH_NOW: &str = "in sight now";
+/// `Freshness.KNOWN_WITHIN`, before its window: "seen in the last 30 s".
+pub const FRESH_WITHIN: &str = "seen in the last";
+/// A freshness left out, which `E0209` rejects.
+pub const FRESH_NONE: &str = "at no freshness the file names";
 
 // --- S2's Defend and Attack settings (task `vfy2`) ---------------------------
 

@@ -66,7 +66,9 @@
 //! T9's; the per-method order is each method's own and is stated at the method.
 //!
 //! Every method `gateway.proto` gives a request/response pair is served, S1's
-//! `resolve_refs` included. Four methods of the schema still answer
+//! `resolve_refs` included, but for `get_vocabulary`, whose pair S3's `con6` put
+//! on the wire and which answers [`crate::error::Code::Internal`] until S3's
+//! `gwr` serves it. Four methods of the schema still answer
 //! [`crate::error::Code::Internal`] -- `query_area`, `list_known_enemies`,
 //! `get_reports` and `get_capabilities` -- and that is not an omission: they
 //! are exactly the four `gateway.proto` gives no request/response pair at all,
@@ -2959,6 +2961,11 @@ impl Surface {
             // Docs and planning.
             Method::GetSchema => Surface::get_schema(request),
             Method::ListTemplates => self.list_templates(request),
+            // On the wire from S3's `con6`, with its pair; S3's `gwr` serves it.
+            Method::GetVocabulary => Err(Error::internal(
+                "`get_vocabulary` is in the schema and this build does not serve it yet: S3's \
+                 rule list fills it",
+            )),
             Method::InstantiateTemplate => self.instantiate_template(subject, request),
             Method::VerifyPlan => self.verify_plan(subject, request),
             Method::RenderPlan => self.render_plan(subject, request),
@@ -3975,6 +3982,17 @@ mod tests {
         let token = seat_token(&mut surface, 0);
         let response = surface.call(Some(&token), &request("get_briefing", "{}"), &Blind);
         assert_eq!(code(&response), "INTERNAL");
+        // On the wire from S3's `con6`, served from S3's `gwr`: until then the
+        // same answer, naming the method, and never the caller's fault.
+        let response = surface.call(Some(&token), &request("get_vocabulary", "{}"), &Blind);
+        assert_eq!(code(&response), "INTERNAL");
+        assert!(
+            matches!(
+                response.get("error").and_then(|error| error.get("message")),
+                Some(Json::String(message)) if message.contains("get_vocabulary")
+            ),
+            "{response:?}"
+        );
     }
 
     #[test]

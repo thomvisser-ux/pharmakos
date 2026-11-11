@@ -70,7 +70,35 @@ breaking:
   # the next proto change that discharges nothing deletes it again, so an
   # un-reservation nobody intended never passes unnoticed (decisions-log items
   # 100 (10), 109 and 111).
-  #
-  # There is no block today. S3's `con5` (#167) held one for
-  # gp/api/v1/gateway.proto; `con5b` discharges nothing (it adds `optional` to
-  # three fields and takes no number), so it deleted it.
+  ignore_only:
+    # S3's second proto pull request (S3's plan, task con6; decision 2, ruled by
+    # decisions-log item 154 (4); AGENTS.md section 5). One rule, two files, five
+    # held ranges, each number taken by a field of what it was held for and the
+    # rest held again. Every other new number (`METHOD_GET_VOCABULARY`, the
+    # fields of `EstimateRouteResponse`, `Leg`, `TemplateSummary` and
+    # `RenderPlanResponse`, and the new messages) comes from no `reserved`
+    # statement, so it discharges nothing.
+    #
+    # gp/v1/playbook.proto, `Condition`:
+    #   * 43-49 were held for the rest of own beacon. 43 takes
+    #     `beacon_units_by_role`, 44 `beacon_mandate` and 45
+    #     `beacon_has_structure`; 46-49 stay held, for reports since (S6).
+    #   * 60-69 were held for enemy knowledge. 60 takes `enemy_units_near`, 61
+    #     `enemy_beacon_known` and 62 `enemy_structure_near`; 63-69 stay held.
+    #   * 72-79 were held for the rest of the economy. 72 takes `kw_supply` and
+    #     73 `kw_draw`; 74-79 stay held, for the income forecast (S6).
+    # gp/v1/playbook.proto, `Location`:
+    #   * 12-49 were held for the rest of the site range, 12 for `toward` by
+    #     name. 12 takes it; 13-49 stay held.
+    # gp/api/v1/gateway.proto, `GetBeaconResponse`:
+    #   * 3-15 were held for the per-beacon detail (the register's X-17). 3 takes
+    #     `mandate`, 4 `settings` and 5 `build_targets`; 6-15 stay held.
+    #
+    # buf sees each old range go away and cannot tell a discharge from an
+    # un-reservation; tests/golden/proto/expected.reserved.txt shows each
+    # narrowing, which is the reviewable half. Inert once this change is on
+    # main. The next proto pull request replaces this block with its own, or
+    # deletes it if it discharges nothing.
+    RESERVED_MESSAGE_NO_DELETE:
+      - gp/v1/playbook.proto
+      - gp/api/v1/gateway.proto

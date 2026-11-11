@@ -152,6 +152,78 @@
     "beginner": "Autocannons, mortars and walls can be built in this build."
   },
   {
+    "code": "E0020",
+    "family": "decode and version",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "predicate `beacon_units_by_role` has no effect until S3's predicate catalogue lands; it is refused rather than ignored.",
+    "beginner": "How many units of a role a beacon has can't be asked about yet."
+  },
+  {
+    "code": "E0021",
+    "family": "decode and version",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "predicate `beacon_mandate` has no effect until S3's predicate catalogue lands; it is refused rather than ignored.",
+    "beginner": "Which job a beacon has can't be asked about yet."
+  },
+  {
+    "code": "E0022",
+    "family": "decode and version",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "predicate `beacon_has_structure` has no effect until S3's predicate catalogue lands; it is refused rather than ignored.",
+    "beginner": "Whether a beacon has a finished building can't be asked about yet."
+  },
+  {
+    "code": "E0023",
+    "family": "decode and version",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "predicate `enemy_units_near` has no effect until S3's predicate catalogue lands; it is refused rather than ignored.",
+    "beginner": "Enemy units near a place can't be asked about yet."
+  },
+  {
+    "code": "E0024",
+    "family": "decode and version",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "predicate `enemy_beacon_known` has no effect until S3's predicate catalogue lands; it is refused rather than ignored.",
+    "beginner": "Whether you know of an enemy beacon can't be asked about yet."
+  },
+  {
+    "code": "E0025",
+    "family": "decode and version",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "predicate `enemy_structure_near` has no effect until S3's predicate catalogue lands; it is refused rather than ignored.",
+    "beginner": "Enemy buildings near a place can't be asked about yet."
+  },
+  {
+    "code": "E0026",
+    "family": "decode and version",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "predicate `kw_supply` has no effect until S3's predicate catalogue lands; it is refused rather than ignored.",
+    "beginner": "Your power supply can't be asked about yet. Asking about headroom works."
+  },
+  {
+    "code": "E0027",
+    "family": "decode and version",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "predicate `kw_draw` has no effect until S3's predicate catalogue lands; it is refused rather than ignored.",
+    "beginner": "Your power draw can't be asked about yet. Asking about headroom works."
+  },
+  {
+    "code": "E0028",
+    "family": "decode and version",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "site `toward` has no effect until S3's stepping-stone site search lands; it is refused rather than ignored.",
+    "beginner": "A beacon can't yet be placed as a stepping stone toward a feature. Pick a spot, or cover a feature you can reach."
+  },
+  {
     "code": "E0101",
     "family": "limits and required blocks",
     "severity": "ERROR",

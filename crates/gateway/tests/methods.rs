@@ -2477,6 +2477,16 @@ fn interface_row_gaps() -> Vec<Case> {
     ]
 }
 
+/// A playbook whose one rule fires on `predicate`.
+fn s3_rule(predicate: &str) -> String {
+    with_handlers(
+        "{\"label\": \"s\", \"hold\": {\"ms\": 1000}}",
+        &format!(
+            ", \"handlers\": [{{\"id\": \"h\", \"when\": {predicate}, \"body\": [{{\"label\": \"b\", \"hold\":              {{\"ms\": 1000}}}}], \"resume\": \"CONTINUE\", \"cooldown_ms\": 5000, \"max_fires\": 1}}]"
+        ),
+    )
+}
+
 /// The gaps a **mandate's settings block** or a **rule** opens.
 ///
 /// Two settings blocks and two rule-shaped cases. The settings ones are
@@ -2499,6 +2509,72 @@ fn mandate_and_rule_gaps() -> Vec<Case> {
         // `dfnd` and `atk`, are Defend's and Attack's settings.
         // S2's `dfnd` closed `beacon_under_attack` too: the predicate reads
         // the beacon's combat memory, so it has no row here.
+        // S3's `con6`: on the wire before S3's `pred` gives them an effect,
+        // and closed at the first door until it does.
+        closed(
+            "a rule asking how many units of a role a beacon has",
+            s3_rule(
+                r#"{"beacon_units_by_role": {"beacon": {"safest": {}}, "role": "SCOUT", "count": {"op": "GE", "value": 1}}}"#,
+            ),
+            "predicate `beacon_units_by_role`",
+            "S3",
+        ),
+        closed(
+            "a rule asking which writ a beacon carries",
+            s3_rule(r#"{"beacon_mandate": {"beacon": {"safest": {}}, "mandate": "BUILD"}}"#),
+            "predicate `beacon_mandate`",
+            "S3",
+        ),
+        closed(
+            "a rule asking whether a beacon has a finished structure",
+            s3_rule(
+                r#"{"beacon_has_structure": {"beacon": {"safest": {}}, "blueprint_id": "generator"}}"#,
+            ),
+            "predicate `beacon_has_structure`",
+            "S3",
+        ),
+        closed(
+            "a rule asking about enemy units near a place",
+            s3_rule(
+                r#"{"enemy_units_near": {"near": {"safest": {}}, "radius_voxels": 24, "count": {"op": "GE", "value": 1}, "freshness": {"kind": "VISIBLE_NOW"}}}"#,
+            ),
+            "predicate `enemy_units_near`",
+            "S3",
+        ),
+        closed(
+            "a rule asking whether an enemy beacon is known",
+            s3_rule(r#"{"enemy_beacon_known": {"freshness": {"kind": "VISIBLE_NOW"}}}"#),
+            "predicate `enemy_beacon_known`",
+            "S3",
+        ),
+        closed(
+            "a rule asking about an enemy structure near a place",
+            s3_rule(
+                r#"{"enemy_structure_near": {"near": {"safest": {}}, "radius_voxels": 24, "any_kind": {}, "freshness": {"kind": "VISIBLE_NOW"}}}"#,
+            ),
+            "predicate `enemy_structure_near`",
+            "S3",
+        ),
+        closed(
+            "a rule asking about the seat's power supply",
+            s3_rule(r#"{"kw_supply": {"kw": {"op": "GE", "value": 1}}}"#),
+            "predicate `kw_supply`",
+            "S3",
+        ),
+        closed(
+            "a rule asking about the seat's power draw",
+            s3_rule(r#"{"kw_draw": {"kw": {"op": "GE", "value": 1}}}"#),
+            "predicate `kw_draw`",
+            "S3",
+        ),
+        closed(
+            "a beacon placed on a stepping stone toward a vent",
+            one_step(
+                r#"{"label": "p", "place_beacon": {"at": {"toward": {"feature": {"vent": {"rank": "NEAREST", "coverage": "UNCOVERED"}}}}}}"#,
+            ),
+            "site `toward`",
+            "S3",
+        ),
         // S2's `vfy2` closed the last gap of this block: the verifier reads
         // the sim's own `MAX_HANDLERS` and refuses the 65th handler as E0113.
         Case {

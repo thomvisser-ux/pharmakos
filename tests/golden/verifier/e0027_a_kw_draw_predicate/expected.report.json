@@ -1,0 +1,19 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0027",
+      "severity": "ERROR",
+      "path": "/declarative/handlers/0/when/kw_draw",
+      "message": "predicate `kw_draw` has no effect until S3's predicate catalogue lands; it is refused rather than ignored.",
+      "beginner": "Your power draw can't be asked about yet. Asking about headroom works."
+    }
+  ],
+  "report_hash": "NmnYIYACdaA=",
+  "rules_hash": "GybFJQaL/2E=",
+  "plan_fingerprint": "B5lwfltYw7k=",
+  "verifier_version": "0.1.0-s2.5",
+  "size_units": 3,
+  "size_budget": 128
+}
+

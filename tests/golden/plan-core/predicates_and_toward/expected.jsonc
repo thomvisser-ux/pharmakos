@@ -1,0 +1,216 @@
+// predicates_and_toward.jsonc - S3's constructs as an author writes them (S3's
+// plan, task `con6`): the eight predicates and the site `toward`, so the round
+// trip, the canonical form and the prose are pinned for each before they have
+// an effect.
+{
+  "schema_version": {
+    "major": 1
+  },
+  "meta": {
+    "title": "Predicates and toward",
+    "author_kind": "HUMAN"
+  },
+  "declarative": {
+    "route": [
+      // a stepping stone out toward a vent no sphere reaches yet
+      {
+        "label": "stone",
+        "place_beacon": {
+          "at": {
+            "toward": {
+              "feature": {
+                "vent": {
+                  "rank": "NEAREST",
+                  "coverage": "UNCOVERED"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "named",
+        "place_beacon": {
+          "at": {
+            "toward": {
+              "feature": {
+                "feature_id": "vent_120_88"
+              }
+            }
+          }
+        }
+      }
+    ],
+    "handlers": [
+      {
+        "id": "own",
+        "when": {
+          "all": {
+            "items": [
+              {
+                "beacon_units_by_role": {
+                  "beacon": {
+                    "beacon_id": "b_00"
+                  },
+                  "role": "SCOUT",
+                  "count": {
+                    "op": "GE",
+                    "value": 2
+                  }
+                }
+              },
+              {
+                "beacon_mandate": {
+                  "beacon": {
+                    "beacon_id": "b_00"
+                  },
+                  "mandate": "BUILD"
+                }
+              },
+              {
+                "beacon_has_structure": {
+                  "beacon": {
+                    "safest": {}
+                  },
+                  "blueprint_id": "generator"
+                }
+              }
+            ]
+          }
+        },
+        "body": [
+          {
+            "label": "own step",
+            "hold": {
+              "ms": 1000
+            }
+          }
+        ],
+        "resume": "CONTINUE",
+        "cooldown_ms": 5000,
+        "max_fires": 1
+      },
+      /* every enemy predicate declares its freshness */
+      {
+        "id": "enemy",
+        "when": {
+          "any": {
+            "items": [
+              {
+                "enemy_units_near": {
+                  "near": {
+                    "voxel": {
+                      "x": 90,
+                      "y": 12,
+                      "z": 11
+                    }
+                  },
+                  "radius_voxels": 24,
+                  "count": {
+                    "op": "GE",
+                    "value": 3
+                  },
+                  "freshness": {
+                    "kind": "VISIBLE_NOW"
+                  }
+                }
+              },
+              {
+                "enemy_beacon_known": {
+                  "freshness": {
+                    "kind": "KNOWN_WITHIN",
+                    "known_within_ms": 30000
+                  }
+                }
+              },
+              {
+                "enemy_structure_near": {
+                  "near": {
+                    "safest": {}
+                  },
+                  "radius_voxels": 16,
+                  "blueprint_id": "mortar",
+                  "freshness": {
+                    "kind": "VISIBLE_NOW"
+                  }
+                }
+              },
+              {
+                "enemy_structure_near": {
+                  "near": {
+                    "safest": {}
+                  },
+                  "radius_voxels": 16,
+                  "freshness": {
+                    "kind": "KNOWN_WITHIN",
+                    "known_within_ms": 60000
+                  },
+                  "any_kind": {}
+                }
+              }
+            ]
+          }
+        },
+        "body": [
+          {
+            "label": "enemy step",
+            "hold": {
+              "ms": 1000
+            }
+          }
+        ],
+        "resume": "CONTINUE",
+        "cooldown_ms": 5000,
+        "max_fires": 1
+      },
+      {
+        "id": "grid",
+        "when": {
+          "all": {
+            "items": [
+              {
+                "kw_supply": {
+                  "kw": {
+                    "op": "GE",
+                    "value": 40
+                  }
+                }
+              },
+              {
+                "kw_draw": {
+                  "kw": {
+                    "op": "LT",
+                    "value": 30
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "body": [
+          {
+            "label": "grid step",
+            "hold": {
+              "ms": 1000
+            }
+          }
+        ],
+        "resume": "CONTINUE",
+        "cooldown_ms": 5000,
+        "max_fires": 1
+      }
+    ]
+  },
+  "on_death": {
+    "on_respawn": "CONTINUE",
+    "max_deaths_before_fallback": 2
+  },
+  "fallback": {
+    "hold": {
+      "at": {
+        "safest": {}
+      }
+    }
+  },
+  "kind": "PLAYBOOK"
+}

@@ -104,8 +104,11 @@ enum Scope {
   // an order is the irrevocable act the whole game is about.
   SCOPE_PLAN_SUBMIT = 3;
 
-  // Generated schema and template listings. Carries no match state at all,
-  // which is why it is its own scope.
+  // Generated schema, the vocabulary and template listings. Carries no match
+  // state, which is why it is its own scope, with two exceptions, each about
+  // the calling seat alone: `get_vocabulary`'s `locked` reasons read its own
+  // licences (S3's plan, E8), and `list_templates`' guided pick is the advisor's
+  // suggestion for it (E25).
   SCOPE_DOCS = 4;
 
   // Spectator only. A seat token can never hold it.
@@ -206,6 +209,14 @@ enum Method {
 
   // "list_templates"
   METHOD_LIST_TEMPLATES = 41 [(required_scope) = SCOPE_DOCS];
+
+  // "get_vocabulary" — what a playbook may name, as the rule list's pickers
+  // draw it: the condition families with their predicates and parameters, and
+  // the mandates, steps and blueprints, each with why this seat cannot use it
+  // yet, if it cannot (S3's plan, E8). Read-only and agent-shaped. Served from
+  // S3's `gwr`; until then the gateway answers INTERNAL, as for a method it
+  // does not serve.
+  METHOD_GET_VOCABULARY = 42 [(required_scope) = SCOPE_DOCS];
 
   // --- Planning ------------------------------------------------------------
 
@@ -846,9 +857,46 @@ message GetBeaconResponse {
   BeaconSummary summary = 1;
   string prose = 2;
 
-  // PLACEHOLDER: the per-beacon detail — owner, S3 (decisions-log item 128,
-  // S1's plan's decision 9).
-  reserved 3 to 15;
+  // Fields 3 to 5 are the per-beacon detail the Visit & change rows draw (the
+  // register's X-17 and S3-01; filled from S3's `gwr`). OWN beacons only: a
+  // beacon's mandate and build progress are never shown for another seat's
+  // beacon (S2's plan's decision 5, ruled by decisions-log item 144 (11)), so
+  // all three are empty on one.
+
+  // The writ this beacon carries. MANDATE_KIND_UNSPECIFIED on a beacon with
+  // none and on another seat's beacon. On the JSON-RPC wire it is lower case
+  // (decisions-log item 80): "build".
+  gp.v1.BeaconFilter.MandateKind mandate = 3;
+
+  // The settings this beacon's mandate has now, one row per setting that is
+  // set, in the schema's field order.
+  repeated BeaconSettingRow settings = 4;
+
+  // A Build beacon's targets, in the order the Quartermaster reads them. Empty
+  // on any other mandate.
+  repeated gp.v1.BuildTarget build_targets = 5;
+
+  // RESERVED — held for a further field of the detail.
+  reserved 6 to 15;
+}
+
+// One setting of a beacon's mandate, as sent to be drawn and edited: the client
+// composes a `set_mandate_settings` row from it and decides nothing.
+message BeaconSettingRow {
+  // RFC 6901 JSON Pointer of the setting inside gp.v1.MandateSettings:
+  // "/build/rebuild_destroyed".
+  string pointer = 1;
+
+  // The setting's name in the player's words.
+  string title = 2;
+
+  // The value now, as JSON text in the playbook's canonical spelling, as
+  // EnumShape.values spells a value: `"RETURN_FIRE"` with its quotes, `true`
+  // without.
+  string value_json = 3;
+
+  // What may be written there.
+  ValueShape shape = 4;
 }
 
 message GetMapSummaryRequest {
@@ -1036,6 +1084,12 @@ message EstimateRouteResponse {
   int32 ms = 2;
 
   repeated Leg legs = 3;
+
+  // Whole-route travel as the player reads it: "1 min 24 s". The gateway
+  // renders the figure, so the editor draws it and does no time maths (the
+  // register's S3-18, items 57 and 61). Says it is a bound when any leg is
+  // fogged. Empty when `reachable` is false. Filled from S3's `gwr`.
+  string travel_text = 4;
 }
 
 message Leg {
@@ -1052,6 +1106,10 @@ message Leg {
   // priced at 3/2 per abstract edge, and the editor draws it dashed and
   // labels it as a bound (item 57).
   bool fogged = 3;
+
+  // This leg's travel as the player reads it, already labelled as a bound when
+  // `fogged` is true. Filled from S3's `gwr`.
+  string travel_text = 4;
 }
 
 // =============================================================================
@@ -1089,6 +1147,141 @@ message TemplateSummary {
 
   // One sentence, from the template file itself.
   string summary = 4;
+
+  // True on the one template a Probation match's first Lull marks as the place
+  // to start, from the advisor's suggestion the gateway already files for a
+  // human seat (S3's plan, E25). False everywhere else. No client names a
+  // template. Filled from S3's `gwp`.
+  bool guided_pick = 5;
+
+  // The sentence that says why, set exactly when `guided_pick` is true.
+  string guided_pick_reason = 6;
+}
+
+// The vocabulary a playbook may name (S3's plan, E8; "get_vocabulary"). It takes
+// no parameters: the answer is for the calling seat.
+message GetVocabularyRequest {}
+
+// Every entry is drawn as sent, and locked entries are greyed with their reason,
+// so the pickers hold no list and no rule of their own. Built from the schema and
+// the rules table, in schema order, from S3's `gwr`.
+message GetVocabularyResponse {
+  // Spec section 10's condition families.
+  repeated VocabularyFamily families = 1;
+
+  // The mandates a beacon may carry.
+  repeated VocabularyEntry mandates = 2;
+
+  // The route steps.
+  repeated VocabularyEntry steps = 3;
+
+  // The blueprints a Build target or a queued structure may name.
+  repeated VocabularyEntry blueprints = 4;
+}
+
+message VocabularyFamily {
+  // A stable id, lower_snake_case: "own_beacon".
+  string family = 1;
+
+  // The family's name in the player's words.
+  string title = 2;
+
+  repeated VocabularyEntry predicates = 3;
+
+  // Why the whole family cannot be used, when it cannot: "from S6" for a block
+  // the schema still reserves. Unset when it can be picked.
+  optional string locked = 4;
+}
+
+message VocabularyEntry {
+  // The word a playbook writes, as a field name or a blueprint id. Empty on an
+  // entry the schema does not hold yet, which always carries `locked`.
+  string name = 1;
+
+  // The entry's name in the player's words.
+  string title = 2;
+
+  repeated VocabularyParameter parameters = 3;
+
+  // What a picker inserts, as JSON text, with each parameter at a legal
+  // starting value. Empty on a locked entry.
+  string skeleton_json = 4;
+
+  // Why this seat cannot use the entry yet: a licence it does not hold, or
+  // "from S6". Unset when it can.
+  optional string locked = 5;
+}
+
+message VocabularyParameter {
+  // RFC 6901 JSON Pointer of the parameter inside the entry's own object:
+  // "/freshness/known_within_ms".
+  string pointer = 1;
+
+  // The parameter's name in the player's words.
+  string title = 2;
+
+  // What may be written there.
+  ValueShape shape = 3;
+}
+
+// What an editable value may hold: the one description a chip, a picker's
+// parameter and a beacon's setting share, so a client has one editor per shape.
+message ValueShape {
+  oneof shape {
+    IntegerShape integer = 1;
+    EnumShape choice = 2;
+    ReferenceShape reference = 3;
+  }
+}
+
+// A whole number, within bounds, inclusive. The bounds are the effective ones
+// the verifier enforces at this pointer: the rules table's, the field type's
+// floor and the unit's own limits (a percentage is 0-100), whichever is
+// tighter. An unset bound is one nothing sets.
+message IntegerShape {
+  optional int32 min = 1;
+  optional int32 max = 2;
+
+  // The unit the number is in: `ms`, `%`, `$`, `kW` or `voxels`, or empty for a
+  // bare count. Drawn beside the value; the client converts nothing.
+  string unit = 3;
+}
+
+// A closed list. Each value is the JSON text to write: `"LE"` with its quotes,
+// `true` without, so a client composes the patch without knowing the type.
+message EnumShape {
+  repeated string values = 1;
+}
+
+// A value picked from the world or the playbook rather than typed.
+message ReferenceShape {
+  Kind kind = 1;
+
+  // The oneof arm names legal at this pointer, filled by the gateway so that
+  // no client holds the per-position rules (AGENTS.md section 3 rule 4). A
+  // gp.v1.NearPlace takes no `on`, `covering` or `toward`; `on` is legal only in
+  // a BuildTarget.anchor; `covering` and `toward` only in a
+  // PlaceBeaconStep.at.
+  repeated string arms = 2;
+
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+
+    // A gp.v1.BeaconRef.
+    BEACON = 1;
+
+    // A gp.v1.Location, or the gp.v1.NearPlace that spells its fixed arms.
+    LOCATION = 2;
+
+    // A gp.v1.FeatureRef.
+    FEATURE = 3;
+
+    // A Step.label of this playbook's route.
+    STEP_LABEL = 4;
+
+    // A Handler.id of this playbook.
+    HANDLER_ID = 5;
+  }
 }
 
 // =============================================================================
@@ -1298,6 +1491,53 @@ message RenderPlanResponse {
   // item 111, decision C3: chips are S3's), and plan-core's render_plan prose
   // goldens (tests/golden/plan-core) pin the layout.
   string prose = 1;
+
+  // Each rule and step of `prose`, in file order, with its editable values
+  // (S3's plan, E8). `prose` itself does not change. Filled from S3's `gwr`.
+  repeated RenderedRule rules = 2;
+}
+
+// One rule or route step of a rendering: where it stands in the file, which
+// lines of `prose` are its own, and the chips on them.
+message RenderedRule {
+  // RFC 6901 JSON Pointer of the rule or step in the playbook:
+  // "/declarative/handlers/2",
+  // which is what a reordering's JSON Patch `move` names.
+  string pointer = 1;
+
+  // The zero-based line of `prose` that is its sentence.
+  uint32 line = 2;
+
+  // How many lines it takes, its sentence and what is indented under it: at
+  // least 1.
+  uint32 line_count = 3;
+
+  repeated Chip chips = 4;
+}
+
+// One editable value in a rendered sentence. The gateway places it, so a client
+// draws the span and parses no sentence.
+message Chip {
+  // RFC 6901 JSON Pointer of the value in the playbook: the path of a patch's
+  // `replace`.
+  string pointer = 1;
+
+  // The zero-based line of RenderPlanResponse.prose the chip stands on.
+  uint32 line = 2;
+
+  // The span it occupies on that line, in Unicode code points from the line's
+  // start, `start` inclusive and `end` exclusive. Code points rather than bytes,
+  // because the client's own strings index by them.
+  uint32 start = 3;
+  uint32 end = 4;
+
+  // What may be written there.
+  ValueShape shape = 5;
+
+  // The value now, as JSON text in the playbook's canonical spelling, as
+  // BeaconSettingRow.value_json is, so the editor pre-fills from the answer
+  // and never reads its own file. Filled by the gateway.
+  string value_json = 6;
 }
 
 message PatchPlanRequest {

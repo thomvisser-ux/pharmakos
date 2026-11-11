@@ -41,7 +41,7 @@ host                      serve one match to the game client over this process's
 
 ## The playbook vocabulary (gp.v1)
 
-108 messages. A field's name is the one the canonical form writes, which is
+119 messages. A field's name is the one the canonical form writes, which is
 the .proto spelling and not lowerCamelCase. A reserved number is one held on
 purpose: field numbers are added, never renumbered or reused.
 
@@ -53,6 +53,8 @@ gp.v1.All
 
 gp.v1.Any
   items                        1   repeated gp.v1.Condition
+
+gp.v1.AnyStructure
 
 gp.v1.Area
   min                          1   gp.v1.Voxel
@@ -94,9 +96,17 @@ gp.v1.BeaconFilter
   mandate                      2   gp.v1.BeaconFilter.MandateKind
   tags                         3   repeated string
 
+gp.v1.BeaconHasStructure
+  beacon                       1   gp.v1.BeaconRef
+  blueprint_id                 2   string
+
 gp.v1.BeaconHpPct
   beacon                       1   gp.v1.BeaconRef
   pct                          2   gp.v1.IntCompare
+
+gp.v1.BeaconMandate
+  beacon                       1   gp.v1.BeaconRef
+  mandate                      2   gp.v1.BeaconFilter.MandateKind
 
 gp.v1.BeaconPowered
   beacon                       1   gp.v1.BeaconRef
@@ -114,6 +124,11 @@ gp.v1.BeaconRef
 gp.v1.BeaconUnderAttack
   beacon                       1   gp.v1.BeaconRef
   within_ms                    2   int32
+
+gp.v1.BeaconUnitsByRole
+  beacon                       1   gp.v1.BeaconRef
+  role                         2   gp.v1.BeaconUnitsByRole.Role
+  count                        3   gp.v1.IntCompare
 
 gp.v1.BroadcastStep
   oneof: payload
@@ -177,16 +192,24 @@ gp.v1.Condition
   beacon_hp_pct                40  gp.v1.BeaconHpPct
   beacon_under_attack          41  gp.v1.BeaconUnderAttack
   beacon_powered               42  gp.v1.BeaconPowered
+  beacon_units_by_role         43  gp.v1.BeaconUnitsByRole
+  beacon_mandate               44  gp.v1.BeaconMandate
+  beacon_has_structure         45  gp.v1.BeaconHasStructure
+  enemy_units_near             60  gp.v1.EnemyUnitsNear
+  enemy_beacon_known           61  gp.v1.EnemyBeaconKnown
+  enemy_structure_near         62  gp.v1.EnemyStructureNear
   treasury                     70  gp.v1.Treasury
   kw_headroom                  71  gp.v1.KwHeadroom
+  kw_supply                    72  gp.v1.KwSupply
+  kw_draw                      73  gp.v1.KwDraw
   step_reached                 90  gp.v1.StepReached
   rule_fired                   91  gp.v1.RuleFired
   reserved 23 to 29
   reserved 31 to 39
-  reserved 43 to 49
+  reserved 46 to 49
   reserved 50 to 59
-  reserved 60 to 69
-  reserved 72 to 79
+  reserved 63 to 69
+  reserved 74 to 79
   reserved 80 to 89
   reserved 92 to 99
   reserved 100
@@ -215,9 +238,26 @@ gp.v1.DefendSettings
   reserved 7 to 15
   reserved auto_fortify, unit_mix
 
+gp.v1.EnemyBeaconKnown
+  freshness                    1   gp.v1.Freshness
+
 gp.v1.EnemyCommander
   oneof: _seat
   seat                         1   uint32
+
+gp.v1.EnemyStructureNear
+  oneof: structure
+  near                         1   gp.v1.NearPlace
+  radius_voxels                2   uint32
+  blueprint_id                 3   string
+  freshness                    4   gp.v1.Freshness
+  any_kind                     5   gp.v1.AnyStructure
+
+gp.v1.EnemyUnitsNear
+  near                         1   gp.v1.NearPlace
+  radius_voxels                2   uint32
+  count                        3   gp.v1.IntCompare
+  freshness                    4   gp.v1.Freshness
 
 gp.v1.Fallback
   oneof: posture
@@ -283,7 +323,13 @@ gp.v1.InterfaceStep
   beacon                       1   gp.v1.BeaconRef
   rows                         2   repeated gp.v1.InterfaceRow
 
+gp.v1.KwDraw
+  kw                           1   gp.v1.IntCompare
+
 gp.v1.KwHeadroom
+  kw                           1   gp.v1.IntCompare
+
+gp.v1.KwSupply
   kw                           1   gp.v1.IntCompare
 
 gp.v1.Location
@@ -293,7 +339,8 @@ gp.v1.Location
   safest                       3   gp.v1.Safest
   on                           10  gp.v1.FeatureRef
   covering                     11  gp.v1.FeatureRef
-  reserved 12 to 49
+  toward                       12  gp.v1.Toward
+  reserved 13 to 49
 
 gp.v1.Mandate
   oneof: kind
@@ -340,6 +387,13 @@ gp.v1.MoveStep
   pace                         2   gp.v1.MoveStep.Pace
 
 gp.v1.MyCommander
+
+gp.v1.NearPlace
+  oneof: place
+  voxel                        1   gp.v1.Voxel
+  beacon_anchor                2   gp.v1.BeaconRef
+  safest                       3   gp.v1.Safest
+  reserved 10 to 49
 
 gp.v1.Nearest
   filter                       1   gp.v1.BeaconFilter
@@ -679,6 +733,9 @@ gp.v1.TemplateParameter
 gp.v1.ThreatAt
   at                           1   gp.v1.Location
 
+gp.v1.Toward
+  feature                      1   gp.v1.FeatureRef
+
 gp.v1.Treasury
   dollars                      1   gp.v1.IntCompare
 
@@ -701,7 +758,7 @@ gp.v1.Weakest
 
 ## The enumerations (gp.v1)
 
-22 of them. JSON spells an enum by value name.
+23 of them. JSON spells an enum by value name.
 
 
 gp.v1.AttackSettings.AfterAction
@@ -726,6 +783,14 @@ gp.v1.BeaconFilter.Side
   SIDE_UNSPECIFIED                 0
   OWN                              1
   ENEMY_KNOWN                      2
+
+gp.v1.BeaconUnitsByRole.Role
+  ROLE_UNSPECIFIED                 0
+  BUILD_DRONE                      1
+  MINING_DRONE                     2
+  REPAIR_DRONE                     3
+  RAIDER                           4
+  SCOUT                            5
 
 gp.v1.BuildSettings.Terraform
   TERRAFORM_UNSPECIFIED            0
@@ -837,7 +902,7 @@ gp.v1.Playbook.Kind
 
 ## Diagnostics
 
-100 codes. A code is language-neutral, append-only and never
+109 codes. A code is language-neutral, append-only and never
 reused; only an ERROR stops a playbook qualifying. `none at the skeleton` names the
 task that owes the emitter, which is honesty about coverage rather than a gap.
 
@@ -917,6 +982,42 @@ E0018  ERROR  decode and version  raised at: decode
 E0019  ERROR  decode and version  raised at: none at the skeleton (retired by S2's `site`, which built the base kit)
   a Build target naming one of S2's base kit had no effect until S2's base kit landed; this code is retired and raised by nothing.
   Autocannons, mortars and walls can be built in this build.
+
+E0020  ERROR  decode and version  raised at: structure
+  predicate `beacon_units_by_role` has no effect until S3's predicate catalogue lands; it is refused rather than ignored.
+  How many units of a role a beacon has can't be asked about yet.
+
+E0021  ERROR  decode and version  raised at: structure
+  predicate `beacon_mandate` has no effect until S3's predicate catalogue lands; it is refused rather than ignored.
+  Which job a beacon has can't be asked about yet.
+
+E0022  ERROR  decode and version  raised at: structure
+  predicate `beacon_has_structure` has no effect until S3's predicate catalogue lands; it is refused rather than ignored.
+  Whether a beacon has a finished building can't be asked about yet.
+
+E0023  ERROR  decode and version  raised at: structure
+  predicate `enemy_units_near` has no effect until S3's predicate catalogue lands; it is refused rather than ignored.
+  Enemy units near a place can't be asked about yet.
+
+E0024  ERROR  decode and version  raised at: structure
+  predicate `enemy_beacon_known` has no effect until S3's predicate catalogue lands; it is refused rather than ignored.
+  Whether you know of an enemy beacon can't be asked about yet.
+
+E0025  ERROR  decode and version  raised at: structure
+  predicate `enemy_structure_near` has no effect until S3's predicate catalogue lands; it is refused rather than ignored.
+  Enemy buildings near a place can't be asked about yet.
+
+E0026  ERROR  decode and version  raised at: structure
+  predicate `kw_supply` has no effect until S3's predicate catalogue lands; it is refused rather than ignored.
+  Your power supply can't be asked about yet. Asking about headroom works.
+
+E0027  ERROR  decode and version  raised at: structure
+  predicate `kw_draw` has no effect until S3's predicate catalogue lands; it is refused rather than ignored.
+  Your power draw can't be asked about yet. Asking about headroom works.
+
+E0028  ERROR  decode and version  raised at: structure
+  site `toward` has no effect until S3's stepping-stone site search lands; it is refused rather than ignored.
+  A beacon can't yet be placed as a stepping stone toward a feature. Pick a spot, or cover a feature you can reach.
 
 E0101  ERROR  limits and required blocks  raised at: structure
   {what} is required and is missing.

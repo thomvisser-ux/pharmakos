@@ -483,7 +483,10 @@ fn walk_location(place: &Location, at: &str, slot: Slot<'_>, visitor: &mut dyn V
         // that checks them reads the `FeatureRef` from `location`, with the
         // slot that decides whether the arm may stand there.
         Some(
-            location::Place::Safest(_) | location::Place::On(_) | location::Place::Covering(_),
+            location::Place::Safest(_)
+            | location::Place::On(_)
+            | location::Place::Covering(_)
+            | location::Place::Toward(_),
         )
         | None => {}
     }

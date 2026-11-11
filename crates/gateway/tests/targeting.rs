@@ -808,6 +808,20 @@ fn a_playbook_this_build_cannot_execute_reads_nothing() {
         &format!(r#"{{"playbook_jsonc":{}}}"#, support::quote(misplaced)),
     );
     assert_eq!(support::code(&answer), "INVALID_ARGUMENT");
+    // S3's `con6`: `toward` is refused at the compile until S3's `pred`, so
+    // `resolve_refs` never reads one and never answers it as a step that found
+    // nothing.
+    let toward = r#"{"schema_version":{"major":1},"meta":{"title":"t","author_kind":"HUMAN"},"kind":"PLAYBOOK",
+        "declarative":{"route":[{"label":"p","place_beacon":{"at":{"toward":{"feature":{"vent":{"rank":"NEAREST","coverage":"UNCOVERED"}}}}}}]},
+        "on_death":{"on_respawn":"CONTINUE"},"fallback":{"hold":{"at":{"safest":{}}}}}"#;
+    let answer = call_in_lull(
+        &mut surface,
+        &token,
+        &mut left,
+        "resolve_refs",
+        &format!(r#"{{"playbook_jsonc":{}}}"#, support::quote(toward)),
+    );
+    assert_eq!(support::code(&answer), "INVALID_ARGUMENT");
     let half_typed = call_in_lull(
         &mut surface,
         &token,

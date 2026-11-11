@@ -1,0 +1,31 @@
+Predicates and toward
+Written by hand.
+
+Route
+  1. stone: place a beacon at a site toward the nearest heat vent you do not cover yet (nearest by travel, read when the step starts) (12 s on site).
+  2. named: place a beacon at a site toward Heat vent (120, 88) (12 s on site).
+
+Rules
+  1. "own", when beacon "b_00" has at or above 2 scouts and beacon "b_00" carries Build and the safest own beacon has a finished generator:
+    1. own step: hold for 1 s.
+    Then carry on with the route.
+    Fires at most 1 time, and no sooner than every 5 s.
+  2. "enemy", when the seat knows of at or above 3 enemy units within 24 voxels of voxel 90, 12, 11, in sight now or the seat knows of an enemy beacon, seen in the last 30 s or the seat knows of an enemy mortar within 16 voxels of the safest own beacon, in sight now or the seat knows of an enemy structure within 16 voxels of the safest own beacon, seen in the last 1:00:
+    1. enemy step: hold for 1 s.
+    Then carry on with the route.
+    Fires at most 1 time, and no sooner than every 5 s.
+  3. "grid", when the grid's supply is at or above 40 kW and the grid's draw is below 30 kW:
+    1. grid step: hold for 1 s.
+    Then carry on with the route.
+    Fires at most 1 time, and no sooner than every 5 s.
+
+If the commander dies
+  On respawn, carry on from the step the route was on.
+  After 2 deaths the fallback takes over.
+
+Fallback
+  Hold at the safest own beacon.
+
+Budget
+  8 of 128 size units.
+  24 s standing at a beacon along the route.
