@@ -9,10 +9,10 @@
       "beginner": "Which job a beacon has can't be asked about yet."
     }
   ],
-  "report_hash": "zO5QevU+i44=",
+  "report_hash": "QV04xri5iBs=",
   "rules_hash": "GybFJQaL/2E=",
   "plan_fingerprint": "OtZ57W7mGxQ=",
-  "verifier_version": "0.1.0-s2.5",
+  "verifier_version": "0.1.0-s3.1",
   "size_units": 3,
   "size_budget": 128
 }

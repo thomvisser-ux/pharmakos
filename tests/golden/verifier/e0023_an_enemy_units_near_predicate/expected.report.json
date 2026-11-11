@@ -9,10 +9,10 @@
       "beginner": "Enemy units near a place can't be asked about yet."
     }
   ],
-  "report_hash": "gLAk8vuxPPA=",
+  "report_hash": "L6//f71pZuM=",
   "rules_hash": "GybFJQaL/2E=",
   "plan_fingerprint": "ut4eCng3h9A=",
-  "verifier_version": "0.1.0-s2.5",
+  "verifier_version": "0.1.0-s3.1",
   "size_units": 3,
   "size_budget": 128
 }

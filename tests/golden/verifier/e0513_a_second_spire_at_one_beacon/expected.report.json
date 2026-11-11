@@ -1,0 +1,57 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0009",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/interface/rows/0/queue_structure",
+      "message": "a `queue_structure` row has no effect until S4, with the capability catalogue and its licences; it is refused rather than ignored.",
+      "beginner": "Queuing a capability building comes later in the game. Nothing you wrote is dropped: take the row out yourself."
+    },
+    {
+      "code": "E0009",
+      "severity": "ERROR",
+      "path": "/declarative/route/1/interface/rows/0/queue_structure",
+      "message": "a `queue_structure` row has no effect until S4, with the capability catalogue and its licences; it is refused rather than ignored.",
+      "beginner": "Queuing a capability building comes later in the game. Nothing you wrote is dropped: take the row out yourself."
+    },
+    {
+      "code": "E0507",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/interface/rows/0/queue_structure/blueprint_id",
+      "message": "`resonance_spire` needs the Resonance Spire licence, which this seat does not hold.",
+      "beginner": "The seat has not earned the right to build this yet. A licence is earned at a settlement and lasts the match."
+    },
+    {
+      "code": "E0507",
+      "severity": "ERROR",
+      "path": "/declarative/route/1/interface/rows/0/queue_structure/blueprint_id",
+      "message": "`resonance_spire` needs the Resonance Spire licence, which this seat does not hold.",
+      "beginner": "The seat has not earned the right to build this yet. A licence is earned at a settlement and lasts the match."
+    },
+    {
+      "code": "E0513",
+      "severity": "ERROR",
+      "path": "/declarative/route/1/interface/rows/0/queue_structure",
+      "related_paths": [
+        "/declarative/route/0/interface/rows/0/queue_structure"
+      ],
+      "message": "`b_01` already has a Resonance Spire queued earlier in this list; a beacon holds one `resonance_spire`, because two interfere with each other.",
+      "beginner": "One Resonance Spire per beacon. Queue this one at another of your beacons, or take the row out."
+    },
+    {
+      "code": "W0602",
+      "severity": "WARNING",
+      "path": "/declarative/route/1",
+      "message": "committed spending of $ 240 outruns the projected treasury of $ 200.",
+      "beginner": "This playbook spends more than the seat is likely to have."
+    }
+  ],
+  "report_hash": "n7UT1nWebak=",
+  "rules_hash": "GybFJQaL/2E=",
+  "plan_fingerprint": "m/oFTt1izzQ=",
+  "verifier_version": "0.1.0-s3.1",
+  "size_units": 2,
+  "size_budget": 128
+}
+

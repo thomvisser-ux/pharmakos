@@ -902,7 +902,7 @@ gp.v1.Playbook.Kind
 
 ## Diagnostics
 
-109 codes. A code is language-neutral, append-only and never
+111 codes. A code is language-neutral, append-only and never
 reused; only an ERROR stops a playbook qualifying. `none at the skeleton` names the
 task that owes the emitter, which is honesty about coverage rather than a gap.
 
@@ -1227,9 +1227,9 @@ E0506  ERROR  settings and recycle  raised at: none at the skeleton (S4, with th
   `{id}` is not a blueprint the catalogue holds.
   There is no such thing to build.
 
-E0507  ERROR  settings and recycle  raised at: none at the skeleton (S4, with licences)
-  `{id}` needs a licence this seat does not hold.
-  The seat has not earned the right to build this yet.
+E0507  ERROR  settings and recycle  raised at: semantics
+  `{id}` needs the {licence} licence, which this seat does not hold.
+  The seat has not earned the right to build this yet. A licence is earned at a settlement and lasts the match.
 
 E0508  ERROR  settings and recycle  raised at: semantics
   `{field}` is {found}; a beacon holds at most {most} scouts.
@@ -1250,6 +1250,10 @@ E0511  ERROR  settings and recycle  raised at: structure
 E0512  ERROR  settings and recycle  raised at: structure
   the wall box is {found} voxels from `min.z` to `max.z`; a wall stands at least {min} voxels above the ground, and `min.z` lies at or below the ground, so this box cannot.
   A wall lower than this is climbable and blocks nothing. Raise the top of the box.
+
+E0513  ERROR  settings and recycle  raised at: semantics
+  `{id}` {why}; a beacon holds one `resonance_spire`, because two interfere with each other.
+  One Resonance Spire per beacon. Queue this one at another of your beacons, or take the row out.
 
 W0501  WARNING  settings and recycle  raised at: none at the skeleton (retired by S2's `dfnd`, which built the threat model)
   `seam_choice` SAFEST read as NEAREST until S2's threat model landed; it digs the nearest seam no known threat's weapon reaches, and this code is retired and raised by nothing.
@@ -1291,9 +1295,9 @@ W0701  WARNING  schedule, conflicts and staleness  raised at: estimate
   the route needs at least {found} ms if every step runs, and the coming segment is {segment} ms.
   There is not time for this whole route this round.
 
-W0702  WARNING  schedule, conflicts and staleness  raised at: none at the skeleton (S3, the lint stage)
-  `{id}` can never fire: `{winner}` is earlier and its condition is true first.
-  An earlier rule always wins, so this one never gets a turn.
+W0702  WARNING  schedule, conflicts and staleness  raised at: lint
+  `{id}` fires only while `{winner}` cannot: `{winner}` comes first, and its condition is true whenever this one's is, so this rule gets a turn only during `{winner}`'s cooldown or after its last fire.
+  An earlier rule wins every time both are true, so this one mostly never gets a turn. Move it above the other rule, or narrow the other rule.
 
 W0703  WARNING  schedule, conflicts and staleness  raised at: lint
   the sighting this rests on is {found} ms old; the reach window is {max} ms.
@@ -1342,3 +1346,7 @@ I0004  INFO  information  raised at: structure
 I0005  INFO  information  raised at: semantics
   `pace` is AVOID_KNOWN_THREATS, and the seat's view holds no enemy beacon in sight; unless the seat sees an armed enemy when the move starts, it goes as DIRECT does.
   Avoiding threats needs an enemy your side can see. None is in sight now, so unless one is when the walk starts, it goes straight.
+
+I0006  INFO  information  raised at: structure
+  `breach_allowed` is true, and only a mortar whose beacon's `roe` is FREE_FIRE shells a breach: RETURN_FIRE never fires at a wall, and a Build beacon's omitted `roe` reads as RETURN_FIRE. Without one, the demolition charge breaches alone.
+  Mortars help a raid through a wall only when their beacon is set to FREE_FIRE. Otherwise the raiders' demolition charge does the work by itself.

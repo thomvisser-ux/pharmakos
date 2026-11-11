@@ -9,10 +9,10 @@
       "beginner": "There is no step by that name on the route."
     }
   ],
-  "report_hash": "U4r8m3LT8Ms=",
+  "report_hash": "yTBXpzcEvjs=",
   "rules_hash": "GybFJQaL/2E=",
   "plan_fingerprint": "c33W5sGveu4=",
-  "verifier_version": "0.1.0-s2.5",
+  "verifier_version": "0.1.0-s3.1",
   "size_units": 3,
   "size_budget": 128
 }
