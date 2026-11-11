@@ -78,7 +78,9 @@ use crate::scope::Scope;
 /// says so in one place rather than leaving a reader to infer it from a moved
 /// golden. `/3` from S2's second verifier lane (task `vfy2`): the view gained
 /// the seat's sightings with their ages, for an Attack target's freshness.
-pub const REPORT_HASH_DOMAIN: &[u8] = b"gp.api.v1/report/3";
+/// `/4` from S3's `vfy5`: the view gained the seat's licences, its grown
+/// sphere radii and the beacons a Resonance Spire stands at.
+pub const REPORT_HASH_DOMAIN: &[u8] = b"gp.api.v1/report/4";
 
 /// The report hash over the five inputs.
 ///

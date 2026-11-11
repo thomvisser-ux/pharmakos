@@ -9,10 +9,10 @@
       "beginner": "A part that every playbook must have is not here."
     }
   ],
-  "report_hash": "E1fyfjMS+xE=",
+  "report_hash": "s+zIIF9E/3Q=",
   "rules_hash": "GybFJQaL/2E=",
   "plan_fingerprint": "A0Rk882uTDU=",
-  "verifier_version": "0.1.0-s2.5",
+  "verifier_version": "0.1.0-s3.1",
   "size_units": 2,
   "size_budget": 128
 }

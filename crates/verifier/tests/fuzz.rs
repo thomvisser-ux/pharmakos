@@ -123,6 +123,12 @@ const S2_CODES: [&str; 16] = [
     "E0512", "W0502", "W0703", "W0708", "W0709", "I0004",
 ];
 
+/// S3's `vfy5` codes, in code order: the ten thousand runs reach every one.
+/// `E0507` and `E0513` stand behind `E0009`, so a run reaches them on a
+/// damaged playbook's queued Spire; `E0513`'s standing Spire is
+/// [`licensed_scope`]'s.
+const S3_CODES: [&str; 4] = ["E0507", "E0513", "W0702", "I0006"];
+
 /// The codes for what the sim refuses at the seal (E0009 to E0016; S2's base
 /// kit's E0019 is retired, since S2's `site` built it, E0012, E0014 and
 /// E0017, since S2's `dfnd` built Defend's settings, `most_threatened` and
@@ -607,7 +613,13 @@ impl Shape {
                 Json::String("NORMAL".to_owned()),
             )]),
             _ => {
-                let blueprint = self.blueprint();
+                // S3's licensed blueprint one row in two, so the Spire's own
+                // checks (E0507, E0513) are reached behind E0009.
+                let blueprint = if self.rarely(2) {
+                    Json::String("resonance_spire".to_owned())
+                } else {
+                    self.blueprint()
+                };
                 Json::Object(vec![(
                     "queue_structure".to_owned(),
                     Json::Object(vec![("blueprint_id".to_owned(), blueprint)]),
@@ -975,6 +987,16 @@ fn stale_scope() -> Scope {
     scope_aged(WINDOW.saturating_add(1), WINDOW.saturating_add(2))
 }
 
+/// [`scope`] with the Resonance licence held and a Spire standing at the
+/// core, `b_01` (S3's `vfy5`), so a route's queued Spire there meets `E0513`
+/// and none meets `E0507`.
+fn licensed_scope() -> Scope {
+    scope()
+        .with_licence(pharmakos_proto::gp::v1::Licence::ResonanceSpire)
+        .and_then(|scope| scope.with_spire("b_01"))
+        .unwrap_or_else(|error| panic!("the licensed fuzz scope builds: {error}"))
+}
+
 /// The fuzz scope with `e_01` and `e_02` seen `first` and `second` ms ago.
 fn scope_aged(first: u32, second: u32) -> Scope {
     Scope::new(
@@ -1283,11 +1305,13 @@ fn ten_thousand_playbooks_come_back_as_reports() {
     let rules = rules();
     let scope = scope();
     let stale = stale_scope();
+    let licensed = licensed_scope();
     let snapshot = snapshot();
     let mut lints: Vec<String> = Vec::new();
     let mut estimates: Vec<String> = Vec::new();
     let mut refusals: Vec<String> = Vec::new();
     let mut s2: Vec<String> = Vec::new();
+    let mut s3: Vec<String> = Vec::new();
     let mut applied: u32 = 0;
     let window = pharmakos_verifier::Limits::from_rules(&rules)
         .unwrap_or_else(|gap| panic!("the limits: {gap}"))
@@ -1298,8 +1322,14 @@ fn ten_thousand_playbooks_come_back_as_reports() {
         "the fuzz scope's ages straddle the committed reach window"
     );
     for index in 0..RUNS {
-        // One run in four against the stale scope, so `W0709` is reachable.
-        let view = if index % 4 == 3 { &stale } else { &scope };
+        // One run in four against the stale scope, so `W0709` is reachable,
+        // and one in four against the licensed one, so `E0513`'s standing
+        // Spire is (S3's `vfy5`).
+        let view = match index % 4 {
+            3 => &stale,
+            1 => &licensed,
+            _ => &scope,
+        };
         let (report, held) = check(index, &rules, view, &snapshot);
         applied = applied.saturating_add(u32::from(held));
         for diagnostic in report.diagnostics {
@@ -1316,6 +1346,8 @@ fn ten_thousand_playbooks_come_back_as_reports() {
                 &mut refusals
             } else if S2_CODES.contains(&code.as_str()) {
                 &mut s2
+            } else if S3_CODES.contains(&code.as_str()) {
+                &mut s3
             } else {
                 continue;
             };
@@ -1349,6 +1381,11 @@ fn ten_thousand_playbooks_come_back_as_reports() {
     let mut wanted = S2_CODES.to_vec();
     wanted.sort_unstable();
     assert_eq!(s2, wanted, "the vfy2 codes the run reached");
+    // Every code S3's `vfy5` emits is reached too.
+    s3.sort();
+    let mut wanted = S3_CODES.to_vec();
+    wanted.sort_unstable();
+    assert_eq!(s3, wanted, "the vfy5 codes the run reached");
     // Every emitting branch of targeting's three lints is reached, so a green
     // run says something about each of them.
     lints.sort();

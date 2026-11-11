@@ -18,7 +18,7 @@
 //! | resolve | [`resolve`] | complete |
 //! | semantics | [`semantics`] | complete |
 //! | estimate | [`estimate`] | the `$` and `kW` projection and the schedule (S1); mast coverage is S4's |
-//! | lint | [`lint`] | targeting's three lints (S1); S2 and S3 add the rest |
+//! | lint | [`lint`] | targeting's three lints (S1), `W0703` (S2) and `W0702` (S3); `I0002` is S3's `vfy6`'s or later |
 //!
 //! FULL's two stages shipped present and empty, deliberately (decisions-log
 //! item 82): `verify_plan{depth}` and `report_hash` were complete from day one,
@@ -59,6 +59,18 @@
 //! those; the checks stand ready for that day. A wall's checks are live: S2's
 //! `site` built the base kit and retired `E0019`, and the sim makes the
 //! ground-dependent halves of the box's checks when the row commits.
+//!
+//! # S3's licence and Spire (task `vfy5`)
+//!
+//! From S3 the seat's [`Scope`] carries the licences it holds, a beacon's
+//! sphere grown by a finished Resonance Spire, and the beacons a Spire stands
+//! at, each through a setter of its own and each a `report_hash` input. A
+//! `queue_structure` row for the Spire without its licence is `E0507`, and a
+//! second Spire at one beacon is `E0513`; both stand behind `E0009`, which
+//! refuses every `queue_structure` row until S3's `lic` gives the Spire an
+//! effect, so the verdict never runs ahead of the sim's compile (S3's plan,
+//! E4 and R4). A breach allowed is noted (`I0006`), and a rule an earlier
+//! rule wins every time both are true is warned of (`W0702`).
 //!
 //! # The arithmetic the estimate stage shares
 //!
@@ -172,7 +184,9 @@ pub use interface::Rates;
 pub use limits::{CONDITION_MAX_DEPTH, CONDITION_MAX_NODES, Limits, RulesGap};
 pub use projection::{Prices, Projection, ProjectionError};
 pub use refusals::{REFUSED_CONSTRUCTS, code_for_construct};
-pub use scope::{FeatureKind, KnownBeacon, KnownFeature, Ownership, Scope, Sighted, Sighting};
+pub use scope::{
+    FeatureKind, KnownBeacon, KnownFeature, Ownership, Scope, ScopeError, Sighted, Sighting,
+};
 pub use size::size_units;
 pub use walking::Walk;
 
@@ -210,8 +224,15 @@ pub use walking::Walk;
 /// qualifies the nearest known enemy beacon (`nearest` with the filter
 /// `side: ENEMY_KNOWN` and nothing else) as an Attack target, lifting `E0015`
 /// for that one selector, and warns of one with no fresh sighting (`W0709`),
-/// so its reports are not comparable with `0.1.0-s2.4`'s.
-pub const VERIFIER_VERSION: &str = "0.1.0-s2.5";
+/// so its reports are not comparable with `0.1.0-s2.4`'s. `0.1.0-s3.1` from
+/// S3's `vfy5`: the seat's view carries its licences, its grown spheres and
+/// the beacons a Spire stands at; this build refuses a licensed blueprint
+/// queued without its licence (`E0507`) and a second Resonance Spire at one
+/// beacon (`E0513`), both behind `E0009`, reads a grown sphere for `E0403`
+/// and `E0416`, notes a breach allowed (`I0006`) and warns of a rule an
+/// earlier rule wins every time both are true (`W0702`), so its reports are
+/// not comparable with `0.1.0-s2.5`'s.
+pub const VERIFIER_VERSION: &str = "0.1.0-s3.1";
 
 /// Everything one verification is a function of, apart from the depth.
 ///
@@ -243,6 +264,10 @@ pub enum InputError {
     /// An input has no encoding for `report_hash`: a byte string or a list
     /// past the encoding's `u32` length prefix.
     Unhashable(HashError),
+    /// The seat's view holds a fact that cannot hold against the rules table
+    /// ([`Scope::check`]): a radius at or below the base sphere, or a radius
+    /// or Spire left behind for a beacon that is no longer the seat's own.
+    View(ScopeError),
 }
 
 impl core::fmt::Display for InputError {
@@ -250,6 +275,7 @@ impl core::fmt::Display for InputError {
         match self {
             InputError::Rules(gap) => write!(formatter, "{gap}"),
             InputError::Unhashable(error) => write!(formatter, "{error}"),
+            InputError::View(error) => write!(formatter, "{error}"),
         }
     }
 }
@@ -286,9 +312,11 @@ impl<'a> Input<'a> {
     ///
     /// [`InputError::Rules`] when the rules table does not carry a block the
     /// checks read — the verifier's limits, the interface rates, the prices
-    /// and the commander's walking rows — or carries one out of range; and
+    /// and the commander's walking rows — or carries one out of range;
     /// [`InputError::Unhashable`] when the playbook, the snapshot or a list or
-    /// string in the view is past `report_hash`'s `u32` length prefix.
+    /// string in the view is past `report_hash`'s `u32` length prefix; and
+    /// [`InputError::View`] when the view's per-beacon facts do not hold
+    /// against the rules table's base sphere ([`Scope::check`]).
     pub fn new(
         playbook: &'a [u8],
         snapshot: &'a [u8],
@@ -296,13 +324,17 @@ impl<'a> Input<'a> {
         rules: &'a RulesTable,
     ) -> Result<Input<'a>, InputError> {
         let rules_hash = rules.rules_hash();
+        let limits = Limits::from_rules(rules)?;
+        scope
+            .check(limits.beacon_sphere_radius_voxels())
+            .map_err(InputError::View)?;
         Ok(Input {
             playbook,
             snapshot,
             scope,
             rules,
             rules_hash,
-            limits: Limits::from_rules(rules)?,
+            limits,
             rates: Rates::from_rules(rules)?,
             prices: Prices::from_rules(rules)?,
             walk: Walk::from_rules(rules)?,

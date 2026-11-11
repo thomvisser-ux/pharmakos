@@ -643,9 +643,9 @@
     "code": "E0507",
     "family": "settings and recycle",
     "severity": "ERROR",
-    "emitter": "none at the skeleton (S4, with licences)",
-    "message": "`{id}` needs a licence this seat does not hold.",
-    "beginner": "The seat has not earned the right to build this yet."
+    "emitter": "semantics",
+    "message": "`{id}` needs the {licence} licence, which this seat does not hold.",
+    "beginner": "The seat has not earned the right to build this yet. A licence is earned at a settlement and lasts the match."
   },
   {
     "code": "E0508",
@@ -686,6 +686,14 @@
     "emitter": "structure",
     "message": "the wall box is {found} voxels from `min.z` to `max.z`; a wall stands at least {min} voxels above the ground, and `min.z` lies at or below the ground, so this box cannot.",
     "beginner": "A wall lower than this is climbable and blocks nothing. Raise the top of the box."
+  },
+  {
+    "code": "E0513",
+    "family": "settings and recycle",
+    "severity": "ERROR",
+    "emitter": "semantics",
+    "message": "`{id}` {why}; a beacon holds one `resonance_spire`, because two interfere with each other.",
+    "beginner": "One Resonance Spire per beacon. Queue this one at another of your beacons, or take the row out."
   },
   {
     "code": "W0501",
@@ -771,9 +779,9 @@
     "code": "W0702",
     "family": "schedule, conflicts and staleness",
     "severity": "WARNING",
-    "emitter": "none at the skeleton (S3, the lint stage)",
-    "message": "`{id}` can never fire: `{winner}` is earlier and its condition is true first.",
-    "beginner": "An earlier rule always wins, so this one never gets a turn."
+    "emitter": "lint",
+    "message": "`{id}` fires only while `{winner}` cannot: `{winner}` comes first, and its condition is true whenever this one's is, so this rule gets a turn only during `{winner}`'s cooldown or after its last fire.",
+    "beginner": "An earlier rule wins every time both are true, so this one mostly never gets a turn. Move it above the other rule, or narrow the other rule."
   },
   {
     "code": "W0703",
@@ -870,6 +878,14 @@
     "emitter": "semantics",
     "message": "`pace` is AVOID_KNOWN_THREATS, and the seat's view holds no enemy beacon in sight; unless the seat sees an armed enemy when the move starts, it goes as DIRECT does.",
     "beginner": "Avoiding threats needs an enemy your side can see. None is in sight now, so unless one is when the walk starts, it goes straight."
+  },
+  {
+    "code": "I0006",
+    "family": "information",
+    "severity": "INFO",
+    "emitter": "structure",
+    "message": "`breach_allowed` is true, and only a mortar whose beacon's `roe` is FREE_FIRE shells a breach: RETURN_FIRE never fires at a wall, and a Build beacon's omitted `roe` reads as RETURN_FIRE. Without one, the demolition charge breaches alone.",
+    "beginner": "Mortars help a raid through a wall only when their beacon is set to FREE_FIRE. Otherwise the raiders' demolition charge does the work by itself."
   }
 ]
 

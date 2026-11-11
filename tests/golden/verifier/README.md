@@ -309,3 +309,31 @@ put on the wire before S3's `pred` gives it an effect. Adding them moves
 `expected.catalogue.json` by those nine rows and moves no existing report: a new
 catalogue row is not one of `report_hash`'s five inputs. `pred` lifts them, as
 `site` lifted `E0019`: each row keeps its number, and its case goes.
+
+**S3's `vfy5` (`VERIFIER_VERSION` 0.1.0-s3.1, `REPORT_HASH_DOMAIN` `/4`).**
+Every `report_hash` moved, the reports whose diagnostics stayed the same
+included. Two of the five inputs moved: the seat's view gained the licences
+it holds, its grown sphere radii and the beacons a Resonance Spire stands at
+(`Scope::encode`), and `REPORT_HASH_DOMAIN` went from `gp.api.v1/report/3` to
+`/4` with it, so input 2's bytes moved for every case (three empty lists are
+bytes too); and `VERIFIER_VERSION` went from `0.1.0-s2.5` to `0.1.0-s3.1`,
+input 4. One existing report's diagnostics moved: `budget_128` gains fifteen
+`W0702` warnings, because its sixteen handlers share one condition, so each of
+`h01` to `h15` is one `h00` wins every time both are true; it still qualifies
+and still sits on the budget. No other case queues the Spire, allows a breach
+or holds a rule another implies. The catalogue moved by `E0507`
+and `W0702` gaining their emitters (semantics and lint), by `E0507`'s and
+`W0702`'s wordings, and by the new rows `E0513` and `I0006`, each at the end
+of its family. Four cases are new, each on the plain fixture:
+`e0507_a_spire_without_its_licence`, `e0513_a_second_spire_at_one_beacon`
+(its first visit ends the route when it fails, so the second queue is
+certainly a second Spire: the reviews' fix pass counts an earlier queue only
+then; it carries `E0507` too, since the plain seat holds no licence, and the
+estimate stage's `W0602` for two Spires' price), `i0006_a_breach_with_no_free_fire_mortar`
+and `w0702_a_rule_an_earlier_rule_always_wins`. Both Spire cases carry `E0009`
+as well: it refuses every `queue_structure` row until S3's `lic`, so the
+Spire's own codes stand behind it. A route's queue where a Spire stands, a
+licensed seat and a grown sphere are tested in `verifier.rs` against fixtures
+of their own (`spire_scope`, and the sphere test's), because
+`crates/bench/src/quick.rs` restates every fixture a case file is checked
+against.
