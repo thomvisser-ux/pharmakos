@@ -74,7 +74,47 @@
 //! no sightings is legal and is what every gateway builds until then: an
 //! Attack target then rests on nothing, and is refused as having no sighting,
 //! which is the truth about that view.
+//!
+//! # Licences, grown spheres and standing Spires (S3's `vfy5`)
+//!
+//! From S3 the view carries three more facts, each through a setter of its
+//! own, so that [`KnownBeacon`]'s fields and every literal that builds one
+//! stay as they were (S3's plan, E3):
+//!
+//! * **The licences the seat holds** ([`Scope::grant_licence`]), as the frozen
+//!   snapshot holds them (spec section 8; decisions-log item 153 (3)). A
+//!   `queue_structure` row for a licensed blueprint the seat does not hold is
+//!   `E0507`.
+//! * **A beacon's grown sphere radius** ([`Scope::set_sphere_radius`]): the
+//!   radius the gateway serves as `BeaconSummary.sphere_radius_voxels`, which
+//!   the sim derives from the base row and a finished Resonance Spire (S3's
+//!   plan, E3 and decision 6). A beacon with no entry has the rules table's
+//!   base radius, `beacon.sphere_radius_voxels`: no Spire has grown it. The
+//!   verifier reads the grown radius for the readers decision 6 grows — the
+//!   sphere a new site must lie in (`E0403`) and the sphere a Build target's
+//!   anchor and a wall's box must lie in (`E0416`) — and never works it out
+//!   from the rules row's bonus itself.
+//! * **The beacons a Spire stands at** ([`Scope::set_spire`]), as the sim's
+//!   own rule for one Spire per beacon decides it, which the gateway reads off
+//!   the frozen world: a route queuing a second one there is `E0513`.
+//!
+//! Each setter refuses, with a [`ScopeError`], a fact about a beacon the view
+//! does not hold as one of the seat's own: no reader reads another seat's
+//! sphere or Spire, and a fact nothing reads would still move `report_hash`.
+//! Each is a `report_hash` input, and an empty one encodes as an empty list.
+//!
+//! # Sighted enemy beacons (the register's S3-04)
+//!
+//! A seat's sighted enemy beacons join the view as [`KnownBeacon`]s with
+//! [`Ownership::EnemyKnown`], each beside its [`Sighting`]: the field has been
+//! here since S1 (the beacon) and S2 (the sighting), every check that names
+//! an enemy beacon by its handle already reads it, and `report_hash` already
+//! covers both. What S3-04 owes is the gateway filling it (S3's `gwr`); until
+//! then a handle the view does not hold is `E0401`.
 
+use core::num::NonZeroU32;
+
+use pharmakos_proto::gp::v1::Licence;
 use pharmakos_proto::gp::v1::Voxel;
 use pharmakos_proto::gp::v1::beacon_filter::MandateKind;
 use pharmakos_proto::gp::v1::by_richness::Richness;
@@ -233,6 +273,44 @@ pub struct Sighting {
     pub age_ms: u32,
 }
 
+/// Why a fact could not join a [`Scope`] (S3's `vfy5`).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum ScopeError {
+    /// `LICENCE_UNSPECIFIED` is the enum's sentinel, not a licence a seat can
+    /// hold.
+    UnspecifiedLicence,
+    /// The view holds no beacon with this id: a per-beacon fact is added after
+    /// the beacon it is about.
+    UnknownBeacon(String),
+    /// The view holds this beacon as another seat's: its sphere and its
+    /// structures are no part of this seat's view.
+    NotOwnBeacon(String),
+}
+
+impl core::fmt::Display for ScopeError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            ScopeError::UnspecifiedLicence => {
+                write!(
+                    formatter,
+                    "LICENCE_UNSPECIFIED is not a licence a seat can hold"
+                )
+            }
+            ScopeError::UnknownBeacon(id) => write!(
+                formatter,
+                "the view holds no beacon `{id}`, so it can carry no fact about one"
+            ),
+            ScopeError::NotOwnBeacon(id) => write!(
+                formatter,
+                "`{id}` is another seat's beacon in this view, and the view carries its sphere \
+                 and its structures for the seat's own beacons only"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ScopeError {}
+
 /// What one seat can see of its own frozen snapshot, for one verification.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Scope {
@@ -242,11 +320,14 @@ pub struct Scope {
     features: Vec<KnownFeature>,
     commander: Option<Voxel>,
     sightings: Vec<Sighting>,
+    licences: Vec<Licence>,
+    sphere_radii: Vec<(String, NonZeroU32)>,
+    spires: Vec<String>,
 }
 
 impl Scope {
-    /// An empty view for `seat`: no beacons, no features, and no commander
-    /// position.
+    /// An empty view for `seat`: no beacons, no features, no commander
+    /// position, no sightings, no licences, no grown sphere and no Spire.
     #[must_use]
     pub const fn new(seat: SeatId, economy: SeatEconomy) -> Scope {
         Scope {
@@ -256,6 +337,9 @@ impl Scope {
             features: Vec::new(),
             commander: None,
             sightings: Vec::new(),
+            licences: Vec::new(),
+            sphere_radii: Vec::new(),
+            spires: Vec::new(),
         }
     }
 
@@ -437,6 +521,162 @@ impl Scope {
         )
     }
 
+    /// Record that the seat holds `licence`, keeping the set in ascending
+    /// order with no repeats, so the encoding does not depend on the order or
+    /// the number of times the gateway added it.
+    ///
+    /// # Errors
+    ///
+    /// [`ScopeError::UnspecifiedLicence`] for the enum's sentinel.
+    pub fn grant_licence(&mut self, licence: Licence) -> Result<(), ScopeError> {
+        if licence == Licence::Unspecified {
+            return Err(ScopeError::UnspecifiedLicence);
+        }
+        if let Err(index) = self.licences.binary_search(&licence) {
+            self.licences.insert(index, licence);
+        }
+        Ok(())
+    }
+
+    /// The same, as a builder.
+    ///
+    /// # Errors
+    ///
+    /// As [`Scope::grant_licence`].
+    pub fn with_licence(mut self, licence: Licence) -> Result<Scope, ScopeError> {
+        self.grant_licence(licence)?;
+        Ok(self)
+    }
+
+    /// Every licence the seat holds, in ascending order.
+    #[must_use]
+    pub fn licences(&self) -> &[Licence] {
+        &self.licences
+    }
+
+    /// Whether the seat holds `licence`.
+    #[must_use]
+    pub fn holds(&self, licence: Licence) -> bool {
+        self.licences.binary_search(&licence).is_ok()
+    }
+
+    /// Set one of the seat's own beacons' sphere radius, in voxels, as the
+    /// gateway serves it (`BeaconSummary.sphere_radius_voxels`, S3's plan,
+    /// E3). A second call for one beacon replaces the first.
+    ///
+    /// # Errors
+    ///
+    /// [`ScopeError::UnknownBeacon`] when the view holds no beacon `beacon_id`
+    /// (add the beacon first), and [`ScopeError::NotOwnBeacon`] when it holds
+    /// it as another seat's.
+    pub fn set_sphere_radius(
+        &mut self,
+        beacon_id: &str,
+        radius_voxels: NonZeroU32,
+    ) -> Result<(), ScopeError> {
+        self.own(beacon_id)?;
+        match self
+            .sphere_radii
+            .binary_search_by(|(held, _)| held.as_str().cmp(beacon_id))
+        {
+            Ok(index) => {
+                if let Some(slot) = self.sphere_radii.get_mut(index) {
+                    slot.1 = radius_voxels;
+                }
+            }
+            Err(index) => self
+                .sphere_radii
+                .insert(index, (beacon_id.to_owned(), radius_voxels)),
+        }
+        Ok(())
+    }
+
+    /// The same, as a builder.
+    ///
+    /// # Errors
+    ///
+    /// As [`Scope::set_sphere_radius`].
+    pub fn with_sphere_radius(
+        mut self,
+        beacon_id: &str,
+        radius_voxels: NonZeroU32,
+    ) -> Result<Scope, ScopeError> {
+        self.set_sphere_radius(beacon_id, radius_voxels)?;
+        Ok(self)
+    }
+
+    /// The radius the view holds for one of the seat's own beacons, when the
+    /// gateway set one. `None` means the view says nothing beyond the beacon
+    /// itself, so its sphere is the rules table's base radius: a grown radius
+    /// is always set, because only a Spire grows one (S3's plan, E3).
+    #[must_use]
+    pub fn sphere_radius(&self, beacon_id: &str) -> Option<NonZeroU32> {
+        self.sphere_radii
+            .binary_search_by(|(held, _)| held.as_str().cmp(beacon_id))
+            .ok()
+            .and_then(|index| self.sphere_radii.get(index))
+            .map(|(_, radius)| *radius)
+    }
+
+    /// Every radius the view holds, in ascending beacon id order.
+    #[must_use]
+    pub fn sphere_radii(&self) -> &[(String, NonZeroU32)] {
+        &self.sphere_radii
+    }
+
+    /// Record that a Resonance Spire stands at one of the seat's own beacons,
+    /// as the sim's one-per-beacon rule reads the frozen world. A second call
+    /// for one beacon changes nothing.
+    ///
+    /// # Errors
+    ///
+    /// As [`Scope::set_sphere_radius`].
+    pub fn set_spire(&mut self, beacon_id: &str) -> Result<(), ScopeError> {
+        self.own(beacon_id)?;
+        if let Err(index) = self
+            .spires
+            .binary_search_by(|held| held.as_str().cmp(beacon_id))
+        {
+            self.spires.insert(index, beacon_id.to_owned());
+        }
+        Ok(())
+    }
+
+    /// The same, as a builder.
+    ///
+    /// # Errors
+    ///
+    /// As [`Scope::set_spire`].
+    pub fn with_spire(mut self, beacon_id: &str) -> Result<Scope, ScopeError> {
+        self.set_spire(beacon_id)?;
+        Ok(self)
+    }
+
+    /// Whether a Resonance Spire stands at this beacon in the frozen snapshot.
+    #[must_use]
+    pub fn spire_at(&self, beacon_id: &str) -> bool {
+        self.spires
+            .binary_search_by(|held| held.as_str().cmp(beacon_id))
+            .is_ok()
+    }
+
+    /// Every beacon a Spire stands at, in ascending id order.
+    #[must_use]
+    pub fn spires(&self) -> &[String] {
+        &self.spires
+    }
+
+    /// The beacon with this id, when the view holds it as the seat's own.
+    fn own(&self, beacon_id: &str) -> Result<&KnownBeacon, ScopeError> {
+        let known = self
+            .beacon(beacon_id)
+            .ok_or_else(|| ScopeError::UnknownBeacon(beacon_id.to_owned()))?;
+        if known.side != Ownership::Own {
+            return Err(ScopeError::NotOwnBeacon(beacon_id.to_owned()));
+        }
+        Ok(known)
+    }
+
     /// Append the view to the canonical encoding.
     ///
     /// Fixed stride and length prefixes throughout, exactly as
@@ -444,14 +684,18 @@ impl Scope {
     /// with its neighbour, and no `usize` reaches the bytes.
     ///
     /// The beacons, then the features, then the commander, then the
-    /// sightings. An absent `covered_by` or commander is a `false` presence
+    /// sightings, then the licences, the sphere radii and the Spires. An
+    /// absent `covered_by` or commander is a `false` presence
     /// byte; a present one is `true` followed by the value, so "none" and "the
     /// empty string" or "the origin" never share bytes. A sighting is a tag
     /// (1 a beacon, 2 a commander), its key (the handle, or the seat), where it
-    /// was seen and its age. The features and the commander widened this
-    /// encoding in S1, and the sightings in S2 (task `vfy2`), and
-    /// `REPORT_HASH_DOMAIN` moved each time, so every `report_hash` moved once
-    /// each time, the view's content otherwise unchanged.
+    /// was seen and its age. A licence is its `gp.v1.Licence` number, a radius
+    /// its beacon's id and its voxels, and a Spire its beacon's id, each list
+    /// length-prefixed. The features and the commander widened this
+    /// encoding in S1, the sightings in S2 (task `vfy2`), and the licences,
+    /// radii and Spires in S3 (task `vfy5`), and `REPORT_HASH_DOMAIN` moved
+    /// each time, so every `report_hash` moved once each time, the view's
+    /// content otherwise unchanged.
     ///
     /// # Errors
     ///
@@ -514,6 +758,19 @@ impl Scope {
             enc.i32(sighting.at.z);
             enc.u32(sighting.age_ms);
         }
+        enc.len(length("the view's licence list", self.licences.len())?);
+        for licence in &self.licences {
+            enc.i32(i32::from(*licence));
+        }
+        enc.len(length("the view's sphere radii", self.sphere_radii.len())?);
+        for (beacon_id, radius) in &self.sphere_radii {
+            encode_str(enc, "a grown sphere's beacon id", beacon_id)?;
+            enc.u32(radius.get());
+        }
+        enc.len(length("the view's Spires", self.spires.len())?);
+        for beacon_id in &self.spires {
+            encode_str(enc, "a Spire's beacon id", beacon_id)?;
+        }
         Ok(())
     }
 }
@@ -535,10 +792,13 @@ fn encode_str(enc: &mut Enc, what: &'static str, text: &str) -> Result<(), HashE
 
 #[cfg(test)]
 mod tests {
-    use super::{FeatureKind, KnownBeacon, KnownFeature, Ownership, Scope, Sighted, Sighting};
-    use pharmakos_proto::gp::v1::Voxel;
+    use super::{
+        FeatureKind, KnownBeacon, KnownFeature, Ownership, Scope, ScopeError, Sighted, Sighting,
+    };
+    use core::num::NonZeroU32;
     use pharmakos_proto::gp::v1::beacon_filter::{MandateKind, Side};
     use pharmakos_proto::gp::v1::by_richness::Richness;
+    use pharmakos_proto::gp::v1::{Licence, Voxel};
     use pharmakos_sim::encoding::Enc;
     use pharmakos_sim::knowledge::SeatEconomy;
     use pharmakos_sim::tables::SeatId;
@@ -749,6 +1009,104 @@ mod tests {
         use pharmakos_proto::gp::api::v1::map_feature::Kind;
         assert_eq!(FeatureKind::Vent.as_i32(), i32::from(Kind::Vent));
         assert_eq!(FeatureKind::Seam.as_i32(), i32::from(Kind::Seam));
+    }
+
+    #[test]
+    fn a_licence_set_is_ordered_unique_and_refuses_the_sentinel() {
+        let mut scope = Scope::new(SeatId::new(0), SeatEconomy::default());
+        assert!(!scope.holds(Licence::ResonanceSpire));
+        assert_eq!(
+            scope.grant_licence(Licence::Unspecified),
+            Err(ScopeError::UnspecifiedLicence)
+        );
+        assert!(
+            scope.licences().is_empty(),
+            "a refused licence joins nothing"
+        );
+        assert_eq!(scope.grant_licence(Licence::ResonanceSpire), Ok(()));
+        assert_eq!(scope.grant_licence(Licence::ResonanceSpire), Ok(()));
+        assert_eq!(scope.licences(), [Licence::ResonanceSpire]);
+        assert!(scope.holds(Licence::ResonanceSpire));
+    }
+
+    #[test]
+    fn a_per_beacon_fact_needs_one_of_the_seat_s_own_beacons() {
+        let mut enemy = beacon("e_01");
+        enemy.side = Ownership::EnemyKnown;
+        let mut scope = Scope::new(SeatId::new(0), SeatEconomy::default())
+            .with_beacon(beacon("b_01"))
+            .with_beacon(enemy);
+        let radius = NonZeroU32::MIN.saturating_add(35);
+        assert_eq!(
+            scope.set_sphere_radius("b_09", radius),
+            Err(ScopeError::UnknownBeacon("b_09".to_owned()))
+        );
+        assert_eq!(
+            scope.set_sphere_radius("e_01", radius),
+            Err(ScopeError::NotOwnBeacon("e_01".to_owned()))
+        );
+        assert_eq!(
+            scope.set_spire("b_09"),
+            Err(ScopeError::UnknownBeacon("b_09".to_owned()))
+        );
+        assert_eq!(
+            scope.set_spire("e_01"),
+            Err(ScopeError::NotOwnBeacon("e_01".to_owned()))
+        );
+        assert!(scope.sphere_radii().is_empty() && scope.spires().is_empty());
+        assert_eq!(scope.sphere_radius("b_01"), None, "the base radius");
+        assert_eq!(scope.set_sphere_radius("b_01", NonZeroU32::MIN), Ok(()));
+        assert_eq!(scope.set_sphere_radius("b_01", radius), Ok(()));
+        assert_eq!(
+            scope.sphere_radius("b_01"),
+            Some(radius),
+            "the last set wins"
+        );
+        assert_eq!(scope.sphere_radii().len(), 1);
+        assert!(!scope.spire_at("b_01"));
+        assert_eq!(scope.set_spire("b_01"), Ok(()));
+        assert_eq!(scope.set_spire("b_01"), Ok(()));
+        assert!(scope.spire_at("b_01"));
+        assert_eq!(scope.spires(), ["b_01"]);
+    }
+
+    #[test]
+    fn every_part_of_the_s3_view_moves_the_bytes_and_its_order_does_not() {
+        let base = Scope::new(SeatId::new(0), SeatEconomy::default())
+            .with_beacon(beacon("b_01"))
+            .with_beacon(beacon("b_02"));
+        let grown = NonZeroU32::MIN.saturating_add(35);
+        let built = |scope: Result<Scope, ScopeError>| -> Scope {
+            scope.unwrap_or_else(|error| panic!("a test fact joins its view: {error}"))
+        };
+        let one = built(
+            built(base.clone().with_sphere_radius("b_01", grown)).with_sphere_radius("b_02", grown),
+        );
+        let other = built(
+            built(base.clone().with_sphere_radius("b_02", grown)).with_sphere_radius("b_01", grown),
+        );
+        assert_eq!(digest(&one), digest(&other));
+        let spires_one = built(built(base.clone().with_spire("b_01")).with_spire("b_02"));
+        let spires_other = built(built(base.clone().with_spire("b_02")).with_spire("b_01"));
+        assert_eq!(digest(&spires_one), digest(&spires_other));
+        let all = [
+            digest(&base),
+            digest(&built(base.clone().with_licence(Licence::ResonanceSpire))),
+            digest(&built(base.clone().with_sphere_radius("b_01", grown))),
+            digest(&built(
+                base.clone().with_sphere_radius("b_01", NonZeroU32::MIN),
+            )),
+            digest(&built(base.clone().with_sphere_radius("b_02", grown))),
+            digest(&built(base.clone().with_spire("b_01"))),
+            digest(&built(base.clone().with_spire("b_02"))),
+            digest(&one),
+            digest(&spires_one),
+        ];
+        for (index, first) in all.iter().enumerate() {
+            for second in all.iter().skip(index.saturating_add(1)) {
+                assert_ne!(first, second, "two different views share bytes");
+            }
+        }
     }
 
     #[test]

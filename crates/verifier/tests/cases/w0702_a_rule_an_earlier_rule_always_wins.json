@@ -1,0 +1,99 @@
+{
+  "schema_version": {
+    "major": 1
+  },
+  "meta": {
+    "title": "case",
+    "author_kind": "HUMAN"
+  },
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {
+        "label": "s1",
+        "hold": {
+          "ms": 1000
+        }
+      }
+    ],
+    "handlers": [
+      {
+        "id": "flee",
+        "when": {
+          "all": {
+            "items": [
+              {
+                "cmdr_hp_pct": {
+                  "cmp": "LE",
+                  "pct": 40
+                }
+              },
+              {
+                "cmdr_took_damage_within": {
+                  "ms": 3000
+                }
+              }
+            ]
+          }
+        },
+        "body": [
+          {
+            "label": "f1",
+            "move": {
+              "to": {
+                "safest": {}
+              }
+            }
+          }
+        ],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 3
+      },
+      {
+        "id": "last_stand",
+        "when": {
+          "all": {
+            "items": [
+              {
+                "cmdr_took_damage_within": {
+                  "ms": 2000
+                }
+              },
+              {
+                "cmdr_hp_pct": {
+                  "cmp": "LT",
+                  "pct": 20
+                }
+              }
+            ]
+          }
+        },
+        "body": [
+          {
+            "label": "l1",
+            "hold": {
+              "ms": 8000
+            }
+          }
+        ],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      }
+    ]
+  },
+  "on_death": {
+    "on_respawn": "CONTINUE",
+    "max_deaths_before_fallback": 1
+  },
+  "fallback": {
+    "hold": {
+      "at": {
+        "beacon_anchor": {
+          "safest": {}
+        }
+      }
+    }
+  }
+}

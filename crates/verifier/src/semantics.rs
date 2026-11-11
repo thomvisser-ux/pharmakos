@@ -57,6 +57,33 @@
 //! the sphere of the beacon whose mandate holds it (`E0416`), by the column
 //! test the view allows.
 //!
+//! # The Resonance Spire's licence and its one per beacon (S3's `vfy5`)
+//!
+//! A `queue_structure` row for a licensed blueprint — `resonance_spire`, the
+//! one S3 has — needs the licence the seat's frozen view holds (`E0507`;
+//! spec section 8, decisions-log item 153 (3)). The licence is the seat's, so
+//! it is checked whichever beacon the visit names, a selector's included. One
+//! Spire per beacon is refused at plan time twice over (`E0513`; S3's plan,
+//! E4): a second queue at one beacon named by its handle in one list (the
+//! route, or one handler's body), and a route's queue at a beacon where the
+//! frozen view holds one. A handler's queue where one stands is not refused
+//! here: a handler is how a seat rebuilds a destroyed Spire (spec section 8:
+//! "Destroyed structures are rebuilt without earning the licence again"), and
+//! the sim refuses one at run time if the Spire still stands then, since the
+//! plan-time answer can go stale. Both codes stand behind `E0009`, which still
+//! refuses every `queue_structure` row until S3's `lic` gives the Spire an
+//! effect, so the verdict never runs ahead of the sim's compile (S3's plan,
+//! R4).
+//!
+//! # A grown sphere (S3's `vfy5`)
+//!
+//! The sphere a new site must lie in (`E0403`) and the sphere a visited
+//! beacon's Build target must lie in (`E0416`) are each beacon's own radius:
+//! the one the seat's view holds for it, which the gateway serves grown by a
+//! finished Spire, or the rules table's base radius when the view holds none
+//! (S3's plan, E3 and decision 6). A beacon a `place_beacon` puts up has the
+//! base radius: no Spire stands at a beacon that does not stand yet.
+//!
 //! # No dry runs
 //!
 //! Everything below is a comparison between a number in the file, a number in
@@ -72,15 +99,16 @@ use pharmakos_proto::gp::v1::move_step::Pace;
 use pharmakos_proto::gp::v1::on_fail::Action;
 use pharmakos_proto::gp::v1::{
     Area, AttackSettings, BeaconFilter, BeaconRef, BuildTarget, DefendSettings, FeatureRef,
-    InterfaceStep, Location, MandateSettings, Playbook, Step, Voxel, attack_target, beacon_ref,
-    interface_row, location, mandate_settings, protected_asset, step,
+    InterfaceStep, Licence, Location, MandateSettings, Playbook, Step, Voxel, attack_target,
+    beacon_ref, interface_row, location, mandate_settings, protected_asset, step,
 };
+use std::collections::BTreeMap;
 
 use crate::limits::Limits;
 use crate::pointer;
 use crate::report::{Builder, Diag, number, patch_add, patch_replace};
 use crate::resolve::Symbols;
-use crate::scope::{FeatureKind, Ownership, Scope, Sighted};
+use crate::scope::{FeatureKind, KnownBeacon, Ownership, Scope, Sighted};
 use crate::strings;
 use crate::structure::arm_name;
 use crate::walk::{self, AreaOf, Carrier, Holder, List, Slot, Visit};
@@ -98,6 +126,8 @@ pub(crate) fn run(
         limits,
         symbols,
         out,
+        list: None,
+        spires: BTreeMap::new(),
     };
     walk::walk(playbook, &mut visitor);
 
@@ -147,21 +177,47 @@ impl Semantics<'_> {
     }
 }
 
+/// The licensed blueprints a `queue_structure` row may name, each with the
+/// licence it needs and that licence's name in the string table (spec
+/// section 8; S3's plan, E4). S3 has the one; S4's capability catalogue adds
+/// the rest.
+const LICENSED: [(&str, Licence, &str); 1] = [(
+    "resonance_spire",
+    Licence::ResonanceSpire,
+    strings::LICENCE_RESONANCE_SPIRE,
+)];
+
+/// The blueprint a beacon holds one of (spec section 8: "one Resonance Spire
+/// per beacon, because two spires interfere with each other").
+const SPIRE: &str = "resonance_spire";
+
+/// Which list a step is in, as a key: `None` for the route, the handler's
+/// index for its body.
+type ListKey = Option<usize>;
+
 struct Semantics<'a> {
     scope: &'a Scope,
     limits: &'a Limits,
     symbols: &'a Symbols,
     out: &'a mut Builder,
+    /// The list of the step the walk is in, set by `entry` before the
+    /// step's own leaves.
+    list: Option<List>,
+    /// The first Spire queued at each beacon, by list, for `E0513`: the
+    /// pointer to its row.
+    spires: BTreeMap<(ListKey, String), String>,
 }
 
 impl Visit for Semantics<'_> {
     fn entry(&mut self, at: &str, entry: &Step, list: List, index: usize) {
+        self.list = Some(list);
         self.jump(at, entry, list, index);
         self.waits(at, entry);
         self.pace(at, entry);
     }
 
     fn interface(&mut self, at: &str, interface: &InterfaceStep) {
+        self.licences(at, interface);
         let Some(target) = interface.beacon.as_ref() else {
             return;
         };
@@ -185,6 +241,7 @@ impl Visit for Semantics<'_> {
             );
             return;
         }
+        self.one_spire(at, interface, known);
         let rows_base = pointer::child(at, "rows");
         for (index, row) in interface.rows.iter().enumerate() {
             let row_at = pointer::at(&rows_base, index);
@@ -227,11 +284,10 @@ impl Visit for Semantics<'_> {
             // could only build before a match starts.
             return;
         }
-        let radius = i64::from(self.limits.beacon_sphere_radius_voxels());
-        let inside = self
-            .scope
-            .own_beacons()
-            .any(|beacon| squared_distance(&beacon.at, voxel) <= radius.saturating_mul(radius));
+        let inside = self.scope.own_beacons().any(|beacon| {
+            let radius = self.radius_of(Some(beacon));
+            squared_distance(&beacon.at, voxel) <= radius.saturating_mul(radius)
+        });
         if !inside {
             self.out.emit(
                 Diag::new("E0403", pointer::child(at, "voxel"))
@@ -647,7 +703,7 @@ impl Semantics<'_> {
         if low.x > high.x || low.y > high.y || low.z > high.z {
             return;
         }
-        let Some(centre) = self.holder_centre(holder) else {
+        let Some((centre, radius)) = self.holder_sphere(holder) else {
             return;
         };
         for (x, y) in [
@@ -656,7 +712,7 @@ impl Semantics<'_> {
             (low.x, high.y),
             (high.x, high.y),
         ] {
-            if self.column_outside(&centre, x, y) {
+            if column_outside(&centre, radius, x, y) {
                 self.out.emit(
                     Diag::new("E0416", pointer::child(at, "wall_box"))
                         .arg("what", strings::WALL_BOX_COLUMN)
@@ -685,10 +741,10 @@ impl Semantics<'_> {
         else {
             return;
         };
-        let Some(centre) = self.holder_centre(holder) else {
+        let Some((centre, radius)) = self.holder_sphere(holder) else {
             return;
         };
-        if self.column_outside(&centre, anchor.x, anchor.y) {
+        if column_outside(&centre, radius, anchor.x, anchor.y) {
             self.out.emit(
                 Diag::new(
                     "E0416",
@@ -702,12 +758,13 @@ impl Semantics<'_> {
         }
     }
 
-    /// Where the beacon holding a target stands, when the file names it: a
-    /// deploy's voxel site, or one of the seat's own beacons visited by its
-    /// handle. Anything else is not known before the Push.
-    fn holder_centre(&self, holder: Holder<'_>) -> Option<Voxel> {
+    /// Where the beacon holding a target stands, and its sphere's radius, when
+    /// the file names it: a deploy's voxel site, at the base radius, or one of
+    /// the seat's own beacons visited by its handle, at the radius the view
+    /// holds for it. Anything else is not known before the Push.
+    fn holder_sphere(&self, holder: Holder<'_>) -> Option<(Voxel, i64)> {
         match holder {
-            Holder::Site(voxel) => Some(*voxel),
+            Holder::Site(voxel) => Some((*voxel, self.radius_of(None))),
             Holder::Visited(beacon) => {
                 let Some(beacon_ref::Ref::BeaconId(id)) = beacon.r#ref.as_ref() else {
                     return None;
@@ -716,19 +773,101 @@ impl Semantics<'_> {
                 self.scope
                     .beacon(id)
                     .filter(|known| known.side == Ownership::Own)
-                    .map(|known| known.at)
+                    .map(|known| (known.at, self.radius_of(Some(known))))
             }
             Holder::Unnamed => None,
         }
     }
 
-    /// Whether a column lies wholly outside the sphere about `centre`: its
-    /// distance in x and y alone is past the radius, so no voxel of it at any
-    /// height is inside.
-    fn column_outside(&self, centre: &Voxel, x: i32, y: i32) -> bool {
-        let radius = i64::from(self.limits.beacon_sphere_radius_voxels());
-        let column = Voxel { x, y, z: centre.z };
-        squared_distance(centre, &column) > radius.saturating_mul(radius)
+    /// A sphere's radius in whole voxels: the one the view holds for `beacon`,
+    /// grown by a finished Spire, or the rules table's base radius for a beacon
+    /// the view holds none for, and for a beacon that does not stand yet
+    /// (`None`), which no Spire has grown (S3's plan, E3).
+    fn radius_of(&self, beacon: Option<&KnownBeacon>) -> i64 {
+        match beacon.and_then(|known| self.scope.sphere_radius(&known.beacon_id)) {
+            Some(grown) => i64::from(grown.get()),
+            None => i64::from(self.limits.beacon_sphere_radius_voxels()),
+        }
+    }
+
+    /// `E0507`: a `queue_structure` row for a licensed blueprint the seat
+    /// does not hold the licence for. The licence is the seat's, so the
+    /// visit's beacon is not read. A blueprint no licence covers is `E0009`'s
+    /// alone until S4's catalogue (`E0506` stays unemitted; S3's plan, E4).
+    fn licences(&mut self, at: &str, interface: &InterfaceStep) {
+        let rows_base = pointer::child(at, "rows");
+        for (index, row) in interface.rows.iter().enumerate() {
+            let Some(interface_row::Row::QueueStructure(queue)) = row.row.as_ref() else {
+                continue;
+            };
+            let Some((_, licence, name)) = LICENSED
+                .iter()
+                .find(|(blueprint, _, _)| *blueprint == queue.blueprint_id)
+            else {
+                continue;
+            };
+            if self.scope.holds(*licence) {
+                continue;
+            }
+            self.out.emit(
+                Diag::new(
+                    "E0507",
+                    pointer::child(
+                        &pointer::child(&pointer::at(&rows_base, index), "queue_structure"),
+                        "blueprint_id",
+                    ),
+                )
+                .arg("id", &queue.blueprint_id)
+                .arg("licence", name),
+            );
+        }
+    }
+
+    /// `E0513`: one Spire per beacon, for a beacon of the seat's own the visit
+    /// names by its handle. A second queue there in the same list, and a
+    /// route's queue there while the frozen view holds a Spire standing; see
+    /// the module doc for why a handler's queue where one stands is the sim's.
+    fn one_spire(&mut self, at: &str, interface: &InterfaceStep, known: &KnownBeacon) {
+        // The walk calls `entry` before any leaf of its step, and an
+        // `interface` is only ever a step, so a list is always set here.
+        let Some(list) = self.list else {
+            return;
+        };
+        let key: ListKey = match list {
+            List::Route => None,
+            List::Body(handler) => Some(handler),
+        };
+        let beacon_at = pointer::child(&pointer::child(at, "beacon"), "beacon_id");
+        let rows_base = pointer::child(at, "rows");
+        for (index, row) in interface.rows.iter().enumerate() {
+            let Some(interface_row::Row::QueueStructure(queue)) = row.row.as_ref() else {
+                continue;
+            };
+            if queue.blueprint_id != SPIRE {
+                continue;
+            }
+            let here = pointer::child(&pointer::at(&rows_base, index), "queue_structure");
+            let id = &known.beacon_id;
+            if let Some(first) = self.spires.get(&(key, id.clone())) {
+                self.out.emit(
+                    Diag::new("E0513", here)
+                        .arg("id", id)
+                        .arg("why", strings::SPIRE_QUEUED_EARLIER)
+                        .related(first.clone()),
+                );
+                continue;
+            }
+            if list == List::Route && self.scope.spire_at(id) {
+                self.out.emit(
+                    Diag::new("E0513", here.clone())
+                        .arg("id", id)
+                        .arg("why", strings::SPIRE_STANDS)
+                        .related(beacon_at.clone())
+                        .map_ref(known.at),
+                );
+            }
+            self.spires.insert((key, id.clone()), here);
+        }
     }
 
     /// "A jump only ever goes forward" — and it has to have somewhere to go.
@@ -865,6 +1004,14 @@ fn list_entry(list: List, index: usize) -> String {
             index,
         ),
     }
+}
+
+/// Whether a column lies wholly outside the sphere of `radius` about
+/// `centre`: its distance in x and y alone is past the radius, so no voxel of
+/// it at any height is inside.
+fn column_outside(centre: &Voxel, radius: i64, x: i32, y: i32) -> bool {
+    let column = Voxel { x, y, z: centre.z };
+    squared_distance(centre, &column) > radius.saturating_mul(radius)
 }
 
 /// Squared distance between two voxels, in whole voxels squared.

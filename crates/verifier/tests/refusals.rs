@@ -16,6 +16,7 @@
     reason = "clippy.toml's allow-expect-in-tests only recognises #[test] functions, not an integration test's helpers. A panic is this file's failure report."
 )]
 
+use pharmakos_proto::gp::api::v1::diagnostic::Severity;
 use pharmakos_proto::gp::api::v1::verify_plan::Depth;
 use pharmakos_proto::gp::v1::Playbook;
 use pharmakos_proto::json;
@@ -403,4 +404,66 @@ fn a_number_no_enum_names_in_s3s_constructs_is_e0018() {
         "/declarative/route/0/place_beacon/at/toward/feature/vent/rank".to_owned(),
     );
     assert!(found.contains(&wanted), "{wanted:?} among {found:?}");
+}
+
+/// S3's `vfy5` builds the Spire's own checks (`E0507`, `E0513`) behind
+/// `E0009`, which still refuses every `queue_structure` row (S3's plan, E4
+/// and R4): a Spire queued by a seat that holds its licence, where none
+/// stands, is refused by the sim's compile with the table entry `E0009`
+/// answers, and by the verifier with `E0009` at the row, so the verdict never
+/// runs ahead of the seal. S3's `lic` narrows both sides together.
+#[test]
+fn a_licensed_spire_is_refused_on_both_sides_until_the_sim_builds_it() {
+    let rules = rules();
+    let row = r#"{"queue_structure": {"blueprint_id": "resonance_spire"}}"#;
+    let step = format!(
+        r#"{{"label": "s", "interface": {{"beacon": {{"beacon_id": "b_00"}}, "rows": [{row}]}}}}"#
+    );
+    let text = playbook(&step, "");
+    let scope = Scope::new(SeatId::new(0), SeatEconomy::default())
+        .with_beacon(pharmakos_verifier::KnownBeacon {
+            beacon_id: "b_00".to_owned(),
+            owner: SeatId::new(0),
+            side: pharmakos_verifier::Ownership::Own,
+            mandate: pharmakos_proto::gp::v1::beacon_filter::MandateKind::Build,
+            tags: Vec::new(),
+            at: pharmakos_proto::gp::v1::Voxel {
+                x: 10,
+                y: 10,
+                z: 10,
+            },
+            is_core: true,
+        })
+        .with_licence(pharmakos_proto::gp::v1::Licence::ResonanceSpire)
+        .expect("the licence joins the view");
+    let snapshot = Snapshot {
+        version: SNAPSHOT_VERSION,
+        ..Snapshot::default()
+    }
+    .to_bytes()
+    .expect("an empty snapshot encodes");
+    let input = Input::new(text.as_bytes(), &snapshot, &scope, &rules).expect("an input");
+    // QUICK: the seat's empty economy makes FULL's projection add `E0601`
+    // for the Spire's draw, which is about the economy and not the queue.
+    let report = verify(&input, Depth::Quick);
+    assert!(!report.qualifies, "{:?}", report.diagnostics);
+    let found: Vec<(&str, &str)> = report
+        .diagnostics
+        .iter()
+        .filter(|found| found.severity == i32::from(Severity::Error))
+        .map(|found| (found.code.as_str(), found.path.as_str()))
+        .collect();
+    assert_eq!(
+        found,
+        [(
+            "E0009",
+            "/declarative/route/0/interface/rows/0/queue_structure"
+        )],
+        "a licensed Spire where none stands is refused by E0009 alone"
+    );
+    let decoded: Playbook = json::decode(&text).expect("the case decodes");
+    let error = Plan::compile(&decoded, &rules).expect_err("the sim refuses it too");
+    let refused =
+        Refusal::of(&error).unwrap_or_else(|| panic!("refused as a table entry, not as {error}"));
+    assert_eq!(code_for_construct(refused.construct), Some("E0009"));
 }

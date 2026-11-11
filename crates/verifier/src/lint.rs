@@ -18,7 +18,7 @@
 //! | A description, or a name, that matches nothing on the map right now | `W0704` | **S1**, here |
 //! | "An earlier step places a beacon; this may read differently" | `W0705` | **S1**, here |
 //! | A fixed site beside a vent the seat already covers, with a Fix that swaps in the description | `W0706` | **S1**, here |
-//! | A handler that can never fire because an earlier one always wins | `W0702` | **S3**, with the rule list at full depth |
+//! | A handler an earlier one wins every time both are true | `W0702` | **S3**, here (task `vfy5`) |
 //! | A reference to an enemy beacon resting on a sighting older than the reach window, an Attack target aside (`E0418` refuses a stale one, `W0708` warns of a seatless commander) | `W0703` | **S2**, here (task `vfy2`) |
 //! | Selector previews — "if this resolved now, it would pick…" | `I0002` | **S3** |
 //!
@@ -53,15 +53,35 @@
 //! not about a projected world. The moment a lint needs a future state to
 //! answer, it is out of bounds and belongs nowhere in this crate (AGENTS.md
 //! section 3 rule 2).
+//!
+//! # A rule an earlier rule always wins (`W0702`, S3's `vfy5`)
+//!
+//! The sim tries the handlers in order at a decision tick and starts the
+//! first ready one whose condition is true (`try_fire`); no handler pre-empts
+//! another. So a later rule whose condition **implies** an earlier one's gets
+//! a turn only while the earlier one is cooling down or has spent its fires.
+//! The test is conservative and reads the two trees alone, never a projected
+//! world: a later condition implies an earlier one when the trees are equal,
+//! through `all`, `any` and `not` taken apart in the ways that keep the claim
+//! true, and at the leaves where one predicate reads the same thing with a
+//! tighter constant (an integer comparison whose values are a subset of the
+//! other's, or a damage window inside the other's). Anything it cannot show
+//! it does not claim. A condition past spec section 10's limits (`E0204`,
+//! `E0205`) and a playbook past the sim's handler ceiling (`E0113`) are
+//! refused already and are not read, which is also what bounds the search:
+//! four levels and 24 nodes a side.
 
 use pharmakos_proto::gp::api::v1::patch_suggestion::Applicability;
+use pharmakos_proto::gp::v1::cmdr_hp_pct::Cmp;
 use pharmakos_proto::gp::v1::feature_ref::{self, Coverage, Rank};
+use pharmakos_proto::gp::v1::int_compare::Op;
 use pharmakos_proto::gp::v1::{
-    BeaconRef, Location, Playbook, Step, Voxel, beacon_ref, location, step,
+    BeaconRef, Condition, Handler, IntCompare, Location, Playbook, Step, Voxel, beacon_ref,
+    condition, location, step,
 };
 use pharmakos_proto::json::Json;
 
-use crate::limits::Limits;
+use crate::limits::{CONDITION_MAX_DEPTH, CONDITION_MAX_NODES, Limits};
 use crate::pointer;
 use crate::report::{Builder, Diag, patch_replace};
 use crate::resolve::Symbols;
@@ -87,6 +107,188 @@ pub(crate) fn run(
         out,
     };
     walk::walk(playbook, &mut lints);
+    shadowed(playbook, out);
+}
+
+/// `W0702`: each handler whose condition implies an earlier handler's, named
+/// against the first such earlier one.
+fn shadowed(playbook: &Playbook, out: &mut Builder) {
+    let Some(declarative) = playbook.declarative.as_ref() else {
+        return;
+    };
+    let handlers = &declarative.handlers;
+    if handlers.len() > pharmakos_sim::interpreter::MAX_HANDLERS {
+        // `E0113`'s: the sim compiles none of them.
+        return;
+    }
+    for (later_index, later) in handlers.iter().enumerate() {
+        let Some(later_when) = judged(later) else {
+            continue;
+        };
+        let winner = handlers
+            .iter()
+            .enumerate()
+            .take(later_index)
+            .find(|(_, earlier)| judged(earlier).is_some_and(|when| implies(later_when, when)));
+        let Some((earlier_index, earlier)) = winner else {
+            continue;
+        };
+        let at =
+            |index: usize| pointer::child(&pointer::at("/declarative/handlers", index), "when");
+        out.emit(
+            Diag::new("W0702", at(later_index))
+                .arg("id", &later.id)
+                .arg("winner", &earlier.id)
+                .related(at(earlier_index)),
+        );
+    }
+}
+
+/// A handler's condition, when it is one this lint reads: present, and
+/// inside spec section 10's depth and node limits (past them it is `E0204`
+/// or `E0205`, and the sim compiles none of it).
+fn judged(handler: &Handler) -> Option<&Condition> {
+    let when = handler.when.as_ref()?;
+    let inside = crate::structure::tree_depth(when) <= CONDITION_MAX_DEPTH
+        && crate::structure::tree_nodes(when) <= CONDITION_MAX_NODES;
+    inside.then_some(when)
+}
+
+/// Whether `a` being true makes `b` true at the same decision tick, as far as
+/// the two trees show. Sound and incomplete: every `true` is a proof, and a
+/// `false` only says none was found.
+fn implies(a: &Condition, b: &Condition) -> bool {
+    use condition::Node;
+    let (Some(left), Some(right)) = (a.node.as_ref(), b.node.as_ref()) else {
+        // An unset node is `E0206`'s and means nothing here.
+        return false;
+    };
+    // Equal groups need no test of their own: taking them apart below meets
+    // each item against its own copy. Only leaves are compared whole, which
+    // keeps each call's own work small (about 7 000 calls for the worst pair
+    // of shapes inside spec section 10's limits).
+    match (left, right) {
+        // `b` holds when each of its items does.
+        (_, Node::All(all)) => all.items.iter().all(|item| implies(a, item)),
+        // `a` holds only when one of its items does, so each must.
+        (Node::Any(any), _) => any.items.iter().all(|item| implies(item, b)),
+        // `b` holds when one of its items does; or `a` holds only when each
+        // of its items does, so one of them alone may be enough.
+        (_, Node::Any(any)) => {
+            any.items.iter().any(|item| implies(a, item))
+                || matches!(left, Node::All(all) if all.items.iter().any(|item| implies(item, b)))
+        }
+        (Node::All(all), _) => all.items.iter().any(|item| implies(item, b)),
+        // The contrapositive: `not x` gives `not y` when `y` gives `x`.
+        (Node::Not(x), Node::Not(y)) => match (x.item.as_deref(), y.item.as_deref()) {
+            (Some(x), Some(y)) => implies(y, x),
+            _ => false,
+        },
+        (left, right) => left == right || leaf_implies(left, right),
+    }
+}
+
+/// One predicate implying another of the same kind, reading the same thing
+/// with a tighter constant. Equal predicates are answered by the caller.
+fn leaf_implies(a: &condition::Node, b: &condition::Node) -> bool {
+    use condition::Node;
+    match (a, b) {
+        (Node::CmdrHpPct(a), Node::CmdrHpPct(b)) => {
+            match (hp_range(a.cmp, a.pct), hp_range(b.cmp, b.pct)) {
+                (Some(a), Some(b)) => a.within(b),
+                _ => false,
+            }
+        }
+        (Node::CmdrTookDamageWithin(a), Node::CmdrTookDamageWithin(b)) => a.ms <= b.ms,
+        (Node::CmdrDeaths(a), Node::CmdrDeaths(b)) => compare_implies(a.deaths, b.deaths),
+        (Node::SegmentElapsed(a), Node::SegmentElapsed(b)) => compare_implies(a.ms, b.ms),
+        (Node::BeaconHpPct(a), Node::BeaconHpPct(b)) => {
+            a.beacon == b.beacon && compare_implies(a.pct, b.pct)
+        }
+        (Node::BeaconUnderAttack(a), Node::BeaconUnderAttack(b)) => {
+            a.beacon == b.beacon && a.within_ms <= b.within_ms
+        }
+        (Node::Treasury(a), Node::Treasury(b)) => compare_implies(a.dollars, b.dollars),
+        (Node::KwHeadroom(a), Node::KwHeadroom(b)) => compare_implies(a.kw, b.kw),
+        _ => false,
+    }
+}
+
+/// One integer comparison's values inside another's, both present.
+fn compare_implies(a: Option<IntCompare>, b: Option<IntCompare>) -> bool {
+    let range = |compare: Option<IntCompare>| {
+        let compare = compare?;
+        Values::of(Op::try_from(compare.op).ok()?, i64::from(compare.value))
+    };
+    match (range(a), range(b)) {
+        (Some(a), Some(b)) => a.within(b),
+        _ => false,
+    }
+}
+
+/// `cmdr_hp_pct`'s own comparison, read as the one `IntCompare` spells: the
+/// two enums name the same six operators with the same numbers
+/// (`playbook.proto`'s `IntCompare` says so).
+fn hp_range(cmp: i32, pct: u32) -> Option<Values> {
+    let op = match Cmp::try_from(cmp).ok()? {
+        Cmp::Unspecified => return None,
+        Cmp::Lt => Op::Lt,
+        Cmp::Le => Op::Le,
+        Cmp::Eq => Op::Eq,
+        Cmp::Ne => Op::Ne,
+        Cmp::Ge => Op::Ge,
+        Cmp::Gt => Op::Gt,
+    };
+    Values::of(op, i64::from(pct))
+}
+
+/// The integers one comparison holds for. Read over every integer, so a
+/// claim made here holds whatever the predicate's own range is.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Values {
+    AtMost(i64),
+    AtLeast(i64),
+    Exactly(i64),
+    Except(i64),
+}
+
+impl Values {
+    /// The values `left op value` holds for, `None` for an unset operator
+    /// (`E0201`'s). The value is a widened `i32` or `u32`, so one either side
+    /// of it is an `i64`.
+    fn of(op: Op, value: i64) -> Option<Values> {
+        Some(match op {
+            Op::Unspecified => return None,
+            Op::Lt => Values::AtMost(value.checked_sub(1)?),
+            Op::Le => Values::AtMost(value),
+            Op::Eq => Values::Exactly(value),
+            Op::Ne => Values::Except(value),
+            Op::Ge => Values::AtLeast(value),
+            Op::Gt => Values::AtLeast(value.checked_add(1)?),
+        })
+    }
+
+    fn holds(self, x: i64) -> bool {
+        match self {
+            Values::AtMost(most) => x <= most,
+            Values::AtLeast(least) => x >= least,
+            Values::Exactly(only) => x == only,
+            Values::Except(not) => x != not,
+        }
+    }
+
+    /// Whether every value `self` holds for, `other` holds for too.
+    fn within(self, other: Values) -> bool {
+        match (self, other) {
+            (Values::Exactly(only), _) => other.holds(only),
+            (Values::AtMost(a), Values::AtMost(b)) => a <= b,
+            (Values::AtLeast(a), Values::AtLeast(b)) => a >= b,
+            (Values::AtMost(a), Values::Except(not)) => not > a,
+            (Values::AtLeast(a), Values::Except(not)) => not < a,
+            (Values::Except(a), Values::Except(b)) => a == b,
+            _ => false,
+        }
+    }
 }
 
 /// Which steps are `place_beacon`s, list by list, for `W0705`.

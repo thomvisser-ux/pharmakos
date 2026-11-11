@@ -45,7 +45,13 @@
 //! with no sighting to route around) at the end of the information codes.
 //! S3's second wire (task `con6`) adds `E0020` to `E0028` at the end of the
 //! decode family, one per predicate and for `toward`, each refused until S3's
-//! `pred` gives it an effect.
+//! `pred` gives it an effect. S3's licence verifier (task `vfy5`) gives
+//! `E0507` (a licensed blueprint queued without its licence) and `W0702` (a
+//! rule an earlier rule wins every time both are true) their emitters, and
+//! adds `E0513` (a second Resonance Spire at one beacon) and `I0006` (a breach
+//! allowed, which only a `FREE_FIRE` mortar shells) at the ends of their
+//! families. `E0506` stays unemitted: an unknown blueprint is `E0009`'s until
+//! S4's capability catalogue (S3's plan, E4).
 //!
 //! The label an unemitted row prints, `none at the skeleton (…)`, is kept as
 //! it was spelt when the table shipped, because `gamectl docs` quotes it; the
@@ -775,11 +781,14 @@ pub const CATALOGUE: &[Entry] = &[
         severity: Severity::Error,
         emitter: Emitter::NoneYet("S4, with the capability catalogue"),
     },
+    // S3's `vfy5` (S3's plan, E4): a `queue_structure` row for a licensed
+    // blueprint the seat's view does not hold the licence for. It stands
+    // behind E0009, which refuses every such row until S3's `lic`.
     Entry {
         code: "E0507",
         family: Family::SettingsAndRecycle,
         severity: Severity::Error,
-        emitter: Emitter::NoneYet("S4, with licences"),
+        emitter: Emitter::Stage(Stage::Semantics),
     },
     // S2-15: a Survey `scout_count` past the byte a beacon's column holds,
     // which the sim's compile refuses (`PlanError::ScoutsOutOfRange`); from
@@ -818,6 +827,16 @@ pub const CATALOGUE: &[Entry] = &[
         family: Family::SettingsAndRecycle,
         severity: Severity::Error,
         emitter: Emitter::Stage(Stage::Structure),
+    },
+    // S3's `vfy5` (S3's plan, E4; spec section 8): one Resonance Spire per
+    // beacon, refused at plan time for a second queue at one beacon in one
+    // list and for a route's queue where the seat's view holds one standing.
+    // Behind E0009, as E0507 is.
+    Entry {
+        code: "E0513",
+        family: Family::SettingsAndRecycle,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Semantics),
     },
     // A warning in the settings family, spelt with the `W` the spec gives a
     // family's warnings, as `W06xx` beside `E06xx`. Decisions-log item 127 (9)
@@ -908,7 +927,9 @@ pub const CATALOGUE: &[Entry] = &[
         code: "W0702",
         family: Family::ScheduleConflictsAndStaleness,
         severity: Severity::Warning,
-        emitter: Emitter::NoneYet("S3, the lint stage"),
+        // S3's `vfy5`: a rule whose condition implies an earlier rule's, read
+        // from the two trees and their constants, never by modelling play.
+        emitter: Emitter::Stage(Stage::Lint),
     },
     Entry {
         code: "W0703",
@@ -1011,6 +1032,17 @@ pub const CATALOGUE: &[Entry] = &[
         family: Family::Information,
         severity: Severity::Info,
         emitter: Emitter::Stage(Stage::Semantics),
+    },
+    // Decisions-log item 151 (2) (c) (4) (S3's `vfy5`): an Attack setting
+    // `breach_allowed: true`. RETURN_FIRE stays literal for a breach, so only
+    // a mortar whose beacon's `roe` is FREE_FIRE shells one, and a Build
+    // beacon's omitted `roe` reads as RETURN_FIRE. A question about the file
+    // alone, so the structure stage's, beside I0004.
+    Entry {
+        code: "I0006",
+        family: Family::Information,
+        severity: Severity::Info,
+        emitter: Emitter::Stage(Stage::Structure),
     },
 ];
 

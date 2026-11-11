@@ -521,8 +521,9 @@ pub const VERIFIER_STRINGS: &[Text] = &[
     },
     Text {
         code: "E0507",
-        message: "`{id}` needs a licence this seat does not hold.",
-        beginner: "The seat has not earned the right to build this yet.",
+        message: "`{id}` needs the {licence} licence, which this seat does not hold.",
+        beginner: "The seat has not earned the right to build this yet. A licence is earned \
+                   at a settlement and lasts the match.",
     },
     Text {
         code: "E0508",
@@ -553,6 +554,13 @@ pub const VERIFIER_STRINGS: &[Text] = &[
                   this box cannot.",
         beginner: "A wall lower than this is climbable and blocks nothing. Raise the top of the \
                    box.",
+    },
+    Text {
+        code: "E0513",
+        message: "`{id}` {why}; a beacon holds one `resonance_spire`, because two interfere \
+                  with each other.",
+        beginner: "One Resonance Spire per beacon. Queue this one at another of your beacons, \
+                   or take the row out.",
     },
     Text {
         code: "W0501",
@@ -620,8 +628,11 @@ pub const VERIFIER_STRINGS: &[Text] = &[
     },
     Text {
         code: "W0702",
-        message: "`{id}` can never fire: `{winner}` is earlier and its condition is true first.",
-        beginner: "An earlier rule always wins, so this one never gets a turn.",
+        message: "`{id}` fires only while `{winner}` cannot: `{winner}` comes first, and its \
+                  condition is true whenever this one's is, so this rule gets a turn only \
+                  during `{winner}`'s cooldown or after its last fire.",
+        beginner: "An earlier rule wins every time both are true, so this one mostly never gets \
+                   a turn. Move it above the other rule, or narrow the other rule.",
     },
     Text {
         code: "W0703",
@@ -701,6 +712,15 @@ pub const VERIFIER_STRINGS: &[Text] = &[
                   DIRECT does.",
         beginner: "Avoiding threats needs an enemy your side can see. None is in sight now, so \
                    unless one is when the walk starts, it goes straight.",
+    },
+    Text {
+        code: "I0006",
+        message: "`breach_allowed` is true, and only a mortar whose beacon's `roe` is FREE_FIRE \
+                  shells a breach: RETURN_FIRE never fires at a wall, and a Build beacon's \
+                  omitted `roe` reads as RETURN_FIRE. Without one, the demolition charge \
+                  breaches alone.",
+        beginner: "Mortars help a raid through a wall only when their beacon is set to \
+                   FREE_FIRE. Otherwise the raiders' demolition charge does the work by itself.",
     },
 ];
 
@@ -832,6 +852,12 @@ pub fn freshest_enemy_beacon(id: &str) -> String {
     format!("the most recently seen enemy beacon, `{id}`,")
 }
 
+/// E0507's `{licence}` for `gp.v1.Licence.RESONANCE_SPIRE`.
+pub const LICENCE_RESONANCE_SPIRE: &str = "Resonance Spire";
+/// E0513's `{why}` for a second Spire queued at one beacon in one list.
+pub const SPIRE_QUEUED_EARLIER: &str = "already has a Resonance Spire queued earlier in this list";
+/// E0513's `{why}` for a beacon where the frozen snapshot holds a Spire.
+pub const SPIRE_STANDS: &str = "already has a Resonance Spire standing";
 /// The enemy commander, as W0708's `{what}` names it.
 pub const THE_ENEMY_COMMANDER: &str = "the enemy commander";
 

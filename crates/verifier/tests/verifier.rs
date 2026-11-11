@@ -48,9 +48,9 @@ use std::path::{Path, PathBuf};
 use pharmakos_proto::gp::api::v1::VerifyReport;
 use pharmakos_proto::gp::api::v1::diagnostic::Severity;
 use pharmakos_proto::gp::api::v1::verify_plan::Depth;
-use pharmakos_proto::gp::v1::Voxel;
 use pharmakos_proto::gp::v1::beacon_filter::MandateKind;
 use pharmakos_proto::gp::v1::by_richness::Richness;
+use pharmakos_proto::gp::v1::{Licence, Voxel};
 use pharmakos_proto::json;
 use pharmakos_sim::knowledge::SeatEconomy;
 use pharmakos_sim::math::quantity::{Kw, Money};
@@ -418,6 +418,18 @@ fn sight_scope() -> Scope {
         })
 }
 
+/// [`fixture_scope`] with the Resonance licence held and a Spire standing at
+/// `b_02`, and nothing else changed (S3's `vfy5`). No case file is checked
+/// against it: `crates/bench/src/quick.rs` restates every fixture a case is
+/// checked against, so the Spire's cases use the plain fixture and its
+/// tests below use this one.
+fn spire_scope() -> Scope {
+    fixture_scope()
+        .with_licence(Licence::ResonanceSpire)
+        .and_then(|scope| scope.with_spire("b_02"))
+        .unwrap_or_else(|error| panic!("the spire fixture builds: {error}"))
+}
+
 /// The view a case is checked against.
 fn scope_for(case: &str) -> Scope {
     if MAP_CASES.contains(&case) {
@@ -692,6 +704,19 @@ fn every_sight_case_exists_and_the_sightings_are_all_it_adds() {
     assert!(sight.features().is_empty() && sight.commander().is_none());
     assert!(plain.sightings().is_empty());
     assert_eq!(sight.sightings().len(), 2);
+}
+
+#[test]
+fn the_spire_fixture_adds_the_licence_and_the_spire_and_nothing_else() {
+    let plain = fixture_scope();
+    let spire = spire_scope();
+    assert_eq!(spire.beacons(), plain.beacons());
+    assert_eq!(spire.economy(), plain.economy());
+    assert!(spire.features().is_empty() && spire.sightings().is_empty());
+    assert!(spire.sphere_radii().is_empty());
+    assert!(plain.licences().is_empty() && plain.spires().is_empty());
+    assert_eq!(spire.licences(), [Licence::ResonanceSpire]);
+    assert_eq!(spire.spires(), ["b_02"]);
 }
 
 /// Freshness reads ages and nothing else (spec section 6; AGENTS.md section 3
@@ -1827,4 +1852,299 @@ fn every_half_written_area_is_refused_as_missing_a_corner() {
         }
         assert_eq!(missing, wanted, "{field}");
     }
+}
+
+// ---------------------------------------------------------------------------
+// S3's licence, Spire and grown sphere (task `vfy5`)
+// ---------------------------------------------------------------------------
+
+/// A playbook with the route steps `steps` and the handlers `handlers`, each
+/// written out as canonical JSON.
+fn route_of(steps: &str, handlers: &str) -> String {
+    format!(
+        "{{\"schema_version\":{{\"major\":1}},\"meta\":{{\"title\":\"case\",\
+         \"author_kind\":\"HUMAN\"}},\"kind\":\"PLAYBOOK\",\"declarative\":{{\"route\":[\
+         {steps}],\"handlers\":[{handlers}]}},\"on_death\":{{\"on_respawn\":\"CONTINUE\",\
+         \"max_deaths_before_fallback\":1}},\"fallback\":{{\"hold\":{{\"at\":\
+         {{\"beacon_anchor\":{{\"safest\":{{}}}}}}}}}}}}"
+    )
+}
+
+/// One handler with condition `when`, as canonical JSON.
+fn handler(id: &str, when: &str) -> String {
+    format!(
+        "{{\"id\":\"{id}\",\"when\":{when},\"body\":[{{\"label\":\"{id}_1\",\"hold\":\
+         {{\"ms\":1000}}}}],\"resume\":\"CONTINUE\",\"cooldown_ms\":5000,\"max_fires\":1}}"
+    )
+}
+
+const SPIRE_ROW: &str = r#"{"queue_structure":{"blueprint_id":"resonance_spire"}}"#;
+
+/// Every diagnostic a FULL check of `text` raises, as `(code, path)`.
+fn found_in(text: &str, scope: &Scope) -> Vec<(String, String)> {
+    let rules = rules();
+    let snapshot = fixture_snapshot();
+    let input = Input::new(text.as_bytes(), &snapshot, scope, &rules)
+        .unwrap_or_else(|error| panic!("assembling the input: {error}"));
+    verify(&input, Depth::Full)
+        .diagnostics
+        .into_iter()
+        .map(|found| (found.code, found.path))
+        .collect()
+}
+
+/// The paths of the diagnostics with `code`.
+fn with_code<'a>(found: &'a [(String, String)], code: &str) -> Vec<&'a str> {
+    found
+        .iter()
+        .filter(|(seen, _)| seen == code)
+        .map(|(_, path)| path.as_str())
+        .collect()
+}
+
+fn licensed_scope() -> Scope {
+    fixture_scope()
+        .with_licence(Licence::ResonanceSpire)
+        .unwrap_or_else(|error| panic!("the licence joins the view: {error}"))
+}
+
+/// E0507 reads the seat's licences and nothing else, and points at the
+/// blueprint's id; E0009 refuses every `queue_structure` row whatever the
+/// licence until S3's `lic` gives the Spire an effect (S3's plan, E4 and R4),
+/// so a Spire never qualifies while the sim's compile refuses it.
+#[test]
+fn a_spire_is_licensed_by_the_seats_view_and_still_refused_by_e0009() {
+    let text = one_visit("b_01", SPIRE_ROW);
+    let unlicensed = found_in(&text, &fixture_scope());
+    let licensed = found_in(&text, &licensed_scope());
+    let row = "/declarative/route/0/interface/rows/0/queue_structure";
+    let blueprint = format!("{row}/blueprint_id");
+    assert_eq!(with_code(&unlicensed, "E0009"), [row]);
+    assert_eq!(with_code(&licensed, "E0009"), [row]);
+    assert_eq!(with_code(&unlicensed, "E0507"), [blueprint.as_str()]);
+    assert!(with_code(&licensed, "E0507").is_empty(), "{licensed:?}");
+    // A blueprint no licence covers is E0009's alone until S4's catalogue
+    // (E0506 stays unemitted, S3's plan, E4).
+    let other = found_in(
+        &one_visit(
+            "b_01",
+            r#"{"queue_structure":{"blueprint_id":"radio_mast"}}"#,
+        ),
+        &fixture_scope(),
+    );
+    assert!(with_code(&other, "E0507").is_empty() && with_code(&other, "E0506").is_empty());
+    // The licence is the seat's, so a beacon chosen by a selector needs it
+    // too.
+    let by_selector = route_of(
+        &format!(
+            "{{\"label\":\"s1\",\"interface\":{{\"beacon\":{{\"nearest\":{{\"filter\":\
+             {{\"side\":\"OWN\"}}}}}},\"rows\":[{SPIRE_ROW}]}}}}"
+        ),
+        "",
+    );
+    assert_eq!(
+        with_code(&found_in(&by_selector, &fixture_scope()), "E0507").len(),
+        1
+    );
+}
+
+/// One Spire per beacon (spec section 8), at plan time: a second queue at one
+/// beacon in one list, and a route's queue where the frozen snapshot holds
+/// one, are E0513. A handler's queue where one stands is not: a handler is
+/// how a seat rebuilds a destroyed Spire ("Destroyed structures are rebuilt
+/// without earning the licence again"), and the sim's run-time refusal
+/// answers it if the Spire still stands then.
+#[test]
+fn one_spire_per_beacon_is_refused_in_one_list_and_where_one_stands() {
+    let scope = spire_scope();
+    // Two rows in one visit.
+    let two_rows = found_in(
+        &one_visit("b_01", &format!("{SPIRE_ROW},{SPIRE_ROW}")),
+        &scope,
+    );
+    assert_eq!(
+        with_code(&two_rows, "E0513"),
+        ["/declarative/route/0/interface/rows/1/queue_structure"]
+    );
+    // Two beacons, one each: nothing.
+    let two_beacons = route_of(
+        &format!(
+            "{{\"label\":\"s1\",\"interface\":{{\"beacon\":{{\"beacon_id\":\"b_01\"}},\
+             \"rows\":[{SPIRE_ROW}]}}}},{{\"label\":\"s2\",\"interface\":{{\"beacon\":\
+             {{\"beacon_id\":\"b_03\"}},\"rows\":[{SPIRE_ROW}]}}}}"
+        ),
+        "",
+    );
+    let three = scope.clone().with_beacon(beacon(
+        "b_03",
+        Ownership::Own,
+        MandateKind::Build,
+        (90, 15, 56),
+        false,
+        &[],
+    ));
+    assert!(with_code(&found_in(&two_beacons, &three), "E0513").is_empty());
+    // The route queues one at `b_01`, and a handler at `b_02`, where one
+    // stands, and at `b_01`: a handler's queue is the sim's to answer.
+    let route_and_handler = route_of(
+        &format!(
+            "{{\"label\":\"s1\",\"interface\":{{\"beacon\":{{\"beacon_id\":\"b_01\"}},\
+             \"rows\":[{SPIRE_ROW}]}}}}"
+        ),
+        &format!(
+            "{{\"id\":\"rebuild\",\"when\":{{\"cmdr_hp_pct\":{{\"cmp\":\"GE\",\"pct\":1}}}},\
+             \"body\":[{{\"label\":\"r1\",\"interface\":{{\"beacon\":{{\"beacon_id\":\"b_02\"}},\
+             \"rows\":[{SPIRE_ROW}]}}}},{{\"label\":\"r2\",\"interface\":{{\"beacon\":\
+             {{\"beacon_id\":\"b_01\"}},\"rows\":[{SPIRE_ROW}]}}}}],\"resume\":\"CONTINUE\",\
+             \"cooldown_ms\":5000,\"max_fires\":1}}"
+        ),
+    );
+    assert!(
+        with_code(&found_in(&route_and_handler, &scope), "E0513").is_empty(),
+        "a handler's queue is the sim's to answer at run time"
+    );
+    // A route's queue where one stands, and the same with none standing.
+    let at_b02 = one_visit("b_02", SPIRE_ROW);
+    assert_eq!(with_code(&found_in(&at_b02, &scope), "E0513").len(), 1);
+    assert!(with_code(&found_in(&at_b02, &licensed_scope()), "E0513").is_empty());
+}
+
+/// Decision 6's readers that grow read the gateway's grown radius: the sphere
+/// a new site must lie in (E0403), and the sphere a visited beacon's Build
+/// target must lie in (E0416). A beacon with no radius in the view has the
+/// rules table's base radius (24 voxels).
+#[test]
+fn a_grown_sphere_reaches_as_far_as_the_view_says() {
+    let site = route_of(
+        r#"{"label":"s1","place_beacon":{"at":{"voxel":{"x":50,"y":11,"z":55}}}}"#,
+        "",
+    );
+    let target = one_visit(
+        "b_01",
+        r#"{"add_build_target":{"target":{"blueprint_id":"generator","anchor":{"voxel":{"x":110,"y":11,"z":55}},"order":1}}}"#,
+    );
+    let radius = |voxels: u32| {
+        fixture_scope()
+            .with_sphere_radius(
+                "b_01",
+                core::num::NonZeroU32::new(voxels)
+                    .unwrap_or_else(|| panic!("a test radius is not zero")),
+            )
+            .unwrap_or_else(|error| panic!("b_01 is the seat's own: {error}"))
+    };
+    let base = fixture_scope();
+    let grown = radius(36);
+    let short = radius(29);
+    assert_eq!(with_code(&found_in(&site, &base), "E0403").len(), 1);
+    assert!(with_code(&found_in(&site, &grown), "E0403").is_empty());
+    assert_eq!(with_code(&found_in(&site, &short), "E0403").len(), 1);
+    assert_eq!(with_code(&found_in(&target, &base), "E0416").len(), 1);
+    assert!(with_code(&found_in(&target, &grown), "E0416").is_empty());
+    assert_eq!(with_code(&found_in(&target, &short), "E0416").len(), 1);
+}
+
+/// I0006 notes a breach allowed, written true, on every carrier; nothing for
+/// false, or for an Attack arm that leaves it out.
+#[test]
+fn a_breach_is_noted_only_where_it_is_allowed() {
+    let attack = |breach: &str| {
+        one_visit(
+            "b_01",
+            &format!("{{\"set_mandate_settings\":{{\"attack\":{{\"waves\":1{breach}}}}}}}"),
+        )
+    };
+    let path = "/declarative/route/0/interface/rows/0/set_mandate_settings/attack/breach_allowed";
+    let noted = |breach: &str| {
+        with_code(&found_in(&attack(breach), &fixture_scope()), "I0006")
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<String>>()
+    };
+    assert_eq!(noted(",\"breach_allowed\":true"), [path]);
+    assert!(noted(",\"breach_allowed\":false").is_empty());
+    assert!(noted("").is_empty());
+}
+
+/// W0702 is conservative: it names a later rule only where its condition
+/// implies an earlier rule's, read from the two trees and their constants.
+/// Each row below is `(earlier, later, warned)`.
+#[test]
+fn a_rule_is_warned_unreachable_only_when_its_condition_implies_an_earlier_one() {
+    let hp =
+        |cmp: &str, pct: u32| format!("{{\"cmdr_hp_pct\":{{\"cmp\":\"{cmp}\",\"pct\":{pct}}}}}");
+    let treasury = |op: &str, value: i32| {
+        format!("{{\"treasury\":{{\"dollars\":{{\"op\":\"{op}\",\"value\":{value}}}}}}}")
+    };
+    let hit = |ms: i32| format!("{{\"cmdr_took_damage_within\":{{\"ms\":{ms}}}}}");
+    let all = |items: &[String]| format!("{{\"all\":{{\"items\":[{}]}}}}", items.join(","));
+    let any = |items: &[String]| format!("{{\"any\":{{\"items\":[{}]}}}}", items.join(","));
+    let not = |item: &str| format!("{{\"not\":{{\"item\":{item}}}}}");
+    let rows: Vec<(String, String, bool)> = vec![
+        (hp("LE", 40), hp("LE", 40), true),
+        (hp("LE", 40), hp("LT", 40), true),
+        (hp("LE", 40), hp("EQ", 12), true),
+        (hp("LE", 40), hp("LE", 41), false),
+        (hp("LE", 40), hp("GE", 10), false),
+        (hp("NE", 50), hp("LT", 50), true),
+        (hp("NE", 50), hp("LE", 50), false),
+        (hp("GT", 10), hp("GE", 11), true),
+        (hp("GT", 10), hp("GE", 10), false),
+        (treasury("GE", 100), treasury("GT", 150), true),
+        (treasury("GE", 100), hp("GT", 50), false),
+        (hit(3000), hit(2000), true),
+        (hit(2000), hit(3000), false),
+        (
+            all(&[hp("LE", 40), hit(3000)]),
+            all(&[hit(3000), hp("LE", 30)]),
+            true,
+        ),
+        (all(&[hp("LE", 40), hit(3000)]), hp("LE", 30), false),
+        (hp("LE", 40), all(&[treasury("GT", 5), hp("LE", 30)]), true),
+        (any(&[hp("LE", 40), hit(3000)]), hit(1000), true),
+        (hp("LE", 40), any(&[hp("LE", 30), hp("LT", 10)]), true),
+        (
+            hp("LE", 40),
+            any(&[hp("LE", 30), treasury("LT", 10)]),
+            false,
+        ),
+        (not(&hp("GE", 50)), not(&hp("GE", 40)), true),
+        (not(&hp("GE", 40)), not(&hp("GE", 50)), false),
+    ];
+    for (earlier, later, warned) in rows {
+        let text = route_of(
+            r#"{"label":"s1","hold":{"ms":1000}}"#,
+            &format!(
+                "{},{}",
+                handler("first", &earlier),
+                handler("second", &later)
+            ),
+        );
+        let found = found_in(&text, &fixture_scope());
+        let w0702 = with_code(&found, "W0702");
+        if warned {
+            assert_eq!(
+                w0702,
+                ["/declarative/handlers/1/when"],
+                "{later} implies {earlier}: {found:?}"
+            );
+        } else {
+            assert!(
+                w0702.is_empty(),
+                "{later} does not imply {earlier}: {found:?}"
+            );
+        }
+    }
+}
+
+/// Only an earlier rule wins a tick (the sim's `try_fire` tries them in
+/// order), so a narrow rule before a wide one says nothing.
+#[test]
+fn only_an_earlier_rule_can_shadow_a_later_one() {
+    let wide = r#"{"cmdr_hp_pct":{"cmp":"LE","pct":40}}"#;
+    let narrow = r#"{"cmdr_hp_pct":{"cmp":"LE","pct":20}}"#;
+    let text = route_of(
+        r#"{"label":"s1","hold":{"ms":1000}}"#,
+        &format!("{},{}", handler("narrow", narrow), handler("wide", wide)),
+    );
+    assert!(with_code(&found_in(&text, &fixture_scope()), "W0702").is_empty());
 }

@@ -78,7 +78,10 @@
 //! Defend or an Attack beacon and `RETURN_FIRE` on the others (decisions-log
 //! item 148 (2)), and a Build beacon's repair threshold of 0 is `I0004` (S2's
 //! plan, decisions 4 and 38). A protected, probe or avoid area missing a
-//! corner is `E0101`, as a wall's box is (decisions-log item 146 (4)).
+//! corner is `E0101`, as a wall's box is (decisions-log item 146 (4)). From
+//! S3's `vfy5` an Attack arm that writes `breach_allowed: true` is `I0006`:
+//! only a mortar whose beacon's `roe` is `FREE_FIRE` shells a breach
+//! (decisions-log item 151 (2) (c) (4)).
 //! The sim's handler ceiling is `E0113`.
 
 use pharmakos_proto::gp::api::v1::patch_suggestion::Applicability;
@@ -891,6 +894,17 @@ impl Sites<'_> {
                 negative(self.out, &retreat_at, "after_launch_ms", ms);
             }
         }
+        // `I0006` (decisions-log item 151 (2) (c) (4)): RETURN_FIRE stays
+        // literal for a breach, so only a mortar whose beacon's `roe` is
+        // FREE_FIRE shells one (the sim's `breach_shell`), and the mortars
+        // belong to the seat's Build beacons, whose omitted `roe` reads as
+        // RETURN_FIRE. Which mortars stand in range is the Push's, so the note
+        // says the rule and claims nothing about them. Written true only, on
+        // every carrier: an edit that allows a breach is told as a deploy is.
+        if attack.breach_allowed == Some(true) {
+            self.out
+                .emit(Diag::new("I0006", pointer::child(at, "breach_allowed")));
+        }
     }
 
     /// `E0510`: a setting outside its range, with a Fix to `fixed` where
@@ -1236,7 +1250,7 @@ fn walk_condition_root(condition: &Condition, at: &str, out: &mut Builder) {
 }
 
 /// How deeply a condition nests. A bare predicate is one level.
-fn tree_depth(condition: &Condition) -> u32 {
+pub(crate) fn tree_depth(condition: &Condition) -> u32 {
     let inner = match condition.node.as_ref() {
         Some(condition::Node::All(all)) => all.items.iter().map(tree_depth).max().unwrap_or(0),
         Some(condition::Node::Any(any)) => any.items.iter().map(tree_depth).max().unwrap_or(0),
@@ -1247,7 +1261,7 @@ fn tree_depth(condition: &Condition) -> u32 {
 }
 
 /// How many nodes a condition holds, itself included.
-fn tree_nodes(condition: &Condition) -> u32 {
+pub(crate) fn tree_nodes(condition: &Condition) -> u32 {
     let inner: u32 = match condition.node.as_ref() {
         Some(condition::Node::All(all)) => all
             .items

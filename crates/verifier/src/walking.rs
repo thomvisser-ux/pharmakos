@@ -41,7 +41,7 @@
 //! `Scope` field the gateway fills, which is the same shape as the segment
 //! clock and the "fits" pill (the register's S3-16).
 //!
-//! PLACEHOLDER: pathfinder-quality travel per known leg for W0701 — owner, S3, with the segment clock.
+//! PLACEHOLDER: pathfinder-quality travel per known leg for W0701 — owner, S6, with the segment clock (S3's plan, section 2.1, row S3-19).
 //!
 //! # The radius at each end
 //!
