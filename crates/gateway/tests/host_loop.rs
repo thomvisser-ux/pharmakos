@@ -200,6 +200,7 @@ fn config(match_id: &str, human: Option<u8>) -> Config {
         human_seat: human,
         segment_lengths_ms: vec![1_000],
         round_limit: 2,
+        preset: pharmakos_gateway::probation::Preset::Custom,
     }
 }
 
@@ -406,8 +407,9 @@ fn the_two_lines_are_read_exactly_as_they_were_written() {
         );
     }
 
-    // The seventh field (decisions-log item 111, decision C9): `resume`, or
-    // nothing. Anything else is refused rather than read as a new match.
+    // The eighth field (decisions-log item 111, decision C9; the seventh is
+    // the preset since S3's `gwp`): `resume`, or nothing. Anything else is
+    // refused rather than read as a new match.
     let resume = ConfigLine {
         config: config("m-t16a-lines", Some(1)),
         resume: true,
@@ -428,19 +430,19 @@ fn the_two_lines_are_read_exactly_as_they_were_written() {
     assert_eq!(
         ConfigLine::parse(&plain.render()).expect("its own line"),
         plain,
-        "six fields are a new match"
+        "seven fields are a new match"
     );
     assert_eq!(plain.render(), plain.config.render());
     for seventh in ["again", "RESUME", "resume please"] {
         let line = format!("{}\t{seventh}\n", plain.render().trim_end());
-        let error = ConfigLine::parse(&line).expect_err("not a seventh field");
+        let error = ConfigLine::parse(&line).expect_err("not an eighth field");
         assert_eq!(error.code, Code::InvalidArgument, "`{seventh}`");
     }
-    // And nothing after the seventh: an eighth field is refused, not ignored,
-    // whether the seventh asks for a resume or not.
+    // And nothing after the eighth: a ninth field is refused, not ignored,
+    // whether the eighth asks for a resume or not.
     for tail in ["resume\tgarbage", "-\tgarbage", "\t"] {
         let line = format!("{}\t{tail}\n", plain.render().trim_end());
-        let error = ConfigLine::parse(&line).expect_err("an eighth field");
+        let error = ConfigLine::parse(&line).expect_err("a ninth field");
         assert_eq!(error.code, Code::InvalidArgument, "`{tail}`");
         assert!(error.message.contains("at most"), "{}", error.message);
     }
@@ -579,6 +581,7 @@ impl Advisor for Advising {
         Advice {
             safe_playbook_jsonc: String::from(pharmakos_gateway::host::SAFE_PLAYBOOK),
             suggestions: Vec::new(),
+            start_here: None,
         }
     }
 }

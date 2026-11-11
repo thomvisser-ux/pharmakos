@@ -56,6 +56,7 @@ fn config_of(match_id: &str) -> Config {
         human_seat: None,
         segment_lengths_ms: vec![SEGMENT_MS],
         round_limit: ROUNDS,
+        preset: pharmakos_gateway::probation::Preset::Custom,
     }
 }
 
@@ -641,7 +642,7 @@ fn a_cursor_from_the_dead_process_is_stale_on_the_resumed_surface() {
 #[test]
 fn a_fourth_seat_is_refused() {
     for seats in [0_u32, 4, 99] {
-        let line = format!("m-t17-seats\t0x1\t{seats}\t-\t-\t2\n");
+        let line = format!("m-t17-seats\t0x1\t{seats}\t-\t-\t2\tcustom\n");
         let error = Config::parse(&line).expect_err("refused");
         assert_eq!(error.code, Code::InvalidArgument, "{seats} seats");
         let error = Host::open_from(
@@ -680,7 +681,8 @@ fn a_fourth_seat_is_refused() {
             error.message
         );
     }
-    let three = Config::parse("m-t17-seats\t0x1\t3\t-\t-\t2\n").expect("three is v1's most");
+    let three =
+        Config::parse("m-t17-seats\t0x1\t3\t-\t-\t2\tcustom\n").expect("three is v1's most");
     assert_eq!(three.seats, 3);
     assert!(
         Host::open_from(

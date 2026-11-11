@@ -98,6 +98,7 @@ fn config_of(match_id: &str) -> Config {
         human_seat: None,
         segment_lengths_ms: vec![SEGMENT_MS],
         round_limit: ROUNDS,
+        preset: pharmakos_gateway::probation::Preset::Custom,
     }
 }
 

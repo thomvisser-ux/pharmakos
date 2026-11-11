@@ -386,6 +386,11 @@ pub struct Advice {
     pub safe_playbook_jsonc: String,
     /// One suggestion per template the operator knows and the library lists.
     pub suggestions: Vec<Suggestion>,
+    /// The template a newcomer starts with, the guided first pick (spec
+    /// section 13; S3's plan, decision 5): Hold & Build, whenever it is among
+    /// `suggestions`, whose `why` is the reason the wizard shows beside it.
+    /// The gateway marks it in a Probation match's first Lull (E25).
+    pub start_here: Option<String>,
     /// How many calls the advice made.
     pub calls: u32,
     /// The refusal that kept the round from being read, when one did: the
@@ -508,6 +513,11 @@ impl Easy {
                 &declared,
                 safe.as_ref(),
             );
+            advice.start_here = advice
+                .suggestions
+                .iter()
+                .find(|suggestion| suggestion.template_id == HOLD_AND_BUILD)
+                .map(|suggestion| suggestion.template_id.clone());
             if let Some(plan) = safe {
                 advice.safe_playbook_jsonc = plan.jsonc;
             }

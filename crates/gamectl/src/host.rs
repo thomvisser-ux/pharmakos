@@ -172,6 +172,7 @@ fn advice_of(advice: pharmakos_operator::Advice) -> Advice {
                 why: suggestion.why,
             })
             .collect(),
+        start_here: advice.start_here,
     }
 }
 

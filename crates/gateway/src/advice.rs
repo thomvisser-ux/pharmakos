@@ -28,7 +28,9 @@
 //!   silently. `get_safe_plan` answers what would be filed, and
 //!   [`crate::surface::Surface::begin_push`] files it.
 //! * The suggestions are stored per seat and answered only to that seat, by
-//!   `instantiate_template{suggested: true}`.
+//!   `instantiate_template{suggested: true}`, and the one the operator says
+//!   to start with is marked on that seat's `list_templates` in a Probation
+//!   match's first Lull ([`Advice::start_here`]; S3's plan, E25).
 //! * All of it is the **round's**: a Lull opening forgets the last one.
 
 /// One suggested value for one declared template parameter.
@@ -60,6 +62,12 @@ pub struct Advice {
     pub safe_playbook_jsonc: String,
     /// One suggestion per template it has one for, in any order.
     pub suggestions: Vec<Suggestion>,
+    /// The template the operator says a newcomer starts with, by its id: the
+    /// guided first pick (spec section 13; S3's plan, decision 5 and E25).
+    /// Its reason is that template's suggestion's `why`, so it names a
+    /// template it has a suggestion for, or nothing. In a Probation match's
+    /// first Lull `list_templates` marks it for the seat it was filed for.
+    pub start_here: Option<String>,
 }
 
 impl Advice {

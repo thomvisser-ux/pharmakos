@@ -1398,6 +1398,16 @@ fn surface_calls_no_save_seam(surface_text: &str, needles: &[(&str, &str)]) {
 /// for "none", nothing to see where no match is hosted -- and says so here.
 const KEPT_FALLBACKS: &[(&str, &str, &str)] = &[
     (
+        "surface.rs",
+        ".map_or_else(LiveVision::default, |host| LiveVision::of(host.world()));",
+        "with no match hosted there is no sensor at all, so nobody witnesses an event: the vision is blind, as `serve::vision_of`'s is",
+    ),
+    (
+        "viewfeed.rs",
+        ".unwrap_or_default()",
+        "a viewer the view has never named a beacon for holds no handles, and a save keeps an empty table for it",
+    ),
+    (
         "audit.rs",
         ".map_or_else(|| String::from(\"-\"), Subject::render);",
         "the audit log's format spells a line with no subject `-` (its reader, `MatchCache::continuation`, reads it so)",
@@ -1429,8 +1439,8 @@ const KEPT_FALLBACKS: &[(&str, &str, &str)] = &[
     ),
     (
         "serve.rs",
-        "let seventh = trimmed.split('\\t').nth(6).unwrap_or(\"\");",
-        "a config line of six fields is a new match: the seventh is absent, read as the empty field the format allows",
+        "let eighth = trimmed.split('\\t').nth(7).unwrap_or(\"\");",
+        "a config line of seven fields is a new match: the eighth is absent, read as the empty field the format allows",
     ),
     (
         "serve.rs",
@@ -1589,7 +1599,7 @@ const KEPT_FALLBACKS: &[(&str, &str, &str)] = &[
     ),
     (
         "strings.rs",
-        "match u8::try_from(value).ok().and_then(posture_name) {",
+        "match u8::try_from(value).ok().and_then(posture_words) {",
         "a posture this build does not name is written as its code, not read as one it does",
     ),
     (

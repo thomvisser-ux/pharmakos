@@ -412,6 +412,7 @@ fn a_fogged_seat_never_sees_an_unseen_voxel() {
                 owner: Some(SeatId::new(1)),
                 at: secret,
             },
+            memo: None,
         })
         .expect("published");
 
@@ -508,6 +509,7 @@ fn elimination_lifts_fog_without_reissuing_a_token() {
                 owner: Some(SeatId::new(1)),
                 at: Voxel { x: 9, y: 9, z: 9 },
             },
+            memo: None,
         })
         .expect("published");
 

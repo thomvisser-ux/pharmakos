@@ -19,16 +19,20 @@
 //! **Config, in**, one line on the child's standard input, tab separated:
 //!
 //! ```text
-//! <match id>\t<seed>\t<seats>\t<human seat|->\t<segment lengths|->\t<round limit>[\tresume]
+//! <match id>\t<seed>\t<seats>\t<human seat|->\t<segment lengths|->\t<round limit>\t<preset>[\tresume]
 //! ```
 //!
-//! The seventh field is optional and has one value, `resume` (decisions-log
-//! item 111, decision C9): go on with the match saved under this id rather
-//! than start a new one. A resume line repeats **all six** of the saved
-//! match's values, the round limit included, and one that differs is refused
-//! as [`crate::error::Code::InvalidArgument`] (item 112 (8)); so is a rules
-//! table, verifier or snapshot format that is not the save's. [`ConfigLine`]
-//! reads it.
+//! The seventh field is the match's **preset**, `probation` or `custom` (S3's
+//! plan, E6; [`crate::probation`]), and it is required: a line without it --
+//! one a lobby remembered before S3 -- is refused with a typed error naming
+//! it, and the lobby offers a fresh match rather than guessing (no silent
+//! default). The eighth field is optional and has one value, `resume`
+//! (decisions-log item 111, decision C9): go on with the match saved under
+//! this id rather than start a new one. A resume line repeats **all seven**
+//! of the saved match's values, the round limit and the preset included, and
+//! one that differs is refused as [`crate::error::Code::InvalidArgument`]
+//! (item 112 (8)); so is a rules table, verifier or snapshot format that is
+//! not the save's. [`ConfigLine`] reads it.
 //!
 //! **Announce, out**, one line on the child's standard output, tab separated:
 //!
@@ -150,6 +154,7 @@ use crate::error::Error;
 use crate::fog::FogPolicy;
 use crate::host::{Host, LiveVision, Settings};
 use crate::net::Listener;
+use crate::probation::Preset;
 use crate::rpc::{self, Request};
 use crate::save::{Save, Stamp};
 use crate::scopes::{Scope, ScopeSet};
@@ -353,21 +358,24 @@ pub struct Config {
     pub segment_lengths_ms: Vec<i32>,
     /// How many rounds the match runs at most.
     pub round_limit: u32,
+    /// The preset the match is played under (S3's plan, E6).
+    pub preset: Preset,
 }
 
 impl Config {
-    /// Read one config line's first six fields.
+    /// Read one config line's first seven fields.
     ///
-    /// A seventh field is not read here: [`ConfigLine::parse`] reads it, and
+    /// An eighth field is not read here: [`ConfigLine::parse`] reads it, and
     /// is what the host loop uses.
     ///
     /// # Errors
     ///
     /// [`crate::error::Code::InvalidArgument`] for a line with too few fields
     /// or a field this host cannot read, and for a seat count outside `1` to
-    /// [`crate::host::MAX_SEATS`]. Nothing here is silently defaulted: the
-    /// lobby is a program, and a host that guessed what it meant would start
-    /// the wrong match.
+    /// [`crate::host::MAX_SEATS`]. A line with no preset -- six fields, or six
+    /// and `resume`, as a lobby wrote before S3 -- is refused naming the
+    /// field. Nothing here is silently defaulted: the lobby is a program, and
+    /// a host that guessed what it meant would start the wrong match.
     pub fn parse(line: &str) -> Result<Config, Error> {
         let fields: Vec<&str> = line.trim_end_matches(['\r', '\n']).split('\t').collect();
         let field = |index: usize, name: &str| -> Result<String, Error> {
@@ -376,8 +384,8 @@ impl Config {
                 .map(|text| (*text).to_owned())
                 .ok_or_else(|| {
                     Error::invalid(format!(
-                        "the config line has no field {index} (`{name}`); it is six tab-separated \
-                         fields"
+                        "the config line has no field {index} (`{name}`); it is seven \
+                         tab-separated fields"
                     ))
                 })
         };
@@ -422,6 +430,16 @@ impl Config {
         let round_limit = field(5, "round limit")?
             .parse::<u32>()
             .map_err(|_| Error::invalid("`round limit` is how many rounds the match runs"))?;
+        let preset = match fields.get(6).copied() {
+            None | Some("resume") => {
+                return Err(Error::invalid(
+                    "the config line has no `preset` (field 6, `probation` or `custom`): a line \
+                     written before S3 names none, and this host does not guess one; start a \
+                     new match",
+                ));
+            }
+            Some(text) => Preset::parse(text)?,
+        };
         // Decisions-log item 110 (5): v1 plays one to three seats, and a lobby
         // that asked for more is told so here, before a map is generated.
         Host::check_seats(seats)?;
@@ -439,6 +457,7 @@ impl Config {
             human_seat,
             segment_lengths_ms,
             round_limit,
+            preset,
         })
     }
 
@@ -458,56 +477,56 @@ impl Config {
                 .join(",")
         };
         format!(
-            "{}\t{}\t{}\t{human}\t{lengths}\t{}\n",
+            "{}\t{}\t{}\t{human}\t{lengths}\t{}\t{}\n",
             self.match_id,
             crate::view::seed_text(self.seed),
             self.seats,
-            self.round_limit
+            self.round_limit,
+            self.preset.name()
         )
     }
 }
 
-/// A whole config line: the match's six values, and whether to resume it.
+/// A whole config line: the match's seven values, and whether to resume it.
 ///
-/// A type of its own rather than a seventh field on [`Config`], so that every
-/// caller that builds a [`Config`] keeps building one (decisions-log item
-/// 111, decision C9: the config line grows, its six values do not change).
+/// A type of its own rather than a field on [`Config`], so that a resume is
+/// never one of the match's values (decisions-log item 111, decision C9).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct ConfigLine {
-    /// The six values.
+    /// The seven values.
     pub config: Config,
-    /// True for a line whose seventh field is `resume`: go on with the match
+    /// True for a line whose eighth field is `resume`: go on with the match
     /// saved under this id.
     pub resume: bool,
 }
 
 impl ConfigLine {
-    /// Read one config line, with its optional seventh field.
+    /// Read one config line, with its optional eighth field.
     ///
     /// # Errors
     ///
-    /// As [`Config::parse`], and [`crate::error::Code::InvalidArgument`] for a
-    /// seventh field that is anything but `resume`, `-` or empty, and for a
-    /// line with an eighth field or more: a resume line repeats the saved
-    /// match exactly (decisions-log item 112 (8)), and a field this host does
-    /// not read is not silently dropped.
+    /// As [`Config::parse`], and [`crate::error::Code::InvalidArgument`] for an
+    /// eighth field that is anything but `resume`, `-` or empty, and for a
+    /// line with a ninth field or more: a resume line repeats the saved match
+    /// exactly (decisions-log item 112 (8)), and a field this host does not
+    /// read is not silently dropped.
     pub fn parse(line: &str) -> Result<ConfigLine, Error> {
         let config = Config::parse(line)?;
         let trimmed = line.trim_end_matches(['\r', '\n']);
         let fields = trimmed.split('\t').count();
-        if fields > 7 {
+        if fields > 8 {
             return Err(Error::invalid(format!(
                 "the config line has {fields} tab-separated fields and this host reads at most \
-                 seven: the match's six, and `resume`"
+                 eight: the match's seven, and `resume`"
             )));
         }
-        let seventh = trimmed.split('\t').nth(6).unwrap_or("");
-        let resume = match seventh {
+        let eighth = trimmed.split('\t').nth(7).unwrap_or("");
+        let resume = match eighth {
             "" | "-" => false,
             "resume" => true,
             other => {
                 return Err(Error::invalid(format!(
-                    "`{other}` is not a seventh config field this host reads: it is `resume`, or \
+                    "`{other}` is not an eighth config field this host reads: it is `resume`, or \
                      nothing for a new match"
                 )));
             }
@@ -515,7 +534,7 @@ impl ConfigLine {
         Ok(ConfigLine { config, resume })
     }
 
-    /// The line a lobby writes: six fields for a new match, seven for a
+    /// The line a lobby writes: seven fields for a new match, eight for a
     /// resume.
     #[must_use]
     pub fn render(&self) -> String {
@@ -875,7 +894,8 @@ fn open_surface(
         // match is made, not something the transport carries).
         FogPolicy::fogged(),
         &seats,
-    )?;
+    )?
+    .with_preset(config.preset, config.human_seat.map(SeatId::new));
     surface.attach(host)?;
     surface.open_lull()?;
     Ok((surface, seats))
@@ -904,7 +924,8 @@ fn resume_surface(
         host,
         &save.state,
         continuation,
-    )?;
+    )?
+    .with_preset(config.preset, config.human_seat.map(SeatId::new));
     Ok((surface, seats))
 }
 

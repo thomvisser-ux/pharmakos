@@ -247,6 +247,7 @@ fn reading_advisor(transcript: Arc<Mutex<Vec<String>>>) -> impl Advisor {
                 first,
                 &format!("Seat {seat}'s first beacon is where the Generator goes."),
             )],
+            start_here: None,
         }
     })
 }
@@ -302,6 +303,7 @@ fn a_suggested_instantiation_reports_every_declared_parameter_in_order() {
                     "A Build beacon at the edge of your core's sphere holds the heat vent nearest \
                      your core in its own.",
                 )],
+                start_here: None,
             }),
         ),
     );
@@ -428,6 +430,7 @@ fn an_explicit_parameter_beats_a_suggestion() {
             fixed_advisor(Advice {
                 safe_playbook_jsonc: String::from(SAFE_PLAYBOOK),
                 suggestions: vec![hold_and_build([150, 13, 118], "Because.")],
+                start_here: None,
             }),
         ),
     );
@@ -475,6 +478,7 @@ fn advice_for_one_seat_never_reaches_another() {
             [100_i32.saturating_add(i32::from(seat)), 12, 100],
             &format!("For seat {seat} alone."),
         )],
+        start_here: None,
     };
     for policy in [FogPolicy::fogged(), FogPolicy::casual()] {
         let mut surface = match_with(policy.clone());
@@ -786,6 +790,7 @@ fn an_advisor_is_refused_every_method_off_its_allow_list() {
                 Advice {
                     safe_playbook_jsonc: String::from(SAFE_PLAYBOOK),
                     suggestions: Vec::new(),
+                    start_here: None,
                 }
             }),
         ),
@@ -883,6 +888,7 @@ fn the_advisor_leaves_the_humans_view_feed_as_it_found_it() {
                         Advice {
                             safe_playbook_jsonc: String::from(SAFE_PLAYBOOK),
                             suggestions: Vec::new(),
+                            start_here: None,
                         }
                     }),
                 ),
@@ -967,6 +973,7 @@ fn an_advised_safe_playbook_that_does_not_qualify_is_replaced_by_the_fallback_an
                 fixed_advisor(Advice {
                     safe_playbook_jsonc: advised.clone(),
                     suggestions: Vec::new(),
+                    start_here: None,
                 }),
             ),
         );
@@ -1051,6 +1058,7 @@ fn a_suggestion_that_would_not_instantiate_is_dropped_and_audited() {
                 fixed_advisor(Advice {
                     safe_playbook_jsonc: String::from(SAFE_PLAYBOOK),
                     suggestions: vec![suggestion.clone()],
+                    start_here: None,
                 }),
             ),
         );

@@ -61,18 +61,33 @@ const RECONNECTS := 5
 ## The match the lobby hosts until it has a match-settings screen.
 ##
 ## PLACEHOLDER: the match the lobby hosts — OWNER, S6, with the settings screen.
-## The golden seed (so the live vista is the fixture's map), two seats with
-## the human at seat 0 and the other played by the built-in operator (Easy, since T18:
-## it plans, submits and says ready for its seat every round), the rules table's own
-## segment ladder, and three rounds, the Probation-shaped match of skeleton-plan section
-## 1.1 (decisions-log item 123 (2) 3; the sim's own default stays the spec's six). The
-## lobby's settings screen and the Probation preset are the owner's, deferred to S6 by
-## decisions-log item 127 (10).
-const MATCH_SEED := "0x00000000ca5caded"
+## Probation's own map seed (S3's decision 13; decisions-log items 154 (1) and 156 (1)):
+## `sim3a`'s pin, PROBATION_SEED in crates/sim/tests/probation_seed.rs, 20, the first seed
+## whose second vent three placements reach, so the licence is earnable. The golden seed
+## stays every test's fixture, the headless watch check's included (watch_check.gd's
+## CHECK_SEED), and godot_project.rs holds MATCH_SEED to the pin. Two seats with the human
+## at seat 0 and the other played by the built-in operator (Easy, since T18: it plans,
+## submits and says ready for its seat every round), the rules table's own segment ladder,
+## and three rounds, the Probation-shaped match of skeleton-plan section 1.1 (decisions-log
+## item 123 (2) 3; the sim's own default stays the spec's six). The Probation preset moved
+## from S6 (decisions-log item 127 (10)) to S3 (item 153 (2)); the settings screen stays
+## the owner's, at S6.
+const MATCH_SEED := "0x0000000000000014"
 const MATCH_SEATS := 2
 const HUMAN_SEAT := 0
 const ROUND_LIMIT := 3
 const LADDER := "-"
+
+## The preset the config line names (S3's plan, E6), `probation` or `custom`: the gateway
+## reads it and decides what it changes, so nothing here does. It is `custom` until S3's
+## `prob` lane turns it to `probation` together with the client's half of an untimed Lull:
+## today's rig counts every Lull down from the rules table and reports the countdown, which
+## a Probation match's gateway refuses (E7), and the rig learns `all_ready` only from that
+## report's answer. A line remembered without a preset is refused by the gateway, naming
+## the field, and the lobby shows the refusal as it shows any host's; New match is the
+## fresh match.
+## PLACEHOLDER: the lobby's preset is `custom` until `prob` — OWNER, at S3's `prob`
+const PRESET := "custom"
 
 ## The test-only launch option that sets the round limit in place of ROUND_LIMIT,
 ## `-- --rounds <n>` (or `-- --rounds=<n>`, as the readers beside it spell theirs), so a
@@ -161,16 +176,18 @@ static func find_root() -> String:
 
 
 ## The one config line `pharmakos_gateway::serve::Config` reads: match id, seed, seats,
-## the human seat, the segment ladder and the round limit, tab separated. `seats` is the
-## lobby's two unless a caller names another (the headless watch check names its own
-## `CHECK_SEATS`, also two: its other seat is the built-in operator's, which says ready at
-## every Lull's start, so the check's own Ready completes every seat's).
+## the human seat, the segment ladder, the round limit and the preset, tab separated.
+## `seats`, `seed` and `preset` are the lobby's unless a caller names others: the headless
+## watch check names its own `CHECK_SEATS`, also two (its other seat is the built-in
+## operator's, which says ready at every Lull's start, so the check's own Ready completes
+## every seat's), its own `CHECK_SEED`, the golden seed, and `custom`.
 ##
 ## The round limit is `round_limit()`'s text: the `--rounds` argument's, or ROUND_LIMIT
-## when the launch gave none. The line's six fields and their order are unchanged, so a
-## remembered `last_match.txt` still parses (AGENTS.md section 5).
-static func config_line(match_id: String, ladder: String, seats: int = MATCH_SEATS) -> String:
-	return "%s\t%s\t%d\t%d\t%s\t%s\n" % [match_id, MATCH_SEED, seats, HUMAN_SEAT, ladder, round_limit()]
+## when the launch gave none. The preset is the seventh field, from S3 (S3's plan, E6): a
+## line the lobby remembered before it has six, and the gateway refuses it naming the field
+## rather than guess one (AGENTS.md section 5).
+static func config_line(match_id: String, ladder: String, seats: int = MATCH_SEATS, seed: String = MATCH_SEED, preset: String = PRESET) -> String:
+	return "%s\t%s\t%d\t%d\t%s\t%s\t%s\n" % [match_id, seed, seats, HUMAN_SEAT, ladder, round_limit(), preset]
 
 
 ## What this launch said about `--rounds`: `given` (whether it said anything), `text` (the
@@ -254,9 +271,9 @@ static func rounds_refusal() -> String:
 	return "`--rounds` was refused for a reason this build does not name"
 
 
-## The resume line for a remembered six-field `line`: the same six fields, a tab and
-## `resume` (decisions-log item 111, decision C9). Nothing else changes, so a refusal says
-## the save and this line disagree, and nothing is retried with other values.
+## The resume line for a remembered `line`: the same seven fields, a tab and `resume`
+## (decisions-log item 111, decision C9). Nothing else changes, so a refusal says the save
+## and this line disagree, and nothing is retried with other values.
 static func resume_line(line: String) -> String:
 	return line.strip_edges(false, true) + "\tresume\n"
 

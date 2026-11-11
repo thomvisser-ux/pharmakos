@@ -147,7 +147,7 @@ impl Surface {
     /// structure finished and an elimination all reach the camera without a
     /// special case each.
     ///
-    /// PLACEHOLDER: the cost of recomputing every modified chunk whenever a sensor moves — owner, at S3's demo, measured by `cert3`, built as decision 14 rules (item 152 (1) 11; decision 14 ruled by item 154 (4): built at S7).
+    /// PLACEHOLDER: the cost of recomputing every modified chunk whenever a sensor moves — owner, at S7, measured in S3 by `cert3` and built at S7 as decision 14 rules (item 152 (1) 11; decision 14 ruled by item 154 (4)).
     /// Since units see, the key moves on every tick one of the seat's units
     /// walks, so "recompute everything on a change" runs on most calls of a
     /// Push. Its cost is the number of modified chunks times a chunk's 32 768

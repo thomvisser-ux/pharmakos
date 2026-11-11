@@ -475,6 +475,7 @@ fn a_two_seat_hosted_match_against_easy_reaches_the_recap_with_both_seats_sealed
         human_seat: Some(0),
         segment_lengths_ms: vec![5_000],
         round_limit: 1,
+        preset: pharmakos_gateway::probation::Preset::Custom,
     };
     let mut running = start(&config);
     let port = running.announce.port;

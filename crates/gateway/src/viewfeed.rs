@@ -60,7 +60,7 @@
 //! seed and the rules table, and the travel estimator already prices every leg
 //! as known ground.
 //!
-//! PLACEHOLDER: real terrain fog in the view — owner, at S3, with the knowledge store.
+//! PLACEHOLDER: real terrain fog in the view — owner, at S4, with the knowledge store's mask (S3's plan, decision 2: S3-05 moved to S4).
 //! With the knowledge store, real terrain
 //! fog (never seen, last known, the x1.5 cost bound) arrives as **one** mask
 //! that feeds both this view and `RouteAdapter::set_unknown_columns`, so the
@@ -781,6 +781,61 @@ impl ViewFeed {
         let name = pharmakos_sim::tables::foreign_beacon_name(number);
         state.beacons.push((id, name.clone()));
         Ok(name)
+    }
+
+    /// Every `e_NN` this viewer holds, with the beacon id each names, in the
+    /// order they were minted: what a save keeps (S3's plan, E1). Read-only.
+    #[must_use]
+    pub fn foreign_beacon_names(&self, viewer: Viewer) -> Vec<(u32, String)> {
+        self.viewers
+            .iter()
+            .find(|state| state.viewer == viewer)
+            .map(|state| state.beacons.clone())
+            .unwrap_or_default()
+    }
+
+    /// Put back the `e_NN` table a save kept for this viewer, before anything
+    /// mints one: the names it held are its names again, in the order they
+    /// were minted, and the next one minted counts on from them (S3's plan,
+    /// E1). Called by [`crate::surface::Surface::resume`], and by nothing
+    /// else.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::InvalidArgument`] when the viewer already holds a
+    /// handle -- a table goes back before any is minted, or the two would
+    /// disagree -- or when `names` is not `e_01` up, one handle a beacon.
+    pub fn restore_foreign_beacon_names(
+        &mut self,
+        viewer: Viewer,
+        names: &[(u32, String)],
+    ) -> Result<(), Error> {
+        let index = slot_of(&mut self.viewers, viewer);
+        let state = self.viewers.get_mut(index).ok_or_else(|| {
+            Error::internal("the view feed lost the viewer slot it had just made")
+        })?;
+        if !state.beacons.is_empty() {
+            return Err(Error::invalid(
+                "a saved handle table goes back before any handle is minted",
+            ));
+        }
+        let mut restored: Vec<(u32, String)> = Vec::with_capacity(names.len());
+        for (id, name) in names {
+            let number = u32::try_from(restored.len())
+                .ok()
+                .and_then(|held| held.checked_add(1))
+                .ok_or_else(|| Error::invalid("a saved handle table longer than u32 counts"))?;
+            if *name != pharmakos_sim::tables::foreign_beacon_name(number)
+                || restored.iter().any(|(held, _)| held == id)
+            {
+                return Err(Error::invalid(
+                    "a saved handle table is `e_01` up, one handle a beacon",
+                ));
+            }
+            restored.push((*id, name.clone()));
+        }
+        state.beacons = restored;
+        Ok(())
     }
 
     /// The handle this viewer already holds for another seat's beacon `id`,
