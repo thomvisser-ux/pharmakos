@@ -305,8 +305,8 @@ fn the_wizards_live_suggestion_qualifies_and_is_goldened_for_every_template() {
         let playbook = text_of(&answer, "playbook_jsonc");
         let why = text_of(&answer, "why");
         assert!(
-            why.starts_with("Easy, seat 0, round 1, seed 0x00000000ca5caded"),
-            "{template}: Easy's why, opening with the seed it recorded: {why}"
+            why.starts_with("Easy, seat 0, round 1, told no seed (Easy draws nothing at random)."),
+            "{template}: Easy's why opens with its seed line, told none (E18): {why}"
         );
         let Some(Json::Array(parameters)) = answer.get("parameters") else {
             panic!("{template}: the answer lists its parameters");

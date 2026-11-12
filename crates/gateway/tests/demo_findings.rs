@@ -67,6 +67,9 @@ fn a_timeout_filing_is_named_in_the_seats_own_feed() {
         result(&submitted, "submit_plan").get("accepted"),
         Some(&Json::Bool(true))
     );
+    // The Lull runs out: the host's last report is a countdown at 0, which
+    // is what the filing line reads as "ran out" (item 143 (4)).
+    surface.set_phase_remaining_ms(pharmakos_sim::math::quantity::Ms::ZERO);
     surface.begin_push().expect("the Push begins");
     let _ = step(&mut surface, 2);
 

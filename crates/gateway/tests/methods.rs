@@ -1041,22 +1041,40 @@ fn code(response: &Json, what: &str) -> String {
 }
 
 /// `get_map_summary` answers the seed the match was built with, in the spelling
-/// the scenario files use.
+/// the scenario files use, to the lobby's token, and to a seat's token none
+/// (S3's plan, E18; decisions-log item 127 (13)).
 ///
 /// The field `match_seed` is the one this lane made a contract change to add,
 /// and a served field nothing asserts is a field that can quietly become empty.
 #[test]
 fn get_map_summary_answers_the_seed_the_match_was_built_with() {
     let mut surface = hosted();
+    let (admin, _) = surface
+        .tokens()
+        .mint(
+            Subject::Admin,
+            MATCH,
+            ScopeSet::of(&[Scope::Admin, Scope::Observe]),
+            Tick::ZERO,
+        )
+        .expect("minted");
+    let lobby = result(
+        &surface.call(Some(&admin), &request("get_map_summary", "{}"), &Blind),
+        "get_map_summary",
+    );
+    assert_eq!(
+        text_of(&lobby, "match_seed"),
+        pharmakos_gateway::view::seed_text(SEED),
+        "the seed is `part of the match, not a secret`, and it is this match's"
+    );
     let token = seat_token(&mut surface, 0);
     let summary = result(
         &surface.call(Some(&token), &request("get_map_summary", "{}"), &Blind),
         "get_map_summary",
     );
-    assert_eq!(
-        text_of(&summary, "match_seed"),
-        pharmakos_gateway::view::seed_text(SEED),
-        "the seed is `part of the match, not a secret`, and it is this match's"
+    assert!(
+        summary.get("match_seed").is_none(),
+        "a seat's token is told no seed: {summary:?}"
     );
     let size = summary.get("size").expect("the extent");
     for axis in ["x", "y", "z"] {

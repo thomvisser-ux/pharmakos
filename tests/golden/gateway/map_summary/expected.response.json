@@ -7,8 +7,7 @@
       "y": 384,
       "z": 64
     },
-    "prose": "The map is 384 by 384 by 64 voxels, generated from seed 0x00000000ca5caded for 2 seats.",
-    "match_seed": "0x00000000ca5caded",
+    "prose": "The map is 384 by 384 by 64 voxels, for 2 seats.",
     "features": [
       {
         "feature_id": "seam_142_212",
