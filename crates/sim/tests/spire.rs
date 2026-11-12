@@ -211,6 +211,22 @@ fn a_licensed_seat_queues_the_spire_and_the_fabricator_raises_it() {
         "the core's sphere grew"
     );
     assert!(world.spire_on(core));
+    // It stands beside the core, on a column of its own: the spiral's first
+    // free one, a single step away on this ground.
+    let structures = world.structures();
+    let row = (0..structures.ids().len())
+        .find(|row| structures.kinds()[*row] == StructureKind::ResonanceSpire.id())
+        .expect("the Spire");
+    let spire = structures.positions()[row];
+    let centre = core_at(world);
+    let (dx, dy) = (
+        spire[0].floor_voxels() - centre[0].floor_voxels(),
+        spire[1].floor_voxels() - centre[1].floor_voxels(),
+    );
+    assert!(
+        (dx, dy) != (0, 0) && dx * dx + dy * dy <= 2,
+        "beside the beacon, not on it: ({dx}, {dy})"
+    );
 }
 
 #[test]

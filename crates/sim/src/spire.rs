@@ -44,8 +44,8 @@
 //! beacon's built-in fabricator builds it (spec section 8). One Spire per
 //! beacon ("two spires interfere with each other"): a second is refused at run
 //! time with the step failure `spire_present`, since the verifier's plan-time
-//! answer can go stale. The Spire stands on its beacon's own column, which is
-//! the beacon's sphere's centre.
+//! answer can go stale. The Spire stands beside its beacon, on the nearest
+//! free column of its sphere, so it is an asset of its own to aim at.
 
 use crate::math::fixed::Fx;
 use crate::rules::RulesTable;

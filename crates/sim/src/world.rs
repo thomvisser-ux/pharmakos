@@ -2622,7 +2622,8 @@ impl World {
     /// the ground at one hit point, going up, homed to the beacon. From that
     /// tick it draws its `kW` ([`crate::power`]) and the beacon's fabricator
     /// raises it ([`crate::spire::fabricate`]), whatever the mandate. It
-    /// stands on the beacon's own column, the sphere's centre.
+    /// stands beside the beacon, on the nearest free column of its sphere
+    /// ([`World::capability_site`]).
     ///
     /// # Errors
     ///
@@ -2631,8 +2632,8 @@ impl World {
     /// (the verifier's `E0507` at plan time); [`StepFailure::SpirePresent`]
     /// when a Spire already stands, or is going up, at the beacon (the
     /// verifier's `E0513`, whose answer can go stale between the seal and the
-    /// commit); [`StepFailure::IllegalSite`] when a structure already stands
-    /// on the beacon's column or a voxel `set` is queued on it this tick;
+    /// commit); [`StepFailure::IllegalSite`] when no column of the beacon's
+    /// sphere is free for it;
     /// [`StepFailure::NoStructureRoom`] when the seat's share of the structure
     /// table is full; [`StepFailure::Unaffordable`] when the treasury does not
     /// reach the structure's price; [`StepFailure::BeaconGone`] for a beacon
@@ -2667,13 +2668,9 @@ impl World {
             .get(row.index())
             .copied()
             .ok_or(StepFailure::BeaconGone)?;
-        let [x, y] = crate::targeting::column_of(at);
-        // One structure per voxel, across seats (targeting.md, "Sites"), and
-        // no purchase whose footing a `set` filed this tick would be refused
-        // by (the owner's footing ruling of 2026-10-20), as `queue_target`.
-        if self.ground().structure_on(x, y) || self.set_queued_on(x, y) {
-            return Err(StepFailure::IllegalSite);
-        }
+        let at = self
+            .capability_site(seat, at)
+            .ok_or(StepFailure::IllegalSite)?;
         if self.structures_held_by(seat) >= room_per_seat(STRUCTURE_TABLE_ROOM, self.seats.len())
             || self.structures.vacancy(STRUCTURE_ROWS).is_err()
         {
@@ -2720,6 +2717,47 @@ impl World {
                 .value(i64::from(kind.id())),
         );
         Ok(placed.id)
+    }
+
+    /// Where a capability structure queued at the beacon standing at `centre`
+    /// stands (S3's `lic`): the first column of the sphere's spiral
+    /// ([`crate::targeting::spiral_offsets`], nearest the beacon first, then
+    /// `y`, then `x`) other than the beacon's own that is standable, outside
+    /// every feature's footprint, holds no live structure and no other own
+    /// beacon (one structure per voxel and no stacking, targeting.md "Sites"),
+    /// is claimed by none of the seat's Build targets, and has no voxel `set`
+    /// filed on it this tick (the owner's footing ruling of 2026-10-20, as
+    /// `queue_target`). Its own column, beside the beacon rather than on it,
+    /// makes the Spire an asset of its own to aim at: a raider that met it on
+    /// the beacon's column would always take the beacon first. `None` when no
+    /// column of the sphere is free.
+    fn capability_site(&self, seat: SeatId, centre: [Fx; 3]) -> Option<[Fx; 3]> {
+        let [bx, by] = crate::targeting::column_of(centre);
+        let ground = self.ground();
+        for &[dx, dy] in &self.spiral {
+            if dx == 0 && dy == 0 {
+                continue;
+            }
+            let (Some(x), Some(y)) = (bx.checked_add(dx), by.checked_add(dy)) else {
+                continue;
+            };
+            let Some(node) = ground.surface.node_of(x, y) else {
+                continue;
+            };
+            if !ground.surface.walkable(node)
+                || ground.features.at_column(x, y).is_some()
+                || ground.structure_on(x, y)
+                || ground.stacks_on_own(seat, x, y)
+                || ground.own_target_on(seat, None, x, y)
+                || self.set_queued_on(x, y)
+            {
+                continue;
+            }
+            if let Some(point) = ground.standing(x, y) {
+                return Some(point);
+            }
+        }
+        None
     }
 
     /// A structure reached full hit points: it is finished, and starts
