@@ -1251,7 +1251,9 @@ fn the_entity_list_at_the_gate_load_is_measured_and_reported() {
     host.seed_layout(&Layout { beacons })
         .expect("the gate load fits each seat's share");
     surface.attach(host).expect("attached");
-    surface.set_phase_remaining_ms(pharmakos_sim::math::quantity::Ms::new(FIRST_LULL_MS));
+    surface
+        .set_phase_remaining_ms(pharmakos_sim::math::quantity::Ms::new(FIRST_LULL_MS))
+        .expect("a custom match takes a countdown");
     surface.open_lull().expect("the opening Lull");
     let token = seat_token(&mut surface, 0);
     let pages = view_pages(&mut surface, &token, "");

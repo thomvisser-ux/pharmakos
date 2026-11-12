@@ -37,8 +37,8 @@
 //!   version and [`pharmakos_sim::snapshot::SNAPSHOT_VERSION`]. A mismatch in
 //!   any of them is refused as [`crate::error::Code::InvalidArgument`].
 //!   PLACEHOLDER: a save from an older build is refused, with no converter — owner, at hardening;
-//! * the **config line's** six values, which a resume line must repeat
-//!   exactly (decisions-log item 112 (8));
+//! * the **config line's** seven values, the preset among them, which a
+//!   resume line must repeat exactly (decisions-log item 112 (8));
 //! * `lull_offset`, so the gateway's tick and the audit log's stamps stay
 //!   monotonic across a resume;
 //! * the **frozen planning snapshot**'s bytes, base64 (the sim's postcard
@@ -46,7 +46,24 @@
 //! * the **boundary** kind, `sealed` or `lull`;
 //! * per seat, the **notebook**, the **drafts**, and the **seal**: canonical
 //!   JSONC as submitted, its round, `filed_by_the_gateway`, its `report_hash`
-//!   and its **plan fingerprint** (decisions-log items 77, 103 (5), 104 (4)).
+//!   and its **plan fingerprint** (decisions-log items 77, 103 (5), 104 (4));
+//! * per seat, from format version 3, the **handle table** -- every `e_NN`
+//!   the seat holds and the beacon id it names, in the order they were
+//!   minted (S3's plan, E1) -- and the **memos** issued to it (E5).
+//!
+//! # Why the handle table is saved (S3's plan, E1)
+//!
+//! A seat's `e_NN` for another seat's beacon is the gateway's per-viewer name,
+//! minted where a Lull opens and never in the sim
+//! ([`crate::surface::Surface`]'s `name_sightings`). Rebuilt on a resume from
+//! the sim's sighting table alone, the names came back in the table's order,
+//! which is not the order they were minted in across several Lulls: a match
+//! resumed at round 3's Lull named round 2's `e_01` `e_02`, and an Attack a
+//! seat wrote against `e_01` would have hit another beacon
+//! (`tests/handles.rs`). The table in the save reproduces the names exactly
+//! across any number of resumes, and the Lull's own minting then names only
+//! what is new. Putting the order in the sim instead would have made a
+//! presentation detail hashed state and moved every chain.
 //!
 //! `SNAPSHOT_VERSION` does **not** move for any of this. The fingerprint lives
 //! beside the snapshot, never inside it, so no verifier `report_hash` golden
@@ -82,6 +99,7 @@ use pharmakos_sim::math::quantity::Tick;
 use pharmakos_sim::tables::SeatId;
 
 use crate::error::Error;
+use crate::probation::{Memo, Preset};
 use crate::serve::Config;
 use crate::surface::Draft;
 
@@ -96,7 +114,14 @@ pub const SAVE_FORMAT: &str = "pharmakos.save";
 /// beacons by numbers that counted every seat's, and resumed under per-seat
 /// names they would point a seat's orders at other beacons. Such a save is
 /// refused by its version, with [`PRE_S1_SAVE`] saying why.
-pub const SAVE_FORMAT_VERSION: u32 = 2;
+///
+/// **3 is S3's `gwp`** (S3's plan, E1, E5 and E6): each seat's `e_NN` handle
+/// table and the memos issued to it, and the config line's preset. A
+/// version-2 save holds no handle table, so a resume would rename the beacons
+/// its seats were shown (the module doc's "Why the handle table is saved");
+/// it is refused by its version, naming both, with no converter (S2's saves
+/// are development saves on the owner's disk only; S3's plan, risk R7).
+pub const SAVE_FORMAT_VERSION: u32 = 3;
 
 /// The last format version written before S1's per-seat beacon names.
 pub const PRE_S1_SAVE: u32 = 1;
@@ -182,6 +207,13 @@ pub struct SavedSeat {
     pub drafts: Vec<Draft>,
     /// The seat's latest verified submission, if it has one.
     pub seal: Option<SavedSeal>,
+    /// Every `e_NN` handle the seat holds: the beacon id it names and the
+    /// handle, in the order they were minted, so `e_01` first (S3's plan,
+    /// E1).
+    pub handles: Vec<(u32, String)>,
+    /// The Ledger's memos issued to the seat, in the order they were issued
+    /// (S3's plan, E5).
+    pub memos: Vec<Memo>,
 }
 
 /// Everything the surface saves: the save less its stamp and config line,
@@ -326,6 +358,10 @@ impl Save {
                 ),
             ),
             ("round_limit", number(self.config.round_limit)),
+            (
+                "preset",
+                Json::String(String::from(self.config.preset.name())),
+            ),
         ]);
         let seats: Vec<Json> = self.state.seats.iter().map(seat_json).collect();
         json::write(&object(vec![
@@ -376,7 +412,7 @@ impl Save {
             return Err(Error::invalid(format!(
                 "this save is format version {format_version} and this build reads version \
                  {SAVE_FORMAT_VERSION}; a save from another build is refused rather than \
-                 converted"
+                 converted: start a new match"
             )));
         }
         let stamp = Stamp {
@@ -413,6 +449,8 @@ impl Save {
             human_seat,
             segment_lengths_ms,
             round_limit: u32_at(config_json, "round_limit")?,
+            preset: Preset::parse(string_at(config_json, "preset")?)
+                .map_err(|error| damaged(&error.message))?,
         };
 
         let boundary = Boundary::from_name(string_at(&root, "boundary")?)
@@ -440,8 +478,9 @@ impl Save {
     /// verifier or snapshot format, or a config line that is not the saved
     /// one.
     ///
-    /// All six of the config line's values must be equal, the round limit
-    /// included (decisions-log item 112 (8)): nothing is silently defaulted,
+    /// All seven of the config line's values must be equal, the round limit
+    /// and the preset included (decisions-log item 112 (8)): nothing is
+    /// silently defaulted,
     /// and a lobby that asked for a different match would get a different
     /// match than it asked for.
     ///
@@ -522,6 +561,34 @@ impl Save {
                 config.round_limit.to_string(),
             ));
         }
+        if saved.preset != config.preset {
+            return Err(differs(
+                "preset",
+                saved.preset.name().to_owned(),
+                config.preset.name().to_owned(),
+            ));
+        }
+        // The Ledger's memos go to the person's seat of a Probation match and
+        // to nobody else (S3's plan, E5): a save holding one anywhere else is
+        // not one this gateway wrote.
+        for seat in &self.state.seats {
+            if seat.memos.is_empty() {
+                continue;
+            }
+            if saved.preset != Preset::Probation {
+                return Err(damaged(&format!(
+                    "seat {} holds the Ledger's memos in a `{}` match, which issues none",
+                    seat.seat,
+                    saved.preset.name()
+                )));
+            }
+            if saved.human_seat != Some(seat.seat) {
+                return Err(damaged(&format!(
+                    "seat {} holds the Ledger's memos and is not the person's seat",
+                    seat.seat
+                )));
+            }
+        }
         Ok(())
     }
 }
@@ -551,11 +618,28 @@ fn seat_json(seat: &SavedSeat) -> Json {
             ("plan_fingerprint", hex64(held.plan_fingerprint)),
         ])
     });
+    let handles: Vec<Json> = seat
+        .handles
+        .iter()
+        .map(|(beacon, handle)| {
+            object(vec![
+                ("beacon", number(*beacon)),
+                ("handle", Json::String(handle.clone())),
+            ])
+        })
+        .collect();
+    let memos: Vec<Json> = seat
+        .memos
+        .iter()
+        .map(|memo| Json::String(String::from(memo.name())))
+        .collect();
     object(vec![
         ("seat", number(seat.seat)),
         ("notebook", Json::String(seat.notebook.clone())),
         ("drafts", Json::Array(drafts)),
         ("seal", sealed),
+        ("handles", Json::Array(handles)),
+        ("memos", Json::Array(memos)),
     ])
 }
 
@@ -585,11 +669,53 @@ fn parse_seat(value: &Json) -> Result<SavedSeat, Error> {
             plan_fingerprint: hex64_at(held, "plan_fingerprint")?,
         }),
     };
+    let listed = array_at(value, "handles")?;
+    if listed.len() > crate::viewfeed::MAX_FOREIGN_HANDLES {
+        return Err(damaged(&format!(
+            "seat {seat}'s handle table holds {} handles, past the {} a seat may",
+            listed.len(),
+            crate::viewfeed::MAX_FOREIGN_HANDLES
+        )));
+    }
+    let mut handles: Vec<(u32, String)> = Vec::with_capacity(listed.len());
+    let mut seen: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+    for held in listed {
+        let beacon = u32_at(held, "beacon")?;
+        let handle = string_at(held, "handle")?.to_owned();
+        // Handles are minted `e_01` up, one a beacon: anything else is not a
+        // table this gateway wrote.
+        let number = u32::try_from(handles.len())
+            .ok()
+            .and_then(|held| held.checked_add(1))
+            .ok_or_else(|| damaged("its handle table is longer than a u32 counts"))?;
+        if handle != pharmakos_sim::tables::foreign_beacon_name(number) || !seen.insert(beacon) {
+            return Err(damaged(&format!(
+                "seat {seat}'s handle table is not `e_01` up, one handle a beacon"
+            )));
+        }
+        handles.push((beacon, handle));
+    }
+    let mut memos: Vec<Memo> = Vec::new();
+    for memo in array_at(value, "memos")? {
+        let Json::String(name) = memo else {
+            return Err(damaged("a memo is not a string"));
+        };
+        let memo = Memo::parse(name).map_err(|error| damaged(&error.message))?;
+        if memos.contains(&memo) {
+            return Err(damaged(&format!(
+                "seat {seat}'s memo `{}` is issued twice, and a memo is issued once a match",
+                memo.name()
+            )));
+        }
+        memos.push(memo);
+    }
     Ok(SavedSeat {
         seat,
         notebook: string_at(value, "notebook")?.to_owned(),
         drafts,
         seal: sealed,
+        handles,
+        memos,
     })
 }
 
@@ -683,6 +809,7 @@ fn hex64_at(value: &Json, key: &str) -> Result<u64, Error> {
 mod tests {
     use super::{Boundary, Save, SavedMatch, SavedSeal, SavedSeat, SegmentChain, Stamp};
     use crate::error::Code;
+    use crate::probation::{Memo, Preset};
     use crate::serve::Config;
     use crate::surface::Draft;
     use pharmakos_sim::math::quantity::Tick;
@@ -695,6 +822,7 @@ mod tests {
             human_seat: Some(0),
             segment_lengths_ms: vec![1_000, 2_000],
             round_limit: 3,
+            preset: Preset::Probation,
         }
     }
 
@@ -724,12 +852,19 @@ mod tests {
                             report_hash: vec![0xde, 0xad, 0xbe, 0xef],
                             plan_fingerprint: 0xfeed_f00d,
                         }),
+                        handles: vec![
+                            (0x0001_0003, String::from("e_01")),
+                            (1, String::from("e_02")),
+                        ],
+                        memos: vec![Memo::FirstDeath, Memo::PowerShortfall],
                     },
                     SavedSeat {
                         seat: 1,
                         notebook: String::new(),
                         drafts: Vec::new(),
                         seal: None,
+                        handles: Vec::new(),
+                        memos: Vec::new(),
                     },
                 ],
             },
@@ -745,25 +880,138 @@ mod tests {
         assert_eq!(Save::parse(&text).expect("its own file"), written);
     }
 
+    /// S3's plan, E1 and risk R7: a version-2 save, which holds no handle
+    /// table, is refused by its version, naming both versions, and says to
+    /// start a new match; so is one from a later build.
     #[test]
-    fn a_save_from_another_format_version_is_refused_by_its_version() {
-        let text = save()
-            .render()
-            .replace("\"format_version\": 2", "\"format_version\": 3");
-        let error = Save::parse(&text).expect_err("another version");
-        assert_eq!(error.code, Code::InvalidArgument);
-        assert!(
-            error.message.contains("format version 3"),
-            "{}",
-            error.message
+    fn a_save_from_another_format_version_is_refused_naming_both_versions() {
+        assert_eq!(super::SAVE_FORMAT_VERSION, 3);
+        for other in [2_u32, 4] {
+            let text = save().render().replace(
+                "\"format_version\": 3",
+                &format!("\"format_version\": {other}"),
+            );
+            let error = Save::parse(&text).expect_err("another version");
+            assert_eq!(error.code, Code::InvalidArgument);
+            assert!(
+                error.message.contains(&format!("format version {other}"))
+                    && error.message.contains("reads version 3")
+                    && error.message.contains("start a new match"),
+                "{}",
+                error.message
+            );
+        }
+    }
+
+    /// The handle table and the memos read back exactly, and a table that is
+    /// not `e_01` up, one handle a beacon, or a memo issued twice, is not a
+    /// save this build wrote.
+    /// The handle table is bounded like the notebook and the drafts: a table
+    /// past `MAX_FOREIGN_HANDLES` is refused as damaged.
+    #[test]
+    fn a_handle_table_past_its_bound_is_refused() {
+        let mut written = save();
+        let most = crate::viewfeed::MAX_FOREIGN_HANDLES;
+        let table = |count: usize| -> Vec<(u32, String)> {
+            (0..count)
+                .map(|index| {
+                    let number = u32::try_from(index).expect("small").saturating_add(1);
+                    (
+                        number.saturating_add(100),
+                        pharmakos_sim::tables::foreign_beacon_name(number),
+                    )
+                })
+                .collect()
+        };
+        if let Some(seat) = written.state.seats.first_mut() {
+            seat.handles = table(most);
+        }
+        assert_eq!(
+            Save::parse(&written.render()).expect("at the bound").state,
+            written.state
         );
+        if let Some(seat) = written.state.seats.first_mut() {
+            seat.handles = table(most.saturating_add(1));
+        }
+        let error = Save::parse(&written.render()).expect_err("past the bound");
+        assert_eq!(error.code, Code::InvalidArgument);
+        assert!(error.message.contains("handles"), "{}", error.message);
+    }
+
+    /// The Ledger's memos are the person's seat's in a Probation match: a save
+    /// holding one on another seat, or in a `custom` match, is refused.
+    #[test]
+    fn memos_off_the_persons_seat_or_in_a_custom_save_are_refused() {
+        let hash = 0x0123_4567_89ab_cdef;
+        let mut elsewhere = save();
+        if let Some(seat) = elsewhere.state.seats.get_mut(1) {
+            seat.memos = vec![Memo::DarkStake];
+        }
+        let error = elsewhere
+            .check(&config(), hash)
+            .expect_err("seat 1 is no one's");
+        assert_eq!(error.code, Code::InvalidArgument);
+        assert!(error.message.contains("seat 1"), "{}", error.message);
+
+        let mut custom = save();
+        custom.config.preset = Preset::Custom;
+        let asked = Config {
+            preset: Preset::Custom,
+            ..config()
+        };
+        let error = custom
+            .check(&asked, hash)
+            .expect_err("a custom match issues none");
+        assert_eq!(error.code, Code::InvalidArgument);
+        assert!(error.message.contains("custom"), "{}", error.message);
+
+        let mut quiet = save();
+        quiet.config.preset = Preset::Custom;
+        for seat in &mut quiet.state.seats {
+            seat.memos.clear();
+        }
+        assert!(
+            quiet.check(&asked, hash).is_ok(),
+            "a custom save with no memos"
+        );
+    }
+
+    #[test]
+    fn a_damaged_handle_table_or_memo_list_is_refused() {
+        let text = save().render();
+        assert!(text.contains("\"handle\": \"e_02\""), "{text}");
+        assert!(text.contains("\"first_death\""), "{text}");
+        assert!(text.contains("\"preset\": \"probation\""), "{text}");
+        for (what, damaged) in [
+            ("a gap", text.replace("\"e_02\"", "\"e_03\"")),
+            (
+                "one beacon twice",
+                text.replace("\"beacon\": 1,", "\"beacon\": 65539,"),
+            ),
+            (
+                "a memo twice",
+                text.replace("\"power_shortfall\"", "\"first_death\""),
+            ),
+            (
+                "an unknown memo",
+                text.replace("\"power_shortfall\"", "\"first_licence\""),
+            ),
+            (
+                "an unknown preset",
+                text.replace("\"probation\"", "\"casual\""),
+            ),
+        ] {
+            assert_ne!(damaged, text, "{what}: the fixture holds what is damaged");
+            let error = Save::parse(&damaged).expect_err(what);
+            assert_eq!(error.code, Code::InvalidArgument, "{what}");
+        }
     }
 
     #[test]
     fn a_pre_s1_save_is_refused() {
         let text = save()
             .render()
-            .replace("\"format_version\": 2", "\"format_version\": 1");
+            .replace("\"format_version\": 3", "\"format_version\": 1");
         let error = Save::parse(&text).expect_err("a pre-S1 save");
         assert_eq!(error.code, Code::InvalidArgument);
         assert!(
@@ -784,10 +1032,10 @@ mod tests {
     }
 
     #[test]
-    fn every_one_of_the_six_config_values_must_match() {
+    fn every_one_of_the_seven_config_values_must_match() {
         let saved = save();
         assert!(saved.check(&config(), 0x0123_4567_89ab_cdef).is_ok());
-        let variants: [(&str, Config); 6] = [
+        let variants: [(&str, Config); 7] = [
             (
                 "match id",
                 Config {
@@ -827,6 +1075,13 @@ mod tests {
                 "round limit",
                 Config {
                     round_limit: 4,
+                    ..config()
+                },
+            ),
+            (
+                "preset",
+                Config {
+                    preset: Preset::Custom,
                     ..config()
                 },
             ),

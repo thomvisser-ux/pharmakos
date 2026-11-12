@@ -306,7 +306,8 @@ pub(crate) struct Situation {
     pub(crate) round: u32,
     /// The coming segment's length, game milliseconds.
     pub(crate) segment_ms: i64,
-    /// The match seed, as `get_map_summary` spells it.
+    /// The match seed, as `get_map_summary` spells it: empty for a seat's
+    /// token, which is told none from S3 (S3's plan, E18).
     pub(crate) match_seed: String,
     /// Every beacon the seat is shown, ascending by id.
     pub(crate) beacons: Vec<Beacon>,

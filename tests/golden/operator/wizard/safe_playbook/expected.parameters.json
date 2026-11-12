@@ -7,5 +7,5 @@
       "suggested": true
     }
   ],
-  "why": "Easy, seat 0, round 1, seed 0x00000000ca5caded (recorded; Easy draws nothing at random). Power is not short, so nothing is raised: move to the safest beacon and stay with it. Then set the core b_00 to dig 4 voxels deep, so its starting drone keeps working its seam below the top layer."
+  "why": "Easy, seat 0, round 1, told no seed (Easy draws nothing at random). Power is not short, so nothing is raised: move to the safest beacon and stay with it. Then set the core b_00 to dig 4 voxels deep, so its starting drone keeps working its seam below the top layer."
 }

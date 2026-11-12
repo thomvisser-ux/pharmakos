@@ -70,7 +70,7 @@ use std::io::IsTerminal as _;
 use std::path::Path;
 
 use pharmakos_gateway::Code;
-use pharmakos_gateway::advice::{Advice, SuggestedValue, Suggestion};
+use pharmakos_gateway::advice::{Advice, StartHere, SuggestedValue, Suggestion};
 use pharmakos_gateway::rpc::Request;
 use pharmakos_gateway::serve::{self, Advisor, BuiltInSeat, Operators, Setup};
 use pharmakos_operator::{Easy, RulesError};
@@ -172,6 +172,10 @@ fn advice_of(advice: pharmakos_operator::Advice) -> Advice {
                 why: suggestion.why,
             })
             .collect(),
+        start_here: advice.start_here.map(|start| StartHere {
+            template_id: start.template_id,
+            why: start.why,
+        }),
     }
 }
 

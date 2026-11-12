@@ -527,7 +527,9 @@ fn round_two_with_a_beacon_on_a_free_vent(initial: &str) -> (Surface, Token) {
     surface.begin_push().expect("the Push begins");
     let _ = support::step(&mut surface, 10_000);
     surface.end_recap().expect("the recap ends");
-    surface.set_phase_remaining_ms(Ms::new(LULL_MS));
+    surface
+        .set_phase_remaining_ms(Ms::new(LULL_MS))
+        .expect("a custom match takes a countdown");
     surface.open_lull().expect("round 2's Lull");
     (surface, token)
 }
@@ -908,7 +910,9 @@ fn the_lull_says_what_this_round_will_do_and_round_two_finds_no_vent() {
     surface.begin_push().expect("the Push begins");
     let _ = support::step(&mut surface, 10_000);
     surface.end_recap().expect("the recap ends");
-    surface.set_phase_remaining_ms(Ms::new(LULL_MS));
+    surface
+        .set_phase_remaining_ms(Ms::new(LULL_MS))
+        .expect("a custom match takes a countdown");
     surface.open_lull().expect("round 2's Lull");
     let mut left = LULL_MS;
     let round_two = briefing(&mut surface, &mut left);

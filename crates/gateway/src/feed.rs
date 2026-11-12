@@ -55,8 +55,9 @@
 //! segment therefore see two different cursor sequences, and that is correct.
 
 use crate::error::Error;
-use crate::fog::{Audience, FogFilter, Viewer, Vision};
+use crate::fog::{Audience, FogFilter, FogPolicy, Viewer, Vision};
 use pharmakos_sim::math::quantity::Ms;
+use pharmakos_sim::tables::SeatId;
 use std::collections::BTreeMap;
 
 /// The digest cadence, in game time. Sixty seconds, from spec section 12; a
@@ -144,6 +145,85 @@ pub struct Event {
     pub text: String,
     /// Who may be told.
     pub audience: Audience,
+    /// The Ledger's memo this line carries (`gp.api.v1.Event.ledger_memo`), on
+    /// a line of kind `ledger_memo` and no other ([`crate::probation`]).
+    pub memo: Option<crate::probation::Memo>,
+}
+
+/// The seats that could see a world event as it reached the bus.
+///
+/// **Taken when the event is published, never at a read** (S3's `gwp`; item
+/// 155 (3) 6). A seat's sight moves with its units, and a listing re-filtered
+/// by the sight of the moment at every read changes length behind the cursor,
+/// which counts what the viewer was shown: sight that grew re-delivered
+/// earlier rows, out of time order, and sight that shrank lost later ones,
+/// the seat's own among them. Stamped once, the list a seat is shown under
+/// one fog policy never changes, so the cursor's count stays a place in it.
+/// It is also what fog means for an event: a seat is told of what it could
+/// see when it happened, not of what happened at a place it sees later.
+///
+/// One bit per seat id, so it holds the eight a `u8` counts, past v1's three
+/// (decisions-log item 110 (5)); a seat past that is refused at publish.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Witnesses(u8);
+
+impl Witnesses {
+    /// Nobody: what a private line and an announcement carry, whose audience
+    /// alone decides who is shown them.
+    pub const NONE: Witnesses = Witnesses(0);
+
+    /// The seats of `seats` that see where `audience` says the event
+    /// happened, by `vision` as it stands. Only a world event is witnessed: a
+    /// private line and an announcement are decided by their audience alone.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] for a seat id past the eight a witness
+    /// set holds.
+    pub fn of<V: Vision>(
+        vision: &V,
+        seats: impl IntoIterator<Item = SeatId>,
+        audience: &Audience,
+    ) -> Result<Witnesses, Error> {
+        let Audience::World { owner, at } = audience else {
+            return Ok(Witnesses::NONE);
+        };
+        let mut bits = 0_u8;
+        for seat in seats {
+            if *owner != Some(seat) && vision.sees(seat, at) {
+                bits |= Witnesses::bit(seat).ok_or_else(|| {
+                    Error::internal(format!(
+                        "seat {} is past the eight seats a feed's witness set holds",
+                        seat.raw()
+                    ))
+                })?;
+            }
+        }
+        Ok(Witnesses(bits))
+    }
+
+    /// True when `seat` saw it.
+    #[must_use]
+    pub fn contains(self, seat: SeatId) -> bool {
+        Witnesses::bit(seat).is_some_and(|bit| self.0 & bit != 0)
+    }
+
+    /// A seat's bit, or `None` past the eighth.
+    fn bit(seat: SeatId) -> Option<u8> {
+        1_u8.checked_shl(u32::from(seat.raw()))
+    }
+}
+
+/// The sight a witness set gives the fog filter: a seat sees an event exactly
+/// when it witnessed it as the event was published. What lets
+/// [`SegmentFeed::page`] ask [`FogFilter::visible`], the one table of who is
+/// shown what, rather than a second copy of it.
+struct Witnessed(Witnesses);
+
+impl Vision for Witnessed {
+    fn sees(&self, seat: SeatId, _at: &pharmakos_proto::gp::v1::Voxel) -> bool {
+        self.0.contains(seat)
+    }
 }
 
 /// The identity of the snapshot a feed and its cursors are tied to.
@@ -227,11 +307,19 @@ impl Listing {
 /// as well as a snapshot's, and handing one seat's cursor to another seat
 /// resumes at the wrong place rather than revealing anything: the position is
 /// counted again over the second seat's own visible events.
+///
+/// A feed cursor also says **whether the viewer's fog had lifted** when it was
+/// issued (`lifted`), because the list it counts in depends on it: a seat is
+/// shown every world event once it is unfogged (eliminated, or the match
+/// ended), and only what it witnessed before ([`SegmentFeed::page`]). The flag
+/// is in the check and not in the text, so the rendering is the same 32 digits
+/// and a cursor issued before the lift still reads.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Cursor {
     snapshot: SnapshotId,
     listing: Listing,
     index: u32,
+    lifted: bool,
 }
 
 impl Cursor {
@@ -242,6 +330,7 @@ impl Cursor {
             snapshot,
             listing: Listing::Feed,
             index: 0,
+            lifted: false,
         }
     }
 
@@ -261,6 +350,7 @@ impl Cursor {
             snapshot,
             listing,
             index,
+            lifted: false,
         }
     }
 
@@ -315,10 +405,24 @@ impl Cursor {
             .get(24..32)
             .and_then(|digits| u32::from_str_radix(digits, 16).ok())
             .ok_or_else(|| Error::invalid("that is not a cursor this gateway issued"))?;
-        let cursor = Cursor {
+        let fogged = Cursor {
             snapshot: SnapshotId(snapshot),
             listing,
             index,
+            lifted: false,
+        };
+        // A feed cursor issued once the viewer's fog had lifted carries the
+        // flag in its check alone ([`Cursor`]'s doc).
+        let lifted = Cursor {
+            lifted: true,
+            ..fogged
+        };
+        let cursor = if fogged.check() == check {
+            fogged
+        } else if listing == Listing::Feed && lifted.check() == check {
+            lifted
+        } else {
+            fogged
         };
         if cursor.check() != check {
             // A cursor of the other listing fails here, which is the point of
@@ -340,12 +444,23 @@ impl Cursor {
     /// The check value: the low 32 bits of the project's one hash function over
     /// the snapshot id, the listing and the index.
     fn check(self) -> u32 {
-        let mut bytes: Vec<u8> = Vec::with_capacity(13);
+        let mut bytes: Vec<u8> = Vec::with_capacity(14);
         bytes.extend_from_slice(&self.snapshot.0.to_le_bytes());
         bytes.push(self.listing.tag());
         bytes.extend_from_slice(&self.index.to_le_bytes());
+        // Only a lifted cursor's bytes grow, so every cursor issued under fog
+        // checks exactly as it did before the flag existed.
+        if self.lifted {
+            bytes.push(1);
+        }
         let [a, b, c, d, ..] = pharmakos_sim::digest(&bytes).to_le_bytes();
         u32::from_le_bytes([a, b, c, d])
+    }
+
+    /// True for a feed cursor issued once the viewer's fog had lifted.
+    #[must_use]
+    pub const fn lifted(self) -> bool {
+        self.lifted
     }
 }
 
@@ -540,6 +655,9 @@ pub struct Page {
 pub struct SegmentFeed {
     snapshot: SnapshotId,
     events: Vec<Event>,
+    /// Who witnessed each event as it was published, index for index with
+    /// `events` ([`Witnesses`]).
+    witnesses: Vec<Witnesses>,
 }
 
 impl SegmentFeed {
@@ -549,6 +667,7 @@ impl SegmentFeed {
         SegmentFeed {
             snapshot,
             events: Vec::new(),
+            witnesses: Vec::new(),
         }
     }
 
@@ -570,7 +689,9 @@ impl SegmentFeed {
         self.events.is_empty()
     }
 
-    /// Put an event on the bus.
+    /// Put an event on the bus, witnessed by `witnesses`: the seats that saw
+    /// where it happened as it happened ([`Witnesses::of`]; [`Witnesses::NONE`]
+    /// for a private line or an announcement).
     ///
     /// # Errors
     ///
@@ -578,7 +699,7 @@ impl SegmentFeed {
     /// event earlier than the one before it. Order is part of the feed's
     /// contract: cursors are indices, and an event inserted behind a cursor
     /// would be one a client could never be told about.
-    pub fn publish(&mut self, event: Event) -> Result<(), Error> {
+    pub fn publish(&mut self, event: Event, witnesses: Witnesses) -> Result<(), Error> {
         if event.at_ms.raw() < 0 {
             return Err(Error::invalid(
                 "an event's time is game milliseconds since the segment began, never negative",
@@ -593,6 +714,7 @@ impl SegmentFeed {
             ));
         }
         self.events.push(event);
+        self.witnesses.push(witnesses);
         Ok(())
     }
 
@@ -603,7 +725,7 @@ impl SegmentFeed {
         &self.events
     }
 
-    /// One page of the feed as `viewer` may see it.
+    /// One page of the feed as `viewer` may see it under `policy`.
     ///
     /// `cursor` is `None` to start at the beginning of the segment. At most
     /// `limit` events come back, and never more than [`MAX_PAGE_EVENTS`]; the
@@ -611,19 +733,46 @@ impl SegmentFeed {
     /// filled the page. The digests cover the whole segment as this viewer sees
     /// it, and do not move with the page size ([`Page::digests`]).
     ///
+    /// # What the viewer is shown
+    ///
+    /// [`crate::fog`]'s table, with a world event's sight read from its
+    /// [`Witnesses`], taken as it was published, and never from the sight of
+    /// the moment: a seat is shown its own world events, and another seat's it
+    /// witnessed, until its fog lifts ([`FogPolicy::unfogged`]: elimination,
+    /// the match's end, a casual match), and from then on every world event.
+    /// So the list a viewer is shown under one policy never changes, and the
+    /// cursor, a count of it, is a place in it however the viewer's sight
+    /// moves between reads (S3's `gwp`; item 155 (3) 6).
+    ///
+    /// # When the fog lifts between two reads
+    ///
+    /// The lift grows the list behind the cursor by every world event the
+    /// viewer did not witness. A cursor issued under fog therefore resumes at
+    /// the bus place **after the last event it was shown**, and the page goes
+    /// on from there in the lifted list: nothing is delivered twice, the times
+    /// a viewer is given never run backwards, and nothing the seat was owed is
+    /// lost. What the lift revealed behind that place is not delivered on this
+    /// cursor; a listing started again from the beginning shows it. The next
+    /// cursor is a lifted one ([`Cursor::lifted`]), counting the lifted list --
+    /// which the viewer may now see whole, so the count gives nothing away.
+    ///
     /// The fog filter runs **before** the cursor arithmetic, not after: the
     /// position is a count of this viewer's own visible events, so no number
-    /// that leaves the gateway is derived from an event the viewer may not see.
+    /// that leaves the gateway is derived from an event the viewer may not see
+    /// (decisions-log item 26).
     ///
     /// # Errors
     ///
     /// As [`Cursor::parse`]: an unreadable cursor is
     /// [`crate::error::Code::InvalidArgument`] and one from another snapshot is
-    /// [`crate::error::Code::StaleSnapshot`].
-    pub fn page<V: Vision>(
+    /// [`crate::error::Code::StaleSnapshot`]. A cursor issued after this
+    /// viewer's fog lifted, handed back by a viewer whose fog has not, is
+    /// [`crate::error::Code::InvalidArgument`]: the list it counts in is not
+    /// this viewer's.
+    pub fn page(
         &self,
         viewer: Viewer,
-        filter: &FogFilter<'_, V>,
+        policy: &FogPolicy,
         cursor: Option<&str>,
         limit: usize,
     ) -> Result<Page, Error> {
@@ -631,7 +780,17 @@ impl SegmentFeed {
             Some(text) if !text.is_empty() => Cursor::parse(text, self.snapshot, Listing::Feed)?,
             _ => Cursor::start(self.snapshot),
         };
-        let start = usize::try_from(from.index()).map_err(|_| {
+        let lifted = match viewer {
+            Viewer::Seat(seat) => policy.unfogged(seat),
+            Viewer::Spectator { .. } | Viewer::Admin => false,
+        };
+        if from.lifted() && !lifted {
+            return Err(Error::invalid(
+                "that cursor was issued to a viewer whose fog had lifted, and this viewer's has \
+                 not: start the feed again",
+            ));
+        }
+        let shown = usize::try_from(from.index()).map_err(|_| {
             Error::invalid(format!(
                 "this cursor points at event {}, past any listing",
                 from.index()
@@ -641,32 +800,72 @@ impl SegmentFeed {
         // as `list_beacons` answers a page of none (no silent `.max(1)`).
         let limit = limit.min(MAX_PAGE_EVENTS);
 
-        let visible: Vec<&Event> = self
-            .events
-            .iter()
-            .filter(|event| filter.visible(viewer, &event.audience))
-            .collect();
+        // The bus place the cursor resumes at: just after the last event it
+        // was shown, counted in the list it was issued in. Under one policy
+        // that list is this one; across a lift it is the fogged one.
+        let fogged = FogPolicy::fogged();
+        let issued_under = if from.lifted() { policy } else { &fogged };
+        let resume_at = match shown.checked_sub(1) {
+            None => 0,
+            Some(last) => match self.listing(viewer, issued_under).nth(last) {
+                Some(place) => place.checked_add(1).ok_or_else(|| {
+                    Error::internal("a bus place past `usize` cannot be resumed after")
+                })?,
+                // A count past the list it was issued in is a place at its
+                // end, as it was before the lift: nothing more to give.
+                None => self.events.len(),
+            },
+        };
 
+        let visible: Vec<usize> = self.listing(viewer, policy).collect();
+        let before = visible
+            .iter()
+            .take_while(|place| **place < resume_at)
+            .count();
         let events: Vec<Event> = visible
             .iter()
-            .skip(start)
+            .skip(before)
             .take(limit)
-            .map(|event| (*event).clone())
+            .filter_map(|place| self.events.get(*place).cloned())
             .collect();
-        let digests = digests_of(&visible);
-        let index = start.min(visible.len()).saturating_add(events.len());
+        let shown_events: Vec<&Event> = visible
+            .iter()
+            .filter_map(|place| self.events.get(*place))
+            .collect();
+        let digests = digests_of(&shown_events);
+        let index = before.saturating_add(events.len());
         let next = Cursor {
             snapshot: self.snapshot,
             listing: Listing::Feed,
             index: u32::try_from(index).map_err(|_| {
                 Error::internal(format!("a feed listing of {index} does not fit a cursor"))
             })?,
+            lifted,
         };
         Ok(Page {
             events,
             digests,
             next_cursor: next,
         })
+    }
+
+    /// The bus places `viewer` is shown under `policy`, in order: the fog
+    /// filter's own answer ([`FogFilter::visible`]), its sight the event's
+    /// witnesses ([`Witnessed`]), so the feed keeps no second table of who is
+    /// shown what.
+    fn listing<'a>(
+        &'a self,
+        viewer: Viewer,
+        policy: &'a FogPolicy,
+    ) -> impl Iterator<Item = usize> + 'a {
+        self.events
+            .iter()
+            .zip(&self.witnesses)
+            .enumerate()
+            .filter(move |(_, (event, witnesses))| {
+                FogFilter::new(policy, &Witnessed(**witnesses)).visible(viewer, &event.audience)
+            })
+            .map(|(place, _)| place)
     }
 }
 
@@ -765,7 +964,7 @@ mod tests {
         ViewCursor, digests,
     };
     use crate::error::Code;
-    use crate::fog::{Audience, Blind, FogFilter, FogPolicy, Viewer};
+    use crate::fog::{Audience, Blind, FogPolicy, Viewer, Vision};
     use pharmakos_proto::gp::v1::Voxel;
     use pharmakos_sim::math::quantity::Ms;
     use pharmakos_sim::tables::SeatId;
@@ -780,7 +979,24 @@ mod tests {
             kind: kind(name),
             text: format!("{name} happened"),
             audience,
+            memo: None,
         }
+    }
+
+    /// The two seats every test feed is published for.
+    const SEATS: [SeatId; 2] = [SeatId::new(0), SeatId::new(1)];
+
+    /// Publish `event` with nobody's sight on it.
+    fn put(feed: &mut SegmentFeed, event: Event) -> Result<(), crate::error::Error> {
+        let witnesses = super::Witnesses::of(&Blind, SEATS, &event.audience)?;
+        feed.publish(event, witnesses)
+    }
+
+    /// Publish `event` witnessed by every seat but its owner, or by nobody.
+    fn put_seen(feed: &mut SegmentFeed, event: Event, seen: bool) {
+        let witnesses =
+            super::Witnesses::of(&Sees(seen), SEATS, &event.audience).expect("two seats");
+        feed.publish(event, witnesses).expect("published");
     }
 
     fn world(seat: u8) -> Audience {
@@ -819,17 +1035,13 @@ mod tests {
     #[test]
     fn events_reach_the_bus_in_time_order_or_not_at_all() {
         let mut feed = SegmentFeed::new(snapshot());
-        feed.publish(event(1_000, "commander_moved", Audience::Public))
-            .expect("first");
-        feed.publish(event(2_000, "beacon_placed", Audience::Public))
-            .expect("later");
-        let error = feed
-            .publish(event(1_500, "beacon_placed", Audience::Public))
+        put(&mut feed, event(1_000, "commander_moved", Audience::Public)).expect("first");
+        put(&mut feed, event(2_000, "beacon_placed", Audience::Public)).expect("later");
+        let error = put(&mut feed, event(1_500, "beacon_placed", Audience::Public))
             .expect_err("out of order");
         assert_eq!(error.code, Code::InvalidArgument);
-        let error = feed
-            .publish(event(-1, "beacon_placed", Audience::Public))
-            .expect_err("negative");
+        let error =
+            put(&mut feed, event(-1, "beacon_placed", Audience::Public)).expect_err("negative");
         assert_eq!(error.code, Code::InvalidArgument);
         assert_eq!(feed.len(), 2);
         assert!(!feed.is_empty());
@@ -889,23 +1101,18 @@ mod tests {
     #[test]
     fn a_page_is_fog_filtered_and_its_digests_count_only_what_the_seat_sees() {
         let mut feed = SegmentFeed::new(snapshot());
-        feed.publish(event(0, "phase_changed", Audience::Public))
-            .expect("published");
-        feed.publish(event(1_000, "beacon_placed", world(1)))
-            .expect("published");
-        feed.publish(event(2_000, "ore_delivered", world(0)))
-            .expect("published");
-        feed.publish(event(
-            3_000,
-            "draft_saved",
-            Audience::Private(SeatId::new(1)),
-        ))
+        put(&mut feed, event(0, "phase_changed", Audience::Public)).expect("published");
+        put(&mut feed, event(1_000, "beacon_placed", world(1))).expect("published");
+        put(&mut feed, event(2_000, "ore_delivered", world(0))).expect("published");
+        put(
+            &mut feed,
+            event(3_000, "draft_saved", Audience::Private(SeatId::new(1))),
+        )
         .expect("published");
 
         let policy = FogPolicy::fogged();
-        let filter = FogFilter::new(&policy, &Blind);
         let page = feed
-            .page(Viewer::Seat(SeatId::new(0)), &filter, None, 64)
+            .page(Viewer::Seat(SeatId::new(0)), &policy, None, 64)
             .expect("a page");
         let kinds: Vec<&str> = page.events.iter().map(|event| event.kind.name()).collect();
         assert_eq!(
@@ -929,27 +1136,31 @@ mod tests {
     #[test]
     fn a_fogged_seats_cursor_does_not_count_events_it_cannot_see() {
         let mut feed = SegmentFeed::new(snapshot());
-        feed.publish(event(0, "phase_changed", Audience::Public))
-            .expect("published");
+        put(&mut feed, event(0, "phase_changed", Audience::Public)).expect("published");
         for index in 0..7_i32 {
-            feed.publish(event(
-                index.saturating_add(1).saturating_mul(100),
-                "ore_delivered",
-                world(1),
-            ))
+            put(
+                &mut feed,
+                event(
+                    index.saturating_add(1).saturating_mul(100),
+                    "ore_delivered",
+                    world(1),
+                ),
+            )
             .expect("published");
-            feed.publish(event(
-                index.saturating_add(1).saturating_mul(100),
-                "draft_saved",
-                Audience::Private(SeatId::new(1)),
-            ))
+            put(
+                &mut feed,
+                event(
+                    index.saturating_add(1).saturating_mul(100),
+                    "draft_saved",
+                    Audience::Private(SeatId::new(1)),
+                ),
+            )
             .expect("published");
         }
 
         let policy = FogPolicy::fogged();
-        let filter = FogFilter::new(&policy, &Blind);
         let page = feed
-            .page(Viewer::Seat(SeatId::new(0)), &filter, None, 64)
+            .page(Viewer::Seat(SeatId::new(0)), &policy, None, 64)
             .expect("a page");
         assert_eq!(
             page.events.len(),
@@ -965,9 +1176,8 @@ mod tests {
         // And a no-fog viewer's cursor counts its own larger view, which is the
         // same rule rather than a second one.
         let nofog = FogPolicy::casual();
-        let open = FogFilter::new(&nofog, &Blind);
         let page = feed
-            .page(Viewer::Seat(SeatId::new(0)), &open, None, 64)
+            .page(Viewer::Seat(SeatId::new(0)), &nofog, None, 64)
             .expect("a page");
         assert_eq!(
             page.next_cursor.index(),
@@ -982,20 +1192,22 @@ mod tests {
     fn a_digest_does_not_move_with_the_page_size() {
         let mut feed = SegmentFeed::new(snapshot());
         for index in 0..5_i32 {
-            feed.publish(event(
-                index.saturating_mul(1_000),
-                "phase_changed",
-                Audience::Public,
-            ))
+            put(
+                &mut feed,
+                event(
+                    index.saturating_mul(1_000),
+                    "phase_changed",
+                    Audience::Public,
+                ),
+            )
             .expect("published");
         }
         let policy = FogPolicy::casual();
-        let filter = FogFilter::new(&policy, &Blind);
         let whole = feed
-            .page(Viewer::Seat(SeatId::new(0)), &filter, None, 64)
+            .page(Viewer::Seat(SeatId::new(0)), &policy, None, 64)
             .expect("a page");
         let narrow = feed
-            .page(Viewer::Seat(SeatId::new(0)), &filter, None, 2)
+            .page(Viewer::Seat(SeatId::new(0)), &policy, None, 2)
             .expect("a page");
         assert_eq!(narrow.events.len(), 2, "the page is what a limit cuts");
         assert_eq!(
@@ -1012,24 +1224,26 @@ mod tests {
     fn a_cursor_resumes_where_it_left_off_and_is_opaque() {
         let mut feed = SegmentFeed::new(snapshot());
         for index in 0..5_i32 {
-            feed.publish(event(
-                index.saturating_mul(100),
-                "commander_moved",
-                Audience::Public,
-            ))
+            put(
+                &mut feed,
+                event(
+                    index.saturating_mul(100),
+                    "commander_moved",
+                    Audience::Public,
+                ),
+            )
             .expect("published");
         }
         let policy = FogPolicy::casual();
-        let filter = FogFilter::new(&policy, &Blind);
         let first = feed
-            .page(Viewer::Seat(SeatId::new(0)), &filter, None, 2)
+            .page(Viewer::Seat(SeatId::new(0)), &policy, None, 2)
             .expect("a page");
         assert_eq!(first.events.len(), 2);
         let text = first.next_cursor.render();
         assert_eq!(text.len(), 32);
         assert_eq!(first.next_cursor.index(), 2);
         let second = feed
-            .page(Viewer::Seat(SeatId::new(0)), &filter, Some(&text), 2)
+            .page(Viewer::Seat(SeatId::new(0)), &policy, Some(&text), 2)
             .expect("a page");
         assert_eq!(second.events.len(), 2);
         assert_eq!(second.events.first().map(|e| e.at_ms), Some(Ms::new(200)));
@@ -1040,11 +1254,10 @@ mod tests {
         let feed = SegmentFeed::new(snapshot());
         let other = Cursor::start(SnapshotId::of(0x00ca_5cad_ed00_0001, 1, 1));
         let policy = FogPolicy::casual();
-        let filter = FogFilter::new(&policy, &Blind);
         let error = feed
             .page(
                 Viewer::Seat(SeatId::new(0)),
-                &filter,
+                &policy,
                 Some(&other.render()),
                 8,
             )
@@ -1114,13 +1327,11 @@ mod tests {
     fn a_page_is_capped_however_large_a_limit_is_asked_for() {
         let mut feed = SegmentFeed::new(snapshot());
         for _ in 0..(MAX_PAGE_EVENTS + 10) {
-            feed.publish(event(0, "commander_moved", Audience::Public))
-                .expect("published");
+            put(&mut feed, event(0, "commander_moved", Audience::Public)).expect("published");
         }
         let policy = FogPolicy::casual();
-        let filter = FogFilter::new(&policy, &Blind);
         let page = feed
-            .page(Viewer::Seat(SeatId::new(0)), &filter, None, usize::MAX)
+            .page(Viewer::Seat(SeatId::new(0)), &policy, None, usize::MAX)
             .expect("a page");
         assert_eq!(page.events.len(), MAX_PAGE_EVENTS);
     }
@@ -1223,5 +1434,296 @@ mod tests {
         assert_ne!(base, SnapshotId::of(7, 1, 1));
         assert_eq!(base, SnapshotId::of(7, 1, 0), "and it is a function");
         assert_ne!(base.raw(), 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Item 155 (3) 6: the feed under a moving sight (S3's `gwp`). The cases
+    // are `ed3a`'s probe's (#166), on the probe's bus, plus the fog-lift case
+    // it left unrun and a sweep over every sequence of sight, page size and
+    // lift.
+    // -----------------------------------------------------------------------
+
+    /// A sight that sees everything or nothing.
+    struct Sees(bool);
+
+    impl Vision for Sees {
+        fn sees(&self, _seat: SeatId, _at: &Voxel) -> bool {
+            self.0
+        }
+    }
+
+    const SEAT_0: Viewer = Viewer::Seat(SeatId::new(0));
+
+    /// The probe's bus, each event published with the sight `seen` gives it.
+    fn probe_bus(seen: impl Fn(&str) -> bool) -> SegmentFeed {
+        let mut feed = SegmentFeed::new(snapshot());
+        for (at_ms, name, owner) in [
+            (60_000, "own_early", 0),
+            (369_000, "theirs_6_09", 1),
+            (380_000, "theirs_6_20", 1),
+            (444_000, "own_7_24", 0),
+            (450_000, "own_7_30", 0),
+        ] {
+            put_seen(&mut feed, event(at_ms, name, world(owner)), seen(name));
+        }
+        feed
+    }
+
+    fn times(page: &super::Page) -> Vec<i32> {
+        page.events.iter().map(|event| event.at_ms.raw()).collect()
+    }
+
+    /// Case 1, sight that grows: the probe read with no sight, then with
+    /// sight, and was given 7:24 and 7:30 twice, after 7:30, and never
+    /// 6:09 and 6:20. Sight is now what a seat had as an event happened, so a
+    /// later sight neither re-delivers nor reorders: what it did not witness
+    /// it is not told, and what it was told it is told once.
+    #[test]
+    fn sight_that_grows_after_the_events_re_delivers_nothing() {
+        let policy = FogPolicy::fogged();
+        let feed = probe_bus(|_| false);
+        let first = feed.page(SEAT_0, &policy, None, 3).expect("a page");
+        assert_eq!(times(&first), vec![60_000, 444_000, 450_000]);
+        let next = first.next_cursor.render();
+        let second = feed.page(SEAT_0, &policy, Some(&next), 64).expect("a page");
+        assert_eq!(times(&second), Vec::<i32>::new(), "nothing twice");
+
+        // Witnessed as they happened, the other seat's two are in the list,
+        // in time order.
+        let witnessed = probe_bus(|name| name.starts_with("theirs"));
+        let whole = witnessed.page(SEAT_0, &policy, None, 64).expect("a page");
+        assert_eq!(
+            times(&whole),
+            vec![60_000, 369_000, 380_000, 444_000, 450_000]
+        );
+    }
+
+    /// Case 2, sight that shrinks: the probe read with sight (4 events), then
+    /// without, and was given nothing: 7:30, the seat's own, was lost. Read
+    /// with the sight each event was published with, it is delivered.
+    #[test]
+    fn sight_that_shrinks_after_the_events_loses_nothing() {
+        let policy = FogPolicy::fogged();
+        let feed = probe_bus(|name| name.starts_with("theirs"));
+        let first = feed.page(SEAT_0, &policy, None, 4).expect("a page");
+        assert_eq!(times(&first), vec![60_000, 369_000, 380_000, 444_000]);
+        let next = first.next_cursor.render();
+        let second = feed.page(SEAT_0, &policy, Some(&next), 64).expect("a page");
+        assert_eq!(times(&second), vec![450_000], "the seat's own 7:30");
+    }
+
+    /// Case 3, the fog lifting between two reads: the match's end
+    /// (`FogPolicy::end_match`) and an elimination (`eliminate`) grow the
+    /// seat's list by every world event it did not witness. The cursor
+    /// resumes after the last event it was shown: nothing twice, nothing
+    /// behind it, and the rest of the bus, the unwitnessed included.
+    #[test]
+    fn the_fog_lifting_between_two_reads_re_delivers_nothing_and_runs_on() {
+        let lifts: [fn(&mut FogPolicy); 2] = [FogPolicy::end_match, |policy| {
+            policy.eliminate(SeatId::new(0));
+        }];
+        for lift in lifts {
+            let feed = probe_bus(|_| false);
+            let mut policy = FogPolicy::fogged();
+            let first = feed.page(SEAT_0, &policy, None, 2).expect("a page");
+            assert_eq!(times(&first), vec![60_000, 444_000]);
+            assert!(!first.next_cursor.lifted());
+            lift(&mut policy);
+            let next = first.next_cursor.render();
+            let second = feed.page(SEAT_0, &policy, Some(&next), 64).expect("a page");
+            assert_eq!(
+                times(&second),
+                vec![450_000],
+                "6:09 and 6:20, behind the cursor, are not delivered on it"
+            );
+            assert!(second.next_cursor.lifted());
+            assert_eq!(
+                second.next_cursor.index(),
+                5,
+                "the lifted list's count, which the seat may now see whole"
+            );
+            // A listing started again shows the whole bus.
+            let again = feed.page(SEAT_0, &policy, None, 64).expect("a page");
+            assert_eq!(
+                times(&again),
+                vec![60_000, 369_000, 380_000, 444_000, 450_000]
+            );
+            // And the lifted cursor reads on in the lifted list.
+            let third = feed
+                .page(SEAT_0, &policy, Some(&second.next_cursor.render()), 64)
+                .expect("a page");
+            assert!(third.events.is_empty());
+        }
+    }
+
+    /// A cursor issued once a seat's fog lifted, handed to a seat whose fog has
+    /// not, is refused: the list it counts in is not that seat's.
+    #[test]
+    fn a_lifted_cursor_is_refused_for_a_fogged_viewer() {
+        let feed = probe_bus(|_| false);
+        let mut lifted = FogPolicy::fogged();
+        lifted.eliminate(SeatId::new(0));
+        let page = feed.page(SEAT_0, &lifted, None, 1).expect("a page");
+        let error = feed
+            .page(
+                Viewer::Seat(SeatId::new(1)),
+                &lifted,
+                Some(&page.next_cursor.render()),
+                64,
+            )
+            .expect_err("seat 1's fog has not lifted");
+        assert_eq!(error.code, Code::InvalidArgument);
+    }
+
+    /// The sweep's oracle for one sequence: `given` is `(bus index, at_ms,
+    /// given after the lift)` for every event the seat was given, in order.
+    fn assert_the_fog_holds(
+        what: &str,
+        bus: &[(i32, u8)],
+        witnessed: &[bool],
+        given: &[(usize, i32, bool)],
+        lifted: bool,
+    ) {
+        assert!(
+            given.windows(2).all(|pair| match pair {
+                [a, b] => a.1 <= b.1,
+                _ => true,
+            }),
+            "{what}: time ran backwards: {given:?}"
+        );
+        let mut places: Vec<usize> = given.iter().map(|held| held.0).collect();
+        places.sort_unstable();
+        let count = places.len();
+        places.dedup();
+        assert_eq!(places.len(), count, "{what}: given twice: {given:?}");
+        let is_given = |index: usize| given.iter().any(|held| held.0 == index);
+        for (index, (_, owner)) in bus.iter().enumerate() {
+            let seen = witnessed.get(index).copied().unwrap_or(false);
+            if *owner == 0 || seen {
+                assert!(
+                    is_given(index),
+                    "{what}: e{index}, the seat's own or witnessed, was lost: \
+                     {given:?}"
+                );
+            }
+        }
+        // Before the lift, nothing unwitnessed of the other seat's.
+        for (index, _, after) in given {
+            let foreign = bus.get(*index).is_some_and(|(_, owner)| *owner == 1);
+            let seen = witnessed.get(*index).copied().unwrap_or(false);
+            assert!(
+                *after || !foreign || seen,
+                "{what}: e{index} was given under fog unwitnessed: {given:?}"
+            );
+        }
+        // After the lift, everything past the resume place.
+        if lifted {
+            let resumed_after = given.iter().filter(|held| !held.2).map(|held| held.0).max();
+            for index in 0..bus.len() {
+                if resumed_after.is_none_or(|last| index > last) {
+                    assert!(
+                        is_given(index),
+                        "{what}: e{index}, past the resume place, was not \
+                         given once the fog lifted: {given:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The test any fix must pass, from #166, with a fog oracle: over
+    /// **every** sequence here -- each other seat's event witnessed or not,
+    /// each read's page size, and the fog lifting (the match's end, or the
+    /// seat's elimination) before any read or not at all -- the times a seat is
+    /// given never run backwards, no event is given twice, and every event of
+    /// the seat's own is given. And the fog holds exactly: before the lift no
+    /// unwitnessed event of the other seat's is given, every witnessed one is,
+    /// and once the fog has lifted every event past the place the cursor
+    /// resumed at is given. Reads are interleaved with publishing, so sight
+    /// changes between reads as it does in a Push.
+    #[test]
+    fn over_every_sight_page_size_and_lift_the_feed_runs_forward_once_and_the_fog_holds() {
+        // (at_ms, owner): seat 0's and seat 1's interleaved, two at one time.
+        let bus: [(i32, u8); 7] = [
+            (100, 0),
+            (200, 1),
+            (200, 0),
+            (300, 1),
+            (400, 1),
+            (400, 0),
+            (500, 1),
+        ];
+        let theirs = bus.iter().filter(|(_, owner)| *owner == 1).count();
+        let masks = u32::try_from(theirs)
+            .ok()
+            .and_then(|count| 1_u32.checked_shl(count))
+            .expect("a few events");
+        let lifts: [fn(&mut FogPolicy); 2] = [FogPolicy::end_match, |policy| {
+            policy.eliminate(SeatId::new(0));
+        }];
+        let mut cases = 0_u32;
+        for lift in lifts {
+            for mask in 0..masks {
+                for limit in [1_usize, 2, 3] {
+                    for lift_at in 0..=bus.len() {
+                        let mut feed = SegmentFeed::new(snapshot());
+                        let mut policy = FogPolicy::fogged();
+                        let mut cursor: Option<String> = None;
+                        // (bus index, at_ms, given after the lift)
+                        let mut given: Vec<(usize, i32, bool)> = Vec::new();
+                        let mut witnessed: Vec<bool> = Vec::new();
+                        let mut other = 0_u32;
+                        let mut lifted = false;
+                        let mut read = |feed: &SegmentFeed,
+                                        policy: &FogPolicy,
+                                        cursor: &mut Option<String>,
+                                        lifted: bool|
+                         -> usize {
+                            let page = feed
+                                .page(SEAT_0, policy, cursor.as_deref(), limit)
+                                .expect("a page");
+                            for event in &page.events {
+                                let index = event
+                                    .kind
+                                    .name()
+                                    .trim_start_matches('e')
+                                    .parse::<usize>()
+                                    .expect("named by its bus index");
+                                given.push((index, event.at_ms.raw(), lifted));
+                            }
+                            *cursor = Some(page.next_cursor.render());
+                            page.events.len()
+                        };
+                        for (index, (at_ms, owner)) in bus.iter().enumerate() {
+                            let seen = *owner == 1
+                                && mask.checked_shr(other).is_some_and(|bits| bits & 1 == 1);
+                            if *owner == 1 {
+                                other = other.saturating_add(1);
+                            }
+                            witnessed.push(seen);
+                            put_seen(
+                                &mut feed,
+                                event(*at_ms, &format!("e{index}"), world(*owner)),
+                                seen,
+                            );
+                            if index == lift_at {
+                                lift(&mut policy);
+                                lifted = true;
+                            }
+                            read(&feed, &policy, &mut cursor, lifted);
+                        }
+                        while read(&feed, &policy, &mut cursor, lifted) > 0 {}
+
+                        let what = format!(
+                            "lift {}, mask {mask:b}, limit {limit}, lift at {lift_at}",
+                            if policy.ended() { "end" } else { "eliminate" }
+                        );
+                        assert_the_fog_holds(&what, &bus, &witnessed, &given, lift_at < bus.len());
+                        cases = cases.saturating_add(1);
+                    }
+                }
+            }
+        }
+        assert_eq!(cases, 2 * 16 * 3 * 8, "every sequence was played");
     }
 }

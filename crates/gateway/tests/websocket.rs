@@ -149,7 +149,9 @@ fn hosted() -> Surface {
     surface.attach(host).expect("attached");
     // The whole first Lull left, as the rules table declares it.
     let first_lull = surface.lull_length(1);
-    surface.set_phase_remaining_ms(first_lull);
+    surface
+        .set_phase_remaining_ms(first_lull)
+        .expect("a custom match takes a countdown");
     surface.open_lull().expect("the opening Lull");
     surface
 }
@@ -828,7 +830,9 @@ fn a_playbook_submitted_over_the_transport_is_executed() {
     surface.attach(host).expect("attached");
     // The whole first Lull left, as the rules table declares it.
     let first_lull = surface.lull_length(1);
-    surface.set_phase_remaining_ms(first_lull);
+    surface
+        .set_phase_remaining_ms(first_lull)
+        .expect("a custom match takes a countdown");
     surface.open_lull().expect("the opening Lull");
     let token = seat_token(&mut surface);
     surface.set_limits(Limits {

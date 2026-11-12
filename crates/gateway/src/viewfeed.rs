@@ -60,7 +60,7 @@
 //! seed and the rules table, and the travel estimator already prices every leg
 //! as known ground.
 //!
-//! PLACEHOLDER: real terrain fog in the view — owner, at S3, with the knowledge store.
+//! PLACEHOLDER: real terrain fog in the view — owner, at S4, with the knowledge store's mask (S3's plan, decision 2: S3-05 moved to S4).
 //! With the knowledge store, real terrain
 //! fog (never seen, last known, the x1.5 cost bound) arrives as **one** mask
 //! that feeds both this view and `RouteAdapter::set_unknown_columns`, so the
@@ -76,6 +76,16 @@ use pharmakos_sim::voxels::VoxelStore;
 use crate::error::Error;
 use crate::feed::ViewCursor;
 use crate::fog::{Viewer, Vision};
+
+/// The most `e_NN` handles one viewer holds: a bound on a table a save carries
+/// and a resume reads back, like the notebook's and the drafts'
+/// (`Surface::resume`), and on the live minting, so a match never holds a
+/// table its own save would refuse. Far past what a v1 match sights: three
+/// seats, a few beacons each, a beacon's id taken anew only when it is
+/// destroyed and placed again.
+///
+/// PLACEHOLDER: 1 024 handles a viewer — owner, at hardening, with the rest of the save's bounds.
+pub const MAX_FOREIGN_HANDLES: usize = 1_024;
 
 /// How many bytes of encoded runs one page of the view carries.
 ///
@@ -679,20 +689,24 @@ impl ViewFeed {
     /// A seat's **own** beacon is its `b_NN`, the beacon's per-seat ordinal,
     /// so a seat's core is `b_00` (decisions-log item 127 (13)). **Anybody
     /// else's** is an `e_NN`, counting from `e_01` (`docs/design/targeting.md`,
-    /// "Names"). A seat's `e_NN` is minted only where a Lull opens or a save
-    /// resumes, from the sim's sighting table (`Surface::name_sightings`); a
-    /// beacon it holds none for yet is drawn under a `v_N` view handle. A
+    /// "Names"). A seat's `e_NN` is minted only where a Lull opens, from the
+    /// sim's sighting table (`Surface::name_sightings`), and a save carries the
+    /// table a seat holds, which a resume puts back before anything is minted
+    /// (`ViewFeed::restore_foreign_beacon_names`; S3's plan, E1); a beacon it
+    /// holds none for yet is drawn under a `v_N` view handle. A
     /// spectator's and the lobby's, which no report reads, are minted the
     /// first time each is shown. Either way the number counts what this viewer
     /// already knows, so no name tells a seat how many beacons another has
     /// placed. A spectator and the lobby own no beacon, so every beacon is an
     /// `e_NN` to them.
     ///
-    /// Re-minted on a restore, with the unit and structure handles (the
-    /// module docs): an `e_NN` reaches no hashed state, and the sim answers
-    /// one with `no_target`. From S2 it does reach the verifier's scope, as
-    /// the key of a sighting (`Surface::verifier_scope`), so a seat's report
-    /// spells an enemy beacon as the seat's own listing does.
+    /// A seat's `e_NN` is never re-minted on a resume, unlike the unit and
+    /// structure handles (the module docs): it reaches the verifier's scope,
+    /// as the key of a sighting (`Surface::verifier_scope`), and an Attack
+    /// target written with one is pinned by it at the seal, so a resume that
+    /// renamed one would aim a carried playbook at another beacon
+    /// (`tests/handles.rs`). It still reaches no hashed state: the sim answers
+    /// one with `no_target`.
     ///
     /// # Errors
     ///
@@ -772,6 +786,11 @@ impl ViewFeed {
         if let Some((_, name)) = state.beacons.iter().find(|(held, _)| *held == id) {
             return Ok(name.clone());
         }
+        if state.beacons.len() >= MAX_FOREIGN_HANDLES {
+            return Err(Error::internal(format!(
+                "this viewer holds {MAX_FOREIGN_HANDLES} beacon handles, as many as one may"
+            )));
+        }
         let number = u32::try_from(state.beacons.len())
             .ok()
             .and_then(|held| held.checked_add(1))
@@ -781,6 +800,68 @@ impl ViewFeed {
         let name = pharmakos_sim::tables::foreign_beacon_name(number);
         state.beacons.push((id, name.clone()));
         Ok(name)
+    }
+
+    /// Every `e_NN` this viewer holds, with the beacon id each names, in the
+    /// order they were minted: what a save keeps (S3's plan, E1). Read-only.
+    #[must_use]
+    pub fn foreign_beacon_names(&self, viewer: Viewer) -> Vec<(u32, String)> {
+        self.viewers
+            .iter()
+            .find(|state| state.viewer == viewer)
+            .map(|state| state.beacons.clone())
+            .unwrap_or_default()
+    }
+
+    /// Put back the `e_NN` table a save kept for this viewer, before anything
+    /// mints one: the names it held are its names again, in the order they
+    /// were minted, and the next one minted counts on from them (S3's plan,
+    /// E1). Called by [`crate::surface::Surface::resume`], and by nothing
+    /// else.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::InvalidArgument`] when the viewer already holds a
+    /// handle -- a table goes back before any is minted, or the two would
+    /// disagree -- when `names` is not `e_01` up, one handle a beacon, or when
+    /// it holds more than [`MAX_FOREIGN_HANDLES`].
+    pub fn restore_foreign_beacon_names(
+        &mut self,
+        viewer: Viewer,
+        names: &[(u32, String)],
+    ) -> Result<(), Error> {
+        let index = slot_of(&mut self.viewers, viewer);
+        let state = self.viewers.get_mut(index).ok_or_else(|| {
+            Error::internal("the view feed lost the viewer slot it had just made")
+        })?;
+        if !state.beacons.is_empty() {
+            return Err(Error::invalid(
+                "a saved handle table goes back before any handle is minted",
+            ));
+        }
+        if names.len() > MAX_FOREIGN_HANDLES {
+            return Err(Error::invalid(format!(
+                "a saved handle table holds {} handles, past the {MAX_FOREIGN_HANDLES} a viewer \
+                 may",
+                names.len()
+            )));
+        }
+        let mut restored: Vec<(u32, String)> = Vec::with_capacity(names.len());
+        let mut seen: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+        for (id, name) in names {
+            let number = u32::try_from(restored.len())
+                .ok()
+                .and_then(|held| held.checked_add(1))
+                .ok_or_else(|| Error::invalid("a saved handle table longer than u32 counts"))?;
+            if *name != pharmakos_sim::tables::foreign_beacon_name(number) || !seen.insert(*id) {
+                return Err(Error::invalid(
+                    "a saved handle table is `e_01` up, one handle a beacon",
+                ));
+            }
+            restored.push((*id, name.clone()));
+        }
+        state.beacons = restored;
+        Ok(())
     }
 
     /// The handle this viewer already holds for another seat's beacon `id`,

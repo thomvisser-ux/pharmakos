@@ -34,7 +34,7 @@
   "meta": {
     "title": "Hold & Build",
     "author_kind": "BUILTIN",
-    "note": "Easy, seat 2, round 1, seed 0x0102030405060708 (recorded; Easy draws nothing at random). A Build beacon covering the lean heat vent vent_171_51, at (177, 44, 26) as its site reads now, with a Generator on the vent as its first Build target: 140 points for 42 s of route (Easy fills 42 s of the segment)."
+    "note": "Easy, seat 2, round 1, told no seed (Easy draws nothing at random). A Build beacon covering the lean heat vent vent_171_51, at (177, 44, 26) as its site reads now, with a Generator on the vent as its first Build target: 140 points for 42 s of route (Easy fills 42 s of the segment)."
   },
   "kind": "PLAYBOOK",
   "declarative": {

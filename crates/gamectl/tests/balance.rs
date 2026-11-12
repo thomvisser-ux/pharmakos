@@ -387,7 +387,9 @@ fn open(
     )
     .expect("a surface");
     surface.attach(host).expect("attached");
-    surface.set_phase_remaining_ms(lull);
+    surface
+        .set_phase_remaining_ms(lull)
+        .expect("a custom match takes a countdown");
     surface.open_lull().expect("the opening Lull");
     surface
 }
@@ -1288,7 +1290,9 @@ fn play(seed: u64, matchup: Matchup, rounds: u32, rules: &str, ladder: Vec<i32>)
         if decided || round == rounds {
             break;
         }
-        surface.set_phase_remaining_ms(lull_ms(&table, round.saturating_add(1)));
+        surface
+            .set_phase_remaining_ms(lull_ms(&table, round.saturating_add(1)))
+            .expect("a custom match takes a countdown");
         surface.open_lull().expect("the next Lull");
     }
     let combat = combat_now(&surface, count, &scouts_lost);
@@ -2744,7 +2748,9 @@ fn the_combat_readers_count_a_staged_fight() {
     )
     .expect("a surface");
     surface.attach(host).expect("attached");
-    surface.set_phase_remaining_ms(lull_ms(&table, 1));
+    surface
+        .set_phase_remaining_ms(lull_ms(&table, 1))
+        .expect("a custom match takes a countdown");
     surface.open_lull().expect("the opening Lull");
     assert!(surface.begin_push().expect("the Push opens"));
 

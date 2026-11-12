@@ -1047,7 +1047,9 @@ fn the_operator_does_not_depend_on_the_host_clock() {
     {
         let mut surface = open(&match_id(&format!("clock-{n}")), SEED, 2, &rules, 3);
         match report {
-            None => surface.set_phase_remaining_ms(Ms::new(180_000)),
+            None => surface
+                .set_phase_remaining_ms(Ms::new(180_000))
+                .expect("a custom match takes a countdown"),
             Some((elapsed, remaining)) => surface
                 .set_host_clock(Ms::new(elapsed), Ms::new(remaining))
                 .expect("a clock report the gateway takes"),

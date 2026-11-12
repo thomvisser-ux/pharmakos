@@ -378,6 +378,15 @@ pub struct Suggestion {
     pub why: String,
 }
 
+/// The guided first pick: which template, and why to start with it.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct StartHere {
+    /// The library's id for the template.
+    pub template_id: String,
+    /// Why to start with it, in one sentence for a newcomer.
+    pub why: String,
+}
+
 /// What the operator advises one seat for one round.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct Advice {
@@ -386,6 +395,13 @@ pub struct Advice {
     pub safe_playbook_jsonc: String,
     /// One suggestion per template the operator knows and the library lists.
     pub suggestions: Vec<Suggestion>,
+    /// The template a newcomer starts with, and the sentence that says why:
+    /// the guided first pick (spec section 13; S3's plan, decision 5). Hold &
+    /// Build, whenever it is among `suggestions`, with
+    /// [`crate::compose::START_HERE_WHY`] -- a sentence for a newcomer, never
+    /// a suggestion's `why`, which opens with the seed line. The gateway marks
+    /// it in a Probation match's first Lull (E25).
+    pub start_here: Option<StartHere>,
     /// How many calls the advice made.
     pub calls: u32,
     /// The refusal that kept the round from being read, when one did: the
@@ -508,6 +524,14 @@ impl Easy {
                 &declared,
                 safe.as_ref(),
             );
+            advice.start_here = advice
+                .suggestions
+                .iter()
+                .find(|suggestion| suggestion.template_id == HOLD_AND_BUILD)
+                .map(|suggestion| StartHere {
+                    template_id: suggestion.template_id.clone(),
+                    why: crate::compose::START_HERE_WHY.to_owned(),
+                });
             if let Some(plan) = safe {
                 advice.safe_playbook_jsonc = plan.jsonc;
             }

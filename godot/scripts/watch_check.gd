@@ -166,6 +166,13 @@ const SEGMENT := "30000"
 ## already ready, this seat's Ready ends the Lull through `all_ready`, as the lobby's does.
 const CHECK_SEATS := 2
 
+## The golden seed, which the committed playbooks and the reference view this check
+## verifies against name their vents and beacons by, so the check keeps it whatever the
+## lobby hosts (the lobby's MATCH_SEED is Probation's from S3's `gwp`), and the `custom`
+## preset, whose Lulls carry the countdown this check reports and drives.
+const CHECK_SEED := "0x00000000ca5caded"
+const CHECK_PRESET := "custom"
+
 ## The committed playbook the editor opens, in plan-core's canonical form.
 const COMMITTED := "res://fixtures/editor_check.jsonc"
 const OUT_OF_VOCABULARY := "res://fixtures/out_of_vocabulary.json"
@@ -223,7 +230,7 @@ func _ready() -> void:
 		for arg in OS.get_cmdline_user_args():
 			if arg.begins_with("--segment="):
 				ladder = arg.trim_prefix("--segment=")
-		_line = HostLink.config_line(HostLink.match_id("watch-check"), ladder, CHECK_SEATS)
+		_line = HostLink.config_line(HostLink.match_id("watch-check"), ladder, CHECK_SEATS, CHECK_SEED, CHECK_PRESET)
 		written = _line
 		print("[watch-check] starting %s" % _gamectl)
 	if not link.start(_gamectl, _root, written):

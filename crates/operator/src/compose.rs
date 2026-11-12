@@ -460,14 +460,37 @@ fn place(at: [i32; 3]) -> String {
     format!("({x}, {y}, {z})")
 }
 
+/// Why a newcomer starts with Hold & Build: the guided first pick's reason
+/// (spec section 13; S3's plan, decision 5 and E25), shown beside the template
+/// in a Probation match's first Lull. One sentence for a person new to the
+/// game, with no seed line and no scoring: a suggestion's `why` is the
+/// operator's bookkeeping, and this is not.
+///
+/// PLACEHOLDER: the wording is the operator's, in English, until the one string table exists — owner, S6
+pub const START_HERE_WHY: &str = "Start here: this places a beacon by the nearest heat vent \
+     you do not cover and builds a Generator on it, which raises your power, and power is what \
+     every later structure draws.";
+
 /// The seed line: read, recorded, and unused at Easy (decision C15).
+///
+/// From S3 a seat's token is not told the match seed (decisions-log item 127
+/// (13); S3's plan, E18), and the operator's in-process seats hold seat tokens
+/// like any other (AGENTS.md section 3 rule 3), so `get_map_summary` answers
+/// none and the line says so rather than naming an empty seed.
 ///
 /// PLACEHOLDER: whether and how Easy uses its (match, seat, round) seed, "top-k" read as best-of-k with no draw — owner, S5
 pub(crate) fn seed_note(situation: &Situation) -> String {
-    format!(
-        "Easy, seat {}, round {}, seed {} (recorded; Easy draws nothing at random).",
-        situation.seat, situation.round, situation.match_seed
-    )
+    if situation.match_seed.is_empty() {
+        format!(
+            "Easy, seat {}, round {}, told no seed (Easy draws nothing at random).",
+            situation.seat, situation.round
+        )
+    } else {
+        format!(
+            "Easy, seat {}, round {}, seed {} (recorded; Easy draws nothing at random).",
+            situation.seat, situation.round, situation.match_seed
+        )
+    }
 }
 
 /// A "why" with the seed line in front of it: every "why" Easy gives, for a

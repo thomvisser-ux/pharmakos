@@ -391,7 +391,9 @@ fn play_until(root: &Path, scenario: &Scenario, mut until: Until<'_>) -> Result<
         if !more {
             break;
         }
-        surface.set_phase_remaining_ms(whole_lull(&surface)?);
+        surface
+            .set_phase_remaining_ms(whole_lull(&surface)?)
+            .map_err(internal)?;
         surface.open_lull().map_err(internal)?;
         index = index.saturating_add(1);
     }
@@ -596,7 +598,9 @@ fn open(root: &Path, scenario: &Scenario, rules: RulesTable) -> Result<Surface, 
     )
     .map_err(internal)?;
     surface.attach(host).map_err(internal)?;
-    surface.set_phase_remaining_ms(whole_lull(&surface)?);
+    surface
+        .set_phase_remaining_ms(whole_lull(&surface)?)
+        .map_err(internal)?;
     surface.open_lull().map_err(internal)?;
     // The limits are left at the gateway's own defaults, deliberately. An
     // earlier draft raised them "because a scenario submits every seat's

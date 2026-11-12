@@ -242,6 +242,7 @@ fn the_segment_digest_golden() {
         kind: Kind::new(kind).expect("a well formed kind"),
         text: String::from("."),
         audience: Audience::Public,
+        memo: None,
     };
     // Three minutes of a segment: a busy first minute, a quiet second, a
     // closing third. The quiet minute is the case worth having a golden for --

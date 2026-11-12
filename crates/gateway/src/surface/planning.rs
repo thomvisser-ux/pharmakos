@@ -134,8 +134,13 @@ impl Surface {
     /// whose paths the zip's manifest golden pins. So from a packaged build a
     /// missing folder is an INTERNAL error, and an empty list means its
     /// templates were removed or no longer parse.
-    pub(super) fn list_templates(&self, request: &Request) -> Result<Json, Error> {
+    pub(super) fn list_templates(
+        &self,
+        subject: crate::token::Subject,
+        request: &Request,
+    ) -> Result<Json, Error> {
         let tag = request.string_param("tag")?.unwrap_or_default();
+        let guided = self.guided_pick(subject)?;
         let Some(folder) = self.host()?.library() else {
             return Ok(Json::Object(vec![
                 (String::from("templates"), Json::Array(Vec::new())),
@@ -155,7 +160,7 @@ impl Surface {
             .filter(|summary| summary.kind == pharmakos_proto::gp::v1::playbook::Kind::Template)
             .filter(|summary| tag.is_empty() || summary.tags.iter().any(|held| held == tag))
             .map(|summary| {
-                Json::Object(vec![
+                let mut entries = vec![
                     (
                         String::from("template_id"),
                         Json::String(summary.template_id.clone()),
@@ -172,7 +177,20 @@ impl Surface {
                         ),
                     ),
                     (String::from("summary"), Json::String(summary.blurb.clone())),
-                ])
+                ];
+                // E25: the template the advisor says to start with, with its
+                // reason, and on no other entry (proto3's `false` and empty
+                // string are left out).
+                if let Some((template, reason)) = guided
+                    && *template == summary.template_id
+                {
+                    entries.push((String::from("guided_pick"), Json::Bool(true)));
+                    entries.push((
+                        String::from("guided_pick_reason"),
+                        Json::String(reason.to_owned()),
+                    ));
+                }
+                Json::Object(entries)
             })
             .collect();
         Ok(Json::Object(vec![
@@ -181,6 +199,36 @@ impl Surface {
             // paging one would be pagination for its own sake.
             (String::from("next_cursor"), Json::String(String::new())),
         ]))
+    }
+
+    /// The guided first pick for `subject`'s template list: the template its
+    /// advisor said to start with and the advisor's sentence for it, in a Probation
+    /// match's first Lull, for the human seat it was filed for (S3's plan,
+    /// decision 5 and E25). `None` anywhere else: a `custom` match, a later
+    /// round, outside a Lull, a caller that is not that seat, or advice that
+    /// names none. Read from the seat's own store, so no seat is told
+    /// another's.
+    ///
+    /// # Errors
+    ///
+    /// As [`Surface::host`].
+    fn guided_pick(&self, subject: crate::token::Subject) -> Result<Option<(&str, &str)>, Error> {
+        let runner = self.host()?.runner();
+        let first_lull =
+            runner.round() == 1 && runner.phase() == pharmakos_sim::runner::MatchPhase::Lull;
+        if self.preset() != crate::probation::Preset::Probation || !first_lull {
+            return Ok(None);
+        }
+        let Some(seat) = subject
+            .seat()
+            .filter(|seat| Some(*seat) == self.human_seat())
+        else {
+            return Ok(None);
+        };
+        Ok(self.current_advice(seat).and_then(|advised| {
+            let start = advised.advice.start_here.as_ref()?;
+            Some((start.template_id.as_str(), start.why.as_str()))
+        }))
     }
 
     /// `instantiate_template`: a template plus parameters, as a playbook, and

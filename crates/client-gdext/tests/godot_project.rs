@@ -930,13 +930,16 @@ fn every_instance_logs_to_its_own_file() {
 }
 
 /// **The lobby hosts three rounds** (decisions-log item 123 (2) 3): skeleton-plan section
-/// 1.1's Probation-shaped match. The config line carries the value in its sixth field and
-/// keeps its six tab-separated fields, so a remembered `last_match.txt` still parses; the
-/// PLACEHOLDER above the constants records the decision and keeps the settings screen and
-/// the Probation preset the owner's, deferred to S6 by decisions-log item 127 (10). Since
-/// S2's `rnds` the sixth field is `round_limit()`'s text, which is `ROUND_LIMIT` unless the
-/// launch says `--rounds` (the next test), so the field is written with `%s`; the six
-/// fields, their order and the line's one newline are unchanged (AGENTS.md section 5).
+/// 1.1's Probation-shaped match. The config line carries the value in its sixth field; the
+/// PLACEHOLDER above the constants records the decision and keeps the settings screen the
+/// owner's, at S6, the Probation preset having moved to S3 (decisions-log item 153 (2),
+/// from item 127 (10)). Since S2's `rnds` the sixth field is `round_limit()`'s text, which
+/// is `ROUND_LIMIT` unless the launch says `--rounds` (the next test), so the field is
+/// written with `%s`. Since S3's `gwp` the line has a **seventh field, the preset**, which
+/// `pharmakos_gateway::serve::Config` requires (S3's plan, E6): the lobby writes it in the
+/// same pull request the gateway starts reading it, so `main`'s lobby is never refused, and
+/// the seed and the preset are parameters the watch check names its own of (AGENTS.md
+/// section 5).
 #[test]
 fn the_lobby_hosts_a_three_round_match() {
     let text = read("scripts/host_link.gd");
@@ -961,6 +964,8 @@ fn the_lobby_hosts_a_three_round_match() {
         "Probation preset",
         "OWNER, S6",
         "item 127 (10)",
+        "item 153 (2)",
+        "PROBATION_SEED",
     ] {
         assert!(
             block.contains(needle),
@@ -970,10 +975,26 @@ fn the_lobby_hosts_a_three_round_match() {
     let line = gd_function(&text, "config_line");
     assert!(
         line.iter().any(|row| row.contains(
-            "\"%s\\t%s\\t%d\\t%d\\t%s\\t%s\\n\" % [match_id, MATCH_SEED, seats, HUMAN_SEAT, \
-             ladder, round_limit()]"
+            "static func config_line(match_id: String, ladder: String, seats: int = \
+             MATCH_SEATS, seed: String = MATCH_SEED, preset: String = PRESET) -> String:"
         )),
-        "the config line keeps its six fields, the round limit last: {line:?}"
+        "the lobby's line is its own seed and preset unless a caller names others: {line:?}"
+    );
+    assert!(
+        line.iter().any(|row| row.contains(
+            "\"%s\\t%s\\t%d\\t%d\\t%s\\t%s\\t%s\\n\" % [match_id, seed, seats, HUMAN_SEAT, \
+             ladder, round_limit(), preset]"
+        )),
+        "the config line's seven fields, the round limit sixth and the preset last: {line:?}"
+    );
+    let presets: Vec<&str> = text
+        .lines()
+        .filter(|line| line.starts_with("const PRESET"))
+        .collect();
+    assert_eq!(
+        presets,
+        ["const PRESET := \"custom\""],
+        "the lobby writes `custom` until `ed3b` brings the client's half of an untimed Lull"
     );
     let limit = gd_function(&text, "round_limit");
     let code: Vec<&str> = limit
@@ -991,6 +1012,65 @@ fn the_lobby_hosts_a_three_round_match() {
             "return str(ROUND_LIMIT)",
         ],
         "absent `--rounds`, the line keeps ROUND_LIMIT: {limit:?}"
+    );
+}
+
+/// **The lobby's seed is Probation's** (S3's decision 13; decisions-log item 156 (1) and
+/// (3)): `host_link.gd`'s `MATCH_SEED` is `sim3a`'s pin, `PROBATION_SEED` in
+/// `crates/sim/tests/probation_seed.rs`, read here from that file as text and compared,
+/// restating neither number, so a re-pin there cannot leave the lobby on a stale seed. The
+/// watch check keeps the golden seed (`CHECK_SEED`), which its committed playbooks name.
+#[test]
+fn the_lobbys_seed_is_the_probation_seed_the_sim_pins() {
+    let pin_path = godot_dir()
+        .join("..")
+        .join("crates")
+        .join("sim")
+        .join("tests")
+        .join("probation_seed.rs");
+    let pin_text = fs::read_to_string(&pin_path)
+        .unwrap_or_else(|error| panic!("reading {}: {error}", pin_path.display()));
+    let pins: Vec<u64> = pin_text
+        .lines()
+        .filter_map(|line| line.strip_prefix("const PROBATION_SEED: u64 = "))
+        .map(|rest| {
+            rest.trim_end_matches(';')
+                .replace('_', "")
+                .parse::<u64>()
+                .unwrap_or_else(|error| panic!("the pin `{rest}` is not a u64: {error}"))
+        })
+        .collect();
+    let [pin] = pins.as_slice() else {
+        panic!("probation_seed.rs pins PROBATION_SEED once: {pins:?}");
+    };
+    let host_link = read("scripts/host_link.gd");
+    let seeds: Vec<u64> = host_link
+        .lines()
+        .filter_map(|line| line.strip_prefix("const MATCH_SEED := \"0x"))
+        .map(|rest| {
+            let digits = rest.trim_end_matches('"');
+            assert_eq!(
+                digits.len(),
+                16,
+                "a seed is spelt with 16 hex digits: {rest}"
+            );
+            u64::from_str_radix(digits, 16)
+                .unwrap_or_else(|error| panic!("`{rest}` is not a hex seed: {error}"))
+        })
+        .collect();
+    assert_eq!(
+        seeds.as_slice(),
+        [*pin],
+        "host_link.gd's MATCH_SEED is the Probation seed the sim pins"
+    );
+    let check = read("scripts/watch_check.gd");
+    assert!(
+        check.contains("const CHECK_SEED := \"0x00000000ca5caded\""),
+        "the watch check keeps the golden seed"
+    );
+    assert!(
+        check.contains("CHECK_SEATS, CHECK_SEED, CHECK_PRESET)"),
+        "the watch check names its own seed and preset on its line"
     );
 }
 

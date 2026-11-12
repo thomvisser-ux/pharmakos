@@ -249,6 +249,9 @@ impl Surface {
     ///   ([`RecapFacts::tallies`]), never added up from the feed, whose bus
     ///   drops past its capacity. Like the settlement it is this recap's, so
     ///   it is the same in the recap, the Lull and the Push that follow.
+    /// * **The Ledger's memos**, `ledger_memos`: those issued to the calling
+    ///   seat over the match so far, in the order they were issued, in a
+    ///   Probation match (S3's plan, E5; [`crate::probation`]).
     /// * **Every seat's tally**, `seat_tallies`, ascending by seat, **only once
     ///   the match is decided** -- from the final recap on, where the outcome
     ///   is decided and the fog lifts -- (the owner's ruling, decisions-log item
@@ -312,7 +315,11 @@ impl Surface {
             {
                 entries.push((String::from("settlement"), settlement));
             }
-            entries.push((String::from("tally"), own_tally(facts, seat, &mut prose)?));
+            let ended = outcome.is_some();
+            entries.push((
+                String::from("tally"),
+                own_tally(facts, seat, ended, &mut prose)?,
+            ));
             if let Some(dark) = facts.dark.iter().find(|dark| dark.seat == seat) {
                 let names: Vec<String> = dark
                     .ordinals
@@ -337,6 +344,18 @@ impl Surface {
             failure_lines(facts, seat, &mut prose)?;
             if let Some(all) = seat_tallies(host, facts)? {
                 entries.push((String::from("seat_tallies"), all));
+            }
+        }
+        // The Ledger's memos issued to the calling seat over the match so far,
+        // in the order they were issued (S3's plan, E5): a seat's own, like
+        // everything in this block, and left out when there are none.
+        if let Some(seat) = subject.seat() {
+            let memos = &self.seat_state(subject, seat)?.memos;
+            if !memos.is_empty() {
+                entries.push((
+                    String::from("ledger_memos"),
+                    Json::Array(memos.iter().map(|memo| memo.json()).collect()),
+                ));
             }
         }
         entries.insert(0, (String::from("prose"), Json::String(prose)));
@@ -495,7 +514,14 @@ impl Surface {
     /// `get_map_summary`: the extent, the seed, and every vent and seam.
     ///
     /// The extent and the seed are "part of the match, not a secret"
-    /// (`gateway.proto`), so neither is fog-filtered. Neither is the feature
+    /// (`gateway.proto`), so neither is fog-filtered. **The seed is not told to
+    /// a seat** from S3 (decisions-log item 127 (13); S3's plan, E18): a seat's
+    /// token is answered with no `match_seed` and prose that names none, the
+    /// built-in operator's in-process seat tokens included (AGENTS.md section 3
+    /// rule 3: the operator is not privileged), while the lobby's and a
+    /// spectator's keep it. A courtesy, not a secret kept: the generated map is
+    /// still served whole (item 107 (1)), and a local agent can read the seed
+    /// from the private match cache's `match.json`. Neither is the feature
     /// list in S1: decisions-log item 130 (3) (a) kept `live` on it and read
     /// `live`, `covered`, `travel_ms` and `reachable` off the world as it
     /// stands, unfogged, as targeting's own ranking is in S1, and the list is
@@ -516,12 +542,17 @@ impl Surface {
         let _ = detail::of(request)?;
         let host = self.host()?;
         let size = host.world().voxels().size();
-        let seed = view::seed_text(host.world().match_seed());
+        // `None` for a seat's token (E18); the field is then left out, at
+        // proto3's default, rather than written empty.
+        let seed = subject
+            .seat()
+            .is_none()
+            .then(|| view::seed_text(host.world().match_seed()));
         let seats = host.world().seats().len();
         let [x, y, z] = size;
         let axis = |length: u32| Json::Number(length.to_string());
         let features = self.map_features(subject.seat())?;
-        Ok(Json::Object(vec![
+        let mut entries = vec![
             (
                 String::from("size"),
                 Json::Object(vec![
@@ -532,11 +563,14 @@ impl Surface {
             ),
             (
                 String::from("prose"),
-                Json::String(strings::map_summary(size, &seed, seats)),
+                Json::String(strings::map_summary(size, seed.as_deref(), seats)),
             ),
-            (String::from("match_seed"), Json::String(seed)),
-            (String::from("features"), Json::Array(features)),
-        ]))
+        ];
+        if let Some(seed) = seed {
+            entries.push((String::from("match_seed"), Json::String(seed)));
+        }
+        entries.push((String::from("features"), Json::Array(features)));
+        Ok(Json::Object(entries))
     }
 
     /// `get_map_summary.features`: every vent and seam, in feature id order,
@@ -674,7 +708,7 @@ impl Surface {
     /// projected income and the projection (S1's plan, decision 12;
     /// decisions-log item 130 (3) (b); the register's S1-46).
     ///
-    /// PLACEHOLDER: the what-if vocabulary and answers, projected income and projection (S1-46) — owner, S3
+    /// PLACEHOLDER: the what-if vocabulary and answers, projected income and projection (S1-46) — owner, S6, with the segment clock (S3's plan, register row S1-46)
     pub(super) fn get_economy_forecast(
         &self,
         subject: crate::token::Subject,
@@ -2002,7 +2036,12 @@ fn failure_lines(
 ///
 /// [`crate::error::Code::Internal`] for a seat the facts hold no tally for,
 /// and as [`tally_json`].
-fn own_tally(facts: &RecapFacts, seat: SeatId, prose: &mut String) -> Result<Json, Error> {
+fn own_tally(
+    facts: &RecapFacts,
+    seat: SeatId,
+    ended: bool,
+    prose: &mut String,
+) -> Result<Json, Error> {
     let tally = facts
         .tallies
         .iter()
@@ -2018,6 +2057,7 @@ fn own_tally(facts: &RecapFacts, seat: SeatId, prose: &mut String) -> Result<Jso
         tally.shared_kills,
         destroyed,
         tally.losses,
+        ended,
     ));
     Ok(json)
 }

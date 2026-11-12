@@ -56,6 +56,7 @@ fn config_of(match_id: &str) -> Config {
         human_seat: None,
         segment_lengths_ms: vec![SEGMENT_MS],
         round_limit: ROUNDS,
+        preset: pharmakos_gateway::probation::Preset::Custom,
     }
 }
 
@@ -531,6 +532,32 @@ fn a_sealed_save_resumes_into_its_push_and_offers_no_lull() {
 /// canonical form that changed between builds -- is refused, and so is a
 /// fingerprint that was damaged instead. Both come from the same file, so this
 /// is not tamper-evidence, and the test does not pretend it is.
+/// A seat names only other seats' beacons by `e_NN`: a saved handle table
+/// that names one of the seat's own is not one this gateway wrote, and the
+/// resume is refused with a typed error (S3's plan, E1).
+#[test]
+fn a_handle_table_naming_the_seats_own_beacon_is_refused() {
+    const MATCH_ID: &str = "m-gwp-own-handle";
+    let surface = new_match(MATCH_ID);
+    let saved = surface.lull_save().expect("a Lull saves");
+    let (core, _) = support::core_beacon(&surface, 0);
+    let mut damaged = saved.clone();
+    if let Some(seat) = damaged.seats.first_mut() {
+        seat.handles = vec![(core.raw(), String::from("e_01"))];
+    }
+    let error = resume(MATCH_ID, &damaged).expect_err("its own beacon");
+    assert_eq!(error.code, Code::InvalidArgument);
+    assert!(
+        error.message.contains("its own beacon"),
+        "{}",
+        error.message
+    );
+    assert!(
+        resume(MATCH_ID, &saved).is_ok(),
+        "the save as written resumes"
+    );
+}
+
 #[test]
 fn a_damaged_seal_in_a_save_is_refused() {
     const MATCH_ID: &str = "m-t17-damaged";
@@ -641,7 +668,7 @@ fn a_cursor_from_the_dead_process_is_stale_on_the_resumed_surface() {
 #[test]
 fn a_fourth_seat_is_refused() {
     for seats in [0_u32, 4, 99] {
-        let line = format!("m-t17-seats\t0x1\t{seats}\t-\t-\t2\n");
+        let line = format!("m-t17-seats\t0x1\t{seats}\t-\t-\t2\tcustom\n");
         let error = Config::parse(&line).expect_err("refused");
         assert_eq!(error.code, Code::InvalidArgument, "{seats} seats");
         let error = Host::open_from(
@@ -680,7 +707,8 @@ fn a_fourth_seat_is_refused() {
             error.message
         );
     }
-    let three = Config::parse("m-t17-seats\t0x1\t3\t-\t-\t2\n").expect("three is v1's most");
+    let three =
+        Config::parse("m-t17-seats\t0x1\t3\t-\t-\t2\tcustom\n").expect("three is v1's most");
     assert_eq!(three.seats, 3);
     assert!(
         Host::open_from(

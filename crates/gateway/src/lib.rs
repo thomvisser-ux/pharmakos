@@ -58,6 +58,7 @@
 //! | [`feed`] | The event bus, the 60 s digest cadence and the opaque cursors |
 //! | [`viewfeed`] | The view's derived, unhashed state: the generated map, the stamps, the entitled bytes |
 //! | [`serve`] | The host loop: one config line in, one announce line out, one surface behind many connections |
+//! | [`probation`] | The match's preset, and the Ledger's memos a Probation match issues |
 //! | [`advice`] | What the built-in operator advises a seat it does not play: the safe playbook and the wizard's suggestions |
 //! | [`cache`] | The private match cache: where it goes, and what is in it |
 //! | [`save`] | The save container and the private replay's inputs: what a Lull boundary writes, and what a resume reads back |
@@ -131,6 +132,7 @@ pub mod handshake;
 pub mod host;
 pub mod limit;
 pub mod net;
+pub mod probation;
 pub mod routes;
 pub mod rpc;
 pub mod save;

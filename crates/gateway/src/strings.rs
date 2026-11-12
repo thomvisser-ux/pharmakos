@@ -94,15 +94,18 @@ pub fn event_text(event: &Event) -> String {
                 event.value
             ),
         },
-        EventKind::StepStarted => format!("Step {} started.", event.value),
-        EventKind::StepCompleted => format!("Step {} completed.", event.value),
+        // Numbered from 1, as the route and the rules are in the playbook's
+        // own prose (`render_plan`) and in the editor: the sim's value is the
+        // index, from 0 (item 139 (2) F).
+        EventKind::StepStarted => format!("Step {} started.", ordinal(event.value)),
+        EventKind::StepCompleted => format!("Step {} completed.", ordinal(event.value)),
         EventKind::StepSkipped => format!(
             "Step {} was skipped: its skip_if guard was true.",
-            event.value
+            ordinal(event.value)
         ),
         EventKind::StepFailed => step_failed(event.value),
-        EventKind::RuleFired => format!("Rule {} fired.", event.value),
-        EventKind::RuleEnded => format!("A rule's body ended with resume code {}.", event.value),
+        EventKind::RuleFired => format!("Rule {} fired.", ordinal(event.value)),
+        EventKind::RuleEnded => rule_ended(event.value),
         EventKind::ReflexFired => format!(
             "The commander's reflex fired at {} % hit points and it is withdrawing.",
             event.value
@@ -115,7 +118,8 @@ pub fn event_text(event: &Event) -> String {
             "The commander began a visit of {} interface rows.",
             event.value
         ),
-        EventKind::RowCommitted => format!("Interface row {} committed.", event.value),
+        // Numbered from 1, as a visit's rows are in the playbook's prose.
+        EventKind::RowCommitted => format!("Interface row {} committed.", ordinal(event.value)),
         EventKind::VisitEnded => format!("The visit ended with {} rows committed.", event.value),
         EventKind::BeaconPlaced => format!("A beacon of {seat} was deployed."),
         // T14's economy lines. Every figure a line carries is named in words
@@ -147,7 +151,7 @@ pub fn event_text(event: &Event) -> String {
         EventKind::KillCredited => {
             format!("{seat} was credited $ {} of a destruction.", event.value)
         }
-        EventKind::FallbackEngaged => fallback_engaged(event.value),
+        EventKind::FallbackEngaged => fallback_engaged(&seat, event.value),
         EventKind::FinalAudit => format!("The final audit scored {seat} at $ {}.", event.value),
         // S2's `fire`: the combat lines (S2's plan, E17).
         EventKind::UnitDestroyed => format!("A unit of {seat} was destroyed."),
@@ -428,36 +432,119 @@ pub fn this_round(reads: &[RoundRead<'_>]) -> Option<String> {
     Some(format!("This round: {}.", parts.join("; ")))
 }
 
-/// `fallback_engaged`'s line: the posture by name, never its wire code (the
-/// demo's F5).
-fn fallback_engaged(value: i64) -> String {
-    match u8::try_from(value).ok().and_then(posture_name) {
-        Some(posture) => format!("The route ended and the fallback took over: {posture}."),
+/// The one line a seat's Survey refreshes of one tick are said in, when there
+/// is more than one: how many, and the oldest memory one replaced (item 155
+/// (3) 6: one line a sighting flooded the feed).
+#[must_use]
+pub fn sightings_refreshed(seat: SeatId, count: usize, oldest_ms: i64) -> String {
+    format!(
+        "Survey scouts of seat {} refreshed {count} sightings, the oldest {oldest_ms} ms old.",
+        seat.raw()
+    )
+}
+
+/// A step's or a rule's number as the playbook's own prose gives it: the sim's
+/// index, from 0, plus one. An index past `i64` less one is said as the index
+/// it is, counted from 0, rather than wrapped or clamped.
+fn ordinal(index: i64) -> String {
+    match index.checked_add(1) {
+        Some(number) => number.to_string(),
+        None => format!("at index {index}, counted from 0,"),
+    }
+}
+
+/// `fallback_engaged`'s line: whose route ended, and the posture in the
+/// player's words -- the words the playbook's own prose uses (`render_plan`'s
+/// "Hold at", "Stay with", "Patrol"), never the posture's internal name or its
+/// wire code (the demo's F5; item 139 (2) E). The seat is named, so two seats'
+/// lines at one time are told apart (item 155 (3) 5).
+fn fallback_engaged(seat: &str, value: i64) -> String {
+    match u8::try_from(value).ok().and_then(posture_words) {
+        Some(posture) => {
+            format!("The route of {seat} ended and its fallback took over: {posture}.")
+        }
         None => format!(
-            "The route ended and the fallback took over, in a posture this build does not \
-             name (code {value})."
+            "The route of {seat} ended and its fallback took over, in a posture this build \
+             does not name (code {value})."
         ),
     }
 }
 
-/// The posture a `fallback_engaged` value names, as the editor spells it, or
-/// `None` for an id this build does not define. The ids are the sim's
-/// `pharmakos_sim::interpreter::Posture::id`: 1 Hold, 2 Shadow, 3 Patrol. The
-/// words live here, in the gateway's one string table, and not in the sim.
-const fn posture_name(id: u8) -> Option<&'static str> {
+/// `rule_ended`'s line: what the route does now the rule's body has run, in
+/// the words of the playbook's `resume` options, never the resume's wire code
+/// (item 139 (2) E's sweep). The ids are the sim's
+/// `pharmakos_sim::interpreter::Resume::id`: 1 continue, 2 skip the step, 3
+/// jump forward, 4 end the route.
+fn rule_ended(value: i64) -> String {
+    let next = match value {
+        1 => "the route carries on with the step it was on",
+        2 => "the route skips the step it was on",
+        3 => "the route jumps forward to the step the rule names",
+        4 => "the route ends and the fallback takes over",
+        other => {
+            return format!(
+                "A rule's body ended, and the route goes on in a way this build does not name \
+                 (code {other})."
+            );
+        }
+    };
+    format!("A rule's body ended: {next}.")
+}
+
+/// What the commander does under a `fallback_engaged` value's posture, in the
+/// words the playbook's prose uses, or `None` for an id this build does not
+/// define. The ids are the sim's `pharmakos_sim::interpreter::Posture::id`: 1
+/// hold, 2 shadow, 3 patrol. The words live here, in the gateway's one string
+/// table, and not in the sim.
+const fn posture_words(id: u8) -> Option<&'static str> {
     match id {
-        1 => Some("Hold"),
-        2 => Some("Shadow"),
-        3 => Some("Patrol"),
+        1 => Some("the commander holds at the place its playbook names"),
+        2 => Some("the commander stays with the beacon its playbook names"),
+        3 => Some("the commander patrols the waypoints its playbook names"),
         _ => None,
     }
 }
 
 /// The line a seat's own feed carries when the gateway filed its playbook for
-/// it: the Lull ran out with nothing sealed, and the safe playbook was filed
-/// (spec section 14). Decision 8 of S1's plan, ruled by item 128, and the
-/// demo's F5: a timeout's filing used to read like the player's own seal.
-pub const SAFE_PLAYBOOK_FILED: &str = "The Lull ran out, so the safe playbook was filed for you.";
+/// it because the Lull ended with nothing sealed (spec section 14). Decision 8
+/// of S1's plan, ruled by item 128, and the demo's F5: a timeout's filing used
+/// to read like the player's own seal.
+///
+/// Worded for either end the gateway cannot tell apart: the client's
+/// countdown running out and the lobby's `end_lull`. The shipped rig calls
+/// `end_lull` when its countdown is spent without reporting the countdown at
+/// 0 first, so the gateway's last report is a few milliseconds left either
+/// way (decisions-log item 143 (4)). S3's `ed3b` makes the rig send that last
+/// report at 0 and gives "the Lull ran out" its own line again.
+pub const SAFE_PLAYBOOK_FILED: &str =
+    "The Lull ended before you sealed, so the safe playbook was filed for you.";
+
+/// The same line when the Lull ended because every seat said Ready, this seat
+/// with nothing sealed (decisions-log item 143 (4): the line said "The Lull
+/// ran out" even when Ready ended it).
+pub const SAFE_PLAYBOOK_FILED_ON_READY: &str =
+    "You said Ready with nothing sealed, so the safe playbook was filed for you.";
+
+// PLACEHOLDER: the memo's wording — owner, at S3's demo
+// The Ledger's memos, in its deadpan voice, one or two sentences and one thing
+// to try (S3's plan, decision 4's first copy; spec section 19: "Tuning S3,
+// polished in S6"). Each is issued at most once a match, to the seat the
+// person plays, in a Probation match only (`crate::probation::Memo`).
+
+/// The first power shortfall's memo.
+pub const MEMO_POWER_SHORTFALL: &str = "Notice of shortfall. Your draw exceeded your supply and \
+     the grid shed load in the order you set. Build a Generator on a vent, or recycle what you \
+     cannot feed.";
+
+/// The first beacon lost's memo: spec section 5's local elimination.
+pub const MEMO_DARK_STAKE: &str = "Notice of loss. A Stake has gone dark. Its works stand as \
+     neutral ruins, which any seat's drones may salvage, and its drones re-home to your nearest \
+     beacon.";
+
+/// The commander's first death's memo.
+pub const MEMO_FIRST_DEATH: &str = "Notice of absence. Your Keybearer was lost and will return \
+     at your core after the usual delay, or at your nearest beacon if the core is gone. Nothing \
+     you sealed changes in the meantime.";
 
 /// `get_briefing`'s prose.
 ///
@@ -588,40 +675,56 @@ fn seats_prose(seats: &[u8]) -> String {
     }
 }
 
-/// `get_map_summary`'s prose.
+/// `get_map_summary`'s prose. `seed` is `None` for a seat's token, which is
+/// not told the seed (S3's plan, E18; decisions-log item 127 (13)).
 #[must_use]
-pub fn map_summary(size: [u32; 3], seed: &str, seats: u32) -> String {
+pub fn map_summary(size: [u32; 3], seed: Option<&str>, seats: u32) -> String {
     let [x, y, z] = size;
-    format!(
-        "The map is {x} by {y} by {z} voxels, generated from seed {seed} for {}.",
-        count(seats, "seat", "seats"),
-    )
+    let seats = count(seats, "seat", "seats");
+    match seed {
+        Some(seed) => {
+            format!("The map is {x} by {y} by {z} voxels, generated from seed {seed} for {seats}.")
+        }
+        None => format!("The map is {x} by {y} by {z} voxels, for {seats}."),
+    }
 }
 
 /// The recap's tally sentence: the seat's own kills, how many of them were
 /// shared, the enemy value they were worth and the seat's own losses, for the
-/// match so far (spec section 3's "shared kill"; S2's plan, E15).
+/// match so far (spec section 3's "shared kill"; S2's plan, E15) -- or, once
+/// the match has ended (`ended`), for the whole match, which is no longer "so
+/// far" (item 155 (3) 7).
 #[must_use]
-pub fn recap_tally(kills: u32, shared: u32, value_dollars: i32, losses: u32) -> String {
+pub fn recap_tally(
+    kills: u32,
+    shared: u32,
+    value_dollars: i32,
+    losses: u32,
+    ended: bool,
+) -> String {
+    let lead = if ended {
+        "In this match"
+    } else {
+        "This match so far"
+    };
     let lost = count(losses, "asset", "assets");
     let destroyed = count(kills, "enemy asset", "enemy assets");
     match (kills, shared) {
-        (0, _) => format!("This match so far you destroyed no enemy assets and lost {lost}."),
-        (_, 0) => format!(
-            "This match so far you destroyed {destroyed}, worth $ {value_dollars}, and lost \
-             {lost}."
-        ),
+        (0, _) => format!("{lead} you destroyed no enemy assets and lost {lost}."),
+        (_, 0) => {
+            format!("{lead} you destroyed {destroyed}, worth $ {value_dollars}, and lost {lost}.")
+        }
         (1, _) => format!(
-            "This match so far you destroyed 1 enemy asset, a shared kill, worth $ \
-             {value_dollars}, and lost {lost}."
+            "{lead} you destroyed 1 enemy asset, a shared kill, worth $ {value_dollars}, and \
+             lost {lost}."
         ),
         (_, 1) => format!(
-            "This match so far you destroyed {destroyed}, 1 of them a shared kill, worth $ \
+            "{lead} you destroyed {destroyed}, 1 of them a shared kill, worth $ \
              {value_dollars}, and lost {lost}."
         ),
         _ => format!(
-            "This match so far you destroyed {destroyed}, {shared} of them shared kills, worth \
-             $ {value_dollars}, and lost {lost}."
+            "{lead} you destroyed {destroyed}, {shared} of them shared kills, worth $ \
+             {value_dollars}, and lost {lost}."
         ),
     }
 }
@@ -910,28 +1013,44 @@ mod tests {
     #[test]
     fn the_tally_sentence_counts_and_names_a_shared_kill() {
         assert_eq!(
-            super::recap_tally(0, 0, 0, 0),
+            super::recap_tally(0, 0, 0, 0, false),
             "This match so far you destroyed no enemy assets and lost no assets."
         );
         assert_eq!(
-            super::recap_tally(2, 1, 35, 1),
+            super::recap_tally(2, 1, 35, 1, false),
             "This match so far you destroyed 2 enemy assets, 1 of them a shared kill, worth $ 35, \
              and lost 1 asset."
         );
         assert_eq!(
-            super::recap_tally(2, 0, 35, 0),
+            super::recap_tally(2, 0, 35, 0, false),
             "This match so far you destroyed 2 enemy assets, worth $ 35, and lost no assets."
         );
         assert_eq!(
-            super::recap_tally(1, 1, 10, 0),
+            super::recap_tally(1, 1, 10, 0, false),
             "This match so far you destroyed 1 enemy asset, a shared kill, worth $ 10, and lost \
              no assets."
         );
         assert_eq!(
-            super::recap_tally(3, 2, 60, 2),
+            super::recap_tally(3, 2, 60, 2, false),
             "This match so far you destroyed 3 enemy assets, 2 of them shared kills, worth $ 60, \
              and lost 2 assets."
         );
+    }
+
+    /// Item 155 (3) 7: once the match has ended its tally is the whole
+    /// match's, and no longer "so far".
+    #[test]
+    fn the_tally_at_the_matchs_end_is_the_whole_matchs() {
+        assert_eq!(
+            super::recap_tally(0, 0, 0, 0, true),
+            "In this match you destroyed no enemy assets and lost no assets."
+        );
+        assert_eq!(
+            super::recap_tally(3, 2, 60, 2, true),
+            "In this match you destroyed 3 enemy assets, 2 of them shared kills, worth $ 60, and \
+             lost 2 assets."
+        );
+        assert!(!super::recap_tally(1, 0, 5, 1, true).contains("so far"));
     }
 
     #[test]
@@ -1089,9 +1208,11 @@ mod tests {
 
     #[test]
     fn the_map_prose_and_the_standing_prose_say_what_they_know() {
-        let prose = map_summary([384, 384, 64], "0x00000000ca5caded", 2);
+        let prose = map_summary([384, 384, 64], Some("0x00000000ca5caded"), 2);
         assert!(prose.contains("384 by 384 by 64"), "{prose}");
         assert!(prose.contains("0x00000000ca5caded"), "{prose}");
+        let withheld = map_summary([384, 384, 64], None, 2);
+        assert_eq!(withheld, "The map is 384 by 384 by 64 voxels, for 2 seats.");
         assert_eq!(
             standing(2, Some((1, 2)), 412),
             "2 seats still standing. Your score is $ 412, which ranks you 1 of 2 on the final \
@@ -1112,16 +1233,68 @@ mod tests {
         );
     }
 
+    /// Item 139 (2) E and item 155 (3) 5: the seat is named, and the posture
+    /// is said in the playbook prose's words, never its internal name.
     #[test]
-    fn fallback_engaged_names_its_posture() {
-        for (id, posture) in [(1, "Hold"), (2, "Shadow"), (3, "Patrol")] {
-            let text = event_text(&event(EventKind::FallbackEngaged, Some(0), id));
+    fn fallback_engaged_names_its_seat_and_says_its_posture_in_the_players_words() {
+        for (id, posture) in [
+            (1, "the commander holds at the place its playbook names"),
+            (2, "the commander stays with the beacon its playbook names"),
+            (3, "the commander patrols the waypoints its playbook names"),
+        ] {
+            let text = event_text(&event(EventKind::FallbackEngaged, Some(1), id));
             assert_eq!(
                 text,
-                format!("The route ended and the fallback took over: {posture}.")
+                format!("The route of seat 1 ended and its fallback took over: {posture}.")
             );
-            assert!(!text.contains("code"), "{text}");
+            for internal in ["code", "Hold", "Shadow", "Patrol"] {
+                assert!(!text.contains(internal), "{text}");
+            }
         }
+    }
+
+    /// Item 139 (2) F: steps and rules are numbered from 1, as the route and
+    /// the rules are in the playbook's own prose.
+    #[test]
+    fn steps_and_rules_are_numbered_from_one() {
+        assert_eq!(
+            event_text(&event(EventKind::StepStarted, Some(0), 0)),
+            "Step 1 started."
+        );
+        assert_eq!(
+            event_text(&event(EventKind::StepCompleted, Some(0), 2)),
+            "Step 3 completed."
+        );
+        assert_eq!(
+            event_text(&event(EventKind::StepSkipped, Some(0), 0)),
+            "Step 1 was skipped: its skip_if guard was true."
+        );
+        assert_eq!(
+            event_text(&event(EventKind::RuleFired, Some(0), 0)),
+            "Rule 1 fired."
+        );
+        assert_eq!(
+            event_text(&event(EventKind::RowCommitted, Some(0), 0)),
+            "Interface row 1 committed."
+        );
+        // The rule's resume in the playbook's words, never its code.
+        for (id, words) in [
+            (1, "the route carries on with the step it was on"),
+            (2, "the route skips the step it was on"),
+            (3, "the route jumps forward to the step the rule names"),
+            (4, "the route ends and the fallback takes over"),
+        ] {
+            assert_eq!(
+                event_text(&event(EventKind::RuleEnded, Some(0), id)),
+                format!("A rule's body ended: {words}.")
+            );
+        }
+        assert!(event_text(&event(EventKind::RuleEnded, Some(0), 9)).contains("code 9"));
+        assert_eq!(
+            event_text(&event(EventKind::StepStarted, Some(0), i64::MAX)),
+            format!("Step at index {}, counted from 0, started.", i64::MAX),
+            "an index past the last number is said as it is, never wrapped"
+        );
     }
 
     #[test]
