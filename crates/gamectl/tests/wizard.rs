@@ -49,6 +49,7 @@ use pharmakos_gamectl::host::{EasyOperators, LIBRARY_PATH};
 use pharmakos_gateway::fog::{Audience, FogPolicy};
 use pharmakos_gateway::host::{Host, Settings, SphereVision};
 use pharmakos_gateway::limit::IN_PROCESS_LIMITS;
+use pharmakos_gateway::probation::Preset;
 use pharmakos_gateway::rpc::Request;
 use pharmakos_gateway::scopes::{Scope, ScopeSet};
 use pharmakos_gateway::serve::InProcessSeats;
@@ -100,6 +101,12 @@ fn target_dir() -> PathBuf {
 /// with Easy advising the human seat and playing the other, as `gamectl host`
 /// seats them.
 fn lobby() -> Surface {
+    lobby_under(Preset::Custom)
+}
+
+/// [`lobby`], played under `preset`, as `serve::run` plays a config line's.
+/// A Probation match's Lull carries no countdown (S3's plan, E7).
+fn lobby_under(preset: Preset) -> Surface {
     let rules = std::fs::read_to_string(root().join("rules").join("rules.v1.json"))
         .expect("the rules text");
     let host = Host::open_from(
@@ -126,11 +133,16 @@ fn lobby() -> Surface {
         FogPolicy::fogged(),
         &seats,
     )
-    .expect("a surface");
+    .expect("a surface")
+    .with_preset(preset, Some(SeatId::new(HUMAN)));
     surface.attach(host).expect("attached");
     surface.open_lull().expect("the opening Lull");
-    let lull = surface.lull_length(1);
-    surface.set_phase_remaining_ms(lull);
+    if preset == Preset::Custom {
+        let lull = surface.lull_length(1);
+        surface
+            .set_phase_remaining_ms(lull)
+            .expect("a custom match takes a countdown");
+    }
     let mut factory = EasyOperators::new(&rules).expect("the operator reads the rules text");
     let mut easy = InProcessSeats::open(&mut surface, &seats, Some(HUMAN), &mut factory)
         .expect("in-process seats");
@@ -281,6 +293,50 @@ fn write_golden(case: &str, file: &str, text: &str) {
     std::fs::write(folder.join(format!("actual.{file}")), text).expect("the fresh golden");
 }
 
+/// The guided first pick against the real Easy (S3's plan, decision 5 and
+/// E25): in a Probation match's first Lull the human seat's template list
+/// marks Hold & Build, and only it, with the operator's own sentence for a
+/// newcomer (`pharmakos_operator::START_HERE_WHY`), never a suggestion's
+/// `why`, which opens with the seed line. Dropping the operator's
+/// `start_here`, its reason, or the host's carrying of either turns this red.
+#[test]
+fn a_probation_lulls_template_list_marks_easys_start_with_its_newcomers_reason() {
+    let mut surface = lobby_under(Preset::Probation);
+    let token = human_token(&mut surface);
+    let answer = call(
+        &mut surface,
+        &token,
+        "list_templates",
+        Json::Object(Vec::new()),
+    );
+    let Some(Json::Array(templates)) = answer.get("templates") else {
+        panic!("a template list: {answer:?}");
+    };
+    let marked: Vec<(String, String)> = templates
+        .iter()
+        .filter(|template| template.get("guided_pick") == Some(&Json::Bool(true)))
+        .map(|template| {
+            (
+                text_of(template, "template_id"),
+                text_of(template, "guided_pick_reason"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        marked,
+        vec![(
+            String::from("hold_and_build"),
+            pharmakos_operator::START_HERE_WHY.to_owned()
+        )],
+        "one template marked, Hold & Build, with the newcomer's sentence"
+    );
+    assert!(
+        !pharmakos_operator::START_HERE_WHY.contains("seed")
+            && !pharmakos_operator::START_HERE_WHY.starts_with("Easy,"),
+        "a sentence for a newcomer, not the operator's bookkeeping"
+    );
+}
+
 /// The wizard, for each shipped template, with the live Easy advisor: the
 /// suggested playbook qualifies FULL in the seat's own Lull, every suggested
 /// value names a declared parameter, Easy says why, and the four goldens are
@@ -423,7 +479,9 @@ fn a_seat_nobody_edits_is_still_earning_in_the_lobbys_third_round() {
     let mut delivered: Vec<u32> = Vec::new();
     for round in 1..=ROUND_LIMIT {
         let lull = surface.lull_length(round);
-        surface.set_phase_remaining_ms(lull);
+        surface
+            .set_phase_remaining_ms(lull)
+            .expect("a custom match takes a countdown");
         easy.plan(&mut surface);
         assert!(
             surface.begin_push().expect("the Push"),

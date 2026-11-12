@@ -76,7 +76,8 @@ mod safe;
 mod situation;
 mod tuning;
 
-pub use easy::{Advice, Easy, Played, Submitted, SuggestedValue, Suggestion};
+pub use compose::START_HERE_WHY;
+pub use easy::{Advice, Easy, Played, StartHere, Submitted, SuggestedValue, Suggestion};
 pub use tuning::RulesError;
 pub use wire::{Call, Refused};
 

@@ -80,13 +80,15 @@ const LADDER := "-"
 
 ## The preset the config line names (S3's plan, E6), `probation` or `custom`: the gateway
 ## reads it and decides what it changes, so nothing here does. It is `custom` until S3's
-## `prob` lane turns it to `probation` together with the client's half of an untimed Lull:
-## today's rig counts every Lull down from the rules table and reports the countdown, which
-## a Probation match's gateway refuses (E7), and the rig learns `all_ready` only from that
-## report's answer. A line remembered without a preset is refused by the gateway, naming
-## the field, and the lobby shows the refusal as it shows any host's; New match is the
-## fresh match.
-## PLACEHOLDER: the lobby's preset is `custom` until `prob` — OWNER, at S3's `prob`
+## `ed3b` lane turns it to `probation` and teaches the rig an untimed Lull: today's rig
+## counts every Lull down from the rules table and reports the countdown, which a Probation
+## match's gateway refuses (E7), and the rig learns `all_ready` only from that report's
+## answer. The `_status` footer's `untimed` means "no countdown reported yet", so the rig
+## needs the gateway to say a Lull is untimed by rule, a field `gp.api.v1.Status` does not
+## carry yet. A line remembered without a preset is refused by the gateway, naming the
+## field, and the lobby shows the refusal as it shows any host's; New match is the fresh
+## match.
+## PLACEHOLDER: the lobby's preset is `custom` until `ed3b` — OWNER, at S3's `ed3b`
 const PRESET := "custom"
 
 ## The test-only launch option that sets the round limit in place of ROUND_LIMIT,

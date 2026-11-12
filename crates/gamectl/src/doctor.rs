@@ -437,7 +437,9 @@ fn surface_for(
         .runner()
         .round();
     let lull = surface.lull_length(round);
-    surface.set_phase_remaining_ms(lull);
+    surface
+        .set_phase_remaining_ms(lull)
+        .map_err(|error| error.message.clone())?;
     surface.open_lull().map_err(|error| error.message)?;
     Ok(surface)
 }

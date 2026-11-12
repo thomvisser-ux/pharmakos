@@ -130,7 +130,9 @@ fn hosted_as(segment_ms: i32, fog: FogPolicy, library: Option<PathBuf>) -> Surfa
     )
     .expect("a match");
     surface.attach(host).expect("attached");
-    surface.set_phase_remaining_ms(Ms::new(FIRST_LULL_MS));
+    surface
+        .set_phase_remaining_ms(Ms::new(FIRST_LULL_MS))
+        .expect("a custom match takes a countdown");
     surface.open_lull().expect("the opening Lull");
     surface
 }
@@ -166,7 +168,9 @@ fn call(
     params: &str,
 ) -> Json {
     *remaining = remaining.saturating_sub(CLIENT_FRAME_MS).max(0);
-    surface.set_phase_remaining_ms(Ms::new(*remaining));
+    surface
+        .set_phase_remaining_ms(Ms::new(*remaining))
+        .expect("a custom match takes a countdown");
     surface.call(Some(token), &request(method, params), &Blind)
 }
 
@@ -1680,7 +1684,9 @@ fn the_gateways_tick_never_goes_backwards_across_a_phase_boundary() {
     // rounding lint is denied inside a test too, and a literal is clearer than
     // a checked division for a number this file already fixes.
     for left in [90_000, 0] {
-        surface.set_phase_remaining_ms(Ms::new(left));
+        surface
+            .set_phase_remaining_ms(Ms::new(left))
+            .expect("a custom match takes a countdown");
         note("the Lull, counting down", &surface);
     }
     surface.begin_push().expect("the Push begins");
@@ -1692,12 +1698,16 @@ fn the_gateways_tick_never_goes_backwards_across_a_phase_boundary() {
         }
     }
     // A client reporting the recap's own timer, which is not the Lull's.
-    surface.set_phase_remaining_ms(Ms::new(8_000));
+    surface
+        .set_phase_remaining_ms(Ms::new(8_000))
+        .expect("a custom match takes a countdown");
     note("the recap", &surface);
     surface.end_recap().expect("the recap ends");
     surface.open_lull().expect("the next Lull");
     note("round 2's Lull", &surface);
-    surface.set_phase_remaining_ms(Ms::new(LULL_MS));
+    surface
+        .set_phase_remaining_ms(Ms::new(LULL_MS))
+        .expect("a custom match takes a countdown");
     note("round 2's Lull, freshly started", &surface);
 
     let mut highest = 0;
@@ -1743,7 +1753,9 @@ fn a_seat_calling_once_a_tick_through_a_push_is_never_rate_limited() {
         let response = call(&mut surface, &token, &mut left, "get_status", "{}");
         let _ = result(&response, "a planning call in the Lull");
     }
-    surface.set_phase_remaining_ms(Ms::ZERO);
+    surface
+        .set_phase_remaining_ms(Ms::ZERO)
+        .expect("a custom match takes a countdown");
     let response = surface.call(Some(&token), &request("get_status", "{}"), &Blind);
     let _ = result(&response, "the last call of the Lull");
     surface.begin_push().expect("the Push begins");
@@ -2278,7 +2290,9 @@ fn round_twos_submission_replaces_round_ones_in_the_world() {
         }
     }
     surface.end_recap().expect("the recap ends");
-    surface.set_phase_remaining_ms(Ms::new(LULL_MS));
+    surface
+        .set_phase_remaining_ms(Ms::new(LULL_MS))
+        .expect("a custom match takes a countdown");
     surface.open_lull().expect("round two's Lull");
     left_zero = LULL_MS;
 

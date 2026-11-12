@@ -62,12 +62,24 @@ pub struct Advice {
     pub safe_playbook_jsonc: String,
     /// One suggestion per template it has one for, in any order.
     pub suggestions: Vec<Suggestion>,
-    /// The template the operator says a newcomer starts with, by its id: the
-    /// guided first pick (spec section 13; S3's plan, decision 5 and E25).
-    /// Its reason is that template's suggestion's `why`, so it names a
-    /// template it has a suggestion for, or nothing. In a Probation match's
-    /// first Lull `list_templates` marks it for the seat it was filed for.
-    pub start_here: Option<String>,
+    /// The template the operator says a newcomer starts with, and why: the
+    /// guided first pick (spec section 13; S3's plan, decision 5 and E25). It
+    /// names a template it has a suggestion for, or nothing. In a Probation
+    /// match's first Lull `list_templates` marks it for the seat it was filed
+    /// for, with its reason.
+    pub start_here: Option<StartHere>,
+}
+
+/// The guided first pick: which template, and the one sentence a newcomer is
+/// told about it -- the operator's own, from its string table, and not a
+/// suggestion's `why`, which records the operator's bookkeeping.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct StartHere {
+    /// Which template: a file stem in the library, as `list_templates`
+    /// answers it.
+    pub template_id: String,
+    /// Why to start with it, in one sentence of English.
+    pub why: String,
 }
 
 impl Advice {

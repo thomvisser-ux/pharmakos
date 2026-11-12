@@ -202,7 +202,9 @@ fn client_path(scenario: &Scenario) -> String {
     let mut surface =
         Surface::new(MATCH, scenario.seed, rules, FogPolicy::casual(), &seats).expect("a match id");
     surface.attach(host).expect("attached");
-    surface.set_phase_remaining_ms(Ms::new(lull_ms(&surface)));
+    surface
+        .set_phase_remaining_ms(Ms::new(lull_ms(&surface)))
+        .expect("a custom match takes a countdown");
     surface.open_lull().expect("the opening Lull");
     // The limits stay at the gateway's defaults, as `scenario::run::play`'s do:
     // the limiter is per token, every seat mints its own, and one `submit_plan`

@@ -87,7 +87,9 @@ fn lobby_match() -> Surface {
     // footer of `instantiate_suggested` shows it. The length is the rules
     // table's `match.first_lull_ms`, read through the gateway's typed read.
     let lull = surface.lull_length(1);
-    surface.set_phase_remaining_ms(lull);
+    surface
+        .set_phase_remaining_ms(lull)
+        .expect("a custom match takes a countdown");
     surface
 }
 

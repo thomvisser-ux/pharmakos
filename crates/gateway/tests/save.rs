@@ -532,6 +532,32 @@ fn a_sealed_save_resumes_into_its_push_and_offers_no_lull() {
 /// canonical form that changed between builds -- is refused, and so is a
 /// fingerprint that was damaged instead. Both come from the same file, so this
 /// is not tamper-evidence, and the test does not pretend it is.
+/// A seat names only other seats' beacons by `e_NN`: a saved handle table
+/// that names one of the seat's own is not one this gateway wrote, and the
+/// resume is refused with a typed error (S3's plan, E1).
+#[test]
+fn a_handle_table_naming_the_seats_own_beacon_is_refused() {
+    const MATCH_ID: &str = "m-gwp-own-handle";
+    let surface = new_match(MATCH_ID);
+    let saved = surface.lull_save().expect("a Lull saves");
+    let (core, _) = support::core_beacon(&surface, 0);
+    let mut damaged = saved.clone();
+    if let Some(seat) = damaged.seats.first_mut() {
+        seat.handles = vec![(core.raw(), String::from("e_01"))];
+    }
+    let error = resume(MATCH_ID, &damaged).expect_err("its own beacon");
+    assert_eq!(error.code, Code::InvalidArgument);
+    assert!(
+        error.message.contains("its own beacon"),
+        "{}",
+        error.message
+    );
+    assert!(
+        resume(MATCH_ID, &saved).is_ok(),
+        "the save as written resumes"
+    );
+}
+
 #[test]
 fn a_damaged_seal_in_a_save_is_refused() {
     const MATCH_ID: &str = "m-t17-damaged";

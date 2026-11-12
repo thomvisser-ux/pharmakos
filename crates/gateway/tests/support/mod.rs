@@ -156,7 +156,9 @@ pub fn hosted_with(
     )
     .expect("a match");
     surface.attach(host).expect("attached");
-    surface.set_phase_remaining_ms(Ms::new(FIRST_LULL_MS));
+    surface
+        .set_phase_remaining_ms(Ms::new(FIRST_LULL_MS))
+        .expect("a custom match takes a countdown");
     surface.open_lull().expect("the opening Lull");
     surface
 }
@@ -202,7 +204,9 @@ pub fn call_in_lull(
     params: &str,
 ) -> Json {
     *remaining = remaining.saturating_sub(CLIENT_FRAME_MS).max(0);
-    surface.set_phase_remaining_ms(Ms::new(*remaining));
+    surface
+        .set_phase_remaining_ms(Ms::new(*remaining))
+        .expect("a custom match takes a countdown");
     call(surface, token, method, params)
 }
 

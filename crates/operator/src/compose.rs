@@ -460,6 +460,17 @@ fn place(at: [i32; 3]) -> String {
     format!("({x}, {y}, {z})")
 }
 
+/// Why a newcomer starts with Hold & Build: the guided first pick's reason
+/// (spec section 13; S3's plan, decision 5 and E25), shown beside the template
+/// in a Probation match's first Lull. One sentence for a person new to the
+/// game, with no seed line and no scoring: a suggestion's `why` is the
+/// operator's bookkeeping, and this is not.
+///
+/// PLACEHOLDER: the wording is the operator's, in English, until the one string table exists — owner, S6
+pub const START_HERE_WHY: &str = "Start here: this places a beacon by the nearest heat vent \
+     you do not cover and builds a Generator on it, which raises your power, and power is what \
+     every later structure draws.";
+
 /// The seed line: read, recorded, and unused at Easy (decision C15).
 ///
 /// From S3 a seat's token is not told the match seed (decisions-log item 127

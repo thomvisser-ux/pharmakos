@@ -568,6 +568,27 @@ impl Save {
                 config.preset.name().to_owned(),
             ));
         }
+        // The Ledger's memos go to the person's seat of a Probation match and
+        // to nobody else (S3's plan, E5): a save holding one anywhere else is
+        // not one this gateway wrote.
+        for seat in &self.state.seats {
+            if seat.memos.is_empty() {
+                continue;
+            }
+            if saved.preset != Preset::Probation {
+                return Err(damaged(&format!(
+                    "seat {} holds the Ledger's memos in a `{}` match, which issues none",
+                    seat.seat,
+                    saved.preset.name()
+                )));
+            }
+            if saved.human_seat != Some(seat.seat) {
+                return Err(damaged(&format!(
+                    "seat {} holds the Ledger's memos and is not the person's seat",
+                    seat.seat
+                )));
+            }
+        }
         Ok(())
     }
 }
@@ -648,8 +669,17 @@ fn parse_seat(value: &Json) -> Result<SavedSeat, Error> {
             plan_fingerprint: hex64_at(held, "plan_fingerprint")?,
         }),
     };
-    let mut handles: Vec<(u32, String)> = Vec::new();
-    for held in array_at(value, "handles")? {
+    let listed = array_at(value, "handles")?;
+    if listed.len() > crate::viewfeed::MAX_FOREIGN_HANDLES {
+        return Err(damaged(&format!(
+            "seat {seat}'s handle table holds {} handles, past the {} a seat may",
+            listed.len(),
+            crate::viewfeed::MAX_FOREIGN_HANDLES
+        )));
+    }
+    let mut handles: Vec<(u32, String)> = Vec::with_capacity(listed.len());
+    let mut seen: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+    for held in listed {
         let beacon = u32_at(held, "beacon")?;
         let handle = string_at(held, "handle")?.to_owned();
         // Handles are minted `e_01` up, one a beacon: anything else is not a
@@ -658,9 +688,7 @@ fn parse_seat(value: &Json) -> Result<SavedSeat, Error> {
             .ok()
             .and_then(|held| held.checked_add(1))
             .ok_or_else(|| damaged("its handle table is longer than a u32 counts"))?;
-        if handle != pharmakos_sim::tables::foreign_beacon_name(number)
-            || handles.iter().any(|(id, _)| *id == beacon)
-        {
+        if handle != pharmakos_sim::tables::foreign_beacon_name(number) || !seen.insert(beacon) {
             return Err(damaged(&format!(
                 "seat {seat}'s handle table is not `e_01` up, one handle a beacon"
             )));
@@ -878,6 +906,76 @@ mod tests {
     /// The handle table and the memos read back exactly, and a table that is
     /// not `e_01` up, one handle a beacon, or a memo issued twice, is not a
     /// save this build wrote.
+    /// The handle table is bounded like the notebook and the drafts: a table
+    /// past `MAX_FOREIGN_HANDLES` is refused as damaged.
+    #[test]
+    fn a_handle_table_past_its_bound_is_refused() {
+        let mut written = save();
+        let most = crate::viewfeed::MAX_FOREIGN_HANDLES;
+        let table = |count: usize| -> Vec<(u32, String)> {
+            (0..count)
+                .map(|index| {
+                    let number = u32::try_from(index).expect("small").saturating_add(1);
+                    (
+                        number.saturating_add(100),
+                        pharmakos_sim::tables::foreign_beacon_name(number),
+                    )
+                })
+                .collect()
+        };
+        if let Some(seat) = written.state.seats.first_mut() {
+            seat.handles = table(most);
+        }
+        assert_eq!(
+            Save::parse(&written.render()).expect("at the bound").state,
+            written.state
+        );
+        if let Some(seat) = written.state.seats.first_mut() {
+            seat.handles = table(most.saturating_add(1));
+        }
+        let error = Save::parse(&written.render()).expect_err("past the bound");
+        assert_eq!(error.code, Code::InvalidArgument);
+        assert!(error.message.contains("handles"), "{}", error.message);
+    }
+
+    /// The Ledger's memos are the person's seat's in a Probation match: a save
+    /// holding one on another seat, or in a `custom` match, is refused.
+    #[test]
+    fn memos_off_the_persons_seat_or_in_a_custom_save_are_refused() {
+        let hash = 0x0123_4567_89ab_cdef;
+        let mut elsewhere = save();
+        if let Some(seat) = elsewhere.state.seats.get_mut(1) {
+            seat.memos = vec![Memo::DarkStake];
+        }
+        let error = elsewhere
+            .check(&config(), hash)
+            .expect_err("seat 1 is no one's");
+        assert_eq!(error.code, Code::InvalidArgument);
+        assert!(error.message.contains("seat 1"), "{}", error.message);
+
+        let mut custom = save();
+        custom.config.preset = Preset::Custom;
+        let asked = Config {
+            preset: Preset::Custom,
+            ..config()
+        };
+        let error = custom
+            .check(&asked, hash)
+            .expect_err("a custom match issues none");
+        assert_eq!(error.code, Code::InvalidArgument);
+        assert!(error.message.contains("custom"), "{}", error.message);
+
+        let mut quiet = save();
+        quiet.config.preset = Preset::Custom;
+        for seat in &mut quiet.state.seats {
+            seat.memos.clear();
+        }
+        assert!(
+            quiet.check(&asked, hash).is_ok(),
+            "a custom save with no memos"
+        );
+    }
+
     #[test]
     fn a_damaged_handle_table_or_memo_list_is_refused() {
         let text = save().render();

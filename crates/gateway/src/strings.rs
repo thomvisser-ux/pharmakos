@@ -105,7 +105,7 @@ pub fn event_text(event: &Event) -> String {
         ),
         EventKind::StepFailed => step_failed(event.value),
         EventKind::RuleFired => format!("Rule {} fired.", ordinal(event.value)),
-        EventKind::RuleEnded => format!("A rule's body ended with resume code {}.", event.value),
+        EventKind::RuleEnded => rule_ended(event.value),
         EventKind::ReflexFired => format!(
             "The commander's reflex fired at {} % hit points and it is withdrawing.",
             event.value
@@ -118,7 +118,8 @@ pub fn event_text(event: &Event) -> String {
             "The commander began a visit of {} interface rows.",
             event.value
         ),
-        EventKind::RowCommitted => format!("Interface row {} committed.", event.value),
+        // Numbered from 1, as a visit's rows are in the playbook's prose.
+        EventKind::RowCommitted => format!("Interface row {} committed.", ordinal(event.value)),
         EventKind::VisitEnded => format!("The visit ended with {} rows committed.", event.value),
         EventKind::BeaconPlaced => format!("A beacon of {seat} was deployed."),
         // T14's economy lines. Every figure a line carries is named in words
@@ -469,6 +470,27 @@ fn fallback_engaged(seat: &str, value: i64) -> String {
     }
 }
 
+/// `rule_ended`'s line: what the route does now the rule's body has run, in
+/// the words of the playbook's `resume` options, never the resume's wire code
+/// (item 139 (2) E's sweep). The ids are the sim's
+/// `pharmakos_sim::interpreter::Resume::id`: 1 continue, 2 skip the step, 3
+/// jump forward, 4 end the route.
+fn rule_ended(value: i64) -> String {
+    let next = match value {
+        1 => "the route carries on with the step it was on",
+        2 => "the route skips the step it was on",
+        3 => "the route jumps forward to the step the rule names",
+        4 => "the route ends and the fallback takes over",
+        other => {
+            return format!(
+                "A rule's body ended, and the route goes on in a way this build does not name \
+                 (code {other})."
+            );
+        }
+    };
+    format!("A rule's body ended: {next}.")
+}
+
 /// What the commander does under a `fallback_engaged` value's posture, in the
 /// words the playbook's prose uses, or `None` for an id this build does not
 /// define. The ids are the sim's `pharmakos_sim::interpreter::Posture::id`: 1
@@ -484,21 +506,24 @@ const fn posture_words(id: u8) -> Option<&'static str> {
 }
 
 /// The line a seat's own feed carries when the gateway filed its playbook for
-/// it because the Lull ran out with nothing sealed (spec section 14). Decision
-/// 8 of S1's plan, ruled by item 128, and the demo's F5: a timeout's filing
-/// used to read like the player's own seal.
-pub const SAFE_PLAYBOOK_FILED: &str = "The Lull ran out, so the safe playbook was filed for you.";
+/// it because the Lull ended with nothing sealed (spec section 14). Decision 8
+/// of S1's plan, ruled by item 128, and the demo's F5: a timeout's filing used
+/// to read like the player's own seal.
+///
+/// Worded for either end the gateway cannot tell apart: the client's
+/// countdown running out and the lobby's `end_lull`. The shipped rig calls
+/// `end_lull` when its countdown is spent without reporting the countdown at
+/// 0 first, so the gateway's last report is a few milliseconds left either
+/// way (decisions-log item 143 (4)). S3's `ed3b` makes the rig send that last
+/// report at 0 and gives "the Lull ran out" its own line again.
+pub const SAFE_PLAYBOOK_FILED: &str =
+    "The Lull ended before you sealed, so the safe playbook was filed for you.";
 
 /// The same line when the Lull ended because every seat said Ready, this seat
 /// with nothing sealed (decisions-log item 143 (4): the line said "The Lull
 /// ran out" even when Ready ended it).
 pub const SAFE_PLAYBOOK_FILED_ON_READY: &str =
     "You said Ready with nothing sealed, so the safe playbook was filed for you.";
-
-/// The same line when the lobby ended the Lull (`end_lull`) before this seat
-/// sealed or said Ready.
-pub const SAFE_PLAYBOOK_FILED_ON_END: &str =
-    "The Lull was ended before you sealed, so the safe playbook was filed for you.";
 
 // PLACEHOLDER: the memo's wording — owner, at S3's demo
 // The Ledger's memos, in its deadpan voice, one or two sentences and one thing
@@ -1248,6 +1273,23 @@ mod tests {
             event_text(&event(EventKind::RuleFired, Some(0), 0)),
             "Rule 1 fired."
         );
+        assert_eq!(
+            event_text(&event(EventKind::RowCommitted, Some(0), 0)),
+            "Interface row 1 committed."
+        );
+        // The rule's resume in the playbook's words, never its code.
+        for (id, words) in [
+            (1, "the route carries on with the step it was on"),
+            (2, "the route skips the step it was on"),
+            (3, "the route jumps forward to the step the rule names"),
+            (4, "the route ends and the fallback takes over"),
+        ] {
+            assert_eq!(
+                event_text(&event(EventKind::RuleEnded, Some(0), id)),
+                format!("A rule's body ended: {words}.")
+            );
+        }
+        assert!(event_text(&event(EventKind::RuleEnded, Some(0), 9)).contains("code 9"));
         assert_eq!(
             event_text(&event(EventKind::StepStarted, Some(0), i64::MAX)),
             format!("Step at index {}, counted from 0, started.", i64::MAX),

@@ -21,7 +21,7 @@
 
 mod support;
 
-use pharmakos_gateway::advice::{Advice, Suggestion};
+use pharmakos_gateway::advice::{Advice, StartHere, Suggestion};
 use pharmakos_gateway::fog::FogPolicy;
 use pharmakos_gateway::host::{Host, Settings};
 use pharmakos_gateway::probation::{Memo, Preset};
@@ -37,7 +37,7 @@ use pharmakos_sim::world::WorldConfig;
 
 use support::{
     SEED, admin_token, array_of, call, code, library_folder, quote, result, rules, rules_json,
-    seat_token, text_of, workspace_root,
+    seat_token, spectator_token, text_of, walk_east, workspace_root,
 };
 
 /// Both seats of a two-seat match.
@@ -309,7 +309,13 @@ fn the_lobbys_line_is_one_this_gateway_reads() {
     );
     let read = ConfigLine::parse(&line).expect("the lobby's line");
     assert!(!read.resume);
-    assert_eq!(read.config.seed, 20, "Probation's seed (decision 13)");
+    let seed = constant("MATCH_SEED");
+    let digits = seed.strip_prefix("0x").expect("a `0x` seed");
+    assert_eq!(
+        read.config.seed,
+        u64::from_str_radix(digits, 16).expect("hex"),
+        "the lobby's MATCH_SEED, Probation's (decision 13)"
+    );
     assert_eq!(read.config.human_seat, Some(0));
     assert_eq!(read.config.preset.name(), constant("PRESET"));
     let resumed = format!("{}\tresume\n", line.trim_end());
@@ -437,13 +443,12 @@ fn a_memo_fires_once_survives_a_resume_and_never_in_a_custom_match() {
             vec![String::from(Memo::FirstDeath.name())],
             "the memo the match issued is still the seat's"
         );
-
         // What a resume put back is the store a memo is checked against
-        // before it is issued (`Surface::issue_memo`; the unit test
+        // before it is issued (`Surface::issue_memo`); the unit test
         // `a_memo_is_the_human_seats_once_and_never_a_recycles` pins that a
-        // held memo is never issued again), and a resumed match issues none
-        // of its own on opening its Lull.
-        assert!(memos_on_the_feed(&mut resumed, 1).is_empty());
+        // held memo is never issued again. A resumed Lull's feed is a fresh
+        // segment's, so asserting it holds no memo could not fail, and is
+        // not asserted.
     }
 }
 
@@ -563,8 +568,9 @@ fn resume(
 // E25: the guided pick
 // ---------------------------------------------------------------------------
 
-/// The advice filed for the human seat, starting at `start`, with a
-/// suggestion for each of `templates` whose `why` names it.
+/// The advice filed for the human seat, starting at `start` with its own
+/// sentence, and a suggestion for each of `templates` whose `why` is the
+/// operator's bookkeeping.
 fn advice(start: Option<&str>, templates: &[&str]) -> Advice {
     Advice {
         safe_playbook_jsonc: String::new(),
@@ -573,10 +579,13 @@ fn advice(start: Option<&str>, templates: &[&str]) -> Advice {
             .map(|template| Suggestion {
                 template_id: (*template).to_owned(),
                 parameters: Vec::new(),
-                why: format!("Start with {template}: it is the advisor's pick."),
+                why: format!("Bookkeeping for {template}."),
             })
             .collect(),
-        start_here: start.map(str::to_owned),
+        start_here: start.map(|template| StartHere {
+            template_id: template.to_owned(),
+            why: format!("Start with {template}: it is the advisor's pick."),
+        }),
     }
 }
 
@@ -640,8 +649,16 @@ fn the_first_lull_marks_the_advisors_start_with_its_reason() {
         "seat 1 is not the person's, and is told nothing of seat 0's advice"
     );
 
+    // An advice whose start has no reason marks nothing.
+    let mut silent = advice(Some("hold_and_build"), &["hold_and_build"]);
+    if let Some(start) = silent.start_here.as_mut() {
+        start.why = String::from("  ");
+    }
+    surface.file_advice(SeatId::new(0), silent).expect("filed");
+    assert!(listed(&mut surface, 0).iter().all(|entry| !entry.1));
+
     // An advice that starts at a template it gave no suggestion for marks
-    // nothing: there is no reason to show.
+    // nothing: it would not instantiate as suggested.
     surface
         .file_advice(
             SeatId::new(0),
@@ -705,6 +722,18 @@ fn a_seats_map_summary_carries_no_seed() {
         "get_map_summary",
     );
     assert_eq!(text_of(&summary, "match_seed"), "0x00000000ca5caded");
+    for nofog in [false, true] {
+        let spectator = spectator_token(&mut surface, nofog);
+        let summary = result(
+            &call(&mut surface, &spectator, "get_map_summary", "{}"),
+            "get_map_summary",
+        );
+        assert_eq!(
+            text_of(&summary, "match_seed"),
+            "0x00000000ca5caded",
+            "a spectator keeps the seed (nofog {nofog})"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -712,8 +741,11 @@ fn a_seats_map_summary_carries_no_seed() {
 // ---------------------------------------------------------------------------
 
 /// The line a seat's feed carries when the gateway filed its safe playbook
-/// says what ended the Lull: the seat's own Ready with nothing sealed, the
-/// Lull's countdown running out, or the lobby ending it.
+/// says what ended the Lull where the gateway can tell: the seat's own Ready
+/// with nothing sealed has its line, and every other end -- the countdown
+/// spent, which the shipped rig ends with a last report of a few
+/// milliseconds and never 0, or the lobby's `end_lull` -- reads "the Lull
+/// ended". `ed3b` makes the rig report its 0 and restores "ran out".
 #[test]
 fn the_filing_line_says_what_ended_the_lull() {
     let filing = |surface: &mut Surface, seat: u8| -> String {
@@ -738,24 +770,148 @@ fn the_filing_line_says_what_ended_the_lull() {
     );
     assert_eq!(
         filing(&mut surface, 1),
-        "The Lull was ended before you sealed, so the safe playbook was filed for you."
+        "The Lull ended before you sealed, so the safe playbook was filed for you."
     );
 
-    // The countdown ran out: the host last reported 0 left.
-    let mut surface = hosted_under("m-ran-out", Preset::Custom, Some(0), 1_000, 1);
-    let admin = admin_token(&mut surface);
-    answered(
-        &call(
-            &mut surface,
-            &admin,
+    // The countdown spent, as the shipped rig ends a Lull: its last report a
+    // few milliseconds left, then `end_lull`.
+    for left in [1, 120, 250] {
+        let mut surface = hosted_under("m-ran-out", Preset::Custom, Some(0), 1_000, 1);
+        let admin = admin_token(&mut surface);
+        answered(
+            &call(
+                &mut surface,
+                &admin,
+                "report_host_clock",
+                &format!("{{\"elapsed_ms\":1000,\"remaining_ms\":{left}}}"),
+            ),
             "report_host_clock",
-            "{\"elapsed_ms\":1000,\"remaining_ms\":0}",
-        ),
-        "report_host_clock",
-    );
+        );
+        answered(&call(&mut surface, &admin, "end_lull", "{}"), "end_lull");
+        let line = filing(&mut surface, 0);
+        assert_eq!(
+            line, "The Lull ended before you sealed, so the safe playbook was filed for you.",
+            "{left} ms left"
+        );
+        assert!(!line.contains("Ready"), "{line}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// E7 at the host's own door
+// ---------------------------------------------------------------------------
+
+/// The host-side countdown (`Surface::set_phase_remaining_ms`, the headless
+/// hosts') is refused in a Probation match as `report_host_clock`'s is, so E7
+/// does not rest on which hosts set a preset; a custom match takes it.
+#[test]
+fn a_host_side_countdown_is_refused_in_a_probation_match() {
+    let mut probation = hosted_under("m-host-clock", Preset::Probation, Some(0), 1_000, 1);
+    let error = probation
+        .set_phase_remaining_ms(pharmakos_sim::math::quantity::Ms::new(60_000))
+        .expect_err("untimed by preset");
+    assert_eq!(error.name(), "INVALID_ARGUMENT");
+    assert!(error.message.contains("probation"), "{}", error.message);
+    assert!(probation.time().untimed, "nothing of it was kept");
+    let mut custom = hosted_under("m-host-clock-c", Preset::Custom, Some(0), 1_000, 1);
+    custom
+        .set_phase_remaining_ms(pharmakos_sim::math::quantity::Ms::new(60_000))
+        .expect("a custom match takes a countdown");
+    assert!(!custom.time().untimed);
+}
+
+// ---------------------------------------------------------------------------
+// Item 155 (3) 5 and 7, hosted
+// ---------------------------------------------------------------------------
+
+/// Item 155 (3) 5: one fallback taking over is one `fallback_engaged` line in
+/// the seat's feed, read in small pages between ticks as the client reads it,
+/// with the seat named. The demo's two identical lines were the feed's cursor
+/// re-delivering a row as sight moved between reads, which this PR's
+/// witness stamp ends ([`pharmakos_gateway::feed::Witnesses`]).
+#[test]
+fn one_fallback_is_one_line_in_the_feed() {
+    let mut surface = hosted_under("m-fallback", Preset::Custom, Some(0), 3_000, 1);
+    let admin = admin_token(&mut surface);
+    let mut elapsed = 0_i32;
+    let route = walk_east(&surface, 0, 2, 0);
+    submit(&mut surface, &admin, &mut elapsed, 0, &route);
     assert!(surface.begin_push().expect("the Push begins"));
-    assert_eq!(
-        filing(&mut surface, 0),
-        "The Lull ran out, so the safe playbook was filed for you."
+    let token = seat_token(&mut surface, 0);
+    let mut cursor = String::new();
+    let mut lines: Vec<String> = Vec::new();
+    loop {
+        let more = surface.step().expect("a tick");
+        let page = result(
+            &call(
+                &mut surface,
+                &token,
+                "get_segment_feed",
+                &format!("{{\"cursor\":{},\"limit\":2}}", quote(&cursor)),
+            ),
+            "get_segment_feed",
+        );
+        for event in array_of(&page, "events") {
+            if text_of(&event, "kind") == "fallback_engaged" {
+                lines.push(text_of(&event, "text"));
+            }
+        }
+        cursor = text_of(&page, "next_cursor");
+        if more.is_none_or(|report| report.segment_ended) {
+            break;
+        }
+    }
+    // Read what is left of the segment.
+    loop {
+        let page = result(
+            &call(
+                &mut surface,
+                &token,
+                "get_segment_feed",
+                &format!("{{\"cursor\":{},\"limit\":2}}", quote(&cursor)),
+            ),
+            "get_segment_feed",
+        );
+        let events = array_of(&page, "events");
+        if events.is_empty() {
+            break;
+        }
+        for event in events {
+            if text_of(&event, "kind") == "fallback_engaged" {
+                lines.push(text_of(&event, "text"));
+            }
+        }
+        cursor = text_of(&page, "next_cursor");
+    }
+    assert_eq!(lines.len(), 1, "one fallback, one line: {lines:?}");
+    assert!(
+        lines
+            .first()
+            .is_some_and(|line| line.starts_with("The route of seat 0 ended")),
+        "{lines:?}"
+    );
+}
+
+/// Item 155 (3) 7: at the match's end the recap's tally reads "In this match",
+/// and between rounds "This match so far".
+#[test]
+fn the_tally_at_the_matchs_end_reads_in_this_match() {
+    let mut surface = hosted_under("m-tally", Preset::Custom, Some(0), 1_000, 2);
+    play_push(&mut surface);
+    let token = seat_token(&mut surface, 0);
+    let between = text_of(
+        &result(&call(&mut surface, &token, "get_recap", "{}"), "get_recap"),
+        "prose",
+    );
+    assert!(between.contains("This match so far"), "{between}");
+    next_lull(&mut surface);
+    play_push(&mut surface);
+    let ended = text_of(
+        &result(&call(&mut surface, &token, "get_recap", "{}"), "get_recap"),
+        "prose",
+    );
+    assert!(
+        ended.contains("In this match") && !ended.contains("so far"),
+        "{ended}"
     );
 }

@@ -143,9 +143,9 @@ pub mod watch;
 use crate::advice::Advice;
 use crate::audit::{AuditLog, Outcome};
 use crate::error::Error;
-use crate::feed::{Event, Kind, SegmentFeed, SnapshotId};
+use crate::feed::{Event, Kind, SegmentFeed, SnapshotId, Witnesses};
 use crate::fog::{Audience, FogPolicy, Viewer, Vision};
-use crate::host::{Host, LiveVision};
+use crate::host::{Host, LiveVision, WorldSight};
 use crate::limit::{Limits, RateLimiter};
 use crate::probation::{Memo, Preset};
 use crate::rpc::{self, Request};
@@ -931,6 +931,23 @@ impl Surface {
                 slot.sealed = sealed;
                 slot.memos.clone_from(&held.memos);
             }
+            // A seat names only other seats' beacons by `e_NN`: a table that
+            // names one of its own is not one this gateway wrote.
+            let world = self.host()?.world();
+            let beacons = world.beacons();
+            let own = held.handles.iter().find(|(id, _)| {
+                (0..beacons.ids().len()).any(|row| {
+                    beacons.ids().get(row) == Some(id)
+                        && beacons.seats().get(row) == Some(&held.seat)
+                })
+            });
+            if let Some((id, name)) = own {
+                return Err(Error::invalid(format!(
+                    "seat {}'s handle table in this save names its own beacon {id} as {name}: \
+                     the file is damaged",
+                    held.seat
+                )));
+            }
             // The seat's `e_NN` names, as they were minted, before this
             // Lull's own minting names only what is new (S3's plan, E1).
             self.views
@@ -1263,9 +1280,25 @@ impl Surface {
     /// reaches this crate as a call. During a Push the number is **not** this
     /// one: game time decides, and [`Surface::sync_time`] computes it from the
     /// segment's own ticks.
-    pub fn set_phase_remaining_ms(&mut self, remaining: Ms) {
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::InvalidArgument`] in a Probation match, whose
+    /// Lulls are untimed (S3's plan, E7): a countdown is refused whichever
+    /// door it arrives by, this host-side one as `report_host_clock`, so the
+    /// rule does not rest on which hosts set a preset.
+    pub fn set_phase_remaining_ms(&mut self, remaining: Ms) -> Result<(), Error> {
+        if self.preset.untimed_lulls() {
+            return Err(Error::invalid(format!(
+                "this is a `{}` match, whose Lulls are untimed: no countdown is set on one, and \
+                 this sets {} ms",
+                self.preset.name(),
+                remaining.raw()
+            )));
+        }
         self.lull_remaining_ms = Some(remaining);
         self.sync_time();
+        Ok(())
     }
 
     /// The host's own clock for the phase the match is in, as
@@ -1554,11 +1587,12 @@ impl Surface {
     /// gateway's act (spec section 14) and the sim never knows who wrote a
     /// plan; private, because whether a seat planned is its own business.
     ///
-    /// The line says what ended the Lull (decisions-log item 143 (4)): the
-    /// seat's own Ready with nothing sealed; the Lull's countdown, when the
-    /// host last reported it at 0; or otherwise the lobby's `end_lull`.
+    /// The line says what ended the Lull where the gateway can tell
+    /// (decisions-log item 143 (4)): the seat's own Ready with nothing sealed
+    /// has a line of its own, and every other end -- the countdown spent or the
+    /// lobby's `end_lull`, which the shipped rig's reports do not tell apart --
+    /// reads "the Lull ended" ([`crate::strings::SAFE_PLAYBOOK_FILED`]).
     fn announce_filings(&mut self, round: u32) -> Result<(), Error> {
-        let ran_out = self.lull_remaining_ms == Some(Ms::ZERO);
         let filed: Vec<(SeatId, &'static str)> = self
             .seats
             .iter()
@@ -1570,10 +1604,8 @@ impl Surface {
             .map(|slot| {
                 let line = if slot.ready {
                     crate::strings::SAFE_PLAYBOOK_FILED_ON_READY
-                } else if ran_out {
-                    crate::strings::SAFE_PLAYBOOK_FILED
                 } else {
-                    crate::strings::SAFE_PLAYBOOK_FILED_ON_END
+                    crate::strings::SAFE_PLAYBOOK_FILED
                 };
                 (slot.seat, line)
             })
@@ -1587,8 +1619,7 @@ impl Surface {
                     audience: Audience::Private(seat),
                     memo: None,
                 },
-                &crate::fog::Blind,
-                &[],
+                Witnesses::NONE,
             )?;
         }
         Ok(())
@@ -2031,27 +2062,42 @@ impl Surface {
             return Ok(());
         };
         let drained = host.drain_events();
-        // The sight the batch's world events are witnessed by: the world as
-        // the tick that emitted them left it (one tick a batch, `after_tick`),
-        // read once, and only when a world event of the batch needs it
-        // ([`crate::feed::Witnesses`]).
-        let sight = if drained
-            .iter()
-            .any(|event| matches!(Self::audience_of(event), Ok(Audience::World { .. })))
-        {
-            LiveVision::of(host.world())
-        } else {
-            LiveVision::default()
-        };
-        let anchor = self.feed_anchor;
         let ended = drained
             .iter()
             .any(|event| event.kind == pharmakos_sim::events::EventKind::SegmentEnded);
+        if drained.is_empty() {
+            // The tick path's common case: nothing to stamp or publish, and
+            // nothing allocated (`after_tick`'s promise).
+            return self.count_drops(ended);
+        }
+        // Who witnessed each world event: the world's sensors as the tick that
+        // emitted the batch left them (one tick a batch, `after_tick`), read
+        // where they stand rather than copied ([`WorldSight`],
+        // [`crate::feed::Witnesses`]). Private lines and announcements need no
+        // sight.
+        let sight = WorldSight::of(host.world());
+        let mut witnesses: Vec<Witnesses> = Vec::with_capacity(drained.len());
+        for event in &drained {
+            let stamp = match Self::audience_of(event) {
+                Ok(audience @ Audience::World { .. }) => {
+                    Witnesses::of(&sight, self.seats.iter().map(|slot| slot.seat), &audience)?
+                }
+                _ => Witnesses::NONE,
+            };
+            witnesses.push(stamp);
+        }
+        let anchor = self.feed_anchor;
         self.count_drops(ended)?;
-        let seats: Vec<SeatId> = self.seats.iter().map(|slot| slot.seat).collect();
         let refreshed = refreshes_by_seat(&drained);
         let mut refresh_said: Vec<SeatId> = Vec::new();
-        for event in drained {
+        // A dark Stake's memo promises drones re-homing; a seat this batch
+        // eliminates has none to re-home (decision 4's reading).
+        let eliminated: Vec<SeatId> = drained
+            .iter()
+            .filter(|event| event.kind == pharmakos_sim::events::EventKind::SeatEliminated)
+            .filter_map(|event| event.seat)
+            .collect();
+        for (event, stamp) in drained.into_iter().zip(witnesses) {
             self.note_for_the_recap(&event)?;
             let kind = Kind::new(event.kind.name()).map_err(|error| {
                 Error::internal(format!(
@@ -2088,10 +2134,9 @@ impl Surface {
                     audience,
                     memo: None,
                 },
-                &sight,
-                &seats,
+                stamp,
             )?;
-            self.issue_memo(&event, at_ms)?;
+            self.issue_memo(&event, at_ms, &eliminated)?;
         }
         Ok(())
     }
@@ -2100,13 +2145,20 @@ impl Surface {
     /// Probation match, onto that seat's own feed, right after its trigger
     /// (S3's plan, E5; decision 4). Once a match: a memo the seat holds is
     /// never issued again, the ones a save restored included. Nothing in a
-    /// `custom` match, or in a match no person plays.
+    /// `custom` match, or in a match no person plays. No dark Stake for a seat
+    /// `eliminated` in the same batch: the memo promises its drones re-home,
+    /// and an eliminated seat's disband (decision 4's reading).
     ///
     /// # Errors
     ///
     /// As [`SegmentFeed::publish`], and [`crate::error::Code::Internal`] when
     /// the human seat is not one of the match's.
-    fn issue_memo(&mut self, event: &pharmakos_sim::events::Event, at_ms: Ms) -> Result<(), Error> {
+    fn issue_memo(
+        &mut self,
+        event: &pharmakos_sim::events::Event,
+        at_ms: Ms,
+        eliminated: &[SeatId],
+    ) -> Result<(), Error> {
         if self.preset != Preset::Probation {
             return Ok(());
         }
@@ -2126,9 +2178,10 @@ impl Surface {
             return Ok(());
         };
         if memo == Memo::DarkStake
-            && event
-                .subject
-                .is_some_and(|subject| self.recycled.contains(&subject))
+            && (eliminated.contains(&seat)
+                || event
+                    .subject
+                    .is_some_and(|subject| self.recycled.contains(&subject)))
         {
             return Ok(());
         }
@@ -2154,8 +2207,7 @@ impl Surface {
                 audience: Audience::Private(seat),
                 memo: Some(memo),
             },
-            &crate::fog::Blind,
-            &[],
+            Witnesses::NONE,
         )
     }
 
@@ -2605,8 +2657,13 @@ impl Surface {
         // fault, dropped and audited like a suggestion that would not
         // instantiate, never marked without a reason.
         let start_here = match start_here {
-            Some(template) if kept.iter().any(|kept| kept.template_id == template) => {
-                Some(template)
+            Some(start)
+                if !start.why.trim().is_empty()
+                    && kept
+                        .iter()
+                        .any(|kept| kept.template_id == start.template_id) =>
+            {
+                Some(start)
             }
             Some(_) => {
                 self.audit.refused(
@@ -2615,7 +2672,8 @@ impl Surface {
                     None,
                     "file advice start",
                     &Error::invalid(
-                        "the template to start with is not one this advice suggests, so it has no reason to give",
+                        "the template to start with is not one this advice suggests, or it gives \
+                         no reason",
                     ),
                 );
                 None
@@ -2908,8 +2966,12 @@ impl Surface {
             .host
             .as_ref()
             .map_or_else(LiveVision::default, |host| LiveVision::of(host.world()));
-        let seats: Vec<SeatId> = self.seats.iter().map(|slot| slot.seat).collect();
-        self.feed.publish(event, &sight, &seats)
+        let witnesses = Witnesses::of(
+            &sight,
+            self.seats.iter().map(|slot| slot.seat),
+            &event.audience,
+        )?;
+        self.feed.publish(event, witnesses)
     }
 
     /// The segment's feed, unfiltered. For the host and the watch rig, never for
@@ -4454,7 +4516,9 @@ mod tests {
         )
         .expect("a match");
         surface.attach(host).expect("attached");
-        surface.set_phase_remaining_ms(Ms::new(300_000));
+        surface
+            .set_phase_remaining_ms(Ms::new(300_000))
+            .expect("a custom match takes a countdown");
         surface.open_lull().expect("the opening Lull");
         surface
     }
@@ -4581,7 +4645,9 @@ mod tests {
             .expect("hosted")
             .resume(&bytes)
             .expect("the remembering snapshot resumes");
-        surface.set_phase_remaining_ms(Ms::new(300_000));
+        surface
+            .set_phase_remaining_ms(Ms::new(300_000))
+            .expect("a custom match takes a countdown");
         surface.open_lull().expect("round 2's Lull");
         let voxel = |at: [pharmakos_sim::math::fixed::Fx; 3]| {
             let voxel = crate::view::voxel_of(at);
@@ -4823,7 +4889,9 @@ mod tests {
             .expect("hosted")
             .resume(&bytes)
             .expect("the edited snapshot resumes");
-        surface.set_phase_remaining_ms(Ms::new(300_000));
+        surface
+            .set_phase_remaining_ms(Ms::new(300_000))
+            .expect("a custom match takes a countdown");
         surface.open_lull().expect("the Lull");
         surface
     }
@@ -5318,7 +5386,9 @@ mod tests {
             .expect("hosted")
             .resume(&bytes)
             .expect("it resumes");
-        again.set_phase_remaining_ms(Ms::new(300_000));
+        again
+            .set_phase_remaining_ms(Ms::new(300_000))
+            .expect("a custom match takes a countdown");
         again.open_lull().expect("the Lull");
         let token = seat_token(&mut again, 0);
         let relisted = result(&again.call(Some(&token), &request("list_beacons", "{}"), &Blind));
@@ -5808,7 +5878,9 @@ mod tests {
         })
         .expect("the layout places an outpost");
         surface.attach(host).expect("attached");
-        surface.set_phase_remaining_ms(Ms::new(300_000));
+        surface
+            .set_phase_remaining_ms(Ms::new(300_000))
+            .expect("a custom match takes a countdown");
         surface.open_lull().expect("the opening Lull");
         surface
     }
@@ -5985,7 +6057,7 @@ mod tests {
             of(EventKind::BeaconBrownedOut, 0, None),
         ] {
             probation
-                .issue_memo(&event, Ms::new(1_000))
+                .issue_memo(&event, Ms::new(1_000), &[])
                 .expect("issued or not");
         }
         let seat_0 = crate::fog::Audience::Private(SeatId::new(0));
@@ -6008,6 +6080,7 @@ mod tests {
             .issue_memo(
                 &of(EventKind::BeaconDestroyed, 0, Some(lost)),
                 Ms::new(2_000),
+                &[],
             )
             .expect("issued");
         assert_eq!(
@@ -6025,7 +6098,7 @@ mod tests {
             EventKind::BeaconBrownedOut,
         ] {
             probation
-                .issue_memo(&of(kind, 0, Some(lost)), Ms::new(2_000))
+                .issue_memo(&of(kind, 0, Some(lost)), Ms::new(2_000), &[])
                 .expect("nothing to issue");
         }
         assert!(
@@ -6033,9 +6106,24 @@ mod tests {
             "once a match, not once a segment"
         );
 
+        // A seat the same batch eliminates gets no dark Stake: its drones
+        // disband rather than re-home.
+        let mut ended = surface().with_preset(Preset::Probation, Some(SeatId::new(0)));
+        ended
+            .issue_memo(
+                &of(EventKind::BeaconDestroyed, 0, Some(lost)),
+                Ms::new(1_000),
+                &[SeatId::new(0)],
+            )
+            .expect("nothing to issue");
+        assert!(
+            memos(&ended).is_empty(),
+            "no dark Stake for an eliminated seat"
+        );
+
         let mut custom = surface().with_preset(Preset::Custom, Some(SeatId::new(0)));
         custom
-            .issue_memo(&of(EventKind::CommanderDied, 0, None), Ms::new(1_000))
+            .issue_memo(&of(EventKind::CommanderDied, 0, None), Ms::new(1_000), &[])
             .expect("nothing to issue");
         assert!(memos(&custom).is_empty(), "a custom match issues no memo");
     }

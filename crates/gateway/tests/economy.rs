@@ -86,7 +86,9 @@ fn short_of_power(round_limit: u32) -> Surface {
     )
     .expect("a match");
     surface.attach(host).expect("attached");
-    surface.set_phase_remaining_ms(Ms::new(FIRST_LULL_MS));
+    surface
+        .set_phase_remaining_ms(Ms::new(FIRST_LULL_MS))
+        .expect("a custom match takes a countdown");
     surface.open_lull().expect("the opening Lull");
     surface
 }
@@ -197,7 +199,9 @@ fn the_recap_names_the_seats_own_settlement_and_shortfall_and_nobody_elses() {
 
     // Round 2's Lull still reads round 1's recap.
     surface.end_recap().expect("the recap ends");
-    surface.set_phase_remaining_ms(surface.lull_length(2));
+    surface
+        .set_phase_remaining_ms(surface.lull_length(2))
+        .expect("a custom match takes a countdown");
     surface.open_lull().expect("round 2's Lull");
     let later = result(&call(&mut surface, &seat, "get_recap", "{}"), "get_recap");
     assert!(
@@ -625,7 +629,9 @@ fn the_band_and_the_next_bmi_are_the_sims_reads_and_a_push_that_spends_nothing_s
             "round {round}: the band moves the BMI, so the reads are under test"
         );
         surface.end_recap().expect("the recap ends");
-        surface.set_phase_remaining_ms(surface.lull_length(round + 1));
+        surface
+            .set_phase_remaining_ms(surface.lull_length(round + 1))
+            .expect("a custom match takes a countdown");
         surface.open_lull().expect("the next Lull");
     }
     // Round 1's leader drew the malus and round 2's ladder put it last: the

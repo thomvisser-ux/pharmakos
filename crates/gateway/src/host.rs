@@ -829,6 +829,50 @@ impl LiveVision {
     }
 }
 
+/// The world's own sensors as a [`Vision`], read where they stand and never
+/// copied: [`World::sensor_at`]'s walk, which allocates nothing. What the feed
+/// stamps a tick's world events with ([`crate::feed::Witnesses`]) on the tick
+/// path, where a [`LiveVision`] would build a sensor list every tick.
+#[derive(Clone, Copy, Debug)]
+pub struct WorldSight<'a> {
+    world: &'a World,
+}
+
+impl<'a> WorldSight<'a> {
+    /// `world`'s sensors as they stand.
+    #[must_use]
+    pub const fn of(world: &'a World) -> WorldSight<'a> {
+        WorldSight { world }
+    }
+}
+
+impl Vision for WorldSight<'_> {
+    fn sees(&self, seat: SeatId, at: &Voxel) -> bool {
+        // A coordinate outside the fixed-point range is off every map, and is
+        // seen by nobody, as the sim's own `Sight::sees` answers it.
+        let (Ok(x), Ok(y), Ok(z)) = (
+            i16::try_from(at.x),
+            i16::try_from(at.y),
+            i16::try_from(at.z),
+        ) else {
+            return false;
+        };
+        let point = [
+            pharmakos_sim::math::fixed::Fx::from_voxels(x),
+            pharmakos_sim::math::fixed::Fx::from_voxels(y),
+            pharmakos_sim::math::fixed::Fx::from_voxels(z),
+        ];
+        let mut cursor = 0_usize;
+        while let Some((sensor, next)) = self.world.sensor_at(cursor) {
+            if sensor.seat == seat && sensor.sees(&pharmakos_sim::sight::RadiusOnly, point) {
+                return true;
+            }
+            cursor = next;
+        }
+        false
+    }
+}
+
 impl Vision for LiveVision {
     fn sees(&self, seat: SeatId, at: &Voxel) -> bool {
         self.sight.sees(seat, [at.x, at.y, at.z])

@@ -55,7 +55,7 @@
 //! segment therefore see two different cursor sequences, and that is correct.
 
 use crate::error::Error;
-use crate::fog::{Audience, FogPolicy, Viewer, Vision};
+use crate::fog::{Audience, FogFilter, FogPolicy, Viewer, Vision};
 use pharmakos_sim::math::quantity::Ms;
 use pharmakos_sim::tables::SeatId;
 use std::collections::BTreeMap;
@@ -168,6 +168,10 @@ pub struct Event {
 pub struct Witnesses(u8);
 
 impl Witnesses {
+    /// Nobody: what a private line and an announcement carry, whose audience
+    /// alone decides who is shown them.
+    pub const NONE: Witnesses = Witnesses(0);
+
     /// The seats of `seats` that see where `audience` says the event
     /// happened, by `vision` as it stands. Only a world event is witnessed: a
     /// private line and an announcement are decided by their audience alone.
@@ -178,16 +182,16 @@ impl Witnesses {
     /// set holds.
     pub fn of<V: Vision>(
         vision: &V,
-        seats: &[SeatId],
+        seats: impl IntoIterator<Item = SeatId>,
         audience: &Audience,
     ) -> Result<Witnesses, Error> {
         let Audience::World { owner, at } = audience else {
-            return Ok(Witnesses(0));
+            return Ok(Witnesses::NONE);
         };
         let mut bits = 0_u8;
         for seat in seats {
-            if *owner != Some(*seat) && vision.sees(*seat, at) {
-                bits |= Witnesses::bit(*seat).ok_or_else(|| {
+            if *owner != Some(seat) && vision.sees(seat, at) {
+                bits |= Witnesses::bit(seat).ok_or_else(|| {
                     Error::internal(format!(
                         "seat {} is past the eight seats a feed's witness set holds",
                         seat.raw()
@@ -207,6 +211,18 @@ impl Witnesses {
     /// A seat's bit, or `None` past the eighth.
     fn bit(seat: SeatId) -> Option<u8> {
         1_u8.checked_shl(u32::from(seat.raw()))
+    }
+}
+
+/// The sight a witness set gives the fog filter: a seat sees an event exactly
+/// when it witnessed it as the event was published. What lets
+/// [`SegmentFeed::page`] ask [`FogFilter::visible`], the one table of who is
+/// shown what, rather than a second copy of it.
+struct Witnessed(Witnesses);
+
+impl Vision for Witnessed {
+    fn sees(&self, seat: SeatId, _at: &pharmakos_proto::gp::v1::Voxel) -> bool {
+        self.0.contains(seat)
     }
 }
 
@@ -673,22 +689,17 @@ impl SegmentFeed {
         self.events.is_empty()
     }
 
-    /// Put an event on the bus, witnessed by whichever of `seats` `vision` says
-    /// sees where it happened, as the vision stands now ([`Witnesses`]).
+    /// Put an event on the bus, witnessed by `witnesses`: the seats that saw
+    /// where it happened as it happened ([`Witnesses::of`]; [`Witnesses::NONE`]
+    /// for a private line or an announcement).
     ///
     /// # Errors
     ///
     /// [`crate::error::Code::InvalidArgument`] for a negative time, or for an
     /// event earlier than the one before it. Order is part of the feed's
     /// contract: cursors are indices, and an event inserted behind a cursor
-    /// would be one a client could never be told about. As [`Witnesses::of`]
-    /// for a seat it cannot hold.
-    pub fn publish<V: Vision>(
-        &mut self,
-        event: Event,
-        vision: &V,
-        seats: &[SeatId],
-    ) -> Result<(), Error> {
+    /// would be one a client could never be told about.
+    pub fn publish(&mut self, event: Event, witnesses: Witnesses) -> Result<(), Error> {
         if event.at_ms.raw() < 0 {
             return Err(Error::invalid(
                 "an event's time is game milliseconds since the segment began, never negative",
@@ -702,7 +713,6 @@ impl SegmentFeed {
                      delivered",
             ));
         }
-        let witnesses = Witnesses::of(vision, seats, &event.audience)?;
         self.events.push(event);
         self.witnesses.push(witnesses);
         Ok(())
@@ -793,9 +803,11 @@ impl SegmentFeed {
         // The bus place the cursor resumes at: just after the last event it
         // was shown, counted in the list it was issued in. Under one policy
         // that list is this one; across a lift it is the fogged one.
+        let fogged = FogPolicy::fogged();
+        let issued_under = if from.lifted() { policy } else { &fogged };
         let resume_at = match shown.checked_sub(1) {
             None => 0,
-            Some(last) => match self.listing(viewer, from.lifted()).nth(last) {
+            Some(last) => match self.listing(viewer, issued_under).nth(last) {
                 Some(place) => place.checked_add(1).ok_or_else(|| {
                     Error::internal("a bus place past `usize` cannot be resumed after")
                 })?,
@@ -805,7 +817,7 @@ impl SegmentFeed {
             },
         };
 
-        let visible: Vec<usize> = self.listing(viewer, lifted).collect();
+        let visible: Vec<usize> = self.listing(viewer, policy).collect();
         let before = visible
             .iter()
             .take_while(|place| **place < resume_at)
@@ -837,32 +849,23 @@ impl SegmentFeed {
         })
     }
 
-    /// The bus places `viewer` is shown, in order, with its fog lifted or not.
-    fn listing(&self, viewer: Viewer, lifted: bool) -> impl Iterator<Item = usize> + '_ {
+    /// The bus places `viewer` is shown under `policy`, in order: the fog
+    /// filter's own answer ([`FogFilter::visible`]), its sight the event's
+    /// witnesses ([`Witnessed`]), so the feed keeps no second table of who is
+    /// shown what.
+    fn listing<'a>(
+        &'a self,
+        viewer: Viewer,
+        policy: &'a FogPolicy,
+    ) -> impl Iterator<Item = usize> + 'a {
         self.events
             .iter()
             .zip(&self.witnesses)
             .enumerate()
             .filter(move |(_, (event, witnesses))| {
-                shown_to(viewer, lifted, &event.audience, **witnesses)
+                FogFilter::new(policy, &Witnessed(**witnesses)).visible(viewer, &event.audience)
             })
             .map(|(place, _)| place)
-    }
-}
-
-/// Whether `viewer` is shown an event of `audience`, witnessed by
-/// `witnesses`: [`crate::fog`]'s table, with a seat's sight read from the
-/// witnesses and its policy from `lifted`.
-fn shown_to(viewer: Viewer, lifted: bool, audience: &Audience, witnesses: Witnesses) -> bool {
-    match (viewer, audience) {
-        // Secrecy is absolute and has no policy that lifts it.
-        (Viewer::Seat(seat), Audience::Private(owner)) => seat == *owner,
-        (_, Audience::Public) => true,
-        (Viewer::Seat(seat), Audience::World { owner, .. }) => {
-            *owner == Some(seat) || lifted || witnesses.contains(seat)
-        }
-        (Viewer::Spectator { nofog }, Audience::World { .. }) => nofog,
-        (_, Audience::Private(_) | Audience::World { .. }) => false,
     }
 }
 
@@ -985,7 +988,15 @@ mod tests {
 
     /// Publish `event` with nobody's sight on it.
     fn put(feed: &mut SegmentFeed, event: Event) -> Result<(), crate::error::Error> {
-        feed.publish(event, &Blind, &SEATS)
+        let witnesses = super::Witnesses::of(&Blind, SEATS, &event.audience)?;
+        feed.publish(event, witnesses)
+    }
+
+    /// Publish `event` witnessed by every seat but its owner, or by nobody.
+    fn put_seen(feed: &mut SegmentFeed, event: Event, seen: bool) {
+        let witnesses =
+            super::Witnesses::of(&Sees(seen), SEATS, &event.audience).expect("two seats");
+        feed.publish(event, witnesses).expect("published");
     }
 
     fn world(seat: u8) -> Audience {
@@ -1453,8 +1464,7 @@ mod tests {
             (444_000, "own_7_24", 0),
             (450_000, "own_7_30", 0),
         ] {
-            feed.publish(event(at_ms, name, world(owner)), &Sees(seen(name)), &SEATS)
-                .expect("published");
+            put_seen(&mut feed, event(at_ms, name, world(owner)), seen(name));
         }
         feed
     }
@@ -1565,14 +1575,74 @@ mod tests {
         assert_eq!(error.code, Code::InvalidArgument);
     }
 
-    /// The test any fix must pass, from #166: over **every** sequence here --
-    /// each other seat's event witnessed or not, each read's page size, and the
-    /// fog lifting before any read or not at all -- the times a seat is given
-    /// never run backwards, no event is given twice, and every event of the
-    /// seat's own is given. Reads are interleaved with publishing, so sight
+    /// The sweep's oracle for one sequence: `given` is `(bus index, at_ms,
+    /// given after the lift)` for every event the seat was given, in order.
+    fn assert_the_fog_holds(
+        what: &str,
+        bus: &[(i32, u8)],
+        witnessed: &[bool],
+        given: &[(usize, i32, bool)],
+        lifted: bool,
+    ) {
+        assert!(
+            given.windows(2).all(|pair| match pair {
+                [a, b] => a.1 <= b.1,
+                _ => true,
+            }),
+            "{what}: time ran backwards: {given:?}"
+        );
+        let mut places: Vec<usize> = given.iter().map(|held| held.0).collect();
+        places.sort_unstable();
+        let count = places.len();
+        places.dedup();
+        assert_eq!(places.len(), count, "{what}: given twice: {given:?}");
+        let is_given = |index: usize| given.iter().any(|held| held.0 == index);
+        for (index, (_, owner)) in bus.iter().enumerate() {
+            let seen = witnessed.get(index).copied().unwrap_or(false);
+            if *owner == 0 || seen {
+                assert!(
+                    is_given(index),
+                    "{what}: e{index}, the seat's own or witnessed, was lost: \
+                     {given:?}"
+                );
+            }
+        }
+        // Before the lift, nothing unwitnessed of the other seat's.
+        for (index, _, after) in given {
+            let foreign = bus.get(*index).is_some_and(|(_, owner)| *owner == 1);
+            let seen = witnessed.get(*index).copied().unwrap_or(false);
+            assert!(
+                *after || !foreign || seen,
+                "{what}: e{index} was given under fog unwitnessed: {given:?}"
+            );
+        }
+        // After the lift, everything past the resume place.
+        if lifted {
+            let resumed_after = given.iter().filter(|held| !held.2).map(|held| held.0).max();
+            for index in 0..bus.len() {
+                if resumed_after.is_none_or(|last| index > last) {
+                    assert!(
+                        is_given(index),
+                        "{what}: e{index}, past the resume place, was not \
+                         given once the fog lifted: {given:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The test any fix must pass, from #166, with a fog oracle: over
+    /// **every** sequence here -- each other seat's event witnessed or not,
+    /// each read's page size, and the fog lifting (the match's end, or the
+    /// seat's elimination) before any read or not at all -- the times a seat is
+    /// given never run backwards, no event is given twice, and every event of
+    /// the seat's own is given. And the fog holds exactly: before the lift no
+    /// unwitnessed event of the other seat's is given, every witnessed one is,
+    /// and once the fog has lifted every event past the place the cursor
+    /// resumed at is given. Reads are interleaved with publishing, so sight
     /// changes between reads as it does in a Push.
     #[test]
-    fn over_every_sight_page_size_and_lift_the_feed_runs_forward_once_and_loses_nothing() {
+    fn over_every_sight_page_size_and_lift_the_feed_runs_forward_once_and_the_fog_holds() {
         // (at_ms, owner): seat 0's and seat 1's interleaved, two at one time.
         let bus: [(i32, u8); 7] = [
             (100, 0),
@@ -1588,84 +1658,72 @@ mod tests {
             .ok()
             .and_then(|count| 1_u32.checked_shl(count))
             .expect("a few events");
+        let lifts: [fn(&mut FogPolicy); 2] = [FogPolicy::end_match, |policy| {
+            policy.eliminate(SeatId::new(0));
+        }];
         let mut cases = 0_u32;
-        for mask in 0..masks {
-            for limit in [1_usize, 2, 3] {
-                for lift_at in 0..=bus.len() {
-                    let mut feed = SegmentFeed::new(snapshot());
-                    let mut policy = FogPolicy::fogged();
-                    let mut cursor: Option<String> = None;
-                    let mut given: Vec<(i32, String)> = Vec::new();
-                    let mut other = 0_u32;
-                    for (index, (at_ms, owner)) in bus.iter().enumerate() {
-                        let name = format!("e{index}");
-                        let witnessed = if *owner == 1 {
-                            let seen = mask.checked_shr(other).is_some_and(|bits| bits & 1 == 1);
-                            other = other.saturating_add(1);
-                            seen
-                        } else {
-                            false
+        for lift in lifts {
+            for mask in 0..masks {
+                for limit in [1_usize, 2, 3] {
+                    for lift_at in 0..=bus.len() {
+                        let mut feed = SegmentFeed::new(snapshot());
+                        let mut policy = FogPolicy::fogged();
+                        let mut cursor: Option<String> = None;
+                        // (bus index, at_ms, given after the lift)
+                        let mut given: Vec<(usize, i32, bool)> = Vec::new();
+                        let mut witnessed: Vec<bool> = Vec::new();
+                        let mut other = 0_u32;
+                        let mut lifted = false;
+                        let mut read = |feed: &SegmentFeed,
+                                        policy: &FogPolicy,
+                                        cursor: &mut Option<String>,
+                                        lifted: bool|
+                         -> usize {
+                            let page = feed
+                                .page(SEAT_0, policy, cursor.as_deref(), limit)
+                                .expect("a page");
+                            for event in &page.events {
+                                let index = event
+                                    .kind
+                                    .name()
+                                    .trim_start_matches('e')
+                                    .parse::<usize>()
+                                    .expect("named by its bus index");
+                                given.push((index, event.at_ms.raw(), lifted));
+                            }
+                            *cursor = Some(page.next_cursor.render());
+                            page.events.len()
                         };
-                        feed.publish(
-                            event(*at_ms, &name, world(*owner)),
-                            &Sees(witnessed),
-                            &SEATS,
-                        )
-                        .expect("published");
-                        if index == lift_at {
-                            policy.end_match();
-                        }
-                        let page = feed
-                            .page(SEAT_0, &policy, cursor.as_deref(), limit)
-                            .expect("a page");
-                        given.extend(
-                            page.events
-                                .iter()
-                                .map(|event| (event.at_ms.raw(), event.kind.name().to_owned())),
-                        );
-                        cursor = Some(page.next_cursor.render());
-                    }
-                    // Drain what is left.
-                    loop {
-                        let page = feed
-                            .page(SEAT_0, &policy, cursor.as_deref(), limit)
-                            .expect("a page");
-                        if page.events.is_empty() {
-                            break;
-                        }
-                        given.extend(
-                            page.events
-                                .iter()
-                                .map(|event| (event.at_ms.raw(), event.kind.name().to_owned())),
-                        );
-                        cursor = Some(page.next_cursor.render());
-                    }
-                    let what = format!("mask {mask:b}, limit {limit}, lift at {lift_at}");
-                    assert!(
-                        given.windows(2).all(|pair| match pair {
-                            [a, b] => a.0 <= b.0,
-                            _ => true,
-                        }),
-                        "{what}: time ran backwards: {given:?}"
-                    );
-                    let mut names: Vec<&String> = given.iter().map(|(_, name)| name).collect();
-                    names.sort();
-                    let before = names.len();
-                    names.dedup();
-                    assert_eq!(names.len(), before, "{what}: given twice: {given:?}");
-                    for (index, (_, owner)) in bus.iter().enumerate() {
-                        if *owner == 0 {
-                            let name = format!("e{index}");
-                            assert!(
-                                given.iter().any(|(_, held)| *held == name),
-                                "{what}: the seat's own {name} was lost: {given:?}"
+                        for (index, (at_ms, owner)) in bus.iter().enumerate() {
+                            let seen = *owner == 1
+                                && mask.checked_shr(other).is_some_and(|bits| bits & 1 == 1);
+                            if *owner == 1 {
+                                other = other.saturating_add(1);
+                            }
+                            witnessed.push(seen);
+                            put_seen(
+                                &mut feed,
+                                event(*at_ms, &format!("e{index}"), world(*owner)),
+                                seen,
                             );
+                            if index == lift_at {
+                                lift(&mut policy);
+                                lifted = true;
+                            }
+                            read(&feed, &policy, &mut cursor, lifted);
                         }
+                        while read(&feed, &policy, &mut cursor, lifted) > 0 {}
+
+                        let what = format!(
+                            "lift {}, mask {mask:b}, limit {limit}, lift at {lift_at}",
+                            if policy.ended() { "end" } else { "eliminate" }
+                        );
+                        assert_the_fog_holds(&what, &bus, &witnessed, &given, lift_at < bus.len());
+                        cases = cases.saturating_add(1);
                     }
-                    cases = cases.saturating_add(1);
                 }
             }
         }
-        assert_eq!(cases, 16 * 3 * 8, "every sequence was played");
+        assert_eq!(cases, 2 * 16 * 3 * 8, "every sequence was played");
     }
 }

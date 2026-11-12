@@ -130,7 +130,9 @@ pub fn attach(
         .ok_or_else(|| {
             Error::Rules("no `match` block, so nothing says how long a Lull is".to_owned())
         })?;
-    surface.set_phase_remaining_ms(Ms::new(lull));
+    surface
+        .set_phase_remaining_ms(Ms::new(lull))
+        .map_err(|error| Error::gateway("setting the Lull's countdown", &error))?;
     surface
         .open_lull()
         .map_err(|error| Error::gateway("opening the Lull", &error))?;

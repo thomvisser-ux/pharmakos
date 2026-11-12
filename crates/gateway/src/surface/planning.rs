@@ -202,7 +202,7 @@ impl Surface {
     }
 
     /// The guided first pick for `subject`'s template list: the template its
-    /// advisor said to start with and that suggestion's `why`, in a Probation
+    /// advisor said to start with and the advisor's sentence for it, in a Probation
     /// match's first Lull, for the human seat it was filed for (S3's plan,
     /// decision 5 and E25). `None` anywhere else: a `custom` match, a later
     /// round, outside a Lull, a caller that is not that seat, or advice that
@@ -226,9 +226,8 @@ impl Surface {
             return Ok(None);
         };
         Ok(self.current_advice(seat).and_then(|advised| {
-            let template = advised.advice.start_here.as_deref()?;
-            let why = advised.advice.suggestion(template)?.why.as_str();
-            Some((template, why))
+            let start = advised.advice.start_here.as_ref()?;
+            Some((start.template_id.as_str(), start.why.as_str()))
         }))
     }
 

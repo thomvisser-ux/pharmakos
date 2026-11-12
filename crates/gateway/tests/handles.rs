@@ -186,16 +186,36 @@ fn submit(surface: &mut Surface, seat: u8, playbook: &str) {
 
 /// Begin the Push, play it to its end, close the recap and open the next
 /// Lull.
-fn play_round(surface: &mut Surface) {
+///
+/// Returns how many `sighting_refreshed` lines the segment's feed carried, and
+/// holds the feed to item 155 (3) 6's thinning: at most one such line a seat a
+/// tick, however many sightings its Survey refreshed in it.
+fn play_round(surface: &mut Surface) -> usize {
     assert!(surface.begin_push().expect("the Push begins"));
     while let Some(report) = surface.step().expect("a tick") {
         if report.segment_ended {
             break;
         }
     }
+    let mut refreshes: Vec<(i32, String)> = surface
+        .feed()
+        .events()
+        .iter()
+        .filter(|event| event.kind.name() == "sighting_refreshed")
+        .map(|event| (event.at_ms.raw(), format!("{:?}", event.audience)))
+        .collect();
+    let lines = refreshes.len();
+    refreshes.sort();
+    refreshes.dedup();
+    assert_eq!(
+        refreshes.len(),
+        lines,
+        "one refresh line a seat a tick (item 155 (3) 6)"
+    );
     assert!(surface.end_recap().expect("the recap ends"));
     assert_eq!(surface.time().phase, Phase::Lull, "the match goes on");
     surface.open_lull().expect("the next Lull");
+    lines
 }
 
 /// Every handle `seat` holds, `e_01` up, with the beacon id each names.
@@ -230,11 +250,12 @@ fn a_resumed_lull_names_every_handle_as_the_match_that_never_stopped() {
     let mut surface = hosted_with(MATCH_ID, FogPolicy::fogged(), 2, SEGMENT_MS, ROUNDS, None);
     let seat_0 = SeatId::new(0);
     let core_1 = core_of(&surface, SeatId::new(1));
+    let mut refreshed = 0_usize;
 
     // Round 1: seat 0's scout finds seat 1's outpost, and only it.
     submit(&mut surface, 0, &committed(ROUND_1_SEAT_0));
     submit(&mut surface, 1, &committed(ROUND_1_SEAT_1));
-    play_round(&mut surface);
+    refreshed = refreshed.saturating_add(play_round(&mut surface));
 
     // Round 2's Lull: the outpost is `e_01`. Seat 1 submits nothing from here
     // on and plays its safe playbook.
@@ -252,7 +273,7 @@ fn a_resumed_lull_names_every_handle_as_the_match_that_never_stopped() {
         "the recipe: round 1 finds the outpost and not the core"
     );
     submit(&mut surface, 0, ROUND_2_SEAT_0);
-    play_round(&mut surface);
+    refreshed = refreshed.saturating_add(play_round(&mut surface));
 
     // Round 3's Lull: the core, sighted in round 2, has a handle of its own,
     // after the outpost's, and the outpost keeps `e_01`.
@@ -268,6 +289,10 @@ fn a_resumed_lull_names_every_handle_as_the_match_that_never_stopped() {
         "the recipe: round 2 finds seat 1's core, and the match that never stopped renames nothing"
     );
 
+    assert!(
+        refreshed > 0,
+        "the recipe: seat 0's scouts refresh sightings, so the thinning is exercised"
+    );
     let saved = surface.lull_save().expect("a Lull saves");
     let resumed = resume(MATCH_ID, &saved);
     assert_eq!(resumed.time().phase, Phase::Lull);

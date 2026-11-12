@@ -994,7 +994,7 @@ fn the_lobby_hosts_a_three_round_match() {
     assert_eq!(
         presets,
         ["const PRESET := \"custom\""],
-        "the lobby writes `custom` until `prob` brings the client's half of an untimed Lull"
+        "the lobby writes `custom` until `ed3b` brings the client's half of an untimed Lull"
     );
     let limit = gd_function(&text, "round_limit");
     let code: Vec<&str> = limit
