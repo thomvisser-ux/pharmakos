@@ -810,6 +810,78 @@ fn a_carrier_killed_before_it_plants_fires_nothing() {
     assert!(runner.world().attack().charges().is_empty());
 }
 
+/// Decisions-log item 151 (2) (c) (3), from S3's `lic`: the charge's blast
+/// takes `combat.charge_damage_hp` from every unit, structure and beacon in
+/// its ball, any seat's, as it cuts the ground; and nothing outside it.
+#[test]
+fn a_charge_blast_damages_what_stands_in_its_ball() {
+    let (mut runner, _, _, _) = walled(3);
+    let mut log = Vec::new();
+    let planted = play_until(&mut runner, 4_000, &mut log, |_, log| {
+        fired(log, EventKind::ChargePlanted) > 0
+    });
+    assert!(planted, "a charge is planted at the breach");
+    let [x, y, z] = runner.world().attack().charges()[0].centre;
+    // A column of open ground beside the breach, not a wall's, so nothing
+    // falls under what stands on it when the cut takes the wall.
+    let open = |world: &World, dx: i32, dy: i32| {
+        let at = world.standing_point([x + dx, y + dy, z]);
+        let top = [x + dx, y + dy, at[2].floor_voxels() - 1];
+        let wall = world
+            .voxels()
+            .get(top)
+            .is_some_and(|material| material.wall_of().is_some());
+        (!wall && at[2].floor_voxels() <= z + 1).then_some(at)
+    };
+    let inside = [
+        (2, 0),
+        (-2, 0),
+        (0, 2),
+        (0, -2),
+        (2, 2),
+        (-2, -2),
+        (2, -2),
+        (-2, 2),
+    ]
+    .into_iter()
+    .find_map(|(dx, dy)| open(runner.world(), dx, dy))
+    .expect("open ground beside the breach");
+    let outside = runner.world().standing_point([x + 16, y + 16, z]);
+    let structure = |world: &mut World, at| {
+        let home = beacon(world, seat(1), at, MandateKind::Build, 0);
+        world
+            .raise_structure(
+                seat(1),
+                home,
+                pharmakos_sim::tables::StructureKind::Generator,
+                at,
+            )
+            .expect("room for a structure")
+    };
+    let near = structure(runner.world_mut(), inside);
+    let far = structure(runner.world_mut(), outside);
+    let hp = |world: &World, id: pharmakos_sim::tables::StructureId| {
+        let row = world.structures().row_of(id).expect("standing").index();
+        world.structures().hit_points()[row].raw()
+    };
+    let (near_before, far_before) = (hp(runner.world(), near), hp(runner.world(), far));
+    let detonated = play_until(&mut runner, 400, &mut log, |_, log| {
+        fired(log, EventKind::ChargeDetonated) > 0
+    });
+    assert!(detonated);
+    let damage = rules().attack().charge_damage.raw();
+    assert_eq!(
+        near_before - hp(runner.world(), near),
+        damage,
+        "the blast takes its damage from a structure in the ball, on the tick it fires"
+    );
+    assert_eq!(
+        hp(runner.world(), far),
+        far_before,
+        "and nothing outside it"
+    );
+}
+
 #[test]
 fn a_charge_crater_carries_its_seat() {
     let edit = VoxelEdit::Cut {

@@ -1232,7 +1232,7 @@ impl World {
                 shell.splash(),
                 damage,
                 SeatId::new(seat),
-                AssetId::new(firer),
+                Some(AssetId::new(firer)),
                 &mut rows,
             );
             let blast = VoxelEdit::Crater {
@@ -1258,6 +1258,26 @@ impl World {
         self.shells.remove_landed(tick);
     }
 
+    /// A demolition charge's blast (decisions-log item 151 (2) (c) (3); S3's
+    /// `lic`): `amount` from every live unit, structure and beacon within
+    /// `radius` of `point`, the carrier's own seat included (spec section 9's
+    /// friendly fire), filed as a shell's splash is ([`World::splash_damage`])
+    /// for this tick's combat phase. `by` is the carrier's seat and `source`
+    /// the Attack beacon that bought the charge.
+    pub(crate) fn blast_damage(
+        &mut self,
+        point: [Fx; 3],
+        radius: Fx,
+        amount: Damage,
+        by: SeatId,
+        source: Option<AssetId>,
+    ) {
+        let mut rows = core::mem::take(&mut self.splash_rows);
+        self.splash_damage(point, radius, amount, by, source, &mut rows);
+        rows.clear();
+        self.splash_rows = rows;
+    }
+
     /// File one order for every live asset inside a splash: units, then
     /// structures (a ruin among them), then beacons, each in row order, the
     /// firer's own seat included (spec section 9's friendly fire).
@@ -1267,7 +1287,7 @@ impl World {
         radius: Fx,
         amount: Damage,
         by: SeatId,
-        source: AssetId,
+        source: Option<AssetId>,
         rows: &mut Vec<Row>,
     ) {
         let limit = Sq::of_radius(radius);
@@ -1335,14 +1355,14 @@ impl World {
         target: DamageTarget,
         amount: Damage,
         by: SeatId,
-        source: AssetId,
+        source: Option<AssetId>,
         room: usize,
     ) {
         let order = DamageOrder {
             target,
             amount,
             by,
-            source: Some(source),
+            source,
         };
         if self.push_damage(order, room).is_err() {
             self.combat.drop(CombatDrop::DamageQueueFull);
