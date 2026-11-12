@@ -1,0 +1,29 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// S3's `lic`: seat 1's half of spire-lost.scenario.jsonc. An Attack beacon
+// beside seat 1's core, aimed at the ground just past seat 0's Resonance
+// Spire, so that at the aim the Spire is the nearest enemy site; it gathers
+// raiders and launches late in a long segment, once the Spire stands.
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {"title": "Raze the Spire", "author_kind": "HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {"label": "post", "timeout_ms": 60000,
+        "place_beacon": {"at": {"voxel": {"x": 30, "y": 352, "z": 28}},
+          "initial": {"priority": "NORMAL", "mandate": {"attack": {
+            "target": {"voxel": {"x": 196, "y": 63, "z": 31}},
+            "retarget": "NONE",
+            "staging": {"x": 30, "y": 352, "z": 28},
+            "launch": {"force_size": 12, "segment_ms": 320000},
+            "after_action": "REGROUP_AT_STAGING",
+            "waves": 1}}}},
+        "on_fail": {"action": "SKIP"}}
+    ],
+    "handlers": []
+  },
+  "on_death": {"on_respawn": "CONTINUE", "max_deaths_before_fallback": 2},
+  "fallback": {"hold": {"at": {"safest": {}}}}
+}

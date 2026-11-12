@@ -5,11 +5,11 @@
       "code": "E0009",
       "severity": "ERROR",
       "path": "/declarative/route/0/interface/rows/0/queue_structure",
-      "message": "a `queue_structure` row has no effect until S4, with the capability catalogue and its licences; it is refused rather than ignored.",
-      "beginner": "Queuing a capability building comes later in the game. Nothing you wrote is dropped: take the row out yourself."
+      "message": "a `queue_structure` row for any blueprint but `resonance_spire` has no effect until S4, with the capability catalogue and its licences; it is refused rather than ignored.",
+      "beginner": "Only the Resonance Spire can be queued so far; the other capability buildings come later in the game. Nothing you wrote is dropped: take the row out yourself."
     }
   ],
-  "report_hash": "bmf4MFoRNcQ=",
+  "report_hash": "HBAv6O3O/kU=",
   "rules_hash": "GybFJQaL/2E=",
   "plan_fingerprint": "a27Ogmh+Xl0=",
   "verifier_version": "0.1.0-s3.1",

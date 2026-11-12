@@ -1,0 +1,64 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// S3's `lic` (S3's plan, decision 6: "on the Spire's destruction the radius
+// returns to its base on that tick"), staged by its two playbooks on
+// Probation's seed.
+//
+//   seat 0  seals scenarios/s3/spire-lost.playbook.jsonc every round: the
+//           licence earned as in resonance-spire, and the Spire queued in
+//           round 3 at the stepping stone, `b_02`, an unarmed beacon well
+//           forward of the core, where it stands beside the beacon and grows
+//           its sphere from 24 voxels to 36;
+//   seat 1  seals scenarios/s3/spire-lost.enemy.playbook.jsonc: an Attack
+//           beacon beside its core, aimed at the ground just past the Spire,
+//           launching at 320 s of a segment, so in round 3, after the Spire
+//           stands.
+//
+// The force walks the map and arrives in round 4. At its aim the Spire is the
+// nearest enemy site, and it falls first, at tick 22324: on that tick the
+// stone's sphere is its base again (the sim derives the radius from the
+// structure table, crates/sim/src/spire.rs, and crates/sim/tests/spire.rs'
+// `the_sphere_returns_to_its_base_on_the_tick_the_spire_is_destroyed` holds
+// the rule). The raiders then take the stone itself, still in reach of the
+// aim, at 22501. `event_fired` has no value predicate (register M-05), so the
+// chain is what pins which structure fell.
+{
+  "format": "pharmakos.scenario.v1",
+  "name": "spire-lost",
+  "summary": "Seat 0 earns the licence and raises a Resonance Spire at its stepping stone in round 3; seat 1's raid destroys it in round 4, and the stone's sphere returns to its base on that tick.",
+
+  "map": {
+    "seed": "0x0000000000000014",
+    "generator": "skeleton"
+  },
+
+  "rules": "rules/rules.v1.json",
+  "round_limit": 4,
+
+  "seats": [
+    { "seat": 0, "kind": "playbook", "playbook": "scenarios/s3/spire-lost.playbook.jsonc" },
+    { "seat": 1, "kind": "playbook", "playbook": "scenarios/s3/spire-lost.enemy.playbook.jsonc" }
+  ],
+
+  "segments": [
+    { "index": 0, "length_ms": 180000, "note": "Round 1: the start vent covered." },
+    { "index": 1, "length_ms": 300000, "note": "Round 2: the stone and the second vent; the licence." },
+    { "index": 2, "length_ms": 480000, "note": "Round 3: the Spire at the stone; seat 1's raid launches." },
+    { "index": 3, "length_ms": 480000, "note": "Round 4: the raid arrives and the Spire falls." }
+  ],
+
+  "assertions": [
+    { "assert": "event_fired", "event": "licence_awarded", "seat": 0, "by_tick": 9600,
+      "note": "Round 2's settlement awards seat 0 the licence, as in resonance-spire." },
+    { "assert": "event_fired", "event": "attack_launched", "seat": 1, "by_tick": 16000,
+      "note": "Seat 1's force launches at 320 s of round 3, tick 16000; the Spire was finished at 10678." },
+    { "assert": "event_fired", "event": "structure_destroyed", "seat": 0, "by_tick": 22324,
+      "note": "Round 4: the Spire falls to the raid at tick 22324, seat 0's first loss of the match; the stone's sphere is its base from that tick." },
+    { "assert": "event_fired", "event": "beacon_destroyed", "seat": 0, "by_tick": 22501,
+      "note": "The raiders then take the stone, at tick 22501." },
+    { "assert": "hash_chain_equals",
+      "golden": "tests/golden/scenarios/spire-lost/expected.hashes.txt",
+      "note": "Byte-identical on Windows, Linux and macOS." }
+  ]
+}

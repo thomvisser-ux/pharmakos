@@ -64,6 +64,8 @@ const SCENARIOS: &[&str] = &[
     RAID_ON_A_MORTAR,
     MORTAR_BREAKS_WALL,
     BREACH_AND_RAZE,
+    RESONANCE_SPIRE,
+    SPIRE_LOST,
 ];
 
 /// The scenario against the built-in operator: seat 1 is `builtin`, played by
@@ -138,6 +140,14 @@ const MORTAR_BREAKS_WALL: &str = "scenarios/s2/mortar-breaks-wall.scenario.jsonc
 /// cut, and the walled beacon razed.
 const BREACH_AND_RAZE: &str = "scenarios/s2/breach-and-raze.scenario.jsonc";
 
+/// S3's `lic`: the Resonance Spire's licence earned on Probation's seed, the
+/// Spire queued at the core and a target built past the old sphere.
+const RESONANCE_SPIRE: &str = "scenarios/s3/resonance-spire.scenario.jsonc";
+
+/// S3's `lic`: a Spire raised at a stepping stone and razed by the other
+/// seat's raid, the sphere back at its base that tick.
+const SPIRE_LOST: &str = "scenarios/s3/spire-lost.scenario.jsonc";
+
 /// Terraform through the playbook door: `FILL` levels a mortar's footprint
 /// before it is bought (S2's `site`; decisions-log item 144 (5)). The crater
 /// refill is evidenced headless, by `crates/sim/tests/site.rs`'
@@ -172,7 +182,16 @@ const TERRAFORM_LEVELS_A_FOOTPRINT: &str =
 /// target, the enemy commander with no seat named, now qualifies with no
 /// sighting at the seal (W0708, the owner's ruling of 2026-10-27), so
 /// `submit_plan` takes the file.
-const HARNESS_DOOR: &[&str] = &[REFUSING, MORTAR_BREAKS_WALL];
+///
+/// S3's `lic` adds two, each carrying one playbook through four rounds whose
+/// later steps the seat's verifier rightly refuses in the rounds before they
+/// can run: `resonance-spire` and `spire-lost` queue the Spire before the
+/// licence is held (E0507), and `resonance-spire` writes a target past the
+/// base sphere before the Spire grows it (E0416) and queues a second Spire
+/// where one stands (E0513). The scenario format seals one file for every
+/// round, and the codes in their notes are the proof the gateway's scope
+/// carries the licence, the grown sphere and the Spire round by round.
+const HARNESS_DOOR: &[&str] = &[REFUSING, MORTAR_BREAKS_WALL, RESONANCE_SPIRE, SPIRE_LOST];
 
 /// What a doctored copy is named.
 ///
@@ -342,6 +361,7 @@ fn the_committed_list_is_the_whole_set() {
                 "terraform-levels-a-footprint",
             ][..],
         ),
+        ("s3", &["resonance-spire", "spire-lost"][..]),
     ] {
         let dir = root().join("scenarios").join(stage);
         for name in names {

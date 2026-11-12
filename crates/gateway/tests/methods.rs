@@ -2488,9 +2488,9 @@ fn sim_door_cases() -> Vec<Case> {
 /// that the v1 vocabulary spells and this build does not carry out.
 ///
 /// **One is left.** T14 closed `recycle`, `add_build_target` and
-/// `remove_build_target`; `queue_structure` waits for S4's capability
-/// catalogue, because the thing it queues is a licensed structure and there is
-/// no licence to check.
+/// `remove_build_target`; S3's `lic` closed `queue_structure` for the
+/// Resonance Spire, whose licence the sim and the verifier check (`E0507`), and
+/// every other blueprint waits for S4's capability catalogue.
 fn interface_row_gaps() -> Vec<Case> {
     vec![
         // T14 closed three rows of this block: `recycle`, `add_build_target`
@@ -2503,7 +2503,7 @@ fn interface_row_gaps() -> Vec<Case> {
                  [{\"queue_structure\": {\"blueprint_id\": \"radio_mast\"}}]}, \"timeout_ms\": \
                  30000}",
             ),
-            "interface row `queue_structure`",
+            "interface row `queue_structure` naming a blueprint other than `resonance_spire`",
             "S4",
         ),
     ]
@@ -2639,6 +2639,18 @@ fn verifier_door_cases() -> Vec<Case> {
     // field the compile reads (S2's `vfy1`, its review).
     let unknown = |what, step: &str| verifier(what, one_step(step), "E0018");
     vec![
+        // S3's `lic`: the Resonance Spire's queue compiles and runs now, and a
+        // seat without its licence is refused by the verifier first, as
+        // E0507, never at the sim's door.
+        verifier(
+            "a Resonance Spire queued by a seat that does not hold its licence",
+            one_step(
+                "{\"label\": \"q\", \"interface\": {\"beacon\": {\"beacon_id\": \"b_00\"}, \
+                 \"rows\": [{\"queue_structure\": {\"blueprint_id\": \"resonance_spire\"}}]}, \
+                 \"timeout_ms\": 30000}",
+            ),
+            "E0507",
+        ),
         closed(
             "a selector filter that matches on the author's own tags",
             one_step(

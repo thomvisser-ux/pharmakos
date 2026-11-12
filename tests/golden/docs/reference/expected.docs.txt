@@ -940,8 +940,8 @@ E0008  WARNING  decode and version  raised at: decode
   The stamp on this file was out of date. It has been worked out again for you.
 
 E0009  ERROR  decode and version  raised at: structure
-  a `queue_structure` row has no effect until S4, with the capability catalogue and its licences; it is refused rather than ignored.
-  Queuing a capability building comes later in the game. Nothing you wrote is dropped: take the row out yourself.
+  a `queue_structure` row for any blueprint but `resonance_spire` has no effect until S4, with the capability catalogue and its licences; it is refused rather than ignored.
+  Only the Resonance Spire can be queued so far; the other capability buildings come later in the game. Nothing you wrote is dropped: take the row out yourself.
 
 E0010  ERROR  decode and version  raised at: structure
   a Build target names `{id}`; beside `generator` and S2's base kit, nothing can be built until S4, with the capability catalogue and its licences.

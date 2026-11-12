@@ -77,10 +77,10 @@
 //! not refused here: a handler is how a seat rebuilds a destroyed Spire (spec section 8:
 //! "Destroyed structures are rebuilt without earning the licence again"), and
 //! the sim refuses one at run time if the Spire still stands then, since the
-//! plan-time answer can go stale. Both codes stand behind `E0009`, which still
-//! refuses every `queue_structure` row until S3's `lic` gives the Spire an
-//! effect, so the verdict never runs ahead of the sim's compile (S3's plan,
-//! R4).
+//! plan-time answer can go stale. Both codes stood behind `E0009` until S3's `lic`
+//! gave the Spire an effect, so the verdict never ran ahead of the sim's compile
+//! (S3's plan, R4); `E0009` now refuses every other blueprint, as the sim's
+//! compile does.
 //!
 //! # A grown sphere (S3's `vfy5`)
 //!
