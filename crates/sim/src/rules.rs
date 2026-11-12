@@ -78,6 +78,7 @@
 //! | [`build_hp_per_tick`](RulesTable::build_hp_per_tick) | `structures.build_hp_per_second` |
 //! | [`power`](RulesTable::power) | the `power` block and the `structures.*.draw_kw` rows ([`crate::power::PowerRules`]) |
 //! | [`resonance_vents`](RulesTable::resonance_vents) | `licences.resonance_vents` (S3's `lic`) |
+//! | [`cluster_shape`](RulesTable::cluster_shape) | `locomotion.hpa_cluster_voxels`, `pathing.long_run` and `pathing.smooth_lookahead` (S3's `lic`) |
 //! | [`grown_sphere_radius_voxels`](RulesTable::grown_sphere_radius_voxels) | `beacon.sphere_radius_voxels` plus `structures.resonance_spire_sphere_bonus_voxels` (S3's `lic`) |
 //!
 //! The map generator ([`crate::mapgen`]) reads a dozen more rows — the whole of
@@ -273,6 +274,11 @@ pub struct RulesTable {
     /// length, so the radius function ([`crate::spire::radius_voxels`]) does no
     /// arithmetic inside a tick (decisions-log item 156).
     grown_sphere_radius_voxels: i16,
+    /// `pathing.long_run` and `pathing.smooth_lookahead`, the HPA* decomposition's
+    /// and the smoother's shape values (the register's S3-10; S3's `lic` reads
+    /// them in place of the old `LONG_RUN` and `SMOOTH_LOOKAHEAD` constants),
+    /// typed at load ([`crate::pathing::clusters::ClusterShape`]).
+    cluster_shape: crate::pathing::clusters::ClusterShape,
 }
 
 /// One unit kind's row as the tick reads it: `units.<kind>.*`, or the
@@ -809,6 +815,15 @@ impl RulesTable {
         self.grown_sphere_radius_voxels
     }
 
+    /// The HPA* decomposition's shape: the cluster edge
+    /// (`locomotion.hpa_cluster_voxels`), `pathing.long_run` and
+    /// `pathing.smooth_lookahead`, refused at load as
+    /// [`crate::pathing::clusters::ClusterShape::read`] says.
+    #[must_use]
+    pub const fn cluster_shape(&self) -> crate::pathing::clusters::ClusterShape {
+        self.cluster_shape
+    }
+
     /// The bottom layers of every column generation writes as bedrock,
     /// `materials.bedrock_layers_voxels`: at least one.
     #[must_use]
@@ -948,6 +963,7 @@ impl RulesTable {
         let grown_sphere_radius_voxels = grown_sphere_radius_of(message, sphere_radius_voxels)?;
         let picket_radius_voxels = picket_radius_of(message, grown_sphere_radius_voxels)?;
         let resonance_vents = resonance_vents_of(message)?;
+        let cluster_shape = crate::pathing::clusters::ClusterShape::read(message)?;
 
         let segment_lengths_ms = segment_lengths_of(matched)?;
 
@@ -1021,6 +1037,7 @@ impl RulesTable {
             picket_radius_voxels,
             resonance_vents,
             grown_sphere_radius_voxels,
+            cluster_shape,
         })
     }
 

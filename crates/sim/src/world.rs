@@ -1151,7 +1151,10 @@ impl World {
                 size: voxels.size(),
             });
         };
-        let Some((clusters, scratch)) = build_graph(&surface, cluster_voxels) else {
+        let Some((clusters, scratch)) = build_graph(
+            &surface,
+            config.rules.cluster_shape().with_size(cluster_voxels),
+        ) else {
             return Err(MapError::Unclusterable { cluster_voxels });
         };
         let mut router = Router::new(unit_count, &config.rules);
@@ -7083,15 +7086,18 @@ fn core_of_generated(generated: &crate::mapgen::GeneratedMap, seat: SeatId) -> B
 ///
 /// `None` when the cluster edge cannot decompose this map, which the caller
 /// reports as [`MapError::Unclusterable`].
-fn build_graph(surface: &Surface, cluster_voxels: i32) -> Option<(Clusters, Scratch)> {
-    let mut scratch = Scratch::for_map(surface, cluster_voxels)?;
-    let clusters = Clusters::new(surface, cluster_voxels, &mut scratch)?;
+fn build_graph(
+    surface: &Surface,
+    shape: crate::pathing::clusters::ClusterShape,
+) -> Option<(Clusters, Scratch)> {
+    let mut scratch = Scratch::for_map(surface, shape.size)?;
+    let clusters = Clusters::new(surface, shape, &mut scratch)?;
     // A real check rather than a `debug_assert!`: this is the only thing tying
     // the scratch's independent derivation of the abstract numbering to the
     // decomposition's, and a release build is exactly where a scratch sized for
     // a different numbering would go unnoticed — the arrays would be short and
     // a query would read a slot that is not there.
-    if clusters.abstract_capacity() != Scratch::abstract_capacity_for(surface, cluster_voxels)? {
+    if clusters.abstract_capacity() != Scratch::abstract_capacity_for(surface, shape.size)? {
         return None;
     }
     Some((clusters, scratch))

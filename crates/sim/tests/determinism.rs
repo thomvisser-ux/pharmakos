@@ -1729,7 +1729,15 @@ fn a_row_out_of_range_is_refused_at_load() {
         },
         "economy.award_fund_percent_of_bmi",
     );
+    // S3's `lic` (decisions-log item 156): the rows it reads, one line each.
+    s3_rows_out_of_range(&refused);
     // Each bound is the last value that loads, not one short of it.
+    let mut lookahead = committed_message();
+    if let Some(pathing) = lookahead.pathing.as_mut() {
+        pathing.smooth_lookahead = pharmakos_sim::pathing::MAX_ROUTE_NODES;
+        pathing.long_run = 1;
+    }
+    assert!(RulesTable::from_message(&lookahead).is_ok());
     let mut message = committed_message();
     let economy = message
         .economy
@@ -1738,6 +1746,66 @@ fn a_row_out_of_range_is_refused_at_load() {
     economy.recycle_refund_percent = 100;
     economy.award_fund_percent_of_bmi = i32::MAX.unsigned_abs();
     assert!(RulesTable::from_message(&message).is_ok());
+}
+
+/// `a_row_out_of_range_is_refused_at_load`'s check: break one row, and the
+/// table is refused at load naming it.
+type Refused<'a> = dyn Fn(&dyn Fn(&mut gp::v1::RulesTable), &str) + 'a;
+
+/// The rows S3's `lic` reads, each refused out of range at load by name
+/// (decisions-log item 156), through `a_row_out_of_range_is_refused_at_load`'s
+/// own check. The two blocks it reads are refused when missing in
+/// `a_block_s3_reads_is_refused_when_missing`.
+fn s3_rows_out_of_range(refused: &Refused<'_>) {
+    let max_nodes = pharmakos_sim::pathing::MAX_ROUTE_NODES;
+    let past_i16 = u32::try_from(i16::MAX).expect("fits");
+    refused(
+        &|m| m.pathing.iter_mut().for_each(|p| p.long_run = 0),
+        "pathing.long_run",
+    );
+    refused(
+        &|m| {
+            m.pathing
+                .iter_mut()
+                .for_each(|p| p.smooth_lookahead = max_nodes + 1);
+        },
+        "pathing.smooth_lookahead",
+    );
+    refused(
+        &|m| m.licences.iter_mut().for_each(|l| l.resonance_vents = 0),
+        "licences.resonance_vents",
+    );
+    // The base row and the bonus each a voxel length, their sum not.
+    refused(
+        &|m| {
+            m.structures
+                .iter_mut()
+                .for_each(|s| s.resonance_spire_sphere_bonus_voxels = past_i16);
+        },
+        "structures.resonance_spire_sphere_bonus_voxels",
+    );
+    refused(
+        &|m| m.combat.iter_mut().for_each(|c| c.charge_damage_hp = 0),
+        "combat.charge_damage_hp",
+    );
+}
+
+/// S3's `lic` (decisions-log item 156): a table without the `pathing` or the
+/// `licences` block does not load, naming the block.
+#[test]
+fn a_block_s3_reads_is_refused_when_missing() {
+    let mut message = committed_message();
+    message.pathing = None;
+    assert_eq!(
+        RulesTable::from_message(&message),
+        Err(pharmakos_sim::rules::RulesError::MissingBlock("pathing"))
+    );
+    let mut message = committed_message();
+    message.licences = None;
+    assert_eq!(
+        RulesTable::from_message(&message),
+        Err(pharmakos_sim::rules::RulesError::MissingBlock("licences"))
+    );
 }
 
 #[test]

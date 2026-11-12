@@ -119,7 +119,12 @@ fn the_pathing_bench_reports_its_numbers() {
     let surface = Surface::new(&store, StepCosts::from_rules(&rules)).expect("a surface");
     let cluster = rules.hpa_cluster_voxels();
     let mut scratch = Scratch::for_map(&surface, cluster).expect("a scratch");
-    let clusters = Clusters::new(&surface, cluster, &mut scratch).expect("a decomposition");
+    let clusters = Clusters::new(
+        &surface,
+        rules.cluster_shape().with_size(cluster),
+        &mut scratch,
+    )
+    .expect("a decomposition");
     let repairer = Repairer::new(clusters.cluster_count());
     let mut bench = Bench {
         store,

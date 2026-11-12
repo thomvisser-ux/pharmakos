@@ -136,9 +136,10 @@ impl RouteAdapter {
         let mut scratch = Scratch::for_map(&surface, cluster_voxels).ok_or_else(|| {
             Error::internal("this map and cluster edge do not size a search scratch")
         })?;
-        let clusters = Clusters::new(&surface, cluster_voxels, &mut scratch).ok_or_else(|| {
-            Error::internal("this map and cluster edge do not decompose into clusters")
-        })?;
+        let clusters =
+            Clusters::new(&surface, rules.cluster_shape(), &mut scratch).ok_or_else(|| {
+                Error::internal("this map and cluster edge do not decompose into clusters")
+            })?;
         Ok(RouteAdapter {
             surface,
             clusters,

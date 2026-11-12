@@ -77,24 +77,13 @@ pub mod router;
 pub mod search;
 pub mod surface;
 
-pub use clusters::{Clusters, Trans};
+pub use clusters::{ClusterShape, Clusters, Trans};
 pub use estimate::{Estimate, Fog, Speed, estimate, ticks_for_cost};
 pub use repair::{RepairReport, repair};
 pub use route::{AbstractResult, RouteOutcome, abstract_search, route};
 pub use router::{Router, WalkState};
 pub use search::Scratch;
 pub use surface::{NEIGHBOURS, Node, StepCosts, Surface};
-
-/// A border run longer than this gets a transition node at each end instead of
-/// one in the middle (spike G2's `LONG_RUN`).
-///
-/// PLACEHOLDER: tuning, one of the seven values G2 §9.9 lists as "to become rules-table data at S3" — owner, at S3.
-pub const LONG_RUN: i32 = 6;
-
-/// How far ahead the smoother looks for a shortcut.
-///
-/// PLACEHOLDER: tuning, from the same G2 §9.9 list — owner, at S3.
-pub const SMOOTH_LOOKAHEAD: usize = 16;
 
 /// The most nodes one unit's route may hold.
 ///

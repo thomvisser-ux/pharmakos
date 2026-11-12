@@ -70,8 +70,8 @@
 //! running down it, which is exactly the case the run definition above exists
 //! for — so runs need no gap cell between them and a comb of 32 single-cell
 //! runs is a state a crater can leave behind. A run emits one transition, or
-//! two at its ends when it is longer than [`LONG_RUN`], and a two-transition
-//! run is at least `LONG_RUN + 1` cells long, so `n` bounds a border's
+//! two at its ends when it is longer than `pathing.long_run` ([`ClusterShape::long_run`]), and a two-transition
+//! run is at least `long_run + 1` cells long, so `n` bounds a border's
 //! transitions either way.
 //!
 //! From there: `4 * cluster_edge` bounds a cluster's transition cells, and
@@ -85,7 +85,6 @@
 //! where the search says no. `a_border_holds_every_run_it_finds` builds the
 //! comb and checks that all 32 survive.
 
-use crate::pathing::LONG_RUN;
 use crate::pathing::search::{Bound, Scratch, dijkstra_bounded};
 use crate::pathing::surface::{DEFAULT_ORDER, Node, Surface};
 
@@ -104,6 +103,90 @@ pub const NO_COMP: u16 = u16::MAX;
 /// `the_cluster_edge_ceiling_is_what_the_row_offsets_can_index` pins the
 /// arithmetic so a widened cap cannot truncate a row unnoticed.
 pub const MAX_CLUSTER_EDGE: i32 = 64;
+
+/// The decomposition's shape, read from the rules table (the register's
+/// S3-10; S3's `lic`): the cluster edge, how long a border run is before it
+/// takes two transitions, and how far ahead the smoother looks.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ClusterShape {
+    /// The cluster edge in voxels, `locomotion.hpa_cluster_voxels`.
+    pub size: i32,
+    /// A border's open run longer than this many cells takes a transition at
+    /// each end; a run no longer takes one, in its middle (`pathing.long_run`,
+    /// spike G2's `LONG_RUN`). At least one.
+    pub long_run: i32,
+    /// How many route nodes ahead of its current one the smoother looks for a
+    /// straight line (`pathing.smooth_lookahead`, spike G2's
+    /// `SMOOTH_LOOKAHEAD`). At most [`crate::pathing::MAX_ROUTE_NODES`].
+    pub smooth_lookahead: usize,
+}
+
+impl ClusterShape {
+    /// Read the shape from the rules table.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::rules::RulesError::MissingBlock`] for an absent `pathing` or
+    /// `locomotion` block, and [`crate::rules::RulesError::OutOfRange`] for a
+    /// `long_run` below one -- a one-cell run emits two transitions, and a comb
+    /// of them overflows a border's room and silently drops transitions, a route
+    /// that exists and cannot be found (decisions-log item 156) -- or past an
+    /// `i32`, a `smooth_lookahead` above [`crate::pathing::MAX_ROUTE_NODES`],
+    /// the most a route holds, or a cluster edge past an `i32`.
+    pub fn read(
+        message: &pharmakos_proto::gp::v1::RulesTable,
+    ) -> Result<ClusterShape, crate::rules::RulesError> {
+        use crate::rules::RulesError;
+        let pathing = message
+            .pathing
+            .as_ref()
+            .ok_or(RulesError::MissingBlock("pathing"))?;
+        let locomotion = message
+            .locomotion
+            .as_ref()
+            .ok_or(RulesError::MissingBlock("locomotion"))?;
+        let size =
+            i32::try_from(locomotion.hpa_cluster_voxels).map_err(|_| RulesError::OutOfRange {
+                field: "locomotion.hpa_cluster_voxels".to_owned(),
+                value: format!(
+                    "{}; a cluster edge is a voxel length",
+                    locomotion.hpa_cluster_voxels
+                ),
+            })?;
+        let long_run = i32::try_from(pathing.long_run)
+            .ok()
+            .filter(|run| *run >= 1)
+            .ok_or_else(|| RulesError::OutOfRange {
+                field: "pathing.long_run".to_owned(),
+                value: format!(
+                    "{}; a run of one cell takes two transitions, and a comb of them drops some",
+                    pathing.long_run
+                ),
+            })?;
+        let smooth_lookahead = (pathing.smooth_lookahead <= crate::pathing::MAX_ROUTE_NODES)
+            .then(|| crate::math::index::row(pathing.smooth_lookahead))
+            .ok_or_else(|| RulesError::OutOfRange {
+                field: "pathing.smooth_lookahead".to_owned(),
+                value: format!(
+                    "{}; the smoother looks at most a route's {} nodes ahead",
+                    pathing.smooth_lookahead,
+                    crate::pathing::MAX_ROUTE_NODES
+                ),
+            })?;
+        Ok(ClusterShape {
+            size,
+            long_run,
+            smooth_lookahead,
+        })
+    }
+
+    /// The same shape at another cluster edge: a test's decomposition, or the
+    /// cluster-size sweep.
+    #[must_use]
+    pub const fn with_size(self, size: i32) -> ClusterShape {
+        ClusterShape { size, ..self }
+    }
+}
 
 /// One border crossing: `a` in this cluster, `b` in the neighbouring one.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -125,6 +208,8 @@ pub struct Trans {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Clusters {
     size: i32,
+    long_run: i32,
+    smooth_lookahead: usize,
     nx: i32,
     ny: i32,
     max_trans_per_border: usize,
@@ -171,7 +256,8 @@ impl Clusters {
     /// column in it at `of_node = 0` and `local_comp = NO_COMP`, so the oracle
     /// would answer confidently and wrongly rather than refusing to build.
     #[must_use]
-    pub fn new(surface: &Surface, size: i32, scratch: &mut Scratch) -> Option<Clusters> {
+    pub fn new(surface: &Surface, shape: ClusterShape, scratch: &mut Scratch) -> Option<Clusters> {
+        let size = shape.size;
         let extent = surface.size();
         let sx = extent.first().copied()?;
         let sy = extent.get(1).copied()?;
@@ -193,6 +279,8 @@ impl Clusters {
 
         let mut built = Clusters {
             size,
+            long_run: shape.long_run,
+            smooth_lookahead: shape.smooth_lookahead,
             nx,
             ny,
             max_trans_per_border: per_border,
@@ -290,6 +378,16 @@ impl Clusters {
     #[must_use]
     pub const fn size(&self) -> i32 {
         self.size
+    }
+
+    /// The shape the decomposition was built with ([`ClusterShape`]).
+    #[must_use]
+    pub const fn shape(&self) -> ClusterShape {
+        ClusterShape {
+            size: self.size,
+            long_run: self.long_run,
+            smooth_lookahead: self.smooth_lookahead,
+        }
     }
 
     /// Clusters along x and y.
@@ -514,7 +612,10 @@ impl Clusters {
                 cursor = cursor.saturating_add(1);
                 continue;
             };
-            for offset in Clusters::run_marks(cursor, run_end).into_iter().flatten() {
+            for offset in Clusters::run_marks(self.long_run, cursor, run_end)
+                .into_iter()
+                .flatten()
+            {
                 let Some((a, b)) = pair(offset) else {
                     continue;
                 };
@@ -575,7 +676,10 @@ impl Clusters {
                 cursor = cursor.saturating_add(1);
                 continue;
             };
-            for offset in Clusters::run_marks(cursor, run_end).into_iter().flatten() {
+            for offset in Clusters::run_marks(self.long_run, cursor, run_end)
+                .into_iter()
+                .flatten()
+            {
                 let Some((a, b)) = pair(offset) else {
                     continue;
                 };
@@ -645,9 +749,9 @@ impl Clusters {
 
     /// Where a run's transition nodes sit: the middle of a short run, both ends
     /// of a long one (item 58's shape, spike G2's `LONG_RUN`).
-    fn run_marks(start: i32, end: i32) -> [Option<i32>; 2] {
+    fn run_marks(long_run: i32, start: i32, end: i32) -> [Option<i32>; 2] {
         let length = end.saturating_sub(start).saturating_add(1);
-        if length <= LONG_RUN {
+        if length <= long_run {
             [Some(start.saturating_add(end).div_euclid(2)), None]
         } else {
             [Some(start), Some(end)]

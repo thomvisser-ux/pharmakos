@@ -1016,8 +1016,16 @@ mod tests {
         let surface = Surface::new(&voxels, StepCosts::new(10, 14, 4, 2))
             .unwrap_or_else(|| panic!("a surface"));
         let mut scratch = Scratch::for_map(&surface, 32).unwrap_or_else(|| panic!("a scratch"));
-        let clusters =
-            Clusters::new(&surface, 32, &mut scratch).unwrap_or_else(|| panic!("clusters"));
+        let clusters = Clusters::new(
+            &surface,
+            crate::pathing::ClusterShape {
+                size: 32,
+                long_run: 6,
+                smooth_lookahead: 16,
+            },
+            &mut scratch,
+        )
+        .unwrap_or_else(|| panic!("clusters"));
         Map {
             voxels,
             surface,
