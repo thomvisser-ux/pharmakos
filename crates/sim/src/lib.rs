@@ -101,6 +101,7 @@ pub mod runner;
 pub mod seams;
 pub mod sight;
 pub mod snapshot;
+pub mod spire;
 pub mod survey;
 pub mod tables;
 pub mod targeting;

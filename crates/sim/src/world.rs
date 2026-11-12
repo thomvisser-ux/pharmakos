@@ -58,7 +58,7 @@ use crate::events::{EVENT_BUS_CAPACITY, Emission, Event, EventBus, EventKind};
 use crate::features::FeatureTable;
 use crate::ids::{RefCounts, Row};
 use crate::interpreter::state::PlanParts;
-use crate::interpreter::{Interpreter, Plan};
+use crate::interpreter::{Interpreter, Plan, StepFailure};
 use crate::knowledge::{AssetId, Position};
 use crate::mapgen::{self, MapError};
 use crate::math::fixed::{Fx, Sq};
@@ -2081,10 +2081,47 @@ impl World {
         self.seats.seats().iter().position(|raw| *raw == seat.raw())
     }
 
-    /// A beacon's sphere of authority, `beacon.sphere_radius_voxels`.
+    /// `beacon`'s sphere of authority (S3's plan, E3): the base row,
+    /// `beacon.sphere_radius_voxels`, grown by a finished Resonance Spire of
+    /// the beacon's own seat homed to it ([`crate::spire::radius_voxels`], the
+    /// one function). The base for an id that names no live row, which no
+    /// Spire stands on.
     #[must_use]
-    pub fn sphere_radius(&self) -> Fx {
-        Fx::from_voxels(self.rules.sphere_radius_voxels())
+    pub fn sphere_radius_of(&self, beacon: BeaconId) -> Fx {
+        Fx::from_voxels(self.sphere_radius_voxels_of(beacon))
+    }
+
+    /// [`World::sphere_radius_of`], in whole voxels.
+    #[must_use]
+    pub fn sphere_radius_voxels_of(&self, beacon: BeaconId) -> i16 {
+        crate::spire::radius_of(&self.rules, &self.beacons, &self.structures, beacon)
+    }
+
+    /// [`World::sphere_radius_of`] for the beacon in `row` of the beacon
+    /// table; the base for a row the table does not hold.
+    #[must_use]
+    pub fn sphere_radius_at_row(&self, row: usize) -> Fx {
+        Fx::from_voxels(crate::spire::radius_at_row(
+            &self.rules,
+            &self.beacons,
+            &self.structures,
+            row,
+        ))
+    }
+
+    /// Whether a living Resonance Spire of `beacon`'s own seat, finished or
+    /// still going up, stands homed to `beacon`: the one-Spire-per-beacon
+    /// rule's question (spec section 8; S3's plan, E4), which the gateway's
+    /// verifier scope reads too.
+    #[must_use]
+    pub fn spire_on(&self, beacon: BeaconId) -> bool {
+        let Ok(row) = self.beacons.row_of(beacon) else {
+            return false;
+        };
+        let Some(seat) = self.beacons.seats().get(row.index()).copied() else {
+            return false;
+        };
+        crate::spire::facts_of(&self.structures).any(|facts| facts.stands(seat, beacon.raw()))
     }
 
     /// How close a walked route has to get before it counts as arrived,
@@ -2239,7 +2276,7 @@ impl World {
     pub fn wreck_in_sphere(&self, beacon: BeaconId) -> Option<Row> {
         let row = self.beacons.row_of(beacon).ok()?;
         let centre = self.beacons.positions().get(row.index()).copied()?;
-        let limit = Sq::of_radius(self.sphere_radius());
+        let limit = Sq::of_radius(self.sphere_radius_at_row(row.index()));
         let mut best: Option<(Sq, u32, Row)> = None;
         let wrecks = self
             .wrecks
@@ -2571,6 +2608,115 @@ impl World {
                 .value(i64::from(kind.id())),
         );
         true
+    }
+
+    /// Queue a capability structure on `beacon`'s fabricator (spec section 8;
+    /// S3's plan, E4): the `queue_structure` row's commit. S3 accepts one
+    /// kind, the Resonance Spire ([`crate::spire::queued_kind`]).
+    ///
+    /// "Paid means yours" as a deploy has it: the checks run first and write
+    /// nothing, then the `$` leaves the treasury and the structure goes into
+    /// the ground at one hit point, going up, homed to the beacon. From that
+    /// tick it draws its `kW` ([`crate::power`]) and the beacon's fabricator
+    /// raises it ([`crate::spire::fabricate`]), whatever the mandate. It
+    /// stands on the beacon's own column, the sphere's centre.
+    ///
+    /// # Errors
+    ///
+    /// The step failure the row fails with, each before anything is written:
+    /// [`StepFailure::NotLicensed`] when the seat does not hold the licence
+    /// (the verifier's `E0507` at plan time); [`StepFailure::SpirePresent`]
+    /// when a Spire already stands, or is going up, at the beacon (the
+    /// verifier's `E0513`, whose answer can go stale between the seal and the
+    /// commit); [`StepFailure::IllegalSite`] when a structure already stands
+    /// on the beacon's column or a voxel `set` is queued on it this tick;
+    /// [`StepFailure::NoStructureRoom`] when the seat's share of the structure
+    /// table is full; [`StepFailure::Unaffordable`] when the treasury does not
+    /// reach the structure's price; [`StepFailure::BeaconGone`] for a beacon
+    /// the table no longer holds.
+    pub(crate) fn queue_capability(
+        &mut self,
+        seat: SeatId,
+        beacon: BeaconId,
+        kind: StructureKind,
+    ) -> Result<StructureId, StepFailure> {
+        let licence = match kind {
+            StructureKind::ResonanceSpire => pharmakos_proto::gp::v1::Licence::ResonanceSpire,
+            StructureKind::Generator
+            | StructureKind::Autocannon
+            | StructureKind::Mortar
+            | StructureKind::SurveyPost
+            | StructureKind::Wall => return Err(StepFailure::NotLicensed),
+        };
+        if !self.licences.holds(seat, licence) {
+            return Err(StepFailure::NotLicensed);
+        }
+        if self.spire_on(beacon) {
+            return Err(StepFailure::SpirePresent);
+        }
+        let row = self
+            .beacons
+            .row_of(beacon)
+            .map_err(|_| StepFailure::BeaconGone)?;
+        let at = self
+            .beacons
+            .positions()
+            .get(row.index())
+            .copied()
+            .ok_or(StepFailure::BeaconGone)?;
+        let [x, y] = crate::targeting::column_of(at);
+        // One structure per voxel, across seats (targeting.md, "Sites"), and
+        // no purchase whose footing a `set` filed this tick would be refused
+        // by (the owner's footing ruling of 2026-10-20), as `queue_target`.
+        if self.ground().structure_on(x, y) || self.set_queued_on(x, y) {
+            return Err(StepFailure::IllegalSite);
+        }
+        if self.structures_held_by(seat) >= room_per_seat(STRUCTURE_TABLE_ROOM, self.seats.len())
+            || self.structures.vacancy(STRUCTURE_ROWS).is_err()
+        {
+            return Err(StepFailure::NoStructureRoom);
+        }
+        let cost = self.structure_cost(kind);
+        let index = self.seat_row(seat).ok_or(StepFailure::BeaconGone)?;
+        let slot = self
+            .seats
+            .treasuries_mut()
+            .get_mut(index)
+            .ok_or(StepFailure::BeaconGone)?;
+        if slot.raw() < cost.raw() {
+            return Err(StepFailure::Unaffordable);
+        }
+        // The check above makes the subtraction exact: a treasury at or above
+        // the price, less the price, is at or above zero.
+        *slot = Money::new(slot.raw().saturating_sub(cost.raw()));
+        let ready_at = self.armed_ready_at(self.structure_weapon(kind));
+        let Ok(placed) = self.structures.place(
+            STRUCTURE_ROWS,
+            seat,
+            kind,
+            at,
+            Hp::new(1),
+            beacon,
+            true,
+            QuarterTurns::NONE,
+            ready_at,
+        ) else {
+            // The vacancy was read above, so this does not happen; were it
+            // to, the price goes back where it came from rather than buying
+            // nothing.
+            self.credit_treasury(seat, cost);
+            return Err(StepFailure::NoStructureRoom);
+        };
+        let tick = self.tick;
+        self.emit(
+            tick,
+            Emission::of(EventKind::StructureQueued)
+                .seat(seat)
+                .subject_of(AssetId::of_structure(placed.id))
+                .at(Position::from_array(at))
+                .value(i64::from(kind.id())),
+        );
+        Ok(placed.id)
     }
 
     /// A structure reached full hit points: it is finished, and starts
@@ -4355,6 +4501,9 @@ impl World {
         // S2's `site`: a unit a fill closed over stands on the new ground.
         crate::site::reseat_buried(self);
         crate::programs::run_all(self);
+        // S3's `lic`: the fabricators raise the capability structures going
+        // up, after the units' programs (E4).
+        crate::spire::fabricate(self);
     }
 
     /// Advance every mover along the route it is following.
@@ -7994,7 +8143,7 @@ mod ids_tests {
                 seen.push((sensor.kind, sensor.radius));
             }
         }
-        assert!(seen.contains(&(SensorKind::Sphere, world.sphere_radius())));
+        assert!(seen.contains(&(SensorKind::Sphere, world.sphere_radius_of(home))));
         assert!(seen.contains(&(SensorKind::Unit(UnitKind::Commander), Fx::from_voxels(13))));
         assert!(seen.contains(&(SensorKind::Unit(UnitKind::BuildDrone), Fx::from_voxels(5))));
         assert!(seen.contains(&(

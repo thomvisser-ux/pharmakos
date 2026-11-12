@@ -78,6 +78,7 @@
 //! | [`build_hp_per_tick`](RulesTable::build_hp_per_tick) | `structures.build_hp_per_second` |
 //! | [`power`](RulesTable::power) | the `power` block and the `structures.*.draw_kw` rows ([`crate::power::PowerRules`]) |
 //! | [`resonance_vents`](RulesTable::resonance_vents) | `licences.resonance_vents` (S3's `lic`) |
+//! | [`grown_sphere_radius_voxels`](RulesTable::grown_sphere_radius_voxels) | `beacon.sphere_radius_voxels` plus `structures.resonance_spire_sphere_bonus_voxels` (S3's `lic`) |
 //!
 //! The map generator ([`crate::mapgen`]) reads a dozen more rows — the whole of
 //! `map`, `beacon`, `power`, `economy` and `units` — and reads them from
@@ -265,6 +266,13 @@ pub struct RulesTable {
     /// would award every seat the licence at its first settlement (decisions-log
     /// item 156).
     resonance_vents: NonZeroU32,
+    /// A beacon's sphere radius while a finished Resonance Spire stands on it,
+    /// in whole voxels: `beacon.sphere_radius_voxels` plus
+    /// `structures.resonance_spire_sphere_bonus_voxels` (S3's `lic`; E3,
+    /// decision 6), summed once at load and refused when it is not a voxel
+    /// length, so the radius function ([`crate::spire::radius_voxels`]) does no
+    /// arithmetic inside a tick (decisions-log item 156).
+    grown_sphere_radius_voxels: i16,
 }
 
 /// One unit kind's row as the tick reads it: `units.<kind>.*`, or the
@@ -793,6 +801,14 @@ impl RulesTable {
         self.resonance_vents
     }
 
+    /// A beacon's sphere radius while a finished Resonance Spire stands on it,
+    /// in whole voxels (E3). Read through [`crate::spire::radius_voxels`], the
+    /// one function that decides which radius a beacon has.
+    #[must_use]
+    pub const fn grown_sphere_radius_voxels(&self) -> i16 {
+        self.grown_sphere_radius_voxels
+    }
+
     /// The bottom layers of every column generation writes as bedrock,
     /// `materials.bedrock_layers_voxels`: at least one.
     #[must_use]
@@ -929,7 +945,8 @@ impl RulesTable {
         let combat = crate::arms::CombatRows::read(message)?;
         let site = crate::site::SiteRows::read(message)?;
         let attack = crate::attack::AttackRows::read(message)?;
-        let picket_radius_voxels = picket_radius_of(message, sphere_radius_voxels)?;
+        let grown_sphere_radius_voxels = grown_sphere_radius_of(message, sphere_radius_voxels)?;
+        let picket_radius_voxels = picket_radius_of(message, grown_sphere_radius_voxels)?;
         let resonance_vents = resonance_vents_of(message)?;
 
         let segment_lengths_ms = segment_lengths_of(matched)?;
@@ -1003,6 +1020,7 @@ impl RulesTable {
             attack,
             picket_radius_voxels,
             resonance_vents,
+            grown_sphere_radius_voxels,
         })
     }
 
@@ -1108,12 +1126,39 @@ fn sphere_radius_of(message: &gp::v1::RulesTable) -> Result<i16, RulesError> {
     })
 }
 
-/// `defend.picket_radius_voxels` as the Defend mandate reads it (S2's
-/// `dfnd`): present, and a voxel length whose sum with the sphere's radius is
-/// one too, so the picket's ring is a place on the map's coordinates.
-fn picket_radius_of(
+/// The sphere's radius under a finished Resonance Spire (S3's `lic`; E3,
+/// decision 6): `beacon.sphere_radius_voxels` plus
+/// `structures.resonance_spire_sphere_bonus_voxels`, the bonus a voxel length
+/// and the sum one too, checked as [`picket_radius_of`] checks its sum
+/// (decisions-log item 156).
+fn grown_sphere_radius_of(
     message: &gp::v1::RulesTable,
     sphere_radius_voxels: i16,
+) -> Result<i16, RulesError> {
+    let structures = message
+        .structures
+        .as_ref()
+        .ok_or(RulesError::MissingBlock("structures"))?;
+    i16::try_from(structures.resonance_spire_sphere_bonus_voxels)
+        .ok()
+        .and_then(|bonus| bonus.checked_add(sphere_radius_voxels))
+        .ok_or_else(|| RulesError::OutOfRange {
+            field: "structures.resonance_spire_sphere_bonus_voxels".to_owned(),
+            value: format!(
+                "{}; a Spire's sphere, the base radius and this, is a voxel length, at most {}",
+                structures.resonance_spire_sphere_bonus_voxels,
+                i16::MAX
+            ),
+        })
+}
+
+/// `defend.picket_radius_voxels` as the Defend mandate reads it (S2's
+/// `dfnd`): present, and a voxel length whose sum with the sphere's largest
+/// radius -- a Spire's, since S3's `lic` -- is one too, so the picket's ring
+/// is a place on the map's coordinates.
+fn picket_radius_of(
+    message: &gp::v1::RulesTable,
+    largest_sphere_voxels: i16,
 ) -> Result<i16, RulesError> {
     let defend = message
         .defend
@@ -1121,7 +1166,7 @@ fn picket_radius_of(
         .ok_or(RulesError::MissingBlock("defend"))?;
     i16::try_from(defend.picket_radius_voxels)
         .ok()
-        .filter(|radius| radius.checked_add(sphere_radius_voxels).is_some())
+        .filter(|radius| radius.checked_add(largest_sphere_voxels).is_some())
         .ok_or_else(|| RulesError::OutOfRange {
             field: "defend.picket_radius_voxels".to_owned(),
             value: format!(

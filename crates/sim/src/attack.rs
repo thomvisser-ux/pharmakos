@@ -1338,7 +1338,7 @@ fn weak_point(world: &World, seat: SeatId, beacon: BeaconId) -> Option<u32> {
         .seats()
         .get(world.beacons().row_of(beacon).ok()?.index())
         .copied()?;
-    let limit = Sq::of_radius(world.sphere_radius());
+    let limit = Sq::of_radius(world.sphere_radius_of(beacon));
     let structures = world.structures();
     let rows = structures
         .seats()

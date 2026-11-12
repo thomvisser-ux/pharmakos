@@ -788,7 +788,9 @@ fn draw_under(world: &World, seat: SeatId, rules: PowerRules, lighting: Lighting
     let count = crate::math::index::row(structures.len());
     let mut row: usize = 0;
     while row < count {
-        if structure_counts(world, seat, row, lighting) {
+        if structure_counts(world, seat, row, lighting)
+            || capability_going_up(world, seat, row, lighting)
+        {
             let kind = structures
                 .kinds()
                 .get(row)
@@ -928,6 +930,30 @@ fn structure_counts(world: &World, seat: SeatId, row: usize, lighting: Lighting)
         .get(row)
         .copied()
         .is_some_and(|home| home_counts(world, home, crate::ids::StaleRef::StructureHome, lighting))
+}
+
+/// Whether the structure in `row` is a capability structure of `seat` still
+/// going up, alive and homed to a beacon that counts as lit: it draws from
+/// the tick it is queued (spec section 8: "the kW draw starts with it"; S3's
+/// plan, E4), where every other structure draws only once finished. It
+/// supplies nothing and has no capability until it is finished.
+fn capability_going_up(world: &World, seat: SeatId, row: usize, lighting: Lighting) -> bool {
+    let structures = world.structures();
+    structures.seats().get(row).copied() == Some(seat.raw())
+        && structures.building().get(row).copied() == Some(true)
+        && structures
+            .hit_points()
+            .get(row)
+            .is_some_and(|hp| hp.is_alive())
+        && structures
+            .kinds()
+            .get(row)
+            .copied()
+            .and_then(StructureKind::from_id)
+            .is_some_and(StructureKind::is_capability)
+        && structures.homes().get(row).copied().is_some_and(|home| {
+            home_counts(world, home, crate::ids::StaleRef::StructureHome, lighting)
+        })
 }
 
 /// The grade of the heat vent a Generator stands on, or `None` when it stands

@@ -230,7 +230,8 @@ impl Mandate for Defend {
         // sees inside the sphere, against the raiders the beacon has, in the
         // band spec section 7's ladder puts first ("defend under attack"),
         // so it is asked for before the repair band below it.
-        let threats = crate::defend::threats_in_sphere(world, seat, centre);
+        let threats =
+            crate::defend::threats_in_sphere(world, seat, centre, world.sphere_radius_of(beacon));
         let guards = drones_homed(world, beacon, UnitKind::Raider);
         if backlogged(world, threats, guards) {
             return Some(unit_request(
@@ -576,17 +577,41 @@ fn building_work(world: &World, beacon: BeaconId) -> u32 {
     work
 }
 
-/// Whether `at` lies inside `beacon`'s sphere of authority.
+/// Whether `at` lies inside `beacon`'s sphere of authority, grown by a
+/// finished Resonance Spire (S3's plan, E3).
+///
+/// One call reads the structure table once for the radius; a caller asking
+/// about many points of one beacon takes [`Sphere::of`] once and asks it.
 #[must_use]
 pub(crate) fn inside_sphere(world: &World, beacon: BeaconId, at: [Fx; 3]) -> bool {
-    let Ok(row) = world.beacons().row_of(beacon) else {
-        return false;
-    };
-    let Some(centre) = world.beacons().positions().get(row.index()).copied() else {
-        return false;
-    };
-    let radius = world.sphere_radius();
-    Sq::between(at, centre) <= Sq::of_radius(radius)
+    Sphere::of(world, beacon).is_some_and(|sphere| sphere.holds(at))
+}
+
+/// One live beacon's sphere, its centre and its squared radius, read once
+/// (S3's `lic`): the radius is [`World::sphere_radius_of`], so a loop that asks
+/// about many points walks the structure table once rather than once a point.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct Sphere {
+    centre: [Fx; 3],
+    limit: Sq,
+}
+
+impl Sphere {
+    /// `beacon`'s sphere, or `None` for an id that names no row the beacon
+    /// table still holds.
+    pub(crate) fn of(world: &World, beacon: BeaconId) -> Option<Sphere> {
+        let row = world.beacons().row_of(beacon).ok()?;
+        let centre = world.beacons().positions().get(row.index()).copied()?;
+        Some(Sphere {
+            centre,
+            limit: Sq::of_radius(world.sphere_radius_at_row(row.index())),
+        })
+    }
+
+    /// Whether `at` lies inside: squared distances in Q32.32, no square root.
+    pub(crate) fn holds(self, at: [Fx; 3]) -> bool {
+        Sq::between(at, self.centre) <= self.limit
+    }
 }
 
 /// A request for work paid in advance (S2's `site`): it draws no `kW`, since

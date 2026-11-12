@@ -738,7 +738,8 @@ fn bind_rows(
             Row::Mandate { .. }
             | Row::Priority { .. }
             | Row::Recycle
-            | Row::RemoveTarget { .. } => {
+            | Row::RemoveTarget { .. }
+            | Row::QueueStructure { .. } => {
                 continue;
             }
         };
@@ -1314,6 +1315,9 @@ fn commit_row(
         Row::Priority { priority } => world.set_beacon_priority(row, *priority),
         Row::Recycle => {
             world.recycle_beacon(seat, beacon);
+        }
+        Row::QueueStructure { kind } => {
+            world.queue_capability(seat, beacon, *kind)?;
         }
         Row::AddTarget { target } => {
             let (at, bound) = match target.anchor {

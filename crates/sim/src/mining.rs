@@ -342,7 +342,7 @@ pub fn remaining_yield(
 ) -> Option<i64> {
     let feature = world.features().get(seam)?;
     let centre = world.beacons().positions().get(row).copied()?;
-    let limit = Sq::of_radius(world.sphere_radius());
+    let limit = Sq::of_radius(world.sphere_radius_at_row(row));
     let mut total: i64 = 0;
     for column in &feature.footprint {
         if pillar(feature, settings, column.x, column.y) || blocked(world, column.x, column.y) {
@@ -371,7 +371,8 @@ fn dig_in(world: &World, row: usize, seam: usize, settings: MineSettings) -> Opt
         return None;
     }
     let centre = world.beacons().positions().get(row).copied()?;
-    if !reaches(world, centre, feature) {
+    let radius = world.sphere_radius_at_row(row);
+    if !reaches(centre, radius, feature) {
         return None;
     }
     let [hx, hy] = crate::targeting::column_of(centre);
@@ -379,7 +380,7 @@ fn dig_in(world: &World, row: usize, seam: usize, settings: MineSettings) -> Opt
     // The cheap tests first, every footprint column at most once: exposed ore,
     // inside the sphere, within the depth, off the pillars, clear of
     // structures. What passes is sorted by the dig order.
-    let limit = Sq::of_radius(world.sphere_radius());
+    let limit = Sq::of_radius(radius);
     let mut keys = [(Sq::ZERO, 0_i32, 0_i32, 0_i32); MAX_FOOTPRINT_COLUMNS];
     let mut count: usize = 0;
     for column in &feature.footprint {
@@ -527,10 +528,10 @@ fn blocked(world: &World, x: i32, y: i32) -> bool {
 }
 
 /// Whether any footprint column of `feature` can lie inside the sphere around
-/// `centre`: a bounding-box test, so a seam across the map costs one
-/// comparison.
-fn reaches(world: &World, centre: [Fx; 3], feature: &Feature) -> bool {
-    let reach = world.sphere_radius().floor_voxels().max(0);
+/// `centre`, of radius `radius` (the beacon's own): a bounding-box test, so a
+/// seam across the map costs one comparison.
+fn reaches(centre: [Fx; 3], radius: Fx, feature: &Feature) -> bool {
+    let reach = radius.floor_voxels().max(0);
     let [cx, cy] = crate::targeting::column_of(centre);
     let [min_x, min_y, max_x, max_y] = feature.bounds;
     cx.saturating_add(reach) >= min_x

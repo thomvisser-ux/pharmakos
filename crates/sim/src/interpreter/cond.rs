@@ -515,7 +515,9 @@ impl Board for SnapshotBoard<'_> {
         let snapshot = self.snapshot;
         let rules = self.rules;
         let seat = self.seat.raw();
-        let limit = Sq::of_radius(Fx::from_voxels(rules.sphere_radius_voxels()));
+        let limit = Sq::of_radius(Fx::from_voxels(crate::spire::radius_in_snapshot(
+            rules, snapshot, row,
+        )));
         let enemy = |owner: u8| owner != seat && SeatId::new(owner).is_some();
         let inside = |at: Option<[Fx; 3]>| at.is_some_and(|at| Sq::between(at, centre) <= limit);
         let mut sum: u64 = 0;
@@ -573,7 +575,11 @@ impl Board for SnapshotBoard<'_> {
         let Some(centre) = self.row_at(row) else {
             return false;
         };
-        let limit = Sq::of_radius(Fx::from_voxels(self.rules.sphere_radius_voxels()));
+        let limit = Sq::of_radius(Fx::from_voxels(crate::spire::radius_in_snapshot(
+            self.rules,
+            self.snapshot,
+            row,
+        )));
         let drone = crate::tables::UnitKind::RepairDrone.id();
         let snapshot = self.snapshot;
         snapshot
@@ -807,7 +813,7 @@ fn live_row_threat(world: &World, seat: SeatId, row: usize) -> u64 {
         .copied()
         // E7: cannot miss: every caller's `row` is a row of the beacon table it read
         .map_or(0, |centre| {
-            crate::defend::sphere_threat(world, seat, centre)
+            crate::defend::sphere_threat(world, seat, centre, world.sphere_radius_at_row(row))
         })
 }
 
@@ -818,7 +824,9 @@ fn live_row_repairs(world: &World, seat: SeatId, row: usize) -> bool {
         .positions()
         .get(row)
         .copied()
-        .is_some_and(|centre| crate::defend::repairs_in_sphere(world, seat, centre))
+        .is_some_and(|centre| {
+            crate::defend::repairs_in_sphere(world, seat, centre, world.sphere_radius_at_row(row))
+        })
 }
 
 /// How a selector orders the beacons that pass its filter.

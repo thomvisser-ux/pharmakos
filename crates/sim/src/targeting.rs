@@ -175,19 +175,44 @@ impl Ground<'_> {
         self.work.add(units);
     }
 
-    /// `beacon.sphere_radius_voxels`, which the rules table refuses at load
-    /// unless it is a voxel length ([`RulesTable::sphere_radius_voxels`]).
+    /// The **base** sphere radius, `beacon.sphere_radius_voxels`, which the
+    /// rules table refuses at load unless it is a voxel length
+    /// ([`RulesTable::sphere_radius_voxels`]): the sphere of a site where no
+    /// beacon stands yet, which no Resonance Spire can have grown (S3's plan,
+    /// decision 6). A placed beacon's is [`Ground::radius_of`].
     #[must_use]
     pub fn sphere_radius(&self) -> i32 {
         i32::from(self.rules.sphere_radius_voxels())
     }
 
-    /// Whether `point` lies within the beacon sphere's radius of `centre`:
-    /// squared distances in Q32.32, no square root (AGENTS.md section 4.2).
+    /// Whether `point` lies within the **base** sphere radius of `centre`:
+    /// the sphere of a site where no beacon stands yet ([`Ground::sphere_radius`]).
+    /// Squared distances in Q32.32, no square root (AGENTS.md section 4.2).
     #[must_use]
     pub fn in_sphere(&self, centre: [Fx; 3], point: [Fx; 3]) -> bool {
         let radius = Fx::from_voxels(self.rules.sphere_radius_voxels());
         Sq::between(centre, point) <= Sq::of_radius(radius)
+    }
+
+    /// The sphere radius of `beacon`, grown by a finished Resonance Spire
+    /// ([`crate::spire::radius_of`]; S3's plan, E3), or the base for `None`,
+    /// a site where no beacon stands yet.
+    #[must_use]
+    pub fn radius_of(&self, beacon: Option<BeaconId>) -> Fx {
+        Fx::from_voxels(match beacon {
+            Some(beacon) => {
+                crate::spire::radius_of(self.rules, self.beacons, self.structures, beacon)
+            }
+            None => self.rules.sphere_radius_voxels(),
+        })
+    }
+
+    /// Whether `point` lies inside the sphere centred on `centre` of `beacon`
+    /// (its grown radius, [`Ground::radius_of`]), or of a site where no beacon
+    /// stands yet for `None`.
+    #[must_use]
+    pub fn in_sphere_of(&self, beacon: Option<BeaconId>, centre: [Fx; 3], point: [Fx; 3]) -> bool {
+        Sq::between(centre, point) <= Sq::of_radius(self.radius_of(beacon))
     }
 
     /// The point a unit or a structure stands at on the column `(x, y)`: one
@@ -213,8 +238,25 @@ impl Ground<'_> {
     /// beacons, **awake or dormant**: a dormant beacon keeps its sphere.
     #[must_use]
     pub fn inside_own_sphere(&self, seat: SeatId, point: [Fx; 3]) -> bool {
-        self.own_live_beacons(seat)
-            .any(|centre| self.in_sphere(centre, point))
+        // Each beacon's own radius, grown by a finished Spire (decision 6: the
+        // anchor for placing the next beacon grows).
+        self.beacons
+            .seats()
+            .iter()
+            .zip(self.beacons.hit_points())
+            .zip(self.beacons.positions())
+            .enumerate()
+            .filter(|(_, ((owner, hp), _))| **owner == seat.raw() && hp.is_alive())
+            .any(|(row, (_, centre))| {
+                crate::spire::inside_at_row(
+                    self.rules,
+                    self.beacons,
+                    self.structures,
+                    row,
+                    *centre,
+                    point,
+                )
+            })
     }
 
     /// **No stacking**: whether one of `seat`'s own live beacons stands on the
@@ -738,9 +780,23 @@ pub fn generator_on(ground: &Ground<'_>, x: i32, y: i32) -> bool {
 /// an index the table does not hold.
 #[must_use]
 pub fn anchor_in_sphere(ground: &Ground<'_>, centre: [Fx; 3], index: usize) -> bool {
+    anchor_in_sphere_of(ground, None, centre, index)
+}
+
+/// [`anchor_in_sphere`] for the sphere of `beacon`, centred on `centre`: its
+/// radius grown by a finished Resonance Spire (S3's plan, decision 6: the
+/// sphere's coverage of vents grows), or the base for `None`, a site where no
+/// beacon stands yet.
+#[must_use]
+pub fn anchor_in_sphere_of(
+    ground: &Ground<'_>,
+    beacon: Option<BeaconId>,
+    centre: [Fx; 3],
+    index: usize,
+) -> bool {
     ground
         .anchor_point(index)
-        .is_some_and(|point| ground.in_sphere(centre, point))
+        .is_some_and(|point| ground.in_sphere_of(beacon, centre, point))
 }
 
 /// Whether a live Generator of any seat, or a Build target of `seat`'s (but
@@ -822,7 +878,7 @@ pub fn on_vent_counted(
         let found = ground.features.get(feature).ok_or(missed)?;
         if found.kind != FeatureKind::Vent
             || !ground.is_live(feature)
-            || !anchor_in_sphere(ground, centre, feature)
+            || !anchor_in_sphere_of(ground, except, centre, feature)
         {
             return Err(missed);
         }
@@ -833,7 +889,7 @@ pub fn on_vent_counted(
         let [x, y] = ground.on_column(feature, seat, except).ok_or(illegal)?;
         let inside = ground
             .standing(x, y)
-            .is_some_and(|point| ground.in_sphere(centre, point));
+            .is_some_and(|point| ground.in_sphere_of(except, centre, point));
         if !inside {
             return Err(illegal);
         }
@@ -884,7 +940,7 @@ pub fn on_candidate(
     ground
         .on_column(index, seat, except)
         .and_then(|[x, y]| ground.standing(x, y))
-        .is_some_and(|point| ground.in_sphere(centre, point))
+        .is_some_and(|point| ground.in_sphere_of(except, centre, point))
 }
 
 #[cfg(test)]
