@@ -77,6 +77,7 @@
 //! | [`arrive_radius_voxels`](RulesTable::arrive_radius_voxels), [`interface_range_voxels`](RulesTable::interface_range_voxels) | `commander.arrive_radius_voxels` / `.interface_range_voxels` |
 //! | [`build_hp_per_tick`](RulesTable::build_hp_per_tick) | `structures.build_hp_per_second` |
 //! | [`power`](RulesTable::power) | the `power` block and the `structures.*.draw_kw` rows ([`crate::power::PowerRules`]) |
+//! | [`resonance_vents`](RulesTable::resonance_vents) | `licences.resonance_vents` (S3's `lic`) |
 //!
 //! The map generator ([`crate::mapgen`]) reads a dozen more rows — the whole of
 //! `map`, `beacon`, `power`, `economy` and `units` — and reads them from
@@ -258,6 +259,12 @@ pub struct RulesTable {
     /// `defend.picket_radius_voxels`, typed at load (S2's `dfnd`): how far
     /// beyond the sphere's edge a Defend beacon's pickets patrol.
     picket_radius_voxels: i16,
+    /// `licences.resonance_vents`, typed at load (S3's `lic`; decision 6): how
+    /// many different vents a seat's finished, powered Generators must tap at a
+    /// settlement for the Resonance Spire's licence. Refused at zero, which
+    /// would award every seat the licence at its first settlement (decisions-log
+    /// item 156).
+    resonance_vents: NonZeroU32,
 }
 
 /// One unit kind's row as the tick reads it: `units.<kind>.*`, or the
@@ -778,6 +785,14 @@ impl RulesTable {
         self.picket_radius_voxels
     }
 
+    /// How many different vents a seat's finished, powered Generators must tap
+    /// at a settlement to earn the Resonance Spire's licence
+    /// (`licences.resonance_vents`; spec section 8, decision 6). At least one.
+    #[must_use]
+    pub const fn resonance_vents(&self) -> NonZeroU32 {
+        self.resonance_vents
+    }
+
     /// The bottom layers of every column generation writes as bedrock,
     /// `materials.bedrock_layers_voxels`: at least one.
     #[must_use]
@@ -915,6 +930,7 @@ impl RulesTable {
         let site = crate::site::SiteRows::read(message)?;
         let attack = crate::attack::AttackRows::read(message)?;
         let picket_radius_voxels = picket_radius_of(message, sphere_radius_voxels)?;
+        let resonance_vents = resonance_vents_of(message)?;
 
         let segment_lengths_ms = segment_lengths_of(matched)?;
 
@@ -986,6 +1002,7 @@ impl RulesTable {
             site,
             attack,
             picket_radius_voxels,
+            resonance_vents,
         })
     }
 
@@ -1113,6 +1130,22 @@ fn picket_radius_of(
                 i16::MAX
             ),
         })
+}
+
+/// `licences.resonance_vents` as the Ledger's licence check reads it (S3's
+/// `lic`): the block present, and at least one vent, since a trigger of none
+/// would award every seat the licence at its first settlement and so license
+/// nothing (decisions-log item 156).
+fn resonance_vents_of(message: &gp::v1::RulesTable) -> Result<NonZeroU32, RulesError> {
+    let licences = message
+        .licences
+        .as_ref()
+        .ok_or(RulesError::MissingBlock("licences"))?;
+    NonZeroU32::new(licences.resonance_vents).ok_or_else(|| RulesError::OutOfRange {
+        field: "licences.resonance_vents".to_owned(),
+        value: "0; a trigger of no vents awards every seat the licence at its first settlement"
+            .to_owned(),
+    })
 }
 
 /// The rows S1's `build` lane reads typed at load, so the tick reads each as

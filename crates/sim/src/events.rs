@@ -331,11 +331,22 @@ pub enum EventKind {
     /// fires (S2's `atk`; decision 9). `seat` is its owner, `subject` the
     /// Attack beacon, `at` the plant point the carrier was walking to.
     ChargeLost,
+    /// A seat earned a Ledger licence at the settlement (S3's `lic`; spec
+    /// section 8, decision 6). `seat` is the seat, `value` the licence's
+    /// `gp.v1.Licence` wire value (1, the Resonance Spire). Emitted in the tick
+    /// that opens the recap, after the settlement's `settled` lines.
+    LicenceAwarded,
+    /// A seat's licence was voided because the seat was eliminated (S3's
+    /// `lic`; spec section 8: "An eliminated seat's licences are voided").
+    /// `seat` is the eliminated seat, `value` the licence's `gp.v1.Licence`
+    /// wire value. Emitted in the tick the seat is eliminated, after its
+    /// `seat_eliminated` line.
+    LicenceVoided,
 }
 
 impl EventKind {
     /// Every kind, in ascending [`EventKind::id`] order.
-    pub const ALL: [EventKind; 58] = [
+    pub const ALL: [EventKind; 60] = [
         EventKind::MatchStarted,
         EventKind::LullOpened,
         EventKind::PushStarted,
@@ -394,6 +405,8 @@ impl EventKind {
         EventKind::ChargePlanted,
         EventKind::ChargeDetonated,
         EventKind::ChargeLost,
+        EventKind::LicenceAwarded,
+        EventKind::LicenceVoided,
     ];
 
     /// The wire id. Additive only: never reuse, never renumber.
@@ -458,6 +471,8 @@ impl EventKind {
             EventKind::ChargePlanted => 56,
             EventKind::ChargeDetonated => 57,
             EventKind::ChargeLost => 58,
+            EventKind::LicenceAwarded => 59,
+            EventKind::LicenceVoided => 60,
         }
     }
 
@@ -523,6 +538,8 @@ impl EventKind {
             56 => Some(EventKind::ChargePlanted),
             57 => Some(EventKind::ChargeDetonated),
             58 => Some(EventKind::ChargeLost),
+            59 => Some(EventKind::LicenceAwarded),
+            60 => Some(EventKind::LicenceVoided),
             _ => None,
         }
     }
@@ -591,6 +608,8 @@ impl EventKind {
             EventKind::ChargePlanted => "charge_planted",
             EventKind::ChargeDetonated => "charge_detonated",
             EventKind::ChargeLost => "charge_lost",
+            EventKind::LicenceAwarded => "licence_awarded",
+            EventKind::LicenceVoided => "licence_voided",
         }
     }
 

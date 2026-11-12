@@ -88,6 +88,7 @@ pub mod hash;
 pub mod ids;
 pub mod interpreter;
 pub mod knowledge;
+pub mod licence;
 pub mod mandate;
 pub mod mapgen;
 pub mod math;

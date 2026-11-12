@@ -392,6 +392,12 @@ pub struct World {
     /// planted charges (S2's `atk`): a block after the explored block that
     /// writes nothing while it is empty (E29).
     attack: crate::attack::AttackTable,
+    /// Every seat's Ledger licences (S3's `lic`, E2): a block after the
+    /// Attack block that writes nothing while it is empty.
+    licences: crate::licence::LicenceTable,
+    /// The licences a seat's elimination voids, one tick's worth: scratch
+    /// sized at construction so the voiding allocates nothing.
+    voided: Vec<u8>,
 
     chunks: ChunkDigests,
 
@@ -1017,6 +1023,7 @@ pub(crate) struct RestoredTables {
     pub(crate) defend: crate::tables::DefendTable,
     pub(crate) explored: crate::tables::ExploredTable,
     pub(crate) attack: crate::attack::AttackTable,
+    pub(crate) licences: crate::licence::LicenceTable,
     pub(crate) voxels: VoxelStore,
     pub(crate) chunks: ChunkDigests,
     /// The map's feature table, regenerated with the pristine map rather than
@@ -1231,6 +1238,8 @@ impl World {
                 table.reserve(beacon_limit, AVOID_AREA_ROOM);
                 table
             },
+            licences: crate::licence::LicenceTable::with_room(config.seats),
+            voided: Vec::with_capacity(crate::licence::AWARDED.len()),
             chunks,
             router,
             match_state: MatchState::new(&settings),
@@ -1405,6 +1414,33 @@ impl World {
     /// The explored table, to write: S2's `surv` marks cells through it.
     pub(crate) const fn explored_mut(&mut self) -> &mut crate::tables::ExploredTable {
         &mut self.explored
+    }
+
+    /// Every seat's Ledger licences (S3's `lic`, E2).
+    #[must_use]
+    pub const fn licences(&self) -> &crate::licence::LicenceTable {
+        &self.licences
+    }
+
+    /// The licence table, to write: the settlement's check awards through it
+    /// ([`crate::licence::settle`]) and an elimination voids through it.
+    pub(crate) const fn licences_mut(&mut self) -> &mut crate::licence::LicenceTable {
+        &mut self.licences
+    }
+
+    /// Award `licence` to `seat` directly, at `round`: `true` when the row is
+    /// new.
+    ///
+    /// Fixture API, like the seven methods below the block comment further
+    /// down: a licence is earned at a settlement ([`crate::licence::settle`])
+    /// and nothing outside a test or a scenario fixture may call this.
+    pub fn award_licence_directly(
+        &mut self,
+        seat: SeatId,
+        licence: pharmakos_proto::gp::v1::Licence,
+        round: u32,
+    ) -> bool {
+        self.licences.award(seat, licence, round)
     }
 
     /// Every Attack beacon's settings and force, the avoid areas and the
@@ -5370,9 +5406,30 @@ impl World {
                     tick,
                     Emission::of(EventKind::SeatEliminated).seat(SeatId::new(raw)),
                 );
+                // Spec section 8: "An eliminated seat's licences are voided", on
+                // the tick it is eliminated (S3's plan, E2).
+                self.void_licences(SeatId::new(raw));
             }
             index = index.saturating_add(1);
         }
+    }
+
+    /// Void every licence `seat` holds, one `licence_voided` line per licence
+    /// in ascending wire value (S3's `lic`; spec section 8).
+    fn void_licences(&mut self, seat: SeatId) {
+        let mut voided = core::mem::take(&mut self.voided);
+        self.licences.void_seat(seat, &mut voided);
+        let tick = self.tick;
+        for licence in &voided {
+            self.emit(
+                tick,
+                Emission::of(EventKind::LicenceVoided)
+                    .seat(seat)
+                    .value(i64::from(*licence)),
+            );
+        }
+        voided.clear();
+        self.voided = voided;
     }
 
     /// Disband every one of a seat's units where it stands, the commander
@@ -5646,6 +5703,10 @@ impl World {
             Emission::of(EventKind::RecapOpened).value(i64::from(round)),
         );
         self.settle_ledger();
+        // The Ledger's licence check, after the income and in seat order
+        // (S3's plan, E2), so an award is in this tick's hash and in the
+        // frozen snapshot the next Lull plans against, as the income is.
+        crate::licence::settle(self);
         // The last round's segment end is the match's **final tick** (spec
         // section 3: "the last tick of the last Push, before the recap"), so
         // the round limit is decided here, after the final settlement, by the
@@ -5908,6 +5969,10 @@ impl World {
     ///     every handler's fire count and cooldown
     ///     ([`crate::interpreter::state`]). The **plans** are not here: a
     ///     playbook is an input, exactly like the rules table.
+    /// 11. the blocks that write nothing while their table is empty, each
+    ///     behind its tag: the shells, the site work, Defend, the explored
+    ///     cells, Attack and, from S3's `lic`, the Ledger's licences
+    ///     ([`crate::licence::LicenceTable`]).
     ///
     /// The seat block gained three columns with the match state: the tick a
     /// seat was eliminated at, its commander's death count for this Push, and
@@ -6106,6 +6171,9 @@ impl World {
         // S2's `atk`: the Attack block, after the explored block, writing
         // nothing while it holds nothing (E29).
         self.attack.encode(enc);
+        // S3's `lic`: the licence block, after the Attack block, writing
+        // nothing while no seat holds a licence (E2).
+        self.encode_licences(enc);
     }
 
     /// The Defend table (S2's `dfnd`), as a block after the site block that
@@ -6131,6 +6199,24 @@ impl World {
         for (by, of) in self.defend.protected() {
             enc.u32(by.raw());
             enc.u32(of.raw());
+        }
+    }
+
+    /// The licence table (S3's `lic`, E2), as a block after the Attack block
+    /// that **writes nothing while no seat holds a licence** and otherwise
+    /// writes its tag, its count and its rows ascending by seat then licence:
+    /// each row's seat, licence wire value and round awarded. A chain whose
+    /// seats earn nothing does not move for the table (item 136's block rule).
+    fn encode_licences(&self, enc: &mut Enc) {
+        if self.licences.is_empty() {
+            return;
+        }
+        enc.u8(crate::licence::LicenceTable::HASH_TAG);
+        enc.len(table_len(self.licences.rows().len()));
+        for row in self.licences.rows() {
+            enc.u8(row.seat);
+            enc.u8(row.licence);
+            enc.u32(row.round);
         }
     }
 
@@ -6569,6 +6655,8 @@ impl World {
         self.explored = restored.explored;
         self.attack = restored.attack;
         self.attack.reserve(self.beacon_limit, AVOID_AREA_ROOM);
+        self.licences = restored.licences;
+        self.licences.reserve_for(self.seats.len());
         self.reserve_route_zones();
         self.bore = restored.bore;
         self.generated = restored.generated;
