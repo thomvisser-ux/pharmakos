@@ -715,7 +715,7 @@ change moves `report_hash` is granted, for the re-bless alone, `tests/golden/gat
 
 - **Owns:** `crates/verifier` and `crates/proto/src/json/`; as a named place, the plan fingerprint's
   computation in `crates/sim/src/hash.rs` (determinism code, named in the PR). Runs after `lic` merges,
-  because it shares `crates/sim`. Builds in `C:/build/vfyq`. **Branch** `feat/verifier-quick`.
+  because it shares `crates/sim`. Builds in `D:/build/vfyq` (item 159). **Branch** `feat/verifier-quick`.
 - **The first run (item 158 (1)).** It stopped without a PR. QUICK is linear in the playbook's bytes,
   and about 70% of it is the codec (`json::read`, then JSON to wire to prost) and the fingerprint (prost
   encode, wire to JSON, write, xxh3). The verifier's walks are about 22%, mostly building pointer
@@ -1137,14 +1137,16 @@ names the decisions it builds on.
 | 2 | 11–24.5 | **pred** (5.5, from 11) → **opr3** (4, from 16.5; merges at 24.5, after `ed3b`) | **gwr** (5, from 11) → **vfy6** (2.5, from 16.5) → **cert3** (2, from 19) | **bench3** (5, to 13) → **nite3** (2.5, from 13) → **ed3b** (8, from 16) | the rule list; the P3 and P1 reports; P6b at day 24 |
 | 3 | 24.5–31 | **tune3** (4, from 24.5) → **demo3** (2.5, from 28.5) | — | **prob** (4, from 24.5) | Playtest mode; the S3 demo of §1.1 |
 
-**One lane at a time, from 2026-11-09 (item 157).** The owner ruled that lanes run one at a time while
-D: is short of space, so the table above is the dependency order, not the calendar. The order from
-`gwp` on is `gwp` → `lic` → `vfyq` (item 158) → `bench3` → `vfy6` → `gwr` → `nite3` → `pred` → `ed3b` (after P6a) →
-`opr3` → `cert3` → `prob` → `tune3` → `demo3`, each lane starting when the one before it merges.
-The named places above stay as written: under serial running they cross no open lane. The
-critical path is now the sum of the lanes' days, not the longer of two chains. Decision 12's
-checkpoints (section 4.5) are held, with no cut taken, until the owner has freed D: and said how lanes
-then run (item 157 (9)).
+**Two lanes at once, from 2026-11-13 (item 159).** Lanes ran one at a time from 2026-11-09 while D:
+was short of space (item 157 (1)); the owner has freed D: and ruled two at once, never sharing a
+crate or a named place, with every lane after `lic` building in `D:/build/<lane>`. The table above
+is the dependency order, not the calendar. From `lic`'s merge (day 0), in plan days:
+slot A runs `vfyq` (0–4) → `vfy6` (4–6.5) → `pred` (6.5–12) → `nite3` (12–14.5) → `opr3`
+(14.5–18.5, its last commit after `ed3b` merges) → `cert3` (18.5–20.5) → `tune3` (20.5–24.5) →
+`demo3` (24.5–27); slot B runs `gwr` (0–5) → `bench3` (5–10) → `ed3b` (10–18, after P6a) → `prob`
+(18.5–22.5). Each lane's Needs line binds over this order. A timed figure is taken only while no
+other cargo, rustc or nextest runs (item 159 (2)). Decision 12's checkpoints (section 4.5) are
+re-based on this order (item 159 (4)).
 
 **Totals.** 19 tasks, **about 74.5 ad** (65–84), including about 1.5 ad of re-blesses after merges
 of `main`; 73.5 without decision 3's Survey post. **Two critical paths of about 31 working days:**
@@ -1250,7 +1252,11 @@ in the match the gate plays (section 1.1's finding).
 **Checkpoints** (decision 12): at `ed3b`'s start (planned day 16), later than day 17 takes cut 1; at
 `pred`'s start (planned day 11), later than day 13 takes cut 2, since the sim's path has about two
 days of its own before its waits; at `opr3`'s start (planned day 16.5), later than day 18 takes cut
-3. Past the last, the main session puts the slip to the owner.
+3. Past the last, the main session puts the slip to the owner. **Re-based by item 159 (4)** on the
+two-slot order, counted from `lic`'s merge (day 0, 2026-11-13): cut 1 if `ed3b` starts later than
+day 11 (2026-11-30), cut 2 if `pred` starts later than day 8.5 (the end of 2026-11-25), cut 3 if
+`opr3` starts later than day 16 (2026-12-07). A checkpoint missed only for want of P6a is put to the
+owner rather than taken.
 
 ### 4.6 The contract pull requests, in merge order
 
