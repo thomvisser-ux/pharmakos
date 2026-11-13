@@ -226,15 +226,19 @@ pub fn event_text(event: &Event) -> String {
     }
 }
 
-/// A licence's name, from its `gp.v1.Licence` wire value. A value this build
-/// does not name is written as the number it is.
+/// A licence's name, from its `gp.v1.Licence` wire value, read through the
+/// typed enum: a value it does not name (the unspecified zero, or a licence
+/// of a later build) is said as the code it is, in the words every other
+/// unknown value of the feed takes ("this build does not name (code N)").
 fn licence_name(value: i64) -> String {
-    match i32::try_from(value)
+    let named = i32::try_from(value)
         .ok()
-        .and_then(|value| pharmakos_proto::gp::v1::Licence::try_from(value).ok())
-    {
+        .and_then(|value| pharmakos_proto::gp::v1::Licence::try_from(value).ok());
+    match named {
         Some(pharmakos_proto::gp::v1::Licence::ResonanceSpire) => String::from("Resonance Spire"),
-        _ => format!("licence {value}"),
+        Some(pharmakos_proto::gp::v1::Licence::Unspecified) | None => {
+            format!("a licence this build does not name (code {value})")
+        }
     }
 }
 
@@ -1018,7 +1022,7 @@ mod tests {
         );
         assert_eq!(
             event_text(&event(EventKind::LicenceAwarded, Some(0), 9)),
-            "The Ledger awarded seat 0 a licence: licence 9."
+            "The Ledger awarded seat 0 a licence: a licence this build does not name (code 9)."
         );
     }
 

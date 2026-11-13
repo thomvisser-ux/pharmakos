@@ -12,10 +12,12 @@
 //           covering the second vent from it, with a Generator; at round 2's
 //           settlement its two finished, powered Generators tap two vents and
 //           the Ledger awards the licence; round 3, the Spire queued at the
-//           core, raised by the core's fabricator, the core's sphere growing
-//           from 24 voxels to 36; round 4, the autocannon 30 voxels east of the
-//           core, written every round and committed only once the larger
-//           sphere holds it, built by the core's drones;
+//           core, raised by the core's fabricator over 60 s, the core's
+//           sphere growing from 24 voxels to 36; the autocannon 30 voxels east
+//           of the core, written in round 1 and waiting outside the base
+//           sphere (decision 6: no physical work reaches it), is bought at
+//           round 4's first decision, once the larger sphere holds it and the
+//           round-3 settlement pays for it, and built by the core's drones;
 //   seat 1  seals nothing, so the gateway files the safe playbook for it.
 //
 // Money needed no cure: dig depth and `tune3`'s rows are untouched, and the
@@ -65,6 +67,6 @@
       "note": "Round 2's settlement, tick 9600: the stone landed at 4841, the second vent's beacon at 5506 and its Generator was finished at 6251, so two Generators tap two vents and the Ledger awards the Resonance Spire's licence. Round 1's settlement, with one, awarded nothing." },
     { "assert": "hash_chain_equals",
       "golden": "tests/golden/scenarios/resonance-spire/expected.hashes.txt",
-      "note": "Pins the rest: the Spire queued at the core at tick 9816 and finished at 9983, the autocannon past the old sphere queued at 19286 and finished at 19927. Byte-identical on Windows, Linux and macOS." }
+      "note": "Pins the rest: the Spire queued at the core at tick 9816 and finished at 11013, the autocannon past the old sphere queued at 19201 and finished at 19842; crates/gamectl/tests/scenarios.rs' `the_s3_scenarios_pin_their_beats` holds those ticks, the events log and the verifier's codes round by round. Byte-identical on Windows, Linux and macOS." }
   ]
 }

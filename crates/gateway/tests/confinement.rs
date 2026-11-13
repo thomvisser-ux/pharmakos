@@ -129,6 +129,59 @@ const BANNED: &[(&str, &str)] = &[
 ];
 
 /// Wildcard addresses: the half of "localhost only" a type cannot enforce.
+/// The sim's fixture API (`World`'s block comment: "not game actions, and
+/// nothing outside a test, a scenario fixture or the host's lobby layout may
+/// call them"), by method name: shipped code reaches a match's state through
+/// the game's own paths, never these (S3's `lic`, its fix pass).
+const SIM_FIXTURES: &[(&str, &str)] = &[
+    (
+        "award_licence_directly",
+        "a licence is earned at a settlement, never handed over (S3's `lic`)",
+    ),
+    (
+        "place_beacon_directly",
+        "a beacon is placed by a deploy, never by a fixture",
+    ),
+    (
+        "raise_structure",
+        "a structure is bought through the Quartermaster and raised by drones or a fabricator",
+    ),
+    (
+        "field_unit",
+        "a unit is fabricated by its beacon, never fielded by hand",
+    ),
+    (
+        "field_movers_directly",
+        "the movers are a test's load, never a match's",
+    ),
+    (
+        "switch_mandate_directly",
+        "a writ changes on site, by a visit",
+    ),
+    (
+        "place_unit_directly",
+        "a unit walks; it is never put somewhere",
+    ),
+    (
+        "mark_explored_directly",
+        "a Survey scout explores; nothing marks a cell by hand",
+    ),
+    (
+        "set_treasury",
+        "the treasury moves by spending and income alone",
+    ),
+    ("set_dormant", "dormancy is the power phase's"),
+    ("send_unit_directly", "a unit is sent by its program"),
+    (
+        "set_build_settings_directly",
+        "Build settings change on site, by a visit",
+    ),
+    (
+        "set_site_funds_directly",
+        "site funds are the Quartermaster's",
+    ),
+];
+
 const NO_WILDCARD_BINDING: &[(&str, &str)] = &[
     (
         "0.0.0.0",
@@ -1776,5 +1829,18 @@ fn the_fallback_scan_finds_what_it_looks_for() {
     assert!(
         found.iter().any(|(file, _)| file == "sha1.rs"),
         "the fallback scan no longer sees sha1.rs' kept read"
+    );
+}
+
+#[test]
+fn no_shipped_code_calls_a_sim_fixture() {
+    let findings = scan(SIM_FIXTURES);
+    assert!(
+        findings.is_empty(),
+        "{}",
+        findings.join(
+            "
+"
+        )
     );
 }

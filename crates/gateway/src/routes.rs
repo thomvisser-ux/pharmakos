@@ -133,13 +133,17 @@ impl RouteAdapter {
         let surface = Surface::new(voxels, StepCosts::from_rules(rules)).ok_or_else(|| {
             Error::internal("this map has no walkable surface to estimate a route over")
         })?;
-        let mut scratch = Scratch::for_map(&surface, cluster_voxels).ok_or_else(|| {
-            Error::internal("this map and cluster edge do not size a search scratch")
-        })?;
-        let clusters =
-            Clusters::new(&surface, rules.cluster_shape(), &mut scratch).ok_or_else(|| {
-                Error::internal("this map and cluster edge do not decompose into clusters")
-            })?;
+        // The sim's own builder, so the adapter's decomposition is the world's
+        // and its scratch is checked against it, as the world's is.
+        let (clusters, scratch) =
+            pharmakos_sim::pathing::graph_for(&surface, rules.cluster_shape()).ok_or_else(
+                || {
+                    Error::internal(
+                        "this map and cluster edge do not decompose into clusters and a search \
+                     scratch sized for them",
+                    )
+                },
+            )?;
         Ok(RouteAdapter {
             surface,
             clusters,

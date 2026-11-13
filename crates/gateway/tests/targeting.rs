@@ -1199,3 +1199,67 @@ fn a_named_vent_outside_the_sphere_matches_nothing_as_the_sim_reports() {
         "the recap says `{said}`: {recap:?}"
     );
 }
+
+/// S3's `lic` (decision 6): `covering_beacon` asks the sim's own sphere test
+/// for a placed beacon, so a finished Resonance Spire's larger sphere covers
+/// for the scope's `covered_by`, `get_map_summary` and W0704/W0706 exactly
+/// where the sim's `covering` does.
+#[test]
+fn covering_beacon_reads_a_spires_grown_sphere() {
+    use pharmakos_sim::math::fixed::Fx;
+    let rules = pharmakos_sim::RulesTable::load(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("rules")
+            .join("rules.v1.json"),
+    )
+    .expect("the committed rules table loads");
+    let base = rules.sphere_radius_voxels();
+    let mut world = pharmakos_sim::World::new(&pharmakos_sim::WorldConfig {
+        match_seed: 0x0000_0000_ca5c_aded,
+        seats: 2,
+        rules,
+        match_settings: pharmakos_sim::MatchSettings {
+            segment_lengths_ms: vec![180_000],
+            round_limit: 1,
+        },
+    })
+    .expect("a world");
+    let seat = SeatId::new(0);
+    let row = world
+        .beacons()
+        .seats()
+        .iter()
+        .position(|owner| *owner == 0)
+        .expect("seat 0's core");
+    let core = pharmakos_sim::tables::BeaconId::new(
+        world.beacons().ids().get(row).copied().expect("an id"),
+    );
+    let at = world
+        .beacons()
+        .positions()
+        .get(row)
+        .copied()
+        .expect("a place");
+    let east = |voxels: i16| [at[0].saturating_add(Fx::from_voxels(voxels)), at[1], at[2]];
+    let ring = east(base + 4);
+    assert_eq!(
+        pharmakos_gateway::targeting::covering_beacon(&world.ground(), seat, ring),
+        None,
+        "past the base sphere, no beacon covers it"
+    );
+    world
+        .raise_structure(
+            seat,
+            core,
+            pharmakos_sim::tables::StructureKind::ResonanceSpire,
+            east(1),
+        )
+        .expect("room for a Spire");
+    assert_eq!(
+        pharmakos_gateway::targeting::covering_beacon(&world.ground(), seat, ring),
+        Some(0),
+        "the core's grown sphere covers it"
+    );
+}

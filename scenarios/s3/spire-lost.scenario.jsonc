@@ -52,13 +52,13 @@
     { "assert": "event_fired", "event": "licence_awarded", "seat": 0, "by_tick": 9600,
       "note": "Round 2's settlement awards seat 0 the licence, as in resonance-spire." },
     { "assert": "event_fired", "event": "attack_launched", "seat": 1, "by_tick": 16000,
-      "note": "Seat 1's force launches at 320 s of round 3, tick 16000; the Spire was finished at 10678." },
+      "note": "Seat 1's force launches at 320 s of round 3, tick 16000; the Spire was finished at 11709." },
     { "assert": "event_fired", "event": "structure_destroyed", "seat": 0, "by_tick": 22324,
       "note": "Round 4: the Spire falls to the raid at tick 22324, seat 0's first loss of the match; the stone's sphere is its base from that tick." },
     { "assert": "event_fired", "event": "beacon_destroyed", "seat": 0, "by_tick": 22501,
       "note": "The raiders then take the stone, at tick 22501." },
     { "assert": "hash_chain_equals",
       "golden": "tests/golden/scenarios/spire-lost/expected.hashes.txt",
-      "note": "Byte-identical on Windows, Linux and macOS." }
+      "note": "crates/gamectl/tests/scenarios.rs' `the_s3_scenarios_pin_their_beats` holds the events log, the exact ticks and the verifier's codes round by round. Byte-identical on Windows, Linux and macOS." }
   ]
 }

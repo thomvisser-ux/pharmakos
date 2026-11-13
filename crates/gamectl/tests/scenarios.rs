@@ -36,6 +36,7 @@
 
 use pharmakos_gamectl::exit::Exit;
 use pharmakos_gamectl::scenario::{self, SUFFIX};
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 /// Every committed scenario, named the way the command line names them.
@@ -678,4 +679,146 @@ fn a_scenario_sealed_behind_the_verifiers_door_says_so_in_its_report() {
     // `every_committed_scenario_passes_on_its_events_and_its_hashes` against
     // [`HARNESS_DOOR`], which covers every committed scenario rather than this
     // one pair and plays no extra match to do it.
+}
+
+/// One S3 scenario's beats, pinned beyond its file's `by_tick` deadlines
+/// (S3's `lic`, its fix pass): the events log committed beside its chain, the
+/// key events at their exact ticks, and the error codes the seat's own
+/// verifier gave each round it sealed through the harness door, the gateway
+/// half of decisions-log item 156's proof (the scope carries the licence, the
+/// grown sphere and the Spire round by round).
+struct Beats {
+    name: &'static str,
+    source: &'static str,
+    /// `(tick, kind, seat)` that must be on the log exactly.
+    exact: &'static [(u32, &'static str, Option<u8>)],
+    /// Each harness note's error codes, in the order the rounds sealed.
+    codes: &'static [&'static [&'static str]],
+}
+
+const S3_BEATS: &[Beats] = &[
+    Beats {
+        name: "resonance-spire",
+        source: RESONANCE_SPIRE,
+        exact: &[
+            // The licence, at round 2's settlement and at no other.
+            (9_600, "licence_awarded", Some(0)),
+            // The Spire queued at the core, and finished 60 s later.
+            (9_816, "structure_queued", Some(0)),
+            (11_013, "structure_completed", Some(0)),
+            // The target past the old sphere, bought and finished in round 4.
+            (19_201, "structure_queued", Some(0)),
+            (19_842, "structure_completed", Some(0)),
+        ],
+        codes: &[
+            &["E0416", "E0507", "E0403"],
+            &["E0416", "E0507"],
+            &["E0416"],
+            &["E0513"],
+        ],
+    },
+    Beats {
+        name: "spire-lost",
+        source: SPIRE_LOST,
+        exact: &[
+            (9_600, "licence_awarded", Some(0)),
+            (10_511, "structure_queued", Some(0)),
+            (11_709, "structure_completed", Some(0)),
+            (16_000, "attack_launched", Some(1)),
+            // The Spire falls, seat 0's only structure there, then its stone.
+            (22_324, "structure_destroyed", Some(0)),
+            (22_501, "beacon_destroyed", Some(0)),
+        ],
+        // Round 3 sealed through `submit_plan`, so it has no note.
+        codes: &[
+            &["E0401", "E0507", "E0403"],
+            &["E0401", "E0507"],
+            &["E0513"],
+        ],
+    },
+];
+
+/// The error codes a harness note lists, in the order it lists them.
+fn error_codes(note: &str) -> Vec<String> {
+    note.split(|c: char| !(c.is_ascii_alphanumeric()))
+        .filter(|word| {
+            word.len() == 5
+                && word.starts_with('E')
+                && word
+                    .get(1..)
+                    .is_some_and(|digits| digits.bytes().all(|b| b.is_ascii_digit()))
+        })
+        .map(str::to_owned)
+        .collect()
+}
+
+#[test]
+fn the_s3_scenarios_pin_their_beats() {
+    for beats in S3_BEATS {
+        let loaded = scenario::load(&root(), Path::new(beats.source))
+            .unwrap_or_else(|failure| panic!("{}: {failure:?}", beats.source));
+        let played = scenario::run::play(&root(), &loaded)
+            .unwrap_or_else(|failure| panic!("{}: {failure:?}", beats.source));
+        let mut log = String::from("# tick\tkind\tseat\n");
+        for event in &played.events {
+            let seat = event
+                .seat
+                .map_or_else(|| "-".to_owned(), |seat| seat.to_string());
+            writeln!(log, "{}\t{}\t{seat}", event.tick, event.kind).expect("a String takes a line");
+        }
+        let dir = pharmakos_gamectl::target_dir()
+            .expect("an integration test runs from a cargo target directory")
+            .join("golden")
+            .join("scenarios")
+            .join(beats.name);
+        std::fs::create_dir_all(&dir).expect("the fresh output's directory");
+        std::fs::write(dir.join("actual.events.txt"), &log).expect("the fresh events log");
+        let committed = root()
+            .join("tests")
+            .join("golden")
+            .join("scenarios")
+            .join(beats.name)
+            .join("expected.events.txt");
+        let expected = std::fs::read_to_string(&committed)
+            .unwrap_or_else(|error| panic!("{}: {error}", committed.display()));
+        assert_eq!(
+            expected.replace("\r\n", "\n"),
+            log,
+            "{}'s events log moved; say which rule moved it",
+            beats.name
+        );
+        for (tick, kind, seat) in beats.exact {
+            assert!(
+                played
+                    .events
+                    .iter()
+                    .any(|event| event.tick == *tick && event.kind == *kind && event.seat == *seat),
+                "{}: no `{kind}` for {seat:?} at tick {tick}",
+                beats.name
+            );
+        }
+        let awards: Vec<u32> = played
+            .events
+            .iter()
+            .filter(|event| event.kind == "licence_awarded")
+            .map(|event| event.tick)
+            .collect();
+        assert_eq!(
+            awards,
+            vec![9_600],
+            "{}: one award, at round 2's settlement",
+            beats.name
+        );
+        let codes: Vec<Vec<String>> = played.notes.iter().map(|note| error_codes(note)).collect();
+        let wanted: Vec<Vec<String>> = beats
+            .codes
+            .iter()
+            .map(|round| round.iter().map(|code| (*code).to_owned()).collect())
+            .collect();
+        assert_eq!(
+            codes, wanted,
+            "{}: the verifier's codes, round by round",
+            beats.name
+        );
+    }
 }

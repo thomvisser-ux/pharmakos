@@ -3620,13 +3620,6 @@ fn dark_beacons(world: &pharmakos_sim::world::World) -> Result<Vec<DarkAtEnd>, E
         .collect()
 }
 
-/// The seat's own beacons in its verifier scope, by ordinal, then every name
-/// it placed whose beacon is gone ([`Surface::verifier_scope`] says why).
-///
-/// # Errors
-///
-/// [`crate::error::Code::Internal`] when the beacon table lacks a column for
-/// one of the seat's rows, or the seat table its placement counter.
 /// The verifier scope's licence half for the seat's own facts (S3's `lic`, a
 /// named place; decisions-log item 157 (5)), each beacon's after
 /// [`push_own_beacons`] has pushed it: every licence the sim's licence table
@@ -3694,6 +3687,13 @@ fn push_own_licence_facts(
     Ok(())
 }
 
+/// The seat's own beacons in its verifier scope, by ordinal, then every name
+/// it placed whose beacon is gone ([`Surface::verifier_scope`] says why).
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] when the beacon table lacks a column for
+/// one of the seat's rows, or the seat table its placement counter.
 fn push_own_beacons(
     world: &pharmakos_sim::world::World,
     seat: SeatId,

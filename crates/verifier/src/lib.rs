@@ -232,8 +232,11 @@ pub use walking::Walk;
 /// beacon (`E0513`), both behind `E0009`, reads a grown sphere for `E0403`
 /// and `E0416`, notes a breach allowed (`I0006`) and warns of a rule an
 /// earlier rule wins every time both are true (`W0702`), so its reports are
-/// not comparable with `0.1.0-s2.5`'s.
-pub const VERIFIER_VERSION: &str = "0.1.0-s3.1";
+/// not comparable with `0.1.0-s2.5`'s. `0.1.0-s3.2` from S3's `lic`: a
+/// `queue_structure` row for the Resonance Spire is no longer refused by
+/// `E0009`, which now refuses every other blueprint, as the sim's compile
+/// does, so its reports are not comparable with `0.1.0-s3.1`'s.
+pub const VERIFIER_VERSION: &str = "0.1.0-s3.2";
 
 /// Everything one verification is a function of, apart from the depth.
 ///

@@ -39,10 +39,10 @@
           "map_refs": []
         }
       ],
-      "report_hash": "ehFUUz8Qw4Y=",
+      "report_hash": "1Of0VcJ0BOE=",
       "rules_hash": "GybFJQaL/2E=",
       "plan_fingerprint": "SHatUjY2/7E=",
-      "verifier_version": "0.1.0-s3.1",
+      "verifier_version": "0.1.0-s3.2",
       "size_units": 8,
       "size_budget": 128
     },
