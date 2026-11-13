@@ -536,6 +536,9 @@ const KEEPS_THE_BASE: &[&str] = &[
     "sim:targeting.rs::covering_site",
     "sim:targeting.rs::anchor_in_sphere",
     "sim:targeting.rs::cover_counted",
+    // A wall's owner: a beacon a Spire ever grew keeps the grown radius for
+    // its walls, decision 6's "works stand", and every other the one function.
+    "sim:world/combat.rs::wall_owner",
     // The gateway's previews of a `covering` site, and the verifier scope's
     // licence half, which reads the base to set only a grown radius.
     "gateway:surface/knowledge.rs::covering_site",
@@ -837,4 +840,191 @@ fn the_spire_is_not_sited_in_a_protected_area() {
         !shield.contains(spire[0].floor_voxels(), spire[1].floor_voxels()),
         "the Spire stands outside the protected box"
     );
+}
+
+/// Decision 6, for walls (S3's `lic`, its fix pass; the beacon's grown flag):
+/// a wall raised in the grown ring while the Spire stands keeps its builder's
+/// ownership when the Spire falls, since works outside the shrunken sphere
+/// "stand"; it still gets no work, a cracked voxel no repair, until a Spire is
+/// rebuilt; and it goes neutral when its beacon dies, as every wall does.
+#[test]
+fn a_wall_in_the_grown_ring_stands_owned_and_unworked_until_a_spire_is_rebuilt() {
+    let mut world = licensed();
+    let core = core(&world);
+    let at = core_at(&world);
+    let beside = world.standing_point([
+        at[0].floor_voxels() + 1,
+        at[1].floor_voxels(),
+        at[2].floor_voxels(),
+    ]);
+    let ring = world.standing_point([
+        at[0].floor_voxels() - 30,
+        at[1].floor_voxels(),
+        at[2].floor_voxels(),
+    ]);
+    let voxel = [
+        ring[0].floor_voxels(),
+        ring[1].floor_voxels(),
+        ring[2].floor_voxels(),
+    ];
+    let spire = world
+        .raise_structure(SEAT, core, StructureKind::ResonanceSpire, beside)
+        .expect("room for a Spire");
+    assert!(
+        world.beacons().grown().iter().any(|grown| *grown),
+        "the core is flagged"
+    );
+    // A cracked wall voxel of seat 0's, raised in the ring while the Spire
+    // stands; the core repairs walls below full.
+    world
+        .request_voxel_edit(pharmakos_sim::voxels::VoxelEdit::Set {
+            at: voxel,
+            material: pharmakos_sim::voxels::Material::wall(SEAT, true).expect("a wall"),
+            by: None,
+        })
+        .expect("room for an edit");
+    world.set_build_settings_directly(
+        core,
+        pharmakos_sim::site::BuildSettings {
+            repair_threshold_pct: 100,
+            rebuild_destroyed: false,
+            terraform: pharmakos_sim::site::Terraform::None,
+        },
+    );
+    let mut runner = Runner::new(world);
+    assert!(runner.begin_push().unwrap());
+    runner.step().unwrap();
+    assert_eq!(
+        runner.world().wall_owner(voxel),
+        Some(SEAT),
+        "owned under the Spire"
+    );
+    runner
+        .world_mut()
+        .request_damage(DamageOrder {
+            target: DamageTarget::Structure(spire),
+            amount: Damage::new(1_000_000).expect("a damage"),
+            by: SeatId::new(1),
+            source: None,
+        })
+        .expect("room");
+    runner.step().unwrap();
+    assert!(!runner.world().spire_on(core), "the Spire fell");
+    assert_eq!(
+        runner.world().wall_owner(voxel),
+        Some(SEAT),
+        "the wall stands, and is still seat 0's"
+    );
+    let cracked = |world: &World| {
+        world
+            .voxels()
+            .get(voxel)
+            .and_then(pharmakos_sim::voxels::Material::wall_of)
+            .is_some_and(|(_, cracked)| cracked)
+    };
+    for _ in 0..1_200 {
+        runner.step().unwrap();
+    }
+    assert!(
+        cracked(runner.world()),
+        "no drone repairs it outside the sphere"
+    );
+
+    // A rebuilt Spire brings the work back.
+    runner
+        .world_mut()
+        .raise_structure(SEAT, core, StructureKind::ResonanceSpire, beside)
+        .expect("room for a Spire");
+    let mut repaired = false;
+    for _ in 0..2_400 {
+        runner.step().unwrap();
+        if !cracked(runner.world()) {
+            repaired = true;
+            break;
+        }
+    }
+    assert!(
+        repaired,
+        "the wall is repaired once the sphere holds it again"
+    );
+}
+
+/// A wall of a beacon the Spire grew goes neutral when that beacon dies,
+/// exactly as decision 42 has it for every wall.
+#[test]
+fn a_wall_of_a_grown_beacon_goes_neutral_when_the_beacon_dies() {
+    let mut world = licensed();
+    let core = core(&world);
+    let at = core_at(&world);
+    let beside = world.standing_point([
+        at[0].floor_voxels() + 1,
+        at[1].floor_voxels(),
+        at[2].floor_voxels(),
+    ]);
+    let ring = world.standing_point([
+        at[0].floor_voxels() - 30,
+        at[1].floor_voxels(),
+        at[2].floor_voxels(),
+    ]);
+    let voxel = [
+        ring[0].floor_voxels(),
+        ring[1].floor_voxels(),
+        ring[2].floor_voxels(),
+    ];
+    world
+        .raise_structure(SEAT, core, StructureKind::ResonanceSpire, beside)
+        .expect("room for a Spire");
+    world
+        .request_voxel_edit(pharmakos_sim::voxels::VoxelEdit::Set {
+            at: voxel,
+            material: pharmakos_sim::voxels::Material::wall(SEAT, false).expect("a wall"),
+            by: None,
+        })
+        .expect("room for an edit");
+    let mut runner = Runner::new(world);
+    assert!(runner.begin_push().unwrap());
+    runner.step().unwrap();
+    assert_eq!(runner.world().wall_owner(voxel), Some(SEAT));
+    runner
+        .world_mut()
+        .request_damage(DamageOrder {
+            target: DamageTarget::Beacon(core),
+            amount: Damage::new(1_000_000).expect("a damage"),
+            by: SeatId::new(1),
+            source: None,
+        })
+        .expect("room");
+    runner.step().unwrap();
+    assert_eq!(
+        runner.world().wall_owner(voxel),
+        None,
+        "its beacon died: nobody's"
+    );
+}
+
+/// The grown flag rides the snapshot and the state hash: a world whose Spire
+/// grew its core restores with the flag, and its hash is the saved one's.
+#[test]
+fn the_grown_flag_survives_a_save_and_a_restore() {
+    let mut world = licensed();
+    let core = core(&world);
+    let at = core_at(&world);
+    let beside = world.standing_point([
+        at[0].floor_voxels() + 1,
+        at[1].floor_voxels(),
+        at[2].floor_voxels(),
+    ]);
+    let bare = world.state_hash();
+    world
+        .raise_structure(SEAT, core, StructureKind::ResonanceSpire, beside)
+        .expect("room for a Spire");
+    assert_ne!(world.state_hash(), bare);
+    let bytes = Snapshot::capture(&world).to_bytes().expect("encoding");
+    let mut restored = self::world();
+    Snapshot::from_bytes(&bytes)
+        .expect("decoding")
+        .restore_into(&mut restored)
+        .expect("restoring");
+    assert_eq!(restored.beacons().grown(), world.beacons().grown());
+    assert_eq!(restored.state_hash(), world.state_hash());
 }

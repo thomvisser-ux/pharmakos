@@ -1949,13 +1949,43 @@ impl World {
     /// names, while the voxel lies inside one of that seat's live spheres, and
     /// nobody's otherwise; `None` too for a voxel that is no wall. Read, never
     /// written: a beacon's death rewrites no voxel.
+    ///
+    /// A beacon whose sphere a finished Spire has ever grown
+    /// ([`crate::tables::BeaconTable::grown`]) keeps the grown radius here,
+    /// and here alone (S3's `lic`; decision 6: works outside the shrunken
+    /// sphere "stand", and "outside works go neutral on the shrink" was
+    /// rejected), so a wall raised in the grown ring stays its builder's when
+    /// the Spire falls, while every physical-work path reads the sphere as it
+    /// stands now and does no work on it. A beacon never grown keeps decision
+    /// 42 unchanged, and a wall whose beacon died goes neutral either way.
     #[must_use]
     pub fn wall_owner(&self, at: [i32; 3]) -> Option<SeatId> {
         let (builder, _) = self.voxels.get(at)?.wall_of()?;
         let point = voxel_point(at)?;
-        self.ground()
-            .inside_own_sphere(builder, point)
-            .then_some(builder)
+        let beacons = &self.beacons;
+        let owned = beacons
+            .seats()
+            .iter()
+            .zip(beacons.hit_points())
+            .zip(beacons.positions().iter().zip(beacons.grown()))
+            .enumerate()
+            .filter(|(_, ((owner, hp), _))| **owner == builder.raw() && hp.is_alive())
+            .any(|(row, (_, (centre, grown)))| {
+                if *grown {
+                    Sq::between(*centre, point)
+                        <= Sq::of_radius(Fx::from_voxels(self.rules.grown_sphere_radius_voxels()))
+                } else {
+                    crate::spire::inside_at_row(
+                        &self.rules,
+                        beacons,
+                        &self.structures,
+                        row,
+                        *centre,
+                        point,
+                    )
+                }
+            });
+        owned.then_some(builder)
     }
 
     /// An asset's threat (decision 12): its weapon's damage per second from

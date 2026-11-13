@@ -218,9 +218,12 @@ use serde::{Deserialize, Serialize};
 /// **Version 15 is S3's Ledger licences** (S3's plan, task `lic`, E2). It adds
 /// a new table, every seat's licences -- each row's seat, its `gp.v1.Licence`
 /// wire value and the round whose settlement awarded it
-/// ([`crate::licence::LicenceTable`]), which hashes nothing while empty. A
-/// Resonance Spire's larger sphere is derived from the structure table, which
-/// version 14 already carries (E3), so it adds no column. A version-14 file is
+/// ([`crate::licence::LicenceTable`]), which hashes nothing while empty, and a
+/// column, each beacon's grown flag ([`crate::tables::BeaconTable::grown`]):
+/// whether a finished Spire has ever grown its sphere, which a wall's owner
+/// reads (decision 6). A Resonance Spire's larger sphere itself is derived
+/// from the structure table, which version 14 already carries (E3). A
+/// version-14 file is
 /// refused rather than read: it carries no licence, and a world restored from
 /// it would refuse a Spire's queue the unbroken run accepted. The gateway's
 /// save refuses a version-14 snapshot by its stamp first.
@@ -350,6 +353,9 @@ pub struct Snapshot {
     pub beacon_seam: Vec<u32>,
     /// Whether each beacon row is free, `0` or `1`.
     pub beacon_free: Vec<u8>,
+    /// S3's `lic` (version 15): whether a finished Resonance Spire has ever
+    /// grown each beacon's sphere, `0` or `1` ([`crate::tables::BeaconTable::grown`]).
+    pub beacon_grown: Vec<u8>,
     /// The tick each beacon's weapon may next fire on: a core's.
     pub beacon_ready_at: Vec<u32>,
     /// The last enemy that damaged each beacon.
@@ -713,6 +719,7 @@ impl Default for Snapshot {
             beacon_flee: Vec::new(),
             beacon_seam: Vec::new(),
             beacon_free: Vec::new(),
+            beacon_grown: Vec::new(),
             beacon_ready_at: Vec::new(),
             beacon_attacker: Vec::new(),
             beacon_attacked_at: Vec::new(),
@@ -1080,6 +1087,7 @@ impl Snapshot {
             beacon_flee: beacons.flees().iter().map(|f| u8::from(*f)).collect(),
             beacon_seam: beacons.seams().to_vec(),
             beacon_free: beacons.frees().iter().map(|f| u8::from(*f)).collect(),
+            beacon_grown: beacons.grown().iter().map(|g| u8::from(*g)).collect(),
             beacon_ready_at: beacons.arms().iter().map(|a| a.ready_at).collect(),
             beacon_attacker: beacons.arms().iter().map(|a| a.attacker).collect(),
             beacon_attacked_at: beacons.arms().iter().map(|a| a.attacked_at).collect(),
@@ -1450,6 +1458,7 @@ impl Snapshot {
             common: commons(&self.beacon_roe, &self.beacon_retreat_pct)?,
             site: self.sites()?,
             free: flags(&self.beacon_free, "beacon_free")?,
+            grown: flags(&self.beacon_grown, "beacon_grown")?,
         }) {
             return Err(SnapshotError::Ragged("beacon"));
         }

@@ -124,6 +124,10 @@ pub enum Phase {
     Hash,
 }
 
+/// The grown-beacon block's tag in the state hash, after the licence block's 6
+/// (S3's `lic`).
+const GROWN_HASH_TAG: u8 = 7;
+
 /// The tick, in order. Determinism code: see the module docs.
 pub const PHASE_ORDER: [Phase; 12] = [
     Phase::Broadphase,
@@ -2773,6 +2777,26 @@ impl World {
         None
     }
 
+    /// Set the grown flag of the beacon the structure in `row` is homed to,
+    /// when that beacon is alive and its seat's: a finished Resonance Spire
+    /// has grown its sphere (S3's `lic`; [`BeaconTable::grown`]).
+    fn mark_grown(&mut self, row: usize) {
+        let (Some(home), Some(seat)) = (
+            self.structures.homes().get(row).copied(),
+            self.structures.seats().get(row).copied(),
+        ) else {
+            return;
+        };
+        let Ok(at) = self.beacons.row_of(home) else {
+            return;
+        };
+        if self.beacons.seats().get(at.index()).copied() == Some(seat)
+            && let Some(slot) = self.beacons.grown_mut().get_mut(at.index())
+        {
+            *slot = true;
+        }
+    }
+
     /// Whether a wall target of one of `seat`'s beacons has a box that holds the
     /// column `(x, y)`: ground its drones will fill.
     fn wall_box_holds(&self, seat: SeatId, x: i32, y: i32) -> bool {
@@ -2806,6 +2830,11 @@ impl World {
         };
         if let Some(slot) = self.structures_mut().building_mut().get_mut(row) {
             *slot = false;
+        }
+        // A finished Spire grows its beacon's sphere, and the beacon remembers
+        // it for its walls' ownership (decision 6; `BeaconTable::grown`).
+        if kind == StructureKind::ResonanceSpire.id() {
+            self.mark_grown(row);
         }
         let at = self.structures.positions().get(row).copied();
         let tick = self.tick;
@@ -3075,7 +3104,8 @@ impl World {
     ) -> Option<StructureId> {
         let hp = self.structure_max_hp(kind)?;
         let ready_at = self.armed_ready_at(self.structure_weapon(kind));
-        self.structures
+        let id = self
+            .structures
             .place(
                 STRUCTURE_ROWS,
                 seat,
@@ -3088,7 +3118,15 @@ impl World {
                 ready_at,
             )
             .ok()
-            .map(|placed| placed.id)
+            .map(|placed| placed.id)?;
+        // A Spire raised finished has grown its beacon's sphere, as one the
+        // fabricator finished has (`World::finish_structure`).
+        if kind == StructureKind::ResonanceSpire
+            && let Ok(row) = self.structures.row_of(id)
+        {
+            self.mark_grown(row.index());
+        }
+        Some(id)
     }
 
     /// Field one unit of `kind` for `seat`, homed to `home`, standing at
@@ -6391,8 +6429,10 @@ impl World {
         // nothing while it holds nothing (E29).
         self.attack.encode(enc);
         // S3's `lic`: the licence block, after the Attack block, writing
-        // nothing while no seat holds a licence (E2).
+        // nothing while no seat holds a licence (E2), then the grown beacons,
+        // writing nothing while no Spire has ever been finished.
         self.encode_licences(enc);
+        self.encode_grown(enc);
     }
 
     /// The Defend table (S2's `dfnd`), as a block after the site block that
@@ -6418,6 +6458,26 @@ impl World {
         for (by, of) in self.defend.protected() {
             enc.u32(by.raw());
             enc.u32(of.raw());
+        }
+    }
+
+    /// The beacons whose sphere a finished Spire has ever grown (S3's `lic`;
+    /// [`BeaconTable::grown`]), as a block after the licence block that
+    /// **writes nothing while no beacon is flagged** and otherwise writes its
+    /// tag, its count and each flagged beacon's id in row order, so a chain
+    /// with no finished Spire does not move for the column (item 136's block
+    /// rule).
+    fn encode_grown(&self, enc: &mut Enc) {
+        let flagged = self.beacons.grown().iter().filter(|grown| **grown).count();
+        if flagged == 0 {
+            return;
+        }
+        enc.u8(GROWN_HASH_TAG);
+        enc.len(table_len(flagged));
+        for (id, grown) in self.beacons.ids().iter().zip(self.beacons.grown()) {
+            if *grown {
+                enc.u32(*id);
+            }
         }
     }
 

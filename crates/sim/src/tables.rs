@@ -3091,6 +3091,9 @@ pub struct BeaconColumns {
     pub site: Vec<crate::site::BeaconSite>,
     /// Whether each row is free (S2's plan, E1).
     pub free: Vec<bool>,
+    /// Whether a finished Resonance Spire has ever grown each beacon's sphere
+    /// ([`BeaconTable::grown`]; S3's `lic`).
+    pub grown: Vec<bool>,
 }
 
 /// Every column of a restored [`StructureTable`]. Same reasoning as
@@ -3151,6 +3154,7 @@ pub struct BeaconTable {
     common: Vec<Common>,
     site: Vec<crate::site::BeaconSite>,
     free: Vec<bool>,
+    grown: Vec<bool>,
 }
 
 impl BeaconTable {
@@ -3179,6 +3183,7 @@ impl BeaconTable {
             common: Vec::with_capacity(n),
             site: Vec::with_capacity(n),
             free: Vec::with_capacity(n),
+            grown: Vec::with_capacity(n),
         }
     }
 
@@ -3266,6 +3271,7 @@ impl BeaconTable {
         put(&mut self.common, row, Common::DEFAULT);
         put(&mut self.site, row, crate::site::BeaconSite::DEFAULT);
         put(&mut self.free, row, false);
+        put(&mut self.grown, row, false);
         if !at.reused {
             // An appended row is the table's last, at most `Row::MAX`.
             self.count = row.raw().saturating_add(1);
@@ -3321,6 +3327,9 @@ impl BeaconTable {
         }
         if let Some(slot) = self.site.get_mut(index) {
             *slot = crate::site::BeaconSite::DEFAULT;
+        }
+        if let Some(slot) = self.grown.get_mut(index) {
+            *slot = false;
         }
         self.id
             .get(index)
@@ -3421,6 +3430,7 @@ impl BeaconTable {
         self.seam.reserve(n);
         self.arms.reserve(n);
         self.common.reserve(n);
+        self.grown.reserve(n);
         self.site.reserve(n);
         self.free.reserve(n);
     }
@@ -3661,6 +3671,24 @@ impl BeaconTable {
         &self.common
     }
 
+    /// Whether a finished Resonance Spire has ever grown each beacon's sphere
+    /// (S3's `lic`; decision 6): set on the tick a Spire homed to the beacon
+    /// is finished, never cleared while the beacon lives, and reset with the
+    /// row. Read by one rule alone, a wall's owner
+    /// ([`crate::world::World::wall_owner`]): a wall raised in the grown ring
+    /// stays its builder's when the Spire falls, since decision 6's works
+    /// outside the shrunken sphere "stand". Every physical-work path reads the
+    /// sphere as it stands now. Hashed and snapshotted.
+    #[must_use]
+    pub fn grown(&self) -> &[bool] {
+        &self.grown
+    }
+
+    /// The grown column, to write into: a Spire's completion sets it.
+    pub fn grown_mut(&mut self) -> &mut [bool] {
+        &mut self.grown
+    }
+
     /// The Common settings column, to write into: a committed settings row
     /// and a mandate switch.
     pub fn commons_mut(&mut self) -> &mut [Common] {
@@ -3699,6 +3727,7 @@ impl BeaconTable {
             || columns.seam.len() != n
             || columns.arms.len() != n
             || columns.common.len() != n
+            || columns.grown.len() != n
             || columns.site.len() != n
             || columns.free.len() != n
             || !ids_name_their_rows(&columns.id)
@@ -3756,6 +3785,7 @@ impl BeaconTable {
         self.common = columns.common;
         self.site = columns.site;
         self.free = columns.free;
+        self.grown = columns.grown;
         true
     }
 }

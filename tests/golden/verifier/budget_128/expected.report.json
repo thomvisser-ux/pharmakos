@@ -1049,7 +1049,7 @@
       "beginner": "An earlier rule wins every time both are true, so this one mostly never gets a turn. Move it above the other rule, or narrow the other rule."
     }
   ],
-  "report_hash": "Bk4H7SylRZo=",
+  "report_hash": "BVt/wAYfcFs=",
   "rules_hash": "GybFJQaL/2E=",
   "plan_fingerprint": "jIVkAUJn7+8=",
   "verifier_version": "0.1.0-s3.2",
