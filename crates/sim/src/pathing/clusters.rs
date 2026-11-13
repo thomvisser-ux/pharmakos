@@ -122,37 +122,28 @@ pub struct ClusterShape {
 }
 
 impl ClusterShape {
-    /// Read the shape from the rules table.
+    /// Read the shape from the rules table, at the cluster edge `size` the
+    /// table's typed read of `locomotion.hpa_cluster_voxels` gave
+    /// ([`crate::rules::RulesTable::hpa_cluster_voxels`]).
     ///
     /// # Errors
     ///
-    /// [`crate::rules::RulesError::MissingBlock`] for an absent `pathing` or
-    /// `locomotion` block, and [`crate::rules::RulesError::OutOfRange`] for a
-    /// `long_run` below one -- a one-cell run emits two transitions, and a comb
-    /// of them overflows a border's room and silently drops transitions, a route
-    /// that exists and cannot be found (decisions-log item 156) -- or past an
-    /// `i32`, a `smooth_lookahead` above [`crate::pathing::MAX_ROUTE_NODES`],
-    /// the most a route holds, or a cluster edge past an `i32`.
+    /// [`crate::rules::RulesError::MissingBlock`] for an absent `pathing`
+    /// block, and [`crate::rules::RulesError::OutOfRange`] for a `long_run`
+    /// below one -- a one-cell run emits two transitions, and a comb of them
+    /// overflows a border's room and silently drops transitions, a route that
+    /// exists and cannot be found (decisions-log item 156) -- or past an
+    /// `i32`, or a `smooth_lookahead` above [`crate::pathing::MAX_ROUTE_NODES`],
+    /// the most a route holds.
     pub fn read(
         message: &pharmakos_proto::gp::v1::RulesTable,
+        size: i32,
     ) -> Result<ClusterShape, crate::rules::RulesError> {
         use crate::rules::RulesError;
         let pathing = message
             .pathing
             .as_ref()
             .ok_or(RulesError::MissingBlock("pathing"))?;
-        let locomotion = message
-            .locomotion
-            .as_ref()
-            .ok_or(RulesError::MissingBlock("locomotion"))?;
-        let size =
-            i32::try_from(locomotion.hpa_cluster_voxels).map_err(|_| RulesError::OutOfRange {
-                field: "locomotion.hpa_cluster_voxels".to_owned(),
-                value: format!(
-                    "{}; a cluster edge is a voxel length",
-                    locomotion.hpa_cluster_voxels
-                ),
-            })?;
         let long_run = i32::try_from(pathing.long_run)
             .ok()
             .filter(|run| *run >= 1)

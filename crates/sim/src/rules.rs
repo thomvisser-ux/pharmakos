@@ -963,7 +963,12 @@ impl RulesTable {
         let grown_sphere_radius_voxels = grown_sphere_radius_of(message, sphere_radius_voxels)?;
         let picket_radius_voxels = picket_radius_of(message, grown_sphere_radius_voxels)?;
         let resonance_vents = resonance_vents_of(message)?;
-        let cluster_shape = crate::pathing::clusters::ClusterShape::read(message)?;
+        let hpa_cluster_voxels = signed(
+            "locomotion.hpa_cluster_voxels",
+            locomotion.hpa_cluster_voxels,
+        )?;
+        let cluster_shape =
+            crate::pathing::clusters::ClusterShape::read(message, hpa_cluster_voxels)?;
 
         let segment_lengths_ms = segment_lengths_of(matched)?;
 
@@ -1012,10 +1017,7 @@ impl RulesTable {
                 "commander.cost_per_second",
                 commander.cost_per_second,
             )?,
-            hpa_cluster_voxels: signed(
-                "locomotion.hpa_cluster_voxels",
-                locomotion.hpa_cluster_voxels,
-            )?,
+            hpa_cluster_voxels,
             fog_cost_numerator: signed(
                 "locomotion.fog_cost_numerator",
                 locomotion.fog_cost_numerator,

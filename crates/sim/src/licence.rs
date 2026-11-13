@@ -351,6 +351,120 @@ mod tests {
         assert_eq!(table.rows().len(), 2);
     }
 
+    /// Two of seat 0's Generators raised finished on the two vents nearest
+    /// its core, homed to the core, in a fresh two-seat world on the golden
+    /// seed: the world, the core and the two structures.
+    fn two_taps() -> (
+        crate::world::World,
+        crate::tables::BeaconId,
+        [crate::tables::StructureId; 2],
+    ) {
+        use crate::features::FeatureKind;
+        use crate::math::fixed::{Fx, Sq};
+        let path =
+            crate::default_rules_path().unwrap_or_else(|| panic!("the committed rules table"));
+        let rules = crate::rules::RulesTable::load(&path)
+            .unwrap_or_else(|error| panic!("it loads: {error:?}"));
+        let mut world = crate::world::World::new(&crate::world::WorldConfig {
+            match_seed: 0x0000_0000_ca5c_aded,
+            seats: 2,
+            rules,
+            match_settings: crate::runner::MatchSettings {
+                segment_lengths_ms: vec![10_000],
+                round_limit: 1,
+            },
+        })
+        .unwrap_or_else(|error| panic!("a world: {error:?}"));
+        let seat = SeatId::new(0);
+        let row = world
+            .beacons()
+            .seats()
+            .iter()
+            .position(|owner| *owner == 0)
+            .unwrap_or_else(|| panic!("seat 0's core"));
+        let core = crate::tables::BeaconId::new(
+            *world
+                .beacons()
+                .ids()
+                .get(row)
+                .unwrap_or_else(|| panic!("an id")),
+        );
+        let centre = *world
+            .beacons()
+            .positions()
+            .get(row)
+            .unwrap_or_else(|| panic!("a place"));
+        let mut vents: Vec<(Sq, usize, [Fx; 3])> = Vec::new();
+        for index in 0..world.features().len() {
+            let Some(feature) = world.features().get(index) else {
+                continue;
+            };
+            if feature.kind != FeatureKind::Vent {
+                continue;
+            }
+            let stand = feature.footprint.iter().find_map(|column| {
+                let z = world.voxels().top_solid_z(column.x, column.y)?;
+                world
+                    .voxels()
+                    .get([column.x, column.y, z])
+                    .and_then(crate::voxels::Material::vent_richness)?;
+                Some([
+                    Fx::from_voxels(i16::try_from(column.x).ok()?),
+                    Fx::from_voxels(i16::try_from(column.y).ok()?),
+                    Fx::from_voxels(i16::try_from(z.checked_add(1)?).ok()?),
+                ])
+            });
+            if let Some(stand) = stand {
+                vents.push((Sq::between(centre, stand), index, stand));
+            }
+        }
+        // item 62: the key ends in the feature index, unique.
+        vents.sort_unstable_by_key(|(distance, index, _)| (*distance, *index));
+        let mut raised = Vec::new();
+        for (_, _, at) in vents.into_iter().take(2) {
+            raised.push(
+                world
+                    .raise_structure(seat, core, crate::tables::StructureKind::Generator, at)
+                    .unwrap_or_else(|| panic!("room for a Generator")),
+            );
+        }
+        let ids: [crate::tables::StructureId; 2] =
+            raised.try_into().unwrap_or_else(|_| panic!("two vents"));
+        (world, core, ids)
+    }
+
+    /// Decision 6's "finished, powered": a Generator still going up, and one
+    /// homed to a dark beacon, tap nothing, exactly as they supply nothing.
+    #[test]
+    fn a_generator_going_up_or_dark_taps_no_vent() {
+        let seat = SeatId::new(0);
+        let (world, _, _) = two_taps();
+        assert_eq!(crate::power::tapped_vents(&world, seat), 2);
+
+        let (mut world, _, [_, second]) = two_taps();
+        let row = world
+            .structures()
+            .row_of(second)
+            .unwrap_or_else(|error| panic!("a row: {error:?}"))
+            .index();
+        if let Some(slot) = world.structures_mut().building_mut().get_mut(row) {
+            *slot = true;
+        }
+        assert_eq!(
+            crate::power::tapped_vents(&world, seat),
+            1,
+            "a Generator going up taps nothing"
+        );
+
+        let (mut world, core, _) = two_taps();
+        world.set_dormant(core, true);
+        assert_eq!(
+            crate::power::tapped_vents(&world, seat),
+            0,
+            "Generators homed to a dark beacon tap nothing"
+        );
+    }
+
     #[test]
     fn every_awarded_licence_has_a_byte() {
         for licence in AWARDED {

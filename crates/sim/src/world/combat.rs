@@ -1515,6 +1515,16 @@ impl World {
             if !SeatId::new(*seat).is_some() || *share <= 0 {
                 continue;
             }
+            // Item 17: an eliminated seat's credit is dropped, not
+            // redistributed, and that holds for damage it dealt before it fell
+            // and lands after, a shell in flight among it: its share is apportioned
+            // with the rest, so nobody else's grows, and booked to nobody.
+            let alive = self
+                .seat_row(SeatId::new(*seat))
+                .is_some_and(|index| self.seats.is_alive(index));
+            if !alive {
+                continue;
+            }
             let booked = i32::try_from(*share)
                 .is_ok_and(|share| self.credit.credit(asset.raw(), SeatId::new(*seat), share));
             if !booked {

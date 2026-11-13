@@ -23,7 +23,7 @@
 )]
 
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use pharmakos_proto::gp;
 use pharmakos_proto::gp::v1::Licence;
@@ -181,7 +181,7 @@ fn a_licensed_seat_queues_the_spire_and_the_fabricator_raises_it() {
     assert_eq!(world.sphere_radius_of(core), base);
     let before = treasury(&world);
 
-    let (runner, feed) = play(world, &queue_at_core("spire", "resonance_spire"), 1_200);
+    let (runner, feed) = play(world, &queue_at_core("spire", "resonance_spire"), 2_400);
     assert!(failures(&feed).is_empty(), "nothing fails: {feed:?}");
     let queued = feed
         .iter()
@@ -199,9 +199,21 @@ fn a_licensed_seat_queues_the_spire_and_the_fabricator_raises_it() {
 
     let world = runner.world();
     let cost = world.structure_cost(StructureKind::ResonanceSpire);
+    // What the seat earned meanwhile (its starting drone's ore) is the only
+    // other movement of the treasury.
+    let earned: i64 = feed
+        .iter()
+        .filter(|event| {
+            matches!(
+                event.kind,
+                EventKind::OreDelivered | EventKind::SalvageDelivered
+            )
+        })
+        .map(|event| event.value)
+        .sum();
     assert_eq!(
         treasury(world).raw(),
-        before.raw() - cost.raw(),
+        before.raw() - cost.raw() + earned,
         "the $ left once, at the queue"
     );
     assert_eq!(spires(world), vec![(false, 500)], "one Spire, finished");
@@ -324,7 +336,7 @@ fn the_sphere_returns_to_its_base_on_the_tick_the_spire_is_destroyed() {
     let (mut runner, _) = play(
         licensed(),
         &queue_at_core("spire", "resonance_spire"),
-        1_200,
+        2_400,
     );
     let core = core(runner.world());
     let base = Fx::from_voxels(rules().sphere_radius_voxels());
@@ -379,7 +391,7 @@ fn a_grown_sphere_survives_a_save_and_a_restore() {
     let (runner, _) = play(
         licensed(),
         &queue_at_core("spire", "resonance_spire"),
-        1_200,
+        2_400,
     );
     let saved = runner.world().clone();
     let core = core(&saved);
@@ -400,121 +412,187 @@ fn a_grown_sphere_survives_a_save_and_a_restore() {
 // E3: every reader of the sphere's radius, named
 // ---------------------------------------------------------------------------
 
-/// The readers decision 6 says grow with a Spire: every function of
-/// `crates/sim/src` that asks the one function ([`pharmakos_sim::spire`]) or
-/// one of its wrappers, `file::function`.
+/// What reads the **base** row, `beacon.sphere_radius_voxels`, or a wrapper
+/// that answers the base: the rules table's field and accessor, the grown
+/// radius summed from it, the targeting view's site test and the
+/// base-radius anchor test. Matched as identifiers, so a call reached
+/// through `use`, a path or a method all count.
+const BASE_NEEDLES: &[&str] = &[
+    "sphere_radius_voxels",
+    "grown_sphere_radius_voxels",
+    "sphere_radius()",
+    "in_sphere(",
+    "anchor_in_sphere(",
+    "covering_site(",
+];
+
+/// What reads the **grown** radius: the one function and every wrapper of it.
+const GROWN_NEEDLES: &[&str] = &[
+    "sphere_radius_of(",
+    "sphere_radius_at_row(",
+    "sphere_radius_voxels_of(",
+    "radius_of(",
+    "radius_at_row(",
+    "radius_voxels(",
+    "radius_in_snapshot(",
+    "inside_at_row(",
+    "inside_sphere(",
+    "inside_own_sphere(",
+    "in_sphere_of(",
+    "anchor_in_sphere_of(",
+    "holds_point(",
+    "Sphere::of(",
+];
+
+/// The readers decision 6 says grow with a Spire, `crate:file::function`.
 const GROWS: &[&str] = &[
     // The mandates' areas: Attack's weak point in the target's sphere.
-    "attack.rs::weak_point",
+    "sim:attack.rs::weak_point",
     // Defend's engagement radius, picket ring and the threat it guards against.
-    "defend.rs::post_of",
-    "mandate.rs::request",
-    "programs.rs::flees",
-    "interpreter/cond.rs::live_row_threat",
-    "interpreter/cond.rs::live_row_repairs",
-    "interpreter/cond.rs::row_threat",
-    "interpreter/cond.rs::row_repairs",
-    // Build's area and the drones' work reach.
-    "mandate.rs::inside_sphere",
-    "mandate.rs::of",
-    "world/site.rs::check_wall",
-    "world/site.rs::wall_voxel",
-    "world/site.rs::refill_voxel",
-    "world/site.rs::nearest_patient",
-    "world/site.rs::cracked_wall",
-    "world/site.rs::ruin_in_sphere",
-    "world/site.rs::repair_work",
-    "world/site.rs::salvage_work",
-    "world.rs::wreck_in_sphere",
+    "sim:defend.rs::post_of",
+    "sim:mandate.rs::request",
+    "sim:programs.rs::flees",
+    "sim:interpreter/cond.rs::live_row_threat",
+    "sim:interpreter/cond.rs::live_row_repairs",
+    "sim:interpreter/cond.rs::row_threat",
+    "sim:interpreter/cond.rs::row_repairs",
+    // Build's area and the drones' work reach, every physical-work path.
+    "sim:mandate.rs::inside_sphere",
+    "sim:mandate.rs::of",
+    "sim:mandate.rs::buildable",
+    "sim:mandate.rs::next_unfinished_target",
+    "sim:mandate.rs::building_work",
+    "sim:world.rs::queue_target",
+    "sim:world/site.rs::check_wall",
+    "sim:world/site.rs::wall_voxel",
+    "sim:world/site.rs::refill_voxel",
+    "sim:world/site.rs::build_job",
+    "sim:world/site.rs::nearest_patient",
+    "sim:world/site.rs::cracked_wall",
+    "sim:world/site.rs::ruin_in_sphere",
+    "sim:world/site.rs::repair_work",
+    "sim:world/site.rs::salvage_work",
+    "sim:world/combat.rs::wall_owner",
+    "sim:world.rs::wreck_in_sphere",
     // Mine's area.
-    "mining.rs::remaining_yield",
-    "mining.rs::dig_in",
+    "sim:mining.rs::remaining_yield",
+    "sim:mining.rs::dig_in",
     // The sphere's coverage of vents and seams, and the anchor for the next
     // beacon.
-    "targeting.rs::radius_of",
-    "targeting.rs::inside_own_sphere",
+    "sim:targeting.rs::radius_of",
+    "sim:targeting.rs::in_sphere_of",
+    "sim:targeting.rs::inside_own_sphere",
+    "sim:targeting.rs::anchor_in_sphere_of",
+    "sim:targeting.rs::on_vent_counted",
+    "sim:targeting.rs::on_candidate",
+    "sim:interpreter/exec.rs::site_is_legal",
     // The sphere's place in the sensor seam's sphere output.
-    "sight.rs::beacon_sensor",
-    "sight.rs::spheres",
+    "sim:sight.rs::beacon_sensor",
+    "sim:sight.rs::spheres",
     // The wrappers themselves.
-    "world.rs::sphere_radius_of",
-    "world.rs::sphere_radius_voxels_of",
-    "world.rs::sphere_radius_at_row",
+    "sim:world.rs::sphere_radius_of",
+    "sim:world.rs::sphere_radius_voxels_of",
+    "sim:world.rs::sphere_radius_at_row",
+    // The repair drones a guard's beacon reads in its sphere, and a
+    // description's `UNCOVERED` test.
+    "sim:world/combat.rs::repairs_at",
+    "sim:targeting.rs::matches_pick",
+    "sim:mandate.rs::holds_point",
+    // The gateway's reads of the sim's sphere: `covered_by`, the placement
+    // test it previews, and the verifier scope's licence half, which chooses.
+    "gateway:targeting.rs::covering_beacon",
+    "gateway:targeting.rs::read_placement",
+    "gateway:surface.rs::push_own_licence_facts",
 ];
 
-/// The readers decision 6 says keep the base row, by name: every function
-/// that reads `beacon.sphere_radius_voxels` itself.
+/// The readers decision 6 says keep the base row, by name.
 const KEEPS_THE_BASE: &[&str] = &[
-    // The one function and its wrappers, which choose between the base and the
-    // grown radius.
-    "spire.rs::radius_voxels",
-    "spire.rs::radius_at_row",
-    "spire.rs::radius_of",
-    "spire.rs::radius_in_snapshot",
-    "spire.rs::inside_at_row",
-    // The rules table: its field (`<module>`, the struct), its load, the
-    // grown radius summed from it once at load, and its accessor.
-    "rules.rs::<module>",
-    "rules.rs::from_message",
-    "rules.rs::sphere_radius_of",
-    "rules.rs::grown_sphere_radius_of",
-    "rules.rs::sphere_radius_voxels",
+    // The one function and its wrappers, which choose between the base and
+    // the grown radius.
+    "sim:spire.rs::radius_voxels",
+    "sim:spire.rs::radius_at_row",
+    "sim:spire.rs::radius_of",
+    "sim:spire.rs::radius_in_snapshot",
+    "sim:spire.rs::inside_at_row",
+    // The rules table: its fields (`<module>`, the struct), its load, the
+    // grown radius summed from the base once at load, and their accessors.
+    "sim:rules.rs::<module>",
+    "sim:rules.rs::from_message",
+    "sim:rules.rs::sphere_radius_of",
+    "sim:rules.rs::grown_sphere_radius_of",
+    "sim:rules.rs::sphere_radius_voxels",
+    "sim:rules.rs::grown_sphere_radius_voxels",
     // Mapgen's twice-the-sphere reach rule and the contested zones, placed
     // against the base at generation.
-    "mapgen.rs::check_bands",
-    "mapgen.rs::place_contested",
-    // The sphere of a site where no beacon stands yet: a `covering` spiral,
-    // a new beacon's `on` and the targeting view's base test.
-    "world.rs::new",
-    "targeting.rs::sphere_radius",
-    "targeting.rs::in_sphere",
-    "targeting.rs::radius_of",
+    "sim:mapgen.rs::check_bands",
+    "sim:mapgen.rs::place_contested",
+    // The sphere of a site where no beacon stands yet: the `covering` spiral
+    // (built once, at the base), its search, a new beacon's `on`, and the
+    // targeting view's base tests.
+    "sim:world.rs::new",
+    "sim:targeting.rs::sphere_radius",
+    "sim:targeting.rs::in_sphere",
+    "sim:targeting.rs::radius_of",
+    "sim:targeting.rs::covering_site",
+    "sim:targeting.rs::anchor_in_sphere",
+    "sim:targeting.rs::cover_counted",
+    // The gateway's previews of a `covering` site, and the verifier scope's
+    // licence half, which reads the base to set only a grown radius.
+    "gateway:surface/knowledge.rs::covering_site",
+    "gateway:surface/knowledge.rs::place_of",
+    "gateway:surface.rs::push_own_licence_facts",
 ];
 
-/// Every `file::function` of `crates/sim/src` whose code (comments and test
-/// modules aside) contains one of `needles`.
+/// Every `crate:file::function` of the sim's and the gateway's sources whose
+/// shipped code (comments and test modules aside) holds one of `needles`.
 #[allow(
     clippy::disallowed_methods,
     reason = "clippy.toml's own reason string sanctions read_dir when the listing is collected and sorted before use, which is what happens below, as tests/confinement.rs does"
 )]
 fn readers(needles: &[&str]) -> BTreeSet<String> {
-    let src = root().join("crates").join("sim").join("src");
     let mut found = BTreeSet::new();
-    let mut stack = vec![src.clone()];
-    while let Some(dir) = stack.pop() {
-        let mut here: Vec<PathBuf> = std::fs::read_dir(&dir)
-            .expect("a source directory")
-            .map(|entry| entry.expect("an entry").path())
-            .collect();
-        here.sort();
-        for path in here {
-            if path.is_dir() {
-                stack.push(path);
-            } else if path.extension().is_some_and(|ext| ext == "rs") {
-                scan(&src, &path, needles, &mut found);
+    for krate in ["sim", "gateway"] {
+        let src = root().join("crates").join(krate).join("src");
+        let mut stack = vec![src.clone()];
+        while let Some(dir) = stack.pop() {
+            let mut here: Vec<PathBuf> = std::fs::read_dir(&dir)
+                .expect("a source directory")
+                .map(|entry| entry.expect("an entry").path())
+                .collect();
+            here.sort();
+            for path in here {
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_some_and(|ext| ext == "rs") {
+                    let text = std::fs::read_to_string(&path).expect("a source file");
+                    let name = path
+                        .strip_prefix(&src)
+                        .expect("under src")
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    scan(&format!("{krate}:{name}"), &text, needles, &mut found);
+                }
             }
         }
     }
     found
 }
 
-fn scan(src: &Path, path: &Path, needles: &[&str], found: &mut BTreeSet<String>) {
-    let text = std::fs::read_to_string(path).expect("a source file");
-    let name = path
-        .strip_prefix(src)
-        .expect("under src")
-        .to_string_lossy()
-        .replace('\\', "/");
+/// The functions of one file's shipped code that hold one of `needles`, as
+/// `file::function` (`file::<module>` outside every function).
+fn scan(name: &str, text: &str, needles: &[&str], found: &mut BTreeSet<String>) {
     let mut function = String::from("<module>");
     let mut test_gate = false;
     for line in text.lines() {
         // A test module ends the shipped code; a lone test-only item does not.
-        if test_gate && line.starts_with("mod ") {
+        if test_gate && line.trim_start().starts_with("mod ") {
             break;
         }
-        test_gate = line.starts_with("#[cfg(test)]");
+        test_gate = line.trim_start().starts_with("#[cfg(test)]");
         let code = line.split("//").next().unwrap_or("");
-        if let Some(at) = code.find("fn ") {
+        if let Some(at) = code.find("fn ")
+            && (at == 0 || !code[..at].ends_with(|c: char| c.is_alphanumeric() || c == '_'))
+        {
             let rest = &code[at + 3..];
             let end = rest
                 .find(|c: char| !(c.is_alphanumeric() || c == '_'))
@@ -529,41 +607,72 @@ fn scan(src: &Path, path: &Path, needles: &[&str], found: &mut BTreeSet<String>)
     }
 }
 
+/// The readers check itself, over a set of readers: every reader is named in
+/// one list or both (a chooser), and every name on a list is a reader.
+fn named(base: &BTreeSet<String>, grows: &BTreeSet<String>) -> Result<(), String> {
+    let keeps: BTreeSet<String> = KEEPS_THE_BASE.iter().map(|s| (*s).to_owned()).collect();
+    let growing: BTreeSet<String> = GROWS.iter().map(|s| (*s).to_owned()).collect();
+    let listed: BTreeSet<String> = keeps.union(&growing).cloned().collect();
+    let readers: BTreeSet<String> = base.union(grows).cloned().collect();
+    let unnamed: Vec<&String> = readers.difference(&listed).collect();
+    if !unnamed.is_empty() {
+        return Err(format!(
+            "a reader of the sphere is in neither list: {unnamed:?}. Name it in GROWS if decision \
+             6 says it grows with a Spire, or in KEEPS_THE_BASE if it does not"
+        ));
+    }
+    let stale: Vec<&String> = listed.difference(&readers).collect();
+    if !stale.is_empty() {
+        return Err(format!("a name on a list reads no sphere: {stale:?}"));
+    }
+    let base_only: Vec<&String> = base
+        .difference(grows)
+        .filter(|r| growing.contains(*r))
+        .collect();
+    if !base_only.is_empty() {
+        return Err(format!(
+            "listed as growing, and reads only the base: {base_only:?}"
+        ));
+    }
+    let grown_only: Vec<&String> = grows
+        .difference(base)
+        .filter(|r| keeps.contains(*r))
+        .collect();
+    if !grown_only.is_empty() {
+        return Err(format!(
+            "listed as keeping the base, and reads only the grown radius: {grown_only:?}"
+        ));
+    }
+    Ok(())
+}
+
 #[test]
 fn every_sphere_reader_is_named() {
-    let base = readers(&["sphere_radius_voxels"]);
-    let expected_base: BTreeSet<String> = KEEPS_THE_BASE.iter().map(|s| (*s).to_owned()).collect();
-    assert_eq!(
-        base, expected_base,
-        "a function reads the base sphere row: name it in KEEPS_THE_BASE if decision 6 says it \
-         does not grow, or read the one function (`World::sphere_radius_of`) if it does"
-    );
-    let grows = readers(&[
-        ".sphere_radius_of(",
-        ".sphere_radius_at_row(",
-        ".sphere_radius_voxels_of(",
-        "spire::radius_of(",
-        "spire::radius_at_row(",
-        "spire::radius_voxels(",
-        "spire::radius_in_snapshot(",
-        "spire::inside_at_row(",
-        "Sphere::of(",
-        "radius_in_snapshot(",
-    ]);
-    let grows: BTreeSet<String> = grows
-        .into_iter()
-        .filter(|reader| !reader.starts_with("spire.rs::"))
-        .collect();
-    let expected_grows: BTreeSet<String> = GROWS.iter().map(|s| (*s).to_owned()).collect();
-    assert_eq!(
-        grows, expected_grows,
-        "a function reads the grown sphere: name it in GROWS"
-    );
-    assert!(
-        base.intersection(&grows)
-            .eq(["targeting.rs::radius_of".to_owned()].iter()),
-        "no reader is in both lists but the targeting view's chooser, which reads the base for a \n         site where no beacon stands and the one function for a placed beacon"
-    );
+    let base = readers(BASE_NEEDLES);
+    let grows = readers(GROWN_NEEDLES);
+    if let Err(why) = named(&base, &grows) {
+        panic!("{why}");
+    }
+}
+
+/// The check fails on a reader planted in neither list, whichever way it
+/// reads: the planted source is scanned as a file of the sim would be.
+#[test]
+fn the_readers_check_fails_on_a_planted_reader() {
+    for planted in [
+        "fn sneaks(world: &World) -> i16 { world.rules().sphere_radius_voxels() }",
+        "fn grows_quietly(world: &World, b: BeaconId) -> Fx { world.sphere_radius_of(b) }",
+        "use crate::targeting::in_sphere;\nfn bare(g: &Ground<'_>, c: [Fx; 3], p: [Fx; 3]) -> bool { in_sphere(c, p) }",
+    ] {
+        let mut base = readers(BASE_NEEDLES);
+        let mut grows = readers(GROWN_NEEDLES);
+        scan("sim:planted.rs", planted, BASE_NEEDLES, &mut base);
+        scan("sim:planted.rs", planted, GROWN_NEEDLES, &mut grows);
+        assert!(
+            named(&base, &grows).is_err(),
+            "the planted reader passed: {planted}"
+        );
+    }
 }
 
 /// Whether `code` holds `needle` as a whole identifier: no identifier
@@ -586,4 +695,146 @@ fn contains_word(code: &str, needle: &str) -> bool {
         from = start + 1;
     }
     false
+}
+
+/// Decision 6, for Build (S3's plan, section 6: "what then lies outside the
+/// sphere stands and stays powered, but no physical work reaches it until a
+/// Spire is rebuilt"): a target in the grown ring is not bought, not counted
+/// as work and not raised while the sphere is its base, and a rebuilt Spire
+/// resumes it.
+#[test]
+fn a_target_a_fallen_spire_left_outside_waits_for_a_spire() {
+    let mut world = licensed();
+    let core = core(&world);
+    let at = core_at(&world);
+    let column = |voxels: i32| {
+        world.standing_point([
+            at[0].floor_voxels() + voxels,
+            at[1].floor_voxels(),
+            at[2].floor_voxels(),
+        ])
+    };
+    let beside = column(1);
+    let ring = column(-28);
+    let spire = world
+        .raise_structure(SEAT, core, StructureKind::ResonanceSpire, beside)
+        .expect("room for a Spire");
+    set_treasury(&mut world, 0);
+    world
+        .add_target(core, StructureKind::Autocannon.id(), ring)
+        .expect("room for a target");
+    let mut runner = Runner::new(world);
+    assert!(runner.begin_push().unwrap());
+    // The Spire falls before anything is bought.
+    runner
+        .world_mut()
+        .request_damage(DamageOrder {
+            target: DamageTarget::Structure(spire),
+            amount: Damage::new(1_000_000).expect("a damage"),
+            by: SeatId::new(1),
+            source: None,
+        })
+        .expect("room");
+    runner.step().unwrap();
+    assert!(!runner.world().spire_on(core), "the Spire fell");
+    runner.world_mut().set_treasury(SEAT, Money::new(RICH));
+    let built_at = |world: &World| {
+        let structures = world.structures();
+        (0..structures.ids().len()).any(|row| {
+            !structures.frees()[row]
+                && structures.kinds()[row] == StructureKind::Autocannon.id()
+                && structures.positions()[row][0].floor_voxels() == ring[0].floor_voxels()
+                && structures.positions()[row][1].floor_voxels() == ring[1].floor_voxels()
+        })
+    };
+    for _ in 0..600 {
+        runner.step().unwrap();
+    }
+    assert!(
+        !built_at(runner.world()),
+        "nothing is bought outside the base sphere"
+    );
+    assert!(
+        treasury(runner.world()).raw() >= RICH,
+        "and nothing is spent: {:?}",
+        treasury(runner.world())
+    );
+
+    // A rebuilt Spire grows the sphere again, and the work resumes.
+    runner
+        .world_mut()
+        .raise_structure(SEAT, core, StructureKind::ResonanceSpire, beside)
+        .expect("room for a Spire");
+    for _ in 0..1_200 {
+        runner.step().unwrap();
+    }
+    assert!(
+        built_at(runner.world()),
+        "the target is bought once the sphere holds it"
+    );
+}
+
+/// No silent drop: a sealed `add_build_target` whose anchor lies outside the
+/// beacon's sphere when its row commits is written, and waits for the sphere
+/// (decision 6), rather than committing and writing nothing.
+#[test]
+fn a_target_written_outside_the_sphere_is_kept_and_waits() {
+    let world = licensed();
+    let at = core_at(&world);
+    let ring = world.standing_point([
+        at[0].floor_voxels() - 28,
+        at[1].floor_voxels(),
+        at[2].floor_voxels(),
+    ]);
+    let [x, y, z] = [
+        ring[0].floor_voxels(),
+        ring[1].floor_voxels(),
+        ring[2].floor_voxels(),
+    ];
+    let route = format!(
+        r#"{{"label":"beyond","interface":{{"beacon":{{"beacon_id":"b_00"}},"rows":[{{"add_build_target":{{"target":{{"blueprint_id":"autocannon","anchor":{{"voxel":{{"x":{x},"y":{y},"z":{z}}}}}}}}}}}]}},"timeout_ms":60000}}"#
+    );
+    let (runner, feed) = play(world, &route, 600);
+    assert!(failures(&feed).is_empty(), "the row commits: {feed:?}");
+    let targets = runner.world().targets();
+    assert!(targets.anchors().contains(&ring), "the target is written");
+    assert!(
+        !feed
+            .iter()
+            .any(|event| event.kind == EventKind::StructureQueued),
+        "and nothing is bought while the sphere does not hold it"
+    );
+}
+
+/// The Spire's site keeps out of the beacon's protected areas, ground its
+/// mandate will not build on: a protected box over the spiral's first ring
+/// puts it on the first free column outside the box.
+#[test]
+fn the_spire_is_not_sited_in_a_protected_area() {
+    let mut world = licensed();
+    let core = core(&world);
+    let at = core_at(&world);
+    let [cx, cy] = [at[0].floor_voxels(), at[1].floor_voxels()];
+    let corner = |dx: i32, dy: i32| {
+        [
+            i16::try_from(cx + dx).expect("on the map"),
+            i16::try_from(cy + dy).expect("on the map"),
+        ]
+    };
+    let shield =
+        pharmakos_sim::tables::ColumnBox::new(corner(-2, -2), corner(2, 2)).expect("a box");
+    world
+        .add_area(core, pharmakos_sim::tables::AreaKind::Protected, at, shield)
+        .expect("room for an area");
+    let (runner, feed) = play(world, &queue_at_core("spire", "resonance_spire"), 400);
+    assert!(failures(&feed).is_empty(), "{feed:?}");
+    let structures = runner.world().structures();
+    let row = (0..structures.ids().len())
+        .find(|row| structures.kinds()[*row] == StructureKind::ResonanceSpire.id())
+        .expect("the Spire");
+    let spire = structures.positions()[row];
+    assert!(
+        !shield.contains(spire[0].floor_voxels(), spire[1].floor_voxels()),
+        "the Spire stands outside the protected box"
+    );
 }

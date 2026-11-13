@@ -1151,7 +1151,7 @@ impl World {
                 size: voxels.size(),
             });
         };
-        let Some((clusters, scratch)) = build_graph(
+        let Some((clusters, scratch)) = crate::pathing::graph_for(
             &surface,
             config.rules.cluster_shape().with_size(cluster_voxels),
         ) else {
@@ -2563,6 +2563,14 @@ impl World {
         if crate::mandate::protected(self, beacon, anchor) {
             return false;
         }
+        // **Nothing is built outside the beacon's sphere as it stands now**
+        // (S3's plan, decision 6: once a Spire falls, "no physical work
+        // reaches" what lies outside until one is rebuilt). The Build mandate
+        // skips such a target ([`crate::mandate::buildable`]); this is the
+        // backstop.
+        if !crate::mandate::inside_sphere(self, beacon, anchor) {
+            return false;
+        }
         // **One structure per voxel, across seats** (targeting.md, "Sites"):
         // construction is refused where any live structure already stands, so
         // the first seat to build wins and the other's target is never paid
@@ -2669,7 +2677,7 @@ impl World {
             .copied()
             .ok_or(StepFailure::BeaconGone)?;
         let at = self
-            .capability_site(seat, at)
+            .capability_site(seat, beacon, at)
             .ok_or(StepFailure::IllegalSite)?;
         if self.structures_held_by(seat) >= room_per_seat(STRUCTURE_TABLE_ROOM, self.seats.len())
             || self.structures.vacancy(STRUCTURE_ROWS).is_err()
@@ -2725,13 +2733,15 @@ impl World {
     /// `y`, then `x`) other than the beacon's own that is standable, outside
     /// every feature's footprint, holds no live structure and no other own
     /// beacon (one structure per voxel and no stacking, targeting.md "Sites"),
-    /// is claimed by none of the seat's Build targets, and has no voxel `set`
-    /// filed on it this tick (the owner's footing ruling of 2026-10-20, as
-    /// `queue_target`). Its own column, beside the beacon rather than on it,
+    /// is claimed by none of the seat's Build targets, lies in no protected
+    /// area of the beacon ([`crate::mandate::protected`]: ground its mandate
+    /// will not build on) and in no box one of the seat's wall targets will
+    /// fill, and has no voxel `set` filed on it this tick (the owner's footing
+    /// ruling of 2026-10-20, as `queue_target`). Its own column, beside the beacon rather than on it,
     /// makes the Spire an asset of its own to aim at: a raider that met it on
     /// the beacon's column would always take the beacon first. `None` when no
     /// column of the sphere is free.
-    fn capability_site(&self, seat: SeatId, centre: [Fx; 3]) -> Option<[Fx; 3]> {
+    fn capability_site(&self, seat: SeatId, beacon: BeaconId, centre: [Fx; 3]) -> Option<[Fx; 3]> {
         let [bx, by] = crate::targeting::column_of(centre);
         let ground = self.ground();
         for &[dx, dy] in &self.spiral {
@@ -2750,14 +2760,34 @@ impl World {
                 || ground.stacks_on_own(seat, x, y)
                 || ground.own_target_on(seat, None, x, y)
                 || self.set_queued_on(x, y)
+                || self.wall_box_holds(seat, x, y)
             {
                 continue;
             }
-            if let Some(point) = ground.standing(x, y) {
+            if let Some(point) = ground.standing(x, y)
+                && !crate::mandate::protected(self, beacon, point)
+            {
                 return Some(point);
             }
         }
         None
+    }
+
+    /// Whether a wall target of one of `seat`'s beacons has a box that holds the
+    /// column `(x, y)`: ground its drones will fill.
+    fn wall_box_holds(&self, seat: SeatId, x: i32, y: i32) -> bool {
+        let targets = &self.targets;
+        targets
+            .beacons()
+            .iter()
+            .zip(targets.kinds())
+            .zip(targets.areas().iter().zip(targets.wall_tops()))
+            .any(|((beacon, kind), (area, top))| {
+                *kind == TargetKind::Build.id()
+                    && *top != crate::tables::NO_WALL
+                    && area.contains(x, y)
+                    && self.seat_of_beacon(*beacon) == seat
+            })
     }
 
     /// A structure reached full hit points: it is finished, and starts
@@ -3697,9 +3727,9 @@ impl World {
         self.clear_targets(beacon, TargetKind::Build);
         for entry in list {
             let anchor = entry.anchor;
-            if !crate::mandate::inside_sphere(self, beacon, anchor)
-                || self.anchor_is_claimed(seat, anchor)
-            {
+            // A target outside the sphere as it stands now is written and
+            // waits for it (S3's plan, decision 6; `crate::mandate::buildable`).
+            if self.anchor_is_claimed(seat, anchor) {
                 continue;
             }
             self.targets.add_bound(
@@ -3809,8 +3839,7 @@ impl World {
         if let Some(list) = build {
             for (index, entry) in list.clone().enumerate() {
                 let anchor = entry.anchor;
-                if !crate::mandate::inside_sphere(self, beacon, anchor)
-                    || self.anchor_claimed_elsewhere(seat, anchor, beacon)
+                if self.anchor_claimed_elsewhere(seat, anchor, beacon)
                     || list
                         .clone()
                         .take(index)
@@ -7113,32 +7142,6 @@ fn core_of_generated(generated: &crate::mapgen::GeneratedMap, seat: SeatId) -> B
         }
     }
     best.map_or(BeaconId::NONE, BeaconId::new)
-}
-
-/// Build the pathing graph and the scratch it is searched with.
-///
-/// The scratch has to be sized before the decomposition exists — building the
-/// intra edges is itself a search — so [`Scratch::for_map`] does that
-/// arithmetic from the map and the cluster edge, and the decomposition is
-/// checked against it below.
-///
-/// `None` when the cluster edge cannot decompose this map, which the caller
-/// reports as [`MapError::Unclusterable`].
-fn build_graph(
-    surface: &Surface,
-    shape: crate::pathing::clusters::ClusterShape,
-) -> Option<(Clusters, Scratch)> {
-    let mut scratch = Scratch::for_map(surface, shape.size)?;
-    let clusters = Clusters::new(surface, shape, &mut scratch)?;
-    // A real check rather than a `debug_assert!`: this is the only thing tying
-    // the scratch's independent derivation of the abstract numbering to the
-    // decomposition's, and a release build is exactly where a scratch sized for
-    // a different numbering would go unnoticed — the arrays would be short and
-    // a query would read a slot that is not there.
-    if clusters.abstract_capacity() != Scratch::abstract_capacity_for(surface, shape.size)? {
-        return None;
-    }
-    Some((clusters, scratch))
 }
 
 /// Mark every cluster a settled chunk's footprint overlaps.

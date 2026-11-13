@@ -1067,7 +1067,15 @@ fn fire_charges(world: &mut World) {
         let blast = voxel_centre([x, y, z.saturating_add(1)]);
         // The blast damages what stands in its ball as well as cutting the
         // ground (decisions-log item 151 (2) (c) (3); S3's `lic`), filed for
-        // this tick's combat phase like a shell's splash.
+        // this tick's combat phase like a shell's splash: the ball is sampled
+        // here, in the programs phase, and the damage applied in combat, so an
+        // asset that walks into or out of the ball between the two counts as
+        // where it stood now. Its source is the Attack beacon that bought the
+        // charge, so an asset under `RETURN_FIRE` answers that beacon (the
+        // reading recorded in S3's `lic`; the owner can veto). A charge whose
+        // cut was refused above fires nothing: no damage and no
+        // `charge_detonated`, counted under its reason
+        // (`count_cut_refused`).
         let damage = world.rules().attack().charge_damage;
         world.blast_damage(
             blast,

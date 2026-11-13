@@ -280,11 +280,24 @@ fn a_restore_refuses_a_licence_no_run_writes() {
     twice.licence_seat = vec![1, 1];
     twice.licence_kind = vec![1, 1];
     twice.licence_round = vec![1, 2];
+    let mut late = good.clone();
+    late.licence_round = vec![good.match_round + 1];
+    // A seat the map never placed: four seats on a two-zone map's world
+    // would be another world, so the file's own seat 1 is unplaced by taking
+    // its beacons out of the beacon columns' seat bytes.
+    let mut unplaced = good.clone();
+    for seat in &mut unplaced.beacon_seat {
+        if *seat == 1 {
+            *seat = 0;
+        }
+    }
     let cases: Vec<(&str, Snapshot)> = vec![
         ("an unknown licence", unknown),
         ("a ragged table", ragged),
         ("a seat the file does not hold", stranger),
         ("a licence held twice", twice),
+        ("a licence later than the round played", late),
+        ("a licence of a seat the map never placed", unplaced),
     ];
     for (name, snapshot) in cases {
         let mut into = self::world(2);
@@ -294,6 +307,15 @@ fn a_restore_refuses_a_licence_no_run_writes() {
         );
         assert!(into.licences().is_empty(), "{name}: nothing written");
     }
+    // The fix pass's round refusal, by name.
+    let mut later = good.clone();
+    later.licence_round = vec![good.match_round + 1];
+    assert_eq!(
+        later.restore_into(&mut self::world(2)),
+        Err(pharmakos_sim::snapshot::SnapshotError::OutOfRange(
+            "licence_round"
+        ))
+    );
     let mut into = self::world(2);
     good.restore_into(&mut into)
         .expect("the good file restores");
@@ -363,5 +385,117 @@ fn an_empty_licence_table_hashes_nothing() {
         held.len() - bare.len(),
         1 + 4 + 1 + 1 + 4,
         "the tag, the count and one row of seat, licence and round"
+    );
+}
+
+/// Item 17, held for damage that lands after its dealer fell: an eliminated
+/// seat's kill credit is dropped, so a hit it dealt (a shell in flight, here
+/// filed directly) books it nothing, while a living seat's hit on the same
+/// tick books as before.
+#[test]
+fn an_eliminated_seats_damage_books_it_no_credit() {
+    let mut runner = Runner::new(world(3));
+    assert!(runner.begin_push().expect("the runner answers"));
+    let core = core_of(runner.world(), SeatId::new(2));
+    let target = runner
+        .world()
+        .commander_of(SeatId::new(0))
+        .expect("seat 0's commander");
+    runner
+        .world_mut()
+        .request_damage(DamageOrder {
+            target: DamageTarget::Beacon(core),
+            amount: Damage::new(1_000_000).expect("a damage"),
+            by: SeatId::NEUTRAL,
+            source: None,
+        })
+        .expect("room");
+    runner.step().expect("the tick runs").expect("a tick");
+    assert!(!runner.world().seats().is_alive(2), "seat 2 fell");
+    for by in [2_u8, 1] {
+        runner
+            .world_mut()
+            .request_damage(DamageOrder {
+                target: DamageTarget::Unit(target),
+                amount: Damage::new(5).expect("a damage"),
+                by: SeatId::new(by),
+                source: None,
+            })
+            .expect("room");
+    }
+    runner.step().expect("the tick runs").expect("a tick");
+    let credit = runner.world().credit();
+    let unit = pharmakos_sim::knowledge::AssetId::of_unit(target)
+        .expect("an asset")
+        .raw();
+    let mut shares = Vec::new();
+    credit.shares_of(unit, &mut shares);
+    assert_eq!(shares, vec![(1, 5)], "seat 1 is credited and seat 2 is not");
+}
+
+/// Spec section 8: "A licence is permanent". Losing a Generator that earned it
+/// takes nothing back: the next settlement neither voids nor awards it again.
+#[test]
+fn a_licence_survives_the_loss_of_a_generator() {
+    let probe = world(2);
+    let core = core_of(&probe, SeatId::new(0));
+    let stands = vent_stands(&probe, at_of(&probe, core), 2);
+    let mut runner = with_generators(&stands);
+    let mut feed = Vec::new();
+    play_segment(&mut runner, &mut feed);
+    assert!(
+        runner
+            .world()
+            .licences()
+            .holds(SeatId::new(0), Licence::ResonanceSpire)
+    );
+    let structures = runner.world().structures();
+    let generator = (0..structures.ids().len())
+        .find(|row| {
+            structures.kinds()[*row] == StructureKind::Generator.id()
+                && structures.seats()[*row] == 0
+        })
+        .map(|row| pharmakos_sim::tables::StructureId::new(structures.ids()[row]))
+        .expect("a Generator");
+    if runner.phase() == pharmakos_sim::MatchPhase::Recap {
+        assert!(runner.end_recap().expect("the runner answers"));
+    }
+    assert!(runner.begin_push().expect("the runner answers"));
+    runner
+        .world_mut()
+        .request_damage(DamageOrder {
+            target: DamageTarget::Structure(generator),
+            amount: Damage::new(1_000_000).expect("a damage"),
+            by: SeatId::NEUTRAL,
+            source: None,
+        })
+        .expect("room");
+    let mut feed = Vec::new();
+    while runner
+        .step()
+        .expect("the tick runs")
+        .is_some_and(|report| !report.segment_ended)
+    {
+        feed.extend_from_slice(runner.events());
+        runner.clear_events();
+    }
+    feed.extend_from_slice(runner.events());
+    assert!(
+        feed.iter()
+            .any(|event| event.kind == EventKind::StructureDestroyed),
+        "the Generator fell"
+    );
+    assert!(
+        !feed.iter().any(|event| matches!(
+            event.kind,
+            EventKind::LicenceAwarded | EventKind::LicenceVoided
+        )),
+        "nothing awarded or voided"
+    );
+    assert!(
+        runner
+            .world()
+            .licences()
+            .holds(SeatId::new(0), Licence::ResonanceSpire)
     );
 }

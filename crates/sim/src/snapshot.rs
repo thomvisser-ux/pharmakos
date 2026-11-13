@@ -2402,9 +2402,11 @@ impl Snapshot {
 
     /// The licence table (S3's `lic`, version 15), checked before anything is
     /// written: the columns are one length, every seat byte names a seat of
-    /// the file that is still in the match (an eliminated seat's licences are
-    /// voided on the tick it falls, so no run writes one), and the rows are
-    /// the ones a writer makes ([`crate::licence::LicenceTable::restore`]).
+    /// the file that was placed and is still in the match (an eliminated
+    /// seat's licences are voided on the tick it falls, so no run writes one),
+    /// no row is later than the round played, no more rows than the seats can
+    /// hold, and the rows are the ones a writer makes
+    /// ([`crate::licence::LicenceTable::restore`]).
     ///
     /// # Errors
     ///
@@ -2422,9 +2424,24 @@ impl Snapshot {
             if seats.seats().get(index).copied() != Some(*seat) {
                 return Err(SnapshotError::OutOfRange("licence_seat"));
             }
+            // A seat the map never placed holds no beacon, and so no Generator
+            // and no licence: its core's row is never freed, so a placed seat
+            // always has one.
+            if !self.beacon_seat.contains(seat) {
+                return Err(SnapshotError::OutOfRange("licence_seat"));
+            }
             if seats.eliminated_at().get(index).copied() != Some(crate::tables::NOT_ELIMINATED) {
                 return Err(SnapshotError::OutOfRange("licence_seat"));
             }
+        }
+        // A licence is awarded at a round's settlement, so none is later than
+        // the round the file says was played.
+        if self
+            .licence_round
+            .iter()
+            .any(|round| *round > self.match_round)
+        {
+            return Err(SnapshotError::OutOfRange("licence_round"));
         }
         let rows = self
             .licence_seat
@@ -2447,9 +2464,8 @@ impl Snapshot {
                 crate::licence::LicenceRowError::RoundZero => {
                     SnapshotError::OutOfRange("licence_round")
                 }
-                crate::licence::LicenceRowError::Order | crate::licence::LicenceRowError::Room => {
-                    SnapshotError::Ragged("licence")
-                }
+                crate::licence::LicenceRowError::Order => SnapshotError::Ragged("licence"),
+                crate::licence::LicenceRowError::Room => SnapshotError::OutOfRange("licence_count"),
             })?;
         Ok(table)
     }

@@ -407,7 +407,7 @@ pub fn check_wall(world: &World, beacon: BeaconId, wall: WallBox) -> Result<(), 
             let low = voxel_point([x, y, ground.saturating_add(1)]);
             let high = voxel_point([x, y, top]);
             let inside = |point: Option<[Fx; 3]>| {
-                point.is_some_and(|at| sphere.is_some_and(|sphere| sphere.holds(at)))
+                point.is_some_and(|at| sphere.is_some_and(|sphere| sphere.holds_point(at)))
             };
             if !inside(low) || !inside(high) {
                 return Err(WallRefused::OutsideSphere);
@@ -778,7 +778,7 @@ fn wall_voxel(
                 continue;
             };
             if crate::mandate::protected(world, beacon, point)
-                || !sphere.holds(point)
+                || !sphere.holds_point(point)
                 || !fillable(world, at)
                 || occupied(world, at)
             {
@@ -834,7 +834,7 @@ fn refill_voxel(world: &World, beacon: BeaconId, class: Option<Drone>) -> Option
             let Some(point) = voxel_point(at) else {
                 continue;
             };
-            if !sphere.holds(point)
+            if !sphere.holds_point(point)
                 || crate::mandate::protected(world, beacon, point)
                 || world.features().at_column(x, y).is_some()
                 || !fillable(world, at)
@@ -925,7 +925,9 @@ pub fn build_job(world: &World, unit: usize) -> Option<BuildJob> {
                 .hit_points()
                 .get(index)
                 .is_some_and(|hp| hp.is_alive());
-        if !going_up {
+        // Decision 6: a structure a fallen Spire's sphere left outside stands,
+        // and no drone raises it until a Spire is rebuilt.
+        if !going_up || !crate::mandate::inside_sphere(world, home, *anchor) {
             continue;
         }
         let at = structures.positions().get(index).copied()?;
@@ -1050,7 +1052,7 @@ fn nearest_patient(
         let Some(kind) = UnitKind::from_id(*kind) else {
             continue;
         };
-        if hp.raw() >= world.unit_max_hp(kind).raw() || !sphere.holds(*at) {
+        if hp.raw() >= world.unit_max_hp(kind).raw() || !sphere.holds_point(*at) {
             continue;
         }
         if let Some(index) = Row::of_index(row) {
@@ -1082,7 +1084,7 @@ fn nearest_patient(
             // structure above the threshold begins nothing.
             let begun = healing && hp.raw() < max.raw() && at_work(world, here, *at);
             if !(below_threshold(hp.raw(), max.raw(), settings.repair_threshold_pct) || begun)
-                || !sphere.holds(*at)
+                || !sphere.holds_point(*at)
             {
                 continue;
             }
@@ -1104,7 +1106,7 @@ fn nearest_patient(
             let max = world.beacon_max_hp(BeaconId::new(*id));
             let begun = healing && hp.raw() < max.raw() && at_work(world, here, *at);
             if !(below_threshold(hp.raw(), max.raw(), settings.repair_threshold_pct) || begun)
-                || !sphere.holds(*at)
+                || !sphere.holds_point(*at)
             {
                 continue;
             }
@@ -1185,7 +1187,7 @@ fn cracked_wall(
                     continue;
                 };
                 let at = [x, y, z];
-                let inside = voxel_point(at).is_some_and(|point| sphere.holds(point));
+                let inside = voxel_point(at).is_some_and(|point| sphere.holds_point(point));
                 if builder == seat
                     && cracked
                     && inside
@@ -1249,7 +1251,7 @@ pub fn ruin_in_sphere(world: &World, beacon: BeaconId) -> Option<Row> {
         if *free
             || SeatId::new(*owner).is_some()
             || *ruined == crate::tables::NOT_RUINED
-            || !sphere.holds(*at)
+            || !sphere.holds_point(*at)
         {
             continue;
         }
@@ -1283,7 +1285,7 @@ pub fn repair_work(world: &World, beacon: BeaconId) -> u32 {
     for ((owner, kind), (hp, at)) in rows {
         let wounded =
             UnitKind::from_id(*kind).is_some_and(|kind| hp.raw() < world.unit_max_hp(kind).raw());
-        if *owner == seat.raw() && hp.is_alive() && wounded && sphere.holds(*at) {
+        if *owner == seat.raw() && hp.is_alive() && wounded && sphere.holds_point(*at) {
             work = work.saturating_add(1);
         }
     }
@@ -1301,7 +1303,12 @@ pub fn repair_work(world: &World, beacon: BeaconId) -> u32 {
                 .is_some_and(|max| {
                     below_threshold(hp.raw(), max.raw(), site.settings.repair_threshold_pct)
                 });
-            if *owner == seat.raw() && hp.is_alive() && !*building && damaged && sphere.holds(*at) {
+            if *owner == seat.raw()
+                && hp.is_alive()
+                && !*building
+                && damaged
+                && sphere.holds_point(*at)
+            {
                 work = work.saturating_add(1);
             }
         }
@@ -1316,7 +1323,7 @@ pub fn repair_work(world: &World, beacon: BeaconId) -> u32 {
             if *owner == seat.raw()
                 && hp.is_alive()
                 && below_threshold(hp.raw(), max.raw(), site.settings.repair_threshold_pct)
-                && sphere.holds(*at)
+                && sphere.holds_point(*at)
             {
                 work = work.saturating_add(1);
             }

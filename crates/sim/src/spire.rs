@@ -150,6 +150,15 @@ pub fn radius_voxels(
     }
 }
 
+/// Whether a kind column holds a Resonance Spire's row, of any state: the
+/// radius functions' fast exit. A freed row keeps its kind byte, so this can
+/// answer yes for a table with no live Spire; it never answers no for one
+/// that has one.
+#[must_use]
+pub fn holds_a_spire(kinds: &[u8]) -> bool {
+    kinds.contains(&StructureKind::ResonanceSpire.id())
+}
+
 /// [`radius_voxels`] for the beacon in `row` of the live tables; the base
 /// radius for a row the table does not hold, which no Spire stands on.
 #[must_use]
@@ -159,6 +168,13 @@ pub fn radius_at_row(
     structures: &StructureTable,
     row: usize,
 ) -> i16 {
+    // The fast exit: with no Spire row in the table, nothing grows, and the
+    // kind column is one byte a row, so the test costs a byte search rather
+    // than the six-column walk below (the tick asks this from per-unit and
+    // per-beacon paths).
+    if !holds_a_spire(structures.kinds()) {
+        return rules.sphere_radius_voxels();
+    }
     match (beacons.seats().get(row), beacons.ids().get(row)) {
         (Some(seat), Some(id)) => radius_voxels(rules, *seat, *id, facts_of(structures)),
         _ => rules.sphere_radius_voxels(),
@@ -181,28 +197,41 @@ pub fn radius_of(
     }
 }
 
+/// How long a Resonance Spire takes to go up, from its queue to its last hit
+/// point, while its beacon's fabricator works on it.
+///
+/// PLACEHOLDER: the Spire's build time, spec section 8's "about 60 s" — owner, at S3's `tune3`, which proposes its row.
+/// Spec section 8: "A crystal lattice grows over about 60 s". No row prices
+/// a fabricator's rate, so the time is this constant until `tune3` proposes
+/// one (AGENTS.md section 12: a tuning value whose row does not exist yet).
+pub const SPIRE_BUILD: crate::math::quantity::Ms = crate::math::quantity::Ms::new(60_000);
+
 /// The fabricators' work on the capability structures going up, one tick of
 /// it (spec section 8: "that beacon's built-in fabricator builds it whatever
 /// the mandate"; S3's plan, E4), in the programs phase, in structure row
 /// order.
 ///
 /// A living capability structure of a seat, going up, homed to a beacon that
-/// is alive and awake gains a tick's hit points and is finished at full, as a
-/// build drone raises a Build target's structure. A dark beacon's fabricator is
-/// powered down with everything else homed to it (item 10), so its structure
-/// waits; a structure whose beacon died is a ruin and nobody's, and is never
-/// finished.
+/// is alive and awake gains its share of the tick's hit points and is finished
+/// at full. **The work goes through the Quartermaster's hold** (S3's plan,
+/// E4; [`crate::power`]'s shortfall order): while the seat's grid is short,
+/// draw above supply as the last power phase settled it, the fabricator's
+/// construction is held exactly as its unit orders are, and resumes when the
+/// headroom does. The structure's draw is unchanged by the hold: it draws from
+/// the tick it was queued. A dark beacon's fabricator is powered down with
+/// everything else homed to it (item 10), so its structure waits too; a
+/// structure whose beacon died is a ruin and nobody's, and is never finished.
 ///
-/// PLACEHOLDER: the fabricator's build rate, one build drone's `structures.build_hp_per_second` — owner, at S3's demo, with `tune3`'s Spire numbers.
-/// Spec section 8 puts the lattice's growth at "about 60 s" as spectacle; at
-/// the committed rows (500 hit points at 60 a second) the Spire finishes in
-/// about eight seconds, and no row prices a fabricator's rate of its own.
+/// The hit points are spread over [`SPIRE_BUILD`] by the tick itself, not by
+/// a counter: on tick `t` the structure gains `⌊(t + 1)·F / T⌋ − ⌊t·F / T⌋`
+/// of its `F` full hit points, `T` being the build time in ticks, so any run of
+/// `T` working ticks adds exactly `F`, with nothing new to hash or snapshot.
 pub(crate) fn fabricate(world: &mut crate::world::World) {
-    let per_tick = world.rules().build_hp_per_tick();
+    let tick = u64::from(world.tick().raw());
     let count = crate::math::index::row(world.structures().len());
     let mut row: usize = 0;
     while row < count {
-        if let Some((id, grown, full)) = fabricated(world, row, per_tick) {
+        if let Some((id, grown, full)) = fabricated(world, row, tick) {
             if let Some(slot) = world.structures_mut().hit_points_mut().get_mut(row) {
                 *slot = grown;
             }
@@ -214,12 +243,21 @@ pub(crate) fn fabricate(world: &mut crate::world::World) {
     }
 }
 
+/// What tick `tick` adds to a structure of `full` hit points built over
+/// `ticks` ticks: `⌊(tick + 1)·full / ticks⌋ − ⌊tick·full / ticks⌋`, exact in
+/// `u64`. `None` for a build time of no ticks, which no constant here is.
+fn share_of_tick(tick: u64, full: u64, ticks: u64) -> Option<u64> {
+    let after = tick.checked_add(1)?.checked_mul(full)?.checked_div(ticks)?;
+    let before = tick.checked_mul(full)?.checked_div(ticks)?;
+    after.checked_sub(before)
+}
+
 /// The structure in `row` if a fabricator works on it this tick: its id, its
 /// hit points after the tick's work, and its full hit points.
 fn fabricated(
     world: &crate::world::World,
     row: usize,
-    per_tick: crate::math::quantity::Hp,
+    tick: u64,
 ) -> Option<(
     crate::tables::StructureId,
     crate::math::quantity::Hp,
@@ -247,14 +285,28 @@ fn fabricated(
     {
         return None;
     }
+    // The Quartermaster's hold: no construction while the seat's grid is short.
+    let index = world.seat_row(seat)?;
+    let supply = world.seats().supplies().get(index).copied()?;
+    let draw = world.seats().draws().get(index).copied()?;
+    if draw.raw() > supply.raw() {
+        return None;
+    }
     let full = world.structure_max_hp(kind)?;
     let id = structures.id_of(crate::ids::Row::of_index(row)?)?;
+    let ticks = u64::from(SPIRE_BUILD.to_ticks_ceil());
+    let share = share_of_tick(tick, u64::try_from(full.raw()).ok()?, ticks)?;
     // A structure going up holds fewer hit points than its full count, and a
-    // tick's work past the full count stops at it: the build rule, as a drone
-    // raises a Build target's structure.
-    let grown =
-        crate::math::quantity::Hp::new(hp.raw().saturating_add(per_tick.raw()).min(full.raw()));
-    Some((id, grown, full))
+    // tick's work stops at the full count: the build rule, as a drone raises a
+    // Build target's structure. The sum fits: both terms are at most `full`.
+    let grown = i64::from(hp.raw())
+        .checked_add(i64::try_from(share).ok()?)?
+        .min(i64::from(full.raw()));
+    Some((
+        id,
+        crate::math::quantity::Hp::new(i32::try_from(grown).ok()?),
+        full,
+    ))
 }
 
 /// Every structure row of a frozen snapshot, as [`StructureFacts`], so a
@@ -291,6 +343,9 @@ pub fn radius_in_snapshot(
     snapshot: &crate::snapshot::Snapshot,
     row: usize,
 ) -> i16 {
+    if !holds_a_spire(&snapshot.structure_kind) {
+        return rules.sphere_radius_voxels();
+    }
     match (snapshot.beacon_seat.get(row), snapshot.beacon_id.get(row)) {
         (Some(seat), Some(id)) => radius_voxels(rules, *seat, *id, facts_of_snapshot(snapshot)),
         _ => rules.sphere_radius_voxels(),
@@ -323,4 +378,120 @@ pub fn inside_at_row(
         return false;
     }
     radius_at_row(rules, beacons, structures, row) == rules.grown_sphere_radius_voxels()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::math::quantity::Kw;
+    use crate::tables::SeatId;
+
+    /// A licensed seat 0 with a Spire queued at its core, going up.
+    fn queued() -> (crate::world::World, crate::tables::StructureId) {
+        let path = crate::default_rules_path().unwrap_or_else(|| panic!("the rules table"));
+        let rules = RulesTable::load(&path).unwrap_or_else(|error| panic!("it loads: {error:?}"));
+        let mut world = crate::world::World::new(&crate::world::WorldConfig {
+            match_seed: 0x0000_0000_ca5c_aded,
+            seats: 2,
+            rules,
+            match_settings: crate::runner::MatchSettings {
+                segment_lengths_ms: vec![180_000],
+                round_limit: 1,
+            },
+        })
+        .unwrap_or_else(|error| panic!("a world: {error:?}"));
+        let seat = SeatId::new(0);
+        world.award_licence_directly(seat, pharmakos_proto::gp::v1::Licence::ResonanceSpire, 1);
+        world.set_treasury(seat, crate::math::quantity::Money::new(10_000));
+        let row = world
+            .beacons()
+            .seats()
+            .iter()
+            .position(|owner| *owner == 0)
+            .unwrap_or_else(|| panic!("seat 0's core"));
+        let core = BeaconId::new(
+            world
+                .beacons()
+                .ids()
+                .get(row)
+                .copied()
+                .unwrap_or_else(|| panic!("an id")),
+        );
+        let spire = world
+            .queue_capability(seat, core, StructureKind::ResonanceSpire)
+            .unwrap_or_else(|failure| panic!("queued: {failure:?}"));
+        (world, spire)
+    }
+
+    fn hp_of(world: &crate::world::World, spire: crate::tables::StructureId) -> i32 {
+        let row = world
+            .structures()
+            .row_of(spire)
+            .unwrap_or_else(|error| panic!("a row: {error:?}"))
+            .index();
+        world
+            .structures()
+            .hit_points()
+            .get(row)
+            .map_or(0, |hp| hp.raw())
+    }
+
+    /// E4: the Spire's construction goes through the Quartermaster's hold, so
+    /// a seat whose grid is short (draw above supply as the power phase last
+    /// settled it) raises nothing until its headroom is back; its draw rule is
+    /// unchanged, since the draw is the power phase's and this reads it.
+    #[test]
+    fn a_shortfall_holds_the_spires_construction() {
+        let (mut world, spire) = queued();
+        let row = world
+            .structures()
+            .row_of(spire)
+            .unwrap_or_else(|error| panic!("a row: {error:?}"))
+            .index();
+        let worked = |world: &crate::world::World| {
+            (0_u64..40)
+                .filter(|tick| fabricated(world, row, *tick).is_some())
+                .count()
+        };
+        {
+            let columns = world.seats_mut().power_columns();
+            if let (Some(supply), Some(draw)) =
+                (columns.supply.first_mut(), columns.draw.first_mut())
+            {
+                *supply = Kw::new(5);
+                *draw = Kw::new(6);
+            }
+        }
+        assert_eq!(worked(&world), 0, "held while the grid is short");
+        {
+            let columns = world.seats_mut().power_columns();
+            if let Some(draw) = columns.draw.first_mut() {
+                *draw = Kw::new(5);
+            }
+        }
+        assert_eq!(
+            worked(&world),
+            40,
+            "worked on every tick once the headroom is back"
+        );
+        let grown = (0_u64..1_200)
+            .filter_map(|tick| fabricated(&world, row, tick))
+            .map(|(_, grown, _)| grown.raw())
+            .max();
+        assert!(grown > Some(hp_of(&world, spire)), "and it grows");
+    }
+
+    /// Spec section 8's "about 60 s": the shares of any run of the build
+    /// time's ticks add up to the full hit points, whatever tick it starts on.
+    #[test]
+    fn the_spire_takes_its_build_time() {
+        let ticks = u64::from(SPIRE_BUILD.to_ticks_ceil());
+        for start in [0_u64, 1, 7, 1_199, 123_457] {
+            let total: u64 = (start..start + ticks)
+                .map(|tick| share_of_tick(tick, 500, ticks).unwrap_or(0))
+                .sum();
+            assert_eq!(total, 500, "from tick {start}");
+        }
+        assert_eq!(ticks, 1_200, "sixty seconds at 20 Hz");
+    }
 }

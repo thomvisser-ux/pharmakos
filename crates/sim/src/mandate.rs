@@ -438,8 +438,11 @@ fn target_cost(world: &World, row: usize) -> Option<Money> {
 }
 
 /// Whether the Build target at `row` of `beacon` can still be built: nothing
-/// stands on its column, the feature it is bound to, if any, is not lost, and
-/// it lies in none of the beacon's protected areas.
+/// stands on its column, the feature it is bound to, if any, is not lost, it
+/// lies in none of the beacon's protected areas, and it lies inside the
+/// beacon's sphere as it stands now (S3's plan, decision 6: a target a fallen
+/// Spire's sphere left outside waits, unbought and unworked, until a Spire is
+/// rebuilt).
 pub(crate) fn buildable(world: &World, beacon: BeaconId, row: usize) -> bool {
     let targets = world.targets();
     let (Some(anchor), Some(feature)) = (
@@ -449,7 +452,10 @@ pub(crate) fn buildable(world: &World, beacon: BeaconId, row: usize) -> bool {
         return false;
     };
     let [x, y] = crate::targeting::column_of(anchor);
-    if world.ground().structure_on(x, y) || protected(world, beacon, anchor) {
+    if world.ground().structure_on(x, y)
+        || protected(world, beacon, anchor)
+        || !inside_sphere(world, beacon, anchor)
+    {
         return false;
     }
     feature == crate::targeting::NO_FEATURE
@@ -516,6 +522,9 @@ pub(crate) fn next_unfinished_target(world: &World, beacon: BeaconId) -> Option<
             || *kind != TargetKind::Build.id()
             || !built.is_some()
             || protected(world, beacon, *at)
+            // Decision 6: a structure a fallen Spire's sphere left outside
+            // stands, and no drone raises it until a Spire is rebuilt.
+            || !inside_sphere(world, beacon, *at)
         {
             continue;
         }
@@ -566,6 +575,7 @@ fn building_work(world: &World, beacon: BeaconId) -> u32 {
             buildable(world, beacon, row)
         } else {
             !protected(world, beacon, *at)
+                && inside_sphere(world, beacon, *at)
                 && built_row(world, *built).is_some_and(|index| {
                     world.structures().building().get(index).copied() == Some(true)
                 })
@@ -584,7 +594,7 @@ fn building_work(world: &World, beacon: BeaconId) -> u32 {
 /// about many points of one beacon takes [`Sphere::of`] once and asks it.
 #[must_use]
 pub(crate) fn inside_sphere(world: &World, beacon: BeaconId, at: [Fx; 3]) -> bool {
-    Sphere::of(world, beacon).is_some_and(|sphere| sphere.holds(at))
+    Sphere::of(world, beacon).is_some_and(|sphere| sphere.holds_point(at))
 }
 
 /// One live beacon's sphere, its centre and its squared radius, read once
@@ -609,7 +619,7 @@ impl Sphere {
     }
 
     /// Whether `at` lies inside: squared distances in Q32.32, no square root.
-    pub(crate) fn holds(self, at: [Fx; 3]) -> bool {
+    pub(crate) fn holds_point(self, at: [Fx; 3]) -> bool {
         Sq::between(at, self.centre) <= self.limit
     }
 }
