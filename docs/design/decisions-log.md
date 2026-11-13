@@ -1770,3 +1770,28 @@ Agenda:
   - **(9) The owner's answers on the review of this item's PR (2026-11-11).** Two questions went to the owner, each with a recommendation.
     - **The cut checkpoints.** Serial running starts every lane far past decision 12's checkpoints, so all three cuts would fire on the dates alone. The owner said: "wait until i free some space". No cut is taken and the checkpoints aren't re-based until the owner has freed D: and said how lanes then run; the lanes keep running one at a time meanwhile.
     - **P1's QUICK gap.** The owner chose "Open a small fix lane now (Recommended)". `vfyq` runs after `gwp` and before `lic`, while the verifier crate is free, so `vfy6` adds its checks on a fast base (section `vfyq` of the plan).
+- **Item 158, the owner's ruling on P1's QUICK bar, and where lanes build (2026-11-12).** (1) is the owner's ruling. (2) to (4) are engineering calls by the main session under the standing "go with your recommendations", each open to the owner's overrule. The AI review is not independent review.
+  - **(1) QUICK is made fast at its source: no fallback, and no change to the size unit.**
+    - **What `vfyq`'s first run found.** `vfyq` (item 157 (9)) stopped without a pull request, on its own stop condition. QUICK's cost is linear in a playbook's bytes, and nothing in it is quadratic. About 70% of it is outside the verifier: `crates/proto`'s JSON codec (`json::read`, then JSON to wire to prost) and the plan fingerprint (prost encode, wire to JSON, write, xxh3). The verifier's own walks are about 22%, mostly building a JSON Pointer string at every node. A size unit bounds neither the condition nodes (up to `CONDITION_MAX_NODES`, 24, per condition) nor the bytes.
+    - **The figures**, on the owner's machine, with a release build, an uncommitted harness in `crates/bench` and 200 timed calls (p50/p99):
+      - `budget_128`: QUICK 1.62/2.24 ms.
+      - Item 157 (7)'s shape (63 handlers with 24-node conditions; 127 units, 79 KB): QUICK 14.5/28.4 ms, FULL 20.2/35.9 ms.
+      - 127 route steps, each with a 24-node `skip_if` (127 units, 151 KB): QUICK 21.8/35.6 ms, FULL 20.2/35.0 ms. This is the larger case.
+      - Lazy pointers alone, in the codec and the verifier, were projected at about 11–12 ms p99.
+    - **The ruling.** The owner was asked how S3 closes the gate. The options were P1's written fallback, a cap on condition nodes, charging conditions in size units, or recording the miss. The owner's answers were "proceed - use C:", then "i did mean c: - not option c", and "i want this to be built well and built efficiently - which was our original plan".
+    - **What follows.** The fallback is not taken, and item 94's unit stands: conditions still count nothing. The original plan of item 157 (9) stands, a lane that makes QUICK meet 5 ms. Its scope widens to where the time actually goes.
+    - **Recorded honestly.** The main session first read "C:" as the third option, and drafted a lane that charged conditions. That draft was discarded before it was pushed.
+  - **(2) `vfyq`, reopened with a wider grant.**
+    - **What it owns.** `crates/verifier`, and `crates/proto`'s JSON codec (`src/json/`), which nobody else edits while it runs. It also holds a named place, the plan fingerprint's computation in `crates/sim/src/hash.rs`. That file is determinism code (AGENTS.md §5), so the PR names it.
+    - **What it does.** It builds JSON Pointers only where a diagnostic needs one. It allocates less. It drops the intermediate wire layer wherever text can go straight to prost with the same results. It computes the fingerprint from bytes QUICK already holds instead of re-encoding the playbook three times. Any other gain it measures goes in too.
+    - **What it holds byte-identical.** Every output: every fingerprint (a save stamps them), every `report_hash`, every golden, and the canonical form. So no `VERIFIER_VERSION` change and no chain moves.
+    - **How that is proved.** A differential property test feeds the old and the new fingerprint, and the old and the new decode, the same generated playbooks, and asserts equal bytes or the same typed error. It is kept until the old path is deleted, and committed vectors replace it then. A counted-work or allocation bound pins QUICK on both shapes.
+    - **The target.** QUICK at or under 5 ms p99 on both shapes in (1) and on `budget_128`, with FULL no slower. It is measured on an idle machine with at least 2,000 timed calls per shape, because the owner's machine is noisy at p99.
+    - **If 5 ms is still out of reach** after this work, the lane reports the figures and where the remaining time goes, and the main session takes it to the owner with options.
+  - **(3) Where it runs.** `vfyq` runs after `lic` merges (it shares `crates/sim`) and before `bench3`. `bench3`'s P1 harness carries both shapes in (1). Estimated at 4 agent-days, up from 1.5.
+  - **(4) Lane builds move to the C: drive.** The owner said "use C:".
+    - D: reached 0 bytes free on 2026-11-12, during `lic`'s run, filled from outside the lanes' folders.
+    - From now on each lane builds in `C:/build/<lane>`, CACHEDIR-tagged, one lane at a time. C: had 42 GB free. Review agents build in `C:/build/rev-<lane>-<n>`, and each folder is deleted when its lane merges or its review ends.
+    - D:'s other folders are left as they are.
+    - Item 157 (9)'s hold on the cut checkpoints stands until the owner says how lanes run with C: in use.
+  - **(5) `VERIFIER_VERSION` re-sequenced on `lic`'s review.** `lic` moves a verdict (a Spire queue is no longer E0009), and the plan bumps the version whenever verdicts move, so `lic` takes 0.1.0-s3.2, `vfy6` 0.1.0-s3.3 and `pred` 0.1.0-s3.4. `vfyq` moves no verdict and takes none.
