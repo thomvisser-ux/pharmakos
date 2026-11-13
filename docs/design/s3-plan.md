@@ -923,7 +923,7 @@ change moves `report_hash` is granted, for the re-bless alone, `tests/golden/gat
   goldens removed, the catalogue and the docs reference re-blessed, the two cross-place tests
   rewritten as agreement tests over the lifted constructs, the nine `closed` rows in
   `crates/gateway/tests/methods.rs` lifted in the same commit (its `closed()` fails the moment a code
-  is gone), and `VERIFIER_VERSION` `0.1.0-s3.3`, because the verdicts change. `vfy6`'s checks already
+  is gone), and `VERIFIER_VERSION` `0.1.0-s3.4`, because the verdicts change. `vfy6`'s checks already
   stand behind those codes, so retiring them uncovers checks rather than a gap. If cut 2 is taken,
   `pred` lifts and retires only E0020–E0022 and E0026–E0028 with their six rows; the sim answers
   `NotAtThisStage("S6")` for 60–62 and E0023–E0025 stay. `pred` also gives `toward` its gateway
@@ -994,7 +994,7 @@ change moves `report_hash` is granted, for the re-bless alone, `tests/golden/gat
   zero `max_deaths_before_fallback`; the fuzz generator (`tests/fuzz.rs`) extended to the new
   constructs and to sizes at and past 256 units, so P1's "10k fuzzed playbooks" covers any budget
   `tune3` can choose; S3-15's marker closed (the spec's limits are technical); `VERIFIER_VERSION`
-  `0.1.0-s3.2`. **Built behind E0020–E0028, before `pred` (item 157):** as `vfy5` built E0507 behind
+  `0.1.0-s3.3`. **Built behind E0020–E0028, before `pred` (item 157):** as `vfy5` built E0507 behind
   E0009 ahead of `lic`, every check here is built and tested while the codes `con6` added still
   refuse each construct, so that when `pred` lifts the sim's refusals and retires the codes, no
   playbook is called qualifying that the sim's compile then refuses (risk R4 the other way round:
@@ -1165,11 +1165,11 @@ and S2's waves), 74.5 ad is about **14–18 M** tokens.
 | `con6` | — | — | — | the schema and docs; `expected.method-scopes.txt`; the diagnostic catalogue and the docs reference (E0020–E0028); nine new verifier cases and plan-core's `predicates_and_toward`; `expected.reserved.txt` |
 | `vfy5` (`VERIFIER_VERSION` 0.1.0-s3.1; `Scope`'s new fields) | — | — | all | the catalogue and the docs reference (E0507, E0513, I0006, W0702); four new cases; `budget_128`'s diagnostics (15 W0702) |
 | `gwp` (the save, the preset, the seed withheld) | — | — | — | the gateway's recap, walkthrough and map summary |
-| `lic` (the licence table, empty until earned; the charge's damage; S3-10's rows at their constants) | its two new ones; any whose seats run Generators on two vents at a settlement; any with a charge (`atk`'s) | — expected (the determinism playbook places one Generator) | all (snapshot 15) | — |
-| `vfy6` (0.1.0-s3.2; its checks behind E0020–E0028) | — | — | all | the catalogue and the docs reference (E0209); its new cases |
+| `lic` (the licence table, empty until earned; the charge's damage; S3-10's rows at their constants; `VERIFIER_VERSION` 0.1.0-s3.2, the Spire queue no longer E0009) | its two new ones; any whose seats run Generators on two vents at a settlement; any with a charge (`atk`'s) | — expected (the determinism playbook places one Generator) | all (snapshot 15) | — |
+| `vfy6` (0.1.0-s3.3; its checks behind E0020–E0028) | — | — | all | the catalogue and the docs reference (E0209); its new cases |
 | `gwr` (chips; the scope's sightings) | — | — | the gateway's | the render goldens gain chips |
 | `nite3` | — | — | — | the nightly result (new keys) |
-| `pred` (snapshot 16 under decision 7; E0020–E0028 retired; 0.1.0-s3.3) | its two new ones; a Survey beacon's where the re-scan changes its scouting | — expected | all (snapshot 16) | the catalogue and the docs reference; the nine retired cases removed |
+| `pred` (snapshot 16 under decision 7; E0020–E0028 retired; 0.1.0-s3.4) | its two new ones; a Survey beacon's where the re-scan changes its scouting | — expected | all (snapshot 16) | the catalogue and the docs reference; the nine retired cases removed |
 | `opr3` (Easy's output; Hold & Build's settings written) | `against-easy*` | — | the operator's and the `demo_*` | the nightly result; the wizard pins |
 | `tune3` (the budget, the rooms, the re-read rows) | all | **moved** | all (`rules_hash`) | the nightly result |
 
@@ -1265,12 +1265,12 @@ end with new names and ids taken at the merge of `main`. Fourteen PRs, one of th
 | 2 | `con6` | `playbook.proto` (predicates, `toward`), `gateway.proto` (chips, `get_vocabulary`, `GetBeaconResponse`, `EstimateRouteResponse`, the guided pick's fields), `proto/buf.yaml`, the generated tree, the schema and docs goldens |
 | 3 | `vfy5` | `report_hash`'s `Scope` encoding; `VERIFIER_VERSION` |
 | 4 | `gwp` | the save container (`SAVE_FORMAT_VERSION` 3); the config line the lobby remembers (`preset`) |
-| 5 | `lic` | determinism code: the licence table in the state hash, `SNAPSHOT_VERSION` 15; the event vocabulary (`licence_awarded`, `licence_voided`); `StepFailure` (`spire_present`) |
+| 5 | `lic` | determinism code: the licence table in the state hash, `SNAPSHOT_VERSION` 15; the event vocabulary (`licence_awarded`, `licence_voided`); `StepFailure` (`spire_present`); `VERIFIER_VERSION` 0.1.0-s3.2 |
 | 6 | `vfyq` | determinism code: the plan fingerprint's computation (`crates/sim/src/hash.rs`), every fingerprint byte-identical |
 | 7 | `bench3` | `xtask/src/main.rs`' perf-alarm list, `xtask/src/budget.rs` |
 | 8 | `vfy6` | `VERIFIER_VERSION` |
 | 9 | `nite3` | the nightly result golden's format (additive) |
-| 10 | `pred` | determinism code: the explore-time column, `SNAPSHOT_VERSION` 16 (under decision 7's recommendation); the verifier's E0020–E0028 retired and `VERIFIER_VERSION` 0.1.0-s3.3 |
+| 10 | `pred` | determinism code: the explore-time column, `SNAPSHOT_VERSION` 16 (under decision 7's recommendation); the verifier's E0020–E0028 retired and `VERIFIER_VERSION` 0.1.0-s3.4 |
 | 11 | `opr3` | `tests/golden/package/`'s manifests, only if a `library/` file is added or renamed (the conditional one) |
 | 12 | `cert3` | `.github/workflows/ci.yml` (the new job, the cross-OS guard's list), `nightly-scenarios.yml` (a summary text), `xtask` |
 | 13 | `tune3` | the rules' values (`rules_hash`), `rules.proto`'s comments, the generated tree |

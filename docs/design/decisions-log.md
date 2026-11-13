@@ -1794,3 +1794,4 @@ Agenda:
     - From now on each lane builds in `C:/build/<lane>`, CACHEDIR-tagged, one lane at a time. C: had 42 GB free. Review agents build in `C:/build/rev-<lane>-<n>`, and each folder is deleted when its lane merges or its review ends.
     - D:'s other folders are left as they are.
     - Item 157 (9)'s hold on the cut checkpoints stands until the owner says how lanes run with C: in use.
+  - **(5) `VERIFIER_VERSION` re-sequenced on `lic`'s review.** `lic` moves a verdict (a Spire queue is no longer E0009), and the plan bumps the version whenever verdicts move, so `lic` takes 0.1.0-s3.2, `vfy6` 0.1.0-s3.3 and `pred` 0.1.0-s3.4. `vfyq` moves no verdict and takes none.
