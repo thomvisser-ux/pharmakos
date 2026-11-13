@@ -903,9 +903,6 @@ mod tests {
         }
     }
 
-    /// The handle table and the memos read back exactly, and a table that is
-    /// not `e_01` up, one handle a beacon, or a memo issued twice, is not a
-    /// save this build wrote.
     /// The handle table is bounded like the notebook and the drafts: a table
     /// past `MAX_FOREIGN_HANDLES` is refused as damaged.
     #[test]
@@ -976,6 +973,9 @@ mod tests {
         );
     }
 
+    /// The handle table and the memos read back exactly, and a table that is
+    /// not `e_01` up, one handle a beacon, or a memo issued twice, is not a
+    /// save this build wrote.
     #[test]
     fn a_damaged_handle_table_or_memo_list_is_refused() {
         let text = save().render();

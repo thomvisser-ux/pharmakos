@@ -128,7 +128,6 @@ const BANNED: &[(&str, &str)] = &[
     ),
 ];
 
-/// Wildcard addresses: the half of "localhost only" a type cannot enforce.
 /// The sim's fixture API (`World`'s block comment: "not game actions, and
 /// nothing outside a test, a scenario fixture or the host's lobby layout may
 /// call them"), by method name: shipped code reaches a match's state through
@@ -182,6 +181,7 @@ const SIM_FIXTURES: &[(&str, &str)] = &[
     ),
 ];
 
+/// Wildcard addresses: the half of "localhost only" a type cannot enforce.
 const NO_WILDCARD_BINDING: &[(&str, &str)] = &[
     (
         "0.0.0.0",
