@@ -711,24 +711,42 @@ change moves `report_hash` is granted, for the re-bless alone, `tests/golden/gat
   (`report_hash`'s `Scope` encoding). **Moves:** every `report_hash` golden. **PLACEHOLDERs:** none.
   **Agent-days:** 3.5.
 
-### `vfyq` — `crates/verifier`: QUICK at the size budget (item 157 (9))
+### `vfyq` — `crates/verifier` + `crates/proto`'s codec: QUICK at the size budget (items 157 (9), 158)
 
-- **Owns:** `crates/verifier`. **Branch** `feat/verifier-quick`.
-- **Builds:** QUICK at or under P1's 5 ms p99 on the worst case `vfy5`'s review found (the shape
-  `lint::tests::the_worst_case_is_bounded_by_the_memo` builds: 63 handlers with 24-node conditions,
-  127 units), measured at 10–12 ms p99 on `c8f8ca3` and 11.6/18.0 ms p50/p99 at `vfy5`'s head. First a
-  profile of which stage and which walk dominates, read through counted work, since the verifier
-  reads no clock; then the fix (repeated walks merged, per-handler work computed once, memo or index
-  where a pass is quadratic), with every verdict unchanged. A test asserts a counted-work bound on
-  that shape for QUICK, as `vfy5`'s does for W0702 in FULL. The wall-clock figure is measured in the
-  walled `crates/bench` by an uncommitted harness, as `vfy5` did, and reported in the PR beside FULL's.
-- **Implements:** spec §16's P1 row (QUICK at the size budget); item 157 (7) and (9). **Needs:**
-  `vfy5` merged. **Acceptance:** QUICK's p99 on the shape at or under 5 ms on the owner's machine,
-  with FULL no slower; every verifier, gateway and operator report golden byte-identical (no
-  `VERIFIER_VERSION` change, because no verdict moves); the confinement and agreement tests green.
-  If 5 ms can't be reached without changing what a size unit counts, the lane stops and the main
-  session puts that to the owner. **Contract PR:** no. **Moves:** nothing. **PLACEHOLDERs:** none.
-  **Agent-days:** 1.5.
+- **Owns:** `crates/verifier` and `crates/proto/src/json/`; as a named place, the plan fingerprint's
+  computation in `crates/sim/src/hash.rs` (determinism code, named in the PR). Runs after `lic` merges,
+  because it shares `crates/sim`. Builds in `C:/build/vfyq`. **Branch** `feat/verifier-quick`.
+- **The first run (item 158 (1)).** It stopped without a PR. QUICK is linear in the playbook's bytes,
+  and about 70% of it is the codec (`json::read`, then JSON to wire to prost) and the fingerprint (prost
+  encode, wire to JSON, write, xxh3). The verifier's walks are about 22%, mostly building pointer
+  strings. The harder of the two shapes is 127 route steps, each with a 24-node `skip_if` (151 KB): QUICK
+  21.8/35.6 ms p50/p99. Item 157 (7)'s shape measured 14.5/28.4 ms.
+- **Builds:** QUICK at or under P1's 5 ms p99 on both shapes and on `budget_128`, with FULL no slower,
+  by making it fast where the time goes:
+  - JSON Pointers built only where a diagnostic needs one, in the codec and in the verifier's walks;
+  - fewer allocations;
+  - text decoded straight to prost wherever the wire layer adds nothing;
+  - the fingerprint computed from bytes QUICK already holds, not by encoding the playbook again;
+  - any further gain the profile shows.
+
+  Every output stays byte-identical: every fingerprint, every `report_hash`, every golden and the
+  canonical form. A differential property test feeds the old and the new decode, and the old and the
+  new fingerprint, the same generated playbooks, and asserts equal bytes or the same typed error. It is
+  kept until the old path is deleted, and committed vectors replace it then. A counted-work or
+  allocation bound pins QUICK on both shapes. Wall clock is measured in the walled `crates/bench` by an
+  uncommitted harness, on an idle machine, with at least 2,000 timed calls a shape, and reported in the
+  PR beside FULL's.
+- **Implements:** spec §16's P1 row (QUICK at the size budget); items 157 (7), (9) and 158. **Needs:**
+  `lic` merged. **Acceptance:**
+  - QUICK's p99 at or under 5 ms on both shapes and on `budget_128` on the owner's machine, with FULL
+    no slower;
+  - every golden byte-identical, with no `VERIFIER_VERSION` change;
+  - the differential test, the confinement tests and the agreement tests green.
+
+  If 5 ms is still out of reach, the lane reports the figures and where the remaining time goes, and the
+  main session takes it to the owner. Item 94's size unit is not changed. **Contract PR:** yes, the
+  fingerprint's computation, though no output moves. **Moves:** nothing. **PLACEHOLDERs:** none.
+  **Agent-days:** 4.
 
 ### `lic` — `crates/sim`: the licence mechanism and the Resonance Spire
 
@@ -842,7 +860,8 @@ change moves `report_hash` is granted, for the re-bless alone, `tests/golden/gat
     nearest-rank percentiles from `stats.rs`.
   - **P1 FULL** (section 5.2): QUICK and FULL p50 and p99 over the committed verifier cases and over
     generated at-budget playbooks of several shapes (all handlers with depth-4 conditions, all
-    Build targets, all protected areas, the longest route) at 64, 96, 128, 192 and 256 units (E24);
+    Build targets, all protected areas, the longest route, and item 158 (1)'s two shapes: handlers
+    with 24-node conditions, and route steps with 24-node guards) at 64, 96, 128, 192 and 256 units (E24);
     the decision tick's cost per size unit (S1's `decision.rs`) at the same sizes, **in nanoseconds
     and in counted evaluation units**, the count added to `pharmakos-bench`'s notice (item 139 (5):
     "count carried to S3"). **The worst case (item 157):** a condition costs no size units, so the
@@ -1120,7 +1139,7 @@ names the decisions it builds on.
 
 **One lane at a time, from 2026-11-09 (item 157).** The owner ruled that lanes run one at a time while
 D: is short of space, so the table above is the dependency order, not the calendar. The order from
-`gwp` on is `gwp` → `vfyq` → `lic` → `bench3` → `vfy6` → `gwr` → `nite3` → `pred` → `ed3b` (after P6a) →
+`gwp` on is `gwp` → `lic` → `vfyq` (item 158) → `bench3` → `vfy6` → `gwr` → `nite3` → `pred` → `ed3b` (after P6a) →
 `opr3` → `cert3` → `prob` → `tune3` → `demo3`, each lane starting when the one before it merges.
 The named places above stay as written: under serial running they cross no open lane. The
 critical path is now the sum of the lanes' days, not the longer of two chains. Decision 12's
@@ -1238,7 +1257,7 @@ days of its own before its waits; at `opr3`'s start (planned day 16.5), later th
 Each body names its paths; each new hashed field goes into the state hash, the snapshot round-trip
 and the goldens in the same PR (AGENTS.md §4.8); each snapshot change bumps `SNAPSHOT_VERSION` (14
 today) and refuses an older one with its typed error; event kinds and step failures are added at the
-end with new names and ids taken at the merge of `main`. Thirteen PRs, one of them conditional:
+end with new names and ids taken at the merge of `main`. Fourteen PRs, one of them conditional:
 
 | Order | PR | Contract paths |
 |---|---|---|
@@ -1247,14 +1266,15 @@ end with new names and ids taken at the merge of `main`. Thirteen PRs, one of th
 | 3 | `vfy5` | `report_hash`'s `Scope` encoding; `VERIFIER_VERSION` |
 | 4 | `gwp` | the save container (`SAVE_FORMAT_VERSION` 3); the config line the lobby remembers (`preset`) |
 | 5 | `lic` | determinism code: the licence table in the state hash, `SNAPSHOT_VERSION` 15; the event vocabulary (`licence_awarded`, `licence_voided`); `StepFailure` (`spire_present`) |
-| 6 | `bench3` | `xtask/src/main.rs`' perf-alarm list, `xtask/src/budget.rs` |
-| 7 | `vfy6` | `VERIFIER_VERSION` |
-| 8 | `nite3` | the nightly result golden's format (additive) |
-| 9 | `pred` | determinism code: the explore-time column, `SNAPSHOT_VERSION` 16 (under decision 7's recommendation); the verifier's E0020–E0028 retired and `VERIFIER_VERSION` 0.1.0-s3.3 |
-| 10 | `opr3` | `tests/golden/package/`'s manifests, only if a `library/` file is added or renamed (the conditional one) |
-| 11 | `cert3` | `.github/workflows/ci.yml` (the new job, the cross-OS guard's list), `nightly-scenarios.yml` (a summary text), `xtask` |
-| 12 | `tune3` | the rules' values (`rules_hash`), `rules.proto`'s comments, the generated tree |
-| 13 | `demo3` | `docs/design/` (this plan's "Merged as" lines, the decisions log, the handoff) |
+| 6 | `vfyq` | determinism code: the plan fingerprint's computation (`crates/sim/src/hash.rs`), every fingerprint byte-identical |
+| 7 | `bench3` | `xtask/src/main.rs`' perf-alarm list, `xtask/src/budget.rs` |
+| 8 | `vfy6` | `VERIFIER_VERSION` |
+| 9 | `nite3` | the nightly result golden's format (additive) |
+| 10 | `pred` | determinism code: the explore-time column, `SNAPSHOT_VERSION` 16 (under decision 7's recommendation); the verifier's E0020–E0028 retired and `VERIFIER_VERSION` 0.1.0-s3.3 |
+| 11 | `opr3` | `tests/golden/package/`'s manifests, only if a `library/` file is added or renamed (the conditional one) |
+| 12 | `cert3` | `.github/workflows/ci.yml` (the new job, the cross-OS guard's list), `nightly-scenarios.yml` (a summary text), `xtask` |
+| 13 | `tune3` | the rules' values (`rules_hash`), `rules.proto`'s comments, the generated tree |
+| 14 | `demo3` | `docs/design/` (this plan's "Merged as" lines, the decisions log, the handoff) |
 
 ---
 
