@@ -123,7 +123,12 @@ impl Fixture {
         store.settle_all(&mut digests);
         let surface = Surface::new(&store, StepCosts::from_rules(&rules)).expect("a surface");
         let mut scratch = Scratch::for_map(&surface, cluster).expect("a scratch");
-        let clusters = Clusters::new(&surface, cluster, &mut scratch).expect("a decomposition");
+        let clusters = Clusters::new(
+            &surface,
+            rules.cluster_shape().with_size(cluster),
+            &mut scratch,
+        )
+        .expect("a decomposition");
         let repairer = Repairer::new(clusters.cluster_count());
         Fixture {
             rules,
@@ -176,9 +181,9 @@ impl Fixture {
     }
 
     fn rebuilt(&mut self) -> Clusters {
-        let cluster = self.clusters.size();
-        let mut scratch = Scratch::for_map(&self.surface, cluster).expect("a scratch");
-        Clusters::new(&self.surface, cluster, &mut scratch).expect("a decomposition")
+        let shape = self.clusters.shape();
+        let mut scratch = Scratch::for_map(&self.surface, shape.size).expect("a scratch");
+        Clusters::new(&self.surface, shape, &mut scratch).expect("a decomposition")
     }
 
     fn commander_speed(&self) -> Speed {
@@ -1055,20 +1060,21 @@ fn an_undecomposable_cluster_edge_is_refused_rather_than_mistagged() {
     // construction, or the oracle answers confidently and wrongly for every
     // column above the 65 536th.
     let mut fixture = Fixture::build(SEED, CLUSTER);
+    let shape = fixture.rules.cluster_shape();
     let surface = &fixture.surface;
     let scratch = &mut fixture.scratch;
     assert!(
-        Clusters::new(surface, 1, scratch).is_none(),
+        Clusters::new(surface, shape.with_size(1), scratch).is_none(),
         "a cluster edge of 1 decomposes the 384-voxel map into 147 456 clusters, which the u16 \
          tags cannot name, and it was accepted"
     );
     assert!(
-        Clusters::new(surface, 0, scratch).is_none(),
+        Clusters::new(surface, shape.with_size(0), scratch).is_none(),
         "a cluster edge of zero was accepted"
     );
     let mut four = Scratch::for_map(surface, 4).expect("a scratch for a cluster edge of 4");
     assert!(
-        Clusters::new(surface, 4, &mut four).is_some(),
+        Clusters::new(surface, shape.with_size(4), &mut four).is_some(),
         "a cluster edge of 4 gives 9 216 clusters, well inside the u16 tags, and it was refused"
     );
 }

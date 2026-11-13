@@ -77,24 +77,13 @@ pub mod router;
 pub mod search;
 pub mod surface;
 
-pub use clusters::{Clusters, Trans};
+pub use clusters::{ClusterShape, Clusters, Trans};
 pub use estimate::{Estimate, Fog, Speed, estimate, ticks_for_cost};
 pub use repair::{RepairReport, repair};
 pub use route::{AbstractResult, RouteOutcome, abstract_search, route};
 pub use router::{Router, WalkState};
 pub use search::Scratch;
 pub use surface::{NEIGHBOURS, Node, StepCosts, Surface};
-
-/// A border run longer than this gets a transition node at each end instead of
-/// one in the middle (spike G2's `LONG_RUN`).
-///
-/// PLACEHOLDER: tuning, one of the seven values G2 §9.9 lists as "to become rules-table data at S3" — owner, at S3.
-pub const LONG_RUN: i32 = 6;
-
-/// How far ahead the smoother looks for a shortcut.
-///
-/// PLACEHOLDER: tuning, from the same G2 §9.9 list — owner, at S3.
-pub const SMOOTH_LOOKAHEAD: usize = 16;
 
 /// The most nodes one unit's route may hold.
 ///
@@ -112,3 +101,29 @@ pub const SMOOTH_LOOKAHEAD: usize = 16;
 ///
 /// PLACEHOLDER: sized against the skeleton's 384-voxel map — owner, at S4, the stage that changes the map's footprint (S2's plan, E27, kept it a constant for S2).
 pub const MAX_ROUTE_NODES: u32 = 1024;
+
+/// The decomposition and its search scratch for `surface` at `shape`, the one
+/// place both are built and tied together: the world builds its graph here, and
+/// so does the gateway's route adapter, so their abstract numberings agree.
+///
+/// The scratch has to be sized before the decomposition exists — building the
+/// intra edges is itself a search — so [`Scratch::for_map`] does that
+/// arithmetic from the map and the cluster edge, and the decomposition is
+/// checked against it below.
+///
+/// `None` when the cluster edge cannot decompose this map, which the caller
+/// reports as the world's `MapError::Unclusterable` and the gateway's route adapter its own internal error.
+#[must_use]
+pub fn graph_for(surface: &Surface, shape: ClusterShape) -> Option<(Clusters, Scratch)> {
+    let mut scratch = Scratch::for_map(surface, shape.size)?;
+    let clusters = Clusters::new(surface, shape, &mut scratch)?;
+    // A real check rather than a `debug_assert!`: this is the only thing tying
+    // the scratch's independent derivation of the abstract numbering to the
+    // decomposition's, and a release build is exactly where a scratch sized for
+    // a different numbering would go unnoticed — the arrays would be short and
+    // a query would read a slot that is not there.
+    if clusters.abstract_capacity() != Scratch::abstract_capacity_for(surface, shape.size)? {
+        return None;
+    }
+    Some((clusters, scratch))
+}

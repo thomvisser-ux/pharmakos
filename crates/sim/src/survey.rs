@@ -12,8 +12,9 @@
 //! come through the one sensor interface ([`crate::sight::Sensor`]; S2's plan,
 //! E10), the knowledge store's output of it:
 //!
-//! * every **live beacon**'s sphere (`beacon.sphere_radius_voxels`), the
-//!   passive vision every seat has from the first tick;
+//! * every **live beacon**'s sphere, the passive vision every seat has from
+//!   the first tick: `beacon.sphere_radius_voxels`, grown by a finished
+//!   Resonance Spire (S3's `lic`; [`crate::spire::radius_voxels`]);
 //! * every living **unit**'s own vision, its kind's `vision_radius_voxels`
 //!   row (the commander's `commander.vision_radius_voxels`), which is what a
 //!   Survey mandate buys by fielding scouts and sending them to its probe

@@ -12,10 +12,10 @@
       "beginner": "A jump can send the commander onward, never back. That is part of why a playbook always finishes."
     }
   ],
-  "report_hash": "2xWCUtM/P1A=",
+  "report_hash": "R1a7vbbltJM=",
   "rules_hash": "GybFJQaL/2E=",
   "plan_fingerprint": "+Dd1n+wcy44=",
-  "verifier_version": "0.1.0-s3.1",
+  "verifier_version": "0.1.0-s3.2",
   "size_units": 1,
   "size_budget": 128
 }

@@ -1232,7 +1232,7 @@ impl World {
                 shell.splash(),
                 damage,
                 SeatId::new(seat),
-                AssetId::new(firer),
+                Some(AssetId::new(firer)),
                 &mut rows,
             );
             let blast = VoxelEdit::Crater {
@@ -1258,6 +1258,26 @@ impl World {
         self.shells.remove_landed(tick);
     }
 
+    /// A demolition charge's blast (decisions-log item 151 (2) (c) (3); S3's
+    /// `lic`): `amount` from every live unit, structure and beacon within
+    /// `radius` of `point`, the carrier's own seat included (spec section 9's
+    /// friendly fire), filed as a shell's splash is ([`World::splash_damage`])
+    /// for this tick's combat phase. `by` is the carrier's seat and `source`
+    /// the Attack beacon that bought the charge.
+    pub(crate) fn blast_damage(
+        &mut self,
+        point: [Fx; 3],
+        radius: Fx,
+        amount: Damage,
+        by: SeatId,
+        source: Option<AssetId>,
+    ) {
+        let mut rows = core::mem::take(&mut self.splash_rows);
+        self.splash_damage(point, radius, amount, by, source, &mut rows);
+        rows.clear();
+        self.splash_rows = rows;
+    }
+
     /// File one order for every live asset inside a splash: units, then
     /// structures (a ruin among them), then beacons, each in row order, the
     /// firer's own seat included (spec section 9's friendly fire).
@@ -1267,7 +1287,7 @@ impl World {
         radius: Fx,
         amount: Damage,
         by: SeatId,
-        source: AssetId,
+        source: Option<AssetId>,
         rows: &mut Vec<Row>,
     ) {
         let limit = Sq::of_radius(radius);
@@ -1335,14 +1355,14 @@ impl World {
         target: DamageTarget,
         amount: Damage,
         by: SeatId,
-        source: AssetId,
+        source: Option<AssetId>,
         room: usize,
     ) {
         let order = DamageOrder {
             target,
             amount,
             by,
-            source: Some(source),
+            source,
         };
         if self.push_damage(order, room).is_err() {
             self.combat.drop(CombatDrop::DamageQueueFull);
@@ -1493,6 +1513,16 @@ impl World {
         crate::credit::apportion_wide(removed, &buckets, &mut split, &mut topped);
         for (seat, share) in &split {
             if !SeatId::new(*seat).is_some() || *share <= 0 {
+                continue;
+            }
+            // Item 17: an eliminated seat's credit is dropped, not
+            // redistributed, and that holds for damage it dealt before it fell
+            // and lands after, a shell in flight among it: its share is apportioned
+            // with the rest, so nobody else's grows, and booked to nobody.
+            let alive = self
+                .seat_row(SeatId::new(*seat))
+                .is_some_and(|index| self.seats.is_alive(index));
+            if !alive {
                 continue;
             }
             let booked = i32::try_from(*share)
@@ -1919,13 +1949,43 @@ impl World {
     /// names, while the voxel lies inside one of that seat's live spheres, and
     /// nobody's otherwise; `None` too for a voxel that is no wall. Read, never
     /// written: a beacon's death rewrites no voxel.
+    ///
+    /// A beacon whose sphere a finished Spire has ever grown
+    /// ([`crate::tables::BeaconTable::grown`]) keeps the grown radius here,
+    /// and here alone (S3's `lic`; decision 6: works outside the shrunken
+    /// sphere "stand", and "outside works go neutral on the shrink" was
+    /// rejected), so a wall raised in the grown ring stays its builder's when
+    /// the Spire falls, while every physical-work path reads the sphere as it
+    /// stands now and does no work on it. A beacon never grown keeps decision
+    /// 42 unchanged, and a wall whose beacon died goes neutral either way.
     #[must_use]
     pub fn wall_owner(&self, at: [i32; 3]) -> Option<SeatId> {
         let (builder, _) = self.voxels.get(at)?.wall_of()?;
         let point = voxel_point(at)?;
-        self.ground()
-            .inside_own_sphere(builder, point)
-            .then_some(builder)
+        let beacons = &self.beacons;
+        let owned = beacons
+            .seats()
+            .iter()
+            .zip(beacons.hit_points())
+            .zip(beacons.positions().iter().zip(beacons.grown()))
+            .enumerate()
+            .filter(|(_, ((owner, hp), _))| **owner == builder.raw() && hp.is_alive())
+            .any(|(row, (_, (centre, grown)))| {
+                if *grown {
+                    Sq::between(*centre, point)
+                        <= Sq::of_radius(Fx::from_voxels(self.rules.grown_sphere_radius_voxels()))
+                } else {
+                    crate::spire::inside_at_row(
+                        &self.rules,
+                        beacons,
+                        &self.structures,
+                        row,
+                        *centre,
+                        point,
+                    )
+                }
+            });
+        owned.then_some(builder)
     }
 
     /// An asset's threat (decision 12): its weapon's damage per second from

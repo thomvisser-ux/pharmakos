@@ -343,6 +343,7 @@ pub struct InterfaceTimes {
     switch_mandate: i32,
     recycle: i32,
     place_beacon_deploy: i32,
+    queue_structure: i32,
 }
 
 impl InterfaceTimes {
@@ -392,6 +393,10 @@ impl InterfaceTimes {
             place_beacon_deploy: rate(
                 "interface_times.place_beacon_deploy_ms",
                 times.place_beacon_deploy_ms,
+            )?,
+            queue_structure: rate(
+                "interface_times.queue_structure_ms",
+                times.queue_structure_ms,
             )?,
         })
     }
@@ -543,6 +548,15 @@ pub enum Row {
         /// The anchor naming the target.
         anchor: Removal,
     },
+    /// Queue a capability structure on the beacon's fabricator --
+    /// `interface_times.queue_structure_ms` (spec section 8; S3's plan, E4).
+    /// S3 compiles one kind, the Resonance Spire; the licence, the one Spire
+    /// per beacon and the price are checked when the row commits
+    /// ([`crate::world::World::queue_capability`]).
+    QueueStructure {
+        /// The structure the row queues.
+        kind: crate::tables::StructureKind,
+    },
 }
 
 impl Row {
@@ -572,6 +586,7 @@ impl Row {
             Row::Priority { .. } => i64::from(times.set_priority),
             Row::Recycle => i64::from(times.recycle),
             Row::AddTarget { .. } | Row::RemoveTarget { .. } => i64::from(times.build_target),
+            Row::QueueStructure { .. } => i64::from(times.queue_structure),
             Row::Settings {
                 fields, targets, ..
             } => {
@@ -597,7 +612,8 @@ impl Row {
             | Row::Priority { .. }
             | Row::Recycle
             | Row::AddTarget { .. }
-            | Row::RemoveTarget { .. } => true,
+            | Row::RemoveTarget { .. }
+            | Row::QueueStructure { .. } => true,
         }
     }
 
@@ -614,7 +630,10 @@ impl Row {
             Row::Mandate { settings, .. } => {
                 settings.as_ref().map_or(0, |edit| edit.binding_slots())
             }
-            Row::Priority { .. } | Row::Recycle | Row::RemoveTarget { .. } => 0,
+            Row::Priority { .. }
+            | Row::Recycle
+            | Row::RemoveTarget { .. }
+            | Row::QueueStructure { .. } => 0,
         }
     }
 }
@@ -1361,7 +1380,13 @@ fn compile_row(
         gp::v1::interface_row::Row::RemoveBuildTarget(remove) => Ok(Row::RemoveTarget {
             anchor: compile_removal(remove.anchor.as_ref(), names)?,
         }),
-        gp::v1::interface_row::Row::QueueStructure(_) => Err(REFUSE_QUEUE_STRUCTURE.error()),
+        gp::v1::interface_row::Row::QueueStructure(queue) => {
+            // S3 lifts the row for the Resonance Spire alone (E4); every other
+            // blueprint waits for S4's capability catalogue.
+            let kind = crate::spire::queued_kind(&queue.blueprint_id)
+                .ok_or_else(|| REFUSE_QUEUE_STRUCTURE.error())?;
+            Ok(Row::QueueStructure { kind })
+        }
     }
 }
 
@@ -2745,7 +2770,7 @@ pub enum PlanError {
     ///
     /// | Construct | Stage |
     /// |---|---|
-    /// | `queue_structure` | S4 (capability licences) |
+    /// | `queue_structure` naming a blueprint other than `resonance_spire` (S3's `lic` lifted the Spire) | S4 (capability licences) |
     /// | a Build target naming a blueprint other than `generator` or S2's base kit (`autocannon`, `mortar`, `wall`, which S2's `site` built) | S4 |
     /// | a Build target (or a removal) anchored on a beacon selector rather than on a voxel or `on` a vent | S3 |
     /// | selector filter `side: ENEMY_KNOWN` | S3 |
@@ -2816,10 +2841,12 @@ impl Refusal {
     }
 }
 
-/// `queue_structure`: S4.
+/// `queue_structure` naming a blueprint other than `resonance_spire`: S4.
+/// S3's `lic` lifted the Resonance Spire (S3's plan, E4); the name stays the
+/// verifier's key for `E0009`.
 pub const REFUSE_QUEUE_STRUCTURE: Refusal = Refusal {
     name: "queue_structure",
-    construct: "interface row `queue_structure`",
+    construct: "interface row `queue_structure` naming a blueprint other than `resonance_spire`",
     stage: "S4 (the capability catalogue and its licences)",
 };
 

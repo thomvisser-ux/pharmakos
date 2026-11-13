@@ -486,7 +486,14 @@ fn flees(world: &World, seat: SeatId, home: BeaconId) -> bool {
             .positions()
             .get(index)
             .copied()
-            .is_some_and(|centre| crate::defend::threat_in_sphere(world, seat, centre))
+            .is_some_and(|centre| {
+                crate::defend::threat_in_sphere(
+                    world,
+                    seat,
+                    centre,
+                    world.sphere_radius_at_row(index),
+                )
+            })
 }
 
 /// What a full load of ore is worth, in `$`, for a drone working the seam that

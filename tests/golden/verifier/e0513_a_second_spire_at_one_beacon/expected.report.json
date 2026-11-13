@@ -2,20 +2,6 @@
   "depth": "FULL",
   "diagnostics": [
     {
-      "code": "E0009",
-      "severity": "ERROR",
-      "path": "/declarative/route/0/interface/rows/0/queue_structure",
-      "message": "a `queue_structure` row has no effect until S4, with the capability catalogue and its licences; it is refused rather than ignored.",
-      "beginner": "Queuing a capability building comes later in the game. Nothing you wrote is dropped: take the row out yourself."
-    },
-    {
-      "code": "E0009",
-      "severity": "ERROR",
-      "path": "/declarative/route/1/interface/rows/0/queue_structure",
-      "message": "a `queue_structure` row has no effect until S4, with the capability catalogue and its licences; it is refused rather than ignored.",
-      "beginner": "Queuing a capability building comes later in the game. Nothing you wrote is dropped: take the row out yourself."
-    },
-    {
       "code": "E0507",
       "severity": "ERROR",
       "path": "/declarative/route/0/interface/rows/0/queue_structure/blueprint_id",
@@ -47,10 +33,10 @@
       "beginner": "This playbook spends more than the seat is likely to have."
     }
   ],
-  "report_hash": "FgDNI9szyrU=",
+  "report_hash": "U0+1rNtW1HI=",
   "rules_hash": "GybFJQaL/2E=",
   "plan_fingerprint": "nQSoJws1feU=",
-  "verifier_version": "0.1.0-s3.1",
+  "verifier_version": "0.1.0-s3.2",
   "size_units": 2,
   "size_budget": 128
 }

@@ -1116,8 +1116,8 @@ mod tests {
         let flat = ground(|_, _| false);
         let surface = Surface::new(&flat, costs).unwrap_or_else(|| panic!("a surface"));
         let mut scratch = Scratch::for_map(&surface, 32).unwrap_or_else(|| panic!("a scratch"));
-        let clusters =
-            Clusters::new(&surface, 32, &mut scratch).unwrap_or_else(|| panic!("clusters"));
+        let clusters = Clusters::new(&surface, rules.cluster_shape().with_size(32), &mut scratch)
+            .unwrap_or_else(|| panic!("clusters"));
         let mut router = Router::new(1, &rules);
         let kinds = [UnitKind::Commander.id()];
         let hit_points = [Hp::new(100)];

@@ -1,0 +1,72 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// S3's `lic` (S3's plan, decisions 6 and 13; decisions-log item 156): the
+// first whole proof that the Resonance Spire's licence can be earned on
+// Probation's seed, 20, on section 1.1's schedule, and spent.
+//
+//   seat 0  seals scenarios/s3/resonance-spire.playbook.jsonc every round:
+//           round 1, the beacon covering its start vent (175, 66) with a
+//           Generator on it; round 2, a stepping stone at (196, 66) by voxel
+//           (`toward` cannot be sealed before S3's `pred`), then the beacon
+//           covering the second vent from it, with a Generator; at round 2's
+//           settlement its two finished, powered Generators tap two vents and
+//           the Ledger awards the licence; round 3, the Spire queued at the
+//           core, raised by the core's fabricator over 60 s, the core's
+//           sphere growing from 24 voxels to 36; the autocannon 30 voxels east
+//           of the core, written in round 1 and waiting outside the base
+//           sphere (decision 6: no physical work reaches it), is bought at
+//           round 4's first decision, once the larger sphere holds it and the
+//           round-3 settlement pays for it, and built by the core's drones;
+//   seat 1  seals nothing, so the gateway files the safe playbook for it.
+//
+// Money needed no cure: dig depth and `tune3`'s rows are untouched, and the
+// seed was not re-pinned (decisions-log item 156 (2)).
+//
+// The playbook goes through the harness door every round, and the notes name
+// the codes the seat's own verifier gives: `E0507` in rounds 1 and 2 (no
+// licence), gone in round 3 once the gateway's scope holds the licence; `E0416`
+// for the target past the base sphere in rounds 1 to 3, gone in round 4 once
+// the scope holds the grown sphere; `E0513` in round 4, the Spire the scope
+// says stands at the core. `event_fired` has no value predicate (register
+// M-05): which structure an event names is pinned by the chain, and the Spire's
+// kind, licence and radius by crates/sim/tests/spire.rs and licence.rs.
+{
+  "format": "pharmakos.scenario.v1",
+  "name": "resonance-spire",
+  "summary": "Seat 0 covers its start vent in round 1, steps to and covers the second vent in round 2, earns the Resonance Spire's licence at round 2's settlement, queues the Spire at its core in round 3, and builds a target beyond the old sphere in round 4.",
+
+  "map": {
+    "seed": "0x0000000000000014",
+    "generator": "skeleton"
+  },
+
+  "rules": "rules/rules.v1.json",
+  "round_limit": 4,
+
+  "seats": [
+    { "seat": 0, "kind": "playbook", "playbook": "scenarios/s3/resonance-spire.playbook.jsonc" },
+    { "seat": 1, "kind": "safe" }
+  ],
+
+  "segments": [
+    { "index": 0, "length_ms": 180000, "note": "Round 1: the beacon covering the start vent and its Generator." },
+    { "index": 1, "length_ms": 300000, "note": "Round 2: the stone, the beacon covering the second vent and its Generator; the licence at the settlement." },
+    { "index": 2, "length_ms": 480000, "note": "Round 3: the Spire queued at the core and raised by its fabricator." },
+    { "index": 3, "length_ms": 480000, "note": "Round 4: the target beyond the old sphere, built." }
+  ],
+
+  "assertions": [
+    { "assert": "event_fired", "event": "step_failed", "seat": 0, "by_tick": 216,
+      "note": "Round 1's queue at the core fails as it commits, `not_licensed` (failure id 18), and is skipped." },
+    { "assert": "event_fired", "event": "beacon_placed", "seat": 0, "by_tick": 941,
+      "note": "Round 1: the beacon covering the start vent lands at tick 941." },
+    { "assert": "event_fired", "event": "structure_completed", "seat": 0, "by_tick": 1902,
+      "note": "Round 1: its Generator is finished at tick 1902." },
+    { "assert": "event_fired", "event": "licence_awarded", "seat": 0, "by_tick": 9600,
+      "note": "Round 2's settlement, tick 9600: the stone landed at 4841, the second vent's beacon at 5506 and its Generator was finished at 6251, so two Generators tap two vents and the Ledger awards the Resonance Spire's licence. Round 1's settlement, with one, awarded nothing." },
+    { "assert": "hash_chain_equals",
+      "golden": "tests/golden/scenarios/resonance-spire/expected.hashes.txt",
+      "note": "Pins the rest: the Spire queued at the core at tick 9816 and finished at 11013, the autocannon past the old sphere queued at 19201 and finished at 19842; crates/gamectl/tests/scenarios.rs' `the_s3_scenarios_pin_their_beats` holds those ticks, the events log and the verifier's codes round by round. Byte-identical on Windows, Linux and macOS." }
+  ]
+}

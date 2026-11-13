@@ -2354,8 +2354,11 @@ impl HeldOrder {
         // one.
         let grid = Grid::of(&rules());
         assert!(grid.per_unit > 0, "a unit draws: {grid:?}");
+        // The Generator's own build drone, fielded below, adds one unit's draw,
+        // so the surplus covers it too and the headroom is as described.
         let surplus = grid
             .starting_load()
+            .saturating_add(grid.per_unit)
             .saturating_add(grid.per_unit)
             .saturating_sub(1);
         let rules = rules_with_core_surplus(u32::try_from(surplus).unwrap_or(0));
@@ -2375,15 +2378,30 @@ impl HeldOrder {
         let output = vent_output(&world, &rules, vent, vent);
         assert!(output > 0, "a vent worth tapping: {output} kW");
 
-        // The writs are set before their settings, because setting a writ
-        // clears them.
-        world.set_writ(core, MandateKind::Build);
+        // The vent lies beyond the core's sphere on this map, and no physical
+        // work reaches past a beacon's sphere (S3's plan, decision 6), so the
+        // Generator is a Build beacon's beside the vent, with a build drone of
+        // its own. The writs are set before their settings, because setting a
+        // writ clears them.
+        let tapper_at = world.standing_point([
+            vent[0].floor_voxels().saturating_add(2),
+            vent[1].floor_voxels(),
+            0,
+        ]);
+        let tapper = world
+            .place_beacon_directly(seat, tapper_at, MandateKind::Build, PRIORITY_NORMAL)
+            .unwrap_or_else(|| panic!("room for the vent's beacon"));
+        world.set_writ(tapper, MandateKind::Build);
         assert!(
             world
-                .add_target(core, StructureKind::Generator.id(), vent)
+                .add_target(tapper, StructureKind::Generator.id(), vent)
                 .is_ok(),
             "the Generator's target fits"
         );
+        world
+            .field_unit(seat, tapper, UnitKind::BuildDrone, tapper_at)
+            .unwrap_or_else(|| panic!("room for its build drone"));
+        let _ = core;
         let survey = world
             .place_beacon_directly(seat, offset(at, 6), MandateKind::Survey, PRIORITY_NORMAL)
             .unwrap_or_else(|| panic!("room for a beacon"));

@@ -391,6 +391,7 @@ pub enum WallRefused {
 /// The first [`WallRefused`] a column meets, in `(y, x)` order.
 pub fn check_wall(world: &World, beacon: BeaconId, wall: WallBox) -> Result<(), WallRefused> {
     let rows = world.rules().site();
+    let sphere = crate::mandate::Sphere::of(world, beacon);
     let [lx, ly] = wall.columns.min_column();
     let [hx, hy] = wall.columns.max_column();
     let top = i32::from(wall.top);
@@ -406,7 +407,7 @@ pub fn check_wall(world: &World, beacon: BeaconId, wall: WallBox) -> Result<(), 
             let low = voxel_point([x, y, ground.saturating_add(1)]);
             let high = voxel_point([x, y, top]);
             let inside = |point: Option<[Fx; 3]>| {
-                point.is_some_and(|at| crate::mandate::inside_sphere(world, beacon, at))
+                point.is_some_and(|at| sphere.is_some_and(|sphere| sphere.holds_point(at)))
             };
             if !inside(low) || !inside(high) {
                 return Err(WallRefused::OutsideSphere);
@@ -758,6 +759,7 @@ fn wall_voxel(
     class: Option<Drone>,
 ) -> Option<VoxelJob> {
     let material = Material::wall(seat, false)?;
+    let sphere = crate::mandate::Sphere::of(world, beacon)?;
     let [lx, ly] = columns.min_column();
     let [hx, hy] = columns.max_column();
     for y in i32::from(ly)..=i32::from(hy) {
@@ -776,7 +778,7 @@ fn wall_voxel(
                 continue;
             };
             if crate::mandate::protected(world, beacon, point)
-                || !crate::mandate::inside_sphere(world, beacon, point)
+                || !sphere.holds_point(point)
                 || !fillable(world, at)
                 || occupied(world, at)
             {
@@ -808,7 +810,10 @@ fn refill_voxel(world: &World, beacon: BeaconId, class: Option<Drone>) -> Option
     let row = world.beacons().row_of(beacon).ok()?;
     let centre = world.beacons().positions().get(row.index()).copied()?;
     let [cx, cy] = crate::targeting::column_of(centre);
-    let radius = i32::from(world.rules().sphere_radius_voxels());
+    // The square the beacon's sphere fits in, grown by a finished Spire
+    // (decision 6), and the sphere itself, each read once.
+    let radius = i32::from(world.sphere_radius_voxels_of(beacon));
+    let sphere = crate::mandate::Sphere::of(world, beacon)?;
     for dy in radius.saturating_neg()..=radius {
         for dx in radius.saturating_neg()..=radius {
             let x = cx.saturating_add(dx);
@@ -829,7 +834,7 @@ fn refill_voxel(world: &World, beacon: BeaconId, class: Option<Drone>) -> Option
             let Some(point) = voxel_point(at) else {
                 continue;
             };
-            if !crate::mandate::inside_sphere(world, beacon, point)
+            if !sphere.holds_point(point)
                 || crate::mandate::protected(world, beacon, point)
                 || world.features().at_column(x, y).is_some()
                 || !fillable(world, at)
@@ -920,7 +925,9 @@ pub fn build_job(world: &World, unit: usize) -> Option<BuildJob> {
                 .hit_points()
                 .get(index)
                 .is_some_and(|hp| hp.is_alive());
-        if !going_up {
+        // Decision 6: a structure a fallen Spire's sphere left outside stands,
+        // and no drone raises it until a Spire is rebuilt.
+        if !going_up || !crate::mandate::inside_sphere(world, home, *anchor) {
             continue;
         }
         let at = structures.positions().get(index).copied()?;
@@ -1023,6 +1030,7 @@ fn nearest_patient(
     (here, healing): ([Fx; 3], bool),
     skip: Option<usize>,
 ) -> Option<(Patient, [Fx; 3])> {
+    let sphere = crate::mandate::Sphere::of(world, beacon)?;
     let mut best: Option<(Sq, u8, usize, Patient, [Fx; 3])> = None;
     let mut consider = |tag: u8, row: usize, patient: Patient, at: [Fx; 3]| {
         let key = (Sq::between(here, at), tag, row);
@@ -1044,9 +1052,7 @@ fn nearest_patient(
         let Some(kind) = UnitKind::from_id(*kind) else {
             continue;
         };
-        if hp.raw() >= world.unit_max_hp(kind).raw()
-            || !crate::mandate::inside_sphere(world, beacon, *at)
-        {
+        if hp.raw() >= world.unit_max_hp(kind).raw() || !sphere.holds_point(*at) {
             continue;
         }
         if let Some(index) = Row::of_index(row) {
@@ -1078,7 +1084,7 @@ fn nearest_patient(
             // structure above the threshold begins nothing.
             let begun = healing && hp.raw() < max.raw() && at_work(world, here, *at);
             if !(below_threshold(hp.raw(), max.raw(), settings.repair_threshold_pct) || begun)
-                || !crate::mandate::inside_sphere(world, beacon, *at)
+                || !sphere.holds_point(*at)
             {
                 continue;
             }
@@ -1100,7 +1106,7 @@ fn nearest_patient(
             let max = world.beacon_max_hp(BeaconId::new(*id));
             let begun = healing && hp.raw() < max.raw() && at_work(world, here, *at);
             if !(below_threshold(hp.raw(), max.raw(), settings.repair_threshold_pct) || begun)
-                || !crate::mandate::inside_sphere(world, beacon, *at)
+                || !sphere.holds_point(*at)
             {
                 continue;
             }
@@ -1152,7 +1158,10 @@ fn cracked_wall(
         .get(row.index())
         .copied()
         .map(crate::targeting::column_of)?;
-    let radius = i32::from(world.rules().sphere_radius_voxels());
+    // The square the beacon's sphere fits in, grown by a finished Spire
+    // (decision 6), and the sphere itself, each read once.
+    let radius = i32::from(world.sphere_radius_voxels_of(beacon));
+    let sphere = crate::mandate::Sphere::of(world, beacon)?;
     for dy in radius.saturating_neg()..=radius {
         for dx in radius.saturating_neg()..=radius {
             let (x, y) = (cx.saturating_add(dx), cy.saturating_add(dy));
@@ -1178,8 +1187,7 @@ fn cracked_wall(
                     continue;
                 };
                 let at = [x, y, z];
-                let inside = voxel_point(at)
-                    .is_some_and(|point| crate::mandate::inside_sphere(world, beacon, point));
+                let inside = voxel_point(at).is_some_and(|point| sphere.holds_point(point));
                 if builder == seat
                     && cracked
                     && inside
@@ -1228,6 +1236,7 @@ fn salvage_job(world: &World, beacon: BeaconId) -> Option<RepairJob> {
 /// 5).
 #[must_use]
 pub fn ruin_in_sphere(world: &World, beacon: BeaconId) -> Option<Row> {
+    let sphere = crate::mandate::Sphere::of(world, beacon)?;
     let row = world.beacons().row_of(beacon).ok()?;
     let centre = world.beacons().positions().get(row.index()).copied()?;
     let structures = world.structures();
@@ -1242,7 +1251,7 @@ pub fn ruin_in_sphere(world: &World, beacon: BeaconId) -> Option<Row> {
         if *free
             || SeatId::new(*owner).is_some()
             || *ruined == crate::tables::NOT_RUINED
-            || !crate::mandate::inside_sphere(world, beacon, *at)
+            || !sphere.holds_point(*at)
         {
             continue;
         }
@@ -1263,6 +1272,9 @@ pub fn repair_work(world: &World, beacon: BeaconId) -> u32 {
     let (Some(seat), Some(site)) = (seat_of(world, beacon), settings_of(world, beacon)) else {
         return 0;
     };
+    let Some(sphere) = crate::mandate::Sphere::of(world, beacon) else {
+        return 0;
+    };
     let mut work: u32 = 0;
     let units = world.units();
     let rows = units
@@ -1273,11 +1285,7 @@ pub fn repair_work(world: &World, beacon: BeaconId) -> u32 {
     for ((owner, kind), (hp, at)) in rows {
         let wounded =
             UnitKind::from_id(*kind).is_some_and(|kind| hp.raw() < world.unit_max_hp(kind).raw());
-        if *owner == seat.raw()
-            && hp.is_alive()
-            && wounded
-            && crate::mandate::inside_sphere(world, beacon, *at)
-        {
+        if *owner == seat.raw() && hp.is_alive() && wounded && sphere.holds_point(*at) {
             work = work.saturating_add(1);
         }
     }
@@ -1299,7 +1307,7 @@ pub fn repair_work(world: &World, beacon: BeaconId) -> u32 {
                 && hp.is_alive()
                 && !*building
                 && damaged
-                && crate::mandate::inside_sphere(world, beacon, *at)
+                && sphere.holds_point(*at)
             {
                 work = work.saturating_add(1);
             }
@@ -1315,7 +1323,7 @@ pub fn repair_work(world: &World, beacon: BeaconId) -> u32 {
             if *owner == seat.raw()
                 && hp.is_alive()
                 && below_threshold(hp.raw(), max.raw(), site.settings.repair_threshold_pct)
-                && crate::mandate::inside_sphere(world, beacon, *at)
+                && sphere.holds_point(*at)
             {
                 work = work.saturating_add(1);
             }
@@ -1345,7 +1353,7 @@ fn salvage_work(world: &World, beacon: BeaconId) -> u32 {
         .ok()
         .and_then(|row| world.beacons().positions().get(row.index()).copied());
     if let Some(centre) = centre {
-        let limit = Sq::of_radius(world.sphere_radius());
+        let limit = Sq::of_radius(world.sphere_radius_of(beacon));
         let wrecks = world.wrecks();
         for ((free, value), at) in wrecks
             .frees()

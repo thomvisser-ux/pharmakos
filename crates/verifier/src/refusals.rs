@@ -89,7 +89,10 @@ use crate::walk::{self, Slot, Visit};
 /// the key the cross-check reads; the sentence a player sees is the string
 /// table's.
 pub const REFUSED_CONSTRUCTS: &[(&str, &str)] = &[
-    ("interface row `queue_structure`", "E0009"),
+    (
+        "interface row `queue_structure` naming a blueprint other than `resonance_spire`",
+        "E0009",
+    ),
     (
         "a Build target naming a blueprint other than `generator`",
         "E0010",
@@ -190,7 +193,13 @@ impl Visit for Refusals<'_> {
     fn interface(&mut self, at: &str, interface: &InterfaceStep) {
         let rows_at = pointer::child(at, "rows");
         for (index, row) in interface.rows.iter().enumerate() {
-            if let Some(interface_row::Row::QueueStructure(_)) = row.row.as_ref() {
+            // S3's `lic` gave the Resonance Spire's queue its effect, so `E0009`
+            // refuses every other blueprint, as the sim's compile does
+            // (`pharmakos_sim::spire::queued_kind`); the Spire's licence and its
+            // one per beacon are the semantic stage's (`E0507`, `E0513`).
+            if let Some(interface_row::Row::QueueStructure(queue)) = row.row.as_ref()
+                && pharmakos_sim::spire::queued_kind(&queue.blueprint_id).is_none()
+            {
                 self.out.emit(Diag::new(
                     "E0009",
                     pointer::child(&pointer::at(&rows_at, index), "queue_structure"),

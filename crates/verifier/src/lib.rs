@@ -66,10 +66,11 @@
 //! sphere grown by a finished Resonance Spire, and the beacons a Spire stands
 //! at, each through a setter of its own and each a `report_hash` input. A
 //! `queue_structure` row for the Spire without its licence is `E0507`, and a
-//! second Spire at one beacon is `E0513`; both stand behind `E0009`, which
-//! refuses every `queue_structure` row until S3's `lic` gives the Spire an
-//! effect, so the verdict never runs ahead of the sim's compile (S3's plan,
-//! E4 and R4). A breach allowed is noted (`I0006`), and a rule an earlier
+//! second Spire at one beacon is `E0513`; both stood behind `E0009`, which
+//! refused every `queue_structure` row until S3's `lic` gave the Spire an
+//! effect, so the verdict never ran ahead of the sim's compile (S3's plan,
+//! E4 and R4). Since `lic`, `E0009` refuses every blueprint but the Spire, as
+//! the sim's compile does. A breach allowed is noted (`I0006`), and a rule an earlier
 //! rule wins every time both are true is warned of (`W0702`).
 //!
 //! # The arithmetic the estimate stage shares
@@ -231,8 +232,11 @@ pub use walking::Walk;
 /// beacon (`E0513`), both behind `E0009`, reads a grown sphere for `E0403`
 /// and `E0416`, notes a breach allowed (`I0006`) and warns of a rule an
 /// earlier rule wins every time both are true (`W0702`), so its reports are
-/// not comparable with `0.1.0-s2.5`'s.
-pub const VERIFIER_VERSION: &str = "0.1.0-s3.1";
+/// not comparable with `0.1.0-s2.5`'s. `0.1.0-s3.2` from S3's `lic`: a
+/// `queue_structure` row for the Resonance Spire is no longer refused by
+/// `E0009`, which now refuses every other blueprint, as the sim's compile
+/// does, so its reports are not comparable with `0.1.0-s3.1`'s.
+pub const VERIFIER_VERSION: &str = "0.1.0-s3.2";
 
 /// Everything one verification is a function of, apart from the depth.
 ///

@@ -2481,7 +2481,14 @@ impl Surface {
             // its seat; what an onlooker sees is the force itself.
             | EventKind::AttackLaunched
             | EventKind::AttackEnded
-            | EventKind::ChargeLost => event.seat.map(Audience::Private).ok_or_else(|| {
+            | EventKind::ChargeLost
+            // S3's `lic`: a licence awarded or voided is the seat's own. A
+            // `Public` audience would announce a seat's licence between rounds,
+            // which the recap's fog rule keeps to the seat until the match
+            // ends (item 145 (7); S3's plan, item 156). What an onlooker sees
+            // is the Spire itself, when one is built.
+            | EventKind::LicenceAwarded
+            | EventKind::LicenceVoided => event.seat.map(Audience::Private).ok_or_else(|| {
                 Error::internal(format!(
                     "the sim emitted `{}` for no seat, and a seat's orders have no other audience",
                     event.kind.name()
@@ -2926,6 +2933,7 @@ impl Surface {
         let mut scope = VerifierScope::new(seat, economy);
 
         push_own_beacons(world, seat, row, &mut scope)?;
+        push_own_licence_facts(world, seat, &mut scope)?;
 
         for read in crate::targeting::feature_reads(world, Some(seat)) {
             scope.push_feature(pharmakos_verifier::KnownFeature {
@@ -3610,6 +3618,73 @@ fn dark_beacons(world: &pharmakos_sim::world::World) -> Result<Vec<DarkAtEnd>, E
             })
         })
         .collect()
+}
+
+/// The verifier scope's licence half for the seat's own facts (S3's `lic`, a
+/// named place; decisions-log item 157 (5)), each beacon's after
+/// [`push_own_beacons`] has pushed it: every licence the sim's licence table
+/// holds for the seat ([`pharmakos_verifier::Scope::grant_licence`]); each
+/// living own beacon's sphere radius from the sim's one radius function, set
+/// only where it is above the base row, so that unset means base
+/// ([`pharmakos_verifier::Scope::set_sphere_radius`]); and each living own
+/// beacon a Resonance Spire stands at, finished or going up, by the sim's own
+/// one-Spire-per-beacon rule ([`pharmakos_verifier::Scope::set_spire`]). Every
+/// one is a `report_hash` input, so a seat that earns nothing and builds no
+/// Spire reports as before.
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] when the scope refuses a fact the sim
+/// handed it: a beacon it was not told of, or a radius past a voxel length,
+/// neither of which a world that loaded can hold.
+fn push_own_licence_facts(
+    world: &pharmakos_sim::world::World,
+    seat: SeatId,
+    scope: &mut VerifierScope,
+) -> Result<(), Error> {
+    let refused = |error: pharmakos_verifier::ScopeError| {
+        Error::internal(format!(
+            "the verifier scope refused the sim's licence facts: {error:?}"
+        ))
+    };
+    for licence in world.licences().held_by(seat) {
+        scope.grant_licence(licence).map_err(refused)?;
+    }
+    let base = world.rules().sphere_radius_voxels();
+    let beacons = world.beacons();
+    for index in 0..beacons.ids().len() {
+        if beacons.seats().get(index).copied() != Some(seat.raw())
+            || !column_of(beacons.hit_points(), index, "hit points")?.is_alive()
+        {
+            continue;
+        }
+        let (Some(id), Some(ordinal)) = (
+            beacons.ids().get(index).copied(),
+            beacons.ordinals().get(index).copied(),
+        ) else {
+            return Err(Error::internal(format!(
+                "the beacon table has no id or ordinal in row {index}"
+            )));
+        };
+        let beacon = pharmakos_sim::tables::BeaconId::new(id);
+        let name = pharmakos_sim::tables::own_beacon_name(ordinal);
+        let radius = world.sphere_radius_voxels_of(beacon);
+        if radius > base {
+            let grown = u32::try_from(radius)
+                .ok()
+                .and_then(core::num::NonZeroU32::new)
+                .ok_or_else(|| {
+                    Error::internal(format!(
+                        "the sim sized {name}'s sphere at {radius} voxels, which is no radius"
+                    ))
+                })?;
+            scope.set_sphere_radius(&name, grown).map_err(refused)?;
+        }
+        if world.spire_on(beacon) {
+            scope.set_spire(&name).map_err(refused)?;
+        }
+    }
+    Ok(())
 }
 
 /// The seat's own beacons in its verifier scope, by ordinal, then every name
@@ -4474,7 +4549,11 @@ mod tests {
         //
         // Plus S2's `atk`'s three, `attack_launched`, `attack_ended` and
         // `charge_lost`: an Attack beacon's own orders acting.
-        assert_eq!(private, 13 + 9 + 2 + 1 + 3 + 3);
+        //
+        // Plus S3's `lic`'s two, `licence_awarded` and `licence_voided`: the
+        // seat's own licences, announced to it alone until the recap's fog
+        // rule opens them at the match's end (item 145 (7)).
+        assert_eq!(private, 13 + 9 + 2 + 1 + 3 + 3 + 2);
         assert!(matches!(
             Surface::audience_of(&sim_event(EventKind::BeaconPlaced, Some(1))),
             Ok(Audience::World { .. })
@@ -4839,6 +4918,66 @@ mod tests {
             theirs.sightings().is_empty(),
             "seat 1 saw nothing, and seat 0's memory is not its"
         );
+    }
+
+    /// S3's `lic` (decisions-log item 157 (5)): the verifier scope's licence
+    /// half carries the seat's own licences, the grown sphere of a beacon a
+    /// finished Spire stands beside, and the beacons a Spire stands at, from
+    /// the sim's own tables; another seat's licence and Spire are not in it,
+    /// and a base sphere is unset.
+    #[test]
+    fn the_verifier_scope_carries_the_seats_licence_its_grown_sphere_and_its_spire() {
+        use pharmakos_proto::gp::v1::Licence;
+        let surface = resumed_with(FogPolicy::fogged(), |snapshot, world| {
+            let mut world = world.clone();
+            let seat = SeatId::new(0);
+            let row = (0..world.beacons().ids().len())
+                .find(|row| world.beacons().seats().get(*row) == Some(&0))
+                .expect("seat 0's core");
+            let core = pharmakos_sim::tables::BeaconId::new(
+                world.beacons().ids().get(row).copied().expect("a core id"),
+            );
+            let at = world
+                .beacons()
+                .positions()
+                .get(row)
+                .copied()
+                .expect("a core place");
+            let beside = [
+                at[0].saturating_add(pharmakos_sim::math::fixed::Fx::from_voxels(1)),
+                at[1],
+                at[2],
+            ];
+            assert!(world.award_licence_directly(seat, Licence::ResonanceSpire, 1));
+            world
+                .raise_structure(
+                    seat,
+                    core,
+                    pharmakos_sim::tables::StructureKind::ResonanceSpire,
+                    beside,
+                )
+                .expect("room for a Spire");
+            *snapshot = pharmakos_sim::snapshot::Snapshot::capture(&world);
+        });
+        let ours = surface.verifier_scope(SeatId::new(0)).expect("a scope");
+        assert_eq!(ours.licences(), [Licence::ResonanceSpire]);
+        let grown = u32::try_from(rules().grown_sphere_radius_voxels()).expect("a radius");
+        assert_eq!(
+            ours.sphere_radius("b_00").map(core::num::NonZeroU32::get),
+            Some(grown)
+        );
+        assert!(ours.spire_at("b_00"));
+        let theirs = surface.verifier_scope(SeatId::new(1)).expect("a scope");
+        assert!(
+            theirs.licences().is_empty(),
+            "seat 0's licence is not seat 1's"
+        );
+        assert_eq!(
+            theirs.sphere_radius("b_00"),
+            None,
+            "seat 1's core keeps its base"
+        );
+        assert!(!theirs.spire_at("b_00"));
     }
 
     /// A world event the sim placed nowhere is refused, never filtered as if it

@@ -214,7 +214,20 @@ use serde::{Deserialize, Serialize};
 /// written before `atk2` restores as the same world, and a build before
 /// `atk2` refuses a file carrying tag 5 by its `attack_aim` column error
 /// rather than misreading it.
-pub const SNAPSHOT_VERSION: u32 = 14;
+///
+/// **Version 15 is S3's Ledger licences** (S3's plan, task `lic`, E2). It adds
+/// a new table, every seat's licences -- each row's seat, its `gp.v1.Licence`
+/// wire value and the round whose settlement awarded it
+/// ([`crate::licence::LicenceTable`]), which hashes nothing while empty, and a
+/// column, each beacon's grown flag ([`crate::tables::BeaconTable::grown`]):
+/// whether a finished Spire has ever grown its sphere, which a wall's owner
+/// reads (decision 6). A Resonance Spire's larger sphere itself is derived
+/// from the structure table, which version 14 already carries (E3). A
+/// version-14 file is
+/// refused rather than read: it carries no licence, and a world restored from
+/// it would refuse a Spire's queue the unbroken run accepted. The gateway's
+/// save refuses a version-14 snapshot by its stamp first.
+pub const SNAPSHOT_VERSION: u32 = 15;
 
 /// A flat, fixed-width projection of the world.
 ///
@@ -340,6 +353,9 @@ pub struct Snapshot {
     pub beacon_seam: Vec<u32>,
     /// Whether each beacon row is free, `0` or `1`.
     pub beacon_free: Vec<u8>,
+    /// S3's `lic` (version 15): whether a finished Resonance Spire has ever
+    /// grown each beacon's sphere, `0` or `1` ([`crate::tables::BeaconTable::grown`]).
+    pub beacon_grown: Vec<u8>,
     /// The tick each beacon's weapon may next fire on: a core's.
     pub beacon_ready_at: Vec<u32>,
     /// The last enemy that damaged each beacon.
@@ -625,6 +641,13 @@ pub struct Snapshot {
     /// S2's `atk` (version 14): the Attack table, its avoid areas and its
     /// planted charges.
     pub attack: crate::attack::AttackColumns,
+    /// S3's `lic` (version 15): each Ledger licence's seat, per row, ascending
+    /// by seat then licence ([`crate::licence::LicenceTable`]).
+    pub licence_seat: Vec<u8>,
+    /// Each licence's `gp.v1.Licence` wire value, never zero.
+    pub licence_kind: Vec<u8>,
+    /// The round whose settlement awarded each licence, from 1.
+    pub licence_round: Vec<u32>,
 }
 
 /// An empty snapshot in an **opening Lull**, not an empty one in no phase at
@@ -696,6 +719,7 @@ impl Default for Snapshot {
             beacon_flee: Vec::new(),
             beacon_seam: Vec::new(),
             beacon_free: Vec::new(),
+            beacon_grown: Vec::new(),
             beacon_ready_at: Vec::new(),
             beacon_attacker: Vec::new(),
             beacon_attacked_at: Vec::new(),
@@ -818,6 +842,9 @@ impl Default for Snapshot {
             explored_seat: Vec::new(),
             explored_cell: Vec::new(),
             attack: crate::attack::AttackColumns::default(),
+            licence_seat: Vec::new(),
+            licence_kind: Vec::new(),
+            licence_round: Vec::new(),
         }
     }
 }
@@ -1060,6 +1087,7 @@ impl Snapshot {
             beacon_flee: beacons.flees().iter().map(|f| u8::from(*f)).collect(),
             beacon_seam: beacons.seams().to_vec(),
             beacon_free: beacons.frees().iter().map(|f| u8::from(*f)).collect(),
+            beacon_grown: beacons.grown().iter().map(|g| u8::from(*g)).collect(),
             beacon_ready_at: beacons.arms().iter().map(|a| a.ready_at).collect(),
             beacon_attacker: beacons.arms().iter().map(|a| a.attacker).collect(),
             beacon_attacked_at: beacons.arms().iter().map(|a| a.attacked_at).collect(),
@@ -1233,6 +1261,19 @@ impl Snapshot {
             explored_seat: explored.rows().iter().map(|(seat, _)| *seat).collect(),
             explored_cell: explored.rows().iter().map(|(_, cell)| *cell).collect(),
             attack: crate::attack::AttackColumns::of(world.attack()),
+            licence_seat: world.licences().rows().iter().map(|row| row.seat).collect(),
+            licence_kind: world
+                .licences()
+                .rows()
+                .iter()
+                .map(|row| row.licence)
+                .collect(),
+            licence_round: world
+                .licences()
+                .rows()
+                .iter()
+                .map(|row| row.round)
+                .collect(),
         }
     }
 
@@ -1417,6 +1458,7 @@ impl Snapshot {
             common: commons(&self.beacon_roe, &self.beacon_retreat_pct)?,
             site: self.sites()?,
             free: flags(&self.beacon_free, "beacon_free")?,
+            grown: flags(&self.beacon_grown, "beacon_grown")?,
         }) {
             return Err(SnapshotError::Ragged("beacon"));
         }
@@ -1490,6 +1532,7 @@ impl Snapshot {
         let defend = self.restore_defend(&beacons)?;
         let explored = self.restore_explored()?;
         let attack = self.restore_attack(&beacons)?;
+        let licences = self.restore_licences(&seats)?;
 
         let targets = self.restore_targets(world)?;
         let sightings = self.restore_sightings(world)?;
@@ -1537,6 +1580,7 @@ impl Snapshot {
             defend,
             explored,
             attack,
+            licences,
             voxels,
             chunks,
             features,
@@ -2363,6 +2407,76 @@ impl Snapshot {
         self.attack
             .restore(live_on, &ascending, self.seat_id.len())
             .map_err(SnapshotError::OutOfRange)
+    }
+
+    /// The licence table (S3's `lic`, version 15), checked before anything is
+    /// written: the columns are one length, every seat byte names a seat of
+    /// the file that was placed and is still in the match (an eliminated
+    /// seat's licences are voided on the tick it falls, so no run writes one),
+    /// no row is later than the round played, no more rows than the seats can
+    /// hold, and the rows are the ones a writer makes
+    /// ([`crate::licence::LicenceTable::restore`]).
+    ///
+    /// # Errors
+    ///
+    /// [`SnapshotError::Ragged`] and [`SnapshotError::OutOfRange`].
+    fn restore_licences(
+        &self,
+        seats: &SeatTable,
+    ) -> Result<crate::licence::LicenceTable, SnapshotError> {
+        let n = self.licence_seat.len();
+        if self.licence_kind.len() != n || self.licence_round.len() != n {
+            return Err(SnapshotError::Ragged("licence"));
+        }
+        for seat in &self.licence_seat {
+            let index = usize::from(*seat);
+            if seats.seats().get(index).copied() != Some(*seat) {
+                return Err(SnapshotError::OutOfRange("licence_seat"));
+            }
+            // A seat the map never placed holds no beacon, and so no Generator
+            // and no licence: its core's row is never freed, so a placed seat
+            // always has one.
+            if !self.beacon_seat.contains(seat) {
+                return Err(SnapshotError::OutOfRange("licence_seat"));
+            }
+            if seats.eliminated_at().get(index).copied() != Some(crate::tables::NOT_ELIMINATED) {
+                return Err(SnapshotError::OutOfRange("licence_seat"));
+            }
+        }
+        // A licence is awarded at a round's settlement, so none is later than
+        // the round the file says was played.
+        if self
+            .licence_round
+            .iter()
+            .any(|round| *round > self.match_round)
+        {
+            return Err(SnapshotError::OutOfRange("licence_round"));
+        }
+        let rows = self
+            .licence_seat
+            .iter()
+            .zip(&self.licence_kind)
+            .zip(&self.licence_round)
+            .map(|((seat, licence), round)| crate::licence::LicenceRow {
+                seat: *seat,
+                licence: *licence,
+                round: *round,
+            })
+            .collect();
+        let mut table = crate::licence::LicenceTable::default();
+        table
+            .restore(rows, seats.len())
+            .map_err(|error| match error {
+                crate::licence::LicenceRowError::UnknownLicence => {
+                    SnapshotError::OutOfRange("licence_kind")
+                }
+                crate::licence::LicenceRowError::RoundZero => {
+                    SnapshotError::OutOfRange("licence_round")
+                }
+                crate::licence::LicenceRowError::Order => SnapshotError::Ragged("licence"),
+                crate::licence::LicenceRowError::Room => SnapshotError::OutOfRange("licence_count"),
+            })?;
+        Ok(table)
     }
 
     /// The explored table (S2's `surv`, laid out by `dfnd`), checked before

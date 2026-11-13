@@ -163,11 +163,10 @@ impl Sight {
 /// or move a beacon: a stale one draws last tick's spheres.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct Spheres {
-    /// `beacon.sphere_radius_voxels`, in whole voxels: a voxel length, which
-    /// the rules table refuses at load to be anything else.
-    radius_voxels: i16,
-    /// One entry per living beacon: the seat that owns it and its centre.
-    centres: Vec<(u8, [Fx; 3])>,
+    /// One entry per living beacon: the seat that owns it, its centre and its
+    /// sphere's radius in whole voxels, grown by a finished Resonance Spire
+    /// ([`crate::spire::radius_voxels`]; S3's plan, E3).
+    centres: Vec<(u8, [Fx; 3], i16)>,
 }
 
 impl Spheres {
@@ -186,8 +185,8 @@ impl Spheres {
         };
         self.centres
             .iter()
-            .filter(|(owner, _)| *owner == seat.raw())
-            .any(|(_, centre)| within(point, *centre, Fx::from_voxels(self.radius_voxels)))
+            .filter(|(owner, _, _)| *owner == seat.raw())
+            .any(|(_, centre, radius)| within(point, *centre, Fx::from_voxels(*radius)))
     }
 
     /// How many living beacons the snapshot holds, every seat's together.
@@ -202,10 +201,10 @@ impl Spheres {
         self.centres.is_empty()
     }
 
-    /// The radius every sphere has, in whole voxels.
-    #[must_use]
-    pub fn radius_voxels(&self) -> i32 {
-        i32::from(self.radius_voxels)
+    /// Each living beacon's sphere radius, in whole voxels, in beacon row
+    /// order: the base, or a Spire's larger sphere (S3's plan, E3).
+    pub fn radii_voxels(&self) -> impl Iterator<Item = i32> + '_ {
+        self.centres.iter().map(|(_, _, radius)| i32::from(*radius))
     }
 }
 
@@ -264,7 +263,9 @@ impl World {
         Some(Sensor {
             seat: seat.is_some().then_some(seat)?,
             centre: self.beacons().positions().get(row).copied()?,
-            radius: self.sphere_radius(),
+            // The sphere as a sensor grows with a finished Spire (decision 6:
+            // "the sphere's place in the sensor seam's sphere output").
+            radius: self.sphere_radius_at_row(row),
             kind: SensorKind::Sphere,
         })
     }
@@ -368,9 +369,8 @@ impl World {
     /// ruins and it powers nothing).
     #[must_use]
     pub fn spheres(&self) -> Spheres {
-        let radius_voxels = self.rules().sphere_radius_voxels();
         let beacons = self.beacons();
-        let mut centres: Vec<(u8, [Fx; 3])> = Vec::with_capacity(beacons.ids().len());
+        let mut centres: Vec<(u8, [Fx; 3], i16)> = Vec::with_capacity(beacons.ids().len());
         for row in 0..beacons.ids().len() {
             let alive = beacons
                 .hit_points()
@@ -386,12 +386,10 @@ impl World {
             ) else {
                 continue;
             };
-            centres.push((seat, centre));
+            let radius = crate::spire::radius_at_row(self.rules(), beacons, self.structures(), row);
+            centres.push((seat, centre, radius));
         }
-        Spheres {
-            radius_voxels,
-            centres,
-        }
+        Spheres { centres }
     }
 
     /// True when `voxel` lies inside the sphere of one of `seat`'s own living
@@ -423,8 +421,7 @@ mod tests {
     #[test]
     fn the_boundary_voxel_is_inside_and_the_next_is_not() {
         let spheres = Spheres {
-            radius_voxels: 3,
-            centres: vec![(1, at(10, 10, 10))],
+            centres: vec![(1, at(10, 10, 10), 3)],
         };
         let seat = SeatId::new(1);
         assert!(spheres.contains(seat, [13, 10, 10]));
@@ -438,8 +435,7 @@ mod tests {
     #[test]
     fn a_sphere_is_its_owners_and_nobody_elses() {
         let spheres = Spheres {
-            radius_voxels: 3,
-            centres: vec![(1, at(10, 10, 10))],
+            centres: vec![(1, at(10, 10, 10), 3)],
         };
         assert!(spheres.contains(SeatId::new(1), [10, 10, 10]));
         assert!(!spheres.contains(SeatId::new(0), [10, 10, 10]));

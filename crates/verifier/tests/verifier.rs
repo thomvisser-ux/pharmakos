@@ -1909,18 +1909,18 @@ fn licensed_scope() -> Scope {
 }
 
 /// E0507 reads the seat's licences and nothing else, and points at the
-/// blueprint's id; E0009 refuses every `queue_structure` row whatever the
-/// licence until S3's `lic` gives the Spire an effect (S3's plan, E4 and R4),
-/// so a Spire never qualifies while the sim's compile refuses it.
+/// blueprint's id; since S3's `lic` gave the Spire an effect, E0009 refuses
+/// every `queue_structure` row but the Spire's, whatever the licence (S3's
+/// plan, E4 and R4), as the sim's compile does.
 #[test]
-fn a_spire_is_licensed_by_the_seats_view_and_still_refused_by_e0009() {
+fn a_spire_is_licensed_by_the_seats_view_and_refused_by_e0507_alone() {
     let text = one_visit("b_01", SPIRE_ROW);
     let unlicensed = found_in(&text, &fixture_scope());
     let licensed = found_in(&text, &licensed_scope());
     let row = "/declarative/route/0/interface/rows/0/queue_structure";
     let blueprint = format!("{row}/blueprint_id");
-    assert_eq!(with_code(&unlicensed, "E0009"), [row]);
-    assert_eq!(with_code(&licensed, "E0009"), [row]);
+    assert!(with_code(&unlicensed, "E0009").is_empty(), "{unlicensed:?}");
+    assert!(with_code(&licensed, "E0009").is_empty(), "{licensed:?}");
     assert_eq!(with_code(&unlicensed, "E0507"), [blueprint.as_str()]);
     assert!(with_code(&licensed, "E0507").is_empty(), "{licensed:?}");
     // A blueprint no licence covers is E0009's alone until S4's catalogue
@@ -1933,6 +1933,7 @@ fn a_spire_is_licensed_by_the_seats_view_and_still_refused_by_e0009() {
         &fixture_scope(),
     );
     assert!(with_code(&other, "E0507").is_empty() && with_code(&other, "E0506").is_empty());
+    assert_eq!(with_code(&other, "E0009"), [row]);
     // The licence is the seat's, so a beacon chosen by a selector needs it
     // too.
     let by_selector = route_of(

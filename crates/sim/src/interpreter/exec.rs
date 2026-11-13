@@ -738,7 +738,8 @@ fn bind_rows(
             Row::Mandate { .. }
             | Row::Priority { .. }
             | Row::Recycle
-            | Row::RemoveTarget { .. } => {
+            | Row::RemoveTarget { .. }
+            | Row::QueueStructure { .. } => {
                 continue;
             }
         };
@@ -1315,6 +1316,9 @@ fn commit_row(
         Row::Recycle => {
             world.recycle_beacon(seat, beacon);
         }
+        Row::QueueStructure { kind } => {
+            world.queue_capability(seat, beacon, *kind)?;
+        }
         Row::AddTarget { target } => {
             let (at, bound) = match target.anchor {
                 Anchor::Voxel(voxel) => (point_of(voxel), (NO_FEATURE, DESCRIPTION_VOXEL)),
@@ -1334,10 +1338,12 @@ fn commit_row(
             // right and would stand a second structure in the same voxel
             // ([`World::anchor_is_claimed`]).
             // A full table fails the step rather than dropping the target
-            // (decisions-log item 136 (5)).
-            if crate::mandate::inside_sphere(world, beacon, at)
-                && !world.anchor_is_claimed(seat, at)
-            {
+            // (decisions-log item 136 (5)). A target outside the beacon's
+            // sphere as it stands now is written all the same, and waits: no
+            // physical work reaches it until the sphere holds it (S3's plan,
+            // decision 6; `crate::mandate::buildable`), rather than the row
+            // committing and writing nothing.
+            if !world.anchor_is_claimed(seat, at) {
                 // A wall's box is checked against the ground before it is
                 // written: the verifier sees no terrain (decisions-log item 146
                 // (4)), so these halves of its checks are the sim's.

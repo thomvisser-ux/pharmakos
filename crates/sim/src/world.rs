@@ -58,7 +58,7 @@ use crate::events::{EVENT_BUS_CAPACITY, Emission, Event, EventBus, EventKind};
 use crate::features::FeatureTable;
 use crate::ids::{RefCounts, Row};
 use crate::interpreter::state::PlanParts;
-use crate::interpreter::{Interpreter, Plan};
+use crate::interpreter::{Interpreter, Plan, StepFailure};
 use crate::knowledge::{AssetId, Position};
 use crate::mapgen::{self, MapError};
 use crate::math::fixed::{Fx, Sq};
@@ -123,6 +123,10 @@ pub enum Phase {
     /// Encode the world in declared table order and digest it (T2).
     Hash,
 }
+
+/// The grown-beacon block's tag in the state hash, after the licence block's 6
+/// (S3's `lic`).
+const GROWN_HASH_TAG: u8 = 7;
 
 /// The tick, in order. Determinism code: see the module docs.
 pub const PHASE_ORDER: [Phase; 12] = [
@@ -392,6 +396,12 @@ pub struct World {
     /// planted charges (S2's `atk`): a block after the explored block that
     /// writes nothing while it is empty (E29).
     attack: crate::attack::AttackTable,
+    /// Every seat's Ledger licences (S3's `lic`, E2): a block after the
+    /// Attack block that writes nothing while it is empty.
+    licences: crate::licence::LicenceTable,
+    /// The licences a seat's elimination voids, one tick's worth: scratch
+    /// sized at construction so the voiding allocates nothing.
+    voided: Vec<u8>,
 
     chunks: ChunkDigests,
 
@@ -1017,6 +1027,7 @@ pub(crate) struct RestoredTables {
     pub(crate) defend: crate::tables::DefendTable,
     pub(crate) explored: crate::tables::ExploredTable,
     pub(crate) attack: crate::attack::AttackTable,
+    pub(crate) licences: crate::licence::LicenceTable,
     pub(crate) voxels: VoxelStore,
     pub(crate) chunks: ChunkDigests,
     /// The map's feature table, regenerated with the pristine map rather than
@@ -1144,7 +1155,10 @@ impl World {
                 size: voxels.size(),
             });
         };
-        let Some((clusters, scratch)) = build_graph(&surface, cluster_voxels) else {
+        let Some((clusters, scratch)) = crate::pathing::graph_for(
+            &surface,
+            config.rules.cluster_shape().with_size(cluster_voxels),
+        ) else {
             return Err(MapError::Unclusterable { cluster_voxels });
         };
         let mut router = Router::new(unit_count, &config.rules);
@@ -1231,6 +1245,8 @@ impl World {
                 table.reserve(beacon_limit, AVOID_AREA_ROOM);
                 table
             },
+            licences: crate::licence::LicenceTable::with_room(config.seats),
+            voided: Vec::with_capacity(crate::licence::AWARDED.len()),
             chunks,
             router,
             match_state: MatchState::new(&settings),
@@ -1405,6 +1421,33 @@ impl World {
     /// The explored table, to write: S2's `surv` marks cells through it.
     pub(crate) const fn explored_mut(&mut self) -> &mut crate::tables::ExploredTable {
         &mut self.explored
+    }
+
+    /// Every seat's Ledger licences (S3's `lic`, E2).
+    #[must_use]
+    pub const fn licences(&self) -> &crate::licence::LicenceTable {
+        &self.licences
+    }
+
+    /// The licence table, to write: the settlement's check awards through it
+    /// ([`crate::licence::settle`]) and an elimination voids through it.
+    pub(crate) const fn licences_mut(&mut self) -> &mut crate::licence::LicenceTable {
+        &mut self.licences
+    }
+
+    /// Award `licence` to `seat` directly, at `round`: `true` when the row is
+    /// new.
+    ///
+    /// Fixture API, like the seven methods below the block comment further
+    /// down: a licence is earned at a settlement ([`crate::licence::settle`])
+    /// and nothing outside a test or a scenario fixture may call this.
+    pub fn award_licence_directly(
+        &mut self,
+        seat: SeatId,
+        licence: pharmakos_proto::gp::v1::Licence,
+        round: u32,
+    ) -> bool {
+        self.licences.award(seat, licence, round)
     }
 
     /// Every Attack beacon's settings and force, the avoid areas and the
@@ -2045,10 +2088,47 @@ impl World {
         self.seats.seats().iter().position(|raw| *raw == seat.raw())
     }
 
-    /// A beacon's sphere of authority, `beacon.sphere_radius_voxels`.
+    /// `beacon`'s sphere of authority (S3's plan, E3): the base row,
+    /// `beacon.sphere_radius_voxels`, grown by a finished Resonance Spire of
+    /// the beacon's own seat homed to it ([`crate::spire::radius_voxels`], the
+    /// one function). The base for an id that names no live row, which no
+    /// Spire stands on.
     #[must_use]
-    pub fn sphere_radius(&self) -> Fx {
-        Fx::from_voxels(self.rules.sphere_radius_voxels())
+    pub fn sphere_radius_of(&self, beacon: BeaconId) -> Fx {
+        Fx::from_voxels(self.sphere_radius_voxels_of(beacon))
+    }
+
+    /// [`World::sphere_radius_of`], in whole voxels.
+    #[must_use]
+    pub fn sphere_radius_voxels_of(&self, beacon: BeaconId) -> i16 {
+        crate::spire::radius_of(&self.rules, &self.beacons, &self.structures, beacon)
+    }
+
+    /// [`World::sphere_radius_of`] for the beacon in `row` of the beacon
+    /// table; the base for a row the table does not hold.
+    #[must_use]
+    pub fn sphere_radius_at_row(&self, row: usize) -> Fx {
+        Fx::from_voxels(crate::spire::radius_at_row(
+            &self.rules,
+            &self.beacons,
+            &self.structures,
+            row,
+        ))
+    }
+
+    /// Whether a living Resonance Spire of `beacon`'s own seat, finished or
+    /// still going up, stands homed to `beacon`: the one-Spire-per-beacon
+    /// rule's question (spec section 8; S3's plan, E4), which the gateway's
+    /// verifier scope reads too.
+    #[must_use]
+    pub fn spire_on(&self, beacon: BeaconId) -> bool {
+        let Ok(row) = self.beacons.row_of(beacon) else {
+            return false;
+        };
+        let Some(seat) = self.beacons.seats().get(row.index()).copied() else {
+            return false;
+        };
+        crate::spire::facts_of(&self.structures).any(|facts| facts.stands(seat, beacon.raw()))
     }
 
     /// How close a walked route has to get before it counts as arrived,
@@ -2203,7 +2283,7 @@ impl World {
     pub fn wreck_in_sphere(&self, beacon: BeaconId) -> Option<Row> {
         let row = self.beacons.row_of(beacon).ok()?;
         let centre = self.beacons.positions().get(row.index()).copied()?;
-        let limit = Sq::of_radius(self.sphere_radius());
+        let limit = Sq::of_radius(self.sphere_radius_at_row(row.index()));
         let mut best: Option<(Sq, u32, Row)> = None;
         let wrecks = self
             .wrecks
@@ -2487,6 +2567,14 @@ impl World {
         if crate::mandate::protected(self, beacon, anchor) {
             return false;
         }
+        // **Nothing is built outside the beacon's sphere as it stands now**
+        // (S3's plan, decision 6: once a Spire falls, "no physical work
+        // reaches" what lies outside until one is rebuilt). The Build mandate
+        // skips such a target ([`crate::mandate::buildable`]); this is the
+        // backstop.
+        if !crate::mandate::inside_sphere(self, beacon, anchor) {
+            return false;
+        }
         // **One structure per voxel, across seats** (targeting.md, "Sites"):
         // construction is refused where any live structure already stands, so
         // the first seat to build wins and the other's target is never paid
@@ -2537,6 +2625,195 @@ impl World {
         true
     }
 
+    /// Queue a capability structure on `beacon`'s fabricator (spec section 8;
+    /// S3's plan, E4): the `queue_structure` row's commit. S3 accepts one
+    /// kind, the Resonance Spire ([`crate::spire::queued_kind`]).
+    ///
+    /// "Paid means yours" as a deploy has it: the checks run first and write
+    /// nothing, then the `$` leaves the treasury and the structure goes into
+    /// the ground at one hit point, going up, homed to the beacon. From that
+    /// tick it draws its `kW` ([`crate::power`]) and the beacon's fabricator
+    /// raises it ([`crate::spire::fabricate`]), whatever the mandate. It
+    /// stands beside the beacon, on the nearest free column of its sphere
+    /// ([`World::capability_site`]).
+    ///
+    /// # Errors
+    ///
+    /// The step failure the row fails with, each before anything is written:
+    /// [`StepFailure::NotLicensed`] when the seat does not hold the licence
+    /// (the verifier's `E0507` at plan time); [`StepFailure::SpirePresent`]
+    /// when a Spire already stands, or is going up, at the beacon (the
+    /// verifier's `E0513`, whose answer can go stale between the seal and the
+    /// commit); [`StepFailure::IllegalSite`] when no column of the beacon's
+    /// sphere is free for it;
+    /// [`StepFailure::NoStructureRoom`] when the seat's share of the structure
+    /// table is full; [`StepFailure::Unaffordable`] when the treasury does not
+    /// reach the structure's price; [`StepFailure::BeaconGone`] for a beacon
+    /// the table no longer holds.
+    pub(crate) fn queue_capability(
+        &mut self,
+        seat: SeatId,
+        beacon: BeaconId,
+        kind: StructureKind,
+    ) -> Result<StructureId, StepFailure> {
+        let licence = match kind {
+            StructureKind::ResonanceSpire => pharmakos_proto::gp::v1::Licence::ResonanceSpire,
+            StructureKind::Generator
+            | StructureKind::Autocannon
+            | StructureKind::Mortar
+            | StructureKind::SurveyPost
+            | StructureKind::Wall => return Err(StepFailure::NotLicensed),
+        };
+        if !self.licences.holds(seat, licence) {
+            return Err(StepFailure::NotLicensed);
+        }
+        if self.spire_on(beacon) {
+            return Err(StepFailure::SpirePresent);
+        }
+        let row = self
+            .beacons
+            .row_of(beacon)
+            .map_err(|_| StepFailure::BeaconGone)?;
+        let at = self
+            .beacons
+            .positions()
+            .get(row.index())
+            .copied()
+            .ok_or(StepFailure::BeaconGone)?;
+        let at = self
+            .capability_site(seat, beacon, at)
+            .ok_or(StepFailure::IllegalSite)?;
+        if self.structures_held_by(seat) >= room_per_seat(STRUCTURE_TABLE_ROOM, self.seats.len())
+            || self.structures.vacancy(STRUCTURE_ROWS).is_err()
+        {
+            return Err(StepFailure::NoStructureRoom);
+        }
+        let cost = self.structure_cost(kind);
+        let index = self.seat_row(seat).ok_or(StepFailure::BeaconGone)?;
+        let slot = self
+            .seats
+            .treasuries_mut()
+            .get_mut(index)
+            .ok_or(StepFailure::BeaconGone)?;
+        if slot.raw() < cost.raw() {
+            return Err(StepFailure::Unaffordable);
+        }
+        // The check above makes the subtraction exact: a treasury at or above
+        // the price, less the price, is at or above zero.
+        *slot = Money::new(slot.raw().saturating_sub(cost.raw()));
+        let ready_at = self.armed_ready_at(self.structure_weapon(kind));
+        let Ok(placed) = self.structures.place(
+            STRUCTURE_ROWS,
+            seat,
+            kind,
+            at,
+            Hp::new(1),
+            beacon,
+            true,
+            QuarterTurns::NONE,
+            ready_at,
+        ) else {
+            // The vacancy was read above, so this does not happen; were it
+            // to, the price goes back where it came from rather than buying
+            // nothing.
+            self.credit_treasury(seat, cost);
+            return Err(StepFailure::NoStructureRoom);
+        };
+        let tick = self.tick;
+        self.emit(
+            tick,
+            Emission::of(EventKind::StructureQueued)
+                .seat(seat)
+                .subject_of(AssetId::of_structure(placed.id))
+                .at(Position::from_array(at))
+                .value(i64::from(kind.id())),
+        );
+        Ok(placed.id)
+    }
+
+    /// Where a capability structure queued at the beacon standing at `centre`
+    /// stands (S3's `lic`): the first column of the sphere's spiral
+    /// ([`crate::targeting::spiral_offsets`], nearest the beacon first, then
+    /// `y`, then `x`) other than the beacon's own that is standable, outside
+    /// every feature's footprint, holds no live structure and no other own
+    /// beacon (one structure per voxel and no stacking, targeting.md "Sites"),
+    /// is claimed by none of the seat's Build targets, lies in no protected
+    /// area of the beacon ([`crate::mandate::protected`]: ground its mandate
+    /// will not build on) and in no box one of the seat's wall targets will
+    /// fill, and has no voxel `set` filed on it this tick (the owner's footing
+    /// ruling of 2026-10-20, as `queue_target`). Its own column, beside the beacon rather than on it,
+    /// makes the Spire an asset of its own to aim at: a raider that met it on
+    /// the beacon's column would always take the beacon first. `None` when no
+    /// column of the sphere is free.
+    fn capability_site(&self, seat: SeatId, beacon: BeaconId, centre: [Fx; 3]) -> Option<[Fx; 3]> {
+        let [bx, by] = crate::targeting::column_of(centre);
+        let ground = self.ground();
+        for &[dx, dy] in &self.spiral {
+            if dx == 0 && dy == 0 {
+                continue;
+            }
+            let (Some(x), Some(y)) = (bx.checked_add(dx), by.checked_add(dy)) else {
+                continue;
+            };
+            let Some(node) = ground.surface.node_of(x, y) else {
+                continue;
+            };
+            if !ground.surface.walkable(node)
+                || ground.features.at_column(x, y).is_some()
+                || ground.structure_on(x, y)
+                || ground.stacks_on_own(seat, x, y)
+                || ground.own_target_on(seat, None, x, y)
+                || self.set_queued_on(x, y)
+                || self.wall_box_holds(seat, x, y)
+            {
+                continue;
+            }
+            if let Some(point) = ground.standing(x, y)
+                && !crate::mandate::protected(self, beacon, point)
+            {
+                return Some(point);
+            }
+        }
+        None
+    }
+
+    /// Set the grown flag of the beacon the structure in `row` is homed to,
+    /// when that beacon is alive and its seat's: a finished Resonance Spire
+    /// has grown its sphere (S3's `lic`; [`BeaconTable::grown`]).
+    fn mark_grown(&mut self, row: usize) {
+        let (Some(home), Some(seat)) = (
+            self.structures.homes().get(row).copied(),
+            self.structures.seats().get(row).copied(),
+        ) else {
+            return;
+        };
+        let Ok(at) = self.beacons.row_of(home) else {
+            return;
+        };
+        if self.beacons.seats().get(at.index()).copied() == Some(seat)
+            && let Some(slot) = self.beacons.grown_mut().get_mut(at.index())
+        {
+            *slot = true;
+        }
+    }
+
+    /// Whether a wall target of one of `seat`'s beacons has a box that holds the
+    /// column `(x, y)`: ground its drones will fill.
+    fn wall_box_holds(&self, seat: SeatId, x: i32, y: i32) -> bool {
+        let targets = &self.targets;
+        targets
+            .beacons()
+            .iter()
+            .zip(targets.kinds())
+            .zip(targets.areas().iter().zip(targets.wall_tops()))
+            .any(|((beacon, kind), (area, top))| {
+                *kind == TargetKind::Build.id()
+                    && *top != crate::tables::NO_WALL
+                    && area.contains(x, y)
+                    && self.seat_of_beacon(*beacon) == seat
+            })
+    }
+
     /// A structure reached full hit points: it is finished, and starts
     /// supplying or drawing on the next tick's power phase.
     pub(crate) fn finish_structure(&mut self, structure: StructureId) {
@@ -2553,6 +2830,11 @@ impl World {
         };
         if let Some(slot) = self.structures_mut().building_mut().get_mut(row) {
             *slot = false;
+        }
+        // A finished Spire grows its beacon's sphere, and the beacon remembers
+        // it for its walls' ownership (decision 6; `BeaconTable::grown`).
+        if kind == StructureKind::ResonanceSpire.id() {
+            self.mark_grown(row);
         }
         let at = self.structures.positions().get(row).copied();
         let tick = self.tick;
@@ -2822,7 +3104,8 @@ impl World {
     ) -> Option<StructureId> {
         let hp = self.structure_max_hp(kind)?;
         let ready_at = self.armed_ready_at(self.structure_weapon(kind));
-        self.structures
+        let id = self
+            .structures
             .place(
                 STRUCTURE_ROWS,
                 seat,
@@ -2835,7 +3118,15 @@ impl World {
                 ready_at,
             )
             .ok()
-            .map(|placed| placed.id)
+            .map(|placed| placed.id)?;
+        // A Spire raised finished has grown its beacon's sphere, as one the
+        // fabricator finished has (`World::finish_structure`).
+        if kind == StructureKind::ResonanceSpire
+            && let Ok(row) = self.structures.row_of(id)
+        {
+            self.mark_grown(row.index());
+        }
+        Some(id)
     }
 
     /// Field one unit of `kind` for `seat`, homed to `home`, standing at
@@ -3474,9 +3765,9 @@ impl World {
         self.clear_targets(beacon, TargetKind::Build);
         for entry in list {
             let anchor = entry.anchor;
-            if !crate::mandate::inside_sphere(self, beacon, anchor)
-                || self.anchor_is_claimed(seat, anchor)
-            {
+            // A target outside the sphere as it stands now is written and
+            // waits for it (S3's plan, decision 6; `crate::mandate::buildable`).
+            if self.anchor_is_claimed(seat, anchor) {
                 continue;
             }
             self.targets.add_bound(
@@ -3586,8 +3877,7 @@ impl World {
         if let Some(list) = build {
             for (index, entry) in list.clone().enumerate() {
                 let anchor = entry.anchor;
-                if !crate::mandate::inside_sphere(self, beacon, anchor)
-                    || self.anchor_claimed_elsewhere(seat, anchor, beacon)
+                if self.anchor_claimed_elsewhere(seat, anchor, beacon)
                     || list
                         .clone()
                         .take(index)
@@ -4319,6 +4609,9 @@ impl World {
         // S2's `site`: a unit a fill closed over stands on the new ground.
         crate::site::reseat_buried(self);
         crate::programs::run_all(self);
+        // S3's `lic`: the fabricators raise the capability structures going
+        // up, after the units' programs (E4).
+        crate::spire::fabricate(self);
     }
 
     /// Advance every mover along the route it is following.
@@ -5370,9 +5663,30 @@ impl World {
                     tick,
                     Emission::of(EventKind::SeatEliminated).seat(SeatId::new(raw)),
                 );
+                // Spec section 8: "An eliminated seat's licences are voided", on
+                // the tick it is eliminated (S3's plan, E2).
+                self.void_licences(SeatId::new(raw));
             }
             index = index.saturating_add(1);
         }
+    }
+
+    /// Void every licence `seat` holds, one `licence_voided` line per licence
+    /// in ascending wire value (S3's `lic`; spec section 8).
+    fn void_licences(&mut self, seat: SeatId) {
+        let mut voided = core::mem::take(&mut self.voided);
+        self.licences.void_seat(seat, &mut voided);
+        let tick = self.tick;
+        for licence in &voided {
+            self.emit(
+                tick,
+                Emission::of(EventKind::LicenceVoided)
+                    .seat(seat)
+                    .value(i64::from(*licence)),
+            );
+        }
+        voided.clear();
+        self.voided = voided;
     }
 
     /// Disband every one of a seat's units where it stands, the commander
@@ -5646,6 +5960,10 @@ impl World {
             Emission::of(EventKind::RecapOpened).value(i64::from(round)),
         );
         self.settle_ledger();
+        // The Ledger's licence check, after the income and in seat order
+        // (S3's plan, E2), so an award is in this tick's hash and in the
+        // frozen snapshot the next Lull plans against, as the income is.
+        crate::licence::settle(self);
         // The last round's segment end is the match's **final tick** (spec
         // section 3: "the last tick of the last Push, before the recap"), so
         // the round limit is decided here, after the final settlement, by the
@@ -5908,6 +6226,10 @@ impl World {
     ///     every handler's fire count and cooldown
     ///     ([`crate::interpreter::state`]). The **plans** are not here: a
     ///     playbook is an input, exactly like the rules table.
+    /// 11. the blocks that write nothing while their table is empty, each
+    ///     behind its tag: the shells, the site work, Defend, the explored
+    ///     cells, Attack and, from S3's `lic`, the Ledger's licences
+    ///     ([`crate::licence::LicenceTable`]).
     ///
     /// The seat block gained three columns with the match state: the tick a
     /// seat was eliminated at, its commander's death count for this Push, and
@@ -6106,6 +6428,11 @@ impl World {
         // S2's `atk`: the Attack block, after the explored block, writing
         // nothing while it holds nothing (E29).
         self.attack.encode(enc);
+        // S3's `lic`: the licence block, after the Attack block, writing
+        // nothing while no seat holds a licence (E2), then the grown beacons,
+        // writing nothing while no Spire has ever been finished.
+        self.encode_licences(enc);
+        self.encode_grown(enc);
     }
 
     /// The Defend table (S2's `dfnd`), as a block after the site block that
@@ -6131,6 +6458,44 @@ impl World {
         for (by, of) in self.defend.protected() {
             enc.u32(by.raw());
             enc.u32(of.raw());
+        }
+    }
+
+    /// The beacons whose sphere a finished Spire has ever grown (S3's `lic`;
+    /// [`BeaconTable::grown`]), as a block after the licence block that
+    /// **writes nothing while no beacon is flagged** and otherwise writes its
+    /// tag, its count and each flagged beacon's id in row order, so a chain
+    /// with no finished Spire does not move for the column (item 136's block
+    /// rule).
+    fn encode_grown(&self, enc: &mut Enc) {
+        let flagged = self.beacons.grown().iter().filter(|grown| **grown).count();
+        if flagged == 0 {
+            return;
+        }
+        enc.u8(GROWN_HASH_TAG);
+        enc.len(table_len(flagged));
+        for (id, grown) in self.beacons.ids().iter().zip(self.beacons.grown()) {
+            if *grown {
+                enc.u32(*id);
+            }
+        }
+    }
+
+    /// The licence table (S3's `lic`, E2), as a block after the Attack block
+    /// that **writes nothing while no seat holds a licence** and otherwise
+    /// writes its tag, its count and its rows ascending by seat then licence:
+    /// each row's seat, licence wire value and round awarded. A chain whose
+    /// seats earn nothing does not move for the table (item 136's block rule).
+    fn encode_licences(&self, enc: &mut Enc) {
+        if self.licences.is_empty() {
+            return;
+        }
+        enc.u8(crate::licence::LicenceTable::HASH_TAG);
+        enc.len(table_len(self.licences.rows().len()));
+        for row in self.licences.rows() {
+            enc.u8(row.seat);
+            enc.u8(row.licence);
+            enc.u32(row.round);
         }
     }
 
@@ -6569,6 +6934,8 @@ impl World {
         self.explored = restored.explored;
         self.attack = restored.attack;
         self.attack.reserve(self.beacon_limit, AVOID_AREA_ROOM);
+        self.licences = restored.licences;
+        self.licences.reserve_for(self.seats.len());
         self.reserve_route_zones();
         self.bore = restored.bore;
         self.generated = restored.generated;
@@ -6835,29 +7202,6 @@ fn core_of_generated(generated: &crate::mapgen::GeneratedMap, seat: SeatId) -> B
         }
     }
     best.map_or(BeaconId::NONE, BeaconId::new)
-}
-
-/// Build the pathing graph and the scratch it is searched with.
-///
-/// The scratch has to be sized before the decomposition exists — building the
-/// intra edges is itself a search — so [`Scratch::for_map`] does that
-/// arithmetic from the map and the cluster edge, and the decomposition is
-/// checked against it below.
-///
-/// `None` when the cluster edge cannot decompose this map, which the caller
-/// reports as [`MapError::Unclusterable`].
-fn build_graph(surface: &Surface, cluster_voxels: i32) -> Option<(Clusters, Scratch)> {
-    let mut scratch = Scratch::for_map(surface, cluster_voxels)?;
-    let clusters = Clusters::new(surface, cluster_voxels, &mut scratch)?;
-    // A real check rather than a `debug_assert!`: this is the only thing tying
-    // the scratch's independent derivation of the abstract numbering to the
-    // decomposition's, and a release build is exactly where a scratch sized for
-    // a different numbering would go unnoticed — the arrays would be short and
-    // a query would read a slot that is not there.
-    if clusters.abstract_capacity() != Scratch::abstract_capacity_for(surface, cluster_voxels)? {
-        return None;
-    }
-    Some((clusters, scratch))
 }
 
 /// Mark every cluster a settled chunk's footprint overlaps.
@@ -7906,7 +8250,7 @@ mod ids_tests {
                 seen.push((sensor.kind, sensor.radius));
             }
         }
-        assert!(seen.contains(&(SensorKind::Sphere, world.sphere_radius())));
+        assert!(seen.contains(&(SensorKind::Sphere, world.sphere_radius_of(home))));
         assert!(seen.contains(&(SensorKind::Unit(UnitKind::Commander), Fx::from_voxels(13))));
         assert!(seen.contains(&(SensorKind::Unit(UnitKind::BuildDrone), Fx::from_voxels(5))));
         assert!(seen.contains(&(

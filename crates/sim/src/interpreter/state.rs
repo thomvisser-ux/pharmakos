@@ -967,6 +967,22 @@ pub enum StepFailure {
     /// A voxel a `wall` target would fill lies outside the sphere of the
     /// beacon whose mandate holds it (item 146 (4)). The row writes nothing.
     WallOutsideSphere,
+    /// A `queue_structure` row for a Resonance Spire at a beacon where one
+    /// already stands or is going up (spec section 8: "one Resonance Spire per
+    /// beacon, because two spires interfere with each other"; S3's plan, E4).
+    /// The verifier refuses it at plan time (`E0513`), but its answer can go
+    /// stale between the seal and the commit. The row writes nothing.
+    SpirePresent,
+    /// A `queue_structure` row for a capability structure whose licence the
+    /// seat does not hold (spec section 8; S3's `lic`). The verifier refuses
+    /// it at plan time (`E0507`); if one reaches the interpreter it fails
+    /// loudly rather than being a silent no-op, as `no_mast` does. The row
+    /// writes nothing.
+    NotLicensed,
+    /// A `queue_structure` row whose structure the seat's share of the
+    /// structure table has no room for (S3's `lic`). The row writes nothing
+    /// and charges nothing.
+    NoStructureRoom,
 }
 
 impl StepFailure {
@@ -975,7 +991,7 @@ impl StepFailure {
     /// `tests/interpreter.rs`'s `every_step_failure_has_a_unique_id` walks it,
     /// which is what makes the ordering claim checked rather than asserted —
     /// the array was out of order when it was only a doc comment.
-    pub const ALL: [StepFailure; 15] = [
+    pub const ALL: [StepFailure; 18] = [
         StepFailure::Timeout,
         StepFailure::NoTarget,
         StepFailure::NoPath,
@@ -991,6 +1007,9 @@ impl StepFailure {
         StepFailure::WallOffTheGround,
         StepFailure::WallTooLow,
         StepFailure::WallOutsideSphere,
+        StepFailure::SpirePresent,
+        StepFailure::NotLicensed,
+        StepFailure::NoStructureRoom,
     ];
 
     /// The id `not_own` carried until S1: **retired, never reused**. It told a
@@ -1018,6 +1037,9 @@ impl StepFailure {
             StepFailure::WallOffTheGround => 14,
             StepFailure::WallTooLow => 15,
             StepFailure::WallOutsideSphere => 16,
+            StepFailure::SpirePresent => 17,
+            StepFailure::NotLicensed => 18,
+            StepFailure::NoStructureRoom => 19,
         }
     }
 
@@ -1040,6 +1062,9 @@ impl StepFailure {
             StepFailure::WallOffTheGround => "wall_off_the_ground",
             StepFailure::WallTooLow => "wall_too_low",
             StepFailure::WallOutsideSphere => "wall_outside_sphere",
+            StepFailure::SpirePresent => "spire_present",
+            StepFailure::NotLicensed => "not_licensed",
+            StepFailure::NoStructureRoom => "no_structure_room",
         }
     }
 

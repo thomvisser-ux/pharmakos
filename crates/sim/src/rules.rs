@@ -77,6 +77,9 @@
 //! | [`arrive_radius_voxels`](RulesTable::arrive_radius_voxels), [`interface_range_voxels`](RulesTable::interface_range_voxels) | `commander.arrive_radius_voxels` / `.interface_range_voxels` |
 //! | [`build_hp_per_tick`](RulesTable::build_hp_per_tick) | `structures.build_hp_per_second` |
 //! | [`power`](RulesTable::power) | the `power` block and the `structures.*.draw_kw` rows ([`crate::power::PowerRules`]) |
+//! | [`resonance_vents`](RulesTable::resonance_vents) | `licences.resonance_vents` (S3's `lic`) |
+//! | [`cluster_shape`](RulesTable::cluster_shape) | `locomotion.hpa_cluster_voxels`, `pathing.long_run` and `pathing.smooth_lookahead` (S3's `lic`) |
+//! | [`grown_sphere_radius_voxels`](RulesTable::grown_sphere_radius_voxels) | `beacon.sphere_radius_voxels` plus `structures.resonance_spire_sphere_bonus_voxels` (S3's `lic`) |
 //!
 //! The map generator ([`crate::mapgen`]) reads a dozen more rows — the whole of
 //! `map`, `beacon`, `power`, `economy` and `units` — and reads them from
@@ -258,6 +261,24 @@ pub struct RulesTable {
     /// `defend.picket_radius_voxels`, typed at load (S2's `dfnd`): how far
     /// beyond the sphere's edge a Defend beacon's pickets patrol.
     picket_radius_voxels: i16,
+    /// `licences.resonance_vents`, typed at load (S3's `lic`; decision 6): how
+    /// many different vents a seat's finished, powered Generators must tap at a
+    /// settlement for the Resonance Spire's licence. Refused at zero, which
+    /// would award every seat the licence at its first settlement (decisions-log
+    /// item 156).
+    resonance_vents: NonZeroU32,
+    /// A beacon's sphere radius while a finished Resonance Spire stands on it,
+    /// in whole voxels: `beacon.sphere_radius_voxels` plus
+    /// `structures.resonance_spire_sphere_bonus_voxels` (S3's `lic`; E3,
+    /// decision 6), summed once at load and refused when it is not a voxel
+    /// length, so the radius function ([`crate::spire::radius_voxels`]) does no
+    /// arithmetic inside a tick (decisions-log item 156).
+    grown_sphere_radius_voxels: i16,
+    /// `pathing.long_run` and `pathing.smooth_lookahead`, the HPA* decomposition's
+    /// and the smoother's shape values (the register's S3-10; S3's `lic` reads
+    /// them in place of the old `LONG_RUN` and `SMOOTH_LOOKAHEAD` constants),
+    /// typed at load ([`crate::pathing::clusters::ClusterShape`]).
+    cluster_shape: crate::pathing::clusters::ClusterShape,
 }
 
 /// One unit kind's row as the tick reads it: `units.<kind>.*`, or the
@@ -778,6 +799,31 @@ impl RulesTable {
         self.picket_radius_voxels
     }
 
+    /// How many different vents a seat's finished, powered Generators must tap
+    /// at a settlement to earn the Resonance Spire's licence
+    /// (`licences.resonance_vents`; spec section 8, decision 6). At least one.
+    #[must_use]
+    pub const fn resonance_vents(&self) -> NonZeroU32 {
+        self.resonance_vents
+    }
+
+    /// A beacon's sphere radius while a finished Resonance Spire stands on it,
+    /// in whole voxels (E3). Read through [`crate::spire::radius_voxels`], the
+    /// one function that decides which radius a beacon has.
+    #[must_use]
+    pub const fn grown_sphere_radius_voxels(&self) -> i16 {
+        self.grown_sphere_radius_voxels
+    }
+
+    /// The HPA* decomposition's shape: the cluster edge
+    /// (`locomotion.hpa_cluster_voxels`), `pathing.long_run` and
+    /// `pathing.smooth_lookahead`, refused at load as
+    /// [`crate::pathing::clusters::ClusterShape::read`] says.
+    #[must_use]
+    pub const fn cluster_shape(&self) -> crate::pathing::clusters::ClusterShape {
+        self.cluster_shape
+    }
+
     /// The bottom layers of every column generation writes as bedrock,
     /// `materials.bedrock_layers_voxels`: at least one.
     #[must_use]
@@ -914,7 +960,15 @@ impl RulesTable {
         let combat = crate::arms::CombatRows::read(message)?;
         let site = crate::site::SiteRows::read(message)?;
         let attack = crate::attack::AttackRows::read(message)?;
-        let picket_radius_voxels = picket_radius_of(message, sphere_radius_voxels)?;
+        let grown_sphere_radius_voxels = grown_sphere_radius_of(message, sphere_radius_voxels)?;
+        let picket_radius_voxels = picket_radius_of(message, grown_sphere_radius_voxels)?;
+        let resonance_vents = resonance_vents_of(message)?;
+        let hpa_cluster_voxels = signed(
+            "locomotion.hpa_cluster_voxels",
+            locomotion.hpa_cluster_voxels,
+        )?;
+        let cluster_shape =
+            crate::pathing::clusters::ClusterShape::read(message, hpa_cluster_voxels)?;
 
         let segment_lengths_ms = segment_lengths_of(matched)?;
 
@@ -963,10 +1017,7 @@ impl RulesTable {
                 "commander.cost_per_second",
                 commander.cost_per_second,
             )?,
-            hpa_cluster_voxels: signed(
-                "locomotion.hpa_cluster_voxels",
-                locomotion.hpa_cluster_voxels,
-            )?,
+            hpa_cluster_voxels,
             fog_cost_numerator: signed(
                 "locomotion.fog_cost_numerator",
                 locomotion.fog_cost_numerator,
@@ -986,6 +1037,9 @@ impl RulesTable {
             site,
             attack,
             picket_radius_voxels,
+            resonance_vents,
+            grown_sphere_radius_voxels,
+            cluster_shape,
         })
     }
 
@@ -1091,12 +1145,39 @@ fn sphere_radius_of(message: &gp::v1::RulesTable) -> Result<i16, RulesError> {
     })
 }
 
-/// `defend.picket_radius_voxels` as the Defend mandate reads it (S2's
-/// `dfnd`): present, and a voxel length whose sum with the sphere's radius is
-/// one too, so the picket's ring is a place on the map's coordinates.
-fn picket_radius_of(
+/// The sphere's radius under a finished Resonance Spire (S3's `lic`; E3,
+/// decision 6): `beacon.sphere_radius_voxels` plus
+/// `structures.resonance_spire_sphere_bonus_voxels`, the bonus a voxel length
+/// and the sum one too, checked as [`picket_radius_of`] checks its sum
+/// (decisions-log item 156).
+fn grown_sphere_radius_of(
     message: &gp::v1::RulesTable,
     sphere_radius_voxels: i16,
+) -> Result<i16, RulesError> {
+    let structures = message
+        .structures
+        .as_ref()
+        .ok_or(RulesError::MissingBlock("structures"))?;
+    i16::try_from(structures.resonance_spire_sphere_bonus_voxels)
+        .ok()
+        .and_then(|bonus| bonus.checked_add(sphere_radius_voxels))
+        .ok_or_else(|| RulesError::OutOfRange {
+            field: "structures.resonance_spire_sphere_bonus_voxels".to_owned(),
+            value: format!(
+                "{}; a Spire's sphere, the base radius and this, is a voxel length, at most {}",
+                structures.resonance_spire_sphere_bonus_voxels,
+                i16::MAX
+            ),
+        })
+}
+
+/// `defend.picket_radius_voxels` as the Defend mandate reads it (S2's
+/// `dfnd`): present, and a voxel length whose sum with the sphere's largest
+/// radius -- a Spire's, since S3's `lic` -- is one too, so the picket's ring
+/// is a place on the map's coordinates.
+fn picket_radius_of(
+    message: &gp::v1::RulesTable,
+    largest_sphere_voxels: i16,
 ) -> Result<i16, RulesError> {
     let defend = message
         .defend
@@ -1104,7 +1185,7 @@ fn picket_radius_of(
         .ok_or(RulesError::MissingBlock("defend"))?;
     i16::try_from(defend.picket_radius_voxels)
         .ok()
-        .filter(|radius| radius.checked_add(sphere_radius_voxels).is_some())
+        .filter(|radius| radius.checked_add(largest_sphere_voxels).is_some())
         .ok_or_else(|| RulesError::OutOfRange {
             field: "defend.picket_radius_voxels".to_owned(),
             value: format!(
@@ -1113,6 +1194,22 @@ fn picket_radius_of(
                 i16::MAX
             ),
         })
+}
+
+/// `licences.resonance_vents` as the Ledger's licence check reads it (S3's
+/// `lic`): the block present, and at least one vent, since a trigger of none
+/// would award every seat the licence at its first settlement and so license
+/// nothing (decisions-log item 156).
+fn resonance_vents_of(message: &gp::v1::RulesTable) -> Result<NonZeroU32, RulesError> {
+    let licences = message
+        .licences
+        .as_ref()
+        .ok_or(RulesError::MissingBlock("licences"))?;
+    NonZeroU32::new(licences.resonance_vents).ok_or_else(|| RulesError::OutOfRange {
+        field: "licences.resonance_vents".to_owned(),
+        value: "0; a trigger of no vents awards every seat the licence at its first settlement"
+            .to_owned(),
+    })
 }
 
 /// The rows S1's `build` lane reads typed at load, so the tick reads each as

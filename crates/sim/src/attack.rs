@@ -94,6 +94,11 @@
 //!   The cut spares bedrock, the core's bore and every footing (item 148 (2));
 //!   a wall is filled to the ground, so nothing above the cut is left
 //!   unsupported and a breach drops nothing (decision 39).
+//! * the blast also **damages**: every unit, structure and beacon within
+//!   `combat.charge_radius_voxels` of the breach column loses
+//!   `combat.charge_damage_hp`, any seat's (spec section 9's friendly fire),
+//!   filed like a shell's splash for the tick's combat phase (decisions-log
+//!   item 151 (2) (c) (3); S3's `lic`).
 //!
 //! The breach is over once the breach column's top is no wall any more, or
 //! the oracle joins the lead raider to the target again; the force walks on.
@@ -110,7 +115,7 @@ use crate::events::{Emission, EventKind};
 use crate::ids::Row;
 use crate::knowledge::{AssetId, AssetKind, Position};
 use crate::math::fixed::{Fx, Sq};
-use crate::math::quantity::{Hp, Money, Ms};
+use crate::math::quantity::{Damage, Hp, Money, Ms};
 use crate::pathing::surface::{NEIGHBOURS, Node, Surface};
 use crate::rules::RulesError;
 use crate::seams::MandateKind;
@@ -880,10 +885,17 @@ pub struct AttackRows {
     pub step_multiplier: i32,
     /// `combat.charge_radius_voxels`, at least one: the charge's cut.
     pub charge_radius: i32,
+    /// The same radius as a fixed-point length: the ball the charge's blast
+    /// damages (S3's `lic`).
+    pub charge_ball: Fx,
     /// `combat.charge_fuse_ms`, never negative.
     pub charge_fuse: Ms,
     /// `structures.demolition_charge_cost_dollars`.
     pub charge_cost: Money,
+    /// `combat.charge_damage_hp`, at least one: the hit points the charge's
+    /// blast takes from each unit, structure and beacon inside
+    /// `charge_radius` of it (decisions-log item 151 (2) (c) (3); S3's `lic`).
+    pub charge_damage: Damage,
     /// `verifier.reach_memory_ms`, never negative: how long a seat's sighting
     /// counts, the reach window an Attack target was qualified against.
     pub reach_memory: Ms,
@@ -927,10 +939,9 @@ impl AttackRows {
                     ),
                 )
             })?;
-        let charge_radius = i16::try_from(combat.charge_radius_voxels)
+        let charge_voxels = i16::try_from(combat.charge_radius_voxels)
             .ok()
             .filter(|radius| *radius >= 1)
-            .map(i32::from)
             .ok_or_else(|| {
                 out_of_range(
                     "combat.charge_radius_voxels",
@@ -940,6 +951,15 @@ impl AttackRows {
                     ),
                 )
             })?;
+        let charge_damage = Damage::new(i64::from(combat.charge_damage_hp)).map_err(|_| {
+            out_of_range(
+                "combat.charge_damage_hp",
+                format!(
+                    "{}; a charge's blast takes at least one hit point, at most a signed \n                     32-bit count",
+                    combat.charge_damage_hp
+                ),
+            )
+        })?;
         if combat.charge_fuse_ms < 0 {
             return Err(out_of_range(
                 "combat.charge_fuse_ms",
@@ -954,9 +974,11 @@ impl AttackRows {
         }
         Ok(AttackRows {
             step_multiplier,
-            charge_radius,
+            charge_radius: i32::from(charge_voxels),
+            charge_ball: Fx::from_voxels(charge_voxels),
             charge_fuse: Ms::new(combat.charge_fuse_ms),
             charge_cost: Money::new(i64::from(structures.demolition_charge_cost_dollars)),
+            charge_damage,
             reach_memory: Ms::new(verifier.reach_memory_ms),
         })
     }
@@ -1042,15 +1064,31 @@ fn fire_charges(world: &mut World) {
             continue;
         }
         let [x, y, z] = charge.centre;
+        let blast = voxel_centre([x, y, z.saturating_add(1)]);
+        // The blast damages what stands in its ball as well as cutting the
+        // ground (decisions-log item 151 (2) (c) (3); S3's `lic`), filed for
+        // this tick's combat phase like a shell's splash: the ball is sampled
+        // here, in the programs phase, and the damage applied in combat, so an
+        // asset that walks into or out of the ball between the two counts as
+        // where it stood now. Its source is the Attack beacon that bought the
+        // charge, so an asset under `RETURN_FIRE` answers that beacon (the
+        // reading recorded in S3's `lic`; the owner can veto). A charge whose
+        // cut was refused above fires nothing: no damage and no
+        // `charge_detonated`, counted under its reason
+        // (`count_cut_refused`).
+        let damage = world.rules().attack().charge_damage;
+        world.blast_damage(
+            blast,
+            world.rules().attack().charge_ball,
+            damage,
+            charge.seat,
+            AssetId::of_beacon(charge.beacon).ok(),
+        );
         world.emit(
             tick,
             Emission::of(EventKind::ChargeDetonated)
                 .seat(charge.seat)
-                .at(Position::from_array(voxel_centre([
-                    x,
-                    y,
-                    z.saturating_add(1),
-                ])))
+                .at(Position::from_array(blast))
                 .value(i64::from(radius)),
         );
         if let Some(row) = world.attack_mut().row_mut(charge.beacon)
@@ -1338,7 +1376,7 @@ fn weak_point(world: &World, seat: SeatId, beacon: BeaconId) -> Option<u32> {
         .seats()
         .get(world.beacons().row_of(beacon).ok()?.index())
         .copied()?;
-    let limit = Sq::of_radius(world.sphere_radius());
+    let limit = Sq::of_radius(world.sphere_radius_of(beacon));
     let structures = world.structures();
     let rows = structures
         .seats()

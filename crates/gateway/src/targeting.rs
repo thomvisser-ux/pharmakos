@@ -147,8 +147,10 @@ pub fn commander_point(world: &World, seat: SeatId) -> Option<[Fx; 3]> {
 
 /// The per-seat ordinal of `seat`'s own **living** beacon -- awake or
 /// dormant, since a dormant beacon keeps its sphere -- whose sphere holds
-/// `point`, the lowest when several do, by the sim's own sphere test
-/// ([`Ground::in_sphere`]). Never reads another seat's beacons.
+/// `point`, the lowest when several do, by the sim's own sphere test for a
+/// placed beacon ([`pharmakos_sim::spire::inside_at_row`]): its radius grown
+/// by a finished Resonance Spire, as the sim's `covering` reads it (S3's plan,
+/// decision 6). Never reads another seat's beacons.
 #[must_use]
 pub fn covering_beacon(ground: &Ground<'_>, seat: SeatId, point: [Fx; 3]) -> Option<u32> {
     let beacons = ground.beacons;
@@ -166,7 +168,16 @@ pub fn covering_beacon(ground: &Ground<'_>, seat: SeatId, point: [Fx; 3]) -> Opt
                 .positions()
                 .get(*row)
                 .copied()
-                .is_some_and(|centre| ground.in_sphere(centre, point))
+                .is_some_and(|centre| {
+                    pharmakos_sim::spire::inside_at_row(
+                        ground.rules,
+                        beacons,
+                        ground.structures,
+                        *row,
+                        centre,
+                        point,
+                    )
+                })
         })
         .filter_map(|row| beacons.ordinals().get(row).copied())
         .min()

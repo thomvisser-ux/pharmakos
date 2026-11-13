@@ -1,0 +1,54 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// S3's `lic` (S3's plan, decisions 6 and 13; decisions-log item 156): one
+// playbook, carried every round, that earns the Resonance Spire's licence on
+// Probation's seed and spends it. See resonance-spire.scenario.jsonc for what
+// is asserted. The steps are ordered so that each round does its own part and
+// every other step fails as it starts and is skipped:
+//
+//   beyond  a Build target 30 voxels east of the core, past the base sphere
+//           (24) and inside a Spire's (36). The row writes it in round 1,
+//           and it waits: no physical work reaches it until a Spire grows the
+//           sphere to hold it (decision 6); later rounds' rows find it
+//           already written.
+//   spire   the Spire's queue at the core: `not_licensed` until the licence,
+//           `spire_present` once one stands.
+//   stone   the stepping stone toward the second vent, by voxel (`toward`
+//           cannot be sealed until S3's `pred`): outside every sphere in
+//           round 1, so `illegal_site`; placed in round 2, from inside the
+//           sphere of the beacon round 1 placed.
+//   cover   a beacon covering the nearest vent the seat does not cover, with a
+//           Generator on it: the start vent in round 1, the second vent from
+//           the stone in round 2.
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {"title": "Resonance Spire", "author_kind": "HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {"label": "beyond",
+        "interface": {"beacon": {"beacon_id": "b_00"}, "rows": [
+          {"add_build_target": {"target": {"blueprint_id": "autocannon",
+            "anchor": {"voxel": {"x": 218, "y": 28, "z": 29}}}}}]},
+        "timeout_ms": 60000, "on_fail": {"action": "SKIP"}},
+      {"label": "spire",
+        "interface": {"beacon": {"beacon_id": "b_00"}, "rows": [
+          {"queue_structure": {"blueprint_id": "resonance_spire"}}]},
+        "timeout_ms": 60000, "on_fail": {"action": "SKIP"}},
+      {"label": "stone",
+        "place_beacon": {"at": {"voxel": {"x": 196, "y": 66, "z": 31}}},
+        "timeout_ms": 120000, "on_fail": {"action": "SKIP"}},
+      {"label": "cover",
+        "place_beacon": {
+          "at": {"covering": {"vent": {"rank": "NEAREST", "coverage": "UNCOVERED"}}},
+          "initial": {"mandate": {"build": {"targets": [
+            {"blueprint_id": "generator", "anchor": {"on": {"covered": {}}}}
+          ]}}}},
+        "timeout_ms": 120000, "on_fail": {"action": "SKIP"}}
+    ],
+    "handlers": []
+  },
+  "on_death": {"on_respawn": "CONTINUE", "max_deaths_before_fallback": 2},
+  "fallback": {"hold": {"at": {"safest": {}}}}
+}

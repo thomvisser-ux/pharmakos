@@ -683,6 +683,39 @@ pub(crate) fn supply_of(world: &World, seat: SeatId, rules: PowerRules) -> Resul
         .ok_or(PowerError::Overflow)
 }
 
+/// How many **different** heat vents `seat` taps: its finished Generators
+/// homed to a lit beacon, each standing on a vent of the map's feature table,
+/// one to a vent (S3's `lic`; decision 6's reading of "Running Generators on 2
+/// vents at a settlement").
+///
+/// Exactly the Generators [`supply_of`] counts, read as vents rather than
+/// `kW`: a Generator still going up, one homed to a dark beacon, and a second
+/// one on a vent an earlier Generator of the seat already taps each count for
+/// nothing, here as there. A Generator that stands on vent material no vent of
+/// the feature table holds counts for nothing either, since no vent names it.
+/// Read once per settlement ([`crate::licence::settle`]), so the quadratic walk
+/// [`vent_already_tapped`] makes costs nothing a tick feels.
+#[must_use]
+pub(crate) fn tapped_vents(world: &World, seat: SeatId) -> u32 {
+    let structures = world.structures();
+    let count = crate::math::index::row(structures.len());
+    let mut tapped: u32 = 0;
+    let mut row: usize = 0;
+    while row < count {
+        if structure_counts(world, seat, row, Lighting::AsIs)
+            && structures.kinds().get(row).copied() == Some(StructureKind::Generator.id())
+            && let Some(point) = structures.positions().get(row).copied()
+            && vent_under(world, point).is_some()
+            && vent_feature_under(world, point).is_some()
+            && !vent_already_tapped(world, seat, row, point, Lighting::AsIs)
+        {
+            tapped = tapped.saturating_add(1);
+        }
+        row = row.saturating_add(1);
+    }
+    tapped
+}
+
 /// [`supply_of`] under a [`Lighting`], `None` when the sum does not fit.
 fn supply_under(world: &World, seat: SeatId, rules: PowerRules, lighting: Lighting) -> Option<i32> {
     let mut total: i32 = 0;
@@ -755,7 +788,9 @@ fn draw_under(world: &World, seat: SeatId, rules: PowerRules, lighting: Lighting
     let count = crate::math::index::row(structures.len());
     let mut row: usize = 0;
     while row < count {
-        if structure_counts(world, seat, row, lighting) {
+        if structure_counts(world, seat, row, lighting)
+            || capability_going_up(world, seat, row, lighting)
+        {
             let kind = structures
                 .kinds()
                 .get(row)
@@ -895,6 +930,30 @@ fn structure_counts(world: &World, seat: SeatId, row: usize, lighting: Lighting)
         .get(row)
         .copied()
         .is_some_and(|home| home_counts(world, home, crate::ids::StaleRef::StructureHome, lighting))
+}
+
+/// Whether the structure in `row` is a capability structure of `seat` still
+/// going up, alive and homed to a beacon that counts as lit: it draws from
+/// the tick it is queued (spec section 8: "the kW draw starts with it"; S3's
+/// plan, E4), where every other structure draws only once finished. It
+/// supplies nothing and has no capability until it is finished.
+fn capability_going_up(world: &World, seat: SeatId, row: usize, lighting: Lighting) -> bool {
+    let structures = world.structures();
+    structures.seats().get(row).copied() == Some(seat.raw())
+        && structures.building().get(row).copied() == Some(true)
+        && structures
+            .hit_points()
+            .get(row)
+            .is_some_and(|hp| hp.is_alive())
+        && structures
+            .kinds()
+            .get(row)
+            .copied()
+            .and_then(StructureKind::from_id)
+            .is_some_and(StructureKind::is_capability)
+        && structures.homes().get(row).copied().is_some_and(|home| {
+            home_counts(world, home, crate::ids::StaleRef::StructureHome, lighting)
+        })
 }
 
 /// The grade of the heat vent a Generator stands on, or `None` when it stands

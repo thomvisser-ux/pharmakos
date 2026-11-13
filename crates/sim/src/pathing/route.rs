@@ -39,11 +39,11 @@
 //! makes the estimate never optimistic (item 61): the estimate prices the
 //! unsmoothed refinement, and the walker walks the smoothed one.
 
+use crate::pathing::MAX_ROUTE_NODES;
 use crate::pathing::clusters::Clusters;
 use crate::pathing::estimate::{Fog, Speed, fog_price};
 use crate::pathing::search::{Bound, Item, Scratch, astar_costed, dijkstra_bounded};
 use crate::pathing::surface::{Node, Surface};
-use crate::pathing::{MAX_ROUTE_NODES, SMOOTH_LOOKAHEAD};
 
 /// One stretch of ground a route pays a surcharge to cross (S2's `atk`): a
 /// known threat's weapon range, or an Attack beacon's avoid area.
@@ -649,7 +649,14 @@ pub fn route_with(
 
     let mut line = core::mem::take(&mut scratch.line);
     let mut prefix = core::mem::take(&mut scratch.prefix);
-    smooth_costed(surface, &raw, out, &mut line, &mut prefix, surcharge);
+    smooth_costed(
+        surface,
+        &raw,
+        out,
+        (&mut line, &mut prefix),
+        surcharge,
+        clusters.shape().smooth_lookahead,
+    );
     scratch.raw = raw;
     scratch.line = line;
     scratch.prefix = prefix;
@@ -864,10 +871,17 @@ pub fn smooth_into(
     surface: &Surface,
     path: &[Node],
     out: &mut Vec<Node>,
-    line: &mut Vec<Node>,
-    prefix: &mut Vec<i32>,
+    (line, prefix): (&mut Vec<Node>, &mut Vec<i32>),
+    lookahead: usize,
 ) {
-    smooth_costed(surface, path, out, line, prefix, Surcharge::NONE);
+    smooth_costed(
+        surface,
+        path,
+        out,
+        (line, prefix),
+        Surcharge::NONE,
+        lookahead,
+    );
 }
 
 /// [`smooth_into`] under a route surcharge: a shortcut is priced, and the
@@ -877,9 +891,9 @@ fn smooth_costed(
     surface: &Surface,
     path: &[Node],
     out: &mut Vec<Node>,
-    line: &mut Vec<Node>,
-    prefix: &mut Vec<i32>,
+    (line, prefix): (&mut Vec<Node>, &mut Vec<i32>),
     surcharge: Surcharge<'_>,
+    lookahead: usize,
 ) {
     out.clear();
     let Some(first) = path.first().copied() else {
@@ -904,7 +918,7 @@ fn smooth_costed(
     let mut index = 0_usize;
     while index.saturating_add(1) < path.len() {
         let limit = index
-            .saturating_add(SMOOTH_LOOKAHEAD)
+            .saturating_add(lookahead)
             .min(path.len().saturating_sub(1));
         let mut chosen = index.saturating_add(1);
         let mut ahead = limit;

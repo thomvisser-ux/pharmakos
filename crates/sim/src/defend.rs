@@ -188,12 +188,13 @@ fn report<F: FnMut(Known)>(
 }
 
 /// The summed threat, in thousandths of a hit point per second, of the armed
-/// enemy assets `seat` sees inside the sphere centred on `centre` (decision
+/// enemy assets `seat` sees inside the sphere centred on `centre`, of radius
+/// `radius` (the beacon's own, [`World::sphere_radius_of`]) (decision
 /// 12's `most_threatened` and `safest` term). Saturates by rule: a sum past
 /// `u64` is no sum a map can hold.
 #[must_use]
-pub(crate) fn sphere_threat(world: &World, seat: SeatId, centre: [Fx; 3]) -> u64 {
-    let limit = Sq::of_radius(world.sphere_radius());
+pub(crate) fn sphere_threat(world: &World, seat: SeatId, centre: [Fx; 3], radius: Fx) -> u64 {
+    let limit = Sq::of_radius(radius);
     let mut sum: u64 = 0;
     for_each_known_threat(world, seat, |known| {
         if Sq::between(known.at, centre) <= limit {
@@ -204,10 +205,10 @@ pub(crate) fn sphere_threat(world: &World, seat: SeatId, centre: [Fx; 3]) -> u64
 }
 
 /// How many armed enemy assets `seat` sees inside the sphere centred on
-/// `centre`: a Defend beacon's work in hand for its guards (decision 13).
+/// `centre`, of radius `radius`: a Defend beacon's work in hand for its guards (decision 13).
 #[must_use]
-pub(crate) fn threats_in_sphere(world: &World, seat: SeatId, centre: [Fx; 3]) -> u32 {
-    let limit = Sq::of_radius(world.sphere_radius());
+pub(crate) fn threats_in_sphere(world: &World, seat: SeatId, centre: [Fx; 3], radius: Fx) -> u32 {
+    let limit = Sq::of_radius(radius);
     let mut count: u32 = 0;
     for_each_known_threat(world, seat, |known| {
         if Sq::between(known.at, centre) <= limit {
@@ -220,15 +221,15 @@ pub(crate) fn threats_in_sphere(world: &World, seat: SeatId, centre: [Fx; 3]) ->
 /// Whether `seat` knows of a threat inside the sphere centred on `centre`
 /// (decision 12's `flee_on_threat`).
 #[must_use]
-pub(crate) fn threat_in_sphere(world: &World, seat: SeatId, centre: [Fx; 3]) -> bool {
-    threats_in_sphere(world, seat, centre) > 0
+pub(crate) fn threat_in_sphere(world: &World, seat: SeatId, centre: [Fx; 3], radius: Fx) -> bool {
+    threats_in_sphere(world, seat, centre, radius) > 0
 }
 
 /// Whether `seat` has a live repair drone inside the sphere centred on
 /// `centre` (decision 6's rescue term).
 #[must_use]
-pub(crate) fn repairs_in_sphere(world: &World, seat: SeatId, centre: [Fx; 3]) -> bool {
-    let limit = Sq::of_radius(world.sphere_radius());
+pub(crate) fn repairs_in_sphere(world: &World, seat: SeatId, centre: [Fx; 3], radius: Fx) -> bool {
+    let limit = Sq::of_radius(radius);
     let units = world.units();
     units
         .kinds()
@@ -282,7 +283,7 @@ fn post_of(world: &World, row: &DefendRow) -> Option<Post> {
     }
     let centre = beacons.positions().get(at).copied()?;
     let roe = Roe::of_setting(beacons.commons().get(at)?.roe, MandateKind::Defend)?;
-    let sphere = world.sphere_radius();
+    let sphere = world.sphere_radius_of(row.beacon);
     Some(Post {
         seat,
         centre,
@@ -544,7 +545,12 @@ fn picket_point(world: &World, post: &Post, leg: u8, k: usize, n: usize) -> Opti
     let legs = usize::from(PICKET_LEGS);
     let spread = k.checked_mul(legs)?.checked_div(n)?;
     let point = usize::from(leg).checked_add(spread)?.checked_rem(legs)?;
-    let ring = i32::from(world.rules().sphere_radius_voxels())
+    // The picket ring stands just outside the sphere's edge, so it moves out
+    // with a Spire's larger sphere (decision 6); the rules table checked at load
+    // that the largest sphere plus the picket radius is a voxel length.
+    let ring = post
+        .sphere
+        .floor_voxels()
         .checked_add(i32::from(world.rules().picket_radius_voxels()))?;
     // 181/256 is 1/sqrt(2) to three places: the diagonal points of the ring,
     // in integers (AGENTS.md section 4.2).
