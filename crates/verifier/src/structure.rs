@@ -116,9 +116,6 @@ use crate::walk::{self, AreaOf, Carrier, List, Slot, Visit};
 
 use std::collections::BTreeMap;
 
-/// The one blueprint that fills a box (`BuildTarget.wall_box`).
-const WALL: &str = "wall";
-
 /// Run the stage.
 pub(crate) fn run(playbook: &Playbook, limits: &Limits, out: &mut Builder) {
     required_blocks(playbook, out);
@@ -594,7 +591,8 @@ impl Visit for Sites<'_> {
     }
 
     fn build_target(&mut self, at: &str, target: &BuildTarget) {
-        if target.blueprint_id == WALL {
+        // The one blueprint that fills a box (`crate::BLUEPRINT_SLOTS`).
+        if crate::blueprints::fills_a_box(&target.blueprint_id) {
             self.wall(at, target);
             return;
         }

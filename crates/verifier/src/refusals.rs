@@ -127,13 +127,6 @@ pub fn code_for_construct(construct: &str) -> Option<&'static str> {
         .map(|(_, code)| *code)
 }
 
-/// The blueprints a Build target may name before S4's capability catalogue:
-/// the Generator and S2's base kit (`playbook.proto`'s `BuildTarget`), which
-/// the sim's `compile_build_target` builds since S2's `site` lane lifted the
-/// base kit's refusal (`E0019`, kept in the catalogue and raised by nothing,
-/// decisions-log item 145 (5)); every other id is S4's (`E0010`).
-const BUILDABLE: [&str; 4] = ["generator", "autocannon", "mortar", "wall"];
-
 /// Run the check.
 pub(crate) fn run(playbook: &Playbook, out: &mut Builder) {
     walk::walk(playbook, &mut Refusals { out });
@@ -201,7 +194,7 @@ impl Visit for Refusals<'_> {
             // (`pharmakos_sim::spire::queued_kind`); the Spire's licence and its
             // one per beacon are the semantic stage's (`E0507`, `E0513`).
             if let Some(interface_row::Row::QueueStructure(queue)) = row.row.as_ref()
-                && pharmakos_sim::spire::queued_kind(&queue.blueprint_id).is_none()
+                && !crate::blueprints::takes_queue(&queue.blueprint_id)
             {
                 self.out.emit(Diag::new(
                     "E0009",
@@ -212,7 +205,8 @@ impl Visit for Refusals<'_> {
     }
 
     fn build_target(&mut self, at: &str, target: &BuildTarget) {
-        if BUILDABLE.contains(&target.blueprint_id.as_str()) {
+        // The table of where each blueprint may stand (`crate::BLUEPRINT_SLOTS`).
+        if crate::blueprints::takes_build_target(&target.blueprint_id) {
             return;
         }
         // The sim refuses an empty id as a blueprint other than `generator`;

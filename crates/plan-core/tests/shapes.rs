@@ -577,8 +577,7 @@ fn every_schema_arm_is_in_the_vocabulary_or_excluded_with_its_reason() {
 /// vocabulary locks it in the verifier's own words.
 #[test]
 fn each_blueprint_is_offered_where_the_verifier_takes_it() {
-    let kinds = pharmakos_plan_core::vocabulary::blueprints_by_slot(&rules())
-        .unwrap_or_else(|error| panic!("{error}"));
+    let kinds = pharmakos_plan_core::vocabulary::blueprints_by_slot();
     let slots: Vec<(&str, bool, bool)> = kinds
         .iter()
         .map(|kind| (kind.id, kind.build_target, kind.queued))
@@ -594,7 +593,7 @@ fn each_blueprint_is_offered_where_the_verifier_takes_it() {
             ("wall", true, false),
         ]
     );
-    // Each answer is the verifier's: a Build target of each kind the probe
+    // Each answer is the verifier's: a Build target of each kind its table
     // calls buildable draws no E0010, and every other kind draws one.
     for kind in &kinds {
         let placed = place_step(

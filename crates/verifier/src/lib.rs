@@ -153,6 +153,7 @@
 //! # }
 //! ```
 
+mod blueprints;
 pub mod catalogue;
 pub mod hash;
 pub mod interface;
@@ -162,7 +163,6 @@ pub mod scope;
 pub mod strings;
 pub mod walking;
 
-mod blueprints;
 mod decode;
 mod enums;
 mod estimate;
@@ -181,6 +181,7 @@ use pharmakos_proto::gp::api::v1::verify_plan::Depth;
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::snapshot::{Snapshot, SnapshotError};
 
+pub use blueprints::{Anchor, BLUEPRINT_SLOTS, BlueprintSlots, slots_of};
 pub use hash::{HashError, REPORT_HASH_DOMAIN};
 pub use interface::Rates;
 pub use limits::{CONDITION_MAX_DEPTH, CONDITION_MAX_NODES, Limits, RulesGap};

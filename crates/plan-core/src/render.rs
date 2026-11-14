@@ -209,8 +209,7 @@ pub fn render(
             "the rendering placed a chip outside every rule and step",
         ));
     }
-    let kinds = crate::vocabulary::blueprints_by_slot(rules)
-        .map_err(|error| Error::at("", error.to_string()))?;
+    let kinds = crate::vocabulary::blueprints_by_slot();
     let rules = pending
         .into_iter()
         .map(|rule| rule.finish(&kinds))

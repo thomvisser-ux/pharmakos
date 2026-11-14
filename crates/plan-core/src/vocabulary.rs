@@ -45,10 +45,6 @@ pub enum VocabularyError {
     /// The verifier refuses a construct by a code its string table has no
     /// sentence for.
     NoRefusalText(&'static str),
-    /// The verifier could not be asked which blueprints a Build target may
-    /// name: its input would not assemble, or its answer did not hold the
-    /// refusal the probe plants, so it was not read.
-    BlueprintProbe(String),
 }
 
 impl From<UnknownEnum> for VocabularyError {
@@ -64,10 +60,6 @@ impl core::fmt::Display for VocabularyError {
             VocabularyError::NoRefusalText(code) => write!(
                 formatter,
                 "the verifier refuses a construct as `{code}` and has no sentence for it"
-            ),
-            VocabularyError::BlueprintProbe(why) => write!(
-                formatter,
-                "the verifier could not be asked which blueprints a Build target may name: {why}"
             ),
         }
     }
@@ -130,11 +122,16 @@ pub struct Parameter {
 
 /// The vocabulary as this seat sees it, holding `held`.
 ///
+/// `_rules` is read by nothing since S3's `vfy6`, which made the blueprint
+/// table the verifier's ([`pharmakos_verifier::BLUEPRINT_SLOTS`]) where it was
+/// a probe verified against the rules table; it is kept so this function's
+/// callers, in the gateway, did not move with that lane.
+///
 /// # Errors
 ///
 /// [`VocabularyError`], which a test pins never happens.
-pub fn vocabulary(held: &[Licence], rules: &RulesTable) -> Result<Vocabulary, VocabularyError> {
-    let kinds = blueprints_by_slot(rules)?;
+pub fn vocabulary(held: &[Licence], _rules: &RulesTable) -> Result<Vocabulary, VocabularyError> {
+    let kinds = blueprints_by_slot();
     Ok(Vocabulary {
         families: families(&kinds)?,
         mandates: mandates()?,
@@ -217,86 +214,24 @@ const fn licence_for(kind: StructureKind) -> Option<Licence> {
     }
 }
 
-/// Where the probe's Build targets stand.
-const PROBE_ROWS: &str = "/declarative/route/0/interface/rows";
-
-/// The probe [`blueprints_by_slot`] asks the verifier: one interface step
-/// holding a Build target of each kind, in [`StructureKind::ALL`]'s order,
-/// and one with an empty id last, whose `E0101` shows the refusals were read.
-fn blueprint_probe() -> String {
-    let target = |id: &str| {
-        format!(
-            r#"{{"add_build_target":{{"target":{{"blueprint_id":"{id}","anchor":{{"voxel":{{"x":0,"y":0,"z":0}}}}}}}}}}"#
-        )
-    };
-    let mut rows: Vec<String> = StructureKind::ALL
-        .into_iter()
-        .map(|kind| target(blueprint_id(kind)))
-        .collect();
-    rows.push(target(""));
-    format!(
-        r#"{{"schema_version":{{"major":1}},"meta":{{"title":"Blueprint probe","author_kind":"BUILTIN"}},"kind":"PLAYBOOK","declarative":{{"route":[{{"label":"probe","interface":{{"beacon":{{"beacon_id":"b_00"}},"rows":[{}]}}}}]}},"on_death":{{"on_respawn":"CONTINUE"}},"fallback":{{"hold":{{"at":{{"safest":{{}}}}}}}}}}"#,
-        rows.join(",")
-    )
-}
-
 /// Every kind of structure the sim defines ([`StructureKind::ALL`]), each
-/// with the slots the verifier lets a playbook name it in: a Build target's
-/// by asking the verifier itself, at QUICK, over one probe playbook holding a
-/// Build target of each kind (its `E0010` is the answer, from its own
-/// `BUILDABLE` table), and a queue's by the sim's
-/// [`pharmakos_sim::spire::queued_kind`], which the verifier's `E0009`
-/// reads. No list here says which kind goes where.
-///
-/// # Errors
-///
-/// [`VocabularyError::BlueprintProbe`] when the verifier's input will not
-/// assemble from `rules`, or its answer lacks the refusal the probe plants
-/// (an empty id's `E0101`), so it was not read.
-pub fn blueprints_by_slot(rules: &RulesTable) -> Result<Vec<Blueprint>, VocabularyError> {
-    let scope = pharmakos_verifier::Scope::new(
-        pharmakos_sim::tables::SeatId::new(0),
-        pharmakos_sim::knowledge::SeatEconomy {
-            treasury: pharmakos_sim::math::quantity::Money::ZERO,
-            supply: pharmakos_sim::math::quantity::Kw::ZERO,
-            draw: pharmakos_sim::math::quantity::Kw::ZERO,
-        },
-    );
-    let report = crate::verify::verify_jsonc(
-        &blueprint_probe(),
-        &[],
-        &scope,
-        rules,
-        pharmakos_proto::gp::api::v1::verify_plan::Depth::Quick,
-    )
-    .map_err(|error| VocabularyError::BlueprintProbe(error.to_string()))?;
-    let refused = |code: &str, index: usize| {
-        let path = format!("{PROBE_ROWS}/{index}/add_build_target/target/blueprint_id");
-        report
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == code && diagnostic.path == path)
-    };
-    if !refused("E0101", StructureKind::ALL.len()) {
-        return Err(VocabularyError::BlueprintProbe(String::from(
-            "its answer lacks the empty id's E0101, so its Build-target refusals were not read",
-        )));
-    }
-    Ok(StructureKind::ALL
-        .into_iter()
-        .enumerate()
-        .map(|(index, kind)| {
-            let id = blueprint_id(kind);
-            Blueprint {
-                kind,
-                id,
-                title: blueprint_title(kind),
-                build_target: !refused("E0010", index),
-                queued: pharmakos_sim::spire::queued_kind(id) == Some(kind),
-                licence: licence_for(kind),
-            }
+/// with the slots the verifier lets a playbook name it in, read from the
+/// verifier's own table ([`pharmakos_verifier::BLUEPRINT_SLOTS`]), which its
+/// `E0009` and `E0010` refusals read too. No list here says which kind goes
+/// where. Until S3's `vfy6` this asked the verifier over a probe playbook.
+#[must_use]
+pub fn blueprints_by_slot() -> Vec<Blueprint> {
+    pharmakos_verifier::BLUEPRINT_SLOTS
+        .iter()
+        .map(|row| Blueprint {
+            kind: row.kind,
+            id: row.id,
+            title: blueprint_title(row.kind),
+            build_target: row.build_target,
+            queued: row.queued,
+            licence: licence_for(row.kind),
         })
-        .collect())
+        .collect()
 }
 
 /// A choice over the ids of the `kinds` that `keep` picks.
@@ -1052,6 +987,25 @@ fn blueprints(held: &[Licence], kinds: &[Blueprint]) -> Result<Vec<Entry>, Vocab
 #[cfg(test)]
 mod tests {
     use super::{Entry, vocabulary};
+
+    /// The id this crate spells for each kind is the one the verifier's table
+    /// judges (S3's `vfy6`): the gateway's view names a structure by
+    /// `blueprint_id`, and a playbook names it by the table's.
+    #[test]
+    fn the_ids_this_crate_spells_are_the_verifiers() {
+        for row in pharmakos_verifier::BLUEPRINT_SLOTS {
+            assert_eq!(super::blueprint_id(row.kind), row.id);
+        }
+        let kinds: Vec<_> = super::blueprints_by_slot()
+            .into_iter()
+            .map(|kind| (kind.kind, kind.id, kind.build_target, kind.queued))
+            .collect();
+        let table: Vec<_> = pharmakos_verifier::BLUEPRINT_SLOTS
+            .iter()
+            .map(|row| (row.kind, row.id, row.build_target, row.queued))
+            .collect();
+        assert_eq!(kinds, table);
+    }
 
     fn rules() -> pharmakos_sim::rules::RulesTable {
         pharmakos_sim::rules::RulesTable::load(
