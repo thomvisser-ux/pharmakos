@@ -203,16 +203,18 @@ pub fn write_wire(full_name: &str, bytes: &[u8]) -> Result<String, Error> {
 /// [`write_wire`], appending to `out`, with one field left out.
 ///
 /// `omit` names the field by its path of `.proto` field names from the
-/// message, `["meta", "fingerprint"]` for a playbook's fingerprint, and the
-/// text is what [`write_wire`] writes for the same message with that field
-/// cleared. A path that runs through a repeated field, or names a field the
-/// bytes do not carry, leaves nothing out there; an empty path leaves nothing
-/// out.
+/// message, [`crate::fingerprint::FINGERPRINT_FIELD`] for a playbook's
+/// fingerprint, and the text is what [`write_wire`] writes for the same
+/// message with that field cleared. Every name on the path must be a singular
+/// field of the message before it, by its `.proto` name, and every name but
+/// the last a message-typed one; a field the bytes do not carry leaves nothing
+/// out, and an empty path leaves nothing out.
 ///
 /// # Errors
 ///
-/// As [`wire_to_json`]. Nothing is promised about what `out` holds after an
-/// error.
+/// As [`wire_to_json`], and a path that names no singular field, which is
+/// refused before anything is written. Nothing is promised about what `out`
+/// holds after an error.
 pub fn write_wire_into(
     full_name: &str,
     bytes: &[u8],
@@ -223,6 +225,7 @@ pub fn write_wire_into(
     let at = index
         .find(full_name)
         .ok_or_else(|| unknown_message(full_name))?;
+    check_omit(index, at, full_name, omit)?;
     let mut decoder = Decoder {
         index,
         entries: Vec::new(),
@@ -234,6 +237,38 @@ pub fn write_wire_into(
     };
     decoder.write_message(at, bytes, place, omit, out)?;
     out.push('\n');
+    Ok(())
+}
+
+/// Whether `omit` is a path [`write_wire_into`] can leave out of the message
+/// at `at`: each name a singular field of the message before it, by its
+/// `.proto` name (the name [`Decoder::write_message`] matches), and each name
+/// but the last a field of a message type. A misspelt path would otherwise
+/// leave nothing out without a word.
+fn check_omit(index: &Index, at: usize, full_name: &str, omit: &[&str]) -> Result<(), Error> {
+    let refused = || {
+        Error::at(
+            "",
+            format!(
+                "`{}` is not a path of singular fields of `{full_name}` by their `.proto` names, \
+                 so there is no field to leave out",
+                omit.join(".")
+            ),
+        )
+    };
+    let mut message = at;
+    let mut names = omit.iter().peekable();
+    while let Some(name) = names.next() {
+        let indexed = index.get(message).ok_or_else(refused)?;
+        let field = indexed
+            .fields
+            .iter()
+            .find(|candidate| candidate.field.name == *name && !candidate.field.repeated)
+            .ok_or_else(refused)?;
+        if names.peek().is_some() {
+            message = field.nested.ok_or_else(refused)?;
+        }
+    }
     Ok(())
 }
 

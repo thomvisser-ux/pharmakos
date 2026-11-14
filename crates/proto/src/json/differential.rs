@@ -462,7 +462,7 @@ fn agree_on_playbook(value: &Json) -> Option<bool> {
         write_wire_into(
             name,
             decoded.encoded().bytes(),
-            &["meta", "fingerprint"],
+            crate::fingerprint::FINGERPRINT_FIELD,
             &mut ours,
         )
         .expect("plain bytes write");

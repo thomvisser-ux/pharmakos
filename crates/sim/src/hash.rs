@@ -36,7 +36,7 @@
 //! every committed playbook and on the shapes P1 is measured at.
 
 use crate::encoding::digest;
-use pharmakos_proto::fingerprint::{PLAN_FINGERPRINT_DOMAIN, canonical_input};
+use pharmakos_proto::fingerprint::{FINGERPRINT_FIELD, PLAN_FINGERPRINT_DOMAIN, canonical_input};
 use pharmakos_proto::gp::v1::Playbook;
 use pharmakos_proto::json::{self, Decoded};
 
@@ -96,15 +96,12 @@ const DOMAIN_TEXT: &str = match core::str::from_utf8(PLAN_FINGERPRINT_DOMAIN) {
 /// the size budget's shapes measure 23 and 24.
 const TEXT_PER_WIRE_BYTE: usize = 24;
 
-/// The field [`canonical_input`] clears, by its path of `.proto` field names.
-const FINGERPRINT_FIELD: &[&str] = &["meta", "fingerprint"];
-
 /// The plan fingerprint of a playbook decoded from JSON, from the wire bytes it
 /// was decoded from: the value [`plan_fingerprint`] gives the playbook, without
 /// encoding it again.
 ///
 /// The canonical bytes are [`json::write_wire_into`]'s over those bytes with
-/// `meta.fingerprint` left out, which is the text [`canonical_input`] writes
+/// `meta.fingerprint` ([`FINGERPRINT_FIELD`]) left out, which is the text [`canonical_input`] writes
 /// for the playbook when the bytes are plain ([`json::Encoded::is_plain`]):
 /// every singular field once, nothing at a default it would drop. Bytes that
 /// are not plain, from a file that spells a field twice, are answered by
