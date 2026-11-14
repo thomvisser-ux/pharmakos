@@ -91,10 +91,30 @@ const DOMAIN_TEXT: &str = match core::str::from_utf8(PLAN_FINGERPRINT_DOMAIN) {
 };
 
 /// How many bytes of canonical text a byte of a playbook's wire bytes makes,
-/// about: a capacity hint, so the text is not copied as it grows. The text is
-/// indented a level for every message it nests, and a condition nests deep:
-/// the size budget's shapes measure 23 and 24.
+/// about, where the text is structure: it is indented a level for every
+/// message it nests, and a condition nests deep. The size budget's shapes
+/// measure 23 and 24 (431,573 bytes of text from 18,758 of wire, and 848,909
+/// from 35,977).
 const TEXT_PER_WIRE_BYTE: usize = 24;
+
+/// The most a fingerprint's text reserves up front: 4 MiB, above both size
+/// budget shapes' text, so neither grows, and far below what
+/// [`TEXT_PER_WIRE_BYTE`] would reserve for a playbook that is mostly one long
+/// string, whose text is about as long as its wire bytes (PR #177's review:
+/// 24 times a 2 MB string is 48 MB). Past it the text grows as it is written.
+const MAX_TEXT_HINT: usize = 4 << 20;
+
+/// The capacity a fingerprint's text is given: a hint, so the text of a
+/// playbook at the size budget is written without being copied as it grows,
+/// and bounded, so a long string reserves no more than [`MAX_TEXT_HINT`]. A
+/// hint too small costs a copy and never a different text.
+fn text_capacity(wire_bytes: usize) -> usize {
+    DOMAIN_TEXT.len().saturating_add(
+        wire_bytes
+            .saturating_mul(TEXT_PER_WIRE_BYTE)
+            .min(MAX_TEXT_HINT),
+    )
+}
 
 /// The plan fingerprint of a playbook decoded from JSON, from the wire bytes it
 /// was decoded from: the value [`plan_fingerprint`] gives the playbook, without
@@ -116,11 +136,7 @@ pub fn plan_fingerprint_of(decoded: &Decoded<Playbook>) -> Result<u64, Fingerpri
     if !encoded.is_plain() {
         return plan_fingerprint(decoded.message());
     }
-    let mut text = String::with_capacity(
-        DOMAIN_TEXT
-            .len()
-            .saturating_add(encoded.bytes().len().saturating_mul(TEXT_PER_WIRE_BYTE)),
-    );
+    let mut text = String::with_capacity(text_capacity(encoded.bytes().len()));
     text.push_str(DOMAIN_TEXT);
     json::write_wire_into(
         "gp.v1.Playbook",
@@ -130,4 +146,33 @@ pub fn plan_fingerprint_of(decoded: &Decoded<Playbook>) -> Result<u64, Fingerpri
     )
     .map_err(FingerprintError::Canonical)?;
     Ok(digest(text.as_bytes()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DOMAIN_TEXT, MAX_TEXT_HINT, TEXT_PER_WIRE_BYTE, text_capacity};
+
+    #[test]
+    fn the_text_capacity_hint_is_bounded() {
+        // At the size budget's shapes the hint is the measured ratio's, so
+        // neither text grows as it is written.
+        for (wire, text) in [(18_758_usize, 431_573_usize), (35_977, 848_909)] {
+            assert!(text_capacity(wire) >= DOMAIN_TEXT.len().saturating_add(text));
+        }
+        // A playbook that is one 2 MB string reserves at most the cap.
+        assert_eq!(
+            text_capacity(2_100_000),
+            DOMAIN_TEXT.len().saturating_add(MAX_TEXT_HINT)
+        );
+        assert_eq!(
+            text_capacity(usize::MAX),
+            DOMAIN_TEXT.len().saturating_add(MAX_TEXT_HINT)
+        );
+        assert_eq!(
+            text_capacity(100),
+            DOMAIN_TEXT
+                .len()
+                .saturating_add(100_usize.saturating_mul(TEXT_PER_WIRE_BYTE))
+        );
+    }
 }

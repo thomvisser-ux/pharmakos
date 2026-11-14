@@ -174,3 +174,24 @@ fn the_size_budget_shapes_have_one_fingerprint_both_ways() {
         "the route shape is a playbook"
     );
 }
+
+/// A playbook that is one long string: the wire bytes and the canonical text
+/// are about the same length, so a capacity hint of many times the wire size
+/// would reserve tens of megabytes for a two-megabyte file (PR #177's
+/// robustness review). The two fingerprints still agree, past every length
+/// prefix width, escaped and not.
+#[test]
+fn a_long_single_string_playbook_has_one_fingerprint_both_ways() {
+    for length in [127_usize, 16_384, 2_100_000] {
+        let title = "t".repeat(length);
+        for text in [
+            format!(r#"{{"meta":{{"title":"{title}","author_kind":"HUMAN"}},"kind":"PLAYBOOK"}}"#),
+            format!(r#"{{"kind":"PLAYBOOK","meta":{{"note":"\u0041\n{title}","title":"x"}}}}"#),
+        ] {
+            assert!(
+                both(&text).is_some(),
+                "a playbook of {length} bytes of text"
+            );
+        }
+    }
+}
