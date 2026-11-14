@@ -386,12 +386,6 @@ const KEPT_FALLBACKS: &[(&str, &str, usize, &str)] = &[
     ),
     (
         "render.rs",
-        "target.map_or_else(String::new, |target| target.blueprint_id.clone())",
-        1,
-        "a row with no target names no blueprint; the verifier refuses the row",
-    ),
-    (
-        "render.rs",
         ".map_or_else(String::new, |area| {",
         1,
         "a target with no box says nothing of one",

@@ -572,6 +572,9 @@ pub const STEP_TITLE_HOLD: &str = "Hold";
 /// The `broadcast` step.
 pub const STEP_TITLE_BROADCAST: &str = "Broadcast";
 
+/// A blueprint parameter.
+pub const VOCABULARY_STRUCTURE: &str = "Structure";
+
 /// The Generator.
 pub const BLUEPRINT_GENERATOR: &str = "Generator";
 /// The autocannon.

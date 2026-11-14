@@ -103,8 +103,8 @@ use crate::context::PlanContext;
 use crate::error::{Error, push_pointer};
 use crate::interface::{self, Rates};
 use crate::shape::{
-    ANCHOR_ARMS, BEACON_ARMS, NEAR_ARMS, ReferenceKind, Shape, UNIT_COUNT, UNIT_DOLLARS, UNIT_KW,
-    UNIT_VOXELS,
+    ATTACK_TARGET_ARMS, BEACON_ARMS, NEAR_ARMS, ReferenceKind, Shape, UNIT_COUNT, UNIT_DOLLARS,
+    UNIT_KW, UNIT_VOXELS, WALL_ANCHOR_ARMS,
 };
 use crate::strings as s;
 
@@ -209,9 +209,11 @@ pub fn render(
             "the rendering placed a chip outside every rule and step",
         ));
     }
+    let kinds = crate::vocabulary::blueprints_by_slot(rules)
+        .map_err(|error| Error::at("", error.to_string()))?;
     let rules = pending
         .into_iter()
-        .map(Pending::finish)
+        .map(|rule| rule.finish(&kinds))
         .collect::<Result<Vec<RenderedRule>, Error>>()?;
     Ok(Rendering {
         prose: out.prose,
@@ -235,6 +237,45 @@ struct Ctx<'a> {
 enum Spec {
     Ready(Shape),
     Choice(&'static str),
+    /// A blueprint id, a choice over the kinds the verifier takes in that
+    /// slot ([`crate::vocabulary::blueprints_by_slot`]).
+    Blueprint(Slot),
+}
+
+/// Where a blueprint id is written.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Slot {
+    /// A Build target's.
+    BuildTarget,
+    /// A `queue_structure` row's.
+    Queue,
+    /// A predicate's, about a structure that stands.
+    Standing,
+}
+
+impl Slot {
+    fn shape(self, kinds: &[crate::vocabulary::Blueprint]) -> Shape {
+        use crate::vocabulary::{Blueprint, blueprint_choice};
+        match self {
+            Slot::BuildTarget => blueprint_choice(kinds, |kind| kind.build_target),
+            Slot::Queue => blueprint_choice(kinds, |kind| kind.queued),
+            Slot::Standing => blueprint_choice(kinds, Blueprint::can_stand),
+        }
+    }
+}
+
+/// A blueprint id the file writes, as a chip over `slot`'s choices; an
+/// absent one (proto3's empty default) as the words alone.
+fn blueprint_chip(id: &str, pointer: String, slot: Slot) -> Text {
+    if id.is_empty() {
+        return Text::default();
+    }
+    chip(
+        shown_text(id).as_ref(),
+        pointer,
+        Spec::Blueprint(slot),
+        Value::text(id),
+    )
 }
 
 /// A chip's value, written as JSON text when the rendering is finished.
@@ -383,6 +424,32 @@ fn chip(shown: &str, pointer: String, spec: Spec, value: Value) -> Text {
     }
 }
 
+/// A string the player wrote (a label, a rule id, a tag, a title, a name),
+/// as the prose shows it: each control character escaped (`\n`, `\r`, `\t`,
+/// and `\u{..}` for every other), so a newline or a carriage return in a
+/// label can never break a line of the prose, move a chip off the line it
+/// stands on, or write a line the player did not (S3's `gwr` review, item 6).
+/// Text with no control character is shown as written.
+#[must_use]
+pub fn shown_text(raw: &str) -> std::borrow::Cow<'_, str> {
+    if !raw.chars().any(char::is_control) {
+        return std::borrow::Cow::Borrowed(raw);
+    }
+    let mut out = String::with_capacity(raw.len());
+    for character in raw.chars() {
+        match character {
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            other if other.is_control() => {
+                out.push_str(&other.escape_unicode().to_string());
+            }
+            other => out.push(other),
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
+
 /// A child of a pointer: a field name, or an index.
 fn at(base: &str, token: impl core::fmt::Display) -> String {
     push_pointer(base, &token.to_string())
@@ -466,7 +533,7 @@ impl Pending {
         self
     }
 
-    fn finish(self) -> Result<RenderedRule, Error> {
+    fn finish(self, kinds: &[crate::vocabulary::Blueprint]) -> Result<RenderedRule, Error> {
         let pointer = self.pointer;
         let chips = self
             .marks
@@ -481,6 +548,7 @@ impl Pending {
                     Spec::Ready(shape) => shape,
                     Spec::Choice(name) => Shape::choice(name)
                         .map_err(|error| Error::at(placed.pointer.clone(), error.to_string()))?,
+                    Spec::Blueprint(slot) => slot.shape(kinds),
                 };
                 Ok(Chip {
                     line: placed.line,
@@ -511,7 +579,7 @@ fn envelope(book: &Playbook, out: &mut Out) {
         .map(|meta| meta.title.trim())
         .filter(|title| !title.is_empty())
         .unwrap_or(s::UNTITLED);
-    line(0, cat!(title), out);
+    line(0, cat!(shown_text(title).as_ref()), out);
     line(
         0,
         cat!(match meta.map(pharmakos_proto::gp::v1::Meta::author_kind) {
@@ -531,8 +599,10 @@ fn envelope(book: &Playbook, out: &mut Out) {
         .map(|meta| meta.note.trim())
         .filter(|note| !note.is_empty())
     {
+        // A note's own line breaks are its lines; any other control
+        // character in it is shown escaped.
         for sentence in note.lines() {
-            line(0, cat!(sentence.trim()), out);
+            line(0, cat!(shown_text(sentence.trim()).as_ref()), out);
         }
     }
 }
@@ -573,7 +643,7 @@ fn step_sentence(entry: &Step, here: &str, ctx: &Ctx<'_>) -> Text {
     if label.is_empty() {
         cat!(body, ".")
     } else {
-        cat!(label, ": ", body, ".")
+        cat!(shown_text(label).as_ref(), ": ", body, ".")
     }
 }
 
@@ -632,7 +702,11 @@ fn step_body(entry: &Step, here: &str, ctx: &Ctx<'_>) -> Text {
                 )
             );
             if !place.tags.is_empty() {
-                let tags: Vec<Text> = place.tags.iter().map(|tag| cat!("\"", tag, "\"")).collect();
+                let tags: Vec<Text> = place
+                    .tags
+                    .iter()
+                    .map(|tag| cat!("\"", shown_text(tag).as_ref(), "\""))
+                    .collect();
                 sentence.push(cat!(", ", s::TAGGED, " ", join(tags)));
             }
             if let Some(initial) = place.initial.as_ref() {
@@ -666,12 +740,23 @@ fn step_body(entry: &Step, here: &str, ctx: &Ctx<'_>) -> Text {
                 condition(wait.condition.as_ref(), &at(&wait_at, "condition"))
             )
         }
-        Some(step::Kind::Hold(hold)) => {
-            let ms_at = at(&at(here, "hold"), "ms");
-            // The verifier refuses a hold of zero or less (`E0303`).
-            cat!(s::STEP_HOLD, " ", duration_chip(hold.ms, ms_at, Some(1)))
-        }
+        Some(step::Kind::Hold(hold)) => hold_body(hold.ms, &at(&at(here, "hold"), "ms")),
         Some(step::Kind::Broadcast(_)) => cat!(s::STEP_BROADCAST),
+    }
+}
+
+/// A `hold` step of `ms`, its value at `ms_at`. The verifier refuses a hold
+/// of zero or less (`E0303`). A hold the file leaves at proto3's zero writes
+/// no member to replace, so it is words alone, as [`nonzero_duration`]'s are.
+fn hold_body(ms: i32, ms_at: &str) -> Text {
+    if ms == 0 {
+        cat!(s::STEP_HOLD, " ", duration(Ms::new(ms)))
+    } else {
+        cat!(
+            s::STEP_HOLD,
+            " ",
+            duration_chip(ms, ms_at.to_owned(), Some(1))
+        )
     }
 }
 
@@ -719,7 +804,7 @@ fn guards(entry: &Step, here: &str) -> Vec<Text> {
 
 /// A label or a rule id the file names, quoted, as a chip when it is written.
 fn label_chip(label: &str, pointer: String, kind: ReferenceKind) -> Text {
-    let shown = format!("\"{label}\"");
+    let shown = format!("\"{}\"", shown_text(label));
     if label.is_empty() {
         return cat!(shown);
     }
@@ -760,11 +845,27 @@ fn row_sentence(row: &InterfaceRow, here: &str) -> Text {
         Some(interface_row::Row::AddBuildTarget(add)) => {
             let target = add.target.as_ref();
             let target_at = at(&at(here, "add_build_target"), "target");
-            let blueprint = target.map_or_else(String::new, |target| target.blueprint_id.clone());
+            // A row with no target names no blueprint; the verifier refuses
+            // the row.
+            let blueprint = match target {
+                Some(target) => blueprint_chip(
+                    &target.blueprint_id,
+                    at(&target_at, "blueprint_id"),
+                    Slot::BuildTarget,
+                ),
+                None => Text::default(),
+            };
+            // A wall's anchor is a voxel inside its box; any other target's
+            // is a voxel or `on` a feature.
+            let arms = if target.is_some_and(|target| target.blueprint_id == "wall") {
+                WALL_ANCHOR_ARMS.to_vec()
+            } else {
+                crate::shape::anchor_arms()
+            };
             let anchor = location_chip(
                 target.and_then(|target| target.anchor.as_ref()),
                 at(&target_at, "anchor"),
-                &ANCHOR_ARMS,
+                &arms,
             );
             // A wall's box is named as the author wrote it, corner to corner
             // (S2's plan, task `con4`); whether it is legal is the verifier's.
@@ -787,12 +888,18 @@ fn row_sentence(row: &InterfaceRow, here: &str) -> Text {
             location_chip(
                 remove.anchor.as_ref(),
                 at(&at(here, "remove_build_target"), "anchor"),
-                &["on"]
+                &crate::shape::anchor_arms()
             )
         ),
-        Some(interface_row::Row::QueueStructure(queue)) => {
-            cat!(s::ROW_QUEUE, " ", &queue.blueprint_id)
-        }
+        Some(interface_row::Row::QueueStructure(queue)) => cat!(
+            s::ROW_QUEUE,
+            " ",
+            blueprint_chip(
+                &queue.blueprint_id,
+                at(&at(here, "queue_structure"), "blueprint_id"),
+                Slot::Queue
+            )
+        ),
     }
 }
 
@@ -898,10 +1005,7 @@ fn attack_parts(attack: &AttackSettings, here: &str) -> Vec<Text> {
                 chip(
                     &shown,
                     at(&target_at, "beacon"),
-                    Spec::Ready(Shape::reference(
-                        ReferenceKind::Beacon,
-                        &["beacon_id", "nearest", "weakest", "most_threatened"],
-                    )),
+                    Spec::Ready(Shape::reference(ReferenceKind::Beacon, &ATTACK_TARGET_ARMS)),
                     Value::Beacon(reference.clone()),
                 )
             }
@@ -1225,7 +1329,7 @@ fn feature_name(id: &str) -> String {
     if let Some((x, y)) = parse("seam_") {
         return format!("{} ({x}, {y})", s::SEAM_NAME);
     }
-    format!("{} \"{id}\"", s::FEATURE_NOUN)
+    format!("{} \"{}\"", s::FEATURE_NOUN, shown_text(id))
 }
 
 /// A pick, with the chip's reminder of when and how it reads.
@@ -1274,7 +1378,9 @@ fn beacon_chip(reference: Option<&BeaconRef>, pointer: String, arms: &[&'static 
 fn beacon_noted(reference: Option<&BeaconRef>, note: &str) -> String {
     match reference.and_then(|reference| reference.r#ref.as_ref()) {
         None => s::BEACON_NONE.to_owned(),
-        Some(beacon_ref::Ref::BeaconId(id)) => format!("{} \"{id}\"", s::BEACON_NOUN),
+        Some(beacon_ref::Ref::BeaconId(id)) => {
+            format!("{} \"{}\"", s::BEACON_NOUN, shown_text(id))
+        }
         Some(beacon_ref::Ref::Safest(_)) => s::BEACON_SAFEST.to_owned(),
         Some(beacon_ref::Ref::Nearest(pick)) => {
             selector(s::BEACON_NEAREST, pick.filter.as_ref(), note)
@@ -1308,7 +1414,10 @@ fn selector(superlative: &str, filter: Option<&BeaconFilter>, note: &str) -> Str
     if let Some(tags) = filter.map(|filter| &filter.tags)
         && !tags.is_empty()
     {
-        let quoted: Vec<String> = tags.iter().map(|tag| format!("\"{tag}\"")).collect();
+        let quoted: Vec<String> = tags
+            .iter()
+            .map(|tag| format!("\"{}\"", shown_text(tag)))
+            .collect();
         sentence.push(' ');
         sentence.push_str(s::TAGGED);
         sentence.push(' ');
@@ -1400,15 +1509,9 @@ fn condition(node: Option<&Condition>, here: &str) -> Text {
             units_by_role(test, &at(here, "beacon_units_by_role"))
         }
         condition::Node::BeaconMandate(test) => beacon_mandate(test, &at(here, "beacon_mandate")),
-        condition::Node::BeaconHasStructure(test) => cat!(
-            beacon_chip(
-                test.beacon.as_ref(),
-                at(&at(here, "beacon_has_structure"), "beacon"),
-                &BEACON_ARMS
-            ),
-            " has a finished ",
-            &test.blueprint_id
-        ),
+        condition::Node::BeaconHasStructure(test) => {
+            has_structure(test, &at(here, "beacon_has_structure"))
+        }
         condition::Node::EnemyUnitsNear(test) => enemy_units(test, &at(here, "enemy_units_near")),
         condition::Node::EnemyBeaconKnown(test) => cat!(
             "the seat knows of an enemy beacon, ",
@@ -1421,6 +1524,15 @@ fn condition(node: Option<&Condition>, here: &str) -> Text {
             enemy_structure(test, &at(here, "enemy_structure_near"))
         }
     }
+}
+
+/// `beacon_has_structure`; `here` is the predicate's pointer.
+fn has_structure(test: &pharmakos_proto::gp::v1::BeaconHasStructure, here: &str) -> Text {
+    cat!(
+        beacon_chip(test.beacon.as_ref(), at(here, "beacon"), &BEACON_ARMS),
+        " has a finished ",
+        blueprint_chip(&test.blueprint_id, at(here, "blueprint_id"), Slot::Standing)
+    )
 }
 
 /// `beacon_under_attack`; `here` is the predicate's pointer.
@@ -1540,9 +1652,11 @@ fn enemy_structure(test: &pharmakos_proto::gp::v1::EnemyStructureNear, here: &st
     cat!(
         "the seat knows of an enemy ",
         match test.structure.as_ref() {
-            Some(enemy_structure_near::Structure::BlueprintId(id)) => id.as_str(),
-            Some(enemy_structure_near::Structure::AnyKind(_)) => s::ANY_STRUCTURE,
-            None => s::STRUCTURE_NONE,
+            Some(enemy_structure_near::Structure::BlueprintId(id)) => {
+                blueprint_chip(id, at(here, "blueprint_id"), Slot::Standing)
+            }
+            Some(enemy_structure_near::Structure::AnyKind(_)) => cat!(s::ANY_STRUCTURE),
+            None => cat!(s::STRUCTURE_NONE),
         },
         " within ",
         radius_chip(test.radius_voxels, at(here, "radius_voxels")),
@@ -1770,7 +1884,7 @@ fn rules_section(book: &Playbook, ctx: &Ctx<'_>, out: &mut Out) -> Vec<Pending> 
             cat!(
                 number.to_string(),
                 ". \"",
-                &rule.id,
+                shown_text(&rule.id).as_ref(),
                 "\", when ",
                 condition(rule.when.as_ref(), &at(&here, "when")),
                 ":"
@@ -1798,7 +1912,7 @@ fn rules_section(book: &Playbook, ctx: &Ctx<'_>, out: &mut Out) -> Vec<Pending> 
         line(2, firing(rule, &here, ctx.limits), out);
         let note = rule.note.trim();
         if !note.is_empty() {
-            line(2, cat!(note), out);
+            line(2, cat!(shown_text(note).as_ref()), out);
         }
         pending.push(open.close(from, out));
     }

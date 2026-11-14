@@ -37,6 +37,10 @@
     /declarative/handlers/0/when/all/items/2/beacon_has_structure/beacon
     reference BEACON [beacon_id, nearest, weakest, most_threatened, safest]
     = {"safest":{}}
+  8:129-138 "generator"
+    /declarative/handlers/0/when/all/items/2/beacon_has_structure/blueprint_id
+    choice "generator" | "autocannon" | "mortar" | "resonance_spire" | "wall"
+    = "generator"
   9:26-29 "1 s"
     /declarative/handlers/0/body/0/hold/ms
     integer 1.. ms
@@ -78,6 +82,10 @@
     /declarative/handlers/1/when/any/items/1/enemy_beacon_known/freshness/known_within_ms
     integer .. ms
     = 30000
+  12:204-210 "mortar"
+    /declarative/handlers/1/when/any/items/2/enemy_structure_near/blueprint_id
+    choice "generator" | "autocannon" | "mortar" | "resonance_spire" | "wall"
+    = "mortar"
   12:218-220 "16"
     /declarative/handlers/1/when/any/items/2/enemy_structure_near/radius_voxels
     integer 0.. voxels

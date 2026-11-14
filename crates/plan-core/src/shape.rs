@@ -208,8 +208,34 @@ pub fn place_arms() -> Vec<&'static str> {
         .collect()
 }
 
-/// The arms legal in a `BuildTarget.anchor`: the fixed ones and `on`.
+/// The arms of a `BuildTarget.anchor` and a `RemoveBuildTargetRow.anchor`:
+/// the fixed ones and `on`.
 pub const ANCHOR_ARMS: [&str; 4] = ["voxel", "beacon_anchor", "safest", "on"];
+
+/// The arms legal in a Build target's anchor, and a removal's, that the
+/// verifier does not refuse in this build: [`ANCHOR_ARMS`] less the two that
+/// place it by a beacon (`beacon_anchor`, `safest`) while the verifier
+/// refuses that (`E0011`), as [`place_arms`] leaves out `toward`.
+#[must_use]
+pub fn anchor_arms() -> Vec<&'static str> {
+    let by_beacon = pharmakos_verifier::code_for_construct(
+        "a Build target anchored on a beacon selector rather than on a voxel or `on` a vent",
+    )
+    .is_some();
+    ANCHOR_ARMS
+        .into_iter()
+        .filter(|arm| !(by_beacon && matches!(*arm, "beacon_anchor" | "safest")))
+        .collect()
+}
+
+/// The arm legal in a `wall` target's anchor: a voxel inside its box (the
+/// sim's `compile_wall_box`, the verifier's `E0417`).
+pub const WALL_ANCHOR_ARMS: [&str; 1] = ["voxel"];
+
+/// The arms legal in an Attack target's `beacon`: a handle, or `nearest`
+/// with `side: ENEMY_KNOWN`; the verifier refuses every other selector there
+/// (`E0015`, `E0415`).
+pub const ATTACK_TARGET_ARMS: [&str; 2] = ["beacon_id", "nearest"];
 
 /// The arms of a `gp.v1.FeatureRef`.
 pub const FEATURE_ARMS: [&str; 4] = ["feature_id", "vent", "seam", "covered"];
@@ -217,7 +243,8 @@ pub const FEATURE_ARMS: [&str; 4] = ["feature_id", "vent", "seam", "covered"];
 #[cfg(test)]
 mod tests {
     use super::{
-        ANCHOR_ARMS, BEACON_ARMS, FEATURE_ARMS, NEAR_ARMS, PLACE_ARMS, Shape, UnknownEnum,
+        ANCHOR_ARMS, ATTACK_TARGET_ARMS, BEACON_ARMS, FEATURE_ARMS, NEAR_ARMS, PLACE_ARMS, Shape,
+        UnknownEnum, WALL_ANCHOR_ARMS,
     };
     use pharmakos_proto::descriptor::schema;
 
@@ -246,6 +273,8 @@ mod tests {
             ("gp.v1.NearPlace", NEAR_ARMS.as_slice()),
             ("gp.v1.Location", PLACE_ARMS.as_slice()),
             ("gp.v1.Location", ANCHOR_ARMS.as_slice()),
+            ("gp.v1.Location", WALL_ANCHOR_ARMS.as_slice()),
+            ("gp.v1.BeaconRef", ATTACK_TARGET_ARMS.as_slice()),
             ("gp.v1.FeatureRef", FEATURE_ARMS.as_slice()),
         ] {
             let declared = schema().message(message).expect("a declared message");

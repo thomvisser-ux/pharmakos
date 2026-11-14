@@ -61,9 +61,7 @@
                 "kind": "beacon",
                 "arms": [
                   "beacon_id",
-                  "nearest",
-                  "weakest",
-                  "most_threatened"
+                  "nearest"
                 ]
               }
             },

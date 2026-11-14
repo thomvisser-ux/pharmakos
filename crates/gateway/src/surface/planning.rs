@@ -158,7 +158,7 @@ impl Surface {
                 .collect::<Result<Vec<_>, Error>>()?,
             None => Vec::new(),
         };
-        let words = pharmakos_plan_core::vocabulary::vocabulary(&held)
+        let words = pharmakos_plan_core::vocabulary::vocabulary(&held, &self.rules)
             .map_err(|error| Error::internal(format!("the vocabulary: {error}")))?;
         let entries = |entries: &[pharmakos_plan_core::vocabulary::Entry]| {
             Json::Array(entries.iter().map(vocabulary_entry).collect())
@@ -1318,7 +1318,7 @@ fn vocabulary_entry(entry: &pharmakos_plan_core::vocabulary::Entry) -> Json {
         ),
         (
             String::from("skeleton_json"),
-            Json::String(entry.skeleton_json.to_owned()),
+            Json::String(entry.skeleton_json.clone()),
         ),
     ];
     if let Some(locked) = &entry.locked {

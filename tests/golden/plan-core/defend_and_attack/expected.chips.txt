@@ -26,7 +26,7 @@
     = {"voxel":{"x":100,"y":20,"z":58}}
   5:80-93 "beacon "e_01""
     /declarative/route/1/place_beacon/initial/mandate/attack/target/beacon
-    reference BEACON [beacon_id, nearest, weakest, most_threatened]
+    reference BEACON [beacon_id, nearest]
     = {"beacon_id":"e_01"}
   5:95-137 "retargeting the nearest known enemy beacon"
     /declarative/route/1/place_beacon/initial/mandate/attack/retarget
@@ -69,7 +69,11 @@
     /declarative/route/2/interface/rows/0/set_mandate_settings/attack/breach_allowed
     choice true | false
     = false
+  6:189-193 "wall"
+    /declarative/route/2/interface/rows/2/add_build_target/target/blueprint_id
+    choice "generator" | "autocannon" | "mortar" | "wall"
+    = "wall"
   6:197-213 "voxel 90, 12, 11"
     /declarative/route/2/interface/rows/2/add_build_target/target/anchor
-    reference LOCATION [voxel, beacon_anchor, safest, on]
+    reference LOCATION [voxel]
     = {"voxel":{"x":90,"y":12,"z":11}}

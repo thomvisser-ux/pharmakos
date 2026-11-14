@@ -164,14 +164,8 @@ pub const fn unit_subtype(kind: UnitKind) -> &'static str {
 /// A structure kind as `gp.api.v1.ViewEntity.subtype` spells it.
 #[must_use]
 pub const fn structure_subtype(kind: StructureKind) -> &'static str {
-    match kind {
-        StructureKind::Generator => "generator",
-        StructureKind::Autocannon => "autocannon",
-        StructureKind::Mortar => "mortar",
-        StructureKind::SurveyPost => "survey_post",
-        StructureKind::ResonanceSpire => "resonance_spire",
-        StructureKind::Wall => "wall",
-    }
+    // The blueprint id, spelt once, in plan-core (S3's `gwr` review, item 4).
+    pharmakos_plan_core::vocabulary::blueprint_id(kind)
 }
 
 /// A seat as `gp.api.v1.ViewEntity.owner` spells it: `seat.0`.
