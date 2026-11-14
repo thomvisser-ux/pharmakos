@@ -49,6 +49,24 @@
 //! reason (a single sample is preemption as much as code). The runs must
 //! produce the same hash chain, which is what makes "the same tick" mean the
 //! same work; a chain that differs stops the measurement.
+//!
+//! # The counted half, and the curve (S3's `bench3`)
+//!
+//! Beside the nanoseconds, each decision tick's **counted evaluation units**
+//! (`World::decision_work`: handlers tried, condition nodes evaluated,
+//! selector candidates ranked and "nearest" estimates run), summed over the
+//! seats, are read after the tick: item 139 (5)'s "count carried to S3". The
+//! count is the sim's, identical on every machine and every run (a run whose
+//! count differs stops the measurement, as a differing chain does), so it is
+//! the platform-free half of the same figure.
+//!
+//! [`measure_curve`] takes both at each size of E24's curve
+//! ([`crate::shapes::SIZES`]): every seat seals
+//! [`crate::shapes::Shape::Handlers24`] at the size, the shape whose
+//! conditions a decision tick evaluates in full (a route step's guard is read
+//! only when its step comes up), under the committed table with its size
+//! budget set to the size ([`crate::full::sized_rules`]), each size's
+//! `rules_hash` printed beside it.
 
 use std::path::Path;
 use std::time::Instant;
@@ -63,6 +81,7 @@ use pharmakos_sim::rules::RulesTable;
 use crate::error::Error;
 use crate::hosted::{self, Opened, Opening};
 use crate::quick::{BUDGET_CASE, cases_dir};
+use crate::shapes::Shape;
 use crate::stats::{self, micros};
 
 /// The map the decision-tick figure is measured on: the seed every committed
@@ -91,6 +110,10 @@ pub struct DecisionPlan {
 /// What [`measure`] found.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct DecisionTiming {
+    /// The map seed, which with `rules_hash` reproduces the match.
+    pub seed: u64,
+    /// The `rules_hash` of the table the match was played under.
+    pub rules_hash: u64,
     /// Seats that sealed the budget playbook.
     pub seats: u32,
     /// The size units each seat sealed: the size budget.
@@ -108,6 +131,15 @@ pub struct DecisionTiming {
     /// The excess per size unit sealed, in nanoseconds; zero or below when the
     /// excess is lost in the noise.
     pub ns_per_unit: i128,
+    /// The decision ticks played (every one, paired or not), over which the
+    /// counted units are taken.
+    pub decision_ticks: usize,
+    /// The counted evaluation units of a decision tick, summed over the seats,
+    /// in thousandths of a unit, as a mean over the decision ticks.
+    pub work_mean_milli: u64,
+    /// The most counted evaluation units one decision tick spent, summed over
+    /// the seats.
+    pub work_max: u64,
 }
 
 impl DecisionTiming {
@@ -204,6 +236,9 @@ struct Sample {
     hash: u64,
     decision: bool,
     last: bool,
+    /// The seats' counted evaluation units, summed, on a decision tick; zero
+    /// on an ordinary one, which decides nothing.
+    work: u64,
 }
 
 /// Measure a decision tick's cost per size unit on `plan`'s match.
@@ -224,22 +259,40 @@ pub fn measure(
         ));
     }
     let playbook = hosted_budget_playbook(root)?;
+    measure_playbook(rules, plan, &playbook)
+}
+
+/// [`measure`] with every seat sealing `playbook` (canonical JSON), which
+/// must sit exactly on `rules`' size budget.
+///
+/// # Errors
+///
+/// As [`measure`].
+pub fn measure_playbook(
+    rules: &RulesTable,
+    plan: DecisionPlan,
+    playbook: &str,
+) -> Result<DecisionTiming, Error> {
+    if plan.runs == 0 {
+        return Err(Error::Empty(
+            "a decision-tick measurement of zero runs measures nothing".to_owned(),
+        ));
+    }
     let mut best: Option<(Vec<Sample>, u32)> = None;
     for run in 0..plan.runs {
-        let (samples, units) = play(rules, plan, &playbook)?;
+        let (samples, units) = play(rules, plan, playbook)?;
         let Some((kept, _)) = best.as_mut() else {
             best = Some((samples, units));
             continue;
         };
         if samples.len() != kept.len()
-            || samples
-                .iter()
-                .zip(kept.iter())
-                .any(|(now, kept)| now.hash != kept.hash || now.decision != kept.decision)
+            || samples.iter().zip(kept.iter()).any(|(now, kept)| {
+                now.hash != kept.hash || now.decision != kept.decision || now.work != kept.work
+            })
         {
             return Err(Error::Drift(format!(
-                "run {run} of the same match produced a different hash chain or decision \
-                 cadence; the per-tick minimum would compare different work"
+                "run {run} of the same match produced a different hash chain, decision cadence \
+                 or counted work; the per-tick minimum would compare different work"
             )));
         }
         for (kept, now) in kept.iter_mut().zip(&samples) {
@@ -248,7 +301,24 @@ pub fn measure(
     }
     let (best, units_per_seat) =
         best.ok_or_else(|| Error::Empty("no run of the bench match was played".to_owned()))?;
-    summarise(&best, plan.seats, units_per_seat)
+    summarise(
+        &best,
+        Match {
+            seed: plan.seed,
+            rules_hash: rules.rules_hash(),
+            seats: plan.seats,
+            units_per_seat,
+        },
+    )
+}
+
+/// The match a sample was taken on, as the timing reports it.
+#[derive(Clone, Copy, Debug)]
+struct Match {
+    seed: u64,
+    rules_hash: u64,
+    seats: u32,
+    units_per_seat: u32,
 }
 
 /// A tick's nanoseconds as a signed figure.
@@ -257,7 +327,13 @@ fn signed(ns: u128) -> Result<i128, Error> {
 }
 
 /// Pair each decision tick with the ordinary ticks after it, and average.
-fn summarise(samples: &[Sample], seats: u32, units_per_seat: u32) -> Result<DecisionTiming, Error> {
+fn summarise(samples: &[Sample], played_on: Match) -> Result<DecisionTiming, Error> {
+    let Match {
+        seed,
+        rules_hash,
+        seats,
+        units_per_seat,
+    } = played_on;
     let played: Vec<&Sample> = samples.iter().filter(|sample| !sample.last).collect();
     let decision: Vec<u128> = played
         .iter()
@@ -297,6 +373,28 @@ fn summarise(samples: &[Sample], seats: u32, units_per_seat: u32) -> Result<Deci
         excesses.push(excess);
     }
     let windows = excesses.len();
+    let work: Vec<u64> = played
+        .iter()
+        .filter(|sample| sample.decision)
+        .map(|sample| sample.work)
+        .collect();
+    let decision_ticks = work.len();
+    let work_sum = work
+        .iter()
+        .try_fold(0_u64, |sum, units| sum.checked_add(*units))
+        .ok_or(Error::Overflow("the counted work"))?;
+    let work_mean_milli = work_sum
+        .checked_mul(1_000)
+        .ok_or(Error::Overflow("the counted work"))?
+        .checked_div(
+            u64::try_from(decision_ticks).map_err(|_| Error::Overflow("the decision ticks"))?,
+        )
+        .ok_or_else(|| Error::Empty("no decision tick was played".to_owned()))?;
+    let work_max = work
+        .iter()
+        .copied()
+        .max()
+        .ok_or_else(|| Error::Empty("no decision tick was played".to_owned()))?;
     let excess_sum = excesses
         .iter()
         .try_fold(0_i128, |sum, excess| sum.checked_add(*excess))
@@ -316,6 +414,8 @@ fn summarise(samples: &[Sample], seats: u32, units_per_seat: u32) -> Result<Deci
         .checked_div(units)
         .ok_or_else(|| Error::Empty("no size unit was sealed to divide by".to_owned()))?;
     Ok(DecisionTiming {
+        seed,
+        rules_hash,
         seats,
         units_per_seat,
         ticks: samples.len(),
@@ -326,6 +426,9 @@ fn summarise(samples: &[Sample], seats: u32, units_per_seat: u32) -> Result<Deci
             .ok_or_else(|| Error::Empty("no ordinary tick was played".to_owned()))?,
         excess_ns,
         ns_per_unit,
+        decision_ticks,
+        work_mean_milli,
+        work_max,
     })
 }
 
@@ -358,18 +461,152 @@ fn play(
         else {
             break;
         };
-        let decision = hosted::world(&surface)?.is_decision_tick();
+        let world = hosted::world(&surface)?;
+        let decision = world.is_decision_tick();
+        let work = if decision {
+            seat_work(world, plan.seats)?
+        } else {
+            0
+        };
         samples.push(Sample {
             ns,
             hash: report.hash,
             decision,
             last: report.segment_ended,
+            work,
         });
         if report.segment_ended {
             break;
         }
     }
     Ok((samples, units_per_seat))
+}
+
+/// The seats' counted evaluation units on the decision just taken, summed.
+fn seat_work(world: &pharmakos_sim::world::World, seats: u32) -> Result<u64, Error> {
+    let mut sum: u64 = 0;
+    for seat in 0..usize::try_from(seats).map_err(|_| Error::Overflow("the seat count"))? {
+        let spent = world
+            .decision_work(seat)
+            .ok_or_else(|| {
+                Error::Drift(format!(
+                    "the world keeps no counted work for seat {seat}, which sealed a playbook"
+                ))
+            })?
+            .spent();
+        sum = sum
+            .checked_add(u64::from(spent))
+            .ok_or(Error::Overflow("the seats' counted work"))?;
+    }
+    Ok(sum)
+}
+
+/// One size of the decision tick's curve.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct SizedDecision {
+    /// The size every seat sealed, in size units: its table's budget.
+    pub units: u32,
+    /// The sized table's `rules_hash`.
+    pub rules_hash: u64,
+    /// What the match measured.
+    pub timing: DecisionTiming,
+}
+
+/// The decision tick at each of `sizes`: every seat seals
+/// [`Shape::Handlers24`] at the size, under `committed` with its size budget
+/// set to the size.
+///
+/// # Errors
+///
+/// [`Error::Empty`] for no size; as [`crate::full::sized_rules`],
+/// [`Shape::bytes`] and [`measure_playbook`].
+pub fn measure_curve(
+    committed: &RulesTable,
+    sizes: &[u32],
+    plan: DecisionPlan,
+) -> Result<Vec<SizedDecision>, Error> {
+    if sizes.is_empty() {
+        return Err(Error::Empty(
+            "a decision-tick curve over no size measures nothing".to_owned(),
+        ));
+    }
+    let mut curve: Vec<SizedDecision> = Vec::with_capacity(sizes.len());
+    for units in sizes {
+        let table = crate::full::sized_rules(committed, *units)?;
+        let playbook = shape_text(Shape::Handlers24, *units)?;
+        let timing = measure_playbook(&table.rules, plan, &playbook)?;
+        if timing.units_per_seat != *units {
+            return Err(Error::Drift(format!(
+                "the seats sealed {} units, not the {units} the curve asked for",
+                timing.units_per_seat
+            )));
+        }
+        curve.push(SizedDecision {
+            units: *units,
+            rules_hash: table.hash,
+            timing,
+        });
+    }
+    Ok(curve)
+}
+
+/// A generated shape at `units`, as the canonical JSON text a seat submits.
+///
+/// # Errors
+///
+/// As [`Shape::bytes`], and [`Error::Codec`] for bytes that are not UTF-8,
+/// which the canonical codec never writes.
+pub fn shape_text(shape: Shape, units: u32) -> Result<String, Error> {
+    String::from_utf8(shape.bytes(units)?).map_err(|error| Error::Codec {
+        what: format!("the {} shape at {units} units", shape.name()),
+        reason: error.to_string(),
+    })
+}
+
+/// The curve's notice, word for word. Pure.
+#[must_use]
+pub fn curve_notice(curve: &[SizedDecision], seed: u64, seats: u32, os: &str) -> String {
+    let points: Vec<String> = curve
+        .iter()
+        .map(|point| {
+            format!(
+                "{} units (rules_hash {}): {} ns per size unit, a decision tick {} against an \
+                 ordinary {}, {} evaluation units a decision tick (most {}), {} per size unit",
+                point.units,
+                pharmakos_sim::hex(point.rules_hash),
+                point.timing.ns_per_unit,
+                micros(point.timing.decision_ns),
+                micros(point.timing.ordinary_ns),
+                thousandths(point.timing.work_mean_milli),
+                point.timing.work_max,
+                per_unit(&point.timing),
+            )
+        })
+        .collect();
+    format!(
+        "::notice title=decision tick by size::on {os}, seed 0x{seed:016x}, {seats} seats each \
+         sealing the {} shape at the size, under the committed table with \
+         verifier.size_budget_units set to it, \
+         fastest run per tick; evaluation units are the sim's own count summed over the seats, \
+         a mean per decision tick: {}",
+        Shape::Handlers24.name(),
+        points.join("; "),
+    )
+}
+
+/// A thousandths figure with three places: `61500` is `61.500`.
+fn thousandths(milli: u64) -> String {
+    format!("{}.{:03}", milli.div_euclid(1_000), milli.rem_euclid(1_000))
+}
+
+/// The counted units per decision tick per size unit sealed, with three
+/// places, or the words for a measurement that sealed no unit.
+fn per_unit(timing: &DecisionTiming) -> String {
+    let units = u64::from(timing.seats).checked_mul(u64::from(timing.units_per_seat));
+    match units.and_then(|units| timing.work_mean_milli.checked_div(units)) {
+        Some(milli) => thousandths(milli),
+        None => "none (no unit sealed)".to_owned(),
+    }
 }
 
 /// The notice for one decision-tick measurement, word for word. Pure, so the
@@ -382,10 +619,15 @@ pub fn notice(timing: &DecisionTiming, os: &str) -> String {
     };
     format!(
         "::notice title=decision tick per size unit::{} ns per size unit per decision tick on \
-         {os} ({} seats x {} units sealed; a decision tick {} against an ordinary tick {}, mean \
+         {os}, seed 0x{:016x} under rules_hash {} ({} seats x {} units sealed; a decision tick {} \
+         against an ordinary tick {}, mean \
          excess {} ns over {} windows of {} ticks, fastest run per tick); a whole {MS_PER_TICK} \
-         ms tick with {BENCH_SEATS} seats would hold {implied}, a ceiling and not a budget",
+         ms tick with {BENCH_SEATS} seats would hold {implied}, a ceiling and not a budget. \
+         Counted: {} evaluation units a decision tick over the seats (mean over {} decision \
+         ticks, most {}), {} per size unit sealed",
         timing.ns_per_unit,
+        timing.seed,
+        pharmakos_sim::hex(timing.rules_hash),
         timing.seats,
         timing.units_per_seat,
         micros(timing.decision_ns),
@@ -393,6 +635,10 @@ pub fn notice(timing: &DecisionTiming, os: &str) -> String {
         timing.excess_ns,
         timing.windows,
         timing.ticks,
+        thousandths(timing.work_mean_milli),
+        timing.decision_ticks,
+        timing.work_max,
+        per_unit(timing),
     )
 }
 
@@ -406,6 +652,7 @@ mod tests {
             hash: 0,
             decision,
             last: false,
+            work: if decision { 90 } else { 0 },
         }
     }
 
@@ -425,25 +672,38 @@ mod tests {
                 hash: 0,
                 decision: false,
                 last: true,
+                work: 0,
             },
         ];
-        let timing = summarise(&samples, 3, 128).expect("two windows");
+        let on = Match {
+            seed: 1,
+            rules_hash: 2,
+            seats: 3,
+            units_per_seat: 128,
+        };
+        let timing = summarise(&samples, on).expect("two windows");
+        assert_eq!((timing.seed, timing.rules_hash), (1, 2));
         assert_eq!(timing.windows, 2);
         assert_eq!(timing.excess_ns, 650);
         assert_eq!(timing.ns_per_unit, 1);
         assert_eq!(timing.decision_ns, 800);
         assert_eq!(timing.ordinary_ns, 150);
         assert_eq!(timing.ticks, 7);
+        assert_eq!(timing.decision_ticks, 2);
+        assert_eq!(timing.work_mean_milli, 90_000);
+        assert_eq!(timing.work_max, 90);
 
         // A decision tick at the very end has nothing to pair with.
         samples.insert(6, sample(10_000, true));
-        assert_eq!(summarise(&samples, 3, 128).expect("still two").windows, 2);
-        assert!(summarise(&[sample(5, true)], 3, 128).is_err());
+        assert_eq!(summarise(&samples, on).expect("still two").windows, 2);
+        assert!(summarise(&[sample(5, true)], on).is_err());
     }
 
     #[test]
     fn the_implied_ceiling_fills_one_tick() {
         let timing = DecisionTiming {
+            seed: 1,
+            rules_hash: 2,
             seats: 3,
             units_per_seat: 128,
             ticks: 1_200,
@@ -452,6 +712,9 @@ mod tests {
             ordinary_ns: 0,
             excess_ns: 0,
             ns_per_unit: 100,
+            decision_ticks: 240,
+            work_mean_milli: 0,
+            work_max: 0,
         };
         // 50 ms is 50 000 000 ns; three seats at 100 ns a unit is 300 ns a unit-row.
         assert_eq!(timing.implied_units_per_seat(3), Some(166_666));
@@ -470,6 +733,8 @@ mod tests {
     #[test]
     fn the_notice_is_word_for_word() {
         let timing = DecisionTiming {
+            seed: 0xca5c_aded,
+            rules_hash: 0x1b26_c525_068b_ff61,
             seats: 3,
             units_per_seat: 128,
             ticks: 1_200,
@@ -478,14 +743,20 @@ mod tests {
             ordinary_ns: 200_000,
             excess_ns: 212_345,
             ns_per_unit: 552,
+            decision_ticks: 240,
+            work_mean_milli: 1_234_500,
+            work_max: 1_301,
         };
         assert_eq!(
             notice(&timing, "linux"),
             "::notice title=decision tick per size unit::552 ns per size unit per decision tick \
-             on linux (3 seats x 128 units sealed; a decision tick 412.345 us against an \
-             ordinary tick 200.000 us, mean excess 212345 ns over 239 windows of 1200 ticks, \
+             on linux, seed 0x00000000ca5caded under rules_hash 1b26c525068bff61 (3 seats x 128 \
+             units sealed; a decision tick 412.345 us against an ordinary tick 200.000 us, mean \
+             excess 212345 ns over 239 windows of 1200 ticks, \
              fastest run per tick); a whole 50 ms tick with 3 seats would hold 30193 units per \
-             seat, a ceiling and not a budget"
+             seat, a ceiling and not a budget. Counted: 1234.500 evaluation units a decision \
+             tick over the seats (mean over 240 decision ticks, most 1301), 3.214 per size unit \
+             sealed"
         );
     }
 

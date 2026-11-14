@@ -234,6 +234,7 @@ fn the_fallback_scan_reads_the_whole_crate() {
         [
             "src/decision.rs",
             "src/error.rs",
+            "src/full.rs",
             "src/g3/fourth.rs",
             "src/g3/layout.rs",
             "src/g3/segment.rs",
@@ -248,6 +249,7 @@ fn the_fallback_scan_reads_the_whole_crate() {
             "src/lib.rs",
             "src/p3.rs",
             "src/quick.rs",
+            "src/shapes.rs",
             "src/stats.rs",
             "tests/g3_real.rs",
             "tests/harness.rs",

@@ -4,10 +4,11 @@
 //! The harness measures what it says it measures.
 //!
 //! These run in every leg's `test` step, debug build, and time nothing worth
-//! reading: they hold the inputs to what P1 and G3′ name, so that the figures
-//! `tests/perf_alarm.rs` and `tests/g3_real.rs` publish are figures about the
-//! committed cases, a hosted match at the size budget and the gate's layout,
-//! and not about something that drifted.
+//! reading: they hold the inputs to what P1, G3′ and P3 name, so that the
+//! figures `tests/perf_alarm.rs`, `tests/g3_real.rs` and `tests/p3_alarm.rs`
+//! publish are figures about the committed cases, the generated shapes at
+//! their sizes, a hosted match at the size budget, the gate's layout and the
+//! sim's own graph, and not about something that drifted.
 //!
 //! # What the bench restates, and what holds each restatement
 //!
@@ -25,13 +26,18 @@
 //! | `g3::sight`'s `seen_by` (the sensor walk under `RadiusOnly`) | `crates/sim/src/world/combat.rs`'s private `World::seen_by` | none can reach a private item; the probe names it in its notice as a restatement, and `g3r` reviews it against the sim at the certifying run |
 //! | `g3::sight`'s core (a seat's lowest-id beacon row) | `crates/sim/src/power.rs`'s crate-private `core_of` | the same |
 //! | `g3::variant`'s draw per seat (`kw_per_unit` a unit, none for the commander, `beacon_base_draw_kw` a beacon) | `crates/sim/src/power.rs`'s draw rule | `the_gate_match_is_reproducible_from_its_seed_and_rules_hash`: an underpowered layout would brown out, and the unit test `the_variant_moves_only_its_named_rows` pins the sum |
+//! | `shapes::Shape::Handlers24` at 127 units (63 handlers of `any(any(any(21)))` and `all(all(all(21)))` over distinct `segment_elapsed EQ` leaves, and a route step) | `crates/verifier/src/lint.rs`'s `the_worst_case_is_bounded_by_the_memo` (`vfy5`; items 157 (7) and 158 (1)) | the unit test `the_handler_shape_at_127_is_item_157s_worst_case`, and `every_shape_at_every_size_qualifies_on_its_budget` |
+//! | `shapes`' anchors inside the fixture core's sphere (`b_01` at (80, 11, 55), 24 voxels) | `quick::fixture_scope` and the rules' `beacon.sphere_radius_voxels` | `every_shape_at_every_size_qualifies_on_its_budget`: an anchor off the map or out of the sphere is an error code, and a shape that does not qualify is refused before it is timed |
+//! | `full::sized_rules` (the committed table, `verifier.size_budget_units` set to the size) | the row the verifier reads at `crates/verifier/src/limits.rs`'s `size_budget_units` (E24) | `every_shape_at_every_size_qualifies_on_its_budget` (each report's `size_budget` is the size), and the unit test `a_sized_table_moves_only_its_budget_row` |
 //! | `p3::Graph::generate` (`mapgen::generate`, the store settled, `Surface::new`, `pathing::graph_for`) | `World::new`'s graph (`crates/sim/src/world.rs`) | `a_short_p3_run_measures_every_figure_on_the_worlds_own_graph`: the measurement refuses a hosted world whose graph's facts differ from the bench's |
 //! | `p3::mark_chunk_clusters` | `crates/sim/src/world.rs`'s private `mark_chunk_clusters` | `the_crater_streams_repair_is_a_rebuild`: after the stream's craters the repaired graph's transitions and edges are a from-scratch rebuild's, which a missed cluster would break |
 
 use std::fs;
 
 use pharmakos_bench::decision::{self, BENCH_SEATS, BENCH_SEED, DecisionPlan};
+use pharmakos_bench::full;
 use pharmakos_bench::quick::{self, BUDGET_CASE, Fixture, QuickPlan};
+use pharmakos_bench::shapes::{SIZES, Shape};
 use pharmakos_bench::workspace_root;
 use pharmakos_proto::gp::api::v1::verify_plan::Depth;
 use pharmakos_proto::json;
@@ -206,6 +212,80 @@ fn the_adversarial_support_tick_drops_the_construct_as_built() {
     assert_eq!(
         report.bound_skips, 0,
         "A is exactly the bound, not past it: {report:?}"
+    );
+}
+
+/// Every generated shape at every size of the curve qualifies, sitting
+/// exactly on the budget of its sized table, at both depths: the curve's
+/// figures are figures of playbooks the verifier accepts. A debug build, so
+/// nothing is timed.
+#[test]
+fn every_shape_at_every_size_qualifies_on_its_budget() {
+    let root = workspace_root();
+    let mut fixture = Fixture::committed(&root).expect("the committed fixture");
+    let committed = fixture.rules().clone();
+    for units in SIZES {
+        let sized = full::sized_rules(&committed, units).expect("a sized table");
+        fixture = fixture.with_rules(sized.rules);
+        for shape in Shape::ALL {
+            let case = full::shape_case(shape, units).expect("the shape");
+            if let Err(error) = full::check_at_budget(&fixture, &case, units) {
+                panic!("{error}");
+            }
+        }
+    }
+}
+
+/// The budget line's measurement covers every shape at the committed budget
+/// and `budget_128`, and prints the line `cargo xtask p1-budget` reads.
+#[test]
+fn the_p1_budget_line_covers_every_input() {
+    let root = workspace_root();
+    let figures = full::measure_budget(
+        &root,
+        QuickPlan {
+            warmup: 0,
+            calls: 1,
+        },
+    )
+    .expect("a measurement");
+    assert_eq!(figures.planned, Shape::ALL.len() + 1);
+    assert_eq!(figures.inputs.len(), figures.planned);
+    assert!(figures.inputs.iter().any(|input| input.name == BUDGET_CASE));
+    let line = full::budget_report_line(&figures);
+    assert!(line.starts_with(full::BUDGET_REPORT_PREFIX), "{line}");
+    assert!(
+        line.contains(" inputs=7 planned_inputs=7 calls=1 "),
+        "{line}"
+    );
+}
+
+/// The decision tick at a size of the curve: every seat seals the handler
+/// shape at that size under its sized table, and the sim counts the work. A
+/// debug build, so the nanoseconds are not asserted.
+#[test]
+fn the_decision_curve_seals_each_size_and_counts_its_work() {
+    let root = workspace_root();
+    let rules = quick::committed_rules(&root).expect("the committed rules");
+    let curve = decision::measure_curve(
+        &rules,
+        &[64],
+        DecisionPlan {
+            seed: BENCH_SEED,
+            seats: BENCH_SEATS,
+            // Twenty ticks: four decision ticks at the committed 250 ms cadence.
+            segment_ms: 1_000,
+            runs: 2,
+        },
+    )
+    .expect("a measurement");
+    let point = curve.first().expect("one size");
+    assert_eq!(point.units, 64);
+    assert_eq!(point.timing.units_per_seat, 64);
+    assert!(point.timing.decision_ticks >= 4, "{point:?}");
+    assert!(
+        point.timing.work_max > 0,
+        "the conditions are counted: {point:?}"
     );
 }
 

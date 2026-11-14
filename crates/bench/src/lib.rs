@@ -16,7 +16,9 @@
 //! | Module | Question |
 //! |---|---|
 //! | [`quick`] | QUICK's p50 and p99 over the committed verifier cases and `budget_128` |
-//! | [`decision`] | A decision tick's wall-clock cost per size unit, in a hosted match at the size budget |
+//! | [`full`] | P1 FULL (S3): QUICK and FULL over the committed cases and the generated shapes at each size of E24's curve |
+//! | [`shapes`] | The generated worst-shaped playbooks P1 FULL times, at any size |
+//! | [`decision`] | A decision tick's wall-clock cost per size unit, in a hosted match at the size budget, and in counted evaluation units; and the same at each size of the curve |
 //! | [`p3`] | P3 (S3): a unit's repath on the sim's own graph, cold and under the crater stream, and the travel estimate through the gateway and the sim's estimator |
 //! | [`g3`] | G3′-real: the tick at the gate's load, phase by phase, over an 8-minute segment, and the figures the power budget needs |
 //! | [`hosted`] | A bench match, hosted as `gamectl scenario run` hosts one, the gate's layout placed in its lobby |
@@ -65,11 +67,13 @@
 
 pub mod decision;
 pub mod error;
+pub mod full;
 pub mod g3;
 pub mod heap;
 pub mod hosted;
 pub mod p3;
 pub mod quick;
+pub mod shapes;
 pub mod stats;
 
 pub use error::Error;
