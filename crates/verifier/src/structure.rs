@@ -1296,8 +1296,9 @@ fn walk_condition(condition: &Condition, here: &mut Here, out: &mut Builder) {
             match not.item.as_ref() {
                 None => out.emit(Diag::new("E0203", here.as_str()).arg("node", "not")),
                 Some(inner) => {
-                    here.push("item");
+                    let item_at = here.push("item");
                     walk_condition(inner, here, out);
+                    here.pop(item_at);
                 }
             }
             here.pop(at);
@@ -1312,12 +1313,13 @@ fn walk_group(node: &'static str, items: &[Condition], here: &mut Here, out: &mu
     if items.is_empty() {
         out.emit(Diag::new("E0203", here.as_str()).arg("node", node));
     }
-    here.push("items");
+    let item_list = here.push("items");
     for (index, item) in items.iter().enumerate() {
         let item_at = here.push_index(index);
         walk_condition(item, here, out);
         here.pop(item_at);
     }
+    here.pop(item_list);
     here.pop(at);
 }
 

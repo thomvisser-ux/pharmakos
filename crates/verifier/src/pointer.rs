@@ -48,7 +48,11 @@ pub(crate) struct Here {
 }
 
 /// Where a [`Here`] stood before a push, to pop back to.
+///
+/// A push that drops its mark leaves the pointer a level too deep for the
+/// walk's next sibling, so a mark must be used (PR #177's review).
 #[derive(Clone, Copy, Debug)]
+#[must_use = "pop back to the mark, or every later pointer is one level too deep"]
 pub(crate) struct Mark(usize);
 
 impl Here {
@@ -68,6 +72,16 @@ impl Here {
     pub(crate) fn push(&mut self, token: &str) -> Mark {
         let mark = Mark(self.buf.len());
         push_token(&mut self.buf, token);
+        mark
+    }
+
+    /// Descends several members at once, climbed back from as one: one push,
+    /// one mark, one pop.
+    pub(crate) fn push_path(&mut self, tokens: &[&str]) -> Mark {
+        let mark = Mark(self.buf.len());
+        for token in tokens {
+            push_token(&mut self.buf, token);
+        }
         mark
     }
 
@@ -144,6 +158,18 @@ mod tests {
         assert_eq!(here.as_str(), "/declarative/route/12");
         here.pop(step);
         assert_eq!(here.as_str(), "/declarative/route");
+    }
+
+    #[test]
+    fn a_path_pushed_at_once_is_the_one_pushed_token_by_token() {
+        let mut here = Here::new("/fallback");
+        let at = here.push_path(&["patrol", "way/points"]);
+        assert_eq!(
+            here.as_str(),
+            child(&child("/fallback", "patrol"), "way/points")
+        );
+        here.pop(at);
+        assert_eq!(here.as_str(), "/fallback");
     }
 
     #[test]
