@@ -129,13 +129,38 @@ const RESERVED_NAMES: &[&str] = &[
 /// literally called `is not a field`, which no `.proto` can declare.
 const UNKNOWN_FIELD_MARKER: &str = "is not a field";
 
+/// What the decode stage hands the later stages: the playbook, and its plan
+/// fingerprint, computed once here from the bytes it was decoded from.
+pub(crate) struct Decoded {
+    /// The playbook.
+    pub(crate) playbook: Playbook,
+    /// Its plan fingerprint, or `None` when it has none
+    /// ([`hash::plan_fingerprint`] says when).
+    pub(crate) fingerprint: Option<u64>,
+}
+
 /// Decode, or say why not.
 ///
 /// Returns `None` when there is no playbook to hand the later stages. A version,
 /// tag or fingerprint problem is reported **and** the playbook is returned: the
 /// author gets the rest of the report in the same pass rather than one
 /// diagnostic at a time.
-pub(crate) fn run(bytes: &[u8], out: &mut Builder) -> Option<Playbook> {
+///
+/// # Two paths, one answer (S3's `vfyq`, decisions-log item 158)
+///
+/// A playbook the codec accepts is read in one pass, straight to its wire
+/// bytes ([`json::decode_direct`]), and its fingerprint is written from those
+/// bytes ([`pharmakos_sim::hash::plan_fingerprint_of`]) rather than by encoding
+/// it again. Every other document takes the diagnostic path below, which reads
+/// the tree, scans it for reserved names and decodes it, and reports what it
+/// finds exactly as before.
+///
+/// The reserved-name scan is not skipped for the first path, it is answered:
+/// a document the codec accepts has every member resolved to a field its
+/// message declares, and no message in the schema declares a reserved name
+/// (`no_message_declares_a_reserved_name` below), so the scan would find
+/// nothing.
+pub(crate) fn run(bytes: &[u8], out: &mut Builder) -> Option<Decoded> {
     let text = match core::str::from_utf8(bytes) {
         Ok(text) => text,
         Err(error) => {
@@ -147,6 +172,28 @@ pub(crate) fn run(bytes: &[u8], out: &mut Builder) -> Option<Playbook> {
         }
     };
 
+    let decoded = match json::decode_direct::<Playbook>(text) {
+        Some(decoded) => {
+            let fingerprint = pharmakos_sim::hash::plan_fingerprint_of(&decoded).ok();
+            Decoded {
+                playbook: decoded.into_message(),
+                fingerprint,
+            }
+        }
+        None => diagnose(text, out)?,
+    };
+
+    check_version(&decoded.playbook, out);
+    check_kind(&decoded.playbook, out);
+    check_author(&decoded.playbook, out);
+    check_fingerprint(&decoded.playbook, decoded.fingerprint, out);
+    crate::enums::run(&decoded.playbook, out);
+    Some(decoded)
+}
+
+/// The diagnostic path: the tree, the reserved names, then the codec's own
+/// refusal, each reported as the first that applies.
+fn diagnose(text: &str, out: &mut Builder) -> Option<Decoded> {
     let value = match json::read(text) {
         Ok(value) => value,
         Err(error) => {
@@ -170,8 +217,17 @@ pub(crate) fn run(bytes: &[u8], out: &mut Builder) -> Option<Playbook> {
         return None;
     }
 
-    let playbook: Playbook = match json::decode_json(&value) {
-        Ok(playbook) => playbook,
+    match json::decode_json::<Playbook>(&value) {
+        // The direct reader answers for every document the codec accepts, so
+        // this arm is reached only if the two disagree; it answers as the
+        // decode stage always has, with the fingerprint of the playbook.
+        Ok(playbook) => {
+            let fingerprint = hash::plan_fingerprint(&playbook);
+            Some(Decoded {
+                playbook,
+                fingerprint,
+            })
+        }
         Err(error) => {
             // A pointer with no last token is the document itself, which no
             // unknown field can be: that error is `E0001`'s.
@@ -190,16 +246,9 @@ pub(crate) fn run(bytes: &[u8], out: &mut Builder) -> Option<Playbook> {
             } else {
                 out.emit(Diag::new("E0001", error.pointer.clone()).arg("detail", &error.message));
             }
-            return None;
+            None
         }
-    };
-
-    check_version(&playbook, out);
-    check_kind(&playbook, out);
-    check_author(&playbook, out);
-    check_fingerprint(&playbook, out);
-    crate::enums::run(&playbook, out);
-    Some(playbook)
+    }
 }
 
 /// Whether the codec's message is the "no such field" one, for the member the
@@ -322,8 +371,10 @@ fn check_author(playbook: &Playbook, out: &mut Builder) {
 ///
 /// A warning rather than an error: the verifier writes the right fingerprint
 /// into the report regardless, so the file is still a playbook — it is the
-/// author's stale copy of a stamp the verifier owns.
-fn check_fingerprint(playbook: &Playbook, out: &mut Builder) {
+/// author's stale copy of a stamp the verifier owns. `computed` is that
+/// fingerprint, which the decode stage computes once for the check and the
+/// report alike.
+fn check_fingerprint(playbook: &Playbook, computed: Option<u64>, out: &mut Builder) {
     let Some(meta) = playbook.meta.as_ref() else {
         return;
     };
@@ -334,7 +385,7 @@ fn check_fingerprint(playbook: &Playbook, out: &mut Builder) {
     // byte order (item 77), so the rule has one home, and a field of the wrong
     // length comes back as `None` there rather than needing a length check here.
     let matches = pharmakos_proto::fingerprint::from_field(&meta.fingerprint)
-        .zip(hash::plan_fingerprint(playbook))
+        .zip(computed)
         .is_some_and(|(found, computed)| found == computed);
     if matches {
         return;
@@ -364,6 +415,26 @@ fn schema_version_json(version: SchemaVersion) -> Json {
 #[cfg(test)]
 mod tests {
     use super::{RESERVED_NAMES, names_an_unknown_field};
+
+    /// What lets the decode stage's direct path skip the reserved-name scan: a
+    /// document the codec accepts has every member resolved to a declared
+    /// field, so if no message declares a reserved name, by either spelling,
+    /// the scan cannot find one in it. A schema change that declares one turns
+    /// this red, and the direct path must then scan as well.
+    #[test]
+    fn no_message_declares_a_reserved_name() {
+        for message in pharmakos_proto::descriptor::schema().messages() {
+            for field in &message.fields {
+                for name in [&field.name, &field.json_name] {
+                    assert!(
+                        !RESERVED_NAMES.contains(&name.as_str()),
+                        "`{}` declares `{name}`, a name `RESERVED_NAMES` holds",
+                        message.full_name
+                    );
+                }
+            }
+        }
+    }
 
     /// Every field name `gp.v1` reserves, read out of the committed `.proto`
     /// text.
