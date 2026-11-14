@@ -18,7 +18,11 @@
 //! [`PAIRS`] pairs of columns are drawn from a counter-based generator over
 //! `(seed, draw)`, every column in the graph's largest component, so every
 //! pair, and every run of six columns, is connected. Every query is timed
-//! once, never best-of-N, and none is thrown away:
+//! once, never best-of-N, after [`WARMUP`] untimed queries of the same kind
+//! (the stream's first ticks are its warm-up), and none of the sample is
+//! thrown away. A repath the router seals between two columns the oracle
+//! connects is an error, never a figure; one it stops at `MAX_ROUTE_NODES`
+//! (partial) is counted beside its figure:
 //!
 //! 1. **Repath, cold.** One unit's repath is one call of the sim's router,
 //!    `Router::serve` with one waiting unit and a cap of one: the abstract
@@ -44,7 +48,11 @@
 //!    tick of its clock (`Surface::set_host_clock`), so the limiter, which
 //!    counts in ticks, sees a client calling once a tick.
 //! 4. **The sim's estimator alone**, `pathing::estimate::estimate` over the
-//!    pristine graph, unfogged, at the commander's speed, for the same pairs.
+//!    pristine graph, unfogged, at the commander's speed, for the same pairs,
+//!    timed pair by pair in turn with 3's one-leg call, so neither figure is
+//!    taken on a machine the other has warmed or left cold. The hosted graph
+//!    is checked to be the bench's first: the world's facts, and the route
+//!    adapter's columns and cluster edge.
 //!
 //! Every figure is a nearest-rank percentile from [`crate::stats`], and every
 //! notice names the seed, the committed `rules_hash` and the graph it ran on,
@@ -59,14 +67,10 @@
 use std::path::Path;
 use std::time::Instant;
 
-use pharmakos_gateway::fog::Blind;
-use pharmakos_gateway::host::Host;
-use pharmakos_gateway::token::Token;
 use pharmakos_proto::json::{self, Json};
 use pharmakos_sim::chunks::ChunkDigests;
 use pharmakos_sim::hex;
 use pharmakos_sim::math::fixed::Fx;
-use pharmakos_sim::math::quantity::{MS_PER_TICK, Ms};
 use pharmakos_sim::pathing::clusters::Clusters;
 use pharmakos_sim::pathing::estimate::{Fog, Speed, estimate};
 use pharmakos_sim::pathing::repair::{Repairer, repair};
@@ -74,11 +78,10 @@ use pharmakos_sim::pathing::router::{Router, WalkState};
 use pharmakos_sim::pathing::search::Scratch;
 use pharmakos_sim::pathing::surface::{Node, StepCosts, Surface as Ground};
 use pharmakos_sim::rules::RulesTable;
-use pharmakos_sim::tables::SeatId;
 use pharmakos_sim::voxels::{CHUNK_EDGE_I32, VoxelStore};
 
 use crate::error::Error;
-use crate::hosted::{self, Opening};
+use crate::hosted::PlanningLull;
 use crate::stats::{Summary, micros, millis};
 
 /// The prefix and format version of the line `cargo xtask p3-budget` reads
@@ -370,10 +373,10 @@ impl Graph {
     /// The graph's refresh and repair after a crater settled `chunks`: the
     /// columns refreshed, the clusters marked and repaired. The share timed
     /// beside the repath, never inside it.
-    fn refresh_and_repair(&mut self, chunks: &[u32]) {
+    fn refresh_and_repair(&mut self, chunks: &[u32]) -> Result<(), Error> {
         for chunk in chunks {
             self.surface.refresh_chunk(&self.voxels, *chunk);
-            mark_chunk_clusters(&self.voxels, &self.clusters, &mut self.repairer, *chunk);
+            mark_chunk_clusters(&self.voxels, &self.clusters, &mut self.repairer, *chunk)?;
         }
         repair(
             &self.surface,
@@ -381,6 +384,7 @@ impl Graph {
             &mut self.scratch,
             &mut self.repairer,
         );
+        Ok(())
     }
 
     /// The graph's state after the repairs so far, against one rebuilt from
@@ -428,44 +432,53 @@ pub fn stream_repair_check(
     let mut draws = Draws::new(seed, CRATER_DRAWS);
     for _ in 0..craters {
         let settled = graph.crater(&mut draws, radius)?;
-        graph.refresh_and_repair(&settled);
+        graph.refresh_and_repair(&settled)?;
     }
     graph.repaired_and_rebuilt(rules)
 }
 
 /// Mark every cluster a settled chunk's footprint overlaps: `crates/sim/src/
 /// world.rs`'s private `mark_chunk_clusters`, restated (at the cluster edge of
-/// 32 a chunk's footprint is one cluster, item 58, and this is one mark).
+/// 32 a chunk's footprint is one cluster, item 58, and this is one mark). The
+/// sim's copy returns quietly where this one cannot reach; here each such
+/// branch is an [`Error::Drift`], since a settled chunk always has an origin
+/// on a map the decomposition covers.
+///
+/// # Errors
+///
+/// [`Error::Drift`] for a chunk with no origin, a cluster edge that is not
+/// positive, a footprint past `i32`, or a cluster index past a `u16` tag.
 fn mark_chunk_clusters(
     voxels: &VoxelStore,
     clusters: &Clusters,
     repairer: &mut Repairer,
     chunk: u32,
-) {
-    let Some(origin) = voxels.chunk_origin(chunk) else {
-        return;
-    };
+) -> Result<(), Error> {
+    let origin = voxels
+        .chunk_origin(chunk)
+        .ok_or_else(|| Error::Drift(format!("settled chunk {chunk} has no origin")))?;
     let size = clusters.size();
     if size <= 0 {
-        return;
+        return Err(Error::Drift(format!("a cluster edge of {size} voxels")));
     }
     let [x0, y0, _] = origin;
     let last = |from: i32| {
         from.checked_add(CHUNK_EDGE_I32 - 1)
             .map(|end| end.div_euclid(size))
+            .ok_or_else(|| Error::Drift(format!("chunk {chunk}'s footprint is past i32")))
     };
-    let (Some(y1), Some(x1)) = (last(y0), last(x0)) else {
-        return;
-    };
+    let (y1, x1) = (last(y0)?, last(x0)?);
     for cy in y0.div_euclid(size)..=y1 {
         for cx in x0.div_euclid(size)..=x1 {
-            if let Some(cluster) = clusters.cluster_index(cx, cy)
-                && let Ok(tag) = u16::try_from(cluster)
-            {
+            if let Some(cluster) = clusters.cluster_index(cx, cy) {
+                let tag = u16::try_from(cluster).map_err(|_| {
+                    Error::Drift(format!("cluster {cluster} is past a repair tag's u16"))
+                })?;
                 repairer.mark(tag);
             }
         }
     }
+    Ok(())
 }
 
 /// A column as the router's Q16.16 point, on its standing height.
@@ -479,14 +492,31 @@ fn point_of(surface: &Ground, node: Node) -> Result<[Fx; 3], Error> {
     Ok([fx(x)?, fx(y)?, fx(surface.standing_z(node))?])
 }
 
-/// One timed repath: the router serves one waiting unit from `from` to `to`.
-/// Answers the time and whether the router sealed the unit (no walk found).
+/// How one repath ended, as the router left the unit.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Walk {
+    /// A whole route.
+    Whole,
+    /// A route the router stopped at `MAX_ROUTE_NODES`: the unit walks it and
+    /// asks again.
+    Partial,
+}
+
+/// One timed repath: the router serves one waiting unit from `from` to `to`,
+/// two columns the graph connects. Answers the time and whether the route is
+/// whole or partial.
+///
+/// # Errors
+///
+/// [`Error::Sim`] when the router seals the unit: the oracle connects the two
+/// columns, so no walk found between them is the sim's failure to report, not
+/// a figure; and [`Error::Drift`] when it serves other than the one unit.
 fn repath(
     graph: &mut Graph,
     router: &mut Router,
     from: Node,
     to: Node,
-) -> Result<(u128, bool), Error> {
+) -> Result<(u128, Walk), Error> {
     let positions = [point_of(&graph.surface, from)?];
     let destinations = [point_of(&graph.surface, to)?];
     router.request(0);
@@ -506,7 +536,23 @@ fn repath(
             served.served
         )));
     }
-    Ok((ns, router.state(0) == WalkState::Sealed))
+    if router.state(0) == WalkState::Sealed {
+        return Err(Error::Sim {
+            during: "repathing between two connected columns",
+            reason: format!(
+                "the router sealed the unit between columns {:?} and {:?}, which the \
+                 connectivity oracle connects",
+                graph.surface.coord_of(from),
+                graph.surface.coord_of(to)
+            ),
+        });
+    }
+    let walk = if router.route_partial(0) {
+        Walk::Partial
+    } else {
+        Walk::Whole
+    };
+    Ok((ns, walk))
 }
 
 /// What one seed measured.
@@ -518,12 +564,14 @@ pub struct SeedReport {
     pub graph: GraphFacts,
     /// Repaths on the pristine graph.
     pub cold: Summary,
-    /// Repaths the router sealed on the pristine graph (no walk found).
-    pub cold_sealed: u64,
+    /// Repaths the router stopped at `MAX_ROUTE_NODES` on the pristine graph
+    /// (a sealed repath between two connected columns is an error, never a
+    /// count).
+    pub cold_partial: u64,
     /// Repaths under the crater stream, each after its tick's repair.
     pub stream: Summary,
-    /// Repaths the router sealed under the stream.
-    pub stream_sealed: u64,
+    /// Repaths the router stopped at `MAX_ROUTE_NODES` under the stream.
+    pub stream_partial: u64,
     /// The graph's refresh and repair after each crater, beside the repath.
     pub repair: Summary,
     /// The craters landed.
@@ -627,10 +675,15 @@ pub fn measure(root: &Path, plan: &P3Plan) -> Result<P3Report, Error> {
     })
 }
 
-fn count(sealed: bool, held: u64) -> Result<u64, Error> {
-    held.checked_add(u64::from(sealed))
-        .ok_or(Error::Overflow("the sealed repaths"))
+fn count(walk: Walk, held: u64) -> Result<u64, Error> {
+    held.checked_add(u64::from(walk == Walk::Partial))
+        .ok_or(Error::Overflow("the partial repaths"))
 }
+
+/// Untimed queries before each figure's sample, over its first pairs, so the
+/// sample measures the query rather than the first touch of its code and
+/// data.
+pub const WARMUP: usize = 20;
 
 /// One seed, every figure.
 fn measure_seed(rules: &RulesTable, seed: u64, pairs: usize) -> Result<SeedReport, Error> {
@@ -654,17 +707,33 @@ fn measure_seed(rules: &RulesTable, seed: u64, pairs: usize) -> Result<SeedRepor
         )));
     }
 
-    // 4. The sim's estimator alone, on the pristine graph.
-    let walker = Speed::commander(rules);
-    let mut estimator: Vec<u128> = Vec::with_capacity(pairs);
+    // 1. Cold repaths on the pristine graph, after an untimed warm-up.
+    let mut router = Router::new(1, rules);
+    for (a, b) in pair_list.iter().take(WARMUP) {
+        repath(&mut graph, &mut router, *a, *b)?;
+    }
+    let mut cold: Vec<u128> = Vec::with_capacity(pairs);
+    let mut cold_partial: u64 = 0;
     for (a, b) in &pair_list {
+        let (ns, walk) = repath(&mut graph, &mut router, *a, *b)?;
+        cold.push(ns);
+        cold_partial = count(walk, cold_partial)?;
+    }
+
+    // 3 and 4. The estimate, through the gateway in a hosted Lull on the same
+    // map and through the sim's estimator alone, pair by pair in turn, after
+    // an untimed warm-up of both.
+    let mut lull = PlanningLull::open(rules, seed, P3_SEATS)?;
+    check_hosted_graph(&lull, &graph, seed)?;
+    let walker = Speed::commander(rules);
+    let alone = |graph: &mut Graph, a: Node, b: Node| -> Result<u128, Error> {
         let started = Instant::now();
         let answer = estimate(
             &graph.surface,
             &graph.clusters,
             &mut graph.scratch,
-            *a,
-            *b,
+            a,
+            b,
             Fog::Clear,
             walker,
         );
@@ -675,61 +744,103 @@ fn measure_seed(rules: &RulesTable, seed: u64, pairs: usize) -> Result<SeedRepor
                  0x{seed:016x}"
             )));
         }
-        estimator.push(ns);
+        Ok(ns)
+    };
+    for (a, b) in pair_list.iter().take(WARMUP) {
+        alone(&mut graph, *a, *b)?;
+        route_estimate(&mut lull, &graph.surface, &[*a, *b])?;
     }
-
-    // 1. Cold repaths on the pristine graph.
-    let mut router = Router::new(1, rules);
-    let mut cold: Vec<u128> = Vec::with_capacity(pairs);
-    let mut cold_sealed: u64 = 0;
+    let mut estimator: Vec<u128> = Vec::with_capacity(pairs);
+    let mut one_leg: Vec<u128> = Vec::with_capacity(pairs);
     for (a, b) in &pair_list {
-        let (ns, sealed) = repath(&mut graph, &mut router, *a, *b)?;
-        cold.push(ns);
-        cold_sealed = count(sealed, cold_sealed)?;
+        estimator.push(alone(&mut graph, *a, *b)?);
+        one_leg.push(route_estimate(&mut lull, &graph.surface, &[*a, *b])?);
+    }
+    let mut five_leg: Vec<u128> = Vec::with_capacity(pairs);
+    for window in points.windows(FIVE_LEG_WAYPOINTS).take(WARMUP) {
+        route_estimate(&mut lull, &graph.surface, window)?;
+    }
+    for window in points.windows(FIVE_LEG_WAYPOINTS).take(pairs) {
+        five_leg.push(route_estimate(&mut lull, &graph.surface, window)?);
     }
 
-    // 3. The gateway's estimate, in a hosted Lull on the same map.
-    let (one_leg, five_leg) = gateway_estimates(rules, seed, &graph, &points, &pair_list)?;
-
-    // 2. Repaths under the crater stream, a crater a tick.
-    let radius = crater_radius(rules)?;
-    let mut craters = Draws::new(seed, CRATER_DRAWS);
-    let mut stream_draws = Draws::new(seed, STREAM_DRAWS);
-    let mut stream: Vec<u128> = Vec::with_capacity(pairs);
-    let mut repairs: Vec<u128> = Vec::with_capacity(pairs);
-    let mut stream_sealed: u64 = 0;
-    let mut landed: u64 = 0;
-    for _ in 0..pairs {
-        let settled = graph.crater(&mut craters, radius)?;
-        landed = landed
-            .checked_add(1)
-            .ok_or(Error::Overflow("the craters"))?;
-        let started = Instant::now();
-        graph.refresh_and_repair(&settled);
-        repairs.push(started.elapsed().as_nanos());
-        let ((a, b), more) = graph.connected_pair(&mut stream_draws)?;
-        redrawn = redrawn
-            .checked_add(more)
-            .ok_or(Error::Overflow("the redraws"))?;
-        let (ns, sealed) = repath(&mut graph, &mut router, a, b)?;
-        stream.push(ns);
-        stream_sealed = count(sealed, stream_sealed)?;
-    }
+    // 2. Repaths under the crater stream.
+    let stream = stream_figures(&mut graph, &mut router, rules, seed, pairs)?;
+    redrawn = redrawn
+        .checked_add(stream.redrawn)
+        .ok_or(Error::Overflow("the redraws"))?;
 
     Ok(SeedReport {
         seed,
         graph: pristine,
         cold: Summary::of(cold)?,
-        cold_sealed,
-        stream: Summary::of(stream)?,
-        stream_sealed,
-        repair: Summary::of(repairs)?,
-        craters: landed,
-        one_leg,
-        five_leg,
+        cold_partial,
+        stream: Summary::of(stream.repaths)?,
+        stream_partial: stream.partial,
+        repair: Summary::of(stream.repairs)?,
+        craters: stream.craters,
+        one_leg: Summary::of(one_leg)?,
+        five_leg: Summary::of(five_leg)?,
         estimator: Summary::of(estimator)?,
         redrawn,
     })
+}
+
+/// What the crater stream measured.
+struct Stream {
+    repaths: Vec<u128>,
+    repairs: Vec<u128>,
+    partial: u64,
+    craters: u64,
+    redrawn: u64,
+}
+
+/// Repaths under the crater stream, a crater a tick: crater and settle
+/// untimed, the graph's refresh and repair timed apart, then one repath
+/// between two columns the repaired graph connects. Its first [`WARMUP`]
+/// ticks are played and not timed.
+fn stream_figures(
+    graph: &mut Graph,
+    router: &mut Router,
+    rules: &RulesTable,
+    seed: u64,
+    pairs: usize,
+) -> Result<Stream, Error> {
+    let radius = crater_radius(rules)?;
+    let mut craters = Draws::new(seed, CRATER_DRAWS);
+    let mut draws = Draws::new(seed, STREAM_DRAWS);
+    let mut stream = Stream {
+        repaths: Vec::with_capacity(pairs),
+        repairs: Vec::with_capacity(pairs),
+        partial: 0,
+        craters: 0,
+        redrawn: 0,
+    };
+    let ticks = pairs
+        .checked_add(WARMUP)
+        .ok_or(Error::Overflow("the stream's ticks"))?;
+    for tick in 0..ticks {
+        let settled = graph.crater(&mut craters, radius)?;
+        stream.craters = stream
+            .craters
+            .checked_add(1)
+            .ok_or(Error::Overflow("the craters"))?;
+        let started = Instant::now();
+        graph.refresh_and_repair(&settled)?;
+        let repair_ns = started.elapsed().as_nanos();
+        let ((a, b), more) = graph.connected_pair(&mut draws)?;
+        stream.redrawn = stream
+            .redrawn
+            .checked_add(more)
+            .ok_or(Error::Overflow("the redraws"))?;
+        let (ns, walk) = repath(graph, router, a, b)?;
+        if tick >= WARMUP {
+            stream.repairs.push(repair_ns);
+            stream.repaths.push(ns);
+            stream.partial = count(walk, stream.partial)?;
+        }
+    }
+    Ok(stream)
 }
 
 /// A `gp.v1.Location` voxel on a column's standing height, as the wire spells
@@ -747,136 +858,56 @@ fn voxel(surface: &Ground, node: Node) -> Json {
     )])
 }
 
-/// The hosted Lull P3's estimate is timed in, its seat 0's token, and the
-/// host clock the bench reports between calls.
-struct Lull {
-    surface: pharmakos_gateway::surface::Surface,
-    token: Token,
-    elapsed_ms: i32,
-    /// Round 1's Lull, `rules.match.first_lull_ms`: the countdown's whole.
-    length_ms: i32,
-}
-
-impl Lull {
-    fn open(rules: &RulesTable, seed: u64) -> Result<Lull, Error> {
-        let opening = Opening {
-            seed,
-            seats: P3_SEATS,
-            // The Lull is all the measurement plays; the segment never opens.
-            segment_ms: MS_PER_TICK,
-            rules,
-            playbook: "",
-        };
-        let host: Host = hosted::open_host(&opening)?;
-        // Untimed until the first report, which then carries the countdown
-        // of round 1's Lull from its whole length.
-        let mut surface = hosted::open_lull(host, &opening, None)?;
-        let token = hosted::mint(&mut surface, SeatId::new(0))?;
-        let lull_ms = rules
-            .message()
-            .r#match
-            .as_ref()
-            .map(|block| block.first_lull_ms)
-            .ok_or_else(|| Error::Rules("no `match` block, so no first Lull".to_owned()))?;
-        Ok(Lull {
-            surface,
-            token,
-            elapsed_ms: 0,
-            length_ms: lull_ms,
-        })
-    }
-
-    /// Report one more tick of host time in the Lull, untimed, so the
-    /// limiter sees one call a tick.
-    fn tick(&mut self) -> Result<(), Error> {
-        self.elapsed_ms = self
-            .elapsed_ms
-            .checked_add(MS_PER_TICK)
-            .ok_or(Error::Overflow("the Lull's clock"))?;
-        let remaining = self
-            .length_ms
-            .checked_sub(self.elapsed_ms)
-            .filter(|remaining| *remaining > 0)
-            .ok_or_else(|| {
-                Error::Empty(format!(
-                    "the calls would outlast the {} ms Lull they are timed in",
-                    self.length_ms
-                ))
-            })?;
-        self.surface
-            .set_host_clock(Ms::new(self.elapsed_ms), Ms::new(remaining))
-            .map_err(|error| Error::gateway("reporting the host clock", &error))
-    }
-
-    /// One timed `estimate_route` over `waypoints`.
-    fn time(&mut self, waypoints: Vec<Json>) -> Result<u128, Error> {
-        self.tick()?;
-        let params = json::write(&Json::Object(vec![(
-            "waypoints".to_owned(),
-            Json::Array(waypoints),
-        )]));
-        let request = pharmakos_gateway::rpc::parse(&format!(
-            r#"{{"jsonrpc":"2.0","id":1,"method":"estimate_route","params":{params}}}"#
-        ))
-        .map_err(|error| Error::Codec {
-            what: "the bench's estimate_route request".to_owned(),
-            reason: error.title().to_string(),
-        })?;
-        let started = Instant::now();
-        let answer = self.surface.call(Some(&self.token), &request, &Blind);
-        let ns = started.elapsed().as_nanos();
-        let reachable = answer
-            .get("result")
-            .and_then(|result| result.get("reachable"));
-        if reachable != Some(&Json::Bool(true)) {
-            return Err(Error::Gateway {
-                during: "estimating a route in the Lull",
-                message: format!(
-                    "at {} ms of host time in the Lull: {}",
-                    self.elapsed_ms,
-                    json::write(&answer)
-                ),
-            });
-        }
-        Ok(ns)
-    }
-}
-
-/// The gateway's one-leg and five-leg figures.
-fn gateway_estimates(
-    rules: &RulesTable,
-    seed: u64,
-    graph: &Graph,
-    points: &[Node],
-    pairs: &[(Node, Node)],
-) -> Result<(Summary, Summary), Error> {
-    let mut lull = Lull::open(rules, seed)?;
-    let hosted = GraphFacts::of(
-        hosted::world(&lull.surface)?.surface(),
-        hosted::world(&lull.surface)?.clusters(),
-    );
-    if hosted != graph.facts() {
+/// The hosted graph is the bench's: the world's own surface and clusters
+/// have the bench graph's facts, and the gateway's route adapter, whose
+/// graph `estimate_route` searches, has its columns and its cluster edge.
+/// The adapter's transitions and edges are not reachable without a gateway
+/// getter, so they are compared through the world's, which the adapter is
+/// built from (`crates/gateway/src/routes.rs`).
+fn check_hosted_graph(lull: &PlanningLull, graph: &Graph, seed: u64) -> Result<(), Error> {
+    let host = lull
+        .surface()
+        .host()
+        .map_err(|error| Error::gateway("reading the hosted match", &error))?;
+    let world = host.world();
+    let hosted = GraphFacts::of(world.surface(), world.clusters());
+    let bench = graph.facts();
+    let routes = host.routes();
+    if hosted != bench
+        || routes.columns() != bench.nodes
+        || routes.cluster_voxels() != bench.cluster_voxels
+    {
         return Err(Error::Drift(format!(
-            "the hosted world's graph {hosted:?} is not the bench's {:?} on seed 0x{seed:016x}",
-            graph.facts()
+            "the hosted graph is not the bench's on seed 0x{seed:016x}: the world's {hosted:?}, \
+             the route adapter's {} columns at cluster {}, the bench's {bench:?}",
+            routes.columns(),
+            routes.cluster_voxels()
         )));
     }
-    let mut one_leg: Vec<u128> = Vec::with_capacity(pairs.len());
-    for (a, b) in pairs {
-        one_leg.push(lull.time(vec![voxel(&graph.surface, *a), voxel(&graph.surface, *b)])?);
+    Ok(())
+}
+
+/// One timed `estimate_route` through `waypoints`, which must reach.
+fn route_estimate(
+    lull: &mut PlanningLull,
+    surface: &Ground,
+    waypoints: &[Node],
+) -> Result<u128, Error> {
+    let params = Json::Object(vec![(
+        "waypoints".to_owned(),
+        Json::Array(waypoints.iter().map(|node| voxel(surface, *node)).collect()),
+    )]);
+    let (ns, result) = lull.time("estimate_route", &params)?;
+    if result.get("reachable") != Some(&Json::Bool(true)) {
+        return Err(Error::Gateway {
+            during: "estimating a route in the Lull",
+            message: format!(
+                "a route through connected columns is answered {}",
+                json::write(&result)
+            ),
+        });
     }
-    let mut five_leg: Vec<u128> = Vec::with_capacity(pairs.len());
-    for window in points.windows(FIVE_LEG_WAYPOINTS).take(pairs.len()) {
-        five_leg.push(
-            lull.time(
-                window
-                    .iter()
-                    .map(|node| voxel(&graph.surface, *node))
-                    .collect(),
-            )?,
-        );
-    }
-    Ok((Summary::of(one_leg)?, Summary::of(five_leg)?))
+    Ok(ns)
 }
 
 /// One seed's notice, word for word. Pure.
@@ -886,10 +917,12 @@ pub fn seed_notice(report: &P3Report, seed: &SeedReport, os: &str) -> String {
     format!(
         "::notice title=P3 seed 0x{:016x}::on {os} (rules_hash {}; {} columns, {} walkable, {} \
          steps, {} transitions, {} abstract edges at cluster {}; {} pairs in the largest \
-         component): repath cold p50 {} p99 {} max {} ({} sealed); under a crater a tick ({} \
-         craters) p50 {} p99 {} max {} ({} sealed), the refresh and repair beside it p50 {} p99 \
+         component, {WARMUP} untimed warm-up queries before each figure): repath cold p50 {} p99 {} \
+         max {} ({} partial); under a crater a tick ({} craters) p50 {} p99 {} max {} ({} \
+         partial), the refresh and repair beside it p50 {} p99 \
          {}; estimate_route through the gateway one leg p50 {} p99 {} max {}, five legs p50 {} \
-         p99 {}; the sim's estimator alone p50 {} p99 {}; {} draws redrawn",
+         p99 {}; the sim's estimator alone, timed in turn with the one-leg call, p50 {} p99 \
+         {}; {} draws redrawn",
         seed.seed,
         hex(report.rules_hash),
         g.nodes,
@@ -902,12 +935,12 @@ pub fn seed_notice(report: &P3Report, seed: &SeedReport, os: &str) -> String {
         micros(seed.cold.p50_ns),
         micros(seed.cold.p99_ns),
         micros(seed.cold.max_ns),
-        seed.cold_sealed,
+        seed.cold_partial,
         seed.craters,
         micros(seed.stream.p50_ns),
         micros(seed.stream.p99_ns),
         micros(seed.stream.max_ns),
-        seed.stream_sealed,
+        seed.stream_partial,
         micros(seed.repair.p50_ns),
         micros(seed.repair.p99_ns),
         micros(seed.one_leg.p50_ns),
@@ -956,7 +989,7 @@ pub fn budget_report_line(report: &P3Report) -> String {
         "{BUDGET_REPORT_PREFIX} seeds={} planned_seeds={} pairs={} planned_pairs={PAIRS} \
          repath_p99_ns={} estimate_p99_ns={}",
         report.seeds.len(),
-        report.planned_seeds,
+        P3_SEEDS.len(),
         report.pairs,
         figure(report.worst_repath_p99()),
         figure(report.worst_estimate_p99()),
@@ -1002,9 +1035,9 @@ mod tests {
             seed: 1,
             graph: facts,
             cold: summary(2_000_000),
-            cold_sealed: 0,
+            cold_partial: 0,
             stream: summary(3_000_000),
-            stream_sealed: 0,
+            stream_partial: 0,
             repair: summary(9_000_000),
             craters: 2,
             one_leg: summary(400_000),
@@ -1027,7 +1060,7 @@ mod tests {
         };
         assert_eq!(
             budget_report_line(&report),
-            "p3-budget-report v1 seeds=2 planned_seeds=2 pairs=2 planned_pairs=2000 \
+            "p3-budget-report v1 seeds=2 planned_seeds=3 pairs=2 planned_pairs=2000 \
              repath_p99_ns=4000000 estimate_p99_ns=600000"
         );
         let none = P3Report {

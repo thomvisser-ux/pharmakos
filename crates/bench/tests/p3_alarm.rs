@@ -17,7 +17,7 @@
 //! name**:
 //!
 //! * `p3_pathing_timings`: `cargo xtask perf-alarms p3`, a notice a seed and
-//!   the summary, four in all;
+//!   the summary, four in all ([`P3_NOTICES`], held under ten);
 //! * `p3_budget`: `cargo xtask p3-budget`, the summary and the report line.
 //!
 //! ```sh
@@ -30,8 +30,14 @@
 //! prints an empty line before its first notice, for `perf_alarm.rs`'s
 //! reason.
 
-use pharmakos_bench::p3::{self, P3Plan};
+use pharmakos_bench::p3::{self, P3_SEEDS, P3Plan};
 use pharmakos_bench::workspace_root;
+
+/// `p3`'s notices: one a seed and the summary. GitHub annotates the first
+/// ten notices of a step (item 149 (4)).
+const P3_NOTICES: usize = P3_SEEDS.len() + 1;
+
+const _: () = assert!(P3_NOTICES <= 10);
 
 #[test]
 #[ignore = "a performance alarm, not a gate: cargo xtask perf-alarms p3 runs it with --exact"]
@@ -42,13 +48,19 @@ fn p3_pathing_timings() {
     println!();
     match p3::measure(&root, &P3Plan::gate()) {
         Ok(report) => {
-            for seed in &report.seeds {
-                println!("{}", p3::seed_notice(&report, seed, os));
-            }
+            let mut lines: Vec<String> = report
+                .seeds
+                .iter()
+                .map(|seed| p3::seed_notice(&report, seed, os))
+                .collect();
             match p3::summary_notice(&report, os) {
-                Ok(line) => println!("{line}"),
+                Ok(line) => lines.push(line),
                 Err(error) => panic!("the P3 summary: {error}"),
             }
+            for line in &lines {
+                println!("{line}");
+            }
+            assert_eq!(lines.len(), P3_NOTICES, "the notices P3 declares");
         }
         Err(error) => {
             println!("::warning title=P3::not measured on {os}: {error}");

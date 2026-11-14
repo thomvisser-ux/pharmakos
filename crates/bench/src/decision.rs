@@ -61,12 +61,16 @@
 //! the platform-free half of the same figure.
 //!
 //! [`measure_curve`] takes both at each size of E24's curve
-//! ([`crate::shapes::SIZES`]): every seat seals
-//! [`crate::shapes::Shape::Handlers24`] at the size, the shape whose
-//! conditions a decision tick evaluates in full (a route step's guard is read
-//! only when its step comes up), under the committed table with its size
-//! budget set to the size ([`crate::full::sized_rules`]), each size's
-//! `rules_hash` printed beside it.
+//! ([`crate::shapes::SIZES`]): every seat seals a decision-tick shape at the
+//! size, [`crate::shapes::Shape::FullEval`] (handlers whose `any` conditions
+//! are never true, so a decision evaluates every node of every one; route
+//! steps that walk) or its selector variant, under the committed table with
+//! its size budget set to the size ([`crate::full::sized_rules`]), each
+//! size's `rules_hash` and handler count printed beside it. The handlers stop
+//! at the interpreter's `MAX_HANDLERS` (64) past 129 units, so the counted
+//! work flattens there and the extra units are route steps. The verifier's
+//! worst case, [`crate::shapes::Shape::Handlers24`], is not a decision-tick
+//! shape: its `all` handlers stop at their first false leaf.
 
 use std::path::Path;
 use std::time::Instant;
@@ -508,13 +512,15 @@ pub struct SizedDecision {
     pub units: u32,
     /// The sized table's `rules_hash`.
     pub rules_hash: u64,
+    /// The handlers each seat's playbook holds.
+    pub handlers: usize,
     /// What the match measured.
     pub timing: DecisionTiming,
 }
 
-/// The decision tick at each of `sizes`: every seat seals
-/// [`Shape::Handlers24`] at the size, under `committed` with its size budget
-/// set to the size.
+/// The decision tick at each of `sizes`: every seat seals `shape` (a
+/// decision-tick shape, [`Shape::FullEval`] or [`Shape::FullEvalSelectors`])
+/// at the size, under `committed` with its size budget set to the size.
 ///
 /// # Errors
 ///
@@ -522,6 +528,7 @@ pub struct SizedDecision {
 /// [`Shape::bytes`] and [`measure_playbook`].
 pub fn measure_curve(
     committed: &RulesTable,
+    shape: Shape,
     sizes: &[u32],
     plan: DecisionPlan,
 ) -> Result<Vec<SizedDecision>, Error> {
@@ -533,7 +540,7 @@ pub fn measure_curve(
     let mut curve: Vec<SizedDecision> = Vec::with_capacity(sizes.len());
     for units in sizes {
         let table = crate::full::sized_rules(committed, *units)?;
-        let playbook = shape_text(Shape::Handlers24, *units)?;
+        let playbook = shape_text(shape, *units)?;
         let timing = measure_playbook(&table.rules, plan, &playbook)?;
         if timing.units_per_seat != *units {
             return Err(Error::Drift(format!(
@@ -544,6 +551,7 @@ pub fn measure_curve(
         curve.push(SizedDecision {
             units: *units,
             rules_hash: table.hash,
+            handlers: shape.handlers_at(*units)?,
             timing,
         });
     }
@@ -565,14 +573,22 @@ pub fn shape_text(shape: Shape, units: u32) -> Result<String, Error> {
 
 /// The curve's notice, word for word. Pure.
 #[must_use]
-pub fn curve_notice(curve: &[SizedDecision], seed: u64, seats: u32, os: &str) -> String {
+pub fn curve_notice(
+    curve: &[SizedDecision],
+    shape: Shape,
+    seed: u64,
+    seats: u32,
+    os: &str,
+) -> String {
     let points: Vec<String> = curve
         .iter()
         .map(|point| {
             format!(
-                "{} units (rules_hash {}): {} ns per size unit, a decision tick {} against an \
-                 ordinary {}, {} evaluation units a decision tick (most {}), {} per size unit",
+                "{} units, {} handlers (rules_hash {}): {} ns per size unit, a decision tick {} \
+                 against an ordinary {}, {} evaluation units a decision tick (most {}), {} per \
+                 size unit",
                 point.units,
+                point.handlers,
                 pharmakos_sim::hex(point.rules_hash),
                 point.timing.ns_per_unit,
                 micros(point.timing.decision_ns),
@@ -584,12 +600,12 @@ pub fn curve_notice(curve: &[SizedDecision], seed: u64, seats: u32, os: &str) ->
         })
         .collect();
     format!(
-        "::notice title=decision tick by size::on {os}, seed 0x{seed:016x}, {seats} seats each \
-         sealing the {} shape at the size, under the committed table with \
-         verifier.size_budget_units set to it, \
-         fastest run per tick; evaluation units are the sim's own count summed over the seats, \
-         a mean per decision tick: {}",
-        Shape::Handlers24.name(),
+        "::notice title=decision tick by size ({})::on {os}, seed 0x{seed:016x}, {seats} seats \
+         each sealing the {} shape at the size, under the committed table with \
+         verifier.size_budget_units set to it, fastest run per tick; evaluation units are the \
+         sim's own count summed over the seats, a mean per decision tick: {}",
+        shape.name(),
+        shape.name(),
         points.join("; "),
     )
 }

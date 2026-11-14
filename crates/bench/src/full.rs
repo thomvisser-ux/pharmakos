@@ -12,14 +12,29 @@
 //!
 //! # What one timed call is
 //!
-//! The same call as QUICK's ([`Fixture::time`]): `Input::new` then `verify`
-//! at the depth, against the verifier goldens' fixture
-//! (`quick::fixture_scope` and `quick::fixture_snapshot`). `Input::new` is
-//! inside the timed region, as `plan-core`'s `verify_jsonc` builds a fresh
-//! `Input` for every call (it decodes the bytes, computes the fingerprint and
-//! `rules_hash` and reads the limits); the canonicalisation in front of it
-//! and the JSON-RPC framing around it are not. Each call is timed once,
-//! never best-of-N, after untimed warm-up calls of the same input.
+//! **The gate figure** is the same call as QUICK's ([`Fixture::time`]):
+//! `Input::new` then `verify` at the depth, on the shape's canonical bytes,
+//! against the verifier goldens' fixture (`quick::fixture_scope` and
+//! `quick::fixture_snapshot`). `Input::new` is inside the timed region, as
+//! `plan-core`'s `verify_jsonc` builds a fresh `Input` for every call (it
+//! decodes the bytes, computes the fingerprint and `rules_hash` and reads the
+//! limits); the canonicalisation in front of it and the JSON-RPC framing
+//! around it are not.
+//!
+//! **The end-to-end figure** beside it ([`EndToEnd`]) is what a player's
+//! editor waits on: `verify_plan` through `Surface::call` in a hosted first
+//! Lull (`hosted::PlanningLull`, the golden seed, three seats, the sized
+//! table), sent the shape's **compact** text ([`crate::shapes::compact`]), so
+//! the canonicalisation, the request's parse and the answer's framing are in
+//! it. The shape's interface steps visit the hosted seat's own core, `b_00`,
+//! and the answer says whether it qualifies there; a compact text past the
+//! gateway's `MAX_PLAYBOOK_CHARS` is marked as over the transport cap and not
+//! sent.
+//!
+//! Each call is timed once, never best-of-N, after untimed warm-up calls of
+//! the same input; every notice says how many calls it took. CI's alarm takes
+//! 200 a figure; certification takes [`CERT_PLAN`]'s 2 000 (item 158 (2)),
+//! through the bench's `p1_certify` test, which `cert3` runs by hand.
 //!
 //! # The sized tables
 //!
@@ -44,15 +59,41 @@
 
 use std::path::Path;
 
+use pharmakos_gateway::surface::planning::MAX_PLAYBOOK_CHARS;
 use pharmakos_proto::gp::api::v1::VerifyReport;
 use pharmakos_proto::gp::api::v1::verify_plan::Depth;
+use pharmakos_proto::json::Json;
 use pharmakos_sim::hex;
 use pharmakos_sim::rules::RulesTable;
+use pharmakos_sim::tables::SeatId;
 
+use crate::decision::{BENCH_SEATS, BENCH_SEED};
 use crate::error::Error;
+use crate::hosted::PlanningLull;
 use crate::quick::{BUDGET_CASE, Case, Fixture, QuickPlan, QuickTiming};
-use crate::shapes::Shape;
+use crate::shapes::{self, Core, Pad, Shape};
 use crate::stats::{Summary, micros, millis};
+
+/// Calls a figure of the budget line takes; the line prints it as
+/// `planned_calls`, so a run cut short of it is no verdict.
+pub const BUDGET_CALLS: usize = 500;
+
+/// The budget line's sample.
+pub const BUDGET_PLAN: QuickPlan = QuickPlan {
+    warmup: 50,
+    calls: BUDGET_CALLS,
+};
+
+/// The budget line's inputs: every shape of [`Shape::ALL`] at the committed
+/// budget, and `budget_128`. The line prints it as `planned_inputs`.
+pub const BUDGET_INPUTS: usize = Shape::ALL.len() + 1;
+
+/// Certification's sample: at least 2 000 timed calls a figure (item 158 (2):
+/// the owner's machine is noisy at p99).
+pub const CERT_PLAN: QuickPlan = QuickPlan {
+    warmup: 100,
+    calls: 2_000,
+};
 
 /// The prefix and format version of the line `cargo xtask p1-budget` reads
 /// (`xtask/src/budget.rs`, whose unit test holds the two spellings together).
@@ -114,6 +155,27 @@ pub fn sized_rules(committed: &RulesTable, units: u32) -> Result<SizedRules, Err
     })
 }
 
+/// The end-to-end figure: `verify_plan` through the hosted gateway, sent the
+/// compact text.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum EndToEnd {
+    /// Both depths were timed.
+    Measured {
+        /// `verify_plan` at `quick`.
+        quick: Summary,
+        /// `verify_plan` at `full`.
+        full: Summary,
+        /// Whether the FULL report qualified on the hosted seat's view.
+        qualifies: bool,
+    },
+    /// The compact text is past the gateway's `MAX_PLAYBOOK_CHARS`, which
+    /// refuses it before anything is verified: not sent.
+    OverCap {
+        /// Its characters.
+        chars: usize,
+    },
+}
+
 /// One shape at one size, both depths.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct ShapeFigure {
@@ -123,10 +185,18 @@ pub struct ShapeFigure {
     pub units: u32,
     /// Its canonical bytes' length.
     pub bytes: usize,
-    /// QUICK's calls.
+    /// Its compact text's length in bytes.
+    pub compact_bytes: usize,
+    /// Its compact text's length in characters, what the transport caps.
+    pub compact_chars: usize,
+    /// Its handlers.
+    pub handlers: usize,
+    /// QUICK's calls, on the canonical bytes: the gate figure.
     pub quick: Summary,
-    /// FULL's calls.
+    /// FULL's calls, on the canonical bytes.
     pub full: Summary,
+    /// `verify_plan` through the hosted gateway, on the compact text.
+    pub end_to_end: EndToEnd,
 }
 
 /// One size of the curve: its table and every shape at it.
@@ -257,12 +327,19 @@ pub fn measure_curve(root: &Path, sizes: &[u32], plan: QuickPlan) -> Result<Curv
         for shape in Shape::ALL {
             let case = shape_case(shape, *units)?;
             check_at_budget(&fixture, &case, *units)?;
+            let compact = compact_text(&case)?;
             shapes.push(ShapeFigure {
                 shape,
                 units: *units,
                 bytes: case.bytes.len(),
+                compact_bytes: compact.len(),
+                compact_chars: compact.chars().count(),
+                handlers: shape.handlers_at(*units)?,
                 quick: sample(&fixture, &case, plan, Depth::Quick)?,
                 full: sample(&fixture, &case, plan, Depth::Full)?,
+                end_to_end: end_to_end(fixture.rules(), plan, |core| {
+                    shapes::canonical(&shape.playbook_at(*units, core)?, shape.name())
+                })?,
             });
         }
         points.push(SizePoint {
@@ -277,6 +354,225 @@ pub fn measure_curve(root: &Path, sizes: &[u32], plan: QuickPlan) -> Result<Curv
         plan,
         points,
     })
+}
+
+/// A case's canonical bytes as compact text.
+fn compact_text(case: &Case) -> Result<String, Error> {
+    let text = std::str::from_utf8(&case.bytes).map_err(|error| Error::Codec {
+        what: format!("{} as text", case.name),
+        reason: error.to_string(),
+    })?;
+    Ok(shapes::compact(text))
+}
+
+/// Seat 0's core in the hosted match: `b_00`, its column and height, and the
+/// map's extent.
+fn hosted_core(lull: &PlanningLull, rules: &RulesTable) -> Result<Core, Error> {
+    let world = crate::hosted::world(lull.surface())?;
+    let beacons = world.beacons();
+    let at = beacons
+        .seats()
+        .iter()
+        .zip(beacons.positions())
+        .find(|(seat, _)| **seat == SeatId::new(0).raw())
+        .map(|(_, at)| at)
+        .ok_or_else(|| Error::Layout("seat 0 has no core on the hosted map".to_owned()))?;
+    let map = rules
+        .message()
+        .map
+        .as_ref()
+        .ok_or_else(|| Error::Rules("no `map` block".to_owned()))?;
+    let extent = |size: u32| i32::try_from(size).map_err(|_| Error::Overflow("the map's extent"));
+    Ok(Core {
+        id: "b_00".to_owned(),
+        at: [
+            at[0].floor_voxels(),
+            at[1].floor_voxels(),
+            at[2].floor_voxels(),
+        ],
+        extent: [extent(map.size_x)?, extent(map.size_y)?],
+    })
+}
+
+/// The end-to-end figure: a hosted first Lull under `rules`, the canonical
+/// text `text` makes for the hosted seat's core turned compact, and
+/// `verify_plan` timed at both depths, `plan.warmup` untimed calls before
+/// each sample.
+///
+/// # Errors
+///
+/// As [`PlanningLull::open`] and [`PlanningLull::time`]; [`Error::Empty`] for
+/// zero calls; [`Error::Drift`] for an answer with no `qualifies`.
+pub fn end_to_end(
+    rules: &RulesTable,
+    plan: QuickPlan,
+    text: impl Fn(&Core) -> Result<String, Error>,
+) -> Result<EndToEnd, Error> {
+    if plan.calls == 0 {
+        return Err(Error::Empty(
+            "an end-to-end sample of zero calls measures nothing".to_owned(),
+        ));
+    }
+    let mut lull = PlanningLull::open(rules, BENCH_SEED, BENCH_SEATS)?;
+    let core = hosted_core(&lull, rules)?;
+    let compact = shapes::compact(&text(&core)?);
+    let chars = compact.chars().count();
+    if chars > MAX_PLAYBOOK_CHARS {
+        return Ok(EndToEnd::OverCap { chars });
+    }
+    let mut call = |depth: &str| -> Result<(u128, Json), Error> {
+        lull.time(
+            "verify_plan",
+            &Json::Object(vec![
+                ("playbook_jsonc".to_owned(), Json::String(compact.clone())),
+                ("depth".to_owned(), Json::String(depth.to_owned())),
+            ]),
+        )
+    };
+    let mut summaries: Vec<Summary> = Vec::with_capacity(2);
+    let mut qualifies = None;
+    for depth in ["quick", "full"] {
+        for _ in 0..plan.warmup {
+            call(depth)?;
+        }
+        let mut durations: Vec<u128> = Vec::with_capacity(plan.calls);
+        for _ in 0..plan.calls {
+            let (ns, result) = call(depth)?;
+            durations.push(ns);
+            qualifies = match result
+                .get("report")
+                .and_then(|report| report.get("qualifies"))
+            {
+                Some(Json::Bool(answer)) => Some(*answer),
+                _ => {
+                    return Err(Error::Drift(format!(
+                        "a verify_plan answer with no `qualifies`: {}",
+                        pharmakos_proto::json::write(&result)
+                    )));
+                }
+            };
+        }
+        summaries.push(Summary::of(durations)?);
+    }
+    match (summaries.as_slice(), qualifies) {
+        ([quick, full], Some(qualifies)) => Ok(EndToEnd::Measured {
+            quick: *quick,
+            full: *full,
+            qualifies,
+        }),
+        _ => Err(Error::Drift(
+            "an end-to-end figure missing a depth".to_owned(),
+        )),
+    }
+}
+
+/// The end-to-end figure's words in a notice.
+fn end_to_end_words(figure: &EndToEnd) -> String {
+    match figure {
+        EndToEnd::Measured {
+            quick,
+            full,
+            qualifies,
+        } => format!(
+            "verify_plan end to end QUICK {} / {}, FULL {} / {}{}",
+            millis(quick.p50_ns),
+            millis(quick.p99_ns),
+            millis(full.p50_ns),
+            millis(full.p99_ns),
+            if *qualifies {
+                ""
+            } else {
+                " (does not qualify on the hosted seat's view)"
+            }
+        ),
+        EndToEnd::OverCap { chars } => format!(
+            "OVER THE TRANSPORT CAP: {chars} compact characters past MAX_PLAYBOOK_CHARS \
+             {MAX_PLAYBOOK_CHARS}, so not sent end to end"
+        ),
+    }
+}
+
+/// QUICK's cost at the transport cap, one [`Pad`]: [`shapes::max_text`] at
+/// the committed budget, the gate figure on its canonical bytes and the
+/// end-to-end figure on its compact text, exactly `MAX_PLAYBOOK_CHARS`
+/// characters. Published, never a budget failure: whether 5 ms must hold at
+/// the cap is the owner's (S3's `bench3` fix pass, item 3).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct CapFigure {
+    /// The padding.
+    pub pad: Pad,
+    /// The size, in size units: the committed budget.
+    pub units: u32,
+    /// The canonical bytes' length.
+    pub bytes: usize,
+    /// The compact text's length in bytes.
+    pub compact_bytes: usize,
+    /// The compact text's length in characters: `MAX_PLAYBOOK_CHARS`.
+    pub compact_chars: usize,
+    /// QUICK's calls, on the canonical bytes.
+    pub quick: Summary,
+    /// FULL's calls, on the canonical bytes.
+    pub full: Summary,
+    /// `verify_plan` through the hosted gateway, on the compact text.
+    pub end_to_end: EndToEnd,
+}
+
+/// [`CapFigure`] for each [`Pad`], under the committed table.
+///
+/// # Errors
+///
+/// As [`shapes::max_text`], [`check_at_budget`], [`sample`] and
+/// [`end_to_end`].
+pub fn measure_cap(root: &Path, plan: QuickPlan) -> Result<Vec<CapFigure>, Error> {
+    let fixture = Fixture::committed(root)?;
+    let units = committed_budget(fixture.rules())?;
+    let mut figures: Vec<CapFigure> = Vec::with_capacity(2);
+    for pad in [Pad::Ascii, Pad::FourByte] {
+        let playbook = shapes::max_text(units, pad, MAX_PLAYBOOK_CHARS)?;
+        let text = shapes::canonical(&playbook, "the max_text shape")?;
+        let case = Case {
+            name: format!("max_text_{}_{units}", pad.name()),
+            bytes: text.clone().into_bytes(),
+        };
+        check_at_budget(&fixture, &case, units)?;
+        let compact = shapes::compact(&text);
+        figures.push(CapFigure {
+            pad,
+            units,
+            bytes: case.bytes.len(),
+            compact_bytes: compact.len(),
+            compact_chars: compact.chars().count(),
+            quick: sample(&fixture, &case, plan, Depth::Quick)?,
+            full: sample(&fixture, &case, plan, Depth::Full)?,
+            end_to_end: end_to_end(fixture.rules(), plan, |_| Ok(text.clone()))?,
+        });
+    }
+    Ok(figures)
+}
+
+/// One [`CapFigure`]'s notice, word for word. Pure.
+#[must_use]
+pub fn cap_notice(figure: &CapFigure, plan: QuickPlan, os: &str) -> String {
+    format!(
+        "::notice title=P1 at the transport cap ({})::on {os}, {}'s structure at {} units, its \
+         labels and title padded with {} characters to {} compact characters ({} bytes; {} \
+         canonical bytes), {} calls after {} untimed: QUICK {} / {}, FULL {} / {} p50 / p99 on \
+         the canonical bytes; {}. Published, never a budget failure",
+        figure.pad.name(),
+        Shape::RouteGuards24.name(),
+        figure.units,
+        figure.pad.name(),
+        figure.compact_chars,
+        figure.compact_bytes,
+        figure.bytes,
+        plan.calls,
+        plan.warmup,
+        millis(figure.quick.p50_ns),
+        millis(figure.quick.p99_ns),
+        millis(figure.full.p50_ns),
+        millis(figure.full.p99_ns),
+        end_to_end_words(&figure.end_to_end),
+    )
 }
 
 /// FULL over the committed cases, as notices word for word. Pure.
@@ -330,21 +626,28 @@ pub fn shape_notice(curve: &Curve, shape: Shape, os: &str) -> String {
         .filter_map(|point| point.shapes.iter().find(|figure| figure.shape == shape))
         .map(|figure| {
             format!(
-                "{} units ({} bytes) QUICK {} / {}, FULL {} / {}",
+                "{} units ({} handlers; {} canonical bytes, {} compact) QUICK {} / {}, FULL {} / \
+                 {}; {}",
                 figure.units,
+                figure.handlers,
                 figure.bytes,
+                figure.compact_bytes,
                 millis(figure.quick.p50_ns),
                 millis(figure.quick.p99_ns),
                 millis(figure.full.p50_ns),
                 millis(figure.full.p99_ns),
+                end_to_end_words(&figure.end_to_end),
             )
         })
         .collect();
     format!(
-        "::notice title=P1 shape {}::p50 / p99 on {os} by size: {}. The committed budget is {} \
-         units; spec section 16's P1 bars there are QUICK {} and FULL {} p99, published here \
-         and never gated",
+        "::notice title=P1 shape {}::p50 / p99 on {os} by size, {} calls a figure after {} \
+         untimed, QUICK and FULL on the canonical bytes (the gate figure): {}. The committed \
+         budget is {} units; spec section 16's P1 bars there are QUICK {} and FULL {} p99, \
+         published here and never gated",
         shape.name(),
+        curve.plan.calls,
+        curve.plan.warmup,
         sizes.join("; "),
         curve.budget_units,
         millis(QUICK_BAR_NS),
@@ -374,7 +677,8 @@ pub struct BudgetFigures {
     pub rules_hash: u64,
     /// Calls per input and depth.
     pub calls: usize,
-    /// How many inputs the run planned: every shape and `budget_128`.
+    /// How many inputs the run measured over, of the [`BUDGET_INPUTS`] the
+    /// line plans.
     pub planned: usize,
     /// The inputs measured, in order.
     pub inputs: Vec<BudgetInput>,
@@ -465,7 +769,8 @@ pub fn budget_notice(figures: &BudgetFigures, os: &str) -> Result<String, Error>
 }
 
 /// The line `cargo xtask p1-budget` reads, after [`BUDGET_REPORT_PREFIX`]:
-/// the inputs measured and planned (so a short run is refused), the calls,
+/// the inputs measured against [`BUDGET_INPUTS`] and the calls against
+/// [`BUDGET_CALLS`] (so a cut run is refused as no verdict),
 /// and the worst p99 of each depth in whole nanoseconds. A run over no input
 /// has no worst, and prints `none` for it, which the reader refuses as not a
 /// whole number: no verdict, never a pass.
@@ -476,11 +781,10 @@ pub fn budget_report_line(figures: &BudgetFigures) -> String {
         None => "none".to_owned(),
     };
     format!(
-        "{BUDGET_REPORT_PREFIX} budget_units={} inputs={} planned_inputs={} calls={} \
-         quick_p99_ns={} full_p99_ns={}",
+        "{BUDGET_REPORT_PREFIX} budget_units={} inputs={} planned_inputs={BUDGET_INPUTS} calls={} \
+         planned_calls={BUDGET_CALLS} quick_p99_ns={} full_p99_ns={}",
         figures.budget_units,
         figures.inputs.len(),
-        figures.planned,
         figures.calls,
         worst(Depth::Quick),
         worst(Depth::Full),
@@ -545,8 +849,8 @@ mod tests {
         };
         assert_eq!(
             budget_report_line(&figures),
-            "p1-budget-report v1 budget_units=128 inputs=2 planned_inputs=2 calls=500 \
-             quick_p99_ns=4000000 full_p99_ns=12000000"
+            "p1-budget-report v1 budget_units=128 inputs=2 planned_inputs=7 calls=500 \
+             planned_calls=500 quick_p99_ns=4000000 full_p99_ns=12000000"
         );
         assert_eq!(figures.worst(Depth::Quick), Some(("a", 4_000_000)));
         assert_eq!(figures.worst(Depth::Full), Some(("b", 12_000_000)));
@@ -574,17 +878,24 @@ mod tests {
                     shape: Shape::LongestRoute,
                     units: 64,
                     bytes: 9_000,
+                    compact_bytes: 3_000,
+                    compact_chars: 3_000,
+                    handlers: 0,
                     quick: summary(1_500_000, 2_250_000),
                     full: summary(3_000_000, 4_000_000),
+                    end_to_end: EndToEnd::OverCap { chars: 600_000 },
                 }],
             }],
         };
         assert_eq!(
             shape_notice(&curve, Shape::LongestRoute, "macos"),
-            "::notice title=P1 shape longest_route::p50 / p99 on macos by size: 64 units (9000 \
-             bytes) QUICK 1.500 ms / 2.250 ms, FULL 3.000 ms / 4.000 ms. The committed budget \
-             is 128 units; spec section 16's P1 bars there are QUICK 5.000 ms and FULL 50.000 \
-             ms p99, published here and never gated"
+            "::notice title=P1 shape longest_route::p50 / p99 on macos by size, 200 calls a \
+             figure after 20 untimed, QUICK and FULL on the canonical bytes (the gate figure): 64 \
+             units (0 handlers; 9000 canonical bytes, 3000 compact) QUICK 1.500 ms / 2.250 ms, \
+             FULL 3.000 ms / 4.000 ms; OVER THE TRANSPORT CAP: 600000 compact characters past \
+             MAX_PLAYBOOK_CHARS 524288, so not sent end to end. The committed budget is 128 \
+             units; spec section 16's P1 bars there are QUICK 5.000 ms and FULL 50.000 ms p99, \
+             published here and never gated"
         );
     }
 }

@@ -101,11 +101,11 @@ impl GateLoad {
     };
 
     /// The load with raids and every seat's playbook at the size budget,
-    /// E24's test (c): the shape whose conditions a decision tick evaluates
-    /// in full.
+    /// E24's test (c): [`Shape::FullEval`], whose handlers a decision
+    /// evaluates in full and whose route steps walk the commander.
     pub const RAIDS_AT_B: GateLoad = GateLoad {
         raids: true,
-        sealed: Sealed::Shape(Shape::Handlers24),
+        sealed: Sealed::Shape(Shape::FullEval),
     };
 }
 

@@ -291,3 +291,116 @@ fn number(value: Option<&Json>) -> Option<u32> {
         _ => None,
     }
 }
+
+/// A hosted first Lull a planning call is timed in, with nothing submitted:
+/// the door a seat's editor calls through. P3 times `estimate_route` here
+/// and P1 FULL's end-to-end figure times `verify_plan`.
+///
+/// The Lull opens untimed, and before each call the host reports one more
+/// tick of its clock (`Surface::set_host_clock`, untimed), so the gateway's
+/// limiter, which counts in ticks, sees a client calling once a tick; the
+/// countdown is round 1's Lull, `rules.match.first_lull_ms`, from its whole.
+#[derive(Debug)]
+pub struct PlanningLull {
+    surface: Surface,
+    token: Token,
+    elapsed_ms: i32,
+    length_ms: i32,
+}
+
+impl PlanningLull {
+    /// Open the match on `seed` at `seats` seats under `rules` and stop in its
+    /// first Lull, with seat 0's token.
+    ///
+    /// # Errors
+    ///
+    /// As [`open_host`] and [`open_lull`]; [`Error::Rules`] for a table with
+    /// no `match` block.
+    pub fn open(rules: &RulesTable, seed: u64, seats: u32) -> Result<PlanningLull, Error> {
+        let opening = Opening {
+            seed,
+            seats,
+            // The Lull is all the measurement plays; the segment never opens.
+            segment_ms: pharmakos_sim::math::quantity::MS_PER_TICK,
+            rules,
+            playbook: "",
+        };
+        let host = open_host(&opening)?;
+        let mut surface = open_lull(host, &opening, None)?;
+        let token = mint(&mut surface, SeatId::new(0))?;
+        let length_ms = rules
+            .message()
+            .r#match
+            .as_ref()
+            .map(|block| block.first_lull_ms)
+            .ok_or_else(|| Error::Rules("no `match` block, so no first Lull".to_owned()))?;
+        Ok(PlanningLull {
+            surface,
+            token,
+            elapsed_ms: 0,
+            length_ms,
+        })
+    }
+
+    /// The hosted surface, read only.
+    #[must_use]
+    pub const fn surface(&self) -> &Surface {
+        &self.surface
+    }
+
+    /// Report one more tick of host time in the Lull, untimed.
+    fn tick(&mut self) -> Result<(), Error> {
+        self.elapsed_ms = self
+            .elapsed_ms
+            .checked_add(pharmakos_sim::math::quantity::MS_PER_TICK)
+            .ok_or(Error::Overflow("the Lull's clock"))?;
+        let remaining = self
+            .length_ms
+            .checked_sub(self.elapsed_ms)
+            .filter(|remaining| *remaining > 0)
+            .ok_or_else(|| {
+                Error::Empty(format!(
+                    "the calls would outlast the {} ms Lull they are timed in",
+                    self.length_ms
+                ))
+            })?;
+        self.surface
+            .set_host_clock(Ms::new(self.elapsed_ms), Ms::new(remaining))
+            .map_err(|error| Error::gateway("reporting the host clock", &error))
+    }
+
+    /// One timed call of `method` with `params`, as seat 0: the request is
+    /// parsed before the clock starts, and the timed region is
+    /// `Surface::call` alone. Answers the time and the call's `result`; an
+    /// answer with no `result` is the gateway's refusal, an error.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Gateway`] for a refusal, naming the host time it came at, and
+    /// as the clock report.
+    pub fn time(&mut self, method: &str, params: &Json) -> Result<(u128, Json), Error> {
+        self.tick()?;
+        let params = json::write(params);
+        let request = pharmakos_gateway::rpc::parse(&format!(
+            r#"{{"jsonrpc":"2.0","id":1,"method":"{method}","params":{params}}}"#
+        ))
+        .map_err(|error| Error::Codec {
+            what: format!("the bench's {method} request"),
+            reason: error.title().to_string(),
+        })?;
+        let started = std::time::Instant::now();
+        let answer = self.surface.call(Some(&self.token), &request, &Blind);
+        let ns = started.elapsed().as_nanos();
+        match answer.get("result") {
+            Some(result) => Ok((ns, result.clone())),
+            None => Err(Error::Gateway {
+                during: "a planning call in the Lull",
+                message: format!(
+                    "{method} at {} ms of host time in the Lull: {}",
+                    self.elapsed_ms,
+                    json::write(&answer)
+                ),
+            }),
+        }
+    }
+}

@@ -204,6 +204,11 @@ fn beacon(
     }
 }
 
+/// The fixture's core, `b_01`: its column and height in [`fixture_scope`],
+/// as `crates/verifier/tests/verifier.rs` writes it. The generated shapes'
+/// anchors stand round it (`crate::shapes::Core::fixture`).
+pub const FIXTURE_CORE_AT: [i32; 3] = [80, 11, 55];
+
 /// The seat's view every case is checked against, as
 /// `crates/verifier/tests/verifier.rs` writes it in `fixture_scope`.
 #[must_use]
@@ -220,7 +225,7 @@ pub fn fixture_scope() -> Scope {
         "b_01",
         Ownership::Own,
         MandateKind::Build,
-        (80, 11, 55),
+        (FIXTURE_CORE_AT[0], FIXTURE_CORE_AT[1], FIXTURE_CORE_AT[2]),
         true,
         &[],
     ))

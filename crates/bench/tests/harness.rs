@@ -31,6 +31,9 @@
 //! | `full::sized_rules` (the committed table, `verifier.size_budget_units` set to the size) | the row the verifier reads at `crates/verifier/src/limits.rs`'s `size_budget_units` (E24) | `every_shape_at_every_size_qualifies_on_its_budget` (each report's `size_budget` is the size), and the unit test `a_sized_table_moves_only_its_budget_row` |
 //! | `p3::Graph::generate` (`mapgen::generate`, the store settled, `Surface::new`, `pathing::graph_for`) | `World::new`'s graph (`crates/sim/src/world.rs`) | `a_short_p3_run_measures_every_figure_on_the_worlds_own_graph`: the measurement refuses a hosted world whose graph's facts differ from the bench's |
 //! | `p3::mark_chunk_clusters` | `crates/sim/src/world.rs`'s private `mark_chunk_clusters` | `the_crater_streams_repair_is_a_rebuild`: after the stream's craters the repaired graph's transitions and edges are a from-scratch rebuild's, which a missed cluster would break |
+//! | `full`'s hosted core (seat 0's core is `b_00`, at its beacon row's position) | the gateway's per-seat beacon names (`crates/gateway/src/surface.rs`, "`b_00`, its core, first") | `the_end_to_end_figure_verifies_the_compact_text_through_the_gateway`: the target shape at that core qualifies through `verify_plan` |
+//! | `shapes::FIXTURE_EXTENT` | the committed rules' `map.size_x` and `map.size_y` | `the_fixture_extent_is_the_committed_map` |
+//! | `p3::check_hosted_graph`'s route-adapter half (its columns and cluster edge) | `crates/gateway/src/routes.rs`'s `RouteAdapter`, whose transitions and edges have no getter | the check itself refuses a mismatch; the adapter's transitions and edges are compared only through the world's graph it is built from, until a gateway lane adds a getter |
 //! | `g3::layout::raid_settings`' aim (an Attack beacon's nearest enemy core) | `g3::layout::layout_at`'s placing, `ATTACK_FROM_ENEMY_CORE` voxels from the enemy core | `the_gate_load_with_raids_launches`: the hosted segment's `attack_launched` count is above zero |
 
 use std::fs;
@@ -251,13 +254,16 @@ fn the_p1_budget_line_covers_every_input() {
         },
     )
     .expect("a measurement");
-    assert_eq!(figures.planned, Shape::ALL.len() + 1);
+    assert_eq!(figures.planned, full::BUDGET_INPUTS);
     assert_eq!(figures.inputs.len(), figures.planned);
     assert!(figures.inputs.iter().any(|input| input.name == BUDGET_CASE));
     let line = full::budget_report_line(&figures);
     assert!(line.starts_with(full::BUDGET_REPORT_PREFIX), "{line}");
+    // A cut run says so: one call of the 500 planned, which `cargo xtask
+    // p1-budget` refuses as a short run, no verdict (xtask/src/budget.rs's
+    // `a_cut_run_is_no_verdict`).
     assert!(
-        line.contains(" inputs=7 planned_inputs=7 calls=1 "),
+        line.contains(" inputs=7 planned_inputs=7 calls=1 planned_calls=500 "),
         "{line}"
     );
 }
@@ -271,6 +277,7 @@ fn the_decision_curve_seals_each_size_and_counts_its_work() {
     let rules = quick::committed_rules(&root).expect("the committed rules");
     let curve = decision::measure_curve(
         &rules,
+        Shape::FullEval,
         &[64],
         DecisionPlan {
             seed: BENCH_SEED,
@@ -284,6 +291,7 @@ fn the_decision_curve_seals_each_size_and_counts_its_work() {
     let point = curve.first().expect("one size");
     assert_eq!(point.units, 64);
     assert_eq!(point.timing.units_per_seat, 64);
+    assert_eq!(point.handlers, 31);
     assert!(point.timing.decision_ticks >= 4, "{point:?}");
     assert!(
         point.timing.work_max > 0,
@@ -376,11 +384,20 @@ fn a_short_p3_run_measures_every_figure_on_the_worlds_own_graph() {
     assert_eq!(seed.one_leg.samples, 8);
     assert_eq!(seed.five_leg.samples, 8);
     assert_eq!(seed.estimator.samples, 8);
-    assert_eq!(seed.craters, 8);
-    assert_eq!(seed.cold_sealed, 0, "a pair of one component always routes");
+    assert_eq!(
+        seed.craters,
+        u64::try_from(8 + p3::WARMUP).expect("fits"),
+        "the warm-up ticks land craters too"
+    );
     assert_eq!(seed.graph.cluster_voxels, 32);
-    // A short run is not the gate's, and its line says so to the reader.
-    assert!(p3::budget_report_line(&report).contains(" pairs=8 planned_pairs=2000 "));
+    // A short run is not the gate's, and its line says so to the reader:
+    // one seed of three and 8 pairs of 2 000, which `cargo xtask p3-budget`
+    // refuses as no verdict.
+    let line = p3::budget_report_line(&report);
+    assert!(
+        line.contains(" seeds=1 planned_seeds=3 pairs=8 planned_pairs=2000 "),
+        "{line}"
+    );
 }
 
 /// The bench's restatement of the sim's cluster marking: after the crater
@@ -393,4 +410,113 @@ fn the_crater_streams_repair_is_a_rebuild() {
     let (repaired, rebuilt) =
         p3::stream_repair_check(&rules, p3::P3_SEEDS[0], 40).expect("a stream");
     assert_eq!(repaired, rebuilt);
+}
+
+/// Every generated shape's compact text, at every size of the curve, fits the
+/// gateway's transport cap: a player could send it. The cap is the gateway's
+/// own constant, read, never restated.
+#[test]
+fn every_shape_fits_the_transport_cap() {
+    use pharmakos_gateway::surface::planning::MAX_PLAYBOOK_CHARS;
+    for units in SIZES {
+        for shape in Shape::ALL
+            .into_iter()
+            .chain([Shape::FullEval, Shape::FullEvalSelectors])
+        {
+            let canonical =
+                String::from_utf8(shape.bytes(units).expect("the shape")).expect("utf-8");
+            let chars = pharmakos_bench::shapes::compact(&canonical).chars().count();
+            assert!(
+                chars <= MAX_PLAYBOOK_CHARS,
+                "{} at {units} units is {chars} characters, past {MAX_PLAYBOOK_CHARS}",
+                shape.name()
+            );
+        }
+    }
+}
+
+/// The fixture's map extent is the committed rules' `map` block, which the
+/// target and area shapes keep their anchors inside.
+#[test]
+fn the_fixture_extent_is_the_committed_map() {
+    let root = workspace_root();
+    let rules = quick::committed_rules(&root).expect("the committed rules");
+    let map = rules.message().map.as_ref().expect("a map block");
+    assert_eq!(
+        pharmakos_bench::shapes::FIXTURE_EXTENT,
+        [
+            i32::try_from(map.size_x).expect("fits"),
+            i32::try_from(map.size_y).expect("fits")
+        ]
+    );
+}
+
+/// The end-to-end figure takes `verify_plan` through the hosted gateway on a
+/// shape's compact text, at the hosted seat's own core: the shape that names
+/// the core qualifies there too.
+#[test]
+fn the_end_to_end_figure_verifies_the_compact_text_through_the_gateway() {
+    let root = workspace_root();
+    let rules = quick::committed_rules(&root).expect("the committed rules");
+    let budget = full::committed_budget(&rules).expect("a budget");
+    let figure = full::end_to_end(
+        &rules,
+        QuickPlan {
+            warmup: 0,
+            calls: 1,
+        },
+        |core| {
+            pharmakos_bench::shapes::canonical(
+                &Shape::BuildTargets.playbook_at(budget, core)?,
+                "build_targets",
+            )
+        },
+    )
+    .expect("a figure");
+    match figure {
+        full::EndToEnd::Measured {
+            quick, qualifies, ..
+        } => {
+            assert_eq!(quick.samples, 1);
+            assert!(qualifies, "the target shape at the hosted core qualifies");
+        }
+        full::EndToEnd::OverCap { chars } => panic!("{chars} characters, past the cap"),
+    }
+}
+
+/// The `max_text` shape sits exactly on the transport cap in both paddings,
+/// qualifies on the budget, and is verified end to end.
+#[test]
+fn the_max_text_shape_qualifies_at_the_cap() {
+    let root = workspace_root();
+    let figures = full::measure_cap(
+        &root,
+        QuickPlan {
+            warmup: 0,
+            calls: 1,
+        },
+    )
+    .expect("a measurement");
+    assert_eq!(figures.len(), 2);
+    for figure in &figures {
+        assert_eq!(
+            figure.compact_chars,
+            pharmakos_gateway::surface::planning::MAX_PLAYBOOK_CHARS
+        );
+        assert!(
+            matches!(
+                figure.end_to_end,
+                full::EndToEnd::Measured {
+                    qualifies: true,
+                    ..
+                }
+            ),
+            "{figure:?}"
+        );
+    }
+    let bytes: Vec<usize> = figures.iter().map(|figure| figure.compact_bytes).collect();
+    assert!(
+        matches!(bytes.as_slice(), [ascii, four] if four > ascii),
+        "four bytes a character: {bytes:?}"
+    );
 }

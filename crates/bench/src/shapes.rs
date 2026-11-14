@@ -34,9 +34,46 @@
 //! accepts, not of a refusal.
 //!
 //! The playbooks are built as `gp.v1` messages and written by the canonical
-//! codec ([`pharmakos_proto::json::encode`]), so their bytes are what the
-//! editor would write for them. Every number in them is the harness's own
-//! input, fixed here, so a shape and a size reproduce its bytes.
+//! codec ([`pharmakos_proto::json::encode`]): the bytes the verifier is handed
+//! whatever the player typed, since `plan-core`'s `verify_jsonc` canonicalises
+//! a file before `Input::new` (`crates/plan-core/src/verify.rs`). The same
+//! playbook as the player could send it, with no whitespace outside its
+//! strings, is [`compact`]: the text the gateway's `MAX_PLAYBOOK_CHARS` caps,
+//! and what the bench's end-to-end figure sends (`full`). Every number in
+//! them is the harness's own input, fixed here, so a shape and a size
+//! reproduce its bytes.
+//!
+//! # Timing-only inputs: the per-beacon target room
+//!
+//! [`Shape::BuildTargets`] and [`Shape::ProtectedAreas`] put every unit on
+//! **one** beacon: up to 255 rows at 256 units. The verifier takes that (no
+//! check counts a beacon's targets), but the sim holds 8 targets a beacon
+//! (`TARGETS_PER_BEACON` in `crates/sim/src/world.rs`), so in a match every
+//! row past the eighth fails its step. They are timing inputs for the
+//! verifier's walks over targets and areas, never playbooks a seat would seal;
+//! E17's rooms are `tune3`'s.
+//!
+//! # The decision tick's shapes
+//!
+//! [`Shape::Handlers24`] is the verifier's worst case, not the decision
+//! tick's: its `all(all(all(..)))` handlers stop at their first false leaf,
+//! and a leaf that comes true stops an `any`. [`Shape::FullEval`] is the
+//! decision tick's: every handler is `any(any(any(21)))` over leaves that are
+//! never true (`segment_elapsed EQ` a value no 50 ms tick reaches), so a
+//! decision evaluates every node of every condition; its route steps are
+//! `move`s, so the commander walks. [`Shape::FullEvalSelectors`] is the same
+//! with selector leaves (`beacon_hp_pct` of the `nearest` own beacon below 0
+//! per cent), each of which ranks the seat's beacons through the sim's
+//! selector catalogue (`resolve_on`) when it is evaluated. Neither is in
+//! [`Shape::ALL`], the verifier's curve.
+//!
+//! # The transport cap
+//!
+//! [`max_text`] is [`Shape::RouteGuards24`]'s structure at a size, its
+//! labels and title padded until its compact text is exactly
+//! `MAX_PLAYBOOK_CHARS` characters, in ASCII or in four-byte characters
+//! ([`Pad`]): QUICK's cost at the transport cap, published and never a budget
+//! failure.
 
 use pharmakos_proto::gp::v1::condition::Node;
 use pharmakos_proto::gp::v1::handler::Resume;
@@ -46,9 +83,9 @@ use pharmakos_proto::gp::v1::move_step::Pace;
 use pharmakos_proto::gp::v1::on_death::OnRespawn;
 use pharmakos_proto::gp::v1::playbook::Kind;
 use pharmakos_proto::gp::v1::{
-    AddBuildTargetRow, All, Any, Area, BeaconRef, BuildSettings, BuildTarget, Condition,
-    Declarative, Fallback, FallbackHold, Handler, HoldStep, IntCompare, InterfaceRow,
-    InterfaceStep, Location, MandateSettings, Meta, MoveStep, OnDeath, Playbook, Safest,
+    AddBuildTargetRow, All, Any, Area, BeaconHpPct, BeaconRef, BuildSettings, BuildTarget,
+    Condition, Declarative, Fallback, FallbackHold, Handler, HoldStep, IntCompare, InterfaceRow,
+    InterfaceStep, Location, MandateSettings, Meta, MoveStep, Nearest, OnDeath, Playbook, Safest,
     SchemaVersion, SegmentElapsed, Step, beacon_ref, fallback, interface_row, location,
     mandate_settings, step,
 };
@@ -65,13 +102,35 @@ pub const SIZES: [u32; 5] = [64, 96, 128, 192, 256];
 /// leaves are `CONDITION_MAX_NODES`, the most spec section 10 allows.
 const LEAVES_PER_CONDITION: usize = 21;
 
-/// The fixture's own core, by its id in `quick::fixture_scope`: a Build
-/// beacon of seat 0 at (80, 11, 55), whose 24-voxel sphere the target and
-/// area shapes fill.
-const CORE_ID: &str = "b_01";
+/// The map's extent the fixture's anchors are kept inside: the committed
+/// rules' `map.size_x` and `map.size_y`, which `tests/harness.rs` holds to the
+/// table.
+pub const FIXTURE_EXTENT: [i32; 2] = [384, 384];
 
-/// The core's column and height in `quick::fixture_scope`.
-const CORE_AT: [i32; 3] = [80, 11, 55];
+/// The core a shape's interface step visits and its anchors stand round.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Core {
+    /// Its name, as the seat's view spells it.
+    pub id: String,
+    /// Its column and height.
+    pub at: [i32; 3],
+    /// The map's extent, `[x, y]`: no anchor is laid off it.
+    pub extent: [i32; 2],
+}
+
+impl Core {
+    /// The fixture's own core, `quick::fixture_scope`'s `b_01`: a Build beacon
+    /// of seat 0 at [`crate::quick::FIXTURE_CORE_AT`], whose 24-voxel sphere
+    /// the target and area shapes fill.
+    #[must_use]
+    pub fn fixture() -> Core {
+        Core {
+            id: "b_01".to_owned(),
+            at: crate::quick::FIXTURE_CORE_AT,
+            extent: FIXTURE_EXTENT,
+        }
+    }
+}
 
 /// The farthest an anchor of the target and area shapes stands from the
 /// core, along either axis and as a column distance: inside its 24-voxel
@@ -96,6 +155,11 @@ pub enum Shape {
     ProtectedAreas,
     /// The longest route: a `move` a unit.
     LongestRoute,
+    /// The decision tick's: handlers evaluated in full every decision, and
+    /// `move` route steps (see the module docs). Not in [`Shape::ALL`].
+    FullEval,
+    /// [`Shape::FullEval`] with selector leaves. Not in [`Shape::ALL`].
+    FullEvalSelectors,
 }
 
 impl Shape {
@@ -119,7 +183,27 @@ impl Shape {
             Shape::BuildTargets => "build_targets",
             Shape::ProtectedAreas => "protected_areas",
             Shape::LongestRoute => "longest_route",
+            Shape::FullEval => "full_eval",
+            Shape::FullEvalSelectors => "full_eval_selectors",
         }
+    }
+
+    /// How many handlers the shape holds at `units`: the size's share, past
+    /// 129 units capped by the interpreter's `MAX_HANDLERS`, which is why a
+    /// handler shape's curve flattens there.
+    ///
+    /// # Errors
+    ///
+    /// As [`Shape::playbook`].
+    pub fn handlers_at(self, units: u32) -> Result<usize, Error> {
+        self.playbook(units)?
+            .declarative
+            .map(|declarative| declarative.handlers.len())
+            .ok_or_else(|| Error::Shape {
+                shape: self.name(),
+                units,
+                reason: "a generated shape with no declarative block".to_owned(),
+            })
     }
 
     /// The shape at `units` size units, as a message.
@@ -129,6 +213,17 @@ impl Shape {
     /// [`Error::Shape`] when the shape cannot be laid at that size, and
     /// [`Error::Overflow`] for a coordinate or a duration past its type.
     pub fn playbook(self, units: u32) -> Result<Playbook, Error> {
+        self.playbook_at(units, &Core::fixture())
+    }
+
+    /// The shape at `units` size units, its interface steps visiting `core`
+    /// and its anchors laid round it: a hosted seat's own core for the
+    /// end-to-end figure.
+    ///
+    /// # Errors
+    ///
+    /// As [`Shape::playbook`].
+    pub fn playbook_at(self, units: u32, core: &Core) -> Result<Playbook, Error> {
         let refuse = |reason: String| Error::Shape {
             shape: self.name(),
             units,
@@ -140,8 +235,14 @@ impl Shape {
             Shape::HandlersDepth4 => handlers(size, Group::Chain, Bodies::Fill).map_err(refuse)?,
             Shape::RouteGuards24 => guarded_route(size).map_err(refuse)?,
             Shape::LongestRoute => longest_route(size).map_err(refuse)?,
-            Shape::BuildTargets => build_targets(size).map_err(refuse)?,
-            Shape::ProtectedAreas => protected_areas(size).map_err(refuse)?,
+            Shape::BuildTargets => build_targets(size, core).map_err(refuse)?,
+            Shape::ProtectedAreas => protected_areas(size, core).map_err(refuse)?,
+            Shape::FullEval => {
+                handlers(size, Group::FullAny(LeafKind::Elapsed), Bodies::Moves).map_err(refuse)?
+            }
+            Shape::FullEvalSelectors => {
+                handlers(size, Group::FullAny(LeafKind::Selector), Bodies::Moves).map_err(refuse)?
+            }
         };
         Ok(Playbook {
             schema_version: Some(SchemaVersion { major: 1, minor: 0 }),
@@ -170,14 +271,131 @@ impl Shape {
     /// As [`Shape::playbook`], and [`Error::Codec`] when the canonical codec
     /// refuses the message.
     pub fn bytes(self, units: u32) -> Result<Vec<u8>, Error> {
-        let playbook = self.playbook(units)?;
-        json::encode(&playbook)
-            .map(String::into_bytes)
-            .map_err(|error| Error::Codec {
-                what: format!("encoding the {} shape at {units} units", self.name()),
-                reason: error.to_string(),
-            })
+        canonical(&self.playbook(units)?, self.name()).map(String::into_bytes)
     }
+}
+
+/// `playbook` as canonical JSON text.
+///
+/// # Errors
+///
+/// [`Error::Codec`] when the canonical codec refuses the message.
+pub fn canonical(playbook: &Playbook, what: &str) -> Result<String, Error> {
+    json::encode(playbook).map_err(|error| Error::Codec {
+        what: format!("encoding {what}"),
+        reason: error.to_string(),
+    })
+}
+
+/// JSON text with every whitespace character outside its strings removed:
+/// the same document, as compact as a player could send it. Inside a string
+/// nothing changes, escapes included.
+#[must_use]
+pub fn compact(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut in_string = false;
+    let mut escaped = false;
+    for character in text.chars() {
+        if in_string {
+            out.push(character);
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == '"' {
+                in_string = false;
+            }
+        } else if character == '"' {
+            in_string = true;
+            out.push(character);
+        } else if !character.is_whitespace() {
+            out.push(character);
+        }
+    }
+    out
+}
+
+/// What [`max_text`] pads with.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Pad {
+    /// ASCII `x`: one byte a character.
+    Ascii,
+    /// U+1F9EA, four bytes a character in UTF-8.
+    FourByte,
+}
+
+impl Pad {
+    /// The character.
+    #[must_use]
+    pub const fn character(self) -> char {
+        match self {
+            Pad::Ascii => 'x',
+            Pad::FourByte => '\u{1F9EA}',
+        }
+    }
+
+    /// The variant's name, as notices print it.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Pad::Ascii => "ascii",
+            Pad::FourByte => "four_byte",
+        }
+    }
+}
+
+/// [`Shape::RouteGuards24`] at `units`, its step labels and its title padded
+/// with `pad` until its [`compact`] text is exactly `cap` characters (the
+/// gateway's `MAX_PLAYBOOK_CHARS`): the costliest text the transport takes at
+/// that size.
+///
+/// # Errors
+///
+/// As [`Shape::playbook`]; [`Error::Shape`] when the unpadded text is already
+/// past `cap`, or the padded text does not land exactly on it.
+pub fn max_text(units: u32, pad: Pad, cap: usize) -> Result<Playbook, Error> {
+    let refuse = |reason: String| Error::Shape {
+        shape: "max_text",
+        units,
+        reason,
+    };
+    let mut playbook = Shape::RouteGuards24.playbook(units)?;
+    let base = compact(&canonical(&playbook, "the max_text shape")?)
+        .chars()
+        .count();
+    let extra = cap
+        .checked_sub(base)
+        .ok_or_else(|| refuse(format!("{base} characters unpadded, past the cap of {cap}")))?;
+    let steps = playbook
+        .declarative
+        .as_ref()
+        .map(|declarative| declarative.route.len())
+        .ok_or_else(|| refuse("no declarative block".to_owned()))?;
+    // A share for every label and the title, the remainder on the title.
+    let shares = steps
+        .checked_add(1)
+        .ok_or_else(|| refuse("the labels".to_owned()))?;
+    let each = extra.div_euclid(shares);
+    let rest = extra.rem_euclid(shares);
+    let padding =
+        |count: usize| -> String { std::iter::repeat_n(pad.character(), count).collect() };
+    if let Some(declarative) = playbook.declarative.as_mut() {
+        for entry in &mut declarative.route {
+            entry.label.push_str(&padding(each));
+        }
+    }
+    if let Some(meta) = playbook.meta.as_mut() {
+        meta.title.push_str(&padding(each + rest));
+    }
+    let length = compact(&canonical(&playbook, "the max_text shape")?)
+        .chars()
+        .count();
+    if length != cap {
+        return Err(refuse(format!(
+            "padded to {length} characters, not the cap of {cap}"
+        )));
+    }
+    Ok(playbook)
 }
 
 /// `beacon_anchor { safest {} }`: the one place every shape's fallback holds.
@@ -223,6 +441,48 @@ enum Group {
     Deep,
     /// `any(all(any(leaf)))`: four levels, four nodes.
     Chain,
+    /// `any(any(any(21 leaves that are never true)))`: 24 nodes, every one
+    /// evaluated every decision.
+    FullAny(LeafKind),
+}
+
+/// The never-true leaves of [`Group::FullAny`].
+#[derive(Clone, Copy, Debug)]
+enum LeafKind {
+    /// `segment_elapsed EQ` a value that is not a multiple of the 50 ms tick.
+    Elapsed,
+    /// `beacon_hp_pct` of the `nearest` own beacon, below 0 per cent.
+    Selector,
+}
+
+/// A leaf of [`Group::FullAny`]: never true, and distinct from every other.
+fn never(kind: LeafKind, leaves: &mut Leaves) -> Result<Condition, String> {
+    leaves.next = leaves
+        .next
+        .checked_add(1)
+        .ok_or_else(|| "more leaves than an i32 counts".to_owned())?;
+    Ok(match kind {
+        // n * 50 + 1 ms: never a tick's elapsed time.
+        LeafKind::Elapsed => node(Node::SegmentElapsed(SegmentElapsed {
+            ms: Some(IntCompare {
+                op: i32::from(Op::Eq),
+                value: leaves
+                    .next
+                    .checked_mul(50)
+                    .and_then(|ms| ms.checked_add(1))
+                    .ok_or_else(|| "a leaf's milliseconds".to_owned())?,
+            }),
+        })),
+        LeafKind::Selector => node(Node::BeaconHpPct(BeaconHpPct {
+            beacon: Some(BeaconRef {
+                r#ref: Some(beacon_ref::Ref::Nearest(Nearest::default())),
+            }),
+            pct: Some(IntCompare {
+                op: i32::from(Op::Lt),
+                value: 0,
+            }),
+        })),
+    })
 }
 
 /// How many body steps a handler holds.
@@ -232,6 +492,8 @@ enum Bodies {
     One,
     /// Every unit past the one route step goes to handlers and their bodies.
     Fill,
+    /// One each, and the units left over go to `move` route steps.
+    Moves,
 }
 
 /// A 24-node condition: `any(any(any(21)))` when `any`, else `all(all(all(21)))`.
@@ -291,7 +553,7 @@ fn handlers(size: usize, group: Group, bodies: Bodies) -> Result<Declarative, St
         .and_then(|in_handlers| size.checked_sub(in_handlers))
         .ok_or_else(|| "the handlers' units".to_owned())?;
     let (route_steps, extra_bodies) = match bodies {
-        Bodies::One => (left, 0),
+        Bodies::One | Bodies::Moves => (left, 0),
         Bodies::Fill => (
             1,
             left.checked_sub(1)
@@ -309,6 +571,13 @@ fn handlers(size: usize, group: Group, bodies: Bodies) -> Result<Declarative, St
         let when = match group {
             Group::Deep => deep(id % 2 == 0, &mut leaves)?,
             Group::Chain => chain(&mut leaves)?,
+            Group::FullAny(kind) => {
+                let inner: Vec<Condition> = (0..LEAVES_PER_CONDITION)
+                    .map(|_| never(kind, &mut leaves))
+                    .collect::<Result<_, _>>()?;
+                let any = |items: Vec<Condition>| node(Node::Any(Any { items }));
+                any(vec![any(vec![any(inner)])])
+            }
         };
         // Spread the extra body steps round the handlers, the first ones first.
         let more =
@@ -326,8 +595,12 @@ fn handlers(size: usize, group: Group, bodies: Bodies) -> Result<Declarative, St
             ..Handler::default()
         });
     }
+    let route = match bodies {
+        Bodies::Moves => moves(route_steps)?,
+        Bodies::One | Bodies::Fill => holds(route_steps),
+    };
     Ok(Declarative {
-        route: holds(route_steps),
+        route,
         handlers: list,
         options: None,
     })
@@ -361,6 +634,16 @@ fn longest_route(size: usize) -> Result<Declarative, String> {
             "a route of {size} steps, outside the interpreter's 1 to {MAX_ROUTE_STEPS}"
         ));
     }
+    Ok(Declarative {
+        route: moves(size)?,
+        handlers: Vec::new(),
+        options: None,
+    })
+}
+
+/// `size` route steps, `r000` on, each a `move` to a voxel of its own, 64 to
+/// a row two voxels apart.
+fn moves(size: usize) -> Result<Vec<Step>, String> {
     let mut route: Vec<Step> = Vec::with_capacity(size);
     for at in 0..size {
         let column = i32::try_from(at.rem_euclid(64)).map_err(|_| "a column".to_owned())?;
@@ -381,30 +664,30 @@ fn longest_route(size: usize) -> Result<Declarative, String> {
             ..Step::default()
         });
     }
-    Ok(Declarative {
-        route,
-        handlers: Vec::new(),
-        options: None,
-    })
+    Ok(route)
 }
 
 /// The anchor columns of the target and area shapes, in order: every second
-/// column within [`ANCHOR_REACH`] of the core and on the map (the core stands
-/// at y = 11, so the rows below y = 0 are left out), rows from the lowest y,
-/// columns from the lowest x, at the core's height.
-fn anchors(count: usize) -> Result<Vec<pharmakos_proto::gp::v1::Voxel>, String> {
+/// column within [`ANCHOR_REACH`] of the core and on the map, with a column to
+/// spare for an area's far corner (the fixture's core stands at y = 11, so its
+/// rows below y = 0 are left out), rows from the lowest y, columns from the
+/// lowest x, at the core's height.
+fn anchors(count: usize, core: &Core) -> Result<Vec<pharmakos_proto::gp::v1::Voxel>, String> {
     let reach_squared = ANCHOR_REACH * ANCHOR_REACH;
+    let [cx, cy, cz] = core.at;
+    let on_map =
+        |x: i32, y: i32| x >= 0 && y >= 0 && x + 1 < core.extent[0] && y + 1 < core.extent[1];
     let mut found: Vec<pharmakos_proto::gp::v1::Voxel> = Vec::with_capacity(count);
-    for dy in (-CORE_AT[1]..=ANCHOR_REACH).step_by(ANCHOR_STEP) {
+    for dy in (-ANCHOR_REACH..=ANCHOR_REACH).step_by(ANCHOR_STEP) {
         for dx in (-ANCHOR_REACH..=ANCHOR_REACH).step_by(ANCHOR_STEP) {
             if found.len() == count {
                 return Ok(found);
             }
-            if dx * dx + dy * dy <= reach_squared {
+            if dx * dx + dy * dy <= reach_squared && on_map(cx + dx, cy + dy) {
                 found.push(pharmakos_proto::gp::v1::Voxel {
-                    x: CORE_AT[0] + dx,
-                    y: CORE_AT[1] + dy,
-                    z: CORE_AT[2],
+                    x: cx + dx,
+                    y: cy + dy,
+                    z: cz,
                 });
             }
         }
@@ -418,14 +701,14 @@ fn anchors(count: usize) -> Result<Vec<pharmakos_proto::gp::v1::Voxel>, String> 
     ))
 }
 
-/// One interface step at the fixture's core carrying `rows`.
-fn at_the_core(rows: Vec<InterfaceRow>) -> Declarative {
+/// One interface step at `core` carrying `rows`.
+fn at_the_core(rows: Vec<InterfaceRow>, core: &Core) -> Declarative {
     Declarative {
         route: vec![Step {
             label: "r000".to_owned(),
             kind: Some(step::Kind::Interface(InterfaceStep {
                 beacon: Some(BeaconRef {
-                    r#ref: Some(beacon_ref::Ref::BeaconId(CORE_ID.to_owned())),
+                    r#ref: Some(beacon_ref::Ref::BeaconId(core.id.clone())),
                 }),
                 rows,
             })),
@@ -437,12 +720,12 @@ fn at_the_core(rows: Vec<InterfaceRow>) -> Declarative {
 }
 
 /// One interface step adding a Generator a unit past the step's own.
-fn build_targets(size: usize) -> Result<Declarative, String> {
+fn build_targets(size: usize, core: &Core) -> Result<Declarative, String> {
     let targets = size
         .checked_sub(1)
         .filter(|count| *count > 0)
         .ok_or_else(|| "a target shape needs two units: the step and a target".to_owned())?;
-    let rows: Vec<InterfaceRow> = anchors(targets)?
+    let rows: Vec<InterfaceRow> = anchors(targets, core)?
         .into_iter()
         .enumerate()
         .map(|(index, anchor)| {
@@ -460,17 +743,17 @@ fn build_targets(size: usize) -> Result<Declarative, String> {
             })
         })
         .collect::<Result<_, String>>()?;
-    Ok(at_the_core(rows))
+    Ok(at_the_core(rows, core))
 }
 
 /// One interface step whose settings row lists an area a unit past the
 /// step's own: each a one-voxel-high box of 2 x 2 columns at an anchor.
-fn protected_areas(size: usize) -> Result<Declarative, String> {
+fn protected_areas(size: usize, core: &Core) -> Result<Declarative, String> {
     let areas = size
         .checked_sub(1)
         .filter(|count| *count > 0)
         .ok_or_else(|| "an area shape needs two units: the step and an area".to_owned())?;
-    let protected: Vec<Area> = anchors(areas)?
+    let protected: Vec<Area> = anchors(areas, core)?
         .into_iter()
         .map(|min| {
             let max = pharmakos_proto::gp::v1::Voxel {
@@ -491,9 +774,12 @@ fn protected_areas(size: usize) -> Result<Declarative, String> {
         })),
         ..MandateSettings::default()
     };
-    Ok(at_the_core(vec![InterfaceRow {
-        row: Some(interface_row::Row::SetMandateSettings(settings)),
-    }]))
+    Ok(at_the_core(
+        vec![InterfaceRow {
+            row: Some(interface_row::Row::SetMandateSettings(settings)),
+        }],
+        core,
+    ))
 }
 
 #[cfg(test)]
@@ -502,7 +788,10 @@ mod tests {
 
     #[test]
     fn every_shape_is_exactly_its_size() {
-        for shape in Shape::ALL {
+        for shape in Shape::ALL
+            .into_iter()
+            .chain([Shape::FullEval, Shape::FullEvalSelectors])
+        {
             for units in SIZES.into_iter().chain([127, 129, 3]) {
                 let playbook = shape
                     .playbook(units)
@@ -549,6 +838,53 @@ mod tests {
             Shape::LongestRoute.playbook(0),
             Err(Error::Shape { .. })
         ));
+    }
+
+    #[test]
+    fn compact_text_drops_only_the_whitespace_outside_strings() {
+        let text = "{\n  \"a b\": [1, 2],\n  \"c\": \"x \\\" y\"\n}\n";
+        assert_eq!(compact(text), "{\"a b\":[1,2],\"c\":\"x \\\" y\"}");
+        let canonical =
+            String::from_utf8(Shape::RouteGuards24.bytes(64).expect("bytes")).expect("utf-8");
+        let decoded: Playbook = json::decode(&compact(&canonical)).expect("compact decodes");
+        assert_eq!(
+            decoded,
+            Shape::RouteGuards24.playbook(64).expect("the shape")
+        );
+    }
+
+    #[test]
+    fn the_max_text_shape_lands_exactly_on_the_cap() {
+        for pad in [Pad::Ascii, Pad::FourByte] {
+            let playbook = max_text(128, pad, 400_000).expect("the shape");
+            let text = compact(&canonical(&playbook, "test").expect("encodes"));
+            assert_eq!(text.chars().count(), 400_000, "{pad:?}");
+            assert_eq!(pharmakos_verifier::size_units(&playbook), 128);
+        }
+        assert!(
+            max_text(128, Pad::Ascii, 1_000).is_err(),
+            "a cap below the text"
+        );
+    }
+
+    #[test]
+    fn the_decision_shapes_are_any_over_never_true_leaves_and_walk() {
+        let playbook = Shape::FullEval.playbook(128).expect("the shape");
+        let declarative = playbook.declarative.expect("declarative");
+        assert_eq!(declarative.handlers.len(), 63);
+        assert!(
+            declarative
+                .route
+                .iter()
+                .all(|entry| matches!(entry.kind, Some(step::Kind::Move(_))))
+        );
+        let text = String::from_utf8(Shape::FullEval.bytes(128).expect("bytes")).expect("utf-8");
+        assert!(!text.contains("\"all\""), "every group is an `any`");
+        assert_eq!(
+            Shape::FullEval.handlers_at(256).expect("handlers"),
+            64,
+            "MAX_HANDLERS"
+        );
     }
 
     #[test]
