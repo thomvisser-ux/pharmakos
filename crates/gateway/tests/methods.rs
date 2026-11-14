@@ -1545,7 +1545,7 @@ fn the_transport_bounds_refuse_rather_than_silently_correcting() {
     );
     assert_eq!(code(&refused, "an upper-case draft id"), "INVALID_ARGUMENT");
 
-    let long_playbook = "x".repeat(pharmakos_gateway::surface::planning::MAX_PLAYBOOK_CHARS + 1);
+    let long_playbook = "x".repeat(pharmakos_verifier::MAX_PLAYBOOK_CHARS + 1);
     let refused = surface.call(
         Some(&token),
         &request(

@@ -2750,10 +2750,10 @@ impl Surface {
         playbook_jsonc: &str,
         round: u32,
     ) -> Result<Sealed, Error> {
-        if playbook_jsonc.chars().count() > crate::surface::planning::MAX_PLAYBOOK_CHARS {
+        if pharmakos_verifier::is_too_long(playbook_jsonc) {
             return Err(Error::invalid(format!(
                 "an advised safe playbook is at most {} characters, like any other",
-                crate::surface::planning::MAX_PLAYBOOK_CHARS
+                pharmakos_verifier::MAX_PLAYBOOK_CHARS
             )));
         }
         let report = self.verify_for(seat, playbook_jsonc, Depth::Full)?;

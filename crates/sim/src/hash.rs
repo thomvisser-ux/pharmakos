@@ -102,6 +102,15 @@ const TEXT_PER_WIRE_BYTE: usize = 24;
 /// [`TEXT_PER_WIRE_BYTE`] would reserve for a playbook that is mostly one long
 /// string, whose text is about as long as its wire bytes (PR #177's review:
 /// 24 times a 2 MB string is 48 MB). Past it the text grows as it is written.
+///
+/// Revisited when the size cap landed (S3's `vfy6`, follow-up D) and kept:
+/// the cap, `pharmakos_verifier::MAX_PLAYBOOK_CHARS`, bounds the player's
+/// text at 512 KiB of characters, so a playbook that is mostly one string has
+/// at most 2 MiB of wire bytes and about as much text, under this hint; and a
+/// structured one has the canonical text of a capped file, which the size
+/// budget's shapes show runs to about 5.7 times its compact text, near 3 MiB
+/// at the cap, under this hint too. The cap is not this function's to
+/// enforce: the fingerprint is taken of whatever the codec accepted.
 const MAX_TEXT_HINT: usize = 4 << 20;
 
 /// The capacity a fingerprint's text is given: a hint, so the text of a

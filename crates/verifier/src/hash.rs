@@ -82,6 +82,16 @@ use crate::scope::Scope;
 /// sphere radii and the beacons a Resonance Spire stands at.
 pub const REPORT_HASH_DOMAIN: &[u8] = b"gp.api.v1/report/4";
 
+/// The domain separator of the one report that is about no playbook bytes:
+/// `E0029`'s, for a player's text past
+/// [`MAX_PLAYBOOK_CHARS`](crate::MAX_PLAYBOOK_CHARS) (S3's `vfy6`,
+/// [`Input::too_long`](crate::Input::too_long)). Its playbook input is empty,
+/// because the text is never read, and a domain of its own keeps its hash from
+/// being any playbook's: an empty file's report, under
+/// [`REPORT_HASH_DOMAIN`], is a different report over the same other inputs.
+/// It moves no existing report hash.
+pub const TOO_LONG_REPORT_DOMAIN: &[u8] = b"gp.api.v1/report-too-long/1";
+
 /// The report hash over the five inputs.
 ///
 /// Public because it is the contract rather than an implementation detail: a
@@ -100,7 +110,14 @@ pub fn report_hash(
     verifier_version: &str,
     depth: Depth,
 ) -> Result<u64, HashError> {
-    let mut enc = inputs(playbook, snapshot, scope, rules_hash, verifier_version)?;
+    let mut enc = inputs(
+        REPORT_HASH_DOMAIN,
+        playbook,
+        snapshot,
+        scope,
+        rules_hash,
+        verifier_version,
+    )?;
     // 5. the depth
     enc.i32(i32::from(depth));
     Ok(enc.finish())
@@ -129,14 +146,29 @@ impl ReportHashes {
     ///
     /// [`HashError::TooLong`], as [`report_hash`].
     pub(crate) fn new(
+        domain: &[u8],
         playbook: &[u8],
         snapshot: &[u8],
         scope: &Scope,
         rules_hash: u64,
         verifier_version: &str,
     ) -> Result<ReportHashes, HashError> {
-        let mut full = inputs(playbook, snapshot, scope, rules_hash, verifier_version)?;
-        let mut quick = inputs(playbook, snapshot, scope, rules_hash, verifier_version)?;
+        let mut full = inputs(
+            domain,
+            playbook,
+            snapshot,
+            scope,
+            rules_hash,
+            verifier_version,
+        )?;
+        let mut quick = inputs(
+            domain,
+            playbook,
+            snapshot,
+            scope,
+            rules_hash,
+            verifier_version,
+        )?;
         full.i32(i32::from(Depth::Full));
         quick.i32(i32::from(Depth::Quick));
         Ok(ReportHashes {
@@ -157,6 +189,7 @@ impl ReportHashes {
 
 /// The domain separator and the first four inputs, in order.
 fn inputs(
+    domain: &[u8],
     playbook: &[u8],
     snapshot: &[u8],
     scope: &Scope,
@@ -171,7 +204,7 @@ fn inputs(
             .saturating_add(snapshot.len())
             .saturating_add(128),
     );
-    append_bytes(&mut enc, "the domain separator", REPORT_HASH_DOMAIN)?;
+    append_bytes(&mut enc, "the domain separator", domain)?;
     // 1. the playbook bytes
     append_bytes(&mut enc, "the playbook", playbook)?;
     // 2. the snapshot bytes, then the seat's view of them
@@ -273,7 +306,7 @@ fn append_bytes(enc: &mut Enc, what: &'static str, bytes: &[u8]) -> Result<(), H
 
 #[cfg(test)]
 mod tests {
-    use super::{HashError, ReportHashes, length, report_hash};
+    use super::{HashError, REPORT_HASH_DOMAIN, ReportHashes, length, report_hash};
     use crate::scope::Scope;
     use pharmakos_proto::gp::api::v1::verify_plan::Depth;
     use pharmakos_sim::knowledge::SeatEconomy;
@@ -300,7 +333,8 @@ mod tests {
     #[test]
     fn the_two_precomputed_hashes_are_report_hash_at_each_depth() {
         let scope = Scope::new(SeatId::new(0), SeatEconomy::default());
-        let both = ReportHashes::new(b"{}", b"snapshot", &scope, 7, "v").expect("hashable");
+        let both = ReportHashes::new(REPORT_HASH_DOMAIN, b"{}", b"snapshot", &scope, 7, "v")
+            .expect("hashable");
         for depth in [Depth::Quick, Depth::Full] {
             assert_eq!(
                 Ok(both.at(depth)),

@@ -504,7 +504,7 @@ golden). `demo2` is a docs pull request, so it moves no marker, and the command 
 | H-17 | `list_beacons`' ladder (8 / 24 / 40) and the what-if budget | `crates/gateway/src/surface/knowledge.rs` `beacon_budget`, and by pointer `what_if_budget` | item 63 |
 | H-18 | `MAX_WAYPOINTS` = 64 | `crates/gateway/src/surface/knowledge.rs` `MAX_WAYPOINTS` | — |
 | H-19 | `MAX_DRAFTS` = 32 | `crates/gateway/src/surface/planning.rs` `MAX_DRAFTS` | — |
-| H-20 | `MAX_PLAYBOOK_CHARS` = 512 KiB | `crates/gateway/src/surface/planning.rs` `MAX_PLAYBOOK_CHARS` | — |
+| H-20 | `MAX_PLAYBOOK_CHARS` = 512 KiB | `crates/verifier/src/lib.rs` `MAX_PLAYBOOK_CHARS` | — |
 | H-21 | `TOKEN_LIFETIME_TICKS` = the whole match | `crates/gateway/src/token.rs` `TOKEN_LIFETIME_TICKS` | plan T9 |
 | H-22 | `VIEW_PAGE_BYTES` = 256 KiB | `crates/gateway/src/viewfeed.rs` `VIEW_PAGE_BYTES` | T16a notes, section D |
 | H-23 | `MAX_CONNECTIONS` = 8, counted at accept | `crates/gateway/src/serve.rs` `MAX_CONNECTIONS` | T16a notes, section D |

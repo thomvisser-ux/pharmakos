@@ -58,7 +58,8 @@
 //! (`toward` outside a `place_beacon`'s `at`) at the ends of their families;
 //! and `E0421` (an enemy beacon's handle outside an Attack target), which
 //! retires `W0703`: a handle that could rest on an old sighting now stands
-//! only where `E0418` judges its age.
+//! only where `E0418` judges its age. It also adds `E0029` (a player's text
+//! past [`crate::MAX_PLAYBOOK_CHARS`]) at the end of the decode family.
 //!
 //! The label an unemitted row prints, `none at the skeleton (…)`, is kept as
 //! it was spelt when the table shipped, because `gamectl docs` quotes it; the
@@ -448,6 +449,14 @@ pub const CATALOGUE: &[Entry] = &[
         family: Family::DecodeAndVersion,
         severity: Severity::Error,
         emitter: Emitter::Stage(Stage::Structure),
+    },
+    // S3's `vfy6`: a player's text past the cap, reported for the boundary
+    // that holds it (`crate::Input::too_long`) before anything decodes it.
+    Entry {
+        code: "E0029",
+        family: Family::DecodeAndVersion,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Decode),
     },
     // --- E01xx: limits and required blocks -----------------------------------
     Entry {

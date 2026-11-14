@@ -234,6 +234,12 @@ pub const VERIFIER_STRINGS: &[Text] = &[
         beginner: "A beacon can't yet be placed as a stepping stone toward a feature. Pick a spot, \
                    or cover a feature you can reach.",
     },
+    Text {
+        code: "E0029",
+        message: "the playbook is longer than {max} characters, so none of it was read.",
+        beginner: "This file is longer than a playbook may be, so nothing in it was checked. \
+                   Take out what it does not need.",
+    },
     // --- E01xx: limits and required blocks -----------------------------------
     Text {
         code: "E0101",

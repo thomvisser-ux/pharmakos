@@ -66,6 +66,14 @@ pub fn verify_jsonc(
     rules: &RulesTable,
     depth: Depth,
 ) -> Result<VerifyReport, Error> {
+    // The cap is on the text the player wrote, here where it enters, and
+    // never on the canonical text below, which runs to several times its
+    // length (`pharmakos_verifier::MAX_PLAYBOOK_CHARS`). A text past it is not
+    // canonicalised, blanked or copied: it is `E0029`, at once.
+    if pharmakos_verifier::is_too_long(playbook_jsonc) {
+        let input = Input::too_long(snapshot, scope, rules).map_err(Error::from)?;
+        return Ok(pharmakos_verifier::verify(&input, depth));
+    }
     let canonical = canonicalise_text(playbook_jsonc).map(|canonical| canonical.json);
     let blanked: String;
     let bytes: &[u8] = match canonical.as_ref() {

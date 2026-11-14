@@ -97,15 +97,10 @@ pub const MAX_DRAFT_LABEL_CHARS: usize = 120;
 /// limits.
 pub const MAX_DRAFTS: usize = 32;
 
-/// The longest playbook text a method will take, in characters.
-///
-/// PLACEHOLDER: a playbook's 512 KiB of characters — owner, at hardening.
-/// 512 KiB of characters is far above item 94's 128-unit size
-/// budget -- the worked example is 6 units and a few hundred bytes -- and far
-/// below anything that costs the process memory. It is a transport bound and
-/// not a game rule, so it is not a rules-table row, for the same reason
-/// [`crate::limit::CALLS_PER_TICK`] is not. OWNER settles it at hardening.
-pub const MAX_PLAYBOOK_CHARS: usize = 512 * 1024;
+// The longest playbook text a method will take, in characters, is the
+// verifier's `MAX_PLAYBOOK_CHARS`, the one number every boundary a player's
+// text enters by reads (S3's `vfy6`; it was defined here until then).
+use pharmakos_verifier::MAX_PLAYBOOK_CHARS;
 
 impl Surface {
     /// `get_schema`: the playbook vocabulary, generated from the schema.
@@ -1029,7 +1024,7 @@ fn playbook_param(request: &Request) -> Result<&str, Error> {
     let text = request
         .string_param("playbook_jsonc")?
         .ok_or_else(|| Error::invalid("`playbook_jsonc` is the playbook, as JSONC text"))?;
-    if text.chars().count() > MAX_PLAYBOOK_CHARS {
+    if pharmakos_verifier::is_too_long(text) {
         return Err(Error::invalid(format!(
             "a playbook is at most {MAX_PLAYBOOK_CHARS} characters and this is {}",
             text.chars().count()

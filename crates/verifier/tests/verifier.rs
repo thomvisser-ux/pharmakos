@@ -59,8 +59,9 @@ use pharmakos_sim::snapshot::{SNAPSHOT_VERSION, Snapshot};
 use pharmakos_sim::tables::SeatId;
 use pharmakos_verifier::catalogue::{CATALOGUE, Emitter, Stage, catalogue_json};
 use pharmakos_verifier::{
-    FeatureKind, Input, InputError, KnownBeacon, KnownFeature, Ownership, Scope, ScopeError,
-    Sighted, Sighting, VERIFIER_VERSION, hash, verify,
+    FeatureKind, Input, InputError, KnownBeacon, KnownFeature, MAX_PLAYBOOK_CHARS, Ownership,
+    Scope, ScopeError, Sighted, Sighting, VERIFIER_VERSION, hash, is_too_long,
+    is_too_long_in_bytes, verify,
 };
 
 // ---------------------------------------------------------------------------
@@ -532,8 +533,11 @@ fn the_catalogue_is_the_committed_one() {
 /// fixture reaches them, and each has its own test instead.
 ///
 /// `W0707`, the snapshot that does not decode:
-/// `an_unreadable_snapshot_is_reported_and_not_swallowed`.
-const HOST_FAULT_CODES: &[&str] = &["W0707"];
+/// `an_unreadable_snapshot_is_reported_and_not_swallowed`. And `E0029`, a
+/// player's text past the cap, which the boundary that holds the text reports
+/// through [`Input::too_long`] and no case file reaches, because a case is the
+/// bytes handed to [`Input::new`]: `a_playbook_past_the_cap_is_e0029_and_nothing_else`.
+const HOST_FAULT_CODES: &[&str] = &["W0707", "E0029"];
 
 #[test]
 fn every_emitted_code_has_a_case() {
@@ -2520,4 +2524,97 @@ fn a_fact_left_behind_by_a_replaced_beacon_is_refused() {
             )))
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// The size cap (S3's `vfy6`, follow-up D)
+// ---------------------------------------------------------------------------
+
+/// `E0029`'s report, from [`Input::too_long`].
+fn too_long_report(depth: Depth) -> VerifyReport {
+    let rules = rules();
+    let scope = fixture_scope();
+    let snapshot = fixture_snapshot();
+    let input = Input::too_long(&snapshot, &scope, &rules)
+        .unwrap_or_else(|error| panic!("assembling the input: {error}"));
+    verify(&input, depth)
+}
+
+#[test]
+fn a_text_past_the_cap_is_counted_in_characters_not_bytes() {
+    let at = "x".repeat(MAX_PLAYBOOK_CHARS);
+    assert!(!is_too_long(&at));
+    assert!(is_too_long(&format!("{at}x")));
+    // Two bytes a character: past the cap in bytes, within it in characters.
+    let wide = "é".repeat(MAX_PLAYBOOK_CHARS);
+    assert!(wide.len() > MAX_PLAYBOOK_CHARS);
+    assert!(!is_too_long(&wide));
+    assert!(is_too_long(&format!("{wide}é")));
+    // Four bytes is the most a character takes, so past four times the cap
+    // in bytes is past it in characters, whatever the bytes hold.
+    let most = MAX_PLAYBOOK_CHARS.checked_mul(4).expect("fits");
+    assert!(!is_too_long_in_bytes(most));
+    assert!(is_too_long_in_bytes(most.checked_add(1).expect("fits")));
+    let widest = "🜁".repeat(MAX_PLAYBOOK_CHARS);
+    assert_eq!(widest.len(), most);
+    assert!(!is_too_long(&widest));
+}
+
+#[test]
+fn a_playbook_past_the_cap_is_e0029_and_nothing_else() {
+    for depth in [Depth::Quick, Depth::Full] {
+        let report = too_long_report(depth);
+        assert!(!report.qualifies);
+        let codes: Vec<&str> = report
+            .diagnostics
+            .iter()
+            .map(|it| it.code.as_str())
+            .collect();
+        assert_eq!(codes, ["E0029"], "{depth:?}");
+        let diagnostic = report.diagnostics.first().expect("one");
+        assert_eq!(diagnostic.severity, i32::from(Severity::Error));
+        assert_eq!(diagnostic.path, "");
+        assert!(
+            diagnostic.message.contains(&MAX_PLAYBOOK_CHARS.to_string()),
+            "{}",
+            diagnostic.message
+        );
+        assert!(!diagnostic.message.contains('{'), "{}", diagnostic.message);
+        assert_eq!(report.size_units, 0);
+        assert!(report.plan_fingerprint.is_empty());
+        assert_eq!(report.verifier_version, VERIFIER_VERSION);
+    }
+}
+
+#[test]
+fn the_too_long_report_has_a_hash_no_playbook_can_have() {
+    let rules = rules();
+    let scope = fixture_scope();
+    let snapshot = fixture_snapshot();
+    let quick = too_long_report(Depth::Quick).report_hash;
+    let full = too_long_report(Depth::Full).report_hash;
+    assert_ne!(quick, full);
+    // Not the hash of any playbook bytes, the empty text included: the
+    // report is over a domain of its own.
+    for playbook in [&b""[..], b"{}", &case_bytes("expand_east")] {
+        let input = Input::new(playbook, &snapshot, &scope, &rules).expect("input");
+        for depth in [Depth::Quick, Depth::Full] {
+            let hash = verify(&input, depth).report_hash;
+            assert_ne!(hash, quick);
+            assert_ne!(hash, full);
+        }
+    }
+    // A pure function of its inputs, like any other report.
+    assert_eq!(too_long_report(Depth::Full), too_long_report(Depth::Full));
+    // And it moves with the view, as every report hash does.
+    let other = Scope::new(
+        SeatId::new(1),
+        SeatEconomy {
+            treasury: Money::new(1),
+            supply: Kw::new(1),
+            draw: Kw::new(1),
+        },
+    );
+    let input = Input::too_long(&snapshot, &other, &rules).expect("input");
+    assert_ne!(verify(&input, Depth::Full).report_hash, full);
 }

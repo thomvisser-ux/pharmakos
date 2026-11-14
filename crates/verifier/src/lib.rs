@@ -192,6 +192,54 @@ pub use scope::{
 pub use size::size_units;
 pub use walking::Walk;
 
+/// The longest playbook text a player's file may be, in characters (S3's
+/// `vfy6`, follow-up D).
+///
+/// PLACEHOLDER: a playbook's 512 KiB of characters — owner, at hardening.
+///
+/// It bounds the text the player wrote, not its canonical form: a playbook at
+/// item 94's 128-unit size budget is within it written compactly (the route
+/// shape P1 is measured at is 152,522 characters) and past it as canonical
+/// text (855,637 characters). It is far below anything that costs the
+/// process memory. It is a bound on what is read,
+/// not a game rule, so it is not a rules-table row, for the same reason the
+/// gateway's rate limits are not. It moved here from the gateway's
+/// `surface::planning` so that every boundary a player's text enters by reads
+/// one number: the gateway's methods, `plan-core`'s `verify_jsonc` and
+/// `gamectl verify`.
+///
+/// **It bounds the text the player wrote, never the bytes handed to
+/// [`Input::new`].** `plan-core` hands the verifier the canonical form, which
+/// is indented a level for every message it nests and runs to several times
+/// the compact text (a 151 KB file is 855 KB of canonical text), so a cap on
+/// the canonical bytes would refuse a legal file. The boundary that holds the
+/// player's text asks [`is_too_long`], and reports a text past the cap through
+/// [`Input::too_long`], as `E0029`, without reading it further.
+pub const MAX_PLAYBOOK_CHARS: usize = 512 * 1024;
+
+/// The most bytes a boundary need read of a file to answer [`is_too_long`]:
+/// four bytes is the longest UTF-8 spells a character in, so a file with more
+/// is past the cap whatever it holds ([`is_too_long_in_bytes`]).
+pub const MAX_PLAYBOOK_READ: usize = MAX_PLAYBOOK_CHARS * 4;
+
+/// Whether a player's text is past [`MAX_PLAYBOOK_CHARS`].
+///
+/// Counts characters only when the text's bytes are past the cap, so a text
+/// within it in bytes, as every playbook at the size budget is, costs one
+/// comparison; a longer one is counted up to one character past the cap and
+/// no further.
+#[must_use]
+pub fn is_too_long(text: &str) -> bool {
+    text.len() > MAX_PLAYBOOK_CHARS && text.chars().nth(MAX_PLAYBOOK_CHARS).is_some()
+}
+
+/// Whether a text of `bytes` bytes is past [`MAX_PLAYBOOK_CHARS`] whatever it
+/// holds, so a boundary reading a file can refuse it without reading it all.
+#[must_use]
+pub const fn is_too_long_in_bytes(bytes: usize) -> bool {
+    bytes > MAX_PLAYBOOK_READ
+}
+
 /// This build of the verifier, opaque and hashed.
 ///
 /// One of the five inputs to `report_hash`, so **changing it moves every report
@@ -268,6 +316,9 @@ pub struct Input<'a> {
     prices: Prices,
     walk: Walk,
     report_hashes: hash::ReportHashes,
+    /// A player's text past [`MAX_PLAYBOOK_CHARS`], from [`Input::too_long`]:
+    /// the report is `E0029` alone.
+    too_long: bool,
 }
 
 /// Why an [`Input`] could not be assembled.
@@ -338,6 +389,37 @@ impl<'a> Input<'a> {
         scope: &'a Scope,
         rules: &'a RulesTable,
     ) -> Result<Input<'a>, InputError> {
+        Input::assemble(playbook, snapshot, scope, rules, false)
+    }
+
+    /// The input for a player's text past [`MAX_PLAYBOOK_CHARS`] (S3's `vfy6`):
+    /// the boundary that holds the text asked [`is_too_long`] or
+    /// [`is_too_long_in_bytes`], and hands over none of it. [`verify`] reports
+    /// `E0029` and nothing else, at either depth, and decodes nothing.
+    ///
+    /// The report's hash is over the snapshot, the view, the rules table, this
+    /// build and the depth, under a domain of its own
+    /// ([`hash::TOO_LONG_REPORT_DOMAIN`]), so it is a pure function of its
+    /// inputs and no playbook's report can share it.
+    ///
+    /// # Errors
+    ///
+    /// As [`Input::new`], for the inputs it still takes.
+    pub fn too_long(
+        snapshot: &'a [u8],
+        scope: &'a Scope,
+        rules: &'a RulesTable,
+    ) -> Result<Input<'a>, InputError> {
+        Input::assemble(&[], snapshot, scope, rules, true)
+    }
+
+    fn assemble(
+        playbook: &'a [u8],
+        snapshot: &'a [u8],
+        scope: &'a Scope,
+        rules: &'a RulesTable,
+        too_long: bool,
+    ) -> Result<Input<'a>, InputError> {
         let rules_hash = rules.rules_hash();
         let limits = Limits::from_rules(rules)?;
         scope
@@ -354,12 +436,18 @@ impl<'a> Input<'a> {
             prices: Prices::from_rules(rules)?,
             walk: Walk::from_rules(rules)?,
             report_hashes: hash::ReportHashes::new(
+                if too_long {
+                    hash::TOO_LONG_REPORT_DOMAIN
+                } else {
+                    REPORT_HASH_DOMAIN
+                },
                 playbook,
                 snapshot,
                 scope,
                 rules_hash,
                 VERIFIER_VERSION,
             )?,
+            too_long,
         })
     }
 
@@ -460,7 +548,9 @@ pub fn verify(input: &Input<'_>, depth: Depth) -> VerifyReport {
     let mut units: u32 = 0;
     let mut fingerprint: Vec<u8> = Vec::new();
 
-    if let Some(decoded) = decode::run(input.playbook, &mut out) {
+    if input.too_long {
+        out.emit(report::Diag::new("E0029", pointer::ROOT).arg("max", MAX_PLAYBOOK_CHARS));
+    } else if let Some(decoded) = decode::run(input.playbook, &mut out) {
         let playbook = &decoded.playbook;
         units = size::size_units(playbook);
         if let Some(digest) = decoded.fingerprint {
