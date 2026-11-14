@@ -118,11 +118,12 @@ pub(crate) const P1_BUDGET: Budget = Budget {
         "inputs",
         "planned_inputs",
         "calls",
+        "planned_calls",
         "quick_p99_ns",
         "full_p99_ns",
     ],
     nonzero: &["budget_units", "inputs", "calls"],
-    complete: &[("inputs", "planned_inputs")],
+    complete: &[("inputs", "planned_inputs"), ("calls", "planned_calls")],
     bars: &[
         Bar {
             field: "quick_p99_ns",
@@ -443,7 +444,7 @@ mod tests {
                       planned_pairs=2000 repath_p99_ns=900000 estimate_p99_ns=400000";
 
     const P1: &str = "p1-budget-report v1 budget_units=128 inputs=7 planned_inputs=7 \
-                      calls=500 quick_p99_ns=3000000 full_p99_ns=30000000";
+                      calls=500 planned_calls=500 quick_p99_ns=3000000 full_p99_ns=30000000";
 
     #[test]
     fn a_report_is_read_among_other_output() {
@@ -525,6 +526,37 @@ mod tests {
         );
     }
 
+    /// A run cut short of its plan gives no verdict, whichever figure was cut:
+    /// the lines the bench prints for a cut plan (its harness tests' own
+    /// lines) are refused as short, never read as a pass.
+    #[test]
+    fn a_cut_run_is_no_verdict() {
+        assert_eq!(
+            parse(
+                &P1_BUDGET,
+                "p1-budget-report v1 budget_units=128 inputs=7 planned_inputs=7 calls=1 \
+                 planned_calls=500 quick_p99_ns=1 full_p99_ns=1"
+            ),
+            Err(BudgetError::Short {
+                field: "calls",
+                measured: 1,
+                planned: 500
+            })
+        );
+        assert_eq!(
+            parse(
+                &P3_BUDGET,
+                "p3-budget-report v1 seeds=1 planned_seeds=3 pairs=8 planned_pairs=2000 \
+                 repath_p99_ns=1 estimate_p99_ns=1"
+            ),
+            Err(BudgetError::Short {
+                field: "seeds",
+                measured: 1,
+                planned: 3
+            })
+        );
+    }
+
     #[test]
     fn each_alarm_fails_only_past_its_doubled_bars() {
         let at = |budget: &Budget, line: &str| {
@@ -548,7 +580,7 @@ mod tests {
         let p1 = |quick: u128, full: u128| {
             format!(
                 "p1-budget-report v1 budget_units=128 inputs=7 planned_inputs=7 calls=500 \
-                 quick_p99_ns={quick} full_p99_ns={full}"
+                 planned_calls=500 quick_p99_ns={quick} full_p99_ns={full}"
             )
         };
         assert!(at(&P1_BUDGET, &p1(10_000_000, 100_000_000)).1);
