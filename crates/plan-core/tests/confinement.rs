@@ -398,7 +398,7 @@ const KEPT_FALLBACKS: &[(&str, &str, usize, &str)] = &[
     ),
     (
         "render.rs",
-        "at.map_or_else(|| s::PLACE_NOWHERE.to_owned(), voxel)",
+        "spot.map_or_else(|| s::PLACE_NOWHERE.to_owned(), voxel)",
         1,
         "a corner the file leaves out is said to be nowhere the file names",
     ),

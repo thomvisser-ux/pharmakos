@@ -195,6 +195,60 @@ pub fn seed_text(seed: u64) -> String {
     format!("0x{seed:016x}")
 }
 
+/// A `gp.api.v1.ValueShape` as the JSON-RPC wire carries it: the one
+/// description of an editable value a rendered chip, a vocabulary parameter
+/// and a beacon's setting share (S3's plan, E8). A reference's kind is lower
+/// case, as every enum this surface answers with is (decisions-log item 80):
+/// `"location"`. An integer's unset bound is left out rather than written as a
+/// number a reader would take for one; its unit is always written, empty for
+/// a bare count.
+#[must_use]
+pub fn value_shape(shape: &pharmakos_plan_core::shape::Shape) -> pharmakos_proto::json::Json {
+    use pharmakos_plan_core::shape::Shape;
+    use pharmakos_proto::json::Json;
+    let (arm, body) = match shape {
+        Shape::Integer { min, max, unit } => {
+            let mut entries = Vec::new();
+            if let Some(min) = min {
+                entries.push((String::from("min"), Json::Number(min.to_string())));
+            }
+            if let Some(max) = max {
+                entries.push((String::from("max"), Json::Number(max.to_string())));
+            }
+            entries.push((String::from("unit"), Json::String((*unit).to_owned())));
+            ("integer", Json::Object(entries))
+        }
+        Shape::Choice { values } => (
+            "choice",
+            Json::Object(vec![(
+                String::from("values"),
+                Json::Array(values.iter().cloned().map(Json::String).collect()),
+            )]),
+        ),
+        Shape::Reference { kind, arms } => (
+            "reference",
+            Json::Object(vec![
+                (
+                    String::from("kind"),
+                    Json::String(pharmakos_proto::scope::wire_name(
+                        "gp.api.v1.ReferenceShape.Kind",
+                        kind.proto_name(),
+                    )),
+                ),
+                (
+                    String::from("arms"),
+                    Json::Array(
+                        arms.iter()
+                            .map(|arm| Json::String((*arm).to_owned()))
+                            .collect(),
+                    ),
+                ),
+            ]),
+        ),
+    };
+    Json::Object(vec![(String::from(arm), body)])
+}
+
 #[cfg(test)]
 mod tests {
     use super::{

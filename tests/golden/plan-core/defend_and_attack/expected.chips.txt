@@ -1,0 +1,75 @@
+/declarative/route/0  lines 4+1
+  4:30-46 "voxel 96, 11, 62"
+    /declarative/route/0/place_beacon/at
+    reference LOCATION [voxel, beacon_anchor, safest, covering]
+    = {"voxel":{"x":96,"y":11,"z":62}}
+  4:80-93 "beacon "b_00""
+    /declarative/route/0/place_beacon/initial/mandate/defend/protect/0/beacon
+    reference BEACON [beacon_id, nearest, weakest, most_threatened, safest]
+    = {"beacon_id":"b_00"}
+  4:130-132 "60"
+    /declarative/route/0/place_beacon/initial/mandate/defend/engagement_radius_pct
+    integer 1..100 %
+    = 60
+  4:149-176 "pursuing to the sphere edge"
+    /declarative/route/0/place_beacon/initial/mandate/defend/pursue
+    choice "NEVER" | "SPHERE_EDGE" | "WHILE_IN_REACH"
+    = "SPHERE_EDGE"
+  4:198-199 "2"
+    /declarative/route/0/place_beacon/initial/mandate/defend/picket_scouts
+    integer 0..255
+    = 2
+/declarative/route/1  lines 5+1
+  5:29-46 "voxel 100, 20, 58"
+    /declarative/route/1/place_beacon/at
+    reference LOCATION [voxel, beacon_anchor, safest, covering]
+    = {"voxel":{"x":100,"y":20,"z":58}}
+  5:80-93 "beacon "e_01""
+    /declarative/route/1/place_beacon/initial/mandate/attack/target/beacon
+    reference BEACON [beacon_id, nearest, weakest, most_threatened]
+    = {"beacon_id":"e_01"}
+  5:95-137 "retargeting the nearest known enemy beacon"
+    /declarative/route/1/place_beacon/initial/mandate/attack/retarget
+    choice "NONE" | "NEAREST_KNOWN"
+    = "NEAREST_KNOWN"
+  5:186-187 "6"
+    /declarative/route/1/place_beacon/initial/mandate/attack/launch/force_size
+    integer 0..
+    = 6
+  5:211-215 "1:30"
+    /declarative/route/1/place_beacon/initial/mandate/attack/launch/segment_ms
+    integer 0.. ms
+    = 90000
+  5:273-275 "30"
+    /declarative/route/1/place_beacon/initial/mandate/attack/retreat/force_below_pct
+    integer 1..100 %
+    = 30
+  5:300-304 "1:00"
+    /declarative/route/1/place_beacon/initial/mandate/attack/retreat/after_launch_ms
+    integer 0.. ms
+    = 60000
+  5:319-355 "then regrouping at the staging point"
+    /declarative/route/1/place_beacon/initial/mandate/attack/after_action
+    choice "REGROUP_AT_STAGING" | "RETURN_HOME"
+    = "REGROUP_AT_STAGING"
+  5:374-400 "breaching walls if it must"
+    /declarative/route/1/place_beacon/initial/mandate/attack/breach_allowed
+    choice true | false
+    = true
+  5:408-409 "1"
+    /declarative/route/1/place_beacon/initial/mandate/attack/waves
+    integer 1..
+    = 1
+/declarative/route/2  lines 6+1
+  6:31-44 "beacon "b_00""
+    /declarative/route/2/interface/beacon
+    reference BEACON [beacon_id, nearest, weakest, most_threatened, safest]
+    = {"beacon_id":"b_00"}
+  6:112-133 "never breaching walls"
+    /declarative/route/2/interface/rows/0/set_mandate_settings/attack/breach_allowed
+    choice true | false
+    = false
+  6:197-213 "voxel 90, 12, 11"
+    /declarative/route/2/interface/rows/2/add_build_target/target/anchor
+    reference LOCATION [voxel, beacon_anchor, safest, on]
+    = {"voxel":{"x":90,"y":12,"z":11}}

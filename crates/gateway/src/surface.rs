@@ -66,9 +66,8 @@
 //! T9's; the per-method order is each method's own and is stated at the method.
 //!
 //! Every method `gateway.proto` gives a request/response pair is served, S1's
-//! `resolve_refs` included, but for `get_vocabulary`, whose pair S3's `con6` put
-//! on the wire and which answers [`crate::error::Code::Internal`] until S3's
-//! `gwr` serves it. Four methods of the schema still answer
+//! `resolve_refs` and S3's `get_vocabulary` included. Four methods of the
+//! schema still answer
 //! [`crate::error::Code::Internal`] -- `query_area`, `list_known_enemies`,
 //! `get_reports` and `get_capabilities` -- and that is not an omission: they
 //! are exactly the four `gateway.proto` gives no request/response pair at all,
@@ -3275,11 +3274,7 @@ impl Surface {
             // Docs and planning.
             Method::GetSchema => Surface::get_schema(request),
             Method::ListTemplates => self.list_templates(subject, request),
-            // On the wire from S3's `con6`, with its pair; S3's `gwr` serves it.
-            Method::GetVocabulary => Err(Error::internal(
-                "`get_vocabulary` is in the schema and this build does not serve it yet: S3's \
-                 rule list fills it",
-            )),
+            Method::GetVocabulary => self.get_vocabulary(subject),
             Method::InstantiateTemplate => self.instantiate_template(subject, request),
             Method::VerifyPlan => self.verify_plan(subject, request),
             Method::RenderPlan => self.render_plan(subject, request),
@@ -4439,17 +4434,6 @@ mod tests {
         let token = seat_token(&mut surface, 0);
         let response = surface.call(Some(&token), &request("get_briefing", "{}"), &Blind);
         assert_eq!(code(&response), "INTERNAL");
-        // On the wire from S3's `con6`, served from S3's `gwr`: until then the
-        // same answer, naming the method, and never the caller's fault.
-        let response = surface.call(Some(&token), &request("get_vocabulary", "{}"), &Blind);
-        assert_eq!(code(&response), "INTERNAL");
-        assert!(
-            matches!(
-                response.get("error").and_then(|error| error.get("message")),
-                Some(Json::String(message)) if message.contains("get_vocabulary")
-            ),
-            "{response:?}"
-        );
     }
 
     #[test]
@@ -4849,9 +4833,10 @@ mod tests {
                 "priority",
                 "powered",
                 "hp",
-                "max_hp"
+                "max_hp",
+                "sphere_radius_voxels"
             ],
-            "a seat's own beacon carries its hit points too"
+            "a seat's own beacon carries its hit points and its sphere too"
         );
     }
 
@@ -5082,6 +5067,111 @@ mod tests {
             "seat 1's core keeps its base"
         );
         assert!(!theirs.spire_at("b_00"));
+    }
+
+    /// Seat 0's core with a finished Resonance Spire beside it, in a casual
+    /// match, so seat 1 sees the core live: the scene the sphere and licence
+    /// reads of S3's `gwr` are pinned on.
+    fn spire_at_seat_zeros_core() -> Surface {
+        use pharmakos_proto::gp::v1::Licence;
+        resumed_with(FogPolicy::casual(), |snapshot, world| {
+            let mut world = world.clone();
+            let seat = SeatId::new(0);
+            let row = (0..world.beacons().ids().len())
+                .find(|row| world.beacons().seats().get(*row) == Some(&0))
+                .expect("seat 0's core");
+            let core = pharmakos_sim::tables::BeaconId::new(
+                world.beacons().ids().get(row).copied().expect("a core id"),
+            );
+            let at = world
+                .beacons()
+                .positions()
+                .get(row)
+                .copied()
+                .expect("a core place");
+            let beside = [
+                at[0].saturating_add(pharmakos_sim::math::fixed::Fx::from_voxels(1)),
+                at[1],
+                at[2],
+            ];
+            assert!(world.award_licence_directly(seat, Licence::ResonanceSpire, 1));
+            world
+                .raise_structure(
+                    seat,
+                    core,
+                    pharmakos_sim::tables::StructureKind::ResonanceSpire,
+                    beside,
+                )
+                .expect("room for a Spire");
+            *snapshot = pharmakos_sim::snapshot::Snapshot::capture(&world);
+        })
+    }
+
+    /// S3's plan, E3 (`gwr`): `BeaconSummary.sphere_radius_voxels` is the sim's
+    /// one radius function's answer on the seat's own beacons -- the grown
+    /// radius beside a finished Spire, the base row elsewhere -- and is never
+    /// on another seat's beacon, even one in live vision, because it would
+    /// tell whether that beacon's Spire stands.
+    #[test]
+    fn the_sphere_radius_is_told_on_own_beacons_only() {
+        let mut surface = spire_at_seat_zeros_core();
+        let grown = rules().grown_sphere_radius_voxels().to_string();
+        let base = rules().sphere_radius_voxels().to_string();
+        let ours = seat_token(&mut surface, 0);
+        let core = result(&surface.call(
+            Some(&ours),
+            &request("get_beacon", r#"{"beacon_id":"b_00"}"#),
+            &Blind,
+        ));
+        assert_eq!(
+            core.get("summary")
+                .and_then(|summary| summary.get("sphere_radius_voxels")),
+            Some(&Json::Number(grown)),
+            "{core:?}"
+        );
+        let theirs = seat_token(&mut surface, 1);
+        let listed = result(&surface.call(Some(&theirs), &request("list_beacons", "{}"), &Blind));
+        let Some(Json::Array(beacons)) = listed.get("beacons") else {
+            panic!("a listing: {listed:?}");
+        };
+        let mut own = 0;
+        let mut foreign = 0;
+        for beacon in beacons {
+            let named = |prefix: &str| matches!(beacon.get("beacon_id"), Some(Json::String(id)) if id.starts_with(prefix));
+            if named("b_") {
+                own += 1;
+                assert_eq!(
+                    beacon.get("sphere_radius_voxels"),
+                    Some(&Json::Number(base.clone())),
+                    "{beacon:?}"
+                );
+            } else {
+                foreign += 1;
+                assert_eq!(beacon.get("sphere_radius_voxels"), None, "{beacon:?}");
+            }
+        }
+        assert!(own > 0 && foreign > 0, "{listed:?}");
+    }
+
+    /// S3's `gwr` (decisions-log item 153 (3)): the briefing tells a seat the
+    /// licences it holds, and leaves the field out for a seat that holds none,
+    /// in a casual match where it sees the other seat's Spire.
+    #[test]
+    fn the_briefing_tells_the_seat_its_own_licences() {
+        let mut surface = spire_at_seat_zeros_core();
+        let ours = seat_token(&mut surface, 0);
+        let briefing = result(&surface.call(Some(&ours), &request("get_briefing", "{}"), &Blind));
+        assert_eq!(
+            briefing.get("licences_held"),
+            Some(&Json::Array(vec![Json::String(String::from(
+                "resonance_spire"
+            ))])),
+            "{briefing:?}"
+        );
+        let theirs = seat_token(&mut surface, 1);
+        let briefing = result(&surface.call(Some(&theirs), &request("get_briefing", "{}"), &Blind));
+        assert!(briefing.get("prose").is_some(), "{briefing:?}");
+        assert_eq!(briefing.get("licences_held"), None, "{briefing:?}");
     }
 
     /// A world event the sim placed nowhere is refused, never filtered as if it

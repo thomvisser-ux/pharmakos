@@ -336,8 +336,9 @@ fn value_at<'a>(root: &'a Json, pointer: &str) -> Result<Option<&'a Json>, Error
 
 /// A value's compact JSON text, as `gp.api.v1.FilledParameter.value` carries
 /// it. One spelling for all three sources, so a wizard never shows `3000` for
-/// one page and `3000 ` for the next.
-fn compact(value: &Json) -> String {
+/// one page and `3000 ` for the next; and, from S3's `gwr`, the spelling of a
+/// rendered chip's value (`crate::render`).
+pub(crate) fn compact(value: &Json) -> String {
     let mut out = String::new();
     compact_into(value, &mut out);
     out

@@ -291,14 +291,13 @@ impl Operators for NoOperators {
 /// seat's store and never reads the seat's drafts. So are the four `admin` methods, which its scopes refuse anyway,
 /// and the four the schema gives no request and response pair
 /// (`query_area`, `list_known_enemies`, `get_reports`, `get_capabilities`),
-/// which no client is served, and `get_vocabulary`, which this build does not
-/// serve until S3's `gwr`. Every other method a seat's `observe`, `docs`
+/// which no client is served. Every other method a seat's `observe`, `docs`
 /// and `plan` reach is on it, `get_segment_feed` included: the feed is read
 /// through an opaque cursor the caller holds and keeps no per-viewer state in
 /// the gateway, so an advisor reading it (the recap's events, say) leaves the
 /// human's feed as it found it. Anything off it is answered `FORBIDDEN_SCOPE`
 /// and audited (`an_advisor_is_refused_every_method_off_its_allow_list`).
-pub const ADVISOR_METHODS: [Method; 19] = [
+pub const ADVISOR_METHODS: [Method; 20] = [
     Method::GetStatus,
     Method::WaitFor,
     Method::GetBriefing,
@@ -309,6 +308,7 @@ pub const ADVISOR_METHODS: [Method; 19] = [
     Method::GetEconomyForecast,
     Method::EstimateRoute,
     Method::GetSchema,
+    Method::GetVocabulary,
     Method::ListTemplates,
     Method::InstantiateTemplate,
     Method::VerifyPlan,

@@ -3,6 +3,304 @@
   "id": 1,
   "result": {
     "prose": "Raid an Enemy Beacon\nWritten from a built-in template.\nWalk to your core, place an Attack beacon beside it, and send its raiders against the nearest enemy beacon you know of.\n\nRoute\n  1. to_core: walk to beacon \"b_00\".\n  2. place_raid: place a beacon at a site covering the nearest scrap seam (nearest by travel, read when the step starts), tagged \"raid\", on an Attack mandate: attacking the nearest known enemy beacon (chosen when the force launches), retargeting the nearest known enemy beacon, gathering at voxel 192, 192, 0, launching once 2 raiders stand there, breaking off once fewer than 51% of the force remain, then regrouping at the staging point and in 1 wave, at normal Quartermaster priority (19 s on site).\n    Give up after 1:00.\n    On failure, move on to the next step.\n  3. hold: hold for 30 s.\n\nRules\n  1. \"flee\", when the commander is at or below 40% HP and the commander took damage in the last 3 s:\n    1. flee_to_safety: walk to the safest own beacon.\n    2. flee_wait: hold for 8 s.\n    Then carry on with the route.\n    Fires at most 3 times, and no sooner than every 30 s.\n\nIf the commander dies\n  On respawn, carry on from the step the route was on.\n\nFallback\n  Hold at the safest own beacon.\n\nBudget\n  6 of 128 size units.\n  19 s standing at a beacon along the route.\n",
+    "rules": [
+      {
+        "pointer": "/declarative/route/0",
+        "line": 5,
+        "line_count": 1,
+        "chips": [
+          {
+            "pointer": "/declarative/route/0/move/to",
+            "line": 5,
+            "start": 22,
+            "end": 35,
+            "shape": {
+              "reference": {
+                "kind": "location",
+                "arms": [
+                  "voxel",
+                  "beacon_anchor",
+                  "safest"
+                ]
+              }
+            },
+            "value_json": "{\"beacon_anchor\":{\"beacon_id\":\"b_00\"}}"
+          }
+        ]
+      },
+      {
+        "pointer": "/declarative/route/1",
+        "line": 6,
+        "line_count": 3,
+        "chips": [
+          {
+            "pointer": "/declarative/route/1/place_beacon/at",
+            "line": 6,
+            "start": 35,
+            "end": 120,
+            "shape": {
+              "reference": {
+                "kind": "location",
+                "arms": [
+                  "voxel",
+                  "beacon_anchor",
+                  "safest",
+                  "covering"
+                ]
+              }
+            },
+            "value_json": "{\"covering\":{\"seam\":{\"rank\":\"NEAREST\",\"coverage\":\"ANY\"}}}"
+          },
+          {
+            "pointer": "/declarative/route/1/place_beacon/initial/mandate/attack/target/beacon",
+            "line": 6,
+            "start": 169,
+            "end": 232,
+            "shape": {
+              "reference": {
+                "kind": "beacon",
+                "arms": [
+                  "beacon_id",
+                  "nearest",
+                  "weakest",
+                  "most_threatened"
+                ]
+              }
+            },
+            "value_json": "{\"nearest\":{\"filter\":{\"side\":\"ENEMY_KNOWN\"}}}"
+          },
+          {
+            "pointer": "/declarative/route/1/place_beacon/initial/mandate/attack/retarget",
+            "line": 6,
+            "start": 234,
+            "end": 276,
+            "shape": {
+              "choice": {
+                "values": [
+                  "\"NONE\"",
+                  "\"NEAREST_KNOWN\""
+                ]
+              }
+            },
+            "value_json": "\"NEAREST_KNOWN\""
+          },
+          {
+            "pointer": "/declarative/route/1/place_beacon/initial/mandate/attack/launch/force_size",
+            "line": 6,
+            "start": 325,
+            "end": 326,
+            "shape": {
+              "integer": {
+                "min": 0,
+                "unit": ""
+              }
+            },
+            "value_json": "2"
+          },
+          {
+            "pointer": "/declarative/route/1/place_beacon/initial/mandate/attack/retreat/force_below_pct",
+            "line": 6,
+            "start": 377,
+            "end": 379,
+            "shape": {
+              "integer": {
+                "min": 1,
+                "max": 100,
+                "unit": "%"
+              }
+            },
+            "value_json": "51"
+          },
+          {
+            "pointer": "/declarative/route/1/place_beacon/initial/mandate/attack/after_action",
+            "line": 6,
+            "start": 402,
+            "end": 438,
+            "shape": {
+              "choice": {
+                "values": [
+                  "\"REGROUP_AT_STAGING\"",
+                  "\"RETURN_HOME\""
+                ]
+              }
+            },
+            "value_json": "\"REGROUP_AT_STAGING\""
+          },
+          {
+            "pointer": "/declarative/route/1/place_beacon/initial/mandate/attack/waves",
+            "line": 6,
+            "start": 446,
+            "end": 447,
+            "shape": {
+              "integer": {
+                "min": 1,
+                "unit": ""
+              }
+            },
+            "value_json": "1"
+          },
+          {
+            "pointer": "/declarative/route/1/place_beacon/initial/priority",
+            "line": 6,
+            "start": 457,
+            "end": 463,
+            "shape": {
+              "choice": {
+                "values": [
+                  "\"LOW\"",
+                  "\"NORMAL\"",
+                  "\"HIGH\""
+                ]
+              }
+            },
+            "value_json": "\"NORMAL\""
+          },
+          {
+            "pointer": "/declarative/route/1/timeout_ms",
+            "line": 7,
+            "start": 18,
+            "end": 22,
+            "shape": {
+              "integer": {
+                "min": 0,
+                "unit": "ms"
+              }
+            },
+            "value_json": "60000"
+          }
+        ]
+      },
+      {
+        "pointer": "/declarative/route/2",
+        "line": 9,
+        "line_count": 1,
+        "chips": [
+          {
+            "pointer": "/declarative/route/2/hold/ms",
+            "line": 9,
+            "start": 20,
+            "end": 24,
+            "shape": {
+              "integer": {
+                "min": 1,
+                "unit": "ms"
+              }
+            },
+            "value_json": "30000"
+          }
+        ]
+      },
+      {
+        "pointer": "/declarative/handlers/0",
+        "line": 12,
+        "line_count": 5,
+        "chips": [
+          {
+            "pointer": "/declarative/handlers/0/when/all/items/0/cmdr_hp_pct/cmp",
+            "line": 12,
+            "start": 35,
+            "end": 46,
+            "shape": {
+              "choice": {
+                "values": [
+                  "\"LT\"",
+                  "\"LE\"",
+                  "\"EQ\"",
+                  "\"NE\"",
+                  "\"GE\"",
+                  "\"GT\""
+                ]
+              }
+            },
+            "value_json": "\"LE\""
+          },
+          {
+            "pointer": "/declarative/handlers/0/when/all/items/0/cmdr_hp_pct/pct",
+            "line": 12,
+            "start": 47,
+            "end": 49,
+            "shape": {
+              "integer": {
+                "min": 0,
+                "max": 100,
+                "unit": "%"
+              }
+            },
+            "value_json": "40"
+          },
+          {
+            "pointer": "/declarative/handlers/0/when/all/items/1/cmdr_took_damage_within/ms",
+            "line": 12,
+            "start": 96,
+            "end": 99,
+            "shape": {
+              "integer": {
+                "min": 0,
+                "unit": "ms"
+              }
+            },
+            "value_json": "3000"
+          },
+          {
+            "pointer": "/declarative/handlers/0/body/0/move/to",
+            "line": 13,
+            "start": 31,
+            "end": 52,
+            "shape": {
+              "reference": {
+                "kind": "location",
+                "arms": [
+                  "voxel",
+                  "beacon_anchor",
+                  "safest"
+                ]
+              }
+            },
+            "value_json": "{\"safest\":{}}"
+          },
+          {
+            "pointer": "/declarative/handlers/0/body/1/hold/ms",
+            "line": 14,
+            "start": 27,
+            "end": 30,
+            "shape": {
+              "integer": {
+                "min": 1,
+                "unit": "ms"
+              }
+            },
+            "value_json": "8000"
+          },
+          {
+            "pointer": "/declarative/handlers/0/max_fires",
+            "line": 16,
+            "start": 18,
+            "end": 19,
+            "shape": {
+              "integer": {
+                "min": 1,
+                "max": 8,
+                "unit": ""
+              }
+            },
+            "value_json": "3"
+          },
+          {
+            "pointer": "/declarative/handlers/0/cooldown_ms",
+            "line": 16,
+            "start": 52,
+            "end": 56,
+            "shape": {
+              "integer": {
+                "min": 5000,
+                "unit": "ms"
+              }
+            },
+            "value_json": "30000"
+          }
+        ]
+      }
+    ],
     "_status": {
       "phase": "lull",
       "phase_remaining_ms": 600000,

@@ -83,9 +83,11 @@ pub mod library;
 pub mod patch;
 pub mod projection;
 pub mod render;
+pub mod shape;
 pub mod strings;
 pub mod travel;
 pub mod verify;
+pub mod vocabulary;
 
 pub use canonical::{Canonical, canonicalise, canonicalise_text};
 pub use context::PlanContext;
@@ -99,6 +101,6 @@ pub use patch::{Patch, patch_text};
 /// verifier.
 pub use pharmakos_verifier::interface;
 pub use projection::{Projection, project};
-pub use render::render_plan;
+pub use render::{Chip, RenderedRule, Rendering, render, render_plan};
 pub use travel::{Estimate, TravelEstimator};
 pub use verify::verify_jsonc;

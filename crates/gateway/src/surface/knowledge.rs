@@ -127,6 +127,11 @@ impl Surface {
     /// sentence about the seat's playbook is exactly what decisions-log item
     /// 111 keeps from it: what it advises must not depend on what the seat
     /// wrote.
+    ///
+    /// From S3, `licences_held`: the licences the sim's licence table holds for
+    /// the seat, ascending (decisions-log item 153 (3); S3's plan, E2), left
+    /// out while it holds none. The seat's own, like the rest of the briefing:
+    /// no seat reads another seat's set here.
     pub(super) fn get_briefing(
         &self,
         subject: crate::token::Subject,
@@ -175,7 +180,15 @@ impl Surface {
             None
         };
 
-        Ok(Json::Object(vec![
+        // The licences this seat holds, ascending (decisions-log item 153 (3);
+        // S3's plan, E2): its own, and left out while it holds none.
+        let held: Vec<Json> = licence_rows(world)?
+            .into_iter()
+            .filter(|row| row.seat == seat)
+            .map(|row| Json::String(licence_wire(row.licence)))
+            .collect();
+
+        let mut entries = vec![
             (String::from("notes"), Json::String(notes)),
             (
                 String::from("standing"),
@@ -198,7 +211,11 @@ impl Surface {
                     None => format!("{briefing} {standing}"),
                 }),
             ),
-        ]))
+        ];
+        if !held.is_empty() {
+            entries.push((String::from("licences_held"), Json::Array(held)));
+        }
+        Ok(Json::Object(entries))
     }
 
     /// `get_recap`: what the last round did.
@@ -249,6 +266,12 @@ impl Surface {
     ///   ([`RecapFacts::tallies`]), never added up from the feed, whose bus
     ///   drops past its capacity. Like the settlement it is this recap's, so
     ///   it is the same in the recap, the Lull and the Push that follow.
+    /// * **The licence line**, `licences_awarded` (spec section 8: "announced
+    ///   in the recap"; decisions-log item 153 (3)), under the tally's fog
+    ///   rule: between rounds, what the seat was awarded at this settlement
+    ///   and no other seat's; once the match has ended, every seat's award of
+    ///   the whole match that still stands. The seat's own awards at this
+    ///   settlement are said in the prose too ([`licence_line`]).
     /// * **The Ledger's memos**, `ledger_memos`: those issued to the calling
     ///   seat over the match so far, in the order they were issued, in a
     ///   Probation match (S3's plan, E5; [`crate::probation`]).
@@ -344,6 +367,9 @@ impl Surface {
             failure_lines(facts, seat, &mut prose)?;
             if let Some(all) = seat_tallies(host, facts)? {
                 entries.push((String::from("seat_tallies"), all));
+            }
+            if let Some(awarded) = licence_line(host.world(), facts, seat, ended, &mut prose)? {
+                entries.push((String::from("licences_awarded"), awarded));
             }
         }
         // The Ledger's memos issued to the calling seat over the match so far,
@@ -443,6 +469,12 @@ impl Surface {
     /// it was seen, and neither is ever its mandate; a seat's own beacon is
     /// its mandate and its hit points, which are the seat's own business.
     ///
+    /// **A seat's own beacon carries its detail** from S3 (the register's X-17,
+    /// for S3-01's Visit & change rows; [`beacon_detail`]): its writ, each
+    /// setting its writ holds with what may be written there, and a Build
+    /// beacon's targets in the order the Quartermaster reads them. Another
+    /// seat's beacon carries none of it, under every fog policy (decision 5).
+    ///
     /// # Errors
     ///
     /// [`crate::error::Code::NotFound`] for a name that names no beacon this
@@ -487,13 +519,21 @@ impl Surface {
         };
         let known = self.known_beacon(viewer, vision, id)?.ok_or_else(absent)?;
         let summary = self.beacon_summary(&known)?;
+        let mut detail = Vec::new();
         let prose = match known.seen {
             Seen::Own { row } => {
-                let beacons = self.host()?.world().beacons();
-                let mandate =
-                    view::mandate_from_id(beacons.mandates().get(row).copied().ok_or_else(
-                        || Error::internal(format!("the beacon table has no mandate in row {row}")),
-                    )?)?;
+                let world = self.host()?.world();
+                let mandate = view::mandate_from_id(
+                    world
+                        .beacons()
+                        .mandates()
+                        .get(row)
+                        .copied()
+                        .ok_or_else(|| {
+                            Error::internal(format!("the beacon table has no mandate in row {row}"))
+                        })?,
+                )?;
+                detail = beacon_detail(world, row, mandate)?;
                 let hp = self.beacon_hit_points(row, id)?;
                 strings::own_beacon(&known.name, view::mandate_name(mandate), hp.0)
             }
@@ -505,10 +545,12 @@ impl Surface {
                 strings::foreign_beacon_remembered(&known.name, known.owner, known.at, age_ms)
             }
         };
-        Ok(Json::Object(vec![
+        let mut entries = vec![
             (String::from("summary"), summary),
             (String::from("prose"), Json::String(prose)),
-        ]))
+        ];
+        entries.extend(detail);
+        Ok(Json::Object(entries))
     }
 
     /// `get_map_summary`: the extent, the seed, and every vent and seam.
@@ -924,6 +966,19 @@ impl Surface {
     /// through the adapter item 100 (1) puts in this crate. Never optimistic,
     /// and a fogged leg comes back flagged so the editor draws it dashed and
     /// labels it a bound rather than an ETA (item 57).
+    ///
+    /// From S3 each leg that reaches, and the whole route when every leg
+    /// does, carries `travel_text`, the figure as the player reads it (the
+    /// register's S3-18, items 57 and 61): plan-core's rendering, rounded up to
+    /// a whole second and labelled "at most" when it is a bound
+    /// ([`pharmakos_plan_core::travel`]), so the editor draws it and does no
+    /// time maths.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] for a travel time the rendering
+    /// refuses (one past what a game millisecond count holds), never drawn as
+    /// a clamped figure; and the refusals of the waypoints' reads.
     pub(super) fn estimate_route(
         &self,
         subject: crate::token::Subject,
@@ -968,47 +1023,26 @@ impl Surface {
         let legs: Vec<Json> = route
             .legs
             .iter()
-            .map(|leg| {
-                let mut entries = vec![
-                    // `gp.api.v1.Leg.to` is a `gp.v1.Location`, so the voxel
-                    // goes under its oneof arm, `{"voxel": {x, y, z}}`, and
-                    // not bare (decisions-log item 112 (3); pinned by
-                    // `a_legs_end_is_written_as_the_location_the_schema_declares`,
-                    // because the walkthrough golden records summaries).
-                    (
-                        String::from("to"),
-                        Json::Object(vec![(
-                            String::from("voxel"),
-                            Json::Object(vec![
-                                (String::from("x"), Json::Number(leg.to.x.to_string())),
-                                (String::from("y"), Json::Number(leg.to.y.to_string())),
-                                (String::from("z"), Json::Number(leg.to.z.to_string())),
-                            ]),
-                        )]),
-                    ),
-                ];
-                // A leg with no estimate writes no `ms`, and the route says it
-                // is unreachable: a 0 would read as a leg that costs nothing.
-                if let Some(found) = leg.estimate {
-                    entries.push((
-                        String::from("ms"),
-                        Json::Number(found.ms().map_err(refused)?.raw().to_string()),
-                    ));
-                }
-                entries.push((String::from("fogged"), Json::Bool(leg.fogged)));
-                Ok(Json::Object(entries))
-            })
+            .map(leg_json)
             .collect::<Result<Vec<Json>, Error>>()?;
         let mut entries = vec![(
             String::from("reachable"),
             Json::Bool(!route.is_unreachable()),
         )];
         // The total only for a route every leg of which reaches, as a leg's
-        // own `ms` is written.
-        if let Some(total) = route.total().map_err(refused)? {
+        // own `ms` is written; and its text beside it, empty -- left out --
+        // when the route does not reach.
+        let total = route.total().map_err(refused)?;
+        if let Some(total) = total {
             entries.push((String::from("ms"), Json::Number(total.raw().to_string())));
         }
         entries.push((String::from("legs"), Json::Array(legs)));
+        if total.is_some() {
+            entries.push((
+                String::from("travel_text"),
+                Json::String(route.render().map_err(refused)?),
+            ));
+        }
         Ok(Json::Object(entries))
     }
 
@@ -1404,8 +1438,10 @@ impl Surface {
     /// `beacon_id`, `at` and `owner` for every beacon a viewer may see or
     /// remembers. For a seat's **own** beacon, also `core`, `priority` and
     /// `powered` (decisions-log item 111, decision C7): what a client needs to
-    /// tell which of its beacons would brown out first, and its `hp` with its
-    /// `max_hp`. **Another seat's beacon** carries what S2's plan's decision 5
+    /// tell which of its beacons would brown out first, its `hp` with its
+    /// `max_hp`, and from S3 its `sphere_radius_voxels`, the sim's one radius
+    /// function's answer (S3's plan, E3), so the client draws a ring it never
+    /// computes. **Another seat's beacon** carries what S2's plan's decision 5
     /// shows (decisions-log item 144 (11), the register's S2-11) and nothing
     /// more, under every fog policy and to every viewer that is not its owner:
     /// in live vision its `hp` and `max_hp` and a `sighting_age_ms` of 0, and
@@ -1470,6 +1506,22 @@ impl Surface {
                 ));
                 entries.push((String::from("powered"), Json::Bool(!dormant)));
                 hit_points(&mut entries, self.beacon_hit_points(row, known.id)?);
+                // The sphere's radius now, from the sim's one function (S3's
+                // plan, E3): the base row, grown while a finished Resonance
+                // Spire stands on the beacon. Own beacons only: another
+                // seat's radius would tell whether its Spire stands.
+                let radius =
+                    world.sphere_radius_voxels_of(pharmakos_sim::tables::BeaconId::new(known.id));
+                let radius = u32::try_from(radius).map_err(|_| {
+                    Error::internal(format!(
+                        "the sim sized {}'s sphere at {radius} voxels, which is no radius",
+                        known.name
+                    ))
+                })?;
+                entries.push((
+                    String::from("sphere_radius_voxels"),
+                    Json::Number(radius.to_string()),
+                ));
             }
             Seen::Live { row } => {
                 hit_points(&mut entries, self.beacon_hit_points(row, known.id)?);
@@ -2098,6 +2150,652 @@ fn own_tally(
     Ok(json)
 }
 
+/// The per-beacon detail `get_beacon` tells about one of the seat's own
+/// beacons (`GetBeaconResponse` fields 3 to 5; the register's X-17), read off
+/// the hosted world's own columns for the beacon in `row`, whose writ is
+/// `mandate`.
+///
+/// * **`mandate`**, lower case (decisions-log item 80), left out on a beacon
+///   with none.
+/// * **`settings`**, one `gp.api.v1.BeaconSettingRow` per setting the writ
+///   holds a value for, in the schema's field order: the common two first
+///   (`roe`, `retreat_hp_pct`), then the writ's own. Each row's pointer is the
+///   setting's inside `gp.v1.MandateSettings`, its title and shape are the
+///   vocabulary's for that field ([`pharmakos_plan_core::vocabulary`]), so a
+///   setting is drawn and edited as a picker's parameter is, and its value is
+///   JSON text in the playbook's canonical spelling. A setting the sim holds as
+///   "not written" (an unset `roe`, retarget or after-action, a zero
+///   engagement radius or wave count) has no row. A list (a protect list, the
+///   avoid areas, the probe areas) and an Attack's target and staging point,
+///   which no one shape describes or which the sim holds resolved, have no
+///   row either.
+/// * **`build_targets`**, a Build beacon's targets in the Quartermaster's
+///   order, each a `gp.v1.BuildTarget`: its blueprint, its anchor as it was
+///   written (a voxel, `on` a named feature, or `on` the nearest vent), its
+///   rotation and its order.
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] when a column lacks the row, or holds a
+/// value the schema does not name.
+fn beacon_detail(
+    world: &pharmakos_sim::world::World,
+    row: usize,
+    mandate: pharmakos_sim::seams::MandateKind,
+) -> Result<Vec<(String, Json)>, Error> {
+    use pharmakos_sim::seams::MandateKind;
+    let beacons = world.beacons();
+    let missing =
+        |name: &str| Error::internal(format!("the beacon table has no {name} in row {row}"));
+    let id = pharmakos_sim::tables::BeaconId::new(
+        beacons
+            .ids()
+            .get(row)
+            .copied()
+            .ok_or_else(|| missing("id"))?,
+    );
+    let mut settings = Settings::new()?;
+    let common = beacons
+        .commons()
+        .get(row)
+        .copied()
+        .ok_or_else(|| missing("common settings"))?;
+    if common.roe != 0 {
+        settings.name(
+            "",
+            "/roe",
+            "gp.v1.MandateSettings.Roe",
+            i32::from(common.roe),
+        )?;
+    }
+    settings.number("", "/retreat_hp_pct", common.retreat_hp_pct)?;
+    match mandate {
+        MandateKind::None => {}
+        MandateKind::Build => build_rows(beacons, row, &mut settings)?,
+        MandateKind::Defend => defend_rows(world, id, &mut settings)?,
+        MandateKind::Attack => attack_rows(world, id, &mut settings)?,
+        MandateKind::Survey => {
+            let scouts = beacons
+                .scout_counts()
+                .get(row)
+                .copied()
+                .ok_or_else(|| missing("scout count"))?;
+            settings.number("survey", "/scout_count", scouts)?;
+        }
+        MandateKind::Mine => mine_rows(beacons, row, &mut settings)?,
+    }
+    let mut out = Vec::new();
+    let wire = view::mandate_of(mandate);
+    if wire != pharmakos_proto::gp::v1::beacon_filter::MandateKind::Unspecified {
+        out.push((
+            String::from("mandate"),
+            Json::String(pharmakos_proto::scope::wire_name(
+                "gp.v1.BeaconFilter.MandateKind",
+                wire.as_str_name(),
+            )),
+        ));
+    }
+    if !settings.rows.is_empty() {
+        out.push((String::from("settings"), Json::Array(settings.rows)));
+    }
+    if mandate == MandateKind::Build {
+        let targets = build_targets(world, id)?;
+        if !targets.is_empty() {
+            out.push((String::from("build_targets"), Json::Array(targets)));
+        }
+    }
+    Ok(out)
+}
+
+/// A Build beacon's settings rows.
+///
+/// # Errors
+///
+/// As [`beacon_detail`].
+fn build_rows(
+    beacons: &pharmakos_sim::tables::BeaconTable,
+    row: usize,
+    settings: &mut Settings,
+) -> Result<(), Error> {
+    let missing =
+        |what: &str| Error::internal(format!("the beacon detail has no {what} for its beacon"));
+    let site = beacons
+        .sites()
+        .get(row)
+        .copied()
+        .ok_or_else(|| missing("site"))?
+        .settings;
+    settings.number("build", "/repair_threshold_pct", site.repair_threshold_pct)?;
+    settings.boolean("build", "/rebuild_destroyed", site.rebuild_destroyed)?;
+    let terraform = match site.terraform {
+        pharmakos_sim::site::Terraform::None => "NONE",
+        pharmakos_sim::site::Terraform::Fill => "FILL",
+        pharmakos_sim::site::Terraform::Dig => "DIG",
+        pharmakos_sim::site::Terraform::Both => "BOTH",
+    };
+    settings.word(
+        "build",
+        "/terraform",
+        "gp.v1.BuildSettings.Terraform",
+        terraform,
+    )?;
+    Ok(())
+}
+
+/// A Defend beacon's settings rows.
+///
+/// # Errors
+///
+/// As [`beacon_detail`].
+fn defend_rows(
+    world: &pharmakos_sim::world::World,
+    id: pharmakos_sim::tables::BeaconId,
+    settings: &mut Settings,
+) -> Result<(), Error> {
+    let missing =
+        |what: &str| Error::internal(format!("the beacon detail has no {what} for its beacon"));
+    let defend = world
+        .defend()
+        .row_of(id)
+        .ok_or_else(|| missing("Defend row"))?
+        .settings;
+    if defend.engagement_pct != 0 {
+        settings.number("defend", "/engagement_radius_pct", defend.engagement_pct)?;
+    }
+    if defend.pursue != pharmakos_sim::tables::Pursue::Unset {
+        settings.name(
+            "defend",
+            "/pursue",
+            "gp.v1.DefendSettings.Pursue",
+            i32::from(defend.pursue.id()),
+        )?;
+    }
+    settings.number("defend", "/picket_scouts", defend.pickets)?;
+    Ok(())
+}
+
+/// An Attack beacon's settings rows.
+///
+/// # Errors
+///
+/// As [`beacon_detail`].
+fn attack_rows(
+    world: &pharmakos_sim::world::World,
+    id: pharmakos_sim::tables::BeaconId,
+    settings: &mut Settings,
+) -> Result<(), Error> {
+    let missing =
+        |what: &str| Error::internal(format!("the beacon detail has no {what} for its beacon"));
+    let attack = world
+        .attack()
+        .row_of(id)
+        .ok_or_else(|| missing("Attack row"))?
+        .settings;
+    let retarget = match attack.retarget {
+        pharmakos_sim::attack::Retarget::Unset => None,
+        pharmakos_sim::attack::Retarget::None => Some("NONE"),
+        pharmakos_sim::attack::Retarget::NearestKnown => Some("NEAREST_KNOWN"),
+    };
+    if let Some(word) = retarget {
+        settings.word("attack", "/retarget", "gp.v1.AttackSettings.Retarget", word)?;
+    }
+    if let Some(force) = attack.force_size {
+        settings.number("attack", "/launch/force_size", force)?;
+    }
+    if let Some(ms) = attack.launch_ms {
+        settings.number("attack", "/launch/segment_ms", ms)?;
+    }
+    if let Some(pct) = attack.retreat_pct {
+        settings.number("attack", "/retreat/force_below_pct", pct)?;
+    }
+    if let Some(ms) = attack.retreat_ms {
+        settings.number("attack", "/retreat/after_launch_ms", ms)?;
+    }
+    let after = match attack.after {
+        pharmakos_sim::attack::AfterAction::Unset => None,
+        pharmakos_sim::attack::AfterAction::Regroup => Some("REGROUP_AT_STAGING"),
+        pharmakos_sim::attack::AfterAction::ReturnHome => Some("RETURN_HOME"),
+    };
+    if let Some(word) = after {
+        settings.word(
+            "attack",
+            "/after_action",
+            "gp.v1.AttackSettings.AfterAction",
+            word,
+        )?;
+    }
+    settings.boolean("attack", "/breach_allowed", attack.breach)?;
+    if attack.waves != 0 {
+        settings.number("attack", "/waves", attack.waves)?;
+    }
+    Ok(())
+}
+
+/// A Mine beacon's settings rows.
+///
+/// # Errors
+///
+/// As [`beacon_detail`].
+fn mine_rows(
+    beacons: &pharmakos_sim::tables::BeaconTable,
+    row: usize,
+    settings: &mut Settings,
+) -> Result<(), Error> {
+    let missing =
+        |what: &str| Error::internal(format!("the beacon detail has no {what} for its beacon"));
+    let mine = beacons
+        .mine_settings(row)
+        .ok_or_else(|| missing("Mine settings"))?;
+    settings.number("mine", "/dig_max_depth", mine.dig_max_depth)?;
+    settings.boolean("mine", "/flee_on_threat", mine.flee_on_threat)?;
+    let seam = match mine.seam_choice {
+        pharmakos_sim::mining::SeamChoice::Richest => "RICHEST",
+        pharmakos_sim::mining::SeamChoice::Nearest => "NEAREST",
+        pharmakos_sim::mining::SeamChoice::Safest => "SAFEST",
+    };
+    settings.word(
+        "mine",
+        "/seam_choice",
+        "gp.v1.MineSettings.SeamChoice",
+        seam,
+    )?;
+    settings.number("mine", "/pillar_spacing", mine.pillar_spacing)?;
+    Ok(())
+}
+
+/// The rows of [`beacon_detail`]'s `settings`, each one's title and shape
+/// the vocabulary's for its field.
+struct Settings {
+    vocabulary: pharmakos_plan_core::vocabulary::Vocabulary,
+    rows: Vec<Json>,
+}
+
+impl Settings {
+    fn new() -> Result<Settings, Error> {
+        Ok(Settings {
+            vocabulary: pharmakos_plan_core::vocabulary::vocabulary(&[])
+                .map_err(|error| Error::internal(format!("the vocabulary: {error}")))?,
+            rows: Vec::new(),
+        })
+    }
+
+    /// One row: `arm` is the writ's field (`build`), empty for a common
+    /// setting, and `field` the setting's pointer inside it.
+    fn push(&mut self, arm: &str, field: &str, value_json: String) -> Result<(), Error> {
+        let parameter = if arm.is_empty() {
+            pharmakos_plan_core::vocabulary::common_parameters()
+                .map_err(|error| Error::internal(format!("the vocabulary: {error}")))?
+                .into_iter()
+                .find(|parameter| parameter.pointer == field)
+        } else {
+            self.vocabulary
+                .mandates
+                .iter()
+                .find(|entry| entry.name == arm)
+                .and_then(|entry| {
+                    entry
+                        .parameters
+                        .iter()
+                        .find(|parameter| parameter.pointer == field)
+                        .cloned()
+                })
+        }
+        .ok_or_else(|| {
+            Error::internal(format!(
+                "the vocabulary has no setting `{field}` for the {arm} writ"
+            ))
+        })?;
+        let pointer = if arm.is_empty() {
+            String::from(field)
+        } else {
+            format!("/{arm}{field}")
+        };
+        self.rows.push(Json::Object(vec![
+            (String::from("pointer"), Json::String(pointer)),
+            (
+                String::from("title"),
+                Json::String(parameter.title.to_owned()),
+            ),
+            (String::from("value_json"), Json::String(value_json)),
+            (String::from("shape"), view::value_shape(&parameter.shape)),
+        ]));
+        Ok(())
+    }
+
+    fn number(&mut self, arm: &str, field: &str, value: impl ToString + Copy) -> Result<(), Error> {
+        self.push(arm, field, value.to_string())
+    }
+
+    fn boolean(&mut self, arm: &str, field: &str, value: bool) -> Result<(), Error> {
+        self.push(arm, field, value.to_string())
+    }
+
+    /// An enum setting by its schema value name, checked against the schema.
+    fn word(&mut self, arm: &str, field: &str, full_name: &str, name: &str) -> Result<(), Error> {
+        pharmakos_proto::descriptor::schema()
+            .enumeration(full_name)
+            .and_then(|declared| declared.value_by_name(name))
+            .ok_or_else(|| {
+                Error::internal(format!("the schema's `{full_name}` names no `{name}`"))
+            })?;
+        self.push(arm, field, format!("\"{name}\""))
+    }
+
+    /// An enum setting by its wire number, which the schema must name.
+    fn name(&mut self, arm: &str, field: &str, full_name: &str, number: i32) -> Result<(), Error> {
+        let name = pharmakos_proto::descriptor::schema()
+            .enumeration(full_name)
+            .and_then(|declared| declared.value_by_number(number))
+            .filter(|declared| declared.number != 0)
+            .map(|declared| declared.name.clone())
+            .ok_or_else(|| {
+                Error::internal(format!(
+                    "the schema's `{full_name}` names no value {number}"
+                ))
+            })?;
+        self.push(arm, field, format!("\"{name}\""))
+    }
+}
+
+/// A Build beacon's targets, in the Quartermaster's order (ascending `order`,
+/// then the table's), each a `gp.v1.BuildTarget` with its anchor as it was
+/// written.
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] when a column lacks the row, a blueprint
+/// the sim does not define, or a description the sim does not write.
+fn build_targets(
+    world: &pharmakos_sim::world::World,
+    beacon: pharmakos_sim::tables::BeaconId,
+) -> Result<Vec<Json>, Error> {
+    let table = world.targets();
+    let missing = |name: &str, row: usize| {
+        Error::internal(format!("the target table has no {name} in row {row}"))
+    };
+    let features = crate::targeting::feature_reads(world, None);
+    let mut found: Vec<(u32, usize, Json)> = Vec::new();
+    for row in 0..table.row_count() {
+        if table.beacons().get(row).copied() != Some(beacon)
+            || table.kinds().get(row).copied()
+                != Some(pharmakos_sim::tables::TargetKind::Build.id())
+        {
+            continue;
+        }
+        let blueprint_id = table
+            .blueprints()
+            .get(row)
+            .copied()
+            .ok_or_else(|| missing("blueprint", row))?;
+        let blueprint = pharmakos_sim::tables::StructureKind::ALL
+            .into_iter()
+            .find(|kind| kind.id() == blueprint_id)
+            .ok_or_else(|| {
+                Error::internal(format!(
+                    "the target table names blueprint {blueprint_id}, which the sim does not define"
+                ))
+            })?;
+        let order = table
+            .orders()
+            .get(row)
+            .copied()
+            .ok_or_else(|| missing("order", row))?;
+        let rotation = table
+            .rotations()
+            .get(row)
+            .copied()
+            .ok_or_else(|| missing("rotation", row))?;
+        let description = table
+            .descriptions()
+            .get(row)
+            .copied()
+            .ok_or_else(|| missing("description", row))?;
+        let anchor = target_anchor(table, row, description, &features)?;
+        let mut entries = vec![
+            (
+                String::from("blueprint_id"),
+                Json::String(view::structure_subtype(blueprint).to_owned()),
+            ),
+            (String::from("anchor"), anchor),
+        ];
+        if rotation != 0 {
+            entries.push((
+                String::from("rotation_quarter_turns"),
+                Json::Number(rotation.to_string()),
+            ));
+        }
+        if order != 0 {
+            entries.push((String::from("order"), Json::Number(order.to_string())));
+        }
+        found.push((order, row, Json::Object(entries)));
+    }
+    found.sort_by_key(|(order, row, _)| (*order, *row));
+    Ok(found.into_iter().map(|(_, _, target)| target).collect())
+}
+
+/// A Build target's anchor as it was written: a voxel, `on` a named
+/// feature, or `on` the nearest vent, by the target table's description column.
+///
+/// # Errors
+///
+/// As [`build_targets`].
+fn target_anchor(
+    table: &pharmakos_sim::tables::TargetTable,
+    row: usize,
+    description: u8,
+    features: &[crate::targeting::FeatureRead],
+) -> Result<Json, Error> {
+    let missing = |name: &str, row: usize| {
+        Error::internal(format!("the target table has no {name} in row {row}"))
+    };
+    Ok(match description {
+        pharmakos_sim::targeting::DESCRIPTION_VOXEL => {
+            let at = view::voxel_of(
+                table
+                    .anchors()
+                    .get(row)
+                    .copied()
+                    .ok_or_else(|| missing("anchor", row))?,
+            );
+            Json::Object(vec![(
+                String::from("voxel"),
+                Json::Object(vec![
+                    (String::from("x"), Json::Number(at.x.to_string())),
+                    (String::from("y"), Json::Number(at.y.to_string())),
+                    (String::from("z"), Json::Number(at.z.to_string())),
+                ]),
+            )])
+        }
+        pharmakos_sim::targeting::DESCRIPTION_NAME => {
+            let index = table
+                .features()
+                .get(row)
+                .copied()
+                .ok_or_else(|| missing("feature", row))?;
+            let name = usize::try_from(index)
+                .ok()
+                .and_then(|index| features.iter().find(|read| read.index == index))
+                .map(|read| read.name.clone())
+                .ok_or_else(|| {
+                    Error::internal(format!(
+                        "a target written by name is bound to feature {index}, which the map \
+                         does not hold"
+                    ))
+                })?;
+            Json::Object(vec![(
+                String::from("on"),
+                Json::Object(vec![(String::from("feature_id"), Json::String(name))]),
+            )])
+        }
+        pharmakos_sim::targeting::DESCRIPTION_NEAREST_VENT => Json::Object(vec![(
+            String::from("on"),
+            Json::Object(vec![(
+                String::from("vent"),
+                Json::Object(vec![(
+                    String::from("rank"),
+                    Json::String(String::from("NEAREST")),
+                )]),
+            )]),
+        )]),
+        other => {
+            return Err(Error::internal(format!(
+                "the target table holds description {other}, which the sim does not write"
+            )));
+        }
+    })
+}
+
+/// One `gp.api.v1.Leg` of [`Surface::estimate_route`]'s answer.
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] for a travel time the rendering refuses.
+fn leg_json(leg: &pharmakos_plan_core::travel::Leg) -> Result<Json, Error> {
+    let refused = |error: pharmakos_plan_core::travel::TravelError| {
+        Error::internal(format!("the route's travel has no rendering: {error}"))
+    };
+    let mut entries = vec![
+        // `gp.api.v1.Leg.to` is a `gp.v1.Location`, so the voxel
+        // goes under its oneof arm, `{"voxel": {x, y, z}}`, and
+        // not bare (decisions-log item 112 (3); pinned by
+        // `a_legs_end_is_written_as_the_location_the_schema_declares`,
+        // because the walkthrough golden records summaries).
+        (
+            String::from("to"),
+            Json::Object(vec![(
+                String::from("voxel"),
+                Json::Object(vec![
+                    (String::from("x"), Json::Number(leg.to.x.to_string())),
+                    (String::from("y"), Json::Number(leg.to.y.to_string())),
+                    (String::from("z"), Json::Number(leg.to.z.to_string())),
+                ]),
+            )]),
+        ),
+    ];
+    // A leg with no estimate writes no `ms` and no `travel_text`,
+    // and the route says it is unreachable: a 0 would read as a
+    // leg that costs nothing.
+    let reached = match leg.estimate {
+        Some(found) => Some((found.ms().map_err(refused)?, leg.render().map_err(refused)?)),
+        None => None,
+    };
+    if let Some((ms, _)) = &reached {
+        entries.push((String::from("ms"), Json::Number(ms.raw().to_string())));
+    }
+    entries.push((String::from("fogged"), Json::Bool(leg.fogged)));
+    if let Some((_, text)) = reached {
+        entries.push((String::from("travel_text"), Json::String(text)));
+    }
+    Ok(Json::Object(entries))
+}
+
+/// One row of the sim's licence table, read as the wire carries it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct LicenceHeld {
+    /// The seat holding it.
+    seat: SeatId,
+    /// Which licence.
+    licence: pharmakos_proto::gp::v1::Licence,
+    /// The round whose settlement awarded it, from 1.
+    round: u32,
+}
+
+/// Every row of the sim's licence table, in its order: ascending by seat, then
+/// licence.
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] for a row naming a licence this build does
+/// not define, which the sim's table refuses to hold.
+fn licence_rows(world: &pharmakos_sim::world::World) -> Result<Vec<LicenceHeld>, Error> {
+    world
+        .licences()
+        .rows()
+        .iter()
+        .map(|row| {
+            let licence = pharmakos_sim::licence::licence_of(row.licence).ok_or_else(|| {
+                Error::internal(format!(
+                    "the licence table holds licence {} for seat {}, which this build does not                      define",
+                    row.licence, row.seat
+                ))
+            })?;
+            Ok(LicenceHeld {
+                seat: SeatId::new(row.seat),
+                licence,
+                round: row.round,
+            })
+        })
+        .collect()
+}
+
+/// A licence as the JSON-RPC wire spells `gp.v1.Licence`: `"resonance_spire"`
+/// (decisions-log item 80).
+fn licence_wire(licence: pharmakos_proto::gp::v1::Licence) -> String {
+    pharmakos_proto::scope::wire_name("gp.v1.Licence", licence.as_str_name())
+}
+
+/// The recap's licence line for `seat` ([`Surface::get_recap`]), under the
+/// tally's fog rule (the owner's ruling, decisions-log item 145 (7); S3's plan,
+/// item 156): at a recap between rounds, what `seat` was awarded at this
+/// settlement and no other seat's; once the match has ended (`ended`), every
+/// seat's award of the whole match that still stands, an eliminated seat's
+/// voided ones gone with it. Each row names its seat, as `seat.0`. `None` when
+/// there is nothing to announce. The prose names `seat`'s own awards at this
+/// settlement, "Licence awarded: Resonance Spire.", whichever rows the wire
+/// carries.
+///
+/// # Errors
+///
+/// As [`licence_rows`], and [`crate::error::Code::Internal`] for a licence the
+/// string table has no name for.
+fn licence_line(
+    world: &pharmakos_sim::world::World,
+    facts: &RecapFacts,
+    seat: SeatId,
+    ended: bool,
+    prose: &mut String,
+) -> Result<Option<Json>, Error> {
+    let rows = licence_rows(world)?;
+    let this_settlement = |row: &LicenceHeld| row.seat == seat && row.round == facts.round;
+    let titles = rows
+        .iter()
+        .filter(|row| this_settlement(row))
+        .map(|row| {
+            strings::licence_title(row.licence).ok_or_else(|| {
+                Error::internal(format!(
+                    "the string table names no licence {}",
+                    row.licence.as_str_name()
+                ))
+            })
+        })
+        .collect::<Result<Vec<&str>, Error>>()?;
+    if let Some(line) = strings::licences_awarded(&titles) {
+        prose.push(' ');
+        prose.push_str(&line);
+    }
+    let told: Vec<Json> = rows
+        .iter()
+        .filter(|row| ended || this_settlement(row))
+        .map(|row| {
+            Json::Object(vec![
+                (
+                    String::from("seat"),
+                    Json::String(crate::token::Subject::Seat(row.seat).render()),
+                ),
+                (
+                    String::from("licence"),
+                    Json::String(licence_wire(row.licence)),
+                ),
+                (
+                    String::from("round_awarded"),
+                    Json::Number(row.round.to_string()),
+                ),
+            ])
+        })
+        .collect();
+    Ok((!told.is_empty()).then_some(Json::Array(told)))
+}
+
 /// Every seat's tally, ascending by seat, for [`Surface::get_recap`]: `None`
 /// until the match is decided (the owner's ruling, decisions-log item 145
 /// (7)), and from the final recap on, since the outcome is decided on the
@@ -2468,5 +3166,88 @@ mod tests {
                 "seat {raw}: with every score distinct, the rank is the score's order"
             );
         }
+    }
+
+    /// The recap's licence line under the tally's fog rule (S3's plan, item
+    /// 156; decisions-log item 145 (7)): between rounds a seat is told its own
+    /// award at this settlement and nobody else's, and an award of an earlier
+    /// round is not announced again; once the match has ended every seat's
+    /// standing award is told, ascending by seat. The prose names the seat's
+    /// own award at this settlement only.
+    #[test]
+    fn the_recaps_licence_line_keeps_the_fog_rule() {
+        use pharmakos_proto::gp::v1::Licence;
+        use pharmakos_proto::json::Json;
+        let rules = RulesTable::load(
+            &Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("..")
+                .join("rules")
+                .join("rules.v1.json"),
+        )
+        .expect("the shipped rules table");
+        let mut world = World::new(&WorldConfig {
+            match_seed: 0x0000_0000_ca5c_aded,
+            seats: 2,
+            rules,
+            match_settings: MatchSettings {
+                segment_lengths_ms: vec![60_000],
+                round_limit: 3,
+            },
+        })
+        .expect("a world");
+        assert!(world.award_licence_directly(SeatId::new(0), Licence::ResonanceSpire, 2));
+        assert!(world.award_licence_directly(SeatId::new(1), Licence::ResonanceSpire, 1));
+        let facts = super::RecapFacts {
+            round: 2,
+            ticks: 20,
+            settled: Vec::new(),
+            dark: Vec::new(),
+            held: Vec::new(),
+            failures: Vec::new(),
+            dropped: 0,
+            tallies: Vec::new(),
+        };
+        let row = |seat: &str, round: u32| {
+            Json::Object(vec![
+                (String::from("seat"), Json::String(String::from(seat))),
+                (
+                    String::from("licence"),
+                    Json::String(String::from("resonance_spire")),
+                ),
+                (
+                    String::from("round_awarded"),
+                    Json::Number(round.to_string()),
+                ),
+            ])
+        };
+        let line = |seat: u8, ended: bool| {
+            let mut prose = String::new();
+            let told = super::licence_line(&world, &facts, SeatId::new(seat), ended, &mut prose)
+                .expect("a line");
+            (told, prose)
+        };
+
+        assert_eq!(
+            line(0, false),
+            (
+                Some(Json::Array(vec![row("seat.0", 2)])),
+                String::from(" Licence awarded: Resonance Spire.")
+            ),
+            "seat 0 is told its own award at this settlement"
+        );
+        assert_eq!(
+            line(1, false),
+            (None, String::new()),
+            "seat 1's award was an earlier round's, and seat 0's is not its to know"
+        );
+        assert_eq!(
+            line(1, true),
+            (
+                Some(Json::Array(vec![row("seat.0", 2), row("seat.1", 1)])),
+                String::new()
+            ),
+            "at the match's end the fog lifts on every standing award"
+        );
     }
 }

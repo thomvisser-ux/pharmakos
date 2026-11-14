@@ -43,7 +43,7 @@ economy surfaces (task `econ`).
 | `walkthrough_watch/` | `expected.watch.txt` | A watch session: keyframe, clock, `end_lull`, speed, skip, `end_recap` |
 | `instantiate_suggested/` | `expected.response.json` | One `instantiate_template{suggested: true}` answer on the wire — **the fixture T19's wizard reads** |
 | `demo_hold_and_build_verify/` | `expected.response.json` | Seat 0's `verify_plan{depth: "full"}` answer for Hold & Build with its own values (nothing suggested), in the lobby's round 1 Lull — its `report_hash` |
-| `demo_hold_and_build_render/` | `expected.response.json` | The same playbook's `render_plan` answer — its prose |
+| `demo_hold_and_build_render/` | `expected.response.json` | The same playbook's `render_plan` answer — its prose, and from S3's `gwr` its `rules`: each step and rule with its lines and chips (S3's plan, E8) |
 | `demo_expand_and_mine_verify/` | `expected.response.json` | As above, for Expand & Mine |
 | `demo_expand_and_mine_render/` | `expected.response.json` | As above, for Expand & Mine |
 | `demo_safe_playbook_verify/` | `expected.response.json` | As above, for the Safe Playbook template |

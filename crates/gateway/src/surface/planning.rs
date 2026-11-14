@@ -121,6 +121,75 @@ impl Surface {
         )]))
     }
 
+    /// `get_vocabulary`: every condition family, predicate, mandate, route step
+    /// and blueprint a playbook may name, each with its parameters and, where
+    /// the calling seat cannot use it yet, why (S3's plan, E8; spec section
+    /// 13). The content is plan-core's ([`pharmakos_plan_core::vocabulary`]),
+    /// built from the schema, the verifier's refusal table and the rules
+    /// table; the one thing this handler adds is the seat's own licences, read
+    /// off the hosted world's licence table, which is what locks or opens a
+    /// licensed blueprint. That read is about the calling seat alone, as
+    /// `SCOPE_DOCS`' comment allows. A caller that is no seat -- the lobby, a
+    /// spectator -- holds no licence, so it is answered every licensed entry
+    /// locked, which is true of it. It takes no parameters.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] when the licence table holds a licence
+    /// this build does not define or the vocabulary disagrees with the schema.
+    pub(super) fn get_vocabulary(&self, subject: crate::token::Subject) -> Result<Json, Error> {
+        let held: Vec<pharmakos_proto::gp::v1::Licence> = match subject.seat() {
+            Some(seat) => self
+                .host()?
+                .world()
+                .licences()
+                .rows()
+                .iter()
+                .filter(|row| row.seat == seat.raw())
+                .map(|row| {
+                    pharmakos_sim::licence::licence_of(row.licence).ok_or_else(|| {
+                        Error::internal(format!(
+                            "the licence table holds licence {} for seat {}, which this build \
+                             does not define",
+                            row.licence, row.seat
+                        ))
+                    })
+                })
+                .collect::<Result<Vec<_>, Error>>()?,
+            None => Vec::new(),
+        };
+        let words = pharmakos_plan_core::vocabulary::vocabulary(&held)
+            .map_err(|error| Error::internal(format!("the vocabulary: {error}")))?;
+        let entries = |entries: &[pharmakos_plan_core::vocabulary::Entry]| {
+            Json::Array(entries.iter().map(vocabulary_entry).collect())
+        };
+        Ok(Json::Object(vec![
+            (
+                String::from("families"),
+                Json::Array(
+                    words
+                        .families
+                        .iter()
+                        .map(|family| {
+                            let mut fields = vec![
+                                (String::from("family"), Json::String(family.id.to_owned())),
+                                (String::from("title"), Json::String(family.title.to_owned())),
+                                (String::from("predicates"), entries(&family.predicates)),
+                            ];
+                            if let Some(locked) = &family.locked {
+                                fields.push((String::from("locked"), Json::String(locked.clone())));
+                            }
+                            Json::Object(fields)
+                        })
+                        .collect(),
+                ),
+            ),
+            (String::from("mandates"), entries(&words.mandates)),
+            (String::from("steps"), entries(&words.steps)),
+            (String::from("blueprints"), entries(&words.blueprints)),
+        ]))
+    }
+
     /// `list_templates`: the local library, read and never stored.
     ///
     /// Spec section 13: "The gateway reads that folder to list and instantiate
@@ -386,6 +455,15 @@ impl Surface {
     /// from the frozen snapshot rather than from a constant (spec section 13,
     /// and `plan-core`'s `context::segment_length_ms`, whose PLACEHOLDER this
     /// lane discharged).
+    ///
+    /// From S3, `rules` beside it (S3's plan, E8): each route step and rule,
+    /// in file order, with the lines of the prose that are its own and its
+    /// chips, each an editable value's pointer, its span on its line, its
+    /// shape and its value now, all of plan-core's
+    /// ([`pharmakos_plan_core::render`]), so the editor draws them and parses
+    /// no sentence (AGENTS.md section 3 rule 4). Left out, as proto3 leaves an
+    /// empty list, when the file has no route step and no rule, or no
+    /// canonical form.
     pub(super) fn render_plan(
         &self,
         subject: crate::token::Subject,
@@ -403,18 +481,26 @@ impl Surface {
         // A file with no canonical form has no rendering. That is not an error
         // -- the editor asks for a rendering on every keystroke and a half-typed
         // file is the normal case -- so it comes back as the sentence that says
-        // to verify it, and `verify_plan` is where the diagnostics live.
-        let prose = match pharmakos_plan_core::canonicalise_text(playbook) {
-            Err(_no_canonical_form) => String::from(crate::strings::UNRENDERABLE),
+        // to verify it, with no rules, and `verify_plan` is where the
+        // diagnostics live.
+        let rendering = match pharmakos_plan_core::canonicalise_text(playbook) {
+            Err(_no_canonical_form) => pharmakos_plan_core::Rendering {
+                prose: String::from(crate::strings::UNRENDERABLE),
+                rules: Vec::new(),
+            },
             Ok(canonical) => {
-                pharmakos_plan_core::render_plan(&canonical.playbook, &context, host.rules())
+                pharmakos_plan_core::render(&canonical.playbook, &context, host.rules())
                     .map_err(|error| Error::internal(error.message))?
             }
         };
-        Ok(Json::Object(vec![(
-            String::from("prose"),
-            Json::String(prose),
-        )]))
+        let mut entries = vec![(String::from("prose"), Json::String(rendering.prose))];
+        if !rendering.rules.is_empty() {
+            entries.push((
+                String::from("rules"),
+                Json::Array(rendering.rules.iter().map(rendered_rule).collect()),
+            ));
+        }
+        Ok(Json::Object(entries))
     }
 
     /// `patch_plan`: apply an RFC 6902 patch, comments and formatting intact.
@@ -1196,6 +1282,79 @@ fn diagnostic_json(diagnostic: &pharmakos_proto::gp::api::v1::Diagnostic) -> Jso
         ),
         (String::from("suggestions"), Json::Array(suggestions)),
         (String::from("map_refs"), Json::Array(map_refs)),
+    ])
+}
+
+/// One `gp.api.v1.VocabularyEntry`: `locked` only when it is set, every other
+/// field always written.
+fn vocabulary_entry(entry: &pharmakos_plan_core::vocabulary::Entry) -> Json {
+    let mut fields = vec![
+        (String::from("name"), Json::String(entry.name.to_owned())),
+        (String::from("title"), Json::String(entry.title.to_owned())),
+        (
+            String::from("parameters"),
+            Json::Array(
+                entry
+                    .parameters
+                    .iter()
+                    .map(|parameter| {
+                        Json::Object(vec![
+                            (
+                                String::from("pointer"),
+                                Json::String(parameter.pointer.to_owned()),
+                            ),
+                            (
+                                String::from("title"),
+                                Json::String(parameter.title.to_owned()),
+                            ),
+                            (
+                                String::from("shape"),
+                                crate::view::value_shape(&parameter.shape),
+                            ),
+                        ])
+                    })
+                    .collect(),
+            ),
+        ),
+        (
+            String::from("skeleton_json"),
+            Json::String(entry.skeleton_json.to_owned()),
+        ),
+    ];
+    if let Some(locked) = &entry.locked {
+        fields.push((String::from("locked"), Json::String(locked.clone())));
+    }
+    Json::Object(fields)
+}
+
+/// One `gp.api.v1.RenderedRule`, every field written, the zeros included.
+fn rendered_rule(rule: &pharmakos_plan_core::RenderedRule) -> Json {
+    let number = |value: u32| Json::Number(value.to_string());
+    Json::Object(vec![
+        (String::from("pointer"), Json::String(rule.pointer.clone())),
+        (String::from("line"), number(rule.line)),
+        (String::from("line_count"), number(rule.line_count)),
+        (
+            String::from("chips"),
+            Json::Array(
+                rule.chips
+                    .iter()
+                    .map(|chip| {
+                        Json::Object(vec![
+                            (String::from("pointer"), Json::String(chip.pointer.clone())),
+                            (String::from("line"), number(chip.line)),
+                            (String::from("start"), number(chip.start)),
+                            (String::from("end"), number(chip.end)),
+                            (String::from("shape"), crate::view::value_shape(&chip.shape)),
+                            (
+                                String::from("value_json"),
+                                Json::String(chip.value_json.clone()),
+                            ),
+                        ])
+                    })
+                    .collect(),
+            ),
+        ),
     ])
 }
 

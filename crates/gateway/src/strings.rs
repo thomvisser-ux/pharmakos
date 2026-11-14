@@ -234,11 +234,32 @@ fn licence_name(value: i64) -> String {
     let named = i32::try_from(value)
         .ok()
         .and_then(|value| pharmakos_proto::gp::v1::Licence::try_from(value).ok());
-    match named {
-        Some(pharmakos_proto::gp::v1::Licence::ResonanceSpire) => String::from("Resonance Spire"),
-        Some(pharmakos_proto::gp::v1::Licence::Unspecified) | None => {
-            format!("a licence this build does not name (code {value})")
-        }
+    match named.and_then(licence_title) {
+        Some(title) => String::from(title),
+        None => format!("a licence this build does not name (code {value})"),
+    }
+}
+
+/// A licence's name in the player's words, or `None` for the enum's
+/// unspecified zero, which names no licence.
+#[must_use]
+pub const fn licence_title(licence: pharmakos_proto::gp::v1::Licence) -> Option<&'static str> {
+    match licence {
+        pharmakos_proto::gp::v1::Licence::ResonanceSpire => Some("Resonance Spire"),
+        pharmakos_proto::gp::v1::Licence::Unspecified => None,
+    }
+}
+
+/// The recap's licence line for the calling seat's own awards at this
+/// settlement (spec section 8: "announced in the recap"): "Licence awarded:
+/// Resonance Spire." `None` when `titles` is empty: the recap says nothing
+/// when no licence was awarded.
+#[must_use]
+pub fn licences_awarded(titles: &[&str]) -> Option<String> {
+    match titles.split_last() {
+        None => None,
+        Some((last, [])) => Some(format!("Licence awarded: {last}.")),
+        Some((last, rest)) => Some(format!("Licences awarded: {} and {last}.", rest.join(", "))),
     }
 }
 
@@ -1026,6 +1047,25 @@ mod tests {
         assert_eq!(
             event_text(&event(EventKind::LicenceAwarded, Some(0), 9)),
             "The Ledger awarded seat 0 a licence: a licence this build does not name (code 9)."
+        );
+    }
+
+    /// S3's `gwr`: the recap's licence line names each licence, and says
+    /// nothing when none was awarded.
+    #[test]
+    fn the_recaps_licence_line_names_each_award() {
+        assert_eq!(super::licences_awarded(&[]), None);
+        assert_eq!(
+            super::licences_awarded(&["Resonance Spire"]).as_deref(),
+            Some("Licence awarded: Resonance Spire.")
+        );
+        assert_eq!(
+            super::licences_awarded(&["A", "B", "C"]).as_deref(),
+            Some("Licences awarded: A, B and C.")
+        );
+        assert_eq!(
+            super::licence_title(pharmakos_proto::gp::v1::Licence::Unspecified),
+            None
         );
     }
 
