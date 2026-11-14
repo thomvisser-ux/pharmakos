@@ -86,7 +86,7 @@ use std::fmt::Write as _;
 use super::base64;
 use super::index::{Index, Indexed, IndexedField, index};
 use super::path::Path;
-use super::value::{Error, Json, write_string};
+use super::value::{Error, Json, is_integer_lexeme, is_misspelt_integer, write_string};
 use crate::descriptor::ScalarKind;
 use crate::wire::{
     Reader, Value, Writer, i64_bits_to_u64, u64_bits_to_i64, zigzag_decode, zigzag_encode,
@@ -1169,13 +1169,27 @@ pub(crate) fn is_proto3_default_lexeme(field: &IndexedField, value: Lexeme<'_>) 
     }
 }
 
-/// True when a JSON number lexeme is a whole zero.
+/// True when a JSON number lexeme is a whole zero: `0` or `-0`.
 ///
-/// Parsed rather than compared with `"0"`: `-0` and `00` are the same value and
-/// a lexeme this schema cannot hold (`0.0`, `1e3`) is left for `write_scalar`
-/// to refuse with its own message.
+/// A lexeme off RFC 8259's integer grammar is never a zero here, however it
+/// parses (`+0`, `00`), so it reaches `write_scalar` and is refused there with
+/// its own message rather than dropped as a default (S3's `vfy6`); so is a
+/// lexeme this schema cannot hold (`0.0`, `1e3`).
 fn is_zero(lexeme: &str) -> bool {
-    lexeme.parse::<i64>() == Ok(0) || lexeme.parse::<u64>() == Ok(0)
+    is_integer_lexeme(lexeme) && (lexeme.parse::<i64>() == Ok(0) || lexeme.parse::<u64>() == Ok(0))
+}
+
+/// Why `lexeme` is not the integer a field asked for: digits RFC 8259 does
+/// not write as an integer, or `otherwise`.
+fn integer_refusal(lexeme: &str, otherwise: &str) -> String {
+    if is_misspelt_integer(lexeme) {
+        format!(
+            "`{lexeme}` is not an integer as JSON writes one: RFC 8259 has no `+` and no \
+             leading zero"
+        )
+    } else {
+        format!("`{lexeme}` {otherwise}")
+    }
 }
 
 /// A JSON integer, from a bare number or from the quoted form the mapping also
@@ -1191,12 +1205,19 @@ fn integer(value: &Json, path: &Path<'_>) -> Result<i64, Error> {
             ));
         }
     };
-    lexeme.parse::<i64>().map_err(|_| {
-        Error::at(
-            &path.render(),
-            format!("`{lexeme}` is not a whole number. This schema has no fractional field."),
-        )
-    })
+    lexeme
+        .parse::<i64>()
+        .ok()
+        .filter(|_| is_integer_lexeme(lexeme))
+        .ok_or_else(|| {
+            Error::at(
+                &path.render(),
+                integer_refusal(
+                    lexeme,
+                    "is not a whole number. This schema has no fractional field.",
+                ),
+            )
+        })
 }
 
 fn unsigned(value: &Json, path: &Path<'_>) -> Result<u64, Error> {
@@ -1209,10 +1230,14 @@ fn unsigned(value: &Json, path: &Path<'_>) -> Result<u64, Error> {
             ));
         }
     };
-    lexeme.parse::<u64>().map_err(|_| {
-        Error::at(
-            &path.render(),
-            format!("`{lexeme}` is not a non-negative whole number"),
-        )
-    })
+    lexeme
+        .parse::<u64>()
+        .ok()
+        .filter(|_| is_integer_lexeme(lexeme))
+        .ok_or_else(|| {
+            Error::at(
+                &path.render(),
+                integer_refusal(lexeme, "is not a non-negative whole number"),
+            )
+        })
 }

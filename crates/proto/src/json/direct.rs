@@ -38,6 +38,7 @@
 use super::base64;
 use super::codec::{Encoded, Lexeme, is_proto3_default_lexeme};
 use super::index::{Index, Indexed, IndexedField, index};
+use super::value::is_integer_lexeme;
 use crate::descriptor::ScalarKind;
 use crate::wire::{i64_bits_to_u64, zigzag_encode};
 
@@ -326,26 +327,53 @@ impl<'t> Direct<'t> {
         }
     }
 
-    /// `read`'s number grammar: an optional `-`, then digits and any of
-    /// `.eE+-`, with at least one digit.
+    /// `read`'s number grammar, RFC 8259's: `-`? then `0` or a non-zero
+    /// digit and digits, then `.` and digits, then `e` or `E`, a sign and
+    /// digits, each part after the first optional.
     fn number(&mut self) -> Option<&'t str> {
         let start = self.pos;
         if self.peek() == Some(b'-') {
             self.bump();
         }
-        let mut digits = false;
-        while let Some(byte) = self.peek() {
-            if byte.is_ascii_digit() {
-                digits = true;
-            } else if !matches!(byte, b'.' | b'e' | b'E' | b'+' | b'-') {
-                break;
+        match self.peek()? {
+            b'0' => {
+                self.bump();
+                if self.at_digit() {
+                    return None;
+                }
             }
-            self.bump();
+            b'1'..=b'9' => self.digits(),
+            _ => return None,
         }
-        if !digits {
-            return None;
+        if self.peek() == Some(b'.') {
+            self.bump();
+            if !self.at_digit() {
+                return None;
+            }
+            self.digits();
+        }
+        if matches!(self.peek(), Some(b'e' | b'E')) {
+            self.bump();
+            if matches!(self.peek(), Some(b'+' | b'-')) {
+                self.bump();
+            }
+            if !self.at_digit() {
+                return None;
+            }
+            self.digits();
         }
         self.text.get(start..self.pos)
+    }
+
+    fn at_digit(&self) -> bool {
+        self.peek().is_some_and(|byte| byte.is_ascii_digit())
+    }
+
+    /// Steps over a run of ASCII digits.
+    fn digits(&mut self) {
+        while self.at_digit() {
+            self.bump();
+        }
     }
 
     /// `read`'s string grammar, unescaping into `unescaped` only when the
@@ -577,8 +605,8 @@ impl<'t> Direct<'t> {
     /// `integer`: a bare or quoted lexeme, as an `i64`.
     fn integer(&self, scalar: Scalar<'_>) -> Option<i64> {
         match scalar {
-            Scalar::Number(lexeme) => lexeme.parse::<i64>().ok(),
-            Scalar::String(text) => self.text_of(text)?.parse::<i64>().ok(),
+            Scalar::Number(lexeme) => whole(lexeme)?.parse::<i64>().ok(),
+            Scalar::String(text) => whole(self.text_of(text)?)?.parse::<i64>().ok(),
             Scalar::Bool(_) => None,
         }
     }
@@ -586,8 +614,8 @@ impl<'t> Direct<'t> {
     /// `unsigned`: a bare or quoted lexeme, as a `u64`.
     fn unsigned(&self, scalar: Scalar<'_>) -> Option<u64> {
         match scalar {
-            Scalar::Number(lexeme) => lexeme.parse::<u64>().ok(),
-            Scalar::String(text) => self.text_of(text)?.parse::<u64>().ok(),
+            Scalar::Number(lexeme) => whole(lexeme)?.parse::<u64>().ok(),
+            Scalar::String(text) => whole(self.text_of(text)?)?.parse::<u64>().ok(),
             Scalar::Bool(_) => None,
         }
     }
@@ -673,4 +701,10 @@ impl<'t> Direct<'t> {
         }
         Some(())
     }
+}
+
+/// `lexeme`, when it is an integer by RFC 8259's grammar, as `integer` and
+/// `unsigned` in the codec ask before they parse one.
+fn whole(lexeme: &str) -> Option<&str> {
+    is_integer_lexeme(lexeme).then_some(lexeme)
 }

@@ -189,6 +189,13 @@ impl JsonReader<'_> {
         self.pos = self.pos.saturating_add(1);
     }
 
+    /// Steps over a run of ASCII digits.
+    fn digits(&mut self) {
+        while self.peek().is_some_and(|byte| byte.is_ascii_digit()) {
+            self.bump();
+        }
+    }
+
     fn skip_whitespace(&mut self) {
         while let Some(byte) = self.peek() {
             if matches!(byte, b' ' | b'\t' | b'\n' | b'\r') {
@@ -411,27 +418,42 @@ impl JsonReader<'_> {
         Ok(value)
     }
 
+    /// RFC 8259's `number`: `-`? then `0` or a non-zero digit and digits,
+    /// then `.` and digits, then `e` or `E`, a sign and digits, each part
+    /// after the first optional (S3's `vfy6`). A fraction or an exponent is
+    /// kept in the lexeme and refused by whichever field asks for it: there
+    /// is no floating-point field in this schema to accept one.
     fn number(&mut self) -> Result<Json, Error> {
         let start = self.pos;
         if self.peek() == Some(b'-') {
             self.bump();
         }
-        let mut digits = 0_usize;
-        while let Some(byte) = self.peek() {
-            if byte.is_ascii_digit() {
-                digits = digits.saturating_add(1);
+        match self.peek() {
+            Some(b'0') => {
                 self.bump();
-            } else if matches!(byte, b'.' | b'e' | b'E' | b'+' | b'-') {
-                // Accepted by the grammar, kept in the lexeme, and rejected by
-                // whichever field asks for it: there is no floating-point
-                // field in this schema to accept it.
-                self.bump();
-            } else {
-                break;
+                if self.peek().is_some_and(|byte| byte.is_ascii_digit()) {
+                    return Err(self.error("a number with a leading zero"));
+                }
             }
+            Some(b'1'..=b'9') => self.digits(),
+            _ => return Err(self.error("expected a value")),
         }
-        if digits == 0 {
-            return Err(self.error("expected a value"));
+        if self.peek() == Some(b'.') {
+            self.bump();
+            if !self.peek().is_some_and(|byte| byte.is_ascii_digit()) {
+                return Err(self.error("a number's fraction without a digit"));
+            }
+            self.digits();
+        }
+        if matches!(self.peek(), Some(b'e' | b'E')) {
+            self.bump();
+            if matches!(self.peek(), Some(b'+' | b'-')) {
+                self.bump();
+            }
+            if !self.peek().is_some_and(|byte| byte.is_ascii_digit()) {
+                return Err(self.error("a number's exponent without a digit"));
+            }
+            self.digits();
         }
         let slice = self
             .bytes
@@ -442,6 +464,33 @@ impl JsonReader<'_> {
             .to_owned();
         Ok(Json::Number(lexeme))
     }
+}
+
+/// Whether `lexeme` is an integer by RFC 8259's grammar: `-`? then `0`, or a
+/// non-zero digit and digits — no `+`, no leading zero, nothing else (S3's
+/// `vfy6`).
+///
+/// A bare number the reader accepted already has that shape when it is
+/// whole; the proto3 mapping also accepts an integer quoted, and a quoted one
+/// is held to the same shape here, so `"+0"` and `"00"` are refused as `+0`
+/// and `00` are. Every reader of an integer asks this before it parses one.
+pub(crate) fn is_integer_lexeme(lexeme: &str) -> bool {
+    let digits = lexeme.strip_prefix('-').unwrap_or(lexeme);
+    match digits.as_bytes() {
+        [b'0'] => true,
+        [b'1'..=b'9', rest @ ..] => rest.iter().all(u8::is_ascii_digit),
+        _ => false,
+    }
+}
+
+/// Whether `lexeme` is digits that RFC 8259 does not write as an integer: a
+/// `+`, or a leading zero. A refusal says so, rather than that the value is
+/// not whole.
+pub(crate) fn is_misspelt_integer(lexeme: &str) -> bool {
+    let digits = lexeme.strip_prefix(['+', '-']).unwrap_or(lexeme);
+    !digits.is_empty()
+        && digits.bytes().all(|byte| byte.is_ascii_digit())
+        && !is_integer_lexeme(lexeme)
 }
 
 /// Whether an object already holds `key`, its members so far being

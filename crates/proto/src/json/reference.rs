@@ -6,11 +6,18 @@
 //! to (decisions-log item 158 (2); S3's plan, section `vfyq`).
 //!
 //! Nothing here is reachable from a build that is not a test. It is the old
-//! path, copied without a behavioural change: `read` and `write` from
+//! path, copied without a behavioural change of its own: `read` and `write` from
 //! `value.rs`, `json_to_wire` and `wire_to_json` from `codec.rs`. One statement
 //! is respelled: the unknown enum number's `map_or_else` is a `match` here, so
 //! that `tests/fallbacks.rs` finds the rule's one allowed statement in the
-//! codec alone. The differential tests in `super::differential` feed it and the fast codec the
+//! codec alone.
+//!
+//! The old path's behaviour moves only where the codec's rules move, and in
+//! step with them, so the two stay one answer (S3's `vfy6`): numbers are read
+//! by RFC 8259's grammar, and a quoted integer is held to its integer grammar
+//! (follow-up B).
+//!
+//! The differential tests in `super::differential` feed it and the fast codec the
 //! same generated documents and assert equal bytes or the same error. It is
 //! kept until the old path is deleted; committed vectors replace it then.
 
@@ -23,7 +30,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use super::base64;
-use super::value::{Error, Json, push_pointer};
+use super::value::{Error, Json, is_integer_lexeme, is_misspelt_integer, push_pointer};
 use crate::descriptor::{Field, Message, ScalarKind, Schema, schema};
 use crate::wire::{
     Reader, Value, Writer, i64_bits_to_u64, u64_bits_to_i64, zigzag_decode, zigzag_encode,
@@ -280,27 +287,44 @@ impl JsonReader<'_> {
         Ok(value)
     }
 
+    // S3's `vfy6`: RFC 8259's number grammar, as `value.rs`'s reader.
     fn number(&mut self) -> Result<Json, Error> {
         let start = self.pos;
         if self.peek() == Some(b'-') {
             self.bump();
         }
-        let mut digits = 0_usize;
-        while let Some(byte) = self.peek() {
-            if byte.is_ascii_digit() {
-                digits = digits.saturating_add(1);
-                self.bump();
-            } else if matches!(byte, b'.' | b'e' | b'E' | b'+' | b'-') {
-                // Accepted by the grammar, kept in the lexeme, and rejected by
-                // whichever field asks for it: there is no floating-point
-                // field in this schema to accept it.
-                self.bump();
-            } else {
-                break;
+        let at_digit = |reader: &Self| reader.peek().is_some_and(|byte| byte.is_ascii_digit());
+        let digits = |reader: &mut Self| {
+            while at_digit(reader) {
+                reader.bump();
             }
+        };
+        match self.peek() {
+            Some(b'0') => {
+                self.bump();
+                if at_digit(self) {
+                    return Err(self.error("a number with a leading zero"));
+                }
+            }
+            Some(b'1'..=b'9') => digits(self),
+            _ => return Err(self.error("expected a value")),
         }
-        if digits == 0 {
-            return Err(self.error("expected a value"));
+        if self.peek() == Some(b'.') {
+            self.bump();
+            if !at_digit(self) {
+                return Err(self.error("a number's fraction without a digit"));
+            }
+            digits(self);
+        }
+        if matches!(self.peek(), Some(b'e' | b'E')) {
+            self.bump();
+            if matches!(self.peek(), Some(b'+' | b'-')) {
+                self.bump();
+            }
+            if !at_digit(self) {
+                return Err(self.error("a number's exponent without a digit"));
+            }
+            digits(self);
         }
         let slice = self
             .bytes
@@ -830,7 +854,20 @@ fn is_proto3_default(schema: &Schema, field: &Field, value: &Json) -> bool {
 /// a lexeme this schema cannot hold (`0.0`, `1e3`) is left for `write_scalar`
 /// to refuse with its own message.
 fn is_zero(lexeme: &str) -> bool {
-    lexeme.parse::<i64>() == Ok(0) || lexeme.parse::<u64>() == Ok(0)
+    // S3's `vfy6`: off RFC 8259's integer grammar is never a zero.
+    is_integer_lexeme(lexeme) && (lexeme.parse::<i64>() == Ok(0) || lexeme.parse::<u64>() == Ok(0))
+}
+
+/// S3's `vfy6`: the codec's `integer_refusal`.
+fn integer_refusal(lexeme: &str, otherwise: &str) -> String {
+    if is_misspelt_integer(lexeme) {
+        format!(
+            "`{lexeme}` is not an integer as JSON writes one: RFC 8259 has no `+` and no \
+             leading zero"
+        )
+    } else {
+        format!("`{lexeme}` {otherwise}")
+    }
 }
 
 #[allow(
@@ -1002,12 +1039,19 @@ fn integer(value: &Json, pointer: &str) -> Result<i64, Error> {
             ));
         }
     };
-    lexeme.parse::<i64>().map_err(|_| {
-        Error::at(
-            pointer,
-            format!("`{lexeme}` is not a whole number. This schema has no fractional field."),
-        )
-    })
+    lexeme
+        .parse::<i64>()
+        .ok()
+        .filter(|_| is_integer_lexeme(lexeme))
+        .ok_or_else(|| {
+            Error::at(
+                pointer,
+                integer_refusal(
+                    lexeme,
+                    "is not a whole number. This schema has no fractional field.",
+                ),
+            )
+        })
 }
 
 fn unsigned(value: &Json, pointer: &str) -> Result<u64, Error> {
@@ -1020,10 +1064,14 @@ fn unsigned(value: &Json, pointer: &str) -> Result<u64, Error> {
             ));
         }
     };
-    lexeme.parse::<u64>().map_err(|_| {
-        Error::at(
-            pointer,
-            format!("`{lexeme}` is not a non-negative whole number"),
-        )
-    })
+    lexeme
+        .parse::<u64>()
+        .ok()
+        .filter(|_| is_integer_lexeme(lexeme))
+        .ok_or_else(|| {
+            Error::at(
+                pointer,
+                integer_refusal(lexeme, "is not a non-negative whole number"),
+            )
+        })
 }

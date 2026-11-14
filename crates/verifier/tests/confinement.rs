@@ -570,9 +570,12 @@ fn the_fallback_scan_finds_what_it_looks_for() {
 }
 
 /// Whether a path (relative to this crate, with `/` separators) is the
-/// codec's own, where `decode_direct` is defined and tested, or this crate's.
+/// codec's own, where `decode_direct` is defined and tested (its unit tests
+/// and `crates/proto/tests`), or this crate's.
 fn may_call_decode_direct(shown: &str) -> bool {
-    shown.starts_with("../proto/src/json") || shown.starts_with("../verifier/")
+    shown.starts_with("../proto/src/json")
+        || shown.starts_with("../proto/tests/")
+        || shown.starts_with("../verifier/")
 }
 
 /// `pharmakos_proto::json::decode_direct` is hidden from the codec's API and
