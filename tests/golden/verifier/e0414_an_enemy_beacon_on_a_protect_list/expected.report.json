@@ -2,6 +2,20 @@
   "depth": "FULL",
   "diagnostics": [
     {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/0/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
       "code": "E0414",
       "severity": "ERROR",
       "path": "/declarative/route/0/place_beacon/initial/mandate/defend/protect/0/beacon/beacon_id",
@@ -9,10 +23,10 @@
       "beginner": "A Defend beacon protects your own beacons, and an Attack beacon attacks an enemy's."
     }
   ],
-  "report_hash": "7F69J2q1yS8=",
+  "report_hash": "X7elBLnMwK8=",
   "rules_hash": "GybFJQaL/2E=",
   "plan_fingerprint": "FrHQr/IENP8=",
-  "verifier_version": "0.1.0-s3.2",
+  "verifier_version": "0.1.0-s3.3",
   "size_units": 2,
   "size_budget": 128
 }

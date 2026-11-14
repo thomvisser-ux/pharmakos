@@ -162,6 +162,7 @@ pub mod scope;
 pub mod strings;
 pub mod walking;
 
+mod blueprints;
 mod decode;
 mod enums;
 mod estimate;
@@ -236,7 +237,15 @@ pub use walking::Walk;
 /// `queue_structure` row for the Resonance Spire is no longer refused by
 /// `E0009`, which now refuses every other blueprint, as the sim's compile
 /// does, so its reports are not comparable with `0.1.0-s3.1`'s.
-pub const VERIFIER_VERSION: &str = "0.1.0-s3.2";
+/// `0.1.0-s3.3` from S3's `vfy6`: this build checks the parameters of S3's
+/// predicates and `toward` behind `E0020` to `E0028` (`E0209`, `E0210`,
+/// `E0420`, `E0506`, and the codes every predicate's parameters already
+/// had), resolves `toward`'s named feature (`E0412`), refuses an unset beacon
+/// reference in a predicate, a protect list or an Attack target (`E0111`),
+/// and notes an absent `on_fail` and a `max_deaths_before_fallback` of 0
+/// (`I0003`, S3's plan, decision 8), so its reports are not comparable with
+/// `0.1.0-s3.2`'s.
+pub const VERIFIER_VERSION: &str = "0.1.0-s3.3";
 
 /// Everything one verification is a function of, apart from the depth.
 ///

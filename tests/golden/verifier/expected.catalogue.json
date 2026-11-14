@@ -395,9 +395,17 @@
     "code": "E0209",
     "family": "conditions",
     "severity": "ERROR",
-    "emitter": "none at the skeleton (S2/S3, with the enemy-knowledge predicates)",
+    "emitter": "structure",
     "message": "an enemy predicate must declare its freshness.",
     "beginner": "Say how recently you must have seen the thing you are asking about."
+  },
+  {
+    "code": "E0210",
+    "family": "conditions",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "`known_within_ms` is {found} ms, and a freshness of VISIBLE_NOW reads no window; only KNOWN_WITHIN reads one.",
+    "beginner": "\"Visible now\" asks about what your side sees this moment, so it takes no time window. Leave the window out, or ask about what was seen within it."
   },
   {
     "code": "E0301",
@@ -592,6 +600,14 @@
     "beginner": "An Attack beacon hunts an enemy's commander. Name an enemy seat, or leave the seat out to hunt the nearest enemy commander seen."
   },
   {
+    "code": "E0420",
+    "family": "references and placement",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "`toward` is legal only in a place_beacon's `at`, which is where a stepping stone goes; here it names no site a beacon is placed at.",
+    "beginner": "\"A stepping stone toward a vent\" says where a new beacon goes, so it belongs in a place-beacon step and nowhere else."
+  },
+  {
     "code": "E0501",
     "family": "settings and recycle",
     "severity": "ERROR",
@@ -635,9 +651,9 @@
     "code": "E0506",
     "family": "settings and recycle",
     "severity": "ERROR",
-    "emitter": "none at the skeleton (S4, with the capability catalogue)",
+    "emitter": "structure",
     "message": "`{id}` is not a blueprint the catalogue holds.",
-    "beginner": "There is no such thing to build."
+    "beginner": "There is no kind of building by that name."
   },
   {
     "code": "E0507",

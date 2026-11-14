@@ -5,6 +5,32 @@
     {
       "code": "I0003",
       "severity": "info",
+      "path": "/on_death/max_deaths_before_fallback",
+      "related_paths": [],
+      "message": "`max_deaths_before_fallback` is omitted and reads as 0, no limit.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [],
+      "map_refs": []
+    },
+    {
+      "code": "I0003",
+      "severity": "info",
+      "path": "/declarative/route/0/on_fail",
+      "related_paths": [],
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "machine_applicable"
+        }
+      ],
+      "map_refs": []
+    },
+    {
+      "code": "I0003",
+      "severity": "info",
       "path": "/declarative/route/0/move/pace",
       "related_paths": [],
       "message": "`pace` is omitted and reads as DIRECT.",
@@ -13,6 +39,38 @@
         {
           "title": "Write the default out",
           "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/move/pace\",\"value\":\"DIRECT\"}]",
+          "applicability": "machine_applicable"
+        }
+      ],
+      "map_refs": []
+    },
+    {
+      "code": "I0003",
+      "severity": "info",
+      "path": "/declarative/route/2/on_fail",
+      "related_paths": [],
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/2/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "machine_applicable"
+        }
+      ],
+      "map_refs": []
+    },
+    {
+      "code": "I0003",
+      "severity": "info",
+      "path": "/declarative/handlers/0/body/0/on_fail",
+      "related_paths": [],
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/0/body/0/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
           "applicability": "machine_applicable"
         }
       ],
@@ -35,6 +93,22 @@
       "map_refs": []
     },
     {
+      "code": "I0003",
+      "severity": "info",
+      "path": "/declarative/handlers/0/body/1/on_fail",
+      "related_paths": [],
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/0/body/1/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "machine_applicable"
+        }
+      ],
+      "map_refs": []
+    },
+    {
       "code": "W0709",
       "severity": "warning",
       "path": "/declarative/route/1/place_beacon/initial/mandate/attack/target/beacon/nearest",
@@ -45,10 +119,10 @@
       "map_refs": []
     }
   ],
-  "report_hash": "00Lp/3wOHKU=",
+  "report_hash": "hsHqYikQR/c=",
   "rules_hash": "GybFJQaL/2E=",
   "plan_fingerprint": "E0a6S8j8dqg=",
-  "verifier_version": "0.1.0-s3.2",
+  "verifier_version": "0.1.0-s3.3",
   "size_units": 6,
   "size_budget": 128
 }

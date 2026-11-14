@@ -64,9 +64,12 @@
 //! S3's `con6` put eight predicates and the site `toward` on the wire before
 //! S3's `pred` gives them an effect, so `E0020` to `E0028` refuse each one where
 //! the compile reaches it: a predicate wherever a condition is read, and
-//! `toward` in every `Location` but a `broadcast`'s. Nothing inside one is judged
-//! yet, since the compile refuses the construct before it reads what it holds;
-//! that is S3's `vfy6`, as is `E0209`.
+//! `toward` in every `Location` but a `broadcast`'s. S3's `vfy6` judges what
+//! each one holds behind its code, in the stages that judge the same leaves
+//! anywhere else (a predicate's parameters, `E0209`'s freshness and `toward`'s
+//! slot are the structure stage's, a named feature the resolve stage's), so
+//! that when `pred` lifts a refusal and retires its code nothing inside is
+//! unjudged and no playbook qualifies that the sim's compile then refuses.
 //!
 //! Nothing here reads the seat's view: every question is about the file alone,
 //! which is why the stage is structure's.

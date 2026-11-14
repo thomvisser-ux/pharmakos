@@ -23,6 +23,7 @@
 //! numbers, and the fix.
 
 use core::fmt::Write as _;
+use std::borrow::Cow;
 
 use pharmakos_proto::gp::api::v1::diagnostic::Severity;
 use pharmakos_proto::gp::api::v1::patch_suggestion::Applicability;
@@ -42,7 +43,7 @@ pub(crate) struct Diag {
     code: &'static str,
     path: String,
     related: Vec<String>,
-    args: Vec<(&'static str, String)>,
+    args: Vec<(&'static str, Cow<'static, str>)>,
     map_refs: Vec<Voxel>,
     suggestions: Vec<PatchSuggestion>,
 }
@@ -62,7 +63,14 @@ impl Diag {
 
     /// One substitution for the message template.
     pub(crate) fn arg(mut self, name: &'static str, value: impl core::fmt::Display) -> Diag {
-        self.args.push((name, value.to_string()));
+        self.args.push((name, Cow::Owned(value.to_string())));
+        self
+    }
+
+    /// One substitution that is a word of the string table, held without a
+    /// copy (S3's `vfy6`: a note raised once per step pays for every copy).
+    pub(crate) fn arg_word(mut self, name: &'static str, value: &'static str) -> Diag {
+        self.args.push((name, Cow::Borrowed(value)));
         self
     }
 
@@ -194,15 +202,46 @@ pub(crate) fn patch_remove(path: &str) -> String {
     patch("remove", path, None)
 }
 
+/// [`patch_add`] for a value already written as compact JSON text, which the
+/// caller holds as a constant: the same bytes, with no [`Json`] built.
+pub(crate) fn patch_add_text(path: &str, value: &str) -> String {
+    let mut out = String::with_capacity(path.len().saturating_add(value.len()).saturating_add(32));
+    out.push_str("[{\"op\":\"add\",\"path\":");
+    write_string(path, &mut out);
+    out.push_str(",\"value\":");
+    out.push_str(value);
+    out.push_str("}]");
+    out
+}
+
+/// [`patch_add`] for a value that is one string, written without building a
+/// [`Json`] for it: the same bytes.
+pub(crate) fn patch_add_word(path: &str, word: &str) -> String {
+    let mut out = String::with_capacity(path.len().saturating_add(word.len()).saturating_add(40));
+    out.push_str("[{\"op\":\"add\",\"path\":");
+    write_string(path, &mut out);
+    out.push_str(",\"value\":");
+    write_string(word, &mut out);
+    out.push_str("}]");
+    out
+}
+
+/// One operation, written straight into its text: the same bytes
+/// [`write_compact`] writes for `[{"op":…,"path":…,"value":…}]`, without building that tree
+/// first (S3's `vfy6`: a diagnostic is raised once per omitted `on_fail`, so
+/// its cost is paid per step).
 fn patch(op: &str, path: &str, value: Option<&Json>) -> String {
-    let mut entries = vec![
-        ("op".to_owned(), Json::String(op.to_owned())),
-        ("path".to_owned(), Json::String(path.to_owned())),
-    ];
+    let mut out = String::with_capacity(path.len().saturating_add(64));
+    out.push_str("[{\"op\":");
+    write_string(op, &mut out);
+    out.push_str(",\"path\":");
+    write_string(path, &mut out);
     if let Some(value) = value {
-        entries.push(("value".to_owned(), value.clone()));
+        out.push_str(",\"value\":");
+        write_compact(value, &mut out);
     }
-    compact(&Json::Array(vec![Json::Object(entries)]))
+    out.push_str("}]");
+    out
 }
 
 /// A whole number as a JSON value.
@@ -221,12 +260,6 @@ pub(crate) fn number(value: impl core::fmt::Display) -> Json {
 /// file: it lives inside a string field of a report, where a newline would be an
 /// escape sequence and nothing more. So this writer exists, it is small, and it
 /// is pinned by the report goldens that quote its output.
-fn compact(value: &Json) -> String {
-    let mut out = String::new();
-    write_compact(value, &mut out);
-    out
-}
-
 fn write_compact(value: &Json, out: &mut String) {
     match value {
         Json::Null => out.push_str("null"),
@@ -289,6 +322,24 @@ mod tests {
     use super::{Builder, Diag, number, patch_add, patch_remove, patch_replace};
     use pharmakos_proto::gp::api::v1::diagnostic::Severity;
     use pharmakos_proto::json::{Json, read};
+
+    #[test]
+    fn the_written_patches_are_the_tree_written_compactly() {
+        let path = "/declarative/route/0/on_fail";
+        let value = read(r#"{"action":"SKIP"}"#).expect("JSON");
+        assert_eq!(
+            super::patch_add_text(path, r#"{"action":"SKIP"}"#),
+            patch_add(path, &value)
+        );
+        assert_eq!(
+            super::patch_add_word("/a~1b/\"c\"", "DIRECT"),
+            patch_add("/a~1b/\"c\"", &Json::String("DIRECT".to_owned()))
+        );
+        assert_eq!(
+            patch_add(path, &value),
+            r#"[{"op":"add","path":"/declarative/route/0/on_fail","value":{"action":"SKIP"}}]"#
+        );
+    }
 
     #[test]
     fn a_patch_is_valid_json_and_carries_the_operation() {

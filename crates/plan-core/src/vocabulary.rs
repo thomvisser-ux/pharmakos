@@ -409,16 +409,16 @@ fn near_parameters() -> Result<Vec<Parameter>, UnknownEnum> {
         parameter(
             "/radius_voxels",
             s::VOCABULARY_RADIUS,
-            Shape::count(UNIT_VOXELS),
+            // The verifier refuses 0 (`E0101`, S3's `vfy6`).
+            Shape::integer(Some(1), None, UNIT_VOXELS),
         ),
     ];
     found.extend(freshness()?);
     Ok(found)
 }
 
-/// A `Freshness`' two parameters. The window has no least: the verifier
-/// refuses an enemy predicate whole until S3's `vfy6` checks it, so nothing
-/// bounds it yet (as the rendered chip says).
+/// A `Freshness`' two parameters. The window's least is 1, the verifier's
+/// since S3's `vfy6` (as the rendered chip says).
 fn freshness() -> Result<[Parameter; 2], UnknownEnum> {
     Ok([
         parameter(
@@ -429,7 +429,8 @@ fn freshness() -> Result<[Parameter; 2], UnknownEnum> {
         parameter(
             "/freshness/known_within_ms",
             s::VOCABULARY_WINDOW,
-            Shape::integer(None, None, UNIT_MS),
+            // At least 1 under KNOWN_WITHIN (`E0209`, `E0109`; S3's `vfy6`).
+            Shape::integer(Some(1), None, UNIT_MS),
         ),
     ])
 }

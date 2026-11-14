@@ -347,6 +347,13 @@ pub const VERIFIER_STRINGS: &[Text] = &[
         message: "an enemy predicate must declare its freshness.",
         beginner: "Say how recently you must have seen the thing you are asking about.",
     },
+    Text {
+        code: "E0210",
+        message: "`known_within_ms` is {found} ms, and a freshness of VISIBLE_NOW reads no \
+                  window; only KNOWN_WITHIN reads one.",
+        beginner: "\"Visible now\" asks about what your side sees this moment, so it takes no \
+                   time window. Leave the window out, or ask about what was seen within it.",
+    },
     // --- E03xx: control flow -------------------------------------------------
     Text {
         code: "E0301",
@@ -489,6 +496,13 @@ pub const VERIFIER_STRINGS: &[Text] = &[
         beginner: "An Attack beacon hunts an enemy's commander. Name an enemy seat, or leave \
                    the seat out to hunt the nearest enemy commander seen.",
     },
+    Text {
+        code: "E0420",
+        message: "`toward` is legal only in a place_beacon's `at`, which is where a stepping \
+                  stone goes; here it names no site a beacon is placed at.",
+        beginner: "\"A stepping stone toward a vent\" says where a new beacon goes, so it \
+                   belongs in a place-beacon step and nowhere else.",
+    },
     // --- E05xx: settings and recycle -----------------------------------------
     Text {
         code: "E0501",
@@ -519,7 +533,7 @@ pub const VERIFIER_STRINGS: &[Text] = &[
     Text {
         code: "E0506",
         message: "`{id}` is not a blueprint the catalogue holds.",
-        beginner: "There is no such thing to build.",
+        beginner: "There is no kind of building by that name.",
     },
     Text {
         code: "E0507",
@@ -757,6 +771,15 @@ pub const SEAM_PICK: &str = "the `seam` pick";
 pub const COVERED_SEAM: &str = "`covered`, whose deploy covers a seam,";
 /// I0003's `{value}` for an omitted `pillar_spacing`.
 pub const NO_PILLARS: &str = "0, no pillars";
+/// I0003's `{value}` for a `max_deaths_before_fallback` of 0 (S3's plan,
+/// decision 8; the register's S3-09).
+pub const NO_DEATH_LIMIT: &str = "0, no limit";
+/// E0209's Fix for an enemy predicate with no freshness block.
+pub const FIX_VISIBLE_NOW: &str = "Ask about what is visible now";
+/// E0209's Fix for an unset kind beside a window.
+pub const FIX_KNOWN_WITHIN: &str = "Ask about what was seen within the window";
+/// E0210's Fix.
+pub const FIX_DROP_WINDOW: &str = "Leave the window out";
 /// W0706's Fix: swap the fixed site for the description it should have been.
 pub const FIX_COVER_NEAREST_VENT: &str = "Cover the nearest vent you do not cover yet";
 /// I0003's Fix: write the named default out.
@@ -875,8 +898,12 @@ pub fn text(code: &str) -> Option<&'static Text> {
 /// blanked: a message that reads `{found}` is a bug report, and a message with a
 /// silent hole in it is not.
 #[must_use]
-pub fn fill(template: &str, args: &[(&str, String)]) -> String {
-    let mut out = String::with_capacity(template.len());
+pub fn fill<V: AsRef<str>>(template: &str, args: &[(&str, V)]) -> String {
+    // Room for every argument, so a message is one allocation.
+    let room = args.iter().fold(template.len(), |total, (_, value)| {
+        total.saturating_add(value.as_ref().len())
+    });
+    let mut out = String::with_capacity(room);
     let mut rest = template;
     // Split at the braces themselves rather than slicing by index, so there is
     // no slice that could fall outside the text and nothing to fall back on.
@@ -888,7 +915,7 @@ pub fn fill(template: &str, args: &[(&str, String)]) -> String {
             return out;
         };
         if let Some((_, value)) = args.iter().find(|(key, _)| *key == name) {
-            out.push_str(value);
+            out.push_str(value.as_ref());
         } else {
             out.push('{');
             out.push_str(name);
@@ -917,7 +944,8 @@ mod tests {
 
     #[test]
     fn an_unsupplied_placeholder_is_left_visible() {
-        assert_eq!(fill("a {missing} b", &[]), "a {missing} b");
+        let none: &[(&str, String)] = &[];
+        assert_eq!(fill("a {missing} b", none), "a {missing} b");
     }
 
     #[test]

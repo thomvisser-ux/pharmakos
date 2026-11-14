@@ -1,0 +1,54 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0101",
+      "severity": "ERROR",
+      "path": "/declarative/handlers/0/when/enemy_structure_near/radius_voxels",
+      "message": "`radius_voxels` is required and is missing.",
+      "beginner": "A part that every playbook must have is not here."
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/0/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/handlers/0/body/0/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/0/body/0/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "E0025",
+      "severity": "ERROR",
+      "path": "/declarative/handlers/0/when/enemy_structure_near",
+      "message": "predicate `enemy_structure_near` has no effect until S3's predicate catalogue lands; it is refused rather than ignored.",
+      "beginner": "Enemy buildings near a place can't be asked about yet."
+    }
+  ],
+  "report_hash": "Kpl29Fh4z4Q=",
+  "rules_hash": "GybFJQaL/2E=",
+  "plan_fingerprint": "QEQkJVT1TlM=",
+  "verifier_version": "0.1.0-s3.3",
+  "size_units": 3,
+  "size_budget": 128
+}
+

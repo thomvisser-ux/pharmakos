@@ -902,7 +902,7 @@ gp.v1.Playbook.Kind
 
 ## Diagnostics
 
-111 codes. A code is language-neutral, append-only and never
+113 codes. A code is language-neutral, append-only and never
 reused; only an ERROR stops a playbook qualifying. `none at the skeleton` names the
 task that owes the emitter, which is honesty about coverage rather than a gap.
 
@@ -1103,9 +1103,13 @@ E0208  ERROR  conditions  raised at: resolve
   `step_reached` names `{label}`, which this playbook's route does not declare.
   There is no step by that name on the route.
 
-E0209  ERROR  conditions  raised at: none at the skeleton (S2/S3, with the enemy-knowledge predicates)
+E0209  ERROR  conditions  raised at: structure
   an enemy predicate must declare its freshness.
   Say how recently you must have seen the thing you are asking about.
+
+E0210  ERROR  conditions  raised at: structure
+  `known_within_ms` is {found} ms, and a freshness of VISIBLE_NOW reads no window; only KNOWN_WITHIN reads one.
+  "Visible now" asks about what your side sees this moment, so it takes no time window. Leave the window out, or ask about what was seen within it.
 
 E0301  ERROR  control flow  raised at: semantics
   `{label}` is at or before this step; a jump only ever goes forward.
@@ -1203,6 +1207,10 @@ E0419  ERROR  references and placement  raised at: semantics
   `enemy_commander` names seat {seat}, {why}; it hunts another seat's commander in this match, or, without a seat, the nearest the seat has seen.
   An Attack beacon hunts an enemy's commander. Name an enemy seat, or leave the seat out to hunt the nearest enemy commander seen.
 
+E0420  ERROR  references and placement  raised at: structure
+  `toward` is legal only in a place_beacon's `at`, which is where a stepping stone goes; here it names no site a beacon is placed at.
+  "A stepping stone toward a vent" says where a new beacon goes, so it belongs in a place-beacon step and nowhere else.
+
 E0501  ERROR  settings and recycle  raised at: semantics
   `{field}` is {found}; it must be between 0 and 100.
   A percentage runs from none of it to all of it.
@@ -1223,9 +1231,9 @@ E0505  ERROR  settings and recycle  raised at: semantics
   `rotation_quarter_turns` is {found}; it must be between 0 and 3.
   A building turns in quarter turns: none, one, two or three.
 
-E0506  ERROR  settings and recycle  raised at: none at the skeleton (S4, with the capability catalogue)
+E0506  ERROR  settings and recycle  raised at: structure
   `{id}` is not a blueprint the catalogue holds.
-  There is no such thing to build.
+  There is no kind of building by that name.
 
 E0507  ERROR  settings and recycle  raised at: semantics
   `{id}` needs the {licence} licence, which this seat does not hold.

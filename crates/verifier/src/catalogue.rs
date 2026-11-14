@@ -50,8 +50,12 @@
 //! rule an earlier rule wins every time both are true) their emitters, and
 //! adds `E0513` (a second Resonance Spire at one beacon) and `I0006` (a breach
 //! allowed, which only a `FREE_FIRE` mortar shells) at the ends of their
-//! families. `E0506` stays unemitted: an unknown blueprint is `E0009`'s until
-//! S4's capability catalogue (S3's plan, E4).
+//! families. An unknown blueprint in a queue stays `E0009`'s until S4's
+//! capability catalogue (S3's plan, E4). S3's predicates' verifier (task
+//! `vfy6`) gives `E0209` (an enemy predicate without its freshness) and
+//! `E0506` (a predicate naming no blueprint this build knows) their emitters,
+//! and adds `E0210` (a freshness window under `VISIBLE_NOW`) and `E0420`
+//! (`toward` outside a `place_beacon`'s `at`) at the ends of their families.
 //!
 //! The label an unemitted row prints, `none at the skeleton (…)`, is kept as
 //! it was spelt when the table shipped, because `gamectl docs` quotes it; the
@@ -580,10 +584,18 @@ pub const CATALOGUE: &[Entry] = &[
         code: "E0209",
         family: Family::Conditions,
         severity: Severity::Error,
-        // S3's `con6` put the enemy-knowledge predicates on the wire, and they
-        // are refused whole (E0023 to E0025) until S3's `pred`, so nothing can
-        // carry a Freshness yet: S3's `vfy6` lifts this row.
-        emitter: Emitter::NoneYet("S2/S3, with the enemy-knowledge predicates"),
+        // S3's `vfy6` lifts this row: an enemy predicate's freshness is
+        // checked behind E0023 to E0025, which refuse each predicate whole
+        // until S3's `pred`. The question is about the file alone.
+        emitter: Emitter::Stage(Stage::Structure),
+    },
+    // S3's `vfy6`: a window written under VISIBLE_NOW, which reads none, so
+    // it is refused rather than silently dropped.
+    Entry {
+        code: "E0210",
+        family: Family::Conditions,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Structure),
     },
     // --- E03xx: control flow -------------------------------------------------
     Entry {
@@ -744,6 +756,14 @@ pub const CATALOGUE: &[Entry] = &[
         severity: Severity::Error,
         emitter: Emitter::Stage(Stage::Semantics),
     },
+    // S3's `vfy6`: `toward` outside a place_beacon's `at`, `covering`'s
+    // twin (E0407). A question about the file alone.
+    Entry {
+        code: "E0420",
+        family: Family::ReferencesAndPlacement,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Structure),
+    },
     // --- E05xx: settings and recycle -----------------------------------------
     Entry {
         code: "E0501",
@@ -779,7 +799,10 @@ pub const CATALOGUE: &[Entry] = &[
         code: "E0506",
         family: Family::SettingsAndRecycle,
         severity: Severity::Error,
-        emitter: Emitter::NoneYet("S4, with the capability catalogue"),
+        // S3's `vfy6`: a predicate naming a blueprint no kind of structure
+        // answers to. A queued structure's unknown id is still E0009's until
+        // S4's capability catalogue (S3's plan, E4).
+        emitter: Emitter::Stage(Stage::Structure),
     },
     // S3's `vfy5` (S3's plan, E4): a `queue_structure` row for a licensed
     // blueprint the seat's view does not hold the licence for. It stands

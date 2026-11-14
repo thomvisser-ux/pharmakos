@@ -1202,9 +1202,13 @@ fn the_worked_example_qualifies_and_is_six_units() {
         .iter()
         .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
         .collect();
+    // S3's plan, decision 8: none of its steps writes an `on_fail`, so each
+    // reads as SKIP, with a note before the step's own.
     assert_eq!(
         notes,
         [
+            ("I0003", "/declarative/route/0/on_fail"),
+            ("I0003", "/declarative/route/1/on_fail"),
             (
                 "I0003",
                 "/declarative/route/1/place_beacon/initial/mandate/mine/seam_choice"
@@ -1213,8 +1217,11 @@ fn the_worked_example_qualifies_and_is_six_units() {
                 "I0003",
                 "/declarative/route/1/place_beacon/initial/mandate/mine/pillar_spacing"
             ),
+            ("I0003", "/declarative/route/2/on_fail"),
             ("I0003", "/declarative/route/2/move/pace"),
+            ("I0003", "/declarative/handlers/0/body/0/on_fail"),
             ("I0003", "/declarative/handlers/0/body/0/move/pace"),
+            ("I0003", "/declarative/handlers/0/body/1/on_fail"),
             // The semantics stage (S2's plan, decision 12, task `vfy3`): the
             // first move avoids known threats, and the plain fixture holds no
             // sighting of another seat, so it would go as DIRECT does now.

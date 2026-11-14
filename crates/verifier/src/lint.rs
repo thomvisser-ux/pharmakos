@@ -103,7 +103,7 @@ use crate::resolve::Symbols;
 use crate::scope::{FeatureKind, KnownFeature, Ownership, Scope};
 use crate::strings;
 use crate::structure::arm_name;
-use crate::walk::{self, List, Slot, Visit};
+use crate::walk::{self, BeaconSlot, List, Slot, Visit};
 
 /// Run the stage.
 pub(crate) fn run(
@@ -548,8 +548,10 @@ impl Visit for Lints<'_> {
         self.current = Some((list, index));
     }
 
-    fn beacon(&mut self, at: &str, reference: &BeaconRef) {
-        self.stale(at, reference);
+    fn beacon(&mut self, at: &str, reference: &BeaconRef, slot: BeaconSlot) {
+        if slot != BeaconSlot::AttackTarget {
+            self.stale(at, reference);
+        }
     }
 
     fn location(&mut self, at: &str, place: &Location, slot: Slot<'_>) {
@@ -627,9 +629,6 @@ impl Lints<'_> {
         let Some(beacon_ref::Ref::BeaconId(id)) = reference.r#ref.as_ref() else {
             return;
         };
-        if at.ends_with("/attack/target/beacon") {
-            return;
-        }
         let Some(known) = self.scope.beacon(id) else {
             return;
         };

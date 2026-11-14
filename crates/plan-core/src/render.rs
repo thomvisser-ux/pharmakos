@@ -1680,7 +1680,8 @@ fn radius_chip(radius: u32, pointer: String) -> Text {
     if radius == 0 {
         cat!(radius.to_string())
     } else {
-        int_chip(radius, pointer, Shape::count(UNIT_VOXELS))
+        // The verifier refuses a radius of 0 (`E0101`, S3's `vfy6`).
+        int_chip(radius, pointer, Shape::integer(Some(1), None, UNIT_VOXELS))
     }
 }
 
@@ -1733,12 +1734,12 @@ fn fresh_words(window: Option<&Freshness>, here: &str) -> Text {
                 "gp.v1.Freshness.Kind"
             ),
             " ",
-            // No least: the verifier refuses an enemy predicate whole until S3's
-            // `vfy6` checks its window, so nothing bounds it yet.
+            // The verifier refuses a window of 0 under KNOWN_WITHIN (`E0209`)
+            // and a negative one (`E0109`), S3's `vfy6`.
             if window.known_within_ms == 0 {
                 cat!(duration(Ms::new(0)))
             } else {
-                duration_chip(window.known_within_ms, at(here, "known_within_ms"), None)
+                duration_chip(window.known_within_ms, at(here, "known_within_ms"), Some(1))
             }
         ),
         freshness::Kind::FreshnessUnspecified => cat!(s::FRESH_NONE),

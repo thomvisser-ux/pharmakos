@@ -7,12 +7,26 @@
       "path": "/declarative/route/0",
       "message": "the step names no action.",
       "beginner": "This step does not say what to do."
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/0/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
     }
   ],
-  "report_hash": "B/ckQ2JRkS4=",
+  "report_hash": "RYDXFkshYiM=",
   "rules_hash": "GybFJQaL/2E=",
   "plan_fingerprint": "jR5OFr9Vm7M=",
-  "verifier_version": "0.1.0-s3.2",
+  "verifier_version": "0.1.0-s3.3",
   "size_units": 1,
   "size_budget": 128
 }

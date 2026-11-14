@@ -1,0 +1,40 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/0/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "E0420",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/move/to/toward",
+      "message": "`toward` is legal only in a place_beacon's `at`, which is where a stepping stone goes; here it names no site a beacon is placed at.",
+      "beginner": "\"A stepping stone toward a vent\" says where a new beacon goes, so it belongs in a place-beacon step and nowhere else."
+    },
+    {
+      "code": "E0028",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/move/to/toward",
+      "message": "site `toward` has no effect until S3's stepping-stone site search lands; it is refused rather than ignored.",
+      "beginner": "A beacon can't yet be placed as a stepping stone toward a feature. Pick a spot, or cover a feature you can reach."
+    }
+  ],
+  "report_hash": "HKcVeLq3+P8=",
+  "rules_hash": "GybFJQaL/2E=",
+  "plan_fingerprint": "01nqfF/FH24=",
+  "verifier_version": "0.1.0-s3.3",
+  "size_units": 1,
+  "size_budget": 128
+}
+

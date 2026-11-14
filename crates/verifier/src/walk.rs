@@ -22,9 +22,9 @@
 
 use pharmakos_proto::gp::v1::{
     Area, AttackSettings, BeaconFilter, BeaconRef, BuildTarget, Condition, DefendSettings,
-    FeatureRef, InterfaceStep, Location, MandateSettings, Playbook, Step, attack_target,
+    FeatureRef, InterfaceStep, Location, MandateSettings, NearPlace, Playbook, Step, attack_target,
     beacon_ref, broadcast_step, condition, fallback, interface_row, location, mandate_settings,
-    protected_asset, step,
+    near_place, protected_asset, step,
 };
 
 use crate::pointer::{self, Here};
@@ -61,6 +61,26 @@ pub(crate) enum Slot<'a> {
     /// Anywhere else: a move's destination, a broadcast's place, the
     /// fallback's hold or patrol. Neither arm is legal here.
     Elsewhere,
+}
+
+/// Which side a beacon reference must name, which is what decides whether an
+/// enemy beacon's handle may stand in it (S3's `vfy6`).
+///
+/// The sim compiles every `e_NN` to `BeaconSpec::Foreign`, which resolves to
+/// nothing outside an Attack target, so the step fails `no_target` at run
+/// time (`crates/sim/src/interpreter.rs`). The walk knows which slot a
+/// reference stands in, and a visitor handed only the `BeaconRef` would not.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum BeaconSlot {
+    /// An `interface` step's beacon, which `E0405` already answers for an
+    /// enemy one.
+    Interface,
+    /// A Defend beacon's protect list, which `E0414` already answers.
+    Protect,
+    /// An Attack target: the one slot an enemy beacon stands in.
+    AttackTarget,
+    /// Any other slot, which names one of the seat's own beacons.
+    Own,
 }
 
 /// Which beacon's mandate holds a Build target, as the file names it: what a
@@ -133,8 +153,8 @@ pub(crate) trait Visit {
     /// Any location, `place_beacon`'s site included, with the slot it stands
     /// in.
     fn location(&mut self, _at: &str, _location: &Location, _slot: Slot<'_>) {}
-    /// Any beacon reference, fixed or late-bound.
-    fn beacon(&mut self, _at: &str, _reference: &BeaconRef) {}
+    /// Any beacon reference, fixed or late-bound, with the slot it stands in.
+    fn beacon(&mut self, _at: &str, _reference: &BeaconRef, _slot: BeaconSlot) {}
     /// Any selector filter.
     fn filter(&mut self, _at: &str, _filter: &BeaconFilter) {}
     /// Any voxel.
@@ -201,7 +221,7 @@ pub(crate) fn walk(playbook: &Playbook, visitor: &mut dyn Visit) {
                 let shadow_at = here.push("shadow");
                 if let Some(beacon) = shadow.beacon.as_ref() {
                     let at = here.push("beacon");
-                    walk_beacon(beacon, &mut here, visitor);
+                    walk_beacon(beacon, &mut here, BeaconSlot::Own, visitor);
                     here.pop(at);
                 }
                 here.pop(shadow_at);
@@ -242,7 +262,7 @@ fn walk_entry(entry: &Step, here: &mut Here, visitor: &mut dyn Visit) {
             visitor.interface(here.as_str(), interface);
             if let Some(beacon) = interface.beacon.as_ref() {
                 let beacon_at = here.push("beacon");
-                walk_beacon(beacon, here, visitor);
+                walk_beacon(beacon, here, BeaconSlot::Interface, visitor);
                 here.pop(beacon_at);
             }
             let row_list = here.push("rows");
@@ -410,7 +430,7 @@ fn walk_defend(defend: &DefendSettings, here: &mut Here, visitor: &mut dyn Visit
         if let Some(protected_asset::Asset::Beacon(beacon)) = entry.asset.as_ref() {
             let at = here.push_index(index);
             let beacon_at = here.push("beacon");
-            walk_beacon(beacon, here, visitor);
+            walk_beacon(beacon, here, BeaconSlot::Protect, visitor);
             here.pop(beacon_at);
             here.pop(at);
         }
@@ -427,7 +447,7 @@ fn walk_attack(attack: &AttackSettings, here: &mut Here, visitor: &mut dyn Visit
         match target.target.as_ref() {
             Some(attack_target::Target::Beacon(beacon)) => {
                 let at = here.push("beacon");
-                walk_beacon(beacon, here, visitor);
+                walk_beacon(beacon, here, BeaconSlot::AttackTarget, visitor);
                 here.pop(at);
             }
             Some(attack_target::Target::Voxel(voxel)) => {
@@ -499,7 +519,7 @@ fn walk_location(place: &Location, here: &mut Here, slot: Slot<'_>, visitor: &mu
         }
         Some(location::Place::BeaconAnchor(beacon)) => {
             let at = here.push("beacon_anchor");
-            walk_beacon(beacon, here, visitor);
+            walk_beacon(beacon, here, BeaconSlot::Own, visitor);
             here.pop(at);
         }
         // Targeting's sites carry no voxel and no beacon to visit: a stage
@@ -515,8 +535,8 @@ fn walk_location(place: &Location, here: &mut Here, slot: Slot<'_>, visitor: &mu
     }
 }
 
-fn walk_beacon(reference: &BeaconRef, here: &mut Here, visitor: &mut dyn Visit) {
-    visitor.beacon(here.as_str(), reference);
+fn walk_beacon(reference: &BeaconRef, here: &mut Here, slot: BeaconSlot, visitor: &mut dyn Visit) {
+    visitor.beacon(here.as_str(), reference, slot);
     let filter = match reference.r#ref.as_ref() {
         Some(beacon_ref::Ref::Nearest(nearest)) => {
             nearest.filter.as_ref().map(|found| ("nearest", found))
@@ -570,7 +590,62 @@ fn walk_condition(node: &Condition, here: &mut Here, visitor: &mut dyn Visit) {
         Some(condition::Node::BeaconPowered(predicate)) => {
             walk_predicate_beacon(predicate.beacon.as_ref(), "beacon_powered", here, visitor);
         }
+        // S3's `con6` predicates (S3's `vfy6`): walked as the others are, so
+        // every stage's checks reach their beacons and places while `E0020`
+        // to `E0027` still refuse each one whole, and the day S3's `pred`
+        // lifts them nothing inside is unjudged.
+        Some(condition::Node::BeaconUnitsByRole(predicate)) => {
+            walk_predicate_beacon(
+                predicate.beacon.as_ref(),
+                "beacon_units_by_role",
+                here,
+                visitor,
+            );
+        }
+        Some(condition::Node::BeaconMandate(predicate)) => {
+            walk_predicate_beacon(predicate.beacon.as_ref(), "beacon_mandate", here, visitor);
+        }
+        Some(condition::Node::BeaconHasStructure(predicate)) => {
+            walk_predicate_beacon(
+                predicate.beacon.as_ref(),
+                "beacon_has_structure",
+                here,
+                visitor,
+            );
+        }
+        Some(condition::Node::EnemyUnitsNear(predicate)) => {
+            walk_near(predicate.near.as_ref(), "enemy_units_near", here, visitor);
+        }
+        Some(condition::Node::EnemyStructureNear(predicate)) => {
+            walk_near(
+                predicate.near.as_ref(),
+                "enemy_structure_near",
+                here,
+                visitor,
+            );
+        }
         _ => {}
+    }
+}
+
+/// An enemy predicate's `near` (`gp.v1.NearPlace`, which has no site arm): a
+/// voxel, or one of the seat's own beacons to measure from.
+fn walk_near(near: Option<&NearPlace>, predicate: &str, here: &mut Here, visitor: &mut dyn Visit) {
+    let Some(place) = near else {
+        return;
+    };
+    match place.place.as_ref() {
+        Some(near_place::Place::Voxel(voxel)) => {
+            let at = here.push_path(&[predicate, "near", "voxel"]);
+            visitor.voxel(here.as_str(), voxel);
+            here.pop(at);
+        }
+        Some(near_place::Place::BeaconAnchor(beacon)) => {
+            let at = here.push_path(&[predicate, "near", "beacon_anchor"]);
+            walk_beacon(beacon, here, BeaconSlot::Own, visitor);
+            here.pop(at);
+        }
+        Some(near_place::Place::Safest(_)) | None => {}
     }
 }
 
@@ -590,7 +665,7 @@ fn walk_predicate_beacon(
 ) {
     if let Some(reference) = beacon {
         let at = here.push_path(&[predicate, "beacon"]);
-        walk_beacon(reference, here, visitor);
+        walk_beacon(reference, here, BeaconSlot::Own, visitor);
         here.pop(at);
     }
 }

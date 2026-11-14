@@ -5,6 +5,16 @@
     {
       "code": "I0003",
       "severity": "info",
+      "path": "/on_death/max_deaths_before_fallback",
+      "related_paths": [],
+      "message": "`max_deaths_before_fallback` is omitted and reads as 0, no limit.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [],
+      "map_refs": []
+    },
+    {
+      "code": "I0003",
+      "severity": "info",
       "path": "/declarative/route/0/place_beacon/initial/mandate/roe",
       "related_paths": [],
       "message": "`roe` is omitted and reads as RETURN_FIRE.",
@@ -37,6 +47,38 @@
     {
       "code": "I0003",
       "severity": "info",
+      "path": "/declarative/route/1/on_fail",
+      "related_paths": [],
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/1/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "machine_applicable"
+        }
+      ],
+      "map_refs": []
+    },
+    {
+      "code": "I0003",
+      "severity": "info",
+      "path": "/declarative/handlers/0/body/0/on_fail",
+      "related_paths": [],
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/0/body/0/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "machine_applicable"
+        }
+      ],
+      "map_refs": []
+    },
+    {
+      "code": "I0003",
+      "severity": "info",
       "path": "/declarative/handlers/0/body/0/move/pace",
       "related_paths": [],
       "message": "`pace` is omitted and reads as DIRECT.",
@@ -49,12 +91,28 @@
         }
       ],
       "map_refs": []
+    },
+    {
+      "code": "I0003",
+      "severity": "info",
+      "path": "/declarative/handlers/0/body/1/on_fail",
+      "related_paths": [],
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/0/body/1/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "machine_applicable"
+        }
+      ],
+      "map_refs": []
     }
   ],
-  "report_hash": "BHa9n58L+vQ=",
+  "report_hash": "zAv5dVCdFUA=",
   "rules_hash": "GybFJQaL/2E=",
   "plan_fingerprint": "9jpSWLu4iR4=",
-  "verifier_version": "0.1.0-s3.2",
+  "verifier_version": "0.1.0-s3.3",
   "size_units": 6,
   "size_budget": 128
 }

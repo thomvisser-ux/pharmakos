@@ -85,7 +85,8 @@
 //! The sim's handler ceiling is `E0113`.
 
 use pharmakos_proto::gp::api::v1::patch_suggestion::Applicability;
-use pharmakos_proto::gp::v1::beacon_filter::Side;
+use pharmakos_proto::gp::v1::beacon_filter::{MandateKind, Side};
+use pharmakos_proto::gp::v1::beacon_units_by_role::Role;
 use pharmakos_proto::gp::v1::build_settings::Terraform;
 use pharmakos_proto::gp::v1::defend_settings::Pursue;
 use pharmakos_proto::gp::v1::feature_ref::{self, Coverage, Rank};
@@ -94,17 +95,21 @@ use pharmakos_proto::gp::v1::mandate_settings::Roe;
 use pharmakos_proto::gp::v1::mine_settings::SeamChoice;
 use pharmakos_proto::gp::v1::move_step::Pace;
 use pharmakos_proto::gp::v1::on_death::OnRespawn;
+use pharmakos_proto::gp::v1::on_fail::Action;
 use pharmakos_proto::gp::v1::{
     Area, AttackSettings, BeaconFilter, BeaconRef, BuildTarget, Condition, DefendSettings,
-    FeatureRef, Handler, IntCompare, Location, MandateSettings, Playbook, ProtectedAsset, Step,
-    attack_target, beacon_ref, condition, fallback, int_compare, interface_row, location,
-    mandate_settings, protected_asset, step,
+    FeatureRef, Freshness, Handler, IntCompare, Location, MandateSettings, NearPlace, Playbook,
+    ProtectedAsset, Step, attack_target, beacon_ref, condition, enemy_structure_near, fallback,
+    freshness, int_compare, interface_row, location, mandate_settings, near_place, protected_asset,
+    step,
 };
 use pharmakos_proto::json::Json;
 
 use crate::limits::{CONDITION_MAX_DEPTH, CONDITION_MAX_NODES, Limits};
 use crate::pointer::{self, Here};
-use crate::report::{Builder, Diag, number, patch_add, patch_remove, patch_replace};
+use crate::report::{
+    Builder, Diag, number, patch_add, patch_add_text, patch_add_word, patch_remove, patch_replace,
+};
 use crate::size;
 use crate::strings;
 use crate::walk::{self, AreaOf, Carrier, List, Slot, Visit};
@@ -170,6 +175,21 @@ pub(crate) fn run(playbook: &Playbook, limits: &Limits, out: &mut Builder) {
                     ),
                     Applicability::MaybeIncorrect,
                 ),
+        );
+    }
+
+    // S3's plan, decision 8 (the register's S3-09): a
+    // `max_deaths_before_fallback` of 0 means no limit, the sim's reading.
+    // No Fix: proto3 writes a zero by leaving it out, so there is no spelling
+    // of "0" for the note to go quiet on, and how many deaths to tolerate is
+    // the author's call.
+    if let Some(on_death) = playbook.on_death.as_ref()
+        && on_death.max_deaths_before_fallback == 0
+    {
+        out.emit(
+            Diag::new("I0003", "/on_death/max_deaths_before_fallback")
+                .arg("field", "max_deaths_before_fallback")
+                .arg("value", strings::NO_DEATH_LIMIT),
         );
     }
 
@@ -456,10 +476,46 @@ enum Arm<'a> {
     /// `on`, in a Build target's anchor; `deploy` is the enclosing
     /// `place_beacon`'s `covering`, if the target is in its `initial`.
     On { deploy: Option<&'a FeatureRef> },
+    /// `toward`'s feature, in a `place_beacon`'s `at`. A pick under it is
+    /// read as a `covering`'s is, from the commander's column, so it takes
+    /// the same rank and coverage (S3's `vfy6`).
+    Toward,
 }
 
 impl Visit for Sites<'_> {
     fn entry(&mut self, at: &str, entry: &Step, _list: List, _index: usize) {
+        // S3's plan, decision 8 (the register's S3-08): an absent `on_fail`,
+        // or one whose `action` is unset, reads as SKIP, the sim's
+        // `DEFAULT_ON_FAIL`, said where it is omitted. Before the move's own
+        // note, in field order.
+        match entry.on_fail.as_ref() {
+            None => {
+                // Every word borrowed and the patch written as text: this note
+                // is raised once per step, so what it copies is paid per step
+                // (`tests/quick_cost.rs`).
+                let here = pointer::child(at, "on_fail");
+                let patch = patch_add_text(&here, SKIP_BLOCK);
+                self.out.emit(
+                    Diag::new("I0003", here)
+                        .arg_word("field", "on_fail")
+                        .arg_word("value", Action::Skip.as_str_name())
+                        .fix(
+                            strings::FIX_WRITE_DEFAULT,
+                            patch,
+                            Applicability::MachineApplicable,
+                        ),
+                );
+            }
+            Some(on_fail) if on_fail.action == i32::from(Action::OnFailUnspecified) => {
+                self.default_note(
+                    &pointer::child(at, "on_fail"),
+                    "action",
+                    Action::Skip.as_str_name(),
+                    true,
+                );
+            }
+            Some(_) => {}
+        }
         if let Some(step::Kind::Move(walk_to)) = entry.kind.as_ref()
             && walk_to.pace == i32::from(Pace::Unspecified)
         {
@@ -512,6 +568,25 @@ impl Visit for Sites<'_> {
                         )),
                     },
                     Slot::PlaceSite | Slot::Elsewhere => self.out.emit(Diag::new("E0408", here)),
+                }
+            }
+            // S3's `toward` (S1's plan, decision 3): legal only in a
+            // `place_beacon`'s `at`, as `covering` is (`Location.toward`), and
+            // its feature is named or described as a `covering`'s is (S3's
+            // `vfy6`). `E0028` refuses it wherever the sim compiles a place
+            // until S3's `pred`; these are the checks behind it.
+            Some(location::Place::Toward(toward)) => {
+                let here = pointer::child(at, "toward");
+                if !matches!(slot, Slot::PlaceSite) {
+                    self.out.emit(Diag::new("E0420", here));
+                    return;
+                }
+                let feature_at = pointer::child(&here, "feature");
+                match toward.feature.as_ref() {
+                    None => self
+                        .out
+                        .emit(Diag::new("E0101", feature_at).arg("what", "`feature`")),
+                    Some(feature) => self.feature(feature, &feature_at, Arm::Toward),
                 }
             }
             _ => {}
@@ -755,6 +830,9 @@ impl Sites<'_> {
                 }
                 Some(protected_asset::Asset::Beacon(beacon)) => {
                     let beacon_at = pointer::child(&here, "beacon");
+                    // The sim compiles the entry's reference and refuses an
+                    // unset one (`MissingBlock("beacon.ref")`).
+                    check_beacon_ref(beacon, &beacon_at, self.out);
                     if let Some((selector, filter)) = selector_filter(beacon)
                         && Side::try_from(filter_side(filter)) == Ok(Side::EnemyKnown)
                     {
@@ -832,30 +910,7 @@ impl Sites<'_> {
                     .out
                     .emit(Diag::new("E0111", target_at).arg("field", "target")),
                 Some(attack_target::Target::Beacon(beacon)) => {
-                    let beacon_at = pointer::child(&target_at, "beacon");
-                    match beacon.r#ref.as_ref() {
-                        Some(beacon_ref::Ref::Safest(_)) => self.out.emit(
-                            Diag::new("E0415", pointer::child(&beacon_at, "safest"))
-                                .arg("role", strings::ROLE_ATTACK_TARGET)
-                                .arg("found", strings::RANKS_SAFEST)
-                                .arg("wanted", strings::RANKS_ENEMY),
-                        ),
-                        _ => {
-                            if let Some((selector, filter)) = selector_filter(beacon) {
-                                // Read raw: a number `Side` does not name is
-                                // `E0018`'s, and says nothing here.
-                                let side = Side::try_from(filter_side(filter));
-                                if matches!(side, Ok(Side::Unspecified | Side::Own)) {
-                                    self.out.emit(
-                                        Diag::new("E0415", pointer::child(&beacon_at, selector))
-                                            .arg("role", strings::ROLE_ATTACK_TARGET)
-                                            .arg("found", strings::RANKS_OWN)
-                                            .arg("wanted", strings::RANKS_ENEMY),
-                                    );
-                                }
-                            }
-                        }
-                    }
+                    self.attack_beacon(&target_at, beacon);
                 }
                 Some(
                     attack_target::Target::Voxel(_) | attack_target::Target::EnemyCommander(_),
@@ -904,6 +959,36 @@ impl Sites<'_> {
         if attack.breach_allowed == Some(true) {
             self.out
                 .emit(Diag::new("I0006", pointer::child(at, "breach_allowed")));
+        }
+    }
+
+    /// An Attack target named as a beacon: a reference that names one (the
+    /// sim refuses an unset one), and a selector that ranks enemy beacons.
+    fn attack_beacon(&mut self, target_at: &str, beacon: &BeaconRef) {
+        let beacon_at = pointer::child(target_at, "beacon");
+        check_beacon_ref(beacon, &beacon_at, self.out);
+        match beacon.r#ref.as_ref() {
+            Some(beacon_ref::Ref::Safest(_)) => self.out.emit(
+                Diag::new("E0415", pointer::child(&beacon_at, "safest"))
+                    .arg("role", strings::ROLE_ATTACK_TARGET)
+                    .arg("found", strings::RANKS_SAFEST)
+                    .arg("wanted", strings::RANKS_ENEMY),
+            ),
+            _ => {
+                if let Some((selector, filter)) = selector_filter(beacon) {
+                    // Read raw: a number `Side` does not name is
+                    // `E0018`'s, and says nothing here.
+                    let side = Side::try_from(filter_side(filter));
+                    if matches!(side, Ok(Side::Unspecified | Side::Own)) {
+                        self.out.emit(
+                            Diag::new("E0415", pointer::child(&beacon_at, selector))
+                                .arg("role", strings::ROLE_ATTACK_TARGET)
+                                .arg("found", strings::RANKS_OWN)
+                                .arg("wanted", strings::RANKS_ENEMY),
+                        );
+                    }
+                }
+            }
         }
     }
 
@@ -971,18 +1056,20 @@ impl Sites<'_> {
             );
         }
         match arm {
-            Arm::Covering if coverage == i32::from(Coverage::Unspecified) => self.out.emit(
-                Diag::new("E0111", pointer::child(&here, "coverage"))
-                    .arg("field", "coverage")
-                    .fix(
-                        strings::FIX_COVERAGE_UNCOVERED,
-                        patch_add(
-                            &pointer::child(&here, "coverage"),
-                            &Json::String("UNCOVERED".to_owned()),
+            Arm::Covering | Arm::Toward if coverage == i32::from(Coverage::Unspecified) => {
+                self.out.emit(
+                    Diag::new("E0111", pointer::child(&here, "coverage"))
+                        .arg("field", "coverage")
+                        .fix(
+                            strings::FIX_COVERAGE_UNCOVERED,
+                            patch_add(
+                                &pointer::child(&here, "coverage"),
+                                &Json::String("UNCOVERED".to_owned()),
+                            ),
+                            Applicability::MaybeIncorrect,
                         ),
-                        Applicability::MaybeIncorrect,
-                    ),
-            ),
+                );
+            }
             Arm::On { .. } if coverage != i32::from(Coverage::Unspecified) => {
                 self.out
                     .emit(Diag::new("E0411", pointer::child(&here, "coverage")).fix(
@@ -994,26 +1081,31 @@ impl Sites<'_> {
                         Applicability::MachineApplicable,
                     ));
             }
-            Arm::Covering | Arm::On { .. } => {}
+            Arm::Covering | Arm::Toward | Arm::On { .. } => {}
         }
     }
 
     /// `I0003`: an omitted setting and the named default it reads as.
-    fn default_note(&mut self, at: &str, field: &'static str, value: &str, fixable: bool) {
+    fn default_note(&mut self, at: &str, field: &'static str, value: &'static str, fixable: bool) {
         let here = pointer::child(at, field);
-        let mut diag = Diag::new("I0003", here.clone())
-            .arg("field", field)
-            .arg("value", value);
-        if fixable {
+        let patch = fixable.then(|| patch_add_word(&here, value));
+        let mut diag = Diag::new("I0003", here)
+            .arg_word("field", field)
+            .arg_word("value", value);
+        if let Some(patch) = patch {
             diag = diag.fix(
                 strings::FIX_WRITE_DEFAULT,
-                patch_add(&here, &Json::String(value.to_owned())),
+                patch,
                 Applicability::MachineApplicable,
             );
         }
         self.out.emit(diag);
     }
 }
+
+/// An `on_fail` written out as its absence reads (S3's plan, decision 8),
+/// as compact JSON text; `tests` holds it to `Action::Skip`'s name.
+const SKIP_BLOCK: &str = r#"{"action":"SKIP"}"#;
 
 /// What an omitted `roe` reads as on a beacon of this writ (decisions-log
 /// item 148 (2)): a Defend or an Attack beacon fires freely, and every other
@@ -1360,7 +1452,7 @@ fn walk_predicate(node: &condition::Node, at: &str, out: &mut Builder) {
             );
         }
         condition::Node::BeaconHpPct(predicate) => {
-            beacon_ref(predicate.beacon.is_some(), at, "beacon_hp_pct", out);
+            beacon_ref(predicate.beacon.as_ref(), at, "beacon_hp_pct", out);
             compare(
                 predicate.pct.as_ref(),
                 at,
@@ -1371,7 +1463,7 @@ fn walk_predicate(node: &condition::Node, at: &str, out: &mut Builder) {
             );
         }
         condition::Node::BeaconUnderAttack(predicate) => {
-            beacon_ref(predicate.beacon.is_some(), at, "beacon_under_attack", out);
+            beacon_ref(predicate.beacon.as_ref(), at, "beacon_under_attack", out);
             negative_under(
                 out,
                 at,
@@ -1381,7 +1473,7 @@ fn walk_predicate(node: &condition::Node, at: &str, out: &mut Builder) {
             );
         }
         condition::Node::BeaconPowered(predicate) => {
-            beacon_ref(predicate.beacon.is_some(), at, "beacon_powered", out);
+            beacon_ref(predicate.beacon.as_ref(), at, "beacon_powered", out);
         }
         condition::Node::Treasury(predicate) => {
             compare(
@@ -1412,19 +1504,216 @@ fn walk_predicate(node: &condition::Node, at: &str, out: &mut Builder) {
                 );
             }
         }
-        // The groups are walked by the caller. S3's `con6` predicates are refused
-        // whole by [`crate::refusals`] until S3's `vfy6` checks their parameters.
-        condition::Node::All(_)
-        | condition::Node::Any(_)
-        | condition::Node::Not(_)
-        | condition::Node::BeaconUnitsByRole(_)
+        condition::Node::BeaconUnitsByRole(_)
         | condition::Node::BeaconMandate(_)
         | condition::Node::BeaconHasStructure(_)
         | condition::Node::EnemyUnitsNear(_)
         | condition::Node::EnemyBeaconKnown(_)
         | condition::Node::EnemyStructureNear(_)
         | condition::Node::KwSupply(_)
-        | condition::Node::KwDraw(_) => {}
+        | condition::Node::KwDraw(_) => walk_s3_predicate(node, at, out),
+        // The groups are walked by the caller.
+        condition::Node::All(_) | condition::Node::Any(_) | condition::Node::Not(_) => {}
+    }
+}
+
+/// One of S3's `con6` predicates, checked here by S3's `vfy6` while
+/// [`crate::refusals`] still refuses each one whole (`E0020` to `E0027`), so
+/// that the day S3's `pred` lifts them no playbook is called qualifying that
+/// the sim's compile then refuses (S3's plan, R4 the other way round). Every
+/// other node is [`walk_predicate`]'s.
+fn walk_s3_predicate(node: &condition::Node, at: &str, out: &mut Builder) {
+    match node {
+        condition::Node::BeaconUnitsByRole(predicate) => {
+            beacon_ref(predicate.beacon.as_ref(), at, "beacon_units_by_role", out);
+            if predicate.role == i32::from(Role::Unspecified) {
+                unset(out, at, &["beacon_units_by_role", "role"], "role");
+            }
+            compare(
+                predicate.count.as_ref(),
+                at,
+                "beacon_units_by_role",
+                "count",
+                false,
+                out,
+            );
+        }
+        condition::Node::BeaconMandate(predicate) => {
+            beacon_ref(predicate.beacon.as_ref(), at, "beacon_mandate", out);
+            // `BeaconMandate.mandate`'s own comment: reading the unset value
+            // as "any writ" is `BeaconFilter.mandate`'s exception alone.
+            if predicate.mandate == i32::from(MandateKind::Unspecified) {
+                unset(out, at, &["beacon_mandate", "mandate"], "mandate");
+            }
+        }
+        condition::Node::BeaconHasStructure(predicate) => {
+            beacon_ref(predicate.beacon.as_ref(), at, "beacon_has_structure", out);
+            blueprint(
+                &predicate.blueprint_id,
+                at,
+                &["beacon_has_structure", "blueprint_id"],
+                out,
+            );
+        }
+        condition::Node::EnemyUnitsNear(predicate) => {
+            near(predicate.near.as_ref(), at, "enemy_units_near", out);
+            radius(predicate.radius_voxels, at, "enemy_units_near", out);
+            compare(
+                predicate.count.as_ref(),
+                at,
+                "enemy_units_near",
+                "count",
+                false,
+                out,
+            );
+            freshness(predicate.freshness.as_ref(), at, "enemy_units_near", out);
+        }
+        condition::Node::EnemyBeaconKnown(predicate) => {
+            freshness(predicate.freshness.as_ref(), at, "enemy_beacon_known", out);
+        }
+        condition::Node::EnemyStructureNear(predicate) => {
+            near(predicate.near.as_ref(), at, "enemy_structure_near", out);
+            radius(predicate.radius_voxels, at, "enemy_structure_near", out);
+            match predicate.structure.as_ref() {
+                // A choice with neither arm, said at the predicate, as an
+                // unset `Location` is: there is no member under it to point at.
+                None => unset(out, at, &["enemy_structure_near"], "structure"),
+                Some(enemy_structure_near::Structure::BlueprintId(id)) => {
+                    blueprint(id, at, &["enemy_structure_near", "blueprint_id"], out);
+                }
+                Some(enemy_structure_near::Structure::AnyKind(_)) => {}
+            }
+            freshness(
+                predicate.freshness.as_ref(),
+                at,
+                "enemy_structure_near",
+                out,
+            );
+        }
+        condition::Node::KwSupply(predicate) => {
+            compare(predicate.kw.as_ref(), at, "kw_supply", "kw", false, out);
+        }
+        condition::Node::KwDraw(predicate) => {
+            compare(predicate.kw.as_ref(), at, "kw_draw", "kw", false, out);
+        }
+        _ => {}
+    }
+}
+
+/// `E0111`: an unset choice at `at` plus `tail`, named `field`.
+fn unset(out: &mut Builder, at: &str, tail: &[&str], field: &'static str) {
+    out.emit(Diag::new("E0111", pointer::join(at, tail)).arg("field", field));
+}
+
+/// A predicate's blueprint id: written (`E0101`), and a blueprint this build
+/// knows (`E0506`). Which beacon has which structure is the Push's, so any
+/// kind the sim defines may be asked about, built or not.
+fn blueprint(id: &str, at: &str, tail: &[&str], out: &mut Builder) {
+    if id.is_empty() {
+        out.emit(Diag::new("E0101", pointer::join(at, tail)).arg("what", "`blueprint_id`"));
+    } else if crate::blueprints::kind_of(id).is_none() {
+        out.emit(Diag::new("E0506", pointer::join(at, tail)).arg("id", id));
+    }
+}
+
+/// An enemy predicate's `near`: present (`E0101`), naming a place (`E0111`),
+/// and, as a beacon, naming one (`E0111`).
+fn near(place: Option<&NearPlace>, at: &str, predicate: &str, out: &mut Builder) {
+    let Some(place) = place else {
+        out.emit(Diag::new("E0101", pointer::join(at, &[predicate, "near"])).arg("what", "`near`"));
+        return;
+    };
+    match place.place.as_ref() {
+        None => unset(out, at, &[predicate, "near"], "place"),
+        Some(near_place::Place::BeaconAnchor(beacon)) if beacon.r#ref.is_none() => {
+            unset(out, at, &[predicate, "near", "beacon_anchor"], "ref");
+        }
+        Some(_) => {}
+    }
+}
+
+/// An enemy predicate's radius, which is required: 0 is no radius, and an
+/// omitted one is not one of the header's named defaults (`playbook.proto`).
+fn radius(found: u32, at: &str, predicate: &str, out: &mut Builder) {
+    if found == 0 {
+        out.emit(
+            Diag::new("E0101", pointer::join(at, &[predicate, "radius_voxels"]))
+                .arg("what", "`radius_voxels`"),
+        );
+    }
+}
+
+/// `E0209`: "enemy predicates must declare freshness (`VISIBLE_NOW` or
+/// `KNOWN_WITHIN` ms)" (spec section 10). A block left out, a kind left unset
+/// and a `KNOWN_WITHIN` with no window each declare none; a negative window is
+/// `E0109`, as every other duration's; and a window under `VISIBLE_NOW`, which
+/// reads none, is `E0210` rather than silently dropped.
+fn freshness(window: Option<&Freshness>, at: &str, predicate: &str, out: &mut Builder) {
+    let Some(window) = window else {
+        let here = pointer::join(at, &[predicate, "freshness"]);
+        out.emit(Diag::new("E0209", here.clone()).fix(
+            strings::FIX_VISIBLE_NOW,
+            // `add`: the block is absent.
+            patch_add(
+                &here,
+                &Json::Object(vec![(
+                    "kind".to_owned(),
+                    Json::String(freshness::Kind::VisibleNow.as_str_name().to_owned()),
+                )]),
+            ),
+            Applicability::MaybeIncorrect,
+        ));
+        return;
+    };
+    match freshness::Kind::try_from(window.kind) {
+        Ok(freshness::Kind::FreshnessUnspecified) => {
+            let here = pointer::join(at, &[predicate, "freshness", "kind"]);
+            let mut diag = Diag::new("E0209", here.clone());
+            if window.known_within_ms > 0 {
+                // A window is written, so the kind it needs is the likely one.
+                diag = diag.fix(
+                    strings::FIX_KNOWN_WITHIN,
+                    patch_add(
+                        &here,
+                        &Json::String(freshness::Kind::KnownWithin.as_str_name().to_owned()),
+                    ),
+                    Applicability::MaybeIncorrect,
+                );
+            }
+            out.emit(diag);
+        }
+        Ok(freshness::Kind::VisibleNow) => {
+            if window.known_within_ms != 0 {
+                let here = pointer::join(at, &[predicate, "freshness", "known_within_ms"]);
+                out.emit(
+                    Diag::new("E0210", here.clone())
+                        .arg("found", window.known_within_ms)
+                        .fix(
+                            strings::FIX_DROP_WINDOW,
+                            patch_remove(&here),
+                            // The author may have meant KNOWN_WITHIN instead.
+                            Applicability::MaybeIncorrect,
+                        ),
+                );
+            }
+        }
+        Ok(freshness::Kind::KnownWithin) => {
+            if window.known_within_ms < 0 {
+                negative(
+                    out,
+                    &pointer::join(at, &[predicate, "freshness"]),
+                    "known_within_ms",
+                    window.known_within_ms,
+                );
+            } else if window.known_within_ms == 0 {
+                out.emit(Diag::new(
+                    "E0209",
+                    pointer::join(at, &[predicate, "freshness", "known_within_ms"]),
+                ));
+            }
+        }
+        // A number `Kind` does not name is `E0018`'s.
+        Err(_) => {}
     }
 }
 
@@ -1436,12 +1725,19 @@ fn negative_under(out: &mut Builder, at: &str, predicate: &str, field: &'static 
     }
 }
 
-/// A predicate's `BeaconRef`, which is required wherever it appears.
-fn beacon_ref(present: bool, at: &str, predicate: &str, out: &mut Builder) {
-    if !present {
-        out.emit(
+/// A predicate's `BeaconRef`, which is required wherever it appears, and
+/// names a beacon: a `{}` is an unset choice, which the sim's compile refuses
+/// (`MissingBlock("beacon.ref")`), as [`check_beacon_ref`] says of every other
+/// beacon a step names (S3's `vfy6`, the rule applied to every predicate).
+fn beacon_ref(beacon: Option<&BeaconRef>, at: &str, predicate: &str, out: &mut Builder) {
+    match beacon {
+        None => out.emit(
             Diag::new("E0101", pointer::join(at, &[predicate, "beacon"])).arg("what", "`beacon`"),
-        );
+        ),
+        Some(found) if found.r#ref.is_none() => {
+            unset(out, at, &[predicate, "beacon"], "ref");
+        }
+        Some(_) => {}
     }
 }
 
@@ -1544,6 +1840,19 @@ mod tests {
 
     const PLACED_AT: &str =
         "/declarative/route/0/place_beacon/initial/mandate/build/repair_threshold_pct";
+
+    #[test]
+    fn the_skip_block_is_skip_written_out() {
+        let written = pharmakos_proto::json::read(super::SKIP_BLOCK).expect("the block is JSON");
+        let action = super::Action::Skip.as_str_name().to_owned();
+        assert_eq!(
+            written,
+            pharmakos_proto::json::Json::Object(vec![(
+                "action".to_owned(),
+                pharmakos_proto::json::Json::String(action),
+            )])
+        );
+    }
 
     #[test]
     fn a_written_zero_in_a_new_beacons_settings_is_noted() {
