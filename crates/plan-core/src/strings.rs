@@ -392,3 +392,206 @@ pub const WAVES_IN: &str = "in";
 pub const ARTICLE_A: &str = "a";
 /// The article before "Attack".
 pub const ARTICLE_AN: &str = "an";
+
+// ---------------------------------------------------------------------------
+// The vocabulary (`get_vocabulary`; S3's plan, E8)
+// ---------------------------------------------------------------------------
+
+/// A lock's lead before the stage: "from S6".
+pub const VOCABULARY_FROM: &str = "from";
+/// The Resonance Spire's lock while the seat holds no licence.
+pub const VOCABULARY_NEEDS_SPIRE_LICENCE: &str = "needs the Resonance Spire licence, which the Ledger awards at a settlement where your \
+     Generators run on two vents";
+
+/// The clock family.
+pub const FAMILY_CLOCK: &str = "Clock";
+/// The commander family.
+pub const FAMILY_COMMANDER: &str = "Commander";
+/// The own-beacon family.
+pub const FAMILY_OWN_BEACON: &str = "Own beacon";
+/// The aggregates family.
+pub const FAMILY_AGGREGATES: &str = "Aggregates";
+/// The enemy-knowledge family.
+pub const FAMILY_ENEMY_KNOWLEDGE: &str = "Enemy knowledge";
+/// The economy family.
+pub const FAMILY_ECONOMY: &str = "Economy";
+/// The capability family.
+pub const FAMILY_CAPABILITY: &str = "Capability licence and structure state";
+/// The mast-coverage family.
+pub const FAMILY_MAST_COVERAGE: &str = "Mast coverage";
+/// The playbook-state family.
+pub const FAMILY_PLAYBOOK_STATE: &str = "Playbook state";
+
+/// `segment_elapsed`.
+pub const PREDICATE_SEGMENT_ELAPSED: &str = "Time into the segment";
+/// `cmdr_hp_pct`.
+pub const PREDICATE_CMDR_HP_PCT: &str = "Commander's HP";
+/// `cmdr_took_damage_within`.
+pub const PREDICATE_CMDR_TOOK_DAMAGE: &str = "Commander took damage recently";
+/// `cmdr_deaths`.
+pub const PREDICATE_CMDR_DEATHS: &str = "Commander's deaths";
+/// `beacon_hp_pct`.
+pub const PREDICATE_BEACON_HP_PCT: &str = "A beacon's HP";
+/// `beacon_under_attack`.
+pub const PREDICATE_BEACON_UNDER_ATTACK: &str = "A beacon under attack";
+/// `beacon_powered`.
+pub const PREDICATE_BEACON_POWERED: &str = "A beacon powered or dormant";
+/// `beacon_units_by_role`.
+pub const PREDICATE_BEACON_UNITS_BY_ROLE: &str = "A beacon's units by role";
+/// `beacon_mandate`.
+pub const PREDICATE_BEACON_MANDATE: &str = "A beacon's mandate";
+/// `beacon_has_structure`.
+pub const PREDICATE_BEACON_HAS_STRUCTURE: &str = "A beacon's finished structure";
+/// `enemy_units_near`.
+pub const PREDICATE_ENEMY_UNITS_NEAR: &str = "Enemy units near";
+/// `enemy_beacon_known`.
+pub const PREDICATE_ENEMY_BEACON_KNOWN: &str = "An enemy beacon known";
+/// `enemy_structure_near`.
+pub const PREDICATE_ENEMY_STRUCTURE_NEAR: &str = "An enemy structure near";
+/// `treasury`.
+pub const PREDICATE_TREASURY: &str = "Treasury";
+/// `kw_headroom`.
+pub const PREDICATE_KW_HEADROOM: &str = "Grid headroom";
+/// `kw_supply`.
+pub const PREDICATE_KW_SUPPLY: &str = "Grid supply";
+/// `kw_draw`.
+pub const PREDICATE_KW_DRAW: &str = "Grid draw";
+/// `step_reached`.
+pub const PREDICATE_STEP_REACHED: &str = "The route reached a step";
+/// `rule_fired`.
+pub const PREDICATE_RULE_FIRED: &str = "A rule fired";
+
+/// The clock family's reserved rest.
+pub const RESERVED_CLOCK: &str = "The rest of the clock";
+/// The commander family's reserved rest.
+pub const RESERVED_COMMANDER: &str = "Commander's position";
+/// The own-beacon family's reserved rest.
+pub const RESERVED_OWN_BEACON: &str = "A beacon's reports since";
+/// The enemy-knowledge family's reserved rest.
+pub const RESERVED_ENEMY_KNOWLEDGE: &str = "The rest of enemy knowledge";
+/// The economy family's reserved rest.
+pub const RESERVED_ECONOMY: &str = "Income forecast";
+/// The playbook-state family's reserved rest.
+pub const RESERVED_PLAYBOOK_STATE: &str = "Posture";
+
+/// A comparison's operator.
+pub const VOCABULARY_COMPARED: &str = "Compared";
+/// A duration.
+pub const VOCABULARY_TIME: &str = "Time";
+/// A recent window.
+pub const VOCABULARY_WITHIN: &str = "Within";
+/// A percentage.
+pub const VOCABULARY_PERCENT: &str = "Percent";
+/// A count.
+pub const VOCABULARY_COUNT: &str = "Count";
+/// A beacon.
+pub const VOCABULARY_BEACON: &str = "Beacon";
+/// Powered or dormant.
+pub const VOCABULARY_POWERED: &str = "Powered";
+/// A unit role.
+pub const VOCABULARY_ROLE: &str = "Role";
+/// A mandate.
+pub const VOCABULARY_MANDATE: &str = "Mandate";
+/// The place an enemy predicate measures from.
+pub const VOCABULARY_NEAR: &str = "Near";
+/// A radius.
+pub const VOCABULARY_RADIUS: &str = "Radius";
+/// A freshness kind.
+pub const VOCABULARY_FRESHNESS: &str = "Freshness";
+/// A freshness window.
+pub const VOCABULARY_WINDOW: &str = "Seen within";
+/// An amount of money.
+pub const VOCABULARY_AMOUNT: &str = "Amount";
+/// An amount of power.
+pub const VOCABULARY_POWER: &str = "Power";
+/// A step label.
+pub const VOCABULARY_STEP: &str = "Step";
+/// A rule id.
+pub const VOCABULARY_RULE: &str = "Rule";
+/// The rules of engagement every writ shares.
+pub const VOCABULARY_ROE: &str = "Rules of engagement";
+/// The retreat threshold every writ shares.
+pub const VOCABULARY_RETREAT_HP: &str = "Retreat below HP";
+/// Build's repair threshold.
+pub const VOCABULARY_REPAIR: &str = "Repair below";
+/// Build's rebuild flag.
+pub const VOCABULARY_REBUILD: &str = "Rebuild destroyed";
+/// Build's terraform setting.
+pub const VOCABULARY_TERRAFORM: &str = "Terraform";
+/// Defend's engagement radius.
+pub const VOCABULARY_ENGAGEMENT: &str = "Engagement radius";
+/// Defend's pursue setting.
+pub const VOCABULARY_PURSUE: &str = "Pursue";
+/// Defend's picket.
+pub const VOCABULARY_PICKET: &str = "Picket scouts";
+/// Attack's target.
+pub const VOCABULARY_TARGET: &str = "Target";
+/// Attack's retarget rule.
+pub const VOCABULARY_RETARGET: &str = "Retarget";
+/// Attack's launch force.
+pub const VOCABULARY_FORCE: &str = "Launch at force";
+/// Attack's launch time.
+pub const VOCABULARY_LAUNCH: &str = "Launch at time";
+/// Attack's retreat force.
+pub const VOCABULARY_RETREAT_FORCE: &str = "Break off below";
+/// Attack's retreat time.
+pub const VOCABULARY_RETREAT_TIME: &str = "Break off after";
+/// Attack's after-action.
+pub const VOCABULARY_AFTER: &str = "After the attack";
+/// Attack's breach permission.
+pub const VOCABULARY_BREACH: &str = "Breach walls";
+/// Attack's waves.
+pub const VOCABULARY_WAVES: &str = "Waves";
+/// Survey's scouts.
+pub const VOCABULARY_SCOUTS: &str = "Scouts";
+/// Mine's dig depth.
+pub const VOCABULARY_DIG: &str = "Dig depth";
+/// Mine's flight.
+pub const VOCABULARY_FLEE: &str = "Flee on threat";
+/// Mine's seam choice.
+pub const VOCABULARY_SEAM: &str = "Seam";
+/// Mine's pillars.
+pub const VOCABULARY_PILLARS: &str = "Pillar spacing";
+/// A move's destination.
+pub const VOCABULARY_TO: &str = "To";
+/// A move's pace.
+pub const VOCABULARY_PACE: &str = "Pace";
+/// A placement's site.
+pub const VOCABULARY_AT: &str = "At";
+
+/// The `move` step.
+pub const STEP_TITLE_MOVE: &str = "Walk";
+/// The `interface` step.
+pub const STEP_TITLE_INTERFACE: &str = "Interface with a beacon";
+/// The `place_beacon` step.
+pub const STEP_TITLE_PLACE_BEACON: &str = "Place a beacon";
+/// The `wait_until` step.
+pub const STEP_TITLE_WAIT_UNTIL: &str = "Wait until";
+/// The `hold` step.
+pub const STEP_TITLE_HOLD: &str = "Hold";
+/// The `broadcast` step.
+pub const STEP_TITLE_BROADCAST: &str = "Broadcast";
+
+/// A blueprint parameter.
+pub const VOCABULARY_STRUCTURE: &str = "Structure";
+
+/// The Generator.
+pub const BLUEPRINT_GENERATOR: &str = "Generator";
+/// The autocannon.
+pub const BLUEPRINT_AUTOCANNON: &str = "Autocannon";
+/// The mortar.
+pub const BLUEPRINT_MORTAR: &str = "Mortar";
+/// The Survey post.
+pub const BLUEPRINT_SURVEY_POST: &str = "Survey post";
+/// The Resonance Spire.
+pub const BLUEPRINT_RESONANCE_SPIRE: &str = "Resonance Spire";
+/// A wall.
+pub const BLUEPRINT_WALL: &str = "Wall";
+
+/// A rendering whose line, character or chip count passed what it is
+/// counted in (E22): refused rather than saturated.
+pub const RENDER_COUNT_PAST_RANGE: &str =
+    "the rendering's line, character or chip count passed what it is counted in";
+/// A rules-table bound past what a chip's `int32` bound holds (E22).
+pub const RENDER_BOUND_PAST_RANGE: &str =
+    "the rules table bounds a value past what a chip's bound holds";

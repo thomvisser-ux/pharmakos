@@ -3,6 +3,176 @@
   "id": 1,
   "result": {
     "prose": "Hold & Build\nWritten from a built-in template.\nGrow the grid: place a Build beacon covering a heat vent you do not cover yet, with a Generator on the vent as its first target, and hold by it.\n\nRoute\n  1. place_power: place a beacon at a site covering the nearest heat vent you do not cover yet (nearest by travel, read when the step starts), tagged \"power\", on a Build mandate (16.5 s on site).\n    Give up after 1:00.\n    On failure, move on to the next step.\n  2. hold: hold for 30 s.\n\nRules\n  1. \"flee\", when the commander is at or below 40% HP and the commander took damage in the last 3 s:\n    1. flee_to_safety: walk to the safest own beacon.\n    2. flee_wait: hold for 8 s.\n    Then carry on with the route.\n    Fires at most 3 times, and no sooner than every 30 s.\n\nIf the commander dies\n  On respawn, carry on from the step the route was on.\n\nFallback\n  Stay with the safest own beacon.\n\nBudget\n  6 of 128 size units.\n  16.5 s standing at a beacon along the route.\n",
+    "rules": [
+      {
+        "pointer": "/declarative/route/0",
+        "line": 5,
+        "line_count": 3,
+        "chips": [
+          {
+            "pointer": "/declarative/route/0/place_beacon/at",
+            "line": 5,
+            "start": 36,
+            "end": 141,
+            "shape": {
+              "reference": {
+                "kind": "location",
+                "arms": [
+                  "voxel",
+                  "beacon_anchor",
+                  "safest",
+                  "covering"
+                ]
+              }
+            },
+            "value_json": "{\"covering\":{\"vent\":{\"rank\":\"NEAREST\",\"coverage\":\"UNCOVERED\"}}}"
+          },
+          {
+            "pointer": "/declarative/route/0/timeout_ms",
+            "line": 6,
+            "start": 18,
+            "end": 22,
+            "shape": {
+              "integer": {
+                "min": 0,
+                "unit": "ms"
+              }
+            },
+            "value_json": "60000"
+          }
+        ]
+      },
+      {
+        "pointer": "/declarative/route/1",
+        "line": 8,
+        "line_count": 1,
+        "chips": [
+          {
+            "pointer": "/declarative/route/1/hold/ms",
+            "line": 8,
+            "start": 20,
+            "end": 24,
+            "shape": {
+              "integer": {
+                "min": 1,
+                "unit": "ms"
+              }
+            },
+            "value_json": "30000"
+          }
+        ]
+      },
+      {
+        "pointer": "/declarative/handlers/0",
+        "line": 11,
+        "line_count": 5,
+        "chips": [
+          {
+            "pointer": "/declarative/handlers/0/when/all/items/0/cmdr_hp_pct/cmp",
+            "line": 11,
+            "start": 35,
+            "end": 46,
+            "shape": {
+              "choice": {
+                "values": [
+                  "\"LT\"",
+                  "\"LE\"",
+                  "\"EQ\"",
+                  "\"NE\"",
+                  "\"GE\"",
+                  "\"GT\""
+                ]
+              }
+            },
+            "value_json": "\"LE\""
+          },
+          {
+            "pointer": "/declarative/handlers/0/when/all/items/0/cmdr_hp_pct/pct",
+            "line": 11,
+            "start": 47,
+            "end": 49,
+            "shape": {
+              "integer": {
+                "min": 0,
+                "max": 100,
+                "unit": "%"
+              }
+            },
+            "value_json": "40"
+          },
+          {
+            "pointer": "/declarative/handlers/0/when/all/items/1/cmdr_took_damage_within/ms",
+            "line": 11,
+            "start": 96,
+            "end": 99,
+            "shape": {
+              "integer": {
+                "min": 0,
+                "unit": "ms"
+              }
+            },
+            "value_json": "3000"
+          },
+          {
+            "pointer": "/declarative/handlers/0/body/0/move/to",
+            "line": 12,
+            "start": 31,
+            "end": 52,
+            "shape": {
+              "reference": {
+                "kind": "location",
+                "arms": [
+                  "voxel",
+                  "beacon_anchor",
+                  "safest"
+                ]
+              }
+            },
+            "value_json": "{\"safest\":{}}"
+          },
+          {
+            "pointer": "/declarative/handlers/0/body/1/hold/ms",
+            "line": 13,
+            "start": 27,
+            "end": 30,
+            "shape": {
+              "integer": {
+                "min": 1,
+                "unit": "ms"
+              }
+            },
+            "value_json": "8000"
+          },
+          {
+            "pointer": "/declarative/handlers/0/max_fires",
+            "line": 15,
+            "start": 18,
+            "end": 19,
+            "shape": {
+              "integer": {
+                "min": 1,
+                "max": 8,
+                "unit": ""
+              }
+            },
+            "value_json": "3"
+          },
+          {
+            "pointer": "/declarative/handlers/0/cooldown_ms",
+            "line": 15,
+            "start": 52,
+            "end": 56,
+            "shape": {
+              "integer": {
+                "min": 5000,
+                "unit": "ms"
+              }
+            },
+            "value_json": "30000"
+          }
+        ]
+      }
+    ],
     "_status": {
       "phase": "lull",
       "phase_remaining_ms": 600000,

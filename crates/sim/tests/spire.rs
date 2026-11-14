@@ -503,6 +503,8 @@ const GROWS: &[&str] = &[
     "gateway:targeting.rs::covering_beacon",
     "gateway:targeting.rs::read_placement",
     "gateway:surface.rs::push_own_licence_facts",
+    // `BeaconSummary.sphere_radius_voxels`, the ring the client draws (E3).
+    "gateway:surface/knowledge.rs::beacon_summary",
 ];
 
 /// The readers decision 6 says keep the base row, by name.

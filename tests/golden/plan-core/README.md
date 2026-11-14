@@ -15,6 +15,12 @@ Three kinds of golden live here, and they fail for different reasons:
   round-trip").
 * `expected.canonical.json` — the canonical form the writer emits.
 * `expected.prose.txt` — `render_plan`'s English rendering.
+* `expected.chips.txt` — from S3's `gwr`, the rule list's chips beside that
+  rendering (S3's plan, E8): each route step and rule by its JSON Pointer, the
+  lines of the prose it takes, and each chip on them — its line and code-point
+  span, the words it marks, its pointer, its shape (`integer min..max unit`,
+  `choice` with the values, or `reference KIND [arms]`) and its value as compact
+  canonical JSON.
 
 ## What a diff means
 
@@ -26,6 +32,14 @@ Three kinds of golden live here, and they fail for different reasons:
   handling changed. `report_hash` is a pure function of the playbook bytes, so a
   canonical-form change moves every verifier golden with it — if this moved and
   `verifier/` did not, one of the two is wrong.
+* **The chips moved.** A value is chipped or not where it was, a span, a shape's
+  bounds or a reference's arms changed. The prose itself cannot have moved with
+  them — the producing test asserts the chips' prose is `render_plan`'s — so a
+  chips diff is a change in what the rule list offers to edit. A bound that
+  moved is the verifier's: `an_integer_chips_bounds_are_the_verifiers` holds
+  every integer chip's bounds to the verifier's own checks, and a reference's
+  `place_beacon` arms drop `toward` while the verifier refuses it (`E0028`), so
+  they gain it in the build whose verifier lifts the refusal.
 * **The prose moved.** Either a template string changed (say so; it is the one
   the player reads) or the plan itself renders differently, which is a semantic
   change wearing a typographic disguise. The prose says **nothing** about the
@@ -48,6 +62,7 @@ Three kinds of golden live here, and they fail for different reasons:
 | `awkward/` | `expected.canonical.json` | that fixture's canonical JSON, comments stripped |
 | `cover_the_nearest_vent/` | `expected.jsonc` | the same, from `crates/plan-core/tests/cases/cover_the_nearest_vent.jsonc` (S1, task `tgtv`) |
 | `cover_the_nearest_vent/` | `expected.prose.txt` | that fixture's `render_plan` |
+| `expand_east/`, `cover_the_nearest_vent/`, `defend_and_attack/`, `predicates_and_toward/` | `expected.chips.txt` | each case's `render`, in `every_rendered_case_has_its_chips_golden_and_keeps_their_promises` (S3's `gwr`) |
 
 `expand_east/` has no `expected.canonical.json` of its own on purpose: its
 canonical JSON is byte-identical to `tests/golden/proto/expected.expand_east.json`,

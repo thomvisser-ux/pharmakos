@@ -234,11 +234,32 @@ fn licence_name(value: i64) -> String {
     let named = i32::try_from(value)
         .ok()
         .and_then(|value| pharmakos_proto::gp::v1::Licence::try_from(value).ok());
-    match named {
-        Some(pharmakos_proto::gp::v1::Licence::ResonanceSpire) => String::from("Resonance Spire"),
-        Some(pharmakos_proto::gp::v1::Licence::Unspecified) | None => {
-            format!("a licence this build does not name (code {value})")
-        }
+    match named.and_then(licence_title) {
+        Some(title) => String::from(title),
+        None => format!("a licence this build does not name (code {value})"),
+    }
+}
+
+/// A licence's name in the player's words, or `None` for the enum's
+/// unspecified zero, which names no licence.
+#[must_use]
+pub const fn licence_title(licence: pharmakos_proto::gp::v1::Licence) -> Option<&'static str> {
+    match licence {
+        pharmakos_proto::gp::v1::Licence::ResonanceSpire => Some("Resonance Spire"),
+        pharmakos_proto::gp::v1::Licence::Unspecified => None,
+    }
+}
+
+/// The recap's licence line for the calling seat's own awards at this
+/// settlement (spec section 8: "announced in the recap"): "Licence awarded:
+/// Resonance Spire." `None` when `titles` is empty: the recap says nothing
+/// when no licence was awarded.
+#[must_use]
+pub fn licences_awarded(titles: &[&str]) -> Option<String> {
+    match titles.split_last() {
+        None => None,
+        Some((last, [])) => Some(format!("Licence awarded: {last}.")),
+        Some((last, rest)) => Some(format!("Licences awarded: {} and {last}.", rest.join(", "))),
     }
 }
 
@@ -576,6 +597,43 @@ pub const MEMO_DARK_STAKE: &str = "Notice of loss. A Stake has gone dark. Its wo
 pub const MEMO_FIRST_DEATH: &str = "Notice of absence. Your Keybearer was lost and will return \
      at your core after the usual delay, or at your nearest beacon if the core is gone. Nothing \
      you sealed changes in the meantime.";
+
+/// The first licence's memo: what it now allows (S3's `gwr`; decision 4's
+/// copy). `vents` is the rules table's `licences.resonance_vents` and
+/// `title` the licence's name ([`licence_title`]), so the memo says what
+/// this build's rules ask, never a number of its own.
+#[must_use]
+pub fn memo_first_licence(vents: core::num::NonZeroU32, title: &str) -> String {
+    let vents = vents.get();
+    let counted = if vents == 1 {
+        format!("{} vent", number_word(vents))
+    } else {
+        format!("{} vents", number_word(vents))
+    };
+    format!(
+        "Notice of licence. You ran Generators on {counted} at settlement. You may now queue a \
+         {title} at any of your beacons."
+    )
+}
+
+/// A count as the Ledger's prose writes it: in words to ten, in figures past.
+fn number_word(many: u32) -> String {
+    let word = match many {
+        0 => "no",
+        1 => "one",
+        2 => "two",
+        3 => "three",
+        4 => "four",
+        5 => "five",
+        6 => "six",
+        7 => "seven",
+        8 => "eight",
+        9 => "nine",
+        10 => "ten",
+        _ => return many.to_string(),
+    };
+    word.to_owned()
+}
 
 /// `get_briefing`'s prose.
 ///
@@ -1023,6 +1081,44 @@ mod tests {
         assert_eq!(
             event_text(&event(EventKind::LicenceAwarded, Some(0), 9)),
             "The Ledger awarded seat 0 a licence: a licence this build does not name (code 9)."
+        );
+    }
+
+    /// S3's `gwr` (decision 4's copy): the first-licence memo says the rules
+    /// table's vent count and the licence's name, in one line of single
+    /// spaces.
+    #[test]
+    fn the_first_licence_memo_says_the_rules_count_and_the_licences_name() {
+        let vents = |n| core::num::NonZeroU32::new(n).expect("a count");
+        assert_eq!(
+            super::memo_first_licence(vents(2), "Resonance Spire"),
+            "Notice of licence. You ran Generators on two vents at settlement. You may now \
+             queue a Resonance Spire at any of your beacons."
+        );
+        assert_eq!(
+            super::memo_first_licence(vents(1), "Resonance Spire"),
+            "Notice of licence. You ran Generators on one vent at settlement. You may now \
+             queue a Resonance Spire at any of your beacons."
+        );
+        assert!(super::memo_first_licence(vents(12), "X").contains("on 12 vents at"));
+    }
+
+    /// S3's `gwr`: the recap's licence line names each licence, and says
+    /// nothing when none was awarded.
+    #[test]
+    fn the_recaps_licence_line_names_each_award() {
+        assert_eq!(super::licences_awarded(&[]), None);
+        assert_eq!(
+            super::licences_awarded(&["Resonance Spire"]).as_deref(),
+            Some("Licence awarded: Resonance Spire.")
+        );
+        assert_eq!(
+            super::licences_awarded(&["A", "B", "C"]).as_deref(),
+            Some("Licences awarded: A, B and C.")
+        );
+        assert_eq!(
+            super::licence_title(pharmakos_proto::gp::v1::Licence::Unspecified),
+            None
         );
     }
 
