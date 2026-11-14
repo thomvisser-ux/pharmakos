@@ -80,6 +80,12 @@ pub(crate) fn text_to_encoded(full_name: &str, text: &str) -> Option<Encoded> {
     Some(Encoded::new(reader.out, reader.plain))
 }
 
+/// Whether the schema holds a message of this type, which is the one reason
+/// [`text_to_encoded`] declines that is not about the text.
+pub(crate) fn knows(full_name: &str) -> bool {
+    index().find(full_name).is_some()
+}
+
 /// One member an object wrote: its field, and where its bytes sit in `out`.
 #[derive(Clone, Copy)]
 struct Member {

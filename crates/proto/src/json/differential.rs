@@ -30,7 +30,7 @@ use super::direct;
 use super::index::{IndexedField, index};
 use super::reference;
 use super::{
-    Error, Json, canonicalise, decode_json_encoded, json_to_encoded, json_to_wire, read,
+    Direct, Error, Json, canonicalise, decode_json_encoded, json_to_encoded, json_to_wire, read,
     wire_to_json, write, write_wire, write_wire_into,
 };
 use crate::descriptor::{ScalarKind, schema};
@@ -423,12 +423,22 @@ fn agree_on_wire(full_name: &str, bytes: &[u8]) {
 /// fingerprint cleared, which is what a plan fingerprint is taken over —
 /// whenever the bytes are plain. Returns whether they were.
 fn agree_on_playbook(value: &Json) -> Option<bool> {
-    let decoded = decode_json_encoded::<Playbook>(value).ok()?;
     let text = write(value);
+    // The direct reader answers `Wire` exactly when the exact path decodes,
+    // plain bytes or not, so a regression in it fails here and not only in a
+    // timing (PR #177's review).
+    let direct = super::decode_direct::<Playbook>(&text);
+    let Ok(decoded) = decode_json_encoded::<Playbook>(value) else {
+        assert!(
+            matches!(direct, Direct::NeedsExactPath(_)),
+            "decode_direct answered a playbook the exact path refuses: {text}"
+        );
+        return None;
+    };
     assert_eq!(
-        super::decode_direct::<Playbook>(&text).as_ref(),
-        Some(&decoded),
-        "decode_direct"
+        direct,
+        Direct::Wire(decoded.clone()),
+        "decode_direct: {text}"
     );
     assert_eq!(
         super::decode_encoded::<Playbook>(&text).as_ref(),

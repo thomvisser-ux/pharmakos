@@ -173,14 +173,14 @@ pub(crate) fn run(bytes: &[u8], out: &mut Builder) -> Option<Decoded> {
     };
 
     let decoded = match json::decode_direct::<Playbook>(text) {
-        Some(decoded) => {
+        json::Direct::Wire(decoded) => {
             let fingerprint = pharmakos_sim::hash::plan_fingerprint_of(&decoded).ok();
             Decoded {
                 playbook: decoded.into_message(),
                 fingerprint,
             }
         }
-        None => diagnose(text, out)?,
+        json::Direct::NeedsExactPath(_) => diagnose(text, out)?,
     };
 
     check_version(&decoded.playbook, out);

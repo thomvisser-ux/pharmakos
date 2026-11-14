@@ -88,28 +88,77 @@ pub fn decode<M: Message + Name + Default>(text: &str) -> Result<M, Error> {
 /// As [`decode`].
 pub fn decode_encoded<M: Message + Name + Default>(text: &str) -> Result<Decoded<M>, Error> {
     match decode_direct(text) {
-        Some(decoded) => Ok(decoded),
-        None => decode_json_encoded(&read(text)?),
+        Direct::Wire(decoded) => Ok(decoded),
+        Direct::NeedsExactPath(_) => decode_json_encoded(&read(text)?),
     }
 }
 
-/// A message read from JSON text in one pass, without a [`Json`] tree, or
-/// `None` when the text is not one [`read`] then [`decode_json_encoded`]
-/// accept.
+/// What [`decode_direct`] answers.
 ///
-/// When it answers, the answer is theirs: the same message, the same wire
-/// bytes, the same [`Encoded::is_plain`]. When it does not, they are the
-/// answer, and it is an error with a pointer and a message; this function
-/// never gives a reason of its own, so the codec has one set of errors (S3's
-/// `vfyq`, decisions-log item 158). A caller that wants the error asks them,
-/// as [`decode_encoded`] does; a caller that also wants the tree for its own
-/// diagnostics, such as the verifier's decode stage, reads it then.
+/// **Not part of the codec's API.** See [`decode_direct`].
+#[doc(hidden)]
+#[derive(Clone, PartialEq, Debug)]
+pub enum Direct<M> {
+    /// The direct reader decoded the text: the message and the wire bytes
+    /// [`read`] then [`decode_json_encoded`] would have answered.
+    Wire(Decoded<M>),
+    /// The direct reader left the text to the exact path, which is the
+    /// answer, for the reason given.
+    NeedsExactPath(ExactPath),
+}
+
+/// Why [`decode_direct`] left a text to the exact path. None of these is a
+/// reason to show anyone: the exact path's error is, with its pointer.
+///
+/// **Not part of the codec's API.** See [`decode_direct`].
+#[doc(hidden)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ExactPath {
+    /// The message's type is not in the checked-in descriptor set.
+    UnknownMessage,
+    /// The text is not one the codec accepts as the message: its syntax, a
+    /// member, or a value. The exact path says which, and where.
+    TextRefused,
+    /// The text read to wire bytes prost would not decode. The exact path
+    /// reports prost's refusal in its own words.
+    WireRefused,
+}
+
+/// A message read from JSON text in one pass, without a [`Json`] tree, or the
+/// reason the exact path ([`read`] then [`decode_json_encoded`]) has to answer
+/// instead.
+///
+/// **Not part of the codec's API.** It exists for one caller, the verifier's
+/// decode stage, which wants the tree for its own diagnostics when the text
+/// does not decode, and so asks for it itself; every other caller wants
+/// [`decode`] or [`decode_encoded`], which answer the same and never need the
+/// exact path asked separately. `crates/verifier/tests/confinement.rs` holds
+/// the verifier to being its only caller outside this module.
+///
+/// When it answers [`Direct::Wire`], the answer is the exact path's: the same
+/// message, the same wire bytes, the same [`Encoded::is_plain`]. When it does
+/// not, the exact path is the answer, and it is an error with a pointer and a
+/// message; this function never gives a sentence of its own, so the codec has
+/// one set of errors (S3's `vfyq`, decisions-log item 158). The differential
+/// tests and the verifier's fuzz run hold it to answering [`Direct::Wire`]
+/// whenever the exact path decodes, so a regression in the direct reader fails
+/// a test rather than only a timing.
+#[doc(hidden)]
 #[must_use]
-pub fn decode_direct<M: Message + Name + Default>(text: &str) -> Option<Decoded<M>> {
-    let encoded = direct::text_to_encoded(&M::full_name(), text)?;
+pub fn decode_direct<M: Message + Name + Default>(text: &str) -> Direct<M> {
+    let full_name = M::full_name();
+    let Some(encoded) = direct::text_to_encoded(&full_name, text) else {
+        return Direct::NeedsExactPath(if direct::knows(&full_name) {
+            ExactPath::TextRefused
+        } else {
+            ExactPath::UnknownMessage
+        });
+    };
     // A prost refusal is the exact path's to report, with its own sentence.
-    let message = M::decode(encoded.bytes()).ok()?;
-    Some(Decoded { message, encoded })
+    match M::decode(encoded.bytes()) {
+        Ok(message) => Direct::Wire(Decoded { message, encoded }),
+        Err(_) => Direct::NeedsExactPath(ExactPath::WireRefused),
+    }
 }
 
 /// A message read from an already-parsed canonical JSON value.

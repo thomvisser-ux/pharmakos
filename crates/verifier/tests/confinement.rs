@@ -104,13 +104,19 @@ const BANNED: &[(&str, &str)] = &[
 ///
 /// `std::fs::read_dir` is on `clippy.toml`'s disallowed list because directory
 /// order differs between ext4, NTFS and APFS. The sanctioned use is exactly this
-/// one: collect, sort, then use.
+/// one: collect, sort, then use, in [`rust_files_under`].
+fn sources() -> Vec<PathBuf> {
+    rust_files_under(PathBuf::from("src"))
+}
+
+/// Every `.rs` file under `root`, in path order, leaving out any `target`
+/// directory. The same sanctioned use of `read_dir` as [`sources`].
 #[allow(
     clippy::disallowed_methods,
     reason = "clippy.toml's own reason string sanctions read_dir when the listing is collected and sorted before use, which is what happens below"
 )]
-fn sources() -> Vec<PathBuf> {
-    let mut stack: Vec<PathBuf> = vec![PathBuf::from("src")];
+fn rust_files_under(root: PathBuf) -> Vec<PathBuf> {
+    let mut stack: Vec<PathBuf> = vec![root];
     let mut found: Vec<PathBuf> = Vec::new();
     while let Some(directory) = stack.pop() {
         let Ok(entries) = std::fs::read_dir(&directory) else {
@@ -122,6 +128,9 @@ fn sources() -> Vec<PathBuf> {
         here.sort();
         for path in here {
             if path.is_dir() {
+                if path.file_name().is_some_and(|name| name == "target") {
+                    continue;
+                }
                 stack.push(path);
             } else if path.extension().is_some_and(|extension| extension == "rs") {
                 found.push(path);
@@ -558,4 +567,51 @@ fn the_fallback_scan_finds_what_it_looks_for() {
         found.iter().any(|(file, _)| file == "walking.rs"),
         "the fallback scan no longer sees walking.rs' kept conversion"
     );
+}
+
+/// Whether a path (relative to this crate, with `/` separators) is the
+/// codec's own, where `decode_direct` is defined and tested, or this crate's.
+fn may_call_decode_direct(shown: &str) -> bool {
+    shown.starts_with("../proto/src/json") || shown.starts_with("../verifier/")
+}
+
+/// `pharmakos_proto::json::decode_direct` is hidden from the codec's API and
+/// has one caller outside the codec: this crate's decode stage, which wants
+/// the tree for its own diagnostics when a text does not decode and so asks
+/// for the exact path itself (PR #177's review). Any other crate wants
+/// `json::decode` or `json::decode_encoded`, which answer the same.
+#[test]
+fn the_direct_reader_has_one_caller_outside_the_codec() {
+    let mut seen: Vec<String> = Vec::new();
+    for root in [PathBuf::from(".."), PathBuf::from("../../xtask")] {
+        for path in rust_files_under(root) {
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            if all_lines(&text)
+                .iter()
+                .any(|(_, line)| line.contains("decode_direct"))
+            {
+                seen.push(path.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    let strays: Vec<&String> = seen
+        .iter()
+        .filter(|shown| !may_call_decode_direct(shown))
+        .collect();
+    assert!(
+        strays.is_empty(),
+        "`json::decode_direct` is the verifier's decode stage's alone; call `json::decode` or \
+         `json::decode_encoded` instead:\n{strays:?}"
+    );
+    // The walk sees the definition and the one call, or the assertion above
+    // passes over nothing.
+    for expected in ["../proto/src/json.rs", "../verifier/src/decode.rs"] {
+        assert!(
+            seen.iter().any(|shown| shown == expected),
+            "the walk no longer sees {expected}: {seen:?}"
+        );
+    }
+    assert!(!may_call_decode_direct("../gateway/src/surface.rs"));
 }
