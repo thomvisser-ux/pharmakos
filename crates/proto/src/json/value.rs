@@ -101,7 +101,9 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {}
 
 /// Appends one RFC 6901 token to a pointer, escaping `~` and `/` as the
-/// standard requires.
+/// standard requires. The codec now carries a lazy `Path`; this is the
+/// reference's, and the tests'.
+#[cfg(test)]
 pub(crate) fn push_pointer(base: &str, token: &str) -> String {
     let mut pointer = String::with_capacity(base.len().saturating_add(token.len()) + 1);
     pointer.push_str(base);
@@ -134,7 +136,11 @@ pub(crate) fn push_pointer(base: &str, token: &str) -> String {
 /// document tree yet.
 pub fn read(text: &str) -> Result<Json, Error> {
     let bytes = text.as_bytes();
-    let mut reader = JsonReader { bytes, pos: 0 };
+    let mut reader = JsonReader {
+        text,
+        bytes,
+        pos: 0,
+    };
     reader.skip_whitespace();
     let value = reader.value(0)?;
     reader.skip_whitespace();
@@ -151,6 +157,7 @@ pub fn read(text: &str) -> Result<Json, Error> {
 const MAX_DEPTH: usize = 64;
 
 struct JsonReader<'a> {
+    text: &'a str,
     bytes: &'a [u8],
     pos: usize,
 }
@@ -283,6 +290,24 @@ impl JsonReader<'_> {
         self.expect(b'"')?;
         let mut out = String::new();
         loop {
+            // Copy the run of bytes up to the next quote, backslash or control
+            // character in one piece. Each of those is ASCII, so a run never
+            // ends inside a UTF-8 sequence, and the input is a `&str`, so the
+            // run is well formed.
+            let start = self.pos;
+            while let Some(byte) = self.peek() {
+                if byte == b'"' || byte == b'\\' || byte < 0x20 {
+                    break;
+                }
+                self.bump();
+            }
+            if self.pos > start {
+                let run = self
+                    .text
+                    .get(start..self.pos)
+                    .ok_or_else(|| self.error("invalid UTF-8 in a string"))?;
+                out.push_str(run);
+            }
             let byte = self
                 .peek()
                 .ok_or_else(|| self.error("unterminated string"))?;
@@ -295,29 +320,8 @@ impl JsonReader<'_> {
                     self.bump();
                     self.escape(&mut out)?;
                 }
-                0x00..=0x1f => {
-                    return Err(self.error("a raw control character in a string"));
-                }
                 _ => {
-                    // Copy one whole UTF-8 sequence, which `str` guarantees is
-                    // well formed because the input was a `&str`.
-                    let start = self.pos;
-                    self.bump();
-                    while let Some(next) = self.peek() {
-                        if next & 0xc0 == 0x80 {
-                            self.bump();
-                        } else {
-                            break;
-                        }
-                    }
-                    let slice = self
-                        .bytes
-                        .get(start..self.pos)
-                        .ok_or_else(|| self.error("truncated UTF-8"))?;
-                    out.push_str(
-                        std::str::from_utf8(slice)
-                            .map_err(|_| self.error("invalid UTF-8 in a string"))?,
-                    );
+                    return Err(self.error("a raw control character in a string"));
                 }
             }
         }
@@ -488,22 +492,37 @@ fn write_value(value: &Json, depth: usize, out: &mut String) {
     }
 }
 
-fn write_string(text: &str, out: &mut String) {
+/// A string as canonical JSON: quoted, with `"`, `\` and the control
+/// characters escaped and everything else as it is.
+pub(crate) fn write_string(text: &str, out: &mut String) {
     out.push('"');
-    for character in text.chars() {
-        match character {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\u{8}' => out.push_str("\\b"),
-            '\u{c}' => out.push_str("\\f"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            other if u32::from(other) < 0x20 => {
-                let _ignored = write!(out, "\\u{:04x}", u32::from(other));
+    // The text between two characters that need an escape is copied in one
+    // piece; each piece ends with the character that ends it, if any.
+    for piece in text.split_inclusive(needs_escape) {
+        let mut characters = piece.chars();
+        match characters.next_back() {
+            Some(last) if needs_escape(last) => {
+                out.push_str(characters.as_str());
+                match last {
+                    '"' => out.push_str("\\\""),
+                    '\\' => out.push_str("\\\\"),
+                    '\u{8}' => out.push_str("\\b"),
+                    '\u{c}' => out.push_str("\\f"),
+                    '\n' => out.push_str("\\n"),
+                    '\r' => out.push_str("\\r"),
+                    '\t' => out.push_str("\\t"),
+                    other => {
+                        let _ignored = write!(out, "\\u{:04x}", u32::from(other));
+                    }
+                }
             }
-            other => out.push(other),
+            _ => out.push_str(piece),
         }
     }
     out.push('"');
+}
+
+/// Whether a character is written escaped: `"`, `\` and the C0 controls.
+const fn needs_escape(character: char) -> bool {
+    matches!(character, '"' | '\\' | '\u{0}'..='\u{1f}')
 }

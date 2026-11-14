@@ -23,9 +23,18 @@
 
 pub mod base64;
 mod codec;
+#[cfg(test)]
+mod differential;
+mod direct;
+mod index;
+mod path;
+#[cfg(test)]
+mod reference;
 mod value;
 
-pub use codec::{json_to_wire, wire_to_json};
+pub use codec::{
+    Encoded, json_to_encoded, json_to_wire, wire_to_json, write_wire, write_wire_into,
+};
 pub use value::{Error, Json, read, write};
 
 use prost::{Message, Name};
@@ -38,7 +47,9 @@ use prost::{Message, Name};
 /// schema declares something the canonical form cannot express — a
 /// floating-point field, for instance, which this codec refuses on principle.
 pub fn encode<M: Message + Name>(message: &M) -> Result<String, Error> {
-    Ok(write(&encode_json(message)?))
+    // Straight from the wire to the text: what `write(&encode_json(message)?)`
+    // answers, without the tree in between (S3's `vfyq`).
+    write_wire(&M::full_name(), &message.encode_to_vec())
 }
 
 /// A message as a canonical JSON value, without rendering it to text.
@@ -63,7 +74,42 @@ pub fn encode_json<M: Message + Name>(message: &M) -> Result<Json, Error> {
 /// declare, if a value does not fit its field, or if two members of one
 /// `oneof` are set at once.
 pub fn decode<M: Message + Name + Default>(text: &str) -> Result<M, Error> {
-    decode_json(&read(text)?)
+    decode_encoded(text).map(Decoded::into_message)
+}
+
+/// [`decode`], keeping the wire bytes the message was decoded from.
+///
+/// The answer is exactly [`decode_json_encoded`]'s over [`read`]'s: the
+/// direct reader ([`decode_direct`]) answers when it can, and the exact path
+/// answers when it cannot, which is when there is an error to report.
+///
+/// # Errors
+///
+/// As [`decode`].
+pub fn decode_encoded<M: Message + Name + Default>(text: &str) -> Result<Decoded<M>, Error> {
+    match decode_direct(text) {
+        Some(decoded) => Ok(decoded),
+        None => decode_json_encoded(&read(text)?),
+    }
+}
+
+/// A message read from JSON text in one pass, without a [`Json`] tree, or
+/// `None` when the text is not one [`read`] then [`decode_json_encoded`]
+/// accept.
+///
+/// When it answers, the answer is theirs: the same message, the same wire
+/// bytes, the same [`Encoded::is_plain`]. When it does not, they are the
+/// answer, and it is an error with a pointer and a message; this function
+/// never gives a reason of its own, so the codec has one set of errors (S3's
+/// `vfyq`, decisions-log item 158). A caller that wants the error asks them,
+/// as [`decode_encoded`] does; a caller that also wants the tree for its own
+/// diagnostics, such as the verifier's decode stage, reads it then.
+#[must_use]
+pub fn decode_direct<M: Message + Name + Default>(text: &str) -> Option<Decoded<M>> {
+    let encoded = direct::text_to_encoded(&M::full_name(), text)?;
+    // A prost refusal is the exact path's to report, with its own sentence.
+    let message = M::decode(encoded.bytes()).ok()?;
+    Some(Decoded { message, encoded })
 }
 
 /// A message read from an already-parsed canonical JSON value.
@@ -72,14 +118,55 @@ pub fn decode<M: Message + Name + Default>(text: &str) -> Result<M, Error> {
 ///
 /// As [`decode`].
 pub fn decode_json<M: Message + Name + Default>(value: &Json) -> Result<M, Error> {
+    decode_json_encoded(value).map(Decoded::into_message)
+}
+
+/// A message decoded from canonical JSON, with the wire bytes it was decoded
+/// from.
+///
+/// The two travel together, and only [`decode_json_encoded`] makes one, so the
+/// bytes are always the ones this message was decoded from: a caller that
+/// wants canonical text for the message can write it from them
+/// ([`write_wire`]) without encoding the message again, when
+/// [`Encoded::is_plain`] says the text would be the same.
+#[derive(Clone, PartialEq, Debug)]
+pub struct Decoded<M> {
+    message: M,
+    encoded: Encoded,
+}
+
+impl<M> Decoded<M> {
+    /// The message.
+    pub const fn message(&self) -> &M {
+        &self.message
+    }
+
+    /// The message, without the bytes.
+    pub fn into_message(self) -> M {
+        self.message
+    }
+
+    /// The wire bytes the message was decoded from.
+    pub const fn encoded(&self) -> &Encoded {
+        &self.encoded
+    }
+}
+
+/// [`decode_json`], keeping the wire bytes the message was decoded from.
+///
+/// # Errors
+///
+/// As [`decode`].
+pub fn decode_json_encoded<M: Message + Name + Default>(value: &Json) -> Result<Decoded<M>, Error> {
     let full_name = M::full_name();
-    let bytes = json_to_wire(&full_name, value)?;
-    M::decode(bytes.as_slice()).map_err(|error| {
+    let encoded = json_to_encoded(&full_name, value)?;
+    let message = M::decode(encoded.bytes()).map_err(|error| {
         Error::at(
             "",
             format!("`{full_name}` did not decode from its own encoding: {error}"),
         )
-    })
+    })?;
+    Ok(Decoded { message, encoded })
 }
 
 /// Canonicalises a JSON text for a named message type: read it, check it
@@ -102,5 +189,5 @@ pub fn decode_json<M: Message + Name + Default>(value: &Json) -> Result<M, Error
 pub fn canonicalise(full_name: &str, text: &str) -> Result<String, Error> {
     let value = read(text)?;
     let bytes = json_to_wire(full_name, &value)?;
-    Ok(write(&wire_to_json(full_name, &bytes)?))
+    write_wire(full_name, &bytes)
 }
