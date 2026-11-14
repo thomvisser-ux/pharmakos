@@ -807,11 +807,9 @@ fn an_advisor_is_refused_every_method_off_its_allow_list() {
             (String::from("get_segment_feed"), String::from("ok")),
             (String::from("end_lull"), String::from("FORBIDDEN_SCOPE")),
             (String::from("query_area"), String::from("FORBIDDEN_SCOPE")),
-            // Off the list until S3's `gwr` serves it.
-            (
-                String::from("get_vocabulary"),
-                String::from("FORBIDDEN_SCOPE"),
-            ),
+            // On the list from S3's `gwr`, which serves it: a docs read about
+            // the seat alone, which disturbs nobody's state.
+            (String::from("get_vocabulary"), String::from("ok")),
         ])
         .collect();
     assert_eq!(answers, expected);
@@ -832,7 +830,6 @@ fn an_advisor_is_refused_every_method_off_its_allow_list() {
         .collect();
     wanted.push(String::from("call end_lull"));
     wanted.push(String::from("call query_area"));
-    wanted.push(String::from("call get_vocabulary"));
     assert_eq!(refusals, wanted);
 
     // And the seat's store is exactly as it was, but for the advice itself.
@@ -1318,7 +1315,8 @@ fn another_seats_beacon_carries_its_owner_and_what_decision_5_shows() {
                         "priority",
                         "powered",
                         "hp",
-                        "max_hp"
+                        "max_hp",
+                        "sphere_radius_voxels"
                     ],
                     "{policy:?}: an own beacon"
                 );

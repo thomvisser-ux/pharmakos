@@ -2892,3 +2892,608 @@ fn a_playbook_this_build_cannot_execute_is_a_method_error_and_keeps_the_old_seal
         "the refusals changed nothing about what seat 0 had sealed"
     );
 }
+
+// ---------------------------------------------------------------------------
+// S3's `gwr`: the rule list's reads and the licences on the wire
+// ---------------------------------------------------------------------------
+
+/// The committed worked example, which every rendering golden starts from.
+fn worked_example() -> String {
+    fs::read_to_string(
+        workspace_root()
+            .join("examples")
+            .join("playbooks")
+            .join("expand_east.jsonc"),
+    )
+    .expect("the worked example")
+}
+
+/// The array member `key`, or a panic naming what it is instead.
+fn array_of(value: &Json, key: &str) -> Vec<Json> {
+    match value.get(key) {
+        Some(Json::Array(items)) => items.clone(),
+        other => panic!("`{key}` is an array, and it is {other:?}"),
+    }
+}
+
+/// E8: `render_plan` answers, beside the unchanged prose, each step and rule
+/// with its lines and its chips, as plan-core places them, with each chip's
+/// shape spelt on the JSON-RPC wire (a reference's kind lower case) and its
+/// value as compact canonical JSON.
+#[test]
+fn render_plan_answers_each_rule_with_its_lines_and_chips() {
+    let mut surface = hosted();
+    let token = seat_token(&mut surface, 0);
+    let mut left = FIRST_LULL_MS;
+    let example = worked_example();
+    let rendered = result(
+        &call(
+            &mut surface,
+            &token,
+            &mut left,
+            "render_plan",
+            &format!(r#"{{"playbook_jsonc":{}}}"#, quote(&example)),
+        ),
+        "render_plan",
+    );
+    let prose = text_of(&rendered, "prose");
+    let rules = array_of(&rendered, "rules");
+    let pointers: Vec<String> = rules.iter().map(|rule| text_of(rule, "pointer")).collect();
+    assert_eq!(
+        pointers.first().map(String::as_str),
+        Some("/declarative/route/0"),
+        "{pointers:?}"
+    );
+    assert!(
+        pointers
+            .iter()
+            .any(|pointer| pointer == "/declarative/handlers/0"),
+        "{pointers:?}"
+    );
+    let first = rules.first().expect("a first step");
+    assert_eq!(first.get("line"), Some(&Json::Number(String::from("4"))));
+    let chips = array_of(first, "chips");
+    let to = chips.first().expect("the walk's destination");
+    assert_eq!(text_of(to, "pointer"), "/declarative/route/0/move/to");
+    assert_eq!(
+        text_of(to, "value_json"),
+        r#"{"voxel":{"x":96,"y":11,"z":62}}"#
+    );
+    let shape = to
+        .get("shape")
+        .and_then(|shape| shape.get("reference"))
+        .expect("a reference shape");
+    assert_eq!(text_of(shape, "kind"), "location");
+    assert_eq!(
+        array_of(shape, "arms"),
+        ["voxel", "beacon_anchor", "safest"].map(|arm| Json::String(String::from(arm)))
+    );
+    // The span marks the words the prose shows for the value.
+    let number = |key: &str| match to.get(key) {
+        Some(Json::Number(text)) => text.parse::<usize>().expect("a span"),
+        other => panic!("`{key}` is a number, and it is {other:?}"),
+    };
+    let line = prose.lines().nth(number("line")).expect("the chip's line");
+    let marked: String = line
+        .chars()
+        .skip(number("start"))
+        .take(number("end").saturating_sub(number("start")))
+        .collect();
+    assert_eq!(marked, "voxel 96, 11, 62");
+
+    // A file with no canonical form answers its sentence and no rules.
+    let broken = result(
+        &call(
+            &mut surface,
+            &token,
+            &mut left,
+            "render_plan",
+            &format!(r#"{{"playbook_jsonc":{}}}"#, quote("{ not json")),
+        ),
+        "render_plan of a broken file",
+    );
+    assert_eq!(broken.get("rules"), None, "{broken:?}");
+}
+
+/// E8: `get_vocabulary` answers every family, mandate, step and blueprint,
+/// each locked entry with its reason and no skeleton: whole families the
+/// schema reserves, predicates the verifier still refuses in its own words,
+/// the radio's step, and the Resonance Spire until the seat holds its
+/// licence. It is a `docs` read, and a seat's advisor reads it too.
+#[test]
+fn get_vocabulary_answers_the_words_and_their_locks() {
+    let mut surface = hosted();
+    let token = seat_token(&mut surface, 0);
+    let mut left = FIRST_LULL_MS;
+    let words = result(
+        &call(&mut surface, &token, &mut left, "get_vocabulary", "{}"),
+        "get_vocabulary",
+    );
+    let families = array_of(&words, "families");
+    let ids: Vec<String> = families
+        .iter()
+        .map(|family| text_of(family, "family"))
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            "clock",
+            "commander",
+            "own_beacon",
+            "aggregates",
+            "enemy_knowledge",
+            "economy",
+            "capability",
+            "mast_coverage",
+            "playbook_state"
+        ]
+    );
+    let family = |id: &str| {
+        families
+            .iter()
+            .find(|family| text_of(family, "family") == id)
+            .cloned()
+            .expect("the family")
+    };
+    assert_eq!(text_of(&family("aggregates"), "locked"), "from S6");
+    assert_eq!(text_of(&family("capability"), "locked"), "from S4");
+    assert_eq!(family("commander").get("locked"), None);
+    let commander = array_of(&family("commander"), "predicates");
+    let hp = commander
+        .iter()
+        .find(|entry| text_of(entry, "name") == "cmdr_hp_pct")
+        .expect("cmdr_hp_pct");
+    assert_eq!(text_of(hp, "skeleton_json"), r#"{"cmp":"LE","pct":40}"#);
+    assert_eq!(hp.get("locked"), None);
+    let pct = array_of(hp, "parameters")
+        .into_iter()
+        .find(|parameter| text_of(parameter, "pointer") == "/pct")
+        .expect("its percentage");
+    let integer = pct
+        .get("shape")
+        .and_then(|shape| shape.get("integer"))
+        .expect("an integer shape");
+    assert_eq!(integer.get("min"), Some(&Json::Number(String::from("0"))));
+    assert_eq!(integer.get("max"), Some(&Json::Number(String::from("100"))));
+    assert_eq!(text_of(integer, "unit"), "%");
+    // A predicate the verifier still refuses is locked in its own words.
+    let by_role = array_of(&family("own_beacon"), "predicates")
+        .into_iter()
+        .find(|entry| text_of(entry, "name") == "beacon_units_by_role")
+        .expect("beacon_units_by_role");
+    if let Some(code) = pharmakos_verifier::code_for_construct("predicate `beacon_units_by_role`") {
+        assert_eq!(
+            text_of(&by_role, "locked"),
+            pharmakos_verifier::strings::text(code)
+                .expect("the refusal's text")
+                .beginner
+        );
+        assert_eq!(text_of(&by_role, "skeleton_json"), "");
+    }
+    let blueprint = |name: &str| {
+        array_of(&words, "blueprints")
+            .into_iter()
+            .find(|entry| text_of(entry, "name") == name)
+            .expect("the blueprint")
+    };
+    assert!(blueprint("resonance_spire").get("locked").is_some());
+    assert_eq!(blueprint("generator").get("locked"), None);
+    let broadcast = array_of(&words, "steps")
+        .into_iter()
+        .find(|entry| text_of(entry, "name") == "broadcast")
+        .expect("broadcast");
+    assert_eq!(text_of(&broadcast, "locked"), "from S4");
+}
+
+/// X-17: `get_beacon` tells a seat its own beacon's writ, the settings it
+/// holds with what may be written there, and a Build beacon's targets; and
+/// tells none of it about another seat's beacon, even in live vision.
+#[test]
+fn get_beacon_tells_the_detail_of_an_own_beacon_and_none_of_anothers() {
+    let mut surface = hosted_as(SEGMENT_MS, FogPolicy::casual(), None);
+    let token = seat_token(&mut surface, 0);
+    let mut left = FIRST_LULL_MS;
+    let core = result(
+        &call(
+            &mut surface,
+            &token,
+            &mut left,
+            "get_beacon",
+            r#"{"beacon_id":"b_00"}"#,
+        ),
+        "get_beacon b_00",
+    );
+    let mandate = text_of(&core, "mandate");
+    assert!(
+        ["build", "defend", "attack", "mine", "survey"].contains(&mandate.as_str()),
+        "{core:?}"
+    );
+    let settings = array_of(&core, "settings");
+    let retreat = settings
+        .iter()
+        .find(|row| text_of(row, "pointer") == "/retreat_hp_pct")
+        .expect("the common retreat threshold");
+    assert_eq!(text_of(retreat, "title"), "Retreat below HP");
+    assert!(
+        retreat
+            .get("shape")
+            .and_then(|shape| shape.get("integer"))
+            .is_some()
+    );
+    for row in &settings {
+        let value = text_of(row, "value_json");
+        pharmakos_proto::json::read(&value).expect("each value is JSON");
+    }
+    if mandate == "build" {
+        assert!(
+            settings
+                .iter()
+                .any(|row| text_of(row, "pointer") == "/build/repair_threshold_pct"),
+            "{settings:?}"
+        );
+    }
+
+    let listed = result(
+        &call(&mut surface, &token, &mut left, "list_beacons", "{}"),
+        "list_beacons",
+    );
+    let theirs = array_of(&listed, "beacons")
+        .into_iter()
+        .map(|row| text_of(&row, "beacon_id"))
+        .find(|id| id.starts_with("e_"))
+        .expect("the other seat's core, in a casual match");
+    let foreign = result(
+        &call(
+            &mut surface,
+            &token,
+            &mut left,
+            "get_beacon",
+            &format!(r#"{{"beacon_id":"{theirs}"}}"#),
+        ),
+        "get_beacon of another seat's beacon",
+    );
+    for key in ["mandate", "settings", "build_targets"] {
+        assert_eq!(foreign.get(key), None, "{key}: {foreign:?}");
+    }
+    assert_eq!(
+        foreign
+            .get("summary")
+            .and_then(|summary| summary.get("sphere_radius_voxels")),
+        None,
+        "another seat's sphere is not told"
+    );
+}
+
+/// S3-18: `estimate_route` answers each leg's travel and the whole route's as
+/// the player reads it, rounded up to a whole second, beside the milliseconds.
+#[test]
+fn estimate_route_answers_the_travel_as_the_player_reads_it() {
+    let mut surface = hosted();
+    let token = seat_token(&mut surface, 0);
+    let mut left = FIRST_LULL_MS;
+    let (cx, cy, cz) = commander_at(&surface);
+    let (_, bx, by, bz) = own_beacon(&surface);
+    let route = result(
+        &call(
+            &mut surface,
+            &token,
+            &mut left,
+            "estimate_route",
+            &format!(
+                r#"{{"waypoints":[{{"voxel":{{"x":{cx},"y":{cy},"z":{cz}}}}},{{"voxel":{{"x":{bx},"y":{by},"z":{bz}}}}}]}}"#
+            ),
+        ),
+        "estimate_route",
+    );
+    assert_eq!(route.get("reachable"), Some(&Json::Bool(true)), "{route:?}");
+    let ms = match route.get("ms") {
+        Some(Json::Number(text)) => text.parse::<i32>().expect("milliseconds"),
+        other => panic!("`ms` is a number, and it is {other:?}"),
+    };
+    let expected = pharmakos_plan_core::travel::whole_seconds(Ms::new(ms)).expect("a time");
+    let leg = array_of(&route, "legs")
+        .into_iter()
+        .next()
+        .expect("one leg");
+    let bound = |text: &str| {
+        if leg.get("fogged") == Some(&Json::Bool(true)) {
+            format!("at most {text}")
+        } else {
+            String::from(text)
+        }
+    };
+    assert_eq!(text_of(&route, "travel_text"), bound(&expected));
+    assert_eq!(text_of(&leg, "travel_text"), bound(&expected));
+}
+
+/// A two-seat casual match in its opening Lull, resumed from its own frozen
+/// snapshot as `edit` leaves it: how a test gives a beacon what only a played
+/// Push would (the target table's rows), through the save's one restore.
+fn resumed_with(
+    edit: impl FnOnce(&mut pharmakos_sim::snapshot::Snapshot, &pharmakos_sim::world::World),
+) -> Surface {
+    use pharmakos_sim::snapshot::Snapshot;
+    let first = hosted_as(SEGMENT_MS, FogPolicy::casual(), None);
+    let mut snapshot = Snapshot::from_bytes(&first.snapshot_bytes().expect("the frozen snapshot"))
+        .expect("it decodes");
+    edit(&mut snapshot, first.host().expect("hosted").world());
+    let bytes = snapshot.to_bytes().expect("it encodes");
+    let mut surface = Surface::new(
+        MATCH,
+        SEED,
+        rules(),
+        FogPolicy::casual(),
+        &[SeatId::new(0), SeatId::new(1)],
+    )
+    .expect("a match id");
+    let mut host = Host::open(
+        &pharmakos_sim::world::WorldConfig {
+            match_seed: SEED,
+            seats: 2,
+            rules: rules(),
+            match_settings: MatchSettings {
+                segment_lengths_ms: vec![SEGMENT_MS],
+                round_limit: 3,
+            },
+        },
+        None,
+    )
+    .expect("a match");
+    host.resume(&bytes).expect("the edited snapshot resumes");
+    surface.attach(host).expect("attached");
+    surface
+        .set_phase_remaining_ms(Ms::new(FIRST_LULL_MS))
+        .expect("a custom match takes a countdown");
+    surface.open_lull().expect("the Lull");
+    surface
+}
+
+/// Seat 0's core made a Build beacon holding four targets, one of each way
+/// a target is written, in the snapshot's own columns: a mortar at a voxel
+/// (order 3), a Generator `on` the first vent by name (order 1) and `on` the
+/// nearest vent (order 2), and a wall with its box (order 0). Answers the
+/// vent's name.
+fn four_targets(
+    snapshot: &mut pharmakos_sim::snapshot::Snapshot,
+    world: &pharmakos_sim::world::World,
+) -> String {
+    use pharmakos_sim::math::fixed::Fx;
+    use pharmakos_sim::tables::{StructureKind, TargetKind};
+    let row = (0..world.beacons().ids().len())
+        .find(|row| world.beacons().seats().get(*row) == Some(&0))
+        .expect("seat 0's core");
+    let core = world.beacons().ids().get(row).copied().expect("an id");
+    let at = world
+        .beacons()
+        .positions()
+        .get(row)
+        .copied()
+        .expect("a place");
+    let vent = world
+        .features()
+        .features()
+        .iter()
+        .enumerate()
+        .find(|(_, feature)| feature.kind == pharmakos_sim::features::FeatureKind::Vent)
+        .map(|(index, feature)| (index, feature.anchor))
+        .expect("the map lays a vent");
+    let vent_name = format!("vent_{}_{}", vent.1[0], vent.1[1]);
+    if let Some(mandate) = snapshot.beacon_mandate.get_mut(row) {
+        *mandate = pharmakos_sim::seams::MandateKind::Build.id();
+    }
+    let raw = |value: Fx| value.raw();
+    let near = [
+        raw(at[0]) + Fx::from_voxels(2).raw(),
+        raw(at[1]),
+        raw(at[2]),
+    ];
+    let mut push =
+        |blueprint: StructureKind, desc: u8, feature: u32, order: u32, area: [i16; 4], top: i16| {
+            snapshot.target_beacon.push(core);
+            snapshot.target_kind.push(TargetKind::Build.id());
+            snapshot.target_blueprint.push(blueprint.id());
+            snapshot.target_at.extend(near);
+            snapshot.target_area.extend(area);
+            snapshot
+                .target_built
+                .push(pharmakos_sim::tables::StructureId::NONE.raw());
+            snapshot.target_feature.push(feature);
+            snapshot.target_desc.push(desc);
+            snapshot.target_order.push(order);
+            snapshot.target_rotation.push(0);
+            snapshot.target_wall_top.push(top);
+            snapshot.target_wall_done.push(0);
+        };
+    let none = pharmakos_sim::targeting::NO_FEATURE;
+    let no_wall = pharmakos_sim::tables::NO_WALL;
+    let vent_index = u32::try_from(vent.0).expect("a feature index");
+    push(
+        StructureKind::Mortar,
+        pharmakos_sim::targeting::DESCRIPTION_VOXEL,
+        none,
+        3,
+        [0; 4],
+        no_wall,
+    );
+    push(
+        StructureKind::Generator,
+        pharmakos_sim::targeting::DESCRIPTION_NAME,
+        vent_index,
+        1,
+        [0; 4],
+        no_wall,
+    );
+    push(
+        StructureKind::Generator,
+        pharmakos_sim::targeting::DESCRIPTION_NEAREST_VENT,
+        vent_index,
+        2,
+        [0; 4],
+        no_wall,
+    );
+    let x = i16::try_from(at[0].floor_voxels()).expect("a column");
+    let y = i16::try_from(at[1].floor_voxels()).expect("a column");
+    push(
+        StructureKind::Wall,
+        pharmakos_sim::targeting::DESCRIPTION_VOXEL,
+        none,
+        0,
+        [x + 2, y, x + 4, y],
+        40,
+    );
+    vent_name
+}
+
+/// The review of `gwr`, item 2: a Build beacon's targets as `get_beacon`
+/// tells them, one of each way a target is written -- at a voxel, `on` a
+/// named feature, `on` the nearest vent (its rank in the wire's lower case),
+/// and a wall with its box -- in the Quartermaster's order, each anchor as it
+/// was written and the wall's box from the target table, its floor the map's.
+#[test]
+fn get_beacon_tells_each_kind_of_build_target_as_it_was_written() {
+    let mut vent_name = String::new();
+    let mut surface = resumed_with(|snapshot, world| {
+        vent_name = four_targets(snapshot, world);
+    });
+    let token = seat_token(&mut surface, 0);
+    let mut left = FIRST_LULL_MS;
+    let core = result(
+        &call(
+            &mut surface,
+            &token,
+            &mut left,
+            "get_beacon",
+            r#"{"beacon_id":"b_00"}"#,
+        ),
+        "get_beacon b_00",
+    );
+    assert_eq!(text_of(&core, "mandate"), "build", "{core:?}");
+    // The review of `gwr`, item 7: every row shows its effective value, an
+    // unset `roe` as the Build writ's, `RETURN_FIRE`, beside the terraform the
+    // sim reads.
+    let settings = array_of(&core, "settings");
+    let value_at = |pointer: &str| {
+        settings
+            .iter()
+            .find(|row| text_of(row, "pointer") == pointer)
+            .map(|row| text_of(row, "value_json"))
+    };
+    assert_eq!(
+        value_at("/roe").as_deref(),
+        Some(r#""RETURN_FIRE""#),
+        "{settings:?}"
+    );
+    assert!(value_at("/build/terraform").is_some(), "{settings:?}");
+    let targets: Vec<String> = array_of(&core, "build_targets")
+        .iter()
+        .map(rpc::render)
+        .collect();
+    assert_eq!(targets.len(), 4, "{targets:?}");
+    let wall = targets.first().expect("the wall, order 0");
+    assert!(wall.contains(r#""blueprint_id": "wall""#), "{wall}");
+    assert!(wall.contains(r#""wall_box""#), "{wall}");
+    let wall_box = array_of(&core, "build_targets")
+        .first()
+        .and_then(|target| target.get("wall_box").cloned())
+        .expect("its box");
+    assert_eq!(
+        wall_box
+            .get("min")
+            .and_then(|min| min.get("z"))
+            .and_then(|z| match z {
+                Json::Number(z) => Some(z.clone()),
+                _ => None,
+            })
+            .as_deref(),
+        Some("0"),
+        "the floor is the map's: {wall_box:?}"
+    );
+    assert_eq!(
+        wall_box
+            .get("max")
+            .and_then(|max| max.get("z"))
+            .and_then(|z| match z {
+                Json::Number(z) => Some(z.clone()),
+                _ => None,
+            })
+            .as_deref(),
+        Some("40"),
+        "{wall_box:?}"
+    );
+    let named = targets.get(1).expect("the named target, order 1");
+    assert!(
+        named.contains(&format!(r#""feature_id": "{vent_name}""#)),
+        "{named}"
+    );
+    let nearest = targets.get(2).expect("the nearest-vent target, order 2");
+    assert!(nearest.contains(r#""rank": "nearest""#), "{nearest}");
+    let voxel = targets.get(3).expect("the voxel target, order 3");
+    assert!(voxel.contains(r#""blueprint_id": "mortar""#), "{voxel}");
+    assert!(voxel.contains(r#""voxel""#), "{voxel}");
+}
+
+/// The review of `gwr`, item 7: a writ's settings rows show what the sim
+/// reads where the playbook left a setting out -- an unset `roe` as the
+/// writ's (`FREE_FIRE` on Defend and Attack), an empty Defend arm's
+/// engagement radius as the whole sphere and its pursue as `NEVER`, an empty
+/// Attack arm's retarget as `NONE`, its after-action as `REGROUP_AT_STAGING`
+/// and its waves as one -- as the seam choice and the terraform always did.
+#[test]
+fn a_writs_settings_rows_show_what_the_sim_reads() {
+    let cases = [
+        (
+            pharmakos_sim::seams::MandateKind::Defend,
+            "defend",
+            vec![
+                ("/roe", r#""FREE_FIRE""#),
+                ("/defend/engagement_radius_pct", "100"),
+                ("/defend/pursue", r#""NEVER""#),
+            ],
+        ),
+        (
+            pharmakos_sim::seams::MandateKind::Attack,
+            "attack",
+            vec![
+                ("/roe", r#""FREE_FIRE""#),
+                ("/attack/retarget", r#""NONE""#),
+                ("/attack/after_action", r#""REGROUP_AT_STAGING""#),
+                ("/attack/waves", "1"),
+            ],
+        ),
+    ];
+    for (writ, name, expected) in cases {
+        let mut surface = resumed_with(|snapshot, world| {
+            let mut world = world.clone();
+            let row = (0..world.beacons().ids().len())
+                .find(|row| world.beacons().seats().get(*row) == Some(&0))
+                .expect("seat 0's core");
+            world.switch_mandate_directly(row, writ);
+            *snapshot = pharmakos_sim::snapshot::Snapshot::capture(&world);
+        });
+        let token = seat_token(&mut surface, 0);
+        let mut left = FIRST_LULL_MS;
+        let core = result(
+            &call(
+                &mut surface,
+                &token,
+                &mut left,
+                "get_beacon",
+                r#"{"beacon_id":"b_00"}"#,
+            ),
+            "get_beacon b_00",
+        );
+        assert_eq!(text_of(&core, "mandate"), name, "{core:?}");
+        let settings = array_of(&core, "settings");
+        for (pointer, value) in expected {
+            let found = settings
+                .iter()
+                .find(|row| text_of(row, "pointer") == pointer)
+                .map(|row| text_of(row, "value_json"));
+            assert_eq!(
+                found.as_deref(),
+                Some(value),
+                "{name} {pointer}: {settings:?}"
+            );
+        }
+    }
+}

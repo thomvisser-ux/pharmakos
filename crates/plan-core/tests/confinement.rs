@@ -305,6 +305,12 @@ fn the_crate_declares_no_features_of_its_own() {
 /// parameter, which refuses a declared parameter the template does not hold
 /// rather than filling it with nothing; and `render.rs`' list joiner, which
 /// splits the list rather than reading its ends through defaults.
+///
+/// S3's `gwr` (E22) took out four more: `travel.rs`' rounding and its total,
+/// which saturated, and now refuse a figure no estimate holds with
+/// `TravelError`; and `render.rs`' divisions, which read a non-zero constant
+/// through a fallback and now divide in `i64` with `div_euclid`, and its
+/// comparisons, which now read an absent one through `let ... else`.
 const KEPT_FALLBACKS: &[(&str, &str, usize, &str)] = &[
     (
         "canonical.rs",
@@ -380,51 +386,82 @@ const KEPT_FALLBACKS: &[(&str, &str, usize, &str)] = &[
     ),
     (
         "render.rs",
-        "target.map_or_else(String::new, |target| target.blueprint_id.clone())",
-        1,
-        "a row with no target names no blueprint; the verifier refuses the row",
-    ),
-    (
-        "render.rs",
         ".map_or_else(String::new, |area| {",
         1,
         "a target with no box says nothing of one",
     ),
     (
         "render.rs",
-        "at.map_or_else(|| s::PLACE_NOWHERE.to_owned(), voxel)",
+        "spot.map_or_else(|| s::PLACE_NOWHERE.to_owned(), voxel)",
         1,
         "a corner the file leaves out is said to be nowhere the file names",
     ),
+    // S3's `gwr` review (E22) widened the needles; these are what the wider
+    // net found that is a rule rather than a hidden failure.
     (
-        "render.rs",
-        "test.map_or_else(",
-        3,
-        "a predicate with no comparison is said to compare to nothing the file names",
+        "canonical.rs",
+        ".ok()",
+        1,
+        "a pointer token that is not an array index names no item, which is the answer the walk is asked for (RFC 6901)",
+    ),
+    (
+        "library.rs",
+        ".ok()",
+        1,
+        "as canonical.rs': a token that is not an array index names no item, and the caller says the pointer names nothing",
+    ),
+    (
+        "jsonc.rs",
+        "token.parse::<usize>().ok()",
+        1,
+        "`index_of` answers whether a token is an RFC 6901 array index; a token that is not one is `None`, its documented answer",
+    ),
+    (
+        "jsonc.rs",
+        "reader.string().ok().map(|(_raw, text)| text)",
+        1,
+        "a key spelling that does not read back is not the same key, so the canonical spelling is written, the module's stated rule",
+    ),
+    (
+        "jsonc.rs",
+        "let at = at.min(members.len());",
+        1,
+        "`put_member`'s documented contract: a position past the end puts the member at the end, as `patch.rs`' caller asks",
     ),
     (
         "render.rs",
-        ".checked_div(",
-        3,
-        "each divisor is a non-zero constant, so the division is never refused",
+        "let parsed = (x.parse::<i32>().ok()?, y.parse::<i32>().ok()?);",
+        1,
+        "a feature name not of the canonical `vent_<x>_<y>` shape is quoted as written, never read as a vent it is not (targeting.md, \"Names\")",
     ),
     (
         "travel.rs",
-        ".unwrap_or(MAX_SECONDS);",
+        ".and_then(|ms| i32::try_from(ms).ok())",
         1,
-        "rounding up past i32 saturates upwards, the one direction the estimator may err in",
-    ),
-    (
-        "travel.rs",
-        "seconds.checked_div(60).unwrap_or(0)",
-        1,
-        "the divisor is a non-zero constant",
+        "the `None` is refused on the next line as `TravelError::LegPastRange`",
     ),
 ];
 
-/// Every fallback call in the crate's shipped code, as `(file name, the
-/// line)`: `unwrap_or` (and so `unwrap_or_default` and `unwrap_or_else`),
-/// `map_or` and `map_or_else`.
+/// The needles a fallback is written with, the gateway's set
+/// (`crates/gateway/tests/confinement.rs`' `FALLBACK_NEEDLES`) and two more
+/// (S3's `gwr` review, E22): the calls that answer a default for a failure
+/// (`unwrap_or`, and so `unwrap_or_default` and `unwrap_or_else`; `map_or`;
+/// `map_or_else`), an error read as nothing (`.ok()`, which holds the
+/// gateway's `.ok()?` and `.ok().and_then(`, and `Result::ok`), and a value
+/// pushed into range (`.clamp(`, `.max(0)`, `.min(`).
+const FALLBACK_NEEDLES: &[&str] = &[
+    "unwrap_or",
+    "map_or(",
+    "map_or_else(",
+    ".ok()",
+    "Result::ok",
+    ".clamp(",
+    ".max(0)",
+    ".min(",
+];
+
+/// Every fallback line in the crate's shipped code, as `(file name, the
+/// line)`: each holding one of [`FALLBACK_NEEDLES`].
 fn fallbacks() -> Vec<(String, String)> {
     let mut found: Vec<(String, String)> = Vec::new();
     for path in sources() {
@@ -438,10 +475,7 @@ fn fallbacks() -> Vec<(String, String)> {
             continue;
         };
         for (_, line) in code_lines(&text) {
-            if line.contains("unwrap_or")
-                || line.contains("map_or(")
-                || line.contains("map_or_else(")
-            {
+            if FALLBACK_NEEDLES.iter().any(|needle| line.contains(needle)) {
                 found.push((name.clone(), line.trim().to_owned()));
             }
         }

@@ -14,8 +14,9 @@
 //!   `_status` footer answers `untimed`, and a host that reports one is refused
 //!   ([`crate::surface::Surface::set_host_clock`]), never clamped or ignored.
 //! * **The Ledger's memos** (E5): for the seat the person plays, the first
-//!   power shortfall, the first beacon lost and the first death each put one
-//!   memo on that seat's feed, and on its recap, once a match ([`Memo`]).
+//!   power shortfall, the first beacon lost, the first death and the first
+//!   licence each put one memo on that seat's feed, and on its recap, once a
+//!   match ([`Memo`]).
 //! * **The guided first pick** (E25): round 1's template list marks the
 //!   template the advisor says to start with, with its reason.
 //!
@@ -75,8 +76,9 @@ impl Preset {
 /// One of the Ledger's memos (`gp.api.v1.LedgerMemo.Id`).
 ///
 /// The fourth, the first licence (`FIRST_LICENCE`), keys on the sim's
-/// `licence_awarded`, which S3's `lic` adds, so it is `gwr`'s to issue (S3's
-/// plan, E5) and has no variant here yet.
+/// `licence_awarded`, which S3's `lic` added; `gwr` issues it (S3's plan, E5).
+/// A save spells each by [`Memo::name`], so a variant is added at the end and
+/// a name never changes.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Memo {
     /// The seat's first brownout that sheds a load.
@@ -86,11 +88,18 @@ pub enum Memo {
     DarkStake,
     /// The seat's commander's first death.
     FirstDeath,
+    /// The seat's first licence awarded.
+    FirstLicence,
 }
 
 impl Memo {
     /// Every memo this build issues, in their wire order.
-    pub const ALL: [Memo; 3] = [Memo::PowerShortfall, Memo::DarkStake, Memo::FirstDeath];
+    pub const ALL: [Memo; 4] = [
+        Memo::PowerShortfall,
+        Memo::DarkStake,
+        Memo::FirstDeath,
+        Memo::FirstLicence,
+    ];
 
     /// The wire's spelling: `gp.api.v1.LedgerMemo.Id` in lower case, as every
     /// enum this surface answers with is (decisions-log item 80), and the
@@ -101,6 +110,7 @@ impl Memo {
             Memo::PowerShortfall => "power_shortfall",
             Memo::DarkStake => "dark_stake",
             Memo::FirstDeath => "first_death",
+            Memo::FirstLicence => "first_licence",
         }
     }
 
@@ -117,23 +127,38 @@ impl Memo {
             .ok_or_else(|| Error::invalid(format!("`{text}` is not a memo this build issues")))
     }
 
-    /// The memo's text, from the one string table.
-    #[must_use]
-    pub const fn text(self) -> &'static str {
-        match self {
-            Memo::PowerShortfall => crate::strings::MEMO_POWER_SHORTFALL,
-            Memo::DarkStake => crate::strings::MEMO_DARK_STAKE,
-            Memo::FirstDeath => crate::strings::MEMO_FIRST_DEATH,
-        }
+    /// The memo's text, from the one string table; the first licence's
+    /// reads the rules table's vent count.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] when the string table has no name
+    /// for the Resonance Spire's licence, which a test pins never happens.
+    pub fn text(self, rules: &pharmakos_sim::rules::RulesTable) -> Result<String, Error> {
+        Ok(match self {
+            Memo::PowerShortfall => String::from(crate::strings::MEMO_POWER_SHORTFALL),
+            Memo::DarkStake => String::from(crate::strings::MEMO_DARK_STAKE),
+            Memo::FirstDeath => String::from(crate::strings::MEMO_FIRST_DEATH),
+            Memo::FirstLicence => {
+                let title =
+                    crate::strings::licence_title(pharmakos_proto::gp::v1::Licence::ResonanceSpire)
+                        .ok_or_else(|| {
+                            Error::internal(
+                                "the string table has no name for the Resonance Spire's licence",
+                            )
+                        })?;
+                crate::strings::memo_first_licence(rules.resonance_vents(), title)
+            }
+        })
     }
 
     /// The memo as the wire carries it, `gp.api.v1.LedgerMemo`: which memo,
-    /// and its text.
+    /// and its text ([`Memo::text`]).
     #[must_use]
-    pub fn json(self) -> Json {
+    pub fn json(self, text: &str) -> Json {
         Json::Object(vec![
             (String::from("id"), Json::String(self.name().to_owned())),
-            (String::from("text"), Json::String(self.text().to_owned())),
+            (String::from("text"), Json::String(text.to_owned())),
         ])
     }
 
@@ -142,8 +167,9 @@ impl Memo {
     /// Decision 4's readings: a beacon going dark (`beacon_browned_out`, the
     /// brownout order shedding it) is the shortfall; a beacon reaching zero hit
     /// points (`beacon_destroyed`) is the dark Stake, a different event, so the
-    /// two never fire on one; and the commander's death (`commander_died`) is
-    /// the first death. Each is the seat's own event, by the event's `seat`.
+    /// two never fire on one; the commander's death (`commander_died`) is the
+    /// first death; and a licence the Ledger awards (`licence_awarded`) is the
+    /// first licence. Each is the seat's own event, by the event's `seat`.
     #[must_use]
     pub fn triggered_by(event: &Event, seat: SeatId) -> Option<Memo> {
         if event.seat != Some(seat) {
@@ -153,6 +179,7 @@ impl Memo {
             EventKind::BeaconBrownedOut => Some(Memo::PowerShortfall),
             EventKind::BeaconDestroyed => Some(Memo::DarkStake),
             EventKind::CommanderDied => Some(Memo::FirstDeath),
+            EventKind::LicenceAwarded => Some(Memo::FirstLicence),
             _ => None,
         }
     }
@@ -184,11 +211,22 @@ mod tests {
     fn a_memo_reads_back_as_it_is_spelt() {
         for memo in Memo::ALL {
             assert_eq!(Memo::parse(memo.name()).expect("its own name"), memo);
-            assert!(!memo.text().is_empty());
+            let rules = pharmakos_sim::rules::RulesTable::load(
+                &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../rules/rules.v1.json"),
+            )
+            .expect("the shipped rules table");
+            assert!(!memo.text(&rules).expect("its text").is_empty());
         }
         assert_eq!(
-            Memo::parse("first_licence").expect_err("gwr's").code,
-            Code::InvalidArgument
+            Memo::parse("first_licence").expect("gwr's"),
+            Memo::FirstLicence
         );
+        for other in ["", "FIRST_LICENCE", "first_licences", "licence"] {
+            assert_eq!(
+                Memo::parse(other).expect_err("not a memo").code,
+                Code::InvalidArgument,
+                "{other}"
+            );
+        }
     }
 }

@@ -1,0 +1,157 @@
+/declarative/route/0  lines 4+1
+  4:30-133 "a site toward the nearest heat vent you do not cover yet (nearest by travel, read when the step starts)"
+    /declarative/route/0/place_beacon/at
+    reference LOCATION [voxel, beacon_anchor, safest, covering]
+    = {"toward":{"feature":{"vent":{"rank":"NEAREST","coverage":"UNCOVERED"}}}}
+/declarative/route/1  lines 5+1
+  5:30-63 "a site toward Heat vent (120, 88)"
+    /declarative/route/1/place_beacon/at
+    reference LOCATION [voxel, beacon_anchor, safest, covering]
+    = {"toward":{"feature":{"feature_id":"vent_120_88"}}}
+/declarative/handlers/0  lines 8+4
+  8:17-30 "beacon "b_00""
+    /declarative/handlers/0/when/all/items/0/beacon_units_by_role/beacon
+    reference BEACON [beacon_id, nearest, weakest, most_threatened, safest]
+    = {"beacon_id":"b_00"}
+  8:35-46 "at or above"
+    /declarative/handlers/0/when/all/items/0/beacon_units_by_role/count/op
+    choice "LT" | "LE" | "EQ" | "NE" | "GE" | "GT"
+    = "GE"
+  8:47-48 "2"
+    /declarative/handlers/0/when/all/items/0/beacon_units_by_role/count/value
+    integer ..
+    = 2
+  8:49-55 "scouts"
+    /declarative/handlers/0/when/all/items/0/beacon_units_by_role/role
+    choice "BUILD_DRONE" | "MINING_DRONE" | "REPAIR_DRONE" | "RAIDER" | "SCOUT"
+    = "SCOUT"
+  8:60-73 "beacon "b_00""
+    /declarative/handlers/0/when/all/items/1/beacon_mandate/beacon
+    reference BEACON [beacon_id, nearest, weakest, most_threatened, safest]
+    = {"beacon_id":"b_00"}
+  8:82-87 "Build"
+    /declarative/handlers/0/when/all/items/1/beacon_mandate/mandate
+    choice "BUILD" | "DEFEND" | "ATTACK" | "SURVEY" | "MINE"
+    = "BUILD"
+  8:92-113 "the safest own beacon"
+    /declarative/handlers/0/when/all/items/2/beacon_has_structure/beacon
+    reference BEACON [beacon_id, nearest, weakest, most_threatened, safest]
+    = {"safest":{}}
+  8:129-138 "generator"
+    /declarative/handlers/0/when/all/items/2/beacon_has_structure/blueprint_id
+    choice "generator" | "autocannon" | "mortar" | "resonance_spire" | "wall"
+    = "generator"
+  9:26-29 "1 s"
+    /declarative/handlers/0/body/0/hold/ms
+    integer 1.. ms
+    = 1000
+  11:18-19 "1"
+    /declarative/handlers/0/max_fires
+    integer 1..8
+    = 1
+  11:51-54 "5 s"
+    /declarative/handlers/0/cooldown_ms
+    integer 5000.. ms
+    = 5000
+/declarative/handlers/1  lines 12+4
+  12:37-48 "at or above"
+    /declarative/handlers/1/when/any/items/0/enemy_units_near/count/op
+    choice "LT" | "LE" | "EQ" | "NE" | "GE" | "GT"
+    = "GE"
+  12:49-50 "3"
+    /declarative/handlers/1/when/any/items/0/enemy_units_near/count/value
+    integer ..
+    = 3
+  12:70-72 "24"
+    /declarative/handlers/1/when/any/items/0/enemy_units_near/radius_voxels
+    integer 0.. voxels
+    = 24
+  12:83-99 "voxel 90, 12, 11"
+    /declarative/handlers/1/when/any/items/0/enemy_units_near/near
+    reference LOCATION [voxel, beacon_anchor, safest]
+    = {"voxel":{"x":90,"y":12,"z":11}}
+  12:101-113 "in sight now"
+    /declarative/handlers/1/when/any/items/0/enemy_units_near/freshness/kind
+    choice "VISIBLE_NOW" | "KNOWN_WITHIN"
+    = "VISIBLE_NOW"
+  12:152-168 "seen in the last"
+    /declarative/handlers/1/when/any/items/1/enemy_beacon_known/freshness/kind
+    choice "VISIBLE_NOW" | "KNOWN_WITHIN"
+    = "KNOWN_WITHIN"
+  12:169-173 "30 s"
+    /declarative/handlers/1/when/any/items/1/enemy_beacon_known/freshness/known_within_ms
+    integer .. ms
+    = 30000
+  12:204-210 "mortar"
+    /declarative/handlers/1/when/any/items/2/enemy_structure_near/blueprint_id
+    choice "generator" | "autocannon" | "mortar" | "resonance_spire" | "wall"
+    = "mortar"
+  12:218-220 "16"
+    /declarative/handlers/1/when/any/items/2/enemy_structure_near/radius_voxels
+    integer 0.. voxels
+    = 16
+  12:231-252 "the safest own beacon"
+    /declarative/handlers/1/when/any/items/2/enemy_structure_near/near
+    reference LOCATION [voxel, beacon_anchor, safest]
+    = {"safest":{}}
+  12:254-266 "in sight now"
+    /declarative/handlers/1/when/any/items/2/enemy_structure_near/freshness/kind
+    choice "VISIBLE_NOW" | "KNOWN_WITHIN"
+    = "VISIBLE_NOW"
+  12:314-316 "16"
+    /declarative/handlers/1/when/any/items/3/enemy_structure_near/radius_voxels
+    integer 0.. voxels
+    = 16
+  12:327-348 "the safest own beacon"
+    /declarative/handlers/1/when/any/items/3/enemy_structure_near/near
+    reference LOCATION [voxel, beacon_anchor, safest]
+    = {"safest":{}}
+  12:350-366 "seen in the last"
+    /declarative/handlers/1/when/any/items/3/enemy_structure_near/freshness/kind
+    choice "VISIBLE_NOW" | "KNOWN_WITHIN"
+    = "KNOWN_WITHIN"
+  12:367-371 "1:00"
+    /declarative/handlers/1/when/any/items/3/enemy_structure_near/freshness/known_within_ms
+    integer .. ms
+    = 60000
+  13:28-31 "1 s"
+    /declarative/handlers/1/body/0/hold/ms
+    integer 1.. ms
+    = 1000
+  15:18-19 "1"
+    /declarative/handlers/1/max_fires
+    integer 1..8
+    = 1
+  15:51-54 "5 s"
+    /declarative/handlers/1/cooldown_ms
+    integer 5000.. ms
+    = 5000
+/declarative/handlers/2  lines 16+4
+  16:39-50 "at or above"
+    /declarative/handlers/2/when/all/items/0/kw_supply/kw/op
+    choice "LT" | "LE" | "EQ" | "NE" | "GE" | "GT"
+    = "GE"
+  16:51-53 "40"
+    /declarative/handlers/2/when/all/items/0/kw_supply/kw/value
+    integer .. kW
+    = 40
+  16:80-85 "below"
+    /declarative/handlers/2/when/all/items/1/kw_draw/kw/op
+    choice "LT" | "LE" | "EQ" | "NE" | "GE" | "GT"
+    = "LT"
+  16:86-88 "30"
+    /declarative/handlers/2/when/all/items/1/kw_draw/kw/value
+    integer .. kW
+    = 30
+  17:27-30 "1 s"
+    /declarative/handlers/2/body/0/hold/ms
+    integer 1.. ms
+    = 1000
+  19:18-19 "1"
+    /declarative/handlers/2/max_fires
+    integer 1..8
+    = 1
+  19:51-54 "5 s"
+    /declarative/handlers/2/cooldown_ms
+    integer 5000.. ms
+    = 5000

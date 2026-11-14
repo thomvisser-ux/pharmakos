@@ -12,6 +12,9 @@
 //! 3. `expected.prose.txt` for `render_plan`.
 //! 4. The writer proved to emit **bare-number durations** exactly as the
 //!    example writes them (decisions-log item 46).
+//! 5. From S3's `gwr`, `expected.chips.txt` for each rendered case: the rules,
+//!    steps and chips `render` places beside the prose (S3's plan, E8), with
+//!    the promises they keep and the verifier's agreement on their bounds.
 //!
 //! The producing tests write `actual.*` under `<target>/golden/plan-core/`,
 //! where `cargo xtask ci`'s `golden` step byte-compares them with what is
@@ -19,15 +22,23 @@
 //! golden has to be explained in the pull request that moved it (AGENTS.md
 //! section 5).
 
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use pharmakos_plan_core::canonical::canonicalise_text;
 use pharmakos_plan_core::context::PlanContext;
+use pharmakos_plan_core::error::split_pointer;
 use pharmakos_plan_core::jsonc::Document;
-use pharmakos_plan_core::render::render_plan;
+use pharmakos_plan_core::patch::patch_text;
+use pharmakos_plan_core::render::{Rendering, render, render_plan};
+use pharmakos_plan_core::shape::Shape;
+use pharmakos_plan_core::verify::verify_jsonc;
+use pharmakos_proto::gp::api::v1::verify_plan::Depth;
+use pharmakos_proto::json::Json;
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::snapshot::Snapshot;
+use pharmakos_verifier::Scope;
 
 // ---------------------------------------------------------------------------
 // Paths
@@ -456,4 +467,291 @@ fn s2s_constructs_round_trip_canonicalise_and_render_to_their_goldens() {
         assert!(prose.contains(said), "the prose says `{said}`:\n{prose}");
     }
     assert_golden("defend_and_attack", "prose.txt", &prose);
+}
+
+// ---------------------------------------------------------------------------
+// 5. The chips (S3's plan, E8; task `gwr`)
+// ---------------------------------------------------------------------------
+
+/// Every case with a prose golden, by name, with its text.
+fn rendered_cases() -> Vec<(&'static str, String)> {
+    let case = |name: &str| {
+        read(
+            &Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests")
+                .join("cases")
+                .join(format!("{name}.jsonc")),
+        )
+    };
+    vec![
+        ("expand_east", example()),
+        ("cover_the_nearest_vent", cover_the_nearest_vent()),
+        ("defend_and_attack", defend_and_attack()),
+        ("predicates_and_toward", case("predicates_and_toward")),
+    ]
+}
+
+/// A shape as one line of the golden.
+fn shape_text(shape: &Shape) -> String {
+    let bound = |value: Option<i32>| value.map_or_else(String::new, |value| value.to_string());
+    match shape {
+        Shape::Integer { min, max, unit } => {
+            let unit = if unit.is_empty() {
+                String::new()
+            } else {
+                format!(" {unit}")
+            };
+            format!("integer {}..{}{unit}", bound(*min), bound(*max))
+        }
+        Shape::Choice { values } => format!("choice {}", values.join(" | ")),
+        Shape::Reference { kind, arms } => {
+            format!("reference {} [{}]", kind.proto_name(), arms.join(", "))
+        }
+    }
+}
+
+/// The rendering's rules and chips, one line a chip, each with the words it
+/// marks, so a diff reads as which value moved where.
+fn chips_text(rendering: &Rendering) -> String {
+    let lines: Vec<&str> = rendering.prose.lines().collect();
+    let mut out = String::new();
+    for rule in &rendering.rules {
+        let _ = writeln!(
+            out,
+            "{}  lines {}+{}",
+            rule.pointer, rule.line, rule.line_count
+        );
+        for chip in &rule.chips {
+            let line = lines
+                .get(
+                    usize::try_from(chip.line)
+                        .unwrap_or_else(|error| panic!("a line index: {error:?}")),
+                )
+                .copied()
+                .unwrap_or_else(|| panic!("chip line {} is not in the prose", chip.line));
+            let marked: String = line
+                .chars()
+                .skip(
+                    usize::try_from(chip.start).unwrap_or_else(|error| panic!("a span: {error:?}")),
+                )
+                .take(
+                    usize::try_from(chip.end.saturating_sub(chip.start))
+                        .unwrap_or_else(|error| panic!("a span: {error:?}")),
+                )
+                .collect();
+            let _ = write!(
+                out,
+                "  {}:{}-{} \"{marked}\"\n    {}\n    {}\n    = {}\n",
+                chip.line,
+                chip.start,
+                chip.end,
+                chip.pointer,
+                shape_text(&chip.shape),
+                chip.value_json
+            );
+        }
+    }
+    out
+}
+
+/// The JSON value at an RFC 6901 pointer.
+fn at_pointer<'a>(document: &'a Json, pointer: &str) -> Option<&'a Json> {
+    let tokens = split_pointer(pointer).ok()?;
+    let mut here = document;
+    for token in tokens {
+        here = match here {
+            Json::Array(items) => items.get(token.parse::<usize>().ok()?)?,
+            other => other.get(&token)?,
+        };
+    }
+    Some(here)
+}
+
+/// The rendering's own promises, which hold for every playbook: each rule's
+/// lines are inside the prose and follow one another, each chip stands on one
+/// of its rule's lines with a non-empty span inside that line and after the
+/// chip before it, and each chip's value is the value the file holds at its
+/// pointer, so a `replace` there has a member to replace.
+fn assert_chips_hold(case: &str, rendering: &Rendering, canonical_json: &str) {
+    let document = pharmakos_proto::json::read(canonical_json)
+        .unwrap_or_else(|error| panic!("canonical JSON reads: {error:?}"));
+    let lines: Vec<&str> = rendering.prose.lines().collect();
+    let mut previous_end = 0;
+    for rule in &rendering.rules {
+        assert!(
+            rule.line_count >= 1,
+            "{case}: {} takes no line",
+            rule.pointer
+        );
+        assert!(
+            rule.line >= previous_end,
+            "{case}: {} starts inside the rule before it",
+            rule.pointer
+        );
+        previous_end = rule.line.saturating_add(rule.line_count);
+        assert!(
+            usize::try_from(previous_end).unwrap_or_else(|error| panic!("a line: {error:?}"))
+                <= lines.len(),
+            "{case}: {} runs past the prose",
+            rule.pointer
+        );
+        let mut last = (0, 0);
+        for chip in &rule.chips {
+            assert!(
+                chip.line >= rule.line && chip.line < previous_end,
+                "{case}: {} stands outside {}",
+                chip.pointer,
+                rule.pointer
+            );
+            assert!(
+                chip.pointer.starts_with(&rule.pointer),
+                "{case}: {} is not inside {}",
+                chip.pointer,
+                rule.pointer
+            );
+            let width = lines
+                .get(usize::try_from(chip.line).unwrap_or_else(|error| panic!("a line: {error:?}")))
+                .map_or(0, |line| line.chars().count());
+            assert!(
+                chip.start < chip.end
+                    && usize::try_from(chip.end)
+                        .unwrap_or_else(|error| panic!("a span: {error:?}"))
+                        <= width,
+                "{case}: {} spans {}..{} of a {width}-character line",
+                chip.pointer,
+                chip.start,
+                chip.end
+            );
+            assert!(
+                (chip.line, chip.start) >= last,
+                "{case}: {} overlaps the chip before it",
+                chip.pointer
+            );
+            last = (chip.line, chip.end);
+            let held = at_pointer(&document, &chip.pointer)
+                .unwrap_or_else(|| panic!("{case}: the file holds nothing at {}", chip.pointer));
+            let value = pharmakos_proto::json::read(&chip.value_json)
+                .unwrap_or_else(|error| panic!("{case}: {} is not JSON: {error:?}", chip.pointer));
+            assert_eq!(
+                &value, held,
+                "{case}: {}'s value is not the file's",
+                chip.pointer
+            );
+            if let Shape::Choice { values } = &chip.shape {
+                assert!(
+                    values.contains(&chip.value_json),
+                    "{case}: {} holds {}, which its choices do not list",
+                    chip.pointer,
+                    chip.value_json
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn every_rendered_case_has_its_chips_golden_and_keeps_their_promises() {
+    for (case, text) in rendered_cases() {
+        let canonical = canonicalise_text(&text)
+            .unwrap_or_else(|error| panic!("the case canonicalises: {error:?}"));
+        let rendering = render(&canonical.playbook, &context(), &rules())
+            .unwrap_or_else(|error| panic!("the committed rules table is complete: {error:?}"));
+        let prose = render_plan(&canonical.playbook, &context(), &rules())
+            .unwrap_or_else(|error| panic!("a rendering: {error:?}"));
+        assert_eq!(rendering.prose, prose, "{case}: the chips moved the prose");
+        assert!(
+            rendering.rules.iter().any(|rule| !rule.chips.is_empty()),
+            "{case}: no chip at all"
+        );
+        assert_chips_hold(case, &rendering, &canonical.json);
+        assert_golden(case, "chips.txt", &chips_text(&rendering));
+    }
+}
+
+/// The verifier at QUICK over `text`, as the paths of its diagnostics.
+fn diagnosed_paths(text: &str) -> Vec<String> {
+    let scope = Scope::new(
+        pharmakos_sim::tables::SeatId::new(0),
+        pharmakos_sim::knowledge::SeatEconomy {
+            treasury: pharmakos_sim::math::quantity::Money::new(200),
+            supply: pharmakos_sim::math::quantity::Kw::new(10),
+            draw: pharmakos_sim::math::quantity::Kw::new(2),
+        },
+    );
+    verify_jsonc(text, &[], &scope, &rules(), Depth::Quick)
+        .unwrap_or_else(|error| panic!("the committed rules table is complete: {error:?}"))
+        .diagnostics
+        .into_iter()
+        .map(|diagnostic| diagnostic.path)
+        .collect()
+}
+
+/// `text` with the value at `pointer` replaced by `value`.
+fn replaced(text: &str, pointer: &str, value: i64) -> String {
+    let patch = format!(r#"[{{"op":"replace","path":"{pointer}","value":{value}}}]"#);
+    patch_text(text, &patch)
+        .unwrap_or_else(|error| panic!("{pointer} takes a replace: {error}"))
+        .0
+}
+
+/// S3's plan, E8: an integer chip's bounds are the ones the verifier
+/// enforces at its pointer. One step past a bound the chip states draws a
+/// diagnostic there, and the bound itself draws none there; and a side the
+/// chip leaves open draws none even far out, so a check the verifier gains
+/// later shows here as a bound the chip does not state.
+#[test]
+fn an_integer_chips_bounds_are_the_verifiers() {
+    for (case, text) in rendered_cases() {
+        let canonical = canonicalise_text(&text)
+            .unwrap_or_else(|error| panic!("the case canonicalises: {error:?}"));
+        let rendering = render(&canonical.playbook, &context(), &rules())
+            .unwrap_or_else(|error| panic!("a rendering: {error:?}"));
+        for chip in rendering.rules.iter().flat_map(|rule| &rule.chips) {
+            let Shape::Integer { min, max, .. } = chip.shape else {
+                continue;
+            };
+            let flagged = |value: i64| {
+                diagnosed_paths(&replaced(&canonical.text, &chip.pointer, value))
+                    .contains(&chip.pointer)
+            };
+            match min {
+                Some(least) => {
+                    assert!(
+                        flagged(i64::from(least) - 1),
+                        "{case}: {} below its least, {least}, draws nothing there",
+                        chip.pointer
+                    );
+                    assert!(
+                        !flagged(i64::from(least)),
+                        "{case}: {} at its least, {least}, is refused",
+                        chip.pointer
+                    );
+                }
+                None => assert!(
+                    !flagged(-1_000_000),
+                    "{case}: {} is refused far below, and its chip states no least",
+                    chip.pointer
+                ),
+            }
+            match max {
+                Some(most) => {
+                    assert!(
+                        flagged(i64::from(most) + 1),
+                        "{case}: {} above its most, {most}, draws nothing there",
+                        chip.pointer
+                    );
+                    assert!(
+                        !flagged(i64::from(most)),
+                        "{case}: {} at its most, {most}, is refused",
+                        chip.pointer
+                    );
+                }
+                None => assert!(
+                    !flagged(1_000_000),
+                    "{case}: {} is refused far above, and its chip states no most",
+                    chip.pointer
+                ),
+            }
+        }
+    }
 }

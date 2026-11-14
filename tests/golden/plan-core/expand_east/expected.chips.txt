@@ -1,0 +1,52 @@
+/declarative/route/0  lines 4+2
+  4:22-38 "voxel 96, 11, 62"
+    /declarative/route/0/move/to
+    reference LOCATION [voxel, beacon_anchor, safest]
+    = {"voxel":{"x":96,"y":11,"z":62}}
+  5:18-22 "2:00"
+    /declarative/route/0/timeout_ms
+    integer 0.. ms
+    = 120000
+/declarative/route/1  lines 6+1
+  6:35-51 "voxel 96, 11, 62"
+    /declarative/route/1/place_beacon/at
+    reference LOCATION [voxel, beacon_anchor, safest, covering]
+    = {"voxel":{"x":96,"y":11,"z":62}}
+  6:90-96 "normal"
+    /declarative/route/1/place_beacon/initial/priority
+    choice "LOW" | "NORMAL" | "HIGH"
+    = "NORMAL"
+/declarative/route/2  lines 7+1
+  7:24-37 "beacon "b_01""
+    /declarative/route/2/move/to
+    reference LOCATION [voxel, beacon_anchor, safest]
+    = {"beacon_anchor":{"beacon_id":"b_01"}}
+/declarative/handlers/0  lines 10+5
+  10:35-46 "at or below"
+    /declarative/handlers/0/when/all/items/0/cmdr_hp_pct/cmp
+    choice "LT" | "LE" | "EQ" | "NE" | "GE" | "GT"
+    = "LE"
+  10:47-49 "40"
+    /declarative/handlers/0/when/all/items/0/cmdr_hp_pct/pct
+    integer 0..100 %
+    = 40
+  10:96-99 "3 s"
+    /declarative/handlers/0/when/all/items/1/cmdr_took_damage_within/ms
+    integer 0.. ms
+    = 3000
+  11:19-40 "the safest own beacon"
+    /declarative/handlers/0/body/0/move/to
+    reference LOCATION [voxel, beacon_anchor, safest]
+    = {"safest":{}}
+  12:20-23 "8 s"
+    /declarative/handlers/0/body/1/hold/ms
+    integer 1.. ms
+    = 8000
+  14:18-19 "3"
+    /declarative/handlers/0/max_fires
+    integer 1..8
+    = 3
+  14:52-56 "30 s"
+    /declarative/handlers/0/cooldown_ms
+    integer 5000.. ms
+    = 30000

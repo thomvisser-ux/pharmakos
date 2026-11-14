@@ -127,18 +127,20 @@ pub const fn mandate_name(mandate: MandateKind) -> &'static str {
     }
 }
 
-/// The mandate a stored wire id names, or [`MandateKind::None`] for one this
-/// build does not define.
-#[must_use]
-pub fn mandate_from_id(id: u8) -> MandateKind {
-    match id {
-        1 => MandateKind::Build,
-        2 => MandateKind::Defend,
-        3 => MandateKind::Attack,
-        4 => MandateKind::Mine,
-        5 => MandateKind::Survey,
-        _ => MandateKind::None,
-    }
+/// The mandate a stored wire id names, by the sim's own table
+/// ([`MandateKind::from_id`]): 0 is no mandate.
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] for an id the sim does not define, which
+/// its beacon table never holds. Until S3's `gwr` it read as no mandate, a
+/// silent default (E22).
+pub fn mandate_from_id(id: u8) -> Result<MandateKind, Error> {
+    MandateKind::from_id(id).ok_or_else(|| {
+        Error::internal(format!(
+            "a beacon's mandate column holds {id}, which the sim does not define"
+        ))
+    })
 }
 
 /// A unit kind as `gp.api.v1.ViewEntity.subtype` spells it.
@@ -162,14 +164,8 @@ pub const fn unit_subtype(kind: UnitKind) -> &'static str {
 /// A structure kind as `gp.api.v1.ViewEntity.subtype` spells it.
 #[must_use]
 pub const fn structure_subtype(kind: StructureKind) -> &'static str {
-    match kind {
-        StructureKind::Generator => "generator",
-        StructureKind::Autocannon => "autocannon",
-        StructureKind::Mortar => "mortar",
-        StructureKind::SurveyPost => "survey_post",
-        StructureKind::ResonanceSpire => "resonance_spire",
-        StructureKind::Wall => "wall",
-    }
+    // The blueprint id, spelt once, in plan-core (S3's `gwr` review, item 4).
+    pharmakos_plan_core::vocabulary::blueprint_id(kind)
 }
 
 /// A seat as `gp.api.v1.ViewEntity.owner` spells it: `seat.0`.
@@ -191,6 +187,60 @@ pub fn owner_text(seat: SeatId) -> String {
 #[must_use]
 pub fn seed_text(seed: u64) -> String {
     format!("0x{seed:016x}")
+}
+
+/// A `gp.api.v1.ValueShape` as the JSON-RPC wire carries it: the one
+/// description of an editable value a rendered chip, a vocabulary parameter
+/// and a beacon's setting share (S3's plan, E8). A reference's kind is lower
+/// case, as every enum this surface answers with is (decisions-log item 80):
+/// `"location"`. An integer's unset bound is left out rather than written as a
+/// number a reader would take for one; its unit is always written, empty for
+/// a bare count.
+#[must_use]
+pub fn value_shape(shape: &pharmakos_plan_core::shape::Shape) -> pharmakos_proto::json::Json {
+    use pharmakos_plan_core::shape::Shape;
+    use pharmakos_proto::json::Json;
+    let (arm, body) = match shape {
+        Shape::Integer { min, max, unit } => {
+            let mut entries = Vec::new();
+            if let Some(min) = min {
+                entries.push((String::from("min"), Json::Number(min.to_string())));
+            }
+            if let Some(max) = max {
+                entries.push((String::from("max"), Json::Number(max.to_string())));
+            }
+            entries.push((String::from("unit"), Json::String((*unit).to_owned())));
+            ("integer", Json::Object(entries))
+        }
+        Shape::Choice { values } => (
+            "choice",
+            Json::Object(vec![(
+                String::from("values"),
+                Json::Array(values.iter().cloned().map(Json::String).collect()),
+            )]),
+        ),
+        Shape::Reference { kind, arms } => (
+            "reference",
+            Json::Object(vec![
+                (
+                    String::from("kind"),
+                    Json::String(pharmakos_proto::scope::wire_name(
+                        "gp.api.v1.ReferenceShape.Kind",
+                        kind.proto_name(),
+                    )),
+                ),
+                (
+                    String::from("arms"),
+                    Json::Array(
+                        arms.iter()
+                            .map(|arm| Json::String((*arm).to_owned()))
+                            .collect(),
+                    ),
+                ),
+            ]),
+        ),
+    };
+    Json::Object(vec![(String::from(arm), body)])
 }
 
 #[cfg(test)]
@@ -273,11 +323,15 @@ mod tests {
     }
 
     #[test]
-    fn a_mandate_maps_both_ways_and_an_unknown_one_is_unspecified() {
+    fn a_mandate_maps_both_ways_and_an_unknown_one_is_refused() {
         assert_eq!(mandate_of(MandateKind::Build), WireMandate::Build);
         assert_eq!(mandate_of(MandateKind::None), WireMandate::Unspecified);
-        assert_eq!(mandate_from_id(4), MandateKind::Mine);
-        assert_eq!(mandate_from_id(200), MandateKind::None);
+        assert_eq!(mandate_from_id(4).ok(), Some(MandateKind::Mine));
+        assert_eq!(mandate_from_id(0).ok(), Some(MandateKind::None));
+        assert_eq!(
+            mandate_from_id(200).map_err(|error| error.code),
+            Err(crate::error::Code::Internal)
+        );
         assert_eq!(mandate_name(MandateKind::Build), "Build");
         assert_eq!(mandate_name(MandateKind::None), "no");
         for kind in [
@@ -287,7 +341,7 @@ mod tests {
             MandateKind::Mine,
             MandateKind::Survey,
         ] {
-            assert_eq!(mandate_from_id(kind.id()), kind);
+            assert_eq!(mandate_from_id(kind.id()).ok(), Some(kind));
         }
     }
 

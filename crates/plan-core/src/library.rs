@@ -86,9 +86,18 @@ pub struct Summary {
 pub fn list(folder: &Path) -> Result<Vec<Summary>, Error> {
     let entries = std::fs::read_dir(folder)
         .map_err(|error| Error::at("", format!("reading {}: {error}", folder.display())))?;
-    let mut ids: Vec<String> = entries
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
+    // An entry the folder cannot read is refused with the folder, as an
+    // unreadable folder is (E22): skipping it would list a library short of a
+    // template without saying so.
+    let paths = entries
+        .map(|entry| {
+            entry
+                .map(|entry| entry.path())
+                .map_err(|error| Error::at("", format!("reading {}: {error}", folder.display())))
+        })
+        .collect::<Result<Vec<PathBuf>, Error>>()?;
+    let mut ids: Vec<String> = paths
+        .into_iter()
         .filter(|path| {
             path.extension()
                 .is_some_and(|extension| extension == EXTENSION)
@@ -336,8 +345,9 @@ fn value_at<'a>(root: &'a Json, pointer: &str) -> Result<Option<&'a Json>, Error
 
 /// A value's compact JSON text, as `gp.api.v1.FilledParameter.value` carries
 /// it. One spelling for all three sources, so a wizard never shows `3000` for
-/// one page and `3000 ` for the next.
-fn compact(value: &Json) -> String {
+/// one page and `3000 ` for the next; and, from S3's `gwr`, the spelling of a
+/// rendered chip's value (`crate::render`).
+pub(crate) fn compact(value: &Json) -> String {
     let mut out = String::new();
     compact_into(value, &mut out);
     out

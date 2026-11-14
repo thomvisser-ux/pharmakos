@@ -50,7 +50,42 @@
 //! arrival rather than as a caveat at plan time. Nothing here claims otherwise.
 
 use pharmakos_proto::gp::v1::Voxel;
-use pharmakos_sim::math::quantity::Ms;
+use pharmakos_sim::math::quantity::{MS_PER_TICK, Ms};
+
+/// Why a travel time has no rendering: each is a figure no estimate holds, so
+/// it is refused rather than clamped into one that reads as an answer.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TravelError {
+    /// A leg's ticks, as game milliseconds, past what [`Ms`] holds.
+    LegPastRange {
+        /// The leg's ticks.
+        ticks: u32,
+    },
+    /// The route's legs, summed, past what [`Ms`] holds.
+    TotalPastRange,
+    /// A travel time below zero, which no estimate is.
+    Negative(Ms),
+}
+
+impl core::fmt::Display for TravelError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            TravelError::LegPastRange { ticks } => write!(
+                formatter,
+                "a leg of {ticks} ticks is past the game milliseconds a travel time holds"
+            ),
+            TravelError::TotalPastRange => write!(
+                formatter,
+                "the route's legs add up past the game milliseconds a travel time holds"
+            ),
+            TravelError::Negative(ms) => {
+                write!(formatter, "a travel time of {} ms is below zero", ms.raw())
+            }
+        }
+    }
+}
+
+impl std::error::Error for TravelError {}
 
 /// What the estimator answers, in item 61's own three fields.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -68,9 +103,17 @@ pub struct Estimate {
 impl Estimate {
     /// The estimate as game milliseconds, which is what every playbook
     /// duration is in and what `gp.api.v1.Leg.ms` carries.
-    #[must_use]
-    pub fn ms(&self) -> Ms {
-        Ms::from_ticks(self.ticks)
+    ///
+    /// # Errors
+    ///
+    /// [`TravelError::LegPastRange`] for ticks whose milliseconds pass what
+    /// [`Ms`] holds, rather than the saturated figure that would read as one.
+    pub fn ms(&self) -> Result<Ms, TravelError> {
+        let ms = i64::from(self.ticks)
+            .checked_mul(i64::from(MS_PER_TICK))
+            .and_then(|ms| i32::try_from(ms).ok())
+            .ok_or(TravelError::LegPastRange { ticks: self.ticks })?;
+        Ok(Ms::new(ms))
     }
 }
 
@@ -108,19 +151,24 @@ pub struct Leg {
 
 impl Leg {
     /// The leg as a sentence, under both rules.
-    #[must_use]
-    pub fn render(&self) -> String {
+    ///
+    /// # Errors
+    ///
+    /// As [`Estimate::ms`] and [`whole_seconds`].
+    pub fn render(&self) -> Result<String, TravelError> {
         match self.estimate {
-            None => crate::strings::NO_ROUTE.to_owned(),
-            Some(estimate) if self.fogged => {
-                format!(
-                    "{} {}",
-                    crate::strings::AT_MOST,
-                    whole_seconds(estimate.ms())
-                )
-            }
-            Some(estimate) => whole_seconds(estimate.ms()),
+            None => Ok(crate::strings::NO_ROUTE.to_owned()),
+            Some(estimate) => Ok(bounded(whole_seconds(estimate.ms()?)?, self.fogged)),
         }
+    }
+}
+
+/// `time`, labelled "at most" when it is a bound (rule 1).
+fn bounded(time: String, bound: bool) -> String {
+    if bound {
+        format!("{} {time}", crate::strings::AT_MOST)
+    } else {
+        time
     }
 }
 
@@ -170,57 +218,66 @@ impl Route {
     /// Clear legs contribute their estimate and fogged legs their bound, which
     /// is item 61's rule for the total: "the clear legs' time plus the fogged
     /// bound, marked as a bound".
-    #[must_use]
-    pub fn total(&self) -> Option<Ms> {
+    ///
+    /// # Errors
+    ///
+    /// As [`Estimate::ms`], and [`TravelError::TotalPastRange`] for legs that
+    /// add up past what [`Ms`] holds, rather than the saturated sum.
+    pub fn total(&self) -> Result<Option<Ms>, TravelError> {
         let mut total: i32 = 0;
         for leg in &self.legs {
-            let estimate = leg.estimate?;
-            total = total.saturating_add(estimate.ms().raw());
+            let Some(estimate) = leg.estimate else {
+                return Ok(None);
+            };
+            total = total
+                .checked_add(estimate.ms()?.raw())
+                .ok_or(TravelError::TotalPastRange)?;
         }
-        Some(Ms::new(total))
+        Ok(Some(Ms::new(total)))
     }
 
     /// The whole route as a sentence, marked as a bound when any leg is
     /// fogged.
-    #[must_use]
-    pub fn render(&self) -> String {
-        match self.total() {
-            None => crate::strings::NO_ROUTE.to_owned(),
-            Some(total) if self.is_bounded() => {
-                format!("{} {}", crate::strings::AT_MOST, whole_seconds(total))
-            }
-            Some(total) => whole_seconds(total),
+    ///
+    /// # Errors
+    ///
+    /// As [`Route::total`] and [`whole_seconds`].
+    pub fn render(&self) -> Result<String, TravelError> {
+        match self.total()? {
+            None => Ok(crate::strings::NO_ROUTE.to_owned()),
+            Some(total) => Ok(bounded(whole_seconds(total)?, self.is_bounded())),
         }
     }
 }
 
-/// The largest whole second a `Ms` can hold, used when rounding up would
-/// overflow. A route this long is not a route, but the rendering must not
-/// panic on one.
-const MAX_SECONDS: i32 = i32::MAX.wrapping_div(1000);
-
 /// Rounds **up** to the next whole second and writes it as `9 s` or `2:00`.
 ///
 /// Up, always: the estimator is never optimistic, and rounding up is the only
-/// direction that keeps that true of what the player reads (item 57).
-#[must_use]
-pub fn whole_seconds(ms: Ms) -> String {
-    let raw = ms.raw().max(0);
-    let seconds = raw
-        .checked_add(999)
-        .and_then(|rounded| rounded.checked_div(1000))
-        .unwrap_or(MAX_SECONDS);
-    if seconds < 60 {
-        return format!("{seconds} s");
+/// direction that keeps that true of what the player reads (item 57). The
+/// arithmetic is in `i64`, where a rounded `i32` of milliseconds cannot
+/// overflow, so every travel time has its rendering.
+///
+/// # Errors
+///
+/// [`TravelError::Negative`] for a time below zero, which no estimate is.
+pub fn whole_seconds(ms: Ms) -> Result<String, TravelError> {
+    let raw = i64::from(ms.raw());
+    if raw < 0 {
+        return Err(TravelError::Negative(ms));
     }
-    let minutes = seconds.checked_div(60).unwrap_or(0);
-    let rest = seconds.saturating_sub(minutes.saturating_mul(60));
-    format!("{minutes}:{rest:02}")
+    // `raw` is at most `i32::MAX`, so the sum is far inside `i64`.
+    let seconds = (raw + 999).div_euclid(1000);
+    if seconds < 60 {
+        return Ok(format!("{seconds} s"));
+    }
+    let minutes = seconds.div_euclid(60);
+    let rest = seconds.rem_euclid(60);
+    Ok(format!("{minutes}:{rest:02}"))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Estimate, Route, TravelEstimator, whole_seconds};
+    use super::{Estimate, Route, TravelError, TravelEstimator, whole_seconds};
     use pharmakos_proto::gp::v1::Voxel;
     use pharmakos_sim::math::quantity::Ms;
 
@@ -256,32 +313,78 @@ mod tests {
         Voxel { x, y, z }
     }
 
+    fn seconds(ms: i32) -> String {
+        whole_seconds(Ms::new(ms)).expect("a travel time")
+    }
+
     #[test]
     fn a_time_is_rounded_up_to_a_whole_second() {
-        assert_eq!(whole_seconds(Ms::new(0)), "0 s");
-        assert_eq!(whole_seconds(Ms::new(1)), "1 s");
-        assert_eq!(whole_seconds(Ms::new(1999)), "2 s");
-        assert_eq!(whole_seconds(Ms::new(2000)), "2 s");
-        assert_eq!(whole_seconds(Ms::new(59_001)), "1:00");
-        assert_eq!(whole_seconds(Ms::new(120_000)), "2:00");
-        assert_eq!(whole_seconds(Ms::new(125_400)), "2:06");
+        assert_eq!(seconds(0), "0 s");
+        assert_eq!(seconds(1), "1 s");
+        assert_eq!(seconds(1999), "2 s");
+        assert_eq!(seconds(2000), "2 s");
+        assert_eq!(seconds(59_001), "1:00");
+        assert_eq!(seconds(120_000), "2:00");
+        assert_eq!(seconds(125_400), "2:06");
+        // The longest time `Ms` holds still has its rendering, rounded up.
+        assert_eq!(seconds(i32::MAX), "35791:24");
+    }
+
+    /// E22 (S3's `gwr`): a figure no estimate holds is refused with its typed
+    /// error, never clamped or saturated into one that reads as an answer.
+    #[test]
+    fn a_figure_no_estimate_holds_is_refused() {
+        assert_eq!(
+            whole_seconds(Ms::new(-1)),
+            Err(TravelError::Negative(Ms::new(-1)))
+        );
+        let long = Estimate {
+            cost: 1,
+            ticks: u32::MAX,
+            legs: 1,
+        };
+        assert_eq!(
+            long.ms(),
+            Err(TravelError::LegPastRange { ticks: u32::MAX })
+        );
+        let half = Estimate {
+            cost: 1,
+            ticks: u32::try_from(i32::MAX.div_euclid(50)).expect("a tick count"),
+            legs: 1,
+        };
+        let route = Route {
+            legs: vec![
+                super::Leg {
+                    to: voxel(1, 0, 1),
+                    estimate: Some(half),
+                    fogged: false,
+                },
+                super::Leg {
+                    to: voxel(2, 0, 1),
+                    estimate: Some(half),
+                    fogged: false,
+                },
+            ],
+        };
+        assert_eq!(route.total(), Err(TravelError::TotalPastRange));
+        assert_eq!(route.render(), Err(TravelError::TotalPastRange));
     }
 
     #[test]
     fn a_clear_leg_reads_as_a_time() {
         let route = Route::estimate(&[voxel(0, 0, 1), voxel(40, 0, 1)], &Double);
         assert!(!route.is_bounded());
-        assert_eq!(route.render(), "2 s");
+        assert_eq!(route.render().as_deref(), Ok("2 s"));
     }
 
     #[test]
     fn a_fogged_leg_reads_as_a_bound_and_never_as_an_eta() {
         let route = Route::estimate(&[voxel(0, 0, 1), voxel(-40, 0, 1)], &Double);
         assert!(route.is_bounded());
-        assert_eq!(route.render(), "at most 2 s");
+        assert_eq!(route.render().as_deref(), Ok("at most 2 s"));
         assert_eq!(
             route.legs.first().map(super::Leg::render),
-            Some("at most 2 s".to_owned())
+            Some(Ok("at most 2 s".to_owned()))
         );
     }
 
@@ -293,21 +396,21 @@ mod tests {
         );
         assert_eq!(route.legs.len(), 2);
         assert!(route.is_bounded());
-        assert!(route.render().starts_with("at most"));
+        assert!(route.render().is_ok_and(|text| text.starts_with("at most")));
     }
 
     #[test]
     fn no_route_is_a_normal_answer_and_stops_the_total() {
         let route = Route::estimate(&[voxel(5, 5, 5), voxel(0, 0, 0)], &Double);
         assert!(route.is_unreachable());
-        assert_eq!(route.total(), None);
-        assert_eq!(route.render(), "no route the seat knows of");
+        assert_eq!(route.total(), Ok(None));
+        assert_eq!(route.render().as_deref(), Ok("no route the seat knows of"));
     }
 
     #[test]
     fn one_waypoint_is_no_legs() {
         let route = Route::estimate(&[voxel(1, 1, 1)], &Double);
         assert!(route.legs.is_empty());
-        assert_eq!(route.total(), Some(Ms::new(0)));
+        assert_eq!(route.total(), Ok(Some(Ms::new(0))));
     }
 }

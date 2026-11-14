@@ -1,0 +1,27 @@
+/declarative/route/0  lines 4+1
+  4:30-135 "a site covering the nearest heat vent you do not cover yet (nearest by travel, read when the step starts)"
+    /declarative/route/0/place_beacon/at
+    reference LOCATION [voxel, beacon_anchor, safest, covering]
+    = {"covering":{"vent":{"rank":"NEAREST","coverage":"UNCOVERED"}}}
+/declarative/route/1  lines 5+1
+  5:25-38 "beacon "b_01""
+    /declarative/route/1/interface/beacon
+    reference BEACON [beacon_id, nearest, weakest, most_threatened, safest]
+    = {"beacon_id":"b_01"}
+  5:63-72 "generator"
+    /declarative/route/1/interface/rows/0/add_build_target/target/blueprint_id
+    choice "generator" | "autocannon" | "mortar" | "wall"
+    = "generator"
+  5:76-154 "a spot on the nearest heat vent (nearest by travel, read when the step starts)"
+    /declarative/route/1/interface/rows/0/add_build_target/target/anchor
+    reference LOCATION [voxel, on]
+    = {"on":{"vent":{"rank":"NEAREST"}}}
+  5:186-215 "a spot on Heat vent (120, 88)"
+    /declarative/route/1/interface/rows/1/remove_build_target/anchor
+    reference LOCATION [voxel, on]
+    = {"on":{"feature_id":"vent_120_88"}}
+/declarative/route/2  lines 6+1
+  6:28-62 "a site covering Scrap seam (14, 9)"
+    /declarative/route/2/place_beacon/at
+    reference LOCATION [voxel, beacon_anchor, safest, covering]
+    = {"covering":{"feature_id":"seam_14_9"}}

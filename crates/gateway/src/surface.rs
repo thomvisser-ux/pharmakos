@@ -66,9 +66,8 @@
 //! T9's; the per-method order is each method's own and is stated at the method.
 //!
 //! Every method `gateway.proto` gives a request/response pair is served, S1's
-//! `resolve_refs` included, but for `get_vocabulary`, whose pair S3's `con6` put
-//! on the wire and which answers [`crate::error::Code::Internal`] until S3's
-//! `gwr` serves it. Four methods of the schema still answer
+//! `resolve_refs` and S3's `get_vocabulary` included. Four methods of the
+//! schema still answer
 //! [`crate::error::Code::Internal`] -- `query_area`, `list_known_enemies`,
 //! `get_reports` and `get_capabilities` -- and that is not an omission: they
 //! are exactly the four `gateway.proto` gives no request/response pair at all,
@@ -2203,7 +2202,7 @@ impl Surface {
             Event {
                 at_ms,
                 kind: Kind::new(crate::probation::LEDGER_MEMO_KIND)?,
-                text: memo.text().to_owned(),
+                text: memo.text(&self.rules)?,
                 audience: Audience::Private(seat),
                 memo: Some(memo),
             },
@@ -2879,14 +2878,24 @@ impl Surface {
 
     /// The seat's view of the frozen snapshot, as the verifier reads it.
     ///
-    /// **Its own beacons, and of everybody else's only its sightings.** A
-    /// seat's knowledge of another seat's beacons as beacons -- their mandate,
-    /// their tags -- is the knowledge store's, which is S3's, and a verifier
-    /// scope that carried beacons a seat has not seen would let a playbook
-    /// reference one it cannot know about -- the same fog leak
+    /// **Its own beacons, and of everybody else's only what it sighted.** A
+    /// verifier scope that carried beacons a seat has not seen would let a
+    /// playbook reference one it cannot know about -- the same fog leak
     /// [`crate::fog`] exists to prevent, arriving through the back door.
     ///
-    /// PLACEHOLDER: a seat's sighted enemy beacons join this scope as known beacons, beyond the sightings S2 carries — owner, S3 with the knowledge store (the register's S3-04).
+    /// # Sighted enemy beacons (the register's S3-04)
+    ///
+    /// Each enemy beacon the seat sights -- in its live vision now, or in its
+    /// memory -- joins the scope as a [`pharmakos_verifier::KnownBeacon`] with
+    /// [`pharmakos_verifier::Ownership::EnemyKnown`], beside its sighting, under
+    /// the handle the sighting spells (`e_NN`), at the place its freshest
+    /// sighting puts it, with its owner and nothing more: no writ
+    /// (`MANDATE_KIND_UNSPECIFIED`), no tags and never the core mark, because
+    /// a seat sees none of another seat's beacon but where it stands (S2's
+    /// plan, decision 5). It is fogged as the briefing is: the same live vision
+    /// through the match's fog filter and the same sighting table
+    /// ([`Surface::verifier_sightings`]). The per-beacon facts the licence half
+    /// sets are pushed after every beacon, and only for the seat's own.
     ///
     /// # Sightings, with their ages (S2's Attack freshness)
     ///
@@ -2933,6 +2942,14 @@ impl Surface {
         let mut scope = VerifierScope::new(seat, economy);
 
         push_own_beacons(world, seat, row, &mut scope)?;
+        let mut sighted: Vec<(String, SeatId)> = Vec::new();
+        for (sighting, owner) in self.verifier_sightings(seat)? {
+            if let pharmakos_verifier::Sighted::Beacon(handle) = &sighting.what {
+                sighted.push((handle.clone(), owner));
+            }
+            scope.push_sighting(sighting);
+        }
+        push_enemy_beacons(&sighted, &mut scope)?;
         push_own_licence_facts(world, seat, &mut scope)?;
 
         for read in crate::targeting::feature_reads(world, Some(seat)) {
@@ -2956,9 +2973,6 @@ impl Surface {
         scope.set_commander(
             crate::targeting::commander_point(world, seat).map(crate::view::voxel_of),
         );
-        for sighting in self.verifier_sightings(seat)? {
-            scope.push_sighting(sighting);
-        }
         Ok(scope)
     }
 
@@ -3260,11 +3274,7 @@ impl Surface {
             // Docs and planning.
             Method::GetSchema => Surface::get_schema(request),
             Method::ListTemplates => self.list_templates(subject, request),
-            // On the wire from S3's `con6`, with its pair; S3's `gwr` serves it.
-            Method::GetVocabulary => Err(Error::internal(
-                "`get_vocabulary` is in the schema and this build does not serve it yet: S3's \
-                 rule list fills it",
-            )),
+            Method::GetVocabulary => self.get_vocabulary(subject),
             Method::InstantiateTemplate => self.instantiate_template(subject, request),
             Method::VerifyPlan => self.verify_plan(subject, request),
             Method::RenderPlan => self.render_plan(subject, request),
@@ -3491,7 +3501,7 @@ impl Surface {
                 // `Event.ledger_memo`, on a memo's line and no other: the
                 // same text as `text`, and which memo (S3's plan, E5).
                 if let Some(memo) = event.memo {
-                    entries.push((String::from("ledger_memo"), memo.json()));
+                    entries.push((String::from("ledger_memo"), memo.json(&event.text)));
                 }
                 Json::Object(entries)
             })
@@ -3618,6 +3628,50 @@ fn dark_beacons(world: &pharmakos_sim::world::World) -> Result<Vec<DarkAtEnd>, E
             })
         })
         .collect()
+}
+
+/// Every enemy beacon the seat sighted, as a known beacon of its scope (the
+/// register's S3-04; [`Surface::verifier_scope`] says what it carries). Run
+/// after every sighting is in the scope, so a beacon both in sight and
+/// remembered stands where the scope's freshest sighting of it puts it.
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] for a handle the scope holds no sighting
+/// of, or one already held as the seat's own beacon: neither is a view the
+/// sighting table and the handle table can give.
+fn push_enemy_beacons(
+    sighted: &[(String, SeatId)],
+    scope: &mut VerifierScope,
+) -> Result<(), Error> {
+    for (handle, owner) in sighted {
+        let at = scope
+            .beacon_sighting(handle)
+            .map(|sighting| sighting.at)
+            .ok_or_else(|| {
+                Error::internal(format!(
+                    "the verifier scope holds no sighting of `{handle}`, which was just pushed"
+                ))
+            })?;
+        if scope
+            .beacon(handle)
+            .is_some_and(|known| known.side == pharmakos_verifier::Ownership::Own)
+        {
+            return Err(Error::internal(format!(
+                "`{handle}` names a sighted enemy beacon and one of the seat's own"
+            )));
+        }
+        scope.push_beacon(pharmakos_verifier::KnownBeacon {
+            beacon_id: handle.clone(),
+            owner: *owner,
+            side: pharmakos_verifier::Ownership::EnemyKnown,
+            mandate: pharmakos_proto::gp::v1::beacon_filter::MandateKind::Unspecified,
+            tags: Vec::new(),
+            at,
+            is_core: false,
+        });
+    }
+    Ok(())
 }
 
 /// The verifier scope's licence half for the seat's own facts (S3's `lic`, a
@@ -3747,7 +3801,7 @@ fn push_own_beacons(
             beacon_id: pharmakos_sim::tables::own_beacon_name(ordinal),
             owner: seat,
             side: pharmakos_verifier::Ownership::Own,
-            mandate: crate::view::mandate_of(crate::view::mandate_from_id(mandate)),
+            mandate: crate::view::mandate_of(crate::view::mandate_from_id(mandate)?),
             // No tag column exists in the sim, and inventing one here would
             // be a proto change wearing a disguise (AGENTS.md section 5).
             tags: Vec::new(),
@@ -4380,17 +4434,6 @@ mod tests {
         let token = seat_token(&mut surface, 0);
         let response = surface.call(Some(&token), &request("get_briefing", "{}"), &Blind);
         assert_eq!(code(&response), "INTERNAL");
-        // On the wire from S3's `con6`, served from S3's `gwr`: until then the
-        // same answer, naming the method, and never the caller's fault.
-        let response = surface.call(Some(&token), &request("get_vocabulary", "{}"), &Blind);
-        assert_eq!(code(&response), "INTERNAL");
-        assert!(
-            matches!(
-                response.get("error").and_then(|error| error.get("message")),
-                Some(Json::String(message)) if message.contains("get_vocabulary")
-            ),
-            "{response:?}"
-        );
     }
 
     #[test]
@@ -4790,9 +4833,10 @@ mod tests {
                 "priority",
                 "powered",
                 "hp",
-                "max_hp"
+                "max_hp",
+                "sphere_radius_voxels"
             ],
-            "a seat's own beacon carries its hit points too"
+            "a seat's own beacon carries its hit points and its sphere too"
         );
     }
 
@@ -4920,6 +4964,51 @@ mod tests {
         );
     }
 
+    /// The register's S3-04 (S3's `gwr`; decisions-log item 157 (5)): the
+    /// enemy beacon the seat sighted joins its verifier scope as a known
+    /// beacon under the sighting's handle, where the sighting puts it, with
+    /// its owner and nothing the seat cannot see -- no writ, no tags, no core
+    /// mark, and no grown sphere or Spire, which the licence half sets for
+    /// the seat's own beacons only. A seat that sighted nothing is told of no
+    /// enemy beacon.
+    #[test]
+    fn the_verifier_scope_carries_the_enemy_beacons_the_seat_sighted() {
+        let (surface, core_at, _) = remembering();
+        let scope = surface.verifier_scope(SeatId::new(0)).expect("a scope");
+        assert_eq!(
+            scope.beacon("e_01"),
+            Some(&pharmakos_verifier::KnownBeacon {
+                beacon_id: String::from("e_01"),
+                owner: SeatId::new(1),
+                side: pharmakos_verifier::Ownership::EnemyKnown,
+                mandate: pharmakos_proto::gp::v1::beacon_filter::MandateKind::Unspecified,
+                tags: Vec::new(),
+                at: pharmakos_proto::gp::v1::Voxel {
+                    x: core_at[0],
+                    y: core_at[1],
+                    z: core_at[2],
+                },
+                is_core: false,
+            })
+        );
+        assert_eq!(scope.sphere_radius("e_01"), None);
+        assert!(!scope.spire_at("e_01"));
+        assert!(
+            scope
+                .own_beacons()
+                .all(|known| known.beacon_id.starts_with("b_")),
+            "the sighted beacon is not the seat's own"
+        );
+        let theirs = surface.verifier_scope(SeatId::new(1)).expect("a scope");
+        assert!(
+            theirs
+                .beacons()
+                .iter()
+                .all(|known| known.side == pharmakos_verifier::Ownership::Own),
+            "seat 1 sighted nothing, so it knows no enemy beacon"
+        );
+    }
+
     /// S3's `lic` (decisions-log item 157 (5)): the verifier scope's licence
     /// half carries the seat's own licences, the grown sphere of a beacon a
     /// finished Spire stands beside, and the beacons a Spire stands at, from
@@ -4978,6 +5067,111 @@ mod tests {
             "seat 1's core keeps its base"
         );
         assert!(!theirs.spire_at("b_00"));
+    }
+
+    /// Seat 0's core with a finished Resonance Spire beside it, in a casual
+    /// match, so seat 1 sees the core live: the scene the sphere and licence
+    /// reads of S3's `gwr` are pinned on.
+    fn spire_at_seat_zeros_core() -> Surface {
+        use pharmakos_proto::gp::v1::Licence;
+        resumed_with(FogPolicy::casual(), |snapshot, world| {
+            let mut world = world.clone();
+            let seat = SeatId::new(0);
+            let row = (0..world.beacons().ids().len())
+                .find(|row| world.beacons().seats().get(*row) == Some(&0))
+                .expect("seat 0's core");
+            let core = pharmakos_sim::tables::BeaconId::new(
+                world.beacons().ids().get(row).copied().expect("a core id"),
+            );
+            let at = world
+                .beacons()
+                .positions()
+                .get(row)
+                .copied()
+                .expect("a core place");
+            let beside = [
+                at[0].saturating_add(pharmakos_sim::math::fixed::Fx::from_voxels(1)),
+                at[1],
+                at[2],
+            ];
+            assert!(world.award_licence_directly(seat, Licence::ResonanceSpire, 1));
+            world
+                .raise_structure(
+                    seat,
+                    core,
+                    pharmakos_sim::tables::StructureKind::ResonanceSpire,
+                    beside,
+                )
+                .expect("room for a Spire");
+            *snapshot = pharmakos_sim::snapshot::Snapshot::capture(&world);
+        })
+    }
+
+    /// S3's plan, E3 (`gwr`): `BeaconSummary.sphere_radius_voxels` is the sim's
+    /// one radius function's answer on the seat's own beacons -- the grown
+    /// radius beside a finished Spire, the base row elsewhere -- and is never
+    /// on another seat's beacon, even one in live vision, because it would
+    /// tell whether that beacon's Spire stands.
+    #[test]
+    fn the_sphere_radius_is_told_on_own_beacons_only() {
+        let mut surface = spire_at_seat_zeros_core();
+        let grown = rules().grown_sphere_radius_voxels().to_string();
+        let base = rules().sphere_radius_voxels().to_string();
+        let ours = seat_token(&mut surface, 0);
+        let core = result(&surface.call(
+            Some(&ours),
+            &request("get_beacon", r#"{"beacon_id":"b_00"}"#),
+            &Blind,
+        ));
+        assert_eq!(
+            core.get("summary")
+                .and_then(|summary| summary.get("sphere_radius_voxels")),
+            Some(&Json::Number(grown)),
+            "{core:?}"
+        );
+        let theirs = seat_token(&mut surface, 1);
+        let listed = result(&surface.call(Some(&theirs), &request("list_beacons", "{}"), &Blind));
+        let Some(Json::Array(beacons)) = listed.get("beacons") else {
+            panic!("a listing: {listed:?}");
+        };
+        let mut own = 0;
+        let mut foreign = 0;
+        for beacon in beacons {
+            let named = |prefix: &str| matches!(beacon.get("beacon_id"), Some(Json::String(id)) if id.starts_with(prefix));
+            if named("b_") {
+                own += 1;
+                assert_eq!(
+                    beacon.get("sphere_radius_voxels"),
+                    Some(&Json::Number(base.clone())),
+                    "{beacon:?}"
+                );
+            } else {
+                foreign += 1;
+                assert_eq!(beacon.get("sphere_radius_voxels"), None, "{beacon:?}");
+            }
+        }
+        assert!(own > 0 && foreign > 0, "{listed:?}");
+    }
+
+    /// S3's `gwr` (decisions-log item 153 (3)): the briefing tells a seat the
+    /// licences it holds, and leaves the field out for a seat that holds none,
+    /// in a casual match where it sees the other seat's Spire.
+    #[test]
+    fn the_briefing_tells_the_seat_its_own_licences() {
+        let mut surface = spire_at_seat_zeros_core();
+        let ours = seat_token(&mut surface, 0);
+        let briefing = result(&surface.call(Some(&ours), &request("get_briefing", "{}"), &Blind));
+        assert_eq!(
+            briefing.get("licences_held"),
+            Some(&Json::Array(vec![Json::String(String::from(
+                "resonance_spire"
+            ))])),
+            "{briefing:?}"
+        );
+        let theirs = seat_token(&mut surface, 1);
+        let briefing = result(&surface.call(Some(&theirs), &request("get_briefing", "{}"), &Blind));
+        assert!(briefing.get("prose").is_some(), "{briefing:?}");
+        assert_eq!(briefing.get("licences_held"), None, "{briefing:?}");
     }
 
     /// A world event the sim placed nowhere is refused, never filtered as if it
@@ -6265,5 +6459,51 @@ mod tests {
             .issue_memo(&of(EventKind::CommanderDied, 0, None), Ms::new(1_000), &[])
             .expect("nothing to issue");
         assert!(memos(&custom).is_empty(), "a custom match issues no memo");
+    }
+
+    /// S3's plan, E5, the fourth memo (`gwr`): the human seat's first licence
+    /// awarded issues `first_licence` once a match, on its own feed; another
+    /// seat's award issues nothing, and a licence voided is no award.
+    #[test]
+    fn the_first_licence_issues_its_memo_once() {
+        use crate::probation::{Memo, Preset};
+        use pharmakos_sim::events::EventKind;
+        let of = |kind, seat: u8| pharmakos_sim::events::Event {
+            tick: Tick::new(9),
+            seq: 0,
+            kind,
+            seat: Some(SeatId::new(seat)),
+            subject: None,
+            at: None,
+            value: 1,
+        };
+        let mut probation = surface().with_preset(Preset::Probation, Some(SeatId::new(0)));
+        for event in [
+            of(EventKind::LicenceAwarded, 1),
+            of(EventKind::LicenceVoided, 0),
+            of(EventKind::LicenceAwarded, 0),
+            of(EventKind::LicenceAwarded, 0),
+        ] {
+            probation
+                .issue_memo(&event, Ms::new(1_000), &[])
+                .expect("issued or not");
+        }
+        let issued: Vec<(Option<Memo>, String)> = probation
+            .feed()
+            .events()
+            .iter()
+            .filter(|event| event.kind.name() == crate::probation::LEDGER_MEMO_KIND)
+            .map(|event| (event.memo, event.text.clone()))
+            .collect();
+        assert_eq!(
+            issued,
+            vec![(
+                Some(Memo::FirstLicence),
+                String::from(
+                    "Notice of licence. You ran Generators on two vents at settlement. You may \
+                     now queue a Resonance Spire at any of your beacons."
+                )
+            )]
+        );
     }
 }

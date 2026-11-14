@@ -31,6 +31,8 @@ use pharmakos_gateway::surface::Surface;
 use pharmakos_gateway::token::Token;
 use pharmakos_proto::gp::api::v1::status::Phase;
 use pharmakos_proto::json::Json;
+use pharmakos_sim::math::fixed::Fx;
+use pharmakos_sim::math::fixed::Sq;
 use pharmakos_sim::runner::MatchSettings;
 use pharmakos_sim::tables::SeatId;
 use pharmakos_sim::world::WorldConfig;
@@ -422,7 +424,7 @@ fn a_memo_fires_once_survives_a_resume_and_never_in_a_custom_match() {
             .into_iter()
             .find(|(kind, ..)| kind == "ledger_memo")
         {
-            assert_eq!(text, Memo::FirstDeath.text());
+            assert_eq!(text, pharmakos_gateway::strings::MEMO_FIRST_DEATH);
         }
 
         // A save at round 2's Lull, through the file's own text, resumed.
@@ -913,5 +915,155 @@ fn the_tally_at_the_matchs_end_reads_in_this_match() {
     assert!(
         ended.contains("In this match") && !ended.contains("so far"),
         "{ended}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The licence, earned at a real settlement (S3's `gwr` review, item 10)
+// ---------------------------------------------------------------------------
+
+/// The standing points of the two vents nearest seat 0's core, each on a
+/// footprint column whose top voxel is vent material, as `crates/sim/tests/
+/// licence.rs` finds them.
+fn two_vent_stands(world: &pharmakos_sim::world::World) -> Vec<[Fx; 3]> {
+    let row = (0..world.beacons().ids().len())
+        .find(|row| world.beacons().seats().get(*row) == Some(&0))
+        .expect("seat 0's core");
+    let from = world
+        .beacons()
+        .positions()
+        .get(row)
+        .copied()
+        .expect("its place");
+    let mut vents: Vec<(Sq, usize, [Fx; 3])> = Vec::new();
+    for (index, feature) in world.features().features().iter().enumerate() {
+        if feature.kind != pharmakos_sim::features::FeatureKind::Vent {
+            continue;
+        }
+        let stand = feature.footprint.iter().find_map(|column| {
+            let z = world.voxels().top_solid_z(column.x, column.y)?;
+            world
+                .voxels()
+                .get([column.x, column.y, z])
+                .and_then(pharmakos_sim::Material::vent_richness)?;
+            Some([
+                Fx::from_voxels(i16::try_from(column.x).ok()?),
+                Fx::from_voxels(i16::try_from(column.y).ok()?),
+                Fx::from_voxels(i16::try_from(z + 1).ok()?),
+            ])
+        });
+        if let Some(stand) = stand {
+            vents.push((Sq::between(from, stand), index, stand));
+        }
+    }
+    vents.sort_unstable_by_key(|(distance, index, _)| (*distance, *index));
+    vents.into_iter().take(2).map(|(_, _, at)| at).collect()
+}
+
+/// S3's `gwr` review, item 10: seat 0 runs Generators on two vents, the
+/// Ledger's own check awards it the Resonance Spire's licence at round 1's
+/// settlement, and every read this lane added tells it: the recap's licence
+/// line and its prose, the feed's `first_licence` memo in a Probation match,
+/// the next Lull's briefing (`licences_held`) and the vocabulary, whose
+/// Resonance Spire unlocks.
+#[test]
+fn a_licence_earned_at_a_settlement_reaches_the_recap_the_feed_the_briefing_and_the_vocabulary() {
+    let config = WorldConfig {
+        match_seed: SEED,
+        seats: 2,
+        rules: rules(),
+        match_settings: MatchSettings {
+            segment_lengths_ms: vec![10_000],
+            round_limit: 3,
+        },
+    };
+    let mut world = pharmakos_sim::world::World::new(&config).expect("the world generates");
+    let core = {
+        let row = (0..world.beacons().ids().len())
+            .find(|row| world.beacons().seats().get(*row) == Some(&0))
+            .expect("seat 0's core");
+        pharmakos_sim::tables::BeaconId::new(
+            world.beacons().ids().get(row).copied().expect("an id"),
+        )
+    };
+    for at in two_vent_stands(&world) {
+        world
+            .raise_structure(
+                SeatId::new(0),
+                core,
+                pharmakos_sim::tables::StructureKind::Generator,
+                at,
+            )
+            .expect("room for a Generator");
+    }
+    let bytes = pharmakos_sim::snapshot::Snapshot::capture(&world)
+        .to_bytes()
+        .expect("it encodes");
+    let mut host = Host::open(&config, Some(library_folder())).expect("a match");
+    host.resume(&bytes).expect("the world resumes");
+    let mut surface = Surface::new("m-licence", SEED, rules(), FogPolicy::fogged(), &SEATS)
+        .expect("a match id")
+        .with_preset(Preset::Probation, Some(SeatId::new(0)));
+    surface.attach(host).expect("attached");
+    surface.open_lull().expect("the opening Lull");
+
+    let spire = |surface: &mut Surface| {
+        let token = seat_token(surface, 0);
+        let words = result(
+            &call(surface, &token, "get_vocabulary", "{}"),
+            "get_vocabulary",
+        );
+        array_of(&words, "blueprints")
+            .into_iter()
+            .find(|entry| text_of(entry, "name") == "resonance_spire")
+            .expect("the Spire is listed")
+    };
+    assert!(
+        spire(&mut surface).get("locked").is_some(),
+        "locked before the licence"
+    );
+
+    play_push(&mut surface);
+    let token = seat_token(&mut surface, 0);
+    let recap = result(&call(&mut surface, &token, "get_recap", "{}"), "get_recap");
+    let awarded = array_of(&recap, "licences_awarded");
+    assert_eq!(awarded.len(), 1, "{recap:?}");
+    let award = awarded.first().expect("the award");
+    assert_eq!(text_of(award, "seat"), "seat.0");
+    assert_eq!(text_of(award, "licence"), "resonance_spire");
+    assert!(
+        text_of(&recap, "prose").contains("Licence awarded: Resonance Spire."),
+        "{recap:?}"
+    );
+    let theirs = seat_token(&mut surface, 1);
+    let their_recap = result(&call(&mut surface, &theirs, "get_recap", "{}"), "get_recap");
+    assert_eq!(
+        their_recap.get("licences_awarded"),
+        None,
+        "seat 0's award is not seat 1's to know between rounds"
+    );
+    assert_eq!(
+        memos_on_the_feed(&mut surface, 0),
+        vec![String::from(Memo::FirstLicence.name())],
+        "the person's first licence issues its memo"
+    );
+
+    next_lull(&mut surface);
+    let token = seat_token(&mut surface, 0);
+    let briefing = result(
+        &call(&mut surface, &token, "get_briefing", "{}"),
+        "get_briefing",
+    );
+    assert_eq!(
+        briefing.get("licences_held"),
+        Some(&Json::Array(vec![Json::String(String::from(
+            "resonance_spire"
+        ))])),
+        "{briefing:?}"
+    );
+    assert_eq!(
+        spire(&mut surface).get("locked"),
+        None,
+        "the Spire unlocks with the licence"
     );
 }
