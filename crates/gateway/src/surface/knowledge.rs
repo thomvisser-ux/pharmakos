@@ -493,7 +493,7 @@ impl Surface {
                 let mandate =
                     view::mandate_from_id(beacons.mandates().get(row).copied().ok_or_else(
                         || Error::internal(format!("the beacon table has no mandate in row {row}")),
-                    )?);
+                    )?)?;
                 let hp = self.beacon_hit_points(row, id)?;
                 strings::own_beacon(&known.name, view::mandate_name(mandate), hp.0)
             }
@@ -962,6 +962,9 @@ impl Surface {
         // A fault in a query is raised, never drawn as an unreachable leg
         // (`crate::routes`, "A fault is raised").
         routes.take_fault()?;
+        let refused = |error: pharmakos_plan_core::travel::TravelError| {
+            Error::internal(format!("the route's travel has no rendering: {error}"))
+        };
         let legs: Vec<Json> = route
             .legs
             .iter()
@@ -989,20 +992,20 @@ impl Surface {
                 if let Some(found) = leg.estimate {
                     entries.push((
                         String::from("ms"),
-                        Json::Number(found.ms().raw().to_string()),
+                        Json::Number(found.ms().map_err(refused)?.raw().to_string()),
                     ));
                 }
                 entries.push((String::from("fogged"), Json::Bool(leg.fogged)));
-                Json::Object(entries)
+                Ok(Json::Object(entries))
             })
-            .collect();
+            .collect::<Result<Vec<Json>, Error>>()?;
         let mut entries = vec![(
             String::from("reachable"),
             Json::Bool(!route.is_unreachable()),
         )];
         // The total only for a route every leg of which reaches, as a leg's
         // own `ms` is written.
-        if let Some(total) = route.total() {
+        if let Some(total) = route.total().map_err(refused)? {
             entries.push((String::from("ms"), Json::Number(total.raw().to_string())));
         }
         entries.push((String::from("legs"), Json::Array(legs)));

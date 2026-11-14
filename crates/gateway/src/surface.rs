@@ -3806,7 +3806,7 @@ fn push_own_beacons(
             beacon_id: pharmakos_sim::tables::own_beacon_name(ordinal),
             owner: seat,
             side: pharmakos_verifier::Ownership::Own,
-            mandate: crate::view::mandate_of(crate::view::mandate_from_id(mandate)),
+            mandate: crate::view::mandate_of(crate::view::mandate_from_id(mandate)?),
             // No tag column exists in the sim, and inventing one here would
             // be a proto change wearing a disguise (AGENTS.md section 5).
             tags: Vec::new(),

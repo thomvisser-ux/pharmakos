@@ -127,18 +127,20 @@ pub const fn mandate_name(mandate: MandateKind) -> &'static str {
     }
 }
 
-/// The mandate a stored wire id names, or [`MandateKind::None`] for one this
-/// build does not define.
-#[must_use]
-pub fn mandate_from_id(id: u8) -> MandateKind {
-    match id {
-        1 => MandateKind::Build,
-        2 => MandateKind::Defend,
-        3 => MandateKind::Attack,
-        4 => MandateKind::Mine,
-        5 => MandateKind::Survey,
-        _ => MandateKind::None,
-    }
+/// The mandate a stored wire id names, by the sim's own table
+/// ([`MandateKind::from_id`]): 0 is no mandate.
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] for an id the sim does not define, which
+/// its beacon table never holds. Until S3's `gwr` it read as no mandate, a
+/// silent default (E22).
+pub fn mandate_from_id(id: u8) -> Result<MandateKind, Error> {
+    MandateKind::from_id(id).ok_or_else(|| {
+        Error::internal(format!(
+            "a beacon's mandate column holds {id}, which the sim does not define"
+        ))
+    })
 }
 
 /// A unit kind as `gp.api.v1.ViewEntity.subtype` spells it.
@@ -273,11 +275,15 @@ mod tests {
     }
 
     #[test]
-    fn a_mandate_maps_both_ways_and_an_unknown_one_is_unspecified() {
+    fn a_mandate_maps_both_ways_and_an_unknown_one_is_refused() {
         assert_eq!(mandate_of(MandateKind::Build), WireMandate::Build);
         assert_eq!(mandate_of(MandateKind::None), WireMandate::Unspecified);
-        assert_eq!(mandate_from_id(4), MandateKind::Mine);
-        assert_eq!(mandate_from_id(200), MandateKind::None);
+        assert_eq!(mandate_from_id(4).ok(), Some(MandateKind::Mine));
+        assert_eq!(mandate_from_id(0).ok(), Some(MandateKind::None));
+        assert_eq!(
+            mandate_from_id(200).map_err(|error| error.code),
+            Err(crate::error::Code::Internal)
+        );
         assert_eq!(mandate_name(MandateKind::Build), "Build");
         assert_eq!(mandate_name(MandateKind::None), "no");
         for kind in [
@@ -287,7 +293,7 @@ mod tests {
             MandateKind::Mine,
             MandateKind::Survey,
         ] {
-            assert_eq!(mandate_from_id(kind.id()), kind);
+            assert_eq!(mandate_from_id(kind.id()).ok(), Some(kind));
         }
     }
 

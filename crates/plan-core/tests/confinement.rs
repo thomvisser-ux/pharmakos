@@ -305,6 +305,12 @@ fn the_crate_declares_no_features_of_its_own() {
 /// parameter, which refuses a declared parameter the template does not hold
 /// rather than filling it with nothing; and `render.rs`' list joiner, which
 /// splits the list rather than reading its ends through defaults.
+///
+/// S3's `gwr` (E22) took out four more: `travel.rs`' rounding and its total,
+/// which saturated, and now refuse a figure no estimate holds with
+/// `TravelError`; and `render.rs`' divisions, which read a non-zero constant
+/// through a fallback and now divide in `i64` with `div_euclid`, and its
+/// comparisons, which now read an absent one through `let ... else`.
 const KEPT_FALLBACKS: &[(&str, &str, usize, &str)] = &[
     (
         "canonical.rs",
@@ -395,30 +401,6 @@ const KEPT_FALLBACKS: &[(&str, &str, usize, &str)] = &[
         "at.map_or_else(|| s::PLACE_NOWHERE.to_owned(), voxel)",
         1,
         "a corner the file leaves out is said to be nowhere the file names",
-    ),
-    (
-        "render.rs",
-        "test.map_or_else(",
-        3,
-        "a predicate with no comparison is said to compare to nothing the file names",
-    ),
-    (
-        "render.rs",
-        ".checked_div(",
-        3,
-        "each divisor is a non-zero constant, so the division is never refused",
-    ),
-    (
-        "travel.rs",
-        ".unwrap_or(MAX_SECONDS);",
-        1,
-        "rounding up past i32 saturates upwards, the one direction the estimator may err in",
-    ),
-    (
-        "travel.rs",
-        "seconds.checked_div(60).unwrap_or(0)",
-        1,
-        "the divisor is a non-zero constant",
     ),
 ];
 

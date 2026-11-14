@@ -827,28 +827,30 @@ fn cmp_word(op: int_compare::Op) -> &'static str {
     }
 }
 
+// A predicate the file wrote with no comparison is said to compare to
+// nothing: the verifier refuses it, and the sentence names what is missing
+// rather than inventing a comparison.
+
 fn compare(test: Option<&pharmakos_proto::gp::v1::IntCompare>, unit: &str) -> String {
-    test.map_or_else(
-        || s::CONDITION_NOTHING.to_owned(),
-        |test| {
-            let spacer = if unit.starts_with('%') { "" } else { " " };
-            format!("{} {}{spacer}{unit}", cmp_word(test.op()), test.value)
-        },
-    )
+    let Some(test) = test else {
+        return s::CONDITION_NOTHING.to_owned();
+    };
+    let spacer = if unit.starts_with('%') { "" } else { " " };
+    format!("{} {}{spacer}{unit}", cmp_word(test.op()), test.value)
 }
 
 fn compare_money(test: Option<&pharmakos_proto::gp::v1::IntCompare>) -> String {
-    test.map_or_else(
-        || s::CONDITION_NOTHING.to_owned(),
-        |test| format!("{} ${}", cmp_word(test.op()), test.value),
-    )
+    let Some(test) = test else {
+        return s::CONDITION_NOTHING.to_owned();
+    };
+    format!("{} ${}", cmp_word(test.op()), test.value)
 }
 
 fn compare_ms(test: Option<&pharmakos_proto::gp::v1::IntCompare>) -> String {
-    test.map_or_else(
-        || s::CONDITION_NOTHING.to_owned(),
-        |test| format!("{} {}", cmp_word(test.op()), duration(Ms::new(test.value))),
-    )
+    let Some(test) = test else {
+        return s::CONDITION_NOTHING.to_owned();
+    };
+    format!("{} {}", cmp_word(test.op()), duration(Ms::new(test.value)))
 }
 
 // ---------------------------------------------------------------------------
@@ -1023,25 +1025,31 @@ fn join(parts: &[String]) -> String {
 ///
 /// Exact rather than rounded, unlike [`crate::travel::whole_seconds`]: these
 /// are authored numbers and rules-table arithmetic, not estimates, and
-/// rounding one would be the rendering inventing a fact.
+/// rounding one would be the rendering inventing a fact. In `i64`, so the
+/// least `i32`, negated, is still the number it is.
 #[must_use]
 pub fn duration(ms: Ms) -> String {
-    let total = ms.raw();
+    let total = i64::from(ms.raw());
     if total < 0 {
-        return format!("minus {}", duration(Ms::new(total.saturating_neg())));
+        return format!("minus {}", magnitude(-total));
     }
-    let seconds = total.checked_div(1000).unwrap_or(0);
-    let rest = total.saturating_sub(seconds.saturating_mul(1000));
+    magnitude(total)
+}
+
+/// [`duration`] of a time at or above zero.
+fn magnitude(total: i64) -> String {
+    let seconds = total.div_euclid(1000);
+    let rest = total.rem_euclid(1000);
     if rest == 0 && seconds >= 60 {
-        let minutes = seconds.checked_div(60).unwrap_or(0);
-        let spare = seconds.saturating_sub(minutes.saturating_mul(60));
+        let minutes = seconds.div_euclid(60);
+        let spare = seconds.rem_euclid(60);
         return format!("{minutes}:{spare:02}");
     }
     if rest == 0 {
         return format!("{seconds} s");
     }
-    if rest.checked_rem(100) == Some(0) {
-        let tenths = rest.checked_div(100).unwrap_or(0);
+    if rest.rem_euclid(100) == 0 {
+        let tenths = rest.div_euclid(100);
         return format!("{seconds}.{tenths} s");
     }
     format!("{seconds}.{rest:03} s")
@@ -1100,6 +1108,10 @@ mod tests {
         assert_eq!(duration(Ms::new(16_500)), "16.5 s");
         assert_eq!(duration(Ms::new(1234)), "1.234 s");
         assert_eq!(duration(Ms::new(-500)), "minus 0.5 s");
+        // E22 (S3's `gwr`): the ends of `i32` read as the numbers they
+        // are; the least one used to saturate on its negation and lose 1 ms.
+        assert_eq!(duration(Ms::new(i32::MAX)), "2147483.647 s");
+        assert_eq!(duration(Ms::new(i32::MIN)), "minus 2147483.648 s");
     }
 
     #[test]
