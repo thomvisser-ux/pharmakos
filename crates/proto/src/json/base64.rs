@@ -88,13 +88,23 @@ fn value_of(symbol: u8) -> Option<u32> {
 /// Standard or URL-safe base64, with or without padding.
 ///
 /// Returns `None` for any symbol outside both alphabets, for a text whose
-/// length is not a whole number of quanta, and for padding in the middle.
+/// length is not a whole number of quanta, for padding in the middle, and for
+/// padding that does not complete the last quantum: padding, when there is
+/// any, is one or two `=` that make the text a whole number of four-symbol
+/// quanta, so `"===="`, `"="`, `"AQ="` and `"AQID="` are refused (S3's
+/// `vfy6`). Without that rule `"===="` read as no bytes, which the codec then
+/// wrote for a field at its default.
 ///
-/// Lenient by design — see the module docs. A caller that wants to refuse a
-/// spelling a conforming writer never produces checks the text's shape first.
+/// Lenient by design otherwise — see the module docs. A caller that wants to
+/// refuse a spelling a conforming writer never produces checks the text's
+/// shape first.
 #[must_use]
 pub fn decode(text: &str) -> Option<Vec<u8>> {
     let trimmed = text.trim_end_matches('=');
+    let padding = text.len().checked_sub(trimmed.len())?;
+    if padding > 0 && (padding > 2 || !text.len().is_multiple_of(4)) {
+        return None;
+    }
     let symbols: Vec<u8> = trimmed.bytes().collect();
     let mut out: Vec<u8> = Vec::new();
     for chunk in symbols.chunks(4) {
@@ -163,5 +173,27 @@ mod tests {
             encode(&ramp),
             "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
         );
+    }
+
+    /// Padding, when there is any, completes the last quantum and does
+    /// nothing else (S3's `vfy6`).
+    #[test]
+    fn padding_completes_the_last_quantum_or_is_refused() {
+        for (coded, plain) in [
+            ("", &b""[..]),
+            ("Zg==", b"f"),
+            ("Zg", b"f"),
+            ("Zm8=", b"fo"),
+            ("Zm8", b"fo"),
+            ("Zm9vYg==", b"foob"),
+        ] {
+            assert_eq!(decode(coded).as_deref(), Some(plain), "{coded:?}");
+        }
+        for coded in [
+            "=", "==", "===", "====", "========", "Zg=", "Zg===", "Zm8==", "Zm9v=", "Zm9v==",
+            "Zm9v====", "Zm9vYg=", "Zg==Zg==",
+        ] {
+            assert_eq!(decode(coded), None, "{coded:?}");
+        }
     }
 }

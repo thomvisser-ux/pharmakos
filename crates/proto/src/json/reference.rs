@@ -15,7 +15,9 @@
 //! The old path's behaviour moves only where the codec's rules move, and in
 //! step with them, so the two stay one answer (S3's `vfy6`): numbers are read
 //! by RFC 8259's grammar, and a quoted integer is held to its integer grammar
-//! (follow-up B).
+//! (follow-up B); a field written under both its `.proto` and its JSON
+//! name is refused (follow-up C); and base64 padding completes the last
+//! quantum or is refused (follow-up C, in the shared `base64` module).
 //!
 //! The differential tests in `super::differential` feed it and the fast codec the
 //! same generated documents and assert equal bytes or the same error. It is
@@ -714,6 +716,7 @@ fn json_to_message(
     // by the order somebody happened to type them in.
     let mut resolved: Vec<(&Field, &Json)> = Vec::new();
     let mut oneofs_used: BTreeMap<i32, String> = BTreeMap::new();
+    let mut named: BTreeMap<i32, String> = BTreeMap::new();
     for (key, item) in entries {
         let key_pointer = push_pointer(pointer, key);
         let field = message.field_by_name(key).ok_or_else(|| {
@@ -725,6 +728,18 @@ fn json_to_message(
                 ),
             )
         })?;
+        // S3's `vfy6`: a field written under both its names is refused.
+        if let Some(first) = named.get(&field.number) {
+            return Err(Error::at(
+                &key_pointer,
+                format!(
+                    "`{first}` and `{key}` both name the field `{}`. A field is written once, \
+                     under one of its names.",
+                    field.name
+                ),
+            ));
+        }
+        named.insert(field.number, key.clone());
         if matches!(item, Json::Null) {
             // The mapping treats null as "the default value", and a default is
             // not written on the wire. Recording it as a no-op keeps a

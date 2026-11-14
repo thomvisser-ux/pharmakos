@@ -121,11 +121,15 @@ fn text_capacity(wire_bytes: usize) -> usize {
 /// encoding it again.
 ///
 /// The canonical bytes are [`json::write_wire_into`]'s over those bytes with
-/// `meta.fingerprint` ([`FINGERPRINT_FIELD`]) left out, which is the text [`canonical_input`] writes
-/// for the playbook when the bytes are plain ([`json::Encoded::is_plain`]):
-/// every singular field once, nothing at a default it would drop. Bytes that
-/// are not plain, from a file that spells a field twice, are answered by
-/// [`plan_fingerprint`] itself.
+/// `meta.fingerprint` ([`FINGERPRINT_FIELD`]) left out, which is the text
+/// [`canonical_input`] writes for the playbook: the codec's bytes hold every
+/// singular field once and nothing at a default prost would drop
+/// ([`json::Encoded`]). Until S3's `vfy6` a file that wrote a field under both
+/// its names, or empty bytes as `"===="`, decoded to bytes that did not, and
+/// this function answered those by [`plan_fingerprint`]; the codec refuses
+/// both now, so there is no second path. `crates/proto`'s differential tests
+/// hold the text written from the bytes to the text of the playbook encoded
+/// again for every generated playbook the codec accepts.
 ///
 /// # Errors
 ///
@@ -133,9 +137,6 @@ fn text_capacity(wire_bytes: usize) -> usize {
 /// canonical JSON, as [`plan_fingerprint`].
 pub fn plan_fingerprint_of(decoded: &Decoded<Playbook>) -> Result<u64, FingerprintError> {
     let encoded = decoded.encoded();
-    if !encoded.is_plain() {
-        return plan_fingerprint(decoded.message());
-    }
     let mut text = String::with_capacity(text_capacity(encoded.bytes().len()));
     text.push_str(DOMAIN_TEXT);
     json::write_wire_into(

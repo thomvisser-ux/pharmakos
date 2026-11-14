@@ -129,17 +129,30 @@ pub fn json_to_wire(full_name: &str, value: &Json) -> Result<Vec<u8>, Error> {
     Ok(json_to_encoded(full_name, value)?.bytes)
 }
 
-/// The wire bytes [`json_to_wire`] writes for a document, with what the
-/// codec learned about them on the way.
+/// The wire bytes [`json_to_wire`] writes for a document.
+///
+/// They hold what prost's encoder writes for the message they decode to, up
+/// to the order of fields: every singular field at most once in each message,
+/// and no field without presence at its default. So canonical text written
+/// from them ([`write_wire`]) is the decoded message's, without encoding it
+/// again.
+///
+/// The codec makes that so by what it refuses (S3's `vfy6`, follow-up C): a
+/// field written under both its `.proto` name and its JSON name, as a key
+/// written twice is; and a default the codec does not drop, which since the
+/// number grammar (RFC 8259's, follow-up B) and base64's padding rule leaves
+/// none. Until then a document could fall short of it, and
+/// `Encoded::is_plain` said so; nothing can now, and the differential tests
+/// hold every accepted generated playbook's canonical text from its bytes to
+/// the text of the playbook encoded again.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Encoded {
     bytes: Vec<u8>,
-    plain: bool,
 }
 
 impl Encoded {
-    pub(crate) const fn new(bytes: Vec<u8>, plain: bool) -> Encoded {
-        Encoded { bytes, plain }
+    pub(crate) const fn new(bytes: Vec<u8>) -> Encoded {
+        Encoded { bytes }
     }
 
     /// The wire bytes, exactly as [`json_to_wire`] answers.
@@ -147,24 +160,9 @@ impl Encoded {
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
     }
-
-    /// Whether the bytes hold what prost's encoder writes for the message
-    /// they decode to, up to the order of fields: every singular field at most
-    /// once in each message, and no field without presence at its default.
-    ///
-    /// A document falls short of that only by spelling one field twice — once
-    /// by its `.proto` name and once by its JSON name — or by spelling a
-    /// default in a way `is_proto3_default` does not recognise, such as
-    /// `"===="` for empty bytes. Decoding such bytes merges or drops what the
-    /// wire says, so canonical text written from them is not the decoded
-    /// message's; [`write_wire`] over plain bytes is.
-    #[must_use]
-    pub const fn is_plain(&self) -> bool {
-        self.plain
-    }
 }
 
-/// [`json_to_wire`], with what [`Encoded`] says about the bytes.
+/// [`json_to_wire`], as an [`Encoded`].
 ///
 /// # Errors
 ///
@@ -178,13 +176,10 @@ pub fn json_to_encoded(full_name: &str, value: &Json) -> Result<Encoded, Error> 
         index,
         fields: Vec::new(),
         oneofs: Vec::new(),
-        plain: true,
+        named: Vec::new(),
     };
     let bytes = encoder.json_to_message(at, value, &Path::Root, 0)?;
-    Ok(Encoded {
-        bytes,
-        plain: encoder.plain,
-    })
+    Ok(Encoded { bytes })
 }
 
 /// Canonical JSON text straight from wire bytes: exactly what
@@ -793,11 +788,43 @@ struct Encoder<'j> {
     /// The `oneof`s each object on the way down has set, with the member name
     /// that set it, as a stack.
     oneofs: Vec<(i32, &'j str)>,
-    /// [`Encoded::is_plain`].
-    plain: bool,
+    /// The fields each object on the way down has named, by number, with the
+    /// member name that named it, as a stack: a field is named once, under
+    /// either of its names.
+    named: Vec<(i32, &'j str)>,
 }
 
 impl<'j> Encoder<'j> {
+    /// Records that this object names `field`, by `key`; or refuses a field
+    /// written under both its names, its `.proto` name and its JSON name, as
+    /// a key written twice is (S3's `vfy6`), whatever either member holds,
+    /// `null` included.
+    fn name_once(
+        &mut self,
+        named_base: usize,
+        field: &IndexedField,
+        key: &'j str,
+        path: &Path<'_>,
+    ) -> Result<(), Error> {
+        let first = self.named.get(named_base..).and_then(|named| {
+            named
+                .iter()
+                .find(|(number, _)| *number == field.field.number)
+        });
+        if let Some((_, first)) = first {
+            return Err(Error::at(
+                &Path::Key(path, key).render(),
+                format!(
+                    "`{first}` and `{key}` both name the field `{}`. A field is written once, \
+                     under one of its names.",
+                    field.field.name
+                ),
+            ));
+        }
+        self.named.push((field.field.number, key));
+        Ok(())
+    }
+
     fn json_to_message(
         &mut self,
         at: usize,
@@ -831,6 +858,7 @@ impl<'j> Encoder<'j> {
         // rather than by the order somebody happened to type them in.
         let base = self.fields.len();
         let oneof_base = self.oneofs.len();
+        let named_base = self.named.len();
         for (key, item) in entries {
             let field = message.field_by_name(key).ok_or_else(|| {
                 Error::at(
@@ -842,6 +870,7 @@ impl<'j> Encoder<'j> {
                     ),
                 )
             })?;
+            self.name_once(named_base, field, key, path)?;
             if matches!(item, Json::Null) {
                 // The mapping treats null as "the default value", and a
                 // default is not written on the wire. Recording it as a no-op
@@ -874,14 +903,12 @@ impl<'j> Encoder<'j> {
             self.fields.push((field, item));
         }
         self.oneofs.truncate(oneof_base);
+        self.named.truncate(named_base);
         let end = self.fields.len();
         if let Some(resolved) = self.fields.get_mut(base..end) {
+            // No field is resolved twice, so the order is total.
             if !resolved.is_sorted_by_key(|(field, _)| field.field.number) {
-                // Stable, so a field spelled twice keeps its document order.
-                resolved.sort_by_key(|(field, _)| field.field.number);
-            }
-            if spelled_twice(resolved) {
-                self.plain = false;
+                resolved.sort_unstable_by_key(|(field, _)| field.field.number);
             }
         }
 
@@ -925,10 +952,7 @@ impl<'j> Encoder<'j> {
     ) -> Result<(), Error> {
         let at = |message: &str| Error::at(&path.render(), message);
         let number = field.field.number;
-        // Whether the value written is the field's default, for
-        // `Encoded::is_plain`: a field without presence is never at its
-        // default in plain bytes.
-        let zero = match field.field.kind {
+        match field.field.kind {
             ScalarKind::Double | ScalarKind::Float => {
                 return Err(at(
                     "a floating-point field: the sim is integer-only and this codec refuses one",
@@ -942,62 +966,51 @@ impl<'j> Encoder<'j> {
                     )));
                 };
                 writer.varint_field(number, u64::from(*flag));
-                !*flag
             }
             ScalarKind::Int32 => {
                 let narrow = i32::try_from(integer(value, path)?)
                     .map_err(|_| at("out of range for an int32 field"))?;
                 writer.varint_field(number, i64_bits_to_u64(i64::from(narrow)));
-                narrow == 0
             }
             ScalarKind::Sint32 => {
                 let narrow = i32::try_from(integer(value, path)?)
                     .map_err(|_| at("out of range for an sint32 field"))?;
                 writer.varint_field(number, zigzag_encode(i64::from(narrow)));
-                narrow == 0
             }
             ScalarKind::Uint32 => {
                 let narrow = u32::try_from(unsigned(value, path)?)
                     .map_err(|_| at("out of range for a uint32 field"))?;
                 writer.varint_field(number, u64::from(narrow));
-                narrow == 0
             }
             ScalarKind::Fixed32 => {
                 let narrow = u32::try_from(unsigned(value, path)?)
                     .map_err(|_| at("out of range for a fixed32 field"))?;
                 writer.fixed32_field(number, narrow);
-                narrow == 0
             }
             ScalarKind::Sfixed32 => {
                 let narrow = i32::try_from(integer(value, path)?)
                     .map_err(|_| at("out of range for an sfixed32 field"))?;
                 writer.fixed32_field(number, u32::from_ne_bytes(narrow.to_ne_bytes()));
-                narrow == 0
             }
             ScalarKind::Int64 => {
                 let wide = integer(value, path)?;
                 writer.varint_field(number, i64_bits_to_u64(wide));
-                wide == 0
             }
             ScalarKind::Sint64 => {
                 let wide = integer(value, path)?;
                 writer.varint_field(number, zigzag_encode(wide));
-                wide == 0
             }
             ScalarKind::Uint64 => {
                 let wide = unsigned(value, path)?;
                 writer.varint_field(number, wide);
-                wide == 0
             }
             ScalarKind::Fixed64 => {
                 let wide = unsigned(value, path)?;
                 writer.fixed64_field(number, wide);
-                wide == 0
             }
             ScalarKind::Sfixed64 => {
                 let wide = integer(value, path)?;
                 writer.fixed64_field(number, i64_bits_to_u64(wide));
-                wide == 0
             }
             ScalarKind::String => {
                 let Json::String(text) = value else {
@@ -1006,7 +1019,6 @@ impl<'j> Encoder<'j> {
                 writer
                     .delimited_field(number, text.as_bytes())
                     .map_err(|_| at("a string too long for its length prefix"))?;
-                text.is_empty()
             }
             ScalarKind::Bytes => {
                 let Json::String(text) = value else {
@@ -1019,7 +1031,6 @@ impl<'j> Encoder<'j> {
                 writer
                     .delimited_field(number, &bytes)
                     .map_err(|_| at("bytes too long for their length prefix"))?;
-                bytes.is_empty()
             }
             ScalarKind::Enum => {
                 let declared = field.enumeration.ok_or_else(|| {
@@ -1047,7 +1058,6 @@ impl<'j> Encoder<'j> {
                     }
                 };
                 writer.varint_field(number, i64_bits_to_u64(i64::from(found)));
-                found == 0
             }
             ScalarKind::Message => {
                 let nested = field.nested.ok_or_else(|| {
@@ -1057,23 +1067,10 @@ impl<'j> Encoder<'j> {
                 writer
                     .delimited_field(number, &payload)
                     .map_err(|_| at("a message too long for its length prefix"))?;
-                false
             }
-        };
-        if zero && !field.presence {
-            self.plain = false;
         }
         Ok(())
     }
-}
-
-/// Whether a message's resolved members, in field-number order, write one
-/// singular field twice: the first half of [`Encoded::is_plain`].
-pub(crate) fn spelled_twice(resolved: &[(&IndexedField, &Json)]) -> bool {
-    resolved.windows(2).any(|pair| {
-        matches!(pair, [(first, _), (second, _)]
-            if first.field.number == second.field.number && !first.field.repeated)
-    })
 }
 
 /// True when `value` is what this field would hold if it were absent — and

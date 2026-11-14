@@ -41,11 +41,6 @@ pub(crate) struct IndexedField {
     /// For an enum-typed field, its enum; `None` otherwise, or when the schema
     /// does not hold the name.
     pub(crate) enumeration: Option<&'static Enum>,
-    /// Whether the field has presence in proto3: a `oneof` member (an
-    /// `optional` field included, as a synthetic one-field oneof), a
-    /// repeated field or a message-typed field. A field without presence is
-    /// dropped at its default by prost's encoder.
-    pub(crate) presence: bool,
     /// The field's member name as canonical text writes it: quoted, then
     /// `": "`.
     pub(crate) key: String,
@@ -129,9 +124,6 @@ fn build() -> Index {
                     } else {
                         None
                     },
-                    presence: field.repeated
-                        || field.oneof_index.is_some()
-                        || field.kind == ScalarKind::Message,
                     key: {
                         let mut key = String::with_capacity(field.name.len().saturating_add(4));
                         write_string(&field.name, &mut key);

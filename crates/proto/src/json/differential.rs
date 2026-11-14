@@ -132,8 +132,9 @@ const WIDE: &[&str] = &[
     "9223372036854775807",
     "123456789012",
 ];
-const BASE64: &[&str] = &["", "AQID", "AAAAAAAAAAE=", "====", "Zg", "-_-_", "AQ=="];
-const BASE64_BAD: &[&str] = &["!!!!", "A", "AQIDB"];
+const BASE64: &[&str] = &["", "AQID", "AAAAAAAAAAE=", "Zg", "-_-_", "AQ=="];
+// Padding that does not complete the last quantum is refused (S3's `vfy6`).
+const BASE64_BAD: &[&str] = &["!!!!", "A", "AQIDB", "====", "=", "AQ=", "AQID="];
 
 struct Gen {
     rng: Rng,
@@ -462,7 +463,7 @@ impl Gen {
 /// down. Returns the wire bytes when the document encodes.
 fn agree_on_text(full_name: &str, text: &str) -> Option<Vec<u8>> {
     // The direct reader answers exactly when the exact path accepts, and with
-    // the exact path's bytes and plainness.
+    // the exact path's bytes.
     let exact = read(text)
         .ok()
         .and_then(|value| json_to_encoded(full_name, &value).ok());
@@ -519,12 +520,12 @@ fn agree_on_wire(full_name: &str, bytes: &[u8]) {
 
 /// For a playbook, the canonical text written from the decoded bytes is the
 /// canonical text of the playbook encoded again — whole, and with the
-/// fingerprint cleared, which is what a plan fingerprint is taken over —
-/// whenever the bytes are plain. Returns whether they were.
-fn agree_on_playbook(value: &Json) -> Option<bool> {
+/// fingerprint cleared, which is what a plan fingerprint is taken over — for
+/// every playbook the codec accepts (S3's `vfy6`: the codec refuses what
+/// once made bytes not plain). Returns `None` when it refuses this one.
+fn agree_on_playbook(value: &Json) -> Option<()> {
     let text = write(value);
-    // The direct reader answers `Wire` exactly when the exact path decodes,
-    // plain bytes or not, so a regression in it fails here and not only in a
+    // The direct reader answers `Wire` exactly when the exact path decodes, so a regression in it fails here and not only in a
     // timing (PR #177's review).
     let direct = super::decode_direct::<Playbook>(&text);
     let Ok(decoded) = decode_json_encoded::<Playbook>(value) else {
@@ -560,31 +561,27 @@ fn agree_on_playbook(value: &Json) -> Option<bool> {
     let canonical = reference::write(
         &reference::wire_to_json(name, &cleared.encode_to_vec()).expect("prost's bytes"),
     );
-    let plain = decoded.encoded().is_plain();
-    if plain {
-        assert_eq!(
-            write_wire(name, decoded.encoded().bytes()).as_deref(),
-            Ok(theirs.as_str()),
-            "write_wire over plain bytes"
-        );
-        let mut ours = String::new();
-        write_wire_into(
-            name,
-            decoded.encoded().bytes(),
-            crate::fingerprint::FINGERPRINT_FIELD,
-            &mut ours,
-        )
-        .expect("plain bytes write");
-        assert_eq!(ours, canonical, "the fingerprint's bytes");
-    }
-    Some(plain)
+    assert_eq!(
+        write_wire(name, decoded.encoded().bytes()).as_deref(),
+        Ok(theirs.as_str()),
+        "write_wire over the decoded bytes"
+    );
+    let mut ours = String::new();
+    write_wire_into(
+        name,
+        decoded.encoded().bytes(),
+        crate::fingerprint::FINGERPRINT_FIELD,
+        &mut ours,
+    )
+    .expect("the decoded bytes write");
+    assert_eq!(ours, canonical, "the fingerprint's bytes");
+    Some(())
 }
 
 #[test]
 fn every_generated_playbook_reads_encodes_and_writes_as_the_reference_does() {
     let at = index().find("gp.v1.Playbook").unwrap();
-    let mut plain = 0_usize;
-    let mut not_plain = 0_usize;
+    let mut accepted = 0_usize;
     let mut refused = 0_usize;
     let mut reach = Reach::default();
     for seed in 0..1_500_u64 {
@@ -603,10 +600,8 @@ fn every_generated_playbook_reads_encodes_and_writes_as_the_reference_does() {
             refused = refused.saturating_add(1);
             continue;
         };
-        match agree_on_playbook(&read(&text).unwrap()) {
-            Some(true) => plain = plain.saturating_add(1),
-            Some(false) => not_plain = not_plain.saturating_add(1),
-            None => {}
+        if agree_on_playbook(&read(&text).unwrap()).is_some() {
+            accepted = accepted.saturating_add(1);
         }
         // The same bytes, broken at a random byte.
         let mut broken = bytes.clone();
@@ -626,11 +621,7 @@ fn every_generated_playbook_reads_encodes_and_writes_as_the_reference_does() {
     }
     // The generator reaches every outcome, or the test proves less than it
     // says.
-    assert!(plain > 200, "plain playbooks: {plain}");
-    assert!(
-        not_plain > 10,
-        "playbooks written with a field twice: {not_plain}"
-    );
+    assert!(accepted > 200, "accepted playbooks: {accepted}");
     assert!(refused > 100, "refused documents: {refused}");
     reach.assert_reached();
 }
@@ -978,20 +969,49 @@ fn a_string_at_each_length_prefix_width_agrees_with_the_reference() {
     }
 }
 
+/// What once made the bytes not plain is refused, by both readers and by the
+/// reference alike (S3's `vfy6`, follow-up C): a field written under both
+/// its names, whatever either member holds, and base64 padding that does not
+/// complete the last quantum.
 #[test]
-fn a_field_spelled_twice_makes_the_bytes_not_plain() {
-    for (text, plain) in [
+fn a_field_under_both_names_and_padding_alone_are_refused() {
+    for text in [
+        r#"{"on_death":{},"onDeath":{}}"#,
+        r#"{"on_death":{"on_respawn":"CONTINUE"},"onDeath":{"max_deaths_before_fallback":1}}"#,
+        r#"{"on_death":null,"onDeath":{}}"#,
+        r#"{"onDeath":{},"on_death":null}"#,
+        r#"{"meta":{"author_kind":"HUMAN","authorKind":"HUMAN"}}"#,
+        r#"{"meta":{"fingerprint":"===="}}"#,
+        r#"{"meta":{"fingerprint":"="}}"#,
+        r#"{"meta":{"fingerprint":"AQ="}}"#,
+    ] {
+        assert!(agree_on_text("gp.v1.Playbook", text).is_none(), "{text}");
+    }
+    assert!(
+        agree_on_text(
+            "gp.v1.SurveySettings",
+            r#"{"probe_areas":[{"min":{"x":1}}],"probeAreas":[{"max":{"y":2}}]}"#
+        )
+        .is_none()
+    );
+    let error = json_to_wire(
+        "gp.v1.Playbook",
+        &read(r#"{"on_death":{},"onDeath":{}}"#).unwrap(),
+    )
+    .unwrap_err();
+    assert_eq!(error.pointer, "/onDeath");
+    assert_eq!(
+        error.message,
+        "`on_death` and `onDeath` both name the field `on_death`. A field is written once, \
+         under one of its names."
+    );
+    for (text, accepted) in [
         (r#"{"on_death":{"on_respawn":"CONTINUE"}}"#, true),
-        (
-            r#"{"on_death":{"on_respawn":"CONTINUE"},"onDeath":{"max_deaths_before_fallback":1}}"#,
-            false,
-        ),
-        (r#"{"meta":{"fingerprint":"===="}}"#, false),
+        (r#"{"onDeath":{"onRespawn":"CONTINUE"}}"#, true),
         (r#"{"meta":{"fingerprint":"AAAAAAAAAAE="}}"#, true),
+        (r#"{"meta":{"fingerprint":""}}"#, true),
     ] {
         let value = read(text).unwrap();
-        let encoded = json_to_encoded("gp.v1.Playbook", &value).unwrap();
-        assert_eq!(encoded.is_plain(), plain, "{text}");
-        agree_on_playbook(&value);
+        assert_eq!(agree_on_playbook(&value).is_some(), accepted, "{text}");
     }
 }

@@ -9,6 +9,8 @@
 //!   quoted integer, which the proto3 mapping also accepts, is held to the
 //!   same integer grammar, so `"+0"` and `"00"` are refused as `+0` and `00`
 //!   are.
+//! * **C.** A field written under both its names, and base64 padding that
+//!   does not complete the last quantum, are refused (below).
 //!
 //! Every case is put to both readers, and both must answer alike: the direct
 //! reader answers a document exactly when the exact path accepts it.
@@ -98,4 +100,49 @@ fn a_quoted_zero_with_a_sign_or_a_leading_zero_is_refused_not_dropped_as_a_defau
     }
     assert!(accepted::<Playbook>(r#"{"kind":0}"#));
     assert!(accepted::<Playbook>(r#"{"kind":-0}"#));
+}
+
+// * **C.** A field written under both its `.proto` name and its JSON name is
+//   refused, as a key written twice is, whatever either member holds; and
+//   base64 padding that does not complete the last quantum is refused. Both
+//   once made bytes the codec accepted but that did not hold what prost would
+//   write for the message, which the plan fingerprint then had to work round.
+
+#[test]
+fn a_field_under_both_its_names_is_refused_by_both_readers() {
+    for text in [
+        r#"{"on_death":{},"onDeath":{}}"#,
+        r#"{"onDeath":{},"on_death":{}}"#,
+        r#"{"on_death":null,"onDeath":{}}"#,
+        r#"{"on_death":{},"onDeath":null}"#,
+        r#"{"on_death":null,"onDeath":null}"#,
+        r#"{"meta":{"author_kind":"HUMAN","authorKind":"HUMAN"}}"#,
+        r#"{"schema_version":{"major":1},"schemaVersion":{"minor":2}}"#,
+        r#"{"on_death":{"on_respawn":"CONTINUE","onRespawn":"CONTINUE"}}"#,
+    ] {
+        assert!(!accepted::<Playbook>(text), "{text}");
+    }
+    // A repeated field too: its two spellings would otherwise concatenate.
+    assert!(!accepted::<SurveySettings>(
+        r#"{"probe_areas":[{"min":{"x":1}}],"probeAreas":[{"max":{"y":2}}]}"#
+    ));
+    // Either name alone is fine.
+    assert!(accepted::<Playbook>(
+        r#"{"on_death":{"on_respawn":"CONTINUE"}}"#
+    ));
+    assert!(accepted::<Playbook>(
+        r#"{"onDeath":{"onRespawn":"CONTINUE"}}"#
+    ));
+}
+
+#[test]
+fn base64_padding_alone_is_refused_not_read_as_empty_bytes() {
+    for bad in ["====", "=", "==", "AQ=", "AQ===", "AQID=", "AQID===="] {
+        let text = format!(r#"{{"meta":{{"fingerprint":"{bad}"}}}}"#);
+        assert!(!accepted::<Playbook>(&text), "{text}");
+    }
+    for good in ["", "AQ==", "AQ", "AQI=", "AQI", "AAAAAAAAAAE="] {
+        let text = format!(r#"{{"meta":{{"fingerprint":"{good}"}}}}"#);
+        assert!(accepted::<Playbook>(&text), "{text}");
+    }
 }

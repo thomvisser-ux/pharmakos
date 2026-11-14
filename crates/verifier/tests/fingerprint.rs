@@ -103,9 +103,10 @@ fn a_stamped_doubled_or_odd_file_has_one_fingerprint_both_ways() {
         r#"{"kind":"PLAYBOOK"}"#,
         r#"{"meta":{"fingerprint":"AAAAAAAAAAE="},"kind":"PLAYBOOK"}"#,
         r#"{"meta":{"title":"t","fingerprint":"//////////8="},"kind":"PLAYBOOK"}"#,
-        // Empty bytes spelled the long way, which is not plain.
+        // Refused since S3's `vfy6`, where they once took the fingerprint's
+        // second path: empty bytes spelled the long way, a field under both
+        // its names. And a duplicate key, which is not JSON.
         r#"{"meta":{"title":"t","fingerprint":"===="}}"#,
-        // A field spelled twice, which prost merges: not plain.
         r#"{"on_death":{"on_respawn":"CONTINUE"},"onDeath":{"max_deaths_before_fallback":1}}"#,
         r#"{"meta":{"title":"a"},"meta":{"title":"b"}}"#,
         // Defaults spelled out, keys out of order, escapes.
@@ -117,8 +118,7 @@ fn a_stamped_doubled_or_odd_file_has_one_fingerprint_both_ways() {
             decoded = decoded.saturating_add(1);
         }
     }
-    // The one with a duplicate key is not JSON; the rest are playbooks.
-    assert_eq!(decoded, documents.len().saturating_sub(1));
+    assert_eq!(decoded, documents.len().saturating_sub(3));
 }
 
 /// The two shapes P1 is measured at (decisions-log item 158 (1)): 63
@@ -227,10 +227,12 @@ fn member_object<'a>(
         .and_then(|(_, value)| members(value))
 }
 
-/// Three variants of a playbook document (PR #177's review): stamped with a
-/// fingerprint drawn from `seed`; with one field written again under its JSON
-/// name, which makes the bytes not plain; and with defaults written out.
-fn variants(text: &str, seed: u64) -> Vec<String> {
+/// Three variants of a playbook document (PR #177's review), each with whether
+/// it decodes when the document does: stamped with a fingerprint drawn from
+/// `seed`; with one field written again under its JSON name, which the codec
+/// refuses since S3's `vfy6` (it once made the bytes not plain, and the
+/// fingerprint took a second path); and with defaults written out.
+fn variants(text: &str, seed: u64) -> Vec<(String, bool)> {
     let Ok(value) = json::read(text) else {
         return Vec::new();
     };
@@ -241,7 +243,7 @@ fn variants(text: &str, seed: u64) -> Vec<String> {
         meta.retain(|(name, _)| name != "fingerprint");
         let stamp = pharmakos_proto::json::base64::encode(&mix(seed).to_be_bytes());
         meta.push(("fingerprint".to_owned(), json::Json::String(stamp)));
-        out.push(json::write(&stamped));
+        out.push((json::write(&stamped), true));
     }
 
     let mut twice = value.clone();
@@ -257,7 +259,7 @@ fn variants(text: &str, seed: u64) -> Vec<String> {
                 _ => "schemaVersion",
             };
             top.push((camel.to_owned(), item));
-            out.push(json::write(&twice));
+            out.push((json::write(&twice), false));
         }
     }
 
@@ -279,14 +281,14 @@ fn variants(text: &str, seed: u64) -> Vec<String> {
         {
             meta.push(("note".to_owned(), json::Json::String(String::new())));
         }
-        out.push(json::write(&defaults));
+        out.push((json::write(&defaults), true));
     }
     out
 }
 
 /// Every committed case, varied: a random stamp, a field in both spellings,
 /// defaults written out. Each variant that decodes has one fingerprint both
-/// ways, and the variants reach both plain and not-plain bytes.
+/// ways, and a field in both spellings never decodes.
 #[test]
 fn every_committed_playbook_varied_has_one_fingerprint_both_ways() {
     let cases = root()
@@ -306,27 +308,24 @@ fn every_committed_playbook_varied_has_one_fingerprint_both_ways() {
         .collect();
     paths.sort();
     let mut agreed = 0_usize;
-    let mut plain = 0_usize;
-    let mut not_plain = 0_usize;
+    let mut refused = 0_usize;
     for (seed, path) in (0_u64..).zip(&paths) {
         let Ok(text) = std::fs::read_to_string(path) else {
             continue;
         };
-        for variant in variants(&text, seed) {
+        let decodes = json::decode_encoded::<Playbook>(&text).is_ok();
+        for (variant, decodes_too) in variants(&text, seed) {
             if both(&variant).is_some() {
+                assert!(decodes_too, "a field in both spellings decoded: {variant}");
                 agreed = agreed.saturating_add(1);
-                let decoded = json::decode_encoded::<Playbook>(&variant).expect("it decoded");
-                if decoded.encoded().is_plain() {
-                    plain = plain.saturating_add(1);
-                } else {
-                    not_plain = not_plain.saturating_add(1);
-                }
+            } else if decodes && !decodes_too {
+                refused = refused.saturating_add(1);
             }
         }
     }
     assert!(agreed > 200, "only {agreed} variants decoded");
     assert!(
-        plain > 100 && not_plain > 50,
-        "{plain} plain, {not_plain} not"
+        refused > 50,
+        "only {refused} variants in both spellings refused"
     );
 }
