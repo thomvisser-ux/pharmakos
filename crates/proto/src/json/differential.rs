@@ -75,7 +75,21 @@ const STRINGS: &[&str] = &[
     "control \u{1} \u{1f} \u{7f}",
     "slash / and ~ tilde",
     "h00_a",
+    "return \r backspace \u{8} form feed \u{c}",
 ];
+
+/// Lengths either side of each length prefix's width: one byte to 127, two
+/// to 16,383, three past (PR #177's review). Four bytes, past 2,097,151, is
+/// left to fixed cases; a generated document that long would slow every seed.
+const LONG: &[usize] = &[126, 127, 128, 129, 16_382, 16_383, 16_384, 16_385];
+
+/// Member names a dirty document may carry that no message declares, with
+/// the characters a JSON Pointer escapes.
+const UNKNOWN: &[&str] = &["wombat", "a/b~c", "x~/y", "~0", "/", "~"];
+
+/// Escapes a string may end with that `read` refuses: a lone low surrogate,
+/// a lone high one, and a high one before something not a low one.
+const BAD_SURROGATES: &[&str] = &[r"\uDE00", r"\uD83Dx", r"\uD83D\u0041", r"\udbff"];
 
 const SIGNED: &[&str] = &[
     "0",
@@ -113,11 +127,64 @@ const BASE64_BAD: &[&str] = &["!!!!", "A", "AQIDB"];
 struct Gen {
     rng: Rng,
     dirty: bool,
+    /// How many messages deep a document may go ([`deepest`]).
+    deep: usize,
+}
+
+/// How many messages deep a generated document goes: most seeds stop at 9,
+/// and one in eight goes on toward the codec's nesting limit, so the
+/// generator reaches the limit's edge as well as the fixed cases do (PR
+/// #177's review).
+const fn deepest(seed: u64) -> usize {
+    if seed % 8 == 5 { 34 } else { 9 }
 }
 
 impl Gen {
     fn message(&mut self, at: usize, depth: usize) -> Json {
         let message = index().get(at).unwrap();
+        // Below its root a deep seed goes on down one message field a level,
+        // a spine, so the document reaches the nesting limit's edge without
+        // growing a tree as wide as it is deep.
+        if self.deep > 9 && depth >= 1 && depth < self.deep {
+            // A field whose message has message fields of its own, where there
+            // is one, so the spine does not end at a leaf.
+            let goes_on = |field: &&IndexedField| {
+                field
+                    .nested
+                    .and_then(|nested| index().get(nested))
+                    .is_some_and(|nested| nested.fields.iter().any(|it| it.nested.is_some()))
+            };
+            // Best of all, a field that comes back to this message, directly
+            // or through one more (a condition's `not` holds a condition).
+            let comes_back = |field: &&IndexedField| {
+                field.nested == Some(at)
+                    || field
+                        .nested
+                        .and_then(|nested| index().get(nested))
+                        .is_some_and(|nested| nested.fields.iter().any(|it| it.nested == Some(at)))
+            };
+            let mut spine: Vec<&IndexedField> = message.fields.iter().filter(comes_back).collect();
+            if spine.is_empty() {
+                spine = message.fields.iter().filter(goes_on).collect();
+            }
+            if spine.is_empty() {
+                spine = message
+                    .fields
+                    .iter()
+                    .filter(|field| field.nested.is_some())
+                    .collect();
+            }
+            if !spine.is_empty() {
+                let field = spine.get(self.rng.below(spine.len())).unwrap();
+                let value = self.scalar(field, depth);
+                let value = if field.field.repeated {
+                    Json::Array(vec![value])
+                } else {
+                    value
+                };
+                return Json::Object(vec![(field.field.name.clone(), value)]);
+            }
+        }
         let mut entries: Vec<(String, Json)> = Vec::new();
         let mut oneofs: Vec<i32> = Vec::new();
         let keep = 2_usize.saturating_add(depth);
@@ -125,7 +192,7 @@ impl Gen {
             if !self.rng.chance(keep) {
                 continue;
             }
-            if field.field.kind == ScalarKind::Message && depth >= 9 {
+            if field.field.kind == ScalarKind::Message && depth >= self.deep {
                 continue;
             }
             if let Some(oneof) = field.field.oneof_index {
@@ -159,7 +226,8 @@ impl Gen {
             }
         }
         if self.dirty && self.rng.chance(30) {
-            entries.push(("wombat".to_owned(), Json::Number("1".to_owned())));
+            let name = self.rng.pick(UNKNOWN);
+            entries.push((name.to_owned(), Json::Number("1".to_owned())));
         }
         if self.dirty && self.rng.chance(40) {
             let name = self.rng.pick(RESERVED);
@@ -226,6 +294,11 @@ impl Gen {
             | ScalarKind::Uint64
             | ScalarKind::Fixed64
             | ScalarKind::Sfixed64 => self.number(WIDE, SIGNED_BAD),
+            ScalarKind::String if self.rng.chance(20) => {
+                // Either side of a length prefix's width, so the reader's
+                // widening of a length in place is exercised.
+                Json::String("y".repeat(self.rng.pick(LONG)))
+            }
             ScalarKind::String => Json::String(self.rng.pick(STRINGS).to_owned()),
             ScalarKind::Bytes => {
                 let text = if self.dirty && self.rng.chance(10) {
@@ -318,6 +391,14 @@ impl Gen {
                 '/' if self.rng.chance(2) => out.push_str("\\/"),
                 '\n' => out.push_str("\\n"),
                 '\t' => out.push_str("\\t"),
+                // The three short escapes `write_string` never writes, and
+                // `read` must still take.
+                '\r' if self.rng.chance(2) => out.push_str("\\r"),
+                '\u{8}' if self.rng.chance(2) => out.push_str("\\b"),
+                '\u{c}' if self.rng.chance(2) => out.push_str("\\f"),
+                other if u32::from(other) < 0x20 && self.rng.chance(2) => {
+                    write!(out, "\\u{:04X}", u32::from(other)).unwrap();
+                }
                 other if u32::from(other) < 0x20 => {
                     write!(out, "\\u{:04x}", u32::from(other)).unwrap();
                 }
@@ -328,10 +409,17 @@ impl Gen {
                     }
                 }
                 other if self.rng.chance(20) && u32::from(other) <= 0xffff => {
-                    write!(out, "\\u{:04x}", u32::from(other)).unwrap();
+                    if self.rng.chance(2) {
+                        write!(out, "\\u{:04X}", u32::from(other)).unwrap();
+                    } else {
+                        write!(out, "\\u{:04x}", u32::from(other)).unwrap();
+                    }
                 }
                 other => out.push(other),
             }
+        }
+        if self.dirty && self.rng.chance(80) {
+            out.push_str(self.rng.pick(BAD_SURROGATES));
         }
         out.push('"');
     }
@@ -487,16 +575,19 @@ fn every_generated_playbook_reads_encodes_and_writes_as_the_reference_does() {
     let mut plain = 0_usize;
     let mut not_plain = 0_usize;
     let mut refused = 0_usize;
+    let mut reach = Reach::default();
     for seed in 0..1_500_u64 {
         let mut generator = Gen {
             rng: Rng(seed),
             dirty: seed % 3 == 2,
+            deep: deepest(seed),
         };
         let value = generator.message(at, 0);
         let mut text = generator.text(&value);
         if generator.dirty && generator.rng.chance(4) {
             text = generator.corrupt(&text);
         }
+        reach.note(&text, &value);
         let Some(bytes) = agree_on_text("gp.v1.Playbook", &text) else {
             refused = refused.saturating_add(1);
             continue;
@@ -530,6 +621,102 @@ fn every_generated_playbook_reads_encodes_and_writes_as_the_reference_does() {
         "playbooks written with a field twice: {not_plain}"
     );
     assert!(refused > 100, "refused documents: {refused}");
+    reach.assert_reached();
+}
+
+/// What the generated documents reached that the fixed cases test too (PR
+/// #177's review), counted from their text, so a generator change that stops
+/// reaching one fails rather than quietly proving less.
+#[derive(Default)]
+struct Reach {
+    short_escapes: usize,
+    upper_hex: usize,
+    bad_surrogates: usize,
+    pointer_keys: usize,
+    two_byte_lengths: usize,
+    three_byte_lengths: usize,
+    deep: usize,
+}
+
+/// The length in bytes of the longest string in a value.
+fn longest_string(value: &Json) -> usize {
+    match value {
+        Json::String(text) => text.len(),
+        Json::Array(items) => items.iter().map(longest_string).max().unwrap_or(0),
+        Json::Object(entries) => entries
+            .iter()
+            .map(|(key, item)| key.len().max(longest_string(item)))
+            .max()
+            .unwrap_or(0),
+        Json::Null | Json::Bool(_) | Json::Number(_) => 0,
+    }
+}
+
+impl Reach {
+    fn note(&mut self, text: &str, value: &Json) {
+        let count = |hit: bool, total: &mut usize| {
+            if hit {
+                *total = total.saturating_add(1);
+            }
+        };
+        count(
+            ["\\r", "\\b", "\\f"]
+                .iter()
+                .any(|escape| text.contains(escape)),
+            &mut self.short_escapes,
+        );
+        count(
+            text.match_indices("\\u").any(|(at, _)| {
+                text.get(at.saturating_add(2)..at.saturating_add(6))
+                    .is_some_and(|hex| hex.bytes().any(|byte| byte.is_ascii_uppercase()))
+            }),
+            &mut self.upper_hex,
+        );
+        count(
+            BAD_SURROGATES
+                .iter()
+                .any(|bad| text.contains(&format!("{bad}\""))),
+            &mut self.bad_surrogates,
+        );
+        count(
+            ["\"a/b~c\"", "\"x~/y\"", "\"~0\"", "\"/\"", "\"~\""]
+                .iter()
+                .any(|key| text.contains(key)),
+            &mut self.pointer_keys,
+        );
+        // From the value, not the text: the text escapes a character now and
+        // then, which breaks a run of them.
+        let longest = longest_string(value);
+        count(longest >= 128, &mut self.two_byte_lengths);
+        count(longest >= 16_384, &mut self.three_byte_lengths);
+        let mut depth = 0_usize;
+        let mut most = 0_usize;
+        for byte in text.bytes() {
+            match byte {
+                b'{' | b'[' => {
+                    depth = depth.saturating_add(1);
+                    most = most.max(depth);
+                }
+                b'}' | b']' => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+        }
+        count(most >= 40, &mut self.deep);
+    }
+
+    fn assert_reached(&self) {
+        for (what, total) in [
+            ("a short escape", self.short_escapes),
+            ("an upper-case hex escape", self.upper_hex),
+            ("a bad surrogate", self.bad_surrogates),
+            ("an unknown key with a pointer's escapes", self.pointer_keys),
+            ("a string with a two-byte length", self.two_byte_lengths),
+            ("a string with a three-byte length", self.three_byte_lengths),
+            ("nesting of 40 or more", self.deep),
+        ] {
+            assert!(total > 2, "only {total} generated documents reached {what}");
+        }
+    }
 }
 
 #[test]
@@ -546,6 +733,7 @@ fn every_message_in_the_schema_reads_encodes_and_writes_as_the_reference_does() 
                     .wrapping_mul(7919)
                     .wrapping_add(u64::try_from(offset).unwrap())),
                 dirty: seed % 3 == 2,
+                deep: deepest(seed),
             };
             let value = generator.message(at, 0);
             let text = generator.text(&value);
@@ -554,19 +742,228 @@ fn every_message_in_the_schema_reads_encodes_and_writes_as_the_reference_does() 
     }
 }
 
+/// A condition `levels` groups deep around `leaf`, each group `open` then the
+/// item then `close`.
+fn chain(leaf: &str, levels: usize, open: &str, close: &str) -> String {
+    let mut text = leaf.to_owned();
+    for _ in 0..levels {
+        text = format!("{open}{text}{close}");
+    }
+    text
+}
+
+/// The leaves the boundary chains end in: a scalar, a `null`, an empty
+/// message and an empty group.
+const LEAVES: &[&str] = &[
+    r#"{"segment_elapsed":{"ms":{"op":"EQ","value":5}}}"#,
+    r#"{"segment_elapsed":{"ms":null}}"#,
+    r#"{"segment_elapsed":{}}"#,
+    r#"{"all":{"items":[]}}"#,
+];
+
+/// Either side of the nesting limit, which the old test, at 60 levels and
+/// past, never reached from below (PR #177's review): `not` chains of 25 to
+/// 39 levels, two objects a level, and `all`/`items` chains of 15 to 29,
+/// three a level, each ending in each leaf. Some of each are accepted and
+/// some refused, so the limit's edge is inside the range.
 #[test]
-fn a_document_nested_past_the_limit_is_refused_as_the_reference_refuses_it() {
+fn a_document_either_side_of_the_nesting_limit_agrees_with_the_reference() {
+    for (levels, open, close) in [
+        (25..40_usize, r#"{"not":{"item":"#, "}}"),
+        (15..30, r#"{"all":{"items":["#, "]}}"),
+    ] {
+        let mut accepted = 0_usize;
+        let mut refused = 0_usize;
+        for level in levels {
+            for leaf in LEAVES {
+                let text = chain(leaf, level, open, close);
+                if agree_on_text("gp.v1.Condition", &text).is_some() {
+                    accepted = accepted.saturating_add(1);
+                } else {
+                    refused = refused.saturating_add(1);
+                }
+            }
+        }
+        assert!(
+            accepted > 0 && refused > 0,
+            "{open}: {accepted} accepted, {refused} refused"
+        );
+    }
+    // Arrays alone, past the limit.
     for levels in [60_usize, 63, 64, 65, 70, 130] {
-        let mut text = String::from(r#"{"segment_elapsed":{"ms":{"op":"EQ","value":5}}}"#);
-        for _ in 0..levels {
-            text = format!("{{\"not\":{{\"item\":{text}}}}}");
+        agree_on_text("gp.v1.Condition", &chain("{}", levels, "[", "]"));
+    }
+}
+
+/// Reviewer 1's edge cases from PR #177's review, each a `gp.v1.Playbook`
+/// document: escapes, surrogates, number lexemes, defaults, both spellings of
+/// a field, empty and broken documents, unknown names with the characters a
+/// pointer escapes.
+const REVIEW_CASES: &[&str] = &[
+    r#"{"meta":{"title":"a","\u0074itle":"b"}}"#,
+    r#"{"meta":{"title":"\r\b\f\u00E9\uD83D\uDE00\/"}}"#,
+    r#"{"meta":{"title":"\uDE00"}}"#,
+    r#"{"meta":{"title":"\uD83Dx"}}"#,
+    r#"{"meta":{"title":"\uD83D\u0041"}}"#,
+    r#"{"meta":{"title":"\uDBFF\uDFFF"}}"#,
+    r#"{"meta":{"title":"\ud800"}}"#,
+    r#"{"meta":{"title":"\udc00"}}"#,
+    r#"{"meta":{"title":"\u0000"}}"#,
+    r#"{"meta":{"title":"\u00e9\u00E9\u00Ea"}}"#,
+    r#"{"meta":{"ti\u0000tle":"x"}}"#,
+    r#"{"kind":-0}"#,
+    r#"{"kind":"0"}"#,
+    r#"{"kind":+0}"#,
+    r#"{"kind":+1}"#,
+    r#"{"kind":1e0}"#,
+    r#"{"kind":true}"#,
+    r#"{"kind":null}"#,
+    r#"{"kind":-1}"#,
+    r#"{"kind":99}"#,
+    r#"{"kind":"99"}"#,
+    r#"{"kind":2147483648}"#,
+    r#"{"kind":-2147483649}"#,
+    r#"{"kind":"KIND_UNSPECIFIED","meta":{"author_kind":0}}"#,
+    r#"{"kind":"PLAYBOOK","\u006bind":"PLAYBOOK"}"#,
+    r#"{"kind":"PLAYBOOK","k\u0069nd":null}"#,
+    r#"{"schema_version":{"major":"1","minor":"-0"}}"#,
+    r#"{"schema_version":{"major":"+1","minor":"00"}}"#,
+    r#"{"schema_version":{"major":"+0"}}"#,
+    r#"{"schema_version":{"major":01}}"#,
+    r#"{"schema_version":{"major":1-}}"#,
+    r#"{"schema_version":{"major":-}}"#,
+    r#"{"schema_version":{"major":--1}}"#,
+    r#"{"schema_version":{"major":.1}}"#,
+    r#"{"schema_version":{"major":e1}}"#,
+    r#"{"schema_version":{"major":99999999999999999999999}}"#,
+    r#"{"schema_version":{"major":1}, "schemaVersion":{"minor":2}}"#,
+    r#"{"schemaVersion":null, "schema_version":{"minor":2}}"#,
+    r#"{"meta":{"author_kind":"HUMAN","authorKind":"HUMAN"}}"#,
+    r#"{"meta":{"author_kind":"HUMAN","authorKind":0}}"#,
+    r#"{"meta":{"fingerprint":"AAAAAAAAAAE=","note":"n"},"kind":"PLAYBOOK"}"#,
+    r#"{"meta":{"fingerprint":""}}"#,
+    r#"{"meta":{"fingerprint":"AA=="}}"#,
+    r#"{"meta":{"fingerprint":"===="}}"#,
+    r#"{"meta":{"fingerprint":"AAAA","fingerprint":"AAAA"}}"#,
+    r#"{"meta":{}}"#,
+    r#"{"meta":{}, "meta":{}}"#,
+    r#"{"meta":{"fingerprint":"AAAAAAAAAAE="},"meta":{}}"#,
+    r#"{"on_death":{},"onDeath":{}}"#,
+    r#"{"declarative":{"route":[null]}}"#,
+    r#"{"declarative":{"route":null}}"#,
+    r#"{"declarative":{"route":[[]]}}"#,
+    r#"{"declarative":{"route":{}}}"#,
+    r#"{"declarative":null,"declarative":null}"#,
+    r#"{"declarative":{"route":[{}],"route":[]}}"#,
+    r#"{"declarative":{"route":[{"label":"a","skipIf":null,"skip_if":{"all":{"items":[]}}}]}}"#,
+    "\u{feff}{}",
+    "\r\n{\r\n}\r\n",
+    "{\u{b}}",
+    "{\u{c}}",
+    "{\"kind\":\"PLAYBOOK\"\u{c}}",
+    "",
+    "   ",
+    "[]",
+    "null",
+    "{ }",
+    r#"{"@type":"x"}"#,
+    r#"{"a/b~c":1}"#,
+    r#"{"meta":{"x~/y":1}}"#,
+    r#"{"meta":{"~0":1}}"#,
+    r#"{"meta":{"/":1}}"#,
+    r#"{"dispatch":{}}"#,
+    r#"{"meta":{"team_id":1}}"#,
+    r#"{"meta":{"title":"a"}  x"#,
+    r#"{"meta":{"title":"a"},}"#,
+    r#"{"meta":{"title":"a",}}"#,
+    r#"{"meta" {"title":"a"}}"#,
+    r#"{"meta":{"title":nul}}"#,
+    r#"{"meta":nullx}"#,
+    r#"{"meta":{"title":tru}}"#,
+    r#"{"kind":"PLAYBOOK"} "#,
+    r#"{"kind":"PLAYBOOK"}x"#,
+    r#"{"kind":"PLAYBOOK",}"#,
+];
+
+#[test]
+fn the_reviews_edge_cases_agree_with_the_reference() {
+    let big = "x".repeat(20_000);
+    let mut cases: Vec<(&str, String)> = REVIEW_CASES
+        .iter()
+        .map(|text| ("gp.v1.Playbook", (*text).to_owned()))
+        .collect();
+    cases.push((
+        "gp.v1.Playbook",
+        format!(r#"{{"meta":{{"title":"{big}","note":"n"}},"kind":"PLAYBOOK"}}"#),
+    ));
+    for text in [
+        r#"{"probe_areas":[{"min":{"x":1}}],"probeAreas":[{"max":{"y":2}}],"scout_count":0}"#,
+        r#"{"scout_count":4294967295,"scoutCount":0}"#,
+        r#"{"scout_count":1,"scoutCount":2}"#,
+        r#"{"probe_areas":[{"min":{"x":-2147483648,"y":"7","z":-0}}]}"#,
+    ] {
+        cases.push(("gp.v1.SurveySettings", text.to_owned()));
+    }
+    for length in 120..140 {
+        let title = "y".repeat(length);
+        cases.push((
+            "gp.v1.Playbook",
+            format!(r#"{{"meta":{{"title":"{title}"}},"on_death":{{}}}}"#),
+        ));
+    }
+    let mut accepted = 0_usize;
+    for (name, text) in &cases {
+        if agree_on_text(name, text).is_some() {
+            accepted = accepted.saturating_add(1);
+            if *name == "gp.v1.Playbook" {
+                agree_on_playbook(&read(text).unwrap());
+            }
         }
-        agree_on_text("gp.v1.Condition", &text);
-        let mut text = String::from("{}");
-        for _ in 0..levels {
-            text = format!("[{text}]");
+    }
+    assert!(
+        accepted > 20 && accepted < cases.len(),
+        "{accepted} of {} accepted",
+        cases.len()
+    );
+}
+
+/// Strings either side of every length prefix's width, one byte to four
+/// (126 bytes to 2,100,000), written plain and escaped, as a deep member and
+/// a nested one, with members out of field-number order at every level, so
+/// the direct reader widens a length in place and then moves the widened
+/// payload (PR #177's review). The four-byte lengths are single cases: each
+/// is two megabytes through both codecs.
+#[test]
+fn a_string_at_each_length_prefix_width_agrees_with_the_reference() {
+    let shapes = |title: &str| {
+        [
+            format!(
+                r#"{{"on_death":{{"on_respawn":"CONTINUE"}},"meta":{{"title":"{title}","author_kind":"HUMAN"}},"kind":"PLAYBOOK","schema_version":{{"major":1}}}}"#
+            ),
+            format!(
+                r#"{{"meta":{{"author_kind":"HUMAN","title":"\u0041{title}"}},"kind":"PLAYBOOK","schema_version":{{"major":1}}}}"#
+            ),
+            format!(
+                r#"{{"declarative":{{"handlers":[{{"when":{{"step_reached":{{"label":"{title}"}}}},"id":"h"}},{{"id":"g","when":{{"not":{{"item":{{"step_reached":{{"label":"{title}"}}}}}}}}}}],"route":[{{"hold":{{"ms":1}},"label":"r"}}]}},"kind":"PLAYBOOK"}}"#
+            ),
+        ]
+    };
+    for length in [126_usize, 127, 128, 129, 16_382, 16_383, 16_384, 16_385] {
+        for text in shapes(&"t".repeat(length)) {
+            assert!(agree_on_text("gp.v1.Playbook", &text).is_some(), "{length}");
+            assert!(
+                agree_on_playbook(&read(&text).unwrap()).is_some(),
+                "{length}"
+            );
         }
-        agree_on_text("gp.v1.Condition", &text);
+    }
+    for (length, shape) in [(2_097_151_usize, 0_usize), (2_097_152, 1), (2_100_000, 2)] {
+        let text = shapes(&"t".repeat(length)).into_iter().nth(shape).unwrap();
+        assert!(agree_on_text("gp.v1.Playbook", &text).is_some(), "{length}");
+        assert!(
+            agree_on_playbook(&read(&text).unwrap()).is_some(),
+            "{length}"
+        );
     }
 }
 

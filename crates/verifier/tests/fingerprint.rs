@@ -195,3 +195,138 @@ fn a_long_single_string_playbook_has_one_fingerprint_both_ways() {
         }
     }
 }
+
+/// splitmix64, for the stamps the variants below carry: seeded, and the same
+/// on every platform.
+fn mix(seed: u64) -> u64 {
+    let mut z = seed.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    z ^ (z >> 31)
+}
+
+/// The members of an object, to change in place.
+fn members(value: &mut json::Json) -> Option<&mut Vec<(String, json::Json)>> {
+    match value {
+        json::Json::Object(entries) => Some(entries),
+        _ => None,
+    }
+}
+
+/// The object under `key`, added empty if the document has none.
+fn member_object<'a>(
+    entries: &'a mut Vec<(String, json::Json)>,
+    key: &str,
+) -> Option<&'a mut Vec<(String, json::Json)>> {
+    if !entries.iter().any(|(name, _)| name == key) {
+        entries.push((key.to_owned(), json::Json::Object(Vec::new())));
+    }
+    entries
+        .iter_mut()
+        .find(|(name, _)| name == key)
+        .and_then(|(_, value)| members(value))
+}
+
+/// Three variants of a playbook document (PR #177's review): stamped with a
+/// fingerprint drawn from `seed`; with one field written again under its JSON
+/// name, which makes the bytes not plain; and with defaults written out.
+fn variants(text: &str, seed: u64) -> Vec<String> {
+    let Ok(value) = json::read(text) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+
+    let mut stamped = value.clone();
+    if let Some(meta) = members(&mut stamped).and_then(|top| member_object(top, "meta")) {
+        meta.retain(|(name, _)| name != "fingerprint");
+        let stamp = pharmakos_proto::json::base64::encode(&mix(seed).to_be_bytes());
+        meta.push(("fingerprint".to_owned(), json::Json::String(stamp)));
+        out.push(json::write(&stamped));
+    }
+
+    let mut twice = value.clone();
+    if let Some(top) = members(&mut twice) {
+        let again = ["on_death", "schema_version"].into_iter().find_map(|name| {
+            top.iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, item)| (name, item.clone()))
+        });
+        if let Some((name, item)) = again {
+            let camel = match name {
+                "on_death" => "onDeath",
+                _ => "schemaVersion",
+            };
+            top.push((camel.to_owned(), item));
+            out.push(json::write(&twice));
+        }
+    }
+
+    let mut defaults = value;
+    if let Some(top) = members(&mut defaults) {
+        if !top.iter().any(|(name, _)| name == "kind") {
+            top.push((
+                "kind".to_owned(),
+                json::Json::String("KIND_UNSPECIFIED".to_owned()),
+            ));
+        }
+        if let Some(version) = member_object(top, "schema_version")
+            && !version.iter().any(|(name, _)| name == "minor")
+        {
+            version.push(("minor".to_owned(), json::Json::Number("0".to_owned())));
+        }
+        if let Some(meta) = member_object(top, "meta")
+            && !meta.iter().any(|(name, _)| name == "note")
+        {
+            meta.push(("note".to_owned(), json::Json::String(String::new())));
+        }
+        out.push(json::write(&defaults));
+    }
+    out
+}
+
+/// Every committed case, varied: a random stamp, a field in both spellings,
+/// defaults written out. Each variant that decodes has one fingerprint both
+/// ways, and the variants reach both plain and not-plain bytes.
+#[test]
+fn every_committed_playbook_varied_has_one_fingerprint_both_ways() {
+    let cases = root()
+        .join("crates")
+        .join("verifier")
+        .join("tests")
+        .join("cases");
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "the listing is collected and sorted before use, which is clippy.toml's \
+                  sanctioned use of read_dir"
+    )]
+    let mut paths: Vec<std::path::PathBuf> = std::fs::read_dir(&cases)
+        .expect("the verifier's cases")
+        .map(|entry| entry.expect("a case").path())
+        .filter(|path| path.extension().is_some_and(|it| it == "json"))
+        .collect();
+    paths.sort();
+    let mut agreed = 0_usize;
+    let mut plain = 0_usize;
+    let mut not_plain = 0_usize;
+    for (seed, path) in (0_u64..).zip(&paths) {
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        for variant in variants(&text, seed) {
+            if both(&variant).is_some() {
+                agreed = agreed.saturating_add(1);
+                let decoded = json::decode_encoded::<Playbook>(&variant).expect("it decoded");
+                if decoded.encoded().is_plain() {
+                    plain = plain.saturating_add(1);
+                } else {
+                    not_plain = not_plain.saturating_add(1);
+                }
+            }
+        }
+    }
+    assert!(agreed > 200, "only {agreed} variants decoded");
+    assert!(
+        plain > 100 && not_plain > 50,
+        "{plain} plain, {not_plain} not"
+    );
+}
