@@ -1300,18 +1300,27 @@ jobs:
     # (crates/mesher/tests/perf_alarm.rs, run with `--release`, `--ignored` and
     # `--nocapture` as its header says); P1's timings from the walled `pharmakos-bench`
     # (crates/bench/tests/perf_alarm.rs: QUICK's p50 and p99 over the committed verifier
-    # cases and `budget_128`, and a decision tick's ns per size unit in a hosted match),
-    # the walled crate AGENTS.md section 4.5 sanctions to read a clock while driving the
-    # verifier and the sim from outside (decisions-log item 131); and the allocations per
+    # cases and `budget_128`, and from S3's `bench3` FULL over them and both depths over
+    # the generated shapes at each size of E24's curve, in the `p1` step; a decision
+    # tick's ns per size unit in a hosted match, and from `bench3` its counted evaluation
+    # units and the same at each size, in the `p1-decision` step), the walled crate
+    # AGENTS.md section 4.5 sanctions to read a clock while driving the verifier and the
+    # sim from outside (decisions-log item 131); P3's timings (crates/bench/tests/
+    # p3_alarm.rs, S3's plan section 5.1: the repath on the sim's graph, cold and under
+    # the crater stream, and the travel estimate through the gateway and the sim's
+    # estimator, on three seeds), in the `p3` step; and the allocations per
     # tick as a notice only — crates/sim/tests/allocations.rs asserts zero in every leg's
     # `test` step, so it is not run again here; and G3′-real's figures (crates/bench/tests/
     # g3_real.rs: the 8-minute segment at the gate's load phase by phase, the
     # tick-minus-pathing mean of item 116 (6)(b) among them, the support search's
     # adversarial tick and a fourth seat's cost; S2's plan, tasks `g3h` and `g3r`). Each
     # alarm is its own step, `cargo xtask perf-alarms <name>`, because GitHub annotates only
-    # the first ten notices of a step and the four together print more (item 149 (4)). The
+    # the first ten notices of a step and the six together print more (item 149 (4)). The
     # G3′ budget is not gated here: the gate is certified on the owner's machine, and its
-    # loose CI alarm is the `g3 budget (ubuntu-24.04)` job below (S2's plan, E18).
+    # loose CI alarm is the `g3 budget (ubuntu-24.04)` job below (S2's plan, E18). P3's
+    # and P1's loose alarms, `cargo xtask p3-budget` and `cargo xtask p1-budget`, are not
+    # run here either: their job, `authoring budgets (ubuntu-24.04)`, is `cert3`'s (S3's
+    # plan, E12).
     #
     # No cache step: the repository's cache store is past GitHub's 10 GB cap already. The
     # release test builds are the mesher's and the bench's, and the bench's links the sim,
@@ -1320,10 +1329,10 @@ jobs:
     # path like the building jobs: a prose-only pull request skips its steps and prints the
     # notice.
     runs-on: ${{ matrix.os }}
-    # Above the sum of the timed steps' own timeouts (the scope step's 10 and the four
-    # measuring steps' 75), so a step that times out under continue-on-error never brings
+    # Above the sum of the timed steps' own timeouts (the scope step's 10 and the six
+    # measuring steps' 125), so a step that times out under continue-on-error never brings
     # the job to its timeout, which would be red.
-    timeout-minutes: 90
+    timeout-minutes: 150
     strategy:
       fail-fast: false
       matrix:
@@ -1380,9 +1389,23 @@ jobs:
       - name: cargo xtask perf-alarms p1
         if: steps.scope.outputs.prose_only != 'true'
         continue-on-error: true
-        timeout-minutes: 20
+        timeout-minutes: 30
         shell: bash
         run: cargo xtask perf-alarms p1
+
+      - name: cargo xtask perf-alarms p1-decision
+        if: steps.scope.outputs.prose_only != 'true'
+        continue-on-error: true
+        timeout-minutes: 20
+        shell: bash
+        run: cargo xtask perf-alarms p1-decision
+
+      - name: cargo xtask perf-alarms p3
+        if: steps.scope.outputs.prose_only != 'true'
+        continue-on-error: true
+        timeout-minutes: 20
+        shell: bash
+        run: cargo xtask perf-alarms p3
 
       - name: cargo xtask perf-alarms g3
         if: steps.scope.outputs.prose_only != 'true'

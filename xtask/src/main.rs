@@ -96,17 +96,25 @@
 //! adversarial tick and a fourth seat's decision-tick cost; S2's plan, task
 //! `g3h`), each with
 //! `--release`, `--ignored` and `--nocapture`, and each printing its own
-//! `::notice::` lines; then it publishes the allocations per
+//! `::notice::` lines; from S3's `bench3` also P1 FULL (FULL over the
+//! committed cases and both depths over the generated shapes at each size of
+//! E24's curve), the decision tick at each size in nanoseconds and counted
+//! evaluation units (`p1-decision`), and P3 (`crates/bench/tests/p3_alarm.rs`:
+//! the repath and the travel estimate on three seeds); then it publishes the
+//! allocations per
 //! tick as a notice naming the test that asserts it. It has no threshold, compares nothing
 //! across operating systems, and never exits non-zero: a failed measurement is
 //! a `::warning::` (skeleton-plan section 7 decision 23, logged as
-//! decisions-log item 116 (6)(b)). Named (`mesher`, `p1`, `g3`,
-//! `allocations`), it runs that one alone, which is how CI gives each its own
-//! step: GitHub annotates only a step's first ten notices (item 149 (4)).
+//! decisions-log item 116 (6)(b)). Named (`mesher`, `p1`, `p1-decision`, `p3`,
+//! `g3`, `allocations`), it runs that one alone, which is how CI gives each its
+//! own step: GitHub annotates only a step's first ten notices (item 149 (4)).
 //!
 //! `cargo xtask g3-budget` is not a step either ([`g3`]): G3′-real's CI alarm
 //! (S2's plan, E18), which runs the bench's `g3_budget_segment` and, unlike
 //! the perf alarms, fails at the gate's numbers doubled or with no verdict.
+//! `cargo xtask p3-budget` and `cargo xtask p1-budget` ([`budget`]) are S3's
+//! two authoring alarms of the same kind (S3's plan, E12): each runs one bench
+//! test and fails at its gate's numbers doubled or with no verdict.
 //!
 //! Usage:
 //!
@@ -123,8 +131,10 @@
 //! cargo xtask list                  # list the steps
 //! cargo xtask ci-scope              # CI's docs-only fast path: `full` or `prose`
 //! cargo xtask perf-alarms           # the per-runner perf notices; never fails
-//! cargo xtask perf-alarms g3        # one alarm (mesher, p1, g3, allocations): CI's steps
+//! cargo xtask perf-alarms g3        # one alarm (mesher, p1, p1-decision, p3, g3, allocations)
 //! cargo xtask g3-budget             # G3′'s CI alarm: fails at the gate's numbers doubled
+//! cargo xtask p3-budget             # P3's CI alarm: a repath p99 over 10 ms, an estimate over 2 ms
+//! cargo xtask p1-budget             # P1's CI alarm: QUICK over 10 ms, FULL over 100 ms at the budget
 //! cargo xtask package               # the unsigned zip for this platform (T21)
 //! cargo xtask placeholders          # the PLACEHOLDER register; --check fails off-grammar
 //! ```
@@ -225,6 +235,7 @@ use std::process::{Command, ExitCode, ExitStatus, Stdio};
 // Harness part 2's formats, each in its own file so that the step table above
 // stays readable and so that a task working on one of them touches one file.
 mod annotate;
+mod budget;
 mod g3;
 mod golden;
 mod package;
@@ -782,11 +793,9 @@ fn run_cli(args: &[String]) -> Result<bool, String> {
                     [] => None,
                     [one] => Some(alarm_selection(one)?),
                     _ => {
-                        return Err(
-                            "`perf-alarms` takes at most one alarm name: mesher, p1, g3 \
-                                    or allocations"
-                                .to_owned(),
-                        );
+                        return Err("`perf-alarms` takes at most one alarm name: mesher, p1, \
+                                    p1-decision, p3, g3 or allocations"
+                            .to_owned());
                     }
                 };
                 perf_alarms(only);
@@ -807,6 +816,27 @@ fn run_cli(args: &[String]) -> Result<bool, String> {
                 let locked = env::var_os("CI").is_some();
                 return g3::run(&root, require_tools, locked).map_err(|error| {
                     println!("::error title=G3' budget::no verdict: {error}");
+                    error.to_string()
+                });
+            }
+            // Not steps: S3's authoring alarms (S3's plan, E12; task
+            // `bench3`). Like `g3-budget` they fail, at the gates' numbers
+            // doubled and whenever they give no verdict.
+            "p3-budget" | "p1-budget" => {
+                let alarm = budget::BUDGETS
+                    .iter()
+                    .find(|alarm| alarm.command == arg)
+                    .ok_or_else(|| format!("`{arg}` is not an authoring alarm"))?;
+                if let Some(other) = args.get(index + 1) {
+                    return Err(format!(
+                        "`{}` takes no arguments, and was given `{other}`",
+                        alarm.command
+                    ));
+                }
+                let root = workspace_root()?;
+                let locked = env::var_os("CI").is_some();
+                return budget::run(alarm, &root, require_tools, locked).map_err(|error| {
+                    println!("::error title={}::no verdict: {error}", alarm.title);
                     error.to_string()
                 });
             }
@@ -1087,9 +1117,20 @@ fn print_help() {
     println!("    cargo xtask list");
     println!("    cargo xtask ci-scope       CI's docs-only fast path: prints `full` or `prose`");
     println!("    cargo xtask perf-alarms [<alarm>]   per-runner perf notices; never fails");
-    println!("                               (one of mesher, p1, g3, allocations; none: all)");
+    println!(
+        "                               (one of mesher, p1, p1-decision, p3, g3, allocations; \
+         none: all)"
+    );
     println!(
         "    cargo xtask g3-budget      G3' CI alarm: fails at a p99 over 50 ms or a mean over 25 ms"
+    );
+    println!(
+        "    cargo xtask p3-budget      P3 CI alarm: fails at a repath p99 over 10 ms or an \
+         estimate p99 over 2 ms"
+    );
+    println!(
+        "    cargo xtask p1-budget      P1 CI alarm: fails at a QUICK p99 over 10 ms or a FULL \
+         p99 over 100 ms at the size budget"
     );
     println!(
         "    cargo xtask package        the unsigned zip for this platform; --bless its manifest"
@@ -2994,6 +3035,18 @@ struct Alarm {
 ///   worst; and a fourth, unplaced seat's decision-tick cost. Published,
 ///   never gated (item 148's CI ruling); `g3r` certifies them on the owner's
 ///   machine, and the CI budget job is `g3r`'s.
+/// * **P1 FULL** (S3's plan, section 5.2 and task `bench3`) shares the `p1`
+///   alarm's target and step: FULL over the committed cases, and QUICK and
+///   FULL over the generated shapes at each size of E24's curve (ten notices
+///   with S1's two). **The decision tick** at the size budget and at each size
+///   of the curve, in nanoseconds and in counted evaluation units, is
+///   `p1-decision`'s, a step of its own for the ten-notice limit.
+/// * **P3** (S3's plan, section 5.1): `crates/bench/tests/p3_alarm.rs` — the
+///   repath on the sim's own graph, cold and under the crater stream with the
+///   repair beside it, and the travel estimate through the gateway's
+///   `estimate_route` in a hosted Lull and through the sim's estimator alone,
+///   on three seeds. The gates are certified on the owner's machine (`cert3`);
+///   `p3-budget` and `p1-budget` ([`budget`]) are the loose CI alarms.
 const ALARMS: &[Alarm] = &[
     Alarm {
         name: "mesher",
@@ -3006,8 +3059,25 @@ const ALARMS: &[Alarm] = &[
         name: "p1",
         package: "pharmakos-bench",
         test: "perf_alarm",
-        exact: None,
+        // The target also holds `p1_decision_tick_timings` (the next alarm's)
+        // and `p1_budget` (`cargo xtask p1-budget`'s).
+        exact: Some("p1_quick_and_full_timings"),
         title: "P1 timings",
+    },
+    Alarm {
+        name: "p1-decision",
+        package: "pharmakos-bench",
+        test: "perf_alarm",
+        exact: Some("p1_decision_tick_timings"),
+        title: "P1 decision tick",
+    },
+    Alarm {
+        name: "p3",
+        package: "pharmakos-bench",
+        test: "p3_alarm",
+        // The target also holds `p3_budget` (`cargo xtask p3-budget`'s).
+        exact: Some("p3_pathing_timings"),
+        title: "P3 timings",
     },
     Alarm {
         name: "g3",
@@ -4510,6 +4580,7 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
         let sources: &[(&str, &str)] = &[
             ("main.rs", include_str!("main.rs")),
             ("annotate.rs", include_str!("annotate.rs")),
+            ("budget.rs", include_str!("budget.rs")),
             ("g3.rs", include_str!("g3.rs")),
             ("golden.rs", include_str!("golden.rs")),
             ("package.rs", include_str!("package.rs")),
@@ -4750,7 +4821,13 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
         let packages: Vec<&str> = ALARMS.iter().map(|alarm| alarm.package).collect();
         assert_eq!(
             packages,
-            vec!["pharmakos-mesher", "pharmakos-bench", "pharmakos-bench"]
+            vec![
+                "pharmakos-mesher",
+                "pharmakos-bench",
+                "pharmakos-bench",
+                "pharmakos-bench",
+                "pharmakos-bench"
+            ]
         );
         for alarm in ALARMS {
             for locked in [false, true] {
@@ -4892,6 +4969,28 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
     fn perf_alarms_is_not_a_step() {
         assert!(STEPS.iter().all(|step| step.name != "perf-alarms"));
         assert!(STEPS.iter().all(|step| step.name != "g3-budget"));
+        assert!(STEPS.iter().all(|step| step.name != "p3-budget"));
+        assert!(STEPS.iter().all(|step| step.name != "p1-budget"));
+    }
+
+    /// Every alarm has its own step in the `perf alarms` job, which runs on all
+    /// three operating systems: an alarm with no step publishes nothing, and
+    /// two alarms in one step share its ten notices (item 149 (4)).
+    #[test]
+    fn every_alarm_has_its_own_step_on_every_runner() {
+        let ci = include_str!("../../.github/workflows/ci.yml");
+        assert!(ci.contains("os: [ubuntu-latest, windows-latest, macos-latest]"));
+        for name in ALARMS.iter().map(|alarm| alarm.name).chain(["allocations"]) {
+            let step = format!(
+                "run: cargo xtask perf-alarms {name}
+"
+            );
+            assert_eq!(
+                ci.matches(step.as_str()).count(),
+                1,
+                "ci.yml runs `cargo xtask perf-alarms {name}` in exactly one step"
+            );
+        }
     }
 
     /// An alarm's `exact` test exists in its target, `#[ignore]`d: a renamed
@@ -4923,7 +5022,7 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
     #[test]
     fn each_alarm_is_selected_by_its_own_name_and_a_typo_is_refused() {
         let names: Vec<&str> = ALARMS.iter().map(|alarm| alarm.name).collect();
-        assert_eq!(names, ["mesher", "p1", "g3"]);
+        assert_eq!(names, ["mesher", "p1", "p1-decision", "p3", "g3"]);
         for alarm in ALARMS {
             assert_eq!(
                 alarm_selection(alarm.name),
@@ -4941,6 +5040,8 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
         assert!(cli(&["perf-alarms", "nope"]).is_err());
         assert!(cli(&["g3-budget", "--quick"]).is_err());
         assert!(cli(&["g3-budget", "g3-budget"]).is_err());
+        assert!(cli(&["p3-budget", "--quick"]).is_err());
+        assert!(cli(&["p1-budget", "p3-budget"]).is_err());
     }
 
     #[test]
