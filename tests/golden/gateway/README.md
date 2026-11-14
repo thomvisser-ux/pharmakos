@@ -57,6 +57,7 @@ economy surfaces (task `econ`).
 | `briefing/` | `expected.response.json` | Seat 0's `get_briefing` in the opening Lull on the golden seed: its own standing (score and displayed rank on the final audit's terms) and the prose |
 | `economy_forecast/` | `expected.response.json` | Seat 0's `get_economy_forecast` in the same Lull once it has sealed `scenarios/s1/cover-nearest-vent.playbook.jsonc`: the four present-state figures and the committed spend |
 | `recap/` | `expected.response.json` | Seat 0's `get_recap` in round 1's recap of the same match: the round's tick count and the seat's own settlement line |
+| `sighting_verify/` | `expected.response.json` | Seat 0's `verify_plan{depth: "full"}` in round 2's Lull of `tests/handles.rs`' match, its scout having sighted seat 1's outpost (`e_01`): a playbook naming `e_01` three ways (a `move` to its anchor, an interface step, an Attack target), its verdicts as they stand in S3's `gwr` (the register's S3-04) -- its `report_hash` moves with the scope's content |
 
 ## What a diff means, case by case
 

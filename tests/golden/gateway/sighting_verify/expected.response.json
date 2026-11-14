@@ -1,0 +1,86 @@
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "report": {
+      "qualifies": false,
+      "depth": "full",
+      "diagnostics": [
+        {
+          "code": "I0003",
+          "severity": "info",
+          "path": "/declarative/route/0/move/pace",
+          "related_paths": [],
+          "message": "`pace` is omitted and reads as DIRECT.",
+          "beginner": "A setting left out takes its named default.",
+          "suggestions": [
+            {
+              "title": "Write the default out",
+              "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/move/pace\",\"value\":\"DIRECT\"}]",
+              "applicability": "machine_applicable"
+            }
+          ],
+          "map_refs": []
+        },
+        {
+          "code": "I0003",
+          "severity": "info",
+          "path": "/declarative/route/2/place_beacon/initial/mandate/roe",
+          "related_paths": [],
+          "message": "`roe` is omitted and reads as FREE_FIRE.",
+          "beginner": "A setting left out takes its named default.",
+          "suggestions": [
+            {
+              "title": "Write the default out",
+              "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/2/place_beacon/initial/mandate/roe\",\"value\":\"FREE_FIRE\"}]",
+              "applicability": "machine_applicable"
+            }
+          ],
+          "map_refs": []
+        },
+        {
+          "code": "E0405",
+          "severity": "error",
+          "path": "/declarative/route/1/interface/beacon/beacon_id",
+          "related_paths": [],
+          "message": "`e_01` is a beacon this seat does not own.",
+          "beginner": "A commander interfaces with your own beacons.",
+          "suggestions": [],
+          "map_refs": []
+        },
+        {
+          "code": "W0701",
+          "severity": "warning",
+          "path": "/declarative/route/0",
+          "related_paths": [],
+          "message": "the route needs at least 351100 ms if every step runs, and the coming segment is 300000 ms.",
+          "beginner": "There is not time for this whole route this round.",
+          "suggestions": [],
+          "map_refs": []
+        },
+        {
+          "code": "I0001",
+          "severity": "info",
+          "path": "/declarative/route",
+          "related_paths": [],
+          "message": "the route is at least 331600 ms of walking, between the places it names.",
+          "beginner": "The least time the walking can take; going round anything in the way takes longer.",
+          "suggestions": [],
+          "map_refs": []
+        }
+      ],
+      "report_hash": "XNesGyixJXY=",
+      "rules_hash": "GybFJQaL/2E=",
+      "plan_fingerprint": "GYBAq9LFb3M=",
+      "verifier_version": "0.1.0-s3.2",
+      "size_units": 3,
+      "size_budget": 128
+    },
+    "_status": {
+      "phase": "lull",
+      "phase_remaining_ms": 599950,
+      "segment_length_ms": 300000,
+      "round": 2
+    }
+  }
+}

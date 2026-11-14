@@ -22,12 +22,13 @@
 //! `tests/save.rs` does. The sighting table is ordered by asset id, so a
 //! resume that rebuilds the names from it alone names the core `e_01`.
 //!
-//! The Attack half is asserted through the handle it would be pinned with
+//! The Attack half: in round 2's Lull an Attack aimed at `e_01` is submitted
+//! and accepted, because the verifier's view holds the seat's sighted enemy
+//! beacons since S3's `gwr` (the register's S3-04), and the beacon it is
+//! pinned to at the seal is asserted through the reader the pin reads
 //! ([`Surface`]'s `plans_for_round` pins an `e_NN` target through
-//! `ViewFeed::foreign_beacon_id`, the reader this test reads): an Attack aimed
-//! at `e_01` cannot be submitted yet, because the verifier's view holds no
-//! enemy beacon until S3's `gwr` fills it (the register's S3-04), and
-//! `submit_plan` refuses it with `E0401`.
+//! `ViewFeed::foreign_beacon_id`). The same Lull pins today's verdicts on a
+//! playbook naming `e_01` three ways (`sighting_verify`'s golden).
 #![allow(
     clippy::expect_used,
     clippy::unwrap_used,
@@ -88,6 +89,72 @@ const ROUND_2_SEAT_0: &str = r#"// Look at the enemy core.
  "on_death": {"on_respawn": "CONTINUE", "max_deaths_before_fallback": 2},
  "fallback": {"hold": {"at": {"safest": {}}}}}
 "#;
+
+/// Round 2, seat 0: an Attack aimed at the beacon the seat calls `e_01`,
+/// submitted to show it is accepted, then replaced by [`ROUND_2_SEAT_0`].
+const ROUND_2_ATTACK: &str = r#"// Raid what the scout found.
+{"schema_version": {"major": 1, "minor": 0},
+ "meta": {"title": "Raid", "author_kind": "HUMAN"},
+ "kind": "PLAYBOOK",
+ "declarative": {"route": [
+   {"label": "raid", "place_beacon": {"at": {"safest": {}},
+      "initial": {"mandate": {"attack": {"target": {"beacon": {"beacon_id": "e_01"}},
+        "retarget": "NONE", "staging": {"x": 350, "y": 30, "z": 36},
+        "launch": {"force_size": 2}, "after_action": "RETURN_HOME", "waves": 1}}}},
+    "on_fail": {"action": "SKIP"}}
+ ], "handlers": []},
+ "on_death": {"on_respawn": "CONTINUE"},
+ "fallback": {"hold": {"at": {"safest": {}}}}}
+"#;
+
+/// Round 2, seat 0: `e_01` named three ways -- walked to, interfaced with,
+/// attacked -- whose verdicts `sighting_verify`'s golden pins as they are
+/// today. The interface is refused (`E0405`, another seat's beacon); the walk
+/// and the Attack qualify, though the sim fails the walk `no_target` (a
+/// known gap the verifier's `vfy6` closes, S3's `gwr` review, item 11).
+const NAMES_E_01: &str = r#"// e_01, three ways.
+{"schema_version": {"major": 1, "minor": 0},
+ "meta": {"title": "Three ways", "author_kind": "HUMAN"},
+ "kind": "PLAYBOOK",
+ "declarative": {"route": [
+   {"label": "to them", "move": {"to": {"beacon_anchor": {"beacon_id": "e_01"}}}},
+   {"label": "touch", "interface": {"beacon": {"beacon_id": "e_01"},
+      "rows": [{"set_priority": "HIGH"}]}},
+   {"label": "raid", "place_beacon": {"at": {"safest": {}},
+      "initial": {"mandate": {"attack": {"target": {"beacon": {"beacon_id": "e_01"}},
+        "retarget": "NONE", "staging": {"x": 350, "y": 30, "z": 36},
+        "launch": {"force_size": 2}, "after_action": "RETURN_HOME", "waves": 1}}}}}
+ ], "handlers": []},
+ "on_death": {"on_respawn": "CONTINUE"},
+ "fallback": {"hold": {"at": {"safest": {}}}}}
+"#;
+
+/// `rendered` written to `<target>/golden/gateway/<case>/actual.response.json`
+/// and compared with the committed `expected.response.json`, as
+/// `tests/targeting.rs`' goldens are.
+fn write_golden(case: &str, rendered: &str) {
+    assert!(!rendered.contains('\r') && rendered.ends_with('\n'));
+    let fresh = support::target_dir()
+        .join("golden")
+        .join("gateway")
+        .join(case);
+    std::fs::create_dir_all(&fresh).expect("the fresh output's folder");
+    std::fs::write(fresh.join("actual.response.json"), rendered).expect("the fresh output");
+    let committed = workspace_root()
+        .join("tests")
+        .join("golden")
+        .join("gateway")
+        .join(case)
+        .join("expected.response.json");
+    let Ok(expected) = std::fs::read_to_string(&committed) else {
+        panic!(
+            "no committed golden at {}. A new case is committed by copying the fresh output \
+             beside it, byte for byte, once it is right.",
+            committed.display()
+        );
+    };
+    assert_eq!(expected, rendered, "{case}: the golden moved");
+}
 
 /// The config line the match was hosted with, as a save carries it.
 fn config_of(match_id: &str) -> Config {
@@ -272,6 +339,33 @@ fn a_resumed_lull_names_every_handle_as_the_match_that_never_stopped() {
         outpost, core_1,
         "the recipe: round 1 finds the outpost and not the core"
     );
+    // S3-04: an Attack aimed at `e_01` qualifies now, and the beacon the
+    // seal pins it to is the outpost (the pin's reader, `plans_for_round`'s).
+    submit(&mut surface, 0, ROUND_2_ATTACK);
+    assert_eq!(
+        surface
+            .views()
+            .foreign_beacon_id(Viewer::Seat(seat_0), "e_01"),
+        Some(outpost),
+        "the Attack sealed in round 2 is pinned to the outpost"
+    );
+    let mut left = FIRST_LULL_MS;
+    let token = seat_token(&mut surface, 0);
+    let verdicts = call_in_lull(
+        &mut surface,
+        &token,
+        &mut left,
+        "verify_plan",
+        &format!(
+            r#"{{"playbook_jsonc":{},"depth":"full"}}"#,
+            quote(NAMES_E_01)
+        ),
+    );
+    write_golden(
+        "sighting_verify",
+        &pharmakos_gateway::rpc::render(&verdicts),
+    );
+    // The recipe's round 2 is the Survey: it replaces the Attack.
     submit(&mut surface, 0, ROUND_2_SEAT_0);
     refreshed = refreshed.saturating_add(play_round(&mut surface));
 
