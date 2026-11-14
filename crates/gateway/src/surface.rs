@@ -2879,14 +2879,24 @@ impl Surface {
 
     /// The seat's view of the frozen snapshot, as the verifier reads it.
     ///
-    /// **Its own beacons, and of everybody else's only its sightings.** A
-    /// seat's knowledge of another seat's beacons as beacons -- their mandate,
-    /// their tags -- is the knowledge store's, which is S3's, and a verifier
-    /// scope that carried beacons a seat has not seen would let a playbook
-    /// reference one it cannot know about -- the same fog leak
+    /// **Its own beacons, and of everybody else's only what it sighted.** A
+    /// verifier scope that carried beacons a seat has not seen would let a
+    /// playbook reference one it cannot know about -- the same fog leak
     /// [`crate::fog`] exists to prevent, arriving through the back door.
     ///
-    /// PLACEHOLDER: a seat's sighted enemy beacons join this scope as known beacons, beyond the sightings S2 carries — owner, S3 with the knowledge store (the register's S3-04).
+    /// # Sighted enemy beacons (the register's S3-04)
+    ///
+    /// Each enemy beacon the seat sights -- in its live vision now, or in its
+    /// memory -- joins the scope as a [`pharmakos_verifier::KnownBeacon`] with
+    /// [`pharmakos_verifier::Ownership::EnemyKnown`], beside its sighting, under
+    /// the handle the sighting spells (`e_NN`), at the place its freshest
+    /// sighting puts it, with its owner and nothing more: no writ
+    /// (`MANDATE_KIND_UNSPECIFIED`), no tags and never the core mark, because
+    /// a seat sees none of another seat's beacon but where it stands (S2's
+    /// plan, decision 5). It is fogged as the briefing is: the same live vision
+    /// through the match's fog filter and the same sighting table
+    /// ([`Surface::verifier_sightings`]). The per-beacon facts the licence half
+    /// sets are pushed after every beacon, and only for the seat's own.
     ///
     /// # Sightings, with their ages (S2's Attack freshness)
     ///
@@ -2933,6 +2943,14 @@ impl Surface {
         let mut scope = VerifierScope::new(seat, economy);
 
         push_own_beacons(world, seat, row, &mut scope)?;
+        let mut sighted: Vec<(String, SeatId)> = Vec::new();
+        for (sighting, owner) in self.verifier_sightings(seat)? {
+            if let pharmakos_verifier::Sighted::Beacon(handle) = &sighting.what {
+                sighted.push((handle.clone(), owner));
+            }
+            scope.push_sighting(sighting);
+        }
+        push_enemy_beacons(&sighted, &mut scope)?;
         push_own_licence_facts(world, seat, &mut scope)?;
 
         for read in crate::targeting::feature_reads(world, Some(seat)) {
@@ -2956,9 +2974,6 @@ impl Surface {
         scope.set_commander(
             crate::targeting::commander_point(world, seat).map(crate::view::voxel_of),
         );
-        for sighting in self.verifier_sightings(seat)? {
-            scope.push_sighting(sighting);
-        }
         Ok(scope)
     }
 
@@ -3618,6 +3633,50 @@ fn dark_beacons(world: &pharmakos_sim::world::World) -> Result<Vec<DarkAtEnd>, E
             })
         })
         .collect()
+}
+
+/// Every enemy beacon the seat sighted, as a known beacon of its scope (the
+/// register's S3-04; [`Surface::verifier_scope`] says what it carries). Run
+/// after every sighting is in the scope, so a beacon both in sight and
+/// remembered stands where the scope's freshest sighting of it puts it.
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] for a handle the scope holds no sighting
+/// of, or one already held as the seat's own beacon: neither is a view the
+/// sighting table and the handle table can give.
+fn push_enemy_beacons(
+    sighted: &[(String, SeatId)],
+    scope: &mut VerifierScope,
+) -> Result<(), Error> {
+    for (handle, owner) in sighted {
+        let at = scope
+            .beacon_sighting(handle)
+            .map(|sighting| sighting.at)
+            .ok_or_else(|| {
+                Error::internal(format!(
+                    "the verifier scope holds no sighting of `{handle}`, which was just pushed"
+                ))
+            })?;
+        if scope
+            .beacon(handle)
+            .is_some_and(|known| known.side == pharmakos_verifier::Ownership::Own)
+        {
+            return Err(Error::internal(format!(
+                "`{handle}` names a sighted enemy beacon and one of the seat's own"
+            )));
+        }
+        scope.push_beacon(pharmakos_verifier::KnownBeacon {
+            beacon_id: handle.clone(),
+            owner: *owner,
+            side: pharmakos_verifier::Ownership::EnemyKnown,
+            mandate: pharmakos_proto::gp::v1::beacon_filter::MandateKind::Unspecified,
+            tags: Vec::new(),
+            at,
+            is_core: false,
+        });
+    }
+    Ok(())
 }
 
 /// The verifier scope's licence half for the seat's own facts (S3's `lic`, a
@@ -4917,6 +4976,51 @@ mod tests {
         assert!(
             theirs.sightings().is_empty(),
             "seat 1 saw nothing, and seat 0's memory is not its"
+        );
+    }
+
+    /// The register's S3-04 (S3's `gwr`; decisions-log item 157 (5)): the
+    /// enemy beacon the seat sighted joins its verifier scope as a known
+    /// beacon under the sighting's handle, where the sighting puts it, with
+    /// its owner and nothing the seat cannot see -- no writ, no tags, no core
+    /// mark, and no grown sphere or Spire, which the licence half sets for
+    /// the seat's own beacons only. A seat that sighted nothing is told of no
+    /// enemy beacon.
+    #[test]
+    fn the_verifier_scope_carries_the_enemy_beacons_the_seat_sighted() {
+        let (surface, core_at, _) = remembering();
+        let scope = surface.verifier_scope(SeatId::new(0)).expect("a scope");
+        assert_eq!(
+            scope.beacon("e_01"),
+            Some(&pharmakos_verifier::KnownBeacon {
+                beacon_id: String::from("e_01"),
+                owner: SeatId::new(1),
+                side: pharmakos_verifier::Ownership::EnemyKnown,
+                mandate: pharmakos_proto::gp::v1::beacon_filter::MandateKind::Unspecified,
+                tags: Vec::new(),
+                at: pharmakos_proto::gp::v1::Voxel {
+                    x: core_at[0],
+                    y: core_at[1],
+                    z: core_at[2],
+                },
+                is_core: false,
+            })
+        );
+        assert_eq!(scope.sphere_radius("e_01"), None);
+        assert!(!scope.spire_at("e_01"));
+        assert!(
+            scope
+                .own_beacons()
+                .all(|known| known.beacon_id.starts_with("b_")),
+            "the sighted beacon is not the seat's own"
+        );
+        let theirs = surface.verifier_scope(SeatId::new(1)).expect("a scope");
+        assert!(
+            theirs
+                .beacons()
+                .iter()
+                .all(|known| known.side == pharmakos_verifier::Ownership::Own),
+            "seat 1 sighted nothing, so it knows no enemy beacon"
         );
     }
 

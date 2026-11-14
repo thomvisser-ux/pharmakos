@@ -1249,6 +1249,10 @@ impl Surface {
     /// freshest of two sightings of one thing, so a beacon both in sight and
     /// remembered rests on its live sighting.
     ///
+    /// Each sighting comes with the seat that owns what was seen, which the
+    /// scope's [`pharmakos_verifier::KnownBeacon`] for a sighted enemy beacon
+    /// names (the register's S3-04; [`Surface::verifier_scope`]).
+    ///
     /// # Errors
     ///
     /// [`crate::error::Code::Internal`] for a sighted beacon this seat holds
@@ -1257,7 +1261,7 @@ impl Surface {
     pub(crate) fn verifier_sightings(
         &self,
         seat: SeatId,
-    ) -> Result<Vec<pharmakos_verifier::Sighting>, Error> {
+    ) -> Result<Vec<(pharmakos_verifier::Sighting, SeatId)>, Error> {
         let viewer = Viewer::Seat(seat);
         let world = self.host()?.world();
         let vision = crate::host::LiveVision::of(world);
@@ -1269,18 +1273,67 @@ impl Surface {
                 ))
             })
         };
-        let mut out: Vec<pharmakos_verifier::Sighting> = Vec::new();
+        let mut out: Vec<(pharmakos_verifier::Sighting, SeatId)> = Vec::new();
         let beacons = world.beacons();
         for row in 0..beacons.ids().len() {
-            if let Some((id, at, _, Seen::Live { .. })) = self.live_beacon(viewer, &vision, row)? {
-                out.push(pharmakos_verifier::Sighting {
-                    what: pharmakos_verifier::Sighted::Beacon(handle(id)?),
-                    at,
-                    age_ms: 0,
-                });
+            if let Some((id, at, owner, Seen::Live { .. })) =
+                self.live_beacon(viewer, &vision, row)?
+            {
+                out.push((
+                    pharmakos_verifier::Sighting {
+                        what: pharmakos_verifier::Sighted::Beacon(handle(id)?),
+                        at,
+                        age_ms: 0,
+                    },
+                    owner,
+                ));
             }
         }
-        let filter = FogFilter::new(&self.fog, &vision);
+        out.extend(self.commanders_in_sight(seat, &vision)?);
+        for remembered in sightings_of(world, seat)? {
+            let what = match remembered.kind {
+                pharmakos_sim::knowledge::AssetKind::Beacon => {
+                    pharmakos_verifier::Sighted::Beacon(handle(beacon_of(&remembered)?)?)
+                }
+                pharmakos_sim::knowledge::AssetKind::Commander => {
+                    pharmakos_verifier::Sighted::Commander(remembered.owner)
+                }
+                // A unit, a structure or a wreck: no Attack target or
+                // freshness rule reads one (spec section 10), and the
+                // verifier's layout has no place for it. `Unknown` is a kind
+                // the sim never records.
+                pharmakos_sim::knowledge::AssetKind::Unit
+                | pharmakos_sim::knowledge::AssetKind::Structure
+                | pharmakos_sim::knowledge::AssetKind::Wreck
+                | pharmakos_sim::knowledge::AssetKind::Unknown => continue,
+            };
+            out.push((
+                pharmakos_verifier::Sighting {
+                    what,
+                    at: remembered.at,
+                    age_ms: remembered.age_ms,
+                },
+                remembered.owner,
+            ));
+        }
+        Ok(out)
+    }
+
+    /// The other seats' commanders `seat` sees now, at an age of 0, for
+    /// [`Surface::verifier_sightings`], each with its owner.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] when the unit table lacks a column.
+    fn commanders_in_sight(
+        &self,
+        seat: SeatId,
+        vision: &crate::host::LiveVision,
+    ) -> Result<Vec<(pharmakos_verifier::Sighting, SeatId)>, Error> {
+        let viewer = Viewer::Seat(seat);
+        let world = self.host()?.world();
+        let mut found = Vec::new();
+        let filter = FogFilter::new(&self.fog, vision);
         let units = world.units();
         for row in 0..units.ids().len() {
             let missing =
@@ -1330,37 +1383,17 @@ impl Surface {
                     at,
                 },
             ) {
-                out.push(pharmakos_verifier::Sighting {
-                    what: pharmakos_verifier::Sighted::Commander(owner),
-                    at,
-                    age_ms: 0,
-                });
+                found.push((
+                    pharmakos_verifier::Sighting {
+                        what: pharmakos_verifier::Sighted::Commander(owner),
+                        at,
+                        age_ms: 0,
+                    },
+                    owner,
+                ));
             }
         }
-        for remembered in sightings_of(world, seat)? {
-            let what = match remembered.kind {
-                pharmakos_sim::knowledge::AssetKind::Beacon => {
-                    pharmakos_verifier::Sighted::Beacon(handle(beacon_of(&remembered)?)?)
-                }
-                pharmakos_sim::knowledge::AssetKind::Commander => {
-                    pharmakos_verifier::Sighted::Commander(remembered.owner)
-                }
-                // A unit, a structure or a wreck: no Attack target or
-                // freshness rule reads one (spec section 10), and the
-                // verifier's layout has no place for it. `Unknown` is a kind
-                // the sim never records.
-                pharmakos_sim::knowledge::AssetKind::Unit
-                | pharmakos_sim::knowledge::AssetKind::Structure
-                | pharmakos_sim::knowledge::AssetKind::Wreck
-                | pharmakos_sim::knowledge::AssetKind::Unknown => continue,
-            };
-            out.push(pharmakos_verifier::Sighting {
-                what,
-                at: remembered.at,
-                age_ms: remembered.age_ms,
-            });
-        }
-        Ok(out)
+        Ok(found)
     }
 
     /// One `gp.api.v1.BeaconSummary`, as `viewer` may be told it.
