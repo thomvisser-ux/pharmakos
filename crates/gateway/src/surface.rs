@@ -6370,4 +6370,47 @@ mod tests {
             .expect("nothing to issue");
         assert!(memos(&custom).is_empty(), "a custom match issues no memo");
     }
+
+    /// S3's plan, E5, the fourth memo (`gwr`): the human seat's first licence
+    /// awarded issues `first_licence` once a match, on its own feed; another
+    /// seat's award issues nothing, and a licence voided is no award.
+    #[test]
+    fn the_first_licence_issues_its_memo_once() {
+        use crate::probation::{Memo, Preset};
+        use pharmakos_sim::events::EventKind;
+        let of = |kind, seat: u8| pharmakos_sim::events::Event {
+            tick: Tick::new(9),
+            seq: 0,
+            kind,
+            seat: Some(SeatId::new(seat)),
+            subject: None,
+            at: None,
+            value: 1,
+        };
+        let mut probation = surface().with_preset(Preset::Probation, Some(SeatId::new(0)));
+        for event in [
+            of(EventKind::LicenceAwarded, 1),
+            of(EventKind::LicenceVoided, 0),
+            of(EventKind::LicenceAwarded, 0),
+            of(EventKind::LicenceAwarded, 0),
+        ] {
+            probation
+                .issue_memo(&event, Ms::new(1_000), &[])
+                .expect("issued or not");
+        }
+        let issued: Vec<(Option<Memo>, String)> = probation
+            .feed()
+            .events()
+            .iter()
+            .filter(|event| event.kind.name() == crate::probation::LEDGER_MEMO_KIND)
+            .map(|event| (event.memo, event.text.clone()))
+            .collect();
+        assert_eq!(
+            issued,
+            vec![(
+                Some(Memo::FirstLicence),
+                String::from(crate::strings::MEMO_FIRST_LICENCE)
+            )]
+        );
+    }
 }

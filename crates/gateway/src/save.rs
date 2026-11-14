@@ -994,7 +994,7 @@ mod tests {
             ),
             (
                 "an unknown memo",
-                text.replace("\"power_shortfall\"", "\"first_licence\""),
+                text.replace("\"power_shortfall\"", "\"first_licences\""),
             ),
             (
                 "an unknown preset",

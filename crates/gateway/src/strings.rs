@@ -577,6 +577,9 @@ pub const MEMO_FIRST_DEATH: &str = "Notice of absence. Your Keybearer was lost a
      at your core after the usual delay, or at your nearest beacon if the core is gone. Nothing \
      you sealed changes in the meantime.";
 
+/// The first licence's memo: what it now allows (S3's `gwr`).
+pub const MEMO_FIRST_LICENCE: &str = "Notice of licence. You ran Generators on two vents at      settlement. You may now queue a Resonance Spire at any of your beacons.";
+
 /// `get_briefing`'s prose.
 ///
 /// The notebook is **not** in it: the notebook is its own field, at the top of
