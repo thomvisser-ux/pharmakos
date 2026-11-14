@@ -1122,6 +1122,23 @@ fn snapshot() -> Vec<u8> {
 /// that it was not vacuous.
 fn check(index: u32, rules: &RulesTable, scope: &Scope, snapshot: &[u8]) -> (VerifyReport, bool) {
     let text = json::write(&Shape::new(index).playbook());
+
+    // The decode stage reads a playbook through the direct reader and falls
+    // back to the exact path only to diagnose one that does not decode. The
+    // direct reader must answer whenever the exact path decodes, or the
+    // fallback would quietly carry every playbook and only a timing would
+    // show it (PR #177's review).
+    if let Ok(exact) =
+        json::read(&text).and_then(|value| json::decode_json_encoded::<Playbook>(&value))
+    {
+        assert_eq!(
+            json::decode_direct::<Playbook>(&text),
+            json::Direct::Wire(exact),
+            "run {index}: the direct reader left a playbook the exact path decodes to the exact \
+             path"
+        );
+    }
+
     let input = Input::new(text.as_bytes(), snapshot, scope, rules)
         .unwrap_or_else(|error| panic!("assembling the input: {error}"));
     let report = verify(&input, Depth::Full);

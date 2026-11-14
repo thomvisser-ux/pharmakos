@@ -449,21 +449,22 @@ pub fn verify(input: &Input<'_>, depth: Depth) -> VerifyReport {
     let mut units: u32 = 0;
     let mut fingerprint: Vec<u8> = Vec::new();
 
-    if let Some(playbook) = decode::run(input.playbook, &mut out) {
-        units = size::size_units(&playbook);
-        if let Some(digest) = hash::plan_fingerprint(&playbook) {
+    if let Some(decoded) = decode::run(input.playbook, &mut out) {
+        let playbook = &decoded.playbook;
+        units = size::size_units(playbook);
+        if let Some(digest) = decoded.fingerprint {
             // `to_field` rather than `to_be_bytes` here: `crates/proto`'s
             // `fingerprint` module owns "eight big-endian bytes" (item 77), and
             // a rule with one home cannot drift between its callers.
             fingerprint = pharmakos_proto::fingerprint::to_field(digest);
         }
-        structure::run(&playbook, limits, &mut out);
-        refusals::run(&playbook, &mut out);
-        let symbols = resolve::run(&playbook, input.scope, &mut out);
-        semantics::run(&playbook, input.scope, limits, &symbols, &mut out);
+        structure::run(playbook, limits, &mut out);
+        refusals::run(playbook, &mut out);
+        let symbols = resolve::run(playbook, input.scope, &mut out);
+        semantics::run(playbook, input.scope, limits, &symbols, &mut out);
         if depth == Depth::Full {
-            estimate::run(&playbook, input, &mut out);
-            lint::run(&playbook, input.scope, limits, &symbols, &mut out);
+            estimate::run(playbook, input, &mut out);
+            lint::run(playbook, input.scope, limits, &symbols, &mut out);
         }
     }
 

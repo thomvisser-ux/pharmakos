@@ -39,20 +39,28 @@ use crate::walk::{self, Carrier, List, Slot, Visit};
 /// Run the check.
 pub(crate) fn run(document: &Playbook, out: &mut Builder) {
     let mut check = Enums { out };
-    check.raw::<playbook::Kind>("/kind", "kind", document.kind);
+    check.raw::<playbook::Kind>("/kind", &[], "kind", document.kind);
     if let Some(about) = document.meta.as_ref() {
-        check.raw::<meta::AuthorKind>("/meta/author_kind", "author_kind", about.author_kind);
+        check.raw::<meta::AuthorKind>("/meta/author_kind", &[], "author_kind", about.author_kind);
     }
     if let Some(death) = document.on_death.as_ref() {
-        check.raw::<on_death::OnRespawn>("/on_death/on_respawn", "on_respawn", death.on_respawn);
+        check.raw::<on_death::OnRespawn>(
+            "/on_death/on_respawn",
+            &[],
+            "on_respawn",
+            death.on_respawn,
+        );
     }
     if let Some(declarative) = document.declarative.as_ref() {
         for (index, rule) in declarative.handlers.iter().enumerate() {
-            check.raw::<handler::Resume>(
-                &pointer::child(&pointer::at("/declarative/handlers", index), "resume"),
-                "resume",
-                rule.resume,
-            );
+            if handler::Resume::try_from(rule.resume).is_err() {
+                check.raw::<handler::Resume>(
+                    &pointer::at("/declarative/handlers", index),
+                    &["resume"],
+                    "resume",
+                    rule.resume,
+                );
+            }
         }
     }
     walk::walk(document, &mut check);
@@ -63,47 +71,49 @@ struct Enums<'a> {
 }
 
 impl Enums<'_> {
-    /// `E0018` when `value` is not a number `E` names.
-    fn raw<E: TryFrom<i32>>(&mut self, at: &str, field: &'static str, value: i32) {
+    /// `E0018` when `value` is not a number `E` names, at the pointer `at`
+    /// plus `tail`, which is built only then.
+    fn raw<E: TryFrom<i32>>(&mut self, at: &str, tail: &[&str], field: &'static str, value: i32) {
         if E::try_from(value).is_ok() {
             return;
         }
         self.out.emit(
-            Diag::new("E0018", at)
+            Diag::new("E0018", pointer::join(at, tail))
                 .arg("field", field)
                 .arg("value", value),
         );
     }
 
     /// An integer comparison's operator.
-    fn compare(&mut self, at: &str, compare: Option<&IntCompare>) {
+    fn compare(&mut self, at: &str, tail: [&str; 2], compare: Option<&IntCompare>) {
         if let Some(compare) = compare {
-            self.raw::<int_compare::Op>(&pointer::child(at, "op"), "op", compare.op);
+            let [first, second] = tail;
+            self.raw::<int_compare::Op>(at, &[first, second, "op"], "op", compare.op);
         }
     }
 
-    /// An enemy predicate's freshness, under the predicate at `at`.
-    fn freshness(&mut self, at: &str, window: Option<&Freshness>) {
+    /// An enemy predicate's freshness, under the predicate `predicate` at
+    /// `at`.
+    fn freshness(&mut self, at: &str, predicate: &str, window: Option<&Freshness>) {
         if let Some(window) = window {
-            let here = pointer::child(&pointer::child(at, "freshness"), "kind");
-            self.raw::<freshness::Kind>(&here, "kind", window.kind);
+            self.raw::<freshness::Kind>(at, &[predicate, "freshness", "kind"], "kind", window.kind);
         }
     }
 
     /// A pick's rank and coverage.
-    fn pick(&mut self, at: &str, rank: i32, coverage: i32) {
-        self.raw::<feature_ref::Rank>(&pointer::child(at, "rank"), "rank", rank);
-        self.raw::<feature_ref::Coverage>(&pointer::child(at, "coverage"), "coverage", coverage);
+    fn pick(&mut self, at: &str, arm: &str, rank: i32, coverage: i32) {
+        self.raw::<feature_ref::Rank>(at, &[arm, "rank"], "rank", rank);
+        self.raw::<feature_ref::Coverage>(at, &[arm, "coverage"], "coverage", coverage);
     }
 
     /// A feature reference's pick, if it holds one.
     fn feature(&mut self, at: &str, reference: &FeatureRef) {
         match reference.r#ref.as_ref() {
             Some(feature_ref::Ref::Vent(vent)) => {
-                self.pick(&pointer::child(at, "vent"), vent.rank, vent.coverage);
+                self.pick(at, "vent", vent.rank, vent.coverage);
             }
             Some(feature_ref::Ref::Seam(seam)) => {
-                self.pick(&pointer::child(at, "seam"), seam.rank, seam.coverage);
+                self.pick(at, "seam", seam.rank, seam.coverage);
             }
             Some(feature_ref::Ref::FeatureId(_) | feature_ref::Ref::Covered(_)) | None => {}
         }
@@ -113,27 +123,17 @@ impl Enums<'_> {
 impl Visit for Enums<'_> {
     fn entry(&mut self, at: &str, entry: &Step, _list: List, _index: usize) {
         if let Some(fail) = entry.on_fail.as_ref() {
-            self.raw::<on_fail::Action>(
-                &pointer::child(&pointer::child(at, "on_fail"), "action"),
-                "action",
-                fail.action,
-            );
+            self.raw::<on_fail::Action>(at, &["on_fail", "action"], "action", fail.action);
         }
         match entry.kind.as_ref() {
             Some(step::Kind::Move(walk_to)) => {
-                self.raw::<move_step::Pace>(
-                    &pointer::child(&pointer::child(at, "move"), "pace"),
-                    "pace",
-                    walk_to.pace,
-                );
+                self.raw::<move_step::Pace>(at, &["move", "pace"], "pace", walk_to.pace);
             }
             Some(step::Kind::PlaceBeacon(place)) => {
                 if let Some(initial) = place.initial.as_ref() {
                     self.raw::<interface_row::QuartermasterPriority>(
-                        &pointer::child(
-                            &pointer::child(&pointer::child(at, "place_beacon"), "initial"),
-                            "priority",
-                        ),
+                        at,
+                        &["place_beacon", "initial", "priority"],
                         "priority",
                         initial.priority,
                     );
@@ -144,11 +144,13 @@ impl Visit for Enums<'_> {
     }
 
     fn interface(&mut self, at: &str, interface: &InterfaceStep) {
-        let rows_at = pointer::child(at, "rows");
         for (index, row) in interface.rows.iter().enumerate() {
-            if let Some(interface_row::Row::SetPriority(priority)) = row.row.as_ref() {
+            if let Some(interface_row::Row::SetPriority(priority)) = row.row.as_ref()
+                && interface_row::QuartermasterPriority::try_from(*priority).is_err()
+            {
                 self.raw::<interface_row::QuartermasterPriority>(
-                    &pointer::child(&pointer::at(&rows_at, index), "set_priority"),
+                    &pointer::at(&pointer::child(at, "rows"), index),
+                    &["set_priority"],
                     "set_priority",
                     *priority,
                 );
@@ -164,8 +166,7 @@ impl Visit for Enums<'_> {
             }
             Some(location::Place::Toward(toward)) => {
                 if let Some(feature) = toward.feature.as_ref() {
-                    let here = pointer::child(&pointer::child(at, "toward"), "feature");
-                    self.feature(&here, feature);
+                    self.feature(&pointer::join(at, &["toward", "feature"]), feature);
                 }
             }
             _ => {}
@@ -173,27 +174,25 @@ impl Visit for Enums<'_> {
     }
 
     fn filter(&mut self, at: &str, filter: &BeaconFilter) {
-        self.raw::<beacon_filter::Side>(&pointer::child(at, "side"), "side", filter.side);
-        self.raw::<beacon_filter::MandateKind>(
-            &pointer::child(at, "mandate"),
-            "mandate",
-            filter.mandate,
-        );
+        self.raw::<beacon_filter::Side>(at, &["side"], "side", filter.side);
+        self.raw::<beacon_filter::MandateKind>(at, &["mandate"], "mandate", filter.mandate);
     }
 
     fn mandate(&mut self, at: &str, settings: &MandateSettings, _carrier: Carrier) {
-        self.raw::<mandate_settings::Roe>(&pointer::child(at, "roe"), "roe", settings.roe);
+        self.raw::<mandate_settings::Roe>(at, &["roe"], "roe", settings.roe);
         match settings.mandate.as_ref() {
             Some(mandate_settings::Mandate::Build(build)) => {
                 self.raw::<build_settings::Terraform>(
-                    &pointer::child(&pointer::child(at, "build"), "terraform"),
+                    at,
+                    &["build", "terraform"],
                     "terraform",
                     build.terraform,
                 );
             }
             Some(mandate_settings::Mandate::Mine(mine)) => {
                 self.raw::<mine_settings::SeamChoice>(
-                    &pointer::child(&pointer::child(at, "mine"), "seam_choice"),
+                    at,
+                    &["mine", "seam_choice"],
                     "seam_choice",
                     mine.seam_choice,
                 );
@@ -204,20 +203,22 @@ impl Visit for Enums<'_> {
             // was not.
             Some(mandate_settings::Mandate::Defend(defend)) => {
                 self.raw::<defend_settings::Pursue>(
-                    &pointer::child(&pointer::child(at, "defend"), "pursue"),
+                    at,
+                    &["defend", "pursue"],
                     "pursue",
                     defend.pursue,
                 );
             }
             Some(mandate_settings::Mandate::Attack(attack)) => {
-                let here = pointer::child(at, "attack");
                 self.raw::<attack_settings::Retarget>(
-                    &pointer::child(&here, "retarget"),
+                    at,
+                    &["attack", "retarget"],
                     "retarget",
                     attack.retarget,
                 );
                 self.raw::<attack_settings::AfterAction>(
-                    &pointer::child(&here, "after_action"),
+                    at,
+                    &["attack", "after_action"],
                     "after_action",
                     attack.after_action,
                 );
@@ -229,69 +230,60 @@ impl Visit for Enums<'_> {
     fn condition(&mut self, at: &str, node: &Condition) {
         match node.node.as_ref() {
             Some(condition::Node::CmdrHpPct(predicate)) => {
-                self.raw::<cmdr_hp_pct::Cmp>(
-                    &pointer::child(&pointer::child(at, "cmdr_hp_pct"), "cmp"),
-                    "cmp",
-                    predicate.cmp,
-                );
+                self.raw::<cmdr_hp_pct::Cmp>(at, &["cmdr_hp_pct", "cmp"], "cmp", predicate.cmp);
             }
-            Some(condition::Node::CmdrDeaths(predicate)) => self.compare(
-                &pointer::child(&pointer::child(at, "cmdr_deaths"), "deaths"),
-                predicate.deaths.as_ref(),
-            ),
-            Some(condition::Node::SegmentElapsed(predicate)) => self.compare(
-                &pointer::child(&pointer::child(at, "segment_elapsed"), "ms"),
-                predicate.ms.as_ref(),
-            ),
-            Some(condition::Node::BeaconHpPct(predicate)) => self.compare(
-                &pointer::child(&pointer::child(at, "beacon_hp_pct"), "pct"),
-                predicate.pct.as_ref(),
-            ),
-            Some(condition::Node::Treasury(predicate)) => self.compare(
-                &pointer::child(&pointer::child(at, "treasury"), "dollars"),
-                predicate.dollars.as_ref(),
-            ),
-            Some(condition::Node::KwHeadroom(predicate)) => self.compare(
-                &pointer::child(&pointer::child(at, "kw_headroom"), "kw"),
-                predicate.kw.as_ref(),
-            ),
+            Some(condition::Node::CmdrDeaths(predicate)) => {
+                self.compare(at, ["cmdr_deaths", "deaths"], predicate.deaths.as_ref());
+            }
+            Some(condition::Node::SegmentElapsed(predicate)) => {
+                self.compare(at, ["segment_elapsed", "ms"], predicate.ms.as_ref());
+            }
+            Some(condition::Node::BeaconHpPct(predicate)) => {
+                self.compare(at, ["beacon_hp_pct", "pct"], predicate.pct.as_ref());
+            }
+            Some(condition::Node::Treasury(predicate)) => {
+                self.compare(at, ["treasury", "dollars"], predicate.dollars.as_ref());
+            }
+            Some(condition::Node::KwHeadroom(predicate)) => {
+                self.compare(at, ["kw_headroom", "kw"], predicate.kw.as_ref());
+            }
             Some(condition::Node::BeaconUnitsByRole(predicate)) => {
-                let here = pointer::child(at, "beacon_units_by_role");
                 self.raw::<beacon_units_by_role::Role>(
-                    &pointer::child(&here, "role"),
+                    at,
+                    &["beacon_units_by_role", "role"],
                     "role",
                     predicate.role,
                 );
-                self.compare(&pointer::child(&here, "count"), predicate.count.as_ref());
+                self.compare(
+                    at,
+                    ["beacon_units_by_role", "count"],
+                    predicate.count.as_ref(),
+                );
             }
             Some(condition::Node::BeaconMandate(predicate)) => {
                 self.raw::<beacon_filter::MandateKind>(
-                    &pointer::child(&pointer::child(at, "beacon_mandate"), "mandate"),
+                    at,
+                    &["beacon_mandate", "mandate"],
                     "mandate",
                     predicate.mandate,
                 );
             }
             Some(condition::Node::EnemyUnitsNear(predicate)) => {
-                let here = pointer::child(at, "enemy_units_near");
-                self.compare(&pointer::child(&here, "count"), predicate.count.as_ref());
-                self.freshness(&here, predicate.freshness.as_ref());
+                self.compare(at, ["enemy_units_near", "count"], predicate.count.as_ref());
+                self.freshness(at, "enemy_units_near", predicate.freshness.as_ref());
             }
             Some(condition::Node::EnemyBeaconKnown(predicate)) => {
-                let here = pointer::child(at, "enemy_beacon_known");
-                self.freshness(&here, predicate.freshness.as_ref());
+                self.freshness(at, "enemy_beacon_known", predicate.freshness.as_ref());
             }
             Some(condition::Node::EnemyStructureNear(predicate)) => {
-                let here = pointer::child(at, "enemy_structure_near");
-                self.freshness(&here, predicate.freshness.as_ref());
+                self.freshness(at, "enemy_structure_near", predicate.freshness.as_ref());
             }
-            Some(condition::Node::KwSupply(predicate)) => self.compare(
-                &pointer::child(&pointer::child(at, "kw_supply"), "kw"),
-                predicate.kw.as_ref(),
-            ),
-            Some(condition::Node::KwDraw(predicate)) => self.compare(
-                &pointer::child(&pointer::child(at, "kw_draw"), "kw"),
-                predicate.kw.as_ref(),
-            ),
+            Some(condition::Node::KwSupply(predicate)) => {
+                self.compare(at, ["kw_supply", "kw"], predicate.kw.as_ref());
+            }
+            Some(condition::Node::KwDraw(predicate)) => {
+                self.compare(at, ["kw_draw", "kw"], predicate.kw.as_ref());
+            }
             _ => {}
         }
     }

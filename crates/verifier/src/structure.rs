@@ -103,7 +103,7 @@ use pharmakos_proto::gp::v1::{
 use pharmakos_proto::json::Json;
 
 use crate::limits::{CONDITION_MAX_DEPTH, CONDITION_MAX_NODES, Limits};
-use crate::pointer;
+use crate::pointer::{self, Here};
 use crate::report::{Builder, Diag, number, patch_add, patch_remove, patch_replace};
 use crate::size;
 use crate::strings;
@@ -1246,7 +1246,7 @@ fn walk_condition_root(condition: &Condition, at: &str, out: &mut Builder) {
                 .arg("max", CONDITION_MAX_NODES),
         );
     }
-    walk_condition(condition, at, out);
+    walk_condition(condition, &mut Here::new(at), out);
 }
 
 /// How deeply a condition nests. A bare predicate is one level.
@@ -1279,124 +1279,136 @@ pub(crate) fn tree_nodes(condition: &Condition) -> u32 {
     inner.saturating_add(1)
 }
 
-/// One condition node's shape, and then its children.
-fn walk_condition(condition: &Condition, at: &str, out: &mut Builder) {
+/// One condition node's shape, and then its children, with `here` at the
+/// node. The pointer is built in place ([`Here`]) and copied only into a
+/// diagnostic, so a well-formed tree costs no allocation per node (S3's
+/// `vfyq`).
+fn walk_condition(condition: &Condition, here: &mut Here, out: &mut Builder) {
     let Some(node) = condition.node.as_ref() else {
-        out.emit(Diag::new("E0206", at));
+        out.emit(Diag::new("E0206", here.as_str()));
         return;
     };
     match node {
-        condition::Node::All(all) => {
-            let here = pointer::child(at, "all");
-            if all.items.is_empty() {
-                out.emit(Diag::new("E0203", here.clone()).arg("node", "all"));
-            }
-            walk_items(&all.items, &pointer::child(&here, "items"), out);
-        }
-        condition::Node::Any(any) => {
-            let here = pointer::child(at, "any");
-            if any.items.is_empty() {
-                out.emit(Diag::new("E0203", here.clone()).arg("node", "any"));
-            }
-            walk_items(&any.items, &pointer::child(&here, "items"), out);
-        }
+        condition::Node::All(all) => walk_group("all", &all.items, here, out),
+        condition::Node::Any(any) => walk_group("any", &any.items, here, out),
         condition::Node::Not(not) => {
-            let here = pointer::child(at, "not");
+            let at = here.push("not");
             match not.item.as_ref() {
-                None => out.emit(Diag::new("E0203", here).arg("node", "not")),
-                Some(inner) => walk_condition(inner, &pointer::child(&here, "item"), out),
+                None => out.emit(Diag::new("E0203", here.as_str()).arg("node", "not")),
+                Some(inner) => {
+                    let item_at = here.push("item");
+                    walk_condition(inner, here, out);
+                    here.pop(item_at);
+                }
             }
+            here.pop(at);
         }
-        other => walk_predicate(other, at, out),
+        other => walk_predicate(other, here.as_str(), out),
     }
 }
 
-fn walk_items(items: &[Condition], at: &str, out: &mut Builder) {
+/// An `all` or `any` group: not empty, and each of its items.
+fn walk_group(node: &'static str, items: &[Condition], here: &mut Here, out: &mut Builder) {
+    let at = here.push(node);
+    if items.is_empty() {
+        out.emit(Diag::new("E0203", here.as_str()).arg("node", node));
+    }
+    let item_list = here.push("items");
     for (index, item) in items.iter().enumerate() {
-        walk_condition(item, &pointer::at(at, index), out);
+        let item_at = here.push_index(index);
+        walk_condition(item, here, out);
+        here.pop(item_at);
     }
+    here.pop(item_list);
+    here.pop(at);
 }
 
-/// One leaf predicate: its comparison, its ranges, its durations.
+/// One leaf predicate: its comparison, its ranges, its durations. Each
+/// pointer is built only for a diagnostic.
 fn walk_predicate(node: &condition::Node, at: &str, out: &mut Builder) {
     match node {
         condition::Node::CmdrHpPct(predicate) => {
-            let here = pointer::child(at, "cmdr_hp_pct");
             if predicate.cmp() == pharmakos_proto::gp::v1::cmdr_hp_pct::Cmp::Unspecified {
-                out.emit(Diag::new("E0201", pointer::child(&here, "cmp")));
+                out.emit(Diag::new(
+                    "E0201",
+                    pointer::join(at, &["cmdr_hp_pct", "cmp"]),
+                ));
             }
-            percent(out, &pointer::child(&here, "pct"), i64::from(predicate.pct));
+            percent(out, at, &["cmdr_hp_pct", "pct"], i64::from(predicate.pct));
         }
         condition::Node::CmdrTookDamageWithin(predicate) => {
-            let here = pointer::child(at, "cmdr_took_damage_within");
-            if predicate.ms < 0 {
-                negative(out, &here, "ms", predicate.ms);
-            }
+            negative_under(out, at, "cmdr_took_damage_within", "ms", predicate.ms);
         }
         condition::Node::CmdrDeaths(predicate) => {
-            let here = pointer::child(at, "cmdr_deaths");
-            compare(predicate.deaths.as_ref(), &here, "deaths", false, out);
-        }
-        condition::Node::SegmentElapsed(predicate) => {
-            let here = pointer::child(at, "segment_elapsed");
-            compare(predicate.ms.as_ref(), &here, "ms", false, out);
-        }
-        condition::Node::BeaconHpPct(predicate) => {
-            let here = pointer::child(at, "beacon_hp_pct");
-            beacon_ref(predicate.beacon.is_some(), &here, out);
-            compare(predicate.pct.as_ref(), &here, "pct", true, out);
-        }
-        condition::Node::BeaconUnderAttack(predicate) => {
-            let here = pointer::child(at, "beacon_under_attack");
-            beacon_ref(predicate.beacon.is_some(), &here, out);
-            if predicate.within_ms < 0 {
-                negative(out, &here, "within_ms", predicate.within_ms);
-            }
-        }
-        condition::Node::BeaconPowered(predicate) => {
-            beacon_ref(
-                predicate.beacon.is_some(),
-                &pointer::child(at, "beacon_powered"),
+            compare(
+                predicate.deaths.as_ref(),
+                at,
+                "cmdr_deaths",
+                "deaths",
+                false,
                 out,
             );
+        }
+        condition::Node::SegmentElapsed(predicate) => {
+            compare(
+                predicate.ms.as_ref(),
+                at,
+                "segment_elapsed",
+                "ms",
+                false,
+                out,
+            );
+        }
+        condition::Node::BeaconHpPct(predicate) => {
+            beacon_ref(predicate.beacon.is_some(), at, "beacon_hp_pct", out);
+            compare(
+                predicate.pct.as_ref(),
+                at,
+                "beacon_hp_pct",
+                "pct",
+                true,
+                out,
+            );
+        }
+        condition::Node::BeaconUnderAttack(predicate) => {
+            beacon_ref(predicate.beacon.is_some(), at, "beacon_under_attack", out);
+            negative_under(
+                out,
+                at,
+                "beacon_under_attack",
+                "within_ms",
+                predicate.within_ms,
+            );
+        }
+        condition::Node::BeaconPowered(predicate) => {
+            beacon_ref(predicate.beacon.is_some(), at, "beacon_powered", out);
         }
         condition::Node::Treasury(predicate) => {
             compare(
                 predicate.dollars.as_ref(),
-                &pointer::child(at, "treasury"),
+                at,
+                "treasury",
                 "dollars",
                 false,
                 out,
             );
         }
         condition::Node::KwHeadroom(predicate) => {
-            compare(
-                predicate.kw.as_ref(),
-                &pointer::child(at, "kw_headroom"),
-                "kw",
-                false,
-                out,
-            );
+            compare(predicate.kw.as_ref(), at, "kw_headroom", "kw", false, out);
         }
         condition::Node::StepReached(predicate) => {
             if predicate.label.is_empty() {
                 out.emit(
-                    Diag::new(
-                        "E0101",
-                        pointer::child(&pointer::child(at, "step_reached"), "label"),
-                    )
-                    .arg("what", "`label`"),
+                    Diag::new("E0101", pointer::join(at, &["step_reached", "label"]))
+                        .arg("what", "`label`"),
                 );
             }
         }
         condition::Node::RuleFired(predicate) => {
             if predicate.handler_id.is_empty() {
                 out.emit(
-                    Diag::new(
-                        "E0101",
-                        pointer::child(&pointer::child(at, "rule_fired"), "handler_id"),
-                    )
-                    .arg("what", "`handler_id`"),
+                    Diag::new("E0101", pointer::join(at, &["rule_fired", "handler_id"]))
+                        .arg("what", "`handler_id`"),
                 );
             }
         }
@@ -1416,48 +1428,66 @@ fn walk_predicate(node: &condition::Node, at: &str, out: &mut Builder) {
     }
 }
 
-/// A predicate's `BeaconRef`, which is required wherever it appears.
-fn beacon_ref(present: bool, at: &str, out: &mut Builder) {
-    if !present {
-        out.emit(Diag::new("E0101", pointer::child(at, "beacon")).arg("what", "`beacon`"));
+/// [`negative`] for a predicate's duration, with the pointer built only when
+/// the duration is negative.
+fn negative_under(out: &mut Builder, at: &str, predicate: &str, field: &'static str, found: i32) {
+    if found < 0 {
+        negative(out, &pointer::child(at, predicate), field, found);
     }
 }
 
-/// One `IntCompare`: present, with an operator, and inside its range if it is a
-/// percentage.
+/// A predicate's `BeaconRef`, which is required wherever it appears.
+fn beacon_ref(present: bool, at: &str, predicate: &str, out: &mut Builder) {
+    if !present {
+        out.emit(
+            Diag::new("E0101", pointer::join(at, &[predicate, "beacon"])).arg("what", "`beacon`"),
+        );
+    }
+}
+
+/// A predicate's comparison, at `at` under `predicate`'s `field`: present,
+/// with an operator, and in range if it is a percentage.
 fn compare(
     value: Option<&IntCompare>,
     at: &str,
+    predicate: &str,
     field: &'static str,
     is_percent: bool,
     out: &mut Builder,
 ) {
-    let here = pointer::child(at, field);
     let Some(comparison) = value else {
-        out.emit(Diag::new("E0101", here).arg("what", format!("`{field}`")));
+        out.emit(
+            Diag::new("E0101", pointer::join(at, &[predicate, field]))
+                .arg("what", format!("`{field}`")),
+        );
         return;
     };
     if comparison.op() == int_compare::Op::Unspecified {
-        out.emit(Diag::new("E0201", pointer::child(&here, "op")));
+        out.emit(Diag::new(
+            "E0201",
+            pointer::join(at, &[predicate, field, "op"]),
+        ));
     }
     if is_percent {
         percent(
             out,
-            &pointer::child(&here, "value"),
+            at,
+            &[predicate, field, "value"],
             i64::from(comparison.value),
         );
     }
 }
 
-/// "Percent, integer. 0-100."
-fn percent(out: &mut Builder, at: &str, found: i64) {
+/// `E0202` when `found` is not a percentage, at `at` plus `tail`.
+fn percent(out: &mut Builder, at: &str, tail: &[&str], found: i64) {
     if (0..=100).contains(&found) {
         return;
     }
+    let here = pointer::join(at, tail);
     let clamped = found.clamp(0, 100);
-    out.emit(Diag::new("E0202", at).arg("found", found).fix(
+    out.emit(Diag::new("E0202", here.as_str()).arg("found", found).fix(
         format!("Clamp it to {clamped}"),
-        patch_replace(at, &number(clamped)),
+        patch_replace(&here, &number(clamped)),
         Applicability::MaybeIncorrect,
     ));
 }
