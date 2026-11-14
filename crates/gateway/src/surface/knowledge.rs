@@ -380,7 +380,12 @@ impl Surface {
             if !memos.is_empty() {
                 entries.push((
                     String::from("ledger_memos"),
-                    Json::Array(memos.iter().map(|memo| memo.json()).collect()),
+                    Json::Array(
+                        memos
+                            .iter()
+                            .map(|memo| Ok(memo.json(&memo.text(&self.rules)?)))
+                            .collect::<Result<Vec<Json>, Error>>()?,
+                    ),
                 ));
             }
         }
@@ -2715,7 +2720,8 @@ fn licence_rows(world: &pharmakos_sim::world::World) -> Result<Vec<LicenceHeld>,
         .map(|row| {
             let licence = pharmakos_sim::licence::licence_of(row.licence).ok_or_else(|| {
                 Error::internal(format!(
-                    "the licence table holds licence {} for seat {}, which this build does not                      define",
+                    "the licence table holds licence {} for seat {}, which this build does not \
+                     define",
                     row.licence, row.seat
                 ))
             })?;

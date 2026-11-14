@@ -598,8 +598,42 @@ pub const MEMO_FIRST_DEATH: &str = "Notice of absence. Your Keybearer was lost a
      at your core after the usual delay, or at your nearest beacon if the core is gone. Nothing \
      you sealed changes in the meantime.";
 
-/// The first licence's memo: what it now allows (S3's `gwr`).
-pub const MEMO_FIRST_LICENCE: &str = "Notice of licence. You ran Generators on two vents at      settlement. You may now queue a Resonance Spire at any of your beacons.";
+/// The first licence's memo: what it now allows (S3's `gwr`; decision 4's
+/// copy). `vents` is the rules table's `licences.resonance_vents` and
+/// `title` the licence's name ([`licence_title`]), so the memo says what
+/// this build's rules ask, never a number of its own.
+#[must_use]
+pub fn memo_first_licence(vents: core::num::NonZeroU32, title: &str) -> String {
+    let vents = vents.get();
+    let counted = if vents == 1 {
+        format!("{} vent", number_word(vents))
+    } else {
+        format!("{} vents", number_word(vents))
+    };
+    format!(
+        "Notice of licence. You ran Generators on {counted} at settlement. You may now queue a \
+         {title} at any of your beacons."
+    )
+}
+
+/// A count as the Ledger's prose writes it: in words to ten, in figures past.
+fn number_word(many: u32) -> String {
+    let word = match many {
+        0 => "no",
+        1 => "one",
+        2 => "two",
+        3 => "three",
+        4 => "four",
+        5 => "five",
+        6 => "six",
+        7 => "seven",
+        8 => "eight",
+        9 => "nine",
+        10 => "ten",
+        _ => return many.to_string(),
+    };
+    word.to_owned()
+}
 
 /// `get_briefing`'s prose.
 ///
@@ -1048,6 +1082,25 @@ mod tests {
             event_text(&event(EventKind::LicenceAwarded, Some(0), 9)),
             "The Ledger awarded seat 0 a licence: a licence this build does not name (code 9)."
         );
+    }
+
+    /// S3's `gwr` (decision 4's copy): the first-licence memo says the rules
+    /// table's vent count and the licence's name, in one line of single
+    /// spaces.
+    #[test]
+    fn the_first_licence_memo_says_the_rules_count_and_the_licences_name() {
+        let vents = |n| core::num::NonZeroU32::new(n).expect("a count");
+        assert_eq!(
+            super::memo_first_licence(vents(2), "Resonance Spire"),
+            "Notice of licence. You ran Generators on two vents at settlement. You may now \
+             queue a Resonance Spire at any of your beacons."
+        );
+        assert_eq!(
+            super::memo_first_licence(vents(1), "Resonance Spire"),
+            "Notice of licence. You ran Generators on one vent at settlement. You may now \
+             queue a Resonance Spire at any of your beacons."
+        );
+        assert!(super::memo_first_licence(vents(12), "X").contains("on 12 vents at"));
     }
 
     /// S3's `gwr`: the recap's licence line names each licence, and says

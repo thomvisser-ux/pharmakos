@@ -1844,3 +1844,260 @@ fn no_shipped_code_calls_a_sim_fixture() {
         )
     );
 }
+
+// ---------------------------------------------------------------------------
+// One space between words (S3's `gwr` review: a lost `\` continuation)
+// ---------------------------------------------------------------------------
+
+/// Every `.rs` file under a sibling crate's `src`, in path order, as
+/// [`sources`] lists this crate's.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "clippy.toml sanctions read_dir when the listing is collected and sorted before use, which is what happens here"
+)]
+fn sources_of(krate: &str) -> Vec<PathBuf> {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join(krate)
+        .join("src");
+    let mut stack: Vec<PathBuf> = vec![root];
+    let mut found: Vec<PathBuf> = Vec::new();
+    while let Some(directory) = stack.pop() {
+        let entries = std::fs::read_dir(&directory)
+            .unwrap_or_else(|error| panic!("{}: {error}", directory.display()));
+        let mut here: Vec<PathBuf> = entries
+            .map(|entry| {
+                entry
+                    .unwrap_or_else(|error| panic!("an entry: {error}"))
+                    .path()
+            })
+            .collect();
+        here.sort();
+        for path in here {
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().is_some_and(|extension| extension == "rs") {
+                found.push(path);
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
+/// A reader over a file's characters, for [`string_literals`].
+struct Chars {
+    chars: Vec<char>,
+}
+
+impl Chars {
+    fn at(&self, index: usize) -> Option<char> {
+        self.chars.get(index).copied()
+    }
+
+    /// The index past a `//` comment starting at `index`.
+    fn past_line_comment(&self, mut index: usize) -> usize {
+        while self.at(index).is_some_and(|c| c != '\n') {
+            index += 1;
+        }
+        index
+    }
+
+    /// The index past a (nested) block comment starting at `index`.
+    fn past_block_comment(&self, mut index: usize) -> usize {
+        let mut depth = 0_usize;
+        while let Some(c) = self.at(index) {
+            if c == '/' && self.at(index + 1) == Some('*') {
+                depth += 1;
+                index += 2;
+            } else if c == '*' && self.at(index + 1) == Some('/') {
+                depth -= 1;
+                index += 2;
+                if depth == 0 {
+                    break;
+                }
+            } else {
+                index += 1;
+            }
+        }
+        index
+    }
+
+    /// The index past a character literal (`'"'`, `'\''`) or a lifetime
+    /// (`'a`) starting at `index`.
+    fn past_quote(&self, mut index: usize) -> usize {
+        if self.at(index + 1) == Some('\\') {
+            index += 2;
+            while self.at(index).is_some_and(|c| c != '\'') {
+                index += 1;
+            }
+            index + 1
+        } else if self.at(index + 2) == Some('\'') {
+            index + 3
+        } else {
+            index + 1
+        }
+    }
+
+    /// A raw string starting at the `r` at `index`, read as written, and the
+    /// index past it; `None` when the `r` starts no raw string.
+    fn raw_string(&self, index: usize) -> Option<(String, usize)> {
+        let mut hashes = 0;
+        let mut cursor = index + 1;
+        while self.at(cursor) == Some('#') {
+            hashes += 1;
+            cursor += 1;
+        }
+        if self.at(cursor) != Some('"') {
+            return None;
+        }
+        cursor += 1;
+        let mut literal = String::new();
+        while let Some(c) = self.at(cursor) {
+            if c == '"' && (1..=hashes).all(|offset| self.at(cursor + offset) == Some('#')) {
+                return Some((literal, cursor + 1 + hashes));
+            }
+            literal.push(c);
+            cursor += 1;
+        }
+        Some((literal, cursor))
+    }
+
+    /// A string starting at the `"` at `index`, as the compiler reads it, and
+    /// the index past it.
+    fn string(&self, index: usize) -> (String, usize) {
+        let mut cursor = index + 1;
+        let mut literal = String::new();
+        while let Some(c) = self.at(cursor) {
+            match c {
+                '"' => return (literal, cursor + 1),
+                '\\' if self.at(cursor + 1) == Some('\n')
+                    || (self.at(cursor + 1) == Some('\r') && self.at(cursor + 2) == Some('\n')) =>
+                {
+                    cursor += 1;
+                    while self.at(cursor).is_some_and(char::is_whitespace) {
+                        cursor += 1;
+                    }
+                }
+                '\\' => {
+                    let kind = self.at(cursor + 1);
+                    literal.push(match kind {
+                        Some('n') => '\n',
+                        Some('r') => '\r',
+                        Some('t') => '\t',
+                        _ => '\u{fffd}',
+                    });
+                    cursor += 2;
+                    if kind == Some('u') {
+                        while self.at(cursor).is_some_and(|c| c != '}') {
+                            cursor += 1;
+                        }
+                        cursor += 1;
+                    } else if kind == Some('x') {
+                        cursor += 2;
+                    }
+                }
+                other => {
+                    literal.push(other);
+                    cursor += 1;
+                }
+            }
+        }
+        (literal, cursor)
+    }
+}
+
+/// The string literals of `text`'s shipped code (everything before its first
+/// `#[cfg(test)]`), each as the compiler reads it: a `\` at a line's end
+/// swallows the newline and the next line's leading white space, `\n`, `\r`
+/// and `\t` read as themselves, and every other escape as one character.
+/// Comments, character literals and lifetimes are skipped; a raw string is
+/// read as written.
+fn string_literals(text: &str) -> Vec<String> {
+    let shipped = text.split("#[cfg(test)]").next().unwrap_or_default();
+    let reader = Chars {
+        chars: shipped.chars().collect(),
+    };
+    let mut found = Vec::new();
+    let mut index = 0;
+    while let Some(here) = reader.at(index) {
+        let after_word = index > 0
+            && reader
+                .at(index - 1)
+                .is_some_and(|c| c.is_alphanumeric() || c == '_');
+        index = match (here, reader.at(index + 1)) {
+            ('/', Some('/')) => reader.past_line_comment(index),
+            ('/', Some('*')) => reader.past_block_comment(index),
+            ('\'', _) => reader.past_quote(index),
+            ('r', Some('"' | '#')) if !after_word => match reader.raw_string(index) {
+                Some((literal, next)) => {
+                    found.push(literal);
+                    next
+                }
+                None => index + 1,
+            },
+            ('"', _) => {
+                let (literal, next) = reader.string(index);
+                found.push(literal);
+                next
+            }
+            _ => index + 1,
+        };
+    }
+    found
+}
+
+/// Whether `literal` holds two spaces in a row after a word: indentation
+/// (a run at the start of the text or of one of its lines, as the canonical
+/// JSON writer and the safe playbook's text indent) is not one.
+fn inner_run(literal: &str) -> bool {
+    literal.lines().any(|line| line.trim_start().contains("  "))
+}
+
+/// S3's `gwr` review: no string the gateway or plan-core ships -- a string
+/// table entry, an error's message, a sentence's piece -- holds two spaces in
+/// a row after a word, the mark of a `\` continuation lost in an edit (the
+/// first-licence memo and a licence error once read "at      settlement").
+#[test]
+fn no_shipped_string_holds_a_run_of_spaces() {
+    let mut runs = Vec::new();
+    let mut read = 0;
+    for krate in ["gateway", "plan-core"] {
+        for path in sources_of(krate) {
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+            for literal in string_literals(&text) {
+                read += 1;
+                if inner_run(&literal) {
+                    runs.push(format!("{}: {literal:?}", path.display()));
+                }
+            }
+        }
+    }
+    assert!(read > 500, "the scan read only {read} string literals");
+    assert!(runs.is_empty(), "{}", runs.join("\n"));
+}
+
+/// The literal reader reads a kept continuation as one space, sees a lost
+/// one, and is not fooled by a character literal, a comment or a raw string;
+/// and indentation is no run.
+#[test]
+fn the_string_scan_reads_literals_as_the_compiler_does() {
+    let text = concat!(
+        "const A: &str = \"one \\\n     two\";\n",
+        "const B: char = '\"';\n",
+        "// \"a  b\"\n",
+        "const C: &str = r#\"c  d\"#;\n",
+        "const D: &str = \"e      f\";\n",
+    );
+    assert_eq!(
+        string_literals(text),
+        vec![
+            String::from("one two"),
+            String::from("c  d"),
+            String::from("e      f")
+        ]
+    );
+    assert!(inner_run("does not                      define"));
+    assert!(!inner_run("{\n  \"indented\": 1\n}"));
+}

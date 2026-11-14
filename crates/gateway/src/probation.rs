@@ -127,24 +127,38 @@ impl Memo {
             .ok_or_else(|| Error::invalid(format!("`{text}` is not a memo this build issues")))
     }
 
-    /// The memo's text, from the one string table.
-    #[must_use]
-    pub const fn text(self) -> &'static str {
-        match self {
-            Memo::PowerShortfall => crate::strings::MEMO_POWER_SHORTFALL,
-            Memo::DarkStake => crate::strings::MEMO_DARK_STAKE,
-            Memo::FirstDeath => crate::strings::MEMO_FIRST_DEATH,
-            Memo::FirstLicence => crate::strings::MEMO_FIRST_LICENCE,
-        }
+    /// The memo's text, from the one string table; the first licence's
+    /// reads the rules table's vent count.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] when the string table has no name
+    /// for the Resonance Spire's licence, which a test pins never happens.
+    pub fn text(self, rules: &pharmakos_sim::rules::RulesTable) -> Result<String, Error> {
+        Ok(match self {
+            Memo::PowerShortfall => String::from(crate::strings::MEMO_POWER_SHORTFALL),
+            Memo::DarkStake => String::from(crate::strings::MEMO_DARK_STAKE),
+            Memo::FirstDeath => String::from(crate::strings::MEMO_FIRST_DEATH),
+            Memo::FirstLicence => {
+                let title =
+                    crate::strings::licence_title(pharmakos_proto::gp::v1::Licence::ResonanceSpire)
+                        .ok_or_else(|| {
+                            Error::internal(
+                                "the string table has no name for the Resonance Spire's licence",
+                            )
+                        })?;
+                crate::strings::memo_first_licence(rules.resonance_vents(), title)
+            }
+        })
     }
 
     /// The memo as the wire carries it, `gp.api.v1.LedgerMemo`: which memo,
-    /// and its text.
+    /// and its text ([`Memo::text`]).
     #[must_use]
-    pub fn json(self) -> Json {
+    pub fn json(self, text: &str) -> Json {
         Json::Object(vec![
             (String::from("id"), Json::String(self.name().to_owned())),
-            (String::from("text"), Json::String(self.text().to_owned())),
+            (String::from("text"), Json::String(text.to_owned())),
         ])
     }
 
@@ -197,7 +211,11 @@ mod tests {
     fn a_memo_reads_back_as_it_is_spelt() {
         for memo in Memo::ALL {
             assert_eq!(Memo::parse(memo.name()).expect("its own name"), memo);
-            assert!(!memo.text().is_empty());
+            let rules = pharmakos_sim::rules::RulesTable::load(
+                &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../rules/rules.v1.json"),
+            )
+            .expect("the shipped rules table");
+            assert!(!memo.text(&rules).expect("its text").is_empty());
         }
         assert_eq!(
             Memo::parse("first_licence").expect("gwr's"),

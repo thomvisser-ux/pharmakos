@@ -295,7 +295,11 @@ impl Operators for NoOperators {
 /// and `plan` reach is on it, `get_segment_feed` included: the feed is read
 /// through an opaque cursor the caller holds and keeps no per-viewer state in
 /// the gateway, so an advisor reading it (the recap's events, say) leaves the
-/// human's feed as it found it. Anything off it is answered `FORBIDDEN_SCOPE`
+/// human's feed as it found it. `get_beacon` is on it with its S3 detail (a
+/// writ, its settings, a Build beacon's targets): that detail is world state,
+/// what the sim holds for the seat's own beacon, and not what the seat wrote,
+/// so it reads none of the seat's drafts or playbooks (item 111's line
+/// stands). Anything off it is answered `FORBIDDEN_SCOPE`
 /// and audited (`an_advisor_is_refused_every_method_off_its_allow_list`).
 pub const ADVISOR_METHODS: [Method; 20] = [
     Method::GetStatus,

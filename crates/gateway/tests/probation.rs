@@ -422,7 +422,7 @@ fn a_memo_fires_once_survives_a_resume_and_never_in_a_custom_match() {
             .into_iter()
             .find(|(kind, ..)| kind == "ledger_memo")
         {
-            assert_eq!(text, Memo::FirstDeath.text());
+            assert_eq!(text, pharmakos_gateway::strings::MEMO_FIRST_DEATH);
         }
 
         // A save at round 2's Lull, through the file's own text, resumed.

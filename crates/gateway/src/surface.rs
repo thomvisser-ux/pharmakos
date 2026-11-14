@@ -2202,7 +2202,7 @@ impl Surface {
             Event {
                 at_ms,
                 kind: Kind::new(crate::probation::LEDGER_MEMO_KIND)?,
-                text: memo.text().to_owned(),
+                text: memo.text(&self.rules)?,
                 audience: Audience::Private(seat),
                 memo: Some(memo),
             },
@@ -3501,7 +3501,7 @@ impl Surface {
                 // `Event.ledger_memo`, on a memo's line and no other: the
                 // same text as `text`, and which memo (S3's plan, E5).
                 if let Some(memo) = event.memo {
-                    entries.push((String::from("ledger_memo"), memo.json()));
+                    entries.push((String::from("ledger_memo"), memo.json(&event.text)));
                 }
                 Json::Object(entries)
             })
@@ -6499,7 +6499,10 @@ mod tests {
             issued,
             vec![(
                 Some(Memo::FirstLicence),
-                String::from(crate::strings::MEMO_FIRST_LICENCE)
+                String::from(
+                    "Notice of licence. You ran Generators on two vents at settlement. You may \
+                     now queue a Resonance Spire at any of your beacons."
+                )
             )]
         );
     }
