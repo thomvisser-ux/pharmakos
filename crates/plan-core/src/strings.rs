@@ -584,3 +584,11 @@ pub const BLUEPRINT_SURVEY_POST: &str = "Survey post";
 pub const BLUEPRINT_RESONANCE_SPIRE: &str = "Resonance Spire";
 /// A wall.
 pub const BLUEPRINT_WALL: &str = "Wall";
+
+/// A rendering whose line, character or chip count passed what it is
+/// counted in (E22): refused rather than saturated.
+pub const RENDER_COUNT_PAST_RANGE: &str =
+    "the rendering's line, character or chip count passed what it is counted in";
+/// A rules-table bound past what a chip's `int32` bound holds (E22).
+pub const RENDER_BOUND_PAST_RANGE: &str =
+    "the rules table bounds a value past what a chip's bound holds";

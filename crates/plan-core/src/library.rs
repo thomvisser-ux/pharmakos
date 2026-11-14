@@ -86,9 +86,18 @@ pub struct Summary {
 pub fn list(folder: &Path) -> Result<Vec<Summary>, Error> {
     let entries = std::fs::read_dir(folder)
         .map_err(|error| Error::at("", format!("reading {}: {error}", folder.display())))?;
-    let mut ids: Vec<String> = entries
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
+    // An entry the folder cannot read is refused with the folder, as an
+    // unreadable folder is (E22): skipping it would list a library short of a
+    // template without saying so.
+    let paths = entries
+        .map(|entry| {
+            entry
+                .map(|entry| entry.path())
+                .map_err(|error| Error::at("", format!("reading {}: {error}", folder.display())))
+        })
+        .collect::<Result<Vec<PathBuf>, Error>>()?;
+    let mut ids: Vec<String> = paths
+        .into_iter()
         .filter(|path| {
             path.extension()
                 .is_some_and(|extension| extension == EXTENSION)

@@ -200,6 +200,9 @@ pub fn render(
     pending.extend(rules_section(playbook, &ctx, &mut out));
     blocks(playbook, &mut out);
     budget(playbook, &rates, limits.size_budget_units(), &mut out);
+    if let Some(why) = out.fault {
+        return Err(Error::at("", why));
+    }
     if let Some(stray) = out.marks.first() {
         return Err(Error::at(
             stray.pointer.clone(),
@@ -282,11 +285,18 @@ struct Mark {
 }
 
 /// Words, with the chips among them.
+///
+/// `fault` is the first count this text could not hold (a character count or
+/// a chip's offset past `usize`, a rules-table bound past a chip's `int32`):
+/// the pieces are put without a `Result`, so the fault travels with the words
+/// and [`render`] refuses the rendering with it (E22), rather than a count
+/// that saturated and a span that reads as true.
 #[derive(Clone, Default, PartialEq, Debug)]
 struct Text {
     words: String,
     chars: usize,
     marks: Vec<Mark>,
+    fault: Option<&'static str>,
 }
 
 impl Text {
@@ -296,7 +306,15 @@ impl Text {
 
     fn push_str(&mut self, text: &str) {
         self.words.push_str(text);
-        self.chars = self.chars.saturating_add(text.chars().count());
+        match self.chars.checked_add(text.chars().count()) {
+            Some(chars) => self.chars = chars,
+            None => self.fail(s::RENDER_COUNT_PAST_RANGE),
+        }
+    }
+
+    /// Keeps the first fault.
+    fn fail(&mut self, why: &'static str) {
+        self.fault.get_or_insert(why);
     }
 }
 
@@ -326,11 +344,15 @@ impl Piece for &String {
 impl Piece for Text {
     fn put(self, text: &mut Text) {
         let offset = text.chars;
-        text.marks.extend(self.marks.into_iter().map(|mark| Mark {
-            start: mark.start.saturating_add(offset),
-            end: mark.end.saturating_add(offset),
-            ..mark
-        }));
+        if let Some(why) = self.fault {
+            text.fail(why);
+        }
+        for mark in self.marks {
+            match (mark.start.checked_add(offset), mark.end.checked_add(offset)) {
+                (Some(start), Some(end)) => text.marks.push(Mark { start, end, ..mark }),
+                _ => text.fail(s::RENDER_COUNT_PAST_RANGE),
+            }
+        }
         text.push_str(&self.words);
     }
 }
@@ -357,6 +379,7 @@ fn chip(shown: &str, pointer: String, spec: Spec, value: Value) -> Text {
             spec,
             value,
         }],
+        fault: None,
     }
 }
 
@@ -365,12 +388,40 @@ fn at(base: &str, token: impl core::fmt::Display) -> String {
     push_pointer(base, &token.to_string())
 }
 
-/// The prose as it is written, line by line, with the chips placed on it.
+/// The prose as it is written, line by line, with the chips placed on it,
+/// and the first fault of any text written onto it ([`Text`]'s).
 #[derive(Default)]
 struct Out {
     prose: String,
     line: u32,
     marks: Vec<Placed>,
+    fault: Option<&'static str>,
+}
+
+impl Out {
+    /// Keeps the first fault.
+    fn fail(&mut self, why: &'static str) {
+        self.fault.get_or_insert(why);
+    }
+
+    /// Moves to the next line.
+    fn next_line(&mut self) {
+        match self.line.checked_add(1) {
+            Some(line) => self.line = line,
+            None => self.fail(s::RENDER_COUNT_PAST_RANGE),
+        }
+    }
+
+    /// A list position, counted from 1.
+    fn ordinal(&mut self, index: usize) -> usize {
+        // On a fault the number is never read: [`render`] refuses the
+        // rendering with it.
+        let Some(number) = index.checked_add(1) else {
+            self.fail(s::RENDER_COUNT_PAST_RANGE);
+            return index;
+        };
+        number
+    }
 }
 
 /// A chip placed on a line of the prose.
@@ -407,7 +458,10 @@ impl Pending {
 
     /// Closes it: every line since it opened, and every chip placed on them.
     fn close(mut self, from: usize, out: &mut Out) -> Pending {
-        self.line_count = out.line.saturating_sub(self.line);
+        match out.line.checked_sub(self.line) {
+            Some(count) => self.line_count = count,
+            None => out.fail(s::RENDER_COUNT_PAST_RANGE),
+        }
         self.marks = out.marks.split_off(from);
         self
     }
@@ -499,7 +553,7 @@ fn route(book: &Playbook, ctx: &Ctx<'_>, out: &mut Out) -> Vec<Pending> {
     for (index, entry) in body.route.iter().enumerate() {
         let here = at("/declarative/route", index);
         let (open, from) = Pending::open(here.clone(), out);
-        let number = index.saturating_add(1);
+        let number = out.ordinal(index);
         line(
             1,
             cat!(number.to_string(), ". ", step_sentence(entry, &here, ctx)),
@@ -1710,7 +1764,7 @@ fn rules_section(book: &Playbook, ctx: &Ctx<'_>, out: &mut Out) -> Vec<Pending> 
     for (index, rule) in body.handlers.iter().enumerate() {
         let here = at("/declarative/handlers", index);
         let (open, from) = Pending::open(here.clone(), out);
-        let number = index.saturating_add(1);
+        let number = out.ordinal(index);
         line(
             1,
             cat!(
@@ -1726,7 +1780,7 @@ fn rules_section(book: &Playbook, ctx: &Ctx<'_>, out: &mut Out) -> Vec<Pending> 
         let body_at = at(&here, "body");
         for (position, entry) in rule.body.iter().enumerate() {
             let entry_at = at(&body_at, position);
-            let step_number = position.saturating_add(1);
+            let step_number = out.ordinal(position);
             line(
                 2,
                 cat!(
@@ -1776,15 +1830,20 @@ fn firing(rule: &Handler, here: &str, limits: &Limits) -> Text {
     let fires = if rule.max_fires == 0 {
         cat!(rule.max_fires.to_string())
     } else {
-        int_chip(
-            rule.max_fires,
-            at(here, "max_fires"),
-            Shape::integer(
-                Some(1),
-                i32::try_from(limits.max_fires_max()).ok(),
-                UNIT_COUNT,
-            ),
-        )
+        // The rules table's ceiling as the chip's `int32` bound; one the
+        // bound cannot hold is the table disagreeing with the wire, refused
+        // with the rendering (E22) rather than read as no ceiling.
+        if let Ok(most) = i32::try_from(limits.max_fires_max()) {
+            int_chip(
+                rule.max_fires,
+                at(here, "max_fires"),
+                Shape::integer(Some(1), Some(most), UNIT_COUNT),
+            )
+        } else {
+            let mut text = cat!(rule.max_fires.to_string());
+            text.fail(s::RENDER_BOUND_PAST_RANGE);
+            text
+        }
     };
     let cooldown = if rule.cooldown_ms == 0 {
         cat!(duration(Ms::new(rule.cooldown_ms)))
@@ -1890,28 +1949,43 @@ fn budget(book: &Playbook, rates: &Rates, size_budget: u32, out: &mut Out) {
 
 fn heading(title: &str, out: &mut Out) {
     out.prose.push('\n');
-    out.line = out.line.saturating_add(1);
+    out.next_line();
     line(0, cat!(title), out);
 }
 
 /// One line of the prose at `depth`, its chips placed on it.
 fn line(depth: usize, text: Text, out: &mut Out) {
-    let indent = depth.saturating_mul(2);
+    // On a fault the indent is never read: [`render`] refuses the
+    // rendering with it.
+    let indent = if let Some(indent) = depth.checked_mul(2) {
+        indent
+    } else {
+        out.fail(s::RENDER_COUNT_PAST_RANGE);
+        0
+    };
+    if let Some(why) = text.fault {
+        out.fail(why);
+    }
     for _ in 0..depth {
         out.prose.push_str("  ");
     }
     out.prose.push_str(&text.words);
     out.prose.push('\n');
     let number = out.line;
-    out.marks.extend(text.marks.into_iter().map(|mark| Placed {
-        line: number,
-        start: mark.start.saturating_add(indent),
-        end: mark.end.saturating_add(indent),
-        pointer: mark.pointer,
-        spec: mark.spec,
-        value: mark.value,
-    }));
-    out.line = out.line.saturating_add(1);
+    for mark in text.marks {
+        match (mark.start.checked_add(indent), mark.end.checked_add(indent)) {
+            (Some(start), Some(end)) => out.marks.push(Placed {
+                line: number,
+                start,
+                end,
+                pointer: mark.pointer,
+                spec: mark.spec,
+                value: mark.value,
+            }),
+            _ => out.fail(s::RENDER_COUNT_PAST_RANGE),
+        }
+    }
+    out.next_line();
 }
 
 /// `a`, `a and b`, `a, b and c` — the Oxford-free reading a sentence wants.
@@ -1982,7 +2056,7 @@ fn magnitude(total: i64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Limits, duration, join_words, render_plan};
+    use super::{Limits, Text, duration, join_words, render_plan};
     use crate::canonical::canonicalise_text;
     use crate::context::PlanContext;
     use crate::strings as s;
@@ -2037,6 +2111,30 @@ mod tests {
         // are; the least one used to saturate on its negation and lose 1 ms.
         assert_eq!(duration(Ms::new(i32::MAX)), "2147483.647 s");
         assert_eq!(duration(Ms::new(i32::MIN)), "minus 2147483.648 s");
+    }
+
+    /// E22 (S3's `gwr` review): a count the rendering cannot hold is a fault
+    /// that travels with the words to `render`, which refuses with it, and
+    /// never a count that saturated into one that reads as true.
+    #[test]
+    fn a_count_past_its_range_is_a_fault_and_not_a_saturated_count() {
+        let mut out = super::Out {
+            line: u32::MAX,
+            ..super::Out::default()
+        };
+        out.next_line();
+        assert_eq!(out.fault, Some(s::RENDER_COUNT_PAST_RANGE));
+        let mut out = super::Out::default();
+        assert_eq!(out.ordinal(3), 4);
+        assert_eq!(out.fault, None);
+        let _ = out.ordinal(usize::MAX);
+        assert_eq!(out.fault, Some(s::RENDER_COUNT_PAST_RANGE));
+        let mut faulty = cat!("a");
+        faulty.fail(s::RENDER_BOUND_PAST_RANGE);
+        let mut out = super::Out::default();
+        super::line(1, cat!("b", faulty), &mut out);
+        assert_eq!(out.fault, Some(s::RENDER_BOUND_PAST_RANGE));
+        assert_eq!(out.line, 1, "the line is still written");
     }
 
     #[test]

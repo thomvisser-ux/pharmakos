@@ -402,11 +402,72 @@ const KEPT_FALLBACKS: &[(&str, &str, usize, &str)] = &[
         1,
         "a corner the file leaves out is said to be nowhere the file names",
     ),
+    // S3's `gwr` review (E22) widened the needles; these are what the wider
+    // net found that is a rule rather than a hidden failure.
+    (
+        "canonical.rs",
+        ".ok()",
+        1,
+        "a pointer token that is not an array index names no item, which is the answer the walk is asked for (RFC 6901)",
+    ),
+    (
+        "library.rs",
+        ".ok()",
+        1,
+        "as canonical.rs': a token that is not an array index names no item, and the caller says the pointer names nothing",
+    ),
+    (
+        "jsonc.rs",
+        "token.parse::<usize>().ok()",
+        1,
+        "`index_of` answers whether a token is an RFC 6901 array index; a token that is not one is `None`, its documented answer",
+    ),
+    (
+        "jsonc.rs",
+        "reader.string().ok().map(|(_raw, text)| text)",
+        1,
+        "a key spelling that does not read back is not the same key, so the canonical spelling is written, the module's stated rule",
+    ),
+    (
+        "jsonc.rs",
+        "let at = at.min(members.len());",
+        1,
+        "`put_member`'s documented contract: a position past the end puts the member at the end, as `patch.rs`' caller asks",
+    ),
+    (
+        "render.rs",
+        "let parsed = (x.parse::<i32>().ok()?, y.parse::<i32>().ok()?);",
+        1,
+        "a feature name not of the canonical `vent_<x>_<y>` shape is quoted as written, never read as a vent it is not (targeting.md, \"Names\")",
+    ),
+    (
+        "travel.rs",
+        ".and_then(|ms| i32::try_from(ms).ok())",
+        1,
+        "the `None` is refused on the next line as `TravelError::LegPastRange`",
+    ),
 ];
 
-/// Every fallback call in the crate's shipped code, as `(file name, the
-/// line)`: `unwrap_or` (and so `unwrap_or_default` and `unwrap_or_else`),
-/// `map_or` and `map_or_else`.
+/// The needles a fallback is written with, the gateway's set
+/// (`crates/gateway/tests/confinement.rs`' `FALLBACK_NEEDLES`) and two more
+/// (S3's `gwr` review, E22): the calls that answer a default for a failure
+/// (`unwrap_or`, and so `unwrap_or_default` and `unwrap_or_else`; `map_or`;
+/// `map_or_else`), an error read as nothing (`.ok()`, which holds the
+/// gateway's `.ok()?` and `.ok().and_then(`, and `Result::ok`), and a value
+/// pushed into range (`.clamp(`, `.max(0)`, `.min(`).
+const FALLBACK_NEEDLES: &[&str] = &[
+    "unwrap_or",
+    "map_or(",
+    "map_or_else(",
+    ".ok()",
+    "Result::ok",
+    ".clamp(",
+    ".max(0)",
+    ".min(",
+];
+
+/// Every fallback line in the crate's shipped code, as `(file name, the
+/// line)`: each holding one of [`FALLBACK_NEEDLES`].
 fn fallbacks() -> Vec<(String, String)> {
     let mut found: Vec<(String, String)> = Vec::new();
     for path in sources() {
@@ -420,10 +481,7 @@ fn fallbacks() -> Vec<(String, String)> {
             continue;
         };
         for (_, line) in code_lines(&text) {
-            if line.contains("unwrap_or")
-                || line.contains("map_or(")
-                || line.contains("map_or_else(")
-            {
+            if FALLBACK_NEEDLES.iter().any(|needle| line.contains(needle)) {
                 found.push((name.clone(), line.trim().to_owned()));
             }
         }
