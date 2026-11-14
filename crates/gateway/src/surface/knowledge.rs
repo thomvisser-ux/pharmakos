@@ -2168,16 +2168,22 @@ fn own_tally(
 ///   setting's inside `gp.v1.MandateSettings`, its title and shape are the
 ///   vocabulary's for that field ([`pharmakos_plan_core::vocabulary`]), so a
 ///   setting is drawn and edited as a picker's parameter is, and its value is
-///   JSON text in the playbook's canonical spelling. A setting the sim holds as
-///   "not written" (an unset `roe`, retarget or after-action, a zero
-///   engagement radius or wave count) has no row. A list (a protect list, the
-///   avoid areas, the probe areas) and an Attack's target and staging point,
-///   which no one shape describes or which the sim holds resolved, have no
-///   row either.
+///   JSON text in the playbook's canonical spelling. Each row shows the
+///   setting's **effective** value, the one the sim reads (S3's `gwr` review,
+///   item 7): an unset `roe` as its writ's (`Roe::of_setting`), an unset
+///   engagement radius, pursue, retarget, after-action or wave count as the
+///   sim's own reading of it (`engagement_reading`, `pursue_reading`,
+///   `retarget_reading`, `after_reading`, `waves_reading`), as the seam
+///   choice and the terraform already were. An Attack's launch and retreat
+///   triggers, which are off rather than defaulted when unwritten, have a row
+///   only when written. A list (a protect list, the avoid areas, the probe
+///   areas) and an Attack's target and staging point, which no one shape
+///   describes or which the sim holds resolved, have no row.
 /// * **`build_targets`**, a Build beacon's targets in the Quartermaster's
 ///   order, each a `gp.v1.BuildTarget`: its blueprint, its anchor as it was
-///   written (a voxel, `on` a named feature, or `on` the nearest vent), its
-///   rotation and its order.
+///   written (a voxel, `on` a named feature, or `on` the nearest vent, its
+///   rank in the wire's lower case), its rotation, its order and, for a wall,
+///   its `wall_box`.
 ///
 /// # Errors
 ///
@@ -2205,14 +2211,18 @@ fn beacon_detail(
         .get(row)
         .copied()
         .ok_or_else(|| missing("common settings"))?;
-    if common.roe != 0 {
-        settings.name(
-            "",
-            "/roe",
-            "gp.v1.MandateSettings.Roe",
-            i32::from(common.roe),
-        )?;
-    }
+    let roe = pharmakos_sim::world::Roe::of_setting(common.roe, mandate).ok_or_else(|| {
+        Error::internal(format!(
+            "the beacon table holds rules of engagement {}, which the sim does not name",
+            common.roe
+        ))
+    })?;
+    let roe = match roe {
+        pharmakos_sim::world::Roe::Hold => "HOLD_FIRE",
+        pharmakos_sim::world::Roe::Return => "RETURN_FIRE",
+        pharmakos_sim::world::Roe::Free => "FREE_FIRE",
+    };
+    settings.word("", "/roe", "gp.v1.MandateSettings.Roe", roe)?;
     settings.number("", "/retreat_hp_pct", common.retreat_hp_pct)?;
     match mandate {
         MandateKind::None => {}
@@ -2304,17 +2314,17 @@ fn defend_rows(
         .row_of(id)
         .ok_or_else(|| missing("Defend row"))?
         .settings;
-    if defend.engagement_pct != 0 {
-        settings.number("defend", "/engagement_radius_pct", defend.engagement_pct)?;
-    }
-    if defend.pursue != pharmakos_sim::tables::Pursue::Unset {
-        settings.name(
-            "defend",
-            "/pursue",
-            "gp.v1.DefendSettings.Pursue",
-            i32::from(defend.pursue.id()),
-        )?;
-    }
+    settings.number(
+        "defend",
+        "/engagement_radius_pct",
+        defend.engagement_reading(),
+    )?;
+    settings.name(
+        "defend",
+        "/pursue",
+        "gp.v1.DefendSettings.Pursue",
+        i32::from(defend.pursue_reading().id()),
+    )?;
     settings.number("defend", "/picket_scouts", defend.pickets)?;
     Ok(())
 }
@@ -2336,14 +2346,21 @@ fn attack_rows(
         .row_of(id)
         .ok_or_else(|| missing("Attack row"))?
         .settings;
-    let retarget = match attack.retarget {
-        pharmakos_sim::attack::Retarget::Unset => None,
-        pharmakos_sim::attack::Retarget::None => Some("NONE"),
-        pharmakos_sim::attack::Retarget::NearestKnown => Some("NEAREST_KNOWN"),
+    let retarget = match attack.retarget_reading() {
+        pharmakos_sim::attack::Retarget::None => "NONE",
+        pharmakos_sim::attack::Retarget::NearestKnown => "NEAREST_KNOWN",
+        pharmakos_sim::attack::Retarget::Unset => {
+            return Err(Error::internal(
+                "the sim's retarget reading is unset, which it never answers",
+            ));
+        }
     };
-    if let Some(word) = retarget {
-        settings.word("attack", "/retarget", "gp.v1.AttackSettings.Retarget", word)?;
-    }
+    settings.word(
+        "attack",
+        "/retarget",
+        "gp.v1.AttackSettings.Retarget",
+        retarget,
+    )?;
     if let Some(force) = attack.force_size {
         settings.number("attack", "/launch/force_size", force)?;
     }
@@ -2356,23 +2373,23 @@ fn attack_rows(
     if let Some(ms) = attack.retreat_ms {
         settings.number("attack", "/retreat/after_launch_ms", ms)?;
     }
-    let after = match attack.after {
-        pharmakos_sim::attack::AfterAction::Unset => None,
-        pharmakos_sim::attack::AfterAction::Regroup => Some("REGROUP_AT_STAGING"),
-        pharmakos_sim::attack::AfterAction::ReturnHome => Some("RETURN_HOME"),
+    let after = match attack.after_reading() {
+        pharmakos_sim::attack::AfterAction::Regroup => "REGROUP_AT_STAGING",
+        pharmakos_sim::attack::AfterAction::ReturnHome => "RETURN_HOME",
+        pharmakos_sim::attack::AfterAction::Unset => {
+            return Err(Error::internal(
+                "the sim's after-action reading is unset, which it never answers",
+            ));
+        }
     };
-    if let Some(word) = after {
-        settings.word(
-            "attack",
-            "/after_action",
-            "gp.v1.AttackSettings.AfterAction",
-            word,
-        )?;
-    }
+    settings.word(
+        "attack",
+        "/after_action",
+        "gp.v1.AttackSettings.AfterAction",
+        after,
+    )?;
     settings.boolean("attack", "/breach_allowed", attack.breach)?;
-    if attack.waves != 0 {
-        settings.number("attack", "/waves", attack.waves)?;
-    }
+    settings.number("attack", "/waves", attack.waves_reading())?;
     Ok(())
 }
 
@@ -2521,10 +2538,17 @@ fn build_targets(
     let features = crate::targeting::feature_reads(world, None);
     let mut found: Vec<(u32, usize, Json)> = Vec::new();
     for row in 0..table.row_count() {
-        if table.beacons().get(row).copied() != Some(beacon)
-            || table.kinds().get(row).copied()
-                != Some(pharmakos_sim::tables::TargetKind::Build.id())
-        {
+        let owner = table
+            .beacons()
+            .get(row)
+            .copied()
+            .ok_or_else(|| missing("beacon", row))?;
+        let kind = table
+            .kinds()
+            .get(row)
+            .copied()
+            .ok_or_else(|| missing("kind", row))?;
+        if owner != beacon || kind != pharmakos_sim::tables::TargetKind::Build.id() {
             continue;
         }
         let blueprint_id = table
@@ -2572,10 +2596,67 @@ fn build_targets(
         if order != 0 {
             entries.push((String::from("order"), Json::Number(order.to_string())));
         }
+        if blueprint == pharmakos_sim::tables::StructureKind::Wall {
+            entries.push((String::from("wall_box"), wall_box(table, row)?));
+        }
         found.push((order, row, Json::Object(entries)));
     }
     found.sort_by_key(|(order, row, _)| (*order, *row));
     Ok(found.into_iter().map(|(_, _, target)| target).collect())
+}
+
+/// The lowest voxel of the map: every column's ground stands at or above it.
+const MAP_FLOOR_Z: i32 = 0;
+
+/// A wall target's `wall_box` (`gp.v1.Area`), from the target table's
+/// columns: the box of columns ([`pharmakos_sim::tables::TargetTable::areas`])
+/// and its top ([`pharmakos_sim::tables::TargetTable::wall_tops`]), `max.z`.
+///
+/// `min.z` "says only that the box reaches the ground: it lies at or below
+/// the ground's top in every column" (`playbook.proto`'s `BuildTarget`): the
+/// sim checks it when the row commits and keeps nothing of it, since a wall
+/// fills from each column's ground up to its top whatever `min.z` was. So
+/// the box's floor is answered as the map's floor, [`MAP_FLOOR_Z`], the one
+/// value at or below every column's ground: the box the world holds, which
+/// commits the same wall, not a value the seat wrote.
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] when the row holds no box or no top, or
+/// holds the no-wall top on a wall's row.
+fn wall_box(table: &pharmakos_sim::tables::TargetTable, row: usize) -> Result<Json, Error> {
+    let missing =
+        |name: &str| Error::internal(format!("the target table has no wall {name} in row {row}"));
+    let columns = table
+        .areas()
+        .get(row)
+        .copied()
+        .ok_or_else(|| missing("box"))?;
+    let top = table
+        .wall_tops()
+        .get(row)
+        .copied()
+        .ok_or_else(|| missing("top"))?;
+    if top == pharmakos_sim::tables::NO_WALL {
+        return Err(missing("top (it holds none)"));
+    }
+    let corner = |[x, y]: [i16; 2], z: i32| {
+        Json::Object(vec![
+            (String::from("x"), Json::Number(x.to_string())),
+            (String::from("y"), Json::Number(y.to_string())),
+            (String::from("z"), Json::Number(z.to_string())),
+        ])
+    };
+    Ok(Json::Object(vec![
+        (
+            String::from("min"),
+            corner(columns.min_column(), MAP_FLOOR_Z),
+        ),
+        (
+            String::from("max"),
+            corner(columns.max_column(), i32::from(top)),
+        ),
+    ]))
 }
 
 /// A Build target's anchor as it was written: a voxel, `on` a named
@@ -2638,7 +2719,12 @@ fn target_anchor(
                 String::from("vent"),
                 Json::Object(vec![(
                     String::from("rank"),
-                    Json::String(String::from("NEAREST")),
+                    // Lower case, as every enum this surface answers with is
+                    // (decisions-log item 80).
+                    Json::String(pharmakos_proto::scope::wire_name(
+                        "gp.v1.FeatureRef.Rank",
+                        pharmakos_proto::gp::v1::feature_ref::Rank::Nearest.as_str_name(),
+                    )),
                 )]),
             )]),
         )]),

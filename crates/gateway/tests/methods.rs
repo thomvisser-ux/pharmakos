@@ -3205,3 +3205,295 @@ fn estimate_route_answers_the_travel_as_the_player_reads_it() {
     assert_eq!(text_of(&route, "travel_text"), bound(&expected));
     assert_eq!(text_of(&leg, "travel_text"), bound(&expected));
 }
+
+/// A two-seat casual match in its opening Lull, resumed from its own frozen
+/// snapshot as `edit` leaves it: how a test gives a beacon what only a played
+/// Push would (the target table's rows), through the save's one restore.
+fn resumed_with(
+    edit: impl FnOnce(&mut pharmakos_sim::snapshot::Snapshot, &pharmakos_sim::world::World),
+) -> Surface {
+    use pharmakos_sim::snapshot::Snapshot;
+    let first = hosted_as(SEGMENT_MS, FogPolicy::casual(), None);
+    let mut snapshot = Snapshot::from_bytes(&first.snapshot_bytes().expect("the frozen snapshot"))
+        .expect("it decodes");
+    edit(&mut snapshot, first.host().expect("hosted").world());
+    let bytes = snapshot.to_bytes().expect("it encodes");
+    let mut surface = Surface::new(
+        MATCH,
+        SEED,
+        rules(),
+        FogPolicy::casual(),
+        &[SeatId::new(0), SeatId::new(1)],
+    )
+    .expect("a match id");
+    let mut host = Host::open(
+        &pharmakos_sim::world::WorldConfig {
+            match_seed: SEED,
+            seats: 2,
+            rules: rules(),
+            match_settings: MatchSettings {
+                segment_lengths_ms: vec![SEGMENT_MS],
+                round_limit: 3,
+            },
+        },
+        None,
+    )
+    .expect("a match");
+    host.resume(&bytes).expect("the edited snapshot resumes");
+    surface.attach(host).expect("attached");
+    surface
+        .set_phase_remaining_ms(Ms::new(FIRST_LULL_MS))
+        .expect("a custom match takes a countdown");
+    surface.open_lull().expect("the Lull");
+    surface
+}
+
+/// Seat 0's core made a Build beacon holding four targets, one of each way
+/// a target is written, in the snapshot's own columns: a mortar at a voxel
+/// (order 3), a Generator `on` the first vent by name (order 1) and `on` the
+/// nearest vent (order 2), and a wall with its box (order 0). Answers the
+/// vent's name.
+fn four_targets(
+    snapshot: &mut pharmakos_sim::snapshot::Snapshot,
+    world: &pharmakos_sim::world::World,
+) -> String {
+    use pharmakos_sim::math::fixed::Fx;
+    use pharmakos_sim::tables::{StructureKind, TargetKind};
+    let row = (0..world.beacons().ids().len())
+        .find(|row| world.beacons().seats().get(*row) == Some(&0))
+        .expect("seat 0's core");
+    let core = world.beacons().ids().get(row).copied().expect("an id");
+    let at = world
+        .beacons()
+        .positions()
+        .get(row)
+        .copied()
+        .expect("a place");
+    let vent = world
+        .features()
+        .features()
+        .iter()
+        .enumerate()
+        .find(|(_, feature)| feature.kind == pharmakos_sim::features::FeatureKind::Vent)
+        .map(|(index, feature)| (index, feature.anchor))
+        .expect("the map lays a vent");
+    let vent_name = format!("vent_{}_{}", vent.1[0], vent.1[1]);
+    if let Some(mandate) = snapshot.beacon_mandate.get_mut(row) {
+        *mandate = pharmakos_sim::seams::MandateKind::Build.id();
+    }
+    let raw = |value: Fx| value.raw();
+    let near = [
+        raw(at[0]) + Fx::from_voxels(2).raw(),
+        raw(at[1]),
+        raw(at[2]),
+    ];
+    let mut push =
+        |blueprint: StructureKind, desc: u8, feature: u32, order: u32, area: [i16; 4], top: i16| {
+            snapshot.target_beacon.push(core);
+            snapshot.target_kind.push(TargetKind::Build.id());
+            snapshot.target_blueprint.push(blueprint.id());
+            snapshot.target_at.extend(near);
+            snapshot.target_area.extend(area);
+            snapshot
+                .target_built
+                .push(pharmakos_sim::tables::StructureId::NONE.raw());
+            snapshot.target_feature.push(feature);
+            snapshot.target_desc.push(desc);
+            snapshot.target_order.push(order);
+            snapshot.target_rotation.push(0);
+            snapshot.target_wall_top.push(top);
+            snapshot.target_wall_done.push(0);
+        };
+    let none = pharmakos_sim::targeting::NO_FEATURE;
+    let no_wall = pharmakos_sim::tables::NO_WALL;
+    let vent_index = u32::try_from(vent.0).expect("a feature index");
+    push(
+        StructureKind::Mortar,
+        pharmakos_sim::targeting::DESCRIPTION_VOXEL,
+        none,
+        3,
+        [0; 4],
+        no_wall,
+    );
+    push(
+        StructureKind::Generator,
+        pharmakos_sim::targeting::DESCRIPTION_NAME,
+        vent_index,
+        1,
+        [0; 4],
+        no_wall,
+    );
+    push(
+        StructureKind::Generator,
+        pharmakos_sim::targeting::DESCRIPTION_NEAREST_VENT,
+        vent_index,
+        2,
+        [0; 4],
+        no_wall,
+    );
+    let x = i16::try_from(at[0].floor_voxels()).expect("a column");
+    let y = i16::try_from(at[1].floor_voxels()).expect("a column");
+    push(
+        StructureKind::Wall,
+        pharmakos_sim::targeting::DESCRIPTION_VOXEL,
+        none,
+        0,
+        [x + 2, y, x + 4, y],
+        40,
+    );
+    vent_name
+}
+
+/// The review of `gwr`, item 2: a Build beacon's targets as `get_beacon`
+/// tells them, one of each way a target is written -- at a voxel, `on` a
+/// named feature, `on` the nearest vent (its rank in the wire's lower case),
+/// and a wall with its box -- in the Quartermaster's order, each anchor as it
+/// was written and the wall's box from the target table, its floor the map's.
+#[test]
+fn get_beacon_tells_each_kind_of_build_target_as_it_was_written() {
+    let mut vent_name = String::new();
+    let mut surface = resumed_with(|snapshot, world| {
+        vent_name = four_targets(snapshot, world);
+    });
+    let token = seat_token(&mut surface, 0);
+    let mut left = FIRST_LULL_MS;
+    let core = result(
+        &call(
+            &mut surface,
+            &token,
+            &mut left,
+            "get_beacon",
+            r#"{"beacon_id":"b_00"}"#,
+        ),
+        "get_beacon b_00",
+    );
+    assert_eq!(text_of(&core, "mandate"), "build", "{core:?}");
+    // The review of `gwr`, item 7: every row shows its effective value, an
+    // unset `roe` as the Build writ's, `RETURN_FIRE`, beside the terraform the
+    // sim reads.
+    let settings = array_of(&core, "settings");
+    let value_at = |pointer: &str| {
+        settings
+            .iter()
+            .find(|row| text_of(row, "pointer") == pointer)
+            .map(|row| text_of(row, "value_json"))
+    };
+    assert_eq!(
+        value_at("/roe").as_deref(),
+        Some(r#""RETURN_FIRE""#),
+        "{settings:?}"
+    );
+    assert!(value_at("/build/terraform").is_some(), "{settings:?}");
+    let targets: Vec<String> = array_of(&core, "build_targets")
+        .iter()
+        .map(rpc::render)
+        .collect();
+    assert_eq!(targets.len(), 4, "{targets:?}");
+    let wall = targets.first().expect("the wall, order 0");
+    assert!(wall.contains(r#""blueprint_id": "wall""#), "{wall}");
+    assert!(wall.contains(r#""wall_box""#), "{wall}");
+    let wall_box = array_of(&core, "build_targets")
+        .first()
+        .and_then(|target| target.get("wall_box").cloned())
+        .expect("its box");
+    assert_eq!(
+        wall_box
+            .get("min")
+            .and_then(|min| min.get("z"))
+            .and_then(|z| match z {
+                Json::Number(z) => Some(z.clone()),
+                _ => None,
+            })
+            .as_deref(),
+        Some("0"),
+        "the floor is the map's: {wall_box:?}"
+    );
+    assert_eq!(
+        wall_box
+            .get("max")
+            .and_then(|max| max.get("z"))
+            .and_then(|z| match z {
+                Json::Number(z) => Some(z.clone()),
+                _ => None,
+            })
+            .as_deref(),
+        Some("40"),
+        "{wall_box:?}"
+    );
+    let named = targets.get(1).expect("the named target, order 1");
+    assert!(
+        named.contains(&format!(r#""feature_id": "{vent_name}""#)),
+        "{named}"
+    );
+    let nearest = targets.get(2).expect("the nearest-vent target, order 2");
+    assert!(nearest.contains(r#""rank": "nearest""#), "{nearest}");
+    let voxel = targets.get(3).expect("the voxel target, order 3");
+    assert!(voxel.contains(r#""blueprint_id": "mortar""#), "{voxel}");
+    assert!(voxel.contains(r#""voxel""#), "{voxel}");
+}
+
+/// The review of `gwr`, item 7: a writ's settings rows show what the sim
+/// reads where the playbook left a setting out -- an unset `roe` as the
+/// writ's (`FREE_FIRE` on Defend and Attack), an empty Defend arm's
+/// engagement radius as the whole sphere and its pursue as `NEVER`, an empty
+/// Attack arm's retarget as `NONE`, its after-action as `REGROUP_AT_STAGING`
+/// and its waves as one -- as the seam choice and the terraform always did.
+#[test]
+fn a_writs_settings_rows_show_what_the_sim_reads() {
+    let cases = [
+        (
+            pharmakos_sim::seams::MandateKind::Defend,
+            "defend",
+            vec![
+                ("/roe", r#""FREE_FIRE""#),
+                ("/defend/engagement_radius_pct", "100"),
+                ("/defend/pursue", r#""NEVER""#),
+            ],
+        ),
+        (
+            pharmakos_sim::seams::MandateKind::Attack,
+            "attack",
+            vec![
+                ("/roe", r#""FREE_FIRE""#),
+                ("/attack/retarget", r#""NONE""#),
+                ("/attack/after_action", r#""REGROUP_AT_STAGING""#),
+                ("/attack/waves", "1"),
+            ],
+        ),
+    ];
+    for (writ, name, expected) in cases {
+        let mut surface = resumed_with(|snapshot, world| {
+            let mut world = world.clone();
+            let row = (0..world.beacons().ids().len())
+                .find(|row| world.beacons().seats().get(*row) == Some(&0))
+                .expect("seat 0's core");
+            world.switch_mandate_directly(row, writ);
+            *snapshot = pharmakos_sim::snapshot::Snapshot::capture(&world);
+        });
+        let token = seat_token(&mut surface, 0);
+        let mut left = FIRST_LULL_MS;
+        let core = result(
+            &call(
+                &mut surface,
+                &token,
+                &mut left,
+                "get_beacon",
+                r#"{"beacon_id":"b_00"}"#,
+            ),
+            "get_beacon b_00",
+        );
+        assert_eq!(text_of(&core, "mandate"), name, "{core:?}");
+        let settings = array_of(&core, "settings");
+        for (pointer, value) in expected {
+            let found = settings
+                .iter()
+                .find(|row| text_of(row, "pointer") == pointer)
+                .map(|row| text_of(row, "value_json"));
+            assert_eq!(
+                found.as_deref(),
+                Some(value),
+                "{name} {pointer}: {settings:?}"
+            );
+        }
+    }
+}
