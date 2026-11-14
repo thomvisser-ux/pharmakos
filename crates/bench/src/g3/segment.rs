@@ -47,10 +47,67 @@ use crate::decision::hosted_budget_playbook;
 use crate::error::Error;
 use crate::heap::HeapCounter;
 use crate::hosted::{self, Opened, Opening};
+use crate::shapes::Shape;
 use crate::stats::{self, Summary};
 
 /// Ticks in one minute of game time.
 pub const TICKS_PER_MINUTE: u64 = 1_200;
+
+/// What every seat seals for the segment.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Sealed {
+    /// `budget_128` with its anchors named by role
+    /// ([`crate::decision::hosted_budget_playbook`]): S2's load.
+    BudgetCase,
+    /// A generated shape at the committed size budget B: E24's test (c).
+    Shape(Shape),
+}
+
+impl Sealed {
+    /// The playbook's name, as the provenance notice prints it.
+    #[must_use]
+    pub fn name(self) -> String {
+        match self {
+            Sealed::BudgetCase => "budget_128 with its anchors named by role".to_owned(),
+            Sealed::Shape(shape) => format!("the {} shape at the size budget", shape.name()),
+        }
+    }
+}
+
+/// The gate's load beyond its layout: whether its Attack beacons launch, and
+/// what every seat seals.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct GateLoad {
+    /// Whether the layout's Attack beacons carry [`layout::raid_settings`]'
+    /// rows and launch (S3's plan, E13), or gather and never launch.
+    pub raids: bool,
+    /// What every seat seals.
+    pub sealed: Sealed,
+}
+
+impl GateLoad {
+    /// S2's load, which G3′ was certified on (`g3r` #147): no raid, and
+    /// `budget_128` sealed.
+    pub const S2: GateLoad = GateLoad {
+        raids: false,
+        sealed: Sealed::BudgetCase,
+    };
+
+    /// The load with raids (E13), `budget_128` sealed: what `cert3` re-runs
+    /// beside S2's certified figure.
+    pub const RAIDS: GateLoad = GateLoad {
+        raids: true,
+        sealed: Sealed::BudgetCase,
+    };
+
+    /// The load with raids and every seat's playbook at the size budget,
+    /// E24's test (c): the shape whose conditions a decision tick evaluates
+    /// in full.
+    pub const RAIDS_AT_B: GateLoad = GateLoad {
+        raids: true,
+        sealed: Sealed::Shape(Shape::Handlers24),
+    };
+}
 
 /// How the segment is played.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -66,6 +123,9 @@ pub struct SegmentPlan {
     /// The share of the gate's units laid out: [`Quarters::FULL`] for the
     /// gate, less for the power sweep.
     pub share: Quarters,
+    /// The raids and the sealed playbook: [`GateLoad::S2`] for the certified
+    /// load.
+    pub load: GateLoad,
 }
 
 /// What the layout and the rules were, so the run can be reproduced.
@@ -89,6 +149,10 @@ pub struct Provenance {
     pub share: Quarters,
     /// The units laid out per seat at that share.
     pub laid_out_units_per_seat: u32,
+    /// The raids and the sealed playbook.
+    pub load: GateLoad,
+    /// The layout's mandate settings rows: one per raiding Attack beacon.
+    pub settings_rows: usize,
 }
 
 /// One phase's sample over the segment.
@@ -173,6 +237,8 @@ pub struct SegmentReport {
     pub peak_events: usize,
     /// Deaths over the segment: units, structures, beacons and commanders.
     pub deaths: u64,
+    /// Attack launches over the segment (`attack_launched` events).
+    pub attack_launches: u64,
     /// Kill credits booked over the segment.
     pub kill_credits: u64,
     /// The support rule: regions that fell, the most passes and visits one
@@ -219,6 +285,7 @@ pub fn gate_load(share: Quarters) -> Result<SeatLoad, Error> {
 struct Counters {
     events: usize,
     deaths: u64,
+    launches: u64,
     credits: u64,
     served: u32,
     backlog: u32,
@@ -267,6 +334,7 @@ fn counters(world: &World) -> Result<Counters, Error> {
             EventKind::BeaconDestroyed,
             EventKind::CommanderDied,
         ])?,
+        launches: count(&[EventKind::AttackLaunched])?,
         credits: count(&[EventKind::KillCredited])?,
         served: serve.served,
         backlog: serve.backlog,
@@ -405,6 +473,7 @@ struct Record {
     run_at_cap: u64,
     peak_events: usize,
     deaths: u64,
+    launches: u64,
     credits: u64,
     max_passes: u64,
     max_visits: usize,
@@ -450,6 +519,7 @@ impl Record {
         };
         self.peak_events = self.peak_events.max(counters.events);
         self.deaths = add(self.deaths, counters.deaths, "the deaths")?;
+        self.launches = add(self.launches, counters.launches, "the launches")?;
         self.credits = add(self.credits, counters.credits, "the kill credits")?;
         self.max_passes = self.max_passes.max(counters.passes);
         self.max_visits = self.max_visits.max(counters.visits);
@@ -510,7 +580,7 @@ pub struct Gate {
 }
 
 /// Open the gate's match on `seed` for one segment of `segment_ms`, with a
-/// crater stream of `craters_per_second`.
+/// crater stream of `craters_per_second`, under the load `gate`.
 ///
 /// # Errors
 ///
@@ -523,10 +593,16 @@ pub fn open_gate(
     segment_ms: i32,
     craters_per_second: u32,
     share: Quarters,
+    gate: GateLoad,
 ) -> Result<Gate, Error> {
     let load = gate_load(share)?;
     let bench = variant::bench_rules(root, GATE_SEATS, load)?;
-    let playbook = hosted_budget_playbook(root)?;
+    let playbook = match gate.sealed {
+        Sealed::BudgetCase => hosted_budget_playbook(root)?,
+        Sealed::Shape(generated) => {
+            crate::decision::shape_text(generated, crate::full::committed_budget(&bench.rules)?)?
+        }
+    };
     let opening = Opening {
         seed,
         seats: GATE_SEATS,
@@ -537,10 +613,15 @@ pub fn open_gate(
     let host = hosted::open_host(&opening)?;
     let layout = layout::layout_at(host.world(), share)?;
     let stream = CraterStream::new(seed, craters_per_second, &layout, host.world())?;
+    let settings = if gate.raids {
+        layout::raid_settings(host.world(), &layout)?
+    } else {
+        Vec::new()
+    };
     let Opened {
         surface,
         units_per_seat,
-    } = hosted::attach(host, Some(&layout), &opening)?;
+    } = hosted::attach_with(host, Some(&layout), &settings, &opening)?;
     let beacon_count = hosted::world(&surface)?.beacons().len();
     let expected = LAID_OUT_BEACONS
         .checked_add(GATE_SEATS)
@@ -564,6 +645,8 @@ pub fn open_gate(
             units_per_seat,
             share,
             laid_out_units_per_seat: load.laid_out_units,
+            load: gate,
+            settings_rows: settings.len(),
         },
         repath_cap: bench.rules.repath_cap_per_tick(),
     })
@@ -591,6 +674,7 @@ pub fn measure(
         plan.segment_ms,
         plan.craters_per_second,
         plan.share,
+        plan.load,
     )?;
     // One tick of slack over the segment's length, so no vector grows inside it.
     let slots = plan
@@ -772,6 +856,7 @@ fn finish(record: Record, tally: Tally) -> Result<SegmentReport, Error> {
         minutes: record.minutes,
         peak_events: record.peak_events,
         deaths: record.deaths,
+        attack_launches: record.launches,
         kill_credits: record.credits,
         regions_fallen,
         max_fall_passes: record.max_passes,

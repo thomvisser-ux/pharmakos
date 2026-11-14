@@ -571,6 +571,7 @@ pub fn measure(root: &Path, seed: u64) -> Result<SupportReport, Error> {
         60_000,
         super::stream::CRATERS_PER_SECOND,
         super::layout::Quarters::FULL,
+        segment::GateLoad::S2,
     )?;
     let mut played: u64 = 0;
     for _ in 0..SETTLE_TICKS {

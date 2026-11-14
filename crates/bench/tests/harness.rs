@@ -31,6 +31,7 @@
 //! | `full::sized_rules` (the committed table, `verifier.size_budget_units` set to the size) | the row the verifier reads at `crates/verifier/src/limits.rs`'s `size_budget_units` (E24) | `every_shape_at_every_size_qualifies_on_its_budget` (each report's `size_budget` is the size), and the unit test `a_sized_table_moves_only_its_budget_row` |
 //! | `p3::Graph::generate` (`mapgen::generate`, the store settled, `Surface::new`, `pathing::graph_for`) | `World::new`'s graph (`crates/sim/src/world.rs`) | `a_short_p3_run_measures_every_figure_on_the_worlds_own_graph`: the measurement refuses a hosted world whose graph's facts differ from the bench's |
 //! | `p3::mark_chunk_clusters` | `crates/sim/src/world.rs`'s private `mark_chunk_clusters` | `the_crater_streams_repair_is_a_rebuild`: after the stream's craters the repaired graph's transitions and edges are a from-scratch rebuild's, which a missed cluster would break |
+//! | `g3::layout::raid_settings`' aim (an Attack beacon's nearest enemy core) | `g3::layout::layout_at`'s placing, `ATTACK_FROM_ENEMY_CORE` voxels from the enemy core | `the_gate_load_with_raids_launches`: the hosted segment's `attack_launched` count is above zero |
 
 use std::fs;
 
@@ -161,6 +162,7 @@ fn the_gate_match_is_reproducible_from_its_seed_and_rules_hash() {
         craters_per_second: 20,
         probe_sight: true,
         share: pharmakos_bench::g3::layout::Quarters::FULL,
+        load: segment::GateLoad::S2,
     };
     let first = segment::measure(&root, plan, None).expect("a measurement");
     // The probe reads the world and moves nothing, so the second run skips it.
@@ -287,6 +289,69 @@ fn the_decision_curve_seals_each_size_and_counts_its_work() {
         point.timing.work_max > 0,
         "the conditions are counted: {point:?}"
     );
+}
+
+/// The gate's load with raids (S3's plan, E13): the layout's settings rows
+/// aim every Attack beacon at an enemy core, and on the hosted segment the
+/// raids launch. `sim3a`'s row test steps `Runner::step` with no seal, so
+/// this is the check on the hosted door (item 156 (3)).
+#[test]
+fn the_gate_load_with_raids_launches() {
+    use pharmakos_bench::g3::layout::Quarters;
+    use pharmakos_bench::g3::segment::{self, GateLoad, SegmentPlan};
+    let root = workspace_root();
+    let report = segment::measure(
+        &root,
+        SegmentPlan {
+            seed: BENCH_SEED,
+            // Forty ticks: eight decision ticks, and a force that stands
+            // gathered launches on one of the first.
+            segment_ms: 2_000,
+            craters_per_second: 20,
+            probe_sight: false,
+            share: Quarters::FULL,
+            load: GateLoad::RAIDS,
+        },
+        None,
+    )
+    .expect("a measurement");
+    // Six Attack beacons: two a seat.
+    assert_eq!(
+        report.provenance.settings_rows, 6,
+        "{:?}",
+        report.provenance
+    );
+    assert!(
+        report.attack_launches > 0,
+        "the raids launch on the hosted segment: {} launches",
+        report.attack_launches
+    );
+}
+
+/// E24's test (c)'s load: every seat seals the handler shape at the size
+/// budget on the gate's match with raids.
+#[test]
+fn the_gate_load_at_the_size_budget_seals_every_seat_at_b() {
+    use pharmakos_bench::g3::layout::Quarters;
+    use pharmakos_bench::g3::segment::{self, GateLoad, SegmentPlan};
+    let root = workspace_root();
+    let rules = quick::committed_rules(&root).expect("the committed rules");
+    let budget = full::committed_budget(&rules).expect("a budget");
+    let report = segment::measure(
+        &root,
+        SegmentPlan {
+            seed: BENCH_SEED,
+            segment_ms: 500,
+            craters_per_second: 20,
+            probe_sight: false,
+            share: Quarters::FULL,
+            load: GateLoad::RAIDS_AT_B,
+        },
+        None,
+    )
+    .expect("a measurement");
+    assert_eq!(report.provenance.units_per_seat, budget);
+    assert_eq!(report.provenance.load, GateLoad::RAIDS_AT_B);
 }
 
 /// A short P3 run takes every figure, on a hosted world whose graph is the

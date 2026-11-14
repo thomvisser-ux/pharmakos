@@ -32,18 +32,25 @@
 //! (`dfnd`, `atk`), each Defend beacon's guards go after the enemy Attack
 //! raiders standing three voxels from it (an unset `roe` reads `FREE_FIRE`,
 //! item 148 (2)), and each core's autocannon fires at the Attack raiders
-//! inside its range. The layout seam carries no mandate settings
-//! (`runner::LayoutBeacon`), so an Attack beacon has no target and its
+//! inside its range. `runner::LayoutBeacon` carries no mandate settings, and
+//! S2's load placed none, so there an Attack beacon has no target and its
 //! raiders gather at it and never launch, and a Build beacon has no blueprint.
+//! From S3 the layout's settings rows (`runner::LayoutSettings`, beside the
+//! beacons, through `Host::seed_layout_with_settings`; S3's plan, E13) carry an
+//! Attack beacon's: [`raid_settings`] aims each Attack beacon at the enemy core
+//! it stands before, launching once its whole force stands gathered, so the
+//! load with raids ([`super::segment::GateLoad`]) launches them. S2's load,
+//! which G3′ was certified on, places no row and is unchanged.
 //!
 //! [`layout_at`] lays out the same beacons with a share of the units, for the
 //! power sweep ([`super::sweep`]).
 
+use pharmakos_sim::attack::{Aim, AttackSettings};
 use pharmakos_sim::features::FeatureKind;
 use pharmakos_sim::math::fixed::Fx;
-use pharmakos_sim::runner::{Layout, LayoutBeacon};
+use pharmakos_sim::runner::{Layout, LayoutBeacon, LayoutMandateSettings, LayoutSettings};
 use pharmakos_sim::seams::MandateKind;
-use pharmakos_sim::tables::{SeatId, UnitKind};
+use pharmakos_sim::tables::{BeaconId, SeatId, UnitKind};
 use pharmakos_sim::world::World;
 
 use crate::error::Error;
@@ -360,6 +367,90 @@ fn check(layout: &Layout, expected: u32) -> Result<(), Error> {
         }
     }
     Ok(())
+}
+
+/// Each seat's core, as the generator placed it: its id and its column.
+fn core_ids(world: &World) -> Result<Vec<(u8, BeaconId, [i32; 2])>, Error> {
+    let beacons = world.beacons();
+    let mut found: Vec<(u8, BeaconId, [i32; 2])> = Vec::new();
+    for ((seat, id), at) in beacons
+        .seats()
+        .iter()
+        .zip(beacons.ids())
+        .zip(beacons.positions())
+    {
+        if found.iter().any(|(held, _, _)| held == seat) {
+            continue;
+        }
+        found.push((
+            *seat,
+            BeaconId::new(*id),
+            [at[0].floor_voxels(), at[1].floor_voxels()],
+        ));
+    }
+    if found.len() != usize::try_from(GATE_SEATS).map_err(|_| Error::Overflow("the seats"))? {
+        return Err(Error::Layout(format!(
+            "the map holds {} seats' cores, not the gate's {GATE_SEATS}",
+            found.len()
+        )));
+    }
+    Ok(found)
+}
+
+/// The raids of the load with raids (S3's plan, E13): a settings row for every
+/// Attack beacon of `layout`, aimed at the enemy core it stands before (the
+/// nearest enemy core: [`layout_at`] stands it [`ATTACK_FROM_ENEMY_CORE`]
+/// voxels from that core and the other enemy's is far off), launching once
+/// its whole laid-out force stands gathered at it, one wave a segment. Read
+/// on `world`, the freshly generated map `layout` was laid out on, before the
+/// layout is placed, when the cores are the only beacons.
+///
+/// # Errors
+///
+/// [`Error::Layout`] for a map whose cores are not the gate's three, or an
+/// Attack beacon with no raider or no enemy core.
+pub fn raid_settings(world: &World, layout: &Layout) -> Result<Vec<LayoutSettings>, Error> {
+    let cores = core_ids(world)?;
+    let mut rows: Vec<LayoutSettings> = Vec::new();
+    for (index, beacon) in layout.beacons.iter().enumerate() {
+        if beacon.mandate != MandateKind::Attack {
+            continue;
+        }
+        let distance = |at: [i32; 2]| {
+            let dx = i64::from(at[0]) - i64::from(beacon.column[0]);
+            let dy = i64::from(at[1]) - i64::from(beacon.column[1]);
+            dx * dx + dy * dy
+        };
+        let target = cores
+            .iter()
+            .filter(|(seat, _, _)| *seat != beacon.seat.raw())
+            .min_by_key(|(seat, _, at)| (distance(*at), *seat))
+            .map(|(_, id, _)| *id)
+            .ok_or_else(|| {
+                Error::Layout(format!("Attack beacon {index} has no enemy core to aim at"))
+            })?;
+        let raiders: u32 = beacon
+            .units
+            .iter()
+            .filter(|(kind, _)| *kind == UnitKind::Raider)
+            .map(|(_, count)| *count)
+            .sum();
+        if raiders == 0 {
+            return Err(Error::Layout(format!(
+                "Attack beacon {index} is laid out with no raider to launch"
+            )));
+        }
+        rows.push(LayoutSettings {
+            beacon: index,
+            settings: LayoutMandateSettings::Attack(AttackSettings {
+                aim: Aim::Beacon(target),
+                force_size: Some(raiders),
+                waves: 1,
+                ..AttackSettings::default()
+            }),
+        });
+    }
+    Ok(rows)
 }
 
 /// How many beacons of each mandate the layout holds, in the order the report
