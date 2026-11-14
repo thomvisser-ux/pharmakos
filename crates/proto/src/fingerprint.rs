@@ -68,6 +68,14 @@ pub fn canonical_input(playbook: &Playbook) -> Result<Vec<u8>, json::Error> {
     Ok(json::encode(&cleared)?.into_bytes())
 }
 
+/// The field [`canonical_input`] clears, as its path of `.proto` field names
+/// from the playbook: what [`json::write_wire_into`] leaves out when the
+/// canonical text is written straight from a playbook's wire bytes
+/// (`pharmakos_sim::hash::plan_fingerprint_of`, S3's `vfyq`). One home, so the
+/// two ways of taking a fingerprint cannot name different fields; the codec
+/// refuses a path that names no singular field.
+pub const FINGERPRINT_FIELD: &[&str] = &["meta", "fingerprint"];
+
 /// A 64-bit digest as the eight big-endian bytes the field holds.
 #[must_use]
 pub fn to_field(digest: u64) -> Vec<u8> {

@@ -11,7 +11,10 @@
 //!
 //! Every callback is handed the **JSON Pointer to the node**, built as the walk
 //! descends, so a diagnostic's path is a fact of the traversal rather than
-//! something a call site reassembles.
+//! something a call site reassembles. It is built in place ([`Here`]): one
+//! buffer for the whole walk, a token pushed on the way down and popped on the
+//! way back, so a callback that raises nothing costs no allocation, and one
+//! that raises a diagnostic copies the pointer then (S3's `vfyq`).
 //!
 //! The order is document order — route before handlers, `on_death` before
 //! `fallback`, a list in its own order — which is the order diagnostics come out
@@ -24,7 +27,7 @@ use pharmakos_proto::gp::v1::{
     protected_asset, step,
 };
 
-use crate::pointer;
+use crate::pointer::{self, Here};
 
 /// Which list a step belongs to: the route, or one handler's body.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -150,92 +153,118 @@ pub(crate) trait Visit {
 
 /// Walk the whole playbook in document order.
 pub(crate) fn walk(playbook: &Playbook, visitor: &mut dyn Visit) {
+    let mut here = Here::new(pointer::ROOT);
     if let Some(declarative) = playbook.declarative.as_ref() {
+        let declarative_at = here.push("declarative");
+        let route_at = here.push("route");
         for (index, entry) in declarative.route.iter().enumerate() {
-            let at = pointer::at("/declarative/route", index);
-            visitor.entry(&at, entry, List::Route, index);
-            walk_entry(entry, &at, visitor);
+            let at = here.push_index(index);
+            visitor.entry(here.as_str(), entry, List::Route, index);
+            walk_entry(entry, &mut here, visitor);
+            here.pop(at);
         }
+        here.pop(route_at);
+        let handler_list = here.push("handlers");
         for (handler_index, handler) in declarative.handlers.iter().enumerate() {
-            let handler_at = pointer::at("/declarative/handlers", handler_index);
+            let handler_at = here.push_index(handler_index);
             if let Some(when) = handler.when.as_ref() {
-                walk_condition(when, &pointer::child(&handler_at, "when"), visitor);
+                let when_at = here.push("when");
+                walk_condition(when, &mut here, visitor);
+                here.pop(when_at);
             }
-            let body_at = pointer::child(&handler_at, "body");
+            let body_at = here.push("body");
             for (index, entry) in handler.body.iter().enumerate() {
-                let at = pointer::at(&body_at, index);
-                visitor.entry(&at, entry, List::Body(handler_index), index);
-                walk_entry(entry, &at, visitor);
+                let at = here.push_index(index);
+                visitor.entry(here.as_str(), entry, List::Body(handler_index), index);
+                walk_entry(entry, &mut here, visitor);
+                here.pop(at);
             }
+            here.pop(body_at);
+            here.pop(handler_at);
         }
+        here.pop(handler_list);
+        here.pop(declarative_at);
     }
     if let Some(tail) = playbook.fallback.as_ref() {
+        let fallback_at = here.push("fallback");
         match tail.posture.as_ref() {
             Some(fallback::Posture::Hold(hold)) => {
-                let at = pointer::child("/fallback", "hold");
+                let hold_at = here.push("hold");
                 if let Some(place) = hold.at.as_ref() {
-                    walk_location(place, &pointer::child(&at, "at"), Slot::Elsewhere, visitor);
+                    let at = here.push("at");
+                    walk_location(place, &mut here, Slot::Elsewhere, visitor);
+                    here.pop(at);
                 }
+                here.pop(hold_at);
             }
             Some(fallback::Posture::Shadow(shadow)) => {
-                let at = pointer::child("/fallback", "shadow");
+                let shadow_at = here.push("shadow");
                 if let Some(beacon) = shadow.beacon.as_ref() {
-                    walk_beacon(beacon, &pointer::child(&at, "beacon"), visitor);
+                    let at = here.push("beacon");
+                    walk_beacon(beacon, &mut here, visitor);
+                    here.pop(at);
                 }
+                here.pop(shadow_at);
             }
             Some(fallback::Posture::Patrol(patrol)) => {
-                let at = pointer::child(&pointer::child("/fallback", "patrol"), "waypoints");
+                let waypoint_list = here.push_path(&["patrol", "waypoints"]);
                 for (index, waypoint) in patrol.waypoints.iter().enumerate() {
-                    walk_location(waypoint, &pointer::at(&at, index), Slot::Elsewhere, visitor);
+                    let at = here.push_index(index);
+                    walk_location(waypoint, &mut here, Slot::Elsewhere, visitor);
+                    here.pop(at);
                 }
+                here.pop(waypoint_list);
             }
             None => {}
         }
+        here.pop(fallback_at);
     }
 }
 
-fn walk_entry(entry: &Step, at: &str, visitor: &mut dyn Visit) {
+/// One step, with `here` at the step. Every walk below returns with `here`
+/// where it found it.
+fn walk_entry(entry: &Step, here: &mut Here, visitor: &mut dyn Visit) {
     if let Some(guard) = entry.skip_if.as_ref() {
-        walk_condition(guard, &pointer::child(at, "skip_if"), visitor);
+        let at = here.push("skip_if");
+        walk_condition(guard, here, visitor);
+        here.pop(at);
     }
     match entry.kind.as_ref() {
         Some(step::Kind::Move(walk_to)) => {
-            let here = pointer::child(at, "move");
             if let Some(place) = walk_to.to.as_ref() {
-                walk_location(
-                    place,
-                    &pointer::child(&here, "to"),
-                    Slot::Elsewhere,
-                    visitor,
-                );
+                let at = here.push_path(&["move", "to"]);
+                walk_location(place, here, Slot::Elsewhere, visitor);
+                here.pop(at);
             }
         }
         Some(step::Kind::Interface(interface)) => {
-            let here = pointer::child(at, "interface");
-            visitor.interface(&here, interface);
+            let at = here.push("interface");
+            visitor.interface(here.as_str(), interface);
             if let Some(beacon) = interface.beacon.as_ref() {
-                walk_beacon(beacon, &pointer::child(&here, "beacon"), visitor);
+                let beacon_at = here.push("beacon");
+                walk_beacon(beacon, here, visitor);
+                here.pop(beacon_at);
             }
-            let rows_at = pointer::child(&here, "rows");
+            let row_list = here.push("rows");
             for (index, row) in interface.rows.iter().enumerate() {
                 let holder = match interface.beacon.as_ref() {
                     Some(beacon) => Holder::Visited(beacon),
                     None => Holder::Unnamed,
                 };
-                walk_row(
-                    row.row.as_ref(),
-                    &pointer::at(&rows_at, index),
-                    holder,
-                    visitor,
-                );
+                let row_at = here.push_index(index);
+                walk_row(row.row.as_ref(), here, holder, visitor);
+                here.pop(row_at);
             }
+            here.pop(row_list);
+            here.pop(at);
         }
         Some(step::Kind::PlaceBeacon(place)) => {
-            let here = pointer::child(at, "place_beacon");
+            let at = here.push("place_beacon");
             if let Some(site) = place.at.as_ref() {
-                let site_at = pointer::child(&here, "at");
-                visitor.place_site(&site_at, site);
-                walk_location(site, &site_at, Slot::PlaceSite, visitor);
+                let site_at = here.push("at");
+                visitor.place_site(here.as_str(), site);
+                walk_location(site, here, Slot::PlaceSite, visitor);
+                here.pop(site_at);
             }
             let deploy = match place.at.as_ref().and_then(|site| site.place.as_ref()) {
                 Some(location::Place::Covering(feature)) => Some(feature),
@@ -248,24 +277,20 @@ fn walk_entry(entry: &Step, at: &str, visitor: &mut dyn Visit) {
             if let Some(initial) = place.initial.as_ref()
                 && let Some(settings) = initial.mandate.as_ref()
             {
-                walk_mandate(
-                    settings,
-                    &pointer::child(&pointer::child(&here, "initial"), "mandate"),
-                    Carrier::Initial,
-                    deploy,
-                    holder,
-                    visitor,
-                );
+                let initial_at = here.push_path(&["initial", "mandate"]);
+                walk_mandate(settings, here, Carrier::Initial, deploy, holder, visitor);
+                here.pop(initial_at);
             }
+            here.pop(at);
         }
         Some(step::Kind::WaitUntil(wait)) => {
-            let here = pointer::child(at, "wait_until");
             if let Some(condition) = wait.condition.as_ref() {
-                walk_condition(condition, &pointer::child(&here, "condition"), visitor);
+                let at = here.push_path(&["wait_until", "condition"]);
+                walk_condition(condition, here, visitor);
+                here.pop(at);
             }
         }
         Some(step::Kind::Broadcast(broadcast)) => {
-            let here = pointer::child(at, "broadcast");
             let place = match broadcast.payload.as_ref() {
                 Some(broadcast_step::Payload::MarkTarget(mark)) => {
                     mark.at.as_ref().map(|place| ("mark_target", place))
@@ -279,12 +304,9 @@ fn walk_entry(entry: &Step, at: &str, visitor: &mut dyn Visit) {
                 Some(broadcast_step::Payload::GoCode(_)) | None => None,
             };
             if let Some((name, location)) = place {
-                walk_location(
-                    location,
-                    &pointer::child(&pointer::child(&here, name), "at"),
-                    Slot::Elsewhere,
-                    visitor,
-                );
+                let at = here.push_path(&["broadcast", name, "at"]);
+                walk_location(location, here, Slot::Elsewhere, visitor);
+                here.pop(at);
             }
         }
         Some(step::Kind::Hold(_)) | None => {}
@@ -293,50 +315,33 @@ fn walk_entry(entry: &Step, at: &str, visitor: &mut dyn Visit) {
 
 fn walk_row(
     row: Option<&interface_row::Row>,
-    at: &str,
+    here: &mut Here,
     holder: Holder<'_>,
     visitor: &mut dyn Visit,
 ) {
     match row {
         Some(interface_row::Row::SetMandate(settings)) => {
-            walk_mandate(
-                settings,
-                &pointer::child(at, "set_mandate"),
-                Carrier::Switch,
-                None,
-                holder,
-                visitor,
-            );
+            let at = here.push("set_mandate");
+            walk_mandate(settings, here, Carrier::Switch, None, holder, visitor);
+            here.pop(at);
         }
         Some(interface_row::Row::SetMandateSettings(settings)) => {
-            walk_mandate(
-                settings,
-                &pointer::child(at, "set_mandate_settings"),
-                Carrier::Edit,
-                None,
-                holder,
-                visitor,
-            );
+            let at = here.push("set_mandate_settings");
+            walk_mandate(settings, here, Carrier::Edit, None, holder, visitor);
+            here.pop(at);
         }
         Some(interface_row::Row::AddBuildTarget(add)) => {
             if let Some(target) = add.target.as_ref() {
-                walk_build_target(
-                    target,
-                    &pointer::child(&pointer::child(at, "add_build_target"), "target"),
-                    None,
-                    holder,
-                    visitor,
-                );
+                let at = here.push_path(&["add_build_target", "target"]);
+                walk_build_target(target, here, None, holder, visitor);
+                here.pop(at);
             }
         }
         Some(interface_row::Row::RemoveBuildTarget(remove)) => {
             if let Some(anchor) = remove.anchor.as_ref() {
-                walk_location(
-                    anchor,
-                    &pointer::child(&pointer::child(at, "remove_build_target"), "anchor"),
-                    Slot::RemoveAnchor,
-                    visitor,
-                );
+                let at = here.push_path(&["remove_build_target", "anchor"]);
+                walk_location(anchor, here, Slot::RemoveAnchor, visitor);
+                here.pop(at);
             }
         }
         _ => {}
@@ -345,47 +350,50 @@ fn walk_row(
 
 fn walk_mandate(
     settings: &MandateSettings,
-    at: &str,
+    here: &mut Here,
     carrier: Carrier,
     deploy: Option<&FeatureRef>,
     holder: Holder<'_>,
     visitor: &mut dyn Visit,
 ) {
-    visitor.mandate(at, settings, carrier);
+    visitor.mandate(here.as_str(), settings, carrier);
     match settings.mandate.as_ref() {
         Some(mandate_settings::Mandate::Build(build)) => {
-            let here = pointer::child(at, "build");
-            let targets_at = pointer::child(&here, "targets");
+            let at = here.push("build");
+            let target_list = here.push("targets");
             for (index, target) in build.targets.iter().enumerate() {
-                walk_build_target(
-                    target,
-                    &pointer::at(&targets_at, index),
-                    deploy,
-                    holder,
-                    visitor,
-                );
+                let target_at = here.push_index(index);
+                walk_build_target(target, here, deploy, holder, visitor);
+                here.pop(target_at);
             }
-            let areas_at = pointer::child(&here, "protected_areas");
+            here.pop(target_list);
+            let area_list = here.push("protected_areas");
             for (index, area) in build.protected_areas.iter().enumerate() {
-                walk_area(
-                    area,
-                    &pointer::at(&areas_at, index),
-                    AreaOf::Protected,
-                    visitor,
-                );
+                let area_at = here.push_index(index);
+                walk_area(area, here, AreaOf::Protected, visitor);
+                here.pop(area_at);
             }
+            here.pop(area_list);
+            here.pop(at);
         }
         Some(mandate_settings::Mandate::Survey(survey)) => {
-            let areas_at = pointer::child(&pointer::child(at, "survey"), "probe_areas");
+            let at = here.push_path(&["survey", "probe_areas"]);
             for (index, area) in survey.probe_areas.iter().enumerate() {
-                walk_area(area, &pointer::at(&areas_at, index), AreaOf::Probe, visitor);
+                let area_at = here.push_index(index);
+                walk_area(area, here, AreaOf::Probe, visitor);
+                here.pop(area_at);
             }
+            here.pop(at);
         }
         Some(mandate_settings::Mandate::Defend(defend)) => {
-            walk_defend(defend, &pointer::child(at, "defend"), visitor);
+            let at = here.push("defend");
+            walk_defend(defend, here, visitor);
+            here.pop(at);
         }
         Some(mandate_settings::Mandate::Attack(attack)) => {
-            walk_attack(attack, &pointer::child(at, "attack"), visitor);
+            let at = here.push("attack");
+            walk_attack(attack, here, visitor);
+            here.pop(at);
         }
         Some(mandate_settings::Mandate::Mine(_)) | None => {}
     }
@@ -396,88 +404,103 @@ fn walk_mandate(
 /// The sim refused the whole arm until S2's `dfnd` lane built it (`E0012`,
 /// raised by nothing now); the leaves are walked so that every stage's checks
 /// reach them, as they reach the same leaves anywhere else.
-fn walk_defend(defend: &DefendSettings, at: &str, visitor: &mut dyn Visit) {
-    let protect_at = pointer::child(at, "protect");
+fn walk_defend(defend: &DefendSettings, here: &mut Here, visitor: &mut dyn Visit) {
+    let protect_at = here.push("protect");
     for (index, entry) in defend.protect.iter().enumerate() {
         if let Some(protected_asset::Asset::Beacon(beacon)) = entry.asset.as_ref() {
-            walk_beacon(
-                beacon,
-                &pointer::child(&pointer::at(&protect_at, index), "beacon"),
-                visitor,
-            );
+            let at = here.push_index(index);
+            let beacon_at = here.push("beacon");
+            walk_beacon(beacon, here, visitor);
+            here.pop(beacon_at);
+            here.pop(at);
         }
     }
+    here.pop(protect_at);
 }
 
 /// S2's Attack settings (`con4`): the target, the staging point and the avoid
 /// areas. Refused as a whole until S2's `atk` lane built it (`E0013`, raised
 /// by nothing now), and walked for the reason [`walk_defend`] gives.
-fn walk_attack(attack: &AttackSettings, at: &str, visitor: &mut dyn Visit) {
+fn walk_attack(attack: &AttackSettings, here: &mut Here, visitor: &mut dyn Visit) {
     if let Some(target) = attack.target.as_ref() {
-        let target_at = pointer::child(at, "target");
+        let target_at = here.push("target");
         match target.target.as_ref() {
             Some(attack_target::Target::Beacon(beacon)) => {
-                walk_beacon(beacon, &pointer::child(&target_at, "beacon"), visitor);
+                let at = here.push("beacon");
+                walk_beacon(beacon, here, visitor);
+                here.pop(at);
             }
             Some(attack_target::Target::Voxel(voxel)) => {
-                visitor.voxel(&pointer::child(&target_at, "voxel"), voxel);
+                let at = here.push("voxel");
+                visitor.voxel(here.as_str(), voxel);
+                here.pop(at);
             }
             Some(attack_target::Target::EnemyCommander(_)) | None => {}
         }
+        here.pop(target_at);
     }
     if let Some(staging) = attack.staging.as_ref() {
-        visitor.voxel(&pointer::child(at, "staging"), staging);
+        let at = here.push("staging");
+        visitor.voxel(here.as_str(), staging);
+        here.pop(at);
     }
-    let areas_at = pointer::child(at, "avoid_areas");
+    let areas_at = here.push("avoid_areas");
     for (index, area) in attack.avoid_areas.iter().enumerate() {
-        walk_area(area, &pointer::at(&areas_at, index), AreaOf::Avoid, visitor);
+        let at = here.push_index(index);
+        walk_area(area, here, AreaOf::Avoid, visitor);
+        here.pop(at);
     }
+    here.pop(areas_at);
 }
 
 fn walk_build_target(
     target: &BuildTarget,
-    at: &str,
+    here: &mut Here,
     deploy: Option<&FeatureRef>,
     holder: Holder<'_>,
     visitor: &mut dyn Visit,
 ) {
-    visitor.build_target(at, target);
-    visitor.held_target(at, target, holder);
+    visitor.build_target(here.as_str(), target);
+    visitor.held_target(here.as_str(), target, holder);
     if let Some(anchor) = target.anchor.as_ref() {
-        walk_location(
-            anchor,
-            &pointer::child(at, "anchor"),
-            Slot::BuildAnchor { deploy },
-            visitor,
-        );
+        let at = here.push("anchor");
+        walk_location(anchor, here, Slot::BuildAnchor { deploy }, visitor);
+        here.pop(at);
     }
     // A `wall` target's box (S2's plan, task `con4`), an area like any other.
     if let Some(wall_box) = target.wall_box.as_ref() {
-        walk_area(
-            wall_box,
-            &pointer::child(at, "wall_box"),
-            AreaOf::WallBox,
-            visitor,
-        );
+        let at = here.push("wall_box");
+        walk_area(wall_box, here, AreaOf::WallBox, visitor);
+        here.pop(at);
     }
 }
 
-fn walk_area(area: &Area, at: &str, of: AreaOf, visitor: &mut dyn Visit) {
-    visitor.area(at, area, of);
+fn walk_area(area: &Area, here: &mut Here, of: AreaOf, visitor: &mut dyn Visit) {
+    visitor.area(here.as_str(), area, of);
     if let Some(corner) = area.min.as_ref() {
-        visitor.voxel(&pointer::child(at, "min"), corner);
+        let at = here.push("min");
+        visitor.voxel(here.as_str(), corner);
+        here.pop(at);
     }
     if let Some(corner) = area.max.as_ref() {
-        visitor.voxel(&pointer::child(at, "max"), corner);
+        let at = here.push("max");
+        visitor.voxel(here.as_str(), corner);
+        here.pop(at);
     }
 }
 
-fn walk_location(place: &Location, at: &str, slot: Slot<'_>, visitor: &mut dyn Visit) {
-    visitor.location(at, place, slot);
+fn walk_location(place: &Location, here: &mut Here, slot: Slot<'_>, visitor: &mut dyn Visit) {
+    visitor.location(here.as_str(), place, slot);
     match place.place.as_ref() {
-        Some(location::Place::Voxel(voxel)) => visitor.voxel(&pointer::child(at, "voxel"), voxel),
+        Some(location::Place::Voxel(voxel)) => {
+            let at = here.push("voxel");
+            visitor.voxel(here.as_str(), voxel);
+            here.pop(at);
+        }
         Some(location::Place::BeaconAnchor(beacon)) => {
-            walk_beacon(beacon, &pointer::child(at, "beacon_anchor"), visitor);
+            let at = here.push("beacon_anchor");
+            walk_beacon(beacon, here, visitor);
+            here.pop(at);
         }
         // Targeting's sites carry no voxel and no beacon to visit: a stage
         // that checks them reads the `FeatureRef` from `location`, with the
@@ -492,8 +515,8 @@ fn walk_location(place: &Location, at: &str, slot: Slot<'_>, visitor: &mut dyn V
     }
 }
 
-fn walk_beacon(reference: &BeaconRef, at: &str, visitor: &mut dyn Visit) {
-    visitor.beacon(at, reference);
+fn walk_beacon(reference: &BeaconRef, here: &mut Here, visitor: &mut dyn Visit) {
+    visitor.beacon(here.as_str(), reference);
     let filter = match reference.r#ref.as_ref() {
         Some(beacon_ref::Ref::Nearest(nearest)) => {
             nearest.filter.as_ref().map(|found| ("nearest", found))
@@ -507,61 +530,67 @@ fn walk_beacon(reference: &BeaconRef, at: &str, visitor: &mut dyn Visit) {
         _ => None,
     };
     if let Some((name, found)) = filter {
-        visitor.filter(&pointer::child(&pointer::child(at, name), "filter"), found);
+        let at = here.push_path(&[name, "filter"]);
+        visitor.filter(here.as_str(), found);
+        here.pop(at);
     }
 }
 
-fn walk_condition(node: &Condition, at: &str, visitor: &mut dyn Visit) {
-    visitor.condition(at, node);
+fn walk_condition(node: &Condition, here: &mut Here, visitor: &mut dyn Visit) {
+    visitor.condition(here.as_str(), node);
     match node.node.as_ref() {
         Some(condition::Node::All(all)) => {
-            let items_at = pointer::child(&pointer::child(at, "all"), "items");
-            for (index, item) in all.items.iter().enumerate() {
-                walk_condition(item, &pointer::at(&items_at, index), visitor);
-            }
+            let at = here.push_path(&["all", "items"]);
+            walk_items(&all.items, here, visitor);
+            here.pop(at);
         }
         Some(condition::Node::Any(any)) => {
-            let items_at = pointer::child(&pointer::child(at, "any"), "items");
-            for (index, item) in any.items.iter().enumerate() {
-                walk_condition(item, &pointer::at(&items_at, index), visitor);
-            }
+            let at = here.push_path(&["any", "items"]);
+            walk_items(&any.items, here, visitor);
+            here.pop(at);
         }
         Some(condition::Node::Not(not)) => {
             if let Some(item) = not.item.as_ref() {
-                walk_condition(
-                    item,
-                    &pointer::child(&pointer::child(at, "not"), "item"),
-                    visitor,
-                );
+                let at = here.push_path(&["not", "item"]);
+                walk_condition(item, here, visitor);
+                here.pop(at);
             }
         }
         Some(condition::Node::BeaconHpPct(predicate)) => {
-            walk_predicate_beacon(
-                predicate.beacon.as_ref(),
-                &pointer::child(at, "beacon_hp_pct"),
-                visitor,
-            );
+            walk_predicate_beacon(predicate.beacon.as_ref(), "beacon_hp_pct", here, visitor);
         }
         Some(condition::Node::BeaconUnderAttack(predicate)) => {
             walk_predicate_beacon(
                 predicate.beacon.as_ref(),
-                &pointer::child(at, "beacon_under_attack"),
+                "beacon_under_attack",
+                here,
                 visitor,
             );
         }
         Some(condition::Node::BeaconPowered(predicate)) => {
-            walk_predicate_beacon(
-                predicate.beacon.as_ref(),
-                &pointer::child(at, "beacon_powered"),
-                visitor,
-            );
+            walk_predicate_beacon(predicate.beacon.as_ref(), "beacon_powered", here, visitor);
         }
         _ => {}
     }
 }
 
-fn walk_predicate_beacon(beacon: Option<&BeaconRef>, at: &str, visitor: &mut dyn Visit) {
+fn walk_items(items: &[Condition], here: &mut Here, visitor: &mut dyn Visit) {
+    for (index, item) in items.iter().enumerate() {
+        let at = here.push_index(index);
+        walk_condition(item, here, visitor);
+        here.pop(at);
+    }
+}
+
+fn walk_predicate_beacon(
+    beacon: Option<&BeaconRef>,
+    predicate: &str,
+    here: &mut Here,
+    visitor: &mut dyn Visit,
+) {
     if let Some(reference) = beacon {
-        walk_beacon(reference, &pointer::child(at, "beacon"), visitor);
+        let at = here.push_path(&[predicate, "beacon"]);
+        walk_beacon(reference, here, visitor);
+        here.pop(at);
     }
 }

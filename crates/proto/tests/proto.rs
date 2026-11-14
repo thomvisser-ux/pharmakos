@@ -2484,3 +2484,57 @@ fn resolve_refs_is_a_planning_method() {
         "resolve_refs"
     );
 }
+
+/// The path `fingerprint::FINGERPRINT_FIELD` names is the field
+/// `canonical_input` clears: the canonical text written from a stamped
+/// playbook's bytes with it left out is `canonical_input`'s text (S3's
+/// `vfyq`; PR #177's review asked for the path to have one home).
+#[test]
+fn the_fingerprint_field_is_the_one_canonical_input_clears() {
+    let text = r#"{"meta":{"title":"t","fingerprint":"AAAAAAAAAAE=","author_kind":"HUMAN"},"kind":"PLAYBOOK"}"#;
+    let playbook: Playbook = json::decode(text).expect("a playbook");
+    let bytes = prost::Message::encode_to_vec(&playbook);
+    let mut ours = String::new();
+    json::write_wire_into(
+        "gp.v1.Playbook",
+        &bytes,
+        fingerprint::FINGERPRINT_FIELD,
+        &mut ours,
+    )
+    .expect("the path names a field");
+    let theirs = fingerprint::canonical_input(&playbook).expect("the playbook writes");
+    assert_eq!(ours.as_bytes(), theirs.as_slice());
+    assert!(!ours.contains("fingerprint"), "{ours}");
+}
+
+/// A path that does not name a singular field by its `.proto` names is
+/// refused with the codec's error, never read as "leave nothing out": a
+/// misspelt fingerprint path would otherwise hash the fingerprint into
+/// itself without a word.
+#[test]
+fn an_omit_path_that_names_no_singular_field_is_refused() {
+    let playbook: Playbook =
+        json::decode(r#"{"meta":{"title":"t"},"declarative":{"route":[{"label":"a"}]}}"#)
+            .expect("a playbook");
+    let bytes = prost::Message::encode_to_vec(&playbook);
+    for path in [
+        &["meta", "fingerprnt"][..],
+        &["meat", "fingerprint"][..],
+        &["meta", "title", "more"][..],
+        &["declarative", "route", "label"][..],
+        &["declarative", "route"][..],
+        &["schemaVersion"][..],
+        &[""][..],
+    ] {
+        let mut out = String::new();
+        let refused = json::write_wire_into("gp.v1.Playbook", &bytes, path, &mut out);
+        assert!(refused.is_err(), "{path:?} names no singular field");
+    }
+    // A singular field the bytes do not carry is still a field: nothing is
+    // left out, and the text is the whole message's.
+    for path in [&["on_death"][..], &["meta", "fingerprint"][..], &[][..]] {
+        let mut out = String::new();
+        json::write_wire_into("gp.v1.Playbook", &bytes, path, &mut out).expect("a field");
+        assert_eq!(out, json::encode(&playbook).expect("it writes"), "{path:?}");
+    }
+}

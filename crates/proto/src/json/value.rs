@@ -15,6 +15,7 @@
 //!   field-number order and the reader can report the position of a duplicate
 //!   key rather than silently keeping the last one.
 
+use std::collections::BTreeSet;
 use std::fmt;
 use std::fmt::Write as _;
 
@@ -101,7 +102,9 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {}
 
 /// Appends one RFC 6901 token to a pointer, escaping `~` and `/` as the
-/// standard requires.
+/// standard requires. The codec now carries a lazy `Path`; this is the
+/// reference's, and the tests'.
+#[cfg(test)]
 pub(crate) fn push_pointer(base: &str, token: &str) -> String {
     let mut pointer = String::with_capacity(base.len().saturating_add(token.len()) + 1);
     pointer.push_str(base);
@@ -134,7 +137,13 @@ pub(crate) fn push_pointer(base: &str, token: &str) -> String {
 /// document tree yet.
 pub fn read(text: &str) -> Result<Json, Error> {
     let bytes = text.as_bytes();
-    let mut reader = JsonReader { bytes, pos: 0 };
+    let mut reader = JsonReader {
+        text,
+        bytes,
+        pos: 0,
+        #[cfg(test)]
+        comparisons: 0,
+    };
     reader.skip_whitespace();
     let value = reader.value(0)?;
     reader.skip_whitespace();
@@ -151,9 +160,18 @@ pub fn read(text: &str) -> Result<Json, Error> {
 const MAX_DEPTH: usize = 64;
 
 struct JsonReader<'a> {
+    text: &'a str,
     bytes: &'a [u8],
     pos: usize,
+    /// How many keys the duplicate-key check has compared one by one, for
+    /// the test that holds it below quadratic.
+    #[cfg(test)]
+    comparisons: u64,
 }
+
+/// How many members an object holds before its duplicate-key check keeps a
+/// sorted set rather than scanning the members one by one.
+const LINEAR_KEYS: usize = 16;
 
 impl JsonReader<'_> {
     fn error(&self, message: impl Into<String>) -> Error {
@@ -228,6 +246,10 @@ impl JsonReader<'_> {
     fn object(&mut self, depth: usize) -> Result<Json, Error> {
         self.expect(b'{')?;
         let mut entries: Vec<(String, Json)> = Vec::new();
+        // Past `LINEAR_KEYS` members, the keys so far as a sorted set: an
+        // object of n members then costs O(n log n) comparisons, not the
+        // O(n²) of comparing every key with every key before it.
+        let mut sorted: Option<BTreeSet<String>> = None;
         self.skip_whitespace();
         if self.peek() == Some(b'}') {
             self.bump();
@@ -236,7 +258,16 @@ impl JsonReader<'_> {
         loop {
             self.skip_whitespace();
             let key = self.string()?;
-            if entries.iter().any(|(name, _)| *name == key) {
+            let (seen, compared) = seen_before(&entries, &mut sorted, &key);
+            // Counted for the test that holds the check below quadratic, and
+            // nothing else.
+            #[cfg(test)]
+            {
+                self.comparisons = self.comparisons.saturating_add(compared);
+            }
+            #[cfg(not(test))]
+            let _: u64 = compared;
+            if seen {
                 return Err(self.error(format!("duplicate key `{key}`")));
             }
             self.skip_whitespace();
@@ -283,6 +314,24 @@ impl JsonReader<'_> {
         self.expect(b'"')?;
         let mut out = String::new();
         loop {
+            // Copy the run of bytes up to the next quote, backslash or control
+            // character in one piece. Each of those is ASCII, so a run never
+            // ends inside a UTF-8 sequence, and the input is a `&str`, so the
+            // run is well formed.
+            let start = self.pos;
+            while let Some(byte) = self.peek() {
+                if byte == b'"' || byte == b'\\' || byte < 0x20 {
+                    break;
+                }
+                self.bump();
+            }
+            if self.pos > start {
+                let run = self
+                    .text
+                    .get(start..self.pos)
+                    .ok_or_else(|| self.error("invalid UTF-8 in a string"))?;
+                out.push_str(run);
+            }
             let byte = self
                 .peek()
                 .ok_or_else(|| self.error("unterminated string"))?;
@@ -295,29 +344,8 @@ impl JsonReader<'_> {
                     self.bump();
                     self.escape(&mut out)?;
                 }
-                0x00..=0x1f => {
-                    return Err(self.error("a raw control character in a string"));
-                }
                 _ => {
-                    // Copy one whole UTF-8 sequence, which `str` guarantees is
-                    // well formed because the input was a `&str`.
-                    let start = self.pos;
-                    self.bump();
-                    while let Some(next) = self.peek() {
-                        if next & 0xc0 == 0x80 {
-                            self.bump();
-                        } else {
-                            break;
-                        }
-                    }
-                    let slice = self
-                        .bytes
-                        .get(start..self.pos)
-                        .ok_or_else(|| self.error("truncated UTF-8"))?;
-                    out.push_str(
-                        std::str::from_utf8(slice)
-                            .map_err(|_| self.error("invalid UTF-8 in a string"))?,
-                    );
+                    return Err(self.error("a raw control character in a string"));
                 }
             }
         }
@@ -416,6 +444,30 @@ impl JsonReader<'_> {
     }
 }
 
+/// Whether an object already holds `key`, its members so far being
+/// `entries`, and how many keys were compared one by one to say so.
+///
+/// They are scanned one by one while there are fewer than [`LINEAR_KEYS`], as
+/// in almost every object a playbook has, and looked up in `sorted` once there
+/// are more, which this builds the first time and keeps up to date. Either way
+/// the answer is the same.
+fn seen_before(
+    entries: &[(String, Json)],
+    sorted: &mut Option<BTreeSet<String>>,
+    key: &str,
+) -> (bool, u64) {
+    if sorted.is_none() && entries.len() < LINEAR_KEYS {
+        let mut compared: u64 = 0;
+        let seen = entries.iter().any(|(name, _)| {
+            compared = compared.saturating_add(1);
+            name == key
+        });
+        return (seen, compared);
+    }
+    let set = sorted.get_or_insert_with(|| entries.iter().map(|(name, _)| name.clone()).collect());
+    (!set.insert(key.to_owned()), 0)
+}
+
 // ---------------------------------------------------------------------------
 // Writing
 // ---------------------------------------------------------------------------
@@ -488,22 +540,115 @@ fn write_value(value: &Json, depth: usize, out: &mut String) {
     }
 }
 
-fn write_string(text: &str, out: &mut String) {
+/// A string as canonical JSON: quoted, with `"`, `\` and the control
+/// characters escaped and everything else as it is.
+pub(crate) fn write_string(text: &str, out: &mut String) {
     out.push('"');
-    for character in text.chars() {
-        match character {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\u{8}' => out.push_str("\\b"),
-            '\u{c}' => out.push_str("\\f"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            other if u32::from(other) < 0x20 => {
-                let _ignored = write!(out, "\\u{:04x}", u32::from(other));
+    // The text between two characters that need an escape is copied in one
+    // piece; each piece ends with the character that ends it, if any.
+    for piece in text.split_inclusive(needs_escape) {
+        let mut characters = piece.chars();
+        match characters.next_back() {
+            Some(last) if needs_escape(last) => {
+                out.push_str(characters.as_str());
+                match last {
+                    '"' => out.push_str("\\\""),
+                    '\\' => out.push_str("\\\\"),
+                    '\u{8}' => out.push_str("\\b"),
+                    '\u{c}' => out.push_str("\\f"),
+                    '\n' => out.push_str("\\n"),
+                    '\r' => out.push_str("\\r"),
+                    '\t' => out.push_str("\\t"),
+                    other => {
+                        let _ignored = write!(out, "\\u{:04x}", u32::from(other));
+                    }
+                }
             }
-            other => out.push(other),
+            _ => out.push_str(piece),
         }
     }
     out.push('"');
+}
+
+/// Whether a character is written escaped: `"`, `\` and the C0 controls.
+const fn needs_escape(character: char) -> bool {
+    matches!(character, '"' | '\\' | '\u{0}'..='\u{1f}')
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fmt::Write as _;
+
+    use super::{Error, JsonReader, LINEAR_KEYS, read};
+
+    /// `read`, with how many key comparisons its duplicate-key check made.
+    fn read_counting(text: &str) -> (Result<super::Json, Error>, u64) {
+        let mut reader = JsonReader {
+            text,
+            bytes: text.as_bytes(),
+            pos: 0,
+            comparisons: 0,
+        };
+        let value = reader.value(0);
+        (value, reader.comparisons)
+    }
+
+    /// One object of `n` distinct keys of one length, and optionally the key
+    /// at `repeat` written again at the end.
+    fn many_keys(n: usize, repeat: Option<usize>) -> String {
+        let mut text = String::from("{");
+        for at in 0..n {
+            if at > 0 {
+                text.push(',');
+            }
+            let _infallible = write!(text, "\"k{at:06}\":0");
+        }
+        if let Some(at) = repeat {
+            let _infallible = write!(text, ",\"k{at:06}\":1");
+        }
+        text.push('}');
+        text
+    }
+
+    /// The duplicate-key check scans a small object and keeps a sorted set
+    /// for a large one, so its linear comparisons are bounded by a constant
+    /// however many keys there are: 32,000 keys took 1.95 s when every key
+    /// was compared with every key before it (PR #177's robustness review).
+    #[test]
+    fn many_distinct_keys_are_checked_in_less_than_quadratic_work() {
+        let bound = u64::try_from(LINEAR_KEYS * LINEAR_KEYS).unwrap();
+        for n in [LINEAR_KEYS, 1_000, 32_000] {
+            let (value, comparisons) = read_counting(&many_keys(n, None));
+            assert!(value.is_ok(), "{n} distinct keys are one object");
+            assert!(
+                comparisons <= bound,
+                "{n} keys took {comparisons} linear comparisons, past {bound}"
+            );
+        }
+    }
+
+    /// A key written twice is refused at the same byte, with the same words,
+    /// whether the object is small enough to scan or large enough to keep a
+    /// set, and as the reference reader refuses it.
+    #[test]
+    fn a_duplicate_key_is_refused_alike_below_and_past_the_set() {
+        for (n, repeat) in [
+            (3, 0),
+            (LINEAR_KEYS - 1, 2),
+            (LINEAR_KEYS, LINEAR_KEYS - 1),
+            (LINEAR_KEYS + 1, 0),
+            (2_000, 1_999),
+            (2_000, 7),
+        ] {
+            let text = many_keys(n, Some(repeat));
+            let ours = read(&text);
+            assert!(ours.is_err(), "{n} keys with key {repeat} written twice");
+            assert_eq!(ours, super::super::reference::read(&text), "{n}, {repeat}");
+        }
+        // A duplicate among the first keys of an object that goes on to grow
+        // past the set is still the first duplicate reported.
+        let mut text = many_keys(40, None);
+        text.insert_str(1, "\"k000003\":2,");
+        assert_eq!(read(&text), super::super::reference::read(&text));
+    }
 }
