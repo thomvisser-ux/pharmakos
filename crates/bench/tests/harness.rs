@@ -25,6 +25,8 @@
 //! | `g3::sight`'s `seen_by` (the sensor walk under `RadiusOnly`) | `crates/sim/src/world/combat.rs`'s private `World::seen_by` | none can reach a private item; the probe names it in its notice as a restatement, and `g3r` reviews it against the sim at the certifying run |
 //! | `g3::sight`'s core (a seat's lowest-id beacon row) | `crates/sim/src/power.rs`'s crate-private `core_of` | the same |
 //! | `g3::variant`'s draw per seat (`kw_per_unit` a unit, none for the commander, `beacon_base_draw_kw` a beacon) | `crates/sim/src/power.rs`'s draw rule | `the_gate_match_is_reproducible_from_its_seed_and_rules_hash`: an underpowered layout would brown out, and the unit test `the_variant_moves_only_its_named_rows` pins the sum |
+//! | `p3::Graph::generate` (`mapgen::generate`, the store settled, `Surface::new`, `pathing::graph_for`) | `World::new`'s graph (`crates/sim/src/world.rs`) | `a_short_p3_run_measures_every_figure_on_the_worlds_own_graph`: the measurement refuses a hosted world whose graph's facts differ from the bench's |
+//! | `p3::mark_chunk_clusters` | `crates/sim/src/world.rs`'s private `mark_chunk_clusters` | `the_crater_streams_repair_is_a_rebuild`: after the stream's craters the repaired graph's transitions and edges are a from-scratch rebuild's, which a missed cluster would break |
 
 use std::fs;
 
@@ -205,4 +207,45 @@ fn the_adversarial_support_tick_drops_the_construct_as_built() {
         report.bound_skips, 0,
         "A is exactly the bound, not past it: {report:?}"
     );
+}
+
+/// A short P3 run takes every figure, on a hosted world whose graph is the
+/// bench's (the measurement refuses one that is not). A debug build, so
+/// nothing is timed worth reading.
+#[test]
+fn a_short_p3_run_measures_every_figure_on_the_worlds_own_graph() {
+    use pharmakos_bench::p3::{self, P3Plan};
+    let root = workspace_root();
+    let report = p3::measure(
+        &root,
+        &P3Plan {
+            seeds: vec![p3::P3_SEEDS[0]],
+            pairs: 8,
+        },
+    )
+    .expect("a measurement");
+    let seed = report.seeds.first().expect("one seed");
+    assert_eq!(seed.cold.samples, 8);
+    assert_eq!(seed.stream.samples, 8);
+    assert_eq!(seed.repair.samples, 8);
+    assert_eq!(seed.one_leg.samples, 8);
+    assert_eq!(seed.five_leg.samples, 8);
+    assert_eq!(seed.estimator.samples, 8);
+    assert_eq!(seed.craters, 8);
+    assert_eq!(seed.cold_sealed, 0, "a pair of one component always routes");
+    assert_eq!(seed.graph.cluster_voxels, 32);
+    // A short run is not the gate's, and its line says so to the reader.
+    assert!(p3::budget_report_line(&report).contains(" pairs=8 planned_pairs=2000 "));
+}
+
+/// The bench's restatement of the sim's cluster marking: after the crater
+/// stream, the repaired graph is the graph a rebuild makes.
+#[test]
+fn the_crater_streams_repair_is_a_rebuild() {
+    use pharmakos_bench::p3;
+    let root = workspace_root();
+    let rules = quick::committed_rules(&root).expect("the committed rules");
+    let (repaired, rebuilt) =
+        p3::stream_repair_check(&rules, p3::P3_SEEDS[0], 40).expect("a stream");
+    assert_eq!(repaired, rebuilt);
 }
