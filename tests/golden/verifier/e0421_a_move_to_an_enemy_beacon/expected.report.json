@@ -1,5 +1,4 @@
 {
-  "qualifies": true,
   "depth": "FULL",
   "diagnostics": [
     {
@@ -17,21 +16,14 @@
       ]
     },
     {
-      "code": "W0703",
-      "severity": "WARNING",
+      "code": "E0421",
+      "severity": "ERROR",
       "path": "/declarative/route/0/move/to/beacon_anchor/beacon_id",
-      "message": "the sighting this rests on is 240000 ms old; the reach window is 180000 ms.",
-      "beginner": "What the seat remembers here may be too old to act on.",
-      "map_refs": [
-        {
-          "x": 300,
-          "y": 300,
-          "z": 40
-        }
-      ]
+      "message": "`e_01` is an enemy beacon the seat has seen, and a `beacon_anchor` names one of this seat's own beacons; an enemy beacon there resolves to nothing, and the step fails `no_target`.",
+      "beginner": "Only an Attack beacon's target can be an enemy beacon. Everywhere else, name one of your own beacons."
     }
   ],
-  "report_hash": "5+8KfiyGDcM=",
+  "report_hash": "ZaIN3LQkGjk=",
   "rules_hash": "GybFJQaL/2E=",
   "plan_fingerprint": "xwxDkvg/dP4=",
   "verifier_version": "0.1.0-s3.3",

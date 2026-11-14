@@ -216,9 +216,10 @@ impl Limits {
     /// their freshness from it rather than declaring their own. From S2 an
     /// Attack target named by id, or one seat's commander, is compared
     /// against it (`E0418`), as are the enemy commander with no seat named
-    /// (`W0708`), the nearest known enemy beacon (`W0709`, S2's `atk2`) and
-    /// every other reference to an enemy beacon (`W0703`), each
-    /// over the sightings the view carries.
+    /// (`W0708`) and the nearest known enemy beacon (`W0709`, S2's `atk2`),
+    /// each over the sightings the view carries. (`W0703`, for any other
+    /// reference to an enemy beacon, retired with S3's `vfy6`: no other slot
+    /// takes one, `E0421`.)
     ///
     /// PLACEHOLDER: the reach window's tuning — owner, S3 (item 90).
     #[must_use]

@@ -385,10 +385,7 @@ fn map_scope() -> Scope {
 
 /// The cases checked against [`sight_scope`]: the ones whose code reads how
 /// long ago the seat saw something (S2's `vfy2`).
-const SIGHT_CASES: &[&str] = &[
-    "e0418_an_attack_target_seen_too_long_ago",
-    "w0703_a_reference_resting_on_an_old_sighting",
-];
+const SIGHT_CASES: &[&str] = &["e0418_an_attack_target_seen_too_long_ago"];
 
 /// [`fixture_scope`] with the seat's sightings and nothing else changed:
 ///

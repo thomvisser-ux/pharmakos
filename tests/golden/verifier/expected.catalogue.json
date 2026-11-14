@@ -608,6 +608,14 @@
     "beginner": "\"A stepping stone toward a vent\" says where a new beacon goes, so it belongs in a place-beacon step and nowhere else."
   },
   {
+    "code": "E0421",
+    "family": "references and placement",
+    "severity": "ERROR",
+    "emitter": "semantics",
+    "message": "`{id}` is an enemy beacon the seat has seen, and {role} names one of this seat's own beacons; an enemy beacon there resolves to nothing, and the step fails `no_target`.",
+    "beginner": "Only an Attack beacon's target can be an enemy beacon. Everywhere else, name one of your own beacons."
+  },
+  {
     "code": "E0501",
     "family": "settings and recycle",
     "severity": "ERROR",
@@ -803,7 +811,7 @@
     "code": "W0703",
     "family": "schedule, conflicts and staleness",
     "severity": "WARNING",
-    "emitter": "lint",
+    "emitter": "none at the skeleton (retired by S3's `vfy6`: an enemy handle outside an Attack target is E0421)",
     "message": "the sighting this rests on is {found} ms old; the reach window is {max} ms.",
     "beginner": "What the seat remembers here may be too old to act on."
   },

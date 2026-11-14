@@ -18,7 +18,7 @@
 //! | resolve | [`resolve`] | complete |
 //! | semantics | [`semantics`] | complete |
 //! | estimate | [`estimate`] | the `$` and `kW` projection and the schedule (S1); mast coverage is S4's |
-//! | lint | [`lint`] | targeting's three lints (S1), `W0703` (S2) and `W0702` (S3); `I0002` is S3's `vfy6`'s or later |
+//! | lint | [`lint`] | targeting's three lints (S1), `W0703` (S2, retired by S3's `vfy6`) and `W0702` (S3); `I0002` is S3's `vfy6`'s or later |
 //!
 //! FULL's two stages shipped present and empty, deliberately (decisions-log
 //! item 82): `verify_plan{depth}` and `report_hash` were complete from day one,
@@ -243,7 +243,9 @@ pub use walking::Walk;
 /// had), resolves `toward`'s named feature (`E0412`), refuses an unset beacon
 /// reference in a predicate, a protect list or an Attack target (`E0111`),
 /// and notes an absent `on_fail` and a `max_deaths_before_fallback` of 0
-/// (`I0003`, S3's plan, decision 8), so its reports are not comparable with
+/// (`I0003`, S3's plan, decision 8), and refuses an enemy beacon's handle
+/// anywhere but an Attack target (`E0421`, which retires `W0703`), so its
+/// reports are not comparable with
 /// `0.1.0-s3.2`'s.
 pub const VERIFIER_VERSION: &str = "0.1.0-s3.3";
 

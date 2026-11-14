@@ -108,10 +108,10 @@ const ROUND_2_ATTACK: &str = r#"// Raid what the scout found.
 "#;
 
 /// Round 2, seat 0: `e_01` named three ways -- walked to, interfaced with,
-/// attacked -- whose verdicts `sighting_verify`'s golden pins as they are
-/// today. The interface is refused (`E0405`, another seat's beacon); the walk
-/// and the Attack qualify, though the sim fails the walk `no_target` (a
-/// known gap the verifier's `vfy6` closes, S3's `gwr` review, item 11).
+/// attacked -- whose verdicts `sighting_verify`'s golden pins. The interface
+/// is refused (`E0405`, another seat's beacon) and, since S3's `vfy6`, so is
+/// the walk (`E0421`: the sim would fail it `no_target`; S3's `gwr` review,
+/// item 11); the Attack qualifies.
 const NAMES_E_01: &str = r#"// e_01, three ways.
 {"schema_version": {"major": 1, "minor": 0},
  "meta": {"title": "Three ways", "author_kind": "HUMAN"},

@@ -357,3 +357,11 @@ on the plain fixture: `e0101_an_enemy_predicate_without_its_radius`,
 `e0420_toward_in_a_move`, `e0506_a_predicate_naming_no_blueprint` and
 `i0003_no_death_limit`. Each S3 case carries its `E002x` code too: the checks
 stand behind it until S3's `pred` lifts the sim's refusal.
+
+**S3's `vfy6`, the enemy handle (`E0421`).** Since S3-04 a sighted `e_NN`
+resolves in the seat's view, and the sim compiles it to a foreign reference
+that resolves to nothing outside an Attack target, so it is refused in every
+other slot that names one of the seat's own beacons. That retires `W0703`,
+whose one case, `w0703_a_reference_resting_on_an_old_sighting`, is gone with
+its golden: its `move` to `e_01` is now `e0421_a_move_to_an_enemy_beacon`, on
+the plain fixture. `W0703`'s row keeps its number and is raised by nothing.

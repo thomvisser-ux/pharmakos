@@ -55,7 +55,10 @@
 //! `vfy6`) gives `E0209` (an enemy predicate without its freshness) and
 //! `E0506` (a predicate naming no blueprint this build knows) their emitters,
 //! and adds `E0210` (a freshness window under `VISIBLE_NOW`) and `E0420`
-//! (`toward` outside a `place_beacon`'s `at`) at the ends of their families.
+//! (`toward` outside a `place_beacon`'s `at`) at the ends of their families;
+//! and `E0421` (an enemy beacon's handle outside an Attack target), which
+//! retires `W0703`: a handle that could rest on an old sighting now stands
+//! only where `E0418` judges its age.
 //!
 //! The label an unemitted row prints, `none at the skeleton (…)`, is kept as
 //! it was spelt when the table shipped, because `gamectl docs` quotes it; the
@@ -764,6 +767,14 @@ pub const CATALOGUE: &[Entry] = &[
         severity: Severity::Error,
         emitter: Emitter::Stage(Stage::Structure),
     },
+    // S3's `vfy6`: an enemy beacon's handle in a slot that names one of the
+    // seat's own beacons. Which side a handle is on is in the seat's view.
+    Entry {
+        code: "E0421",
+        family: Family::ReferencesAndPlacement,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Semantics),
+    },
     // --- E05xx: settings and recycle -----------------------------------------
     Entry {
         code: "E0501",
@@ -961,7 +972,9 @@ pub const CATALOGUE: &[Entry] = &[
         // S2's `vfy2`: a reference to an enemy beacon, other than an Attack
         // target (which E0418 refuses), resting on a sighting older than the
         // reach window.
-        emitter: Emitter::Stage(Stage::Lint),
+        emitter: Emitter::NoneYet(
+            "retired by S3's `vfy6`: an enemy handle outside an Attack target is E0421",
+        ),
     },
     // Targeting's three lints (docs/design/targeting.md, "Surfaces"), the
     // first codes the lint stage raises. Advice, never a refusal: each is a

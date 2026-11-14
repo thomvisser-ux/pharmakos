@@ -63,8 +63,9 @@
 //! commander, must rest on a sighting inside that window (`E0418`); the enemy
 //! commander with no seat named, which the sim chooses at launch, is only
 //! warned of without one (`W0708`), as is the nearest known enemy beacon
-//! (`W0709`); and any other reference to an enemy
-//! beacon resting on an older one is `W0703`.
+//! (`W0709`). An enemy beacon's handle anywhere but an Attack target is
+//! `E0421` (S3's `vfy6`, which retired `W0703`, the warning such a handle
+//! resting on an old sighting had).
 //! The verifier **reads ages and nothing else**: it never ranks the
 //! sightings, never guesses where an asset went, and never models what an
 //! enemy does (AGENTS.md section 3 rule 2).

@@ -119,9 +119,9 @@ const WINDOW: u32 = 180_000;
 
 /// S2's `vfy2` codes, S2's `atk`'s E0419, S2's `vfy4`'s W0708 and S2's
 /// `atk2`'s W0709, in code order: the ten thousand runs reach every one.
-const S2_CODES: [&str; 16] = [
+const S2_CODES: [&str; 15] = [
     "E0113", "E0414", "E0415", "E0416", "E0417", "E0418", "E0419", "E0508", "E0510", "E0511",
-    "E0512", "W0502", "W0703", "W0708", "W0709", "I0004",
+    "E0512", "W0502", "W0708", "W0709", "I0004",
 ];
 
 /// S3's `vfy5` codes, in code order: the ten thousand runs reach every one.
@@ -133,7 +133,7 @@ const S3_CODES: [&str; 4] = ["E0507", "E0513", "W0702", "I0006"];
 /// S3's `vfy6` codes, in code order: the checks behind S3's predicates and
 /// `toward`, which the ten thousand runs reach on a damaged run's
 /// predicates and sites.
-const VFY6_CODES: [&str; 4] = ["E0209", "E0210", "E0420", "E0506"];
+const VFY6_CODES: [&str; 5] = ["E0209", "E0210", "E0420", "E0421", "E0506"];
 
 /// The size the padded runs reach past: twice the committed budget, the most
 /// a later stage can choose (S3's plan, E24: never above 256), so the ten

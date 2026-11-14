@@ -28,6 +28,7 @@ use pharmakos_proto::gp::v1::{
 };
 
 use crate::pointer::{self, Here};
+use crate::strings;
 
 /// Which list a step belongs to: the route, or one handler's body.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -79,8 +80,9 @@ pub(crate) enum BeaconSlot {
     Protect,
     /// An Attack target: the one slot an enemy beacon stands in.
     AttackTarget,
-    /// Any other slot, which names one of the seat's own beacons.
-    Own,
+    /// Any other slot, which names one of the seat's own beacons; the words
+    /// say which (`E0421`'s `{role}`).
+    Own(&'static str),
 }
 
 /// Which beacon's mandate holds a Build target, as the file names it: what a
@@ -221,7 +223,12 @@ pub(crate) fn walk(playbook: &Playbook, visitor: &mut dyn Visit) {
                 let shadow_at = here.push("shadow");
                 if let Some(beacon) = shadow.beacon.as_ref() {
                     let at = here.push("beacon");
-                    walk_beacon(beacon, &mut here, BeaconSlot::Own, visitor);
+                    walk_beacon(
+                        beacon,
+                        &mut here,
+                        BeaconSlot::Own(strings::ROLE_SHADOW),
+                        visitor,
+                    );
                     here.pop(at);
                 }
                 here.pop(shadow_at);
@@ -519,7 +526,12 @@ fn walk_location(place: &Location, here: &mut Here, slot: Slot<'_>, visitor: &mu
         }
         Some(location::Place::BeaconAnchor(beacon)) => {
             let at = here.push("beacon_anchor");
-            walk_beacon(beacon, here, BeaconSlot::Own, visitor);
+            walk_beacon(
+                beacon,
+                here,
+                BeaconSlot::Own(strings::ROLE_BEACON_ANCHOR),
+                visitor,
+            );
             here.pop(at);
         }
         // Targeting's sites carry no voxel and no beacon to visit: a stage
@@ -642,7 +654,7 @@ fn walk_near(near: Option<&NearPlace>, predicate: &str, here: &mut Here, visitor
         }
         Some(near_place::Place::BeaconAnchor(beacon)) => {
             let at = here.push_path(&[predicate, "near", "beacon_anchor"]);
-            walk_beacon(beacon, here, BeaconSlot::Own, visitor);
+            walk_beacon(beacon, here, BeaconSlot::Own(strings::ROLE_NEAR), visitor);
             here.pop(at);
         }
         Some(near_place::Place::Safest(_)) | None => {}
@@ -665,7 +677,12 @@ fn walk_predicate_beacon(
 ) {
     if let Some(reference) = beacon {
         let at = here.push_path(&[predicate, "beacon"]);
-        walk_beacon(reference, here, BeaconSlot::Own, visitor);
+        walk_beacon(
+            reference,
+            here,
+            BeaconSlot::Own(strings::ROLE_PREDICATE),
+            visitor,
+        );
         here.pop(at);
     }
 }

@@ -902,7 +902,7 @@ gp.v1.Playbook.Kind
 
 ## Diagnostics
 
-113 codes. A code is language-neutral, append-only and never
+114 codes. A code is language-neutral, append-only and never
 reused; only an ERROR stops a playbook qualifying. `none at the skeleton` names the
 task that owes the emitter, which is honesty about coverage rather than a gap.
 
@@ -1211,6 +1211,10 @@ E0420  ERROR  references and placement  raised at: structure
   `toward` is legal only in a place_beacon's `at`, which is where a stepping stone goes; here it names no site a beacon is placed at.
   "A stepping stone toward a vent" says where a new beacon goes, so it belongs in a place-beacon step and nowhere else.
 
+E0421  ERROR  references and placement  raised at: semantics
+  `{id}` is an enemy beacon the seat has seen, and {role} names one of this seat's own beacons; an enemy beacon there resolves to nothing, and the step fails `no_target`.
+  Only an Attack beacon's target can be an enemy beacon. Everywhere else, name one of your own beacons.
+
 E0501  ERROR  settings and recycle  raised at: semantics
   `{field}` is {found}; it must be between 0 and 100.
   A percentage runs from none of it to all of it.
@@ -1307,7 +1311,7 @@ W0702  WARNING  schedule, conflicts and staleness  raised at: lint
   `{id}` fires only while `{winner}` cannot: `{winner}` comes first, and its condition is true whenever this one's is, so this rule gets a turn only during `{winner}`'s cooldown or after its last fire.
   An earlier rule wins every time both are true, so this one mostly never gets a turn. Move it above the other rule, or narrow the other rule.
 
-W0703  WARNING  schedule, conflicts and staleness  raised at: lint
+W0703  WARNING  schedule, conflicts and staleness  raised at: none at the skeleton (retired by S3's `vfy6`: an enemy handle outside an Attack target is E0421)
   the sighting this rests on is {found} ms old; the reach window is {max} ms.
   What the seat remembers here may be too old to act on.
 

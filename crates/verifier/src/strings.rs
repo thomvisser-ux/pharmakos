@@ -503,6 +503,14 @@ pub const VERIFIER_STRINGS: &[Text] = &[
         beginner: "\"A stepping stone toward a vent\" says where a new beacon goes, so it \
                    belongs in a place-beacon step and nowhere else.",
     },
+    Text {
+        code: "E0421",
+        message: "`{id}` is an enemy beacon the seat has seen, and {role} names one of this \
+                  seat's own beacons; an enemy beacon there resolves to nothing, and the step \
+                  fails `no_target`.",
+        beginner: "Only an Attack beacon's target can be an enemy beacon. Everywhere else, name \
+                   one of your own beacons.",
+    },
     // --- E05xx: settings and recycle -----------------------------------------
     Text {
         code: "E0501",
@@ -831,6 +839,15 @@ pub const WALL_BOX_COLUMN: &str = "the wall box's";
 pub const ANCHOR_COLUMN: &str = "the anchor's";
 /// W0708's `{what}`: no enemy commander has been sighted.
 pub const NO_COMMANDER_SIGHTED: &str = "the seat has no sighting of an enemy commander";
+/// E0421's `{role}` for a place's `beacon_anchor` (a move, a placement,
+/// the fallback's hold and patrol).
+pub const ROLE_BEACON_ANCHOR: &str = "a `beacon_anchor`";
+/// E0421's `{role}` for the fallback's `shadow`.
+pub const ROLE_SHADOW: &str = "the fallback's `shadow`";
+/// E0421's `{role}` for an own-beacon predicate's `beacon`.
+pub const ROLE_PREDICATE: &str = "a beacon predicate's `beacon`";
+/// E0421's `{role}` for an enemy predicate's `near`.
+pub const ROLE_NEAR: &str = "an enemy predicate's `near`";
 /// E0419's `{why}` for the playbook's own seat.
 pub const SEAT_IS_OWN: &str = "which is this playbook's own seat";
 /// E0419's `{why}` for a seat past any match's.

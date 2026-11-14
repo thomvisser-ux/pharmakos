@@ -97,6 +97,16 @@
           "map_refs": []
         },
         {
+          "code": "E0421",
+          "severity": "error",
+          "path": "/declarative/route/0/move/to/beacon_anchor/beacon_id",
+          "related_paths": [],
+          "message": "`e_01` is an enemy beacon the seat has seen, and a `beacon_anchor` names one of this seat's own beacons; an enemy beacon there resolves to nothing, and the step fails `no_target`.",
+          "beginner": "Only an Attack beacon's target can be an enemy beacon. Everywhere else, name one of your own beacons.",
+          "suggestions": [],
+          "map_refs": []
+        },
+        {
           "code": "E0405",
           "severity": "error",
           "path": "/declarative/route/1/interface/beacon/beacon_id",
