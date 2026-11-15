@@ -520,3 +520,28 @@ fn the_max_text_shape_qualifies_at_the_cap() {
         "four bytes a character: {bytes:?}"
     );
 }
+
+/// The selector variant at the size budget is submittable through the hosted
+/// door: its pretty canonical text is past the transport cap, so a seat sends
+/// it compact, as `decision::shape_text` writes it.
+#[test]
+fn the_selector_shape_at_the_budget_seals_through_the_gateway() {
+    let root = workspace_root();
+    let rules = quick::committed_rules(&root).expect("the committed rules");
+    let budget = full::committed_budget(&rules).expect("a budget");
+    let curve = decision::measure_curve(
+        &rules,
+        Shape::FullEvalSelectors,
+        &[budget],
+        DecisionPlan {
+            seed: BENCH_SEED,
+            seats: BENCH_SEATS,
+            segment_ms: 500,
+            runs: 1,
+        },
+    )
+    .expect("a measurement");
+    let point = curve.first().expect("one size");
+    assert_eq!(point.timing.units_per_seat, budget);
+    assert!(point.timing.work_max > 0, "{point:?}");
+}

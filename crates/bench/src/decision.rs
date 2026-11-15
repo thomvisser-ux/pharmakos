@@ -558,17 +558,24 @@ pub fn measure_curve(
     Ok(curve)
 }
 
-/// A generated shape at `units`, as the canonical JSON text a seat submits.
+/// A generated shape at `units`, as the text a seat submits: its canonical
+/// JSON made compact ([`crate::shapes::compact`]), as a player's client could
+/// send it. The canonical form is pretty-printed, and at the size budget
+/// [`Shape::FullEvalSelectors`]' is past the gateway's `MAX_PLAYBOOK_CHARS`;
+/// the gateway canonicalises whatever it is sent, so the match seals the same
+/// playbook either way.
 ///
 /// # Errors
 ///
 /// As [`Shape::bytes`], and [`Error::Codec`] for bytes that are not UTF-8,
 /// which the canonical codec never writes.
 pub fn shape_text(shape: Shape, units: u32) -> Result<String, Error> {
-    String::from_utf8(shape.bytes(units)?).map_err(|error| Error::Codec {
-        what: format!("the {} shape at {units} units", shape.name()),
-        reason: error.to_string(),
-    })
+    String::from_utf8(shape.bytes(units)?)
+        .map(|text| crate::shapes::compact(&text))
+        .map_err(|error| Error::Codec {
+            what: format!("the {} shape at {units} units", shape.name()),
+            reason: error.to_string(),
+        })
 }
 
 /// The curve's notice, word for word. Pure.
