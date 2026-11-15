@@ -102,15 +102,67 @@ impl Diag {
     }
 }
 
+/// The most `I0003` notes one report carries (S3's `vfy6`, the review of PR
+/// #179, item 3).
+///
+/// Decision 8's notes come one per omitted setting, so a long file of bare
+/// steps made a report of megabytes, past the client's 1 MiB inbound buffer
+/// (`godot/scripts/host_link.gd`'s `INBOUND_BYTES`). Past this many the rest
+/// are counted, and one `I0007` says how many were left out. A note with its
+/// Fix is about 450 bytes of JSON, so the notes of the worst capped report
+/// are about 29 KB. `tests/report_size.rs` holds the longest file's report
+/// to an eighth of the client's buffer.
+pub const MAX_DEFAULT_NOTES: u32 = 64;
+
+/// The code of decision 8's per-setting note.
+const DEFAULT_NOTE: &str = "I0003";
+
 /// The report under construction, shared by every stage.
 #[derive(Clone, PartialEq, Debug, Default)]
 pub(crate) struct Builder {
     diagnostics: Vec<Diagnostic>,
+    /// `I0003` notes written so far, at most [`MAX_DEFAULT_NOTES`].
+    notes: u32,
+    /// `I0003` notes left out: past the cap, or after `E0110`.
+    withheld: u32,
+    /// Whether `E0110` has fired: past the size budget, no per-setting
+    /// note is written, because the file is not one to fill in.
+    over_budget: bool,
 }
 
 impl Builder {
     /// Finish a diagnostic and append it.
     pub(crate) fn emit(&mut self, diag: Diag) {
+        if diag.code == DEFAULT_NOTE {
+            // Every writer asks `takes_default_note` before it builds the
+            // note, so that a note left out costs nothing; this keeps the cap
+            // whole should one not.
+            if self.notes >= MAX_DEFAULT_NOTES {
+                self.withheld = self.withheld.saturating_add(1);
+                return;
+            }
+            self.notes = self.notes.saturating_add(1);
+        }
+        if diag.code == "E0110" {
+            self.over_budget = true;
+        }
+        self.push(diag);
+    }
+
+    /// Whether an `I0003` note is to be written: `false`, and the note
+    /// counted as left out, past [`MAX_DEFAULT_NOTES`] or once `E0110` has
+    /// fired. A writer asks before it builds the note, so a note left out
+    /// costs no allocation.
+    pub(crate) fn takes_default_note(&mut self) -> bool {
+        if self.over_budget || self.notes >= MAX_DEFAULT_NOTES {
+            self.withheld = self.withheld.saturating_add(1);
+            return false;
+        }
+        true
+    }
+
+    /// Finish a diagnostic and append it, uncounted.
+    fn push(&mut self, diag: Diag) {
         let severity = catalogue::entry(diag.code).map_or(Severity::Error, |row| row.severity);
         let (message, beginner) = match strings::text(diag.code) {
             Some(row) => (
@@ -148,8 +200,13 @@ impl Builder {
             .any(|diagnostic| diagnostic.severity == i32::from(Severity::Error))
     }
 
-    /// The diagnostics, in the order they were emitted.
-    pub(crate) fn into_diagnostics(self) -> Vec<Diagnostic> {
+    /// The diagnostics, in the order they were emitted, then one `I0007` with
+    /// the count of `I0003` notes left out, when any were.
+    pub(crate) fn into_diagnostics(mut self) -> Vec<Diagnostic> {
+        if self.withheld > 0 {
+            let withheld = self.withheld;
+            self.push(Diag::new("I0007", crate::pointer::ROOT).arg("count", withheld));
+        }
         self.diagnostics
     }
 }

@@ -59,7 +59,9 @@
 //! and `E0421` (an enemy beacon's handle outside an Attack target), which
 //! retires `W0703`: a handle that could rest on an old sighting now stands
 //! only where `E0418` judges its age. It also adds `E0029` (a player's text
-//! past [`crate::MAX_PLAYBOOK_CHARS`]) at the end of the decode family.
+//! past [`crate::MAX_PLAYBOOK_CHARS`]) at the end of the decode family, and
+//! `I0007` (the count of `I0003` notes past [`crate::MAX_DEFAULT_NOTES`]) at
+//! the end of the information codes.
 //!
 //! The label an unemitted row prints, `none at the skeleton (…)`, is kept as
 //! it was spelt when the table shipped, because `gamectl docs` quotes it; the
@@ -1085,6 +1087,13 @@ pub const CATALOGUE: &[Entry] = &[
     // alone, so the structure stage's, beside I0004.
     Entry {
         code: "I0006",
+        family: Family::Information,
+        severity: Severity::Info,
+        emitter: Emitter::Stage(Stage::Structure),
+    },
+    // S3's `vfy6` (the review of PR #179): the `I0003` notes past the cap.
+    Entry {
+        code: "I0007",
         family: Family::Information,
         severity: Severity::Info,
         emitter: Emitter::Stage(Stage::Structure),

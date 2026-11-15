@@ -182,6 +182,7 @@ pub(crate) fn run(playbook: &Playbook, limits: &Limits, out: &mut Builder) {
     // the author's call.
     if let Some(on_death) = playbook.on_death.as_ref()
         && on_death.max_deaths_before_fallback == 0
+        && out.takes_default_note()
     {
         out.emit(
             Diag::new("I0003", "/on_death/max_deaths_before_fallback")
@@ -486,7 +487,7 @@ impl Visit for Sites<'_> {
         // `DEFAULT_ON_FAIL`, said where it is omitted. Before the move's own
         // note, in field order.
         match entry.on_fail.as_ref() {
-            None => {
+            None if self.out.takes_default_note() => {
                 // Every word borrowed and the patch written as text: this note
                 // is raised once per step, so what it copies is paid per step
                 // (`tests/quick_cost.rs`).
@@ -511,7 +512,9 @@ impl Visit for Sites<'_> {
                     true,
                 );
             }
-            Some(_) => {}
+            // Past the notes' cap, or past the size budget: counted, not
+            // written (`Builder::takes_default_note`).
+            None | Some(_) => {}
         }
         if let Some(step::Kind::Move(walk_to)) = entry.kind.as_ref()
             && walk_to.pace == i32::from(Pace::Unspecified)
@@ -1087,6 +1090,9 @@ impl Sites<'_> {
 
     /// `I0003`: an omitted setting and the named default it reads as.
     fn default_note(&mut self, at: &str, field: &'static str, value: &'static str, fixable: bool) {
+        if !self.out.takes_default_note() {
+            return;
+        }
         let here = pointer::child(at, field);
         let patch = fixable.then(|| patch_add_word(&here, value));
         let mut diag = Diag::new("I0003", here)

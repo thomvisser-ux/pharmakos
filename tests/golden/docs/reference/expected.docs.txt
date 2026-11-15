@@ -902,7 +902,7 @@ gp.v1.Playbook.Kind
 
 ## Diagnostics
 
-115 codes. A code is language-neutral, append-only and never
+116 codes. A code is language-neutral, append-only and never
 reused; only an ERROR stops a playbook qualifying. `none at the skeleton` names the
 task that owes the emitter, which is honesty about coverage rather than a gap.
 
@@ -1366,3 +1366,7 @@ I0005  INFO  information  raised at: semantics
 I0006  INFO  information  raised at: structure
   `breach_allowed` is true, and only a mortar whose beacon's `roe` is FREE_FIRE shells a breach: RETURN_FIRE never fires at a wall, and a Build beacon's omitted `roe` reads as RETURN_FIRE. Without one, the demolition charge breaches alone.
   Mortars help a raid through a wall only when their beacon is set to FREE_FIRE. Otherwise the raiders' demolition charge does the work by itself.
+
+I0007  INFO  information  raised at: structure
+  omitted settings not noted one by one: {count}. Each reads as its default; a report notes at most the first few, and none past the size budget.
+  Many settings here are left to their defaults. The first few are noted; the rest work the same way.

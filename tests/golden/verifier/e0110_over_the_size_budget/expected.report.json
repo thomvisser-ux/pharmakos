@@ -9,18 +9,10 @@
       "beginner": "This playbook is larger than the seal allows. Take something out of it."
     },
     {
-      "code": "I0003",
+      "code": "I0007",
       "severity": "INFO",
-      "path": "/declarative/route/0/on_fail",
-      "message": "`on_fail` is omitted and reads as SKIP.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
+      "message": "omitted settings not noted one by one: 1. Each reads as its default; a report notes at most the first few, and none past the size budget.",
+      "beginner": "Many settings here are left to their defaults. The first few are noted; the rest work the same way."
     }
   ],
   "report_hash": "hk4IRpv7sf8=",

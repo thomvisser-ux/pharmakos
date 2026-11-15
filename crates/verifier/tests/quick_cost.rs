@@ -35,7 +35,7 @@ use pharmakos_sim::knowledge::SeatEconomy;
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::snapshot::{SNAPSHOT_VERSION, Snapshot};
 use pharmakos_sim::tables::SeatId;
-use pharmakos_verifier::{Input, Scope, verify};
+use pharmakos_verifier::{Input, MAX_DEFAULT_NOTES, Scope, verify};
 
 thread_local! {
     /// How many times **this thread** has allocated.
@@ -327,7 +327,12 @@ fn every_omitted_on_fail_is_noted_within_its_own_bound() {
         ("budget_128", budget_case(), BUDGET_CASE_BOUND, 112),
     ] {
         let notes = on_fail_notes(&playbook);
-        assert_eq!(notes, steps, "{name}: one note a step");
+        // One note a step, to the cap, which the other `I0003` notes share
+        // (`tests/report_size.rs` holds the cap itself).
+        assert!(
+            notes > 0 && notes <= steps.min(u64::from(MAX_DEFAULT_NOTES)),
+            "{name}: {notes} notes for {steps} steps"
+        );
         let bound = bound.saturating_add(notes.saturating_mul(NOTE_BOUND));
         let (counted, _, _) = quick_allocations(&playbook);
         println!("{name}: {counted} allocations with {notes} notes");

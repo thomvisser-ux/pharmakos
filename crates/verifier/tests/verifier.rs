@@ -622,8 +622,28 @@ fn full_finds_what_quick_finds() {
     let mut full_added_something = false;
     let mut full_refused_something = false;
     for case in cases() {
-        let quick = report_for(&case, Depth::Quick);
-        let full = report_for(&case, Depth::Full);
+        let mut quick = report_for(&case, Depth::Quick);
+        let mut full = report_for(&case, Depth::Full);
+        // The count of `I0003` notes left out past the cap (`I0007`, S3's
+        // `vfy6`) closes each report, and FULL's stages may leave out more.
+        let left_out = |report: &mut VerifyReport| {
+            let summary = report
+                .diagnostics
+                .iter()
+                .position(|found| found.code == "I0007")
+                .map(|at| report.diagnostics.remove(at));
+            assert!(
+                !report.diagnostics.iter().any(|found| found.code == "I0007"),
+                "{case}: one summary at most"
+            );
+            summary
+        };
+        let quick_left = left_out(&mut quick);
+        let full_left = left_out(&mut full);
+        assert!(
+            quick_left.is_none() || full_left.is_some(),
+            "{case}: FULL lost QUICK's count of the notes left out"
+        );
         assert!(
             full.diagnostics.starts_with(&quick.diagnostics),
             "{case}: FULL lost or reordered something QUICK found"

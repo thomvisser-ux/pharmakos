@@ -752,6 +752,13 @@ pub const VERIFIER_STRINGS: &[Text] = &[
         beginner: "Mortars help a raid through a wall only when their beacon is set to \
                    FREE_FIRE. Otherwise the raiders' demolition charge does the work by itself.",
     },
+    Text {
+        code: "I0007",
+        message: "omitted settings not noted one by one: {count}. Each reads as its default; a \
+                  report notes at most the first few, and none past the size budget.",
+        beginner: "Many settings here are left to their defaults. The first few are noted; the \
+                   rest work the same way.",
+    },
 ];
 
 // --- Words the templates' arguments use --------------------------------------
