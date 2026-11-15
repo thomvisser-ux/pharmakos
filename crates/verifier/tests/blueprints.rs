@@ -187,3 +187,29 @@ fn a_build_targets_anchor_is_refused_exactly_where_the_table_says() {
         );
     }
 }
+
+/// The sim's half (the review of PR #179, item 10): the compile accepts a
+/// minimal `add_build_target` naming each kind exactly when the table says a
+/// Build target takes it, so the table cannot let a playbook qualify that the
+/// seal then refuses, nor refuse one the seal takes.
+#[test]
+fn the_sims_compile_takes_a_build_target_exactly_where_the_table_does() {
+    let rules = rules();
+    for row in BLUEPRINT_SLOTS {
+        let boxed = row.anchor == Anchor::VoxelInsideBox;
+        let text = format!(
+            r#"{{"schema_version":{{"major":1}},"meta":{{"title":"slots","author_kind":"HUMAN"}},"kind":"PLAYBOOK","declarative":{{"route":[{{"label":"probe","interface":{{"beacon":{{"beacon_id":"b_00"}},"rows":[{}]}}}}]}},"on_death":{{"on_respawn":"CONTINUE"}},"fallback":{{"hold":{{"at":{{"safest":{{}}}}}}}}}}"#,
+            target(row.id, VOXEL, boxed)
+        );
+        let playbook: pharmakos_proto::gp::v1::Playbook =
+            pharmakos_proto::json::decode(&text).expect("the probe decodes");
+        let compiled = pharmakos_sim::interpreter::Plan::compile(&playbook, &rules);
+        assert_eq!(
+            compiled.is_ok(),
+            row.build_target,
+            "{}: {:?}",
+            row.id,
+            compiled.err()
+        );
+    }
+}

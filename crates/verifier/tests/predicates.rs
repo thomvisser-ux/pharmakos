@@ -386,6 +386,15 @@ fn well_formed() -> Vec<String> {
         ruled(r#"{"kw_draw":{"kw":{"op":"GT","value":4}}}"#),
         placed(r#"{"toward":{"feature":{"vent":{"rank":"NEAREST","coverage":"UNCOVERED"}}}}"#),
         placed(r#"{"toward":{"feature":{"seam":{"rank":"NEAREST","coverage":"ANY"}}}}"#),
+        // The extremes each field's type holds (the review of PR #179, item 10),
+        // so the agreement above forces `pred` to decide each bound when it lifts
+        // the code: a radius at `u32::MAX` and a window at `i32::MAX` ms.
+        ruled(&format!(
+            r#"{{"enemy_units_near":{{"near":{{"beacon_anchor":{{"beacon_id":"b_01"}}}},"radius_voxels":4294967295,{count},"freshness":{{"kind":"KNOWN_WITHIN","known_within_ms":2147483647}}}}}}"#
+        )),
+        ruled(
+            r#"{"enemy_structure_near":{"near":{"voxel":{"x":90,"y":20,"z":50}},"radius_voxels":4294967295,"any_kind":{},"freshness":{"kind":"KNOWN_WITHIN","known_within_ms":2147483647}}}"#,
+        ),
         placed(r#"{"toward":{"feature":{"feature_id":"vent_150_25"}}}"#),
     ]
 }
