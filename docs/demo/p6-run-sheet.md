@@ -143,6 +143,8 @@ the record says which.
 - **P6b's seed and preset.** Section 5.3 says the golden seed, which holds at P6a. `gwp` moves the lobby
   to Probation before P6b: its own seed, chosen for a near vent, and untimed Lulls. So P6b's times
   aren't a like-for-like comparison with P6a's.
+- **P6a was driven by the main AI session with the owner watching,** at the owner's request, so the
+  watch was the Lull's countdown read from the screen, cross-checked against the audit log's ticks.
 
 **The missing "New" command is a finding in its own right,** whatever P6a's time, and so is the opening
 camera, which leaves the core at the panel's edge. The main session carries both into `ed3b`'s brief.
@@ -155,6 +157,78 @@ text for the golden seed plus card A's ten steps at one set of places, with `saf
 the probe's own places: step 5 can read a different vent if step 3's beacon already covers the near
 one.
 
+## P6a as run (2026-11-15)
+
+**Who drove.** The owner asked the main AI session to drive the game window by computer control,
+and watched. So both timings are AI-driven: they measure the AI's clicks (seconds of latency per
+action, no reading time, no hunting for controls), not a person's. The AI had read task card A
+beforehand, because it made the headless card check. Another project's cargo job was running; no
+Pharmakos build was. That weakens the evidence beyond the caveats above: the clicks were not a
+person's, and the card was read beforehand, not opened when the watch started. The AI's checks
+are not independent review.
+
+**The build.** `D:/build/p6a/Pharmakos/Pharmakos.exe`, packaged from `main` at `83c63a0` (after
+`ed3a`, #166), zip `pharmakos-windows-x86_64.zip`, SHA-256
+`bb05bd62741ddaa78c8022b817537bd1adc32588a1477359480aef22cd4e8a98`. The lobby's golden seed
+`0x00000000ca5caded`, Easy opponent, round 1's Lull 10:00.
+
+**The timings.** The time is 10:00 less the Lull's countdown when "Submitted. This is now your sealed
+order." showed, cross-checked against seat 0's `submit_plan` tick in the audit log at 20 Hz.
+
+- Template: Expand & Mine, no value changed. Submitted at countdown 9:45, about 0:15; the audit log
+  has tick 246 (12.3 s). No refusal. Match `local-1794786192-15984`.
+- Scratch: Safe playbook, then card A's ten steps. Submitted at countdown 8:08, about 1:52; the audit
+  log has tick 2183 (109 s). No refusal. Match `local-1794786235-6836`. The two clocks agree within a
+  few seconds.
+- The sealed route (`seats/0/sealed/1.jsonc`) has 12 steps: `to_safety`, `deepen_core`, then `go_1`
+  (move, voxel), `visit_1` (`b_00` set_priority HIGH), `place_1` (voxel), `go_2` (move, voxel),
+  `place_2` (place_beacon covering `feature_id` `vent_324_16`), `go_3` (move to `b_00`'s anchor),
+  `visit_2` (set_priority NORMAL), `go_4` (move, voxel), `place_3` (voxel), `go_5` (move to `b_00`'s
+  anchor). It matches the card, with step 5 a vent's name, not a description. The Push began and the
+  log read "The playbook of seat 0 was sealed: 12 route steps."
+- Mis-clicks: none in the timed runs. The camera opened with the core at the panel's right edge; it
+  took 2 s of D and four wheel ticks before the first click, inside the scratch time. The first
+  ground click, about 20 voxels from the core, drew "Not here: A beacon goes up inside ground you
+  already hold." beside the Go here / Place beacon menu; a spot nearer the core drew "A beacon can go
+  here."
+
+**The void match.** One earlier match, `local-1794786057-2556`, is void: the AI's tool launched extra
+copies of the game before any template was used. It says nothing about the editor, and no timing was
+repeated.
+
+**The hand checks.**
+
+1. Alt-click on a vent: **failed.** The AI's Alt-click and plain click both showed "Place beacon
+   covering this vent"; the owner's own Alt-click by hand: "I get Place Beacon". Nobody saw "Place
+   beacon covering the nearest vent you can cover".
+2. Escape closes a map menu on a real window: yes.
+3. Load's dialog opens with an empty File name box: yes (a native Windows dialog, folder
+   `D:\build\p6a\Pharmakos`, filter "Playbooks (*.jsonc)").
+4. The unticked E0601 checkbox: **not checked.** Four plain place_beacon steps did not make power
+   short and the map menu cannot add a structure, so the checkbox never showed.
+5. Structure names (autocannon, wall, mortar, close and from about 50 voxels): **not checked.** No
+   template builds all three and the map menu cannot.
+
+**The owner's words.** On the re-check and the redraw after each edit: "i did not see the re-check
+and redraw. most of the map has been too far zoomed out for me to see useful detail." On the
+sitting: "i watched the playthrough. seemed to go well. not much got tested imo".
+
+**What it shows** (the main session's reading; the owner can veto it). Ten map-menu steps fit well
+inside the limits when the clicker knows the card and the controls. It does not show that a
+first-time person does, so the gate's two timing clauses are not shown for a person and stay open
+for P6b, which the owner drives by hand. The findings carried into `ed3b`'s brief:
+
+1. Alt-click on a vent never gives the description.
+2. The re-check and redraw are not noticeable to a watcher: nothing draws the eye to the status line
+   or the size meter after an edit.
+3. The map opens too far out to read, and the core sits at the panel's edge: open framed on the
+   seat's core at a zoom where beacons and vents read.
+4. There is no "New" command (the Safe playbook template stands in).
+5. The "Not here" sentence shows in the side panel, away from the click.
+6. The E0601 checkbox and the structure names still need a hand check, so P6b's sheet needs a set-up
+   that shows them (a committed playbook that builds an autocannon, a wall and a mortar, and one that
+   goes short of power).
+
 ## The record
 
 One row per sitting and timing. Fixed for every row: the tester is the owner, not a first-time user
@@ -162,8 +236,8 @@ One row per sitting and timing. Fixed for every row: the tester is the owner, no
 
 | Sitting | Timing | Build, SHA-256 | Seed, preset | Template, values changed | Time | Limit, pass or miss | Repeat? | Refusals | Mis-clicks | Route count, card match | Alt-click check | Edit or typing feel |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| P6a | Template | | | | | 2 min | | | | n/a | n/a | |
-| P6a | Scratch | | | Safe playbook | | 5 min | | | | | | |
+| P6a | Template | zip from `83c63a0`, `bb05bd62741ddaa78c8022b817537bd1adc32588a1477359480aef22cd4e8a98` | golden `0x00000000ca5caded`, round 1's Lull 10 min | Expand & Mine, none | about 0:15 (countdown 9:45; audit tick 246, 12.3 s) | 2 min: inside the limit, AI-driven | none (`local-1794786057-2556` void, see above) | none | none | n/a | n/a | no edit made; see the scratch row |
+| P6a | Scratch | zip from `83c63a0`, `bb05bd62741ddaa78c8022b817537bd1adc32588a1477359480aef22cd4e8a98` | golden `0x00000000ca5caded`, round 1's Lull 10 min | Safe playbook, none | about 1:52 (countdown 8:08; audit tick 2183, 109 s) | 5 min: inside the limit, AI-driven | none | none | none | 12, matches; step 5 a vent's name | failed: no description menu, for the AI and for the owner by hand | "i did not see the re-check and redraw. most of the map has been too far zoomed out for me to see useful detail." |
 | P6b | Template | | | | | 2 min | | | | n/a | n/a | |
 | P6b | Scratch | | | Safe playbook | | 5 min | | | | | n/a | |
 | P6b | Card B | | | | | none | | | | | n/a | |
