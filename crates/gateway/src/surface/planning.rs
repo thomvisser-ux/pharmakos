@@ -97,10 +97,11 @@ pub const MAX_DRAFT_LABEL_CHARS: usize = 120;
 /// limits.
 pub const MAX_DRAFTS: usize = 32;
 
-// The longest playbook text a method will take, in characters, is the
-// verifier's `MAX_PLAYBOOK_CHARS`, the one number every boundary a player's
-// text enters by reads (S3's `vfy6`; it was defined here until then).
-use pharmakos_verifier::MAX_PLAYBOOK_CHARS;
+/// The longest playbook text a method will take, in characters: the
+/// verifier's [`pharmakos_verifier::MAX_PLAYBOOK_CHARS`], re-exported here, where it
+/// was defined until S3's `vfy6`, so this path still names it (the walled
+/// `pharmakos-bench` reads it here). The number has one definition.
+pub use pharmakos_verifier::MAX_PLAYBOOK_CHARS;
 
 impl Surface {
     /// `get_schema`: the playbook vocabulary, generated from the schema.

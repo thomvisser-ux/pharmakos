@@ -11,7 +11,7 @@
 //! owner's machine under Windows and WSL2 Linux, three repetitions each (S2's
 //! plan, section 5 item 4); these lines are what they record.
 //!
-//! The binary holds three `#[ignore]`d tests, so `cargo test --workspace` pays
+//! The binary holds four `#[ignore]`d tests, so `cargo test --workspace` pays
 //! for none of them, and each is run **alone, by its exact name**: `--ignored`
 //! by itself would run them side by side on libtest's threads, sharing the
 //! machine.
@@ -21,7 +21,11 @@
 //! * `g3_budget_segment`, the segment alone and the one report line
 //!   `cargo xtask g3-budget` reads (S2's plan, E18): the CI alarm;
 //! * `g3_power_sweep`, the power sweep for `tune2`'s power rows (items 65 and
-//!   91), six more segments: run by hand with the certifying runs, never in CI.
+//!   91), six more segments: run by hand with the certifying runs, never in CI;
+//! * `g3_raids_segments`, S3's two loads (S3's plan, E13 and E24's test (c)):
+//!   the gate's layout with its Attack beacons launching, then the same with
+//!   every seat's playbook at the size budget, two more segments: run by hand
+//!   by `cert3` beside S2's certified figure, never in CI.
 //!
 //! ```sh
 //! cargo test --release -p pharmakos-bench --test g3_real -- --ignored --nocapture \
@@ -53,7 +57,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use pharmakos_bench::g3::layout::Quarters;
-use pharmakos_bench::g3::segment::{self, SegmentPlan};
+use pharmakos_bench::g3::segment::{self, GateLoad, SegmentPlan};
 use pharmakos_bench::g3::{self, G3_SEED, G3_SEGMENT_MS, fourth, stream, support, sweep, variant};
 use pharmakos_bench::heap::HeapCounter;
 use pharmakos_bench::{Error, workspace_root};
@@ -195,6 +199,7 @@ fn gate_segment(root: &Path) -> Result<segment::SegmentReport, Error> {
             craters_per_second: stream::CRATERS_PER_SECOND,
             probe_sight: true,
             share: Quarters::FULL,
+            load: GateLoad::S2,
         },
         Some(&Counter),
     )
@@ -255,4 +260,41 @@ fn fourth_notice(root: &Path, os: &str) -> Result<Vec<String>, Error> {
     let bench = variant::bench_rules(root, 3, segment::gate_load(Quarters::FULL)?)?;
     let line = fourth::measure(root, &bench.rules, G3_SEED, FOURTH_SEGMENT_MS)?;
     Ok(vec![g3::fourth_notice(&line, os)?])
+}
+
+#[test]
+#[ignore = "S3's loads with raids, run by hand with the certifying runs (--ignored --exact)"]
+fn g3_raids_segments() {
+    let root = workspace_root();
+    let os = std::env::consts::OS;
+    println!();
+    for load in [GateLoad::RAIDS, GateLoad::RAIDS_AT_B] {
+        let measured = segment::measure(
+            &root,
+            SegmentPlan {
+                seed: G3_SEED,
+                segment_ms: G3_SEGMENT_MS,
+                craters_per_second: stream::CRATERS_PER_SECOND,
+                probe_sight: false,
+                share: Quarters::FULL,
+                load,
+            },
+            Some(&Counter),
+        );
+        let lines = measured.and_then(|report| {
+            Ok(vec![
+                g3::provenance_notice(&report, os),
+                g3::tick_notice(&report, os)?,
+                g3::phases_notice(&report, os)?,
+                g3::repaths_notice(&report, os)?,
+                g3::combat_notice(&report, os)?,
+            ])
+        });
+        match lines {
+            Ok(lines) => lines.iter().for_each(|line| println!("{line}")),
+            Err(error) => {
+                panic!("the G3' segment under {load:?} was not measured on {os}: {error}")
+            }
+        }
+    }
 }

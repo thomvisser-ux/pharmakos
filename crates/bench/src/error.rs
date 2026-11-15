@@ -59,6 +59,16 @@ pub enum Error {
     Empty(String),
     /// A count or a sum would not fit its type.
     Overflow(&'static str),
+    /// A generated playbook shape cannot be laid at the size asked for
+    /// ([`crate::shapes::Shape`]).
+    Shape {
+        /// The shape's name.
+        shape: &'static str,
+        /// The size asked for, in size units.
+        units: u32,
+        /// Why not.
+        reason: String,
+    },
 }
 
 impl fmt::Display for Error {
@@ -76,6 +86,11 @@ impl fmt::Display for Error {
             | Error::Drift(reason)
             | Error::Empty(reason) => f.write_str(reason),
             Error::Overflow(what) => write!(f, "{what} does not fit its type"),
+            Error::Shape {
+                shape,
+                units,
+                reason,
+            } => write!(f, "the {shape} shape at {units} units: {reason}"),
         }
     }
 }
