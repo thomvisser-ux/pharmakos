@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The walled timing harness for P1, the depth task of S1 (S1's plan, section 5
-//! and task `p1`; decisions-log items 33 (c), 116 (6) (b) and 128 (3) (b)), and
-//! for G3′-real, the depth task of S2 (S2's plan, section 5 and task `g3h`).
+//! and task `p1`; decisions-log items 33 (c), 116 (6) (b) and 128 (3) (b)),
+//! for G3′-real, the depth task of S2 (S2's plan, section 5 and task `g3h`),
+//! and for S3's G2 + P3 and P1 FULL (S3's plan, sections 5.1 and 5.2 and task
+//! `bench3`).
 //!
 //! Spec section 16's P1 and G3′ rows ask wall-clock questions no other crate
 //! may answer. The verifier, the sim and `gamectl` read no clock (AGENTS.md
@@ -14,7 +16,10 @@
 //! | Module | Question |
 //! |---|---|
 //! | [`quick`] | QUICK's p50 and p99 over the committed verifier cases and `budget_128` |
-//! | [`decision`] | A decision tick's wall-clock cost per size unit, in a hosted match at the size budget |
+//! | [`full`] | P1 FULL (S3): QUICK and FULL over the committed cases and the generated shapes at each size of E24's curve |
+//! | [`shapes`] | The generated worst-shaped playbooks P1 FULL times, at any size |
+//! | [`decision`] | A decision tick's wall-clock cost per size unit, in a hosted match at the size budget, and in counted evaluation units; and the same at each size of the curve |
+//! | [`p3`] | P3 (S3): a unit's repath on the sim's own graph, cold and under the crater stream, and the travel estimate through the gateway and the sim's estimator |
 //! | [`g3`] | G3′-real: the tick at the gate's load, phase by phase, over an 8-minute segment, and the figures the power budget needs |
 //! | [`hosted`] | A bench match, hosted as `gamectl scenario run` hosts one, the gate's layout placed in its lobby |
 //! | [`heap`] | What a counting global allocator tells the G3′ segment |
@@ -62,10 +67,13 @@
 
 pub mod decision;
 pub mod error;
+pub mod full;
 pub mod g3;
 pub mod heap;
 pub mod hosted;
+pub mod p3;
 pub mod quick;
+pub mod shapes;
 pub mod stats;
 
 pub use error::Error;

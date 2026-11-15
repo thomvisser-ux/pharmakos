@@ -234,6 +234,7 @@ fn the_fallback_scan_reads_the_whole_crate() {
         [
             "src/decision.rs",
             "src/error.rs",
+            "src/full.rs",
             "src/g3/fourth.rs",
             "src/g3/layout.rs",
             "src/g3/segment.rs",
@@ -246,10 +247,13 @@ fn the_fallback_scan_reads_the_whole_crate() {
             "src/heap.rs",
             "src/hosted.rs",
             "src/lib.rs",
+            "src/p3.rs",
             "src/quick.rs",
+            "src/shapes.rs",
             "src/stats.rs",
             "tests/g3_real.rs",
             "tests/harness.rs",
+            "tests/p3_alarm.rs",
             "tests/perf_alarm.rs",
         ],
         "the scan reads every source file of the crate; a new one joins this list"

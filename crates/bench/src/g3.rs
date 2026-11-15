@@ -31,15 +31,22 @@
 //! range, each Defend beacon's guards (an unset `roe` reads `FREE_FIRE`) go
 //! after the enemy Attack raiders standing three voxels from it, craters land
 //! at the budget's rate, regions collapse and units repath, all through the
-//! sim's own phases. Two mandates do less than in a played match, because the
-//! layout seam carries no mandate settings (`runner::LayoutBeacon`): an Attack
-//! beacon has no target, so its laid-out raiders gather at it and never
-//! launch, and a Build beacon has no blueprint, so nothing is built. The
-//! repath cap bounds what a launched force's walk would add to Pathing, and
-//! the footing query, which Build's structures lengthen, is also measured over
-//! full tables on a world of the bench's own
-//! ([`support::footing_at_room`]). Every notice names the seed, the variant's
-//! `rules_hash` and the layout's digest, so a reader can reproduce the run.
+//! sim's own phases. In S2's load, which G3′ was certified on, two mandates do
+//! less than in a played match, because that load places no mandate settings:
+//! an Attack beacon has no target, so its laid-out raiders gather at it and
+//! never launch, and a Build beacon has no blueprint, so nothing is built.
+//! From S3 the layout carries mandate settings beside its beacons
+//! (`runner::LayoutSettings`, E13), and the load with raids
+//! ([`segment::GateLoad::RAIDS`]) aims every Attack beacon at the enemy core
+//! it stands before, so its force launches and walks; [`segment::GateLoad::RAIDS_AT_B`]
+//! adds every seat's playbook at the size budget (E24's test (c)). `cert3`
+//! re-runs both on the owner's machine beside S2's certified figure; Build
+//! still builds nothing in any of them. The repath cap bounds what a launched
+//! force's walk adds to Pathing, and the footing query, which Build's
+//! structures lengthen, is also measured over full tables on a world of the
+//! bench's own ([`support::footing_at_room`]). Every notice names the seed,
+//! the variant's `rules_hash`, the layout's digest and the load, so a reader
+//! can reproduce the run.
 //!
 //! The notice text lives here, pure, so a unit test pins it word for word;
 //! `tests/g3_real.rs` measures and prints.
@@ -121,23 +128,39 @@ pub fn provenance_notice(report: &SegmentReport, os: &str) -> String {
         "::notice title=G3' provenance::on {os}: seed 0x{:016x}, bench rules_hash {} (the \
          committed table's {} with {}), layout {} (3 seats x 100 laid-out units on top of each \
          seat's starting force, so a little over item 63's 300, and 40 beacons as world totals; \
-         beacons by mandate: {}), every seat sealed at {} size units; craters {} filed at 20 a \
-         second ({} refused as the queue full, {} draws redrawn); hash chain digest {}. On the \
-         finished S2 sim: Defend's guards fight the enemy Attack raiders beside them and the \
-         cores fire; the layout carries no mandate settings, so Attack has no target and never \
-         launches and Build builds nothing",
+         beacons by mandate: {}), every seat sealed {} at {} size units; craters {} filed at 20 a \
+         second ({} refused as the queue full, {} draws redrawn); hash chain digest {}. \
+         Defend's guards fight the enemy Attack raiders beside them and the cores fire; {}; \
+         Build builds nothing",
         p.seed,
         hex(p.bench_rules_hash),
         hex(p.shipped_rules_hash),
         overrides.join(", "),
         hex(p.layout_digest),
         mandates.join(", "),
+        p.load.sealed.name(),
         p.units_per_seat,
         report.craters.filed,
         report.craters.queue_full,
         report.craters.redrawn,
         hex(report.chain_digest),
+        raids(report),
     )
+}
+
+/// What the provenance says of the raids.
+fn raids(report: &SegmentReport) -> String {
+    if report.provenance.load.raids {
+        format!(
+            "the layout's {} mandate settings rows aim every Attack beacon at the enemy core it \
+             stands before, launching with its whole force gathered, and {} attacks launched",
+            report.provenance.settings_rows, report.attack_launches
+        )
+    } else {
+        "this load places no mandate settings (S2's, as certified), so Attack has no target and \
+         never launches"
+            .to_owned()
+    }
 }
 
 /// The headline notice: G3′-a and G3′-b's figures.

@@ -136,6 +136,7 @@ fn play(
             craters_per_second,
             probe_sight: false,
             share,
+            load: segment::GateLoad::S2,
         },
         heap,
     )?;

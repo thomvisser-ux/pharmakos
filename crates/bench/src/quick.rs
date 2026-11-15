@@ -204,6 +204,11 @@ fn beacon(
     }
 }
 
+/// The fixture's core, `b_01`: its column and height in [`fixture_scope`],
+/// as `crates/verifier/tests/verifier.rs` writes it. The generated shapes'
+/// anchors stand round it (`crate::shapes::Core::fixture`).
+pub const FIXTURE_CORE_AT: [i32; 3] = [80, 11, 55];
+
 /// The seat's view every case is checked against, as
 /// `crates/verifier/tests/verifier.rs` writes it in `fixture_scope`.
 #[must_use]
@@ -220,7 +225,7 @@ pub fn fixture_scope() -> Scope {
         "b_01",
         Ownership::Own,
         MandateKind::Build,
-        (80, 11, 55),
+        (FIXTURE_CORE_AT[0], FIXTURE_CORE_AT[1], FIXTURE_CORE_AT[2]),
         true,
         &[],
     ))
@@ -465,13 +470,36 @@ impl Fixture {
     ///
     /// As [`Fixture::report`]; the error is checked after the clock stops.
     pub fn time_quick(&self, case: &Case) -> Result<u128, Error> {
+        self.time(case, Depth::Quick)
+    }
+
+    /// One timed call at `depth`, in nanoseconds: the timed region is
+    /// [`Fixture::report`], `Input::new` then `verify`, and nothing else.
+    ///
+    /// # Errors
+    ///
+    /// As [`Fixture::report`]; the error is checked after the clock stops.
+    pub fn time(&self, case: &Case, depth: Depth) -> Result<u128, Error> {
         let started = Instant::now();
-        let report = self.report(case, Depth::Quick);
+        let report = self.report(case, depth);
         let elapsed = started.elapsed().as_nanos();
         let report = report?;
         // Read after the clock stops, so the optimiser cannot drop the call.
         std::hint::black_box(&report);
         Ok(elapsed)
+    }
+
+    /// The same fixture under another rules table: P1 FULL's sized tables
+    /// ([`crate::full::sized_rules`]), every view and snapshot unchanged.
+    #[must_use]
+    pub fn with_rules(self, rules: RulesTable) -> Fixture {
+        Fixture { rules, ..self }
+    }
+
+    /// The rules table every call is verified against.
+    #[must_use]
+    pub const fn rules(&self) -> &RulesTable {
+        &self.rules
     }
 }
 
@@ -508,10 +536,25 @@ pub struct QuickTiming {
 /// When `cases` holds no [`BUDGET_CASE`], `plan.calls` is zero, or a call
 /// cannot assemble its input.
 pub fn measure(fixture: &Fixture, cases: &[Case], plan: QuickPlan) -> Result<QuickTiming, Error> {
+    measure_at(fixture, cases, plan, Depth::Quick)
+}
+
+/// [`measure`] at `depth`: FULL's figures over the same cases are P1 FULL's
+/// (S3's plan, section 5.2 item 1).
+///
+/// # Errors
+///
+/// As [`measure`].
+pub fn measure_at(
+    fixture: &Fixture,
+    cases: &[Case],
+    plan: QuickPlan,
+    depth: Depth,
+) -> Result<QuickTiming, Error> {
     if plan.calls == 0 {
-        return Err(Error::Empty(
-            "a QUICK measurement of zero calls measures nothing".to_owned(),
-        ));
+        return Err(Error::Empty(format!(
+            "a {depth:?} measurement of zero calls measures nothing"
+        )));
     }
     let room = cases
         .len()
@@ -522,11 +565,11 @@ pub fn measure(fixture: &Fixture, cases: &[Case], plan: QuickPlan) -> Result<Qui
     let mut slowest: (String, u128) = (String::new(), 0);
     for case in cases {
         for _ in 0..plan.warmup {
-            fixture.time_quick(case)?;
+            fixture.time(case, depth)?;
         }
         let mut own: Vec<u128> = Vec::with_capacity(plan.calls);
         for _ in 0..plan.calls {
-            own.push(fixture.time_quick(case)?);
+            own.push(fixture.time(case, depth)?);
         }
         pooled.extend_from_slice(&own);
         let summary = Summary::of(own)?;
