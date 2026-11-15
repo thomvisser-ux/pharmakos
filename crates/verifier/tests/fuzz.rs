@@ -1107,6 +1107,44 @@ fn rules() -> RulesTable {
         .unwrap_or_else(|error| panic!("reading the rules table: {error}"))
 }
 
+/// The committed rules table with the size budget at [`PADDED_PAST`], the
+/// most a later stage can choose (S3's plan, E24), so a padded run can
+/// qualify and the compile cross-check in [`check`] reaches it (the review of
+/// PR #179, item 9). Every other run is checked against the committed table.
+fn rules_at_the_widest_budget(rules: &RulesTable) -> RulesTable {
+    let mut message = rules.message().clone();
+    let verifier = message
+        .verifier
+        .as_mut()
+        .unwrap_or_else(|| panic!("the committed rules carry the verifier's block"));
+    verifier.size_budget_units = PADDED_PAST;
+    RulesTable::from_message(&message).unwrap_or_else(|error| panic!("the widened rules: {error}"))
+}
+
+/// The S3 constructs `pred` lifts, by the field a playbook writes and the
+/// code that refuses each until then (`pharmakos_verifier::REFUSED_CONSTRUCTS`).
+const S3_CONSTRUCTS: [(&str, &str); 9] = [
+    (r#""beacon_units_by_role""#, "E0020"),
+    (r#""beacon_mandate""#, "E0021"),
+    (r#""beacon_has_structure""#, "E0022"),
+    (r#""enemy_units_near""#, "E0023"),
+    (r#""enemy_beacon_known""#, "E0024"),
+    (r#""enemy_structure_near""#, "E0025"),
+    (r#""kw_supply""#, "E0026"),
+    (r#""kw_draw""#, "E0027"),
+    (r#""toward""#, "E0028"),
+];
+
+/// What one run came to: its FULL report, whether the draw property applied,
+/// whether a QUICK pass qualified it, and its text.
+struct Run {
+    report: VerifyReport,
+    applied: bool,
+    quick: bool,
+    padded: bool,
+    text: String,
+}
+
 /// The names the scope's features carry, for a `feature_id` that names one.
 const FEATURE_IDS: [&str; 4] = ["vent_150_25", "vent_84_12", "vent_300_300", "seam_200_60"];
 
@@ -1276,8 +1314,21 @@ fn snapshot() -> Vec<u8> {
 ///
 /// The flag says whether the draw property below applied, so a run can show
 /// that it was not vacuous.
-fn check(index: u32, rules: &RulesTable, scope: &Scope, snapshot: &[u8]) -> (VerifyReport, bool) {
-    let text = json::write(&Shape::new(index).playbook());
+#[allow(
+    clippy::too_many_lines,
+    reason = "one run's every invariant in order; split, an invariant could be checked on a different run"
+)]
+fn check(
+    index: u32,
+    committed: &RulesTable,
+    widest: &RulesTable,
+    scope: &Scope,
+    snapshot: &[u8],
+) -> Run {
+    let mut shape = Shape::new(index);
+    let padded = shape.padded;
+    let rules = if padded { widest } else { committed };
+    let text = json::write(&shape.playbook());
 
     // The decode stage reads a playbook through the direct reader and falls
     // back to the exact path only to diagnose one that does not decode. The
@@ -1298,6 +1349,14 @@ fn check(index: u32, rules: &RulesTable, scope: &Scope, snapshot: &[u8]) -> (Ver
     let input = Input::new(text.as_bytes(), snapshot, scope, rules)
         .unwrap_or_else(|error| panic!("assembling the input: {error}"));
     let report = verify(&input, Depth::Full);
+    // QUICK runs FULL's first four stages and nothing else, so it qualifies
+    // at least what FULL qualifies; the compile cross-check below reads QUICK's
+    // answer, the wider of the two (the review of PR #179, item 9).
+    let quick = verify(&input, Depth::Quick).qualifies;
+    assert!(
+        quick || !report.qualifies,
+        "run {index}: FULL qualifies what QUICK refuses"
+    );
 
     assert_eq!(report.verifier_version, VERIFIER_VERSION, "run {index}");
     assert_eq!(report.report_hash.len(), 8, "run {index}");
@@ -1349,7 +1408,7 @@ fn check(index: u32, rules: &RulesTable, scope: &Scope, snapshot: &[u8]) -> (Ver
     // calls qualifying, the sim's compile accepts, so no file passes the
     // editor and is refused at the seal. When S3's `pred` lifts its
     // refusals, the predicates and sites the generator writes are held to it.
-    if report.qualifies {
+    if quick {
         let decoded: Playbook = json::decode(&text)
             .unwrap_or_else(|error| panic!("run {index}: qualifies and does not decode: {error}"));
         if let Err(error) = Plan::compile(&decoded, rules) {
@@ -1392,7 +1451,13 @@ fn check(index: u32, rules: &RulesTable, scope: &Scope, snapshot: &[u8]) -> (Ver
             );
         }
     }
-    (report, applied)
+    Run {
+        report,
+        applied,
+        quick,
+        padded,
+        text,
+    }
 }
 
 /// A reference figure for the property above, written apart from the
@@ -1462,19 +1527,15 @@ fn certain_scout_draw(playbook: &Playbook, per_unit: i128) -> i128 {
 #[test]
 fn the_generator_still_produces_shapes_the_verifier_reads() {
     let rules = rules();
+    let widest = rules_at_the_widest_budget(&rules);
     let scope = scope();
     let snapshot = snapshot();
     let mut qualified = 0_u32;
     let mut past = 0_u32;
     for index in 0..SMOKE_RUNS {
-        let (report, _) = check(index, &rules, &scope, &snapshot);
-        past = past.saturating_add(u32::from(report.size_units >= PADDED_PAST));
-        let text = json::write(&Shape::new(index).playbook());
-        let input =
-            Input::new(text.as_bytes(), &snapshot, &scope, &rules).expect("the input assembles");
-        if verify(&input, Depth::Full).qualifies {
-            qualified = qualified.saturating_add(1);
-        }
+        let run = check(index, &rules, &widest, &scope, &snapshot);
+        past = past.saturating_add(u32::from(run.report.size_units >= PADDED_PAST));
+        qualified = qualified.saturating_add(u32::from(run.quick));
     }
     // A generator that never produces a valid playbook is a generator that only
     // ever exercises the decode stage, and a green fuzz run over it would mean
@@ -1492,12 +1553,19 @@ fn the_generator_still_produces_shapes_the_verifier_reads() {
 
 #[test]
 #[ignore = "ten thousand verifications; nightly-scenarios.yml's fuzz job calls it"]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one tally over the ten thousand runs and its assertions; split, a code could be counted and not asserted"
+)]
 fn ten_thousand_playbooks_come_back_as_reports() {
     let rules = rules();
     let scope = scope();
     let stale = stale_scope();
     let licensed = licensed_scope();
     let snapshot = snapshot();
+    let widest = rules_at_the_widest_budget(&rules);
+    let mut padded_qualified: u32 = 0;
+    let mut constructs: Vec<u32> = vec![0; S3_CONSTRUCTS.len()];
     let mut lints: Vec<String> = Vec::new();
     let mut estimates: Vec<String> = Vec::new();
     let mut refusals: Vec<String> = Vec::new();
@@ -1523,8 +1591,15 @@ fn ten_thousand_playbooks_come_back_as_reports() {
             1 => &licensed,
             _ => &scope,
         };
-        let (report, held) = check(index, &rules, view, &snapshot);
-        applied = applied.saturating_add(u32::from(held));
+        let run = check(index, &rules, &widest, view, &snapshot);
+        applied = applied.saturating_add(u32::from(run.applied));
+        if run.quick {
+            padded_qualified = padded_qualified.saturating_add(u32::from(run.padded));
+            for (count, (field, _)) in constructs.iter_mut().zip(S3_CONSTRUCTS) {
+                *count = count.saturating_add(u32::from(run.text.contains(field)));
+            }
+        }
+        let report = run.report;
         past = past.saturating_add(u32::from(report.size_units >= PADDED_PAST));
         for diagnostic in report.diagnostics {
             let code = diagnostic.code;
@@ -1592,6 +1667,28 @@ fn ten_thousand_playbooks_come_back_as_reports() {
         past > 0,
         "no generated playbook reached {PADDED_PAST} size units"
     );
+    // And against the widest budget, some padded playbook qualifies, so the
+    // compile cross-check reaches a file that long.
+    assert!(
+        padded_qualified > 0,
+        "no padded playbook qualified against a budget of {PADDED_PAST}"
+    );
+    // Each S3 construct qualifies in some run once `pred` lifts its code; while
+    // its code still refuses it, none can (S3's `pred` turns each on).
+    for ((field, code), count) in S3_CONSTRUCTS.iter().zip(&constructs) {
+        let refused = pharmakos_verifier::REFUSED_CONSTRUCTS
+            .iter()
+            .any(|(_, refusing)| refusing == code);
+        println!("{field}: {count} qualifying runs ({code} refusing: {refused})");
+        if refused {
+            assert_eq!(*count, 0, "{field} qualified while {code} refuses it");
+        } else {
+            assert!(
+                *count > 0,
+                "{field} never qualified once {code} stopped refusing it"
+            );
+        }
+    }
     // Every emitting branch of targeting's three lints is reached, so a green
     // run says something about each of them.
     lints.sort();
