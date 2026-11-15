@@ -111,6 +111,20 @@ pub const BLUEPRINT_SLOTS: [BlueprintSlots; 6] = [
     },
 ];
 
+/// The row for a kind: every kind the sim defines has one, in
+/// [`StructureKind::ALL`]'s order, so this cannot miss.
+#[must_use]
+pub const fn slots_for(kind: StructureKind) -> &'static BlueprintSlots {
+    match kind {
+        StructureKind::Generator => &BLUEPRINT_SLOTS[0],
+        StructureKind::Autocannon => &BLUEPRINT_SLOTS[1],
+        StructureKind::Mortar => &BLUEPRINT_SLOTS[2],
+        StructureKind::SurveyPost => &BLUEPRINT_SLOTS[3],
+        StructureKind::ResonanceSpire => &BLUEPRINT_SLOTS[4],
+        StructureKind::Wall => &BLUEPRINT_SLOTS[5],
+    }
+}
+
 /// The row for a blueprint id, or `None` for an id this build does not know.
 #[must_use]
 pub fn slots_of(id: &str) -> Option<&'static BlueprintSlots> {
@@ -154,6 +168,7 @@ mod tests {
         for row in BLUEPRINT_SLOTS {
             assert_eq!(kind_of(row.id), Some(row.kind));
             assert_eq!(slots_of(row.id), Some(&row));
+            assert_eq!(super::slots_for(row.kind), &row);
         }
         assert_eq!(kind_of("death_ray"), None);
         assert_eq!(kind_of(""), None);

@@ -98,7 +98,7 @@ pub fn run(root: &Path, path: &Path, depth: Depth) -> Result<String, Failure> {
 /// # Errors
 ///
 /// The file cannot be opened or read, or is not UTF-8.
-fn read_bounded(path: &Path) -> std::io::Result<Option<String>> {
+pub(crate) fn read_bounded(path: &Path) -> std::io::Result<Option<String>> {
     let most = u64::try_from(pharmakos_verifier::MAX_PLAYBOOK_READ)
         .ok()
         .and_then(|most| most.checked_add(1))

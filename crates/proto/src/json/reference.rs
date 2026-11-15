@@ -892,12 +892,16 @@ fn is_zero(lexeme: &str) -> bool {
 }
 
 /// S3's `vfy6`: the codec's `integer_refusal`.
-fn integer_refusal(lexeme: &str, otherwise: &str) -> String {
+fn integer_refusal(lexeme: &str, otherwise: &str, signed: bool) -> String {
     if is_misspelt_integer(lexeme) {
         format!(
             "`{lexeme}` is not an integer as JSON writes one: RFC 8259 has no `+` and no \
              leading zero"
         )
+    } else if is_integer_lexeme(lexeme) && (signed || !lexeme.starts_with('-')) {
+        // A whole number too large for the field's 64 bits (the review of
+        // PR #179): out of range, not a fraction.
+        format!("`{lexeme}` is out of range for a 64-bit integer")
     } else {
         format!("`{lexeme}` {otherwise}")
     }
@@ -1083,6 +1087,7 @@ fn integer(value: &Json, pointer: &str) -> Result<i64, Error> {
                 integer_refusal(
                     lexeme,
                     "is not a whole number. This schema has no fractional field.",
+                    true,
                 ),
             )
         })
@@ -1105,7 +1110,7 @@ fn unsigned(value: &Json, pointer: &str) -> Result<u64, Error> {
         .ok_or_else(|| {
             classified(
                 pointer,
-                integer_refusal(lexeme, "is not a non-negative whole number"),
+                integer_refusal(lexeme, "is not a non-negative whole number", false),
             )
         })
 }

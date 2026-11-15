@@ -23,11 +23,10 @@
 //!   licence the seat does not hold.
 //!
 //! Nothing here reads the world: the seat's licences are the caller's to
-//! pass, and the answer is otherwise a pure function of the build and the
-//! rules table.
+//! pass, and the answer is otherwise a pure function of the build (since S3's
+//! `vfy6` the blueprint table is the verifier's, so no rules table is read).
 
 use pharmakos_proto::gp::v1::Licence;
-use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::tables::StructureKind;
 
 use crate::shape::{
@@ -122,15 +121,10 @@ pub struct Parameter {
 
 /// The vocabulary as this seat sees it, holding `held`.
 ///
-/// `_rules` is read by nothing since S3's `vfy6`, which made the blueprint
-/// table the verifier's ([`pharmakos_verifier::BLUEPRINT_SLOTS`]) where it was
-/// a probe verified against the rules table; it is kept so this function's
-/// callers, in the gateway, did not move with that lane.
-///
 /// # Errors
 ///
 /// [`VocabularyError`], which a test pins never happens.
-pub fn vocabulary(held: &[Licence], _rules: &RulesTable) -> Result<Vocabulary, VocabularyError> {
+pub fn vocabulary(held: &[Licence]) -> Result<Vocabulary, VocabularyError> {
     let kinds = blueprints_by_slot();
     Ok(Vocabulary {
         families: families(&kinds)?,
@@ -179,14 +173,9 @@ impl Blueprint {
 /// spelling: the one place this crate and the gateway spell it.
 #[must_use]
 pub const fn blueprint_id(kind: StructureKind) -> &'static str {
-    match kind {
-        StructureKind::Generator => "generator",
-        StructureKind::Autocannon => "autocannon",
-        StructureKind::Mortar => "mortar",
-        StructureKind::SurveyPost => "survey_post",
-        StructureKind::ResonanceSpire => pharmakos_sim::spire::SPIRE_BLUEPRINT,
-        StructureKind::Wall => "wall",
-    }
+    // The verifier's table is the one spelling (S3's `vfy6`, the review of
+    // PR #179).
+    pharmakos_verifier::slots_for(kind).id
 }
 
 /// `kind`'s name in the player's words.
@@ -1007,12 +996,6 @@ mod tests {
         assert_eq!(kinds, table);
     }
 
-    fn rules() -> pharmakos_sim::rules::RulesTable {
-        pharmakos_sim::rules::RulesTable::load(
-            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../rules/rules.v1.json"),
-        )
-        .expect("the shipped rules table")
-    }
     use pharmakos_proto::descriptor::schema;
     use pharmakos_proto::gp::v1::Licence;
 
@@ -1021,7 +1004,7 @@ mod tests {
     /// pointer names fields its message declares.
     #[test]
     fn every_word_and_parameter_is_the_schemas() {
-        let words = vocabulary(&[], &rules()).expect("the vocabulary");
+        let words = vocabulary(&[]).expect("the vocabulary");
         let arm = |message: &str, name: &str| {
             let declared = schema().message(message).expect("a declared message");
             let field = declared
@@ -1063,7 +1046,7 @@ mod tests {
     /// an entry the schema does not hold yet is always locked.
     #[test]
     fn a_lock_and_a_skeleton_never_go_together() {
-        let words = vocabulary(&[], &rules()).expect("the vocabulary");
+        let words = vocabulary(&[]).expect("the vocabulary");
         let entries = words
             .families
             .iter()
@@ -1091,7 +1074,7 @@ mod tests {
     #[test]
     fn the_spire_waits_for_its_licence_and_a_refused_predicate_is_locked() {
         let spire = |held: &[Licence]| {
-            vocabulary(held, &rules())
+            vocabulary(held)
                 .expect("the vocabulary")
                 .blueprints
                 .into_iter()
@@ -1100,7 +1083,7 @@ mod tests {
         };
         assert!(spire(&[]).locked.is_some());
         assert_eq!(spire(&[Licence::ResonanceSpire]).locked, None);
-        let words = vocabulary(&[], &rules()).expect("the vocabulary");
+        let words = vocabulary(&[]).expect("the vocabulary");
         for predicate in words.families.iter().flat_map(|family| &family.predicates) {
             if predicate.name.is_empty() {
                 continue;

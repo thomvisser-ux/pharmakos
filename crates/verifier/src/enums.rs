@@ -17,8 +17,8 @@
 //! to the field. It reads every enum field of `gp.v1`'s playbook vocabulary,
 //! not only the ones the sim's compile reads today, so a field that gains a
 //! reader later is already covered. S3's `con6` predicates and `toward` are
-//! read here while the sim refuses them; a selector inside one is not, because
-//! the walk does not enter a refused predicate until S3's `vfy6`.
+//! read here while the sim refuses them, and since S3's `vfy6` the walk enters
+//! them, so a selector inside one is read too.
 //! An unset enum (zero) is the stages' own business: `E0005`, `E0007`, `E0111`
 //! and the omitted-setting notes say what it means where it stands.
 //!

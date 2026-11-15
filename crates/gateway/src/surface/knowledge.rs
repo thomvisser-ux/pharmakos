@@ -2205,7 +2205,7 @@ fn beacon_detail(
             .copied()
             .ok_or_else(|| missing("id"))?,
     );
-    let mut settings = Settings::new(world.rules())?;
+    let mut settings = Settings::new()?;
     let common = beacons
         .commons()
         .get(row)
@@ -2433,9 +2433,9 @@ struct Settings {
 }
 
 impl Settings {
-    fn new(rules: &pharmakos_sim::rules::RulesTable) -> Result<Settings, Error> {
+    fn new() -> Result<Settings, Error> {
         Ok(Settings {
-            vocabulary: pharmakos_plan_core::vocabulary::vocabulary(&[], rules)
+            vocabulary: pharmakos_plan_core::vocabulary::vocabulary(&[])
                 .map_err(|error| Error::internal(format!("the vocabulary: {error}")))?,
             rows: Vec::new(),
         })

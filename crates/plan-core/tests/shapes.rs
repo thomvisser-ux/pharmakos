@@ -403,7 +403,7 @@ fn full_arm(writ: &str) -> &'static str {
 /// Every open entry of the vocabulary, placed in the frame: a writ's as its
 /// skeleton, or, when `full`, as its [`full_arm`].
 fn placed_entries(full: bool) -> Vec<(String, Placed, Vec<Parameter>)> {
-    let words = vocabulary(&[], &rules()).unwrap_or_else(|error| panic!("{error}"));
+    let words = vocabulary(&[]).unwrap_or_else(|error| panic!("{error}"));
     let mut found = Vec::new();
     let open = |entry: &Entry| entry.locked.is_none() && !entry.name.is_empty();
     for entry in words.families.iter().flat_map(|family| &family.predicates) {
@@ -532,7 +532,7 @@ const NOT_IN_THE_VOCABULARY: &[(&str, &str, &str)] = &[
 /// fails here until it is offered or excluded.
 #[test]
 fn every_schema_arm_is_in_the_vocabulary_or_excluded_with_its_reason() {
-    let words = vocabulary(&[], &rules()).unwrap_or_else(|error| panic!("{error}"));
+    let words = vocabulary(&[]).unwrap_or_else(|error| panic!("{error}"));
     let predicates: Vec<&str> = words
         .families
         .iter()
@@ -620,7 +620,7 @@ fn each_blueprint_is_offered_where_the_verifier_takes_it() {
             kind.id
         );
     }
-    let words = vocabulary(&[], &rules()).unwrap_or_else(|error| panic!("{error}"));
+    let words = vocabulary(&[]).unwrap_or_else(|error| panic!("{error}"));
     let locked = |id: &str| {
         words
             .blueprints

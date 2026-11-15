@@ -181,7 +181,7 @@ use pharmakos_proto::gp::api::v1::verify_plan::Depth;
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::snapshot::{Snapshot, SnapshotError};
 
-pub use blueprints::{Anchor, BLUEPRINT_SLOTS, BlueprintSlots, slots_of};
+pub use blueprints::{Anchor, BLUEPRINT_SLOTS, BlueprintSlots, slots_for, slots_of};
 pub use hash::{HashError, REPORT_HASH_DOMAIN, TOO_LONG_REPORT_DOMAIN, too_long_report_hash};
 pub use interface::Rates;
 pub use limits::{CONDITION_MAX_DEPTH, CONDITION_MAX_NODES, Limits, RulesGap};

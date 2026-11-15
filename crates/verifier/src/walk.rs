@@ -645,7 +645,23 @@ fn walk_condition(node: &Condition, here: &mut Here, visitor: &mut dyn Visit) {
                 visitor,
             );
         }
-        _ => {}
+        // The leaves that hold no beacon, place or condition to walk into,
+        // named so a new arm is a compile error here rather than a node the
+        // walk silently passes over.
+        Some(
+            condition::Node::CmdrHpPct(_)
+            | condition::Node::CmdrTookDamageWithin(_)
+            | condition::Node::CmdrDeaths(_)
+            | condition::Node::SegmentElapsed(_)
+            | condition::Node::EnemyBeaconKnown(_)
+            | condition::Node::Treasury(_)
+            | condition::Node::KwHeadroom(_)
+            | condition::Node::KwSupply(_)
+            | condition::Node::KwDraw(_)
+            | condition::Node::StepReached(_)
+            | condition::Node::RuleFired(_),
+        )
+        | None => {}
     }
 }
 

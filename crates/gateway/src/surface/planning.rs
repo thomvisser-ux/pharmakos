@@ -154,7 +154,7 @@ impl Surface {
                 .collect::<Result<Vec<_>, Error>>()?,
             None => Vec::new(),
         };
-        let words = pharmakos_plan_core::vocabulary::vocabulary(&held, &self.rules)
+        let words = pharmakos_plan_core::vocabulary::vocabulary(&held)
             .map_err(|error| Error::internal(format!("the vocabulary: {error}")))?;
         let entries = |entries: &[pharmakos_plan_core::vocabulary::Entry]| {
             Json::Array(entries.iter().map(vocabulary_entry).collect())

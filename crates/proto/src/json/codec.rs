@@ -1233,12 +1233,16 @@ fn is_zero(lexeme: &str) -> bool {
 
 /// Why `lexeme` is not the integer a field asked for: digits RFC 8259 does
 /// not write as an integer, or `otherwise`.
-fn integer_refusal(lexeme: &str, otherwise: &str) -> String {
+fn integer_refusal(lexeme: &str, otherwise: &str, signed: bool) -> String {
     if is_misspelt_integer(lexeme) {
         format!(
             "`{lexeme}` is not an integer as JSON writes one: RFC 8259 has no `+` and no \
              leading zero"
         )
+    } else if is_integer_lexeme(lexeme) && (signed || !lexeme.starts_with('-')) {
+        // A whole number too large for the field's 64 bits (the review of
+        // PR #179): out of range, not a fraction.
+        format!("`{lexeme}` is out of range for a 64-bit integer")
     } else {
         format!("`{lexeme}` {otherwise}")
     }
@@ -1269,6 +1273,7 @@ fn integer(value: &Json, path: &Path<'_>) -> Result<i64, Error> {
                 integer_refusal(
                     lexeme,
                     "is not a whole number. This schema has no fractional field.",
+                    true,
                 ),
             )
         })
@@ -1293,7 +1298,7 @@ fn unsigned(value: &Json, path: &Path<'_>) -> Result<u64, Error> {
             Error::at(
                 ErrorKind::Integer,
                 &path.render(),
-                integer_refusal(lexeme, "is not a non-negative whole number"),
+                integer_refusal(lexeme, "is not a non-negative whole number", false),
             )
         })
 }

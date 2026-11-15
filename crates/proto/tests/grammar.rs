@@ -146,3 +146,34 @@ fn base64_padding_alone_is_refused_not_read_as_empty_bytes() {
         assert!(accepted::<Playbook>(&text), "{text}");
     }
 }
+
+/// A whole number too large for 64 bits is out of range, not "not a whole
+/// number" (the review of PR #179).
+#[test]
+fn an_overlong_integer_is_out_of_range() {
+    for (text, kind) in [
+        (r#"{"scout_count":99999999999999999999}"#, "unsigned"),
+        (
+            r#"{"probe_areas":[{"min":{"x":99999999999999999999}}]}"#,
+            "signed",
+        ),
+        (
+            r#"{"probe_areas":[{"min":{"x":-99999999999999999999}}]}"#,
+            "signed, negative",
+        ),
+    ] {
+        let error = json::decode::<SurveySettings>(text).expect_err(kind);
+        assert_eq!(error.kind, json::ErrorKind::Integer, "{kind}");
+        assert!(
+            error.message.contains("out of range"),
+            "{kind}: {}",
+            error.message
+        );
+    }
+    let negative = json::decode::<SurveySettings>(r#"{"scout_count":-1}"#).expect_err("-1");
+    assert!(
+        negative.message.contains("not a non-negative whole number"),
+        "{}",
+        negative.message
+    );
+}
