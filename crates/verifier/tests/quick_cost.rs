@@ -191,31 +191,32 @@ fn quick_allocations(playbook: &[u8]) -> (u64, u32, bool) {
     )
 }
 
-/// The bounds: each the count measured at `vfyq`'s head, with about a
-/// quarter's headroom. Most of what is left is prost's own message tree, a
-/// `Vec` for every group and a `String` for every label. The path before
-/// `vfyq` made 118,538, 227,365 and 18,964 allocations on the same three (main
-/// at `0f6466f`). The count is a property of this code, not of a machine: it
-/// reads no clock and spawns no thread.
+/// The bounds: each the count measured, with about a quarter's headroom, so a
+/// regression of more than that fails rather than hides. Most of what is left
+/// is prost's own message tree, a `Vec` for every group and a `String` for
+/// every label. The path before `vfyq` made 118,538, 227,365 and 18,964
+/// allocations on the same three (main at `0f6466f`). The count is a property
+/// of this code, not of a machine: it reads no clock and spawns no thread.
 ///
 /// From S3's `vfy6` a step with no `on_fail` is noted (`I0003`, decision 8),
 /// so the bounds below are held on the shapes with an `on_fail` written on
 /// every step ([`with_on_fail`]), where they measure the walk as `vfyq` did,
-/// and the notes are held to [`NOTE_BOUND`] apiece beside them. Measured at
-/// `vfy6`: 1,575 and 1,965 on the shapes (`vfyq`: 1,576 and 1,967), and
-/// 1,618 on `budget_128` in canonical form with every `on_fail` written
-/// (`vfyq` measured the file as committed, 2,707; `vfy6` writes a patch
-/// without building a tree for it, and as committed the file now costs
-/// 2,628, its 112 notes included).
-const HANDLER_SHAPE_BOUND: u64 = 2_000; // measured 1,575
-const ROUTE_SHAPE_BOUND: u64 = 2_500; // measured 1,965
-const BUDGET_CASE_BOUND: u64 = 3_400; // measured 1,618 with every on_fail written
+/// and the notes are held to [`NOTE_BOUND`] apiece beside them. Re-derived in
+/// `vfy6`'s fix pass (the review of PR #179, item 6) from 1,571 and 1,961 on
+/// the shapes and 1,614 on `budget_128` in canonical form with every `on_fail`
+/// written; as committed the file now costs 1,663, its notes capped at
+/// `MAX_DEFAULT_NOTES` (2,628 before the cap).
+const HANDLER_SHAPE_BOUND: u64 = 1_975; // measured 1,571
+const ROUTE_SHAPE_BOUND: u64 = 2_450; // measured 1,961
+const BUDGET_CASE_BOUND: u64 = 2_050; // measured 1,614 with every on_fail written
 
 /// What one `I0003` note for an omitted `on_fail` may allocate (S3's plan,
 /// decision 8; S3's `vfy6`): measured 9, the floor a diagnostic with one Fix
 /// needs (its pointer, message, sentence, code, title and patch, and the two
-/// lists that hold its arguments and its Fix), with a third's headroom.
-const NOTE_BOUND: u64 = 12;
+/// lists that hold its arguments and its Fix), and 9.2 a note on the shapes
+/// once the closing `I0007` is shared out; with about a quarter's headroom,
+/// as the bounds above (re-derived in the fix pass, from 12).
+const NOTE_BOUND: u64 = 11;
 
 /// The committed budget case.
 fn budget_case() -> Vec<u8> {
