@@ -85,12 +85,51 @@ pub const REPORT_HASH_DOMAIN: &[u8] = b"gp.api.v1/report/4";
 /// The domain separator of the one report that is about no playbook bytes:
 /// `E0029`'s, for a player's text past
 /// [`MAX_PLAYBOOK_CHARS`](crate::MAX_PLAYBOOK_CHARS) (S3's `vfy6`,
-/// [`Input::too_long`](crate::Input::too_long)). Its playbook input is empty,
-/// because the text is never read, and a domain of its own keeps its hash from
-/// being any playbook's: an empty file's report, under
-/// [`REPORT_HASH_DOMAIN`], is a different report over the same other inputs.
-/// It moves no existing report hash.
+/// [`Input::too_long`](crate::Input::too_long)).
+///
+/// Its bytes are this separator, then the cap itself as a `u64`, then the
+/// inputs [`report_hash`] takes with an empty playbook, because the text is
+/// never read. The separator keeps the hash from being any playbook's (an
+/// empty file's report, under [`REPORT_HASH_DOMAIN`], is a different report
+/// over the same other inputs), and the cap in the bytes keeps a change to
+/// the cap from giving two different verdicts one hash. It moves no existing
+/// report hash. [`too_long_report_hash`] reproduces it.
 pub const TOO_LONG_REPORT_DOMAIN: &[u8] = b"gp.api.v1/report-too-long/1";
+
+/// What a report is about: a playbook's bytes, or a player's text past the
+/// cap, which has none ([`TOO_LONG_REPORT_DOMAIN`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Subject<'a> {
+    /// The bytes handed to [`Input::new`](crate::Input::new).
+    Playbook(&'a [u8]),
+    /// `E0029`'s report ([`Input::too_long`](crate::Input::too_long)).
+    TooLong,
+}
+
+/// `E0029`'s report hash (S3's `vfy6`): [`report_hash`]'s bytes under
+/// [`TOO_LONG_REPORT_DOMAIN`] with the cap folded in, for a caller that wants
+/// to check one without running the pipeline.
+///
+/// # Errors
+///
+/// [`HashError::TooLong`] when an input has no encoding, as [`report_hash`].
+pub fn too_long_report_hash(
+    snapshot: &[u8],
+    scope: &Scope,
+    rules_hash: u64,
+    verifier_version: &str,
+    depth: Depth,
+) -> Result<u64, HashError> {
+    let mut enc = inputs(
+        Subject::TooLong,
+        snapshot,
+        scope,
+        rules_hash,
+        verifier_version,
+    )?;
+    enc.i32(i32::from(depth));
+    Ok(enc.finish())
+}
 
 /// The report hash over the five inputs.
 ///
@@ -111,8 +150,7 @@ pub fn report_hash(
     depth: Depth,
 ) -> Result<u64, HashError> {
     let mut enc = inputs(
-        REPORT_HASH_DOMAIN,
-        playbook,
+        Subject::Playbook(playbook),
         snapshot,
         scope,
         rules_hash,
@@ -146,29 +184,14 @@ impl ReportHashes {
     ///
     /// [`HashError::TooLong`], as [`report_hash`].
     pub(crate) fn new(
-        domain: &[u8],
-        playbook: &[u8],
+        subject: Subject<'_>,
         snapshot: &[u8],
         scope: &Scope,
         rules_hash: u64,
         verifier_version: &str,
     ) -> Result<ReportHashes, HashError> {
-        let mut full = inputs(
-            domain,
-            playbook,
-            snapshot,
-            scope,
-            rules_hash,
-            verifier_version,
-        )?;
-        let mut quick = inputs(
-            domain,
-            playbook,
-            snapshot,
-            scope,
-            rules_hash,
-            verifier_version,
-        )?;
+        let mut full = inputs(subject, snapshot, scope, rules_hash, verifier_version)?;
+        let mut quick = inputs(subject, snapshot, scope, rules_hash, verifier_version)?;
         full.i32(i32::from(Depth::Full));
         quick.i32(i32::from(Depth::Quick));
         Ok(ReportHashes {
@@ -189,8 +212,7 @@ impl ReportHashes {
 
 /// The domain separator and the first four inputs, in order.
 fn inputs(
-    domain: &[u8],
-    playbook: &[u8],
+    subject: Subject<'_>,
     snapshot: &[u8],
     scope: &Scope,
     rules_hash: u64,
@@ -198,13 +220,29 @@ fn inputs(
 ) -> Result<Enc, HashError> {
     // The capacity is a hint and nothing reads it back, so its sum saturating
     // could cost a reallocation and never a byte of the encoding.
+    let playbook = match subject {
+        Subject::Playbook(bytes) => bytes,
+        Subject::TooLong => &[],
+    };
     let mut enc = Enc::with_capacity(
         playbook
             .len()
             .saturating_add(snapshot.len())
             .saturating_add(128),
     );
-    append_bytes(&mut enc, "the domain separator", domain)?;
+    match subject {
+        Subject::Playbook(_) => {
+            append_bytes(&mut enc, "the domain separator", REPORT_HASH_DOMAIN)?;
+        }
+        Subject::TooLong => {
+            append_bytes(&mut enc, "the domain separator", TOO_LONG_REPORT_DOMAIN)?;
+            let cap = u64::try_from(crate::MAX_PLAYBOOK_CHARS).map_err(|_| HashError::TooLong {
+                what: "the playbook cap",
+                len: crate::MAX_PLAYBOOK_CHARS,
+            })?;
+            enc.u64(cap);
+        }
+    }
     // 1. the playbook bytes
     append_bytes(&mut enc, "the playbook", playbook)?;
     // 2. the snapshot bytes, then the seat's view of them
@@ -306,7 +344,7 @@ fn append_bytes(enc: &mut Enc, what: &'static str, bytes: &[u8]) -> Result<(), H
 
 #[cfg(test)]
 mod tests {
-    use super::{HashError, REPORT_HASH_DOMAIN, ReportHashes, length, report_hash};
+    use super::{HashError, ReportHashes, Subject, length, report_hash};
     use crate::scope::Scope;
     use pharmakos_proto::gp::api::v1::verify_plan::Depth;
     use pharmakos_sim::knowledge::SeatEconomy;
@@ -333,7 +371,7 @@ mod tests {
     #[test]
     fn the_two_precomputed_hashes_are_report_hash_at_each_depth() {
         let scope = Scope::new(SeatId::new(0), SeatEconomy::default());
-        let both = ReportHashes::new(REPORT_HASH_DOMAIN, b"{}", b"snapshot", &scope, 7, "v")
+        let both = ReportHashes::new(Subject::Playbook(b"{}"), b"snapshot", &scope, 7, "v")
             .expect("hashable");
         for depth in [Depth::Quick, Depth::Full] {
             assert_eq!(

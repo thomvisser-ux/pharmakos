@@ -182,7 +182,7 @@ use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::snapshot::{Snapshot, SnapshotError};
 
 pub use blueprints::{Anchor, BLUEPRINT_SLOTS, BlueprintSlots, slots_of};
-pub use hash::{HashError, REPORT_HASH_DOMAIN};
+pub use hash::{HashError, REPORT_HASH_DOMAIN, TOO_LONG_REPORT_DOMAIN, too_long_report_hash};
 pub use interface::Rates;
 pub use limits::{CONDITION_MAX_DEPTH, CONDITION_MAX_NODES, Limits, RulesGap};
 pub use projection::{Prices, Projection, ProjectionError};
@@ -199,25 +199,49 @@ pub use walking::Walk;
 ///
 /// PLACEHOLDER: a playbook's 512 KiB of characters — owner, at hardening.
 ///
-/// It bounds the text the player wrote, not its canonical form: a playbook at
-/// item 94's 128-unit size budget is within it written compactly (the route
-/// shape P1 is measured at is 152,522 characters) and past it as canonical
-/// text (855,637 characters). It is far below anything that costs the
-/// process memory. It is a bound on what is read,
-/// not a game rule, so it is not a rules-table row, for the same reason the
-/// gateway's rate limits are not. It moved here from the gateway's
-/// `surface::planning` so that every boundary a player's text enters by reads
-/// one number: the gateway's methods, `plan-core`'s `verify_jsonc` and
-/// `gamectl verify`.
+/// **It is a cap on the text the player wrote**, so whitespace can decide the
+/// verdict: the same playbook written compactly can be within it and written
+/// with indentation past it. A playbook at item 94's 128-unit size budget is
+/// within it compactly (the route shape P1 is measured at is 152,522
+/// characters) and past it in its canonical spelling (855,637 characters). It
+/// is a bound on what is read, not a game rule, so it is not a rules-table
+/// row, for the same reason the gateway's rate limits are not. It moved here
+/// from the gateway's `surface::planning`, where a re-export still names it,
+/// so that the boundaries a player's text enters by read one definition:
+/// `plan-core`'s `verify_jsonc`, `gamectl verify` and `gamectl scenario run`,
+/// and the gateway's methods.
+///
+/// **It is not the only bound on every boundary.** Over the gateway's socket a
+/// message is at most 256 KiB (`crates/gateway/src/frame.rs`'s
+/// `MAX_MESSAGE_BYTES`), which binds first: a text between the two is refused
+/// by the transport before this cap is asked. In process and from a file this
+/// cap is the one that binds. Reconciling the two numbers is the owner's, at
+/// hardening, with the rest of the transport's.
 ///
 /// **It bounds the text the player wrote, never the bytes handed to
 /// [`Input::new`].** `plan-core` hands the verifier the canonical form, which
 /// is indented a level for every message it nests and runs to several times
-/// the compact text (a 151 KB file is 855 KB of canonical text), so a cap on
-/// the canonical bytes would refuse a legal file. The boundary that holds the
-/// player's text asks [`is_too_long`], and reports a text past the cap through
-/// [`Input::too_long`], as `E0029`, without reading it further.
+/// the compact text, so a cap on the canonical bytes would refuse a legal
+/// file. The boundary that holds the player's text asks [`is_too_long`], and
+/// reports a text past the cap through [`Input::too_long`], as `E0029`,
+/// without reading it further. [`Input::new`]'s own bound is the backstop
+/// [`MAX_CANONICAL_BYTES`].
 pub const MAX_PLAYBOOK_CHARS: usize = 512 * 1024;
+
+/// The most canonical text one character of a player's text can become:
+/// measured 14.52 on the deepest chain the codec reads (handlers whose `when`
+/// is `not` within `not` to the 64-level nesting limit, each level indented
+/// two spaces more), with headroom. A string's characters grow at most six
+/// times (a `\u` escape), and a structured file's about 5.7 times at the size
+/// budget.
+pub const CANONICAL_GROWTH: usize = 16;
+
+/// The longest bytes [`Input::new`] takes (S3's `vfy6`, the review of PR
+/// #179): the canonical text of the longest player's text
+/// ([`MAX_PLAYBOOK_CHARS`] times [`CANONICAL_GROWTH`]), a backstop for a
+/// caller that hands the verifier bytes no boundary has bounded. Past it
+/// [`Input::new`] answers [`InputError::Oversize`].
+pub const MAX_CANONICAL_BYTES: usize = MAX_PLAYBOOK_CHARS * CANONICAL_GROWTH;
 
 /// The most bytes a boundary need read of a file to answer [`is_too_long`]:
 /// four bytes is the longest UTF-8 spells a character in, so a file with more
@@ -227,9 +251,10 @@ pub const MAX_PLAYBOOK_READ: usize = MAX_PLAYBOOK_CHARS * 4;
 /// Whether a player's text is past [`MAX_PLAYBOOK_CHARS`].
 ///
 /// Counts characters only when the text's bytes are past the cap, so a text
-/// within it in bytes, as every playbook at the size budget is, costs one
-/// comparison; a longer one is counted up to one character past the cap and
-/// no further.
+/// within it in bytes costs one comparison; a longer one is counted up to one
+/// character past the cap and no further. Whitespace counts like any other
+/// character: the question is about the text as written, not the playbook it
+/// spells.
 #[must_use]
 pub fn is_too_long(text: &str) -> bool {
     text.len() > MAX_PLAYBOOK_CHARS && text.chars().nth(MAX_PLAYBOOK_CHARS).is_some()
@@ -336,11 +361,25 @@ pub enum InputError {
     /// ([`Scope::check`]): a radius at or below the base sphere, or a radius
     /// or Spire left behind for a beacon that is no longer the seat's own.
     View(ScopeError),
+    /// The playbook bytes are past [`MAX_CANONICAL_BYTES`]: longer than the
+    /// canonical text of any player's text within [`MAX_PLAYBOOK_CHARS`], so
+    /// no boundary bounded them (S3's `vfy6`).
+    Oversize {
+        /// Their length.
+        bytes: usize,
+        /// [`MAX_CANONICAL_BYTES`].
+        max: usize,
+    },
 }
 
 impl core::fmt::Display for InputError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            InputError::Oversize { bytes, max } => write!(
+                formatter,
+                "the playbook bytes are {bytes} long, past the {max} the canonical text of the 
+                 longest player's text can be"
+            ),
             InputError::Rules(gap) => write!(formatter, "{gap}"),
             InputError::Unhashable(error) => write!(formatter, "{error}"),
             InputError::View(error) => write!(formatter, "{error}"),
@@ -382,9 +421,12 @@ impl<'a> Input<'a> {
     /// checks read — the verifier's limits, the interface rates, the prices
     /// and the commander's walking rows — or carries one out of range;
     /// [`InputError::Unhashable`] when the playbook, the snapshot or a list or
-    /// string in the view is past `report_hash`'s `u32` length prefix; and
+    /// string in the view is past `report_hash`'s `u32` length prefix;
     /// [`InputError::View`] when the view's per-beacon facts do not hold
-    /// against the rules table's base sphere ([`Scope::check`]).
+    /// against the rules table's base sphere ([`Scope::check`]); and
+    /// [`InputError::Oversize`] when the playbook is past
+    /// [`MAX_CANONICAL_BYTES`], the backstop behind the boundaries'
+    /// [`MAX_PLAYBOOK_CHARS`].
     pub fn new(
         playbook: &'a [u8],
         snapshot: &'a [u8],
@@ -422,6 +464,12 @@ impl<'a> Input<'a> {
         rules: &'a RulesTable,
         too_long: bool,
     ) -> Result<Input<'a>, InputError> {
+        if playbook.len() > MAX_CANONICAL_BYTES {
+            return Err(InputError::Oversize {
+                bytes: playbook.len(),
+                max: MAX_CANONICAL_BYTES,
+            });
+        }
         let rules_hash = rules.rules_hash();
         let limits = Limits::from_rules(rules)?;
         scope
@@ -439,11 +487,10 @@ impl<'a> Input<'a> {
             walk: Walk::from_rules(rules)?,
             report_hashes: hash::ReportHashes::new(
                 if too_long {
-                    hash::TOO_LONG_REPORT_DOMAIN
+                    hash::Subject::TooLong
                 } else {
-                    REPORT_HASH_DOMAIN
+                    hash::Subject::Playbook(playbook)
                 },
-                playbook,
                 snapshot,
                 scope,
                 rules_hash,

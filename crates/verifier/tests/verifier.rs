@@ -2638,3 +2638,74 @@ fn the_too_long_report_has_a_hash_no_playbook_can_have() {
     let input = Input::too_long(&snapshot, &other, &rules).expect("input");
     assert_ne!(verify(&input, Depth::Full).report_hash, full);
 }
+
+#[test]
+fn the_too_long_reports_hash_is_reproducible_through_the_public_api() {
+    let rules = rules();
+    let scope = fixture_scope();
+    let snapshot = fixture_snapshot();
+    for depth in [Depth::Quick, Depth::Full] {
+        let wanted = pharmakos_verifier::too_long_report_hash(
+            &snapshot,
+            &scope,
+            rules.rules_hash(),
+            VERIFIER_VERSION,
+            depth,
+        )
+        .expect("hashable");
+        assert_eq!(
+            too_long_report(depth).report_hash,
+            wanted.to_be_bytes().to_vec(),
+            "{depth:?}"
+        );
+    }
+}
+
+#[test]
+fn input_new_refuses_bytes_past_the_canonical_backstop() {
+    use pharmakos_verifier::{CANONICAL_GROWTH, MAX_CANONICAL_BYTES};
+    let rules = rules();
+    let scope = fixture_scope();
+    let snapshot = fixture_snapshot();
+    let at = vec![b' '; MAX_CANONICAL_BYTES];
+    assert!(Input::new(&at, &snapshot, &scope, &rules).is_ok());
+    let past = vec![b' '; MAX_CANONICAL_BYTES.checked_add(1).expect("fits")];
+    assert_eq!(
+        Input::new(&past, &snapshot, &scope, &rules).err(),
+        Some(InputError::Oversize {
+            bytes: MAX_CANONICAL_BYTES.checked_add(1).expect("fits"),
+            max: MAX_CANONICAL_BYTES,
+        })
+    );
+    // The deepest chain the codec reads, as long as the cap allows, still
+    // fits the backstop once canonical: handlers whose `when` is `not`
+    // within `not` to the nesting limit.
+    let mut leaf = "{}".to_owned();
+    for _ in 0..30 {
+        leaf = format!(r#"{{"not":{{"item":{leaf}}}}}"#);
+    }
+    let mut handlers = String::new();
+    for index in 0_u32.. {
+        let handler = format!(
+            r#"{{"id":"h{index}","when":{leaf},"body":[{{"label":"b","hold":{{"ms":1000}}}}]}},"#
+        );
+        if handlers.len().saturating_add(handler.len()) > MAX_PLAYBOOK_CHARS.saturating_sub(256) {
+            break;
+        }
+        handlers.push_str(&handler);
+    }
+    handlers.pop();
+    let text = format!(
+        r#"{{"kind":"PLAYBOOK","declarative":{{"route":[{{"label":"r","hold":{{"ms":1}}}}],"handlers":[{handlers}]}}}}"#
+    );
+    assert!(!is_too_long(&text));
+    let canonical = json::canonicalise("gp.v1.Playbook", &text).expect("the codec reads it");
+    assert!(
+        canonical.len() <= MAX_CANONICAL_BYTES,
+        "{} canonical bytes from {} characters, past {MAX_CANONICAL_BYTES}",
+        canonical.len(),
+        text.len()
+    );
+    // And the growth it measures is within the declared factor.
+    assert!(canonical.len() <= text.len().saturating_mul(CANONICAL_GROWTH));
+}

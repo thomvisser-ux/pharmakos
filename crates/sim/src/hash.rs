@@ -109,8 +109,17 @@ const TEXT_PER_WIRE_BYTE: usize = 24;
 /// at most 2 MiB of wire bytes and about as much text, under this hint; and a
 /// structured one has the canonical text of a capped file, which the size
 /// budget's shapes show runs to about 5.7 times its compact text, near 3 MiB
-/// at the cap, under this hint too. The cap is not this function's to
-/// enforce: the fingerprint is taken of whatever the codec accepted.
+/// at the cap, under this hint too.
+///
+/// **The worst case is past it, and only costs copies.** The deepest chain the
+/// codec reads (a condition's `not` within `not` to the 64-level nesting
+/// limit, each level indented two spaces more) grows 14.52 times, measured,
+/// against an inferred 13, so a capped file of nothing else is about 7.4 MiB
+/// of text. The text then grows past the hint as it is written. The verifier
+/// holds the bytes it takes to `pharmakos_verifier::MAX_CANONICAL_BYTES`
+/// (the cap times a growth of 16), a typed refusal, so that is the bound.
+/// The cap is not this function's to enforce: the fingerprint is taken of
+/// whatever the codec accepted.
 const MAX_TEXT_HINT: usize = 4 << 20;
 
 /// The capacity a fingerprint's text is given: a hint, so the text of a
