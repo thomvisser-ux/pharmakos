@@ -223,6 +223,44 @@ fn own_slots(beacon: &str) -> Vec<Place> {
             ),
             at: "/declarative/handlers/0/when/enemy_units_near/near/beacon_anchor/beacon_id",
         },
+        Place {
+            text: playbook(
+                &format!(r#"{{"label":"p","place_beacon":{{"at":{anchor}}}}}"#),
+                "",
+                SAFEST,
+            ),
+            at: "/declarative/route/0/place_beacon/at/beacon_anchor/beacon_id",
+        },
+        Place {
+            text: playbook(
+                HOLD,
+                &rule(format!(
+                    r#"{{"enemy_structure_near":{{"near":{anchor},"radius_voxels":24,"any_kind":{{}},"freshness":{{"kind":"VISIBLE_NOW"}}}}}}"#
+                )),
+                SAFEST,
+            ),
+            at: "/declarative/handlers/0/when/enemy_structure_near/near/beacon_anchor/beacon_id",
+        },
+        Place {
+            text: playbook(
+                &format!(
+                    r#"{{"label":"v","interface":{{"beacon":{{"beacon_id":"b_01"}},"rows":[{{"add_build_target":{{"target":{{"blueprint_id":"generator","anchor":{anchor}}}}}}}]}},"timeout_ms":30000}}"#
+                ),
+                "",
+                SAFEST,
+            ),
+            at: "/declarative/route/0/interface/rows/0/add_build_target/target/anchor/beacon_anchor/beacon_id",
+        },
+        Place {
+            text: playbook(
+                &format!(
+                    r#"{{"label":"v","interface":{{"beacon":{{"beacon_id":"b_01"}},"rows":[{{"remove_build_target":{{"anchor":{anchor}}}}}]}},"timeout_ms":30000}}"#
+                ),
+                "",
+                SAFEST,
+            ),
+            at: "/declarative/route/0/interface/rows/0/remove_build_target/anchor/beacon_anchor/beacon_id",
+        },
     ]
 }
 
@@ -331,4 +369,44 @@ fn an_attack_target_takes_an_enemy_handle_and_the_other_slots_keep_their_codes()
             && !found.iter().any(|(code, _)| code == "E0421"),
         "{found:?}"
     );
+}
+
+/// A broadcast's places (`mark_target`, `threat_at`, `rally`), which the sim
+/// never compiles: an enemy handle there is not `E0421`'s, because no step
+/// fails on it (S3's `vfy6`, the review). The file's shape rules still hold
+/// there, as `E0408` does for `on`: `toward` in a broadcast is `E0420`.
+#[test]
+fn a_broadcasts_places_take_any_handle_and_keep_the_shape_rules() {
+    let rules = rules();
+    for payload in ["mark_target", "threat_at", "rally"] {
+        for beacon in ["e_01", "b_01"] {
+            let text = playbook(
+                &format!(
+                    r#"{{"label":"b","broadcast":{{"{payload}":{{"at":{{"beacon_anchor":{{"beacon_id":"{beacon}"}}}}}}}}}}"#
+                ),
+                "",
+                SAFEST,
+            );
+            let found = errors(&text, &rules);
+            assert!(
+                !found.iter().any(|(code, _)| code == "E0421"),
+                "{payload} at {beacon}: {found:?}"
+            );
+        }
+        let toward = playbook(
+            &format!(
+                r#"{{"label":"b","broadcast":{{"{payload}":{{"at":{{"toward":{{"feature":{{"feature_id":"vent_0_0"}}}}}}}}}}}}"#
+            ),
+            "",
+            SAFEST,
+        );
+        let found = errors(&toward, &rules);
+        assert!(
+            found.contains(&(
+                "E0420".to_owned(),
+                format!("/declarative/route/0/broadcast/{payload}/at/toward")
+            )),
+            "{payload}: {found:?}"
+        );
+    }
 }

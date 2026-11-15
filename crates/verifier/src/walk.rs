@@ -59,9 +59,15 @@ pub(crate) enum Slot<'a> {
     },
     /// `RemoveBuildTargetRow.anchor`, where `on` is legal as a name only.
     RemoveAnchor,
-    /// Anywhere else: a move's destination, a broadcast's place, the
-    /// fallback's hold or patrol. Neither arm is legal here.
+    /// Anywhere else the sim compiles: a move's destination, the fallback's
+    /// hold or patrol. Neither arm is legal here.
     Elsewhere,
+    /// A broadcast's place (`mark_target`, `threat_at`, `rally`), which the
+    /// sim never compiles (`crates/sim/src/interpreter.rs`, the broadcast
+    /// arm). The file's shape rules hold here as anywhere (`E0408` for `on`,
+    /// `E0420` for `toward`), and the run-time ones do not: a beacon here is
+    /// [`BeaconSlot::Broadcast`], never `E0421`'s (S3's `vfy6`, the review).
+    Broadcast,
 }
 
 /// Which side a beacon reference must name, which is what decides whether an
@@ -83,6 +89,9 @@ pub(crate) enum BeaconSlot {
     /// Any other slot, which names one of the seat's own beacons; the words
     /// say which (`E0421`'s `{role}`).
     Own(&'static str),
+    /// A beacon in a broadcast's place ([`Slot::Broadcast`]), which the sim
+    /// never compiles, so no side is wrong there.
+    Broadcast,
 }
 
 /// Which beacon's mandate holds a Build target, as the file names it: what a
@@ -332,7 +341,7 @@ fn walk_entry(entry: &Step, here: &mut Here, visitor: &mut dyn Visit) {
             };
             if let Some((name, location)) = place {
                 let at = here.push_path(&["broadcast", name, "at"]);
-                walk_location(location, here, Slot::Elsewhere, visitor);
+                walk_location(location, here, Slot::Broadcast, visitor);
                 here.pop(at);
             }
         }
@@ -526,12 +535,12 @@ fn walk_location(place: &Location, here: &mut Here, slot: Slot<'_>, visitor: &mu
         }
         Some(location::Place::BeaconAnchor(beacon)) => {
             let at = here.push("beacon_anchor");
-            walk_beacon(
-                beacon,
-                here,
-                BeaconSlot::Own(strings::ROLE_BEACON_ANCHOR),
-                visitor,
-            );
+            let beacon_slot = if slot == Slot::Broadcast {
+                BeaconSlot::Broadcast
+            } else {
+                BeaconSlot::Own(strings::ROLE_BEACON_ANCHOR)
+            };
+            walk_beacon(beacon, here, beacon_slot, visitor);
             here.pop(at);
         }
         // Targeting's sites carry no voxel and no beacon to visit: a stage

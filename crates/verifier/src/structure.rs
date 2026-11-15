@@ -564,7 +564,9 @@ impl Visit for Sites<'_> {
                             pointer::child(&here, arm_name(description)),
                         )),
                     },
-                    Slot::PlaceSite | Slot::Elsewhere => self.out.emit(Diag::new("E0408", here)),
+                    Slot::PlaceSite | Slot::Elsewhere | Slot::Broadcast => {
+                        self.out.emit(Diag::new("E0408", here));
+                    }
                 }
             }
             // S3's `toward` (S1's plan, decision 3): legal only in a

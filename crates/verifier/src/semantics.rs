@@ -499,7 +499,7 @@ impl Visit for Semantics<'_> {
             Slot::BuildAnchor { deploy } => deploy,
             Slot::RemoveAnchor => None,
             // `E0408` from the structure stage: `on` cannot stand here at all.
-            Slot::PlaceSite | Slot::Elsewhere => return,
+            Slot::PlaceSite | Slot::Elsewhere | Slot::Broadcast => return,
         };
         let Some(chosen) = feature.r#ref.as_ref() else {
             return;
