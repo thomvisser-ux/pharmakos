@@ -1382,14 +1382,13 @@ fn every_reserved_name_the_schema_holds_is_refused_by_name() {
 #[test]
 fn the_codec_still_says_what_this_crate_reads() {
     // `crates/verifier`'s decode stage tells `E0002` from `E0001` by the codec's
-    // own wording. The coupling is deliberate and this is where it breaks
-    // loudly: if `crates/proto` rewords the message, this test goes red in the
-    // pull request that reworded it, rather than the code quietly changing.
+    // typed kind (S3's `vfy6`, the review of PR #179), never by its wording.
     let error = json::decode::<pharmakos_proto::gp::v1::Playbook>("{\"nonsense\":1}")
         .expect_err("an unknown field is rejected");
-    assert!(
-        error.message.contains("is not a field"),
-        "the marker `crates/verifier/src/decode.rs` reads is gone: {}",
+    assert_eq!(
+        error.kind,
+        json::ErrorKind::UnknownField,
+        "{}",
         error.message
     );
     assert_eq!(error.pointer, "/nonsense");

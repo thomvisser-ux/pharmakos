@@ -65,6 +65,38 @@ impl Json {
     }
 }
 
+/// What kind of thing a text or a document did not allow (S3's `vfy6`, the
+/// review of PR #179): the typed half of an [`Error`], so a caller decides
+/// by kind and never by reading the message.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ErrorKind {
+    /// The text is not JSON as RFC 8259 writes it: a syntax error, an
+    /// escape, a surrogate, a number's spelling, trailing content.
+    Grammar,
+    /// Nested past the nesting limit, in the text or in the schema.
+    Depth,
+    /// One key written twice in one object.
+    DuplicateField,
+    /// A member the message does not declare.
+    UnknownField,
+    /// One field written under both its `.proto` name and its JSON name.
+    BothNames,
+    /// Two members of one `oneof` set at once.
+    OneofArms,
+    /// An integer field's value: not whole, out of range, or misspelt.
+    Integer,
+    /// A `bytes` field's value is not base64.
+    Base64,
+    /// A value of the wrong JSON type for its field, an enum name the enum
+    /// does not hold, a floating-point field, or a value too long for its
+    /// length prefix.
+    Value,
+    /// Wire bytes that do not decode as the message they are read as.
+    Wire,
+    /// A name the schema does not hold: a message, a type or a path.
+    Schema,
+}
+
 /// Something a JSON text, or the schema it is read against, did not allow.
 ///
 /// `pointer` is an RFC 6901 JSON Pointer into the document — `""` for the
@@ -73,6 +105,8 @@ impl Json {
 /// can be reported at the place in the file that caused it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Error {
+    /// What kind of thing it is.
+    pub kind: ErrorKind,
     /// Where in the document the problem is, as an RFC 6901 JSON Pointer. A
     /// syntax error, which has no place in the tree yet, reports `/byte/NNN`.
     pub pointer: String,
@@ -81,8 +115,9 @@ pub struct Error {
 }
 
 impl Error {
-    pub(crate) fn at(pointer: &str, message: impl Into<String>) -> Self {
+    pub(crate) fn at(kind: ErrorKind, pointer: &str, message: impl Into<String>) -> Self {
         Self {
+            kind,
             pointer: pointer.to_owned(),
             message: message.into(),
         }
@@ -174,8 +209,15 @@ struct JsonReader<'a> {
 const LINEAR_KEYS: usize = 16;
 
 impl JsonReader<'_> {
+    /// A grammar error at the current byte.
     fn error(&self, message: impl Into<String>) -> Error {
+        self.error_of(ErrorKind::Grammar, message)
+    }
+
+    /// An error of `kind` at the current byte.
+    fn error_of(&self, kind: ErrorKind, message: impl Into<String>) -> Error {
         Error {
+            kind,
             pointer: format!("/byte/{}", self.pos),
             message: message.into(),
         }
@@ -227,7 +269,7 @@ impl JsonReader<'_> {
 
     fn value(&mut self, depth: usize) -> Result<Json, Error> {
         if depth > MAX_DEPTH {
-            return Err(self.error("JSON nested deeper than 64 levels"));
+            return Err(self.error_of(ErrorKind::Depth, "JSON nested deeper than 64 levels"));
         }
         match self.peek() {
             Some(b'{') => self.object(depth),
@@ -275,7 +317,9 @@ impl JsonReader<'_> {
             #[cfg(not(test))]
             let _: u64 = compared;
             if seen {
-                return Err(self.error(format!("duplicate key `{key}`")));
+                return Err(
+                    self.error_of(ErrorKind::DuplicateField, format!("duplicate key `{key}`"))
+                );
             }
             self.skip_whitespace();
             self.expect(b':')?;

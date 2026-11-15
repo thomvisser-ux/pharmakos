@@ -109,26 +109,6 @@ const RESERVED_NAMES: &[&str] = &[
     "probe_directions",
 ];
 
-/// What the codec says when a member names a field the message does not have,
-/// with the member's own name in front of it: ``"`{name}` is not a field of
-/// `{message}`. …"``.
-///
-/// The classification below is coupled to this wording on purpose and the
-/// coupling is asserted by `the_codec_still_says_what_this_crate_reads` in
-/// `tests/verifier.rs`: if `crates/proto` rewords it, that test goes red in the
-/// pull request that reworded it, rather than `E0002` quietly becoming `E0001`.
-///
-/// The match is **anchored to the pointer** rather than searched for anywhere in
-/// the text, and that is not fussiness. The codec's other messages quote author
-/// text back: an enum value it does not know is reported as ``"`{value}` is not
-/// a value of `{enum}`"``, so a file carrying `"author_kind": "is not a field"`
-/// would match a floating substring and be reported as an unknown field named
-/// `author_kind` — a real, declared field, with a patch offering to delete it.
-/// Requiring the codec's sentence to *begin* with the pointer's own last token
-/// cannot be provoked that way: the only string that still matches is a field
-/// literally called `is not a field`, which no `.proto` can declare.
-const UNKNOWN_FIELD_MARKER: &str = "is not a field";
-
 /// What the decode stage hands the later stages: the playbook, and its plan
 /// fingerprint, computed once here from the bytes it was decoded from.
 pub(crate) struct Decoded {
@@ -229,10 +209,15 @@ fn diagnose(text: &str, out: &mut Builder) -> Option<Decoded> {
             })
         }
         Err(error) => {
-            // A pointer with no last token is the document itself, which no
-            // unknown field can be: that error is `E0001`'s.
-            let unknown = pointer::last_token(&error.pointer)
-                .filter(|name| names_an_unknown_field(&error.message, name));
+            // The codec's kind says which (S3's `vfy6`, the review of PR #179):
+            // the message is for the player and never read here, so author
+            // text quoted back in it (an enum value it does not know) cannot
+            // talk this into the wrong code. A pointer with no last token is
+            // the document itself, which no unknown field can be: that error
+            // is `E0001`'s.
+            let unknown = (error.kind == json::ErrorKind::UnknownField)
+                .then(|| pointer::last_token(&error.pointer))
+                .flatten();
             if let Some(name) = unknown {
                 out.emit(
                     Diag::new("E0002", error.pointer.clone())
@@ -249,20 +234,6 @@ fn diagnose(text: &str, out: &mut Builder) -> Option<Decoded> {
             None
         }
     }
-}
-
-/// Whether the codec's message is the "no such field" one, for the member the
-/// error's pointer names.
-///
-/// See [`UNKNOWN_FIELD_MARKER`] for why this is anchored rather than searched.
-fn names_an_unknown_field(message: &str, name: &str) -> bool {
-    let mut opening = String::with_capacity(name.len().saturating_add(32));
-    opening.push('`');
-    opening.push_str(name);
-    opening.push_str("` ");
-    opening.push_str(UNKNOWN_FIELD_MARKER);
-    opening.push_str(" of `");
-    message.starts_with(&opening)
 }
 
 /// Every reserved name anywhere in the document, with the pointer to it.
@@ -414,7 +385,8 @@ fn schema_version_json(version: SchemaVersion) -> Json {
 
 #[cfg(test)]
 mod tests {
-    use super::{RESERVED_NAMES, names_an_unknown_field};
+    use super::RESERVED_NAMES;
+    use pharmakos_proto::json::{self, ErrorKind};
 
     /// What lets the decode stage's direct path skip the reserved-name scan: a
     /// document the codec accepts has every member resolved to a declared
@@ -492,23 +464,22 @@ mod tests {
     }
 
     #[test]
-    fn an_enum_value_that_quotes_the_marker_is_not_read_as_an_unknown_field() {
+    fn an_unknown_field_is_told_by_its_kind_not_its_words() {
         // `crates/proto` reports an unknown enum value as "`{value}` is not a
-        // value of `{enum}`", quoting author text. A file carrying
-        // `"author_kind": "is not a field"` therefore produces a message with
-        // this module's marker inside it — and must still be `E0001`, not an
-        // `E0002` naming a real, declared field as unknown.
-        assert!(names_an_unknown_field(
-            "`wombat` is not a field of `gp.v1.Meta`. Unknown fields are rejected, never stripped.",
-            "wombat",
-        ));
-        assert!(!names_an_unknown_field(
-            "`is not a field` is not a value of `gp.v1.Meta.AuthorKind`",
-            "author_kind",
-        ));
-        assert!(!names_an_unknown_field(
-            "`WOMBAT` is not a value of `gp.v1.Meta.AuthorKind`",
-            "author_kind",
-        ));
+        // value of `{enum}`", quoting author text, so a file carrying
+        // `"author_kind": "is not a field"` has the old marker in its message.
+        // Its kind is still `Value`, and only `UnknownField` is `E0002`.
+        let unknown = json::decode::<pharmakos_proto::gp::v1::Meta>(r#"{"wombat":1}"#)
+            .expect_err("an unknown field is refused");
+        assert_eq!(unknown.kind, ErrorKind::UnknownField);
+        let quoted =
+            json::decode::<pharmakos_proto::gp::v1::Meta>(r#"{"author_kind":"is not a field"}"#)
+                .expect_err("an unknown enum value is refused");
+        assert_eq!(quoted.kind, ErrorKind::Value);
+        assert!(
+            quoted.message.contains("is not a field"),
+            "{}",
+            quoted.message
+        );
     }
 }
