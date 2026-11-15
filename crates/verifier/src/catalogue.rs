@@ -980,9 +980,11 @@ pub const CATALOGUE: &[Entry] = &[
         code: "W0703",
         family: Family::ScheduleConflictsAndStaleness,
         severity: Severity::Warning,
-        // S2's `vfy2`: a reference to an enemy beacon, other than an Attack
-        // target (which E0418 refuses), resting on a sighting older than the
-        // reach window.
+        // S2's `vfy2` gave it a reference to an enemy beacon, other than an
+        // Attack target (which E0418 refuses), resting on a sighting older than
+        // the reach window. Retired by S3's `vfy6`: such a reference is now
+        // E0421 wherever it stands, so nothing raises this; the row keeps its
+        // number, as E0012 to E0019's and W0501's do.
         emitter: Emitter::NoneYet(
             "retired by S3's `vfy6`: an enemy handle outside an Attack target is E0421",
         ),

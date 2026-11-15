@@ -1316,8 +1316,8 @@ W0702  WARNING  schedule, conflicts and staleness  raised at: lint
   An earlier rule wins every time both are true, so this one mostly never gets a turn. Move it above the other rule, or narrow the other rule.
 
 W0703  WARNING  schedule, conflicts and staleness  raised at: none at the skeleton (retired by S3's `vfy6`: an enemy handle outside an Attack target is E0421)
-  the sighting this rests on is {found} ms old; the reach window is {max} ms.
-  What the seat remembers here may be too old to act on.
+  a reference to an enemy beacon rested on a sighting older than the reach window; such a reference is E0421 since S3, so this code is retired and raised by nothing.
+  An enemy beacon is named only as an Attack target, where its age is checked.
 
 W0704  WARNING  schedule, conflicts and staleness  raised at: lint
   {what} matches nothing on the map right now: {why}.

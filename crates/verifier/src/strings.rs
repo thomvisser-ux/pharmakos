@@ -666,8 +666,10 @@ pub const VERIFIER_STRINGS: &[Text] = &[
     },
     Text {
         code: "W0703",
-        message: "the sighting this rests on is {found} ms old; the reach window is {max} ms.",
-        beginner: "What the seat remembers here may be too old to act on.",
+        message: "a reference to an enemy beacon rested on a sighting older than the reach \
+                  window; such a reference is E0421 since S3, so this code is retired and raised \
+                  by nothing.",
+        beginner: "An enemy beacon is named only as an Attack target, where its age is checked.",
     },
     Text {
         code: "W0704",
