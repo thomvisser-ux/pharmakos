@@ -64,7 +64,7 @@
     = 3
   12:70-72 "24"
     /declarative/handlers/1/when/any/items/0/enemy_units_near/radius_voxels
-    integer 0.. voxels
+    integer 1.. voxels
     = 24
   12:83-99 "voxel 90, 12, 11"
     /declarative/handlers/1/when/any/items/0/enemy_units_near/near
@@ -80,7 +80,7 @@
     = "KNOWN_WITHIN"
   12:169-173 "30 s"
     /declarative/handlers/1/when/any/items/1/enemy_beacon_known/freshness/known_within_ms
-    integer .. ms
+    integer 1.. ms
     = 30000
   12:204-210 "mortar"
     /declarative/handlers/1/when/any/items/2/enemy_structure_near/blueprint_id
@@ -88,7 +88,7 @@
     = "mortar"
   12:218-220 "16"
     /declarative/handlers/1/when/any/items/2/enemy_structure_near/radius_voxels
-    integer 0.. voxels
+    integer 1.. voxels
     = 16
   12:231-252 "the safest own beacon"
     /declarative/handlers/1/when/any/items/2/enemy_structure_near/near
@@ -100,7 +100,7 @@
     = "VISIBLE_NOW"
   12:314-316 "16"
     /declarative/handlers/1/when/any/items/3/enemy_structure_near/radius_voxels
-    integer 0.. voxels
+    integer 1.. voxels
     = 16
   12:327-348 "the safest own beacon"
     /declarative/handlers/1/when/any/items/3/enemy_structure_near/near
@@ -112,7 +112,7 @@
     = "KNOWN_WITHIN"
   12:367-371 "1:00"
     /declarative/handlers/1/when/any/items/3/enemy_structure_near/freshness/known_within_ms
-    integer .. ms
+    integer 1.. ms
     = 60000
   13:28-31 "1 s"
     /declarative/handlers/1/body/0/hold/ms

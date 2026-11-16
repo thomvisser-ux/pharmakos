@@ -96,6 +96,13 @@ impl From<pharmakos_verifier::InputError> for Error {
                 "",
                 format!("the seat's view does not hold against the rules table: {cause}"),
             ),
+            // S3's `vfy6`: the verifier's backstop. `verify_jsonc` refuses a
+            // player's text past the cap first, so this answers a canonical
+            // text no capped file can make.
+            cause @ pharmakos_verifier::InputError::Oversize { .. } => Self::at(
+                "",
+                format!("the playbook is longer than the verifier takes: {cause}"),
+            ),
         }
     }
 }

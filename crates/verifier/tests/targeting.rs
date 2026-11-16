@@ -147,7 +147,14 @@ fn report_with(route: &str, fallback: &str, scope: &Scope, depth: Depth) -> Veri
     let rules = rules();
     let input = Input::new(bytes.as_bytes(), &snapshot, scope, &rules)
         .unwrap_or_else(|error| panic!("the rules table carries what the checks read: {error}"));
-    verify(&input, depth)
+    let mut report = verify(&input, depth);
+    // S3's plan, decision 8: a step with no `on_fail` is noted as reading
+    // SKIP (`I0003`). That note is about the step, never about targeting, and
+    // `tests/verifier.rs` holds it; the cases here write no `on_fail`.
+    report
+        .diagnostics
+        .retain(|found| !(found.code == "I0003" && found.path.ends_with("/on_fail")));
+    report
 }
 
 fn report(route: &str, depth: Depth) -> VerifyReport {

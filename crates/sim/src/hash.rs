@@ -102,6 +102,24 @@ const TEXT_PER_WIRE_BYTE: usize = 24;
 /// [`TEXT_PER_WIRE_BYTE`] would reserve for a playbook that is mostly one long
 /// string, whose text is about as long as its wire bytes (PR #177's review:
 /// 24 times a 2 MB string is 48 MB). Past it the text grows as it is written.
+///
+/// Revisited when the size cap landed (S3's `vfy6`, follow-up D) and kept:
+/// the cap, `pharmakos_verifier::MAX_PLAYBOOK_CHARS`, bounds the player's
+/// text at 512 KiB of characters, so a playbook that is mostly one string has
+/// at most 2 MiB of wire bytes and about as much text, under this hint; and a
+/// structured one has the canonical text of a capped file, which the size
+/// budget's shapes show runs to about 5.7 times its compact text, near 3 MiB
+/// at the cap, under this hint too.
+///
+/// **The worst case is past it, and only costs copies.** The deepest chain the
+/// codec reads (a condition's `not` within `not` to the 64-level nesting
+/// limit, each level indented two spaces more) grows 14.52 times, measured,
+/// against an inferred 13, so a capped file of nothing else is about 7.4 MiB
+/// of text. The text then grows past the hint as it is written. The verifier
+/// holds the bytes it takes to `pharmakos_verifier::MAX_CANONICAL_BYTES`
+/// (the cap times a growth of 16), a typed refusal, so that is the bound.
+/// The cap is not this function's to enforce: the fingerprint is taken of
+/// whatever the codec accepted.
 const MAX_TEXT_HINT: usize = 4 << 20;
 
 /// The capacity a fingerprint's text is given: a hint, so the text of a
@@ -121,11 +139,15 @@ fn text_capacity(wire_bytes: usize) -> usize {
 /// encoding it again.
 ///
 /// The canonical bytes are [`json::write_wire_into`]'s over those bytes with
-/// `meta.fingerprint` ([`FINGERPRINT_FIELD`]) left out, which is the text [`canonical_input`] writes
-/// for the playbook when the bytes are plain ([`json::Encoded::is_plain`]):
-/// every singular field once, nothing at a default it would drop. Bytes that
-/// are not plain, from a file that spells a field twice, are answered by
-/// [`plan_fingerprint`] itself.
+/// `meta.fingerprint` ([`FINGERPRINT_FIELD`]) left out, which is the text
+/// [`canonical_input`] writes for the playbook: the codec's bytes hold every
+/// singular field once and nothing at a default prost would drop
+/// ([`json::Encoded`]). Until S3's `vfy6` a file that wrote a field under both
+/// its names, or empty bytes as `"===="`, decoded to bytes that did not, and
+/// this function answered those by [`plan_fingerprint`]; the codec refuses
+/// both now, so there is no second path. `crates/proto`'s differential tests
+/// hold the text written from the bytes to the text of the playbook encoded
+/// again for every generated playbook the codec accepts.
 ///
 /// # Errors
 ///
@@ -133,9 +155,6 @@ fn text_capacity(wire_bytes: usize) -> usize {
 /// canonical JSON, as [`plan_fingerprint`].
 pub fn plan_fingerprint_of(decoded: &Decoded<Playbook>) -> Result<u64, FingerprintError> {
     let encoded = decoded.encoded();
-    if !encoded.is_plain() {
-        return plan_fingerprint(decoded.message());
-    }
     let mut text = String::with_capacity(text_capacity(encoded.bytes().len()));
     text.push_str(DOMAIN_TEXT);
     json::write_wire_into(

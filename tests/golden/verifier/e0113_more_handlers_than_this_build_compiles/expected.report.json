@@ -7,12 +7,26 @@
       "path": "/declarative/handlers/64",
       "message": "the playbook has 65 handlers; this build compiles at most 64.",
       "beginner": "A playbook can carry only so many rules, however small each one is. Take some out."
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/0/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
     }
   ],
-  "report_hash": "S7xMd7o5bo0=",
+  "report_hash": "i557U30d04k=",
   "rules_hash": "GybFJQaL/2E=",
   "plan_fingerprint": "Wax4RBZe5xE=",
-  "verifier_version": "0.1.0-s3.2",
+  "verifier_version": "0.1.0-s3.3",
   "size_units": 66,
   "size_budget": 128
 }

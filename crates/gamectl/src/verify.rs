@@ -23,8 +23,14 @@
 //! not a crash, which is the difference between a verifier and a parser — so it
 //! is `Failed` too, and only a missing or unreadable **file** is
 //! [`Exit::Input`].
+//!
+//! A file past the size cap (`pharmakos_verifier::MAX_PLAYBOOK_CHARS`) is the
+//! same answer as one that does not parse: `E0029`, `Failed`. It is read no
+//! further than the cap needs, so a huge file is refused without being held in
+//! memory.
 
 use std::fmt::Write as _;
+use std::io::Read as _;
 use std::path::Path;
 
 use pharmakos_proto::gp::api::v1::VerifyReport;
@@ -46,7 +52,7 @@ use crate::strings;
 pub fn run(root: &Path, path: &Path, depth: Depth) -> Result<String, Failure> {
     let rules = rules::load(root)?;
     let display = crate::display(path);
-    let text = std::fs::read_to_string(root.join(path)).map_err(|error| {
+    let text = read_bounded(&root.join(path)).map_err(|error| {
         Failure::input(strings::unreadable(
             "playbook",
             &display,
@@ -60,10 +66,19 @@ pub fn run(root: &Path, path: &Path, depth: Depth) -> Result<String, Failure> {
         ))
     })?;
     let scope = seat::scope();
-    let report = pharmakos_plan_core::verify_jsonc(&text, &snapshot, &scope, &rules, depth)
-        .map_err(|error| {
-            Failure::internal(strings::rules_gap(rules::RULES_PATH, &error.to_string()))
-        })?;
+    let gap = |error: &dyn std::fmt::Display| {
+        Failure::internal(strings::rules_gap(rules::RULES_PATH, &error.to_string()))
+    };
+    let report = if let Some(text) = text {
+        pharmakos_plan_core::verify_jsonc(&text, &snapshot, &scope, &rules, depth)
+            .map_err(|error| gap(&error))?
+    } else {
+        // Past the cap in bytes, so past it whatever the bytes hold: `E0029`,
+        // and the rest of the file is never read.
+        let input = pharmakos_verifier::Input::too_long(&snapshot, &scope, &rules)
+            .map_err(|error| gap(&error))?;
+        pharmakos_verifier::verify(&input, depth)
+    };
 
     let rendered = render(&display, &report);
     if report.qualifies {
@@ -71,6 +86,33 @@ pub fn run(root: &Path, path: &Path, depth: Depth) -> Result<String, Failure> {
     } else {
         Err(Failure::new(Exit::Failed, rendered))
     }
+}
+
+/// The file's text, read no further than the size cap needs (S3's `vfy6`):
+/// `None` for a file past [`pharmakos_verifier::MAX_PLAYBOOK_READ`] bytes,
+/// which is past [`pharmakos_verifier::MAX_PLAYBOOK_CHARS`] whatever it holds,
+/// having read one byte past that and no more. A shorter file past the cap in
+/// characters is `plan-core`'s to refuse, and is refused before it is
+/// canonicalised.
+///
+/// # Errors
+///
+/// The file cannot be opened or read, or is not UTF-8.
+pub(crate) fn read_bounded(path: &Path) -> std::io::Result<Option<String>> {
+    let most = u64::try_from(pharmakos_verifier::MAX_PLAYBOOK_READ)
+        .ok()
+        .and_then(|most| most.checked_add(1))
+        .ok_or_else(|| std::io::Error::other("the size cap does not fit a file length"))?;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)?
+        .take(most)
+        .read_to_end(&mut bytes)?;
+    if pharmakos_verifier::is_too_long_in_bytes(bytes.len()) {
+        return Ok(None);
+    }
+    String::from_utf8(bytes)
+        .map(Some)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
 }
 
 /// The report as a person reads it.

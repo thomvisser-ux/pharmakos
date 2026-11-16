@@ -5,6 +5,34 @@
     {
       "code": "I0003",
       "severity": "INFO",
+      "path": "/declarative/route/0/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/1/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/1/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
       "path": "/declarative/route/1/place_beacon/initial/mandate/mine/seam_choice",
       "message": "`seam_choice` is omitted and reads as NEAREST.",
       "beginner": "A setting left out takes its named default.",
@@ -26,6 +54,20 @@
     {
       "code": "I0003",
       "severity": "INFO",
+      "path": "/declarative/route/2/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/2/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
       "path": "/declarative/route/2/move/pace",
       "message": "`pace` is omitted and reads as DIRECT.",
       "beginner": "A setting left out takes its named default.",
@@ -33,6 +75,20 @@
         {
           "title": "Write the default out",
           "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/2/move/pace\",\"value\":\"DIRECT\"}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/handlers/0/body/0/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/0/body/0/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
           "applicability": "MACHINE_APPLICABLE"
         }
       ]
@@ -52,6 +108,20 @@
       ]
     },
     {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/handlers/0/body/1/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/0/body/1/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
       "code": "I0005",
       "severity": "INFO",
       "path": "/declarative/route/0/move/pace",
@@ -66,10 +136,10 @@
       "beginner": "The least time the walking can take; going round anything in the way takes longer."
     }
   ],
-  "report_hash": "yCqGbftDkE0=",
+  "report_hash": "p1uM8t8E4Gc=",
   "rules_hash": "GybFJQaL/2E=",
   "plan_fingerprint": "tPe4E/SBB60=",
-  "verifier_version": "0.1.0-s3.2",
+  "verifier_version": "0.1.0-s3.3",
   "size_units": 6,
   "size_budget": 128
 }

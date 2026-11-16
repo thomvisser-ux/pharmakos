@@ -3,16 +3,30 @@
   "depth": "FULL",
   "diagnostics": [
     {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/0/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
       "code": "W0601",
       "severity": "WARNING",
       "message": "the grid is already 6 kW short.",
       "beginner": "The power the seat has is already less than the power it is using."
     }
   ],
-  "report_hash": "+MA5c1bPe+k=",
+  "report_hash": "/c5EQNXaYs8=",
   "rules_hash": "GybFJQaL/2E=",
   "plan_fingerprint": "9Y5p5OPom34=",
-  "verifier_version": "0.1.0-s3.2",
+  "verifier_version": "0.1.0-s3.3",
   "size_units": 1,
   "size_budget": 128
 }

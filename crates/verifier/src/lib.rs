@@ -18,7 +18,7 @@
 //! | resolve | [`resolve`] | complete |
 //! | semantics | [`semantics`] | complete |
 //! | estimate | [`estimate`] | the `$` and `kW` projection and the schedule (S1); mast coverage is S4's |
-//! | lint | [`lint`] | targeting's three lints (S1), `W0703` (S2) and `W0702` (S3); `I0002` is S3's `vfy6`'s or later |
+//! | lint | [`lint`] | targeting's three lints (S1), `W0703` (S2, retired by S3's `vfy6`) and `W0702` (S3); `I0002` is S3's `vfy6`'s or later |
 //!
 //! FULL's two stages shipped present and empty, deliberately (decisions-log
 //! item 82): `verify_plan{depth}` and `report_hash` were complete from day one,
@@ -153,6 +153,7 @@
 //! # }
 //! ```
 
+mod blueprints;
 pub mod catalogue;
 pub mod hash;
 pub mod interface;
@@ -180,16 +181,91 @@ use pharmakos_proto::gp::api::v1::verify_plan::Depth;
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::snapshot::{Snapshot, SnapshotError};
 
-pub use hash::{HashError, REPORT_HASH_DOMAIN};
+pub use blueprints::{Anchor, BLUEPRINT_SLOTS, BlueprintSlots, slots_for, slots_of};
+pub use hash::{HashError, REPORT_HASH_DOMAIN, TOO_LONG_REPORT_DOMAIN, too_long_report_hash};
 pub use interface::Rates;
 pub use limits::{CONDITION_MAX_DEPTH, CONDITION_MAX_NODES, Limits, RulesGap};
 pub use projection::{Prices, Projection, ProjectionError};
 pub use refusals::{REFUSED_CONSTRUCTS, code_for_construct};
+pub use report::MAX_DEFAULT_NOTES;
 pub use scope::{
     FeatureKind, KnownBeacon, KnownFeature, Ownership, Scope, ScopeError, Sighted, Sighting,
 };
 pub use size::size_units;
 pub use walking::Walk;
+
+/// The longest playbook text a player's file may be, in characters (S3's
+/// `vfy6`, follow-up D).
+///
+/// PLACEHOLDER: a playbook's 512 KiB of characters — owner, at hardening.
+///
+/// **It is a cap on the text the player wrote**, so whitespace can decide the
+/// verdict: the same playbook written compactly can be within it and written
+/// with indentation past it. A playbook at item 94's 128-unit size budget is
+/// within it compactly (the route shape P1 is measured at is 152,522
+/// characters) and past it in its canonical spelling (855,637 characters). It
+/// is a bound on what is read, not a game rule, so it is not a rules-table
+/// row, for the same reason the gateway's rate limits are not. It moved here
+/// from the gateway's `surface::planning`, where a re-export still names it,
+/// so that the boundaries a player's text enters by read one definition:
+/// `plan-core`'s `verify_jsonc`, `gamectl verify` and `gamectl scenario run`,
+/// and the gateway's methods.
+///
+/// **It is not the only bound on every boundary.** Over the gateway's socket a
+/// message is at most 256 KiB (`crates/gateway/src/frame.rs`'s
+/// `MAX_MESSAGE_BYTES`), which binds first: a text between the two is refused
+/// by the transport before this cap is asked. In process and from a file this
+/// cap is the one that binds. Reconciling the two numbers is the owner's, at
+/// hardening, with the rest of the transport's.
+///
+/// **It bounds the text the player wrote, never the bytes handed to
+/// [`Input::new`].** `plan-core` hands the verifier the canonical form, which
+/// is indented a level for every message it nests and runs to several times
+/// the compact text, so a cap on the canonical bytes would refuse a legal
+/// file. The boundary that holds the player's text asks [`is_too_long`], and
+/// reports a text past the cap through [`Input::too_long`], as `E0029`,
+/// without reading it further. [`Input::new`]'s own bound is the backstop
+/// [`MAX_CANONICAL_BYTES`].
+pub const MAX_PLAYBOOK_CHARS: usize = 512 * 1024;
+
+/// The most canonical text one character of a player's text can become:
+/// measured 14.52 on the deepest chain the codec reads (handlers whose `when`
+/// is `not` within `not` to the 64-level nesting limit, each level indented
+/// two spaces more), with headroom. A string's characters grow at most six
+/// times (a `\u` escape), and a structured file's about 5.7 times at the size
+/// budget.
+pub const CANONICAL_GROWTH: usize = 16;
+
+/// The longest bytes [`Input::new`] takes (S3's `vfy6`, the review of PR
+/// #179): the canonical text of the longest player's text
+/// ([`MAX_PLAYBOOK_CHARS`] times [`CANONICAL_GROWTH`]), a backstop for a
+/// caller that hands the verifier bytes no boundary has bounded. Past it
+/// [`Input::new`] answers [`InputError::Oversize`].
+pub const MAX_CANONICAL_BYTES: usize = MAX_PLAYBOOK_CHARS * CANONICAL_GROWTH;
+
+/// The most bytes a boundary need read of a file to answer [`is_too_long`]:
+/// four bytes is the longest UTF-8 spells a character in, so a file with more
+/// is past the cap whatever it holds ([`is_too_long_in_bytes`]).
+pub const MAX_PLAYBOOK_READ: usize = MAX_PLAYBOOK_CHARS * 4;
+
+/// Whether a player's text is past [`MAX_PLAYBOOK_CHARS`].
+///
+/// Counts characters only when the text's bytes are past the cap, so a text
+/// within it in bytes costs one comparison; a longer one is counted up to one
+/// character past the cap and no further. Whitespace counts like any other
+/// character: the question is about the text as written, not the playbook it
+/// spells.
+#[must_use]
+pub fn is_too_long(text: &str) -> bool {
+    text.len() > MAX_PLAYBOOK_CHARS && text.chars().nth(MAX_PLAYBOOK_CHARS).is_some()
+}
+
+/// Whether a text of `bytes` bytes is past [`MAX_PLAYBOOK_CHARS`] whatever it
+/// holds, so a boundary reading a file can refuse it without reading it all.
+#[must_use]
+pub const fn is_too_long_in_bytes(bytes: usize) -> bool {
+    bytes > MAX_PLAYBOOK_READ
+}
 
 /// This build of the verifier, opaque and hashed.
 ///
@@ -236,7 +312,17 @@ pub use walking::Walk;
 /// `queue_structure` row for the Resonance Spire is no longer refused by
 /// `E0009`, which now refuses every other blueprint, as the sim's compile
 /// does, so its reports are not comparable with `0.1.0-s3.1`'s.
-pub const VERIFIER_VERSION: &str = "0.1.0-s3.2";
+/// `0.1.0-s3.3` from S3's `vfy6`: this build checks the parameters of S3's
+/// predicates and `toward` behind `E0020` to `E0028` (`E0209`, `E0210`,
+/// `E0420`, `E0506`, and the codes every predicate's parameters already
+/// had), resolves `toward`'s named feature (`E0412`), refuses an unset beacon
+/// reference in a predicate, a protect list or an Attack target (`E0111`),
+/// and notes an absent `on_fail` and a `max_deaths_before_fallback` of 0
+/// (`I0003`, S3's plan, decision 8), and refuses an enemy beacon's handle
+/// anywhere but an Attack target (`E0421`, which retires `W0703`), so its
+/// reports are not comparable with
+/// `0.1.0-s3.2`'s.
+pub const VERIFIER_VERSION: &str = "0.1.0-s3.3";
 
 /// Everything one verification is a function of, apart from the depth.
 ///
@@ -257,6 +343,9 @@ pub struct Input<'a> {
     prices: Prices,
     walk: Walk,
     report_hashes: hash::ReportHashes,
+    /// A player's text past [`MAX_PLAYBOOK_CHARS`], from [`Input::too_long`]:
+    /// the report is `E0029` alone.
+    too_long: bool,
 }
 
 /// Why an [`Input`] could not be assembled.
@@ -272,11 +361,25 @@ pub enum InputError {
     /// ([`Scope::check`]): a radius at or below the base sphere, or a radius
     /// or Spire left behind for a beacon that is no longer the seat's own.
     View(ScopeError),
+    /// The playbook bytes are past [`MAX_CANONICAL_BYTES`]: longer than the
+    /// canonical text of any player's text within [`MAX_PLAYBOOK_CHARS`], so
+    /// no boundary bounded them (S3's `vfy6`).
+    Oversize {
+        /// Their length.
+        bytes: usize,
+        /// [`MAX_CANONICAL_BYTES`].
+        max: usize,
+    },
 }
 
 impl core::fmt::Display for InputError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            InputError::Oversize { bytes, max } => write!(
+                formatter,
+                "the playbook bytes are {bytes} long, past the {max} the canonical text of the 
+                 longest player's text can be"
+            ),
             InputError::Rules(gap) => write!(formatter, "{gap}"),
             InputError::Unhashable(error) => write!(formatter, "{error}"),
             InputError::View(error) => write!(formatter, "{error}"),
@@ -318,15 +421,55 @@ impl<'a> Input<'a> {
     /// checks read — the verifier's limits, the interface rates, the prices
     /// and the commander's walking rows — or carries one out of range;
     /// [`InputError::Unhashable`] when the playbook, the snapshot or a list or
-    /// string in the view is past `report_hash`'s `u32` length prefix; and
+    /// string in the view is past `report_hash`'s `u32` length prefix;
     /// [`InputError::View`] when the view's per-beacon facts do not hold
-    /// against the rules table's base sphere ([`Scope::check`]).
+    /// against the rules table's base sphere ([`Scope::check`]); and
+    /// [`InputError::Oversize`] when the playbook is past
+    /// [`MAX_CANONICAL_BYTES`], the backstop behind the boundaries'
+    /// [`MAX_PLAYBOOK_CHARS`].
     pub fn new(
         playbook: &'a [u8],
         snapshot: &'a [u8],
         scope: &'a Scope,
         rules: &'a RulesTable,
     ) -> Result<Input<'a>, InputError> {
+        Input::assemble(playbook, snapshot, scope, rules, false)
+    }
+
+    /// The input for a player's text past [`MAX_PLAYBOOK_CHARS`] (S3's `vfy6`):
+    /// the boundary that holds the text asked [`is_too_long`] or
+    /// [`is_too_long_in_bytes`], and hands over none of it. [`verify`] reports
+    /// `E0029` and nothing else, at either depth, and decodes nothing.
+    ///
+    /// The report's hash is over the snapshot, the view, the rules table, this
+    /// build and the depth, under a domain of its own
+    /// ([`hash::TOO_LONG_REPORT_DOMAIN`]), so it is a pure function of its
+    /// inputs and no playbook's report can share it.
+    ///
+    /// # Errors
+    ///
+    /// As [`Input::new`], for the inputs it still takes.
+    pub fn too_long(
+        snapshot: &'a [u8],
+        scope: &'a Scope,
+        rules: &'a RulesTable,
+    ) -> Result<Input<'a>, InputError> {
+        Input::assemble(&[], snapshot, scope, rules, true)
+    }
+
+    fn assemble(
+        playbook: &'a [u8],
+        snapshot: &'a [u8],
+        scope: &'a Scope,
+        rules: &'a RulesTable,
+        too_long: bool,
+    ) -> Result<Input<'a>, InputError> {
+        if playbook.len() > MAX_CANONICAL_BYTES {
+            return Err(InputError::Oversize {
+                bytes: playbook.len(),
+                max: MAX_CANONICAL_BYTES,
+            });
+        }
         let rules_hash = rules.rules_hash();
         let limits = Limits::from_rules(rules)?;
         scope
@@ -343,12 +486,17 @@ impl<'a> Input<'a> {
             prices: Prices::from_rules(rules)?,
             walk: Walk::from_rules(rules)?,
             report_hashes: hash::ReportHashes::new(
-                playbook,
+                if too_long {
+                    hash::Subject::TooLong
+                } else {
+                    hash::Subject::Playbook(playbook)
+                },
                 snapshot,
                 scope,
                 rules_hash,
                 VERIFIER_VERSION,
             )?,
+            too_long,
         })
     }
 
@@ -449,7 +597,9 @@ pub fn verify(input: &Input<'_>, depth: Depth) -> VerifyReport {
     let mut units: u32 = 0;
     let mut fingerprint: Vec<u8> = Vec::new();
 
-    if let Some(decoded) = decode::run(input.playbook, &mut out) {
+    if input.too_long {
+        out.emit(report::Diag::new("E0029", pointer::ROOT).arg("max", MAX_PLAYBOOK_CHARS));
+    } else if let Some(decoded) = decode::run(input.playbook, &mut out) {
         let playbook = &decoded.playbook;
         units = size::size_units(playbook);
         if let Some(digest) = decoded.fingerprint {

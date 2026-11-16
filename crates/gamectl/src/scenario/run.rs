@@ -706,13 +706,26 @@ fn seal(
     relative: &str,
     nightly: bool,
 ) -> Result<Door, Failure> {
-    let playbook = std::fs::read_to_string(root.join(relative)).map_err(|error| {
-        Failure::input(strings::unreadable(
-            "playbook",
-            relative,
-            &error.to_string(),
-        ))
-    })?;
+    // Read no further than the size cap needs, as `gamectl verify` reads one
+    // (S3's `vfy6`, the review of PR #179).
+    let playbook = crate::verify::read_bounded(&root.join(relative))
+        .map_err(|error| {
+            Failure::input(strings::unreadable(
+                "playbook",
+                relative,
+                &error.to_string(),
+            ))
+        })?
+        .ok_or_else(|| {
+            Failure::input(strings::unreadable(
+                "playbook",
+                relative,
+                &format!(
+                    "it is past the {} characters a playbook may be",
+                    pharmakos_verifier::MAX_PLAYBOOK_CHARS
+                ),
+            ))
+        })?;
     let params = pharmakos_proto::json::write(&Json::Object(vec![(
         String::from("playbook_jsonc"),
         Json::String(playbook.clone()),

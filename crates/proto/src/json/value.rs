@@ -65,6 +65,38 @@ impl Json {
     }
 }
 
+/// What kind of thing a text or a document did not allow (S3's `vfy6`, the
+/// review of PR #179): the typed half of an [`Error`], so a caller decides
+/// by kind and never by reading the message.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ErrorKind {
+    /// The text is not JSON as RFC 8259 writes it: a syntax error, an
+    /// escape, a surrogate, a number's spelling, trailing content.
+    Grammar,
+    /// Nested past the nesting limit, in the text or in the schema.
+    Depth,
+    /// One key written twice in one object.
+    DuplicateField,
+    /// A member the message does not declare.
+    UnknownField,
+    /// One field written under both its `.proto` name and its JSON name.
+    BothNames,
+    /// Two members of one `oneof` set at once.
+    OneofArms,
+    /// An integer field's value: not whole, out of range, or misspelt.
+    Integer,
+    /// A `bytes` field's value is not base64.
+    Base64,
+    /// A value of the wrong JSON type for its field, an enum name the enum
+    /// does not hold, a floating-point field, or a value too long for its
+    /// length prefix.
+    Value,
+    /// Wire bytes that do not decode as the message they are read as.
+    Wire,
+    /// A name the schema does not hold: a message, a type or a path.
+    Schema,
+}
+
 /// Something a JSON text, or the schema it is read against, did not allow.
 ///
 /// `pointer` is an RFC 6901 JSON Pointer into the document — `""` for the
@@ -73,6 +105,8 @@ impl Json {
 /// can be reported at the place in the file that caused it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Error {
+    /// What kind of thing it is.
+    pub kind: ErrorKind,
     /// Where in the document the problem is, as an RFC 6901 JSON Pointer. A
     /// syntax error, which has no place in the tree yet, reports `/byte/NNN`.
     pub pointer: String,
@@ -81,8 +115,9 @@ pub struct Error {
 }
 
 impl Error {
-    pub(crate) fn at(pointer: &str, message: impl Into<String>) -> Self {
+    pub(crate) fn at(kind: ErrorKind, pointer: &str, message: impl Into<String>) -> Self {
         Self {
+            kind,
             pointer: pointer.to_owned(),
             message: message.into(),
         }
@@ -174,8 +209,15 @@ struct JsonReader<'a> {
 const LINEAR_KEYS: usize = 16;
 
 impl JsonReader<'_> {
+    /// A grammar error at the current byte.
     fn error(&self, message: impl Into<String>) -> Error {
+        self.error_of(ErrorKind::Grammar, message)
+    }
+
+    /// An error of `kind` at the current byte.
+    fn error_of(&self, kind: ErrorKind, message: impl Into<String>) -> Error {
         Error {
+            kind,
             pointer: format!("/byte/{}", self.pos),
             message: message.into(),
         }
@@ -187,6 +229,13 @@ impl JsonReader<'_> {
 
     fn bump(&mut self) {
         self.pos = self.pos.saturating_add(1);
+    }
+
+    /// Steps over a run of ASCII digits.
+    fn digits(&mut self) {
+        while self.peek().is_some_and(|byte| byte.is_ascii_digit()) {
+            self.bump();
+        }
     }
 
     fn skip_whitespace(&mut self) {
@@ -220,7 +269,7 @@ impl JsonReader<'_> {
 
     fn value(&mut self, depth: usize) -> Result<Json, Error> {
         if depth > MAX_DEPTH {
-            return Err(self.error("JSON nested deeper than 64 levels"));
+            return Err(self.error_of(ErrorKind::Depth, "JSON nested deeper than 64 levels"));
         }
         match self.peek() {
             Some(b'{') => self.object(depth),
@@ -268,7 +317,9 @@ impl JsonReader<'_> {
             #[cfg(not(test))]
             let _: u64 = compared;
             if seen {
-                return Err(self.error(format!("duplicate key `{key}`")));
+                return Err(
+                    self.error_of(ErrorKind::DuplicateField, format!("duplicate key `{key}`"))
+                );
             }
             self.skip_whitespace();
             self.expect(b':')?;
@@ -411,27 +462,42 @@ impl JsonReader<'_> {
         Ok(value)
     }
 
+    /// RFC 8259's `number`: `-`? then `0` or a non-zero digit and digits,
+    /// then `.` and digits, then `e` or `E`, a sign and digits, each part
+    /// after the first optional (S3's `vfy6`). A fraction or an exponent is
+    /// kept in the lexeme and refused by whichever field asks for it: there
+    /// is no floating-point field in this schema to accept one.
     fn number(&mut self) -> Result<Json, Error> {
         let start = self.pos;
         if self.peek() == Some(b'-') {
             self.bump();
         }
-        let mut digits = 0_usize;
-        while let Some(byte) = self.peek() {
-            if byte.is_ascii_digit() {
-                digits = digits.saturating_add(1);
+        match self.peek() {
+            Some(b'0') => {
                 self.bump();
-            } else if matches!(byte, b'.' | b'e' | b'E' | b'+' | b'-') {
-                // Accepted by the grammar, kept in the lexeme, and rejected by
-                // whichever field asks for it: there is no floating-point
-                // field in this schema to accept it.
-                self.bump();
-            } else {
-                break;
+                if self.peek().is_some_and(|byte| byte.is_ascii_digit()) {
+                    return Err(self.error("a number with a leading zero"));
+                }
             }
+            Some(b'1'..=b'9') => self.digits(),
+            _ => return Err(self.error("expected a value")),
         }
-        if digits == 0 {
-            return Err(self.error("expected a value"));
+        if self.peek() == Some(b'.') {
+            self.bump();
+            if !self.peek().is_some_and(|byte| byte.is_ascii_digit()) {
+                return Err(self.error("a number's fraction without a digit"));
+            }
+            self.digits();
+        }
+        if matches!(self.peek(), Some(b'e' | b'E')) {
+            self.bump();
+            if matches!(self.peek(), Some(b'+' | b'-')) {
+                self.bump();
+            }
+            if !self.peek().is_some_and(|byte| byte.is_ascii_digit()) {
+                return Err(self.error("a number's exponent without a digit"));
+            }
+            self.digits();
         }
         let slice = self
             .bytes
@@ -442,6 +508,33 @@ impl JsonReader<'_> {
             .to_owned();
         Ok(Json::Number(lexeme))
     }
+}
+
+/// Whether `lexeme` is an integer by RFC 8259's grammar: `-`? then `0`, or a
+/// non-zero digit and digits — no `+`, no leading zero, nothing else (S3's
+/// `vfy6`).
+///
+/// A bare number the reader accepted already has that shape when it is
+/// whole; the proto3 mapping also accepts an integer quoted, and a quoted one
+/// is held to the same shape here, so `"+0"` and `"00"` are refused as `+0`
+/// and `00` are. Every reader of an integer asks this before it parses one.
+pub(crate) fn is_integer_lexeme(lexeme: &str) -> bool {
+    let digits = lexeme.strip_prefix('-').unwrap_or(lexeme);
+    match digits.as_bytes() {
+        [b'0'] => true,
+        [b'1'..=b'9', rest @ ..] => rest.iter().all(u8::is_ascii_digit),
+        _ => false,
+    }
+}
+
+/// Whether `lexeme` is digits that RFC 8259 does not write as an integer: a
+/// `+`, or a leading zero. A refusal says so, rather than that the value is
+/// not whole.
+pub(crate) fn is_misspelt_integer(lexeme: &str) -> bool {
+    let digits = lexeme.strip_prefix(['+', '-']).unwrap_or(lexeme);
+    !digits.is_empty()
+        && digits.bytes().all(|byte| byte.is_ascii_digit())
+        && !is_integer_lexeme(lexeme)
 }
 
 /// Whether an object already holds `key`, its members so far being

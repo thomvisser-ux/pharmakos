@@ -224,6 +224,14 @@
     "beginner": "A beacon can't yet be placed as a stepping stone toward a feature. Pick a spot, or cover a feature you can reach."
   },
   {
+    "code": "E0029",
+    "family": "decode and version",
+    "severity": "ERROR",
+    "emitter": "decode",
+    "message": "the playbook is longer than {max} characters, so none of it was read.",
+    "beginner": "This file is longer than a playbook may be, so nothing in it was checked. Take out what it does not need."
+  },
+  {
     "code": "E0101",
     "family": "limits and required blocks",
     "severity": "ERROR",
@@ -395,9 +403,17 @@
     "code": "E0209",
     "family": "conditions",
     "severity": "ERROR",
-    "emitter": "none at the skeleton (S2/S3, with the enemy-knowledge predicates)",
+    "emitter": "structure",
     "message": "an enemy predicate must declare its freshness.",
     "beginner": "Say how recently you must have seen the thing you are asking about."
+  },
+  {
+    "code": "E0210",
+    "family": "conditions",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "`known_within_ms` is {found} ms, and a freshness of VISIBLE_NOW reads no window; only KNOWN_WITHIN reads one.",
+    "beginner": "\"Visible now\" asks about what your side sees this moment, so it takes no time window. Leave the window out, or ask about what was seen within it."
   },
   {
     "code": "E0301",
@@ -592,6 +608,22 @@
     "beginner": "An Attack beacon hunts an enemy's commander. Name an enemy seat, or leave the seat out to hunt the nearest enemy commander seen."
   },
   {
+    "code": "E0420",
+    "family": "references and placement",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "`toward` is legal only in a place_beacon's `at`, which is where a stepping stone goes; here it names no site a beacon is placed at.",
+    "beginner": "\"A stepping stone toward a vent\" says where a new beacon goes, so it belongs in a place-beacon step and nowhere else."
+  },
+  {
+    "code": "E0421",
+    "family": "references and placement",
+    "severity": "ERROR",
+    "emitter": "semantics",
+    "message": "`{id}` is an enemy beacon the seat has seen, and {role} names one of this seat's own beacons; an enemy beacon there resolves to nothing, and the step fails `no_target`.",
+    "beginner": "Only an Attack beacon's target can be an enemy beacon. Everywhere else, name one of your own beacons."
+  },
+  {
     "code": "E0501",
     "family": "settings and recycle",
     "severity": "ERROR",
@@ -635,9 +667,9 @@
     "code": "E0506",
     "family": "settings and recycle",
     "severity": "ERROR",
-    "emitter": "none at the skeleton (S4, with the capability catalogue)",
+    "emitter": "structure",
     "message": "`{id}` is not a blueprint the catalogue holds.",
-    "beginner": "There is no such thing to build."
+    "beginner": "There is no kind of building by that name."
   },
   {
     "code": "E0507",
@@ -787,9 +819,9 @@
     "code": "W0703",
     "family": "schedule, conflicts and staleness",
     "severity": "WARNING",
-    "emitter": "lint",
-    "message": "the sighting this rests on is {found} ms old; the reach window is {max} ms.",
-    "beginner": "What the seat remembers here may be too old to act on."
+    "emitter": "none at the skeleton (retired by S3's `vfy6`: an enemy handle outside an Attack target is E0421)",
+    "message": "a reference to an enemy beacon rested on a sighting older than the reach window; such a reference is E0421 since S3, so this code is retired and raised by nothing.",
+    "beginner": "An enemy beacon is named only as an Attack target, where its age is checked."
   },
   {
     "code": "W0704",
@@ -886,6 +918,14 @@
     "emitter": "structure",
     "message": "`breach_allowed` is true, and only a mortar whose beacon's `roe` is FREE_FIRE shells a breach: RETURN_FIRE never fires at a wall, and a Build beacon's omitted `roe` reads as RETURN_FIRE. Without one, the demolition charge breaches alone.",
     "beginner": "Mortars help a raid through a wall only when their beacon is set to FREE_FIRE. Otherwise the raiders' demolition charge does the work by itself."
+  },
+  {
+    "code": "I0007",
+    "family": "information",
+    "severity": "INFO",
+    "emitter": "structure",
+    "message": "omitted settings not noted one by one: {count}. Each reads as its default; a report notes at most the first few, and none past the size budget.",
+    "beginner": "Many settings here are left to their defaults. The first few are noted; the rest work the same way."
   }
 ]
 

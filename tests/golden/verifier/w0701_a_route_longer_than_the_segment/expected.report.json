@@ -3,6 +3,34 @@
   "depth": "FULL",
   "diagnostics": [
     {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/0/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/1/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/1/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
       "code": "W0701",
       "severity": "WARNING",
       "path": "/declarative/route/1",
@@ -17,10 +45,10 @@
       "beginner": "The least time the walking can take; going round anything in the way takes longer."
     }
   ],
-  "report_hash": "GHgEpjhT88M=",
+  "report_hash": "6iR2y0D3/14=",
   "rules_hash": "GybFJQaL/2E=",
   "plan_fingerprint": "XDxgLw2ztrc=",
-  "verifier_version": "0.1.0-s3.2",
+  "verifier_version": "0.1.0-s3.3",
   "size_units": 2,
   "size_budget": 128
 }

@@ -297,7 +297,10 @@ fn fix_from(report: &Json) -> String {
         panic!("a report carries diagnostics");
     };
     let mut operations: Vec<Json> = Vec::new();
-    for diagnostic in diagnostics {
+    // The errors' fixes: since S3's `vfy6` a report also carries the notes
+    // decision 8 adds (an omitted `on_fail`, a death limit of 0), which are
+    // not what the walkthrough repairs.
+    for diagnostic in diagnostics.iter().filter(|found| is_error(found)) {
         let Some(Json::Array(suggestions)) = diagnostic.get("suggestions") else {
             panic!("`{diagnostic:?}` carries no suggestions, so there is no fix to apply");
         };
@@ -513,7 +516,7 @@ fn the_specs_fourteen_call_walkthrough_runs_end_to_end() {
         report.get("depth"),
         Some(&Json::String(String::from("quick")))
     );
-    let errors = diagnostics_of(report);
+    let errors = errors_of(report);
     assert_eq!(
         errors, 2,
         "the walkthrough's line is `(2 errors, with fixes)`, and this is what the two are"
@@ -681,6 +684,22 @@ fn the_specs_fourteen_call_walkthrough_runs_end_to_end() {
 }
 
 /// How many diagnostics a report carries.
+/// Whether a wire diagnostic is an error, as the gateway spells the severity.
+fn is_error(diagnostic: &Json) -> bool {
+    diagnostic.get("severity") == Some(&Json::String(String::from("error")))
+}
+
+/// How many of a report's diagnostics are errors.
+fn errors_of(report: &Json) -> usize {
+    match report.get("diagnostics") {
+        Some(Json::Array(found)) => found
+            .iter()
+            .filter(|diagnostic| is_error(diagnostic))
+            .count(),
+        other => panic!("diagnostics is an array, and it is {other:?}"),
+    }
+}
+
 fn diagnostics_of(report: &Json) -> usize {
     match report.get("diagnostics") {
         Some(Json::Array(found)) => found.len(),
@@ -1526,7 +1545,7 @@ fn the_transport_bounds_refuse_rather_than_silently_correcting() {
     );
     assert_eq!(code(&refused, "an upper-case draft id"), "INVALID_ARGUMENT");
 
-    let long_playbook = "x".repeat(pharmakos_gateway::surface::planning::MAX_PLAYBOOK_CHARS + 1);
+    let long_playbook = "x".repeat(pharmakos_verifier::MAX_PLAYBOOK_CHARS + 1);
     let refused = surface.call(
         Some(&token),
         &request(

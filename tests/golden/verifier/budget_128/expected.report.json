@@ -5,6 +5,20 @@
     {
       "code": "I0003",
       "severity": "INFO",
+      "path": "/declarative/route/0/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
       "path": "/declarative/route/0/move/pace",
       "message": "`pace` is omitted and reads as DIRECT.",
       "beginner": "A setting left out takes its named default.",
@@ -12,6 +26,34 @@
         {
           "title": "Write the default out",
           "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/move/pace\",\"value\":\"DIRECT\"}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/1/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/1/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/2/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/2/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
           "applicability": "MACHINE_APPLICABLE"
         }
       ]
@@ -33,6 +75,34 @@
     {
       "code": "I0003",
       "severity": "INFO",
+      "path": "/declarative/route/3/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/3/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/4/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/4/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
       "path": "/declarative/route/4/move/pace",
       "message": "`pace` is omitted and reads as DIRECT.",
       "beginner": "A setting left out takes its named default.",
@@ -40,6 +110,34 @@
         {
           "title": "Write the default out",
           "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/4/move/pace\",\"value\":\"DIRECT\"}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/5/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/5/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/6/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/6/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
           "applicability": "MACHINE_APPLICABLE"
         }
       ]
@@ -61,6 +159,34 @@
     {
       "code": "I0003",
       "severity": "INFO",
+      "path": "/declarative/route/7/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/7/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/8/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/8/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
       "path": "/declarative/route/8/move/pace",
       "message": "`pace` is omitted and reads as DIRECT.",
       "beginner": "A setting left out takes its named default.",
@@ -68,6 +194,34 @@
         {
           "title": "Write the default out",
           "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/8/move/pace\",\"value\":\"DIRECT\"}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/9/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/9/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/10/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/10/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
           "applicability": "MACHINE_APPLICABLE"
         }
       ]
@@ -89,6 +243,34 @@
     {
       "code": "I0003",
       "severity": "INFO",
+      "path": "/declarative/route/11/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/11/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/12/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/12/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
       "path": "/declarative/route/12/move/pace",
       "message": "`pace` is omitted and reads as DIRECT.",
       "beginner": "A setting left out takes its named default.",
@@ -96,6 +278,34 @@
         {
           "title": "Write the default out",
           "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/12/move/pace\",\"value\":\"DIRECT\"}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/13/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/13/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/14/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/14/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
           "applicability": "MACHINE_APPLICABLE"
         }
       ]
@@ -117,6 +327,34 @@
     {
       "code": "I0003",
       "severity": "INFO",
+      "path": "/declarative/route/15/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/15/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/16/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/16/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
       "path": "/declarative/route/16/move/pace",
       "message": "`pace` is omitted and reads as DIRECT.",
       "beginner": "A setting left out takes its named default.",
@@ -124,6 +362,34 @@
         {
           "title": "Write the default out",
           "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/16/move/pace\",\"value\":\"DIRECT\"}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/17/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/17/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/18/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/18/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
           "applicability": "MACHINE_APPLICABLE"
         }
       ]
@@ -145,6 +411,34 @@
     {
       "code": "I0003",
       "severity": "INFO",
+      "path": "/declarative/route/19/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/19/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/20/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/20/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
       "path": "/declarative/route/20/move/pace",
       "message": "`pace` is omitted and reads as DIRECT.",
       "beginner": "A setting left out takes its named default.",
@@ -152,6 +446,34 @@
         {
           "title": "Write the default out",
           "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/20/move/pace\",\"value\":\"DIRECT\"}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/21/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/21/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/22/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/22/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
           "applicability": "MACHINE_APPLICABLE"
         }
       ]
@@ -173,6 +495,34 @@
     {
       "code": "I0003",
       "severity": "INFO",
+      "path": "/declarative/route/23/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/23/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/24/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/24/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
       "path": "/declarative/route/24/move/pace",
       "message": "`pace` is omitted and reads as DIRECT.",
       "beginner": "A setting left out takes its named default.",
@@ -180,6 +530,34 @@
         {
           "title": "Write the default out",
           "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/24/move/pace\",\"value\":\"DIRECT\"}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/25/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/25/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/26/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/26/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
           "applicability": "MACHINE_APPLICABLE"
         }
       ]
@@ -201,6 +579,34 @@
     {
       "code": "I0003",
       "severity": "INFO",
+      "path": "/declarative/route/27/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/27/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/28/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/28/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
       "path": "/declarative/route/28/move/pace",
       "message": "`pace` is omitted and reads as DIRECT.",
       "beginner": "A setting left out takes its named default.",
@@ -208,6 +614,34 @@
         {
           "title": "Write the default out",
           "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/28/move/pace\",\"value\":\"DIRECT\"}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/29/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/29/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/30/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/30/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
           "applicability": "MACHINE_APPLICABLE"
         }
       ]
@@ -229,6 +663,34 @@
     {
       "code": "I0003",
       "severity": "INFO",
+      "path": "/declarative/route/31/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/31/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/32/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/32/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
       "path": "/declarative/route/32/move/pace",
       "message": "`pace` is omitted and reads as DIRECT.",
       "beginner": "A setting left out takes its named default.",
@@ -236,6 +698,34 @@
         {
           "title": "Write the default out",
           "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/32/move/pace\",\"value\":\"DIRECT\"}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/33/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/33/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/34/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/34/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
           "applicability": "MACHINE_APPLICABLE"
         }
       ]
@@ -257,6 +747,34 @@
     {
       "code": "I0003",
       "severity": "INFO",
+      "path": "/declarative/route/35/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/35/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/36/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/36/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
       "path": "/declarative/route/36/move/pace",
       "message": "`pace` is omitted and reads as DIRECT.",
       "beginner": "A setting left out takes its named default.",
@@ -264,6 +782,34 @@
         {
           "title": "Write the default out",
           "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/36/move/pace\",\"value\":\"DIRECT\"}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/37/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/37/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/38/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/38/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
           "applicability": "MACHINE_APPLICABLE"
         }
       ]
@@ -285,6 +831,34 @@
     {
       "code": "I0003",
       "severity": "INFO",
+      "path": "/declarative/route/39/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/39/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/40/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/40/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
       "path": "/declarative/route/40/move/pace",
       "message": "`pace` is omitted and reads as DIRECT.",
       "beginner": "A setting left out takes its named default.",
@@ -299,13 +873,13 @@
     {
       "code": "I0003",
       "severity": "INFO",
-      "path": "/declarative/route/42/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
+      "path": "/declarative/route/41/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
       "beginner": "A setting left out takes its named default.",
       "suggestions": [
         {
           "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/42/move/pace\",\"value\":\"DIRECT\"}]",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/41/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
           "applicability": "MACHINE_APPLICABLE"
         }
       ]
@@ -313,587 +887,13 @@
     {
       "code": "I0003",
       "severity": "INFO",
-      "path": "/declarative/route/44/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
+      "path": "/declarative/route/42/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
       "beginner": "A setting left out takes its named default.",
       "suggestions": [
         {
           "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/44/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/route/46/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/46/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/route/48/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/48/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/route/50/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/50/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/route/52/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/52/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/route/54/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/54/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/route/56/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/56/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/route/58/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/58/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/route/60/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/60/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/route/62/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/62/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/handlers/0/body/0/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/0/body/0/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/handlers/0/body/2/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/0/body/2/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/handlers/1/body/0/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/1/body/0/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/handlers/1/body/2/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/1/body/2/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/handlers/2/body/0/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/2/body/0/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/handlers/2/body/2/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/2/body/2/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/handlers/3/body/0/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/3/body/0/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/handlers/3/body/2/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/3/body/2/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/handlers/4/body/0/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/4/body/0/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/handlers/4/body/2/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/4/body/2/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/handlers/5/body/0/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/5/body/0/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/handlers/5/body/2/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/5/body/2/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/handlers/6/body/0/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/6/body/0/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/handlers/6/body/2/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/6/body/2/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/handlers/7/body/0/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/7/body/0/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/handlers/7/body/2/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/7/body/2/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/handlers/8/body/0/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/8/body/0/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/handlers/8/body/2/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/8/body/2/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/handlers/9/body/0/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/9/body/0/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/handlers/9/body/2/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/9/body/2/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/handlers/10/body/0/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/10/body/0/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/handlers/10/body/2/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/10/body/2/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/handlers/11/body/0/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/11/body/0/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/handlers/11/body/2/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/11/body/2/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/handlers/12/body/0/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/12/body/0/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/handlers/12/body/2/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/12/body/2/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/handlers/13/body/0/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/13/body/0/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/handlers/13/body/2/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/13/body/2/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/handlers/14/body/0/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/14/body/0/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/handlers/14/body/2/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/14/body/2/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/handlers/15/body/0/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/15/body/0/move/pace\",\"value\":\"DIRECT\"}]",
-          "applicability": "MACHINE_APPLICABLE"
-        }
-      ]
-    },
-    {
-      "code": "I0003",
-      "severity": "INFO",
-      "path": "/declarative/handlers/15/body/2/move/pace",
-      "message": "`pace` is omitted and reads as DIRECT.",
-      "beginner": "A setting left out takes its named default.",
-      "suggestions": [
-        {
-          "title": "Write the default out",
-          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/15/body/2/move/pace\",\"value\":\"DIRECT\"}]",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/42/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
           "applicability": "MACHINE_APPLICABLE"
         }
       ]
@@ -1047,12 +1047,18 @@
       ],
       "message": "`h15` fires only while `h00` cannot: `h00` comes first, and its condition is true whenever this one's is, so this rule gets a turn only during `h00`'s cooldown or after its last fire.",
       "beginner": "An earlier rule wins every time both are true, so this one mostly never gets a turn. Move it above the other rule, or narrow the other rule."
+    },
+    {
+      "code": "I0007",
+      "severity": "INFO",
+      "message": "omitted settings not noted one by one: 112. Each reads as its default; a report notes at most the first few, and none past the size budget.",
+      "beginner": "Many settings here are left to their defaults. The first few are noted; the rest work the same way."
     }
   ],
-  "report_hash": "BVt/wAYfcFs=",
+  "report_hash": "8m3AL6HuVSs=",
   "rules_hash": "GybFJQaL/2E=",
   "plan_fingerprint": "jIVkAUJn7+8=",
-  "verifier_version": "0.1.0-s3.2",
+  "verifier_version": "0.1.0-s3.3",
   "size_units": 128,
   "size_budget": 128
 }

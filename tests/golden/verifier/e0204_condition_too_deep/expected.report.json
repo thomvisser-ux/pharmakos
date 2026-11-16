@@ -7,12 +7,40 @@
       "path": "/declarative/handlers/0/when",
       "message": "the condition is 5 levels deep; the limit is 4.",
       "beginner": "This condition is nested too deeply to be read at a glance. Flatten it."
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/0/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/handlers/0/body/0/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/0/body/0/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
     }
   ],
-  "report_hash": "dx6YHVb0w94=",
+  "report_hash": "JbwO3iEJjpE=",
   "rules_hash": "GybFJQaL/2E=",
   "plan_fingerprint": "/sKdUaULGck=",
-  "verifier_version": "0.1.0-s3.2",
+  "verifier_version": "0.1.0-s3.3",
   "size_units": 3,
   "size_budget": 128
 }

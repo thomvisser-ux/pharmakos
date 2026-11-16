@@ -177,6 +177,17 @@ same run's notices gave their red-channel variance: **742** for the rows and
   row has its coloured severity square, the severity in words, the plain
   sentence, and the code and pointer; a Fix button appears only for the two
   machine-applicable patches.
+  **Re-rendered by S3's `vfy6` lane** (pull request #179), taken from the
+  `vista-screenshot` artefact of workflow run 43677665128 at `5f3aaec6`, and
+  looked at by the main session before it was committed: the fixture's four
+  reports gained decision 8's `I0003` notes, so the panel now holds nine rows
+  and the 720-pixel frame shows the first five — **Error** E0003 (no Fix),
+  **Error** E0108 with its Fix (the pointer wraps after `cooldown_m`), **Note**
+  I0003 at `/declarative/route/0/on_fail` ("A setting left out takes its named
+  default.") with a "Fix: Write the default out" button, the same **Note** at
+  `/declarative/handlers/0/body/0/on_fail`, and the top of the **Warning**
+  E0008 row, cut by the frame's bottom edge. The rows below it are drawn and
+  not in the picture. A note's square and word are blue.
 * `expected.wizard.png` — `wizard_shot.tscn` drawing
   `godot/fixtures/instantiate_suggested.json` through the bridge's wizard decode
   and `scripts/wizard.gd`: the same panel holding the Hold & Build wizard's first

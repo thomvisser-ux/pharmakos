@@ -118,7 +118,7 @@ use crate::resolve::Symbols;
 use crate::scope::{FeatureKind, KnownBeacon, Ownership, Scope, Sighted};
 use crate::strings;
 use crate::structure::arm_name;
-use crate::walk::{self, AreaOf, Carrier, Holder, List, Slot, Visit};
+use crate::walk::{self, AreaOf, BeaconSlot, Carrier, Holder, List, Slot, Visit};
 use pharmakos_proto::gp::v1::OnFail;
 
 /// Run the stage.
@@ -314,6 +314,34 @@ struct Semantics<'a> {
 }
 
 impl Visit for Semantics<'_> {
+    /// `E0421` (S3's `vfy6`): an enemy beacon's handle in a slot that names
+    /// one of the seat's own beacons. Since S3-04 the view holds the enemy
+    /// beacons the seat sighted, so a handle there resolves here and nothing
+    /// else refused it; the sim compiles it to `BeaconSpec::Foreign`, which
+    /// resolves to nothing, and the step fails `no_target` at run time. An
+    /// Attack target is the one slot an enemy beacon stands in, and an
+    /// `interface` step's beacon and a protect list's are `E0405`'s and
+    /// `E0414`'s already.
+    fn beacon(&mut self, at: &str, reference: &BeaconRef, slot: BeaconSlot) {
+        let BeaconSlot::Own(role) = slot else {
+            return;
+        };
+        let Some(beacon_ref::Ref::BeaconId(id)) = reference.r#ref.as_ref() else {
+            return;
+        };
+        if self
+            .scope
+            .beacon(id)
+            .is_some_and(|known| known.side == Ownership::EnemyKnown)
+        {
+            self.out.emit(
+                Diag::new("E0421", pointer::child(at, "beacon_id"))
+                    .arg("id", id)
+                    .arg_word("role", role),
+            );
+        }
+    }
+
     fn entry(&mut self, at: &str, entry: &Step, list: List, index: usize) {
         self.step = Some(Here {
             list,
@@ -471,7 +499,7 @@ impl Visit for Semantics<'_> {
             Slot::BuildAnchor { deploy } => deploy,
             Slot::RemoveAnchor => None,
             // `E0408` from the structure stage: `on` cannot stand here at all.
-            Slot::PlaceSite | Slot::Elsewhere => return,
+            Slot::PlaceSite | Slot::Elsewhere | Slot::Broadcast => return,
         };
         let Some(chosen) = feature.r#ref.as_ref() else {
             return;

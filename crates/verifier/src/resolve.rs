@@ -42,7 +42,7 @@ use pharmakos_proto::gp::v1::{
 use crate::pointer;
 use crate::report::{Builder, Diag};
 use crate::scope::Scope;
-use crate::walk::{self, List, Slot, Visit};
+use crate::walk::{self, BeaconSlot, List, Slot, Visit};
 
 /// Every name a playbook declares, in the order it declares them.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
@@ -195,7 +195,7 @@ impl Visit for Resolver<'_> {
         }
     }
 
-    fn beacon(&mut self, at: &str, reference: &BeaconRef) {
+    fn beacon(&mut self, at: &str, reference: &BeaconRef, _slot: BeaconSlot) {
         let Some(beacon_ref::Ref::BeaconId(id)) = reference.r#ref.as_ref() else {
             return;
         };
@@ -209,9 +209,15 @@ impl Visit for Resolver<'_> {
         // Every slot, legal or not, as `E0401` is raised for a beacon id
         // wherever it stands: whether the arm may stand there is the structure
         // stage's question, and whether the name names anything is this one's.
+        // S3's `toward` names its feature one level down (`Toward.feature`),
+        // and resolves a name as `on` and `covering` do (S3's `vfy6`).
         let (arm, feature) = match place.place.as_ref() {
-            Some(location::Place::On(feature)) => ("on", feature),
-            Some(location::Place::Covering(feature)) => ("covering", feature),
+            Some(location::Place::On(feature)) => (&["on"][..], feature),
+            Some(location::Place::Covering(feature)) => (&["covering"][..], feature),
+            Some(location::Place::Toward(toward)) => match toward.feature.as_ref() {
+                Some(feature) => (&["toward", "feature"][..], feature),
+                None => return,
+            },
             _ => return,
         };
         let Some(feature_ref::Ref::FeatureId(id)) = feature.r#ref.as_ref() else {
@@ -221,7 +227,7 @@ impl Visit for Resolver<'_> {
             self.out.emit(
                 Diag::new(
                     "E0412",
-                    pointer::child(&pointer::child(at, arm), "feature_id"),
+                    pointer::child(&pointer::join(at, arm), "feature_id"),
                 )
                 .arg("id", id),
             );

@@ -6,11 +6,20 @@
 //! to (decisions-log item 158 (2); S3's plan, section `vfyq`).
 //!
 //! Nothing here is reachable from a build that is not a test. It is the old
-//! path, copied without a behavioural change: `read` and `write` from
+//! path, copied without a behavioural change of its own: `read` and `write` from
 //! `value.rs`, `json_to_wire` and `wire_to_json` from `codec.rs`. One statement
 //! is respelled: the unknown enum number's `map_or_else` is a `match` here, so
 //! that `tests/fallbacks.rs` finds the rule's one allowed statement in the
-//! codec alone. The differential tests in `super::differential` feed it and the fast codec the
+//! codec alone.
+//!
+//! The old path's behaviour moves only where the codec's rules move, and in
+//! step with them, so the two stay one answer (S3's `vfy6`): numbers are read
+//! by RFC 8259's grammar, and a quoted integer is held to its integer grammar
+//! (follow-up B); a field written under both its `.proto` and its JSON
+//! name is refused (follow-up C); and base64 padding completes the last
+//! quantum or is refused (follow-up C, in the shared `base64` module).
+//!
+//! The differential tests in `super::differential` feed it and the fast codec the
 //! same generated documents and assert equal bytes or the same error. It is
 //! kept until the old path is deleted; committed vectors replace it then.
 
@@ -23,7 +32,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use super::base64;
-use super::value::{Error, Json, push_pointer};
+use super::value::{Error, ErrorKind, Json, is_integer_lexeme, is_misspelt_integer, push_pointer};
 use crate::descriptor::{Field, Message, ScalarKind, Schema, schema};
 use crate::wire::{
     Reader, Value, Writer, i64_bits_to_u64, u64_bits_to_i64, zigzag_decode, zigzag_encode,
@@ -54,9 +63,18 @@ struct JsonReader<'a> {
 
 impl JsonReader<'_> {
     fn error(&self, message: impl Into<String>) -> Error {
+        let message = message.into();
+        let kind = if message.starts_with("JSON nested deeper") {
+            ErrorKind::Depth
+        } else if message.starts_with("duplicate key") {
+            ErrorKind::DuplicateField
+        } else {
+            ErrorKind::Grammar
+        };
         Error {
+            kind,
             pointer: format!("/byte/{}", self.pos),
-            message: message.into(),
+            message,
         }
     }
 
@@ -280,27 +298,44 @@ impl JsonReader<'_> {
         Ok(value)
     }
 
+    // S3's `vfy6`: RFC 8259's number grammar, as `value.rs`'s reader.
     fn number(&mut self) -> Result<Json, Error> {
         let start = self.pos;
         if self.peek() == Some(b'-') {
             self.bump();
         }
-        let mut digits = 0_usize;
-        while let Some(byte) = self.peek() {
-            if byte.is_ascii_digit() {
-                digits = digits.saturating_add(1);
-                self.bump();
-            } else if matches!(byte, b'.' | b'e' | b'E' | b'+' | b'-') {
-                // Accepted by the grammar, kept in the lexeme, and rejected by
-                // whichever field asks for it: there is no floating-point
-                // field in this schema to accept it.
-                self.bump();
-            } else {
-                break;
+        let at_digit = |reader: &Self| reader.peek().is_some_and(|byte| byte.is_ascii_digit());
+        let digits = |reader: &mut Self| {
+            while at_digit(reader) {
+                reader.bump();
             }
+        };
+        match self.peek() {
+            Some(b'0') => {
+                self.bump();
+                if at_digit(self) {
+                    return Err(self.error("a number with a leading zero"));
+                }
+            }
+            Some(b'1'..=b'9') => digits(self),
+            _ => return Err(self.error("expected a value")),
         }
-        if digits == 0 {
-            return Err(self.error("expected a value"));
+        if self.peek() == Some(b'.') {
+            self.bump();
+            if !at_digit(self) {
+                return Err(self.error("a number's fraction without a digit"));
+            }
+            digits(self);
+        }
+        if matches!(self.peek(), Some(b'e' | b'E')) {
+            self.bump();
+            if matches!(self.peek(), Some(b'+' | b'-')) {
+                self.bump();
+            }
+            if !at_digit(self) {
+                return Err(self.error("a number's exponent without a digit"));
+            }
+            digits(self);
         }
         let slice = self
             .bytes
@@ -406,7 +441,7 @@ pub(super) fn wire_to_json(full_name: &str, bytes: &[u8]) -> Result<Json, Error>
     let schema = schema();
     let message = schema
         .message(full_name)
-        .ok_or_else(|| Error::at("", format!("`{full_name}` is not a message in the schema")))?;
+        .ok_or_else(|| classified("", format!("`{full_name}` is not a message in the schema")))?;
     message_to_json(schema, message, bytes, "", 0)
 }
 
@@ -421,7 +456,7 @@ pub(super) fn json_to_wire(full_name: &str, value: &Json) -> Result<Vec<u8>, Err
     let schema = schema();
     let message = schema
         .message(full_name)
-        .ok_or_else(|| Error::at("", format!("`{full_name}` is not a message in the schema")))?;
+        .ok_or_else(|| classified("", format!("`{full_name}` is not a message in the schema")))?;
     json_to_message(schema, message, value, "", 0)
 }
 
@@ -437,7 +472,10 @@ fn message_to_json(
     depth: usize,
 ) -> Result<Json, Error> {
     if depth > CODEC_MAX_DEPTH {
-        return Err(Error::at(pointer, "a message nested deeper than 64 levels"));
+        return Err(classified(
+            pointer,
+            "a message nested deeper than 64 levels",
+        ));
     }
 
     // Grouped by field number, so the output is in ascending number order
@@ -446,7 +484,7 @@ fn message_to_json(
     let mut reader = Reader::new(bytes);
     while !reader.is_done() {
         let (number, value) = reader.field().map_err(|error| {
-            Error::at(
+            classified(
                 pointer,
                 format!("`{}` is not a valid encoding: {error:?}", message.full_name),
             )
@@ -457,7 +495,7 @@ fn message_to_json(
     let mut entries: Vec<(String, Json)> = Vec::new();
     for (number, values) in grouped {
         let field = message.field_by_number(number).ok_or_else(|| {
-            Error::at(
+            classified(
                 pointer,
                 format!(
                     "field number {number} is not declared on `{}`",
@@ -485,7 +523,7 @@ fn message_to_json(
             let last = values
                 .last()
                 .copied()
-                .ok_or_else(|| Error::at(&field_pointer, "a field with no value"))?;
+                .ok_or_else(|| classified(&field_pointer, "a field with no value"))?;
             scalar_to_json(schema, field, last, &field_pointer, depth)?
         };
         entries.push((field.name.clone(), json));
@@ -505,14 +543,14 @@ fn unpack<'a>(kind: ScalarKind, value: Value<'a>, pointer: &str) -> Result<Vec<V
     let mut out: Vec<Value<'a>> = Vec::new();
     let mut reader = Reader::new(payload);
     while !reader.is_done() {
-        let fail = |error| Error::at(pointer, format!("a packed repeated field: {error:?}"));
+        let fail = |error| classified(pointer, format!("a packed repeated field: {error:?}"));
         let element = match kind {
             ScalarKind::Fixed32 | ScalarKind::Sfixed32 | ScalarKind::Float => {
                 let array: [u8; 4] = reader
                     .raw(4)
                     .map_err(fail)?
                     .try_into()
-                    .map_err(|_| Error::at(pointer, "a truncated packed fixed32"))?;
+                    .map_err(|_| classified(pointer, "a truncated packed fixed32"))?;
                 Value::Fixed32(u32::from_le_bytes(array))
             }
             ScalarKind::Fixed64 | ScalarKind::Sfixed64 | ScalarKind::Double => {
@@ -520,7 +558,7 @@ fn unpack<'a>(kind: ScalarKind, value: Value<'a>, pointer: &str) -> Result<Vec<V
                     .raw(8)
                     .map_err(fail)?
                     .try_into()
-                    .map_err(|_| Error::at(pointer, "a truncated packed fixed64"))?;
+                    .map_err(|_| classified(pointer, "a truncated packed fixed64"))?;
                 Value::Fixed64(u64::from_le_bytes(array))
             }
             _ => Value::Varint(reader.varint().map_err(fail)?),
@@ -545,7 +583,7 @@ fn scalar_to_json(
     depth: usize,
 ) -> Result<Json, Error> {
     match field.kind {
-        ScalarKind::Double | ScalarKind::Float => Err(Error::at(
+        ScalarKind::Double | ScalarKind::Float => Err(classified(
             pointer,
             "a floating-point field: the sim is integer-only and this codec refuses one",
         )),
@@ -553,18 +591,18 @@ fn scalar_to_json(
         ScalarKind::Int32 => {
             let wide = u64_bits_to_i64(varint(value, pointer)?);
             let narrow = i32::try_from(wide)
-                .map_err(|_| Error::at(pointer, "an int32 field carrying a wider value"))?;
+                .map_err(|_| classified(pointer, "an int32 field carrying a wider value"))?;
             Ok(Json::Number(narrow.to_string()))
         }
         ScalarKind::Sint32 => {
             let wide = zigzag_decode(varint(value, pointer)?);
             let narrow = i32::try_from(wide)
-                .map_err(|_| Error::at(pointer, "an sint32 field carrying a wider value"))?;
+                .map_err(|_| classified(pointer, "an sint32 field carrying a wider value"))?;
             Ok(Json::Number(narrow.to_string()))
         }
         ScalarKind::Uint32 => {
             let narrow = u32::try_from(varint(value, pointer)?)
-                .map_err(|_| Error::at(pointer, "a uint32 field carrying a wider value"))?;
+                .map_err(|_| classified(pointer, "a uint32 field carrying a wider value"))?;
             Ok(Json::Number(narrow.to_string()))
         }
         ScalarKind::Fixed32 => Ok(Json::Number(fixed32(value, pointer)?.to_string())),
@@ -591,15 +629,15 @@ fn scalar_to_json(
         ScalarKind::String => {
             let payload = delimited(value, pointer)?;
             let text = std::str::from_utf8(payload)
-                .map_err(|_| Error::at(pointer, "a string field that is not valid UTF-8"))?;
+                .map_err(|_| classified(pointer, "a string field that is not valid UTF-8"))?;
             Ok(Json::String(text.to_owned()))
         }
         ScalarKind::Bytes => Ok(Json::String(base64::encode(delimited(value, pointer)?))),
         ScalarKind::Enum => {
             let number = i32::try_from(u64_bits_to_i64(varint(value, pointer)?))
-                .map_err(|_| Error::at(pointer, "an enum value out of range"))?;
+                .map_err(|_| classified(pointer, "an enum value out of range"))?;
             let declared = schema.enumeration(&field.type_name).ok_or_else(|| {
-                Error::at(
+                classified(
                     pointer,
                     format!("`{}` is not in the schema", field.type_name),
                 )
@@ -616,7 +654,7 @@ fn scalar_to_json(
         }
         ScalarKind::Message => {
             let nested = schema.message(&field.type_name).ok_or_else(|| {
-                Error::at(
+                classified(
                     pointer,
                     format!("`{}` is not in the schema", field.type_name),
                 )
@@ -635,28 +673,31 @@ fn scalar_to_json(
 fn varint(value: Value<'_>, pointer: &str) -> Result<u64, Error> {
     match value {
         Value::Varint(raw) => Ok(raw),
-        _ => Err(Error::at(pointer, "expected a varint on the wire")),
+        _ => Err(classified(pointer, "expected a varint on the wire")),
     }
 }
 
 fn fixed32(value: Value<'_>, pointer: &str) -> Result<u32, Error> {
     match value {
         Value::Fixed32(raw) => Ok(raw),
-        _ => Err(Error::at(pointer, "expected four fixed bytes on the wire")),
+        _ => Err(classified(pointer, "expected four fixed bytes on the wire")),
     }
 }
 
 fn fixed64(value: Value<'_>, pointer: &str) -> Result<u64, Error> {
     match value {
         Value::Fixed64(raw) => Ok(raw),
-        _ => Err(Error::at(pointer, "expected eight fixed bytes on the wire")),
+        _ => Err(classified(
+            pointer,
+            "expected eight fixed bytes on the wire",
+        )),
     }
 }
 
 fn delimited<'a>(value: Value<'a>, pointer: &str) -> Result<&'a [u8], Error> {
     match value {
         Value::Delimited(payload) => Ok(payload),
-        _ => Err(Error::at(pointer, "expected a length-delimited value")),
+        _ => Err(classified(pointer, "expected a length-delimited value")),
     }
 }
 
@@ -672,10 +713,13 @@ fn json_to_message(
     depth: usize,
 ) -> Result<Vec<u8>, Error> {
     if depth > CODEC_MAX_DEPTH {
-        return Err(Error::at(pointer, "a message nested deeper than 64 levels"));
+        return Err(classified(
+            pointer,
+            "a message nested deeper than 64 levels",
+        ));
     }
     let Json::Object(entries) = value else {
-        return Err(Error::at(
+        return Err(classified(
             pointer,
             format!(
                 "expected an object for `{}`, found {}",
@@ -690,10 +734,11 @@ fn json_to_message(
     // by the order somebody happened to type them in.
     let mut resolved: Vec<(&Field, &Json)> = Vec::new();
     let mut oneofs_used: BTreeMap<i32, String> = BTreeMap::new();
+    let mut named: BTreeMap<i32, String> = BTreeMap::new();
     for (key, item) in entries {
         let key_pointer = push_pointer(pointer, key);
         let field = message.field_by_name(key).ok_or_else(|| {
-            Error::at(
+            classified(
                 &key_pointer,
                 format!(
                     "`{key}` is not a field of `{}`. Unknown fields are rejected, never stripped.",
@@ -701,6 +746,18 @@ fn json_to_message(
                 ),
             )
         })?;
+        // S3's `vfy6`: a field written under both its names is refused.
+        if let Some(first) = named.get(&field.number) {
+            return Err(classified(
+                &key_pointer,
+                format!(
+                    "`{first}` and `{key}` both name the field `{}`. A field is written once, \
+                     under one of its names.",
+                    field.name
+                ),
+            ));
+        }
+        named.insert(field.number, key.clone());
         if matches!(item, Json::Null) {
             // The mapping treats null as "the default value", and a default is
             // not written on the wire. Recording it as a no-op keeps a
@@ -709,7 +766,7 @@ fn json_to_message(
         }
         if let Some(index) = field.oneof_index {
             if let Some(previous) = oneofs_used.get(&index) {
-                return Err(Error::at(
+                return Err(classified(
                     &key_pointer,
                     format!(
                         "`{key}` and `{previous}` are both set, but only one member of a oneof may be"
@@ -733,7 +790,7 @@ fn json_to_message(
         let field_pointer = push_pointer(pointer, &field.name);
         if field.repeated {
             let Json::Array(items) = item else {
-                return Err(Error::at(
+                return Err(classified(
                     &field_pointer,
                     format!("expected an array, found {}", item.kind()),
                 ));
@@ -830,7 +887,24 @@ fn is_proto3_default(schema: &Schema, field: &Field, value: &Json) -> bool {
 /// a lexeme this schema cannot hold (`0.0`, `1e3`) is left for `write_scalar`
 /// to refuse with its own message.
 fn is_zero(lexeme: &str) -> bool {
-    lexeme.parse::<i64>() == Ok(0) || lexeme.parse::<u64>() == Ok(0)
+    // S3's `vfy6`: off RFC 8259's integer grammar is never a zero.
+    is_integer_lexeme(lexeme) && (lexeme.parse::<i64>() == Ok(0) || lexeme.parse::<u64>() == Ok(0))
+}
+
+/// S3's `vfy6`: the codec's `integer_refusal`.
+fn integer_refusal(lexeme: &str, otherwise: &str, signed: bool) -> String {
+    if is_misspelt_integer(lexeme) {
+        format!(
+            "`{lexeme}` is not an integer as JSON writes one: RFC 8259 has no `+` and no \
+             leading zero"
+        )
+    } else if is_integer_lexeme(lexeme) && (signed || !lexeme.starts_with('-')) {
+        // A whole number too large for the field's 64 bits (the review of
+        // PR #179): out of range, not a fraction.
+        format!("`{lexeme}` is out of range for a 64-bit integer")
+    } else {
+        format!("`{lexeme}` {otherwise}")
+    }
 }
 
 #[allow(
@@ -847,13 +921,13 @@ fn write_scalar(
     writer: &mut Writer,
 ) -> Result<(), Error> {
     match field.kind {
-        ScalarKind::Double | ScalarKind::Float => Err(Error::at(
+        ScalarKind::Double | ScalarKind::Float => Err(classified(
             pointer,
             "a floating-point field: the sim is integer-only and this codec refuses one",
         )),
         ScalarKind::Bool => {
             let Json::Bool(flag) = value else {
-                return Err(Error::at(
+                return Err(classified(
                     pointer,
                     format!("expected true or false, found {}", value.kind()),
                 ));
@@ -864,35 +938,35 @@ fn write_scalar(
         ScalarKind::Int32 => {
             let number = integer(value, pointer)?;
             let narrow = i32::try_from(number)
-                .map_err(|_| Error::at(pointer, "out of range for an int32 field"))?;
+                .map_err(|_| classified(pointer, "out of range for an int32 field"))?;
             writer.varint_field(field.number, i64_bits_to_u64(i64::from(narrow)));
             Ok(())
         }
         ScalarKind::Sint32 => {
             let number = integer(value, pointer)?;
             let narrow = i32::try_from(number)
-                .map_err(|_| Error::at(pointer, "out of range for an sint32 field"))?;
+                .map_err(|_| classified(pointer, "out of range for an sint32 field"))?;
             writer.varint_field(field.number, zigzag_encode(i64::from(narrow)));
             Ok(())
         }
         ScalarKind::Uint32 => {
             let number = unsigned(value, pointer)?;
             let narrow = u32::try_from(number)
-                .map_err(|_| Error::at(pointer, "out of range for a uint32 field"))?;
+                .map_err(|_| classified(pointer, "out of range for a uint32 field"))?;
             writer.varint_field(field.number, u64::from(narrow));
             Ok(())
         }
         ScalarKind::Fixed32 => {
             let number = unsigned(value, pointer)?;
             let narrow = u32::try_from(number)
-                .map_err(|_| Error::at(pointer, "out of range for a fixed32 field"))?;
+                .map_err(|_| classified(pointer, "out of range for a fixed32 field"))?;
             writer.fixed32_field(field.number, narrow);
             Ok(())
         }
         ScalarKind::Sfixed32 => {
             let number = integer(value, pointer)?;
             let narrow = i32::try_from(number)
-                .map_err(|_| Error::at(pointer, "out of range for an sfixed32 field"))?;
+                .map_err(|_| classified(pointer, "out of range for an sfixed32 field"))?;
             writer.fixed32_field(field.number, u32::from_ne_bytes(narrow.to_ne_bytes()));
             Ok(())
         }
@@ -918,31 +992,31 @@ fn write_scalar(
         }
         ScalarKind::String => {
             let Json::String(text) = value else {
-                return Err(Error::at(
+                return Err(classified(
                     pointer,
                     format!("expected a string, found {}", value.kind()),
                 ));
             };
             writer
                 .delimited_field(field.number, text.as_bytes())
-                .map_err(|_| Error::at(pointer, "a string too long for its length prefix"))
+                .map_err(|_| classified(pointer, "a string too long for its length prefix"))
         }
         ScalarKind::Bytes => {
             let Json::String(text) = value else {
-                return Err(Error::at(
+                return Err(classified(
                     pointer,
                     format!("expected base64 in a string, found {}", value.kind()),
                 ));
             };
             let bytes =
-                base64::decode(text).ok_or_else(|| Error::at(pointer, "not valid base64"))?;
+                base64::decode(text).ok_or_else(|| classified(pointer, "not valid base64"))?;
             writer
                 .delimited_field(field.number, &bytes)
-                .map_err(|_| Error::at(pointer, "bytes too long for their length prefix"))
+                .map_err(|_| classified(pointer, "bytes too long for their length prefix"))
         }
         ScalarKind::Enum => {
             let declared = schema.enumeration(&field.type_name).ok_or_else(|| {
-                Error::at(
+                classified(
                     pointer,
                     format!("`{}` is not in the schema", field.type_name),
                 )
@@ -952,7 +1026,7 @@ fn write_scalar(
                     declared
                         .value_by_name(name)
                         .ok_or_else(|| {
-                            Error::at(
+                            classified(
                                 pointer,
                                 format!("`{name}` is not a value of `{}`", field.type_name),
                             )
@@ -961,11 +1035,12 @@ fn write_scalar(
                 }
                 Json::Number(_) => {
                     let raw = integer(value, pointer)?;
-                    i32::try_from(raw)
-                        .map_err(|_| Error::at(pointer, "an enum value out of range"))?
+                    i32::try_from(raw).map_err(|_| {
+                        Error::at(ErrorKind::Integer, pointer, "an enum value out of range")
+                    })?
                 }
                 other => {
-                    return Err(Error::at(
+                    return Err(classified(
                         pointer,
                         format!("expected an enum value name, found {}", other.kind()),
                     ));
@@ -976,7 +1051,7 @@ fn write_scalar(
         }
         ScalarKind::Message => {
             let nested = schema.message(&field.type_name).ok_or_else(|| {
-                Error::at(
+                classified(
                     pointer,
                     format!("`{}` is not in the schema", field.type_name),
                 )
@@ -984,7 +1059,7 @@ fn write_scalar(
             let payload = json_to_message(schema, nested, value, pointer, depth.saturating_add(1))?;
             writer
                 .delimited_field(field.number, &payload)
-                .map_err(|_| Error::at(pointer, "a message too long for its length prefix"))
+                .map_err(|_| classified(pointer, "a message too long for its length prefix"))
         }
     }
 }
@@ -996,34 +1071,87 @@ fn integer(value: &Json, pointer: &str) -> Result<i64, Error> {
     let lexeme = match value {
         Json::Number(text) | Json::String(text) => text,
         other => {
-            return Err(Error::at(
+            return Err(classified(
                 pointer,
                 format!("expected an integer, found {}", other.kind()),
             ));
         }
     };
-    lexeme.parse::<i64>().map_err(|_| {
-        Error::at(
-            pointer,
-            format!("`{lexeme}` is not a whole number. This schema has no fractional field."),
-        )
-    })
+    lexeme
+        .parse::<i64>()
+        .ok()
+        .filter(|_| is_integer_lexeme(lexeme))
+        .ok_or_else(|| {
+            classified(
+                pointer,
+                integer_refusal(
+                    lexeme,
+                    "is not a whole number. This schema has no fractional field.",
+                    true,
+                ),
+            )
+        })
 }
 
 fn unsigned(value: &Json, pointer: &str) -> Result<u64, Error> {
     let lexeme = match value {
         Json::Number(text) | Json::String(text) => text,
         other => {
-            return Err(Error::at(
+            return Err(classified(
                 pointer,
                 format!("expected a non-negative integer, found {}", other.kind()),
             ));
         }
     };
-    lexeme.parse::<u64>().map_err(|_| {
-        Error::at(
-            pointer,
-            format!("`{lexeme}` is not a non-negative whole number"),
-        )
-    })
+    lexeme
+        .parse::<u64>()
+        .ok()
+        .filter(|_| is_integer_lexeme(lexeme))
+        .ok_or_else(|| {
+            classified(
+                pointer,
+                integer_refusal(lexeme, "is not a non-negative whole number", false),
+            )
+        })
+}
+
+/// S3's `vfy6` (the review of PR #179, item 7): the old codec had no
+/// [`ErrorKind`], so the reference gives each of its errors the kind its
+/// message names, and the differential tests hold the fast codec's typed
+/// kinds to this reading of the same messages. Test-only: nothing outside
+/// this module reads a kind from a message.
+fn classified(pointer: &str, message: impl Into<String>) -> Error {
+    const KINDS: &[(&str, ErrorKind)] = &[
+        ("both name the field", ErrorKind::BothNames),
+        ("is not a field of", ErrorKind::UnknownField),
+        ("only one member of a", ErrorKind::OneofArms),
+        ("nested deeper than 64", ErrorKind::Depth),
+        ("not valid base64", ErrorKind::Base64),
+        ("out of range for a", ErrorKind::Integer),
+        ("expected an integer, found", ErrorKind::Integer),
+        ("expected a non-negative integer", ErrorKind::Integer),
+        ("is not a whole number", ErrorKind::Integer),
+        ("is not a non-negative whole number", ErrorKind::Integer),
+        ("is not an integer as JSON writes one", ErrorKind::Integer),
+        ("an enum value out of range", ErrorKind::Wire),
+        ("is not a message in the schema", ErrorKind::Schema),
+        ("is not a path of singular fields", ErrorKind::Schema),
+        ("a message index outside the schema", ErrorKind::Schema),
+        ("is not in the schema", ErrorKind::Schema),
+        ("expected an object for", ErrorKind::Value),
+        ("expected an array", ErrorKind::Value),
+        ("expected true or false", ErrorKind::Value),
+        ("expected a string, found", ErrorKind::Value),
+        ("expected base64 in a string", ErrorKind::Value),
+        ("is not a value of", ErrorKind::Value),
+        ("expected an enum value name", ErrorKind::Value),
+        ("a floating-point field", ErrorKind::Value),
+        ("too long for", ErrorKind::Value),
+    ];
+    let message = message.into();
+    let kind = KINDS
+        .iter()
+        .find(|(words, _)| message.contains(words))
+        .map_or(ErrorKind::Wire, |(_, kind)| *kind);
+    Error::at(kind, pointer, message)
 }

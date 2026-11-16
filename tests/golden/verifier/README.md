@@ -337,3 +337,31 @@ licensed seat and a grown sphere are tested in `verifier.rs` against fixtures
 of their own (`spire_scope`, and the sphere test's), because
 `crates/bench/src/quick.rs` restates every fixture a case file is checked
 against.
+
+**S3's `vfy6` (`VERIFIER_VERSION` 0.1.0-s3.3).** Every `report_hash` moved:
+`VERIFIER_VERSION` is input 4. Every report whose playbook has a step with no
+`on_fail` gains one `I0003` note a step, before that step's own notes ("`on_fail`
+is omitted and reads as SKIP", with a Fix that writes `{"action":"SKIP"}`), and
+one whose `on_death` omits `max_deaths_before_fallback` gains one at
+`/on_death/max_deaths_before_fallback` ("reads as 0, no limit", no Fix): S3's
+plan, decision 8, the register's S3-08 and S3-09. No verdict moved on an
+existing case but where its S3 construct now holds a second error behind its
+`E002x` code. The catalogue moved by `E0209` and `E0506` gaining their emitter
+(structure), `E0506`'s beginner sentence, and the new rows `E0210` (a
+freshness window under `VISIBLE_NOW`) and `E0420` (`toward` outside a
+place_beacon's `at`), each at the end of its family. Eight cases are new, each
+on the plain fixture: `e0101_an_enemy_predicate_without_its_radius`,
+`e0111_a_predicate_with_its_role_unset`,
+`e0209_an_enemy_predicate_without_its_freshness`,
+`e0210_a_window_under_visible_now`, `e0412_toward_an_unknown_feature`,
+`e0420_toward_in_a_move`, `e0506_a_predicate_naming_no_blueprint` and
+`i0003_no_death_limit`. Each S3 case carries its `E002x` code too: the checks
+stand behind it until S3's `pred` lifts the sim's refusal.
+
+**S3's `vfy6`, the enemy handle (`E0421`).** Since S3-04 a sighted `e_NN`
+resolves in the seat's view, and the sim compiles it to a foreign reference
+that resolves to nothing outside an Attack target, so it is refused in every
+other slot that names one of the seat's own beacons. That retires `W0703`,
+whose one case, `w0703_a_reference_resting_on_an_old_sighting`, is gone with
+its golden: its `move` to `e_01` is now `e0421_a_move_to_an_enemy_beacon`, on
+the plain fixture. `W0703`'s row keeps its number and is raised by nothing.

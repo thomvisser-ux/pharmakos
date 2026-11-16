@@ -64,9 +64,12 @@
 //! S3's `con6` put eight predicates and the site `toward` on the wire before
 //! S3's `pred` gives them an effect, so `E0020` to `E0028` refuse each one where
 //! the compile reaches it: a predicate wherever a condition is read, and
-//! `toward` in every `Location` but a `broadcast`'s. Nothing inside one is judged
-//! yet, since the compile refuses the construct before it reads what it holds;
-//! that is S3's `vfy6`, as is `E0209`.
+//! `toward` in every `Location` but a `broadcast`'s. S3's `vfy6` judges what
+//! each one holds behind its code, in the stages that judge the same leaves
+//! anywhere else (a predicate's parameters, `E0209`'s freshness and `toward`'s
+//! slot are the structure stage's, a named feature the resolve stage's), so
+//! that when `pred` lifts a refusal and retires its code nothing inside is
+//! unjudged and no playbook qualifies that the sim's compile then refuses.
 //!
 //! Nothing here reads the seat's view: every question is about the file alone,
 //! which is why the stage is structure's.
@@ -123,13 +126,6 @@ pub fn code_for_construct(construct: &str) -> Option<&'static str> {
         .find(|(name, _)| *name == construct)
         .map(|(_, code)| *code)
 }
-
-/// The blueprints a Build target may name before S4's capability catalogue:
-/// the Generator and S2's base kit (`playbook.proto`'s `BuildTarget`), which
-/// the sim's `compile_build_target` builds since S2's `site` lane lifted the
-/// base kit's refusal (`E0019`, kept in the catalogue and raised by nothing,
-/// decisions-log item 145 (5)); every other id is S4's (`E0010`).
-const BUILDABLE: [&str; 4] = ["generator", "autocannon", "mortar", "wall"];
 
 /// Run the check.
 pub(crate) fn run(playbook: &Playbook, out: &mut Builder) {
@@ -198,7 +194,7 @@ impl Visit for Refusals<'_> {
             // (`pharmakos_sim::spire::queued_kind`); the Spire's licence and its
             // one per beacon are the semantic stage's (`E0507`, `E0513`).
             if let Some(interface_row::Row::QueueStructure(queue)) = row.row.as_ref()
-                && pharmakos_sim::spire::queued_kind(&queue.blueprint_id).is_none()
+                && !crate::blueprints::takes_queue(&queue.blueprint_id)
             {
                 self.out.emit(Diag::new(
                     "E0009",
@@ -209,7 +205,8 @@ impl Visit for Refusals<'_> {
     }
 
     fn build_target(&mut self, at: &str, target: &BuildTarget) {
-        if BUILDABLE.contains(&target.blueprint_id.as_str()) {
+        // The table of where each blueprint may stand (`crate::BLUEPRINT_SLOTS`).
+        if crate::blueprints::takes_build_target(&target.blueprint_id) {
             return;
         }
         // The sim refuses an empty id as a blueprint other than `generator`;

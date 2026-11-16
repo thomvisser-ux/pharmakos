@@ -35,7 +35,7 @@ mod value;
 pub use codec::{
     Encoded, json_to_encoded, json_to_wire, wire_to_json, write_wire, write_wire_into,
 };
-pub use value::{Error, Json, read, write};
+pub use value::{Error, ErrorKind, Json, read, write};
 
 use prost::{Message, Name};
 
@@ -136,7 +136,7 @@ pub enum ExactPath {
 /// the verifier to being its only caller outside this module.
 ///
 /// When it answers [`Direct::Wire`], the answer is the exact path's: the same
-/// message, the same wire bytes, the same [`Encoded::is_plain`]. When it does
+/// message and the same wire bytes. When it does
 /// not, the exact path is the answer, and it is an error with a pointer and a
 /// message; this function never gives a sentence of its own, so the codec has
 /// one set of errors (S3's `vfyq`, decisions-log item 158). The differential
@@ -176,8 +176,8 @@ pub fn decode_json<M: Message + Name + Default>(value: &Json) -> Result<M, Error
 /// The two travel together, and only [`decode_json_encoded`] makes one, so the
 /// bytes are always the ones this message was decoded from: a caller that
 /// wants canonical text for the message can write it from them
-/// ([`write_wire`]) without encoding the message again, when
-/// [`Encoded::is_plain`] says the text would be the same.
+/// ([`write_wire`]) without encoding the message again ([`Encoded`] says why
+/// the text is the same).
 #[derive(Clone, PartialEq, Debug)]
 pub struct Decoded<M> {
     message: M,
@@ -211,6 +211,7 @@ pub fn decode_json_encoded<M: Message + Name + Default>(value: &Json) -> Result<
     let encoded = json_to_encoded(&full_name, value)?;
     let message = M::decode(encoded.bytes()).map_err(|error| {
         Error::at(
+            ErrorKind::Wire,
             "",
             format!("`{full_name}` did not decode from its own encoding: {error}"),
         )

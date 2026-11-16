@@ -11,6 +11,20 @@
     {
       "code": "I0003",
       "severity": "INFO",
+      "path": "/declarative/route/0/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
       "path": "/declarative/route/0/move/pace",
       "message": "`pace` is omitted and reads as DIRECT.",
       "beginner": "A setting left out takes its named default.",
@@ -23,10 +37,10 @@
       ]
     }
   ],
-  "report_hash": "Ht6FHutlmvw=",
+  "report_hash": "OJjKQf6LA14=",
   "rules_hash": "GybFJQaL/2E=",
   "plan_fingerprint": "S8aNfwnG0nE=",
-  "verifier_version": "0.1.0-s3.2",
+  "verifier_version": "0.1.0-s3.3",
   "size_units": 1,
   "size_budget": 128
 }

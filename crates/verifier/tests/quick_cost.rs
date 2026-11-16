@@ -35,7 +35,7 @@ use pharmakos_sim::knowledge::SeatEconomy;
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::snapshot::{SNAPSHOT_VERSION, Snapshot};
 use pharmakos_sim::tables::SeatId;
-use pharmakos_verifier::{Input, Scope, verify};
+use pharmakos_verifier::{Input, MAX_DEFAULT_NOTES, Scope, verify};
 
 thread_local! {
     /// How many times **this thread** has allocated.
@@ -191,19 +191,36 @@ fn quick_allocations(playbook: &[u8]) -> (u64, u32, bool) {
     )
 }
 
-/// The bounds: each the count measured at `vfyq`'s head, with about a
-/// quarter's headroom. Most of what is left is prost's own message tree, a
-/// `Vec` for every group and a `String` for every label. The path before
-/// `vfyq` made 118,538, 227,365 and 18,964 allocations on the same three (main
-/// at `0f6466f`). The count is a property of this code, not of a machine: it
-/// reads no clock and spawns no thread.
-const HANDLER_SHAPE_BOUND: u64 = 2_000; // measured 1,576
-const ROUTE_SHAPE_BOUND: u64 = 2_500; // measured 1,967
-const BUDGET_CASE_BOUND: u64 = 3_400; // measured 2,707
+/// The bounds: each the count measured, with about a quarter's headroom, so a
+/// regression of more than that fails rather than hides. Most of what is left
+/// is prost's own message tree, a `Vec` for every group and a `String` for
+/// every label. The path before `vfyq` made 118,538, 227,365 and 18,964
+/// allocations on the same three (main at `0f6466f`). The count is a property
+/// of this code, not of a machine: it reads no clock and spawns no thread.
+///
+/// From S3's `vfy6` a step with no `on_fail` is noted (`I0003`, decision 8),
+/// so the bounds below are held on the shapes with an `on_fail` written on
+/// every step ([`with_on_fail`]), where they measure the walk as `vfyq` did,
+/// and the notes are held to [`NOTE_BOUND`] apiece beside them. Re-derived in
+/// `vfy6`'s fix pass (the review of PR #179, item 6) from 1,571 and 1,961 on
+/// the shapes and 1,614 on `budget_128` in canonical form with every `on_fail`
+/// written; as committed the file now costs 1,663, its notes capped at
+/// `MAX_DEFAULT_NOTES` (2,628 before the cap).
+const HANDLER_SHAPE_BOUND: u64 = 1_975; // measured 1,571
+const ROUTE_SHAPE_BOUND: u64 = 2_450; // measured 1,961
+const BUDGET_CASE_BOUND: u64 = 2_050; // measured 1,614 with every on_fail written
 
-#[test]
-fn quick_allocates_within_its_bound_on_both_shapes_at_the_size_budget() {
-    let budget = std::fs::read(
+/// What one `I0003` note for an omitted `on_fail` may allocate (S3's plan,
+/// decision 8; S3's `vfy6`): measured 9, the floor a diagnostic with one Fix
+/// needs (its pointer, message, sentence, code, title and patch, and the two
+/// lists that hold its arguments and its Fix), and 9.2 a note on the shapes
+/// once the closing `I0007` is shared out; with about a quarter's headroom,
+/// as the bounds above (re-derived in the fix pass, from 12).
+const NOTE_BOUND: u64 = 11;
+
+/// The committed budget case.
+fn budget_case() -> Vec<u8> {
+    std::fs::read(
         workspace_root()
             .join("crates")
             .join("verifier")
@@ -211,14 +228,80 @@ fn quick_allocates_within_its_bound_on_both_shapes_at_the_size_budget() {
             .join("cases")
             .join("budget_128.json"),
     )
-    .expect("the committed budget case");
+    .expect("the committed budget case")
+}
+
+/// `playbook` with an `on_fail` of SKIP written on every step, the route's
+/// and every handler body's, so no step is noted: what QUICK's walk costs,
+/// apart from what it says.
+fn with_on_fail(playbook: &[u8]) -> Vec<u8> {
+    use pharmakos_proto::gp::v1::{OnFail, Playbook, on_fail::Action};
+    let text = std::str::from_utf8(playbook).expect("UTF-8");
+    let mut decoded: Playbook = pharmakos_proto::json::decode(text).expect("the shape decodes");
+    let declarative = decoded.declarative.as_mut().expect("a declarative block");
+    let skip = OnFail {
+        action: i32::from(Action::Skip),
+        jump_to_label: String::new(),
+    };
+    for step in declarative.route.iter_mut().chain(
+        declarative
+            .handlers
+            .iter_mut()
+            .flat_map(|handler| handler.body.iter_mut()),
+    ) {
+        step.on_fail = Some(skip.clone());
+    }
+    pharmakos_proto::json::encode(&decoded)
+        .expect("the shape encodes")
+        .into_bytes()
+}
+
+/// How many `I0003` notes for an omitted `on_fail` QUICK raises on `playbook`.
+fn on_fail_notes(playbook: &[u8]) -> u64 {
+    let rules = RulesTable::load(&workspace_root().join("rules").join("rules.v1.json"))
+        .expect("the committed rules table");
+    let snapshot = Snapshot {
+        version: SNAPSHOT_VERSION,
+        ..Snapshot::default()
+    }
+    .to_bytes()
+    .expect("the fixture snapshot");
+    let scope = Scope::new(SeatId::new(0), SeatEconomy::default());
+    let input = Input::new(playbook, &snapshot, &scope, &rules).expect("an input");
+    let notes = verify(&input, Depth::Quick)
+        .diagnostics
+        .iter()
+        .filter(|found| found.code == "I0003" && found.path.ends_with("/on_fail"))
+        .count();
+    u64::try_from(notes).expect("a count")
+}
+
+#[test]
+fn quick_allocates_within_its_bound_on_both_shapes_at_the_size_budget() {
     // `budget_128` names beacons this view does not hold, so it does not
-    // qualify here; its diagnostics are part of what it costs.
+    // qualify here; its diagnostics are part of what it costs. Every step
+    // carries an `on_fail`, so these are `vfyq`'s bounds on the walk itself.
     for (name, playbook, bound, qualifies) in [
-        ("63 handlers", handler_shape(), HANDLER_SHAPE_BOUND, true),
-        ("127 route steps", route_shape(), ROUTE_SHAPE_BOUND, true),
-        ("budget_128", budget, BUDGET_CASE_BOUND, false),
+        (
+            "63 handlers",
+            with_on_fail(&handler_shape()),
+            HANDLER_SHAPE_BOUND,
+            true,
+        ),
+        (
+            "127 route steps",
+            with_on_fail(&route_shape()),
+            ROUTE_SHAPE_BOUND,
+            true,
+        ),
+        (
+            "budget_128",
+            with_on_fail(&budget_case()),
+            BUDGET_CASE_BOUND,
+            false,
+        ),
     ] {
+        assert_eq!(on_fail_notes(&playbook), 0, "{name}: no step is noted");
         let (counted, units, qualified) = quick_allocations(&playbook);
         println!("{name}: {counted} allocations, {units} size units, qualifies {qualified}");
         assert_eq!(qualified, qualifies, "{name}: the verdict");
@@ -226,6 +309,34 @@ fn quick_allocates_within_its_bound_on_both_shapes_at_the_size_budget() {
             units >= 127,
             "{name}: the shape is at the size budget ({units})"
         );
+        assert!(
+            counted <= bound,
+            "{name}: QUICK made {counted} allocations, past its bound of {bound}"
+        );
+    }
+}
+
+/// The shapes as item 158 (1) wrote them, and the case as committed, with no
+/// `on_fail` on any step: each step's `I0003` note (decision 8) is output
+/// QUICK now writes, and costs at most [`NOTE_BOUND`] beside the walk's own
+/// bound.
+#[test]
+fn every_omitted_on_fail_is_noted_within_its_own_bound() {
+    for (name, playbook, bound, steps) in [
+        ("63 handlers", handler_shape(), HANDLER_SHAPE_BOUND, 64),
+        ("127 route steps", route_shape(), ROUTE_SHAPE_BOUND, 127),
+        ("budget_128", budget_case(), BUDGET_CASE_BOUND, 112),
+    ] {
+        let notes = on_fail_notes(&playbook);
+        // One note a step, to the cap, which the other `I0003` notes share
+        // (`tests/report_size.rs` holds the cap itself).
+        assert!(
+            notes > 0 && notes <= steps.min(u64::from(MAX_DEFAULT_NOTES)),
+            "{name}: {notes} notes for {steps} steps"
+        );
+        let bound = bound.saturating_add(notes.saturating_mul(NOTE_BOUND));
+        let (counted, _, _) = quick_allocations(&playbook);
+        println!("{name}: {counted} allocations with {notes} notes");
         assert!(
             counted <= bound,
             "{name}: QUICK made {counted} allocations, past its bound of {bound}"

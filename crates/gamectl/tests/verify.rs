@@ -164,3 +164,94 @@ fn a_missing_file_is_an_input_error_and_names_the_path() {
     assert_eq!(outcome.code, Exit::Input);
     assert!(outcome.err.contains("not_here.jsonc"), "{}", outcome.err);
 }
+
+// ---------------------------------------------------------------------------
+// The size cap (S3's `vfy6`, follow-up D)
+// ---------------------------------------------------------------------------
+
+/// A file under this test's scratch folder, written fresh.
+fn scratch_file(name: &str, bytes: &[u8]) -> PathBuf {
+    let path = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
+    std::fs::write(&path, bytes).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+    path
+}
+
+/// `gamectl verify` over a file outside the workspace, by its absolute path.
+fn verify_file(path: &Path) -> pharmakos_gamectl::Outcome {
+    let shown = path.to_str().expect("a UTF-8 scratch path");
+    gamectl(&["verify", shown])
+}
+
+#[test]
+fn a_huge_file_is_e0029_and_is_never_read_whole() {
+    // Not UTF-8, and longer than the cap could be in any bytes: had the whole
+    // file been read as text it would be an unreadable file (`Exit::Input`),
+    // so `E0029` says the read stopped at the bound.
+    let length = pharmakos_verifier::MAX_PLAYBOOK_READ
+        .checked_mul(3)
+        .expect("fits");
+    let path = scratch_file("vfy6_huge.json", &vec![0xff_u8; length]);
+    let outcome = verify_file(&path);
+    assert_eq!(outcome.code, Exit::Failed, "{}{}", outcome.out, outcome.err);
+    assert!(outcome.err.contains("E0029"), "{}", outcome.err);
+    assert!(outcome.err.contains("report_hash"), "{}", outcome.err);
+}
+
+#[test]
+fn a_text_past_the_cap_in_characters_is_e0029() {
+    let title = "t".repeat(pharmakos_verifier::MAX_PLAYBOOK_CHARS);
+    let text = format!(r#"{{"kind":"PLAYBOOK","meta":{{"title":"{title}"}}}}"#);
+    assert!(!pharmakos_verifier::is_too_long_in_bytes(text.len()));
+    let path = scratch_file("vfy6_long.json", text.as_bytes());
+    let outcome = verify_file(&path);
+    assert_eq!(outcome.code, Exit::Failed, "{}{}", outcome.out, outcome.err);
+    assert!(outcome.err.contains("E0029"), "{}", outcome.err);
+    // Nothing past the cap is decoded, so nothing else is said about it.
+    assert!(!outcome.err.contains("E0001"), "{}", outcome.err);
+}
+
+/// The cap is on the text the player wrote, never on the canonical text the
+/// verifier is handed, which is indented a level for every message it nests
+/// (bench3's finding in PR #178: a 151 KB file is 855 KB of canonical text).
+#[test]
+fn a_file_under_the_cap_whose_canonical_text_is_over_it_still_verifies() {
+    let leaf =
+        |value: usize| format!(r#"{{"segment_elapsed":{{"ms":{{"op":"EQ","value":{value}}}}}}}"#);
+    let mut next = 0_usize;
+    let steps: Vec<String> = (0..127_usize)
+        .map(|id| {
+            let leaves: Vec<String> = (0..21)
+                .map(|_| {
+                    next = next.saturating_add(1);
+                    leaf(next)
+                })
+                .collect();
+            let group = if id.is_multiple_of(2) { "any" } else { "all" };
+            let wrap = |inner: String| format!(r#"{{"{group}":{{"items":[{inner}]}}}}"#);
+            let condition = wrap(wrap(wrap(leaves.join(","))));
+            format!(r#"{{"label":"r{id:03}","skip_if":{condition},"hold":{{"ms":1000}}}}"#)
+        })
+        .collect();
+    let text = format!(
+        r#"{{"schema_version":{{"major":1}},"meta":{{"title":"cap","author_kind":"HUMAN"}},"kind":"PLAYBOOK","declarative":{{"route":[{}]}},"on_death":{{"on_respawn":"CONTINUE","max_deaths_before_fallback":1}},"fallback":{{"hold":{{"at":{{"beacon_anchor":{{"safest":{{}}}}}}}}}}}}"#,
+        steps.join(",")
+    );
+    let canonical = pharmakos_plan_core::canonicalise_text(&text)
+        .expect("the shape has a canonical form")
+        .json;
+    assert!(
+        !pharmakos_verifier::is_too_long(&text),
+        "{} chars",
+        text.len()
+    );
+    assert!(
+        pharmakos_verifier::is_too_long(&canonical),
+        "the canonical text is {} chars, within the cap, so this test proves nothing",
+        canonical.chars().count()
+    );
+    let path = scratch_file("vfy6_under_the_cap.json", text.as_bytes());
+    let outcome = verify_file(&path);
+    let said = format!("{}{}", outcome.out, outcome.err);
+    assert!(!said.contains("E0029"), "{said}");
+    assert!(said.contains("report_hash"), "{said}");
+}

@@ -7,12 +7,26 @@
       "path": "/declarative/route/0/move/pace",
       "message": "`pace` carries 9, which is not a value this build names; it is refused rather than read as a default.",
       "beginner": "This setting holds a number the game does not know. Nothing is guessed for you: write one of the setting's names instead."
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/0/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
     }
   ],
-  "report_hash": "pruhBE/6Y1g=",
+  "report_hash": "o7D+oOiEFFg=",
   "rules_hash": "GybFJQaL/2E=",
   "plan_fingerprint": "eh0et2NlZZA=",
-  "verifier_version": "0.1.0-s3.2",
+  "verifier_version": "0.1.0-s3.3",
   "size_units": 1,
   "size_budget": 128
 }

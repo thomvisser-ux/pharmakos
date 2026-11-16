@@ -13,8 +13,8 @@
 //! # It answers only when it can answer exactly
 //!
 //! [`text_to_encoded`] returns exactly what `read` then `json_to_encoded`
-//! return for a document both accept — the same bytes, in the same order, and
-//! the same [`Encoded::is_plain`] — and `None` for every document either of
+//! return for a document both accept — the same bytes, in the same order — and
+//! `None` for every document either of
 //! them refuses. It never says *why*: a refusal is reported by the exact path,
 //! with its pointer and its message, which is the path the caller takes on
 //! `None`. So the codec has one set of errors, and this reader cannot drift
@@ -23,13 +23,13 @@
 //! What it does to match the exact path:
 //!
 //! * the grammar is `read`'s, byte for byte: the same whitespace, literals,
-//!   number lexemes, escapes and surrogates, the same nesting limit, and a
-//!   duplicate key refused;
+//!   number lexemes, escapes and surrogates, and the same nesting limit;
 //! * a member is resolved, skipped as `null` or as a written-out default, or
-//!   refused as an unknown field or a second arm of a `oneof`, as
-//!   `json_to_message` does;
+//!   refused as an unknown field, a field this object has already named
+//!   (under either of its names, which covers `read`'s duplicate key), or a
+//!   second arm of a `oneof`, as `read` and `json_to_message` do;
 //! * each object's members are written in document order and then, if their
-//!   field numbers are not already ascending, moved into a stable ascending
+//!   field numbers are not already ascending, moved into ascending
 //!   order — the order `json_to_message` writes in;
 //! * a submessage's length is reserved as one byte and patched when its
 //!   payload is done, widened in place past 127 bytes, so the bytes are what
@@ -38,6 +38,7 @@
 use super::base64;
 use super::codec::{Encoded, Lexeme, is_proto3_default_lexeme};
 use super::index::{Index, Indexed, IndexedField, index};
+use super::value::is_integer_lexeme;
 use crate::descriptor::ScalarKind;
 use crate::wire::{i64_bits_to_u64, zigzag_encode};
 
@@ -64,12 +65,10 @@ pub(crate) fn text_to_encoded(full_name: &str, text: &str) -> Option<Encoded> {
         pos: 0,
         out: Vec::with_capacity(text.len()),
         members: Vec::new(),
-        keys: Vec::new(),
-        key_text: String::new(),
+        named: Vec::new(),
         oneofs: Vec::new(),
         unescaped: String::new(),
         moved: Vec::new(),
-        plain: true,
     };
     reader.skip_whitespace();
     reader.message(at, 0, 0)?;
@@ -77,7 +76,7 @@ pub(crate) fn text_to_encoded(full_name: &str, text: &str) -> Option<Encoded> {
     if reader.pos < reader.bytes.len() {
         return None;
     }
-    Some(Encoded::new(reader.out, reader.plain))
+    Some(Encoded::new(reader.out))
 }
 
 /// Whether the schema holds a message of this type, which is the one reason
@@ -90,7 +89,6 @@ pub(crate) fn knows(full_name: &str) -> bool {
 #[derive(Clone, Copy)]
 struct Member {
     number: i32,
-    repeated: bool,
     start: usize,
     end: usize,
 }
@@ -120,18 +118,16 @@ struct Direct<'t> {
     out: Vec<u8>,
     /// The members of every object on the way down, as a stack.
     members: Vec<Member>,
-    /// The keys of every object on the way down, unescaped, as a stack of
-    /// spans into `key_text`, for the duplicate-key check.
-    keys: Vec<(usize, usize)>,
-    /// The text of those keys.
-    key_text: String,
+    /// The fields every object on the way down has named, by number, as a
+    /// stack: a field is named once, under either of its names, which also
+    /// refuses a key written twice.
+    named: Vec<i32>,
     /// The `oneof`s every object on the way down has set, as a stack.
     oneofs: Vec<i32>,
     /// A string with an escape in it, unescaped.
     unescaped: String,
     /// Scratch for moving an object's members into field-number order.
     moved: Vec<u8>,
-    plain: bool,
 }
 
 impl<'t> Direct<'t> {
@@ -166,8 +162,7 @@ impl<'t> Direct<'t> {
         let message: &'static Indexed = self.index.get(at)?;
         self.expect(b'{')?;
         let member_base = self.members.len();
-        let key_base = self.keys.len();
-        let key_text_base = self.key_text.len();
+        let named_base = self.named.len();
         let oneof_base = self.oneofs.len();
         let region = self.out.len();
         self.skip_whitespace();
@@ -177,7 +172,7 @@ impl<'t> Direct<'t> {
         }
         loop {
             self.skip_whitespace();
-            let field = self.key(message, key_base)?;
+            let field = self.key(message, named_base)?;
             self.skip_whitespace();
             self.expect(b':')?;
             self.skip_whitespace();
@@ -194,32 +189,26 @@ impl<'t> Direct<'t> {
         }
         self.order(member_base, region)?;
         self.members.truncate(member_base);
-        self.keys.truncate(key_base);
-        self.key_text.truncate(key_text_base);
+        self.named.truncate(named_base);
         self.oneofs.truncate(oneof_base);
         Some(())
     }
 
-    /// A member's key: read, refused if this object has already had it, and
-    /// resolved to the field it names.
-    fn key(&mut self, message: &'static Indexed, key_base: usize) -> Option<&'static IndexedField> {
+    /// A member's key: read, resolved to the field it names, and refused if
+    /// this object has named that field already under either of its names —
+    /// the codec's refusal of a field written under both (S3's `vfy6`), which
+    /// covers `read`'s of a key written twice as well.
+    fn key(
+        &mut self,
+        message: &'static Indexed,
+        named_base: usize,
+    ) -> Option<&'static IndexedField> {
         let text = self.string()?;
-        let start = self.key_text.len();
-        match text {
-            Text::Slice(from, to) => self.key_text.push_str(self.text.get(from..to)?),
-            Text::Unescaped => self.key_text.push_str(&self.unescaped),
-        }
-        let end = self.key_text.len();
-        let key = self.key_text.get(start..end)?;
-        let seen = self.keys.get(key_base..)?;
-        if seen
-            .iter()
-            .any(|&(from, to)| self.key_text.get(from..to) == Some(key))
-        {
+        let field = message.field_by_name(self.text_of(text)?)?;
+        if self.named.get(named_base..)?.contains(&field.field.number) {
             return None;
         }
-        let field = message.field_by_name(key)?;
-        self.keys.push((start, end));
+        self.named.push(field.field.number);
         Some(field)
     }
 
@@ -274,7 +263,6 @@ impl<'t> Direct<'t> {
         if end > start {
             self.members.push(Member {
                 number: field.field.number,
-                repeated: field.field.repeated,
                 start,
                 end,
             });
@@ -307,11 +295,7 @@ impl<'t> Direct<'t> {
         if droppable && self.is_default(field, scalar) {
             return Some(());
         }
-        let zero = self.write_scalar(field, scalar)?;
-        if zero && !field.presence {
-            self.plain = false;
-        }
-        Some(())
+        self.write_scalar(field, scalar)
     }
 
     /// A scalar token: `true`, `false`, a string or a number. An object, an
@@ -326,26 +310,53 @@ impl<'t> Direct<'t> {
         }
     }
 
-    /// `read`'s number grammar: an optional `-`, then digits and any of
-    /// `.eE+-`, with at least one digit.
+    /// `read`'s number grammar, RFC 8259's: `-`? then `0` or a non-zero
+    /// digit and digits, then `.` and digits, then `e` or `E`, a sign and
+    /// digits, each part after the first optional.
     fn number(&mut self) -> Option<&'t str> {
         let start = self.pos;
         if self.peek() == Some(b'-') {
             self.bump();
         }
-        let mut digits = false;
-        while let Some(byte) = self.peek() {
-            if byte.is_ascii_digit() {
-                digits = true;
-            } else if !matches!(byte, b'.' | b'e' | b'E' | b'+' | b'-') {
-                break;
+        match self.peek()? {
+            b'0' => {
+                self.bump();
+                if self.at_digit() {
+                    return None;
+                }
             }
-            self.bump();
+            b'1'..=b'9' => self.digits(),
+            _ => return None,
         }
-        if !digits {
-            return None;
+        if self.peek() == Some(b'.') {
+            self.bump();
+            if !self.at_digit() {
+                return None;
+            }
+            self.digits();
+        }
+        if matches!(self.peek(), Some(b'e' | b'E')) {
+            self.bump();
+            if matches!(self.peek(), Some(b'+' | b'-')) {
+                self.bump();
+            }
+            if !self.at_digit() {
+                return None;
+            }
+            self.digits();
         }
         self.text.get(start..self.pos)
+    }
+
+    fn at_digit(&self) -> bool {
+        self.peek().is_some_and(|byte| byte.is_ascii_digit())
+    }
+
+    /// Steps over a run of ASCII digits.
+    fn digits(&mut self) {
+        while self.at_digit() {
+            self.bump();
+        }
     }
 
     /// `read`'s string grammar, unescaping into `unescaped` only when the
@@ -464,7 +475,7 @@ impl<'t> Direct<'t> {
         reason = "one arm per Protobuf scalar kind, as the codec's `write_scalar`, which it \
                   must answer as"
     )]
-    fn write_scalar(&mut self, field: &IndexedField, scalar: Scalar<'_>) -> Option<bool> {
+    fn write_scalar(&mut self, field: &IndexedField, scalar: Scalar<'_>) -> Option<()> {
         let number = field.field.number;
         match field.field.kind {
             ScalarKind::Double | ScalarKind::Float | ScalarKind::Message => None,
@@ -473,61 +484,61 @@ impl<'t> Direct<'t> {
                     return None;
                 };
                 self.varint_field(number, u64::from(flag));
-                Some(!flag)
+                Some(())
             }
             ScalarKind::Int32 => {
                 let narrow = i32::try_from(self.integer(scalar)?).ok()?;
                 self.varint_field(number, i64_bits_to_u64(i64::from(narrow)));
-                Some(narrow == 0)
+                Some(())
             }
             ScalarKind::Sint32 => {
                 let narrow = i32::try_from(self.integer(scalar)?).ok()?;
                 self.varint_field(number, zigzag_encode(i64::from(narrow)));
-                Some(narrow == 0)
+                Some(())
             }
             ScalarKind::Uint32 => {
                 let narrow = u32::try_from(self.unsigned(scalar)?).ok()?;
                 self.varint_field(number, u64::from(narrow));
-                Some(narrow == 0)
+                Some(())
             }
             ScalarKind::Fixed32 => {
                 let narrow = u32::try_from(self.unsigned(scalar)?).ok()?;
                 self.tag(number, FIXED32);
                 self.out.extend_from_slice(&narrow.to_le_bytes());
-                Some(narrow == 0)
+                Some(())
             }
             ScalarKind::Sfixed32 => {
                 let narrow = i32::try_from(self.integer(scalar)?).ok()?;
                 self.tag(number, FIXED32);
                 self.out.extend_from_slice(&narrow.to_le_bytes());
-                Some(narrow == 0)
+                Some(())
             }
             ScalarKind::Int64 => {
                 let wide = self.integer(scalar)?;
                 self.varint_field(number, i64_bits_to_u64(wide));
-                Some(wide == 0)
+                Some(())
             }
             ScalarKind::Sint64 => {
                 let wide = self.integer(scalar)?;
                 self.varint_field(number, zigzag_encode(wide));
-                Some(wide == 0)
+                Some(())
             }
             ScalarKind::Uint64 => {
                 let wide = self.unsigned(scalar)?;
                 self.varint_field(number, wide);
-                Some(wide == 0)
+                Some(())
             }
             ScalarKind::Fixed64 => {
                 let wide = self.unsigned(scalar)?;
                 self.tag(number, FIXED64);
                 self.out.extend_from_slice(&wide.to_le_bytes());
-                Some(wide == 0)
+                Some(())
             }
             ScalarKind::Sfixed64 => {
                 let wide = self.integer(scalar)?;
                 self.tag(number, FIXED64);
                 self.out.extend_from_slice(&wide.to_le_bytes());
-                Some(wide == 0)
+                Some(())
             }
             ScalarKind::String => {
                 let Scalar::String(text) = scalar else {
@@ -540,7 +551,7 @@ impl<'t> Direct<'t> {
                         self.tag(number, DELIMITED);
                         self.varint(length);
                         self.out.extend_from_slice(self.unescaped.as_bytes());
-                        return Some(self.unescaped.is_empty());
+                        return Some(());
                     }
                 };
                 let slice = self.bytes.get(start..end)?;
@@ -548,7 +559,7 @@ impl<'t> Direct<'t> {
                 self.tag(number, DELIMITED);
                 self.varint(length);
                 self.out.extend_from_slice(slice);
-                Some(slice.is_empty())
+                Some(())
             }
             ScalarKind::Bytes => {
                 let Scalar::String(text) = scalar else {
@@ -559,7 +570,7 @@ impl<'t> Direct<'t> {
                 self.tag(number, DELIMITED);
                 self.varint(length);
                 self.out.extend_from_slice(&decoded);
-                Some(decoded.is_empty())
+                Some(())
             }
             ScalarKind::Enum => {
                 let declared = field.enumeration?;
@@ -569,7 +580,7 @@ impl<'t> Direct<'t> {
                     Scalar::Bool(_) => return None,
                 };
                 self.varint_field(number, i64_bits_to_u64(i64::from(found)));
-                Some(found == 0)
+                Some(())
             }
         }
     }
@@ -577,8 +588,8 @@ impl<'t> Direct<'t> {
     /// `integer`: a bare or quoted lexeme, as an `i64`.
     fn integer(&self, scalar: Scalar<'_>) -> Option<i64> {
         match scalar {
-            Scalar::Number(lexeme) => lexeme.parse::<i64>().ok(),
-            Scalar::String(text) => self.text_of(text)?.parse::<i64>().ok(),
+            Scalar::Number(lexeme) => whole(lexeme)?.parse::<i64>().ok(),
+            Scalar::String(text) => whole(self.text_of(text)?)?.parse::<i64>().ok(),
             Scalar::Bool(_) => None,
         }
     }
@@ -586,19 +597,19 @@ impl<'t> Direct<'t> {
     /// `unsigned`: a bare or quoted lexeme, as a `u64`.
     fn unsigned(&self, scalar: Scalar<'_>) -> Option<u64> {
         match scalar {
-            Scalar::Number(lexeme) => lexeme.parse::<u64>().ok(),
-            Scalar::String(text) => self.text_of(text)?.parse::<u64>().ok(),
+            Scalar::Number(lexeme) => whole(lexeme)?.parse::<u64>().ok(),
+            Scalar::String(text) => whole(self.text_of(text)?)?.parse::<u64>().ok(),
             Scalar::Bool(_) => None,
         }
     }
 
     /// Moves the members an object wrote since `region` into ascending field
-    /// number, stably, if they are not already; and marks the bytes not plain
-    /// if a singular field was written twice.
+    /// number if they are not already. No field is written twice, so the
+    /// order is total.
     fn order(&mut self, member_base: usize, region: usize) -> Option<()> {
         let members = self.members.get_mut(member_base..)?;
         if !members.is_sorted_by_key(|member| member.number) {
-            members.sort_by_key(|member| member.number);
+            members.sort_unstable_by_key(|member| member.number);
             self.moved.clear();
             self.moved.extend_from_slice(self.out.get(region..)?);
             self.out.truncate(region);
@@ -607,13 +618,6 @@ impl<'t> Direct<'t> {
                 let end = member.end.checked_sub(region)?;
                 self.out.extend_from_slice(self.moved.get(start..end)?);
             }
-        }
-        let twice = members.windows(2).any(|pair| {
-            matches!(pair, [first, second]
-                if first.number == second.number && !first.repeated)
-        });
-        if twice {
-            self.plain = false;
         }
         Some(())
     }
@@ -673,4 +677,10 @@ impl<'t> Direct<'t> {
         }
         Some(())
     }
+}
+
+/// `lexeme`, when it is an integer by RFC 8259's grammar, as `integer` and
+/// `unsigned` in the codec ask before they parse one.
+fn whole(lexeme: &str) -> Option<&str> {
+    is_integer_lexeme(lexeme).then_some(lexeme)
 }

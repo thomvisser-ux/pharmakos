@@ -50,8 +50,18 @@
 //! rule an earlier rule wins every time both are true) their emitters, and
 //! adds `E0513` (a second Resonance Spire at one beacon) and `I0006` (a breach
 //! allowed, which only a `FREE_FIRE` mortar shells) at the ends of their
-//! families. `E0506` stays unemitted: an unknown blueprint is `E0009`'s until
-//! S4's capability catalogue (S3's plan, E4).
+//! families. An unknown blueprint in a queue stays `E0009`'s until S4's
+//! capability catalogue (S3's plan, E4). S3's predicates' verifier (task
+//! `vfy6`) gives `E0209` (an enemy predicate without its freshness) and
+//! `E0506` (a predicate naming no blueprint this build knows) their emitters,
+//! and adds `E0210` (a freshness window under `VISIBLE_NOW`) and `E0420`
+//! (`toward` outside a `place_beacon`'s `at`) at the ends of their families;
+//! and `E0421` (an enemy beacon's handle outside an Attack target), which
+//! retires `W0703`: a handle that could rest on an old sighting now stands
+//! only where `E0418` judges its age. It also adds `E0029` (a player's text
+//! past [`crate::MAX_PLAYBOOK_CHARS`]) at the end of the decode family, and
+//! `I0007` (the count of `I0003` notes past [`crate::MAX_DEFAULT_NOTES`]) at
+//! the end of the information codes.
 //!
 //! The label an unemitted row prints, `none at the skeleton (…)`, is kept as
 //! it was spelt when the table shipped, because `gamectl docs` quotes it; the
@@ -442,6 +452,14 @@ pub const CATALOGUE: &[Entry] = &[
         severity: Severity::Error,
         emitter: Emitter::Stage(Stage::Structure),
     },
+    // S3's `vfy6`: a player's text past the cap, reported for the boundary
+    // that holds it (`crate::Input::too_long`) before anything decodes it.
+    Entry {
+        code: "E0029",
+        family: Family::DecodeAndVersion,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Decode),
+    },
     // --- E01xx: limits and required blocks -----------------------------------
     Entry {
         code: "E0101",
@@ -580,10 +598,18 @@ pub const CATALOGUE: &[Entry] = &[
         code: "E0209",
         family: Family::Conditions,
         severity: Severity::Error,
-        // S3's `con6` put the enemy-knowledge predicates on the wire, and they
-        // are refused whole (E0023 to E0025) until S3's `pred`, so nothing can
-        // carry a Freshness yet: S3's `vfy6` lifts this row.
-        emitter: Emitter::NoneYet("S2/S3, with the enemy-knowledge predicates"),
+        // S3's `vfy6` lifts this row: an enemy predicate's freshness is
+        // checked behind E0023 to E0025, which refuse each predicate whole
+        // until S3's `pred`. The question is about the file alone.
+        emitter: Emitter::Stage(Stage::Structure),
+    },
+    // S3's `vfy6`: a window written under VISIBLE_NOW, which reads none, so
+    // it is refused rather than silently dropped.
+    Entry {
+        code: "E0210",
+        family: Family::Conditions,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Structure),
     },
     // --- E03xx: control flow -------------------------------------------------
     Entry {
@@ -744,6 +770,22 @@ pub const CATALOGUE: &[Entry] = &[
         severity: Severity::Error,
         emitter: Emitter::Stage(Stage::Semantics),
     },
+    // S3's `vfy6`: `toward` outside a place_beacon's `at`, `covering`'s
+    // twin (E0407). A question about the file alone.
+    Entry {
+        code: "E0420",
+        family: Family::ReferencesAndPlacement,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Structure),
+    },
+    // S3's `vfy6`: an enemy beacon's handle in a slot that names one of the
+    // seat's own beacons. Which side a handle is on is in the seat's view.
+    Entry {
+        code: "E0421",
+        family: Family::ReferencesAndPlacement,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Semantics),
+    },
     // --- E05xx: settings and recycle -----------------------------------------
     Entry {
         code: "E0501",
@@ -779,7 +821,10 @@ pub const CATALOGUE: &[Entry] = &[
         code: "E0506",
         family: Family::SettingsAndRecycle,
         severity: Severity::Error,
-        emitter: Emitter::NoneYet("S4, with the capability catalogue"),
+        // S3's `vfy6`: a predicate naming a blueprint no kind of structure
+        // answers to. A queued structure's unknown id is still E0009's until
+        // S4's capability catalogue (S3's plan, E4).
+        emitter: Emitter::Stage(Stage::Structure),
     },
     // S3's `vfy5` (S3's plan, E4): a `queue_structure` row for a licensed
     // blueprint the seat's view does not hold the licence for. It stands
@@ -935,10 +980,14 @@ pub const CATALOGUE: &[Entry] = &[
         code: "W0703",
         family: Family::ScheduleConflictsAndStaleness,
         severity: Severity::Warning,
-        // S2's `vfy2`: a reference to an enemy beacon, other than an Attack
-        // target (which E0418 refuses), resting on a sighting older than the
-        // reach window.
-        emitter: Emitter::Stage(Stage::Lint),
+        // S2's `vfy2` gave it a reference to an enemy beacon, other than an
+        // Attack target (which E0418 refuses), resting on a sighting older than
+        // the reach window. Retired by S3's `vfy6`: such a reference is now
+        // E0421 wherever it stands, so nothing raises this; the row keeps its
+        // number, as E0012 to E0019's and W0501's do.
+        emitter: Emitter::NoneYet(
+            "retired by S3's `vfy6`: an enemy handle outside an Attack target is E0421",
+        ),
     },
     // Targeting's three lints (docs/design/targeting.md, "Surfaces"), the
     // first codes the lint stage raises. Advice, never a refusal: each is a
@@ -1040,6 +1089,13 @@ pub const CATALOGUE: &[Entry] = &[
     // alone, so the structure stage's, beside I0004.
     Entry {
         code: "I0006",
+        family: Family::Information,
+        severity: Severity::Info,
+        emitter: Emitter::Stage(Stage::Structure),
+    },
+    // S3's `vfy6` (the review of PR #179): the `I0003` notes past the cap.
+    Entry {
+        code: "I0007",
         family: Family::Information,
         severity: Severity::Info,
         emitter: Emitter::Stage(Stage::Structure),

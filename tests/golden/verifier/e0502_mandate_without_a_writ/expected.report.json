@@ -2,6 +2,20 @@
   "depth": "FULL",
   "diagnostics": [
     {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/0/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
       "code": "E0502",
       "severity": "ERROR",
       "path": "/declarative/route/0/place_beacon/initial/mandate",
@@ -9,10 +23,10 @@
       "beginner": "Say which writ the beacon is on."
     }
   ],
-  "report_hash": "tGUDqVwVMBI=",
+  "report_hash": "2RKGnDuaO5M=",
   "rules_hash": "GybFJQaL/2E=",
   "plan_fingerprint": "ka4O0qFw7LI=",
-  "verifier_version": "0.1.0-s3.2",
+  "verifier_version": "0.1.0-s3.3",
   "size_units": 1,
   "size_budget": 128
 }

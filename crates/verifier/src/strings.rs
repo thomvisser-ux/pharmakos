@@ -234,6 +234,12 @@ pub const VERIFIER_STRINGS: &[Text] = &[
         beginner: "A beacon can't yet be placed as a stepping stone toward a feature. Pick a spot, \
                    or cover a feature you can reach.",
     },
+    Text {
+        code: "E0029",
+        message: "the playbook is longer than {max} characters, so none of it was read.",
+        beginner: "This file is longer than a playbook may be, so nothing in it was checked. \
+                   Take out what it does not need.",
+    },
     // --- E01xx: limits and required blocks -----------------------------------
     Text {
         code: "E0101",
@@ -346,6 +352,13 @@ pub const VERIFIER_STRINGS: &[Text] = &[
         code: "E0209",
         message: "an enemy predicate must declare its freshness.",
         beginner: "Say how recently you must have seen the thing you are asking about.",
+    },
+    Text {
+        code: "E0210",
+        message: "`known_within_ms` is {found} ms, and a freshness of VISIBLE_NOW reads no \
+                  window; only KNOWN_WITHIN reads one.",
+        beginner: "\"Visible now\" asks about what your side sees this moment, so it takes no \
+                   time window. Leave the window out, or ask about what was seen within it.",
     },
     // --- E03xx: control flow -------------------------------------------------
     Text {
@@ -489,6 +502,21 @@ pub const VERIFIER_STRINGS: &[Text] = &[
         beginner: "An Attack beacon hunts an enemy's commander. Name an enemy seat, or leave \
                    the seat out to hunt the nearest enemy commander seen.",
     },
+    Text {
+        code: "E0420",
+        message: "`toward` is legal only in a place_beacon's `at`, which is where a stepping \
+                  stone goes; here it names no site a beacon is placed at.",
+        beginner: "\"A stepping stone toward a vent\" says where a new beacon goes, so it \
+                   belongs in a place-beacon step and nowhere else.",
+    },
+    Text {
+        code: "E0421",
+        message: "`{id}` is an enemy beacon the seat has seen, and {role} names one of this \
+                  seat's own beacons; an enemy beacon there resolves to nothing, and the step \
+                  fails `no_target`.",
+        beginner: "Only an Attack beacon's target can be an enemy beacon. Everywhere else, name \
+                   one of your own beacons.",
+    },
     // --- E05xx: settings and recycle -----------------------------------------
     Text {
         code: "E0501",
@@ -519,7 +547,7 @@ pub const VERIFIER_STRINGS: &[Text] = &[
     Text {
         code: "E0506",
         message: "`{id}` is not a blueprint the catalogue holds.",
-        beginner: "There is no such thing to build.",
+        beginner: "There is no kind of building by that name.",
     },
     Text {
         code: "E0507",
@@ -638,8 +666,10 @@ pub const VERIFIER_STRINGS: &[Text] = &[
     },
     Text {
         code: "W0703",
-        message: "the sighting this rests on is {found} ms old; the reach window is {max} ms.",
-        beginner: "What the seat remembers here may be too old to act on.",
+        message: "a reference to an enemy beacon rested on a sighting older than the reach \
+                  window; such a reference is E0421 since S3, so this code is retired and raised \
+                  by nothing.",
+        beginner: "An enemy beacon is named only as an Attack target, where its age is checked.",
     },
     Text {
         code: "W0704",
@@ -724,6 +754,13 @@ pub const VERIFIER_STRINGS: &[Text] = &[
         beginner: "Mortars help a raid through a wall only when their beacon is set to \
                    FREE_FIRE. Otherwise the raiders' demolition charge does the work by itself.",
     },
+    Text {
+        code: "I0007",
+        message: "omitted settings not noted one by one: {count}. Each reads as its default; a \
+                  report notes at most the first few, and none past the size budget.",
+        beginner: "Many settings here are left to their defaults. The first few are noted; the \
+                   rest work the same way.",
+    },
 ];
 
 // --- Words the templates' arguments use --------------------------------------
@@ -757,6 +794,15 @@ pub const SEAM_PICK: &str = "the `seam` pick";
 pub const COVERED_SEAM: &str = "`covered`, whose deploy covers a seam,";
 /// I0003's `{value}` for an omitted `pillar_spacing`.
 pub const NO_PILLARS: &str = "0, no pillars";
+/// I0003's `{value}` for a `max_deaths_before_fallback` of 0 (S3's plan,
+/// decision 8; the register's S3-09).
+pub const NO_DEATH_LIMIT: &str = "0, no limit";
+/// E0209's Fix for an enemy predicate with no freshness block.
+pub const FIX_VISIBLE_NOW: &str = "Ask about what is visible now";
+/// E0209's Fix for an unset kind beside a window.
+pub const FIX_KNOWN_WITHIN: &str = "Ask about what was seen within the window";
+/// E0210's Fix.
+pub const FIX_DROP_WINDOW: &str = "Leave the window out";
 /// W0706's Fix: swap the fixed site for the description it should have been.
 pub const FIX_COVER_NEAREST_VENT: &str = "Cover the nearest vent you do not cover yet";
 /// I0003's Fix: write the named default out.
@@ -808,6 +854,15 @@ pub const WALL_BOX_COLUMN: &str = "the wall box's";
 pub const ANCHOR_COLUMN: &str = "the anchor's";
 /// W0708's `{what}`: no enemy commander has been sighted.
 pub const NO_COMMANDER_SIGHTED: &str = "the seat has no sighting of an enemy commander";
+/// E0421's `{role}` for a place's `beacon_anchor` (a move, a placement,
+/// the fallback's hold and patrol).
+pub const ROLE_BEACON_ANCHOR: &str = "a `beacon_anchor`";
+/// E0421's `{role}` for the fallback's `shadow`.
+pub const ROLE_SHADOW: &str = "the fallback's `shadow`";
+/// E0421's `{role}` for an own-beacon predicate's `beacon`.
+pub const ROLE_PREDICATE: &str = "a beacon predicate's `beacon`";
+/// E0421's `{role}` for an enemy predicate's `near`.
+pub const ROLE_NEAR: &str = "an enemy predicate's `near`";
 /// E0419's `{why}` for the playbook's own seat.
 pub const SEAT_IS_OWN: &str = "which is this playbook's own seat";
 /// E0419's `{why}` for a seat past any match's.
@@ -875,8 +930,12 @@ pub fn text(code: &str) -> Option<&'static Text> {
 /// blanked: a message that reads `{found}` is a bug report, and a message with a
 /// silent hole in it is not.
 #[must_use]
-pub fn fill(template: &str, args: &[(&str, String)]) -> String {
-    let mut out = String::with_capacity(template.len());
+pub fn fill<V: AsRef<str>>(template: &str, args: &[(&str, V)]) -> String {
+    // Room for every argument, so a message is one allocation.
+    let room = args.iter().fold(template.len(), |total, (_, value)| {
+        total.saturating_add(value.as_ref().len())
+    });
+    let mut out = String::with_capacity(room);
     let mut rest = template;
     // Split at the braces themselves rather than slicing by index, so there is
     // no slice that could fall outside the text and nothing to fall back on.
@@ -888,7 +947,7 @@ pub fn fill(template: &str, args: &[(&str, String)]) -> String {
             return out;
         };
         if let Some((_, value)) = args.iter().find(|(key, _)| *key == name) {
-            out.push_str(value);
+            out.push_str(value.as_ref());
         } else {
             out.push('{');
             out.push_str(name);
@@ -917,7 +976,8 @@ mod tests {
 
     #[test]
     fn an_unsupplied_placeholder_is_left_visible() {
-        assert_eq!(fill("a {missing} b", &[]), "a {missing} b");
+        let none: &[(&str, String)] = &[];
+        assert_eq!(fill("a {missing} b", none), "a {missing} b");
     }
 
     #[test]

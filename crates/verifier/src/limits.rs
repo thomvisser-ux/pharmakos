@@ -18,12 +18,14 @@
 //! breath as "integer comparisons only". They are [`CONDITION_MAX_DEPTH`] and
 //! [`CONDITION_MAX_NODES`] here.
 //!
-//! PLACEHOLDER: a rules-table row for either, if it becomes a tuning number — owner, S3, with the rule list at full depth.
-//!
-//! They are written here rather than in `rules/rules.v1.json`
-//! because inventing a row the owner has not decided on would be the larger
-//! mistake, and because `rules.proto` is a contract file this task does not
-//! touch.
+//! They are written here rather than in `rules/rules.v1.json` because they are
+//! technical, not tuning: spec section 10 gives them as the bounded cost and
+//! guaranteed termination every playbook is held to, so no rules row holds
+//! them. That closes the register's S3-15 (S3's plan, section 2.1; task
+//! `vfy6`), which asked for rows if they ever became tuning numbers. The sim's
+//! compile holds the same two numbers (`MAX_CONDITION_DEPTH`,
+//! `MAX_CONDITION_NODES` in `pharmakos_sim::interpreter`), and
+//! `the_condition_limits_are_the_sims` below holds the two to each other.
 //!
 //! # A missing block is refused, never defaulted
 //!
@@ -214,9 +216,10 @@ impl Limits {
     /// their freshness from it rather than declaring their own. From S2 an
     /// Attack target named by id, or one seat's commander, is compared
     /// against it (`E0418`), as are the enemy commander with no seat named
-    /// (`W0708`), the nearest known enemy beacon (`W0709`, S2's `atk2`) and
-    /// every other reference to an enemy beacon (`W0703`), each
-    /// over the sightings the view carries.
+    /// (`W0708`) and the nearest known enemy beacon (`W0709`, S2's `atk2`),
+    /// each over the sightings the view carries. (`W0703`, for any other
+    /// reference to an enemy beacon, retired with S3's `vfy6`: no other slot
+    /// takes one, `E0421`.)
     ///
     /// PLACEHOLDER: the reach window's tuning — owner, S3 (item 90).
     #[must_use]
@@ -262,4 +265,23 @@ impl Limits {
 /// (AGENTS.md section 4.3).
 fn signed(field: &'static str, value: u32) -> Result<i32, RulesGap> {
     i32::try_from(value).map_err(|_| RulesGap::OutOfRange { field, value })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CONDITION_MAX_DEPTH, CONDITION_MAX_NODES};
+
+    /// The spec's two condition limits are one pair of numbers on both sides
+    /// of the seal: the editor's verdict and the compile's agree on them.
+    #[test]
+    fn the_condition_limits_are_the_sims() {
+        assert_eq!(
+            CONDITION_MAX_DEPTH,
+            pharmakos_sim::interpreter::MAX_CONDITION_DEPTH
+        );
+        assert_eq!(
+            CONDITION_MAX_NODES,
+            pharmakos_sim::interpreter::MAX_CONDITION_NODES
+        );
+    }
 }

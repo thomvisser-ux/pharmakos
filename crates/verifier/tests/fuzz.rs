@@ -57,6 +57,7 @@ use pharmakos_proto::gp::api::v1::diagnostic::Severity;
 use pharmakos_proto::gp::api::v1::verify_plan::Depth;
 use pharmakos_proto::gp::v1::by_richness::Richness;
 use pharmakos_proto::json::{self, Json};
+use pharmakos_sim::interpreter::Plan;
 use pharmakos_sim::knowledge::SeatEconomy;
 use pharmakos_sim::math::random::{Stream, StreamRng};
 use pharmakos_sim::rules::RulesTable;
@@ -118,9 +119,9 @@ const WINDOW: u32 = 180_000;
 
 /// S2's `vfy2` codes, S2's `atk`'s E0419, S2's `vfy4`'s W0708 and S2's
 /// `atk2`'s W0709, in code order: the ten thousand runs reach every one.
-const S2_CODES: [&str; 16] = [
+const S2_CODES: [&str; 15] = [
     "E0113", "E0414", "E0415", "E0416", "E0417", "E0418", "E0419", "E0508", "E0510", "E0511",
-    "E0512", "W0502", "W0703", "W0708", "W0709", "I0004",
+    "E0512", "W0502", "W0708", "W0709", "I0004",
 ];
 
 /// S3's `vfy5` codes, in code order: the ten thousand runs reach every one.
@@ -129,6 +130,16 @@ const S2_CODES: [&str; 16] = [
 /// [`licensed_scope`]'s.
 const S3_CODES: [&str; 4] = ["E0507", "E0513", "W0702", "I0006"];
 
+/// S3's `vfy6` codes, in code order: the checks behind S3's predicates and
+/// `toward`, which the ten thousand runs reach on a damaged run's
+/// predicates and sites.
+const VFY6_CODES: [&str; 5] = ["E0209", "E0210", "E0420", "E0421", "E0506"];
+
+/// The size the padded runs reach past: twice the committed budget, the most
+/// a later stage can choose (S3's plan, E24: never above 256), so the ten
+/// thousand cover any budget `tune3` sets.
+const PADDED_PAST: u32 = 256;
+
 /// The codes for what the sim refuses at the seal (E0009 to E0016; S2's base
 /// kit's E0019 is retired, since S2's `site` built it, E0012, E0014 and
 /// E0017, since S2's `dfnd` built Defend's settings, `most_threatened` and
@@ -136,8 +147,9 @@ const S3_CODES: [&str; 4] = ["E0507", "E0513", "W0702", "I0006"];
 /// settings), for an enum number this build does not name (E0018) and for a
 /// `wall_box` on a target that is not a wall (E0509), in code order: the ten
 /// thousand runs reach every one.
-const REFUSALS: [&str; 7] = [
-    "E0009", "E0010", "E0011", "E0015", "E0016", "E0018", "E0509",
+const REFUSALS: [&str; 16] = [
+    "E0009", "E0010", "E0011", "E0015", "E0016", "E0018", "E0020", "E0021", "E0022", "E0023",
+    "E0024", "E0025", "E0026", "E0027", "E0028", "E0509",
 ];
 
 /// The coordinates at the ends of the field, so the walk and the semantics
@@ -163,6 +175,14 @@ struct Shape {
     clean: bool,
     labels: u32,
     handlers: u32,
+    /// When set, the route is padded with holds to between 240 and about
+    /// 330 size units, so the run meets sizes at and past [`PADDED_PAST`]
+    /// (S3's `vfy6`): one run in eight, clean and damaged alike.
+    padded: bool,
+    /// When set, no held-back word is written, so a run that orders more
+    /// handlers than the sim compiles reaches the structure stage's `E0113`
+    /// rather than stopping at decode on one of its sixty-five handlers' steps.
+    quiet: bool,
 }
 
 impl Shape {
@@ -170,6 +190,8 @@ impl Shape {
         Shape {
             rng: StreamRng::new(FUZZ_SEED, Stream::Map, index, 0, 0),
             clean: index.is_multiple_of(4),
+            padded: matches!(index % 16, 4 | 7),
+            quiet: false,
             labels: 0,
             handlers: 0,
         }
@@ -329,10 +351,13 @@ impl Shape {
         )])
     }
 
-    /// `on` or `covering`, with a name, a pick (sometimes with its rank or
-    /// coverage left out), `covered {}`, or nothing chosen at all.
+    /// `on`, `covering` or S3's `toward`, with a name, a pick (sometimes with
+    /// its rank or coverage left out), `covered {}`, or nothing chosen at all.
     fn feature_site(&mut self) -> Json {
-        let arm = if self.rarely(2) { "on" } else { "covering" };
+        let arm = ["on", "covering", "toward"]
+            .get(usize::try_from(self.below(3)).unwrap_or(0))
+            .copied()
+            .unwrap_or("on");
         let pick = |rank: bool, coverage: Option<&str>| {
             let mut fields: Vec<(String, Json)> = Vec::new();
             if rank {
@@ -360,6 +385,12 @@ impl Shape {
         } else {
             Json::Object(vec![(reference.0.to_owned(), reference.1)])
         };
+        // `toward` holds its feature one level down, and now and then none.
+        let inner = if arm == "toward" && !self.rarely(8) {
+            Json::Object(vec![("feature".to_owned(), inner)])
+        } else {
+            inner
+        };
         Json::Object(vec![(arm.to_owned(), inner)])
     }
 
@@ -378,8 +409,11 @@ impl Shape {
         }
         // A clean run keeps to the three predicates that need no reference to
         // resolve; the rest are what the resolve stage is for.
-        let families = if self.clean { 3 } else { 7 };
+        // A damaged run reaches S3's eight predicates too, which `E0020` to
+        // `E0027` refuse until S3's `pred`, with what each holds damaged.
+        let families = if self.clean { 3 } else { 9 };
         match self.below(families) {
+            7 | 8 => self.s3_predicate(),
             0 => {
                 let pct = if self.clean {
                     self.number(0, 100)
@@ -439,6 +473,110 @@ impl Shape {
         }
     }
 
+    /// One of S3's `con6` predicates, each field now and then left out or
+    /// out of range, as a hand editor writes them (S3's `vfy6`).
+    fn s3_predicate(&mut self) -> Json {
+        let (name, mut fields): (&str, Vec<(String, Json)>) = match self.below(8) {
+            0 => {
+                let role = self.wild_enum(&[
+                    "BUILD_DRONE",
+                    "MINING_DRONE",
+                    "REPAIR_DRONE",
+                    "RAIDER",
+                    "SCOUT",
+                ]);
+                (
+                    "beacon_units_by_role",
+                    vec![
+                        ("beacon".to_owned(), self.beacon_ref()),
+                        ("role".to_owned(), role),
+                        ("count".to_owned(), self.int_compare()),
+                    ],
+                )
+            }
+            1 => {
+                let mandate = self.wild_enum(&["BUILD", "MINE", "DEFEND", "ATTACK", "SURVEY"]);
+                (
+                    "beacon_mandate",
+                    vec![
+                        ("beacon".to_owned(), self.beacon_ref()),
+                        ("mandate".to_owned(), mandate),
+                    ],
+                )
+            }
+            2 => (
+                "beacon_has_structure",
+                vec![
+                    ("beacon".to_owned(), self.beacon_ref()),
+                    ("blueprint_id".to_owned(), self.blueprint()),
+                ],
+            ),
+            3 => (
+                "enemy_units_near",
+                vec![
+                    ("near".to_owned(), self.near()),
+                    ("radius_voxels".to_owned(), self.number(0, 64)),
+                    ("count".to_owned(), self.int_compare()),
+                    ("freshness".to_owned(), self.freshness()),
+                ],
+            ),
+            4 => (
+                "enemy_beacon_known",
+                vec![("freshness".to_owned(), self.freshness())],
+            ),
+            5 => {
+                let structure = match self.below(3) {
+                    0 => ("any_kind".to_owned(), Json::Object(Vec::new())),
+                    _ => ("blueprint_id".to_owned(), self.blueprint()),
+                };
+                (
+                    "enemy_structure_near",
+                    vec![
+                        ("near".to_owned(), self.near()),
+                        ("radius_voxels".to_owned(), self.number(0, 64)),
+                        structure,
+                        ("freshness".to_owned(), self.freshness()),
+                    ],
+                )
+            }
+            6 => ("kw_supply", vec![("kw".to_owned(), self.int_compare())]),
+            _ => ("kw_draw", vec![("kw".to_owned(), self.int_compare())]),
+        };
+        // One field in four left out, whichever it is.
+        if !fields.is_empty() && self.rarely(4) {
+            let index =
+                usize::try_from(self.below(i32::try_from(fields.len()).unwrap_or(1))).unwrap_or(0);
+            if index < fields.len() {
+                fields.remove(index);
+            }
+        }
+        Json::Object(vec![(name.to_owned(), Json::Object(fields))])
+    }
+
+    /// An enemy predicate's place: a voxel, a beacon, the safest, or none.
+    fn near(&mut self) -> Json {
+        match self.below(4) {
+            0 => Json::Object(vec![("voxel".to_owned(), self.wild_voxel())]),
+            1 => Json::Object(vec![("beacon_anchor".to_owned(), self.beacon_ref())]),
+            2 => Json::Object(vec![("safest".to_owned(), Json::Object(Vec::new()))]),
+            _ => Json::Object(Vec::new()),
+        }
+    }
+
+    /// A freshness: either kind, a window under either (or none), an unset
+    /// kind, or a number the enum does not name.
+    fn freshness(&mut self) -> Json {
+        let mut fields: Vec<(String, Json)> = Vec::new();
+        if !self.rarely(5) {
+            let kind = self.wild_enum(&["VISIBLE_NOW", "KNOWN_WITHIN"]);
+            fields.push(("kind".to_owned(), kind));
+        }
+        if self.rarely(2) {
+            fields.push(("known_within_ms".to_owned(), self.number(-1_000, 240_000)));
+        }
+        Json::Object(fields)
+    }
+
     fn int_compare(&mut self) -> Json {
         let mut fields: Vec<(String, Json)> = Vec::new();
         if !self.damage(5) {
@@ -490,7 +628,7 @@ impl Shape {
                 ]),
             ));
         }
-        if self.damage(12) {
+        if !self.quiet && self.damage(12) {
             let index = usize::try_from(self.below(5)).unwrap_or(0);
             let held = HELD.get(index).copied().unwrap_or("set_flag");
             fields.push((held.to_owned(), Json::Object(Vec::new())));
@@ -891,8 +1029,26 @@ impl Shape {
         for _ in 0..route_count {
             route.push(self.entry());
         }
+        // Sizes at and past [`PADDED_PAST`]: holds, one unit each.
+        if self.padded {
+            for _ in 0..self.below(90).saturating_add(240) {
+                let label = self.label();
+                route.push(Json::Object(vec![
+                    ("label".to_owned(), Json::String(label)),
+                    (
+                        "hold".to_owned(),
+                        Json::Object(vec![("ms".to_owned(), Json::Number("1000".to_owned()))]),
+                    ),
+                ]));
+            }
+        }
         // Now and then more handlers than the sim compiles (E0113).
-        let handler_count = if self.damage(40) { 65 } else { self.below(3) };
+        let handler_count = if self.damage(40) {
+            self.quiet = true;
+            65
+        } else {
+            self.below(3)
+        };
         let mut handlers: Vec<Json> = Vec::new();
         for _ in 0..handler_count {
             handlers.push(self.handler());
@@ -929,7 +1085,7 @@ impl Shape {
                 )]),
             ));
         }
-        if self.damage(15) {
+        if !self.quiet && self.damage(15) {
             let nonsense = self.number(0, 9);
             fields.push(("nonsense".to_owned(), nonsense));
         }
@@ -949,6 +1105,44 @@ fn rules() -> RulesTable {
         .to_path_buf();
     RulesTable::load(&root.join("rules").join("rules.v1.json"))
         .unwrap_or_else(|error| panic!("reading the rules table: {error}"))
+}
+
+/// The committed rules table with the size budget at [`PADDED_PAST`], the
+/// most a later stage can choose (S3's plan, E24), so a padded run can
+/// qualify and the compile cross-check in [`check`] reaches it (the review of
+/// PR #179, item 9). Every other run is checked against the committed table.
+fn rules_at_the_widest_budget(rules: &RulesTable) -> RulesTable {
+    let mut message = rules.message().clone();
+    let verifier = message
+        .verifier
+        .as_mut()
+        .unwrap_or_else(|| panic!("the committed rules carry the verifier's block"));
+    verifier.size_budget_units = PADDED_PAST;
+    RulesTable::from_message(&message).unwrap_or_else(|error| panic!("the widened rules: {error}"))
+}
+
+/// The S3 constructs `pred` lifts, by the field a playbook writes and the
+/// code that refuses each until then (`pharmakos_verifier::REFUSED_CONSTRUCTS`).
+const S3_CONSTRUCTS: [(&str, &str); 9] = [
+    (r#""beacon_units_by_role""#, "E0020"),
+    (r#""beacon_mandate""#, "E0021"),
+    (r#""beacon_has_structure""#, "E0022"),
+    (r#""enemy_units_near""#, "E0023"),
+    (r#""enemy_beacon_known""#, "E0024"),
+    (r#""enemy_structure_near""#, "E0025"),
+    (r#""kw_supply""#, "E0026"),
+    (r#""kw_draw""#, "E0027"),
+    (r#""toward""#, "E0028"),
+];
+
+/// What one run came to: its FULL report, whether the draw property applied,
+/// whether a QUICK pass qualified it, and its text.
+struct Run {
+    report: VerifyReport,
+    applied: bool,
+    quick: bool,
+    padded: bool,
+    text: String,
 }
 
 /// The names the scope's features carry, for a `feature_id` that names one.
@@ -1120,8 +1314,21 @@ fn snapshot() -> Vec<u8> {
 ///
 /// The flag says whether the draw property below applied, so a run can show
 /// that it was not vacuous.
-fn check(index: u32, rules: &RulesTable, scope: &Scope, snapshot: &[u8]) -> (VerifyReport, bool) {
-    let text = json::write(&Shape::new(index).playbook());
+#[allow(
+    clippy::too_many_lines,
+    reason = "one run's every invariant in order; split, an invariant could be checked on a different run"
+)]
+fn check(
+    index: u32,
+    committed: &RulesTable,
+    widest: &RulesTable,
+    scope: &Scope,
+    snapshot: &[u8],
+) -> Run {
+    let mut shape = Shape::new(index);
+    let padded = shape.padded;
+    let rules = if padded { widest } else { committed };
+    let text = json::write(&shape.playbook());
 
     // The decode stage reads a playbook through the direct reader and falls
     // back to the exact path only to diagnose one that does not decode. The
@@ -1142,6 +1349,14 @@ fn check(index: u32, rules: &RulesTable, scope: &Scope, snapshot: &[u8]) -> (Ver
     let input = Input::new(text.as_bytes(), snapshot, scope, rules)
         .unwrap_or_else(|error| panic!("assembling the input: {error}"));
     let report = verify(&input, Depth::Full);
+    // QUICK runs FULL's first four stages and nothing else, so it qualifies
+    // at least what FULL qualifies; the compile cross-check below reads QUICK's
+    // answer, the wider of the two (the review of PR #179, item 9).
+    let quick = verify(&input, Depth::Quick).qualifies;
+    assert!(
+        quick || !report.qualifies,
+        "run {index}: FULL qualifies what QUICK refuses"
+    );
 
     assert_eq!(report.verifier_version, VERIFIER_VERSION, "run {index}");
     assert_eq!(report.report_hash.len(), 8, "run {index}");
@@ -1189,6 +1404,18 @@ fn check(index: u32, rules: &RulesTable, scope: &Scope, snapshot: &[u8]) -> (Ver
     // writable as canonical JSON whatever went into it.
     json::encode(&report).unwrap_or_else(|error| panic!("run {index}: {error}"));
 
+    // S2's E8, over every generated playbook (S3's `vfy6`): one the verifier
+    // calls qualifying, the sim's compile accepts, so no file passes the
+    // editor and is refused at the seal. When S3's `pred` lifts its
+    // refusals, the predicates and sites the generator writes are held to it.
+    if quick {
+        let decoded: Playbook = json::decode(&text)
+            .unwrap_or_else(|error| panic!("run {index}: qualifies and does not decode: {error}"));
+        if let Err(error) = Plan::compile(&decoded, rules) {
+            panic!("run {index}: qualifies and the sim's compile refuses it: {error}\n{text}");
+        }
+    }
+
     // The estimate stage's one refusal can never be silenced: a route whose
     // deploys certainly order more draw than the grid has room for carries
     // `E0601`, or `W0603` where the playbook accepts the shortfall, however
@@ -1224,7 +1451,13 @@ fn check(index: u32, rules: &RulesTable, scope: &Scope, snapshot: &[u8]) -> (Ver
             );
         }
     }
-    (report, applied)
+    Run {
+        report,
+        applied,
+        quick,
+        padded,
+        text,
+    }
 }
 
 /// A reference figure for the property above, written apart from the
@@ -1294,17 +1527,15 @@ fn certain_scout_draw(playbook: &Playbook, per_unit: i128) -> i128 {
 #[test]
 fn the_generator_still_produces_shapes_the_verifier_reads() {
     let rules = rules();
+    let widest = rules_at_the_widest_budget(&rules);
     let scope = scope();
     let snapshot = snapshot();
     let mut qualified = 0_u32;
+    let mut past = 0_u32;
     for index in 0..SMOKE_RUNS {
-        let _ = check(index, &rules, &scope, &snapshot);
-        let text = json::write(&Shape::new(index).playbook());
-        let input =
-            Input::new(text.as_bytes(), &snapshot, &scope, &rules).expect("the input assembles");
-        if verify(&input, Depth::Full).qualifies {
-            qualified = qualified.saturating_add(1);
-        }
+        let run = check(index, &rules, &widest, &scope, &snapshot);
+        past = past.saturating_add(u32::from(run.report.size_units >= PADDED_PAST));
+        qualified = qualified.saturating_add(u32::from(run.quick));
     }
     // A generator that never produces a valid playbook is a generator that only
     // ever exercises the decode stage, and a green fuzz run over it would mean
@@ -1314,22 +1545,35 @@ fn the_generator_still_produces_shapes_the_verifier_reads() {
         "none of {SMOKE_RUNS} generated playbooks qualified; the generator only reaches the \
          rejection paths"
     );
+    assert!(
+        past > 0,
+        "no generated playbook reached {PADDED_PAST} size units"
+    );
 }
 
 #[test]
 #[ignore = "ten thousand verifications; nightly-scenarios.yml's fuzz job calls it"]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one tally over the ten thousand runs and its assertions; split, a code could be counted and not asserted"
+)]
 fn ten_thousand_playbooks_come_back_as_reports() {
     let rules = rules();
     let scope = scope();
     let stale = stale_scope();
     let licensed = licensed_scope();
     let snapshot = snapshot();
+    let widest = rules_at_the_widest_budget(&rules);
+    let mut padded_qualified: u32 = 0;
+    let mut constructs: Vec<u32> = vec![0; S3_CONSTRUCTS.len()];
     let mut lints: Vec<String> = Vec::new();
     let mut estimates: Vec<String> = Vec::new();
     let mut refusals: Vec<String> = Vec::new();
     let mut s2: Vec<String> = Vec::new();
     let mut s3: Vec<String> = Vec::new();
+    let mut vfy6: Vec<String> = Vec::new();
     let mut applied: u32 = 0;
+    let mut past: u32 = 0;
     let window = pharmakos_verifier::Limits::from_rules(&rules)
         .unwrap_or_else(|gap| panic!("the limits: {gap}"))
         .reach_memory_ms();
@@ -1347,8 +1591,16 @@ fn ten_thousand_playbooks_come_back_as_reports() {
             1 => &licensed,
             _ => &scope,
         };
-        let (report, held) = check(index, &rules, view, &snapshot);
-        applied = applied.saturating_add(u32::from(held));
+        let run = check(index, &rules, &widest, view, &snapshot);
+        applied = applied.saturating_add(u32::from(run.applied));
+        if run.quick {
+            padded_qualified = padded_qualified.saturating_add(u32::from(run.padded));
+            for (count, (field, _)) in constructs.iter_mut().zip(S3_CONSTRUCTS) {
+                *count = count.saturating_add(u32::from(run.text.contains(field)));
+            }
+        }
+        let report = run.report;
+        past = past.saturating_add(u32::from(report.size_units >= PADDED_PAST));
         for diagnostic in report.diagnostics {
             let code = diagnostic.code;
             let list = if ["W0704", "W0705", "W0706"].contains(&code.as_str()) {
@@ -1365,6 +1617,8 @@ fn ten_thousand_playbooks_come_back_as_reports() {
                 &mut s2
             } else if S3_CODES.contains(&code.as_str()) {
                 &mut s3
+            } else if VFY6_CODES.contains(&code.as_str()) {
+                &mut vfy6
             } else {
                 continue;
             };
@@ -1403,6 +1657,38 @@ fn ten_thousand_playbooks_come_back_as_reports() {
     let mut wanted = S3_CODES.to_vec();
     wanted.sort_unstable();
     assert_eq!(s3, wanted, "the vfy5 codes the run reached");
+    // And every code S3's `vfy6` added or gave its emitter.
+    vfy6.sort();
+    let mut wanted = VFY6_CODES.to_vec();
+    wanted.sort_unstable();
+    assert_eq!(vfy6, wanted, "the vfy6 codes the run reached");
+    // Sizes at and past any budget a later stage can choose.
+    assert!(
+        past > 0,
+        "no generated playbook reached {PADDED_PAST} size units"
+    );
+    // And against the widest budget, some padded playbook qualifies, so the
+    // compile cross-check reaches a file that long.
+    assert!(
+        padded_qualified > 0,
+        "no padded playbook qualified against a budget of {PADDED_PAST}"
+    );
+    // Each S3 construct qualifies in some run once `pred` lifts its code; while
+    // its code still refuses it, none can (S3's `pred` turns each on).
+    for ((field, code), count) in S3_CONSTRUCTS.iter().zip(&constructs) {
+        let refused = pharmakos_verifier::REFUSED_CONSTRUCTS
+            .iter()
+            .any(|(_, refusing)| refusing == code);
+        println!("{field}: {count} qualifying runs ({code} refusing: {refused})");
+        if refused {
+            assert_eq!(*count, 0, "{field} qualified while {code} refuses it");
+        } else {
+            assert!(
+                *count > 0,
+                "{field} never qualified once {code} stopped refusing it"
+            );
+        }
+    }
     // Every emitting branch of targeting's three lints is reached, so a green
     // run says something about each of them.
     lints.sort();

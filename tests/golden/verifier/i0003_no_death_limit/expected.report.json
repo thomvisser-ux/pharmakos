@@ -1,0 +1,34 @@
+{
+  "qualifies": true,
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/on_death/max_deaths_before_fallback",
+      "message": "`max_deaths_before_fallback` is omitted and reads as 0, no limit.",
+      "beginner": "A setting left out takes its named default."
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/0/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    }
+  ],
+  "report_hash": "srmjsPpJ3aY=",
+  "rules_hash": "GybFJQaL/2E=",
+  "plan_fingerprint": "AH/F+KmtvN0=",
+  "verifier_version": "0.1.0-s3.3",
+  "size_units": 1,
+  "size_budget": 128
+}
+

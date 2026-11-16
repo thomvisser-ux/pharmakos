@@ -59,8 +59,9 @@ use pharmakos_sim::snapshot::{SNAPSHOT_VERSION, Snapshot};
 use pharmakos_sim::tables::SeatId;
 use pharmakos_verifier::catalogue::{CATALOGUE, Emitter, Stage, catalogue_json};
 use pharmakos_verifier::{
-    FeatureKind, Input, InputError, KnownBeacon, KnownFeature, Ownership, Scope, ScopeError,
-    Sighted, Sighting, VERIFIER_VERSION, hash, verify,
+    FeatureKind, Input, InputError, KnownBeacon, KnownFeature, MAX_PLAYBOOK_CHARS, Ownership,
+    Scope, ScopeError, Sighted, Sighting, VERIFIER_VERSION, hash, is_too_long,
+    is_too_long_in_bytes, verify,
 };
 
 // ---------------------------------------------------------------------------
@@ -385,10 +386,7 @@ fn map_scope() -> Scope {
 
 /// The cases checked against [`sight_scope`]: the ones whose code reads how
 /// long ago the seat saw something (S2's `vfy2`).
-const SIGHT_CASES: &[&str] = &[
-    "e0418_an_attack_target_seen_too_long_ago",
-    "w0703_a_reference_resting_on_an_old_sighting",
-];
+const SIGHT_CASES: &[&str] = &["e0418_an_attack_target_seen_too_long_ago"];
 
 /// [`fixture_scope`] with the seat's sightings and nothing else changed:
 ///
@@ -535,8 +533,11 @@ fn the_catalogue_is_the_committed_one() {
 /// fixture reaches them, and each has its own test instead.
 ///
 /// `W0707`, the snapshot that does not decode:
-/// `an_unreadable_snapshot_is_reported_and_not_swallowed`.
-const HOST_FAULT_CODES: &[&str] = &["W0707"];
+/// `an_unreadable_snapshot_is_reported_and_not_swallowed`. And `E0029`, a
+/// player's text past the cap, which the boundary that holds the text reports
+/// through [`Input::too_long`] and no case file reaches, because a case is the
+/// bytes handed to [`Input::new`]: `a_playbook_past_the_cap_is_e0029_and_nothing_else`.
+const HOST_FAULT_CODES: &[&str] = &["W0707", "E0029"];
 
 #[test]
 fn every_emitted_code_has_a_case() {
@@ -621,8 +622,28 @@ fn full_finds_what_quick_finds() {
     let mut full_added_something = false;
     let mut full_refused_something = false;
     for case in cases() {
-        let quick = report_for(&case, Depth::Quick);
-        let full = report_for(&case, Depth::Full);
+        let mut quick = report_for(&case, Depth::Quick);
+        let mut full = report_for(&case, Depth::Full);
+        // The count of `I0003` notes left out past the cap (`I0007`, S3's
+        // `vfy6`) closes each report, and FULL's stages may leave out more.
+        let left_out = |report: &mut VerifyReport| {
+            let summary = report
+                .diagnostics
+                .iter()
+                .position(|found| found.code == "I0007")
+                .map(|at| report.diagnostics.remove(at));
+            assert!(
+                !report.diagnostics.iter().any(|found| found.code == "I0007"),
+                "{case}: one summary at most"
+            );
+            summary
+        };
+        let quick_left = left_out(&mut quick);
+        let full_left = left_out(&mut full);
+        assert!(
+            quick_left.is_none() || full_left.is_some(),
+            "{case}: FULL lost QUICK's count of the notes left out"
+        );
         assert!(
             full.diagnostics.starts_with(&quick.diagnostics),
             "{case}: FULL lost or reordered something QUICK found"
@@ -1202,9 +1223,13 @@ fn the_worked_example_qualifies_and_is_six_units() {
         .iter()
         .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
         .collect();
+    // S3's plan, decision 8: none of its steps writes an `on_fail`, so each
+    // reads as SKIP, with a note before the step's own.
     assert_eq!(
         notes,
         [
+            ("I0003", "/declarative/route/0/on_fail"),
+            ("I0003", "/declarative/route/1/on_fail"),
             (
                 "I0003",
                 "/declarative/route/1/place_beacon/initial/mandate/mine/seam_choice"
@@ -1213,8 +1238,11 @@ fn the_worked_example_qualifies_and_is_six_units() {
                 "I0003",
                 "/declarative/route/1/place_beacon/initial/mandate/mine/pillar_spacing"
             ),
+            ("I0003", "/declarative/route/2/on_fail"),
             ("I0003", "/declarative/route/2/move/pace"),
+            ("I0003", "/declarative/handlers/0/body/0/on_fail"),
             ("I0003", "/declarative/handlers/0/body/0/move/pace"),
+            ("I0003", "/declarative/handlers/0/body/1/on_fail"),
             // The semantics stage (S2's plan, decision 12, task `vfy3`): the
             // first move avoids known threats, and the plain fixture holds no
             // sighting of another seat, so it would go as DIRECT does now.
@@ -1354,14 +1382,13 @@ fn every_reserved_name_the_schema_holds_is_refused_by_name() {
 #[test]
 fn the_codec_still_says_what_this_crate_reads() {
     // `crates/verifier`'s decode stage tells `E0002` from `E0001` by the codec's
-    // own wording. The coupling is deliberate and this is where it breaks
-    // loudly: if `crates/proto` rewords the message, this test goes red in the
-    // pull request that reworded it, rather than the code quietly changing.
+    // typed kind (S3's `vfy6`, the review of PR #179), never by its wording.
     let error = json::decode::<pharmakos_proto::gp::v1::Playbook>("{\"nonsense\":1}")
         .expect_err("an unknown field is rejected");
-    assert!(
-        error.message.contains("is not a field"),
-        "the marker `crates/verifier/src/decode.rs` reads is gone: {}",
+    assert_eq!(
+        error.kind,
+        json::ErrorKind::UnknownField,
+        "{}",
         error.message
     );
     assert_eq!(error.pointer, "/nonsense");
@@ -2516,4 +2543,168 @@ fn a_fact_left_behind_by_a_replaced_beacon_is_refused() {
             )))
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// The size cap (S3's `vfy6`, follow-up D)
+// ---------------------------------------------------------------------------
+
+/// `E0029`'s report, from [`Input::too_long`].
+fn too_long_report(depth: Depth) -> VerifyReport {
+    let rules = rules();
+    let scope = fixture_scope();
+    let snapshot = fixture_snapshot();
+    let input = Input::too_long(&snapshot, &scope, &rules)
+        .unwrap_or_else(|error| panic!("assembling the input: {error}"));
+    verify(&input, depth)
+}
+
+#[test]
+fn a_text_past_the_cap_is_counted_in_characters_not_bytes() {
+    let at = "x".repeat(MAX_PLAYBOOK_CHARS);
+    assert!(!is_too_long(&at));
+    assert!(is_too_long(&format!("{at}x")));
+    // Two bytes a character: past the cap in bytes, within it in characters.
+    let wide = "é".repeat(MAX_PLAYBOOK_CHARS);
+    assert!(wide.len() > MAX_PLAYBOOK_CHARS);
+    assert!(!is_too_long(&wide));
+    assert!(is_too_long(&format!("{wide}é")));
+    // Four bytes is the most a character takes, so past four times the cap
+    // in bytes is past it in characters, whatever the bytes hold.
+    let most = MAX_PLAYBOOK_CHARS.checked_mul(4).expect("fits");
+    assert!(!is_too_long_in_bytes(most));
+    assert!(is_too_long_in_bytes(most.checked_add(1).expect("fits")));
+    let widest = "🜁".repeat(MAX_PLAYBOOK_CHARS);
+    assert_eq!(widest.len(), most);
+    assert!(!is_too_long(&widest));
+}
+
+#[test]
+fn a_playbook_past_the_cap_is_e0029_and_nothing_else() {
+    for depth in [Depth::Quick, Depth::Full] {
+        let report = too_long_report(depth);
+        assert!(!report.qualifies);
+        let codes: Vec<&str> = report
+            .diagnostics
+            .iter()
+            .map(|it| it.code.as_str())
+            .collect();
+        assert_eq!(codes, ["E0029"], "{depth:?}");
+        let diagnostic = report.diagnostics.first().expect("one");
+        assert_eq!(diagnostic.severity, i32::from(Severity::Error));
+        assert_eq!(diagnostic.path, "");
+        assert!(
+            diagnostic.message.contains(&MAX_PLAYBOOK_CHARS.to_string()),
+            "{}",
+            diagnostic.message
+        );
+        assert!(!diagnostic.message.contains('{'), "{}", diagnostic.message);
+        assert_eq!(report.size_units, 0);
+        assert!(report.plan_fingerprint.is_empty());
+        assert_eq!(report.verifier_version, VERIFIER_VERSION);
+    }
+}
+
+#[test]
+fn the_too_long_report_has_a_hash_no_playbook_can_have() {
+    let rules = rules();
+    let scope = fixture_scope();
+    let snapshot = fixture_snapshot();
+    let quick = too_long_report(Depth::Quick).report_hash;
+    let full = too_long_report(Depth::Full).report_hash;
+    assert_ne!(quick, full);
+    // Not the hash of any playbook bytes, the empty text included: the
+    // report is over a domain of its own.
+    for playbook in [&b""[..], b"{}", &case_bytes("expand_east")] {
+        let input = Input::new(playbook, &snapshot, &scope, &rules).expect("input");
+        for depth in [Depth::Quick, Depth::Full] {
+            let hash = verify(&input, depth).report_hash;
+            assert_ne!(hash, quick);
+            assert_ne!(hash, full);
+        }
+    }
+    // A pure function of its inputs, like any other report.
+    assert_eq!(too_long_report(Depth::Full), too_long_report(Depth::Full));
+    // And it moves with the view, as every report hash does.
+    let other = Scope::new(
+        SeatId::new(1),
+        SeatEconomy {
+            treasury: Money::new(1),
+            supply: Kw::new(1),
+            draw: Kw::new(1),
+        },
+    );
+    let input = Input::too_long(&snapshot, &other, &rules).expect("input");
+    assert_ne!(verify(&input, Depth::Full).report_hash, full);
+}
+
+#[test]
+fn the_too_long_reports_hash_is_reproducible_through_the_public_api() {
+    let rules = rules();
+    let scope = fixture_scope();
+    let snapshot = fixture_snapshot();
+    for depth in [Depth::Quick, Depth::Full] {
+        let wanted = pharmakos_verifier::too_long_report_hash(
+            &snapshot,
+            &scope,
+            rules.rules_hash(),
+            VERIFIER_VERSION,
+            depth,
+        )
+        .expect("hashable");
+        assert_eq!(
+            too_long_report(depth).report_hash,
+            wanted.to_be_bytes().to_vec(),
+            "{depth:?}"
+        );
+    }
+}
+
+#[test]
+fn input_new_refuses_bytes_past_the_canonical_backstop() {
+    use pharmakos_verifier::{CANONICAL_GROWTH, MAX_CANONICAL_BYTES};
+    let rules = rules();
+    let scope = fixture_scope();
+    let snapshot = fixture_snapshot();
+    let at = vec![b' '; MAX_CANONICAL_BYTES];
+    assert!(Input::new(&at, &snapshot, &scope, &rules).is_ok());
+    let past = vec![b' '; MAX_CANONICAL_BYTES.checked_add(1).expect("fits")];
+    assert_eq!(
+        Input::new(&past, &snapshot, &scope, &rules).err(),
+        Some(InputError::Oversize {
+            bytes: MAX_CANONICAL_BYTES.checked_add(1).expect("fits"),
+            max: MAX_CANONICAL_BYTES,
+        })
+    );
+    // The deepest chain the codec reads, as long as the cap allows, still
+    // fits the backstop once canonical: handlers whose `when` is `not`
+    // within `not` to the nesting limit.
+    let mut leaf = "{}".to_owned();
+    for _ in 0..30 {
+        leaf = format!(r#"{{"not":{{"item":{leaf}}}}}"#);
+    }
+    let mut handlers = String::new();
+    for index in 0_u32.. {
+        let handler = format!(
+            r#"{{"id":"h{index}","when":{leaf},"body":[{{"label":"b","hold":{{"ms":1000}}}}]}},"#
+        );
+        if handlers.len().saturating_add(handler.len()) > MAX_PLAYBOOK_CHARS.saturating_sub(256) {
+            break;
+        }
+        handlers.push_str(&handler);
+    }
+    handlers.pop();
+    let text = format!(
+        r#"{{"kind":"PLAYBOOK","declarative":{{"route":[{{"label":"r","hold":{{"ms":1}}}}],"handlers":[{handlers}]}}}}"#
+    );
+    assert!(!is_too_long(&text));
+    let canonical = json::canonicalise("gp.v1.Playbook", &text).expect("the codec reads it");
+    assert!(
+        canonical.len() <= MAX_CANONICAL_BYTES,
+        "{} canonical bytes from {} characters, past {MAX_CANONICAL_BYTES}",
+        canonical.len(),
+        text.len()
+    );
+    // And the growth it measures is within the declared factor.
+    assert!(canonical.len() <= text.len().saturating_mul(CANONICAL_GROWTH));
 }

@@ -23,6 +23,7 @@
 //! numbers, and the fix.
 
 use core::fmt::Write as _;
+use std::borrow::Cow;
 
 use pharmakos_proto::gp::api::v1::diagnostic::Severity;
 use pharmakos_proto::gp::api::v1::patch_suggestion::Applicability;
@@ -42,7 +43,7 @@ pub(crate) struct Diag {
     code: &'static str,
     path: String,
     related: Vec<String>,
-    args: Vec<(&'static str, String)>,
+    args: Vec<(&'static str, Cow<'static, str>)>,
     map_refs: Vec<Voxel>,
     suggestions: Vec<PatchSuggestion>,
 }
@@ -62,7 +63,14 @@ impl Diag {
 
     /// One substitution for the message template.
     pub(crate) fn arg(mut self, name: &'static str, value: impl core::fmt::Display) -> Diag {
-        self.args.push((name, value.to_string()));
+        self.args.push((name, Cow::Owned(value.to_string())));
+        self
+    }
+
+    /// One substitution that is a word of the string table, held without a
+    /// copy (S3's `vfy6`: a note raised once per step pays for every copy).
+    pub(crate) fn arg_word(mut self, name: &'static str, value: &'static str) -> Diag {
+        self.args.push((name, Cow::Borrowed(value)));
         self
     }
 
@@ -94,15 +102,67 @@ impl Diag {
     }
 }
 
+/// The most `I0003` notes one report carries (S3's `vfy6`, the review of PR
+/// #179, item 3).
+///
+/// Decision 8's notes come one per omitted setting, so a long file of bare
+/// steps made a report of megabytes, past the client's 1 MiB inbound buffer
+/// (`godot/scripts/host_link.gd`'s `INBOUND_BYTES`). Past this many the rest
+/// are counted, and one `I0007` says how many were left out. A note with its
+/// Fix is about 450 bytes of JSON, so the notes of the worst capped report
+/// are about 29 KB. `tests/report_size.rs` holds the longest file's report
+/// to an eighth of the client's buffer.
+pub const MAX_DEFAULT_NOTES: u32 = 64;
+
+/// The code of decision 8's per-setting note.
+const DEFAULT_NOTE: &str = "I0003";
+
 /// The report under construction, shared by every stage.
 #[derive(Clone, PartialEq, Debug, Default)]
 pub(crate) struct Builder {
     diagnostics: Vec<Diagnostic>,
+    /// `I0003` notes written so far, at most [`MAX_DEFAULT_NOTES`].
+    notes: u32,
+    /// `I0003` notes left out: past the cap, or after `E0110`.
+    withheld: u32,
+    /// Whether `E0110` has fired: past the size budget, no per-setting
+    /// note is written, because the file is not one to fill in.
+    over_budget: bool,
 }
 
 impl Builder {
     /// Finish a diagnostic and append it.
     pub(crate) fn emit(&mut self, diag: Diag) {
+        if diag.code == DEFAULT_NOTE {
+            // Every writer asks `takes_default_note` before it builds the
+            // note, so that a note left out costs nothing; this keeps the cap
+            // whole should one not.
+            if self.notes >= MAX_DEFAULT_NOTES {
+                self.withheld = self.withheld.saturating_add(1);
+                return;
+            }
+            self.notes = self.notes.saturating_add(1);
+        }
+        if diag.code == "E0110" {
+            self.over_budget = true;
+        }
+        self.push(diag);
+    }
+
+    /// Whether an `I0003` note is to be written: `false`, and the note
+    /// counted as left out, past [`MAX_DEFAULT_NOTES`] or once `E0110` has
+    /// fired. A writer asks before it builds the note, so a note left out
+    /// costs no allocation.
+    pub(crate) fn takes_default_note(&mut self) -> bool {
+        if self.over_budget || self.notes >= MAX_DEFAULT_NOTES {
+            self.withheld = self.withheld.saturating_add(1);
+            return false;
+        }
+        true
+    }
+
+    /// Finish a diagnostic and append it, uncounted.
+    fn push(&mut self, diag: Diag) {
         let severity = catalogue::entry(diag.code).map_or(Severity::Error, |row| row.severity);
         let (message, beginner) = match strings::text(diag.code) {
             Some(row) => (
@@ -140,8 +200,13 @@ impl Builder {
             .any(|diagnostic| diagnostic.severity == i32::from(Severity::Error))
     }
 
-    /// The diagnostics, in the order they were emitted.
-    pub(crate) fn into_diagnostics(self) -> Vec<Diagnostic> {
+    /// The diagnostics, in the order they were emitted, then one `I0007` with
+    /// the count of `I0003` notes left out, when any were.
+    pub(crate) fn into_diagnostics(mut self) -> Vec<Diagnostic> {
+        if self.withheld > 0 {
+            let withheld = self.withheld;
+            self.push(Diag::new("I0007", crate::pointer::ROOT).arg("count", withheld));
+        }
         self.diagnostics
     }
 }
@@ -194,15 +259,46 @@ pub(crate) fn patch_remove(path: &str) -> String {
     patch("remove", path, None)
 }
 
+/// [`patch_add`] for a value already written as compact JSON text, which the
+/// caller holds as a constant: the same bytes, with no [`Json`] built.
+pub(crate) fn patch_add_text(path: &str, value: &str) -> String {
+    let mut out = String::with_capacity(path.len().saturating_add(value.len()).saturating_add(32));
+    out.push_str("[{\"op\":\"add\",\"path\":");
+    write_string(path, &mut out);
+    out.push_str(",\"value\":");
+    out.push_str(value);
+    out.push_str("}]");
+    out
+}
+
+/// [`patch_add`] for a value that is one string, written without building a
+/// [`Json`] for it: the same bytes.
+pub(crate) fn patch_add_word(path: &str, word: &str) -> String {
+    let mut out = String::with_capacity(path.len().saturating_add(word.len()).saturating_add(40));
+    out.push_str("[{\"op\":\"add\",\"path\":");
+    write_string(path, &mut out);
+    out.push_str(",\"value\":");
+    write_string(word, &mut out);
+    out.push_str("}]");
+    out
+}
+
+/// One operation, written straight into its text: the same bytes
+/// [`write_compact`] writes for `[{"op":…,"path":…,"value":…}]`, without building that tree
+/// first (S3's `vfy6`: a diagnostic is raised once per omitted `on_fail`, so
+/// its cost is paid per step).
 fn patch(op: &str, path: &str, value: Option<&Json>) -> String {
-    let mut entries = vec![
-        ("op".to_owned(), Json::String(op.to_owned())),
-        ("path".to_owned(), Json::String(path.to_owned())),
-    ];
+    let mut out = String::with_capacity(path.len().saturating_add(64));
+    out.push_str("[{\"op\":");
+    write_string(op, &mut out);
+    out.push_str(",\"path\":");
+    write_string(path, &mut out);
     if let Some(value) = value {
-        entries.push(("value".to_owned(), value.clone()));
+        out.push_str(",\"value\":");
+        write_compact(value, &mut out);
     }
-    compact(&Json::Array(vec![Json::Object(entries)]))
+    out.push_str("}]");
+    out
 }
 
 /// A whole number as a JSON value.
@@ -221,12 +317,6 @@ pub(crate) fn number(value: impl core::fmt::Display) -> Json {
 /// file: it lives inside a string field of a report, where a newline would be an
 /// escape sequence and nothing more. So this writer exists, it is small, and it
 /// is pinned by the report goldens that quote its output.
-fn compact(value: &Json) -> String {
-    let mut out = String::new();
-    write_compact(value, &mut out);
-    out
-}
-
 fn write_compact(value: &Json, out: &mut String) {
     match value {
         Json::Null => out.push_str("null"),
@@ -289,6 +379,24 @@ mod tests {
     use super::{Builder, Diag, number, patch_add, patch_remove, patch_replace};
     use pharmakos_proto::gp::api::v1::diagnostic::Severity;
     use pharmakos_proto::json::{Json, read};
+
+    #[test]
+    fn the_written_patches_are_the_tree_written_compactly() {
+        let path = "/declarative/route/0/on_fail";
+        let value = read(r#"{"action":"SKIP"}"#).expect("JSON");
+        assert_eq!(
+            super::patch_add_text(path, r#"{"action":"SKIP"}"#),
+            patch_add(path, &value)
+        );
+        assert_eq!(
+            super::patch_add_word("/a~1b/\"c\"", "DIRECT"),
+            patch_add("/a~1b/\"c\"", &Json::String("DIRECT".to_owned()))
+        );
+        assert_eq!(
+            patch_add(path, &value),
+            r#"[{"op":"add","path":"/declarative/route/0/on_fail","value":{"action":"SKIP"}}]"#
+        );
+    }
 
     #[test]
     fn a_patch_is_valid_json_and_carries_the_operation() {
