@@ -174,6 +174,8 @@ const ITEM_RECYCLE := 2
 const ITEM_PLACE := 3
 const ITEM_COVER := 4
 const ITEM_COVER_NEAREST := 5
+## The ground menu's first line: the ghost's words, a line and not an action.
+const ITEM_GHOST := 6
 const ITEM_LOW := 11
 const ITEM_NORMAL := 12
 const ITEM_HIGH := 13
@@ -662,10 +664,27 @@ func _on_ground_clicked(at: Vector3i, where: Vector2) -> void:
 	# The ghost for this click: the draft with a beacon patched in here, checked by QUICK.
 	bridge.editor_preview_place(at)
 	_menu.clear()
+	# The ghost's words head the menu the click opened (the P6a finding: they showed only in
+	# the side panel, away from the click); `_ghost_in_menu` fills them in as QUICK answers.
+	_menu.add_item(Strings.text("ghost_waiting"), ITEM_GHOST)
+	_menu.set_item_disabled(_menu.get_item_index(ITEM_GHOST), true)
 	_menu.add_item(Strings.text("menu_go"), ITEM_GO)
 	_menu.add_item(Strings.text("menu_place"), ITEM_PLACE)
 	_menu.position = Vector2i(where)
 	_menu.popup()
+
+
+## The open ground menu, when it is the one for the ghost's voxel: its first line says what
+## the panel's ghost line says, and "Place beacon" is greyed while the gateway says the spot is
+## illegal. Nothing is decided here: the words and the verdict are QUICK's.
+func _ghost_in_menu(ghost: Dictionary) -> void:
+	if not _menu.visible or _menu.get_item_index(ITEM_GHOST) < 0 or ghost.is_empty():
+		return
+	if not _menu_target.has("voxel") or _menu_target["voxel"] != ghost.get("at"):
+		return
+	_menu.set_item_text(_menu.get_item_index(ITEM_GHOST), _ghost_label.text)
+	_menu.set_item_disabled(_menu.get_item_index(ITEM_PLACE), String(ghost.get("state", "")) == "illegal")
+	_menu.reset_size()
 
 
 func _on_menu(id: int) -> void:
@@ -987,6 +1006,7 @@ func _draw_ghost(ghost: Dictionary) -> void:
 		_ghost_label.text = Strings.text("ghost_illegal", {"sentence": ghost.get("sentence", "")})
 	else:
 		_ghost_label.text = Strings.text("ghost_" + state)
+	_ghost_in_menu(ghost)
 
 
 ## The Attack beacons' targets the text on screen names (S2's plan, task `view`), read by

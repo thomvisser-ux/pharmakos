@@ -107,7 +107,9 @@ connection the vista already holds, and a thin one. Load and Save read and write
 player's own JSONC file byte for byte; a file is opened only after QUICK has seen it, and an
 out-of-vocabulary construct is refused with the verifier's code and pointer. Click one of
 your beacons for Visit & change, Go here or Recycle; click the ground for Go here or Place
-beacon (the ghost shows QUICK's verdict for that click). A beacon's menu offers its target
+beacon (the ghost shows QUICK's verdict for that click, and the menu the click opened carries
+the same words on its first line and greys Place beacon while the gateway says the spot is
+illegal). A beacon's menu offers its target
 every time: this beacon, or a selector (Alt held pre-selects the nearest own beacon). Every edit is a JSON Patch the gateway applies, QUICK runs on
 every edit and FULL after 600 ms idle, and the rows' Fix buttons apply the verifier's own
 machine-applicable patches. The route is the gateway's `estimate_route`, drawn as a polyline

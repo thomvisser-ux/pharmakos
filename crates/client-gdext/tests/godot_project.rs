@@ -1994,3 +1994,47 @@ fn the_map_is_shut_once_the_match_ends_and_nothing_waits_on_a_shut_door() {
         );
     }
 }
+
+/// **"Not here" at the click** (the P6a finding, S3's `ed3b`). The gateway's legality
+/// sentence for a ground click ("Not here: ..." or "A beacon can go here.") showed in the side
+/// panel, away from the menu the click opened. The ground menu now carries the ghost's words
+/// as its own first, disabled line, filled in when QUICK's answer comes, and "Place beacon" is
+/// greyed while the gateway says the spot is illegal. The words are the ghost's, which are the
+/// verifier's sentence; the client only places them.
+#[test]
+fn the_ground_menu_carries_the_ghosts_words_and_greys_place_when_the_gateway_says_no() {
+    let editor = read("scripts/editor.gd");
+    let ground = gd_code(&editor, "_on_ground_clicked");
+    let ghost = ground
+        .iter()
+        .position(|line| line.contains("ITEM_GHOST"))
+        .expect("the ground menu has the ghost's line");
+    let place = ground
+        .iter()
+        .position(|line| line.contains("ITEM_PLACE"))
+        .expect("the ground menu has Place beacon");
+    assert!(ghost < place, "the ghost's words head the menu: {ground:?}");
+    assert!(
+        ground
+            .iter()
+            .any(|line| line.contains("set_item_disabled(_menu.get_item_index(ITEM_GHOST), true)")),
+        "the words are a line, not an action: {ground:?}"
+    );
+    let draw = gd_code(&editor, "_draw_ghost");
+    assert!(
+        draw.iter().any(|line| line.contains("_ghost_in_menu(")),
+        "a redrawn ghost updates the open menu: {draw:?}"
+    );
+    let menu = gd_code(&editor, "_ghost_in_menu");
+    assert!(
+        menu.iter().any(|line| line
+            .contains("_menu.set_item_text(_menu.get_item_index(ITEM_GHOST), _ghost_label.text)")),
+        "the menu says what the panel's ghost line says: {menu:?}"
+    );
+    assert!(
+        menu.iter().any(|line| line.contains(
+            "_menu.set_item_disabled(_menu.get_item_index(ITEM_PLACE), String(ghost.get(\"state\", \"\")) == \"illegal\")"
+        )),
+        "Place beacon is greyed exactly when the gateway's ghost is illegal: {menu:?}"
+    );
+}
