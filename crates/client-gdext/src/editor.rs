@@ -74,6 +74,7 @@ use pharmakos_proto::json::{self, Json};
 
 use crate::enums;
 use crate::error::BridgeError;
+use crate::rule_list::{self, ChipEditor, RuleList};
 use crate::targeting::{self, Chip, Feature, FeatureKind};
 use crate::variant::proto3_integer;
 use crate::variant::text_or_empty;
@@ -352,6 +353,9 @@ pub struct Row {
     /// The machine-applicable fixes only: those are the editor's Fix buttons (spec section
     /// 13; `gp.api.v1.PatchSuggestion.Applicability`).
     pub fixes: Vec<Fix>,
+    /// The diagnostic's other JSON Pointers, as the verifier wrote them (W0702's earlier
+    /// rule, which the rule list's connector joins).
+    pub related: Vec<String>,
 }
 
 /// The rows of one report, in the verifier's order.
@@ -387,6 +391,7 @@ pub fn rows_of(report: &VerifyReport) -> Vec<Row> {
                 sentence,
                 message: diagnostic.message.clone(),
                 fixes,
+                related: diagnostic.related_paths.clone(),
             }
         })
         .collect()
@@ -669,6 +674,31 @@ pub struct DraftRow {
     pub round: u32,
 }
 
+/// The gateway's refusal of a rule-list edit: shown on the rule that holds `pointer`, in the
+/// gateway's words.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct RuleRefusal {
+    /// What the edit was of: the chip's pointer, or the moved rule's.
+    pub pointer: String,
+    /// `CODE: message`, as it came.
+    pub detail: String,
+    /// The text it was asked of.
+    revision: u64,
+}
+
+/// Two rules the conflict connector joins (W0702), by their index in the rule list.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Conflict {
+    /// The row that names them.
+    pub row: usize,
+    /// The earlier rule, which wins every time both are true.
+    pub earlier: usize,
+    /// The later rule, which never fires while the earlier does.
+    pub later: usize,
+    /// The row's sentence, the verifier's.
+    pub sentence: String,
+}
+
 /// What the last `submit_plan` said.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Submitted {
@@ -760,6 +790,12 @@ enum Job {
     New {
         text: String,
     },
+    /// A rule-list edit: a chip's `replace` or a drag's `move`, composed from the click, and
+    /// the pointer of what it edits, for a refusal to be shown on that rule.
+    RuleEdit {
+        patch: String,
+        pointer: String,
+    },
     /// `get_draft`: open the draft `id` (the carried one) as the text.
     GetDraft {
         id: String,
@@ -787,6 +823,7 @@ impl Job {
                 | Self::PreviewCheck
                 | Self::UseWizard { .. }
                 | Self::New { .. }
+                | Self::RuleEdit { .. }
                 | Self::GetDraft { .. }
                 | Self::SetOption { .. }
         )
@@ -933,8 +970,13 @@ pub struct Editor {
     wizard: Option<Wizard>,
     /// Every wizard ask so far, so an answer to an older ask (of any template) is known.
     wizard_asks: u64,
-    /// The rule list: `render_plan`'s lines for the text at `prose_revision`.
-    prose: Vec<String>,
+    /// The rule list: `render_plan`'s lines, rules and chips for the text at
+    /// `prose_revision`.
+    rule_list: RuleList,
+    /// The gateway's refusal of the last rule-list edit, for the text it was asked of.
+    rule_refusal: Option<RuleRefusal>,
+    /// The chip whose map pick the next map click is, by its index in the rule list.
+    picking: Option<usize>,
     prose_revision: Option<u64>,
     /// The rule list (`render_plan`) is owed for the newest text.
     render_owed: bool,
@@ -1418,6 +1460,207 @@ impl Editor {
     #[must_use]
     pub fn this_round(&self) -> Option<&str> {
         self.this_round.as_deref()
+    }
+
+    // --- The rule list (S3's `ed3b`) -------------------------------------------------------
+
+    /// Whether the rule list's controls take a click now: it describes the text on screen, no
+    /// edit is on its way, and the door is open, as for a Fix button.
+    #[must_use]
+    pub fn rules_editable(&self) -> bool {
+        self.prose_current() && !self.busy() && self.door == Door::Open
+    }
+
+    /// Chip `chip`'s number field sent `value`: one `replace` of it at the chip's pointer.
+    /// The field holds the bounds the gateway sent; whether the value is legal is the
+    /// verifier's next report. Refused for a chip that is not a number field.
+    pub fn set_number(&mut self, chip: usize, value: i64) -> bool {
+        if !self.rule_edit_taken() {
+            return false;
+        }
+        let Some(found) = self.rule_list.chips.get(chip) else {
+            return false;
+        };
+        if !matches!(found.editor, ChipEditor::Number { .. }) {
+            return false;
+        }
+        let pointer = found.pointer.clone();
+        let patch = rule_list::replace_patch(&pointer, Json::Number(value.to_string()));
+        self.queue_rule_edit(patch, pointer);
+        true
+    }
+
+    /// Chip `chip`'s enum took its `which`th value as sent: one `replace` writing that value's
+    /// JSON text. Refused for a chip that is not an enum, or a value it does not list.
+    pub fn choose(&mut self, chip: usize, which: usize) -> bool {
+        if !self.rule_edit_taken() {
+            return false;
+        }
+        let Some(found) = self.rule_list.chips.get(chip) else {
+            return false;
+        };
+        let ChipEditor::Choice { values } = &found.editor else {
+            return false;
+        };
+        let Some(text) = values.get(which).cloned() else {
+            return false;
+        };
+        let pointer = found.pointer.clone();
+        let Ok(value) = json::read(&text) else {
+            // The gateway's own value text, which its contract says is JSON.
+            self.say(
+                "gateway_refused",
+                &format!("an enum value that is not JSON: {text}"),
+            );
+            return false;
+        };
+        let patch = rule_list::replace_patch(&pointer, value);
+        self.queue_rule_edit(patch, pointer);
+        true
+    }
+
+    /// The next map click is chip `chip`'s pick. Refused for a chip that is not picked on
+    /// the map.
+    pub fn begin_pick(&mut self, chip: usize) -> bool {
+        if !self.rule_edit_taken() {
+            return false;
+        }
+        let picked = self
+            .rule_list
+            .chips
+            .get(chip)
+            .is_some_and(|found| matches!(found.editor, ChipEditor::Pick { .. }));
+        if picked {
+            self.picking = Some(chip);
+            self.say("picking", "");
+        }
+        picked
+    }
+
+    /// The pick is called off: the next map click opens the map's menus again.
+    pub fn cancel_pick(&mut self) {
+        if self.picking.take().is_some() {
+            self.say("", "");
+        }
+    }
+
+    /// The chip whose pick the next map click is, if one is.
+    #[must_use]
+    pub const fn picking(&self) -> Option<usize> {
+        self.picking
+    }
+
+    /// A map click on `target` while a pick is on: one `replace` of the picked chip with the
+    /// arm the click names, when the gateway lists that arm there. A click that names nothing
+    /// the chip takes is refused with the reason, and the pick stays on.
+    pub fn pick(&mut self, target: &Target) -> bool {
+        let Some(chip) = self.picking else {
+            return false;
+        };
+        if !self.rule_edit_taken() {
+            self.picking = None;
+            return false;
+        }
+        let Some(found) = self.rule_list.chips.get(chip) else {
+            self.picking = None;
+            return false;
+        };
+        let ChipEditor::Pick { kind, arms } = &found.editor else {
+            self.picking = None;
+            return false;
+        };
+        let (kind, pointer) = (*kind, found.pointer.clone());
+        match rule_list::picked_value(kind, arms, target) {
+            Ok(value) => {
+                let patch = rule_list::replace_patch(&pointer, value);
+                self.picking = None;
+                self.queue_rule_edit(patch, pointer);
+                true
+            }
+            Err(refusal) => {
+                let detail = match refusal {
+                    rule_list::PickRefusal::ArmNotHere(arm) => arm,
+                    rule_list::PickRefusal::NotThisKind => kind.name(),
+                };
+                self.say(&format!("pick_{}", refusal.name()), detail);
+                false
+            }
+        }
+    }
+
+    /// A drag of rule `from` onto rule `to`: one `move` of it to that rule's place, within
+    /// their own array. A drop on a rule of another array (a step onto a rule) is refused
+    /// with the reason; a drop on itself moves nothing.
+    pub fn move_rule(&mut self, from: usize, to: usize) -> bool {
+        if from == to || !self.rule_edit_taken() {
+            return false;
+        }
+        let (Some(moved), Some(onto)) =
+            (self.rule_list.rules.get(from), self.rule_list.rules.get(to))
+        else {
+            return false;
+        };
+        if moved.parent() != onto.parent() {
+            self.say("move_other_list", "");
+            return false;
+        }
+        let pointer = moved.pointer.clone();
+        let patch = rule_list::move_patch(&pointer, &onto.pointer);
+        self.queue_rule_edit(patch, pointer);
+        true
+    }
+
+    /// The gateway's refusal of the last rule-list edit, while the text it was asked of is on
+    /// screen.
+    #[must_use]
+    pub fn rule_refusal(&self) -> Option<&RuleRefusal> {
+        self.rule_refusal
+            .as_ref()
+            .filter(|refusal| refusal.revision == self.revision)
+    }
+
+    /// The rule pairs the conflict connector joins: for each W0702 row
+    /// ([`rule_list::CONFLICT_CODE`]), the rule holding its path (the later rule) and the
+    /// rule holding its related path (the earlier one that wins). Only while the rows and the
+    /// rule list both describe the text on screen; a row whose paths no rendered rule holds
+    /// joins nothing.
+    #[must_use]
+    pub fn conflicts(&self) -> Vec<Conflict> {
+        if !self.rows_current() || !self.prose_current() {
+            return Vec::new();
+        }
+        self.rows
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| row.code == rule_list::CONFLICT_CODE)
+            .filter_map(|(index, row)| {
+                let later = self.rule_list.rule_holding(&row.pointer)?;
+                let earlier = row
+                    .related
+                    .iter()
+                    .find_map(|related| self.rule_list.rule_holding(related))?;
+                Some(Conflict {
+                    row: index,
+                    earlier,
+                    later,
+                    sentence: row.sentence.clone(),
+                })
+            })
+            .collect()
+    }
+
+    /// Whether a rule-list edit may be asked now; says why not when the door is shut.
+    fn rule_edit_taken(&mut self) -> bool {
+        if self.shut_to_asks() {
+            return false;
+        }
+        self.rules_editable()
+    }
+
+    fn queue_rule_edit(&mut self, patch: String, pointer: String) {
+        self.rule_refusal = None;
+        self.queue.push_back(Job::RuleEdit { patch, pointer });
+        self.say("rule_editing", "");
     }
 
     // --- What the rig tells the editor --------------------------------------------------
@@ -1939,7 +2182,13 @@ impl Editor {
     /// The rule list: `render_plan`'s lines, as they came.
     #[must_use]
     pub fn prose(&self) -> &[String] {
-        &self.prose
+        &self.rule_list.lines
+    }
+
+    /// The rule list: lines, rules and chips, as `render_plan` last answered.
+    #[must_use]
+    pub const fn rule_list(&self) -> &RuleList {
+        &self.rule_list
     }
 
     /// Whether the rule list describes the text on screen.
@@ -1979,6 +2228,7 @@ impl Editor {
             .as_ref()
             .is_some_and(|ghost| ghost.state == GhostState::Waiting);
         self.queue.clear();
+        self.picking = None;
         self.owed.quick = false;
         self.owed.estimate = false;
         self.resolve_owed = false;
@@ -2129,6 +2379,7 @@ impl Editor {
             | Job::Instantiate
             | Job::UseWizard { .. }
             | Job::New { .. }
+            | Job::RuleEdit { .. }
             | Job::GetDraft { .. }
             | Job::MapSummary
             | Job::SetOption { .. }) => return self.render_pr2(job),
@@ -2181,6 +2432,19 @@ impl Editor {
                 self.accept_text(text);
                 self.say("wizard_used", "");
                 None
+            }
+            Job::RuleEdit { patch, pointer } => {
+                let playbook = self.text.clone()?;
+                let revision = self.revision;
+                let params = patch_params(&playbook, &patch);
+                Some(self.send(
+                    Sent::Edit {
+                        base: revision,
+                        retry: Box::new(Job::RuleEdit { patch, pointer }),
+                    },
+                    "patch_plan",
+                    params,
+                ))
             }
             Job::New { text } => {
                 // As a template's playbook: no file's, and Undo gives the text before it back
@@ -2379,9 +2643,9 @@ impl Editor {
     fn settle_pr2(&mut self, sent: Sent, result: &Json) -> Result<(), BridgeError> {
         match sent {
             Sent::Render { revision } => {
-                let prose = wizard::prose_of(result)?;
+                let list = rule_list::rule_list_of(result)?;
                 if revision == self.revision {
-                    self.prose = prose;
+                    self.rule_list = list;
                     self.prose_revision = Some(revision);
                 }
             }
@@ -2577,7 +2841,7 @@ impl Editor {
         self.verdict = Verdict::None;
         self.qualifies = false;
         self.route = Route::default();
-        self.prose.clear();
+        self.rule_list = RuleList::default();
         self.prose_revision = None;
         self.chips.clear();
         self.chips_revision = None;
@@ -2606,6 +2870,8 @@ impl Editor {
     /// A new text is on screen: every check of it is owed.
     fn accept_text(&mut self, text: String) {
         self.attack = targeting::attack_targets(&text);
+        self.rule_refusal = None;
+        self.picking = None;
         self.text = Some(text);
         self.revision = self.revision.wrapping_add(1);
         self.owed.quick = true;
@@ -2700,6 +2966,15 @@ impl Editor {
             && revision == self.revision
         {
             *self.check_refusals.slot(check) = Some((revision, detail.clone()));
+        }
+        if let Sent::Edit { base, retry } = sent
+            && let Job::RuleEdit { pointer, .. } = retry.as_ref()
+        {
+            self.rule_refusal = Some(RuleRefusal {
+                pointer: pointer.clone(),
+                detail: detail.clone(),
+                revision: *base,
+            });
         }
         match sent {
             Sent::Load { .. } => self.say("load_refused_by_gateway", &detail),
@@ -3043,7 +3318,7 @@ fn patch_params(playbook: &str, patch: &str) -> Json {
 }
 
 /// A voxel as a `gp.v1.Location`.
-fn voxel_location(at: [i32; 3]) -> Json {
+pub(crate) fn voxel_location(at: [i32; 3]) -> Json {
     let [x, y, z] = at;
     object(vec![(
         "voxel",
@@ -3510,6 +3785,218 @@ mod tests {
                 .contains("\"covering\""),
             "{waypoints:?}"
         );
+    }
+
+    /// The gateway's committed `render_plan` answer for the Expand & Mine demo: the rule list
+    /// the chip tests edit.
+    const EXPAND_AND_MINE_RENDER: &str = include_str!(
+        "../../../tests/golden/gateway/demo_expand_and_mine_render/expected.response.json"
+    );
+
+    /// An editor holding `text`, its rows QUICK-clean and its rule list the golden's.
+    fn rendered(text: &str) -> Editor {
+        let mut editor = loaded(text);
+        for _ in 0..16 {
+            let Some(call) = editor.next_call(false) else {
+                break;
+            };
+            let answer = match call.method {
+                "render_plan" => read(EXPAND_AND_MINE_RENDER)
+                    .get("result")
+                    .cloned()
+                    .expect("a result"),
+                "estimate_route" => read(r#"{"reachable":true}"#),
+                "resolve_refs" => read(r#"{"refs":[]}"#),
+                _ => quick_report("", true),
+            };
+            editor.answered(Ok(&answer)).expect("reads");
+        }
+        assert!(editor.prose_current(), "the rule list is the text's");
+        editor
+    }
+
+    fn chip_index(editor: &Editor, suffix: &str) -> usize {
+        editor
+            .rule_list()
+            .chips
+            .iter()
+            .position(|chip| chip.pointer.ends_with(suffix))
+            .unwrap_or_else(|| panic!("no chip {suffix}"))
+    }
+
+    fn patch_of_call(call: &Call) -> String {
+        match call.params.get("json_patch") {
+            Some(Json::String(patch)) => compact(&read(patch)),
+            other => panic!("no patch: {other:?}"),
+        }
+    }
+
+    /// **A chip's edit is one `replace`** (S3's `ed3b`): a number within the bounds sent, an
+    /// enum's value as sent, each at the chip's pointer; the patched text is `patch_plan`'s.
+    #[test]
+    fn a_chip_edit_is_one_replace_at_its_pointer() {
+        let mut editor = rendered(EXPAND_EAST);
+        let pct = chip_index(&editor, "/cmdr_hp_pct/pct");
+        assert!(editor.rules_editable());
+        assert!(editor.set_number(pct, 35));
+        let call = editor.next_call(false).expect("the patch");
+        assert_eq!(call.method, "patch_plan");
+        assert_eq!(
+            patch_of_call(&call),
+            r#"[{"op":"replace","path":"/declarative/handlers/0/when/all/items/0/cmdr_hp_pct/pct","value":35}]"#
+        );
+        assert!(!editor.rules_editable(), "not while the edit is in flight");
+        assert!(!editor.set_number(pct, 36));
+        editor
+            .answered(Ok(&patched("{\"edited\": 1}", "[]")))
+            .expect("reads");
+        assert_eq!(editor.bytes(), b"{\"edited\": 1}");
+        assert_eq!(editor.undo_depth(), 1);
+        assert!(
+            !editor.rules_editable(),
+            "the rule list describes the text before the edit"
+        );
+
+        let mut editor = rendered(EXPAND_EAST);
+        let priority = chip_index(&editor, "/initial/priority");
+        assert!(editor.choose(priority, 2));
+        let call = editor.next_call(false).expect("the patch");
+        assert_eq!(
+            patch_of_call(&call),
+            r#"[{"op":"replace","path":"/declarative/route/0/place_beacon/initial/priority","value":"HIGH"}]"#
+        );
+        let mut editor = rendered(EXPAND_EAST);
+        assert!(!editor.choose(priority, 3), "no such value");
+        assert!(!editor.set_number(priority, 3), "a choice is not a number");
+        let timeout = chip_index(&editor, "/route/0/timeout_ms");
+        assert!(
+            !editor.set_number(timeout, 60_000),
+            "a duration is the gateway's text, not a number field"
+        );
+        editor.set_door(Door::Push);
+        assert!(!editor.choose(priority, 0), "the door gates the chips");
+        assert_eq!(editor.status().key, "closed_push");
+    }
+
+    /// **A map pick is one `replace`**: the chip's pick mode takes the next map click, writes
+    /// the arm the click names when the gateway lists it, and refuses one it does not.
+    #[test]
+    fn a_map_pick_replaces_a_reference_chip_with_the_arm_the_click_names() {
+        let mut editor = rendered(EXPAND_EAST);
+        let to = chip_index(&editor, "/route/1/move/to");
+        assert!(editor.begin_pick(to));
+        assert_eq!(editor.picking(), Some(to));
+        assert!(
+            !editor.pick(&Target::Feature("vent_1_2".to_owned())),
+            "this move takes no `covering`"
+        );
+        assert_eq!(editor.status().key, "pick_arm_not_here");
+        assert_eq!(editor.picking(), Some(to), "a refused pick keeps the mode");
+        assert!(editor.pick(&Target::Beacon("b_01".to_owned())));
+        assert_eq!(editor.picking(), None);
+        let call = editor.next_call(false).expect("the patch");
+        assert_eq!(
+            patch_of_call(&call),
+            r#"[{"op":"replace","path":"/declarative/route/1/move/to","value":{"beacon_anchor":{"beacon_id":"b_01"}}}]"#
+        );
+        let mut editor = rendered(EXPAND_EAST);
+        let priority = chip_index(&editor, "/initial/priority");
+        assert!(
+            !editor.begin_pick(priority),
+            "a choice is not picked on the map"
+        );
+        assert!(editor.begin_pick(to));
+        editor.cancel_pick();
+        assert_eq!(editor.picking(), None);
+    }
+
+    /// **A drag is one `move`** within the rule's own array, onto the other rule's place.
+    #[test]
+    fn a_drag_is_one_move_within_the_rules_own_array() {
+        let mut editor = rendered(EXPAND_EAST);
+        let rules = editor.rule_list().rules.clone();
+        let route_1 = rules
+            .iter()
+            .position(|rule| rule.pointer == "/declarative/route/1")
+            .expect("step 2");
+        let handler = rules
+            .iter()
+            .position(|rule| rule.pointer == "/declarative/handlers/0")
+            .expect("rule 1");
+        assert!(
+            !editor.move_rule(route_1, route_1),
+            "onto itself moves nothing"
+        );
+        assert!(!editor.move_rule(route_1, handler), "a step is not a rule");
+        assert_eq!(editor.status().key, "move_other_list");
+        assert!(editor.move_rule(route_1, 0));
+        let call = editor.next_call(false).expect("the patch");
+        assert_eq!(
+            patch_of_call(&call),
+            r#"[{"op":"move","from":"/declarative/route/1","path":"/declarative/route/0"}]"#
+        );
+    }
+
+    /// **The gateway's refusal of a rule-list edit shows on that rule**, in its words.
+    #[test]
+    fn a_refused_chip_edit_shows_the_gateways_words_on_its_rule() {
+        let mut editor = rendered(EXPAND_EAST);
+        let pct = chip_index(&editor, "/cmdr_hp_pct/pct");
+        assert!(editor.set_number(pct, 35));
+        let _ = editor.next_call(false);
+        editor
+            .answered(Err(("INVALID_ARGUMENT", "no such member: pct")))
+            .expect("reads");
+        let refusal = editor.rule_refusal().expect("the refusal");
+        assert_eq!(refusal.detail, "INVALID_ARGUMENT: no such member: pct");
+        let rule = editor
+            .rule_list()
+            .rule_holding(&refusal.pointer)
+            .and_then(|index| editor.rule_list().rules.get(index))
+            .expect("its rule");
+        assert_eq!(rule.pointer, "/declarative/handlers/0");
+        assert_eq!(editor.status().key, "gateway_refused");
+    }
+
+    /// **The conflict connector's two rules** are the rules holding a W0702 row's path and its
+    /// related path, read only while the rows and the rule list describe the text on screen.
+    #[test]
+    fn a_w0702_row_names_the_two_rules_the_connector_joins() {
+        let mut editor = rendered(EXPAND_EAST);
+        let later = compact_row("/declarative/handlers/0/when", "/declarative/route/0");
+        let diagnostic = format!(
+            r#"{{"code":"W0702","severity":"warning","path":"/declarative/handlers/0/when","related_paths":["/declarative/route/1"],"beginner":"{later}"}}"#
+        );
+        // A fresh QUICK of the same text: the rows change, the rule list stays the text's.
+        editor.owe_checks();
+        let _ = editor.next_call(false);
+        editor
+            .answered(Ok(&quick_report(&diagnostic, true)))
+            .expect("reads");
+        let conflicts = editor.conflicts();
+        let [conflict] = conflicts.as_slice() else {
+            panic!("one conflict: {conflicts:?}");
+        };
+        let pointer = |index: usize| {
+            editor
+                .rule_list()
+                .rules
+                .get(index)
+                .map(|rule| rule.pointer.clone())
+        };
+        assert_eq!(
+            pointer(conflict.later).as_deref(),
+            Some("/declarative/handlers/0")
+        );
+        assert_eq!(
+            pointer(conflict.earlier).as_deref(),
+            Some("/declarative/route/1")
+        );
+        assert_eq!(conflict.sentence, later);
+    }
+
+    fn compact_row(a: &str, b: &str) -> String {
+        format!("{a} is always beaten by {b}")
     }
 
     /// **New** (the P6a finding): the shipped empty playbook's bytes go on screen as one edit,

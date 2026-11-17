@@ -74,7 +74,7 @@ use crate::chunks;
 use crate::editor::Action;
 use crate::editor_view::{
     instance_dictionary, meter_dictionary, name_into, recap_dictionary, rows_array,
-    rows_of_report_text, state_dictionary, target_of,
+    rows_of_report_text, rule_list_dictionary, state_dictionary, target_of,
 };
 use crate::engine::ChunkRenderer;
 use crate::error::BridgeError;
@@ -890,6 +890,84 @@ impl PharmakosBridge {
         })
     }
 
+    // --- The rule list (S3's `ed3b`) ---------------------------------------------------------
+
+    /// Rule-list chip `chip`'s number field sent `value`: one `replace` through `patch_plan`.
+    /// Returns whether it was taken.
+    #[func]
+    fn editor_set_number(&mut self, chip: i64, value: i64) -> bool {
+        let (Some(rig), Ok(chip)) = (self.rig.as_mut(), usize::try_from(chip)) else {
+            return false;
+        };
+        self.panics.guard_or("editor_set_number", false, || {
+            rig.editor_mut().set_number(chip, value)
+        })
+    }
+
+    /// Rule-list chip `chip`'s enum took its `which`th value as sent: one `replace`.
+    #[func]
+    fn editor_choose(&mut self, chip: i64, which: i64) -> bool {
+        let (Some(rig), Ok(chip), Ok(which)) = (
+            self.rig.as_mut(),
+            usize::try_from(chip),
+            usize::try_from(which),
+        ) else {
+            return false;
+        };
+        self.panics.guard_or("editor_choose", false, || {
+            rig.editor_mut().choose(chip, which)
+        })
+    }
+
+    /// The next map click is rule-list chip `chip`'s pick.
+    #[func]
+    fn editor_begin_pick(&mut self, chip: i64) -> bool {
+        let (Some(rig), Ok(chip)) = (self.rig.as_mut(), usize::try_from(chip)) else {
+            return false;
+        };
+        self.panics.guard_or("editor_begin_pick", false, || {
+            rig.editor_mut().begin_pick(chip)
+        })
+    }
+
+    /// Calls the pick off.
+    #[func]
+    fn editor_cancel_pick(&mut self) {
+        if let Some(rig) = self.rig.as_mut() {
+            let _ = self
+                .panics
+                .guard("editor_cancel_pick", || rig.editor_mut().cancel_pick());
+        }
+    }
+
+    /// A map click while a pick is on, at a target dictionary as `editor_action` takes it (a
+    /// `beacon`, a `voxel` or a `feature`): one `replace` of the picked chip. Returns whether
+    /// it was taken.
+    #[func]
+    fn editor_pick(&mut self, target: VarDictionary) -> bool {
+        let Some(rig) = self.rig.as_mut() else {
+            return false;
+        };
+        self.panics.guard_or("editor_pick", false, || {
+            target_of(&target).is_some_and(|target| rig.editor_mut().pick(&target))
+        })
+    }
+
+    /// A drag of rule `from` onto rule `to` (their indices in the rule list): one `move`.
+    #[func]
+    fn editor_move_rule(&mut self, from: i64, to: i64) -> bool {
+        let (Some(rig), Ok(from), Ok(to)) = (
+            self.rig.as_mut(),
+            usize::try_from(from),
+            usize::try_from(to),
+        ) else {
+            return false;
+        };
+        self.panics.guard_or("editor_move_rule", false, || {
+            rig.editor_mut().move_rule(from, to)
+        })
+    }
+
     /// The features the map lists this Lull (`get_map_summary`), for the editor's vent
     /// click: `id`, `kind`, `x` and `y` as the name spells them, `covered`, `live`, and
     /// `at`, a `Vector3i` in the sim's axes standing on the ground the view holds at the
@@ -1075,6 +1153,25 @@ impl PharmakosBridge {
             .guard_or("watch_recap", VarDictionary::new(), || {
                 recap_dictionary(rig.recap())
             })
+    }
+
+    /// The rule list from one `render_plan` answer's text (a whole JSON-RPC answer, or its
+    /// result), with no gateway behind it: what the hostless rule-list scene draws, in the
+    /// shape of the editor state's `rule_list`. An empty dictionary means the reason is in
+    /// the log.
+    #[func]
+    fn editor_rule_list_of_response(&mut self, text: GString) -> VarDictionary {
+        let text = text.to_string();
+        match self.panics.guard("editor_rule_list_of_response", || {
+            crate::rule_list::rule_list_of_text(&text)
+        }) {
+            Some(Ok(list)) => rule_list_dictionary(&list),
+            Some(Err(error)) => {
+                godot_error!("[pharmakos] editor_rule_list_of_response: {error}");
+                VarDictionary::new()
+            }
+            None => VarDictionary::new(),
+        }
     }
 
     /// Validation rows from a `gp.api.v1.VerifyReport` JSON text, with no gateway behind

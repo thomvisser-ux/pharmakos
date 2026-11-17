@@ -298,6 +298,7 @@ const SCRIPTS: &[&str] = &[
     "rows.gd",
     "rows_shot.gd",
     "rule_list.gd",
+    "rule_list_shot.gd",
     "smoke_check.gd",
     "strings.gd",
     "vista.gd",
@@ -344,6 +345,7 @@ fn every_script_is_listed_and_every_scene_names_files_that_exist() {
         "scenes/credits.tscn",
         "scenes/lobby.tscn",
         "scenes/rows_shot.tscn",
+        "scenes/rule_list_shot.tscn",
         "scenes/smoke_check.tscn",
         "scenes/vista.tscn",
         "scenes/vista_shot.tscn",
@@ -2183,5 +2185,135 @@ fn a_checks_answer_is_highlighted_until_the_next_input() {
                 .iter()
                 .any(|line| line.contains("InputEventMouseButton")),
         "a key, a click and a wheel notch are inputs; a mouse move is not: {clear:?}"
+    );
+}
+
+/// **The rule list draws the gateway's cut and forwards every click** (S3's `ed3b`). A line is
+/// drawn from the bridge's runs, a chip as a link whose meta is its index, and nothing in the
+/// script reads a sentence; a click on a chip opens the editor its shape names; a rule's row
+/// drags onto another of its own list and the drop asks the bridge for the move; the W0702
+/// connector is drawn on the list's own `draw`; the gateway's refusal of an edit and the
+/// verifier's conflict sentence are lines under the rule. A map click while a pick is on goes
+/// to the bridge's pick, not the menus, and Escape calls the pick off.
+#[test]
+fn the_rule_list_draws_the_gateways_cut_and_forwards_every_click() {
+    let list = read("scripts/rule_list.gd");
+    let code: Vec<&str> = list
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.starts_with('#'))
+        .collect();
+    for forbidden in [".split(", ".find(", ".substr(", "RegEx", ".begins_with("] {
+        assert!(
+            !code.iter().any(|line| line.contains(forbidden)),
+            "rule_list.gd reads a sentence with `{forbidden}`"
+        );
+    }
+    let row = gd_code(&list, "_row");
+    for wanted in [
+        "row.push_meta(chip)",
+        "row.add_text(piece)",
+        "row.meta_clicked.connect(func(meta: Variant) -> void: on_chip.call(int(meta)))",
+        "row.accessibility_name = text",
+        "row.set_meta(\"line\", text)",
+    ] {
+        assert!(row.contains(&wanted), "{wanted}: {row:?}");
+    }
+    let drag = gd_code(&list, "_draggable");
+    assert!(
+        drag.iter()
+            .any(|line| line.contains("on_move.call(int(data[\"rule\"]), rule)")),
+        "{drag:?}"
+    );
+    assert!(
+        drag.iter().any(|line| line.contains("if not editable:")),
+        "nothing drags while the list takes no click: {drag:?}"
+    );
+    let fill = gd_code(&list, "fill");
+    for wanted in ["rule_conflict", "rule_refused", "container.queue_redraw()"] {
+        assert!(
+            fill.iter().any(|line| line.contains(wanted)),
+            "{wanted}: {fill:?}"
+        );
+    }
+    let editor = read("scripts/editor.gd");
+    assert!(
+        editor.contains(
+            "_rules_box.draw.connect(func() -> void: RuleList.draw_connectors(_rules_box))"
+        ),
+        "the connector is drawn on the list's own draw"
+    );
+    let chip = gd_code(&editor, "_on_rule_chip");
+    for wanted in [
+        "\"number\":",
+        "\"choice\":",
+        "\"pick\":",
+        "bridge.editor_begin_pick(index)",
+        "_say_local(\"rule_chip_read_only_\" + String(chip.get(\"why\", \"\")), {})",
+    ] {
+        assert!(chip.contains(&wanted), "{wanted}: {chip:?}");
+    }
+    let number = gd_code(&editor, "_open_number");
+    assert!(
+        number
+            .iter()
+            .any(|line| line
+                .contains("_number_field.allow_lesser = not chip.get(\"has_min\", false)"))
+            && number.iter().any(|line| line
+                .contains("_number_field.allow_greater = not chip.get(\"has_max\", false)")),
+        "the field's bounds are the ones sent, and none where none was sent: {number:?}"
+    );
+    assert!(
+        gd_code(&editor, "_on_number_send")
+            .contains(&"bridge.editor_set_number(_number_chip, int(_number_field.value))")
+    );
+    assert!(gd_code(&editor, "_on_choice").contains(&"bridge.editor_choose(_choice_chip, which)"));
+    assert!(gd_code(&editor, "_on_rule_move").contains(&"bridge.editor_move_rule(from, to)"));
+    let click = gd_code(&editor, "map_click");
+    let pick = click
+        .iter()
+        .position(|line| line.contains("return _pick_at(camera, at)"))
+        .expect("a pick takes the click");
+    let beacon = click
+        .iter()
+        .position(|line| line.contains("_beacon_under("))
+        .expect("beacons are picked");
+    assert!(pick < beacon, "a pick comes before the menus: {click:?}");
+    assert!(
+        gd_code(&editor, "_pick_at").contains(&"bridge.editor_pick(target)"),
+        "the bridge composes the pick"
+    );
+    assert!(
+        gd_code(&editor, "_input").contains(&"bridge.editor_cancel_pick()"),
+        "Escape calls a pick off"
+    );
+}
+
+/// The hostless rule-list scene draws a byte-identical copy of the gateway's own render
+/// golden, as the wizard and vista shots draw theirs.
+#[test]
+fn the_rule_list_shot_draws_a_byte_copy_of_the_gateways_render_golden() {
+    let copy =
+        fs::read(godot_dir().join("fixtures").join("rule_list_render.json")).expect("the fixture");
+    let golden = fs::read(
+        godot_dir()
+            .join("..")
+            .join("tests")
+            .join("golden")
+            .join("gateway")
+            .join("demo_expand_and_mine_render")
+            .join("expected.response.json"),
+    )
+    .expect("the golden");
+    assert!(
+        copy == golden,
+        "godot/fixtures/rule_list_render.json is not the golden's bytes"
+    );
+    let shot = read("scripts/rule_list_shot.gd");
+    assert!(shot.contains("res://fixtures/rule_list_render.json"));
+    assert!(shot.contains("bridge.editor_rule_list_of_response("));
+    assert!(
+        !shot.contains("host_link") && !shot.contains("execute_with_pipe"),
+        "the shot starts no host"
     );
 }

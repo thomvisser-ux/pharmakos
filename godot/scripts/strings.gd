@@ -108,6 +108,15 @@ const TEXT := {
 	"wizard_close": "Close",
 	"rules_heading": "What the playbook says",
 	"rules_waiting": "Rendering...",
+	# The rule list's chips, drag and connector (S3's `ed3b`). Every value is the gateway's as
+	# sent; a refusal is its words.
+	"rule_number_heading": "Change {text}:",
+	"rule_number_send": "Set this value",
+	"rule_conflict": "Never fires while the rule joined above it is true: {sentence}",
+	"rule_refused": "The gateway refused that edit: {detail}",
+	"rule_chip_read_only_ms": "This duration is shown as the gateway wrote it. Editing it here waits on a unit the gateway can send.",
+	"rule_chip_read_only_not_on_the_map": "This names a step or a rule; picking one is a later version's.",
+	"rule_chip_read_only_no_shape": "The gateway sent no way to edit this value.",
 	"meter_heading": "Your economy",
 	# The four numbers as the gateway sent them. Headroom is the gateway's own figure,
 	# never supply minus draw: nothing here adds or subtracts anything.
@@ -177,6 +186,11 @@ const TEXT := {
 	"status_save_failed": "Could not write {path}.",
 	"status_open_failed": "Could not read {path}.",
 	"status_new_opened": "A new playbook is in the editor; the checks say what it still needs. Undo takes it back.",
+	"status_picking": "Click the map for the new value; Escape stops.",
+	"status_pick_arm_not_here": "That cannot go here: the gateway takes no {detail} at this point. Click something else, or Escape.",
+	"status_pick_not_this_kind": "That is not a {detail}. Click one on the map, or Escape.",
+	"status_rule_editing": "Editing...",
+	"status_move_other_list": "A step moves among the route's steps and a rule among the rules, not from one list to the other.",
 	"status_wizard_used": "The template's playbook is in the editor. Undo takes it back.",
 	"status_wizard_refused": "The gateway refused that value: {detail}",
 	"status_dormant_allowing": "Allowing dormant beacons...",

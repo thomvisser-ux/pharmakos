@@ -61,6 +61,7 @@ exported build, whose extension list the package job's import wrote (decisions-l
 | `scenes/vista_shot.tscn` | the vista golden's scene: the keyframe fixture with **no host running** |
 | `scenes/watch_check.tscn` | the headless-driven run against a real `gamectl host` (CI's `client` job): the watch rig, the editor, the wizard, the meter, the camera's keys (`_camera_keys`: W held in the focused notes box leaves the camera still, and moves it once a right-click on the view has released the focus), the first click on the panel (`_first_click_lands`: one injected click on Submit, a Fix button and Save reaches its handler exactly once, with the rows redrawn under the press, with a map menu open and after a panel scroll), the name Save as... offers (`_save_as_offers`: the opened file's, the saved file's under a name of its own, and none after a template or a carried draft; the native dialog's overwrite prompt is the package hand check), the map in a Push (`_refused_in_the_push`: a click opens the menu as before, and its ghost, its Go and a submission are refused at once), and a resume by a fresh client |
 | `scenes/rows_shot.tscn` | the validation rows drawn from `fixtures/rows_report.json` with no host; `cargo xtask screenshot` compares it with `tests/golden/vista/expected.rows.png` |
+| `scenes/rule_list_shot.tscn` | the rule list drawn from `fixtures/rule_list_render.json` (a byte copy of the gateway's Expand & Mine render golden) with no host, its chips and one conflict connector; not yet in `cargo xtask screenshot`'s list (an `xtask` change), so run by hand |
 | `scenes/wizard_shot.tscn` | the wizard's first page drawn from `fixtures/instantiate_suggested.json` with no host; `cargo xtask screenshot` compares it with `tests/golden/vista/expected.wizard.png` |
 | `scenes/client_check.tscn` | T12's headless acceptance scene |
 | `scenes/smoke_check.tscn` | the shipped smoke check (T21): the real lobby idles, opens and closes the credits overlay, starts a New match and reaches the Lull; the one check the export keeps |
@@ -200,9 +201,16 @@ Pull request 2 adds four things to the panel, each drawn as the gateway answered
   `playbook_jsonc` into the editor byte for byte, as one edit Undo takes back, and QUICK, the
   route, the rule list and FULL follow. Nothing in the client names a template, a pointer or
   a label, so a `library/` change needs no client change (`tests/wizard.rs`).
-- **The rule list** (`scripts/rule_list.gd`): `render_plan`'s prose for the text on screen,
-  one read-only row per line, its accessible name its line. No sentence is parsed; chips are
-  S3's.
+- **The rule list** (`scripts/rule_list.gd`; S3's `ed3b`): `render_plan`'s prose for the text
+  on screen, one row per line, its accessible name its line, each line cut by the bridge at the
+  chips `render_plan` placed on it. No sentence is parsed. A chip is a link: a number opens a
+  field within the bounds the gateway sent, an enum its values as sent, and a reference a pick
+  on the map (the next map click; Escape stops), each edit one JSON Patch `replace`. A
+  duration is drawn as the gateway wrote it and not edited (it waits on a typed unit hint from
+  the wire), and a step label or a rule id waits on part 2's picker. A step's or a rule's row
+  drags onto another of its own list: one JSON Patch `move`. The two rules a W0702 row names
+  are joined by a connector in the list's margin, with the verifier's sentence under the later
+  one, and the gateway's refusal of an edit shows under the rule it was of.
 - **The meter**: `get_economy_forecast`'s four numbers (`$`, supply, draw and headroom in
   `kW`) put into `scripts/strings.gd`'s frame as they came. Headroom is the gateway's, never
   supply minus draw. The bridge's rig polls it when a Lull opens and whenever the match moved
@@ -405,7 +413,8 @@ one.
 
 ## What is not here yet
 
-Chips on the rule list, drag reordering and the pickers are S3's; unit display of wizard
+The rule list's condition picker, locks and Visit & change rows are S3's, in `ed3b`'s part
+2; unit display of wizard
 values, the typed parameter catalogue, the draft and save browsers and the real lobby are
 S6's; the `.vox` models and the art pass are S6's too. Entities are drawn as placeholder
 primitives until then.

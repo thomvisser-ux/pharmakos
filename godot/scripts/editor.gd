@@ -49,6 +49,9 @@
 #     lists - label, raw value, the operator's mark and its why. Use puts the gateway's
 #     playbook into the editor byte for byte, as one edit Undo takes back;
 #   * the RULE LIST (scripts/rule_list.gd): `render_plan`'s lines for the text on screen;
+#     from S3's `ed3b`, with its chips (each edit one `replace`: a number field within the
+#     bounds sent, an enum's values as sent, a pick on the map), drag reordering (one `move`)
+#     and W0702's conflict connector, every patch composed by the bridge from the click;
 #   * the own $/kW METER: `get_economy_forecast`'s four numbers, as they came, through
 #     strings.gd's frame. Headroom is the gateway's, never supply minus draw. When it is
 #     read is the bridge's rig's scheduling (crates/client-gdext/src/rig.rs).
@@ -255,9 +258,18 @@ var _templates_box: VBoxContainer
 var _wizard_box: VBoxContainer
 var _rules_status: Label
 var _rules_box: VBoxContainer
+## The rule list's chips as the bridge last sent them, for a click on one to find its editor.
+var _rule_chips: Array = []
+## A number chip's editor: a field within the bounds sent, and the chip it is for.
+var _number_popup: PopupPanel
+var _number_heading: Label
+var _number_field: SpinBox
+var _number_chip := -1
+## An enum chip's editor: its values as sent, and the chip it is for.
+var _choice_menu: PopupMenu
+var _choice_chip := -1
 var _templates_drawn := ""
 var _wizard_drawn := ""
-var _rules_drawn := ""
 ## Per counted button: how many presses (`button_down`) and handled clicks (`pressed`) it
 ## has had, for `watch_check.gd`'s `_first_click_lands`.
 var _clicks := {}
@@ -511,6 +523,10 @@ func _input(event: InputEvent) -> void:
 	if close_menu_on_escape(event):
 		get_viewport().set_input_as_handled()
 		return
+	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE and int(bridge.editor_state().get("picking", -1)) >= 0:
+		bridge.editor_cancel_pick()
+		get_viewport().set_input_as_handled()
+		return
 	if not (event is InputEventMouseButton) or not event.pressed:
 		return
 	if menu_open() and _panel.get_global_rect().has_point(event.position):
@@ -555,6 +571,8 @@ func map_click(at: Vector2, alt: bool) -> bool:
 		_say_local("status_closed_ended", {})
 		return false
 	var camera: Camera3D = vista.rig.camera
+	if int(bridge.editor_state().get("picking", -1)) >= 0:
+		return _pick_at(camera, at)
 	var beacon := _beacon_under(camera, at)
 	if not beacon.is_empty():
 		_take_map_click()
@@ -571,6 +589,27 @@ func map_click(at: Vector2, alt: bool) -> bool:
 		_on_ground_clicked(picked["at"], at)
 		return true
 	return false
+
+
+## A map click while a rule-list chip's pick is on: what is under it - a beacon (any seat's), a
+## vent or the ground - goes to the bridge, which writes the arm the click names when the
+## gateway lists it there, or says why not and keeps the pick on. No menu opens.
+func _pick_at(camera: Camera3D, at: Vector2) -> bool:
+	var target := {}
+	var beacon := _beacon_under(camera, at)
+	var vent := _vent_under(camera, at)
+	if not beacon.is_empty():
+		target = {"beacon": String(beacon["id"])}
+	elif not vent.is_empty():
+		target = {"feature": String(vent["id"])}
+	else:
+		var picked: Dictionary = bridge.view_pick(camera.project_ray_origin(at), camera.project_ray_normal(at))
+		if not picked.get("hit", false):
+			return false
+		target = {"voxel": picked["at"]}
+	_take_map_click()
+	bridge.editor_pick(target)
+	return true
 
 
 ## Whether the map offers its menus: until the match has ended, by the bridge's phase string
@@ -771,7 +810,7 @@ func _draw_state(state: Dictionary) -> void:
 	_draw_ghost(state.get("ghost", {}))
 	_draw_templates(state.get("templates", []))
 	_draw_wizard(state.get("wizard", {}), state.get("templates", []))
-	_draw_rules(state.get("prose", PackedStringArray()), state.get("prose_current", false), state.get("has_text", false), unchecked_text(state, "prose"))
+	_draw_rules(state, unchecked_text(state, "prose"))
 	_draw_this_round(String(state.get("this_round", "")))
 	_draw_chips(state.get("chips", []), state.get("chips_current", false), state.get("has_text", false), unchecked_text(state, "chips"))
 	_draw_attack(state.get("attack_targets", []))
@@ -1000,16 +1039,71 @@ func _draw_wizard(wizard: Dictionary, templates: Array) -> void:
 	Wizard.fill(_wizard_box, title, wizard, Callable(self, "wizard_send"), func() -> void: bridge.editor_wizard_use(), func() -> void: bridge.editor_wizard_close())
 
 
-func _draw_rules(lines: PackedStringArray, current: bool, has_text: bool, unchecked: String) -> void:
-	if has_text and not current:
+## The rule list: `render_plan`'s lines, cut at its chips by the bridge, with the conflict
+## connectors and the gateway's refusal of the last edit (S3's `ed3b`; scripts/rule_list.gd).
+func _draw_rules(state: Dictionary, unchecked: String) -> void:
+	if state.get("has_text", false) and not state.get("prose_current", false):
 		_rules_status.text = unchecked if unchecked != "" else Strings.text("rules_waiting")
 	else:
 		_rules_status.text = ""
-	var drawn := var_to_str(lines)
-	if drawn == _rules_drawn:
+	var list: Dictionary = state.get("rule_list", {})
+	_rule_chips = list.get("chips", [])
+	RuleList.fill(_rules_box, list, state.get("rules_editable", false), int(state.get("picking", -1)), state.get("conflicts", []), state.get("rule_refusal", {}), Callable(self, "_on_rule_chip"), Callable(self, "_on_rule_move"))
+
+
+## A click on rule-list chip `index` opens its editor, by the shape the gateway sent: a number
+## field within the bounds sent, the enum's values as sent, or a pick on the map; a chip the
+## rule list does not edit says why. The edit itself is the bridge's one JSON Patch `replace`.
+func _on_rule_chip(index: int) -> void:
+	if index < 0 or index >= _rule_chips.size():
 		return
-	_rules_drawn = drawn
-	RuleList.fill(_rules_box, lines)
+	var chip: Dictionary = _rule_chips[index]
+	match String(chip.get("editor", "")):
+		"number":
+			_open_number(index, chip)
+		"choice":
+			_choice_chip = index
+			_choice_menu.clear()
+			var values: PackedStringArray = chip.get("values", PackedStringArray())
+			for which in values.size():
+				_choice_menu.add_radio_check_item(values[which], which)
+				_choice_menu.set_item_checked(which, values[which] == String(chip.get("value_json", "")))
+			_choice_menu.position = Vector2i(get_viewport().get_mouse_position())
+			_choice_menu.popup()
+		"pick":
+			bridge.editor_begin_pick(index)
+		_:
+			_say_local("rule_chip_read_only_" + String(chip.get("why", "")), {})
+
+
+## The number field for chip `index`: the bounds the gateway sent, none where it set none, and
+## the unit beside it as sent. The field keeps its value inside those bounds; nothing else is
+## checked here.
+func _open_number(index: int, chip: Dictionary) -> void:
+	_number_chip = index
+	_number_field.allow_lesser = not chip.get("has_min", false)
+	_number_field.allow_greater = not chip.get("has_max", false)
+	_number_field.min_value = chip.get("min") if chip.get("has_min", false) else chip.get("now", 0)
+	_number_field.max_value = chip.get("max") if chip.get("has_max", false) else chip.get("now", 0)
+	_number_field.value = chip.get("now", 0)
+	_number_field.suffix = String(chip.get("unit", ""))
+	_number_heading.text = Strings.text("rule_number_heading", {"text": chip.get("text", "")})
+	_number_popup.position = Vector2i(get_viewport().get_mouse_position())
+	_number_popup.popup()
+
+
+func _on_number_send() -> void:
+	_number_popup.hide()
+	bridge.editor_set_number(_number_chip, int(_number_field.value))
+
+
+func _on_choice(which: int) -> void:
+	bridge.editor_choose(_choice_chip, which)
+
+
+## A rule dropped on another of its list: the bridge's one JSON Patch `move`.
+func _on_rule_move(from: int, to: int) -> void:
+	bridge.editor_move_rule(from, to)
 
 
 func _draw_notes(state: Dictionary) -> void:
@@ -1233,6 +1327,7 @@ func _build_panel() -> void:
 	_heading(column, "rules_heading")
 	_rules_status = _label(column)
 	_rules_box = VBoxContainer.new()
+	_rules_box.draw.connect(func() -> void: RuleList.draw_connectors(_rules_box))
 	column.add_child(_rules_box)
 
 	_heading(column, "route_heading")
@@ -1290,6 +1385,25 @@ func _build_menus() -> void:
 	_visit_menu.id_pressed.connect(_on_menu)
 	_visit_menu.window_input.connect(close_menu_on_escape)
 	_menu.add_child(_visit_menu)
+	# The rule list's chip editors (S3's `ed3b`).
+	_choice_menu = PopupMenu.new()
+	_choice_menu.id_pressed.connect(_on_choice)
+	add_child(_choice_menu)
+	_number_popup = PopupPanel.new()
+	var box := VBoxContainer.new()
+	_number_popup.add_child(box)
+	_number_heading = Label.new()
+	box.add_child(_number_heading)
+	_number_field = SpinBox.new()
+	_number_field.step = 1.0
+	_number_field.rounded = true
+	box.add_child(_number_field)
+	var send := Button.new()
+	send.text = Strings.text("rule_number_send")
+	send.accessibility_name = send.text
+	send.pressed.connect(_on_number_send)
+	box.add_child(send)
+	add_child(_number_popup)
 
 
 ## An unticked checkbox's box: a square outline in `colour`, clear inside.
