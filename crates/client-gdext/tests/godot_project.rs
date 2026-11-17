@@ -2038,3 +2038,52 @@ fn the_ground_menu_carries_the_ghosts_words_and_greys_place_when_the_gateway_say
         "Place beacon is greyed exactly when the gateway's ghost is illegal: {menu:?}"
     );
 }
+
+/// **The map opens on the seat's own commander** (the P6a finding, S3's `ed3b`). At P6a the map
+/// opened framed on the whole map, too far out to read, with the core at the panel's edge. The
+/// first complete view now opens on this seat's commander, who stands at the core in round 1,
+/// at the rig's opening distance, with the commander drawn in the middle of what the editor's
+/// panel leaves of the window; with no commander in the view it frames the whole map as
+/// before, and the Whole map button still does. Camera only: the commander is the view's own
+/// marker, and nothing else is read.
+#[test]
+fn the_map_opens_on_the_seats_own_commander_clear_of_the_panel() {
+    let lobby = read("scripts/lobby.gd");
+    let received = gd_code(&lobby, "_on_received");
+    let first = received
+        .iter()
+        .position(|line| line.contains("if first and view.get(\"complete\", false):"))
+        .expect("the first complete view is framed");
+    assert_eq!(
+        received.get(first.saturating_add(1)).copied(),
+        Some("if not vista.open_on_own_commander(editor.PANEL_WIDTH):"),
+        "it opens on the commander, clear of the panel: {received:?}"
+    );
+    assert_eq!(
+        received.get(first.saturating_add(2)).copied(),
+        Some("vista.frame_whole_map()"),
+        "and frames the whole map when the view has no commander: {received:?}"
+    );
+    assert!(
+        lobby.contains("func() -> void: vista.frame_whole_map())"),
+        "Whole map stays"
+    );
+    let vista = read("scripts/vista.gd");
+    let open = gd_code(&vista, "open_on_own_commander");
+    assert!(
+        open.iter().any(|line| line.contains("my_commander()"))
+            && open
+                .iter()
+                .any(|line| line.contains("rig.open_on(commander.global_position, cover)")),
+        "{open:?}"
+    );
+    let rig = read("scripts/camera_rig.gd");
+    let on = gd_code(&rig, "open_on");
+    for wanted in [
+        "distance = OPENING_DISTANCE",
+        "pitch = OPENING_PITCH",
+        "target = null",
+    ] {
+        assert!(on.contains(&wanted), "{wanted}: {on:?}");
+    }
+}

@@ -86,7 +86,10 @@ else. Closing the window closes the host's standard input, which ends the host.
 The watch rig is what spec section 3 names for a Push and nothing more: free-look (WASD or
 the arrows, Q and E, the wheel, which zooms on what is under the cursor, the right mouse
 button), a follow-commander toggle, the live
-event list, 1x, 2x and 4x, and Skip. There is no pause (decisions-log item 108 (3)). The
+event list, 1x, 2x and 4x, and Skip. There is no pause (decisions-log item 108 (3)). The map
+opens on this seat's own commander (at the core in round 1), close enough to read, and drawn
+in the middle of what the editor's panel leaves of the window; with no commander in the view
+it frames the whole map, as the Whole map button does (S3's `ed3b`, a P6a finding). The
 Lull ends when every seat is ready or its timer runs out; Ready is this seat's `set_ready`,
 and Continue leaves the recap. What each connection sends and when — the pacer, the host
 clock reported four times a second outside a Push, the keep-alive — is the bridge's
