@@ -154,6 +154,12 @@ const GHOST_COLOURS := {
 ## PLACEHOLDER: the size meter's look — OWNER, at S6.
 const SIZE_BAR := Vector2(64, 10)
 const SIZE_STALE_ALPHA := 0.35
+## The verdict line's and the size meter's two looks (the P6a finding): CHECKING while a check
+## of the text on screen is on its way, ANSWERED from its answer until the player's next input.
+## Still colours behind the words, never a flash: there is no motion, and no clock. Part of the
+## panel's look, whose marker heads this file.
+const CHECKING_LOOK := Color(0.55, 0.6, 0.7, 0.22)
+const ANSWERED_LOOK := Color(0.95, 0.78, 0.25, 0.38)
 ## The unticked box: its side in pixels, its outline's width, and its colour, shown or disabled.
 ## PLACEHOLDER: the checkbox's box — OWNER, at S6's art pass.
 const BOX_SIDE := 16
@@ -210,6 +216,10 @@ var _notes: TextEdit
 var _notes_status: Label
 var _drafts: Label
 var _undo_button: Button
+## Whether a check of the text on screen was on its way at the last redraw, and whether its
+## answer's highlight is showing (`_mark_check`).
+var _was_checking := false
+var _highlit := false
 var _new_button: Button
 var _size_box: HBoxContainer
 var _size_bar: ProgressBar
@@ -496,6 +506,8 @@ func _process(_delta: float) -> void:
 func _input(event: InputEvent) -> void:
 	if _panel == null:
 		return
+	if next_input(event):
+		_clear_highlight()
 	if close_menu_on_escape(event):
 		get_viewport().set_input_as_handled()
 		return
@@ -737,12 +749,15 @@ func _draw_state(state: Dictionary) -> void:
 	# A check that will not come says why, on its own line, in place of the words that wait
 	# for it.
 	var unchecked := unchecked_text(state, "rows")
+	var checking := false
 	if state.get("busy", false) or (state.get("has_text", false) and not state.get("rows_current", false) and verdict != "refused"):
-		line = unchecked if unchecked != "" and not state.get("busy", false) else Strings.text("verdict_checking")
+		checking = unchecked == "" or state.get("busy", false)
+		line = Strings.text("verdict_checking") if checking else unchecked
 	elif String(state.get("seal", "")) != "":
 		# Whether the text can be sealed is the bridge's `seal`: said only in an open Lull,
 		# and outside one only that the gateway filed the safe playbook (finding J).
 		line += " - " + Strings.text("seal_" + String(state["seal"]))
+	_mark_check(checking, line)
 	_verdict.text = line
 	var open: bool = String(state.get("door", "open")) == "open"
 	Rows.fill(_rows, state.get("rows", []), Callable(self, "_on_fix_pressed"), state.get("rows_current", false) and not state.get("busy", false) and open, Callable(self, "_on_fix_down"))
@@ -765,6 +780,55 @@ func _draw_state(state: Dictionary) -> void:
 	# verifier refused opened nothing, so the text on screen is still the one it counted.
 	var counted: bool = state.get("rows_current", false) or verdict == "refused"
 	_draw_size(state.get("size", {}), counted, unchecked if unchecked != "" else Strings.text("verdict_checking"))
+
+
+## The re-check made visible (the P6a finding: "i did not see the re-check and redraw"). While
+## a check is on its way the verdict line and the size meter's line wear CHECKING_LOOK; when its
+## answer arrives, or the verdict line changes, both wear ANSWERED_LOOK until the player's next
+## input (`_clear_highlight`). `after` is the verdict line about to be drawn.
+func _mark_check(checking: bool, after: String) -> void:
+	if answer_arrived(_was_checking, checking, _verdict.text, after):
+		_highlit = true
+	_was_checking = checking
+	if checking:
+		_highlit = false
+	var colour := CHECKING_LOOK if checking else (ANSWERED_LOOK if _highlit else Color(0, 0, 0, 0))
+	_look(_verdict, colour)
+	_look(_size_line, colour)
+
+
+## Whether an answer is to be highlighted: no check is on its way now, and one was at the last
+## redraw, or the verdict line changes.
+static func answer_arrived(was_checking: bool, checking: bool, before: String, after: String) -> bool:
+	return not checking and (was_checking or before != after)
+
+
+## The player's next input took the answer's highlight down.
+func _clear_highlight() -> void:
+	if not _highlit:
+		return
+	_highlit = false
+	if not _was_checking:
+		_look(_verdict, Color(0, 0, 0, 0))
+		_look(_size_line, Color(0, 0, 0, 0))
+
+
+## Whether `event` is the player's next input: a key going down, or a mouse button (a click
+## or a wheel notch) going down. A mouse move is not.
+static func next_input(event: InputEvent) -> bool:
+	if event is InputEventKey:
+		return event.pressed and not event.echo
+	return event is InputEventMouseButton and event.pressed
+
+
+## Paints `colour` behind `label`'s words, or nothing when it is clear.
+static func _look(label: Label, colour: Color) -> void:
+	if colour.a <= 0.0:
+		label.remove_theme_stylebox_override("normal")
+		return
+	var box := StyleBoxFlat.new()
+	box.bg_color = colour
+	label.add_theme_stylebox_override("normal", box)
 
 
 ## Why `check` (`rows`, `route`, `prose` or `chips`) of the text on screen will not come, as
@@ -1137,6 +1201,7 @@ func _build_panel() -> void:
 	_count(_button(buttons, "submit", _on_submit_pressed), "submit")
 	_status = _label(column)
 	_verdict = _label(column)
+	_verdict.text = Strings.text("verdict_none")
 	_beacon_label = _label(column)
 	_ghost_label = _label(column)
 

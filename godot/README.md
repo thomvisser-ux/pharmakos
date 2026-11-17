@@ -116,7 +116,9 @@ beacon (the ghost shows QUICK's verdict for that click, and the menu the click o
 the same words on its first line and greys Place beacon while the gateway says the spot is
 illegal). A beacon's menu offers its target
 every time: this beacon, or a selector (Alt held pre-selects the nearest own beacon). Every edit is a JSON Patch the gateway applies, QUICK runs on
-every edit and FULL after 600 ms idle, and the rows' Fix buttons apply the verifier's own
+every edit and FULL after 600 ms idle (while a check is on its way the verdict line and the
+size meter wear a checking look, and when its answer arrives both are highlighted until the
+player's next key, click or wheel notch: no timer, nothing flashes), and the rows' Fix buttons apply the verifier's own
 machine-applicable patches. The route is the gateway's `estimate_route`, drawn as a polyline
 with each leg's travel time in game milliseconds as it came back; there are no dashed legs
 at the skeleton. The notebook, draft continuity, Submit and Ready go through the gateway

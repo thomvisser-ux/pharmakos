@@ -2135,3 +2135,53 @@ fn new_puts_the_shipped_empty_playbook_on_screen() {
         "the door gates New: {draw:?}"
     );
 }
+
+/// **The re-check is visible** (the P6a finding, S3's `ed3b`: "i did not see the re-check and
+/// redraw"). While a check of the text on screen is on its way, the verdict line and the size
+/// meter's line wear the checking look; when its answer arrives, or the verdict changes, both
+/// are highlighted, and the highlight stays until the player's next input (a key, a click, a
+/// wheel notch). No clock: no timer, no tween (`no_arithmetic.rs`' clock scan holds the editor
+/// to that), so nothing flashes and nothing moves, and there is no motion for a reduced-motion
+/// setting to turn off. The words stay the gateway's.
+#[test]
+fn a_checks_answer_is_highlighted_until_the_next_input() {
+    let editor = read("scripts/editor.gd");
+    let mark = gd_code(&editor, "answer_arrived");
+    assert!(
+        mark.contains(&"return not checking and (was_checking or before != after)"),
+        "an answer arriving, or a changed verdict, is what lights the line: {mark:?}"
+    );
+    let draw = gd_code(&editor, "_draw_state");
+    assert!(
+        draw.iter()
+            .any(|line| line.contains("_mark_check(checking, line)")),
+        "every redraw tells the highlight whether a check is on its way: {draw:?}"
+    );
+    let look = gd_code(&editor, "_mark_check");
+    assert!(
+        look.iter()
+            .any(|line| line
+                .contains("answer_arrived(_was_checking, checking, _verdict.text, after)")),
+        "{look:?}"
+    );
+    for label in ["_verdict", "_size_line"] {
+        assert!(
+            look.iter()
+                .any(|line| line.contains(&format!("_look({label}, "))),
+            "{label} wears the look: {look:?}"
+        );
+    }
+    let input = gd_code(&editor, "_input");
+    assert!(
+        input.iter().any(|line| line.contains("_clear_highlight()")),
+        "the player's next input clears it: {input:?}"
+    );
+    let clear = gd_code(&editor, "next_input");
+    assert!(
+        clear.iter().any(|line| line.contains("InputEventKey"))
+            && clear
+                .iter()
+                .any(|line| line.contains("InputEventMouseButton")),
+        "a key, a click and a wheel notch are inputs; a mouse move is not: {clear:?}"
+    );
+}
