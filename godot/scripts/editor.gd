@@ -19,12 +19,15 @@
 #   * click the ground: Go here, or Place beacon - the ghost shows QUICK's verdict for this
 #     click (per click at the skeleton, not live on hover: plan T19 amendment).
 #     PLACEHOLDER: the ghost per click, not live on hover — OWNER, S6 (w6 notes A4 item 5);
-#   * Alt-click a beacon: the step's target becomes a selector - nearest, weakest, safest
-#     or most threatened own beacon, chosen when the step starts;
+#   * the beacon menu's target choice: this beacon, or a selector - nearest, weakest, safest
+#     or most threatened own beacon, chosen when the step starts; Alt held pre-selects the
+#     nearest (S3's `ed3b`: the choice is in the menu every time, because at P6a a real
+#     Windows window never delivered Alt with the click);
 #   * click a heat vent: "Place beacon covering this vent", a place-beacon step whose site
-#     is `covering` the vent by its name; Alt-click a vent: "the nearest vent you can
-#     cover", the same step with a description the sim ranks when the step starts
-#     (docs/design/targeting.md, "Surfaces"; S1's plan, task `ui`). The vents are the ones
+#     is `covering` the vent by its name, and "the nearest vent you can cover", the same
+#     step with a description the sim ranks when the step starts, both every time; Alt held
+#     puts the description first (docs/design/targeting.md, "Surfaces"; S1's plan, task
+#     `ui`; S3's `ed3b`). `--log-input` logs every map click's modifiers. The vents are the ones
 #     `get_map_summary` lists this Lull, drawn where the view holds their anchor column,
 #     and picked by screen distance as the beacons are;
 #   * the route is drawn as a polyline from the gateway's `estimate_route` legs, each leg
@@ -170,9 +173,12 @@ const ITEM_GO := 1
 const ITEM_RECYCLE := 2
 const ITEM_PLACE := 3
 const ITEM_COVER := 4
+const ITEM_COVER_NEAREST := 5
 const ITEM_LOW := 11
 const ITEM_NORMAL := 12
 const ITEM_HIGH := 13
+## "This beacon": the clicked beacon itself, the first of the beacon menu's target choices.
+const ITEM_THIS := 19
 const ITEM_SELECTOR := 20
 const SELECTORS := ["nearest", "weakest", "safest", "most_threatened"]
 ## The user argument (after `--`) that turns on the click logging.
@@ -207,6 +213,9 @@ var _save_dialog: FileDialog
 var _menu: PopupMenu
 var _visit_menu: PopupMenu
 var _menu_target := {}
+## The target each menu entry acts on, by its item id, where entries differ in target (the
+## vent menu's name and description).
+var _menu_targets := {}
 var _selector := ""
 var _route_mesh: MeshInstance3D
 var _route_labels: Node3D
@@ -495,7 +504,17 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if not event.pressed or event.button_index != MOUSE_BUTTON_LEFT:
 		return
-	map_click(event.position, event.alt_pressed)
+	if log_input:
+		# The P6a hand check: what the window delivered with this click, both ways Alt can be read.
+		print("[editor] map click at %s: alt_pressed %s, KEY_ALT held %s, shift %s, ctrl %s" % [event.position, event.alt_pressed, Input.is_key_pressed(KEY_ALT), event.shift_pressed, event.ctrl_pressed])
+	map_click(event.position, alt_held(event))
+
+
+## Whether Alt is held for a map click: the event's own flag, or the key's state as the engine
+## reads it. At P6a, on a real Windows window, Alt-click never reached the map as an Alt-click;
+## Alt is a shortcut only, and every choice it makes is also in the menu without it.
+static func alt_held(event: InputEventWithModifiers) -> bool:
+	return event.alt_pressed or Input.is_key_pressed(KEY_ALT)
 
 
 ## A left-click on the map at `at` (screen pixels), Alt held or not: the map surface's menus
@@ -577,19 +596,29 @@ func _vent_under(camera: Camera3D, at: Vector2) -> Dictionary:
 	return best
 
 
-## A click on a vent offers a beacon covering it, by its name; Alt-click offers the
-## description instead, "the nearest vent you can cover" (docs/design/targeting.md).
+## A click on a vent offers a beacon covering it by its name AND by the description, "the
+## nearest vent you can cover" (docs/design/targeting.md), every time: no modifier is needed
+## (the P6a finding). Alt only puts the description first.
 func _on_vent_clicked(vent: Dictionary, alt: bool, at: Vector2) -> void:
 	_selector = ""
 	_beacon_label.text = Strings.text("feature_vent", {"x": vent.get("x", ""), "y": vent.get("y", "")})
-	if alt:
-		_menu_target = {"nearest_uncovered": "vent"}
-	else:
-		_menu_target = {"feature": String(vent["id"])}
+	_menu_target = {}
+	_menu_targets = {}
 	_menu.clear()
-	_menu.add_item(Strings.text("menu_cover_nearest" if alt else "menu_cover"), ITEM_COVER)
+	for choice in vent_choices(String(vent["id"]), alt):
+		_menu_targets[choice["id"]] = choice["target"]
+		_menu.add_item(Strings.text(choice["key"]), choice["id"])
 	_menu.position = Vector2i(at)
 	_menu.popup()
+
+
+## The vent menu's two entries, in the order shown: the vent by its name, and the description
+## of the nearest vent you can cover, each with the target its step names. Both are there every
+## time; Alt held puts the description first.
+static func vent_choices(vent_id: String, alt: bool) -> Array:
+	var named := {"key": "menu_cover", "id": ITEM_COVER, "target": {"feature": vent_id}}
+	var described := {"key": "menu_cover_nearest", "id": ITEM_COVER_NEAREST, "target": {"nearest_uncovered": "vent"}}
+	return [described, named] if alt else [named, described]
 
 
 func _on_beacon_clicked(beacon: Dictionary, alt: bool, at: Vector2) -> void:
@@ -604,16 +633,20 @@ func _on_beacon_clicked(beacon: Dictionary, alt: bool, at: Vector2) -> void:
 	# "T19" (4)); its description heads the panel while the menu is open.
 	bridge.editor_describe_beacon(id)
 	_beacon_label.text = Strings.text("beacon_heading", {"id": id})
+	# The target choice is in the menu every time (the P6a finding): this beacon, or a
+	# selector chosen when the step starts. Alt held pre-selects the nearest own beacon.
 	_selector = SELECTORS[0] if alt else ""
 	_menu_target = {"beacon": id}
+	_menu_targets = {}
 	_menu.clear()
-	if alt:
-		_menu.add_separator(Strings.text("menu_target"))
-		for index in SELECTORS.size():
-			var name: String = SELECTORS[index]
-			_menu.add_radio_check_item(Strings.text("selector_" + name), ITEM_SELECTOR + index)
-			_menu.set_item_checked(_menu.get_item_index(ITEM_SELECTOR + index), index == 0)
-		_menu.add_separator()
+	_menu.add_separator(Strings.text("menu_target"))
+	_menu.add_radio_check_item(Strings.text("selector_this"), ITEM_THIS)
+	_menu.set_item_checked(_menu.get_item_index(ITEM_THIS), _selector == "")
+	for index in SELECTORS.size():
+		var name: String = SELECTORS[index]
+		_menu.add_radio_check_item(Strings.text("selector_" + name), ITEM_SELECTOR + index)
+		_menu.set_item_checked(_menu.get_item_index(ITEM_SELECTOR + index), name == _selector)
+	_menu.add_separator()
 	_menu.add_submenu_node_item(Strings.text("menu_visit"), _visit_menu)
 	_menu.add_item(Strings.text("menu_go"), ITEM_GO)
 	_menu.add_item(Strings.text("menu_recycle"), ITEM_RECYCLE)
@@ -623,6 +656,7 @@ func _on_beacon_clicked(beacon: Dictionary, alt: bool, at: Vector2) -> void:
 
 func _on_ground_clicked(at: Vector3i, where: Vector2) -> void:
 	_menu_target = {"voxel": at}
+	_menu_targets = {}
 	_selector = ""
 	_beacon_label.text = ""
 	# The ghost for this click: the draft with a beacon patched in here, checked by QUICK.
@@ -635,8 +669,9 @@ func _on_ground_clicked(at: Vector3i, where: Vector2) -> void:
 
 
 func _on_menu(id: int) -> void:
-	if id >= ITEM_SELECTOR and id < ITEM_SELECTOR + SELECTORS.size():
-		_selector = SELECTORS[id - ITEM_SELECTOR]
+	if id == ITEM_THIS or (id >= ITEM_SELECTOR and id < ITEM_SELECTOR + SELECTORS.size()):
+		_selector = "" if id == ITEM_THIS else SELECTORS[id - ITEM_SELECTOR]
+		_menu.set_item_checked(_menu.get_item_index(ITEM_THIS), _selector == "")
 		for index in SELECTORS.size():
 			_menu.set_item_checked(_menu.get_item_index(ITEM_SELECTOR + index), SELECTORS[index] == _selector)
 		return
@@ -650,8 +685,8 @@ func _on_menu(id: int) -> void:
 			act("recycle", target)
 		ITEM_PLACE:
 			act("place", target)
-		ITEM_COVER:
-			act("place_covering", target)
+		ITEM_COVER, ITEM_COVER_NEAREST:
+			act("place_covering", _menu_targets.get(id, {}))
 		ITEM_LOW:
 			act("visit_low", target)
 		ITEM_NORMAL:

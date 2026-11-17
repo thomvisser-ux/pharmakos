@@ -107,8 +107,8 @@ connection the vista already holds, and a thin one. Load and Save read and write
 player's own JSONC file byte for byte; a file is opened only after QUICK has seen it, and an
 out-of-vocabulary construct is refused with the verifier's code and pointer. Click one of
 your beacons for Visit & change, Go here or Recycle; click the ground for Go here or Place
-beacon (the ghost shows QUICK's verdict for that click); Alt-click a beacon to make the
-step's target a selector. Every edit is a JSON Patch the gateway applies, QUICK runs on
+beacon (the ghost shows QUICK's verdict for that click). A beacon's menu offers its target
+every time: this beacon, or a selector (Alt held pre-selects the nearest own beacon). Every edit is a JSON Patch the gateway applies, QUICK runs on
 every edit and FULL after 600 ms idle, and the rows' Fix buttons apply the verifier's own
 machine-applicable patches. The route is the gateway's `estimate_route`, drawn as a polyline
 with each leg's travel time in game milliseconds as it came back; there are no dashed legs
@@ -243,9 +243,11 @@ schedules, and decides nothing (AGENTS.md section 3 rule 4).
   heading is hidden: the client words no claim about the orders of its own.
 * **The chips.** For every vent or seam the playbook names or describes, what it reads now,
   how far, and the next candidate, from `resolve_refs` for the text on screen.
-* **The vent click.** A click on a heat vent offers "Place beacon covering this vent" (a name);
-  Alt-click offers "the nearest vent you can cover" (a description). The vents are those
-  `get_map_summary` lists this Lull.
+* **The vent click.** A click on a heat vent offers "Place beacon covering this vent" (a name)
+  and "the nearest vent you can cover" (a description), both every time; Alt held puts the
+  description first (S3's `ed3b`: at P6a a real Windows window never delivered Alt with the
+  click). With `-- --log-input`, every map click logs `event.alt_pressed`, whether the Alt key
+  is held, Shift and Ctrl. The vents are those `get_map_summary` lists this Lull.
 * **The meter.** Beside the four numbers: the next BMI, labelled as the BMI at the band held
   now, ignoring committed spend (item 135 (2) (g)); the committed spend in a Lull; and that
   supply and draw leave out each beacon's base draw, which its key-core supplies (S1-31). A

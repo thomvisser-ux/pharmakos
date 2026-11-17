@@ -1468,7 +1468,7 @@ fn the_first_click_on_the_panel_reaches_its_handler() {
     );
     assert_eq!(
         unhandled.last().copied(),
-        Some("map_click(event.position, event.alt_pressed)"),
+        Some("map_click(event.position, alt_held(event))"),
         "a left press goes to the map surface's handler: {unhandled:?}"
     );
     let click = gd_code(&editor, "map_click");
@@ -1626,11 +1626,15 @@ fn the_lobby_draws_the_bridges_countdown_and_the_gateways_recap() {
     );
 }
 
-/// **A click on a vent names it, and Alt-click describes it** (`docs/design/targeting.md`,
-/// "Surfaces"; S1's plan, task `ui`). The editor picks a vent from the features the bridge
-/// lists, offers "Place beacon covering this vent" with the vent's name as the target, and
-/// on Alt-click "the nearest vent you can cover" with the description as the target; the
-/// menu item asks the bridge for `place_covering`, whose step the bridge writes.
+/// **A click on a vent offers both its name and its description** (`docs/design/targeting.md`,
+/// "Surfaces"; S1's plan, task `ui`; the P6a finding, S3's `ed3b`). At P6a, on a real Windows
+/// window, Alt-click and plain click both gave "Place beacon covering this vent": the Alt
+/// never reached the click. So the menu no longer hangs on a modifier: every vent click
+/// offers "Place beacon covering this vent" (the vent's name) AND "the nearest vent you can
+/// cover" (the description), and Alt only puts the description first. Alt is read from the
+/// event or from the key's own state, and `--log-input` logs both and the other modifiers on
+/// every map click, so a hand check can show what the window delivered. Each entry asks the
+/// bridge for `place_covering` with its own target, whose step the bridge writes.
 #[test]
 fn a_vent_click_offers_a_beacon_covering_it_and_alt_click_the_nearest_you_can_cover() {
     let editor = read("scripts/editor.gd");
@@ -1640,33 +1644,72 @@ fn a_vent_click_offers_a_beacon_covering_it_and_alt_click_the_nearest_you_can_co
             .any(|line| line.contains("bridge.editor_features()")),
         "the vents are the bridge's: {pick:?}"
     );
+    let choices = gd_code(&editor, "vent_choices");
+    for wanted in [
+        "var named := {\"key\": \"menu_cover\", \"id\": ITEM_COVER, \"target\": {\"feature\": vent_id}}",
+        "var described := {\"key\": \"menu_cover_nearest\", \"id\": ITEM_COVER_NEAREST, \"target\": {\"nearest_uncovered\": \"vent\"}}",
+        "return [described, named] if alt else [named, described]",
+    ] {
+        assert!(
+            choices.contains(&wanted),
+            "both entries, every time, Alt first-ing the description: {choices:?}"
+        );
+    }
     let click = gd_code(&editor, "_on_vent_clicked");
     assert!(
         click
             .iter()
-            .any(|line| line.contains("_menu_target = {\"nearest_uncovered\": \"vent\"}")),
-        "Alt-click describes the vent: {click:?}"
+            .any(|line| line.contains("vent_choices(String(vent[\"id\"]), alt)")),
+        "the menu is the two choices: {click:?}"
     );
+    let held = gd_code(&editor, "alt_held");
     assert!(
-        click
+        held.contains(&"return event.alt_pressed or Input.is_key_pressed(KEY_ALT)"),
+        "Alt is the event's flag or the key held: {held:?}"
+    );
+    let unhandled = gd_code(&editor, "_unhandled_input");
+    assert!(
+        unhandled
             .iter()
-            .any(|line| line.contains("_menu_target = {\"feature\": String(vent[\"id\"])}")),
-        "a click names it: {click:?}"
+            .any(|line| line.contains("map_click(event.position, alt_held(event))")),
+        "{unhandled:?}"
     );
     assert!(
-        click.iter().any(|line| line.contains(
-            "Strings.text(\"menu_cover_nearest\" if alt else \"menu_cover\"), ITEM_COVER"
-        )),
-        "{click:?}"
+        unhandled.iter().any(|line| line.contains("if log_input:"))
+            && unhandled
+                .iter()
+                .any(|line| line.contains("event.alt_pressed")
+                    && line.contains("Input.is_key_pressed(KEY_ALT)")
+                    && line.contains("event.shift_pressed")
+                    && line.contains("event.ctrl_pressed")),
+        "--log-input logs the modifiers of every map click: {unhandled:?}"
     );
     let menu = gd_code(&editor, "_on_menu");
     let cover = menu
         .iter()
-        .position(|line| *line == "ITEM_COVER:")
-        .expect("the menu routes ITEM_COVER");
+        .position(|line| *line == "ITEM_COVER, ITEM_COVER_NEAREST:")
+        .expect("the menu routes both cover entries");
     assert_eq!(
         menu.get(cover.saturating_add(1)).copied(),
-        Some("act(\"place_covering\", target)")
+        Some("act(\"place_covering\", _menu_targets.get(id, {}))")
+    );
+    // A beacon's target choice is in its menu every time too: this beacon, or a selector.
+    let beacon = gd_code(&editor, "_on_beacon_clicked");
+    assert!(
+        !beacon.contains(&"if alt:"),
+        "the target choice does not hang on Alt: {beacon:?}"
+    );
+    assert!(
+        beacon
+            .iter()
+            .any(|line| line.contains("_selector = SELECTORS[0] if alt else \"\"")),
+        "Alt pre-selects the nearest own beacon: {beacon:?}"
+    );
+    assert!(
+        beacon
+            .iter()
+            .any(|line| line.contains("Strings.text(\"selector_this\")")),
+        "this beacon is a choice of its own: {beacon:?}"
     );
     let unhandled = gd_code(&editor, "map_click");
     let beacon = unhandled

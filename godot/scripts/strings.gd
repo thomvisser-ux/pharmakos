@@ -247,10 +247,12 @@ const TEXT := {
 	"menu_go": "Go here",
 	"menu_recycle": "Recycle",
 	"menu_place": "Place beacon",
-	# A click on a vent names it; Alt-click describes it (docs/design/targeting.md).
+	# A click on a vent offers both: its name, and the description (docs/design/targeting.md).
+	# Alt held puts the description first.
 	"menu_cover": "Place beacon covering this vent",
 	"menu_cover_nearest": "Place beacon covering the nearest vent you can cover",
-	"menu_target": "Target, chosen when the step starts:",
+	"menu_target": "Target (a selector picks when the step starts):",
+	"selector_this": "this beacon",
 	"selector_nearest": "the nearest own beacon",
 	"selector_weakest": "the weakest own beacon",
 	"selector_safest": "the safest own beacon",

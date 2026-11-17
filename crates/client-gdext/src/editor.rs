@@ -3425,6 +3425,7 @@ mod tests {
     /// `covering`, and a feature is a target for nothing else.
     #[test]
     fn a_vent_click_places_a_beacon_covering_it_and_alt_click_describes_it() {
+        // Both are offered on every vent click; Alt only puts the description first.
         let named = step_value(
             Action::PlaceCovering,
             &Target::Feature("vent_120_88".to_owned()),
@@ -3471,6 +3472,28 @@ mod tests {
                 .unwrap_or_default()
                 .contains("\"covering\""),
             "{waypoints:?}"
+        );
+    }
+
+    /// **The P6a finding (item 139 (2) C)**: the vent menu's "the nearest vent you can cover",
+    /// chosen with Alt held or picked from the menu without it, is one `patch_plan` whose
+    /// patch appends the description, `covering {vent {NEAREST, UNCOVERED}}`, exactly.
+    #[test]
+    fn the_nearest_vent_you_can_cover_composes_the_description_patch() {
+        let mut editor = loaded(r#"{"declarative":{"route":[]}}"#);
+        assert!(editor.act(
+            Action::PlaceCovering,
+            &Target::NearestUncovered(FeatureKind::Vent)
+        ));
+        let call = editor.next_call(false).expect("the patch");
+        assert_eq!(call.method, "patch_plan");
+        let patch = match call.params.get("json_patch") {
+            Some(Json::String(patch)) => patch.clone(),
+            other => panic!("no patch: {other:?}"),
+        };
+        assert_eq!(
+            compact(&read(&patch)),
+            r#"[{"op":"add","path":"/declarative/route/-","value":{"label":"place_1","place_beacon":{"at":{"covering":{"vent":{"rank":"NEAREST","coverage":"UNCOVERED"}}}}}}]"#
         );
     }
 
