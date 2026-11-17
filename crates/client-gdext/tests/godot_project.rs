@@ -2087,3 +2087,51 @@ fn the_map_opens_on_the_seats_own_commander_clear_of_the_panel() {
         assert!(on.contains(&wanted), "{wanted}: {on:?}");
     }
 }
+
+/// **New** (the P6a finding, S3's `ed3b`): the Orders bar's New puts the empty playbook the
+/// client ships on screen. The text is one data file under `godot/` (`playbooks/new.jsonc`,
+/// with an SPDX header), never text assembled in code, and both export presets pack it: a
+/// `.jsonc` is not a resource, so `all_resources` alone would leave it out of the `.pck`. The
+/// button asks the bridge (`editor_new`) with the file's bytes, and the door gates it as it
+/// gates Fix.
+#[test]
+fn new_puts_the_shipped_empty_playbook_on_screen() {
+    let text = read("playbooks/new.jsonc");
+    assert!(
+        text.starts_with("// SPDX-FileCopyrightText: 2026 Pharmakos contributors\n// SPDX-License-Identifier: GPL-3.0-or-later\n"),
+        "the data file carries its SPDX header"
+    );
+    let presets = read("export_presets.cfg");
+    let includes: Vec<&str> = presets
+        .lines()
+        .filter_map(|line| line.strip_prefix("include_filter="))
+        .collect();
+    assert_eq!(includes.len(), 2, "two presets: {includes:?}");
+    for include in includes {
+        let patterns = filter_patterns(include.trim_matches('"'));
+        assert!(
+            excluded(&patterns, "playbooks/new.jsonc"),
+            "the export packs the new playbook: {patterns:?}"
+        );
+    }
+    let editor = read("scripts/editor.gd");
+    assert!(
+        editor.contains("const NEW_PLAYBOOK := \"res://playbooks/new.jsonc\""),
+        "New reads the shipped file"
+    );
+    let new = gd_code(&editor, "new_playbook");
+    assert!(
+        new.iter()
+            .any(|line| line.contains("FileAccess.get_file_as_bytes(NEW_PLAYBOOK)"))
+            && new
+                .iter()
+                .any(|line| line.contains("bridge.editor_new(bytes)")),
+        "{new:?}"
+    );
+    let draw = gd_code(&editor, "_draw_state");
+    assert!(
+        draw.iter()
+            .any(|line| line.contains("_new_button.disabled = not open")),
+        "the door gates New: {draw:?}"
+    );
+}

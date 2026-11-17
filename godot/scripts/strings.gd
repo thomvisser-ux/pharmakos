@@ -74,6 +74,7 @@ const TEXT := {
 
 	# --- The editor's panel ------------------------------------------------------
 	"editor_title": "Orders",
+	"new": "New",
 	"load": "Load...",
 	"save": "Save",
 	"save_as": "Save as...",
@@ -175,6 +176,7 @@ const TEXT := {
 	"status_saved_file": "Saved to {detail}.",
 	"status_save_failed": "Could not write {path}.",
 	"status_open_failed": "Could not read {path}.",
+	"status_new_opened": "A new playbook is in the editor; the checks say what it still needs. Undo takes it back.",
 	"status_wizard_used": "The template's playbook is in the editor. Undo takes it back.",
 	"status_wizard_refused": "The gateway refused that value: {detail}",
 	"status_dormant_allowing": "Allowing dormant beacons...",

@@ -185,6 +185,9 @@ const ITEM_SELECTOR := 20
 const SELECTORS := ["nearest", "weakest", "safest", "most_threatened"]
 ## The user argument (after `--`) that turns on the click logging.
 const LOG_INPUT_ARG := "--log-input"
+## What New puts on screen: the empty playbook the client ships, one data file (the P6a
+## finding). The checks, not the client, say what it still needs.
+const NEW_PLAYBOOK := "res://playbooks/new.jsonc"
 ## The panel buttons whose clicks are counted and, with `--log-input`, logged.
 const COUNTED := ["submit", "fix", "save"]
 
@@ -207,6 +210,7 @@ var _notes: TextEdit
 var _notes_status: Label
 var _drafts: Label
 var _undo_button: Button
+var _new_button: Button
 var _size_box: HBoxContainer
 var _size_bar: ProgressBar
 var _size_line: Label
@@ -279,6 +283,16 @@ func load_file(path: String) -> bool:
 		_say_local("status_open_failed", {"path": path})
 		return false
 	return bridge.editor_load_file(bytes, path)
+
+
+## New: puts the empty playbook the client ships on screen, as one edit Undo takes back
+## (the P6a finding). Its checks follow as for any edit.
+func new_playbook() -> bool:
+	var bytes := FileAccess.get_file_as_bytes(NEW_PLAYBOOK)
+	if bytes.is_empty():
+		_say_local("status_open_failed", {"path": NEW_PLAYBOOK})
+		return false
+	return bridge.editor_new(bytes)
 
 
 ## Opens a playbook from its bytes, which came from no file of the player's.
@@ -733,6 +747,7 @@ func _draw_state(state: Dictionary) -> void:
 	var open: bool = String(state.get("door", "open")) == "open"
 	Rows.fill(_rows, state.get("rows", []), Callable(self, "_on_fix_pressed"), state.get("rows_current", false) and not state.get("busy", false) and open, Callable(self, "_on_fix_down"))
 	_undo_button.disabled = int(state.get("undo_depth", 0)) == 0
+	_new_button.disabled = not open
 	if state.get("beacon_prose", "") != "":
 		_beacon_label.text = String(state["beacon_prose"])
 	_draw_notes(state)
@@ -1114,6 +1129,7 @@ func _build_panel() -> void:
 	_size_box.add_child(_size_line)
 	var buttons := HBoxContainer.new()
 	column.add_child(buttons)
+	_new_button = _button(buttons, "new", new_playbook)
 	_button(buttons, "load", open_load)
 	_count(_button(buttons, "save", _save), "save")
 	_button(buttons, "save_as", open_save_as)

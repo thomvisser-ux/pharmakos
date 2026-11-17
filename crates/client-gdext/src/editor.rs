@@ -756,6 +756,10 @@ enum Job {
     UseWizard {
         text: String,
     },
+    /// New: the shipped empty playbook, put into the editor as one edit.
+    New {
+        text: String,
+    },
     /// `get_draft`: open the draft `id` (the carried one) as the text.
     GetDraft {
         id: String,
@@ -782,6 +786,7 @@ impl Job {
                 | Self::Preview { .. }
                 | Self::PreviewCheck
                 | Self::UseWizard { .. }
+                | Self::New { .. }
                 | Self::GetDraft { .. }
                 | Self::SetOption { .. }
         )
@@ -1283,6 +1288,24 @@ impl Editor {
             return false;
         };
         self.queue.push_back(Job::UseWizard { text });
+        self.touch();
+        true
+    }
+
+    /// **New** (the P6a finding): put `bytes`, the empty playbook the client ships
+    /// (`godot/playbooks/new.jsonc`), on screen as one edit Undo takes back, as a template's
+    /// playbook is. The client claims nothing about it: its checks follow as for any edit, and
+    /// they say what it still needs. It is no file's, so Save as offers no name. Returns
+    /// `false` with the door shut or for bytes that are not text.
+    pub fn start_new(&mut self, bytes: &[u8]) -> bool {
+        if self.shut_to_asks() {
+            return false;
+        }
+        let Ok(text) = String::from_utf8(bytes.to_vec()) else {
+            self.say("load_not_text", "");
+            return false;
+        };
+        self.queue.push_back(Job::New { text });
         self.touch();
         true
     }
@@ -2105,6 +2128,7 @@ impl Editor {
             job @ (Job::Templates
             | Job::Instantiate
             | Job::UseWizard { .. }
+            | Job::New { .. }
             | Job::GetDraft { .. }
             | Job::MapSummary
             | Job::SetOption { .. }) => return self.render_pr2(job),
@@ -2156,6 +2180,19 @@ impl Editor {
                 self.drop_settled_ghost();
                 self.accept_text(text);
                 self.say("wizard_used", "");
+                None
+            }
+            Job::New { text } => {
+                // As a template's playbook: no file's, and Undo gives the text before it back
+                // with its file. Another text is on screen, so an open wizard's pages go.
+                self.undo.push(Undo::Restore {
+                    text: self.text.clone(),
+                    file: self.file.take(),
+                });
+                self.drop_settled_ghost();
+                self.wizard_close();
+                self.accept_text(text);
+                self.say("new_opened", "");
                 None
             }
             Job::GetDraft { id } => {
@@ -3473,6 +3510,59 @@ mod tests {
                 .contains("\"covering\""),
             "{waypoints:?}"
         );
+    }
+
+    /// **New** (the P6a finding): the shipped empty playbook's bytes go on screen as one edit,
+    /// with no call of its own and no file, the wizard closed; its checks are owed like any
+    /// edit's, and Undo gives back the text and the file before it. With the door shut it is
+    /// refused at once, and bytes that are not text are refused before anything is queued.
+    #[test]
+    fn new_puts_the_empty_playbook_on_screen_as_one_edit_undo_takes_back() {
+        const NEW: &str = include_str!("../../../godot/playbooks/new.jsonc");
+        let mut editor = Editor::new("seat.0");
+        assert!(editor.open(EXPAND_EAST.as_bytes(), Some("C:/mine.jsonc")));
+        let _ = editor.next_call(false);
+        editor.answered(Ok(&quick_report("", true))).expect("reads");
+        drain(&mut editor, r#"{"drafts":[]}"#);
+        editor.wizard_open("safe_playbook");
+        assert_eq!(method_of(editor.next_call(false)), "instantiate_template");
+        editor
+            .answered(Err(("NOT_FOUND", "no such template")))
+            .expect("reads");
+        assert!(editor.wizard().is_some(), "a refused wizard stays open");
+        let before = editor.revision();
+        assert!(editor.start_new(NEW.as_bytes()));
+        assert_eq!(
+            method_of(editor.next_call(false)),
+            "verify_plan",
+            "New makes no call of its own: the next is QUICK of the new text"
+        );
+        assert_eq!(
+            editor.bytes(),
+            NEW.as_bytes(),
+            "the shipped bytes, byte for byte"
+        );
+        assert_eq!(editor.revision(), before.wrapping_add(1));
+        assert_eq!(editor.file(), None, "a new playbook is no file's");
+        assert!(
+            editor.wizard().is_none(),
+            "the template's pages describe another text"
+        );
+        assert_eq!(editor.status().key, "new_opened");
+        editor
+            .answered(Ok(&quick_report("", false)))
+            .expect("reads");
+        assert_eq!(editor.undo_depth(), 1);
+        assert!(editor.undo());
+        let _ = editor.next_call(false);
+        assert_eq!(editor.bytes(), EXPAND_EAST.as_bytes(), "Undo takes it back");
+        assert_eq!(editor.file(), Some("C:/mine.jsonc"));
+
+        assert!(!editor.start_new(&[0xff, 0xfe]));
+        assert_eq!(editor.status().key, "load_not_text");
+        editor.set_door(Door::Push);
+        assert!(!editor.start_new(NEW.as_bytes()));
+        assert_eq!(editor.status().key, "closed_push");
     }
 
     /// **The P6a finding (item 139 (2) C)**: the vent menu's "the nearest vent you can cover",

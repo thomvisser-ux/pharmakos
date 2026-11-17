@@ -765,6 +765,19 @@ impl PharmakosBridge {
         })
     }
 
+    /// New: put `bytes`, the empty playbook the client ships, on screen as one edit Undo takes
+    /// back; its checks follow as for any edit. Returns `false` with the door shut or for
+    /// bytes that are not text.
+    #[func]
+    fn editor_new(&mut self, bytes: PackedByteArray) -> bool {
+        let Some(rig) = self.rig.as_mut() else {
+            return false;
+        };
+        self.panics.guard_or("editor_new", false, || {
+            rig.editor_mut().start_new(bytes.as_slice())
+        })
+    }
+
     /// The playbook on screen was written to `path`: from now on it is the text's file.
     #[func]
     fn editor_saved_to(&mut self, path: GString) {

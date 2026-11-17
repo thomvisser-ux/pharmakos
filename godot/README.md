@@ -106,7 +106,9 @@ godot --headless --path godot res://scenes/watch_check.tscn -- \
 
 `scripts/editor.gd` is the playbook editor: a panel on the right of the lobby and a route
 and a placement ghost on the map. It is one more client of the gateway on the seat
-connection the vista already holds, and a thin one. Load and Save read and write the
+connection the vista already holds, and a thin one. New puts the empty playbook the client ships (`playbooks/new.jsonc`, packed by both export
+presets' include filter) on screen as one edit Undo takes back, and the checks say what it
+still needs. Load and Save read and write the
 player's own JSONC file byte for byte; a file is opened only after QUICK has seen it, and an
 out-of-vocabulary construct is refused with the verifier's code and pointer. Click one of
 your beacons for Visit & change, Go here or Recycle; click the ground for Go here or Place
