@@ -105,6 +105,12 @@ fn route_dictionary(route: &Route) -> VarDictionary {
     drawn.set(&"points".to_variant(), &points.to_variant());
     drawn.set(&"legs".to_variant(), &legs.to_variant());
     drawn.set(&"whole".to_variant(), &route.whole.to_variant());
+    drawn.set(&"whole_text".to_variant(), &route.whole_text.to_variant());
+    let mut texts = PackedStringArray::new();
+    for text in &route.leg_texts {
+        texts.push(text.as_str());
+    }
+    drawn.set(&"leg_texts".to_variant(), &texts.to_variant());
     drawn.set(&"reachable".to_variant(), &route.reachable.to_variant());
     drawn.set(&"readable".to_variant(), &route.readable.to_variant());
     drawn.set(&"current".to_variant(), &route.current.to_variant());

@@ -128,11 +128,10 @@
 # layout is S6's (skeleton plan T19).
 #
 # PLACEHOLDER: the segment clock and the "fits" pill — OWNER, S6.
-# Neither is built (skeleton plan T19, PLACEHOLDERs line; S3's plan's register row S3-16). A
-# rendered travel time is S3's: legs and the whole route are shown as the raw game
-# milliseconds the estimator answered, not the generously rounded or whole-second figure
-# decisions-log items 57 and 61 ask for, until the gateway answers one (see strings.gd's `leg`,
-# whose marker carries it).
+# Neither is built (skeleton plan T19, PLACEHOLDERs line; S3's plan's register row S3-16). The
+# rendered travel time is the gateway's from S3 (`estimate_route`'s `travel_text`, the
+# register's S3-18): the route and each leg say it as it came, and only a figure the gateway
+# sent no text for is drawn as its raw game milliseconds, saying so.
 
 extends CanvasLayer
 
@@ -1141,10 +1140,14 @@ func _draw_route(route: Dictionary, has_text: bool, unchecked: String) -> void:
 		_route_label.text = Strings.text("route_none")
 	elif (route.get("legs", PackedInt64Array()) as PackedInt64Array).is_empty():
 		_route_label.text = Strings.text("route_empty")
+	elif String(route.get("whole_text", "")) != "":
+		# The gateway's own rendered figure (S3-18): the client formats nothing.
+		_route_label.text = Strings.text("route_whole_text", {"text": route.get("whole_text", "")})
 	else:
 		_route_label.text = Strings.text("route_whole", {"ms": route.get("whole", 0)})
 	var points: Array = route.get("points", [])
 	var legs: PackedInt64Array = route.get("legs", PackedInt64Array())
+	var texts: PackedStringArray = route.get("leg_texts", PackedStringArray())
 	if points.size() < 2:
 		return
 	mesh.surface_begin(Mesh.PRIMITIVE_LINE_STRIP)
@@ -1159,7 +1162,8 @@ func _draw_route(route: Dictionary, has_text: bool, unchecked: String) -> void:
 		label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 		label.no_depth_test = true
 		label.pixel_size = 0.05
-		label.text = Strings.text("leg", {"ms": legs[index]})
+		var said := texts[index] if index < texts.size() else ""
+		label.text = Strings.text("leg_text", {"text": said}) if said != "" else Strings.text("leg", {"ms": legs[index]})
 		label.position = _world(points[index]).lerp(_world(points[index + 1]), 0.5)
 		_route_labels.add_child(label)
 

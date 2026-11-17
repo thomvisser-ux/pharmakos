@@ -208,13 +208,13 @@ const TEXT := {
 	"status_safe_filed": "{detail} The orders on screen were not sealed.",
 
 	# --- The route -------------------------------------------------------------
-	# PLACEHOLDER: travel times as raw game milliseconds — OWNER, S3, with plan-core/T18a.
-	# Travel times are shown as the raw game milliseconds the estimator
-	# answered, until the gateway answers a rendered figure (decisions-log items 57 and 61:
-	# a short route's ETA rounded generously or shown in whole seconds). OWNER, with
-	# plan-core/T18a, S3.
-	"leg": "{ms} ms",
-	"route_whole": "Travel, as estimated: {ms} ms",
+	# Travel is the gateway's rendered figure (`estimate_route`'s `travel_text`, the register's
+	# S3-18; decisions-log items 57 and 61), as it came, a fogged leg already labelled a bound.
+	# A figure it sent no text for is the raw game milliseconds it did send, and says so.
+	"leg_text": "{text}",
+	"route_whole_text": "Travel, as estimated: {text}",
+	"leg": "{ms} ms (raw)",
+	"route_whole": "Travel, as estimated: {ms} ms (the gateway sent no rendered figure)",
 	"route_none": "No route: the commander cannot get there.",
 	# The gateway's sentence when a waypoint resolves to nothing (a `covering` that covers
 	# nothing), shown as it came: its answer about the route, not a refused call.

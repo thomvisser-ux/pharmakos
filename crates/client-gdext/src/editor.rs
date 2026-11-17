@@ -74,6 +74,7 @@ use pharmakos_proto::json::{self, Json};
 
 use crate::enums;
 use crate::error::BridgeError;
+use crate::rig::proto3_text;
 use crate::rule_list::{self, ChipEditor, RuleList};
 use crate::targeting::{self, Chip, Feature, FeatureKind};
 use crate::variant::proto3_integer;
@@ -609,6 +610,12 @@ pub struct Route {
     pub legs: Vec<i64>,
     /// The whole route's travel, in game milliseconds, as the gateway answered.
     pub whole: i64,
+    /// The whole route's travel as the player reads it ("1 min 24 s"), rendered by the
+    /// gateway (the register's S3-18); empty when it sent none.
+    pub whole_text: String,
+    /// Each leg's travel as the player reads it, as the gateway rendered it, already labelled
+    /// a bound for a fogged leg; empty for a leg it sent none for.
+    pub leg_texts: Vec<String>,
     /// Whether the connectivity oracle found a route at all.
     pub reachable: bool,
     /// Whether this route describes the text on screen.
@@ -2905,6 +2912,7 @@ impl Editor {
         let mut route = Route {
             reachable,
             whole: proto3_integer(&answer, "ms")?,
+            whole_text: proto3_text(&answer, "travel_text")?.to_owned(),
             current: true,
             readable: true,
             ..Route::default()
@@ -2915,6 +2923,9 @@ impl Editor {
         if let Some(Json::Array(legs)) = answer.get("legs") {
             for leg in legs {
                 route.legs.push(proto3_integer(leg, "ms")?);
+                route
+                    .leg_texts
+                    .push(proto3_text(leg, "travel_text")?.to_owned());
                 // `gp.api.v1.Leg.to` is a `gp.v1.Location`, `{"voxel":{..}}`; the gateway
                 // at `main` writes the bare voxel `{"x":..}` there instead. Both spellings
                 // name the same voxel, so both are read; the disagreement is the gateway's
@@ -3784,6 +3795,40 @@ mod tests {
                 .unwrap_or_default()
                 .contains("\"covering\""),
             "{waypoints:?}"
+        );
+    }
+
+    /// **S3-18**: the route carries the gateway's rendered travel figures, whole and per leg,
+    /// as they came, beside the raw milliseconds; a leg the gateway sent no text for keeps an
+    /// empty one, said as such and never filled in by the client.
+    #[test]
+    fn the_route_carries_the_gateways_rendered_travel_text() {
+        let mut editor = loaded(EXPAND_EAST);
+        editor.set_entities(&[Entity {
+            id: "u_1".to_owned(),
+            kind: EntityKind::Unit,
+            subtype: "commander".to_owned(),
+            owner: "seat.0".to_owned(),
+            at: [358, 22, 36],
+            hp: None,
+            heading: None,
+        }]);
+        assert_eq!(method_of(editor.next_call(false)), "estimate_route");
+        editor
+            .answered(Ok(&read(
+                r#"{"reachable":true,"ms":84000,"travel_text":"1 min 24 s","legs":[{"to":{"voxel":{"x":1,"y":2,"z":3}},"ms":80000,"travel_text":"1 min 20 s"},{"to":{"voxel":{"x":1,"y":2,"z":4}},"ms":4000}]}"#,
+            )))
+            .expect("reads");
+        let route = editor.route();
+        assert_eq!(route.whole_text, "1 min 24 s");
+        assert_eq!(
+            route.leg_texts,
+            vec!["1 min 20 s".to_owned(), String::new()]
+        );
+        assert_eq!(
+            route.legs,
+            vec![80_000, 4_000],
+            "the raw figures stay as they came"
         );
     }
 

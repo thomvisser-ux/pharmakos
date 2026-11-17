@@ -2317,3 +2317,39 @@ fn the_rule_list_shot_draws_a_byte_copy_of_the_gateways_render_golden() {
         "the shot starts no host"
     );
 }
+
+/// **The route says the gateway's travel figure** (S3-18, S3's `ed3b`): the whole route and
+/// each leg are drawn with the text `estimate_route` rendered ("1 min 24 s", a fogged leg
+/// labelled as a bound), not the raw milliseconds; the client formats nothing. A figure the
+/// gateway sent no text for is drawn as the raw milliseconds it did send, and says so.
+#[test]
+fn the_route_draws_the_gateways_rendered_travel_text() {
+    let editor = read("scripts/editor.gd");
+    let route = gd_code(&editor, "_draw_route");
+    assert!(
+        route
+            .iter()
+            .any(|line| line.contains("route.get(\"whole_text\", \"\")")),
+        "the whole route's text: {route:?}"
+    );
+    assert!(
+        route
+            .iter()
+            .any(|line| line.contains("route.get(\"leg_texts\", PackedStringArray())")),
+        "each leg's text: {route:?}"
+    );
+    let strings = read("scripts/strings.gd");
+    for key in ["route_whole_text", "leg_text", "route_whole", "leg"] {
+        assert!(
+            strings.contains(&format!("\"{key}\":")),
+            "strings.gd has `{key}`"
+        );
+    }
+    assert!(
+        !strings.contains(concat!(
+            "PLACE",
+            "HOLDER: travel times as raw game milliseconds"
+        )),
+        "S3-18's marker is resolved by the gateway's text"
+    );
+}

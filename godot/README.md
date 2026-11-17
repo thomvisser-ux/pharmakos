@@ -121,7 +121,8 @@ every edit and FULL after 600 ms idle (while a check is on its way the verdict l
 size meter wear a checking look, and when its answer arrives both are highlighted until the
 player's next key, click or wheel notch: no timer, nothing flashes), and the rows' Fix buttons apply the verifier's own
 machine-applicable patches. The route is the gateway's `estimate_route`, drawn as a polyline
-with each leg's travel time in game milliseconds as it came back; there are no dashed legs
+with the whole route's and each leg's travel as the gateway rendered it (`travel_text`, the
+register's S3-18; a figure sent with no text is drawn as its raw game milliseconds and says so); there are no dashed legs
 at the skeleton. The notebook, draft continuity, Submit and Ready go through the gateway
 too. Every sentence the client writes itself is in `scripts/strings.gd`.
 
