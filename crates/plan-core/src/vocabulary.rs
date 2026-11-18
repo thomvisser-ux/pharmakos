@@ -342,7 +342,12 @@ fn near_parameters() -> Result<Vec<Parameter>, UnknownEnum> {
 }
 
 /// A `Freshness`' two parameters. The window's least is 1, the verifier's
-/// since S3's `vfy6` (as the rendered chip says).
+/// since S3's `vfy6` (as the rendered chip says). The enemy predicates'
+/// skeletons write `KNOWN_WITHIN` with a 30 s window, so both parameters are
+/// true of the skeleton they are listed for (S3's `pred`): under
+/// `VISIBLE_NOW` the window must be absent (`E0210`), which "at least 1"
+/// would not say. The two remain separate parameters: a picker that sets the
+/// kind alone leaves the window as it was.
 fn freshness() -> Result<[Parameter; 2], UnknownEnum> {
     Ok([
         parameter(
@@ -572,21 +577,23 @@ fn enemy_knowledge_family(kinds: &[Blueprint]) -> Result<Family, VocabularyError
                     .to_vec(),
                 ]
                 .concat(),
-                r#"{"near":{"safest":{}},"radius_voxels":24,"count":{"op":"GE","value":1},"freshness":{"kind":"VISIBLE_NOW"}}"#,
+                r#"{"near":{"safest":{}},"radius_voxels":24,"count":{"op":"GE","value":1},"freshness":{"kind":"KNOWN_WITHIN","known_within_ms":30000}}"#,
             )?,
             predicate(
                 "enemy_beacon_known",
                 s::PREDICATE_ENEMY_BEACON_KNOWN,
                 freshness()?.to_vec(),
-                r#"{"freshness":{"kind":"VISIBLE_NOW"}}"#,
+                r#"{"freshness":{"kind":"KNOWN_WITHIN","known_within_ms":30000}}"#,
             )?,
             predicate(
                 "enemy_structure_near",
                 s::PREDICATE_ENEMY_STRUCTURE_NEAR,
                 [
                     near_parameters()?,
-                    // `structure`'s `blueprint_id` arm; the skeleton writes
-                    // its other arm, `any_kind`.
+                    // `structure`'s `blueprint_id` arm, which the skeleton
+                    // writes (S3's `pred`), so a pick of a blueprint replaces
+                    // one; `any_kind`, the oneof's other arm, is written by
+                    // hand.
                     vec![parameter(
                         "/blueprint_id",
                         s::VOCABULARY_STRUCTURE,
@@ -594,7 +601,7 @@ fn enemy_knowledge_family(kinds: &[Blueprint]) -> Result<Family, VocabularyError
                     )],
                 ]
                 .concat(),
-                r#"{"near":{"safest":{}},"radius_voxels":16,"any_kind":{},"freshness":{"kind":"VISIBLE_NOW"}}"#,
+                r#"{"near":{"safest":{}},"radius_voxels":16,"blueprint_id":"generator","freshness":{"kind":"KNOWN_WITHIN","known_within_ms":30000}}"#,
             )?,
             reserved(s::RESERVED_ENEMY_KNOWLEDGE, "S6"),
         ],
