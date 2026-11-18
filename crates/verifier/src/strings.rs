@@ -178,8 +178,8 @@ pub const VERIFIER_STRINGS: &[Text] = &[
         beginner: "Autocannons, mortars and walls can be built in this build.",
     },
     // E0020 to E0028: S3's predicates and `toward`, on the wire before they
-    // had an effect, as E0009 to E0017 are. S3's `pred` retired E0020 to
-    // E0027 when it built the predicates.
+    // had an effect, as E0009 to E0017 are. S3's `pred` retired them all when
+    // it built the predicates and `toward`.
     Text {
         code: "E0020",
         message: "predicate `beacon_units_by_role` had no effect until S3's predicate catalogue landed; this code is \
@@ -230,10 +230,9 @@ pub const VERIFIER_STRINGS: &[Text] = &[
     },
     Text {
         code: "E0028",
-        message: "site `toward` has no effect until S3's stepping-stone site search lands; it is \
-                  refused rather than ignored.",
-        beginner: "A beacon can't yet be placed as a stepping stone toward a feature. Pick a spot, \
-                   or cover a feature you can reach.",
+        message: "site `toward` had no effect until S3's stepping-stone site search landed; this \
+                  code is retired and raised by nothing.",
+        beginner: "A beacon can be placed as a stepping stone toward a feature in this build.",
     },
     Text {
         code: "E0029",

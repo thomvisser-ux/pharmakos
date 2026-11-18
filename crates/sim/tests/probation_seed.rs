@@ -14,10 +14,9 @@
 //! # The criterion
 //!
 //! The seats are two, and the human is seat 0. A seed passes when all of this
-//! holds, read from the real generator and the sim's own site rules, except
-//! the stepping stones of clause 3: `toward` is not built yet, so [`stone`]
-//! restates E23 over clear terrain, and `pred` replaces it with the real
-//! resolver.
+//! holds, read from the real generator and the sim's own site rules: since
+//! S3's `pred` the stepping stones of clause 3 are the sim's own `toward`
+//! ([`toward_counted`]), which replaced this file's restatement of E23.
 //!
 //! 1. **The second vent** is the vent nearest seat 0's core, by squared column
 //!    distance with ties to the lowest `(y, x)`, that is not the vent the
@@ -26,10 +25,11 @@
 //! 2. **It is not given.** With nothing placed, no site covers it, so a seat
 //!    that never expands never earns the licence (decision 13's "earnable by a
 //!    seat that expands, not given").
-//! 3. **At most [`MOST_PLACEMENTS`] beacons reach it.** Each stone is this
-//!    file's restatement of `toward` (S3's plan, E23): the legal site inside the
-//!    seat's spheres nearest the vent by the item-61 estimator, ties to the
-//!    lowest `(y, x)`. The placement that covers the vent is the sim's own
+//! 3. **At most [`MOST_PLACEMENTS`] beacons reach it.** Each stone is the sim's
+//!    own `toward` (S3's plan, E23): the legal site inside the seat's spheres
+//!    nearest the vent by the item-61 estimator, ties to the lowest `(y, x)`.
+//!    Its terrain is the live world's, unfogged, until S3-05's mask at S4
+//!    (decisions-log item 156 (3)). The placement that covers the vent is the sim's own
 //!    [`covering_site`], and it counts: "three stepping stones" is three
 //!    beacons, the third of them covering the vent. A beacon stands inside
 //!    another's 24-voxel sphere and covers 24 more, so three reach 96 voxels at
@@ -56,7 +56,6 @@
 
 use pharmakos_sim::features::FeatureKind;
 use pharmakos_sim::interpreter::StepFailure;
-use pharmakos_sim::math::fixed::Fx;
 use pharmakos_sim::math::quantity::Ms;
 use pharmakos_sim::pathing::estimate::{Fog, Speed, estimate};
 use pharmakos_sim::pathing::search::Scratch;
@@ -64,7 +63,7 @@ use pharmakos_sim::pathing::surface::Node;
 use pharmakos_sim::seams::MandateKind;
 use pharmakos_sim::tables::{PRIORITY_NORMAL, SeatId};
 use pharmakos_sim::targeting::{
-    FeatureSpec, Ground, column_of, covering_site, on_vent_counted, spiral_offsets,
+    FeatureSpec, Ground, StoneCandidate, column_of, covering_site, on_vent_counted, toward_counted,
 };
 use pharmakos_sim::{MatchSettings, RulesTable, World, WorldConfig, default_rules_path, mapgen};
 use std::path::PathBuf;
@@ -229,61 +228,6 @@ fn walk(ground: &Ground<'_>, scratch: &mut Scratch, from: Node, to: Node) -> Opt
     .map(|found| (i64::from(found.cost), found.ticks))
 }
 
-/// A restatement of E23's `toward`, which `pred` builds and then replaces this
-/// with: the legal site inside the seat's spheres with the least estimated
-/// travel over clear terrain to the vent's anchor, ties to the lowest `(y, x)`.
-/// The candidates are walked in the order of the estimator's own lower bound,
-/// so most of them are never estimated.
-fn stone(
-    ground: &Ground<'_>,
-    scratch: &mut Scratch,
-    seat: SeatId,
-    origin: [Fx; 3],
-    placed: &[[i32; 2]],
-    anchor: Node,
-) -> Option<[i32; 2]> {
-    let [ox, oy] = column_of(origin);
-    let start = ground.surface.node_of(ox, oy)?;
-    let mut candidates: Vec<(i32, i32, i32, Node)> = Vec::new();
-    let offsets = spiral_offsets(ground.sphere_radius());
-    for [bx, by] in placed {
-        for [dx, dy] in &offsets {
-            let (x, y) = (bx + dx, by + dy);
-            let Some(node) = ground.surface.node_of(x, y) else {
-                continue;
-            };
-            let Some(site) = ground.standing(x, y) else {
-                continue;
-            };
-            if ground.surface.walkable(node)
-                && ground.features.at_column(x, y).is_none()
-                && ground.inside_own_sphere(seat, site)
-                && !ground.stacks_on_own(seat, x, y)
-                && ground.clusters.connected(ground.surface, start, node)
-            {
-                candidates.push((ground.surface.heuristic(node, anchor), y, x, node));
-            }
-        }
-    }
-    // item 62: the key ends in `(y, x)`, and a column seen from two beacons is
-    // the same entry, so once it is deduplicated the order is total.
-    candidates.sort_unstable_by_key(|(bound, y, x, _)| (*bound, *y, *x));
-    candidates.dedup_by_key(|(_, y, x, _)| (*y, *x));
-    let mut best: Option<(i64, i32, i32)> = None;
-    for (bound, y, x, node) in candidates {
-        if best.is_some_and(|(cost, _, _)| i64::from(bound) > cost) {
-            break;
-        }
-        let Some((cost, _)) = walk(ground, scratch, node, anchor) else {
-            continue;
-        };
-        if best.is_none_or(|held| (cost, y, x) < held) {
-            best = Some((cost, y, x));
-        }
-    }
-    best.map(|(_, y, x)| [x, y])
-}
-
 /// The criterion, for one seed.
 fn probe(seed: u64, rules: &RulesTable) -> Result<Chain, Miss> {
     let vent = second_vent(seed, rules)?;
@@ -296,14 +240,6 @@ fn probe(seed: u64, rules: &RulesTable) -> Result<Chain, Miss> {
     let commander = world.commander_of(seat).expect("a commander");
     let row = world.units().row_of(commander).expect("a live commander");
     let start = world.units().positions()[row.index()];
-    // Nothing is placed yet, so the seat's one beacon is its core.
-    let core_row = world
-        .beacons()
-        .seats()
-        .iter()
-        .position(|owner| *owner == seat.raw())
-        .expect("a core");
-    let core_column = column_of(world.beacons().positions()[core_row]);
     let mut scratch = {
         let ground = world.ground();
         Scratch::for_map(ground.surface, ground.rules.hpa_cluster_voxels())
@@ -312,21 +248,25 @@ fn probe(seed: u64, rules: &RulesTable) -> Result<Chain, Miss> {
     if covering_site(&world.ground(), seat, start, feature).is_some() {
         return Err(Miss::Given);
     }
-    let mut placed: Vec<[i32; 2]> = vec![core_column];
+    let mut stones: Vec<StoneCandidate> = Vec::new();
     let mut sites: Vec<[i32; 2]> = Vec::new();
     let mut walk_ticks = 0_i32;
     let mut at = start;
     for placement in 1..=MOST_PLACEMENTS {
         let ground = world.ground();
-        let anchor = ground
-            .surface
-            .node_of(vent[0], vent[1])
-            .expect("a vent's anchor is on the map");
         let covers = covering_site(&ground, seat, at, feature);
         let site = match covers {
             Some(site) => site,
             None if placement == MOST_PLACEMENTS => return Err(Miss::OutOfReach),
-            None => stone(&ground, &mut scratch, seat, at, &placed, anchor).ok_or(Miss::NoStone)?,
+            None => {
+                let spec = FeatureSpec::Name {
+                    kind: FeatureKind::Vent,
+                    anchor: vent,
+                };
+                toward_counted(&ground, &mut scratch, &mut stones, seat, at, spec)
+                    .map_err(|_| Miss::NoStone)?
+                    .site
+            }
         };
         let [ax, ay] = column_of(at);
         let from = ground
@@ -341,7 +281,6 @@ fn probe(seed: u64, rules: &RulesTable) -> Result<Chain, Miss> {
         let point = ground.standing(site[0], site[1]).expect("a site stands");
         walk_ticks = walk_ticks.checked_add(ticks).expect("a short walk");
         sites.push(site);
-        placed.push(site);
         at = point;
         if covers.is_some() {
             break;
@@ -435,6 +374,70 @@ fn a_build_target_can_name_the_vent_from_the_third_placement() {
         world.ground().is_live(feature),
         "the vent is there to build on"
     );
+}
+
+/// S3's `pred`: a `toward` that finds no site says why, with how many sites
+/// it weighed (S1's plan, decision 3). A name the map does not hold is
+/// `no_target` having weighed nothing; a commander standing on no column of
+/// the map reaches no site, `illegal_site`, and weighs none; and from the
+/// commander's start the named vent's stone is the pinned first site.
+#[test]
+fn a_toward_says_why_it_found_no_site() {
+    use pharmakos_sim::interpreter::StepFailed;
+    use pharmakos_sim::math::fixed::Fx;
+    let rules = rules();
+    let world = world_of(PROBATION_SEED, &rules);
+    let seat = SeatId::new(0);
+    let commander = world.commander_of(seat).expect("a commander");
+    let row = world.units().row_of(commander).expect("a live commander");
+    let start = world.units().positions()[row.index()];
+    let ground = world.ground();
+    let mut scratch = Scratch::for_map(ground.surface, ground.rules.hpa_cluster_voxels())
+        .expect("the map takes a search");
+    let mut stones: Vec<StoneCandidate> = Vec::new();
+    let named = |anchor: [i32; 2]| FeatureSpec::Name {
+        kind: FeatureKind::Vent,
+        anchor,
+    };
+    assert_eq!(
+        toward_counted(
+            &ground,
+            &mut scratch,
+            &mut stones,
+            seat,
+            start,
+            named([1, 1])
+        ),
+        Err(StepFailed {
+            reason: StepFailure::NoTarget,
+            matched: Some(0),
+        })
+    );
+    let nowhere = [Fx::from_voxels(-8), Fx::from_voxels(-8), Fx::from_voxels(0)];
+    assert_eq!(
+        toward_counted(
+            &ground,
+            &mut scratch,
+            &mut stones,
+            seat,
+            nowhere,
+            named(PINNED_VENT)
+        ),
+        Err(StepFailed {
+            reason: StepFailure::IllegalSite,
+            matched: Some(0),
+        })
+    );
+    let found = toward_counted(
+        &ground,
+        &mut scratch,
+        &mut stones,
+        seat,
+        start,
+        named(PINNED_VENT),
+    )
+    .expect("a stone toward the second vent");
+    assert_eq!(found.site, PINNED_SITES[0]);
 }
 
 #[test]

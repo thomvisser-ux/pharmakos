@@ -452,7 +452,7 @@ pub const CATALOGUE: &[Entry] = &[
         code: "E0028",
         family: Family::DecodeAndVersion,
         severity: Severity::Error,
-        emitter: Emitter::Stage(Stage::Structure),
+        emitter: Emitter::NoneYet("retired by S3's `pred`, which built `toward`"),
     },
     // S3's `vfy6`: a player's text past the cap, reported for the boundary
     // that holds it (`crate::Input::too_long`) before anything decodes it.

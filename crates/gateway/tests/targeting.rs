@@ -810,9 +810,10 @@ fn a_playbook_this_build_cannot_execute_reads_nothing() {
         &format!(r#"{{"playbook_jsonc":{}}}"#, support::quote(misplaced)),
     );
     assert_eq!(support::code(&answer), "INVALID_ARGUMENT");
-    // S3's `con6`: `toward` is refused at the compile until S3's `pred`, so
-    // `resolve_refs` never reads one and never answers it as a step that found
-    // nothing.
+    // S3's `pred`: `toward` compiles in a placement's `at` and `resolve_refs`
+    // reads it through the sim's own stepping-stone search, answering a
+    // reference at its feature's pointer (here a pick, ranked as a
+    // `covering`'s is) rather than a method error.
     let toward = r#"{"schema_version":{"major":1},"meta":{"title":"t","author_kind":"HUMAN"},"kind":"PLAYBOOK",
         "declarative":{"route":[{"label":"p","place_beacon":{"at":{"toward":{"feature":{"vent":{"rank":"NEAREST","coverage":"UNCOVERED"}}}}}}]},
         "on_death":{"on_respawn":"CONTINUE"},"fallback":{"hold":{"at":{"safest":{}}}}}"#;
@@ -822,6 +823,26 @@ fn a_playbook_this_build_cannot_execute_reads_nothing() {
         &mut left,
         "resolve_refs",
         &format!(r#"{{"playbook_jsonc":{}}}"#, support::quote(toward)),
+    );
+    let _ = result(&answer, "resolve_refs");
+    assert!(
+        rpc::render(&answer).contains("/declarative/route/0/place_beacon/at/toward/feature"),
+        "the `toward` is read at its feature's pointer: {}",
+        rpc::render(&answer)
+    );
+    // And outside a placement's `at` it is misplaced, as `covering` is.
+    let misplaced_toward = r#"{"schema_version":{"major":1},"meta":{"title":"t","author_kind":"HUMAN"},"kind":"PLAYBOOK",
+        "declarative":{"route":[{"label":"m","move":{"to":{"toward":{"feature":{"vent":{"rank":"NEAREST","coverage":"ANY"}}}}}}]},
+        "on_death":{"on_respawn":"CONTINUE"},"fallback":{"hold":{"at":{"safest":{}}}}}"#;
+    let answer = call_in_lull(
+        &mut surface,
+        &token,
+        &mut left,
+        "resolve_refs",
+        &format!(
+            r#"{{"playbook_jsonc":{}}}"#,
+            support::quote(misplaced_toward)
+        ),
     );
     assert_eq!(support::code(&answer), "INVALID_ARGUMENT");
     let half_typed = call_in_lull(

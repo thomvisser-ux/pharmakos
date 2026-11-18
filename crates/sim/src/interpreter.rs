@@ -268,6 +268,10 @@ pub enum Place {
     /// [`crate::targeting::cover`]. Legal only in `place_beacon.at`
     /// (`docs/design/targeting.md`, "Sites").
     Covering(FeatureSpec),
+    /// `toward`: the stepping-stone site nearest a feature, inside the seat's
+    /// spheres, found by [`crate::targeting::toward_counted`] (S3's plan,
+    /// E23; task `pred`). Legal only in `place_beacon.at`, as `covering` is.
+    Toward(FeatureSpec),
 }
 
 /// Where a Build target goes: a fixed voxel, or `on` a vent
@@ -2036,7 +2040,9 @@ fn compile_anchor(
         Some(gp::v1::location::Place::Covering(_)) => Err(PlanError::MisplacedTarget(
             "`covering` is legal only in a `place_beacon`'s `at`; a Build target stands `on` a vent",
         )),
-        Some(gp::v1::location::Place::Toward(_)) => Err(REFUSE_TOWARD.error()),
+        Some(gp::v1::location::Place::Toward(_)) => Err(PlanError::MisplacedTarget(
+            "`toward` is legal only in a `place_beacon`'s `at`; a Build target stands `on` a vent",
+        )),
         None => Err(PlanError::MissingBlock("location.place")),
     }
 }
@@ -2069,7 +2075,9 @@ fn compile_removal(
         Some(gp::v1::location::Place::Covering(_)) => Err(PlanError::MisplacedTarget(
             "`covering` is legal only in a `place_beacon`'s `at`",
         )),
-        Some(gp::v1::location::Place::Toward(_)) => Err(REFUSE_TOWARD.error()),
+        Some(gp::v1::location::Place::Toward(_)) => Err(PlanError::MisplacedTarget(
+            "`toward` is legal only in a `place_beacon`'s `at`",
+        )),
         None => Err(PlanError::MissingBlock("location.place")),
     }
 }
@@ -2079,6 +2087,10 @@ fn compile_removal(
 enum FeatureSite {
     /// `place_beacon.at`'s `covering`.
     Covering,
+    /// `place_beacon.at`'s `toward`, whose feature is named or described as a
+    /// `covering`'s is: a pick takes a rank and a coverage, and `covered {}`
+    /// names nothing yet (S3's `pred`; the verifier's `E0111` and `E0409`).
+    Toward,
     /// A Build target's `on`; `covering` says whether it is in the initial
     /// settings of a `place_beacon` whose `at` is a `covering` arm, the one
     /// place `covered {}` is legal.
@@ -2120,10 +2132,14 @@ fn compile_feature_ref(
             }
         })?;
         match site {
-            FeatureSite::Covering => {
+            FeatureSite::Covering | FeatureSite::Toward => {
                 let uncovered = match coverage {
                     gp::v1::feature_ref::Coverage::Unspecified => {
-                        return Err(PlanError::UnsetEnum("covering.coverage"));
+                        return Err(PlanError::UnsetEnum(if site == FeatureSite::Toward {
+                            "toward.coverage"
+                        } else {
+                            "covering.coverage"
+                        }));
                     }
                     gp::v1::feature_ref::Coverage::Any => false,
                     gp::v1::feature_ref::Coverage::Uncovered => true,
@@ -2162,7 +2178,7 @@ fn compile_feature_ref(
         }
         Some(gp::v1::feature_ref::Ref::Covered(_)) => match site {
             FeatureSite::On { covering: true } => Ok(FeatureSpec::Covered),
-            FeatureSite::On { covering: false } | FeatureSite::Covering => {
+            FeatureSite::On { covering: false } | FeatureSite::Covering | FeatureSite::Toward => {
                 Err(PlanError::MisplacedTarget(
                     "`covered {}` is legal only under `on`, in the initial settings of a \
                      `place_beacon` whose `at` is a `covering` arm",
@@ -2293,7 +2309,22 @@ fn compile_place(
         Some(gp::v1::location::Place::On(_)) => Err(PlanError::MisplacedTarget(
             "`on` is legal only as a Build target's anchor (and, by name, a removal's)",
         )),
-        Some(gp::v1::location::Place::Toward(_)) => Err(REFUSE_TOWARD.error()),
+        Some(gp::v1::location::Place::Toward(toward)) => {
+            if placing {
+                let feature = toward
+                    .feature
+                    .as_ref()
+                    .ok_or(PlanError::MissingBlock("toward.feature"))?;
+                Ok(Place::Toward(compile_feature_ref(
+                    feature,
+                    FeatureSite::Toward,
+                )?))
+            } else {
+                Err(PlanError::MisplacedTarget(
+                    "`toward` is legal only in a `place_beacon`'s `at`",
+                ))
+            }
+        }
         None => Err(PlanError::MissingBlock("location.place")),
     }
 }
@@ -2998,14 +3029,15 @@ pub enum PlanError {
     /// | a Build target (or a removal) anchored on a beacon selector rather than on a voxel or `on` a vent | S3 |
     /// | selector filter `side: ENEMY_KNOWN` | S3 |
     /// | selector filter `tags` | S3 |
-    /// | site `toward`, wherever a `Location` is read | S3 (`pred`) |
     ///
     /// S2's `dfnd` lifted Defend's settings, `most_threatened` and
     /// `beacon_under_attack`, and S2's `atk` Attack's settings, which have
     /// their effect now; S3's `pred` lifted the eight predicates S3's `con6`
     /// put on the wire (`beacon_units_by_role`, `beacon_mandate`,
     /// `beacon_has_structure`, `enemy_units_near`, `enemy_beacon_known`,
-    /// `enemy_structure_near`, `kw_supply` and `kw_draw`).
+    /// `enemy_structure_near`, `kw_supply` and `kw_draw`) and the site
+    /// `toward`, which is a [`PlanError::MisplacedTarget`] anywhere but a
+    /// `place_beacon`'s `at`.
     ///
     /// Targeting's `on` and `covering`, refused here until S1's targeting
     /// behaviour landed (S1's plan, task `con2`), now have their effect and
@@ -3104,22 +3136,14 @@ pub const REFUSE_FILTER_TAGS: Refusal = Refusal {
             writing tags is legal, reading them is not)",
 };
 
-/// The site `toward`: S3.
-pub const REFUSE_TOWARD: Refusal = Refusal {
-    name: "site_toward",
-    construct: "site `toward`",
-    stage: "S3 (the stepping-stone site search, which chooses the site)",
-};
-
 /// Every construct the compile refuses for its stage, in the order
 /// [`PlanError::NotAtThisStage`]'s documentation lists them (E8).
-pub const REFUSALS: [Refusal; 6] = [
+pub const REFUSALS: [Refusal; 5] = [
     REFUSE_QUEUE_STRUCTURE,
     REFUSE_BUILD_BLUEPRINT,
     REFUSE_BUILD_BEACON_ANCHOR,
     REFUSE_ENEMY_KNOWN,
     REFUSE_FILTER_TAGS,
-    REFUSE_TOWARD,
 ];
 
 /// [`PlanError::WallBoxOffAWall`]'s words, apart so that `Display`'s match

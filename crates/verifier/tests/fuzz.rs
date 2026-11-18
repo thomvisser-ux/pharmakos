@@ -144,12 +144,13 @@ const PADDED_PAST: u32 = 256;
 /// kit's E0019 is retired, since S2's `site` built it, E0012, E0014 and
 /// E0017, since S2's `dfnd` built Defend's settings, `most_threatened` and
 /// `beacon_under_attack`, and E0013, since S2's `atk` built Attack's
-/// settings; and E0020 to E0027, since S3's `pred` built the predicates), for
+/// settings; and E0020 to E0028, since S3's `pred` built the predicates and
+/// `toward`), for
 /// an enum number this build does not name (E0018) and for a `wall_box` on a
 /// target that is not a wall (E0509), in code order: the ten thousand runs
 /// reach every one.
-const REFUSALS: [&str; 8] = [
-    "E0009", "E0010", "E0011", "E0015", "E0016", "E0018", "E0028", "E0509",
+const REFUSALS: [&str; 7] = [
+    "E0009", "E0010", "E0011", "E0015", "E0016", "E0018", "E0509",
 ];
 
 /// The coordinates at the ends of the field, so the walk and the semantics

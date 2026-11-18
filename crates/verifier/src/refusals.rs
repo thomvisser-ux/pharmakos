@@ -64,8 +64,10 @@
 //! S3's `con6` put eight predicates and the site `toward` on the wire before
 //! S3's `pred` gave them an effect, so `E0020` to `E0028` refused each one where
 //! the compile reached it: a predicate wherever a condition is read, and
-//! `toward` in every `Location` but a `broadcast`'s. S3's `pred` built the
-//! predicates and retired `E0020` to `E0027`. S3's `vfy6` judges what
+//! `toward` in every `Location` but a `broadcast`'s. S3's `pred` built them
+//! and retired `E0020` to `E0028`: what each holds is judged by the checks
+//! `vfy6` built behind them (`toward` outside a `place_beacon`'s `at` is the
+//! structure stage's `E0420`). S3's `vfy6` judges what
 //! each one holds behind its code, in the stages that judge the same leaves
 //! anywhere else (a predicate's parameters, `E0209`'s freshness and `toward`'s
 //! slot are the structure stage's, a named feature the resolve stage's), so
@@ -107,7 +109,6 @@ pub const REFUSED_CONSTRUCTS: &[(&str, &str)] = &[
     ),
     ("selector filter `side: ENEMY_KNOWN`", "E0015"),
     ("selector filter `tags`", "E0016"),
-    ("site `toward`", "E0028"),
 ];
 
 /// The code this crate refuses a construct by, keyed by the sim's name for it,
@@ -217,14 +218,6 @@ impl Visit for Refusals<'_> {
     }
 
     fn location(&mut self, at: &str, place: &Location, slot: Slot<'_>) {
-        if matches!(place.place.as_ref(), Some(location::Place::Toward(_))) {
-            // In the places `not_compiled` names the sim reads no place.
-            if !not_compiled(at) {
-                self.out
-                    .emit(Diag::new("E0028", pointer::child(at, "toward")));
-            }
-            return;
-        }
         if !matches!(slot, Slot::BuildAnchor { .. } | Slot::RemoveAnchor) {
             return;
         }

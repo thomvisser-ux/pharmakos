@@ -425,6 +425,30 @@ pub enum RoundRead<'a> {
         /// `vent` or `seam`.
         kind: &'a str,
     },
+    /// A `toward` finds no `kind` to step toward (S3's `pred`).
+    NothingToward {
+        /// The route step, from 0.
+        step: usize,
+        /// `vent` or `seam`.
+        kind: &'a str,
+    },
+    /// A `toward`'s `matched` features matched and none can be reached.
+    NoneReachableToward {
+        /// The route step, from 0.
+        step: usize,
+        /// How many matched.
+        matched: u32,
+    },
+    /// A `toward` found its `kind` and no legal site that reaches it, having
+    /// weighed `weighed` sites (S1's plan, decision 3).
+    NoStone {
+        /// The route step, from 0.
+        step: usize,
+        /// `vent` or `seam`.
+        kind: &'a str,
+        /// How many legal sites the search weighed.
+        weighed: u32,
+    },
     /// It fails for another reason, named as the feed names it.
     Fails {
         /// The route step, from 0.
@@ -470,6 +494,25 @@ pub fn this_round(reads: &[RoundRead<'_>]) -> Option<String> {
                     step.saturating_add(1)
                 )
             }
+            RoundRead::NothingToward { step, kind } => {
+                format!(
+                    "step {} finds no {kind} to step toward",
+                    step.saturating_add(1)
+                )
+            }
+            RoundRead::NoneReachableToward { step, matched } => format!(
+                "step {} finds nothing to step toward: {matched} matched, none reachable",
+                step.saturating_add(1)
+            ),
+            RoundRead::NoStone {
+                step,
+                kind,
+                weighed,
+            } => format!(
+                "step {} finds no stepping stone toward the {kind}: {weighed} sites weighed, none \
+                 reaches it",
+                step.saturating_add(1)
+            ),
             RoundRead::Fails { step, failure } => {
                 format!(
                     "step {} fails `{failure}` before it reads the map",

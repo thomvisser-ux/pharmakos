@@ -575,8 +575,7 @@ impl Visit for Sites<'_> {
             // S3's `toward` (S1's plan, decision 3): legal only in a
             // `place_beacon`'s `at`, as `covering` is (`Location.toward`), and
             // its feature is named or described as a `covering`'s is (S3's
-            // `vfy6`). `E0028` refuses it wherever the sim compiles a place
-            // until S3's `pred`; these are the checks behind it.
+            // `vfy6`), as the sim's compile reads it (S3's `pred`).
             Some(location::Place::Toward(toward)) => {
                 let here = pointer::child(at, "toward");
                 if !matches!(slot, Slot::PlaceSite) {
@@ -1523,11 +1522,11 @@ fn walk_predicate(node: &condition::Node, at: &str, out: &mut Builder) {
     }
 }
 
-/// One of S3's `con6` predicates, checked here by S3's `vfy6` while
-/// [`crate::refusals`] still refuses each one whole (`E0020` to `E0027`), so
-/// that the day S3's `pred` lifts them no playbook is called qualifying that
-/// the sim's compile then refuses (S3's plan, R4 the other way round). Every
-/// other node is [`walk_predicate`]'s.
+/// One of S3's `con6` predicates, checked here by S3's `vfy6` behind the codes
+/// that refused each one whole until S3's `pred` retired them (`E0020` to
+/// `E0027`), so that no playbook is called qualifying that the sim's compile
+/// then refuses (S3's plan, R4 the other way round). Every other node is
+/// [`walk_predicate`]'s.
 fn walk_s3_predicate(node: &condition::Node, at: &str, out: &mut Builder) {
     match node {
         condition::Node::BeaconUnitsByRole(predicate) => {

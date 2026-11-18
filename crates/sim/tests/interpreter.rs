@@ -2037,12 +2037,6 @@ fn the_refusal_table_and_the_arms_agree() {
             ),
             String::new(),
         ),
-        (
-            "site_toward",
-            r#"{"label": "p", "place_beacon": {"at": {"toward": {"feature": {"vent": {"rank": "NEAREST", "coverage": "UNCOVERED"}}}}}}"#
-                .to_owned(),
-            String::new(),
-        ),
     ];
     let named: Vec<&str> = cases.iter().map(|(name, _, _)| *name).collect();
     let table: Vec<&str> = pharmakos_sim::interpreter::REFUSALS

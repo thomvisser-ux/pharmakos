@@ -612,9 +612,8 @@ fn walk_condition(node: &Condition, here: &mut Here, visitor: &mut dyn Visit) {
             walk_predicate_beacon(predicate.beacon.as_ref(), "beacon_powered", here, visitor);
         }
         // S3's `con6` predicates (S3's `vfy6`): walked as the others are, so
-        // every stage's checks reach their beacons and places while `E0020`
-        // to `E0027` still refuse each one whole, and the day S3's `pred`
-        // lifts them nothing inside is unjudged.
+        // every stage's checks reach their beacons and places, which S3's
+        // `pred` relies on since it lifted them.
         Some(condition::Node::BeaconUnitsByRole(predicate)) => {
             walk_predicate_beacon(
                 predicate.beacon.as_ref(),

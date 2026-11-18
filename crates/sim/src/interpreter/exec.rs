@@ -661,6 +661,33 @@ fn start_step(
                         state.pinned_at = voxels_of(point);
                         point
                     }
+                    // S3's `pred`: the stepping-stone site (E23). It binds no
+                    // feature: `covered {}` is refused under `toward`, so the
+                    // initial settings name their vents themselves.
+                    Place::Toward(spec) => {
+                        let mut candidates = world.take_stone_scratch();
+                        let found = {
+                            let (ground, scratch) = world.ground_and_scratch();
+                            crate::targeting::toward_counted(
+                                &ground,
+                                scratch,
+                                &mut candidates,
+                                seat,
+                                commander,
+                                *spec,
+                            )
+                        };
+                        world.put_stone_scratch(candidates);
+                        let [x, y] = found?.site;
+                        let point = world
+                            .ground()
+                            .standing(x, y)
+                            .ok_or(StepFailure::IllegalSite)?;
+                        state.pinned = true;
+                        state.pinned_beacon = NO_INDEX;
+                        state.pinned_at = voxels_of(point);
+                        point
+                    }
                     Place::Voxel(_) | Place::Beacon(_) => {
                         pin_place(world, seat, seat_index, state, *at)?
                     }
@@ -1869,14 +1896,15 @@ fn pin_place(
             }
         }
         Place::Voxel(_) => None,
-        // `covering` is a placement's site and is resolved by the placement
-        // itself; the compile refuses it anywhere else.
-        Place::Covering(_) => return Err(StepFailure::NoTarget),
+        // `covering` and `toward` are a placement's sites and are resolved by
+        // the placement itself; the compile refuses them anywhere else.
+        Place::Covering(_) | Place::Toward(_) => return Err(StepFailure::NoTarget),
     };
     let at = match (place, beacon) {
         (Place::Voxel(voxel), _) => ground_point(world, voxel).ok_or(StepFailure::NoPath)?,
         (Place::Beacon(_), Some(id)) => beacon_at(world, id).ok_or(StepFailure::NoTarget)?,
-        (Place::Beacon(_) | Place::Covering(_), None) | (Place::Covering(_), Some(_)) => {
+        (Place::Beacon(_) | Place::Covering(_) | Place::Toward(_), None)
+        | (Place::Covering(_) | Place::Toward(_), Some(_)) => {
             return Err(StepFailure::NoTarget);
         }
     };
@@ -1900,8 +1928,9 @@ fn resolve_place(
             let seen = view(world, seat, seat_index, state);
             resolve_beacon(&seen, spec).and_then(|id| beacon_at(world, id))
         }
-        // A fallback never covers anything: the compile refuses it there.
-        Place::Covering(_) => None,
+        // A fallback never covers or steps toward anything: the compile
+        // refuses both there.
+        Place::Covering(_) | Place::Toward(_) => None,
     }
 }
 

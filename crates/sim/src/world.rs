@@ -510,6 +510,9 @@ pub struct World {
     /// weapon's reach (S2's `dfnd`), sized as above: an armed asset is one
     /// that can fire.
     threat_scratch: Vec<([Fx; 3], Sq)>,
+    /// Scratch for a `toward` step's candidate sites (S3's `pred`), empty
+    /// between uses and grown to the largest search the match has made.
+    stone_scratch: Vec<crate::targeting::StoneCandidate>,
     /// Scratch for the breach search (S2's `atk`), reserved for the whole
     /// graph so a search allocates nothing.
     breach_scratch: crate::attack::BreachScratch,
@@ -1338,6 +1341,7 @@ impl World {
             fire_order: Vec::with_capacity(armed_rows),
             attackers: Vec::with_capacity(armed_rows),
             threat_scratch: Vec::with_capacity(armed_rows),
+            stone_scratch: Vec::new(),
             breach_scratch: crate::attack::BreachScratch::new(breach_nodes),
             charge_scratch: Vec::with_capacity(crate::math::index::row(beacon_limit)),
             attack_counts: crate::attack::AttackCounts::default(),
@@ -1446,6 +1450,18 @@ impl World {
     /// `dfnd`): taken and given back so the choice allocates nothing.
     pub(crate) fn take_threat_scratch(&mut self) -> Vec<([Fx; 3], Sq)> {
         core::mem::take(&mut self.threat_scratch)
+    }
+
+    /// A `toward` step's candidate scratch (S3's `pred`), taken and given back
+    /// so a later search reuses what an earlier one grew.
+    pub(crate) fn take_stone_scratch(&mut self) -> Vec<crate::targeting::StoneCandidate> {
+        core::mem::take(&mut self.stone_scratch)
+    }
+
+    /// Give the `toward` scratch back, cleared.
+    pub(crate) fn put_stone_scratch(&mut self, mut scratch: Vec<crate::targeting::StoneCandidate>) {
+        scratch.clear();
+        self.stone_scratch = scratch;
     }
 
     /// Give the threat scratch back, cleared.
