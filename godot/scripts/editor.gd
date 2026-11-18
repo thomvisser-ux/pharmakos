@@ -161,6 +161,9 @@ const SIZE_STALE_ALPHA := 0.35
 ## Still colours behind the words, never a flash: there is no motion, and no clock. Part of the
 ## panel's look, whose marker heads this file.
 const CHECKING_LOOK := Color(0.55, 0.6, 0.7, 0.22)
+## How far the number field's bounds open before the pair a chip sent is set: past every value
+## the field can hold exactly (the bridge keeps chips outside `i32` read-only).
+const FIELD_OPEN := 1.0e18
 const ANSWERED_LOOK := Color(0.95, 0.78, 0.25, 0.38)
 ## The unticked box: its side in pixels, its outline's width, and its colour, shown or disabled.
 ## PLACEHOLDER: the checkbox's box — OWNER, at S6's art pass.
@@ -1118,15 +1121,16 @@ func _on_rule_chip(index: int) -> void:
 ## The number field for the chip `named`: the bounds the gateway sent, none where it set none,
 ## and the unit beside it as sent. The value is shown as the file holds it, never clamped into
 ## range (L1): a value outside the bounds sent opens the field past them, and the note says so
-## with the gateway's two numbers (`outside` is the bridge's reading). The maximum is set before
-## the minimum, so a range above the field's old one is not cut by it.
+## with the gateway's two numbers (`outside` is the bridge's reading). The one field serves every
+## chip, and Godot 4.7.2's `Range` keeps its maximum at least its minimum on every set (measured:
+## after 50..100, setting 0..10 maximum-first leaves 0..50), so both bounds are first opened
+## fully and only then set to the pair sent, which no earlier pair can cut (`set_bounds`).
 func _open_number(named: Dictionary, chip: Dictionary) -> void:
 	_number_chip = named
 	var outside: bool = chip.get("outside", false)
+	set_bounds(_number_field, chip)
 	_number_field.allow_lesser = outside or not chip.get("has_min", false)
 	_number_field.allow_greater = outside or not chip.get("has_max", false)
-	_number_field.max_value = chip.get("max") if chip.get("has_max", false) else chip.get("now", 0)
-	_number_field.min_value = chip.get("min") if chip.get("has_min", false) else chip.get("now", 0)
 	_number_field.value = chip.get("now", 0)
 	_number_field.suffix = String(chip.get("unit", ""))
 	_number_heading.text = Strings.text("rule_number_heading", {"text": chip.get("text", "")})
@@ -1134,6 +1138,18 @@ func _open_number(named: Dictionary, chip: Dictionary) -> void:
 	_number_note.text = Strings.text("rule_number_outside", {"now": chip.get("now", 0), "min": chip.get("min", "-"), "max": chip.get("max", "-")}) if outside else ""
 	_number_popup.position = Vector2i(get_viewport().get_mouse_position())
 	_number_popup.popup()
+
+
+## Sets `field`'s bounds to the pair `chip` sent, whatever it held before: both bounds opened
+## fully first, then the maximum and the minimum sent. A bound the gateway did not send stays
+## open (`FIELD_OPEN`).
+static func set_bounds(field: Range, chip: Dictionary) -> void:
+	field.min_value = -FIELD_OPEN
+	field.max_value = FIELD_OPEN
+	if chip.get("has_max", false):
+		field.max_value = chip.get("max")
+	if chip.get("has_min", false):
+		field.min_value = chip.get("min")
 
 
 func _on_number_send() -> void:

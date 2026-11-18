@@ -2454,16 +2454,31 @@ fn a_chip_editor_names_its_chip_and_never_clamps() {
             "{wanted}: {rules:?}"
         );
     }
-    // L1: the field shows the file's value as it is; max is set before min.
-    let max_at = number
+    // L1, as Godot measured it (fix pass 2 item 3): the one field's bounds are opened fully,
+    // then set to the pair sent, so no earlier pair cuts either; client_check.gd runs it.
+    assert!(
+        number.contains(&"set_bounds(_number_field, chip)"),
+        "{number:?}"
+    );
+    let bounds = gd_code(&editor, "set_bounds");
+    let opened = bounds
         .iter()
-        .position(|line| line.starts_with("_number_field.max_value ="))
-        .expect("the max");
-    let min_at = number
+        .position(|line| *line == "field.max_value = FIELD_OPEN")
+        .expect("both bounds opened");
+    let sent = bounds
         .iter()
-        .position(|line| line.starts_with("_number_field.min_value ="))
-        .expect("the min");
-    assert!(max_at < min_at, "max before min: {number:?}");
+        .position(|line| *line == "field.max_value = chip.get(\"max\")")
+        .expect("the sent maximum");
+    assert!(
+        bounds.first().copied() == Some("field.min_value = -FIELD_OPEN") && opened < sent,
+        "opened fully before the pair sent: {bounds:?}"
+    );
+    let check = read("scripts/client_check.gd");
+    assert!(
+        check.contains("_check_the_number_field(editor, failures)")
+            && check.contains("_check_the_refused_ghost_line(editor, failures)"),
+        "the client check runs both hostless checks"
+    );
     assert!(
         number
             .iter()

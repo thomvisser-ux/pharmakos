@@ -117,6 +117,7 @@ const TEXT := {
 	"rule_chip_read_only_ms": "This duration is shown as the gateway wrote it. Editing it here waits on a unit the gateway can send.",
 	"rule_chip_read_only_not_on_the_map": "This names a step or a rule; picking one is a later version's.",
 	"rule_chip_read_only_no_shape": "The gateway sent no way to edit this value.",
+	"rule_chip_read_only_not_exact": "This number is larger than the number field holds exactly, so it is shown and not edited here.",
 	# The file's value lies outside the gateway's bounds: shown as it is, never clamped (L1).
 	"rule_number_outside": "The file holds {now}, outside the range the gateway gives here ({min} to {max}). It is shown as it is; the checks say what it costs.",
 	# Why the rule list took no edit, by the bridge's reason (`RuleEditRefusal`), never in silence.

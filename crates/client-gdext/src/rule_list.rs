@@ -55,6 +55,11 @@ pub enum ReadOnly {
     NotOnTheMap,
     /// A chip whose shape the gateway left unset, or set to a kind this build does not know.
     NoShape,
+    /// A whole number the number field cannot hold exactly: the field is a 64-bit float with
+    /// a step, which Godot 4.7.2 measured holding every `i32` exactly and not 2^52 + 1. A value
+    /// outside `i32` (the wire's type for the bounds) would come back as another number, so it
+    /// is drawn and not edited, never rounded. About the control's shape, not the game.
+    NotExact,
 }
 
 impl ReadOnly {
@@ -65,6 +70,7 @@ impl ReadOnly {
             Self::Milliseconds => "ms",
             Self::NotOnTheMap => "not_on_the_map",
             Self::NoShape => "no_shape",
+            Self::NotExact => "not_exact",
         }
     }
 }
@@ -335,12 +341,18 @@ fn editor_of(chip: &Chip) -> Result<ChipEditor, BridgeError> {
         Shape::Integer(integer) if integer.unit == MILLISECONDS => {
             ChipEditor::ReadOnly(ReadOnly::Milliseconds)
         }
-        Shape::Integer(integer) => ChipEditor::Number {
-            min: integer.min,
-            max: integer.max,
-            unit: integer.unit.clone(),
-            now: integer_of(&chip.pointer, &chip.value_json)?,
-        },
+        Shape::Integer(integer) => {
+            let now = integer_of(&chip.pointer, &chip.value_json)?;
+            if i32::try_from(now).is_err() {
+                return Ok(ChipEditor::ReadOnly(ReadOnly::NotExact));
+            }
+            ChipEditor::Number {
+                min: integer.min,
+                max: integer.max,
+                unit: integer.unit.clone(),
+                now,
+            }
+        }
         Shape::Choice(choice) => ChipEditor::Choice {
             values: choice.values.clone(),
         },
@@ -665,6 +677,35 @@ mod tests {
         assert!(chip(Some(0), Some(100), 140).outside_bounds());
         assert!(chip(Some(10), None, 5).outside_bounds());
         assert!(!chip(None, None, -5).outside_bounds());
+    }
+
+    /// A whole number outside `i32` is not put in the float field, which would send it back
+    /// as another number: it is drawn read-only, with its reason.
+    #[test]
+    fn a_number_the_field_cannot_hold_exactly_is_read_only() {
+        let answer = |value: &str| {
+            json::read(&format!(
+                r#"{{"prose":"Route\n  1. go: wait 12 ticks.\n","rules":[{{"pointer":"/declarative/route/0","line":1,"line_count":1,"chips":[{{"pointer":"/declarative/route/0/wait/n","line":1,"start":16,"end":18,"shape":{{"integer":{{"min":0}}}},"value_json":"{value}"}}]}}]}}"#
+            ))
+            .expect("json")
+        };
+        let editor = |value: &str| {
+            rule_list_of(&answer(value))
+                .expect("reads")
+                .chips
+                .first()
+                .map(|chip| chip.editor.clone())
+                .expect("a chip")
+        };
+        assert!(matches!(editor("2147483647"), ChipEditor::Number { .. }));
+        assert_eq!(
+            editor("4503599627370497"),
+            ChipEditor::ReadOnly(ReadOnly::NotExact)
+        );
+        assert_eq!(
+            editor("-2147483649"),
+            ChipEditor::ReadOnly(ReadOnly::NotExact)
+        );
     }
 
     #[test]
