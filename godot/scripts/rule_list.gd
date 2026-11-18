@@ -12,9 +12,9 @@
 # This script draws the runs and forwards the clicks:
 #   * a CHIP is drawn as a link in its sentence; a click on it asks the editor for its editor,
 #     which the chip's shape names (a number field within the bounds sent, an enum's values as
-#     sent, a pick on the map). A chip the rule list does not edit (a duration, which waits on a
-#     typed unit hint from the wire; a step label or a rule id, part 2's picker) is drawn dim,
-#     and a click says why;
+#     sent, a pick on the map, or, for a step label or a rule id, the names the playbook itself
+#     holds, in file order). A chip the rule list does not edit (a duration, which waits on a
+#     display unit from the wire) is drawn dim, and a click says why;
 #   * a rule's or a step's sentence row can be DRAGGED onto another of the same list: the drop
 #     asks the bridge for one JSON Patch `move` of it to that rule's place;
 #   * the CONFLICT CONNECTOR joins the two rules a W0702 row names, a line in the list's left

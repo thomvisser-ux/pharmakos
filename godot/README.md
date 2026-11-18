@@ -55,6 +55,8 @@ exported build, whose extension list the package job's import wrote (decisions-l
 | `fixtures/needs_a_fix.jsonc` | the verifier's own E0108 case: a file with one machine-applicable Fix |
 | `fixtures/rows_report.json` | a `VerifyReport` of four committed verifier diagnostics, for the rows scene; the pull request that moves this fixture re-renders `tests/golden/vista/expected.rows.png` from CI's Linux run, as `tests/golden/vista/README.md` says |
 | `fixtures/instantiate_suggested.json` | a byte-identical copy of the gateway's `tests/golden/gateway/instantiate_suggested/expected.response.json` (seat 0's `instantiate_template{suggested: true}` answer for Hold & Build), for the wizard scene and the watch check's pin (the pull request that moves the golden always re-copies it, and re-renders `tests/golden/vista/expected.wizard.png` from CI's Linux run only when something the wizard's first page draws moved: its label, value, mark or why, and a template comment is none of them; `tests/golden/vista/README.md` says how); `crates/client-gdext/tests/wizard.rs` keeps it identical and pins its pages. **The lane that changes `library/` moves that golden and so owns this copy too**: re-copy it, and update the page pins, in the same pull request |
+| `fixtures/vocabulary.json` | a `get_vocabulary` answer, **captured** from a match hosted by the gateway's own `Surface` (`crates/gateway` at `9dda8d48`, the committed rules table, seed `0xca5caded`, seat 0, the first Lull) on 2026-11-18, for the hostless picker scene and the client's tests (`src/vocabulary.rs`, `src/editor.rs`, and `tests/vocabulary.rs`, which reads the names the client may never say out of it). **Drift-prone and to be replaced**: there is no gateway golden for `get_vocabulary` yet; once lane `gwu` commits one, this file becomes a byte copy of it held identical by a test, in the pull request that takes `gwu`. Until then a change to the vocabulary (a predicate, a lock, a licence) is re-captured by hand |
+| `fixtures/beacon_detail.json` | a `get_beacon` answer for seat 0's own core beacon `b_00` (a Build beacon), captured the same way and on the same day, for the Visit & change rows' tests. **Drift-prone and to be replaced** by a byte copy of `gwu`'s `get_beacon` golden, as `vocabulary.json` is |
 | `fixtures/rule_list_render.json` | a byte-identical copy of the gateway's `tests/golden/gateway/demo_expand_and_mine_render/expected.response.json` (the Expand & Mine demo's `render_plan` answer, chips and all), for the hostless rule-list scene; `crates/client-gdext/tests/godot_project.rs` keeps it identical. **The lane that moves that golden re-copies it** in the same pull request, and re-renders the rule list's shot once `xtask` takes it |
 | `playbooks/new.jsonc` | what New puts on screen: kind PLAYBOOK, an empty route, and the verifier's own `on_death` and `fallback` stubs, so one map step makes it sealable. It starts a player's own file, so it carries no header and no comment (comments round-trip into the player's text); it is MIT OR Apache-2.0 by its own `REUSE.toml` entry (the owner's ruling of 2026-11-17). Both export presets pack it by their include filter, `playbooks/*.jsonc` |
 | `scenes/boot.tscn` | the main scene: `--scene=<res path>` after `--` sends the run there, otherwise to the lobby |
@@ -63,6 +65,7 @@ exported build, whose extension list the package job's import wrote (decisions-l
 | `scenes/vista_shot.tscn` | the vista golden's scene: the keyframe fixture with **no host running** |
 | `scenes/watch_check.tscn` | the headless-driven run against a real `gamectl host` (CI's `client` job): the watch rig, the editor, the wizard, the meter, the camera's keys (`_camera_keys`: W held in the focused notes box leaves the camera still, and moves it once a right-click on the view has released the focus), the first click on the panel (`_first_click_lands`: one injected click on Submit, a Fix button and Save reaches its handler exactly once, with the rows redrawn under the press, with a map menu open and after a panel scroll), the name Save as... offers (`_save_as_offers`: the opened file's, the saved file's under a name of its own, and none after a template or a carried draft; the native dialog's overwrite prompt is the package hand check), the map in a Push (`_refused_in_the_push`: a click opens the menu as before, still open after a redraw, and its ghost, its Go and a submission are refused at once), New then one Go here qualifying at QUICK (`_new_then_go_here`), and a resume by a fresh client |
 | `scenes/rows_shot.tscn` | the validation rows drawn from `fixtures/rows_report.json` with no host; `cargo xtask screenshot` compares it with `tests/golden/vista/expected.rows.png` |
+| `scenes/picker_shot.tscn` | the condition picker drawn from `fixtures/vocabulary.json` with no host: the families, predicates and parameters as sent, one locked entry greyed with the gateway's reason; not yet in `cargo xtask screenshot`'s list (an `xtask` change), so run by hand |
 | `scenes/rule_list_shot.tscn` | the rule list drawn from `fixtures/rule_list_render.json` (a byte copy of the gateway's Expand & Mine render golden) with no host, its chips and one conflict connector; not yet in `cargo xtask screenshot`'s list (an `xtask` change), so run by hand |
 | `scenes/wizard_shot.tscn` | the wizard's first page drawn from `fixtures/instantiate_suggested.json` with no host; `cargo xtask screenshot` compares it with `tests/golden/vista/expected.wizard.png` |
 | `scenes/client_check.tscn` | T12's headless acceptance scene |
@@ -208,14 +211,29 @@ Pull request 2 adds four things to the panel, each drawn as the gateway answered
   on screen, one row per line, its accessible name its line, each line cut by the bridge at the
   chips `render_plan` placed on it. No sentence is parsed. A chip is a link: a number opens a
   field within the bounds the gateway sent, an enum its values as sent, and a reference a pick
-  on the map (the next map click; Escape stops), each edit one JSON Patch `replace`. A
-  duration is drawn as the gateway wrote it and not edited (it waits on a typed unit hint from
-  the wire), and a step label or a rule id waits on part 2's picker. A step's or a rule's row
+  on the map (the next map click; Escape stops), and a step label or a rule id a menu of the
+  labels or rule ids the playbook itself holds, in file order (whether the pick is legal is the
+  gateway's check), each edit one JSON Patch `replace`. A duration is drawn as the gateway wrote
+  it and not edited (it waits on a display unit from the wire). A step's or a rule's row
   drags onto another of its own list: one JSON Patch `move` to that rule's place, so a rule
   dragged down lands after the rule it is dropped on, and one dragged up before it (RFC 6902
   `move` removes, then inserts at the target index). The two rules a W0702 row names
   are joined by a connector in the list's margin, with the verifier's sentence under the later
   one, and the gateway's refusal of an edit shows under the rule it was of.
+- **The condition picker** (`scripts/condition_picker.gd`; S3's `ed3b`, part 2): family, then
+  predicate, then its parameters, every one `get_vocabulary`'s as sent (read once per Lull), a
+  locked family or predicate greyed with the gateway's reason and not pickable. **Use** asks the
+  bridge for one JSON Patch at the condition slot: the predicate's skeleton under its name, a
+  `replace` over the condition there or an `add` into an empty slot; its parameters are then the
+  new rendering's chips. Where a slot is, and whether it holds a condition, is the gateway's to
+  say on each rendered rule (lane `gwu`): until that lands nothing opens the picker from a rule.
+- **Visit & change** (S3's `ed3b`, part 2): the beacon menu's Visit & change submenu, beside
+  S1's three priority rows, lists from `get_beacon`'s detail one row per setting (its title and
+  value now, its editor by its shape), Switch mandate, Add a build target (a blueprint, then a
+  click on the ground for its anchor; Escape stops), Remove a build target, and Queue a
+  structure, every mandate and blueprint as `get_vocabulary` sent it and a locked one greyed
+  with its reason. Each pick is one route step visiting the beacon with that one row. The detail
+  describes the beacon as the Lull sees it; what an earlier step would leave is not projected.
 - **The meter**: `get_economy_forecast`'s four numbers (`$`, supply, draw and headroom in
   `kW`) put into `scripts/strings.gd`'s frame as they came. Headroom is the gateway's, never
   supply minus draw. The bridge's rig polls it when a Lull opens and whenever the match moved
@@ -418,8 +436,9 @@ one.
 
 ## What is not here yet
 
-The rule list's condition picker, locks and Visit & change rows are S3's, in `ed3b`'s part
-2; unit display of wizard
+The condition picker opens from a rule once the gateway sends each condition slot's pointer
+(lane `gwu`); a Probation match's untimed Lull and the "the Lull ran out" line wait on `gwu`'s
+footer field and line; unit display of wizard
 values, the typed parameter catalogue, the draft and save browsers and the real lobby are
 S6's; the `.vox` models and the art pass are S6's too. Entities are drawn as placeholder
 primitives until then.

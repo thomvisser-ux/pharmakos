@@ -289,12 +289,14 @@ const SCRIPTS: &[&str] = &[
     "boot.gd",
     "camera_rig.gd",
     "client_check.gd",
+    "condition_picker.gd",
     "credits.gd",
     "editor.gd",
     "host_link.gd",
     "instance_log.gd",
     "lobby.gd",
     "mesher_rules.gd",
+    "picker_shot.gd",
     "rows.gd",
     "rows_shot.gd",
     "rule_list.gd",
@@ -344,6 +346,7 @@ fn every_script_is_listed_and_every_scene_names_files_that_exist() {
         "scenes/client_check.tscn",
         "scenes/credits.tscn",
         "scenes/lobby.tscn",
+        "scenes/picker_shot.tscn",
         "scenes/rows_shot.tscn",
         "scenes/rule_list_shot.tscn",
         "scenes/smoke_check.tscn",
@@ -2489,5 +2492,102 @@ fn a_chip_editor_names_its_chip_and_never_clamps() {
                 .iter()
                 .any(|line| line.contains("rule_number_outside")),
         "a value outside the bounds sent is shown and said, never clamped: {number:?}"
+    );
+}
+
+/// **The condition picker draws the vocabulary as sent** (S3's `ed3b`, part 2): every family,
+/// predicate and parameter is the bridge's `vocabulary`, a locked one greyed with the gateway's
+/// reason and not selectable, and Use asks the bridge for the one patch, naming the rule, the
+/// rendering and the slot. The hostless scene draws the captured answer and starts no host.
+#[test]
+fn the_picker_draws_the_vocabulary_as_sent_and_a_lock_with_its_reason() {
+    let picker = read("scripts/condition_picker.gd");
+    let fill = gd_code(&picker, "fill");
+    for wanted in [
+        "item.set_selectable(0, locked == \"\" and family_locked == \"\")",
+        "item.set_text(0, Strings.text(\"picker_entry_locked\", {\"title\": entry.get(\"title\", \"\"), \"locked\": locked}))",
+        "item.set_metadata(0, [family_index, entry_index])",
+    ] {
+        assert!(fill.contains(&wanted), "{wanted}: {fill:?}");
+    }
+    let editor = read("scripts/editor.gd");
+    assert!(
+        gd_code(&editor, "_on_picker_use").iter().any(|line| line.contains(
+            "bridge.editor_choose_predicate(int(_picker_slot.get(\"rule\", -1)), String(_picker_slot.get(\"pointer\", \"\")), int(_picker_slot.get(\"revision\", -1)), String(_picker_slot.get(\"slot\", \"\")), _picker_slot.get(\"present\", false), int(picked[0]), int(picked[1]))"
+        )),
+        "the pick names the rule, the rendering and the slot"
+    );
+    let open = gd_code(&editor, "open_condition_picker");
+    assert!(
+        open.iter()
+            .position(|line| line.contains("if _rules_blocked != \"\":"))
+            .is_some_and(|blocked| open
+                .get(blocked.saturating_add(1))
+                .is_some_and(|line| line
+                    .contains("_say_local(\"status_rule_refused_\" + _rules_blocked, {})"))),
+        "no picker opens while the list takes no edit: {open:?}"
+    );
+    let rules = gd_code(&editor, "_draw_rules");
+    assert!(
+        rules
+            .iter()
+            .any(|line| line.contains("_picker_popup.hide()")),
+        "the picker closes with the list it was opened on: {rules:?}"
+    );
+    let shot = read("scripts/picker_shot.gd");
+    assert!(shot.contains("res://fixtures/vocabulary.json"));
+    assert!(shot.contains("bridge.editor_vocabulary_of_response("));
+    assert!(
+        !shot.contains("host_link") && !shot.contains("execute_with_pipe"),
+        "the shot starts no host"
+    );
+}
+
+/// **A name chip and the Visit & change rows go through the bridge** (S3's `ed3b`, part 2): a
+/// step-label or rule-id chip offers the names the bridge read from the text and sends the
+/// pick's index; each Visit & change row is the bridge's (`editor_visit_row`,
+/// `editor_change_setting_choice`, `editor_change_setting_number`); an anchor pick takes the
+/// next map click, and Escape stops it.
+#[test]
+fn a_name_chip_and_the_visit_rows_go_through_the_bridge() {
+    let editor = read("scripts/editor.gd");
+    let chip = gd_code(&editor, "_on_rule_chip");
+    assert!(
+        chip.contains(&"\"name\":") && chip.contains(&"_open_names(named, chip)"),
+        "{chip:?}"
+    );
+    assert!(
+        gd_code(&editor, "_on_name").iter().any(|line| line.contains(
+            "bridge.editor_choose_name(int(_name_chip.get(\"index\", -1)), int(_name_chip.get(\"revision\", -1)), String(_name_chip.get(\"pointer\", \"\")), which)"
+        ))
+    );
+    assert!(
+        gd_code(&editor, "_entry_rows").iter().any(|line| line
+            .contains("menu.id_pressed.connect(func(which: int) -> void: bridge.editor_visit_row(_visit_beacon, row, which))")),
+        "a mandate or a blueprint is the bridge's row"
+    );
+    assert!(
+        gd_code(&editor, "_setting_row").iter().any(|line| line
+            .contains("bridge.editor_change_setting_choice(_visit_beacon, which, pointer, value)")),
+        "an enum setting's value is the bridge's row"
+    );
+    assert!(
+        gd_code(&editor, "_on_number_send")
+            .iter()
+            .any(|line| line.contains("bridge.editor_change_setting_number(")),
+        "a number setting's value is the bridge's row"
+    );
+    let click = gd_code(&editor, "map_click");
+    assert!(
+        click.iter().any(|line| line.contains(
+            "if int(picking.get(\"picking\", -1)) >= 0 or picking.get(\"anchoring\", false):"
+        )),
+        "an anchor pick takes the next map click: {click:?}"
+    );
+    assert!(
+        gd_code(&editor, "_a_pick_is_on")
+            .iter()
+            .any(|line| line.contains("state.get(\"anchoring\", false)")),
+        "Escape stops an anchor pick as it stops a chip's"
     );
 }
