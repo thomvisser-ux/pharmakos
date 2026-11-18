@@ -23,7 +23,7 @@ use crate::error::BridgeError;
 use crate::rig::{Meter, Recap};
 use crate::rule_list::{ChipEditor, NameKind, RuleChip, RuleList};
 use crate::targeting::{AttackAim, AttackMark, Chip, ChipFeature, FeatureKind, FeatureName};
-use crate::variant::{godot_int, text_or_empty};
+use crate::variant::{int_variant, text_or_empty};
 use crate::vocabulary::{BeaconDetail, Entry, ParameterShape, Setting, Vocabulary};
 use crate::wizard::{Instance, Wizard};
 
@@ -801,11 +801,11 @@ pub(crate) fn meter_dictionary(meter: Meter) -> VarDictionary {
 }
 
 fn counter(value: u64) -> Variant {
-    godot_int(value).to_variant()
+    int_variant(value)
 }
 
 fn count(value: usize) -> Variant {
-    godot_int(value).to_variant()
+    int_variant(value)
 }
 
 /// A route step numbered from 1 as GDScript reads it, 0 for none: the panel's own

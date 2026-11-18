@@ -85,7 +85,7 @@ use crate::rig::{Answer, LullLengths, Rig};
 use crate::rules::{self, MesherRules};
 use crate::surface::{ColourQuantisation, Surface, SurfaceProbe};
 use crate::upload::{DEFAULT_UPLOAD_PATH, ResidentSurface, UploadCounters, UploadPath, Uploader};
-use crate::variant::{godot_int, json_to_variant, text_or_empty};
+use crate::variant::{int_variant, json_to_variant, text_or_empty};
 use crate::view::{self, Applied, Entity, ViewModel};
 
 /// The bridge node. One per client; the scenes hold it and GDScript calls it.
@@ -175,10 +175,11 @@ impl INode3D for PharmakosBridge {
 #[allow(clippy::needless_pass_by_value, clippy::unused_self)]
 #[godot_api]
 impl PharmakosBridge {
-    /// How many panics this bridge has caught at its own boundary. CI asserts zero.
+    /// How many panics this bridge has caught at its own boundary, as an `int`. CI asserts
+    /// zero. A count past what an `int` holds is the typed refusal [`int_variant`] sends.
     #[func]
-    fn caught_panics(&self) -> i64 {
-        godot_int(self.panics.caught())
+    fn caught_panics(&self) -> Variant {
+        int_variant(self.panics.caught())
     }
 
     /// The caught-panic count and the last message, as one line for the log.
@@ -1700,12 +1701,12 @@ fn counters_of(renderer: &ChunkRenderer) -> VarDictionary {
 
 /// One counter as the `Variant` a dictionary holds.
 fn counter(value: u64) -> Variant {
-    godot_int(value).to_variant()
+    int_variant(value)
 }
 
 /// One size as the `Variant` a dictionary holds.
 fn count_of(value: usize) -> Variant {
-    godot_int(value).to_variant()
+    int_variant(value)
 }
 
 /// What `configure` answers when it configured nothing: `configured` and `attached` are
