@@ -267,8 +267,9 @@ fn setup(case: &str, world: &mut World) {
             world.set_scouts(core, 1);
         }
         "beacon_mandate" => world.set_writ(core, MandateKind::Survey),
-        // A finished Generator homed to the core, and seat 1's Survey post
-        // homed to it too, which is not the seat's own and never counts.
+        // A finished Generator homed to the core, and seat 1's Resonance
+        // Spire homed to it too, which is not the seat's own and never
+        // counts.
         "beacon_has_structure" => {
             let at = beside(world, home, 6, 0);
             world
@@ -276,7 +277,7 @@ fn setup(case: &str, world: &mut World) {
                 .expect("room for a structure");
             let at = beside(world, home, -6, 0);
             world
-                .raise_structure(SeatId::new(1), core, StructureKind::SurveyPost, at)
+                .raise_structure(SeatId::new(1), core, StructureKind::ResonanceSpire, at)
                 .expect("room for a structure");
         }
         // Seat 1's Generator inside seat 0's core sphere, which the core sees.
@@ -1019,12 +1020,14 @@ fn a_move_a_commander_cannot_walk_fails_with_no_path() {
 
 /// S3's `pred`: **a predicate never reads another seat's state.** Seat 0's
 /// rules ask about the ground around seat 1's core, which none of seat 0's
-/// sensors reach. Seat 2's commander is carried there and seat 1 builds a
-/// Generator there: seat 1 sees both, and remembers them, and seat 0 must not
-/// learn of either through its own predicates. The run with the carry and the
-/// run without it give seat 0 the same decisions, line for line, and no rule
-/// of seat 0's fires in either; seat 1, which does see them, is shown to hold
-/// the memory, so the test is not passing on an empty table.
+/// sensors reach. Seat 2's commander is carried there, which seat 1 sees and
+/// remembers, so seat 0 must not learn of it through another seat's memory;
+/// and seat 1 raises a Generator there, its own, which no seat but seat 1's
+/// enemies could remember, so seat 0 must not learn of it from the world's
+/// structure table, the ground truth. The run with both and the run without
+/// give seat 0 the same decisions, line for line, and no rule of seat 0's
+/// fires in either; seat 1 is shown to hold a memory of the commander, so the
+/// test is not passing on an empty table.
 #[test]
 fn a_predicate_reads_only_its_own_seats_knowledge() {
     let rule = |id: &str, when: &str| {

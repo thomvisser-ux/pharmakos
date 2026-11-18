@@ -5,8 +5,7 @@
   "declarative": {
     "route": [
       {"label": "generator", "skip_if": {"beacon_has_structure": {"beacon": {"beacon_id": "b_00"}, "blueprint_id": "generator"}}, "hold": {"ms": 1000}},
-      {"label": "spire", "skip_if": {"beacon_has_structure": {"beacon": {"beacon_id": "b_00"}, "blueprint_id": "resonance_spire"}}, "hold": {"ms": 1000}},
-      {"label": "other_seats", "skip_if": {"beacon_has_structure": {"beacon": {"beacon_id": "b_00"}, "blueprint_id": "survey_post"}}, "hold": {"ms": 1000}}
+      {"label": "spire", "skip_if": {"beacon_has_structure": {"beacon": {"beacon_id": "b_00"}, "blueprint_id": "resonance_spire"}}, "hold": {"ms": 1000}}
     ],
     "handlers": []
   },

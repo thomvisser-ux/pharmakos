@@ -2726,10 +2726,10 @@ fn compile_mandate_kind(mandate: i32, field: &'static str) -> Result<MandateKind
     }
 }
 
-/// A predicate's blueprint id: written, and naming a kind this build defines.
-/// Any kind may be asked about, whether a slot can build it or not: which
-/// beacon has what is the Push's to answer (the verifier's `E0101` and
-/// `E0506`).
+/// A predicate's blueprint id: written, naming a kind this build defines, and
+/// a kind a structure row can be (the verifier's `E0101`, `E0506` and
+/// `E0514`): a predicate about a wall or a Survey post could never be true,
+/// so it is refused rather than false for ever (fix pass 1, C3).
 fn compile_blueprint(
     id: &str,
     field: &'static str,
@@ -2737,8 +2737,12 @@ fn compile_blueprint(
     if id.is_empty() {
         return Err(PlanError::MissingBlock(field));
     }
-    crate::tables::StructureKind::from_blueprint_id(id)
-        .ok_or_else(|| PlanError::UnknownBlueprint(id.to_owned()))
+    let kind = crate::tables::StructureKind::from_blueprint_id(id)
+        .ok_or_else(|| PlanError::UnknownBlueprint(id.to_owned()))?;
+    if !kind.can_stand_as_a_row() {
+        return Err(PlanError::BlueprintNeverStands(id.to_owned()));
+    }
+    Ok(kind)
 }
 
 /// An enemy predicate's `near`: a voxel on the map, or an own beacon by
@@ -2839,6 +2843,10 @@ pub enum PlanError {
     /// A predicate names a blueprint id no kind of this build has (the
     /// verifier's `E0506`; S3's `pred`).
     UnknownBlueprint(String),
+    /// A predicate names a blueprint no structure row of this build can be: a
+    /// wall, which is voxels, or a Survey post, which nothing raises (the
+    /// verifier's `E0514`; S3's `pred`, fix pass 1).
+    BlueprintNeverStands(String),
     /// An enemy predicate's radius is 0, which is no radius: the radius is
     /// required (the verifier's `E0101`; S3's `pred`).
     NoRadius(&'static str),
@@ -3179,6 +3187,11 @@ impl core::fmt::Display for PlanError {
             PlanError::UnknownBlueprint(id) => {
                 write!(f, "`{id}` names no blueprint this build knows")
             }
+            PlanError::BlueprintNeverStands(id) => write!(
+                f,
+                "`{id}` never stands as a structure, so a predicate asking about one could \
+                 never be true"
+            ),
             PlanError::NoRadius(name) => write!(
                 f,
                 "`{name}` is 0, which is no radius; an enemy predicate's radius is required"

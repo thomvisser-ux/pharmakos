@@ -248,7 +248,7 @@ enum Slot {
     BuildTarget,
     /// A `queue_structure` row's.
     Queue,
-    /// A predicate's, about a structure that stands.
+    /// A predicate's, about a structure a row can be (`E0514` otherwise).
     Standing,
 }
 
@@ -258,7 +258,7 @@ impl Slot {
         match self {
             Slot::BuildTarget => blueprint_choice(kinds, |kind| kind.build_target),
             Slot::Queue => blueprint_choice(kinds, |kind| kind.queued),
-            Slot::Standing => blueprint_choice(kinds, Blueprint::can_stand),
+            Slot::Standing => blueprint_choice(kinds, Blueprint::can_be_asked_about),
         }
     }
 }

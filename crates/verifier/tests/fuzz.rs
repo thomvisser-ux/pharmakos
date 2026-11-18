@@ -411,7 +411,8 @@ impl Shape {
         // A clean run keeps to the three predicates that need no reference to
         // resolve; the rest are what the resolve stage is for.
         // A damaged run reaches S3's eight predicates too, with what each
-        // holds damaged, and a clean one qualifies some (S3's `pred`).
+        // holds damaged; a clean run generates none of them, so a qualifying
+        // run that holds one is a damaged run whose damage missed it.
         let families = if self.clean { 3 } else { 9 };
         match self.below(families) {
             7 | 8 => self.s3_predicate(),

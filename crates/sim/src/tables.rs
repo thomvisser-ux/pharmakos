@@ -2935,6 +2935,25 @@ impl StructureKind {
         }
     }
 
+    /// Whether a structure row of this kind can stand in this build, so a
+    /// predicate asking about one can ever be true (S3's `pred`, fix pass 1):
+    /// a Generator and the base kit, which Build targets raise, and the
+    /// Resonance Spire, which a queue raises. A wall is voxels and never a
+    /// structure row, and nothing in this build raises a Survey post, so a
+    /// predicate naming either is refused rather than false for ever. The
+    /// verifier's `BlueprintSlots::stands_as_a_structure` and the vocabulary's
+    /// pickers say the same, and a test holds the three together.
+    #[must_use]
+    pub const fn can_stand_as_a_row(self) -> bool {
+        match self {
+            StructureKind::Generator
+            | StructureKind::Autocannon
+            | StructureKind::Mortar
+            | StructureKind::ResonanceSpire => true,
+            StructureKind::SurveyPost | StructureKind::Wall => false,
+        }
+    }
+
     /// The kind a playbook's blueprint id names, or `None` for an id that
     /// names no kind this build defines (the verifier's `E0506`).
     #[must_use]

@@ -162,6 +162,15 @@ impl Blueprint {
         self.build_target || self.queued
     }
 
+    /// Whether a predicate may ask about this kind: one a structure row can be
+    /// in this build, the verifier's [`pharmakos_verifier::BlueprintSlots::stands_as_a_structure`]
+    /// (`E0514` otherwise; S3's `pred`, fix pass 1). A wall can stand, as
+    /// voxels, and is never a structure row.
+    #[must_use]
+    pub const fn can_be_asked_about(&self) -> bool {
+        pharmakos_verifier::slots_for(self.kind).stands_as_a_structure()
+    }
+
     /// The id as JSON text, quotes included.
     #[must_use]
     pub fn json(&self) -> String {
@@ -262,9 +271,11 @@ fn reserved(title: &'static str, stage: &str) -> Entry {
     }
 }
 
-/// `entry` with the verifier's lock when it still refuses `construct`, in its
-/// own sentence; open otherwise. A refused entry offers no skeleton, so a
-/// picker inserts nothing the verifier refuses.
+/// `entry` with the verifier's lock when it refuses `construct`, in its own
+/// sentence; open otherwise. A refused entry offers no skeleton, so a picker
+/// inserts nothing the verifier refuses. Since S3's `pred` retired `E0020` to
+/// `E0028` no predicate is locked this way; the lock stays for a construct a
+/// later wire puts on it before its effect.
 fn unless_refused(mut entry: Entry, construct: &str) -> Result<Entry, VocabularyError> {
     if let Some(code) = pharmakos_verifier::code_for_construct(construct) {
         let text =
@@ -547,7 +558,7 @@ fn own_beacon_family(kinds: &[Blueprint]) -> Result<Family, VocabularyError> {
                     parameter(
                         "/blueprint_id",
                         s::VOCABULARY_STRUCTURE,
-                        blueprint_choice(kinds, Blueprint::can_stand),
+                        blueprint_choice(kinds, Blueprint::can_be_asked_about),
                     ),
                 ],
                 r#"{"beacon":{"safest":{}},"blueprint_id":"generator"}"#,
@@ -597,7 +608,7 @@ fn enemy_knowledge_family(kinds: &[Blueprint]) -> Result<Family, VocabularyError
                     vec![parameter(
                         "/blueprint_id",
                         s::VOCABULARY_STRUCTURE,
-                        blueprint_choice(kinds, Blueprint::can_stand),
+                        blueprint_choice(kinds, Blueprint::can_be_asked_about),
                     )],
                 ]
                 .concat(),

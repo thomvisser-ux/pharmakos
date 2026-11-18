@@ -39,7 +39,7 @@
     = {"safest":{}}
   8:129-138 "generator"
     /declarative/handlers/0/when/all/items/2/beacon_has_structure/blueprint_id
-    choice "generator" | "autocannon" | "mortar" | "resonance_spire" | "wall"
+    choice "generator" | "autocannon" | "mortar" | "resonance_spire"
     = "generator"
   9:26-29 "1 s"
     /declarative/handlers/0/body/0/hold/ms
@@ -84,7 +84,7 @@
     = 30000
   12:204-210 "mortar"
     /declarative/handlers/1/when/any/items/2/enemy_structure_near/blueprint_id
-    choice "generator" | "autocannon" | "mortar" | "resonance_spire" | "wall"
+    choice "generator" | "autocannon" | "mortar" | "resonance_spire"
     = "mortar"
   12:218-220 "16"
     /declarative/handlers/1/when/any/items/2/enemy_structure_near/radius_voxels

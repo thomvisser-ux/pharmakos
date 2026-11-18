@@ -593,6 +593,14 @@ pub const VERIFIER_STRINGS: &[Text] = &[
                    or take the row out.",
     },
     Text {
+        code: "E0514",
+        message: "`{id}` never stands as a structure in this build, so a predicate asking about \
+                  one could never be true.",
+        beginner: "Walls are built voxel by voxel, and nothing builds a Survey post yet, so \
+                   neither can be asked about. Ask about a Generator, an autocannon, a mortar \
+                   or a Resonance Spire.",
+    },
+    Text {
         code: "W0501",
         message: "`seam_choice` SAFEST read as NEAREST until S2's threat model landed; it digs \
                   the nearest seam no known threat's weapon reaches, and this code is retired \

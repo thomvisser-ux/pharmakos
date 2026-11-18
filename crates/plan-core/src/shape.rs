@@ -195,9 +195,9 @@ pub const NEAR_ARMS: [&str; 3] = ["voxel", "beacon_anchor", "safest"];
 pub const PLACE_ARMS: [&str; 5] = ["voxel", "beacon_anchor", "safest", "covering", "toward"];
 
 /// The arms legal in a `PlaceBeaconStep.at` that the verifier does not refuse
-/// in this build: [`PLACE_ARMS`] less `toward` while the verifier refuses it
-/// (`E0028`, until S3's `pred`), so a picker never offers an arm the verifier
-/// would refuse, and offers it in the build whose verifier lifts the refusal.
+/// in this build: [`PLACE_ARMS`], less `toward` in a build whose verifier
+/// refuses it (`E0028`, which S3's `pred` retired), so a picker never offers
+/// an arm the verifier would refuse.
 #[must_use]
 pub fn place_arms() -> Vec<&'static str> {
     PLACE_ARMS

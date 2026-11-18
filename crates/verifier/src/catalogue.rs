@@ -45,7 +45,9 @@
 //! with no sighting to route around) at the end of the information codes.
 //! S3's second wire (task `con6`) adds `E0020` to `E0028` at the end of the
 //! decode family, one per predicate and for `toward`, each refused until S3's
-//! `pred` gives it an effect. S3's licence verifier (task `vfy5`) gives
+//! `pred` gave it an effect and retired it: the rows keep their numbers,
+//! raised by nothing. S3's `pred` adds `E0514` (a predicate naming a
+//! blueprint no structure row can be) at the end of the settings family. S3's licence verifier (task `vfy5`) gives
 //! `E0507` (a licensed blueprint queued without its licence) and `W0702` (a
 //! rule an earlier rule wins every time both are true) their emitters, and
 //! adds `E0513` (a second Resonance Spire at one beacon) and `I0006` (a breach
@@ -884,6 +886,14 @@ pub const CATALOGUE: &[Entry] = &[
         family: Family::SettingsAndRecycle,
         severity: Severity::Error,
         emitter: Emitter::Stage(Stage::Semantics),
+    },
+    // S3's `pred`, fix pass 1: a predicate naming a blueprint no structure row
+    // can be (a wall, a Survey post), which could never be true.
+    Entry {
+        code: "E0514",
+        family: Family::SettingsAndRecycle,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Structure),
     },
     // A warning in the settings family, spelt with the `W` the spec gives a
     // family's warnings, as `W06xx` beside `E06xx`. Decisions-log item 127 (9)

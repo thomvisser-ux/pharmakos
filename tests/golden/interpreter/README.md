@@ -63,7 +63,7 @@ and the host's `plan_sealed` are not decisions and are not on that clock.
 | `reflex` | the fixed 20 % reflex aborting a visit, the committed row staying, the resumed visit paying the handshake again, and the reflex **not** re-firing until new damage arrives |
 | `beacon_units_by_role` | S3's `pred`: a Survey core with one scout ordered; build drones counted (skipped), no repair drone (started), and a `wait_until` that holds once the scout is fielded |
 | `beacon_mandate` | the core's writ (Survey, skipped), a writ it does not carry through `safest` (started), and a beacon that does not exist read as false under a `not` (skipped) |
-| `beacon_has_structure` | a finished Generator homed to the core (skipped), a Spire it lacks (started), and another seat's Survey post homed to it, which is not the seat's own and never counts (started) |
+| `beacon_has_structure` | a finished Generator homed to the core (skipped), and a Spire it lacks (started) although seat 1's Spire is homed to it, which is not the seat's own and never counts |
 | `kw_supply` | the core's 10 kW surplus read exactly (skipped), more than it (started), and a `wait_until` that holds the decision after a Generator on the nearest vent is finished at tick 60 |
 | `kw_draw` | the draw at the start (skipped) and one past any the seat can reach (started) |
 | `enemy_units_near` | seat 1's commander carried into the core's sphere at tick 40 and out at tick 120: `VISIBLE_NOW` holds at the next decision, a 2 s `KNOWN_WITHIN` goes stale 2 s after it left, and the largest radius and window the wire holds still count exactly one |

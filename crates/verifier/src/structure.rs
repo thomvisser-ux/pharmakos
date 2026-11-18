@@ -1610,14 +1610,22 @@ fn unset(out: &mut Builder, at: &str, tail: &[&str], field: &'static str) {
     out.emit(Diag::new("E0111", pointer::join(at, tail)).arg("field", field));
 }
 
-/// A predicate's blueprint id: written (`E0101`), and a blueprint this build
-/// knows (`E0506`). Which beacon has which structure is the Push's, so any
-/// kind the sim defines may be asked about, built or not.
+/// A predicate's blueprint id: written (`E0101`), a blueprint this build
+/// knows (`E0506`), and one a structure row can be (`E0514`; S3's `pred`, fix
+/// pass 1): a wall is voxels and nothing raises a Survey post, so a predicate
+/// naming either could never be true. Which beacon has which structure is the
+/// Push's, so any kind that can stand may be asked about, built or not.
 fn blueprint(id: &str, at: &str, tail: &[&str], out: &mut Builder) {
     if id.is_empty() {
         out.emit(Diag::new("E0101", pointer::join(at, tail)).arg("what", "`blueprint_id`"));
-    } else if crate::blueprints::kind_of(id).is_none() {
-        out.emit(Diag::new("E0506", pointer::join(at, tail)).arg("id", id));
+        return;
+    }
+    match crate::blueprints::slots_of(id) {
+        None => out.emit(Diag::new("E0506", pointer::join(at, tail)).arg("id", id)),
+        Some(row) if !row.stands_as_a_structure() => {
+            out.emit(Diag::new("E0514", pointer::join(at, tail)).arg("id", id));
+        }
+        Some(_) => {}
     }
 }
 

@@ -382,3 +382,14 @@ carried beside its own error, which stands (`e0101_an_enemy_predicate_without_it
 `e0420_toward_in_a_move` and `e0506_a_predicate_naming_no_blueprint`). No
 other diagnostic moved. The catalogue moved by the nine rows' emitters and
 sentences.
+
+**S3's `pred`, fix pass 1 (`E0514`).** `beacon_has_structure` and
+`enemy_structure_near` name only a kind a structure row can be: a wall is
+voxels and nothing raises a Survey post, so a predicate naming either could
+never be true, and the structure stage refuses it as `E0514`, appended at the
+end of the settings family, as the sim's compile does
+(`PlanError::BlueprintNeverStands`) and as the vocabulary's pickers leave it
+out. One case is new, on the plain fixture: `e0514_a_predicate_about_a_wall`.
+The catalogue moved by the new row; no existing report moved (a new row is not
+one of `report_hash`'s inputs, and `VERIFIER_VERSION` stays `0.1.0-s3.4`,
+which `main` has not seen).

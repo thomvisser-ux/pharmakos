@@ -728,6 +728,14 @@
     "beginner": "One Resonance Spire per beacon. Queue this one at another of your beacons, or take the row out."
   },
   {
+    "code": "E0514",
+    "family": "settings and recycle",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "`{id}` never stands as a structure in this build, so a predicate asking about one could never be true.",
+    "beginner": "Walls are built voxel by voxel, and nothing builds a Survey post yet, so neither can be asked about. Ask about a Generator, an autocannon, a mortar or a Resonance Spire."
+  },
+  {
     "code": "W0501",
     "family": "settings and recycle",
     "severity": "WARNING",

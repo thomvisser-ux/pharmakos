@@ -111,6 +111,18 @@ pub const BLUEPRINT_SLOTS: [BlueprintSlots; 6] = [
     },
 ];
 
+impl BlueprintSlots {
+    /// Whether a structure row of this kind can stand in this build: one a
+    /// Build target or a queue raises, and not the one that fills a box (a
+    /// wall, which is voxels). A predicate may name only such a kind (`E0514`;
+    /// S3's `pred`, fix pass 1); the sim's `StructureKind::can_stand_as_a_row`
+    /// says the same, and a test holds the two together.
+    #[must_use]
+    pub const fn stands_as_a_structure(&self) -> bool {
+        (self.build_target || self.queued) && !matches!(self.anchor, Anchor::VoxelInsideBox)
+    }
+}
+
 /// The row for a kind: every kind the sim defines has one, in
 /// [`StructureKind::ALL`]'s order, so this cannot miss.
 #[must_use]
@@ -129,13 +141,6 @@ pub const fn slots_for(kind: StructureKind) -> &'static BlueprintSlots {
 #[must_use]
 pub fn slots_of(id: &str) -> Option<&'static BlueprintSlots> {
     BLUEPRINT_SLOTS.iter().find(|row| row.id == id)
-}
-
-/// The kind a blueprint id names, or `None` for an id this build does not
-/// know.
-#[must_use]
-pub(crate) fn kind_of(id: &str) -> Option<StructureKind> {
-    slots_of(id).map(|row| row.kind)
 }
 
 /// Whether a Build target may name `id` (`E0010` otherwise).
@@ -158,7 +163,7 @@ pub(crate) fn fills_a_box(id: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{BLUEPRINT_SLOTS, kind_of, slots_of};
+    use super::{BLUEPRINT_SLOTS, slots_of};
     use pharmakos_sim::tables::StructureKind;
 
     #[test]
@@ -166,11 +171,11 @@ mod tests {
         let kinds: Vec<StructureKind> = BLUEPRINT_SLOTS.iter().map(|row| row.kind).collect();
         assert_eq!(kinds, StructureKind::ALL);
         for row in BLUEPRINT_SLOTS {
-            assert_eq!(kind_of(row.id), Some(row.kind));
+            assert_eq!(slots_of(row.id).map(|found| found.kind), Some(row.kind));
             assert_eq!(slots_of(row.id), Some(&row));
             assert_eq!(super::slots_for(row.kind), &row);
         }
-        assert_eq!(kind_of("death_ray"), None);
-        assert_eq!(kind_of(""), None);
+        assert_eq!(slots_of("death_ray").map(|found| found.kind), None);
+        assert_eq!(slots_of("").map(|found| found.kind), None);
     }
 }

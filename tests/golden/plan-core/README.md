@@ -38,8 +38,8 @@ Three kinds of golden live here, and they fail for different reasons:
   chips diff is a change in what the rule list offers to edit. A bound that
   moved is the verifier's: `an_integer_chips_bounds_are_the_verifiers` holds
   every integer chip's bounds to the verifier's own checks, and a reference's
-  `place_beacon` arms drop `toward` while the verifier refuses it (`E0028`), so
-  they gain it in the build whose verifier lifts the refusal.
+  `place_beacon` arms list `toward` since S3's `pred` retired `E0028` (they
+  dropped it while the verifier refused it).
 * **The prose moved.** Either a template string changed (say so; it is the one
   the player reads) or the plan itself renders differently, which is a semantic
   change wearing a typographic disguise. The prose says **nothing** about the
