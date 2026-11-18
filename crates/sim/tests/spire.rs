@@ -456,6 +456,10 @@ const GROWS: &[&str] = &[
     "sim:interpreter/cond.rs::live_row_repairs",
     "sim:interpreter/cond.rs::row_threat",
     "sim:interpreter/cond.rs::row_repairs",
+    // S3's `pred`: a `toward` stone's candidates are columns within each own
+    // beacon's sphere, grown by a Spire as the anchor for the next beacon is
+    // (decision 6).
+    "sim:targeting.rs::stone_site",
     // Build's area and the drones' work reach, every physical-work path.
     "sim:mandate.rs::inside_sphere",
     "sim:mandate.rs::of",
