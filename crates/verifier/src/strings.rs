@@ -178,54 +178,55 @@ pub const VERIFIER_STRINGS: &[Text] = &[
         beginner: "Autocannons, mortars and walls can be built in this build.",
     },
     // E0020 to E0028: S3's predicates and `toward`, on the wire before they
-    // have an effect, as E0009 to E0017 are.
+    // had an effect, as E0009 to E0017 are. S3's `pred` retired E0020 to
+    // E0027 when it built the predicates.
     Text {
         code: "E0020",
-        message: "predicate `beacon_units_by_role` has no effect until S3's predicate catalogue lands; it is \
-                  refused rather than ignored.",
-        beginner: "How many units of a role a beacon has can't be asked about yet.",
+        message: "predicate `beacon_units_by_role` had no effect until S3's predicate catalogue landed; this code is \
+                  retired and raised by nothing.",
+        beginner: "How many units of a role a beacon has can be asked about in this build.",
     },
     Text {
         code: "E0021",
-        message: "predicate `beacon_mandate` has no effect until S3's predicate catalogue lands; it is \
-                  refused rather than ignored.",
-        beginner: "Which job a beacon has can't be asked about yet.",
+        message: "predicate `beacon_mandate` had no effect until S3's predicate catalogue landed; this code is \
+                  retired and raised by nothing.",
+        beginner: "Which job a beacon has can be asked about in this build.",
     },
     Text {
         code: "E0022",
-        message: "predicate `beacon_has_structure` has no effect until S3's predicate catalogue lands; it is \
-                  refused rather than ignored.",
-        beginner: "Whether a beacon has a finished building can't be asked about yet.",
+        message: "predicate `beacon_has_structure` had no effect until S3's predicate catalogue landed; this code is \
+                  retired and raised by nothing.",
+        beginner: "Whether a beacon has a finished building can be asked about in this build.",
     },
     Text {
         code: "E0023",
-        message: "predicate `enemy_units_near` has no effect until S3's predicate catalogue lands; it is \
-                  refused rather than ignored.",
-        beginner: "Enemy units near a place can't be asked about yet.",
+        message: "predicate `enemy_units_near` had no effect until S3's predicate catalogue landed; this code is \
+                  retired and raised by nothing.",
+        beginner: "Enemy units near a place can be asked about in this build.",
     },
     Text {
         code: "E0024",
-        message: "predicate `enemy_beacon_known` has no effect until S3's predicate catalogue lands; it is \
-                  refused rather than ignored.",
-        beginner: "Whether you know of an enemy beacon can't be asked about yet.",
+        message: "predicate `enemy_beacon_known` had no effect until S3's predicate catalogue landed; this code is \
+                  retired and raised by nothing.",
+        beginner: "Whether you know of an enemy beacon can be asked about in this build.",
     },
     Text {
         code: "E0025",
-        message: "predicate `enemy_structure_near` has no effect until S3's predicate catalogue lands; it is \
-                  refused rather than ignored.",
-        beginner: "Enemy buildings near a place can't be asked about yet.",
+        message: "predicate `enemy_structure_near` had no effect until S3's predicate catalogue landed; this code is \
+                  retired and raised by nothing.",
+        beginner: "Enemy buildings near a place can be asked about in this build.",
     },
     Text {
         code: "E0026",
-        message: "predicate `kw_supply` has no effect until S3's predicate catalogue lands; it is \
-                  refused rather than ignored.",
-        beginner: "Your power supply can't be asked about yet. Asking about headroom works.",
+        message: "predicate `kw_supply` had no effect until S3's predicate catalogue landed; this code is \
+                  retired and raised by nothing.",
+        beginner: "Your power supply can be asked about in this build.",
     },
     Text {
         code: "E0027",
-        message: "predicate `kw_draw` has no effect until S3's predicate catalogue lands; it is \
-                  refused rather than ignored.",
-        beginner: "Your power draw can't be asked about yet. Asking about headroom works.",
+        message: "predicate `kw_draw` had no effect until S3's predicate catalogue landed; this code is \
+                  retired and raised by nothing.",
+        beginner: "Your power draw can be asked about in this build.",
     },
     Text {
         code: "E0028",

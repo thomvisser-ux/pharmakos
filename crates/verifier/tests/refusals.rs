@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The sim's refusal table and this crate's codes for it, held to each other
-//! in both directions (S2's plan, E8).
+//! in both directions (S2's plan, E8); and, for the constructs S3's `pred`
+//! lifted, the sim's compile and this crate's verdict held to each other.
 //!
 //! The sim refuses at the seal every construct whose effect needs a later stage
 //! (`pharmakos_sim::interpreter::REFUSALS`); this crate refuses each of them by
@@ -112,17 +113,58 @@ fn codes(text: &str, rules: &RulesTable) -> Vec<(String, String)> {
         .collect()
 }
 
-/// S3's `con6`, held on both sides by one table: every construct `con6` put on
-/// the wire, written in every place it can stand, is refused by the sim's
-/// compile with its own table entry and by the verifier with that entry's code
-/// at the construct's own pointer. So none of them can be half-used, wherever it
-/// is written, until S3's `pred` lifts it.
-#[test]
-fn every_s3_construct_is_refused_in_every_place_it_can_stand() {
-    let mut cases = predicate_cases();
-    cases.append(&mut toward_cases());
-    assert_eq!(cases.len(), 8 * 5 + 9, "every construct in every place");
+/// The error-severity codes a QUICK check of `text` raises, each with its
+/// pointer.
+fn errors(text: &str, rules: &RulesTable) -> Vec<(String, String)> {
+    let snapshot = Snapshot {
+        version: SNAPSHOT_VERSION,
+        ..Snapshot::default()
+    }
+    .to_bytes()
+    .expect("an empty snapshot encodes");
+    let scope = Scope::new(SeatId::new(0), SeatEconomy::default());
+    let input = Input::new(text.as_bytes(), &snapshot, &scope, rules).expect("an input");
+    verify(&input, Depth::Quick)
+        .diagnostics
+        .into_iter()
+        .filter(|found| found.severity == i32::from(Severity::Error))
+        .map(|found| (found.code, found.path))
+        .collect()
+}
 
+/// S3's `con6` put eight predicates on the wire, and S3's `pred` gave them
+/// their effect and retired `E0020` to `E0027` in one change (item 157). The
+/// agreement, held by one table: every predicate, written in every place a
+/// condition is read, compiles in the sim and qualifies at the verifier, and
+/// no code of `con6`'s is raised anywhere. A verifier that kept a code the sim
+/// lifted would refuse a playbook the sim seals; one that dropped a check the
+/// sim keeps would qualify one the sim refuses (risk R4).
+#[test]
+fn every_s3_predicate_compiles_and_qualifies_in_every_place_it_can_stand() {
+    let cases = predicate_cases();
+    assert_eq!(cases.len(), 8 * 5, "every predicate in every place");
+    let rules = rules();
+    for (step, handlers, fallback, at, _) in cases {
+        let text = playbook_with(&step, &handlers, &fallback);
+        let found = errors(&text, &rules);
+        assert!(
+            found.is_empty(),
+            "{at}: a well-formed predicate qualifies, among {found:?}"
+        );
+        let decoded: Playbook = json::decode(&text).expect("the case decodes");
+        if let Err(error) = Plan::compile(&decoded, &rules) {
+            panic!("{at}: the sim compiles it too, not {error}");
+        }
+    }
+}
+
+/// `toward`, until S3's `pred` gives it its site search: in every place a
+/// `Location` is compiled it is refused by the sim's table entry and by the
+/// verifier's `E0028` at its own pointer.
+#[test]
+fn toward_is_refused_in_every_place_it_can_stand() {
+    let cases = toward_cases();
+    assert_eq!(cases.len(), 9, "toward in every place");
     let rules = rules();
     for (step, handlers, fallback, at, code) in cases {
         let text = playbook_with(&step, &handlers, &fallback);
@@ -130,12 +172,6 @@ fn every_s3_construct_is_refused_in_every_place_it_can_stand() {
         assert!(
             found.contains(&(code.to_owned(), at.clone())),
             "{code} at {at}, among {found:?}"
-        );
-        assert!(
-            found
-                .iter()
-                .all(|(other, _)| !other.starts_with("E002") || other == code),
-            "only {code} of con6's codes at {at}: {found:?}"
         );
         let decoded: Playbook = json::decode(&text).expect("the case decodes");
         let error = Plan::compile(&decoded, &rules).expect_err("the sim refuses it too");
@@ -164,6 +200,7 @@ fn predicate_cases() -> Vec<PlaceCase> {
             r#"{{"id": "h", "when": {when}, "body": [{body}], "resume": "CONTINUE", "cooldown_ms": 5000, "max_fires": 1}}"#
         )
     };
+    // (name, the code `con6` refused it by until S3's `pred`, its body)
     let predicates: [(&str, &str, &str); 8] = [
         (
             "beacon_units_by_role",

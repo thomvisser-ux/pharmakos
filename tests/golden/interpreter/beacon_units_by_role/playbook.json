@@ -1,0 +1,16 @@
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {"title": "Units by role at the core", "author_kind": "HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {"label": "drones", "skip_if": {"beacon_units_by_role": {"beacon": {"beacon_id": "b_00"}, "role": "BUILD_DRONE", "count": {"op": "GE", "value": 1}}}, "hold": {"ms": 1000}},
+      {"label": "repairers", "skip_if": {"beacon_units_by_role": {"beacon": {"beacon_id": "b_00"}, "role": "REPAIR_DRONE", "count": {"op": "GE", "value": 1}}}, "hold": {"ms": 1000}},
+      {"label": "scouts", "skip_if": {"beacon_units_by_role": {"beacon": {"beacon_id": "b_00"}, "role": "SCOUT", "count": {"op": "GE", "value": 1}}}, "hold": {"ms": 1000}},
+      {"label": "fielded", "wait_until": {"condition": {"beacon_units_by_role": {"beacon": {"beacon_id": "b_00"}, "role": "SCOUT", "count": {"op": "EQ", "value": 1}}}}, "timeout_ms": 12000}
+    ],
+    "handlers": []
+  },
+  "on_death": {"on_respawn": "CONTINUE", "max_deaths_before_fallback": 1},
+  "fallback": {"hold": {"at": {"safest": {}}}}
+}

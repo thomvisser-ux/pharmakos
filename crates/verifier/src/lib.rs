@@ -321,8 +321,11 @@ pub const fn is_too_long_in_bytes(bytes: usize) -> bool {
 /// (`I0003`, S3's plan, decision 8), and refuses an enemy beacon's handle
 /// anywhere but an Attack target (`E0421`, which retires `W0703`), so its
 /// reports are not comparable with
-/// `0.1.0-s3.2`'s.
-pub const VERIFIER_VERSION: &str = "0.1.0-s3.3";
+/// `0.1.0-s3.2`'s. `0.1.0-s3.4` from S3's `pred`: the sim's compile gives the
+/// eight predicates and `toward` their effect, so this build retires `E0020`
+/// to `E0028` and qualifies each construct the checks `vfy6` built behind
+/// them pass, so its reports are not comparable with `0.1.0-s3.3`'s.
+pub const VERIFIER_VERSION: &str = "0.1.0-s3.4";
 
 /// Everything one verification is a function of, apart from the depth.
 ///

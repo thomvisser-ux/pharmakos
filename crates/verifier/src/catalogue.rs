@@ -397,54 +397,56 @@ pub const CATALOGUE: &[Entry] = &[
     },
     // S3's second wire (task `con6`): eight predicates and the site `toward`,
     // on the wire before S3's `pred` gives them an effect, one code each, as
-    // `E0009` to `E0017` are ([`crate::refusals`]; S2's plan, E8).
+    // `E0009` to `E0017` are ([`crate::refusals`]; S2's plan, E8). S3's
+    // `pred` built them and retired each code: the rows keep their numbers,
+    // raised by nothing.
     Entry {
         code: "E0020",
         family: Family::DecodeAndVersion,
         severity: Severity::Error,
-        emitter: Emitter::Stage(Stage::Structure),
+        emitter: Emitter::NoneYet("retired by S3's `pred`, which built `beacon_units_by_role`"),
     },
     Entry {
         code: "E0021",
         family: Family::DecodeAndVersion,
         severity: Severity::Error,
-        emitter: Emitter::Stage(Stage::Structure),
+        emitter: Emitter::NoneYet("retired by S3's `pred`, which built `beacon_mandate`"),
     },
     Entry {
         code: "E0022",
         family: Family::DecodeAndVersion,
         severity: Severity::Error,
-        emitter: Emitter::Stage(Stage::Structure),
+        emitter: Emitter::NoneYet("retired by S3's `pred`, which built `beacon_has_structure`"),
     },
     Entry {
         code: "E0023",
         family: Family::DecodeAndVersion,
         severity: Severity::Error,
-        emitter: Emitter::Stage(Stage::Structure),
+        emitter: Emitter::NoneYet("retired by S3's `pred`, which built `enemy_units_near`"),
     },
     Entry {
         code: "E0024",
         family: Family::DecodeAndVersion,
         severity: Severity::Error,
-        emitter: Emitter::Stage(Stage::Structure),
+        emitter: Emitter::NoneYet("retired by S3's `pred`, which built `enemy_beacon_known`"),
     },
     Entry {
         code: "E0025",
         family: Family::DecodeAndVersion,
         severity: Severity::Error,
-        emitter: Emitter::Stage(Stage::Structure),
+        emitter: Emitter::NoneYet("retired by S3's `pred`, which built `enemy_structure_near`"),
     },
     Entry {
         code: "E0026",
         family: Family::DecodeAndVersion,
         severity: Severity::Error,
-        emitter: Emitter::Stage(Stage::Structure),
+        emitter: Emitter::NoneYet("retired by S3's `pred`, which built `kw_supply`"),
     },
     Entry {
         code: "E0027",
         family: Family::DecodeAndVersion,
         severity: Severity::Error,
-        emitter: Emitter::Stage(Stage::Structure),
+        emitter: Emitter::NoneYet("retired by S3's `pred`, which built `kw_draw`"),
     },
     Entry {
         code: "E0028",

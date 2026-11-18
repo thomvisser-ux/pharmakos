@@ -1,0 +1,15 @@
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {"title": "The seat's power supply", "author_kind": "HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {"label": "core", "skip_if": {"kw_supply": {"kw": {"op": "EQ", "value": 10}}}, "hold": {"ms": 1000}},
+      {"label": "more", "skip_if": {"kw_supply": {"kw": {"op": "GT", "value": 10}}}, "hold": {"ms": 1000}},
+      {"label": "generator", "wait_until": {"condition": {"kw_supply": {"kw": {"op": "GT", "value": 10}}}}, "timeout_ms": 12000}
+    ],
+    "handlers": []
+  },
+  "on_death": {"on_respawn": "CONTINUE", "max_deaths_before_fallback": 1},
+  "fallback": {"hold": {"at": {"safest": {}}}}
+}

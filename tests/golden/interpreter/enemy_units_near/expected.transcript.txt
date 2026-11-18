@@ -1,0 +1,12 @@
+# tick	seq	kind	seat	subject	value
+0	0	match_started	-	-	60000
+0	1	lull_opened	-	-	1
+0	2	plan_sealed	0	-	3
+0	3	push_started	-	-	60000
+1	0	step_started	0	-	0
+41	0	step_completed	0	-	0
+46	0	step_started	0	-	1
+121	0	unit_fabricated	1	12	4
+161	0	step_completed	0	-	1
+166	0	step_skipped	0	-	2
+166	1	fallback_engaged	0	-	1

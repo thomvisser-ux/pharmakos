@@ -829,6 +829,53 @@ pub enum Cond {
     StepReached(u32),
     /// Whether a handler has fired, by handler index.
     RuleFired(u32),
+    /// `beacon_units_by_role`: how many living units of one role are homed to
+    /// a beacon (S3's `pred`).
+    BeaconUnitsByRole(BeaconSpec, crate::tables::UnitKind, Cmp, i64),
+    /// `beacon_mandate`: whether a beacon carries a writ.
+    BeaconMandate(BeaconSpec, MandateKind),
+    /// `beacon_has_structure`: whether a beacon has a finished, living
+    /// structure of a kind homed to it.
+    BeaconHasStructure(BeaconSpec, crate::tables::StructureKind),
+    /// `enemy_units_near`: how many enemy units (commanders included) the
+    /// seat remembers within a radius of a place, under a freshness window.
+    EnemyUnitsNear(Near, u32, Cmp, i64, Freshness),
+    /// `enemy_beacon_known`: whether the seat remembers any enemy beacon
+    /// under a freshness window.
+    EnemyBeaconKnown(Freshness),
+    /// `enemy_structure_near`: whether the seat remembers an enemy structure
+    /// of a kind, or of any kind (`None`), within a radius of a place, under a
+    /// freshness window.
+    EnemyStructureNear(Near, u32, Option<crate::tables::StructureKind>, Freshness),
+    /// `kw_supply`: the seat's whole power supply, in whole `kW`.
+    KwSupply(Cmp, i64),
+    /// `kw_draw`: the seat's whole power draw, in whole `kW`.
+    KwDraw(Cmp, i64),
+}
+
+/// The place an enemy predicate measures from (`gp.v1.NearPlace`): a fixed
+/// voxel, or the anchor of the own beacon a selector picks (`safest` is
+/// `Beacon(BeaconSpec::Safest)`). A selector resolves at every evaluation, as
+/// every condition's does.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Near {
+    /// Whole voxel coordinates, checked as [`Place::Voxel`]'s are.
+    Voxel([i16; 3]),
+    /// The anchor of whichever own beacon the selector picks.
+    Beacon(BeaconSpec),
+}
+
+/// How fresh a sighting must be for an enemy predicate to count it
+/// (`gp.v1.Freshness`; spec section 10, "Knowledge").
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Freshness {
+    /// Seen on this decision tick's look: sightings are recorded on every
+    /// decision tick before the decision phase reads them
+    /// ([`crate::survey::record_sightings`], run from the programs phase), so
+    /// "visible now" is a sighting whose tick is the current one.
+    VisibleNow,
+    /// Seen within this many game milliseconds, inclusive: at least 1.
+    KnownWithin(Ms),
 }
 
 /// A compiled playbook: an **input** to the sim, never hashed state.
@@ -2550,14 +2597,178 @@ fn compile_cond(
                 .ok_or_else(|| PlanError::UnknownHandler(predicate.handler_id.clone()))?;
             Ok(Cond::RuleFired(index))
         }
-        gp::v1::condition::Node::BeaconUnitsByRole(_) => Err(REFUSE_BEACON_UNITS_BY_ROLE.error()),
-        gp::v1::condition::Node::BeaconMandate(_) => Err(REFUSE_BEACON_MANDATE.error()),
-        gp::v1::condition::Node::BeaconHasStructure(_) => Err(REFUSE_BEACON_HAS_STRUCTURE.error()),
-        gp::v1::condition::Node::EnemyUnitsNear(_) => Err(REFUSE_ENEMY_UNITS_NEAR.error()),
-        gp::v1::condition::Node::EnemyBeaconKnown(_) => Err(REFUSE_ENEMY_BEACON_KNOWN.error()),
-        gp::v1::condition::Node::EnemyStructureNear(_) => Err(REFUSE_ENEMY_STRUCTURE_NEAR.error()),
-        gp::v1::condition::Node::KwSupply(_) => Err(REFUSE_KW_SUPPLY.error()),
-        gp::v1::condition::Node::KwDraw(_) => Err(REFUSE_KW_DRAW.error()),
+        // S3's predicates (S3's plan, decision 2; task `pred`). Each reads
+        // the seat's own knowledge only: its own beacons and economy, or its
+        // own sighting table ([`cond`]).
+        gp::v1::condition::Node::BeaconUnitsByRole(predicate) => {
+            let beacon = compile_beacon_ref(predicate.beacon.as_ref(), names)?;
+            let role = compile_role(predicate.role)?;
+            let (cmp, value) = int_compare(predicate.count.as_ref(), "beacon_units_by_role.count")?;
+            Ok(Cond::BeaconUnitsByRole(beacon, role, cmp, value))
+        }
+        gp::v1::condition::Node::BeaconMandate(predicate) => {
+            let beacon = compile_beacon_ref(predicate.beacon.as_ref(), names)?;
+            let mandate = compile_mandate_kind(predicate.mandate, "beacon_mandate.mandate")?;
+            Ok(Cond::BeaconMandate(beacon, mandate))
+        }
+        gp::v1::condition::Node::BeaconHasStructure(predicate) => {
+            let beacon = compile_beacon_ref(predicate.beacon.as_ref(), names)?;
+            let kind =
+                compile_blueprint(&predicate.blueprint_id, "beacon_has_structure.blueprint_id")?;
+            Ok(Cond::BeaconHasStructure(beacon, kind))
+        }
+        gp::v1::condition::Node::EnemyUnitsNear(predicate) => {
+            let near = compile_near(predicate.near.as_ref(), names, "enemy_units_near.near")?;
+            let radius = compile_radius(predicate.radius_voxels, "enemy_units_near.radius_voxels")?;
+            let (cmp, value) = int_compare(predicate.count.as_ref(), "enemy_units_near.count")?;
+            let fresh =
+                compile_freshness(predicate.freshness.as_ref(), "enemy_units_near.freshness")?;
+            Ok(Cond::EnemyUnitsNear(near, radius, cmp, value, fresh))
+        }
+        gp::v1::condition::Node::EnemyBeaconKnown(predicate) => Ok(Cond::EnemyBeaconKnown(
+            compile_freshness(predicate.freshness.as_ref(), "enemy_beacon_known.freshness")?,
+        )),
+        gp::v1::condition::Node::EnemyStructureNear(predicate) => {
+            let near = compile_near(predicate.near.as_ref(), names, "enemy_structure_near.near")?;
+            let radius = compile_radius(
+                predicate.radius_voxels,
+                "enemy_structure_near.radius_voxels",
+            )?;
+            let kind = match predicate.structure.as_ref() {
+                Some(gp::v1::enemy_structure_near::Structure::BlueprintId(id)) => {
+                    Some(compile_blueprint(id, "enemy_structure_near.blueprint_id")?)
+                }
+                Some(gp::v1::enemy_structure_near::Structure::AnyKind(_)) => None,
+                None => return Err(PlanError::MissingBlock("enemy_structure_near.structure")),
+            };
+            let fresh = compile_freshness(
+                predicate.freshness.as_ref(),
+                "enemy_structure_near.freshness",
+            )?;
+            Ok(Cond::EnemyStructureNear(near, radius, kind, fresh))
+        }
+        gp::v1::condition::Node::KwSupply(predicate) => {
+            let (cmp, value) = int_compare(predicate.kw.as_ref(), "kw_supply.kw")?;
+            Ok(Cond::KwSupply(cmp, value))
+        }
+        gp::v1::condition::Node::KwDraw(predicate) => {
+            let (cmp, value) = int_compare(predicate.kw.as_ref(), "kw_draw.kw")?;
+            Ok(Cond::KwDraw(cmp, value))
+        }
+    }
+}
+
+/// `beacon_units_by_role.role`: the unit kind a role names. The commander has
+/// no beacon, so it has no role (`BeaconUnitsByRole.Role`).
+fn compile_role(role: i32) -> Result<crate::tables::UnitKind, PlanError> {
+    use crate::tables::UnitKind;
+    use gp::v1::beacon_units_by_role::Role;
+    match Role::try_from(role) {
+        Ok(Role::Unspecified) => Err(PlanError::UnsetEnum("beacon_units_by_role.role")),
+        Ok(Role::BuildDrone) => Ok(UnitKind::BuildDrone),
+        Ok(Role::MiningDrone) => Ok(UnitKind::MiningDrone),
+        Ok(Role::RepairDrone) => Ok(UnitKind::RepairDrone),
+        Ok(Role::Raider) => Ok(UnitKind::Raider),
+        Ok(Role::Scout) => Ok(UnitKind::Scout),
+        Err(_) => Err(PlanError::UnknownEnum {
+            field: "beacon_units_by_role.role",
+            value: role,
+        }),
+    }
+}
+
+/// A predicate's writ: unlike `BeaconFilter.mandate`, an unset one is an error
+/// here, never "any writ" (`BeaconMandate.mandate`).
+fn compile_mandate_kind(mandate: i32, field: &'static str) -> Result<MandateKind, PlanError> {
+    use gp::v1::beacon_filter::MandateKind as Wire;
+    match Wire::try_from(mandate) {
+        Ok(Wire::Unspecified) => Err(PlanError::UnsetEnum(field)),
+        Ok(Wire::Build) => Ok(MandateKind::Build),
+        Ok(Wire::Defend) => Ok(MandateKind::Defend),
+        Ok(Wire::Attack) => Ok(MandateKind::Attack),
+        Ok(Wire::Survey) => Ok(MandateKind::Survey),
+        Ok(Wire::Mine) => Ok(MandateKind::Mine),
+        Err(_) => Err(PlanError::UnknownEnum {
+            field,
+            value: mandate,
+        }),
+    }
+}
+
+/// A predicate's blueprint id: written, and naming a kind this build defines.
+/// Any kind may be asked about, whether a slot can build it or not: which
+/// beacon has what is the Push's to answer (the verifier's `E0101` and
+/// `E0506`).
+fn compile_blueprint(
+    id: &str,
+    field: &'static str,
+) -> Result<crate::tables::StructureKind, PlanError> {
+    if id.is_empty() {
+        return Err(PlanError::MissingBlock(field));
+    }
+    crate::tables::StructureKind::from_blueprint_id(id)
+        .ok_or_else(|| PlanError::UnknownBlueprint(id.to_owned()))
+}
+
+/// An enemy predicate's `near`: a voxel on the map, or an own beacon by
+/// selector (`safest` among them).
+fn compile_near(
+    near: Option<&gp::v1::NearPlace>,
+    names: &Names<'_>,
+    field: &'static str,
+) -> Result<Near, PlanError> {
+    let near = near.ok_or(PlanError::MissingBlock(field))?;
+    match near.place.as_ref() {
+        Some(gp::v1::near_place::Place::Voxel(voxel)) => Ok(Near::Voxel(names.voxel(voxel)?)),
+        Some(gp::v1::near_place::Place::BeaconAnchor(reference)) => {
+            Ok(Near::Beacon(compile_beacon_ref(Some(reference), names)?))
+        }
+        Some(gp::v1::near_place::Place::Safest(_)) => Ok(Near::Beacon(BeaconSpec::Safest)),
+        None => Err(PlanError::MissingBlock("near.place")),
+    }
+}
+
+/// An enemy predicate's radius in whole voxels: required, so 0 is refused
+/// rather than read as "nothing is near". Every other `u32` is a radius, the
+/// largest included: the evaluation compares squared distances in `i128`
+/// ([`cond`]), so no radius saturates.
+fn compile_radius(radius: u32, field: &'static str) -> Result<u32, PlanError> {
+    if radius == 0 {
+        return Err(PlanError::NoRadius(field));
+    }
+    Ok(radius)
+}
+
+/// An enemy predicate's freshness, which is required (spec section 10:
+/// "enemy predicates must declare freshness"): `VISIBLE_NOW` with no window,
+/// or `KNOWN_WITHIN` a positive window of game milliseconds, `i32::MAX`
+/// included.
+fn compile_freshness(
+    freshness: Option<&gp::v1::Freshness>,
+    field: &'static str,
+) -> Result<Freshness, PlanError> {
+    use gp::v1::freshness::Kind;
+    let freshness = freshness.ok_or(PlanError::MissingBlock(field))?;
+    match Kind::try_from(freshness.kind) {
+        Ok(Kind::FreshnessUnspecified) => Err(PlanError::UnsetEnum("freshness.kind")),
+        Ok(Kind::VisibleNow) => {
+            if freshness.known_within_ms == 0 {
+                Ok(Freshness::VisibleNow)
+            } else {
+                Err(PlanError::WindowUnderVisibleNow {
+                    found: freshness.known_within_ms,
+                })
+            }
+        }
+        Ok(Kind::KnownWithin) => match freshness.known_within_ms {
+            0 => Err(PlanError::MissingBlock("freshness.known_within_ms")),
+            ms if ms < 0 => Err(PlanError::NegativeDuration("freshness.known_within_ms")),
+            ms => Ok(Freshness::KnownWithin(Ms::new(ms))),
+        },
+        Err(_) => Err(PlanError::UnknownEnum {
+            field: "freshness.kind",
+            value: freshness.kind,
+        }),
     }
 }
 
@@ -2594,6 +2805,18 @@ pub enum PlanError {
     },
     /// A step names no action at all.
     StepWithoutAction,
+    /// A predicate names a blueprint id no kind of this build has (the
+    /// verifier's `E0506`; S3's `pred`).
+    UnknownBlueprint(String),
+    /// An enemy predicate's radius is 0, which is no radius: the radius is
+    /// required (the verifier's `E0101`; S3's `pred`).
+    NoRadius(&'static str),
+    /// A freshness of `VISIBLE_NOW` carries a window, which it does not read
+    /// (the verifier's `E0210`; S3's `pred`).
+    WindowUnderVisibleNow {
+        /// The window written.
+        found: i32,
+    },
     /// A duration is negative. The verifier rejects one with a code and a JSON
     /// Pointer; this is the sim's own door (item 46).
     NegativeDuration(&'static str),
@@ -2775,12 +2998,14 @@ pub enum PlanError {
     /// | a Build target (or a removal) anchored on a beacon selector rather than on a voxel or `on` a vent | S3 |
     /// | selector filter `side: ENEMY_KNOWN` | S3 |
     /// | selector filter `tags` | S3 |
-    /// | predicates `beacon_units_by_role`, `beacon_mandate`, `beacon_has_structure`, `enemy_units_near`, `enemy_beacon_known`, `enemy_structure_near`, `kw_supply` and `kw_draw` | S3 (`pred`) |
     /// | site `toward`, wherever a `Location` is read | S3 (`pred`) |
     ///
     /// S2's `dfnd` lifted Defend's settings, `most_threatened` and
     /// `beacon_under_attack`, and S2's `atk` Attack's settings, which have
-    /// their effect now.
+    /// their effect now; S3's `pred` lifted the eight predicates S3's `con6`
+    /// put on the wire (`beacon_units_by_role`, `beacon_mandate`,
+    /// `beacon_has_structure`, `enemy_units_near`, `enemy_beacon_known`,
+    /// `enemy_structure_near`, `kw_supply` and `kw_draw`).
     ///
     /// Targeting's `on` and `covering`, refused here until S1's targeting
     /// behaviour landed (S1's plan, task `con2`), now have their effect and
@@ -2879,66 +3104,6 @@ pub const REFUSE_FILTER_TAGS: Refusal = Refusal {
             writing tags is legal, reading them is not)",
 };
 
-/// The stage S3's predicates take their reading at: on the wire from `con6`,
-/// evaluated from `pred`.
-const PREDICATE_STAGE: &str = "S3 (the predicate catalogue, which gives it a reading)";
-
-/// The predicate `beacon_units_by_role`: S3.
-pub const REFUSE_BEACON_UNITS_BY_ROLE: Refusal = Refusal {
-    name: "predicate_beacon_units_by_role",
-    construct: "predicate `beacon_units_by_role`",
-    stage: PREDICATE_STAGE,
-};
-
-/// The predicate `beacon_mandate`: S3.
-pub const REFUSE_BEACON_MANDATE: Refusal = Refusal {
-    name: "predicate_beacon_mandate",
-    construct: "predicate `beacon_mandate`",
-    stage: PREDICATE_STAGE,
-};
-
-/// The predicate `beacon_has_structure`: S3.
-pub const REFUSE_BEACON_HAS_STRUCTURE: Refusal = Refusal {
-    name: "predicate_beacon_has_structure",
-    construct: "predicate `beacon_has_structure`",
-    stage: PREDICATE_STAGE,
-};
-
-/// The predicate `enemy_units_near`: S3.
-pub const REFUSE_ENEMY_UNITS_NEAR: Refusal = Refusal {
-    name: "predicate_enemy_units_near",
-    construct: "predicate `enemy_units_near`",
-    stage: PREDICATE_STAGE,
-};
-
-/// The predicate `enemy_beacon_known`: S3.
-pub const REFUSE_ENEMY_BEACON_KNOWN: Refusal = Refusal {
-    name: "predicate_enemy_beacon_known",
-    construct: "predicate `enemy_beacon_known`",
-    stage: PREDICATE_STAGE,
-};
-
-/// The predicate `enemy_structure_near`: S3.
-pub const REFUSE_ENEMY_STRUCTURE_NEAR: Refusal = Refusal {
-    name: "predicate_enemy_structure_near",
-    construct: "predicate `enemy_structure_near`",
-    stage: PREDICATE_STAGE,
-};
-
-/// The predicate `kw_supply`: S3.
-pub const REFUSE_KW_SUPPLY: Refusal = Refusal {
-    name: "predicate_kw_supply",
-    construct: "predicate `kw_supply`",
-    stage: PREDICATE_STAGE,
-};
-
-/// The predicate `kw_draw`: S3.
-pub const REFUSE_KW_DRAW: Refusal = Refusal {
-    name: "predicate_kw_draw",
-    construct: "predicate `kw_draw`",
-    stage: PREDICATE_STAGE,
-};
-
 /// The site `toward`: S3.
 pub const REFUSE_TOWARD: Refusal = Refusal {
     name: "site_toward",
@@ -2948,20 +3113,12 @@ pub const REFUSE_TOWARD: Refusal = Refusal {
 
 /// Every construct the compile refuses for its stage, in the order
 /// [`PlanError::NotAtThisStage`]'s documentation lists them (E8).
-pub const REFUSALS: [Refusal; 14] = [
+pub const REFUSALS: [Refusal; 6] = [
     REFUSE_QUEUE_STRUCTURE,
     REFUSE_BUILD_BLUEPRINT,
     REFUSE_BUILD_BEACON_ANCHOR,
     REFUSE_ENEMY_KNOWN,
     REFUSE_FILTER_TAGS,
-    REFUSE_BEACON_UNITS_BY_ROLE,
-    REFUSE_BEACON_MANDATE,
-    REFUSE_BEACON_HAS_STRUCTURE,
-    REFUSE_ENEMY_UNITS_NEAR,
-    REFUSE_ENEMY_BEACON_KNOWN,
-    REFUSE_ENEMY_STRUCTURE_NEAR,
-    REFUSE_KW_SUPPLY,
-    REFUSE_KW_DRAW,
     REFUSE_TOWARD,
 ];
 
@@ -2995,6 +3152,17 @@ impl core::fmt::Display for PlanError {
                  is refused rather than defaulted"
             ),
             PlanError::StepWithoutAction => write!(f, "a step names no action"),
+            PlanError::UnknownBlueprint(id) => {
+                write!(f, "`{id}` names no blueprint this build knows")
+            }
+            PlanError::NoRadius(name) => write!(
+                f,
+                "`{name}` is 0, which is no radius; an enemy predicate's radius is required"
+            ),
+            PlanError::WindowUnderVisibleNow { found } => write!(
+                f,
+                "`known_within_ms` is {found} ms, and a freshness of VISIBLE_NOW reads no window"
+            ),
             PlanError::NegativeDuration(name) => {
                 write!(f, "`{name}` is negative; durations are game milliseconds")
             }

@@ -1,0 +1,16 @@
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {"title": "An enemy structure near the core", "author_kind": "HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {"label": "generator", "skip_if": {"enemy_structure_near": {"near": {"beacon_anchor": {"beacon_id": "b_00"}}, "radius_voxels": 24, "blueprint_id": "generator", "freshness": {"kind": "VISIBLE_NOW"}}}, "hold": {"ms": 1000}},
+      {"label": "mortar", "skip_if": {"enemy_structure_near": {"near": {"beacon_anchor": {"beacon_id": "b_00"}}, "radius_voxels": 24, "blueprint_id": "mortar", "freshness": {"kind": "VISIBLE_NOW"}}}, "hold": {"ms": 1000}},
+      {"label": "any_far", "skip_if": {"enemy_structure_near": {"near": {"voxel": {"x": 0, "y": 0, "z": 0}}, "radius_voxels": 8, "any_kind": {}, "freshness": {"kind": "VISIBLE_NOW"}}}, "hold": {"ms": 1000}},
+      {"label": "any_near", "skip_if": {"enemy_structure_near": {"near": {"safest": {}}, "radius_voxels": 24, "any_kind": {}, "freshness": {"kind": "KNOWN_WITHIN", "known_within_ms": 1000}}}, "hold": {"ms": 1000}}
+    ],
+    "handlers": []
+  },
+  "on_death": {"on_respawn": "CONTINUE", "max_deaths_before_fallback": 1},
+  "fallback": {"hold": {"at": {"safest": {}}}}
+}
