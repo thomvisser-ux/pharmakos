@@ -45,7 +45,8 @@
                   "voxel",
                   "beacon_anchor",
                   "safest",
-                  "covering"
+                  "covering",
+                  "toward"
                 ]
               }
             },

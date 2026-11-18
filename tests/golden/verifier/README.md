@@ -365,3 +365,31 @@ other slot that names one of the seat's own beacons. That retires `W0703`,
 whose one case, `w0703_a_reference_resting_on_an_old_sighting`, is gone with
 its golden: its `move` to `e_01` is now `e0421_a_move_to_an_enemy_beacon`, on
 the plain fixture. `W0703`'s row keeps its number and is raised by nothing.
+
+**S3's `pred` (`VERIFIER_VERSION` 0.1.0-s3.4, `SNAPSHOT_VERSION` 16).** Every
+`report_hash` moved, for two of its five inputs: `VERIFIER_VERSION` went from
+`0.1.0-s3.3` to `0.1.0-s3.4` (input 4), and the fixture snapshot's bytes moved
+(input 3), because version 16 adds two columns to every snapshot, the explored
+table's ticks and the sightings' blueprints (empty lists are bytes too). The
+sim's compile gives the eight predicates and `toward` their effect, so
+`E0020` to `E0028` are retired: their catalogue rows keep their numbers with
+no emitter, their sentences say they are retired, and their nine cases,
+`e0020_a_units_by_role_predicate` to `e0028_a_site_toward_a_vent`, are gone
+with their goldens. The S3 cases `vfy6` added lose the `E002x` diagnostic each
+carried beside its own error, which stands (`e0101_an_enemy_predicate_without_its_radius`,
+`e0111_a_predicate_with_its_role_unset`, `e0209_an_enemy_predicate_without_its_freshness`,
+`e0210_a_window_under_visible_now`, `e0412_toward_an_unknown_feature`,
+`e0420_toward_in_a_move` and `e0506_a_predicate_naming_no_blueprint`). No
+other diagnostic moved. The catalogue moved by the nine rows' emitters and
+sentences.
+
+**S3's `pred`, fix pass 1 (`E0514`).** `beacon_has_structure` and
+`enemy_structure_near` name only a kind a structure row can be: a wall is
+voxels and nothing raises a Survey post, so a predicate naming either could
+never be true, and the structure stage refuses it as `E0514`, appended at the
+end of the settings family, as the sim's compile does
+(`PlanError::BlueprintNeverStands`) and as the vocabulary's pickers leave it
+out. One case is new, on the plain fixture: `e0514_a_predicate_about_a_wall`.
+The catalogue moved by the new row; no existing report moved (a new row is not
+one of `report_hash`'s inputs, and `VERIFIER_VERSION` stays `0.1.0-s3.4`,
+which `main` has not seen).

@@ -227,7 +227,18 @@ use serde::{Deserialize, Serialize};
 /// refused rather than read: it carries no licence, and a world restored from
 /// it would refuse a Spire's queue the unbroken run accepted. The gateway's
 /// save refuses a version-14 snapshot by its stamp first.
-pub const SNAPSHOT_VERSION: u32 = 15;
+///
+/// **Version 16 is S3's predicates and Survey's re-scan** (S3's plan, task
+/// `pred`, decision 7). It adds two columns: the tick each explored cell was
+/// last explored on (`explored_at`), which decides when a Survey scout scans
+/// it again, and the blueprint each remembered structure was seen as
+/// (`sighting_blueprint`), which `enemy_structure_near` reads. A version-15
+/// file is refused rather than read, by its version before anything else is
+/// decoded ([`Snapshot::from_bytes`]): it carries no explore tick, and a
+/// world restored from it would send a scout to a cell the unbroken run held
+/// fresh, or none to one it held due. The gateway's save refuses a version-15
+/// snapshot by its stamp first.
+pub const SNAPSHOT_VERSION: u32 = 16;
 
 /// A flat, fixed-width projection of the world.
 ///
@@ -475,6 +486,10 @@ pub struct Snapshot {
     pub sighting_owner: Vec<u8>,
     /// [`crate::knowledge::AssetKind::id`] per sighting.
     pub sighting_kind: Vec<u8>,
+    /// S3's `pred` (version 16): the [`crate::tables::StructureKind::id`] a
+    /// remembered structure was seen as, or
+    /// [`crate::tables::NO_BLUEPRINT`] for any other sighting.
+    pub sighting_blueprint: Vec<u8>,
     /// Three raw Q16.16 coordinates per sighting.
     pub sighting_at: Vec<i32>,
     /// The tick each sighting was taken at.
@@ -638,6 +653,9 @@ pub struct Snapshot {
     pub explored_seat: Vec<u8>,
     /// The explored table's cell, per row.
     pub explored_cell: Vec<u32>,
+    /// S3's `pred` (version 16): the tick each explored row was last explored
+    /// on (decision 7's re-scan clock).
+    pub explored_at: Vec<u32>,
     /// S2's `atk` (version 14): the Attack table, its avoid areas and its
     /// planted charges.
     pub attack: crate::attack::AttackColumns,
@@ -773,6 +791,7 @@ impl Default for Snapshot {
             sighting_asset: Vec::new(),
             sighting_owner: Vec::new(),
             sighting_kind: Vec::new(),
+            sighting_blueprint: Vec::new(),
             sighting_at: Vec::new(),
             sighting_seen_at: Vec::new(),
             credit_asset: Vec::new(),
@@ -841,6 +860,7 @@ impl Default for Snapshot {
             defend_protect_of: Vec::new(),
             explored_seat: Vec::new(),
             explored_cell: Vec::new(),
+            explored_at: Vec::new(),
             attack: crate::attack::AttackColumns::default(),
             licence_seat: Vec::new(),
             licence_kind: Vec::new(),
@@ -1166,6 +1186,7 @@ impl Snapshot {
             sighting_asset: sightings.assets().to_vec(),
             sighting_owner: sightings.owners().to_vec(),
             sighting_kind: sightings.kinds().to_vec(),
+            sighting_blueprint: sightings.blueprints().to_vec(),
             sighting_at: axes_from_points(sightings.places()),
             sighting_seen_at: sightings.seen_at().to_vec(),
 
@@ -1260,6 +1281,7 @@ impl Snapshot {
             defend_protect_of: defend.protected().iter().map(|(_, of)| of.raw()).collect(),
             explored_seat: explored.rows().iter().map(|(seat, _)| *seat).collect(),
             explored_cell: explored.rows().iter().map(|(_, cell)| *cell).collect(),
+            explored_at: explored.explored_at().to_vec(),
             attack: crate::attack::AttackColumns::of(world.attack()),
             licence_seat: world.licences().rows().iter().map(|row| row.seat).collect(),
             licence_kind: world
@@ -1294,6 +1316,17 @@ impl Snapshot {
     /// Returns [`SnapshotError::Decode`] when the bytes are not a snapshot, or
     /// [`SnapshotError::Version`] when they are one this build cannot read.
     pub fn from_bytes(bytes: &[u8]) -> Result<Snapshot, SnapshotError> {
+        // The version is the first field, read alone before the rest: a file
+        // of another version has other columns, so decoding it whole would
+        // fail with a decode error that hides which version it was.
+        let (found, _) = postcard::take_from_bytes::<u32>(bytes)
+            .map_err(|error| SnapshotError::Decode(error.to_string()))?;
+        if found != SNAPSHOT_VERSION {
+            return Err(SnapshotError::Version {
+                found,
+                expected: SNAPSHOT_VERSION,
+            });
+        }
         let snapshot: Snapshot = postcard::from_bytes(bytes)
             .map_err(|error| SnapshotError::Decode(error.to_string()))?;
         if snapshot.version != SNAPSHOT_VERSION {
@@ -1648,6 +1681,11 @@ impl Snapshot {
     /// search assumes, so a file that broke it would restore into a table whose
     /// lookups silently missed.
     fn restore_sightings(&self, world: &World) -> Result<SightingTable, SnapshotError> {
+        // A sighting is taken on a tick already played (S3's `pred`, fix pass
+        // 1): freshness reads its age as the snapshot's tick less it.
+        if self.sighting_seen_at.iter().any(|seen| *seen > self.tick) {
+            return Err(SnapshotError::OutOfRange("sighting_seen_at"));
+        }
         let capacity = world.sightings().capacity();
         let mut sightings =
             SightingTable::with_room(world.seats().len(), world.sightings().per_seat());
@@ -1658,6 +1696,7 @@ impl Snapshot {
                 asset: self.sighting_asset.clone(),
                 owner: self.sighting_owner.clone(),
                 kind: self.sighting_kind.clone(),
+                blueprint: self.sighting_blueprint.clone(),
                 at: points_from_axes(&self.sighting_at)
                     .ok_or(SnapshotError::Ragged("sighting_at"))?,
                 seen_at: self.sighting_seen_at.clone(),
@@ -1735,7 +1774,7 @@ impl Snapshot {
         };
         let row_kind =
             |id: &u8| StructureKind::from_id(*id).is_some_and(|kind| kind != StructureKind::Wall);
-        let checks: [(&'static str, bool); 7] = [
+        let checks: [(&'static str, bool); 8] = [
             (
                 "unit_kind",
                 self.unit_kind
@@ -1774,6 +1813,21 @@ impl Snapshot {
                 self.sighting_kind
                     .iter()
                     .all(|id| crate::knowledge::AssetKind::from_id(*id).is_some()),
+            ),
+            (
+                // S3's `pred`: a structure's sighting names the kind of row it
+                // saw, and no other sighting names one.
+                "sighting_blueprint",
+                self.sighting_blueprint.len() == self.sighting_kind.len()
+                    && self.sighting_blueprint.iter().zip(&self.sighting_kind).all(
+                        |(blueprint, kind)| {
+                            if *kind == crate::knowledge::AssetKind::Structure.id() {
+                                row_kind(blueprint)
+                            } else {
+                                *blueprint == crate::tables::NO_BLUEPRINT
+                            }
+                        },
+                    ),
             ),
         ];
         // A seat byte names a seat the file carries; a sighting's owner and a
@@ -2487,8 +2541,14 @@ impl Snapshot {
     ///
     /// [`SnapshotError::Ragged`] and [`SnapshotError::OutOfRange`].
     fn restore_explored(&self) -> Result<crate::tables::ExploredTable, SnapshotError> {
-        if self.explored_seat.len() != self.explored_cell.len() {
+        if self.explored_seat.len() != self.explored_cell.len()
+            || self.explored_at.len() != self.explored_cell.len()
+        {
             return Err(SnapshotError::Ragged("explored"));
+        }
+        // A cell is explored on a tick already played.
+        if self.explored_at.iter().any(|at| *at > self.tick) {
+            return Err(SnapshotError::OutOfRange("explored_at"));
         }
         let seats = self.seat_id.len();
         if self
@@ -2505,7 +2565,7 @@ impl Snapshot {
             .copied()
             .zip(self.explored_cell.iter().copied())
             .collect();
-        if !table.restore(rows) {
+        if !table.restore(rows, self.explored_at.clone()) {
             return Err(SnapshotError::Ragged("explored"));
         }
         Ok(table)

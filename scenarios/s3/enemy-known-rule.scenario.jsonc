@@ -1,0 +1,57 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// S3's `pred` (S3's plan, task `pred`): a rule that asks about enemy units
+// fires on a fresh sighting and not on a stale one, on Probation's seed, 20,
+// in one eight-minute segment.
+//
+//   seat 0  seals scenarios/s3/enemy-known-rule.playbook.jsonc: its commander
+//           holds at the core, and one rule, `defend`, switches the core to
+//           Defend while the seat remembers an enemy unit within 30 voxels of
+//           the core seen no more than 10 s ago (`enemy_units_near`,
+//           KNOWN_WITHIN 10000);
+//   seat 1  seals scenarios/s3/enemy-known-rule.enemy.playbook.jsonc: its
+//           commander walks down the map to the edge of seat 0's core sphere,
+//           where the core sees it, and straight back out.
+//
+// The rule fires once, on the sighting the core takes. Its cooldown, 30 s, is
+// longer than the sighting stays fresh after the commander has gone, and the
+// seat still remembers it when the cooldown ends: a stale sighting, which the
+// rule never fires on. `event_fired` cannot assert that something did not
+// happen (register M-05), so the chain pins it: a second firing would move it.
+// The pull request that added this file showed the probe: with the rule's
+// `max_fires` cut from 4 to 1 the chain is byte-identical, so it fired once;
+// with its window widened to 120 s the same cut moves the chain, so a
+// fresh-enough memory would have fired it again after its cooldown.
+{
+  "format": "pharmakos.scenario.v1",
+  "name": "enemy-known-rule",
+  "summary": "Seat 0's Defend rule fires when its core sights seat 1's commander, and not again once that sighting is stale.",
+
+  "map": {
+    "seed": "0x0000000000000014",
+    "generator": "skeleton"
+  },
+
+  "rules": "rules/rules.v1.json",
+  "round_limit": 1,
+
+  "seats": [
+    { "seat": 0, "kind": "playbook", "playbook": "scenarios/s3/enemy-known-rule.playbook.jsonc" },
+    { "seat": 1, "kind": "playbook", "playbook": "scenarios/s3/enemy-known-rule.enemy.playbook.jsonc" }
+  ],
+
+  "segments": [
+    { "index": 0, "length_ms": 480000, "note": "The walk in, the sighting, the rule, the walk out and the stale memory." }
+  ],
+
+  "assertions": [
+    { "assert": "event_fired", "event": "rule_fired", "seat": 0, "by_tick": 7821,
+      "note": "The rule fires at tick 7821, on the sighting the core takes as seat 1's commander reaches the edge of its sphere." },
+    { "assert": "event_fired", "event": "row_committed", "seat": 0, "by_tick": 8011,
+      "note": "The core is switched to Defend at tick 8011." },
+    { "assert": "hash_chain_equals",
+      "golden": "tests/golden/scenarios/enemy-known-rule/expected.hashes.txt",
+      "note": "Pins that the rule fires once: a firing on the stale sighting would move the chain. Byte-identical on Windows, Linux and macOS." }
+  ]
+}

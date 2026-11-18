@@ -1,27 +1,25 @@
 // SPDX-FileCopyrightText: 2026 Pharmakos contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! S3's predicates and `toward`, checked behind the codes that still refuse
-//! them (S3's plan, task `vfy6`; item 157).
+//! S3's predicates and `toward`: the verifier's checks and the sim's compile,
+//! held to each other (S3's plan, tasks `vfy6` and `pred`; item 157; S2's
+//! E8 test).
 //!
 //! S3's `con6` put eight predicates and the site `toward` on the wire, and
-//! `E0020` to `E0028` refuse each one whole until S3's `pred` gives it an
-//! effect. `vfy6` builds every check on what each one holds behind those
-//! codes, so the day `pred` lifts the sim's refusals and retires the codes
+//! `E0020` to `E0028` refused each one whole until S3's `pred` gave it an
+//! effect. `vfy6` built every check on what each one holds behind those
+//! codes, and `pred` lifted the sim's refusals and retired the codes, so that
 //! no playbook is called qualifying that the sim's compile then refuses (risk
-//! R4 the other way round).
-//!
-//! Two tables hold that promise, and `pred` holds them on its branch:
+//! R4 the other way round). Two tables hold that agreement:
 //!
 //! * **[`malformed`]**: a construct written wrong, each with the error the
-//!   verifier raises *besides* its `E002x` code, at its pointer. Retire the
-//!   `E002x` codes and each still fails, so it can never qualify; and the
-//!   sim's compile refuses it, today for its stage and from `pred` for what
-//!   is wrong with it.
+//!   verifier raises at its pointer, so it never qualifies; and the sim's
+//!   compile refuses it for what is wrong with it, except where the error is a
+//!   question of the seat's view the compile cannot ask ([`SCOPE_CODES`]): the
+//!   run answers those as `no_target`.
 //! * **[`well_formed`]**: each construct written right, which the verifier
-//!   refuses by its `E002x` code alone. Retire that code and it qualifies;
-//!   `pred`'s compile must then accept it, which is the agreement test
-//!   `pred` turns this file's second half into.
+//!   qualifies and the sim compiles, the extremes each field's type holds
+//!   included.
 
 #![allow(
     clippy::expect_used,
@@ -134,13 +132,12 @@ fn errors(text: &str, rules: &RulesTable) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Whether `code` is one of the codes `con6` added for S3's constructs.
-fn is_s3_refusal(code: &str) -> bool {
-    matches!(
-        code,
-        "E0020" | "E0021" | "E0022" | "E0023" | "E0024" | "E0025" | "E0026" | "E0027" | "E0028"
-    )
-}
+/// The errors that are questions of the seat's view, which the verifier
+/// answers from its scope and the sim's compile, holding no view, cannot ask:
+/// a `b_NN` the seat does not hold (`E0401`) and a feature it cannot name
+/// (`E0412`). The sim compiles such a reference and the run answers it as
+/// `no_target`, so the verifier is the stricter side, the safe direction.
+const SCOPE_CODES: [&str; 2] = ["E0401", "E0412"];
 
 /// One malformed case: the playbook, and the error it must raise besides its
 /// `E002x` code.
@@ -359,8 +356,7 @@ fn malformed() -> Vec<Malformed> {
     ]
 }
 
-/// Every construct written right, each refused today by its `E002x` code
-/// alone.
+/// Every construct written right.
 fn well_formed() -> Vec<String> {
     let near = r#""near":{"beacon_anchor":{"beacon_id":"b_01"}},"radius_voxels":24"#;
     let count = r#""count":{"op":"GE","value":1}"#;
@@ -386,9 +382,10 @@ fn well_formed() -> Vec<String> {
         ruled(r#"{"kw_draw":{"kw":{"op":"GT","value":4}}}"#),
         placed(r#"{"toward":{"feature":{"vent":{"rank":"NEAREST","coverage":"UNCOVERED"}}}}"#),
         placed(r#"{"toward":{"feature":{"seam":{"rank":"NEAREST","coverage":"ANY"}}}}"#),
-        // The extremes each field's type holds (the review of PR #179, item 10),
-        // so the agreement above forces `pred` to decide each bound when it lifts
-        // the code: a radius at `u32::MAX` and a window at `i32::MAX` ms.
+        // The extremes each field's type holds (the review of PR #179, item 10):
+        // a radius at `u32::MAX` and a window at `i32::MAX` ms, each a legal
+        // value the sim reads exactly (S3's `pred`: squared distances in
+        // `i128`, ages in whole ticks).
         ruled(&format!(
             r#"{{"enemy_units_near":{{"near":{{"beacon_anchor":{{"beacon_id":"b_01"}}}},"radius_voxels":4294967295,{count},"freshness":{{"kind":"KNOWN_WITHIN","known_within_ms":2147483647}}}}}}"#
         )),
@@ -400,7 +397,7 @@ fn well_formed() -> Vec<String> {
 }
 
 #[test]
-fn a_malformed_construct_fails_besides_its_s3_code_and_the_sim_refuses_it() {
+fn a_malformed_construct_fails_and_the_sim_refuses_it() {
     let rules = rules();
     for case in malformed() {
         let found = errors(&case.text, &rules);
@@ -410,41 +407,51 @@ fn a_malformed_construct_fails_besides_its_s3_code_and_the_sim_refuses_it() {
             "{wanted:?} among {found:?}\n{}",
             case.text
         );
-        assert!(
-            found.iter().any(|(code, _)| !is_s3_refusal(code)),
-            "{}: an error stands once E0020 to E0028 are retired",
-            case.at
-        );
         let decoded: Playbook = json::decode(&case.text).expect("the case decodes");
-        assert!(
-            Plan::compile(&decoded, &rules).is_err(),
-            "{}: the sim's compile refuses it too",
-            case.at
-        );
+        let compiled = Plan::compile(&decoded, &rules);
+        if found
+            .iter()
+            .all(|(code, _)| SCOPE_CODES.contains(&code.as_str()))
+        {
+            assert!(
+                compiled.is_ok(),
+                "{}: a question of the seat's view only, which the compile cannot ask: {:?}",
+                case.at,
+                compiled.err()
+            );
+        } else {
+            assert!(
+                compiled.is_err(),
+                "{}: the sim's compile refuses it too",
+                case.at
+            );
+        }
     }
 }
 
 #[test]
-fn a_well_formed_construct_is_refused_by_its_s3_code_alone() {
+fn a_well_formed_construct_qualifies_and_the_sim_compiles_it() {
     let rules = rules();
     for text in well_formed() {
         let found = errors(&text, &rules);
-        assert!(
-            !found.is_empty() && found.iter().all(|(code, _)| is_s3_refusal(code)),
-            "only con6's codes refuse a well-formed construct: {found:?}\n{text}"
-        );
-        // Until S3's `pred`, the sim refuses it by the table entry the same
-        // code answers. When `pred` lifts it, this is where the compile must
-        // accept it, and the verifier qualify it, together.
         let decoded: Playbook = json::decode(&text).expect("the case decodes");
-        let error = Plan::compile(&decoded, &rules).expect_err("refused until S3's pred");
-        let refused =
-            Refusal::of(&error).unwrap_or_else(|| panic!("a table entry, not {error}\n{text}"));
-        let code = code_for_construct(refused.construct).expect("a code for the entry");
-        assert!(
-            found.iter().all(|(found_code, _)| *found_code == code),
-            "{code} is the one code: {found:?}"
-        );
+        match Plan::compile(&decoded, &rules) {
+            Ok(_) => assert!(
+                found.is_empty(),
+                "the sim compiles it, so the verifier qualifies it: {found:?}\n{text}"
+            ),
+            // A construct still refused for its stage is refused on both
+            // sides by one table entry and its code alone.
+            Err(error) => {
+                let refused = Refusal::of(&error)
+                    .unwrap_or_else(|| panic!("a table entry, not {error}\n{text}"));
+                let code = code_for_construct(refused.construct).expect("a code for the entry");
+                assert!(
+                    !found.is_empty() && found.iter().all(|(found_code, _)| *found_code == code),
+                    "{code} is the one code: {found:?}"
+                );
+            }
+        }
     }
 }
 

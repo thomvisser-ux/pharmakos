@@ -45,7 +45,9 @@
 //! with no sighting to route around) at the end of the information codes.
 //! S3's second wire (task `con6`) adds `E0020` to `E0028` at the end of the
 //! decode family, one per predicate and for `toward`, each refused until S3's
-//! `pred` gives it an effect. S3's licence verifier (task `vfy5`) gives
+//! `pred` gave it an effect and retired it: the rows keep their numbers,
+//! raised by nothing. S3's `pred` adds `E0514` (a predicate naming a
+//! blueprint no structure row can be) at the end of the settings family. S3's licence verifier (task `vfy5`) gives
 //! `E0507` (a licensed blueprint queued without its licence) and `W0702` (a
 //! rule an earlier rule wins every time both are true) their emitters, and
 //! adds `E0513` (a second Resonance Spire at one beacon) and `I0006` (a breach
@@ -397,60 +399,62 @@ pub const CATALOGUE: &[Entry] = &[
     },
     // S3's second wire (task `con6`): eight predicates and the site `toward`,
     // on the wire before S3's `pred` gives them an effect, one code each, as
-    // `E0009` to `E0017` are ([`crate::refusals`]; S2's plan, E8).
+    // `E0009` to `E0017` are ([`crate::refusals`]; S2's plan, E8). S3's
+    // `pred` built them and retired each code: the rows keep their numbers,
+    // raised by nothing.
     Entry {
         code: "E0020",
         family: Family::DecodeAndVersion,
         severity: Severity::Error,
-        emitter: Emitter::Stage(Stage::Structure),
+        emitter: Emitter::NoneYet("retired by S3's `pred`, which built `beacon_units_by_role`"),
     },
     Entry {
         code: "E0021",
         family: Family::DecodeAndVersion,
         severity: Severity::Error,
-        emitter: Emitter::Stage(Stage::Structure),
+        emitter: Emitter::NoneYet("retired by S3's `pred`, which built `beacon_mandate`"),
     },
     Entry {
         code: "E0022",
         family: Family::DecodeAndVersion,
         severity: Severity::Error,
-        emitter: Emitter::Stage(Stage::Structure),
+        emitter: Emitter::NoneYet("retired by S3's `pred`, which built `beacon_has_structure`"),
     },
     Entry {
         code: "E0023",
         family: Family::DecodeAndVersion,
         severity: Severity::Error,
-        emitter: Emitter::Stage(Stage::Structure),
+        emitter: Emitter::NoneYet("retired by S3's `pred`, which built `enemy_units_near`"),
     },
     Entry {
         code: "E0024",
         family: Family::DecodeAndVersion,
         severity: Severity::Error,
-        emitter: Emitter::Stage(Stage::Structure),
+        emitter: Emitter::NoneYet("retired by S3's `pred`, which built `enemy_beacon_known`"),
     },
     Entry {
         code: "E0025",
         family: Family::DecodeAndVersion,
         severity: Severity::Error,
-        emitter: Emitter::Stage(Stage::Structure),
+        emitter: Emitter::NoneYet("retired by S3's `pred`, which built `enemy_structure_near`"),
     },
     Entry {
         code: "E0026",
         family: Family::DecodeAndVersion,
         severity: Severity::Error,
-        emitter: Emitter::Stage(Stage::Structure),
+        emitter: Emitter::NoneYet("retired by S3's `pred`, which built `kw_supply`"),
     },
     Entry {
         code: "E0027",
         family: Family::DecodeAndVersion,
         severity: Severity::Error,
-        emitter: Emitter::Stage(Stage::Structure),
+        emitter: Emitter::NoneYet("retired by S3's `pred`, which built `kw_draw`"),
     },
     Entry {
         code: "E0028",
         family: Family::DecodeAndVersion,
         severity: Severity::Error,
-        emitter: Emitter::Stage(Stage::Structure),
+        emitter: Emitter::NoneYet("retired by S3's `pred`, which built `toward`"),
     },
     // S3's `vfy6`: a player's text past the cap, reported for the boundary
     // that holds it (`crate::Input::too_long`) before anything decodes it.
@@ -882,6 +886,14 @@ pub const CATALOGUE: &[Entry] = &[
         family: Family::SettingsAndRecycle,
         severity: Severity::Error,
         emitter: Emitter::Stage(Stage::Semantics),
+    },
+    // S3's `pred`, fix pass 1: a predicate naming a blueprint no structure row
+    // can be (a wall, a Survey post), which could never be true.
+    Entry {
+        code: "E0514",
+        family: Family::SettingsAndRecycle,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Structure),
     },
     // A warning in the settings family, spelt with the `W` the spec gives a
     // family's warnings, as `W06xx` beside `E06xx`. Decisions-log item 127 (9)

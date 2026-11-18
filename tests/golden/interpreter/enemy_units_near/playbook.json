@@ -1,0 +1,15 @@
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {"title": "Enemy units near the core", "author_kind": "HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {"label": "seen", "wait_until": {"condition": {"enemy_units_near": {"near": {"beacon_anchor": {"beacon_id": "b_00"}}, "radius_voxels": 24, "count": {"op": "GE", "value": 1}, "freshness": {"kind": "VISIBLE_NOW"}}}}, "timeout_ms": 12000},
+      {"label": "stale", "wait_until": {"condition": {"not": {"item": {"enemy_units_near": {"near": {"safest": {}}, "radius_voxels": 24, "count": {"op": "GE", "value": 1}, "freshness": {"kind": "KNOWN_WITHIN", "known_within_ms": 2000}}}}}}, "timeout_ms": 12000},
+      {"label": "remembered", "skip_if": {"enemy_units_near": {"near": {"beacon_anchor": {"beacon_id": "b_00"}}, "radius_voxels": 4294967295, "count": {"op": "EQ", "value": 1}, "freshness": {"kind": "KNOWN_WITHIN", "known_within_ms": 2147483647}}}, "hold": {"ms": 1000}}
+    ],
+    "handlers": []
+  },
+  "on_death": {"on_respawn": "CONTINUE", "max_deaths_before_fallback": 1},
+  "fallback": {"hold": {"at": {"safest": {}}}}
+}

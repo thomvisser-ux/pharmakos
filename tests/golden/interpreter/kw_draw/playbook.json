@@ -1,0 +1,14 @@
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {"title": "The seat's power draw", "author_kind": "HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {"label": "drawn", "skip_if": {"kw_draw": {"kw": {"op": "GE", "value": 1}}}, "hold": {"ms": 1000}},
+      {"label": "huge", "skip_if": {"kw_draw": {"kw": {"op": "GT", "value": 100000}}}, "hold": {"ms": 1000}}
+    ],
+    "handlers": []
+  },
+  "on_death": {"on_respawn": "CONTINUE", "max_deaths_before_fallback": 1},
+  "fallback": {"hold": {"at": {"safest": {}}}}
+}

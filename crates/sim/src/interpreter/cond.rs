@@ -64,13 +64,14 @@
 //!   and the ordering of a handful of own beacons by a lower bound is the same
 //!   ordering in every case the skeleton can produce.
 
-use crate::interpreter::{BeaconSpec, Cond, Filter};
+use crate::interpreter::{BeaconSpec, Cond, Filter, Freshness, Near};
+use crate::knowledge::AssetKind;
 use crate::math::fixed::{Fx, Sq};
 use crate::math::quantity::Hp;
 use crate::math::quantity::{Ms, Tick};
 use crate::rules::RulesTable;
 use crate::snapshot::Snapshot;
-use crate::tables::{BeaconId, SeatId};
+use crate::tables::{BeaconId, SeatId, StructureKind, UnitKind};
 use crate::world::World;
 
 use super::state::{NO_TICK, PlanState};
@@ -198,6 +199,26 @@ impl View<'_> {
             .map_or(0, |money| money.raw())
     }
 
+    /// The seat's whole power supply, in whole `kW` (`kw_supply`).
+    pub(crate) fn supply(&self) -> i64 {
+        self.world
+            .seats()
+            .supplies()
+            .get(self.seat_index)
+            // E7: cannot miss: `seat_index` is a row of the seat table the view was built for
+            .map_or(0, |kw| i64::from(kw.raw()))
+    }
+
+    /// The seat's whole power draw, in whole `kW` (`kw_draw`).
+    pub(crate) fn draw(&self) -> i64 {
+        self.world
+            .seats()
+            .draws()
+            .get(self.seat_index)
+            // E7: cannot miss: as above
+            .map_or(0, |kw| i64::from(kw.raw()))
+    }
+
     /// Supply minus draw, in whole `kW`.
     pub(crate) fn headroom(&self) -> i64 {
         let supply = self
@@ -274,6 +295,165 @@ pub(crate) fn evaluate(view: &View<'_>, condition: &Cond) -> bool {
             // E7: rule: a handler index the plan does not hold has never fired, and the compile refuses one
             view.state.fires.get(at).copied().unwrap_or(0) > 0
         }
+        // S3's predicates (task `pred`). A beacon predicate whose selector
+        // resolves to nothing is false, as `beacon_hp_pct`'s is.
+        Cond::BeaconUnitsByRole(spec, kind, cmp, right) => resolve_beacon(view, *spec)
+            .is_some_and(|beacon| cmp.holds(units_by_role(view, beacon, *kind), *right)),
+        Cond::BeaconMandate(spec, mandate) => resolve_beacon(view, *spec)
+            .and_then(|beacon| view.beacon_row(beacon))
+            .is_some_and(|row| view.row_mandate(row) == mandate.id()),
+        Cond::BeaconHasStructure(spec, kind) => {
+            resolve_beacon(view, *spec).is_some_and(|beacon| has_structure(view, beacon, *kind))
+        }
+        Cond::KwSupply(cmp, right) => cmp.holds(view.supply(), *right),
+        Cond::KwDraw(cmp, right) => cmp.holds(view.draw(), *right),
+        Cond::EnemyUnitsNear(near, radius, cmp, right, fresh) => near_point(view, *near)
+            .is_some_and(|centre| {
+                let count = count_sightings(view, *fresh, |seen| {
+                    (seen.kind == AssetKind::Unit.id() || seen.kind == AssetKind::Commander.id())
+                        && within_radius(seen.at, centre, *radius)
+                });
+                cmp.holds(count, *right)
+            }),
+        Cond::EnemyBeaconKnown(fresh) => {
+            count_sightings(view, *fresh, |seen| seen.kind == AssetKind::Beacon.id()) > 0
+        }
+        Cond::EnemyStructureNear(near, radius, kind, fresh) => {
+            near_point(view, *near).is_some_and(|centre| {
+                count_sightings(view, *fresh, |seen| {
+                    seen.kind == AssetKind::Structure.id()
+                        && kind.is_none_or(|kind| seen.blueprint == kind.id())
+                        && within_radius(seen.at, centre, *radius)
+                }) > 0
+            })
+        }
+    }
+}
+
+/// How many of the seat's own living units of `kind` are homed to `beacon`
+/// (`beacon_units_by_role`). Reads the seat's own unit rows only.
+fn units_by_role(view: &View<'_>, beacon: BeaconId, kind: UnitKind) -> i64 {
+    let units = view.world.units();
+    let mut count: i64 = 0;
+    for (((home, owner), unit), hp) in units
+        .homes()
+        .iter()
+        .zip(units.seats())
+        .zip(units.kinds())
+        .zip(units.hit_points())
+    {
+        view.world.charge_decision(1);
+        if *home == beacon && *owner == view.seat.raw() && *unit == kind.id() && hp.is_alive() {
+            // E7: rule: the count is at most the unit table's rows, a `u32`, far inside `i64`
+            count = count.saturating_add(1);
+        }
+    }
+    count
+}
+
+/// Whether a finished, living structure of `kind` of the seat's own is homed
+/// to `beacon` (`beacon_has_structure`): one still going up does not count.
+fn has_structure(view: &View<'_>, beacon: BeaconId, kind: StructureKind) -> bool {
+    let structures = view.world.structures();
+    structures
+        .homes()
+        .iter()
+        .zip(structures.seats())
+        .zip(structures.kinds())
+        .zip(structures.hit_points())
+        .zip(structures.building())
+        .any(|((((home, owner), held), hp), building)| {
+            view.world.charge_decision(1);
+            *home == beacon
+                && *owner == view.seat.raw()
+                && *held == kind.id()
+                && hp.is_alive()
+                && !*building
+        })
+}
+
+/// The point an enemy predicate measures from: a voxel's point, or the anchor
+/// of the own beacon its selector picks now; `None` when the selector picks
+/// nothing, which makes the predicate false.
+fn near_point(view: &View<'_>, near: Near) -> Option<[Fx; 3]> {
+    match near {
+        Near::Voxel([x, y, z]) => {
+            Some([Fx::from_voxels(x), Fx::from_voxels(y), Fx::from_voxels(z)])
+        }
+        Near::Beacon(spec) => {
+            let row = view.beacon_row(resolve_beacon(view, spec)?)?;
+            view.row_at(row)
+        }
+    }
+}
+
+/// Whether `at` lies within `radius` whole voxels of `centre`, inclusive, as a
+/// straight-line distance: squared distances in Q32.32, compared in `i128` so
+/// that every `u32` radius is exact (AGENTS.md section 4.2; no square root,
+/// and nothing saturates).
+fn within_radius(at: [Fx; 3], centre: [Fx; 3], radius: u32) -> bool {
+    // `radius << 16` is below 2^48 and its square below 2^96: inside `i128`.
+    let reach = i128::from(radius) << 16;
+    i128::from(Sq::between(at, centre).raw()) <= reach.saturating_mul(reach)
+}
+
+/// One row of the seat's own sighting table, as an enemy predicate reads it.
+#[derive(Clone, Copy, Debug)]
+struct Seen {
+    kind: u8,
+    blueprint: u8,
+    at: [Fx; 3],
+}
+
+/// How many of the seat's **own** sightings of an **enemy** asset pass
+/// `fresh` and `keep`: the enemy predicates' one read, of the seat's knowledge
+/// and never of the world (spec section 10, "Knowledge"). A sighting's kind,
+/// blueprint and place are what the seat saw, so nothing here can tell it
+/// whether the asset still stands where it was seen.
+fn count_sightings<F: Fn(Seen) -> bool>(view: &View<'_>, fresh: Freshness, keep: F) -> i64 {
+    let table = view.world.sightings();
+    let now = view.world.tick().raw();
+    let mut count: i64 = 0;
+    let rows = table
+        .seats()
+        .iter()
+        .zip(table.owners())
+        .zip(table.kinds())
+        .zip(table.blueprints())
+        .zip(table.places())
+        .zip(table.seen_at());
+    for (((((by, owner), kind), blueprint), at), seen) in rows {
+        if *by != view.seat.raw() {
+            continue;
+        }
+        view.world.charge_decision(1);
+        if crate::defend::enemy(view.seat, *owner)
+            && is_fresh(fresh, *seen, now)
+            && keep(Seen {
+                kind: *kind,
+                blueprint: *blueprint,
+                at: *at,
+            })
+        {
+            // E7: rule: the count is at most the sighting table's capacity, a `u32`, far inside `i64`
+            count = count.saturating_add(1);
+        }
+    }
+    count
+}
+
+/// Whether a sighting taken on tick `seen` passes `fresh` on tick `now`.
+///
+/// `VISIBLE_NOW` is a sighting taken on this tick: sightings are recorded on
+/// every decision tick before the decision phase reads them. `KNOWN_WITHIN`
+/// is an age of at most the window, compared in whole ticks against the
+/// window floored to ticks, which is exact: an age of `t` ticks is `t * 50`
+/// ms, at most `ms` exactly when `t` is at most `ms`'s whole ticks.
+pub(crate) fn is_fresh(fresh: Freshness, seen: u32, now: u32) -> bool {
+    match fresh {
+        Freshness::VisibleNow => seen == now,
+        // E7: rule: a sighting is taken on a tick already played, so it is never later than now
+        Freshness::KnownWithin(ms) => now.saturating_sub(seen) <= ms.to_ticks_floor(),
     }
 }
 
@@ -923,4 +1103,23 @@ fn octile(cardinal: i64, diagonal: i64, a: [Fx; 3], b: [Fx; 3]) -> i64 {
     cardinal
         .saturating_mul(long.saturating_sub(short))
         .saturating_add(diagonal.saturating_mul(short))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_fresh;
+    use crate::interpreter::Freshness;
+    use crate::math::quantity::Ms;
+
+    /// S3's `pred`, fix pass 1: the freshness boundary. `KNOWN_WITHIN` 500 ms
+    /// is 10 ticks: an age of 10 ticks is fresh and 11 is not; `VISIBLE_NOW`
+    /// is a sighting of this tick and not the one before.
+    #[test]
+    fn freshness_holds_at_its_window_and_not_a_tick_past_it() {
+        let within = Freshness::KnownWithin(Ms::new(500));
+        assert!(is_fresh(within, 90, 100), "an age of the window is fresh");
+        assert!(!is_fresh(within, 89, 100), "one tick past it is not");
+        assert!(is_fresh(Freshness::VisibleNow, 100, 100));
+        assert!(!is_fresh(Freshness::VisibleNow, 99, 100));
+    }
 }

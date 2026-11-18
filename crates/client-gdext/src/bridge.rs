@@ -1848,7 +1848,7 @@ fn round_trip_status() -> Result<(), BridgeError> {
             phase_remaining_ms: 90_000,
             segment_length_ms: 180_000,
             round: 1,
-            untimed: false,
+            ..Default::default()
         }),
     };
     let text = json::encode(&response)?;

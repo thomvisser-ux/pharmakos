@@ -1,7 +1,7 @@
 /declarative/route/0  lines 4+1
   4:30-46 "voxel 96, 11, 62"
     /declarative/route/0/place_beacon/at
-    reference LOCATION [voxel, beacon_anchor, safest, covering]
+    reference LOCATION [voxel, beacon_anchor, safest, covering, toward]
     = {"voxel":{"x":96,"y":11,"z":62}}
   4:80-93 "beacon "b_00""
     /declarative/route/0/place_beacon/initial/mandate/defend/protect/0/beacon
@@ -22,7 +22,7 @@
 /declarative/route/1  lines 5+1
   5:29-46 "voxel 100, 20, 58"
     /declarative/route/1/place_beacon/at
-    reference LOCATION [voxel, beacon_anchor, safest, covering]
+    reference LOCATION [voxel, beacon_anchor, safest, covering, toward]
     = {"voxel":{"x":100,"y":20,"z":58}}
   5:80-93 "beacon "e_01""
     /declarative/route/1/place_beacon/initial/mandate/attack/target/beacon

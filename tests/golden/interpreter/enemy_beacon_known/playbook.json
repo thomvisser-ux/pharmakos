@@ -1,0 +1,15 @@
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {"title": "An enemy beacon known", "author_kind": "HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {"label": "none_yet", "skip_if": {"enemy_beacon_known": {"freshness": {"kind": "KNOWN_WITHIN", "known_within_ms": 60000}}}, "hold": {"ms": 1000}},
+      {"label": "seen", "wait_until": {"condition": {"enemy_beacon_known": {"freshness": {"kind": "VISIBLE_NOW"}}}}, "timeout_ms": 12000},
+      {"label": "stale", "wait_until": {"condition": {"not": {"item": {"enemy_beacon_known": {"freshness": {"kind": "KNOWN_WITHIN", "known_within_ms": 2000}}}}}}, "timeout_ms": 12000}
+    ],
+    "handlers": []
+  },
+  "on_death": {"on_respawn": "CONTINUE", "max_deaths_before_fallback": 1},
+  "fallback": {"hold": {"at": {"safest": {}}}}
+}

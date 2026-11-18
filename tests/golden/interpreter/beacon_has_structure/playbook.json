@@ -1,0 +1,14 @@
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {"title": "A finished structure at the core", "author_kind": "HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {"label": "generator", "skip_if": {"beacon_has_structure": {"beacon": {"beacon_id": "b_00"}, "blueprint_id": "generator"}}, "hold": {"ms": 1000}},
+      {"label": "spire", "skip_if": {"beacon_has_structure": {"beacon": {"beacon_id": "b_00"}, "blueprint_id": "resonance_spire"}}, "hold": {"ms": 1000}}
+    ],
+    "handlers": []
+  },
+  "on_death": {"on_respawn": "CONTINUE", "max_deaths_before_fallback": 1},
+  "fallback": {"hold": {"at": {"safest": {}}}}
+}

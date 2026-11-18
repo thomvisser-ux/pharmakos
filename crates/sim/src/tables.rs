@@ -1955,13 +1955,24 @@ pub struct SightingTable {
     asset: Vec<u32>,
     owner: Vec<u8>,
     kind: Vec<u8>,
+    /// The blueprint a structure was seen as, or [`NO_BLUEPRINT`] (S3's
+    /// `pred`).
+    blueprint: Vec<u8>,
     at: Vec<[Fx; 3]>,
     seen_at: Vec<u32>,
     capacity: u32,
     per_seat: u32,
 }
 
+/// What a sighting of anything but a structure carries in its blueprint
+/// column: no [`StructureKind::id`] is zero.
+pub const NO_BLUEPRINT: u8 = 0;
+
 impl SightingTable {
+    /// The blueprint block's tag in the state hash, after the explore-tick
+    /// block's 8 (S3's `pred`).
+    pub const BLUEPRINT_HASH_TAG: u8 = 9;
+
     /// A table holding `per_seat` sightings for each of `seats` seats, never
     /// growing.
     ///
@@ -1980,6 +1991,7 @@ impl SightingTable {
             asset: Vec::with_capacity(n),
             owner: Vec::with_capacity(n),
             kind: Vec::with_capacity(n),
+            blueprint: Vec::with_capacity(n),
             at: Vec::with_capacity(n),
             seen_at: Vec::with_capacity(n),
             capacity,
@@ -2047,6 +2059,16 @@ impl SightingTable {
         &self.kind
     }
 
+    /// The blueprint column: the [`StructureKind::id`] a structure was seen
+    /// as, [`NO_BLUEPRINT`] for any other sighting (S3's `pred`). A seat that
+    /// saw a structure knows what it was, so `enemy_structure_near` reads it
+    /// here rather than in the structure table, which would tell it whether the
+    /// structure still stands.
+    #[must_use]
+    pub fn blueprints(&self) -> &[u8] {
+        &self.blueprint
+    }
+
     /// The remembered-place column.
     #[must_use]
     pub fn places(&self) -> &[[Fx; 3]] {
@@ -2106,6 +2128,7 @@ impl SightingTable {
         asset: u32,
         owner: SeatId,
         kind: u8,
+        blueprint: u8,
         at: [Fx; 3],
         tick: u32,
     ) -> bool {
@@ -2123,6 +2146,9 @@ impl SightingTable {
                 if let Some(what) = self.kind.get_mut(slot) {
                     *what = kind;
                 }
+                if let Some(what) = self.blueprint.get_mut(slot) {
+                    *what = blueprint;
+                }
                 true
             }
             Err(slot) => {
@@ -2131,7 +2157,7 @@ impl SightingTable {
                         return false;
                     };
                     self.forget(stalest);
-                    return self.see(seat, asset, owner, kind, at, tick);
+                    return self.see(seat, asset, owner, kind, blueprint, at, tick);
                 }
                 if self.count >= self.capacity {
                     return false;
@@ -2140,6 +2166,7 @@ impl SightingTable {
                 self.asset.insert(slot, asset);
                 self.owner.insert(slot, owner.raw());
                 self.kind.insert(slot, kind);
+                self.blueprint.insert(slot, blueprint);
                 self.at.insert(slot, at);
                 self.seen_at.insert(slot, tick);
                 self.count = self.count.saturating_add(1);
@@ -2178,6 +2205,7 @@ impl SightingTable {
         self.asset.remove(slot);
         self.owner.remove(slot);
         self.kind.remove(slot);
+        self.blueprint.remove(slot);
         self.at.remove(slot);
         self.seen_at.remove(slot);
         self.count = self.count.saturating_sub(1);
@@ -2191,6 +2219,7 @@ impl SightingTable {
         if columns.asset.len() != n
             || columns.owner.len() != n
             || columns.kind.len() != n
+            || columns.blueprint.len() != n
             || columns.at.len() != n
             || columns.seen_at.len() != n
         {
@@ -2216,6 +2245,7 @@ impl SightingTable {
         self.asset = columns.asset;
         self.owner = columns.owner;
         self.kind = columns.kind;
+        self.blueprint = columns.blueprint;
         self.at = columns.at;
         self.seen_at = columns.seen_at;
         true
@@ -2234,6 +2264,8 @@ pub struct SightingColumns {
     pub owner: Vec<u8>,
     /// [`crate::knowledge::AssetKind::id`] per row.
     pub kind: Vec<u8>,
+    /// The blueprint each structure was seen as, or [`NO_BLUEPRINT`].
+    pub blueprint: Vec<u8>,
     /// Where it was when it was seen.
     pub at: Vec<[Fx; 3]>,
     /// The tick it was seen at.
@@ -2886,6 +2918,49 @@ impl StructureKind {
             6 => Some(StructureKind::Wall),
             _ => None,
         }
+    }
+
+    /// The id a playbook writes for this kind, `gp.v1.RulesTable.Structures`'
+    /// spelling (`BuildTarget.blueprint_id`, and the predicates S3's `con6`
+    /// added).
+    #[must_use]
+    pub const fn blueprint_id(self) -> &'static str {
+        match self {
+            StructureKind::Generator => "generator",
+            StructureKind::Autocannon => "autocannon",
+            StructureKind::Mortar => "mortar",
+            StructureKind::SurveyPost => "survey_post",
+            StructureKind::ResonanceSpire => "resonance_spire",
+            StructureKind::Wall => "wall",
+        }
+    }
+
+    /// Whether a structure row of this kind can stand in this build, so a
+    /// predicate asking about one can ever be true (S3's `pred`, fix pass 1):
+    /// a Generator and the base kit, which Build targets raise, and the
+    /// Resonance Spire, which a queue raises. A wall is voxels and never a
+    /// structure row, and nothing in this build raises a Survey post, so a
+    /// predicate naming either is refused rather than false for ever. The
+    /// verifier's `BlueprintSlots::stands_as_a_structure` and the vocabulary's
+    /// pickers say the same, and a test holds the three together.
+    #[must_use]
+    pub const fn can_stand_as_a_row(self) -> bool {
+        match self {
+            StructureKind::Generator
+            | StructureKind::Autocannon
+            | StructureKind::Mortar
+            | StructureKind::ResonanceSpire => true,
+            StructureKind::SurveyPost | StructureKind::Wall => false,
+        }
+    }
+
+    /// The kind a playbook's blueprint id names, or `None` for an id that
+    /// names no kind this build defines (the verifier's `E0506`).
+    #[must_use]
+    pub fn from_blueprint_id(id: &str) -> Option<StructureKind> {
+        StructureKind::ALL
+            .into_iter()
+            .find(|kind| kind.blueprint_id() == id)
     }
 }
 
@@ -4927,25 +5002,42 @@ impl DefendTable {
 }
 
 /// Every seat's explored coarse cells (S2's `surv`, laid out by `dfnd`): one
-/// row per `(seat, cell)` a seat has explored, ascending. The cell's meaning
-/// -- its size, and how a scout marks one -- is `surv`'s; this table holds
-/// the marks, and nothing writes one yet.
+/// row per `(seat, cell)` a seat has explored, ascending, with the tick a
+/// Survey scout last explored it on (S3's `pred`, decision 7: a cell is due a
+/// re-scan once it is older than reach memory). The cell's meaning -- its
+/// size, and how a scout marks one -- is [`crate::survey`]'s; this table holds
+/// the marks.
 ///
-/// **Hashed as one block that writes nothing while the table holds no row**
-/// (S2's plan, E29).
+/// **Hashed as two blocks that write nothing while the table holds no row**
+/// (S2's plan, E29): the rows, then, from S3's `pred`, the explore ticks as a
+/// block of their own after the last block the world writes (decisions-log
+/// item 136's form), so a chain whose seats explore nothing does not move for
+/// the column.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct ExploredTable {
     rows: Vec<(u8, u32)>,
+    /// The tick each row was last explored on, parallel to `rows`.
+    at: Vec<u32>,
 }
 
 impl ExploredTable {
     /// The table's tag in the state hash (E29).
     pub const HASH_TAG: u8 = 4;
 
+    /// The explore-tick block's tag in the state hash, after the grown-beacon
+    /// block's 7 (S3's `pred`).
+    pub const TICK_HASH_TAG: u8 = 8;
+
     /// The rows, `(seat, cell)`, ascending.
     #[must_use]
     pub fn rows(&self) -> &[(u8, u32)] {
         &self.rows
+    }
+
+    /// The tick each row was last explored on, in the rows' order.
+    #[must_use]
+    pub fn explored_at(&self) -> &[u32] {
+        &self.at
     }
 
     /// Whether no seat has explored a cell.
@@ -4960,24 +5052,40 @@ impl ExploredTable {
         self.rows.binary_search(&(seat.raw(), cell)).is_ok()
     }
 
-    /// Mark `cell` explored for `seat`: `true` when the mark is new.
-    pub fn mark(&mut self, seat: SeatId, cell: u32) -> bool {
+    /// The tick `seat` last explored `cell` on, or `None` when it never has.
+    #[must_use]
+    pub fn explored_on(&self, seat: SeatId, cell: u32) -> Option<u32> {
+        let at = self.rows.binary_search(&(seat.raw(), cell)).ok()?;
+        self.at.get(at).copied()
+    }
+
+    /// Mark `cell` explored for `seat` on `tick`: `true` when the mark is new.
+    /// A cell already marked takes the later tick, so a re-scan renews it.
+    pub fn mark(&mut self, seat: SeatId, cell: u32, tick: u32) -> bool {
         match self.rows.binary_search(&(seat.raw(), cell)) {
-            Ok(_) => false,
+            Ok(at) => {
+                if let Some(when) = self.at.get_mut(at) {
+                    *when = tick;
+                }
+                false
+            }
             Err(at) => {
                 self.rows.insert(at, (seat.raw(), cell));
+                self.at.insert(at, tick);
                 true
             }
         }
     }
 
     /// Replace the table from a restored snapshot. `false`, changing nothing,
-    /// when the rows are not strictly ascending.
-    pub fn restore(&mut self, rows: Vec<(u8, u32)>) -> bool {
-        if !rows.windows(2).all(|pair| matches!(pair, [a, b] if a < b)) {
+    /// when the rows are not strictly ascending or the ticks are not one per
+    /// row.
+    pub fn restore(&mut self, rows: Vec<(u8, u32)>, at: Vec<u32>) -> bool {
+        if rows.len() != at.len() || !rows.windows(2).all(|pair| matches!(pair, [a, b] if a < b)) {
             return false;
         }
         self.rows = rows;
+        self.at = at;
         true
     }
 }

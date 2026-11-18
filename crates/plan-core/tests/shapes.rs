@@ -801,3 +801,53 @@ fn a_string_the_player_wrote_never_breaks_a_line_or_moves_a_chip() {
         assert!(strings >= 3, "{name:?}: only {strings} string chips");
     }
 }
+
+/// S3's `pred`, fix pass 1 (C3): the two structure predicates name exactly the
+/// kinds a structure row can be, held three ways: the vocabulary offers a
+/// blueprint, the verifier qualifies it, and the sim's compile accepts it,
+/// for every kind the sim defines, or none of the three does. A wall (voxels,
+/// never a row) and a Survey post (nothing raises one) could never be true,
+/// so they are refused rather than false for ever.
+#[test]
+fn a_structure_predicate_names_what_can_stand_on_all_three_sides() {
+    let rules = rules();
+    let words = vocabulary(&[]).unwrap_or_else(|error| panic!("{error}"));
+    for name in ["beacon_has_structure", "enemy_structure_near"] {
+        let entry = words
+            .families
+            .iter()
+            .flat_map(|family| &family.predicates)
+            .find(|entry| entry.name == name)
+            .unwrap_or_else(|| panic!("{name} is in the vocabulary"));
+        let offered: Vec<String> = entry
+            .parameters
+            .iter()
+            .find(|parameter| parameter.pointer == "/blueprint_id")
+            .map_or_else(
+                || panic!("{name} offers a blueprint"),
+                |parameter| match &parameter.shape {
+                    Shape::Choice { values } => values.clone(),
+                    other => panic!("{name}'s blueprint is a choice, not {other:?}"),
+                },
+            );
+        let placed = place_predicate(name, &entry.skeleton_json);
+        let pointer = format!("{}/blueprint_id", placed.at);
+        for kind in pharmakos_sim::tables::StructureKind::ALL {
+            let id = format!("\"{}\"", kind.blueprint_id());
+            let text = with_value(&placed.text, &pointer, &id);
+            let qualifies = refused(&text, &placed.at).is_empty();
+            let decoded: pharmakos_proto::gp::v1::Playbook = pharmakos_proto::json::decode(
+                &canonicalise_text(&text)
+                    .unwrap_or_else(|error| panic!("{error:?}"))
+                    .text,
+            )
+            .unwrap_or_else(|error| panic!("{error:?}"));
+            let compiles = pharmakos_sim::interpreter::Plan::compile(&decoded, &rules).is_ok();
+            let listed = offered.contains(&id);
+            assert!(
+                listed == qualifies && qualifies == compiles,
+                "{name} {id}: offered {listed}, qualifies {qualifies}, compiles {compiles}"
+            );
+        }
+    }
+}

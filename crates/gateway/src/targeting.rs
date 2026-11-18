@@ -285,6 +285,10 @@ pub enum Site {
     /// `remove_build_target`'s `on {feature_id}`: a name, never ranked, and
     /// read when the row commits rather than when the step starts.
     Removal,
+    /// `place_beacon.at`'s `toward` (S3's `pred`, E23): its feature named or
+    /// described as a `covering`'s is, ranked from the commander's column,
+    /// and the site the sim's own stepping-stone search chooses.
+    Toward,
 }
 
 /// One candidate a reference could read, and how far it is from the
@@ -327,6 +331,10 @@ pub struct Resolved {
     pub matched: u32,
     /// The step failure the sim would answer; `None` when it reads a feature.
     pub failure: Option<StepFailure>,
+    /// For a `toward` that found its feature and no site: how many legal
+    /// sites the sim's search weighed (S3's `pred`; the `step_failed` count).
+    /// `None` for every other read.
+    pub weighed: Option<u32>,
     /// For a `covering` that reads a feature: the column the beacon would
     /// stand on, as a whole voxel on the ground.
     pub site_voxel: Option<Voxel>,
@@ -361,9 +369,10 @@ pub fn spec_of(reference: &FeatureRef, site: Site) -> Result<FeatureSpec, String
         let coverage = Coverage::try_from(coverage)
             .map_err(|_| format!("`coverage` {coverage} is not a coverage this build knows"))?;
         match site {
-            Site::Covering => match coverage {
+            Site::Covering | Site::Toward => match coverage {
                 Coverage::Unspecified => Err(String::from(
-                    "under `covering` a pick's `coverage` is required: `ANY` or `UNCOVERED`",
+                    "under `covering` or `toward` a pick's `coverage` is required: `ANY` or \
+                     `UNCOVERED`",
                 )),
                 Coverage::Any => Ok(FeatureSpec::Nearest {
                     kind,
@@ -409,10 +418,12 @@ pub fn spec_of(reference: &FeatureRef, site: Site) -> Result<FeatureSpec, String
         Some(Ref::Seam(seam)) => pick(FeatureKind::Seam, seam.rank, seam.coverage),
         Some(Ref::Covered(_)) => match site {
             Site::On { covering: true } => Ok(FeatureSpec::Covered),
-            Site::On { covering: false } | Site::Covering | Site::Removal => Err(String::from(
-                "`covered {}` is legal only under `on`, in the initial settings of a \
-                 `place_beacon` whose `at` is a `covering` arm",
-            )),
+            Site::On { covering: false } | Site::Covering | Site::Removal | Site::Toward => {
+                Err(String::from(
+                    "`covered {}` is legal only under `on`, in the initial settings of a \
+                     `place_beacon` whose `at` is a `covering` arm",
+                ))
+            }
         },
         None => Err(String::from(
             "a `FeatureRef` names a feature or describes one",
@@ -572,6 +583,82 @@ impl Reader<'_> {
             }
             Err(failure) => {
                 resolved.failure = Some(failure);
+                Ok(CoveringRead::failed(resolved))
+            }
+        }
+    }
+
+    /// A `toward` site, read as the sim reads it when the step starts: the
+    /// feature and the site are [`pharmakos_sim::targeting::toward_counted`]'s
+    /// (S3's `pred`, E23), and the candidates listed are its feature's, ranked
+    /// from the commander's column as a `covering`'s are. A miss carries the
+    /// sim's count: the features matched for `no_target`, the sites weighed
+    /// for `illegal_site`.
+    fn toward(
+        &mut self,
+        pointer: String,
+        route_step: Option<usize>,
+        spec: FeatureSpec,
+    ) -> Result<CoveringRead, Error> {
+        let mut resolved = empty(pointer, route_step, Site::Toward, kind_of(spec));
+        let Some(commander) = self.commander else {
+            resolved.failure = Some(StepFailure::CommanderDead);
+            return Ok(CoveringRead::failed(resolved));
+        };
+        let seat = self.seat;
+        let ground = self.ground;
+        let (listed, matched) = match spec {
+            FeatureSpec::Nearest { kind, uncovered } => (
+                self.candidates(commander, |index| {
+                    matches_pick(&ground, seat, index, kind, uncovered)
+                })?,
+                self.matched(|index| matches_pick(&ground, seat, *index, kind, uncovered))?,
+            ),
+            FeatureSpec::Name { kind, anchor } => {
+                let named = ground
+                    .features
+                    .index_of(kind, anchor)
+                    .filter(|index| ground.is_live(*index));
+                match named {
+                    Some(named) => (self.candidates(commander, |index| index == named)?, 1),
+                    None => (Vec::new(), 0),
+                }
+            }
+            FeatureSpec::Covered => (Vec::new(), 0),
+        };
+        resolved.matched = matched;
+        resolved.candidates = listed
+            .iter()
+            .map(|(_, candidate)| candidate.clone())
+            .collect();
+        let mut stones: Vec<pharmakos_sim::targeting::StoneCandidate> = Vec::new();
+        match pharmakos_sim::targeting::toward_counted(
+            &ground,
+            &mut self.scratch,
+            &mut stones,
+            seat,
+            commander,
+            spec,
+        ) {
+            Ok(found) => {
+                let [x, y] = found.site;
+                let point = ground
+                    .standing(x, y)
+                    .ok_or_else(|| Error::internal("the sim chose a `toward` site off the map"))?;
+                resolved.feature_id = self.name(found.feature)?;
+                resolved.travel_ms = Reader::travel_of(&listed, found.feature, spec)?;
+                resolved.site_voxel = Some(crate::view::voxel_of(point));
+                Ok(CoveringRead {
+                    resolved,
+                    feature: None,
+                    point: Some(point),
+                })
+            }
+            Err(failed) => {
+                resolved.failure = Some(failed.reason);
+                if failed.reason == StepFailure::IllegalSite {
+                    resolved.weighed = failed.matched;
+                }
                 Ok(CoveringRead::failed(resolved))
             }
         }
@@ -742,6 +829,7 @@ fn empty(
         candidates: Vec::new(),
         matched: 0,
         failure: None,
+        weighed: None,
         site_voxel: None,
     }
 }
@@ -1028,17 +1116,13 @@ fn read_placement(
                 point.is_none().then_some(StepFailure::NoTarget),
             )
         }
+        // S3's `pred`: the stepping-stone site, the sim's own search. It binds
+        // no feature, so the initial settings' `covered {}` (refused by the
+        // compile under `toward`) has nothing to name.
+        Some(Place::Toward(toward)) => read_toward(reader, &base, route_step, toward, out)?,
         // Out of reach: the compile refuses each before this reads it, and a
-        // made-up `no_target` would hide the day that stops being true.
-        // `toward` is refused until S3's `pred`, which must give it a reading
-        // here when it lifts the refusal; `on` is a misplaced site and an
-        // absent `at` a missing block, for good.
-        Some(Place::Toward(_)) => {
-            return Err(Error::internal(format!(
-                "{base}/at/toward reached the gateway's placement reader, which does not read \
-                 `toward` yet: the compile refuses it until S3's stepping-stone site search"
-            )));
-        }
+        // made-up `no_target` would hide the day that stops being true: `on`
+        // is a misplaced site and an absent `at` a missing block, for good.
         Some(Place::On(_)) => {
             return Err(Error::internal(format!(
                 "{base}/at/on reached the gateway's placement reader, and the compile refuses \
@@ -1099,6 +1183,34 @@ fn read_placement(
         out.push(resolved);
     }
     Ok(())
+}
+
+/// Where a placement stands, the feature a `covering` bound, and the failure
+/// its step ends on, if it does.
+type PlacedSite = (Option<[Fx; 3]>, Option<usize>, Option<StepFailure>);
+
+/// A `place_beacon`'s `toward` site (S3's `pred`): the stone's standing
+/// point, no bound feature (`covered {}` is refused under `toward`), and the
+/// failure the step ends on, if it does.
+fn read_toward(
+    reader: &mut Reader<'_>,
+    base: &str,
+    route_step: Option<usize>,
+    toward: &pharmakos_proto::gp::v1::Toward,
+    out: &mut Vec<Resolved>,
+) -> Result<PlacedSite, Error> {
+    let pointer = format!("{base}/at/toward/feature");
+    let reference = toward.feature.as_ref().ok_or_else(|| {
+        Error::internal(format!(
+            "{pointer} reached the gateway's placement reader with no feature, and the compile \
+             refuses a `toward` without one"
+        ))
+    })?;
+    let spec = compiled(reference, Site::Toward, &pointer)?;
+    let read = reader.toward(pointer, route_step, spec)?;
+    let failure = read.resolved.failure;
+    out.push(read.resolved);
+    Ok((read.point, None, failure))
 }
 
 /// An `interface`'s references: each row's `on` anchors, read from the

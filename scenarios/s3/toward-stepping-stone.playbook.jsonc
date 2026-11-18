@@ -1,0 +1,40 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// S3's `pred` (S3's plan, E23 and section 1.1; decisions-log item 156 (1)):
+// one playbook, carried every round, that places a stepping stone by `toward`
+// and covers the far vent from it on Probation's seed. See
+// toward-stepping-stone.scenario.jsonc for what is asserted. The steps are
+// ordered so that each round does its own part and the other steps fail as
+// they start and are skipped:
+//
+//   stone   a beacon placed `toward` the second vent, by name, guarded by
+//           `kw_supply`: skipped while the seat's supply is the core's 10 kW
+//           alone, so until round 1's Generator runs, and the stone waits for
+//           round 2 as section 1.1's schedule has it.
+//   cover   a beacon covering the nearest vent the seat does not cover, with a
+//           Generator on it: the start vent in round 1, the second vent from
+//           the stone in round 2.
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {"title": "Toward the stepping stone", "author_kind": "HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {"label": "stone",
+        "skip_if": {"kw_supply": {"kw": {"op": "LE", "value": 10}}},
+        "place_beacon": {"at": {"toward": {"feature": {"feature_id": "vent_232_96"}}}},
+        "timeout_ms": 120000, "on_fail": {"action": "SKIP"}},
+      {"label": "cover",
+        "place_beacon": {
+          "at": {"covering": {"vent": {"rank": "NEAREST", "coverage": "UNCOVERED"}}},
+          "initial": {"mandate": {"build": {"targets": [
+            {"blueprint_id": "generator", "anchor": {"on": {"covered": {}}}}
+          ]}}}},
+        "timeout_ms": 120000, "on_fail": {"action": "SKIP"}}
+    ],
+    "handlers": []
+  },
+  "on_death": {"on_respawn": "CONTINUE", "max_deaths_before_fallback": 2},
+  "fallback": {"hold": {"at": {"safest": {}}}}
+}

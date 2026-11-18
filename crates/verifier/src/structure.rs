@@ -575,8 +575,7 @@ impl Visit for Sites<'_> {
             // S3's `toward` (S1's plan, decision 3): legal only in a
             // `place_beacon`'s `at`, as `covering` is (`Location.toward`), and
             // its feature is named or described as a `covering`'s is (S3's
-            // `vfy6`). `E0028` refuses it wherever the sim compiles a place
-            // until S3's `pred`; these are the checks behind it.
+            // `vfy6`), as the sim's compile reads it (S3's `pred`).
             Some(location::Place::Toward(toward)) => {
                 let here = pointer::child(at, "toward");
                 if !matches!(slot, Slot::PlaceSite) {
@@ -1523,11 +1522,11 @@ fn walk_predicate(node: &condition::Node, at: &str, out: &mut Builder) {
     }
 }
 
-/// One of S3's `con6` predicates, checked here by S3's `vfy6` while
-/// [`crate::refusals`] still refuses each one whole (`E0020` to `E0027`), so
-/// that the day S3's `pred` lifts them no playbook is called qualifying that
-/// the sim's compile then refuses (S3's plan, R4 the other way round). Every
-/// other node is [`walk_predicate`]'s.
+/// One of S3's `con6` predicates, checked here by S3's `vfy6` behind the codes
+/// that refused each one whole until S3's `pred` retired them (`E0020` to
+/// `E0027`), so that no playbook is called qualifying that the sim's compile
+/// then refuses (S3's plan, R4 the other way round). Every other node is
+/// [`walk_predicate`]'s.
 fn walk_s3_predicate(node: &condition::Node, at: &str, out: &mut Builder) {
     match node {
         condition::Node::BeaconUnitsByRole(predicate) => {
@@ -1611,14 +1610,22 @@ fn unset(out: &mut Builder, at: &str, tail: &[&str], field: &'static str) {
     out.emit(Diag::new("E0111", pointer::join(at, tail)).arg("field", field));
 }
 
-/// A predicate's blueprint id: written (`E0101`), and a blueprint this build
-/// knows (`E0506`). Which beacon has which structure is the Push's, so any
-/// kind the sim defines may be asked about, built or not.
+/// A predicate's blueprint id: written (`E0101`), a blueprint this build
+/// knows (`E0506`), and one a structure row can be (`E0514`; S3's `pred`, fix
+/// pass 1): a wall is voxels and nothing raises a Survey post, so a predicate
+/// naming either could never be true. Which beacon has which structure is the
+/// Push's, so any kind that can stand may be asked about, built or not.
 fn blueprint(id: &str, at: &str, tail: &[&str], out: &mut Builder) {
     if id.is_empty() {
         out.emit(Diag::new("E0101", pointer::join(at, tail)).arg("what", "`blueprint_id`"));
-    } else if crate::blueprints::kind_of(id).is_none() {
-        out.emit(Diag::new("E0506", pointer::join(at, tail)).arg("id", id));
+        return;
+    }
+    match crate::blueprints::slots_of(id) {
+        None => out.emit(Diag::new("E0506", pointer::join(at, tail)).arg("id", id)),
+        Some(row) if !row.stands_as_a_structure() => {
+            out.emit(Diag::new("E0514", pointer::join(at, tail)).arg("id", id));
+        }
+        Some(_) => {}
     }
 }
 

@@ -285,6 +285,181 @@ fn scouts_scan_unexplored_ground_first() {
     assert_eq!(done, 1, "the scan reports its end once");
 }
 
+/// S3's `pred`, decision 7: an explored cell is due again once it is older
+/// than reach memory, and a scout takes a due cell only when no unexplored
+/// cell is left, by the same selection and order as an unexplored one: the
+/// nearest scan point, ties to the lowest cell id (the main session's ruling).
+/// Every cell of the area is explored at tick 0, and the nearest again a
+/// little later; while none is due the scout has nothing to scan,
+/// and once the earlier ones are due it walks to the nearest of them, passing
+/// over the nearest cell, which is not due yet.
+#[test]
+fn a_cell_older_than_reach_memory_is_scanned_again_nearest_first() {
+    let mut world = world();
+    let post = survey_post(&mut world);
+    let cells = strip(&mut world, post, 20, 68);
+    assert!(cells.len() >= 3, "the area spans several cells: {cells:?}");
+    for cell in &cells {
+        assert!(world.mark_explored_directly(seat(0), *cell));
+    }
+    let scout = scout_of(&mut world, post);
+    let window = world.rules().attack().reach_memory.to_ticks_floor();
+
+    let mut runner = pushing(world);
+    let mut feed = Vec::new();
+    play(&mut runner, 200, &mut feed);
+    // The nearest cell is explored again 200 ticks after the rest, so it
+    // falls due 200 ticks later: a mark renews its tick.
+    assert!(
+        !runner.world_mut().mark_explored_directly(seat(0), cells[0]),
+        "the nearest cell was explored already"
+    );
+    let target = |runner: &Runner| cell_of(column(going(runner.world(), scout)));
+    play_to(&mut runner, window, &mut feed);
+    assert!(
+        !cells.contains(&target(&runner).expect("a cell")),
+        "no cell is due yet, so the scout scans none of them: {:?}",
+        target(&runner)
+    );
+    // Past reach memory the cells explored at tick 0 are due; the nearest
+    // cell, explored at tick 200, is not.
+    play_to(&mut runner, window + 10, &mut feed);
+    assert_eq!(
+        target(&runner),
+        Some(cells[1]),
+        "the scout walks to the nearest due cell, passing over the one not due yet"
+    );
+    // The scout reaches the due cell and explores it again: its explore tick
+    // is renewed past the window (fix pass 1, C2: a renewal the scout made,
+    // not one the fixture wrote).
+    let mut renewed = None;
+    while runner.world().tick().raw() < window + 1_200 {
+        play(&mut runner, 1, &mut feed);
+        if runner
+            .world()
+            .explored()
+            .explored_on(seat(0), cells[1])
+            .is_some_and(|tick| tick > window)
+        {
+            renewed = Some(runner.world().tick().raw());
+            break;
+        }
+    }
+    let renewed = renewed.expect("the scout scans the due cell again");
+    // The first renewal's tick and the chain's hash on it, pinned: the one
+    // committed chain of this lane that holds a re-scan (fix pass 1, C2). A
+    // change that moves either names why.
+    assert_eq!(
+        (renewed, runner.world().state_hash()),
+        (RENEWAL_TICK, RENEWAL_HASH),
+        "the first renewal, and the chain on its tick"
+    );
+    // And it moves on to another cell that is due now, never back to the one
+    // it has just renewed.
+    play(&mut runner, 10, &mut feed);
+    let now = runner.world().tick().raw();
+    let next = target(&runner).expect("a cell");
+    assert!(
+        cells.contains(&next) && next != cells[1],
+        "the scout moves on to another cell of the area: {next}"
+    );
+    let explored = runner
+        .world()
+        .explored()
+        .explored_on(seat(0), next)
+        .expect("an explored cell");
+    assert!(
+        now.saturating_sub(explored) > window,
+        "and that cell is due: explored on {explored}, now {now}"
+    );
+}
+
+/// The tick a Survey scout first renews a due cell in
+/// `a_cell_older_than_reach_memory_is_scanned_again_nearest_first`.
+const RENEWAL_TICK: u32 = 3_961;
+
+/// The chain's hash on [`RENEWAL_TICK`].
+const RENEWAL_HASH: u64 = 0xf795_cf68_97a4_d21c;
+
+/// Fix pass 1, C1 (AGENTS.md section 4.8, the second place): a save and a
+/// restore with both of snapshot 16's columns filled. A Survey scout has
+/// marked cells of its area on different ticks (no renewal: a cell falls due
+/// only after reach memory's 3600 ticks, which the re-scan test covers), and
+/// seat 0 remembers seat 1's Generator; the
+/// snapshot goes through its bytes and back, the restored world hashes as the
+/// saved one did, both run on alike, and every explore tick and every sighted
+/// blueprint is the saved one.
+#[test]
+fn a_save_keeps_every_explore_tick_and_every_sighted_blueprint() {
+    let mut world = world();
+    let post = survey_post(&mut world);
+    let cells = strip(&mut world, post, 20, 68);
+    let at = beacon_at(&world, post);
+    let theirs = core(&world, seat(1));
+    let near = ground(&world, at, 0, 6);
+    world
+        .raise_structure(
+            seat(1),
+            theirs,
+            pharmakos_sim::tables::StructureKind::Generator,
+            near,
+        )
+        .expect("room for a structure");
+    let _scout = scout_of(&mut world, post);
+    let mut runner = pushing(world);
+    let mut feed = Vec::new();
+    play(&mut runner, 400, &mut feed);
+    let explored = runner.world().explored();
+    let ticks: std::collections::BTreeSet<u32> = cells
+        .iter()
+        .filter_map(|cell| explored.explored_on(seat(0), *cell))
+        .collect();
+    assert!(
+        ticks.len() >= 2,
+        "the scout marked cells of its area on different ticks: {ticks:?}"
+    );
+    let sightings = runner.world().sightings();
+    assert!(
+        sightings
+            .blueprints()
+            .iter()
+            .any(|blueprint| *blueprint == pharmakos_sim::tables::StructureKind::Generator.id()),
+        "seat 0 remembers seat 1's Generator"
+    );
+
+    let bytes = runner
+        .capture()
+        .expect("between ticks")
+        .to_bytes()
+        .expect("the snapshot encodes");
+    let snapshot = pharmakos_sim::snapshot::Snapshot::from_bytes(&bytes).expect("the bytes decode");
+    let before = runner.world().state_hash();
+    let mut resumed = Runner::new(world_with(600_000));
+    resumed.restore(&snapshot).expect("the snapshot restores");
+    assert_eq!(
+        resumed.world().state_hash(),
+        before,
+        "a restore is hash-identical"
+    );
+    assert_eq!(
+        resumed.world().explored(),
+        runner.world().explored(),
+        "every explore tick is the saved one"
+    );
+    assert_eq!(
+        resumed.world().sightings().blueprints(),
+        runner.world().sightings().blueprints(),
+        "every sighted blueprint is the saved one"
+    );
+    for _ in 0..200 {
+        let one = runner.step().expect("a tick").map(|report| report.hash);
+        let two = resumed.step().expect("a tick").map(|report| report.hash);
+        assert_eq!(one, two, "the resumed run diverged from the saved one");
+        runner.clear_events();
+        resumed.clear_events();
+    }
+}
+
 #[test]
 fn the_stalest_sighting_is_refreshed_next() {
     let mut world = short_sighted_world();

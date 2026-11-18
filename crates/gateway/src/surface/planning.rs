@@ -818,7 +818,13 @@ impl Surface {
             .map(|beacon| beacon.cost_dollars)
             .ok_or_else(|| Error::internal("the rules table prices no beacon"))?;
         let mut lines: Vec<RoundRead<'_>> = Vec::new();
-        for read in reads.iter().filter(|read| read.site == Site::Covering) {
+        // S3's `pred`: a `toward` placement reads the map as a `covering` does,
+        // through the same placement reader, and says so in its own words.
+        for read in reads
+            .iter()
+            .filter(|read| read.site == Site::Covering || read.site == Site::Toward)
+        {
+            let toward = read.site == Site::Toward;
             // A handler body may never run, so only the route speaks.
             let Some(step) = read.route_step else {
                 continue;
@@ -832,6 +838,20 @@ impl Surface {
                     x: site.x,
                     y: site.y,
                     dollars,
+                },
+                (Some(StepFailure::NoTarget), _) if toward && read.matched == 0 => {
+                    RoundRead::NothingToward { step, kind }
+                }
+                (Some(StepFailure::NoTarget), _) if toward => RoundRead::NoneReachableToward {
+                    step,
+                    matched: read.matched,
+                },
+                (Some(StepFailure::IllegalSite), _) if toward => RoundRead::NoStone {
+                    step,
+                    kind,
+                    weighed: read.weighed.ok_or_else(|| {
+                        Error::internal("a `toward` that found no site counted no sites")
+                    })?,
                 },
                 (Some(StepFailure::NoTarget), _) if read.matched == 0 => {
                     RoundRead::NothingMatches { step, kind }
@@ -847,7 +867,7 @@ impl Surface {
                 },
                 (None, None) => {
                     return Err(Error::internal(
-                        "a `covering` read answered neither a site nor a failure",
+                        "a `covering` or `toward` read answered neither a site nor a failure",
                     ));
                 }
             });
@@ -1372,6 +1392,7 @@ mod tests {
             candidates,
             matched: 1,
             failure: None,
+            weighed: None,
             site_voxel: None,
         }
     }

@@ -729,6 +729,228 @@ pub fn cover_counted(
     }
 }
 
+/// One candidate site of a `toward` search: a legal site column, the node it
+/// stands on, the column of the feature it is measured to, and the octile
+/// lower bound on that cost. Kept in a buffer the caller owns, so a decision
+/// that searches allocates nothing once the buffer has grown.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct StoneCandidate {
+    bound: i64,
+    y: i32,
+    x: i32,
+    node: Node,
+    goal: Node,
+}
+
+/// What `toward` resolved to: the feature it steps toward and the site
+/// column the commander walks to and deploys on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Stone {
+    /// The feature the stone steps toward.
+    pub feature: usize,
+    /// The site column.
+    pub site: [i32; 2],
+    /// How many legal sites the search weighed for it: what a miss would
+    /// count, kept on a hit for the measurement of the search's cost.
+    pub weighed: u32,
+}
+
+/// The stepping-stone site toward `feature` (S3's plan, E23; S1's plan,
+/// decision 3; task `pred`): **the legal site, inside `seat`'s spheres,
+/// nearest the feature**, where "nearest" is targeting's (the module docs):
+/// the least item-61 estimate's integer cost **from the candidate site to
+/// the feature's anchor column** ([`Ground::measure_to`]); a candidate from
+/// which the feature cannot be reached is skipped; ties go to the lowest
+/// site y, then x. Straight-line distance is not used.
+///
+/// A candidate is a column within the sphere of one of `seat`'s own living
+/// beacons (its own radius, grown by a finished Spire), that is a **legal
+/// site** (inside one of the seat's own spheres, not on the column of one of
+/// its own live beacons), standable, walkable, outside every feature's
+/// footprint and connected to the commander's column, exactly as
+/// [`covering_site`] admits a column. Candidates are estimated in the order
+/// of the estimator's own lower bound, so the search stops as soon as no
+/// unestimated candidate can beat the best one found.
+///
+/// **The terrain is the live world's, unfogged** (`Fog::Clear`): E23's "the
+/// terrain the seat knows" reads every column until S3-05's terrain mask
+/// lands at S4 (S3's plan, decision 2; decisions-log item 156 (3)), as every
+/// other read of targeting's does (decisions-log item 108 (1)).
+///
+/// Returns the site, if any, and how many legal sites it weighed.
+fn stone_site(
+    ground: &Ground<'_>,
+    scratch: &mut Scratch,
+    candidates: &mut Vec<StoneCandidate>,
+    seat: SeatId,
+    commander: [Fx; 3],
+    feature: usize,
+) -> (Option<[i32; 2]>, u32) {
+    candidates.clear();
+    let [cx, cy] = column_of(commander);
+    let Some(start) = ground.surface.node_of(cx, cy) else {
+        return (None, 0);
+    };
+    let beacons = ground.beacons;
+    for (((owner, hp), centre), id) in beacons
+        .seats()
+        .iter()
+        .zip(beacons.hit_points())
+        .zip(beacons.positions())
+        .zip(beacons.ids())
+    {
+        if *owner != seat.raw() || !hp.is_alive() {
+            continue;
+        }
+        let radius = ground.radius_of(Some(BeaconId::new(*id))).floor_voxels();
+        let limit = i64::from(radius) * i64::from(radius);
+        let [bx, by] = column_of(*centre);
+        for dy in -radius..=radius {
+            for dx in -radius..=radius {
+                if i64::from(dx) * i64::from(dx) + i64::from(dy) * i64::from(dy) > limit {
+                    continue;
+                }
+                ground.charge(1);
+                let (Some(x), Some(y)) = (bx.checked_add(dx), by.checked_add(dy)) else {
+                    continue;
+                };
+                let Some(node) = ground.surface.node_of(x, y) else {
+                    continue;
+                };
+                let Some(site) = ground.standing(x, y) else {
+                    continue;
+                };
+                if !ground.surface.walkable(node)
+                    || ground.features.at_column(x, y).is_some()
+                    || !ground.inside_own_sphere(seat, site)
+                    || ground.stacks_on_own(seat, x, y)
+                    || !ground.clusters.connected(ground.surface, start, node)
+                {
+                    continue;
+                }
+                let Some(goal) = ground.measure_to(feature, node) else {
+                    // The feature cannot be reached from here, which makes the
+                    // column no candidate; a deduplicated count below still
+                    // weighs it.
+                    candidates.push(StoneCandidate {
+                        bound: i64::MAX,
+                        y,
+                        x,
+                        node,
+                        goal: node,
+                    });
+                    continue;
+                };
+                candidates.push(StoneCandidate {
+                    bound: i64::from(ground.surface.heuristic(node, goal)),
+                    y,
+                    x,
+                    node,
+                    goal,
+                });
+            }
+        }
+    }
+    // A column two spheres hold is one candidate: deduplicated by `(y, x)`,
+    // keeping its one bound (the bound is a function of the column alone).
+    // item 62: the key ends in `(y, x)`, unique per column, so it is total.
+    candidates.sort_unstable_by_key(|entry| (entry.y, entry.x));
+    candidates.dedup_by_key(|entry| (entry.y, entry.x));
+    // E7: rule: a count past `u32` is a count no step_failed value can carry; it reads as the most
+    let weighed = u32::try_from(candidates.len()).unwrap_or(u32::MAX);
+    // item 62: as above.
+    candidates.sort_unstable_by_key(|entry| (entry.bound, entry.y, entry.x));
+    let mut best: Option<(i64, i32, i32)> = None;
+    for entry in candidates.iter() {
+        if entry.bound == i64::MAX {
+            break;
+        }
+        if best.is_some_and(|(cost, _, _)| entry.bound > cost) {
+            break;
+        }
+        let Some(cost) = ground.travel(scratch, entry.node, entry.goal) else {
+            continue;
+        };
+        if best.is_none_or(|held| (cost, entry.y, entry.x) < held) {
+            best = Some((cost, entry.y, entry.x));
+        }
+    }
+    (best.map(|(_, y, x)| [x, y]), weighed)
+}
+
+/// Resolve a `toward` site for `seat` (S3's plan, E23; task `pred`): the
+/// feature it names, or the one its pick ranks first from the commander's
+/// column as a `covering`'s does, and the stepping-stone site toward it
+/// ([`stone_site`]). A pick whose nearest feature has no site tries the next,
+/// as `covering` does. `candidates` is the caller's buffer.
+///
+/// # Errors
+///
+/// `no_target` when a name is absent or lost, or a description matches
+/// nothing reachable, counted as [`cover_counted`] counts it; `illegal_site`
+/// when a feature was found and no legal site reaches it, counted with **how
+/// many legal sites it weighed** (S1's plan, decision 3: "a `toward` that
+/// finds no site fails its step and says why, with how many sites it
+/// weighed").
+pub fn toward_counted(
+    ground: &Ground<'_>,
+    scratch: &mut Scratch,
+    candidates: &mut Vec<StoneCandidate>,
+    seat: SeatId,
+    commander: [Fx; 3],
+    spec: FeatureSpec,
+) -> Result<Stone, StepFailed> {
+    match spec {
+        FeatureSpec::Name { kind, anchor } => {
+            let feature = ground
+                .features
+                .index_of(kind, anchor)
+                .filter(|index| ground.is_live(*index))
+                .ok_or(StepFailed::counted(StepFailure::NoTarget, 0))?;
+            match stone_site(ground, scratch, candidates, seat, commander, feature) {
+                (Some(site), weighed) => Ok(Stone {
+                    feature,
+                    site,
+                    weighed,
+                }),
+                (None, weighed) => Err(StepFailed::counted(StepFailure::IllegalSite, weighed)),
+            }
+        }
+        FeatureSpec::Nearest { kind, uncovered } => {
+            let mut ranker = Ranker::new(ground, column_of(commander), |index| {
+                matches_pick(ground, seat, index, kind, uncovered)
+            });
+            let mut reached = false;
+            // The sites weighed for every feature are the same legal sites:
+            // the candidate set is built from the seat's spheres and the
+            // commander's column alone, and only the feature each is measured
+            // to differs. So the count is that set's size, never a sum over
+            // the features tried (fix pass 1, C5).
+            let mut weighed: u32 = 0;
+            while let Some((feature, _)) = ranker.next(ground, scratch) {
+                reached = true;
+                match stone_site(ground, scratch, candidates, seat, commander, feature) {
+                    (Some(site), count) => {
+                        return Ok(Stone {
+                            feature,
+                            site,
+                            weighed: count,
+                        });
+                    }
+                    (None, count) => weighed = count,
+                }
+            }
+            if reached {
+                Err(StepFailed::counted(StepFailure::IllegalSite, weighed))
+            } else {
+                Err(StepFailed::counted(StepFailure::NoTarget, ranker.matched()))
+            }
+        }
+        // `covered {}` is legal only under `on` (the compile refuses it here).
+        FeatureSpec::Covered => Err(StepFailed::counted(StepFailure::NoTarget, 0)),
+    }
+}
+
 /// Whether the feature at `index` passes a `covering` pick's filters: its
 /// kind, alive, and -- for `UNCOVERED` -- its anchor point outside every
 /// sphere of `seat`'s own living beacons, awake or dormant. Never reads

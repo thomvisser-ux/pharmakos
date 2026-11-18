@@ -20,20 +20,11 @@
       {
         "id": "h1",
         "when": {
-          "enemy_units_near": {
-            "near": {
-              "beacon_anchor": {
-                "beacon_id": "b_01"
-              }
+          "beacon_has_structure": {
+            "beacon": {
+              "beacon_id": "b_01"
             },
-            "radius_voxels": 24,
-            "count": {
-              "op": "GE",
-              "value": 1
-            },
-            "freshness": {
-              "kind": "VISIBLE_NOW"
-            }
+            "blueprint_id": "wall"
           }
         },
         "body": [

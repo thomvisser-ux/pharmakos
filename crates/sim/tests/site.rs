@@ -1528,7 +1528,9 @@ fn duel_evidence(seat0: BuildSettings) -> (Vec<u64>, Vec<pharmakos_sim::Event>) 
 /// `(Push tick, hash)`: what a duel test pins, so a change that moves the
 /// shells, the repairs or the refills is red here (AGENTS.md section 4.8). A
 /// change that moves them re-blesses them with its reason, as any golden
-/// chain.
+/// chain. Re-blessed by S3's `pred`: each seat sees the other's mortar, so
+/// the sighted-blueprint block (snapshot 16) is hashed; the hash moved and
+/// the duel did not (with the block written out, the old values hold).
 fn pinned_around(
     chain: &[u64],
     events: &[pharmakos_sim::Event],
@@ -1584,12 +1586,12 @@ fn a_mortar_duel_repairs_and_salvages() {
             &[EventKind::ShellLanded, EventKind::AssetRepaired]
         ),
         vec![
-            (104, 0xad5e_7c1b_e1af_e0a8),
-            (105, 0xf343_98f2_7feb_7279),
-            (106, 0xbc6b_2894_e1ba_ab6d),
-            (181, 0x49f5_4247_3002_50e9),
-            (182, 0xb59f_8156_30f9_72ef),
-            (183, 0x16f6_78ee_b10d_0873)
+            (104, 0x7798_7618_afae_eeba),
+            (105, 0xd58b_fb5c_72bf_a5e2),
+            (106, 0x5416_8f40_1d06_1a0f),
+            (181, 0x1620_ef8d_0b41_833b),
+            (182, 0xf986_c544_cacb_fcfc),
+            (183, 0xc0a7_dbad_0c68_15d9)
         ],
         "the duel's chain at its first shell and its first repair"
     );
@@ -1616,12 +1618,12 @@ fn a_mortar_duel_refills_its_craters() {
             &[EventKind::ShellLanded, EventKind::GroundRefilled]
         ),
         vec![
-            (104, 0xb519_3d09_8659_c0ed),
-            (105, 0x6bf6_9573_d5c1_9b16),
-            (106, 0x475b_0751_5ef0_7b94),
-            (138, 0x8fa0_b9c1_e603_b9ec),
-            (139, 0xdaa3_c6ac_37df_824a),
-            (140, 0x586f_8750_342c_2117)
+            (104, 0x3c33_5a34_a9e3_2c13),
+            (105, 0x2ed1_bebd_a928_98cf),
+            (106, 0x90ed_6241_0749_9069),
+            (138, 0xaa25_4f17_69d4_cea5),
+            (139, 0x003d_0d68_a7a8_a865),
+            (140, 0xda4d_1bd7_7c6a_7e76)
         ],
         "the duel's chain at its first shell and its first refill"
     );

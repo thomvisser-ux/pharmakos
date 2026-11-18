@@ -439,10 +439,10 @@ pub fn stream_repair_check(
 
 /// Mark every cluster a settled chunk's footprint overlaps: `crates/sim/src/
 /// world.rs`'s private `mark_chunk_clusters`, restated (at the cluster edge of
-/// 32 a chunk's footprint is one cluster, item 58, and this is one mark). The
-/// sim's copy returns quietly where this one cannot reach; here each such
-/// branch is an [`Error::Drift`], since a settled chunk always has an origin
-/// on a map the decomposition covers.
+/// 32 a chunk's footprint is one cluster, item 58, and this is one mark). Each
+/// branch the sim's copy answers with a typed `MarkError` (since S3's `pred`;
+/// it returned quietly before) is an [`Error::Drift`] here, since a settled
+/// chunk always has an origin on a map the decomposition covers.
 ///
 /// # Errors
 ///

@@ -70,7 +70,16 @@
 //!   brought inside the first of its beacon's probe areas the cell overlaps,
 //!   the place it looks round the cell from. Only a Survey beacon's scouts
 //!   mark: a Defend beacon's pickets warn, they do not survey
-//!   ([`World::survey_scout_sensor`]). A cell once explored stays explored.
+//!   ([`World::survey_scout_sensor`]). A cell once explored stays explored,
+//!   and each mark writes the tick it was made on, so a scout standing on the
+//!   scan column again renews it.
+//! * **The re-scan** (S3's plan, decision 7, ruled by item 154 (4); S3's
+//!   `pred`): an explored cell is **due** again once it is older than reach
+//!   memory (`verifier.reach_memory_ms`), the one clock a seat's Attack
+//!   targets are held to, so a seat's map stays as fresh as its targets must
+//!   be. A scout takes a due cell only when no unexplored cell is left and no
+//!   sighting is due a re-check, chosen by the same selection and order as an
+//!   unexplored one ([`nearest_cell`]).
 //! * **The scan.** The scout walks to the nearest unexplored cell of its
 //!   beacon's probe areas, ties to the lowest cell: to the cell's scan column,
 //!   when that column is ground the scout can reach (the router's own
@@ -119,7 +128,9 @@ use crate::knowledge::{AssetId, AssetKind, Position};
 use crate::math::fixed::{Fx, Sq};
 use crate::math::quantity::Ms;
 use crate::sight::{RadiusOnly, Sensor};
-use crate::tables::{BeaconId, ColumnBox, SeatId, StructureId, TargetKind, UnitId, UnitKind};
+use crate::tables::{
+    BeaconId, ColumnBox, NO_BLUEPRINT, SeatId, StructureId, TargetKind, UnitId, UnitKind,
+};
 use crate::targeting::column_of;
 use crate::world::World;
 
@@ -132,8 +143,6 @@ use crate::world::World;
 /// marked unseen.
 // PLACEHOLDER: Survey's coarse cell, 16 columns square, which a scout of vision 24 sees whole from its centre — owner, at S3's demo (item 152 (1) 2), with `tune3`'s balance re-run
 pub const CELL_VOXELS: i32 = 16;
-
-// PLACEHOLDER: whether an explored cell is ever scanned again, and on what clock — owner, at S3, with the reach filters
 
 /// Survey's refresh interval: a sighting this old is due a re-check, and a
 /// Push's last this-long is the refresh pass (decisions-log item 13).
@@ -299,6 +308,7 @@ fn look_around(world: &mut World, sensor: &Sensor, tick: u32, found: &mut Vec<Ro
                 id,
                 owner: SeatId::new(owner),
                 kind,
+                blueprint: NO_BLUEPRINT,
                 place,
                 tick,
             };
@@ -328,6 +338,7 @@ fn look_around(world: &mut World, sensor: &Sensor, tick: u32, found: &mut Vec<Ro
                 id,
                 owner: SeatId::new(owner),
                 kind: AssetKind::Beacon,
+                blueprint: NO_BLUEPRINT,
                 place,
                 tick,
             };
@@ -337,11 +348,12 @@ fn look_around(world: &mut World, sensor: &Sensor, tick: u32, found: &mut Vec<Ro
 
     for at in 0..crate::math::index::row(world.structures().len()) {
         let s = world.structures();
-        let (Some(owner), Some(hp), Some(place), Some(id)) = (
+        let (Some(owner), Some(hp), Some(place), Some(id), Some(blueprint)) = (
             s.seats().get(at).copied(),
             s.hit_points().get(at).copied(),
             s.positions().get(at).copied(),
             s.ids().get(at).copied(),
+            s.kinds().get(at).copied(),
         ) else {
             continue;
         };
@@ -357,6 +369,7 @@ fn look_around(world: &mut World, sensor: &Sensor, tick: u32, found: &mut Vec<Ro
                 id,
                 owner: SeatId::new(owner),
                 kind: AssetKind::Structure,
+                blueprint,
                 place,
                 tick,
             };
@@ -372,6 +385,9 @@ struct Seen {
     id: AssetId,
     owner: SeatId,
     kind: AssetKind,
+    /// The structure's [`crate::tables::StructureKind::id`], or
+    /// [`NO_BLUEPRINT`]: a seat that sees a structure sees what it is.
+    blueprint: u8,
     place: [Fx; 3],
     tick: u32,
 }
@@ -386,6 +402,7 @@ fn note(world: &mut World, report: bool, seen: Seen) {
         seen.id,
         seen.owner,
         seen.kind.id(),
+        seen.blueprint,
         seen.place,
         seen.tick,
     );
@@ -430,6 +447,7 @@ fn seen_at(world: &World, seat: SeatId, asset: AssetId) -> Option<u32> {
 /// from; and report `area_surveyed` when that mark took the last scannable
 /// cell of its beacon's probe areas.
 fn explore(world: &mut World, sensor: &Sensor, home: BeaconId) {
+    let tick = world.tick().raw();
     let [x, y] = column_of(sensor.centre);
     let reach = world.arrive_radius().floor_voxels();
     let mut surveyed = false;
@@ -444,14 +462,24 @@ fn explore(world: &mut World, sensor: &Sensor, home: BeaconId) {
                 continue;
             };
             if on_scan_column(world, sensor.centre, home, cell)
-                && world.explored_mut().mark(sensor.seat, cell)
+                && world.explored_mut().mark(sensor.seat, cell, tick)
                 && in_probe_areas(world, home, cell)
             {
                 surveyed = true;
             }
         }
     }
-    if !surveyed || nearest_cell(world, sensor.seat, home, sensor.centre, &|_| true).is_some() {
+    if !surveyed
+        || nearest_cell(
+            world,
+            sensor.seat,
+            home,
+            sensor.centre,
+            Pick::Unexplored,
+            &|_| true,
+        )
+        .is_some()
+    {
         return;
     }
     let now = world.tick();
@@ -572,16 +600,46 @@ fn centre(c: i32, lo: i32, hi: i32) -> Option<i32> {
     Some(mid.clamp(lo, hi))
 }
 
-/// The nearest cell of `home`'s probe areas that `seat` has not explored and a
+/// Which cells a scan looks for (decision 7).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Pick {
+    /// Cells `seat` has never explored.
+    Unexplored,
+    /// Cells `seat` explored longer ago than reach memory
+    /// (`verifier.reach_memory_ms`): due a re-scan ([`cell_due`]).
+    Due,
+}
+
+/// Whether a cell explored on tick `explored` is due a re-scan on tick `now`
+/// (S3's plan, decision 7): **older than reach memory**, the one clock a
+/// seat's Attack targets are held to as well. The age is in whole ticks
+/// against reach memory floored to ticks, so "older than N ms" is exact: an
+/// age of `t` ticks is `t * 50` ms, which exceeds N exactly when `t` exceeds
+/// N's whole ticks.
+fn cell_due(world: &World, explored: u32, now: u32) -> bool {
+    let window = world.rules().attack().reach_memory.to_ticks_floor();
+    // E7: rule: a cell is explored on a tick already played, so never later than now
+    now.saturating_sub(explored) > window
+}
+
+/// The nearest cell of `home`'s probe areas that `pick` admits for `seat` and a
 /// scout at `here` can reach, with the point it walks to, ties to the lowest
 /// cell; `open` refuses a point the caller will not send it to.
+///
+/// One selection and one order for both picks (S3's `pred`, the main
+/// session's ruling on decision 7's tie-break): a due cell is chosen exactly
+/// as an unexplored one is, by squared distance from the scout to the point
+/// it would scan from, ties to the lowest cell id. Decision 7 adds no rule of
+/// its own beyond which cells are candidates.
 fn nearest_cell(
     world: &World,
     seat: SeatId,
     home: BeaconId,
     here: [Fx; 3],
+    pick: Pick,
     open: &dyn Fn([Fx; 3]) -> bool,
 ) -> Option<(u32, [Fx; 3])> {
+    let now = world.tick().raw();
     let surface = world.surface();
     let [hx, hy] = column_of(here);
     let start = surface.node_of(hx, hy)?;
@@ -590,7 +648,12 @@ fn nearest_cell(
         for (cell, [cx, cy], [x, y]) in cells_of(area) {
             // A cell two areas overlap is scanned from the first's column
             // ([`scan_column`]), so it is a candidate of the first only.
-            if world.explored().contains(seat, cell)
+            let candidate = match (pick, world.explored().explored_on(seat, cell)) {
+                (Pick::Unexplored, explored) => explored.is_none(),
+                (Pick::Due, Some(explored)) => cell_due(world, explored, now),
+                (Pick::Due, None) => false,
+            };
+            if !candidate
                 || probe_areas(world, home)
                     .take(index)
                     .any(|earlier| overlaps(earlier, cx, cy))
@@ -642,11 +705,17 @@ pub(crate) fn run_scout(world: &mut World, unit: u32) {
                 .any(|(at, reach)| Sq::between(*at, point) <= *reach)
                 && !claimed(world, home, row, point)
         };
-        let scan = nearest_cell(world, seat, home, here, &open).map(|(_, point)| point);
+        let scan =
+            nearest_cell(world, seat, home, here, Pick::Unexplored, &open).map(|(_, point)| point);
         if scan.is_some() && !refresh_pass(world) {
             scan
         } else {
-            most_due(world, seat, going, &open).or(scan)
+            // Decision 7: a due cell is scanned again only when no unexplored
+            // cell is left, and after the sightings due a re-check, the
+            // spec's second job; so it takes the time a scout was idle.
+            most_due(world, seat, going, &open).or(scan).or_else(|| {
+                nearest_cell(world, seat, home, here, Pick::Due, &open).map(|(_, point)| point)
+            })
         }
     };
     world.put_threat_scratch(threats);

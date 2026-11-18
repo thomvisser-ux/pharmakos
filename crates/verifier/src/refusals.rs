@@ -62,9 +62,12 @@
 //! the semantic check's `E0415`, decisions-log item 146 (3) (h)).
 //!
 //! S3's `con6` put eight predicates and the site `toward` on the wire before
-//! S3's `pred` gives them an effect, so `E0020` to `E0028` refuse each one where
-//! the compile reaches it: a predicate wherever a condition is read, and
-//! `toward` in every `Location` but a `broadcast`'s. S3's `vfy6` judges what
+//! S3's `pred` gave them an effect, so `E0020` to `E0028` refused each one where
+//! the compile reached it: a predicate wherever a condition is read, and
+//! `toward` in every `Location` but a `broadcast`'s. S3's `pred` built them
+//! and retired `E0020` to `E0028`: what each holds is judged by the checks
+//! `vfy6` built behind them (`toward` outside a `place_beacon`'s `at` is the
+//! structure stage's `E0420`). S3's `vfy6` judges what
 //! each one holds behind its code, in the stages that judge the same leaves
 //! anywhere else (a predicate's parameters, `E0209`'s freshness and `toward`'s
 //! slot are the structure stage's, a named feature the resolve stage's), so
@@ -76,8 +79,8 @@
 
 use pharmakos_proto::gp::v1::beacon_filter::Side;
 use pharmakos_proto::gp::v1::{
-    BeaconFilter, BeaconRef, BuildTarget, Condition, InterfaceStep, Location, Playbook, beacon_ref,
-    condition, interface_row, location,
+    BeaconFilter, BeaconRef, BuildTarget, InterfaceStep, Location, Playbook, beacon_ref,
+    interface_row, location,
 };
 
 use crate::pointer;
@@ -106,15 +109,6 @@ pub const REFUSED_CONSTRUCTS: &[(&str, &str)] = &[
     ),
     ("selector filter `side: ENEMY_KNOWN`", "E0015"),
     ("selector filter `tags`", "E0016"),
-    ("predicate `beacon_units_by_role`", "E0020"),
-    ("predicate `beacon_mandate`", "E0021"),
-    ("predicate `beacon_has_structure`", "E0022"),
-    ("predicate `enemy_units_near`", "E0023"),
-    ("predicate `enemy_beacon_known`", "E0024"),
-    ("predicate `enemy_structure_near`", "E0025"),
-    ("predicate `kw_supply`", "E0026"),
-    ("predicate `kw_draw`", "E0027"),
-    ("site `toward`", "E0028"),
 ];
 
 /// The code this crate refuses a construct by, keyed by the sim's name for it,
@@ -223,30 +217,7 @@ impl Visit for Refusals<'_> {
         );
     }
 
-    fn condition(&mut self, at: &str, node: &Condition) {
-        let (code, field) = match node.node.as_ref() {
-            Some(condition::Node::BeaconUnitsByRole(_)) => ("E0020", "beacon_units_by_role"),
-            Some(condition::Node::BeaconMandate(_)) => ("E0021", "beacon_mandate"),
-            Some(condition::Node::BeaconHasStructure(_)) => ("E0022", "beacon_has_structure"),
-            Some(condition::Node::EnemyUnitsNear(_)) => ("E0023", "enemy_units_near"),
-            Some(condition::Node::EnemyBeaconKnown(_)) => ("E0024", "enemy_beacon_known"),
-            Some(condition::Node::EnemyStructureNear(_)) => ("E0025", "enemy_structure_near"),
-            Some(condition::Node::KwSupply(_)) => ("E0026", "kw_supply"),
-            Some(condition::Node::KwDraw(_)) => ("E0027", "kw_draw"),
-            _ => return,
-        };
-        self.out.emit(Diag::new(code, pointer::child(at, field)));
-    }
-
     fn location(&mut self, at: &str, place: &Location, slot: Slot<'_>) {
-        if matches!(place.place.as_ref(), Some(location::Place::Toward(_))) {
-            // In the places `not_compiled` names the sim reads no place.
-            if !not_compiled(at) {
-                self.out
-                    .emit(Diag::new("E0028", pointer::child(at, "toward")));
-            }
-            return;
-        }
         if !matches!(slot, Slot::BuildAnchor { .. } | Slot::RemoveAnchor) {
             return;
         }

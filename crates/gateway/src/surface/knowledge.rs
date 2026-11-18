@@ -1104,6 +1104,9 @@ impl Surface {
         if let Some(reference) = waypoint.get("covering") {
             return self.covering_site(seat, reference, &at, from, scratch);
         }
+        if let Some(toward) = waypoint.get("toward") {
+            return self.toward_site(seat, toward, &at, from, scratch);
+        }
         let host = self.host()?;
         let spec = if let Some(reference) = waypoint.get("beacon_anchor") {
             let reference: pharmakos_proto::gp::v1::BeaconRef =
@@ -1220,6 +1223,73 @@ impl Surface {
                 ))
             },
         )?;
+        let [x, y] = found.site;
+        let point = ground
+            .standing(x, y)
+            .ok_or_else(|| Error::internal(format!("{at}: the sim chose a site off the map")))?;
+        Ok(view::voxel_of(point))
+    }
+
+    /// A `toward` waypoint's site: where the stepping stone would stand, as the
+    /// sim chooses it (S3's `pred`, E23), ranked from `from` (or from the
+    /// commander, for the first waypoint) as `covering`'s is. **Outside a Push
+    /// only**, for [`Surface::covering_site`]'s reason. A `toward` that finds
+    /// no site is `NOT_FOUND` naming the step failure it would be.
+    fn toward_site(
+        &self,
+        seat: SeatId,
+        toward: &Json,
+        at: &str,
+        from: Option<Voxel>,
+        scratch: &mut Option<pharmakos_sim::pathing::Scratch>,
+    ) -> Result<Voxel, Error> {
+        use crate::targeting::Site;
+        if self.host()?.runner().phase() == pharmakos_sim::runner::MatchPhase::Push {
+            return Err(Error::phase_closed(format!(
+                "{at} is a `toward`, which is read off the frozen world, and in a Push the \
+                 world has moved on from it: ask outside a Push"
+            )));
+        }
+        let toward: pharmakos_proto::gp::v1::Toward = pharmakos_proto::json::decode_json(toward)
+            .map_err(|error| {
+                Error::invalid(format!("{at}: `toward` is a `gp.v1.Toward`: {error}"))
+            })?;
+        let reference = toward
+            .feature
+            .as_ref()
+            .ok_or_else(|| Error::invalid(format!("{at}: `toward` names its `feature`")))?;
+        let spec = crate::targeting::spec_of(reference, Site::Toward)
+            .map_err(|why| Error::invalid(format!("{at}: {why}")))?;
+        let world = self.host()?.world();
+        let origin = match from {
+            Some(voxel) => fx_point(voxel, at)?,
+            None => crate::targeting::commander_point(world, seat).ok_or_else(|| {
+                Error::not_found(format!(
+                    "{at} steps from where the commander stands, and it is standing nowhere"
+                ))
+            })?,
+        };
+        let tally = pharmakos_sim::seams::UnitTally::new();
+        let ground = crate::targeting::lend(world, &tally);
+        let scratch = match scratch {
+            Some(held) => held,
+            None => scratch.insert(crate::targeting::scratch_for(world)?),
+        };
+        let mut stones: Vec<pharmakos_sim::targeting::StoneCandidate> = Vec::new();
+        let found = pharmakos_sim::targeting::toward_counted(
+            &ground,
+            scratch,
+            &mut stones,
+            seat,
+            origin,
+            spec,
+        )
+        .map_err(|failed| {
+            Error::not_found(format!(
+                "{at} finds no stepping stone: its step would fail `{}`",
+                failed.reason.name()
+            ))
+        })?;
         let [x, y] = found.site;
         let point = ground
             .standing(x, y)

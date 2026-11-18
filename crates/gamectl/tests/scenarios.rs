@@ -67,6 +67,8 @@ const SCENARIOS: &[&str] = &[
     BREACH_AND_RAZE,
     RESONANCE_SPIRE,
     SPIRE_LOST,
+    "scenarios/s3/toward-stepping-stone.scenario.jsonc",
+    "scenarios/s3/enemy-known-rule.scenario.jsonc",
 ];
 
 /// The scenario against the built-in operator: seat 1 is `builtin`, played by

@@ -43,6 +43,7 @@ use pharmakos_proto::json::{self, Json};
 use pharmakos_sim::events::{Event, EventKind};
 use pharmakos_sim::interpreter::state::{NO_INDEX, StepFailure};
 use pharmakos_sim::interpreter::{Plan, PlanError, VisitState};
+use pharmakos_sim::math::fixed::Fx;
 use pharmakos_sim::math::random::{Stream, StreamRng};
 use pharmakos_sim::runner::{DEFAULT_ROUND_LIMIT, MatchSettings, Runner};
 use pharmakos_sim::tables::SeatId;
@@ -51,7 +52,21 @@ use pharmakos_sim::world::{DamageOrder, DamageTarget};
 use pharmakos_sim::{RulesTable, World, WorldConfig};
 
 /// The committed transcript cases, in the order the golden tree holds them.
-const CASES: &[&str] = &["guards", "handlers", "place_beacon", "reflex", "visit"];
+const CASES: &[&str] = &[
+    "guards",
+    "handlers",
+    "place_beacon",
+    "reflex",
+    "visit",
+    "beacon_units_by_role",
+    "beacon_mandate",
+    "beacon_has_structure",
+    "kw_supply",
+    "kw_draw",
+    "enemy_units_near",
+    "enemy_beacon_known",
+    "enemy_structure_near",
+];
 
 /// How many ticks a transcript case plays, per case.
 ///
@@ -168,18 +183,16 @@ fn transcript(case: &str) -> String {
         // damage. The case is about the reflex, so its core fabricates
         // nothing: a Survey writ with no scouts.
         let world = runner.world_mut();
-        let row = world
-            .beacons()
-            .row_of_ordinal(SeatId::new(CASE_SEAT), 0)
-            .expect("the case's seat has a core");
-        let core = pharmakos_sim::tables::BeaconId::new(u32::try_from(row).expect("a beacon row"));
+        let core = core_of(world, CASE_SEAT);
         world.set_writ(core, pharmakos_sim::seams::MandateKind::Survey);
     }
+    setup(case, runner.world_mut());
     assert!(runner.begin_push().unwrap(), "a match opens in a Lull");
 
     let mut lines = String::from("# tick\tseq\tkind\tseat\tsubject\tvalue\n");
     let damage = script(case);
     for tick in 0..case_ticks(case) {
+        stage(case, tick, runner.world_mut());
         for (at, amount) in damage {
             if *at == tick {
                 let commander = runner
@@ -210,6 +223,130 @@ fn transcript(case: &str) -> String {
         runner.clear_events();
     }
     lines
+}
+
+/// `seat`'s core, its `b_00`.
+fn core_of(world: &World, seat: u8) -> pharmakos_sim::tables::BeaconId {
+    let row = world
+        .beacons()
+        .row_of_ordinal(SeatId::new(seat), 0)
+        .expect("an occupied seat has a core");
+    pharmakos_sim::tables::BeaconId::new(u32::try_from(row).expect("a beacon row"))
+}
+
+/// Where `seat`'s core stands.
+fn core_at(world: &World, seat: u8) -> [Fx; 3] {
+    let row = world
+        .beacons()
+        .row_of_ordinal(SeatId::new(seat), 0)
+        .expect("an occupied seat has a core");
+    world.beacons().positions()[row]
+}
+
+/// The standing point `(dx, dy)` columns from `at`.
+fn beside(world: &World, at: [Fx; 3], dx: i32, dy: i32) -> [Fx; 3] {
+    let [x, y, _] = at;
+    world
+        .ground()
+        .standing(x.floor_voxels() + dx, y.floor_voxels() + dy)
+        .expect("a column on the map")
+}
+
+/// What an S3 predicate case puts in the world before its Push (S3's `pred`):
+/// the state its predicate reads, which no playbook of seat 0's can make in
+/// a case's fifteen seconds.
+fn setup(case: &str, world: &mut World) {
+    use pharmakos_sim::seams::MandateKind;
+    use pharmakos_sim::tables::StructureKind;
+    let core = core_of(world, CASE_SEAT);
+    let home = core_at(world, CASE_SEAT);
+    match case {
+        // A Survey core asked for one scout fields it during the case.
+        "beacon_units_by_role" => {
+            world.set_writ(core, MandateKind::Survey);
+            world.set_scouts(core, 1);
+        }
+        "beacon_mandate" => world.set_writ(core, MandateKind::Survey),
+        // A finished Generator homed to the core, and seat 1's Resonance
+        // Spire homed to it too, which is not the seat's own and never
+        // counts.
+        "beacon_has_structure" => {
+            let at = beside(world, home, 6, 0);
+            world
+                .raise_structure(SeatId::new(CASE_SEAT), core, StructureKind::Generator, at)
+                .expect("room for a structure");
+            let at = beside(world, home, -6, 0);
+            world
+                .raise_structure(SeatId::new(1), core, StructureKind::ResonanceSpire, at)
+                .expect("room for a structure");
+        }
+        // Seat 1's Generator inside seat 0's core sphere, which the core sees.
+        "enemy_structure_near" => {
+            let theirs = core_of(world, 1);
+            let at = beside(world, home, 8, 0);
+            world
+                .raise_structure(SeatId::new(1), theirs, StructureKind::Generator, at)
+                .expect("room for a structure");
+        }
+        _ => {}
+    }
+}
+
+/// What an S3 predicate case does to the world during its Push, before tick
+/// `tick` is played: a unit carried into sight and out of it again.
+fn stage(case: &str, tick: u32, world: &mut World) {
+    use pharmakos_sim::tables::StructureKind;
+    let carry = |world: &mut World, seat: u8, to: [Fx; 3]| {
+        let unit = world
+            .commander_of(SeatId::new(seat))
+            .expect("an occupied seat has a commander");
+        assert!(world.place_unit_directly(unit, to), "the commander stands");
+    };
+    match (case, tick) {
+        // Seat 1's commander walks into seat 0's core sphere at tick 40 and
+        // out of it, back to its own core, at tick 120.
+        ("enemy_units_near", 40) => {
+            let to = beside(world, core_at(world, CASE_SEAT), 6, 0);
+            carry(world, 1, to);
+        }
+        ("enemy_units_near", 120) => {
+            let to = beside(world, core_at(world, 1), 3, 0);
+            carry(world, 1, to);
+        }
+        // Seat 0's commander looks at seat 1's core at tick 40 and comes home
+        // at tick 120.
+        ("enemy_beacon_known", 40) => {
+            let to = beside(world, core_at(world, 1), 6, 0);
+            carry(world, CASE_SEAT, to);
+        }
+        ("enemy_beacon_known", 120) => {
+            let to = beside(world, core_at(world, CASE_SEAT), 3, 0);
+            carry(world, CASE_SEAT, to);
+        }
+        // A Generator homed to seat 0's core is finished at tick 60, on the
+        // vent nearest the core, so it supplies.
+        ("kw_supply", 60) => {
+            let core = core_of(world, CASE_SEAT);
+            let [x, y, _] = core_at(world, CASE_SEAT);
+            let (cx, cy) = (i64::from(x.floor_voxels()), i64::from(y.floor_voxels()));
+            let [vx, vy] = world
+                .features()
+                .features()
+                .iter()
+                .filter(|feature| feature.kind == pharmakos_sim::features::FeatureKind::Vent)
+                .map(|feature| feature.anchor)
+                .min_by_key(|[vx, vy]| {
+                    let (dx, dy) = (i64::from(*vx) - cx, i64::from(*vy) - cy);
+                    (dx * dx + dy * dy, *vy, *vx)
+                })
+                .expect("a vent");
+            let at = world.ground().standing(vx, vy).expect("a vent on the map");
+            world
+                .raise_structure(SeatId::new(CASE_SEAT), core, StructureKind::Generator, at)
+                .expect("room for a structure");
+        }
+        _ => {}
+    }
 }
 
 /// One event, as the transcript writes it.
@@ -878,6 +1015,120 @@ fn a_move_a_commander_cannot_walk_fails_with_no_path() {
     assert!(
         failures.contains(&i64::from(StepFailure::NoPath.id())),
         "a sealed-in commander's move fails with `no_path`, not with a silent wait:\n{body}"
+    );
+}
+
+/// S3's `pred`: **a predicate never reads another seat's state.** Seat 0's
+/// rules ask about the ground around seat 1's core, which none of seat 0's
+/// sensors reach. Seat 2's commander is carried there, which seat 1 sees and
+/// remembers, so seat 0 must not learn of it through another seat's memory;
+/// and seat 1 raises a Generator there, its own, which no seat but seat 1's
+/// enemies could remember, so seat 0 must not learn of it from the world's
+/// structure table, the ground truth. The run with both and the run without
+/// give seat 0 the same decisions, line for line, and no rule of seat 0's
+/// fires in either; seat 1 is shown to hold a memory of the commander, so the
+/// test is not passing on an empty table.
+#[test]
+fn a_predicate_reads_only_its_own_seats_knowledge() {
+    let rule = |id: &str, when: &str| {
+        format!(
+            r#"{{"id": "{id}", "when": {when}, "body": [{{"label": "{id}_b", "hold": {{"ms": 250}}}}], "resume": "CONTINUE", "cooldown_ms": 5000, "max_fires": 1}}"#
+        )
+    };
+    let world = fresh_world();
+    let [x, y, z] = core_at(&world, 1).map(Fx::floor_voxels);
+    let near = format!(r#"{{"voxel": {{"x": {x}, "y": {y}, "z": {z}}}}}"#);
+    let handlers = [
+        rule(
+            "units",
+            &format!(
+                r#"{{"enemy_units_near": {{"near": {near}, "radius_voxels": 24, "count": {{"op": "GE", "value": 1}}, "freshness": {{"kind": "KNOWN_WITHIN", "known_within_ms": 60000}}}}}}"#
+            ),
+        ),
+        rule(
+            "structures",
+            &format!(
+                r#"{{"enemy_structure_near": {{"near": {near}, "radius_voxels": 24, "any_kind": {{}}, "freshness": {{"kind": "KNOWN_WITHIN", "known_within_ms": 60000}}}}}}"#
+            ),
+        ),
+        rule(
+            "beacons",
+            r#"{"enemy_beacon_known": {"freshness": {"kind": "KNOWN_WITHIN", "known_within_ms": 60000}}}"#,
+        ),
+    ]
+    .join(", ");
+    let text = format!(
+        r#"{{
+  "schema_version": {{"major": 1, "minor": 0}},
+  "meta": {{"title": "Asking about another seat's ground", "author_kind": "HUMAN"}},
+  "kind": "PLAYBOOK",
+  "declarative": {{"route": [{{"label": "stay", "hold": {{"ms": 12000}}}}], "handlers": [{handlers}]}},
+  "on_death": {{"on_respawn": "CONTINUE", "max_deaths_before_fallback": 2}},
+  "fallback": {{"hold": {{"at": {{"safest": {{}}}}}}}}
+}}"#
+    );
+    let plan = compile(&decode(&text)).expect("the rules compile");
+    let run = |carry: bool| -> (String, u32) {
+        let mut runner = Runner::new(fresh_world());
+        assert!(
+            runner
+                .world_mut()
+                .seal_playbook(SeatId::new(CASE_SEAT), plan.clone())
+        );
+        if carry {
+            let world = runner.world_mut();
+            let theirs = core_of(world, 1);
+            let at = beside(world, core_at(world, 1), 7, 0);
+            world
+                .raise_structure(
+                    SeatId::new(1),
+                    theirs,
+                    pharmakos_sim::tables::StructureKind::Generator,
+                    at,
+                )
+                .expect("room for a structure");
+        }
+        assert!(runner.begin_push().unwrap());
+        let mut body = String::new();
+        for tick in 0..200_u32 {
+            if carry && tick == 20 {
+                let world = runner.world_mut();
+                let to = beside(world, core_at(world, 1), 4, 0);
+                let unit = world.commander_of(SeatId::new(2)).expect("a commander");
+                assert!(world.place_unit_directly(unit, to));
+            }
+            if runner.step().unwrap().is_none() {
+                break;
+            }
+            for event in runner.events() {
+                if event.seat == Some(SeatId::new(CASE_SEAT)) {
+                    body.push_str(&line(event));
+                }
+            }
+            runner.clear_events();
+        }
+        let seen = runner
+            .world()
+            .sightings()
+            .seats()
+            .iter()
+            .filter(|seat| SeatId::new(**seat) == SeatId::new(1))
+            .count();
+        (body, u32::try_from(seen).expect("a count"))
+    };
+    let (quiet, quiet_seen) = run(false);
+    let (carried, carried_seen) = run(true);
+    assert!(
+        carried_seen > quiet_seen,
+        "seat 1 remembers what was carried into its sight ({carried_seen} against {quiet_seen})"
+    );
+    assert!(
+        ticks_of(&carried, EventKind::RuleFired).is_empty(),
+        "no rule of seat 0's fires on what only seat 1 saw:\n{carried}"
+    );
+    assert_eq!(
+        quiet, carried,
+        "seat 0's decisions do not move with what only another seat knows"
     );
 }
 
@@ -1757,11 +2008,6 @@ fn the_refusal_table_and_the_arms_agree() {
         )
     };
     let walk = |to: &str| format!(r#"{{"label": "m", "move": {{"to": {to}, "pace": "DIRECT"}}}}"#);
-    let when = |predicate: &str| {
-        format!(
-            r#"{{"id": "h", "when": {predicate}, "body": [{{"label": "b", "hold": {{"ms": 1000}}}}], "resume": "CONTINUE", "cooldown_ms": 5000, "max_fires": 1}}"#
-        )
-    };
     let cases: Vec<(&str, String, String)> = vec![
         (
             "queue_structure",
@@ -1792,60 +2038,6 @@ fn the_refusal_table_and_the_arms_agree() {
             walk(
                 r#"{"beacon_anchor": {"nearest": {"filter": {"side": "OWN", "tags": ["east"]}}}}"#,
             ),
-            String::new(),
-        ),
-        (
-            "predicate_beacon_units_by_role",
-            String::new(),
-            when(
-                r#"{"beacon_units_by_role": {"beacon": {"safest": {}}, "role": "SCOUT", "count": {"op": "GE", "value": 1}}}"#,
-            ),
-        ),
-        (
-            "predicate_beacon_mandate",
-            String::new(),
-            when(r#"{"beacon_mandate": {"beacon": {"safest": {}}, "mandate": "BUILD"}}"#),
-        ),
-        (
-            "predicate_beacon_has_structure",
-            String::new(),
-            when(
-                r#"{"beacon_has_structure": {"beacon": {"safest": {}}, "blueprint_id": "generator"}}"#,
-            ),
-        ),
-        (
-            "predicate_enemy_units_near",
-            String::new(),
-            when(
-                r#"{"enemy_units_near": {"near": {"safest": {}}, "radius_voxels": 24, "count": {"op": "GE", "value": 1}, "freshness": {"kind": "VISIBLE_NOW"}}}"#,
-            ),
-        ),
-        (
-            "predicate_enemy_beacon_known",
-            String::new(),
-            when(r#"{"enemy_beacon_known": {"freshness": {"kind": "VISIBLE_NOW"}}}"#),
-        ),
-        (
-            "predicate_enemy_structure_near",
-            String::new(),
-            when(
-                r#"{"enemy_structure_near": {"near": {"safest": {}}, "radius_voxels": 24, "any_kind": {}, "freshness": {"kind": "KNOWN_WITHIN", "known_within_ms": 30000}}}"#,
-            ),
-        ),
-        (
-            "predicate_kw_supply",
-            String::new(),
-            when(r#"{"kw_supply": {"kw": {"op": "GE", "value": 1}}}"#),
-        ),
-        (
-            "predicate_kw_draw",
-            String::new(),
-            when(r#"{"kw_draw": {"kw": {"op": "GE", "value": 1}}}"#),
-        ),
-        (
-            "site_toward",
-            r#"{"label": "p", "place_beacon": {"at": {"toward": {"feature": {"vent": {"rank": "NEAREST", "coverage": "UNCOVERED"}}}}}}"#
-                .to_owned(),
             String::new(),
         ),
     ];

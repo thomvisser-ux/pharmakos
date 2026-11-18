@@ -144,12 +144,13 @@ const PADDED_PAST: u32 = 256;
 /// kit's E0019 is retired, since S2's `site` built it, E0012, E0014 and
 /// E0017, since S2's `dfnd` built Defend's settings, `most_threatened` and
 /// `beacon_under_attack`, and E0013, since S2's `atk` built Attack's
-/// settings), for an enum number this build does not name (E0018) and for a
-/// `wall_box` on a target that is not a wall (E0509), in code order: the ten
-/// thousand runs reach every one.
-const REFUSALS: [&str; 16] = [
-    "E0009", "E0010", "E0011", "E0015", "E0016", "E0018", "E0020", "E0021", "E0022", "E0023",
-    "E0024", "E0025", "E0026", "E0027", "E0028", "E0509",
+/// settings; and E0020 to E0028, since S3's `pred` built the predicates and
+/// `toward`), for
+/// an enum number this build does not name (E0018) and for a `wall_box` on a
+/// target that is not a wall (E0509), in code order: the ten thousand runs
+/// reach every one.
+const REFUSALS: [&str; 7] = [
+    "E0009", "E0010", "E0011", "E0015", "E0016", "E0018", "E0509",
 ];
 
 /// The coordinates at the ends of the field, so the walk and the semantics
@@ -409,8 +410,9 @@ impl Shape {
         }
         // A clean run keeps to the three predicates that need no reference to
         // resolve; the rest are what the resolve stage is for.
-        // A damaged run reaches S3's eight predicates too, which `E0020` to
-        // `E0027` refuse until S3's `pred`, with what each holds damaged.
+        // A damaged run reaches S3's eight predicates too, with what each
+        // holds damaged; a clean run generates none of them, so a qualifying
+        // run that holds one is a damaged run whose damage missed it.
         let families = if self.clean { 3 } else { 9 };
         match self.below(families) {
             7 | 8 => self.s3_predicate(),
@@ -1122,7 +1124,8 @@ fn rules_at_the_widest_budget(rules: &RulesTable) -> RulesTable {
 }
 
 /// The S3 constructs `pred` lifts, by the field a playbook writes and the
-/// code that refuses each until then (`pharmakos_verifier::REFUSED_CONSTRUCTS`).
+/// code that refused each until then (`pharmakos_verifier::REFUSED_CONSTRUCTS`
+/// while it still lists the code).
 const S3_CONSTRUCTS: [(&str, &str); 9] = [
     (r#""beacon_units_by_role""#, "E0020"),
     (r#""beacon_mandate""#, "E0021"),

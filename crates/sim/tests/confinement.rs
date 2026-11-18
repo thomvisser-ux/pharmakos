@@ -206,6 +206,52 @@ fn the_crate_has_sources_to_check() {
     );
 }
 
+/// S3's `pred`, the main session's ruling on the three boards: **a
+/// condition, S3's predicates among them, is evaluated only in a seat's live
+/// decision.** `cond::evaluate` takes the live [`View`] alone, and its only
+/// callers are the interpreter's decision (`interpreter/exec.rs`) and its own
+/// recursion, so neither the frozen planning snapshot's board
+/// (`SnapshotBoard`, which `estimate_route` and `resolve_refs` read) nor the
+/// live board a host reads outside a decision (`SeatBoard`) can evaluate a
+/// predicate: nothing the verifier, plan-core or the gateway's planning
+/// methods reach evaluates one over a projected future (AGENTS.md section 3
+/// rule 2). Those boards resolve selectors and nothing else.
+///
+/// [`View`]: the decision's view in `interpreter/cond.rs`
+#[test]
+fn a_condition_is_evaluated_only_in_a_live_decision() {
+    let mut callers: Vec<String> = Vec::new();
+    let mut signature = false;
+    for path in sources() {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let name = path.display().to_string().replace('\\', "/");
+        for (number, line) in code_lines(&text) {
+            if line.contains("pub(crate) fn evaluate(view: &View<'_>, condition: &Cond) -> bool") {
+                signature = name.ends_with("interpreter/cond.rs");
+                continue;
+            }
+            if line.contains("evaluate(") && !line.contains("fn evaluate") {
+                let sanctioned =
+                    name.ends_with("interpreter/exec.rs") || name.ends_with("interpreter/cond.rs");
+                if !sanctioned {
+                    callers.push(format!("{name}:{number}: {}", line.trim()));
+                }
+            }
+        }
+    }
+    assert!(
+        signature,
+        "`cond::evaluate` takes the live decision's view and nothing else"
+    );
+    assert!(
+        callers.is_empty(),
+        "a condition is evaluated outside the interpreter's decision:\n{}",
+        callers.join("\n")
+    );
+}
+
 #[test]
 fn no_clock_and_no_hash_map_reach_the_crate() {
     let mut findings: Vec<String> = Vec::new();

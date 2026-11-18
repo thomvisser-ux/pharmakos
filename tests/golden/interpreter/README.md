@@ -61,6 +61,19 @@ and the host's `plan_sealed` are not decisions and are not on that clock.
 | `guards` | `skip_if`, a `timeout_ms` that fires, `on_fail: JUMP_FORWARD` over a step, a `broadcast` refused with `no_mast`, and `on_fail: ABORT_ROUTE` into a `patrol` fallback |
 | `handlers` | four handlers in priority order; the `all`, `any` and `not` tree shapes; the `rule_fired` predicate; cooldowns; **all four** `resume` values (`CONTINUE`, `SKIP_STEP`, `JUMP_FORWARD`, `END_ROUTE`); a `max_fires` of 2 driven to its ceiling; and a handler firing *after* the fallback has engaged |
 | `reflex` | the fixed 20 % reflex aborting a visit, the committed row staying, the resumed visit paying the handshake again, and the reflex **not** re-firing until new damage arrives |
+| `beacon_units_by_role` | S3's `pred`: a Survey core with one scout ordered; build drones counted (skipped), no repair drone (started), and a `wait_until` that holds once the scout is fielded |
+| `beacon_mandate` | the core's writ (Survey, skipped), a writ it does not carry through `safest` (started), and a beacon that does not exist read as false under a `not` (skipped) |
+| `beacon_has_structure` | a finished Generator homed to the core (skipped), and a Spire it lacks (started) although seat 1's Spire is homed to it, which is not the seat's own and never counts |
+| `kw_supply` | the core's 10 kW surplus read exactly (skipped), more than it (started), and a `wait_until` that holds the decision after a Generator on the nearest vent is finished at tick 60 |
+| `kw_draw` | the draw at the start (skipped) and one past any the seat can reach (started) |
+| `enemy_units_near` | seat 1's commander carried into the core's sphere at tick 40 and out at tick 120: `VISIBLE_NOW` holds at the next decision, a 2 s `KNOWN_WITHIN` goes stale 2 s after it left, and the largest radius and window the wire holds still count exactly one |
+| `enemy_beacon_known` | no enemy beacon known in the first minute (started), one seen from seat 0's commander carried to seat 1's core at tick 40, and the memory going stale 2 s after it came home at tick 120 |
+| `enemy_structure_near` | seat 1's Generator inside the core's sphere: a `generator` (skipped), a `mortar` (started), any kind near a far voxel (started) and any kind near `safest` (skipped) |
+
+The eight S3 cases put in the world what their predicate reads before the Push
+(`setup()`) or during it (`stage()`), as `reflex`'s `script()` does: a seat 0
+playbook cannot field another seat's commander or finish a Generator in a
+case's fifteen seconds.
 
 The `reflex` case is the one that needs something the playbook cannot ask for:
 damage. `script()` in `crates/sim/tests/interpreter.rs` applies it at named

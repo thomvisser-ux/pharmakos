@@ -4745,6 +4745,9 @@ mod tests {
             snapshot.sighting_owner.push(1);
             snapshot.sighting_kind.push(kind.id());
             snapshot
+                .sighting_blueprint
+                .push(pharmakos_sim::tables::NO_BLUEPRINT);
+            snapshot
                 .sighting_at
                 .extend(at.map(pharmakos_sim::math::fixed::Fx::raw));
             snapshot.sighting_seen_at.push(0);

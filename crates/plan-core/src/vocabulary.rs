@@ -162,6 +162,15 @@ impl Blueprint {
         self.build_target || self.queued
     }
 
+    /// Whether a predicate may ask about this kind: one a structure row can be
+    /// in this build, the verifier's [`pharmakos_verifier::BlueprintSlots::stands_as_a_structure`]
+    /// (`E0514` otherwise; S3's `pred`, fix pass 1). A wall can stand, as
+    /// voxels, and is never a structure row.
+    #[must_use]
+    pub const fn can_be_asked_about(&self) -> bool {
+        pharmakos_verifier::slots_for(self.kind).stands_as_a_structure()
+    }
+
     /// The id as JSON text, quotes included.
     #[must_use]
     pub fn json(&self) -> String {
@@ -262,9 +271,11 @@ fn reserved(title: &'static str, stage: &str) -> Entry {
     }
 }
 
-/// `entry` with the verifier's lock when it still refuses `construct`, in its
-/// own sentence; open otherwise. A refused entry offers no skeleton, so a
-/// picker inserts nothing the verifier refuses.
+/// `entry` with the verifier's lock when it refuses `construct`, in its own
+/// sentence; open otherwise. A refused entry offers no skeleton, so a picker
+/// inserts nothing the verifier refuses. Since S3's `pred` retired `E0020` to
+/// `E0028` no predicate is locked this way; the lock stays for a construct a
+/// later wire puts on it before its effect.
 fn unless_refused(mut entry: Entry, construct: &str) -> Result<Entry, VocabularyError> {
     if let Some(code) = pharmakos_verifier::code_for_construct(construct) {
         let text =
@@ -342,7 +353,12 @@ fn near_parameters() -> Result<Vec<Parameter>, UnknownEnum> {
 }
 
 /// A `Freshness`' two parameters. The window's least is 1, the verifier's
-/// since S3's `vfy6` (as the rendered chip says).
+/// since S3's `vfy6` (as the rendered chip says). The enemy predicates'
+/// skeletons write `KNOWN_WITHIN` with a 30 s window, so both parameters are
+/// true of the skeleton they are listed for (S3's `pred`): under
+/// `VISIBLE_NOW` the window must be absent (`E0210`), which "at least 1"
+/// would not say. The two remain separate parameters: a picker that sets the
+/// kind alone leaves the window as it was.
 fn freshness() -> Result<[Parameter; 2], UnknownEnum> {
     Ok([
         parameter(
@@ -542,7 +558,7 @@ fn own_beacon_family(kinds: &[Blueprint]) -> Result<Family, VocabularyError> {
                     parameter(
                         "/blueprint_id",
                         s::VOCABULARY_STRUCTURE,
-                        blueprint_choice(kinds, Blueprint::can_stand),
+                        blueprint_choice(kinds, Blueprint::can_be_asked_about),
                     ),
                 ],
                 r#"{"beacon":{"safest":{}},"blueprint_id":"generator"}"#,
@@ -572,29 +588,31 @@ fn enemy_knowledge_family(kinds: &[Blueprint]) -> Result<Family, VocabularyError
                     .to_vec(),
                 ]
                 .concat(),
-                r#"{"near":{"safest":{}},"radius_voxels":24,"count":{"op":"GE","value":1},"freshness":{"kind":"VISIBLE_NOW"}}"#,
+                r#"{"near":{"safest":{}},"radius_voxels":24,"count":{"op":"GE","value":1},"freshness":{"kind":"KNOWN_WITHIN","known_within_ms":30000}}"#,
             )?,
             predicate(
                 "enemy_beacon_known",
                 s::PREDICATE_ENEMY_BEACON_KNOWN,
                 freshness()?.to_vec(),
-                r#"{"freshness":{"kind":"VISIBLE_NOW"}}"#,
+                r#"{"freshness":{"kind":"KNOWN_WITHIN","known_within_ms":30000}}"#,
             )?,
             predicate(
                 "enemy_structure_near",
                 s::PREDICATE_ENEMY_STRUCTURE_NEAR,
                 [
                     near_parameters()?,
-                    // `structure`'s `blueprint_id` arm; the skeleton writes
-                    // its other arm, `any_kind`.
+                    // `structure`'s `blueprint_id` arm, which the skeleton
+                    // writes (S3's `pred`), so a pick of a blueprint replaces
+                    // one; `any_kind`, the oneof's other arm, is written by
+                    // hand.
                     vec![parameter(
                         "/blueprint_id",
                         s::VOCABULARY_STRUCTURE,
-                        blueprint_choice(kinds, Blueprint::can_stand),
+                        blueprint_choice(kinds, Blueprint::can_be_asked_about),
                     )],
                 ]
                 .concat(),
-                r#"{"near":{"safest":{}},"radius_voxels":16,"any_kind":{},"freshness":{"kind":"VISIBLE_NOW"}}"#,
+                r#"{"near":{"safest":{}},"radius_voxels":16,"blueprint_id":"generator","freshness":{"kind":"KNOWN_WITHIN","known_within_ms":30000}}"#,
             )?,
             reserved(s::RESERVED_ENEMY_KNOWLEDGE, "S6"),
         ],

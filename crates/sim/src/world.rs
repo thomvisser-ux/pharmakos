@@ -510,6 +510,9 @@ pub struct World {
     /// weapon's reach (S2's `dfnd`), sized as above: an armed asset is one
     /// that can fire.
     threat_scratch: Vec<([Fx; 3], Sq)>,
+    /// Scratch for a `toward` step's candidate sites (S3's `pred`), empty
+    /// between uses and grown to the largest search the match has made.
+    stone_scratch: Vec<crate::targeting::StoneCandidate>,
     /// Scratch for the breach search (S2's `atk`), reserved for the whole
     /// graph so a search allocates nothing.
     breach_scratch: crate::attack::BreachScratch,
@@ -912,6 +915,54 @@ pub enum TickError {
     /// phase not marked run, so the world refuses every later step until it
     /// is replaced (a restore from the last save).
     Collapse(support::CollapseError),
+    /// The Voxels phase could not mark the clusters a settled chunk dirtied
+    /// ([`MarkError`]): a fault no legal world reaches (S3's `pred`, the E22
+    /// carry; it used to skip the chunk in silence). **Fatal**, as
+    /// [`TickError::Collapse`] is: a cluster left unmarked would keep a stale
+    /// graph that a replay would not, so the world refuses every later step.
+    Marking(MarkError),
+}
+
+/// Why the Voxels phase could not mark a settled chunk's clusters for repair
+/// (S3's `pred`, the E22 carry). Every arm is unreachable on a map the
+/// decomposition was built for; each was a silent skip before.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MarkError {
+    /// The settled chunk has no origin in the voxel store.
+    NoOrigin {
+        /// The chunk.
+        chunk: u32,
+    },
+    /// The decomposition's cluster edge is not positive.
+    NoClusterEdge {
+        /// The edge, in voxels.
+        size: i32,
+    },
+    /// The chunk's footprint reaches past `i32`.
+    PastTheCoordinates {
+        /// The chunk.
+        chunk: u32,
+    },
+    /// A cluster index past the repairer's `u16` tag.
+    PastTheTag {
+        /// The cluster.
+        cluster: usize,
+    },
+}
+
+impl core::fmt::Display for MarkError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            MarkError::NoOrigin { chunk } => write!(f, "settled chunk {chunk} has no origin"),
+            MarkError::NoClusterEdge { size } => write!(f, "a cluster edge of {size} voxels"),
+            MarkError::PastTheCoordinates { chunk } => {
+                write!(f, "chunk {chunk}'s footprint is past i32")
+            }
+            MarkError::PastTheTag { cluster } => {
+                write!(f, "cluster {cluster} is past a repair tag's u16")
+            }
+        }
+    }
 }
 
 impl core::fmt::Display for TickError {
@@ -928,6 +979,12 @@ impl core::fmt::Display for TickError {
                 "the open tick cannot end before its {next:?} phase has run"
             ),
             TickError::Collapse(error) => write!(f, "the voxel phase's collapse failed: {error}"),
+            TickError::Marking(error) => {
+                write!(
+                    f,
+                    "the voxel phase could not mark a chunk's clusters: {error}"
+                )
+            }
         }
     }
 }
@@ -1284,6 +1341,7 @@ impl World {
             fire_order: Vec::with_capacity(armed_rows),
             attackers: Vec::with_capacity(armed_rows),
             threat_scratch: Vec::with_capacity(armed_rows),
+            stone_scratch: Vec::new(),
             breach_scratch: crate::attack::BreachScratch::new(breach_nodes),
             charge_scratch: Vec::with_capacity(crate::math::index::row(beacon_limit)),
             attack_counts: crate::attack::AttackCounts::default(),
@@ -1392,6 +1450,18 @@ impl World {
     /// `dfnd`): taken and given back so the choice allocates nothing.
     pub(crate) fn take_threat_scratch(&mut self) -> Vec<([Fx; 3], Sq)> {
         core::mem::take(&mut self.threat_scratch)
+    }
+
+    /// A `toward` step's candidate scratch (S3's `pred`), taken and given back
+    /// so a later search reuses what an earlier one grew.
+    pub(crate) fn take_stone_scratch(&mut self) -> Vec<crate::targeting::StoneCandidate> {
+        core::mem::take(&mut self.stone_scratch)
+    }
+
+    /// Give the `toward` scratch back, cleared.
+    pub(crate) fn put_stone_scratch(&mut self, mut scratch: Vec<crate::targeting::StoneCandidate>) {
+        scratch.clear();
+        self.stone_scratch = scratch;
     }
 
     /// Give the threat scratch back, cleared.
@@ -2360,16 +2430,22 @@ impl World {
 
     /// Record a sighting. Crate-internal: [`crate::survey`] is the only caller,
     /// so nothing outside can put a memory in a seat's head.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one argument per column of the sighting being written, as `SightingTable::see`"
+    )]
     pub(crate) fn see(
         &mut self,
         seat: SeatId,
         asset: AssetId,
         owner: SeatId,
         kind: u8,
+        blueprint: u8,
         at: [Fx; 3],
         tick: u32,
     ) {
-        self.sightings.see(seat, asset.raw(), owner, kind, at, tick);
+        self.sightings
+            .see(seat, asset.raw(), owner, kind, blueprint, at, tick);
     }
 
     /// Forget sighting row `slot`. Crate-internal: [`crate::survey`]'s
@@ -3297,12 +3373,13 @@ impl World {
         true
     }
 
-    /// Mark a cell explored for a seat directly (S2's `surv` writes the table
-    /// in play): `true` when the mark is new.
+    /// Mark a cell explored for a seat directly, on the world's current tick
+    /// (S2's `surv` writes the table in play): `true` when the mark is new.
     ///
     /// Fixture API; see the block comment above.
     pub fn mark_explored_directly(&mut self, seat: SeatId, cell: u32) -> bool {
-        self.explored_mut().mark(seat, cell)
+        let tick = self.tick.raw();
+        self.explored_mut().mark(seat, cell, tick)
     }
 
     /// Write a beacon's Common settings directly: its rules of engagement and
@@ -5166,7 +5243,16 @@ impl World {
             };
             at = at.saturating_add(1);
             self.surface.refresh_chunk(&self.voxels, chunk);
-            mark_chunk_clusters(&self.voxels, &self.clusters, &mut self.repairer, chunk);
+            if let Err(error) =
+                mark_chunk_clusters(&self.voxels, &self.clusters, &mut self.repairer, chunk)
+            {
+                // Fatal, as a collapse is: the tick stops here.
+                touched.clear();
+                self.touched = touched;
+                self.edits = edits;
+                self.edits.clear();
+                return Err(TickError::Marking(error));
+            }
         }
         touched.clear();
         self.touched = touched;
@@ -6433,6 +6519,56 @@ impl World {
         // writing nothing while no Spire has ever been finished.
         self.encode_licences(enc);
         self.encode_grown(enc);
+        // S3's `pred`: the explore ticks, after the grown beacons, writing
+        // nothing while no seat has explored a cell; then the sighted
+        // structures' blueprints, writing nothing while no seat remembers a
+        // structure (item 136's block rule).
+        self.encode_explored_ticks(enc);
+        self.encode_sighted_blueprints(enc);
+    }
+
+    /// The tick each explored cell was last explored on (S3's `pred`,
+    /// decision 7), as a block after the grown-beacon block that **writes
+    /// nothing while the explored table holds no row** and otherwise writes its
+    /// tag, its count and each row's tick in the rows' ascending order. A
+    /// chain whose seats explore nothing does not move for the column; one
+    /// whose Survey scouts explore moves from the first tick a cell is marked.
+    fn encode_explored_ticks(&self, enc: &mut Enc) {
+        if self.explored.is_empty() {
+            return;
+        }
+        enc.u8(crate::tables::ExploredTable::TICK_HASH_TAG);
+        enc.len(table_len(self.explored.explored_at().len()));
+        for tick in self.explored.explored_at() {
+            enc.u32(*tick);
+        }
+    }
+
+    /// The blueprint each remembered structure was seen as (S3's `pred`:
+    /// `enemy_structure_near` names one), as a block after the explore-tick
+    /// block that **writes nothing while no sighting is of a structure** and
+    /// otherwise writes its tag, how many sightings are of one, and for each
+    /// in the table's `(seat, asset)` order its row and its blueprint id. A
+    /// chain in which no seat sees another's structure does not move for the
+    /// column; one in which a seat does moves from the first tick it does.
+    fn encode_sighted_blueprints(&self, enc: &mut Enc) {
+        let held = self
+            .sightings
+            .blueprints()
+            .iter()
+            .filter(|blueprint| **blueprint != crate::tables::NO_BLUEPRINT)
+            .count();
+        if held == 0 {
+            return;
+        }
+        enc.u8(crate::tables::SightingTable::BLUEPRINT_HASH_TAG);
+        enc.len(table_len(held));
+        for (row, blueprint) in self.sightings.blueprints().iter().enumerate() {
+            if *blueprint != crate::tables::NO_BLUEPRINT {
+                enc.u32(table_len(row));
+                enc.u8(*blueprint);
+            }
+        }
     }
 
     /// The Defend table (S2's `dfnd`), as a block after the site block that
@@ -7210,32 +7346,43 @@ fn core_of_generated(generated: &crate::mapgen::GeneratedMap, seat: SeatId) -> B
 /// and this loop is one iteration. It is written as a loop anyway because the
 /// cluster edge is a rules-table row and the cluster-size sweep in
 /// `tests/pathing.rs` runs the decomposition at 16 and 64, where a chunk covers
-/// four clusters or a quarter of one.
+/// four clusters or a quarter of one. A cluster coordinate outside the
+/// decomposition's grid is no cluster, and marks nothing.
+///
+/// # Errors
+///
+/// [`MarkError`] for a chunk with no origin, a cluster edge that is not
+/// positive, a footprint past `i32`, or a cluster past a `u16` repair tag:
+/// none reachable, and each a silent skip until S3's `pred` (the E22 carry).
 fn mark_chunk_clusters(
     voxels: &VoxelStore,
     clusters: &Clusters,
     repairer: &mut Repairer,
     chunk: u32,
-) {
-    let Some(origin) = voxels.chunk_origin(chunk) else {
-        return;
-    };
-    let edge = crate::voxels::CHUNK_EDGE_I32;
-    let size = clusters.size().max(1);
+) -> Result<(), MarkError> {
+    let origin = voxels
+        .chunk_origin(chunk)
+        .ok_or(MarkError::NoOrigin { chunk })?;
+    let size = clusters.size();
+    if size <= 0 {
+        return Err(MarkError::NoClusterEdge { size });
+    }
     let [x0, y0, _] = origin;
-    let mut cy = y0.div_euclid(size);
-    while cy <= y0.saturating_add(edge.saturating_sub(1)).div_euclid(size) {
-        let mut cx = x0.div_euclid(size);
-        while cx <= x0.saturating_add(edge.saturating_sub(1)).div_euclid(size) {
-            if let Some(cluster) = clusters.cluster_index(cx, cy)
-                && let Ok(tag) = u16::try_from(cluster)
-            {
+    let last = |from: i32| {
+        from.checked_add(crate::voxels::CHUNK_EDGE_I32.saturating_sub(1))
+            .map(|end| end.div_euclid(size))
+            .ok_or(MarkError::PastTheCoordinates { chunk })
+    };
+    let (y1, x1) = (last(y0)?, last(x0)?);
+    for cy in y0.div_euclid(size)..=y1 {
+        for cx in x0.div_euclid(size)..=x1 {
+            if let Some(cluster) = clusters.cluster_index(cx, cy) {
+                let tag = u16::try_from(cluster).map_err(|_| MarkError::PastTheTag { cluster })?;
                 repairer.mark(tag);
             }
-            cx = cx.saturating_add(1);
         }
-        cy = cy.saturating_add(1);
     }
+    Ok(())
 }
 
 /// One row's combat memory, in its declared order: the ready tick, the
@@ -7282,6 +7429,23 @@ mod tests {
             match_settings: MatchSettings::default(),
         })
         .unwrap_or_else(|error| panic!("the committed table describes a world: {error}"))
+    }
+
+    /// S3's `pred`, the E22 carry: a chunk the store does not hold is a typed
+    /// error, where the marking used to skip it in silence; a chunk it holds
+    /// marks its clusters.
+    #[test]
+    fn marking_a_chunk_the_store_does_not_hold_is_a_typed_error() {
+        let mut world = world();
+        let past = world.voxels.chunk_count();
+        assert_eq!(
+            super::mark_chunk_clusters(&world.voxels, &world.clusters, &mut world.repairer, past),
+            Err(super::MarkError::NoOrigin { chunk: past })
+        );
+        assert_eq!(
+            super::mark_chunk_clusters(&world.voxels, &world.clusters, &mut world.repairer, 0),
+            Ok(())
+        );
     }
 
     fn hit(unit: u32, amount: i64) -> DamageOrder {
@@ -7679,7 +7843,15 @@ mod ids_tests {
         let old = world.fabricate(SEAT, home, UnitKind::Scout).must("room");
         let old_asset = AssetId::of_unit(old).must("a value");
         let place = world.units.positions()[old.row().must("a value").index()];
-        world.see(other, old_asset, SEAT, 2, place, 0);
+        world.see(
+            other,
+            old_asset,
+            SEAT,
+            2,
+            crate::tables::NO_BLUEPRINT,
+            place,
+            0,
+        );
         kill_unit(&mut world, old);
         world.free_settled_rows();
         world.clear_events();
