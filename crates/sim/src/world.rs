@@ -912,6 +912,54 @@ pub enum TickError {
     /// phase not marked run, so the world refuses every later step until it
     /// is replaced (a restore from the last save).
     Collapse(support::CollapseError),
+    /// The Voxels phase could not mark the clusters a settled chunk dirtied
+    /// ([`MarkError`]): a fault no legal world reaches (S3's `pred`, the E22
+    /// carry; it used to skip the chunk in silence). **Fatal**, as
+    /// [`TickError::Collapse`] is: a cluster left unmarked would keep a stale
+    /// graph that a replay would not, so the world refuses every later step.
+    Marking(MarkError),
+}
+
+/// Why the Voxels phase could not mark a settled chunk's clusters for repair
+/// (S3's `pred`, the E22 carry). Every arm is unreachable on a map the
+/// decomposition was built for; each was a silent skip before.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MarkError {
+    /// The settled chunk has no origin in the voxel store.
+    NoOrigin {
+        /// The chunk.
+        chunk: u32,
+    },
+    /// The decomposition's cluster edge is not positive.
+    NoClusterEdge {
+        /// The edge, in voxels.
+        size: i32,
+    },
+    /// The chunk's footprint reaches past `i32`.
+    PastTheCoordinates {
+        /// The chunk.
+        chunk: u32,
+    },
+    /// A cluster index past the repairer's `u16` tag.
+    PastTheTag {
+        /// The cluster.
+        cluster: usize,
+    },
+}
+
+impl core::fmt::Display for MarkError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            MarkError::NoOrigin { chunk } => write!(f, "settled chunk {chunk} has no origin"),
+            MarkError::NoClusterEdge { size } => write!(f, "a cluster edge of {size} voxels"),
+            MarkError::PastTheCoordinates { chunk } => {
+                write!(f, "chunk {chunk}'s footprint is past i32")
+            }
+            MarkError::PastTheTag { cluster } => {
+                write!(f, "cluster {cluster} is past a repair tag's u16")
+            }
+        }
+    }
 }
 
 impl core::fmt::Display for TickError {
@@ -928,6 +976,12 @@ impl core::fmt::Display for TickError {
                 "the open tick cannot end before its {next:?} phase has run"
             ),
             TickError::Collapse(error) => write!(f, "the voxel phase's collapse failed: {error}"),
+            TickError::Marking(error) => {
+                write!(
+                    f,
+                    "the voxel phase could not mark a chunk's clusters: {error}"
+                )
+            }
         }
     }
 }
@@ -5173,7 +5227,16 @@ impl World {
             };
             at = at.saturating_add(1);
             self.surface.refresh_chunk(&self.voxels, chunk);
-            mark_chunk_clusters(&self.voxels, &self.clusters, &mut self.repairer, chunk);
+            if let Err(error) =
+                mark_chunk_clusters(&self.voxels, &self.clusters, &mut self.repairer, chunk)
+            {
+                // Fatal, as a collapse is: the tick stops here.
+                touched.clear();
+                self.touched = touched;
+                self.edits = edits;
+                self.edits.clear();
+                return Err(TickError::Marking(error));
+            }
         }
         touched.clear();
         self.touched = touched;
@@ -7267,32 +7330,43 @@ fn core_of_generated(generated: &crate::mapgen::GeneratedMap, seat: SeatId) -> B
 /// and this loop is one iteration. It is written as a loop anyway because the
 /// cluster edge is a rules-table row and the cluster-size sweep in
 /// `tests/pathing.rs` runs the decomposition at 16 and 64, where a chunk covers
-/// four clusters or a quarter of one.
+/// four clusters or a quarter of one. A cluster coordinate outside the
+/// decomposition's grid is no cluster, and marks nothing.
+///
+/// # Errors
+///
+/// [`MarkError`] for a chunk with no origin, a cluster edge that is not
+/// positive, a footprint past `i32`, or a cluster past a `u16` repair tag:
+/// none reachable, and each a silent skip until S3's `pred` (the E22 carry).
 fn mark_chunk_clusters(
     voxels: &VoxelStore,
     clusters: &Clusters,
     repairer: &mut Repairer,
     chunk: u32,
-) {
-    let Some(origin) = voxels.chunk_origin(chunk) else {
-        return;
-    };
-    let edge = crate::voxels::CHUNK_EDGE_I32;
-    let size = clusters.size().max(1);
+) -> Result<(), MarkError> {
+    let origin = voxels
+        .chunk_origin(chunk)
+        .ok_or(MarkError::NoOrigin { chunk })?;
+    let size = clusters.size();
+    if size <= 0 {
+        return Err(MarkError::NoClusterEdge { size });
+    }
     let [x0, y0, _] = origin;
-    let mut cy = y0.div_euclid(size);
-    while cy <= y0.saturating_add(edge.saturating_sub(1)).div_euclid(size) {
-        let mut cx = x0.div_euclid(size);
-        while cx <= x0.saturating_add(edge.saturating_sub(1)).div_euclid(size) {
-            if let Some(cluster) = clusters.cluster_index(cx, cy)
-                && let Ok(tag) = u16::try_from(cluster)
-            {
+    let last = |from: i32| {
+        from.checked_add(crate::voxels::CHUNK_EDGE_I32.saturating_sub(1))
+            .map(|end| end.div_euclid(size))
+            .ok_or(MarkError::PastTheCoordinates { chunk })
+    };
+    let (y1, x1) = (last(y0)?, last(x0)?);
+    for cy in y0.div_euclid(size)..=y1 {
+        for cx in x0.div_euclid(size)..=x1 {
+            if let Some(cluster) = clusters.cluster_index(cx, cy) {
+                let tag = u16::try_from(cluster).map_err(|_| MarkError::PastTheTag { cluster })?;
                 repairer.mark(tag);
             }
-            cx = cx.saturating_add(1);
         }
-        cy = cy.saturating_add(1);
     }
+    Ok(())
 }
 
 /// One row's combat memory, in its declared order: the ready tick, the
@@ -7339,6 +7413,23 @@ mod tests {
             match_settings: MatchSettings::default(),
         })
         .unwrap_or_else(|error| panic!("the committed table describes a world: {error}"))
+    }
+
+    /// S3's `pred`, the E22 carry: a chunk the store does not hold is a typed
+    /// error, where the marking used to skip it in silence; a chunk it holds
+    /// marks its clusters.
+    #[test]
+    fn marking_a_chunk_the_store_does_not_hold_is_a_typed_error() {
+        let mut world = world();
+        let past = world.voxels.chunk_count();
+        assert_eq!(
+            super::mark_chunk_clusters(&world.voxels, &world.clusters, &mut world.repairer, past),
+            Err(super::MarkError::NoOrigin { chunk: past })
+        );
+        assert_eq!(
+            super::mark_chunk_clusters(&world.voxels, &world.clusters, &mut world.repairer, 0),
+            Ok(())
+        );
     }
 
     fn hit(unit: u32, amount: i64) -> DamageOrder {
