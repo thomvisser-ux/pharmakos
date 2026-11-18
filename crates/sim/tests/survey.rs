@@ -383,7 +383,9 @@ const RENEWAL_HASH: u64 = 0xf795_cf68_97a4_d21c;
 
 /// Fix pass 1, C1 (AGENTS.md section 4.8, the second place): a save and a
 /// restore with both of snapshot 16's columns filled. A Survey scout has
-/// marked cells and renewed one, and seat 0 remembers seat 1's Generator; the
+/// marked cells of its area on different ticks (no renewal: a cell falls due
+/// only after reach memory's 3600 ticks, which the re-scan test covers), and
+/// seat 0 remembers seat 1's Generator; the
 /// snapshot goes through its bytes and back, the restored world hashes as the
 /// saved one did, both run on alike, and every explore tick and every sighted
 /// blueprint is the saved one.
@@ -408,12 +410,13 @@ fn a_save_keeps_every_explore_tick_and_every_sighted_blueprint() {
     let mut feed = Vec::new();
     play(&mut runner, 400, &mut feed);
     let explored = runner.world().explored();
+    let ticks: std::collections::BTreeSet<u32> = cells
+        .iter()
+        .filter_map(|cell| explored.explored_on(seat(0), *cell))
+        .collect();
     assert!(
-        cells.iter().any(|cell| explored
-            .explored_on(seat(0), *cell)
-            .is_some_and(|tick| tick > 1)),
-        "a cell is explored and renewed: {:?}",
-        explored.explored_at()
+        ticks.len() >= 2,
+        "the scout marked cells of its area on different ticks: {ticks:?}"
     );
     let sightings = runner.world().sightings();
     assert!(
