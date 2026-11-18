@@ -376,7 +376,7 @@ puts that reading to the owner.
   issues the first three; the first-licence memo is `gwr`'s, since it keys on `lic`'s
   `licence_awarded`, which merges after `gwp`.
 - **E6. The preset travels on the config line.** `serve::Config` gains a `preset` field (`probation`
-  or `custom`; the lobby only ever writes `probation` until S6's settings screen). The line is a
+  or `custom`; the lobby only ever writes `probation` until S6's settings screen; amended by items 160 (4) and 161 (8): `host_link.gd`'s `PRESET` is `custom` until `ed3b` part 2 flips it to `probation`). The line is a
   contract format the lobby remembers in `user://last_match.txt` (AGENTS.md §5); the reader refuses a
   line without the field with a typed error naming it, and the lobby, on that refusal, offers a fresh
   match rather than guessing (no silent default). `--rounds` keeps working as item 143 (5) built it.
@@ -386,7 +386,7 @@ puts that reading to the owner.
   section 4.1 schedules `gwp` where no client lane runs. `prob` then draws the preset.
 - **E7. Untimed Lulls by preset.** A Probation match's Lulls are untimed: the gateway answers
   `_status.untimed`, which the rig already reads to hide the countdown, so the client makes no
-  decision about the preset. The client still reports its clock through `report_host_clock`, so
+  decision about the preset. [Amended by items 160 (4) and 161 (8): item 160 (4) records PR #172's finding that the client cannot tell untimed-by-rule from "no countdown reported yet", which is all `Status.untimed` means; `gwu` adds a field saying a Lull is untimed by rule, and `ed3b` part 2 reads it.] The client still reports its clock through `report_host_clock`, so
   rate limits and token expiry advance (AGENTS.md §4.5); a report that carries a Lull countdown in
   a Probation match is refused with a typed error (`INVALID_ARGUMENT`, naming the preset), never
   clamped or ignored. The rules' `match.lull_ms` rows are unchanged; the preset overrides them,
@@ -1053,7 +1053,7 @@ change moves `report_hash` is granted, for the re-bless alone, `tests/golden/gat
 
 - **Owns:** `crates/client-gdext`, `godot/`. **Branch** `feat/client-probation`.
 - **Builds:** the lobby's one match named Probation (the config line's `preset` already written by
-  `gwp`), the older-line refusal answered by a fresh match; the guided first pick (decision 5) drawn
+  `gwp`) [`ed3b` part 2, not `prob`, flips the preset to `probation`: item 160 (4)], the older-line refusal answered by a fresh match; the guided first pick (decision 5) drawn
   from the gateway's mark and reason (E25), with no template named in GDScript; memos drawn in the
   event list and the recap as the Ledger's, from the `ledger_memo` kind; the Spire and the larger
   sphere ring drawn plainly (`vista.gd`: a marker and a ring at the served radius; the lattice and
