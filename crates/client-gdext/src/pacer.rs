@@ -476,6 +476,33 @@ impl HostClock {
         Some((wired, countdown))
     }
 
+    /// The last report of a timed Lull whose countdown has run out: the countdown at zero, so
+    /// the gateway can tell a Lull that ran out from one ended by Ready (part 2's item 5; the
+    /// gateway's own line for it is `gwu`'s). `elapsed_ms` is the Lull's whole length, or the
+    /// last report the gateway accepted if that was later, so the report never runs backwards.
+    /// `None` outside a timed Lull that has run out, with a report in flight, or when the time
+    /// does not fit the wire's `int32`.
+    pub fn closing_report(&mut self) -> Option<i32> {
+        let ClockPhase::Lull {
+            countdown_ms: Some(total_ms),
+        } = self.phase
+        else {
+            return None;
+        };
+        if !self.run_out() || self.pending_ms.is_some() {
+            return None;
+        }
+        let report = total_ms.max(self.accepted_ms);
+        let Ok(wired) = i32::try_from(report) else {
+            // Said as any report the wire cannot carry is ([`HostClock::unreportable`]).
+            self.unreportable = true;
+            return None;
+        };
+        self.pending_ms = Some(report);
+        self.since_report_us = 0;
+        Some(wired)
+    }
+
     /// The report in flight was accepted.
     pub fn answered(&mut self) {
         if let Some(report) = self.pending_ms.take() {

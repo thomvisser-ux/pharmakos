@@ -364,6 +364,46 @@ struct Wants {
     ready: bool,
 }
 
+/// Where a timed Lull's run-out stands: its countdown is reported at zero once, and only then
+/// is the Lull ended, so the gateway can tell a Lull that ran out from one Ready ended (part 2's
+/// item 5; the gateway's line for it is `gwu`'s). Scheduling, as the pacer's clock is.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+enum RanOut {
+    /// The countdown has not run out this Lull, or the Lull is untimed.
+    #[default]
+    No,
+    /// It ran out: the zero report is owed, ahead of `end_lull`.
+    Owed,
+    /// The zero report went out (or could not be carried); `end_lull` follows.
+    Reported,
+}
+
+/// The footer field that says a Lull is untimed by rule (a Probation match's), which `gwu` adds
+/// to `gp.api.v1.Status` (the rulings on part 2's first question). The client reads the field
+/// and decides nothing about the preset.
+///
+/// PLACEHOLDER: the untimed-by-rule field's name, read by name — `gwu`'s builder, when `gwu`
+/// merges. Until the generated `Status` carries the field, the rig reads it off the raw footer
+/// ([`untimed_by_rule`]) and [`crate::view::read_status`] reads the rest; once it does, this
+/// constant and that read go, and the field is the decoded `Status`'s.
+pub const UNTIMED_BY_RULE: &str = "untimed_by_rule";
+
+/// Whether `footer` says its Lull is untimed by rule ([`UNTIMED_BY_RULE`]): `true` only for a
+/// field that is `true`; absent, it is not.
+///
+/// # Errors
+///
+/// [`BridgeError::Rpc`] for the field holding anything but a boolean.
+pub fn untimed_by_rule(footer: &Json) -> Result<bool, BridgeError> {
+    match footer.get(UNTIMED_BY_RULE) {
+        None => Ok(false),
+        Some(Json::Bool(flag)) => Ok(*flag),
+        Some(_) => Err(BridgeError::Rpc(format!(
+            "`{UNTIMED_BY_RULE}` is not a boolean"
+        ))),
+    }
+}
+
 /// Where a phase's clock reports stand, for the seat's budget: a phase's first report
 /// moves no gateway tick, and every later one does (the module doc's "Not every clock
 /// answer moves the clock").
@@ -395,8 +435,11 @@ pub struct Rig {
     /// How long each Lull is, from the rules table's two Lull rows.
     lulls: LullLengths,
     /// Whether the admin connection's latest footer said the phase has no countdown
-    /// (`_status.untimed`): the lobby then shows none (S1-11's client half, item 135).
+    /// (`_status.untimed`), or that the Lull is untimed by rule ([`UNTIMED_BY_RULE`]): the
+    /// lobby then shows none (S1-11's client half, item 135).
     untimed: bool,
+    /// Where this Lull's run-out stands ([`RanOut`]).
+    ran_out: RanOut,
     /// How many `get_view` pages this client refused after the gateway served them.
     view_refusals: u32,
     /// After a refused page: the wall time before which no keyframe is asked again.
@@ -450,6 +493,7 @@ impl Rig {
             last_error: None,
             lulls: LullLengths::default(),
             untimed: true,
+            ran_out: RanOut::No,
             view_refusals: 0,
             keyframe_not_before_us: 0,
             seat_calls_left: SEAT_CALLS_PER_REFILL,
@@ -528,6 +572,9 @@ impl Rig {
         self.sync_editor();
         self.timing.advance(now_us);
         if self.phase == Phase::Lull && self.timing.clock.run_out() {
+            if self.ran_out == RanOut::No {
+                self.ran_out = RanOut::Owed;
+            }
             self.wants.end_lull = true;
         }
         let mut out = Vec::new();
@@ -564,6 +611,22 @@ impl Rig {
                 return Some((Purpose::Status, "get_status", object(Vec::new())));
             }
             return None;
+        }
+        if self.ran_out == RanOut::Owed && self.phase == Phase::Lull {
+            // The countdown at zero, once, ahead of `end_lull`: only a timed Lull that ran out
+            // owes it, never one Ready or the human ended.
+            self.ran_out = RanOut::Reported;
+            if let Some(spent) = self.timing.clock.closing_report() {
+                self.clock_reports = ClockReports::Refilling;
+                return Some((
+                    Purpose::Clock,
+                    "report_host_clock",
+                    object(vec![
+                        ("elapsed_ms", number(i64::from(spent))),
+                        ("remaining_ms", number(0)),
+                    ]),
+                ));
+            }
         }
         if self.wants.end_lull && self.phase == Phase::Lull {
             return Some((Purpose::EndLull, "end_lull", object(Vec::new())));
@@ -770,7 +833,8 @@ impl Rig {
         if link == ADMIN
             && let (_, Some(footer)) = split_footer(result)
         {
-            answer.phase_changed = self.observe(&read_status(&footer)?)?;
+            let by_rule = untimed_by_rule(&footer)?;
+            answer.phase_changed = self.observe(&read_status(&footer)?, by_rule)?;
         }
         Ok(answer)
     }
@@ -1004,15 +1068,19 @@ impl Rig {
     fn observe(
         &mut self,
         footer: &pharmakos_proto::gp::api::v1::Status,
+        by_rule: bool,
     ) -> Result<bool, BridgeError> {
         let phase = Phase::of(footer.phase);
-        let countdown = if phase == Phase::Lull && phase != self.phase {
+        // A Lull untimed by rule has no countdown at all: the rig starts none, reports only the
+        // time spent, and the lobby shows none (part 2's item 4). Which preset that is stays the
+        // gateway's word.
+        let countdown = if phase == Phase::Lull && phase != self.phase && !by_rule {
             self.lull_countdown(footer)?
         } else {
             None
         };
         self.round = footer.round;
-        self.untimed = footer.untimed;
+        self.untimed = footer.untimed || by_rule;
         if phase == self.phase {
             return Ok(false);
         }
@@ -1026,6 +1094,7 @@ impl Rig {
         self.clock_reports = ClockReports::Unsent;
         self.wants.end_lull = false;
         self.wants.end_recap = false;
+        self.ran_out = RanOut::No;
         self.all_ready = false;
         // Something about the view may have changed at the boundary: the unlock at match
         // end is a policy change, and a new segment makes the feed cursor stale.
@@ -2131,7 +2200,7 @@ mod tests {
             phase: pharmakos_proto::gp::api::v1::status::Phase::Recap.into(),
             ..Default::default()
         };
-        assert!(rig.observe(&footer).expect("a readable footer"));
+        assert!(rig.observe(&footer, false).expect("a readable footer"));
         assert_eq!(
             rig.seat_calls_left, 0,
             "the phase change refilled the budget"
@@ -2161,14 +2230,14 @@ mod tests {
             round: 1,
             ..Default::default()
         };
-        assert!(rig.observe(&recap).expect("a readable footer"));
+        assert!(rig.observe(&recap, false).expect("a readable footer"));
         let broken = pharmakos_proto::gp::api::v1::Status {
             phase: pharmakos_proto::gp::api::v1::status::Phase::Lull.into(),
             round: 2,
             phase_remaining_ms: -1,
             ..Default::default()
         };
-        assert!(rig.observe(&broken).is_err());
+        assert!(rig.observe(&broken, false).is_err());
         assert_eq!(
             rig.phase,
             Phase::Recap,
@@ -2179,7 +2248,7 @@ mod tests {
             phase_remaining_ms: 5_000,
             ..broken
         };
-        assert!(rig.observe(&good).expect("a readable footer"));
+        assert!(rig.observe(&good, false).expect("a readable footer"));
         assert_eq!(rig.phase, Phase::Lull);
         assert!(
             !rig.timer_text().is_empty(),
@@ -2322,12 +2391,176 @@ mod tests {
         let mut rig = opened_with(r#"{"phase":"lull","phase_remaining_ms":42000,"round":1}"#);
         assert_eq!(reported_countdown(&mut rig, 1), Some(42_000));
         let mut ran_out = opened_with(r#"{"phase":"lull","phase_remaining_ms":0,"round":2}"#);
-        let sent = ran_out.poll(1);
-        assert!(
-            sent.iter()
-                .any(|frame| frame.link == ADMIN && method_of(frame) == "end_lull"),
-            "a Lull rejoined at zero has run out: {sent:?}"
+        assert_eq!(
+            admin_calls(&mut ran_out, 1, 2),
+            [
+                ("report_host_clock".to_owned(), Some(0)),
+                ("end_lull".to_owned(), None)
+            ],
+            "a Lull rejoined at zero has run out: its zero, then its end"
         );
+    }
+
+    /// The admin calls the rig sends over `polls` polls from `start`, a clock report's cadence
+    /// apart, each with the countdown it reported (`None` for none), every one answered with
+    /// a Lull's footer that is not all ready.
+    fn admin_calls(rig: &mut Rig, start: u64, polls: u64) -> Vec<(String, Option<i64>)> {
+        let mut out = Vec::new();
+        for poll in 0..polls {
+            let now = start.saturating_add(poll.saturating_mul(CLOCK_REPORT_US));
+            for frame in rig.poll(now) {
+                if frame.link != ADMIN {
+                    continue;
+                }
+                let method = method_of(&frame);
+                let countdown = json::read(&frame.text)
+                    .expect("json")
+                    .get("params")
+                    .and_then(|params| params.get("remaining_ms"))
+                    .and_then(json_integer);
+                let result = if method == "report_host_clock" {
+                    r#"{"all_ready":false}"#
+                } else {
+                    "{}"
+                };
+                // `end_lull` ends the Lull, as the gateway's answer to it says.
+                let phase = if method == "end_lull" { "push" } else { "lull" };
+                rig.receive(ADMIN, &answer(id_of(&frame), result, phase))
+                    .expect("reads");
+                out.push((method, countdown));
+            }
+        }
+        out
+    }
+
+    /// **The "ran out" line's client half** (part 2's item 5): when a timed Lull's countdown is
+    /// spent, the rig reports the countdown at zero once, and only then calls `end_lull`.
+    #[test]
+    fn a_spent_countdown_is_reported_at_zero_once_before_end_lull() {
+        let mut rig = opened_with(r#"{"phase":"lull","phase_remaining_ms":1000,"round":2}"#);
+        let calls = admin_calls(&mut rig, 1, 12);
+        let zero = calls
+            .iter()
+            .position(|(method, countdown)| method == "report_host_clock" && *countdown == Some(0))
+            .expect("the zero report");
+        let end = calls
+            .iter()
+            .position(|(method, _)| method == "end_lull")
+            .expect("end_lull");
+        assert!(zero < end, "{calls:?}");
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|(_, countdown)| *countdown == Some(0))
+                .count(),
+            1,
+            "once: {calls:?}"
+        );
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|(method, _)| method == "end_lull")
+                .count(),
+            1,
+            "{calls:?}"
+        );
+    }
+
+    /// An untimed Lull never runs out and never reports a zero; a Lull Ready ended reports no
+    /// zero before its `end_lull`.
+    #[test]
+    fn an_untimed_lull_and_a_ready_lull_send_no_zero() {
+        let mut untimed = Rig::new();
+        untimed.opened(ADMIN);
+        let sent = untimed.poll(0);
+        let status = sent.first().expect("the first get_status");
+        untimed
+            .receive(
+                ADMIN,
+                &answer_with(
+                    id_of(status),
+                    "{}",
+                    r#"{"phase":"lull","round":1,"untimed":true}"#,
+                ),
+            )
+            .expect("reads");
+        let calls = admin_calls(&mut untimed, 1, 40);
+        assert!(
+            calls
+                .iter()
+                .all(|(method, countdown)| countdown.is_none() && method != "end_lull"),
+            "{calls:?}"
+        );
+        // Every seat ready: the clock's answer says so, and `end_lull` follows with no zero.
+        let mut ready = opened_with(r#"{"phase":"lull","phase_remaining_ms":42000,"round":1}"#);
+        let mut sent_calls: Vec<(String, Option<i64>)> = Vec::new();
+        for poll in 0..6_u64 {
+            for frame in ready.poll(1 + poll * CLOCK_REPORT_US) {
+                if frame.link != ADMIN {
+                    continue;
+                }
+                let method = method_of(&frame);
+                let countdown = json::read(&frame.text)
+                    .expect("json")
+                    .get("params")
+                    .and_then(|params| params.get("remaining_ms"))
+                    .and_then(json_integer);
+                let result = if method == "report_host_clock" {
+                    r#"{"all_ready":true}"#
+                } else {
+                    "{}"
+                };
+                let phase = if method == "end_lull" { "push" } else { "lull" };
+                ready
+                    .receive(ADMIN, &answer(id_of(&frame), result, phase))
+                    .expect("reads");
+                sent_calls.push((method, countdown));
+            }
+        }
+        assert!(
+            sent_calls.iter().any(|(method, _)| method == "end_lull"),
+            "{sent_calls:?}"
+        );
+        assert!(
+            sent_calls
+                .iter()
+                .all(|(_, countdown)| *countdown != Some(0)),
+            "{sent_calls:?}"
+        );
+    }
+
+    /// **A Lull untimed by rule** (part 2's item 4; a Probation match's, the field `gwu` adds):
+    /// the rig starts no countdown, never sends `remaining_ms` (which a Probation gateway would
+    /// refuse), and the lobby shows none; a custom match's Lull still counts down.
+    #[test]
+    fn a_lull_untimed_by_rule_sends_no_countdown() {
+        let footer =
+            format!(r#"{{"phase":"lull","round":1,"untimed":true,"{UNTIMED_BY_RULE}":true}}"#);
+        let mut probation = opened_with(&footer);
+        assert_eq!(probation.timer_text(), "");
+        assert!(probation.untimed());
+        let calls = admin_calls(&mut probation, 1, 3_000);
+        assert!(
+            calls
+                .iter()
+                .any(|(method, _)| method == "report_host_clock"),
+            "the time spent is still reported: {calls:?}"
+        );
+        assert!(
+            calls
+                .iter()
+                .all(|(method, countdown)| countdown.is_none() && method != "end_lull"),
+            "no countdown and no run-out: {calls:?}"
+        );
+        assert_eq!(probation.timer_text(), "");
+        let mut custom =
+            opened_with(r#"{"phase":"lull","phase_remaining_ms":0,"round":1,"untimed":true}"#);
+        assert_eq!(reported_countdown(&mut custom, 1), Some(600_000));
+        let mut off = opened_with(&format!(
+            r#"{{"phase":"lull","round":1,"untimed":true,"{UNTIMED_BY_RULE}":false}}"#
+        ));
+        assert_eq!(reported_countdown(&mut off, 1), Some(600_000));
+        assert!(untimed_by_rule(&json::read(r#"{"untimed_by_rule":1}"#).expect("json")).is_err());
     }
 
     /// A Lull the rules give no length is untimed: its reports carry no countdown, so the
