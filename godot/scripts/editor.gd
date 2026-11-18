@@ -262,9 +262,9 @@ var _rules_status: Label
 var _rules_box: VBoxContainer
 ## The rule list's chips as the bridge last sent them, for a click on one to find its editor.
 var _rule_chips: Array = []
-## The rendering the rule list on screen was drawn for (the bridge's `rules_revision`), and why
+## The rendering id of the rule list on screen (the bridge's `rules_rendering`), and why
 ## it takes no edit now (`rules_blocked`, "" when it takes one).
-var _rules_revision := -1
+var _rules_rendering := -1
 var _rules_blocked := ""
 ## A number chip's editor: a field within the bounds sent, and the chip it is for, named as
 ## the bridge checks it: its index, the rendering and its pointer (M1).
@@ -1077,9 +1077,9 @@ func _draw_rules(state: Dictionary, unchecked: String) -> void:
 		_rules_status.text = ""
 	var list: Dictionary = state.get("rule_list", {})
 	_rule_chips = list.get("chips", [])
-	_rules_revision = int(state.get("rules_revision", -1))
+	_rules_rendering = int(state.get("rules_rendering", -1))
 	_rules_blocked = String(state.get("rules_blocked", ""))
-	var redrawn: bool = RuleList.fill(_rules_box, list, _rules_revision, state.get("rules_editable", false), int(state.get("picking", -1)), state.get("conflicts", []), state.get("rule_refusal", {}), Callable(self, "_on_rule_chip"), Callable(self, "_on_rule_move"))
+	var redrawn: bool = RuleList.fill(_rules_box, list, _rules_rendering, state.get("rules_editable", false), int(state.get("picking", -1)), state.get("conflicts", []), state.get("rule_refusal", {}), Callable(self, "_on_rule_chip"), Callable(self, "_on_rule_move"))
 	# An editor opened on the list drawn before names chips that may not be there any more
 	# (M1): it closes with that list, and the bridge would refuse its edit anyway.
 	if redrawn:
@@ -1099,7 +1099,7 @@ func _on_rule_chip(index: int) -> void:
 		_say_local("status_rule_refused_no_such_chip", {})
 		return
 	var chip: Dictionary = _rule_chips[index]
-	var named := {"index": index, "revision": _rules_revision, "pointer": String(chip.get("pointer", ""))}
+	var named := {"index": index, "revision": _rules_rendering, "pointer": String(chip.get("pointer", ""))}
 	match String(chip.get("editor", "")):
 		"number":
 			_open_number(named, chip)
@@ -1113,7 +1113,7 @@ func _on_rule_chip(index: int) -> void:
 			_choice_menu.position = Vector2i(get_viewport().get_mouse_position())
 			_choice_menu.popup()
 		"pick":
-			bridge.editor_begin_pick(index, _rules_revision, named["pointer"])
+			bridge.editor_begin_pick(index, _rules_rendering, named["pointer"])
 		_:
 			_say_local("rule_chip_read_only_" + String(chip.get("why", "")), {})
 
@@ -1161,10 +1161,10 @@ func _on_choice(which: int) -> void:
 	bridge.editor_choose(int(_choice_chip.get("index", -1)), int(_choice_chip.get("revision", -1)), String(_choice_chip.get("pointer", "")), which)
 
 
-## A rule dropped on another of its list, in the rendering the drag began on: the bridge's one
-## JSON Patch `move`.
-func _on_rule_move(from: int, to: int, revision: int) -> void:
-	bridge.editor_move_rule(from, to, revision)
+## A rule dropped on another of its list, each named by its index and pointer, in the
+## rendering the drag began on: the bridge's one JSON Patch `move`.
+func _on_rule_move(from: int, from_pointer: String, to: int, to_pointer: String, rendering: int) -> void:
+	bridge.editor_move_rule(from, from_pointer, to, to_pointer, rendering)
 
 
 func _draw_notes(state: Dictionary) -> void:

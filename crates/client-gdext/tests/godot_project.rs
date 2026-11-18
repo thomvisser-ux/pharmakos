@@ -2242,9 +2242,10 @@ fn the_rule_list_draws_the_gateways_cut_and_forwards_every_click() {
     }
     let drag = gd_code(&list, "_draggable");
     assert!(
-        drag.iter().any(|line| line
-            .contains("on_move.call(int(data[\"rule\"]), rule, int(data[\"revision\"]))")),
-        "a drop names the rendering the drag began on: {drag:?}"
+        drag.iter().any(|line| line.contains(
+            "on_move.call(int(data[\"rule\"]), String(data[\"pointer\"]), rule, pointer, int(data[\"revision\"]))"
+        )),
+        "a drop names both rules by index and pointer, and the rendering: {drag:?}"
     );
     assert!(
         drag.iter()
@@ -2274,7 +2275,7 @@ fn the_rule_list_draws_the_gateways_cut_and_forwards_every_click() {
         "\"number\":",
         "\"choice\":",
         "\"pick\":",
-        "bridge.editor_begin_pick(index, _rules_revision, named[\"pointer\"])",
+        "bridge.editor_begin_pick(index, _rules_rendering, named[\"pointer\"])",
         "_say_local(\"rule_chip_read_only_\" + String(chip.get(\"why\", \"\")), {})",
     ] {
         assert!(chip.contains(&wanted), "{wanted}: {chip:?}");
@@ -2435,7 +2436,8 @@ fn a_chip_editor_names_its_chip_and_never_clamps() {
         ))
     );
     assert!(
-        gd_code(&editor, "_on_rule_move").contains(&"bridge.editor_move_rule(from, to, revision)")
+        gd_code(&editor, "_on_rule_move")
+            .contains(&"bridge.editor_move_rule(from, from_pointer, to, to_pointer, rendering)")
     );
     // M1: no editor opens while the list takes no edit, and the editors close with the list.
     assert!(

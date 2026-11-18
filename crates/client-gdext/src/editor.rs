@@ -719,8 +719,10 @@ pub enum RuleEditRefusal {
     OtherList,
     /// A map pick with no pick on.
     NotPicking,
-    /// A map pick whose click named nothing: no beacon, feature or voxel.
+    /// A map pick whose click named nothing: no beacon, feature or voxel. The pick stays on.
     NoTarget,
+    /// The rendering id does not fit GDScript's `int`, so no control can name it back.
+    RenderingOutOfRange,
     /// The click names something the chip does not take; the chip's kind, `beacon`,
     /// `location` or `feature`.
     NotThisKind(&'static str),
@@ -748,6 +750,7 @@ impl RuleEditRefusal {
             Self::OtherList => "other_list",
             Self::NotPicking => "not_picking",
             Self::NoTarget => "no_target",
+            Self::RenderingOutOfRange => "rendering_out_of_range",
             Self::NotThisKind(_) => "not_this_kind",
             Self::ArmNotHere(_) => "arm_not_here",
         }
@@ -773,6 +776,26 @@ pub struct RuleRefusal {
     pub detail: String,
     /// The text it was asked of.
     revision: u64,
+}
+
+/// The pick that is on: the chip, as the control that began it named it.
+#[derive(Clone, PartialEq, Eq, Debug)]
+struct PickOn {
+    chip: usize,
+    rendering: u64,
+    pointer: String,
+}
+
+/// A rule as a drag names it: its index in the rule list, the rendering the drag began on and
+/// its pointer, so a drop never moves another rule than the one dragged.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct RuleNamed {
+    /// Its index in the rule list.
+    pub index: usize,
+    /// The rendering id the drag began on ([`Editor::rules_rendering`]).
+    pub rendering: u64,
+    /// Its JSON Pointer.
+    pub pointer: String,
 }
 
 /// Two rules the conflict connector joins (W0702), by their index in the rule list.
@@ -1065,7 +1088,13 @@ pub struct Editor {
     /// The gateway's refusal of the last rule-list edit, for the text it was asked of.
     rule_refusal: Option<RuleRefusal>,
     /// The chip whose map pick the next map click is, by its index in the rule list.
-    picking: Option<usize>,
+    picking: Option<PickOn>,
+    /// The rendering id: bumped on every rule-list answer the editor accepts, a re-render of
+    /// the same text included (a new round's Lull, a door opened again), so any re-render
+    /// invalidates every control opened on the list before it.
+    rendering: u64,
+    /// The rendering the rule list on screen is, once one was accepted for the text.
+    rules_rendering: Option<u64>,
     prose_revision: Option<u64>,
     /// The rule list (`render_plan`) is owed for the newest text.
     render_owed: bool,
@@ -1577,12 +1606,13 @@ impl Editor {
         self.rules_blocked().is_none()
     }
 
-    /// The text revision the rule list on screen was rendered for: what an editor opened on
-    /// one of its chips names back, so an edit never lands on a chip of another rendering
-    /// (`set_number`, `choose`, `begin_pick`, `move_rule`). `None` before a rendering.
+    /// The rendering id of the rule list on screen: what an editor opened on one of its chips
+    /// or rules names back, so an edit never lands on a chip of another rendering (`set_number`,
+    /// `choose`, `begin_pick`, `move_rule`). Bumped on every rule-list answer accepted, a
+    /// re-render of the same text included. `None` before a rendering.
     #[must_use]
-    pub const fn rules_revision(&self) -> Option<u64> {
-        self.prose_revision
+    pub const fn rules_rendering(&self) -> Option<u64> {
+        self.rules_rendering
     }
 
     /// Chip `chip`'s number field sent `value`: one `replace` of it at the chip's pointer.
@@ -1689,7 +1719,11 @@ impl Editor {
         });
         match outcome {
             Ok(()) => {
-                self.picking = Some(chip);
+                self.picking = Some(PickOn {
+                    chip,
+                    rendering: revision,
+                    pointer: pointer.to_owned(),
+                });
                 self.say("picking", "");
                 Ok(())
             }
@@ -1706,18 +1740,20 @@ impl Editor {
 
     /// The chip whose pick the next map click is, if one is.
     #[must_use]
-    pub const fn picking(&self) -> Option<usize> {
-        self.picking
+    pub fn picking(&self) -> Option<usize> {
+        self.picking.as_ref().map(|on| on.chip)
     }
 
     /// A map click on `target` while a pick is on: one `replace` of the picked chip with the
     /// arm the click names, when the gateway lists that arm there. A click on something the
-    /// chip does not take keeps the pick on; any other refusal ends it.
+    /// chip does not take keeps the pick on, as a click on nothing does
+    /// ([`Editor::pick_missed`]): the player missed and clicks again. Any other refusal ends it.
     ///
     /// # Errors
     ///
     /// A [`RuleEditRefusal`], said on the status line: no pick is on, the list takes no edit
-    /// now, or the click names nothing this chip takes ([`RuleEditRefusal::NotThisKind`],
+    /// now or was redrawn since the pick began ([`RuleEditRefusal::Changed`]), or the click
+    /// names nothing this chip takes ([`RuleEditRefusal::NotThisKind`],
     /// [`RuleEditRefusal::ArmNotHere`]).
     pub fn pick(&mut self, target: &Target) -> Result<(), RuleEditRefusal> {
         let outcome = self.pick_patch(target);
@@ -1730,16 +1766,26 @@ impl Editor {
         self.ask_rule_edit(outcome)
     }
 
+    /// A map click on nothing (no beacon, feature or voxel) while a pick is on: refused as
+    /// [`RuleEditRefusal::NoTarget`], and the pick stays on, as for a click on something the
+    /// chip does not take.
+    ///
+    /// # Errors
+    ///
+    /// Always: [`RuleEditRefusal::NoTarget`], or [`RuleEditRefusal::NotPicking`] with no pick
+    /// on.
+    pub fn pick_missed(&mut self) -> Result<(), RuleEditRefusal> {
+        let refusal = if self.picking.is_some() {
+            RuleEditRefusal::NoTarget
+        } else {
+            RuleEditRefusal::NotPicking
+        };
+        Err(self.refuse_rule_edit(refusal))
+    }
+
     fn pick_patch(&self, target: &Target) -> Result<(String, String), RuleEditRefusal> {
-        let chip = self.picking.ok_or(RuleEditRefusal::NotPicking)?;
-        if let Some(blocked) = self.rules_blocked() {
-            return Err(blocked);
-        }
-        let found = self
-            .rule_list
-            .chips
-            .get(chip)
-            .ok_or(RuleEditRefusal::NoSuchChip)?;
+        let on = self.picking.as_ref().ok_or(RuleEditRefusal::NotPicking)?;
+        let found = self.chip_drawn(on.chip, on.rendering, &on.pointer)?;
         let ChipEditor::Pick { kind, arms } = &found.editor else {
             return Err(RuleEditRefusal::NotThisEditor);
         };
@@ -1762,39 +1808,22 @@ impl Editor {
     /// A [`RuleEditRefusal`], said on the status line: the list takes no edit now or was
     /// redrawn since the drag began, a rule is not there, the drop is on the dragged rule
     /// itself, or on a rule of another array (a step onto a rule).
-    pub fn move_rule(
-        &mut self,
-        from: usize,
-        to: usize,
-        revision: u64,
-    ) -> Result<(), RuleEditRefusal> {
-        let outcome = self.move_patch(from, to, revision);
+    pub fn move_rule(&mut self, from: &RuleNamed, to: &RuleNamed) -> Result<(), RuleEditRefusal> {
+        let outcome = self.move_patch(from, to);
         self.ask_rule_edit(outcome)
     }
 
     fn move_patch(
         &self,
-        from: usize,
-        to: usize,
-        revision: u64,
+        from: &RuleNamed,
+        to: &RuleNamed,
     ) -> Result<(String, String), RuleEditRefusal> {
         if let Some(blocked) = self.rules_blocked() {
             return Err(blocked);
         }
-        if self.prose_revision != Some(revision) {
-            return Err(RuleEditRefusal::Changed);
-        }
-        let moved = self
-            .rule_list
-            .rules
-            .get(from)
-            .ok_or(RuleEditRefusal::NoSuchRule)?;
-        let onto = self
-            .rule_list
-            .rules
-            .get(to)
-            .ok_or(RuleEditRefusal::NoSuchRule)?;
-        if from == to {
+        let moved = self.rule_drawn(from)?;
+        let onto = self.rule_drawn(to)?;
+        if from.index == to.index {
             return Err(RuleEditRefusal::OntoItself);
         }
         if moved.parent() != onto.parent() {
@@ -1859,6 +1888,23 @@ impl Editor {
             .collect()
     }
 
+    /// Rule `named.index` of the rule list on screen, when it is the rule a drag named: the
+    /// same rendering and the same pointer.
+    fn rule_drawn(&self, named: &RuleNamed) -> Result<&rule_list::RuleRow, RuleEditRefusal> {
+        if self.rules_rendering != Some(named.rendering) {
+            return Err(RuleEditRefusal::Changed);
+        }
+        let found = self
+            .rule_list
+            .rules
+            .get(named.index)
+            .ok_or(RuleEditRefusal::NoSuchRule)?;
+        if found.pointer != named.pointer {
+            return Err(RuleEditRefusal::Changed);
+        }
+        Ok(found)
+    }
+
     /// Chip `chip` of the rule list on screen, when the list takes an edit now and the chip
     /// is the one an editor was opened on: the same rendering and the same pointer.
     fn chip_drawn(
@@ -1870,7 +1916,7 @@ impl Editor {
         if let Some(blocked) = self.rules_blocked() {
             return Err(blocked);
         }
-        if self.prose_revision != Some(revision) {
+        if self.rules_rendering != Some(revision) {
             return Err(RuleEditRefusal::Changed);
         }
         let found = self
@@ -2893,6 +2939,8 @@ impl Editor {
                 if revision == self.revision {
                     self.rule_list = list;
                     self.prose_revision = Some(revision);
+                    self.rendering = self.rendering.wrapping_add(1);
+                    self.rules_rendering = Some(self.rendering);
                 }
             }
             Sent::Templates => {
@@ -4132,9 +4180,81 @@ mod tests {
             .expect("a chip");
         (
             index,
-            editor.rules_revision().expect("a rendering"),
+            editor.rules_rendering().expect("a rendering"),
             pointer,
         )
+    }
+
+    /// Rule `index` as a drag begun now names it.
+    fn rule_named(editor: &Editor, index: usize) -> RuleNamed {
+        RuleNamed {
+            index,
+            rendering: editor.rules_rendering().expect("a rendering"),
+            pointer: editor
+                .rule_list()
+                .rules
+                .get(index)
+                .map(|rule| rule.pointer.clone())
+                .unwrap_or_default(),
+        }
+    }
+
+    /// The golden render answer with its rules and every rule's chips rotated by one: the
+    /// same text rendered again, where every old index names another chip and another rule.
+    fn reordered_render() -> Json {
+        let mut result = read(EXPAND_AND_MINE_RENDER)
+            .get("result")
+            .cloned()
+            .expect("a result");
+        // Rotated, not reversed: a reversal keeps a middle item at its index.
+        let reverse = |value: &mut Json| {
+            if let Json::Array(items) = value
+                && !items.is_empty()
+            {
+                items.rotate_left(1);
+            }
+        };
+        if let Json::Object(fields) = &mut result {
+            for (key, rules) in fields.iter_mut() {
+                if key != "rules" {
+                    continue;
+                }
+                reverse(rules);
+                if let Json::Array(rules) = rules {
+                    for rule in rules.iter_mut() {
+                        if let Json::Object(rule) = rule {
+                            for (key, chips) in rule.iter_mut() {
+                                if key == "chips" {
+                                    reverse(chips);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        result
+    }
+
+    /// Answers the editor's calls until it is quiet, with `render` for the rule list.
+    fn rerender(editor: &mut Editor, render: &Json) {
+        for _ in 0..24 {
+            let Some(call) = editor.next_call(false) else {
+                return;
+            };
+            let answer = match call.method {
+                "render_plan" => render.clone(),
+                "estimate_route" => read(r#"{"reachable":true}"#),
+                "resolve_refs" => read(r#"{"refs":[]}"#),
+                "get_briefing" => read(r#"{"notes":""}"#),
+                "get_map_summary" => read(r#"{"features":[]}"#),
+                "list_drafts" => read(r#"{"drafts":[]}"#),
+                "list_templates" => read(r#"{"templates":[]}"#),
+                _ => quick_report("", true),
+            };
+            editor.answered(Ok(&answer)).expect("reads");
+        }
+        panic!("the editor never went quiet");
     }
 
     /// **A chip's edit is one `replace`** (S3's `ed3b`): a number within the bounds sent, an
@@ -4199,7 +4319,8 @@ mod tests {
     fn an_edit_never_lands_on_a_chip_of_another_rendering() {
         let mut editor = rendered(EXPAND_EAST);
         let (pct, revision, pointer) = drawn(&editor, "/cmdr_hp_pct/pct");
-        assert_eq!(editor.move_rule(1, 0, revision), Ok(()));
+        let (from, onto) = (rule_named(&editor, 1), rule_named(&editor, 0));
+        assert_eq!(editor.move_rule(&from, &onto), Ok(()));
         assert_eq!(
             editor.set_number(pct, revision, &pointer, 35),
             Err(RuleEditRefusal::Busy)
@@ -4214,24 +4335,20 @@ mod tests {
             Err(RuleEditRefusal::Stale)
         );
         assert_eq!(editor.status().key, "rule_refused_stale");
-        // The new text is checked and rendered: the same golden, a new revision.
-        for _ in 0..16 {
-            let Some(call) = editor.next_call(false) else {
-                break;
-            };
-            let answer = match call.method {
-                "render_plan" => read(EXPAND_AND_MINE_RENDER)
-                    .get("result")
-                    .cloned()
-                    .expect("a result"),
-                "estimate_route" => read(r#"{"reachable":true}"#),
-                "resolve_refs" => read(r#"{"refs":[]}"#),
-                _ => quick_report("", true),
-            };
-            editor.answered(Ok(&answer)).expect("reads");
-        }
+        // The new text is checked and rendered, its chips in another order: the old index
+        // names another chip now.
+        rerender(&mut editor, &reordered_render());
         assert!(editor.rules_editable());
-        assert_ne!(editor.rules_revision(), Some(revision));
+        assert_ne!(editor.rules_rendering(), Some(revision));
+        assert_ne!(
+            editor
+                .rule_list()
+                .chips
+                .get(pct)
+                .map(|chip| chip.pointer.as_str()),
+            Some(pointer.as_str()),
+            "the old index lands on another chip now"
+        );
         assert_eq!(
             editor.set_number(pct, revision, &pointer, 35),
             Err(RuleEditRefusal::Changed),
@@ -4245,6 +4362,57 @@ mod tests {
             "another chip's pointer at this index"
         );
         assert!(editor.next_call(false).is_none(), "nothing was sent");
+    }
+
+    /// **A re-render of the same text invalidates every open control** (fix pass 2, item 2). A
+    /// new round's Lull renders the same text again, here with its rules and chips in another
+    /// order, so every old index names another chip or rule. A pick begun on the old list and
+    /// a drag begun on it are both refused as `Changed`, and nothing is sent.
+    #[test]
+    fn a_re_render_of_the_same_text_refuses_an_old_pick_and_an_old_drag() {
+        let mut editor = rendered(EXPAND_EAST);
+        let (to, rendering, to_at) = drawn(&editor, "/route/1/move/to");
+        let (from, onto) = (rule_named(&editor, 1), rule_named(&editor, 0));
+        assert_eq!(editor.begin_pick(to, rendering, &to_at), Ok(()));
+        let revision = editor.revision();
+        editor.lull_opened(2);
+        rerender(&mut editor, &reordered_render());
+        assert_eq!(editor.revision(), revision, "the same text");
+        assert_ne!(editor.rules_rendering(), Some(rendering), "a new rendering");
+        assert_ne!(
+            editor
+                .rule_list()
+                .rules
+                .get(from.index)
+                .map(|rule| rule.pointer.as_str()),
+            Some(from.pointer.as_str()),
+            "the old index names another rule now"
+        );
+        assert_eq!(
+            editor.pick(&Target::Beacon("b_01".to_owned())),
+            Err(RuleEditRefusal::Changed)
+        );
+        assert_eq!(editor.picking(), None, "a pick on an old list ends");
+        assert_eq!(
+            editor.move_rule(&from, &onto),
+            Err(RuleEditRefusal::Changed)
+        );
+        assert_eq!(editor.status().key, "rule_refused_changed");
+        assert!(editor.next_call(false).is_none(), "nothing was sent");
+    }
+
+    /// **A pick on nothing keeps the pick on** (fix pass 2, item 4): the player missed, says
+    /// so, and clicks again.
+    #[test]
+    fn a_pick_on_nothing_keeps_the_pick_on() {
+        let mut editor = rendered(EXPAND_EAST);
+        assert_eq!(editor.pick_missed(), Err(RuleEditRefusal::NotPicking));
+        let (to, rendering, to_at) = drawn(&editor, "/route/1/move/to");
+        assert_eq!(editor.begin_pick(to, rendering, &to_at), Ok(()));
+        assert_eq!(editor.pick_missed(), Err(RuleEditRefusal::NoTarget));
+        assert_eq!(editor.status().key, "rule_refused_no_target");
+        assert_eq!(editor.picking(), Some(to), "the pick stays on");
+        assert_eq!(editor.pick(&Target::Beacon("b_01".to_owned())), Ok(()));
     }
 
     /// **No rule-list edit is refused in silence** (M2): each wrong ask comes back as its
@@ -4285,11 +4453,11 @@ mod tests {
                 RuleEditRefusal::NoSuchChip,
             ),
             (
-                editor.move_rule(0, 0, revision),
+                editor.move_rule(&rule_named(&editor, 0), &rule_named(&editor, 0)),
                 RuleEditRefusal::OntoItself,
             ),
             (
-                editor.move_rule(0, 99, revision),
+                editor.move_rule(&rule_named(&editor, 0), &rule_named(&editor, 99)),
                 RuleEditRefusal::NoSuchRule,
             ),
             (
@@ -4332,7 +4500,7 @@ mod tests {
             editor.set_number(pct, revision, &pct_at, 35),
             editor.choose(priority, revision, &at, 0),
             editor.begin_pick(to, revision, &to_at),
-            editor.move_rule(1, 0, revision),
+            editor.move_rule(&rule_named(&editor, 1), &rule_named(&editor, 0)),
         ] {
             assert_eq!(got, Err(RuleEditRefusal::Shut));
             assert_eq!(editor.status().key, "closed_push");
@@ -4384,7 +4552,7 @@ mod tests {
     #[test]
     fn a_drag_is_one_move_within_the_rules_own_array() {
         let mut editor = rendered(EXPAND_EAST);
-        let revision = editor.rules_revision().expect("a rendering");
+        let revision = editor.rules_rendering().expect("a rendering");
         let rules = editor.rule_list().rules.clone();
         let route_1 = rules
             .iter()
@@ -4395,16 +4563,25 @@ mod tests {
             .position(|rule| rule.pointer == "/declarative/handlers/0")
             .expect("rule 1");
         assert_eq!(
-            editor.move_rule(route_1, handler, revision),
+            editor.move_rule(&rule_named(&editor, route_1), &rule_named(&editor, handler)),
             Err(RuleEditRefusal::OtherList),
             "a step is not a rule"
         );
         assert_eq!(editor.status().key, "rule_refused_other_list");
         assert_eq!(
-            editor.move_rule(route_1, 0, revision.wrapping_add(7)),
+            editor.move_rule(
+                &RuleNamed {
+                    rendering: revision.wrapping_add(7),
+                    ..rule_named(&editor, route_1)
+                },
+                &rule_named(&editor, 0)
+            ),
             Err(RuleEditRefusal::Changed)
         );
-        assert_eq!(editor.move_rule(route_1, 0, revision), Ok(()));
+        assert_eq!(
+            editor.move_rule(&rule_named(&editor, route_1), &rule_named(&editor, 0)),
+            Ok(())
+        );
         let call = editor.next_call(false).expect("the patch");
         assert_eq!(
             patch_of_call(&call),

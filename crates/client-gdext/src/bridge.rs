@@ -72,7 +72,7 @@ use pharmakos_proto::json;
 use crate::api;
 use crate::chunks;
 use crate::editor::Action;
-use crate::editor::RuleEditRefusal;
+use crate::editor::{RuleEditRefusal, RuleNamed};
 use crate::editor_view::{
     instance_dictionary, meter_dictionary, name_into, recap_dictionary, rows_array,
     rows_of_report_text, rule_list_dictionary, state_dictionary, target_of,
@@ -987,26 +987,48 @@ impl PharmakosBridge {
             let editor = rig.editor_mut();
             match target_of(&target) {
                 Some(target) => editor.pick(&target).is_ok(),
-                None => refused(editor, RuleEditRefusal::NoTarget),
+                // A click on nothing: refused, and the pick stays on for the next click.
+                None => editor.pick_missed().is_ok(),
             }
         })
     }
 
-    /// A drag of rule `from` onto rule `to` (their indices in the rendering `revision`): one
-    /// `move`.
+    /// A drag of rule `from` onto rule `to`, each named by its index and its pointer, in the
+    /// rendering `rendering` the drag began on: one `move`.
     #[func]
-    fn editor_move_rule(&mut self, from: i64, to: i64, revision: i64) -> bool {
+    fn editor_move_rule(
+        &mut self,
+        from: i64,
+        from_pointer: GString,
+        to: i64,
+        to_pointer: GString,
+        rendering: i64,
+    ) -> bool {
         let Some(rig) = self.rig.as_mut() else {
             return false;
         };
+        let (from_pointer, to_pointer) = (from_pointer.to_string(), to_pointer.to_string());
         self.panics.guard_or("editor_move_rule", false, || {
             let editor = rig.editor_mut();
             match (
                 usize::try_from(from),
                 usize::try_from(to),
-                u64::try_from(revision),
+                u64::try_from(rendering),
             ) {
-                (Ok(from), Ok(to), Ok(revision)) => editor.move_rule(from, to, revision).is_ok(),
+                (Ok(from), Ok(to), Ok(rendering)) => editor
+                    .move_rule(
+                        &RuleNamed {
+                            index: from,
+                            rendering,
+                            pointer: from_pointer,
+                        },
+                        &RuleNamed {
+                            index: to,
+                            rendering,
+                            pointer: to_pointer,
+                        },
+                    )
+                    .is_ok(),
                 (Err(_), _, _) | (_, Err(_), _) => refused(editor, RuleEditRefusal::NoSuchRule),
                 (_, _, Err(_)) => refused(editor, RuleEditRefusal::Changed),
             }

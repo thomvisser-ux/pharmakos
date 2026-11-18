@@ -47,11 +47,12 @@ const DRAWN := "drawn"
 
 
 ## Replaces the rows in `container` with the rule list `list` (the bridge's `rule_list`),
-## rendered for `revision` (the bridge's `rules_revision`), unless that is what is drawn
-## already; returns whether it redrew. `editable` is the bridge's `rules_editable`, `picking`
+## rendered as `revision` (the bridge's `rules_rendering`, the rendering id), unless that is
+## what is drawn already; returns whether it redrew. `editable` is the bridge's `rules_editable`, `picking`
 ## the chip a pick is on for (-1 none), `conflicts` and `refusal` the bridge's. `on_chip` is
-## called with a chip's index when it is clicked, `on_move` with the two rule indices and the
-## rendering when one is dropped on the other.
+## called with a chip's index when it is clicked, `on_move` with the dragged rule's index and
+## pointer, the dropped-on rule's index and pointer, and the rendering, when one is dropped on
+## the other.
 static func fill(container: Container, list: Dictionary, revision: int, editable: bool, picking: int, conflicts: Array, refusal: Dictionary, on_chip: Callable, on_move: Callable) -> bool:
 	var drawn := var_to_str([list, revision, editable, picking, conflicts, refusal])
 	if container.has_meta(DRAWN) and String(container.get_meta(DRAWN)) == drawn:
@@ -73,7 +74,7 @@ static func fill(container: Container, list: Dictionary, revision: int, editable
 		var row := _row(line, chips, editable, picking, on_chip)
 		row.set_meta("rule", rule)
 		if rule >= 0 and rule < rules.size():
-			_draggable(row, rule, String(rules[rule].get("parent", "")), revision, editable, on_move)
+			_draggable(row, rule, String(rules[rule].get("pointer", "")), String(rules[rule].get("parent", "")), revision, editable, on_move)
 		container.add_child(row)
 		if rule >= 0 and said.has(rule):
 			container.add_child(_note(Strings.text("rule_conflict", {"sentence": said[rule]})))
@@ -117,7 +118,7 @@ static func _row(line: Dictionary, chips: Array, editable: bool, picking: int, o
 ## same rendering, `revision`; the drop asks for the move. A drag down lands the rule after the
 ## one it is dropped on, and a drag up before it: an RFC 6902 `move` takes the dropped-on
 ## rule's place. Nothing is dragged while the rule list takes no click.
-static func _draggable(row: Control, rule: int, parent: String, revision: int, editable: bool, on_move: Callable) -> void:
+static func _draggable(row: Control, rule: int, pointer: String, parent: String, revision: int, editable: bool, on_move: Callable) -> void:
 	row.set_drag_forwarding(
 		func(_at: Vector2) -> Variant:
 			if not editable:
@@ -125,11 +126,11 @@ static func _draggable(row: Control, rule: int, parent: String, revision: int, e
 			var preview := Label.new()
 			preview.text = String(row.get_meta("line")).strip_edges()
 			row.set_drag_preview(preview)
-			return {"rule": rule, "parent": parent, "revision": revision},
+			return {"rule": rule, "pointer": pointer, "parent": parent, "revision": revision},
 		func(_at: Vector2, data: Variant) -> bool:
 			return editable and data is Dictionary and String(data.get("parent", "")) == parent and int(data.get("revision", -1)) == revision and int(data.get("rule", -1)) != rule,
 		func(_at: Vector2, data: Variant) -> void:
-			on_move.call(int(data["rule"]), rule, int(data["revision"]))
+			on_move.call(int(data["rule"]), String(data["pointer"]), rule, pointer, int(data["revision"]))
 	)
 
 

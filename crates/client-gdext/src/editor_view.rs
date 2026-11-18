@@ -15,7 +15,9 @@ use godot::meta::ToGodot;
 use pharmakos_proto::gp::api::v1::VerifyReport;
 use pharmakos_proto::json;
 
-use crate::editor::{Check, Editor, Route, Row, Selector, SizeMeter, Target, Unchecked, rows_of};
+use crate::editor::{
+    Check, Editor, Route, Row, RuleEditRefusal, Selector, SizeMeter, Target, Unchecked, rows_of,
+};
 use crate::error::BridgeError;
 use crate::rig::{Meter, Recap};
 use crate::rule_list::{ChipEditor, RuleChip, RuleList};
@@ -242,7 +244,7 @@ fn dormant_dictionary(editor: &Editor) -> VarDictionary {
 }
 
 /// The rule list's keys of the editor's state (S3's `ed3b`): `rule_list`
-/// ([`rule_list_dictionary`]), `rules_editable`, `rules_blocked` (why it takes no edit, by name; "" when it takes one), `rules_revision` (the rendering an editor names back; -1 before one), `picking` (the chip a pick is on for, -1 for
+/// ([`rule_list_dictionary`]), `rules_editable`, `rules_blocked` (why it takes no edit, by name; "" when it takes one), `rules_rendering` (the rendering id an editor names back; -1 before one), `picking` (the chip a pick is on for, -1 for
 /// none), `conflicts` (each `{earlier, later, sentence}`, rule indices) and `rule_refusal`
 /// (empty, or `{rule, detail}`: the gateway's refusal of the last rule-list edit and the rule
 /// it is shown on, -1 for none).
@@ -255,16 +257,19 @@ fn put_rule_list(state: &mut VarDictionary, editor: &Editor) {
     put("rules_editable", editor.rules_editable().to_variant());
     // Why the list takes no edit, by its reason's name ("" when it takes one), and the
     // rendering an editor opened now names back (-1 before one).
-    let blocked = match editor.rules_blocked() {
+    // The rendering id is converted as a typed refusal, never saturated: an id GDScript's
+    // `int` cannot hold blocks the list (`rendering_out_of_range`), so no control names it back.
+    let (rendering, blocked) = match editor.rules_rendering().map(i64::try_from) {
+        Some(Ok(rendering)) => (rendering, editor.rules_blocked()),
+        Some(Err(_)) => (-1, Some(RuleEditRefusal::RenderingOutOfRange)),
+        None => (-1, editor.rules_blocked()),
+    };
+    let blocked = match blocked {
         Some(refusal) => refusal.name(),
         None => "",
     };
     put("rules_blocked", blocked.to_variant());
-    let revision = match editor.rules_revision() {
-        Some(revision) => counter(revision),
-        None => (-1_i64).to_variant(),
-    };
-    put("rules_revision", revision);
+    put("rules_rendering", rendering.to_variant());
     put("picking", index_or_none(editor.picking()));
     let mut conflicts = VarArray::new();
     for conflict in editor.conflicts() {
