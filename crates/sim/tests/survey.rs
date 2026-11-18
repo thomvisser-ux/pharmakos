@@ -285,6 +285,58 @@ fn scouts_scan_unexplored_ground_first() {
     assert_eq!(done, 1, "the scan reports its end once");
 }
 
+/// S3's `pred`, decision 7: an explored cell is due again once it is older
+/// than reach memory, and a scout takes a due cell only when no unexplored
+/// cell is left, by the same selection and order as an unexplored one: the
+/// nearest scan point, ties to the lowest cell id (the main session's ruling).
+/// Every cell of the area is explored at tick 0, and the nearest again a
+/// little later; while none is due the scout has nothing to scan,
+/// and once the earlier ones are due it walks to the nearest of them, passing
+/// over the nearest cell, which is not due yet.
+#[test]
+fn a_cell_older_than_reach_memory_is_scanned_again_nearest_first() {
+    let mut world = world();
+    let post = survey_post(&mut world);
+    let cells = strip(&mut world, post, 20, 68);
+    assert!(cells.len() >= 3, "the area spans several cells: {cells:?}");
+    for cell in &cells {
+        assert!(world.mark_explored_directly(seat(0), *cell));
+    }
+    let scout = scout_of(&mut world, post);
+    let window = world.rules().attack().reach_memory.to_ticks_floor();
+
+    let mut runner = pushing(world);
+    let mut feed = Vec::new();
+    play(&mut runner, 200, &mut feed);
+    // The nearest cell is explored again 200 ticks after the rest, so it
+    // falls due 200 ticks later: a mark renews its tick.
+    assert!(
+        !runner.world_mut().mark_explored_directly(seat(0), cells[0]),
+        "the nearest cell was explored already"
+    );
+    let target = |runner: &Runner| cell_of(column(going(runner.world(), scout)));
+    play_to(&mut runner, window, &mut feed);
+    assert!(
+        !cells.contains(&target(&runner).expect("a cell")),
+        "no cell is due yet, so the scout scans none of them: {:?}",
+        target(&runner)
+    );
+    // Past reach memory the cells explored at tick 0 are due; the nearest
+    // cell, explored at tick 200, is not.
+    play_to(&mut runner, window + 10, &mut feed);
+    assert_eq!(
+        target(&runner),
+        Some(cells[1]),
+        "the scout walks to the nearest due cell, passing over the one not due yet"
+    );
+    let explored = runner.world().explored();
+    assert_eq!(
+        explored.explored_on(seat(0), cells[0]),
+        Some(200),
+        "the explore tick is the tick the cell was marked on"
+    );
+}
+
 #[test]
 fn the_stalest_sighting_is_refreshed_next() {
     let mut world = short_sighted_world();
