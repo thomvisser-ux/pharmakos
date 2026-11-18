@@ -72,6 +72,7 @@ use pharmakos_proto::json;
 use crate::api;
 use crate::chunks;
 use crate::editor::Action;
+use crate::editor::RuleEditRefusal;
 use crate::editor_view::{
     instance_dictionary, meter_dictionary, name_into, recap_dictionary, rows_array,
     rows_of_report_text, rule_list_dictionary, state_dictionary, target_of,
@@ -891,42 +892,76 @@ impl PharmakosBridge {
     }
 
     // --- The rule list (S3's `ed3b`) ---------------------------------------------------------
+    //
+    // Each edit names the rendering it was opened on (`revision`, the editor state's
+    // `rules_revision`) and the chip's `pointer`, so it never lands on a chip of another
+    // rendering. An index or a revision no Rust type holds (a negative int) is refused
+    // through the editor like any other refusal, by its reason on the status line.
 
     /// Rule-list chip `chip`'s number field sent `value`: one `replace` through `patch_plan`.
-    /// Returns whether it was taken.
+    /// Returns whether it was taken; a refusal is on the status line.
     #[func]
-    fn editor_set_number(&mut self, chip: i64, value: i64) -> bool {
-        let (Some(rig), Ok(chip)) = (self.rig.as_mut(), usize::try_from(chip)) else {
+    fn editor_set_number(
+        &mut self,
+        chip: i64,
+        revision: i64,
+        pointer: GString,
+        value: i64,
+    ) -> bool {
+        let Some(rig) = self.rig.as_mut() else {
             return false;
         };
+        let pointer = pointer.to_string();
         self.panics.guard_or("editor_set_number", false, || {
-            rig.editor_mut().set_number(chip, value)
+            let editor = rig.editor_mut();
+            match (usize::try_from(chip), u64::try_from(revision)) {
+                (Ok(chip), Ok(revision)) => {
+                    editor.set_number(chip, revision, &pointer, value).is_ok()
+                }
+                (Err(_), _) => refused(editor, RuleEditRefusal::NoSuchChip),
+                (_, Err(_)) => refused(editor, RuleEditRefusal::Changed),
+            }
         })
     }
 
     /// Rule-list chip `chip`'s enum took its `which`th value as sent: one `replace`.
     #[func]
-    fn editor_choose(&mut self, chip: i64, which: i64) -> bool {
-        let (Some(rig), Ok(chip), Ok(which)) = (
-            self.rig.as_mut(),
-            usize::try_from(chip),
-            usize::try_from(which),
-        ) else {
+    fn editor_choose(&mut self, chip: i64, revision: i64, pointer: GString, which: i64) -> bool {
+        let Some(rig) = self.rig.as_mut() else {
             return false;
         };
+        let pointer = pointer.to_string();
         self.panics.guard_or("editor_choose", false, || {
-            rig.editor_mut().choose(chip, which)
+            let editor = rig.editor_mut();
+            match (
+                usize::try_from(chip),
+                u64::try_from(revision),
+                usize::try_from(which),
+            ) {
+                (Ok(chip), Ok(revision), Ok(which)) => {
+                    editor.choose(chip, revision, &pointer, which).is_ok()
+                }
+                (Err(_), _, _) => refused(editor, RuleEditRefusal::NoSuchChip),
+                (_, Err(_), _) => refused(editor, RuleEditRefusal::Changed),
+                (_, _, Err(_)) => refused(editor, RuleEditRefusal::NoSuchValue),
+            }
         })
     }
 
     /// The next map click is rule-list chip `chip`'s pick.
     #[func]
-    fn editor_begin_pick(&mut self, chip: i64) -> bool {
-        let (Some(rig), Ok(chip)) = (self.rig.as_mut(), usize::try_from(chip)) else {
+    fn editor_begin_pick(&mut self, chip: i64, revision: i64, pointer: GString) -> bool {
+        let Some(rig) = self.rig.as_mut() else {
             return false;
         };
+        let pointer = pointer.to_string();
         self.panics.guard_or("editor_begin_pick", false, || {
-            rig.editor_mut().begin_pick(chip)
+            let editor = rig.editor_mut();
+            match (usize::try_from(chip), u64::try_from(revision)) {
+                (Ok(chip), Ok(revision)) => editor.begin_pick(chip, revision, &pointer).is_ok(),
+                (Err(_), _) => refused(editor, RuleEditRefusal::NoSuchChip),
+                (_, Err(_)) => refused(editor, RuleEditRefusal::Changed),
+            }
         })
     }
 
@@ -942,29 +977,39 @@ impl PharmakosBridge {
 
     /// A map click while a pick is on, at a target dictionary as `editor_action` takes it (a
     /// `beacon`, a `voxel` or a `feature`): one `replace` of the picked chip. Returns whether
-    /// it was taken.
+    /// it was taken; a refusal is on the status line.
     #[func]
     fn editor_pick(&mut self, target: VarDictionary) -> bool {
         let Some(rig) = self.rig.as_mut() else {
             return false;
         };
         self.panics.guard_or("editor_pick", false, || {
-            target_of(&target).is_some_and(|target| rig.editor_mut().pick(&target))
+            let editor = rig.editor_mut();
+            match target_of(&target) {
+                Some(target) => editor.pick(&target).is_ok(),
+                None => refused(editor, RuleEditRefusal::NoTarget),
+            }
         })
     }
 
-    /// A drag of rule `from` onto rule `to` (their indices in the rule list): one `move`.
+    /// A drag of rule `from` onto rule `to` (their indices in the rendering `revision`): one
+    /// `move`.
     #[func]
-    fn editor_move_rule(&mut self, from: i64, to: i64) -> bool {
-        let (Some(rig), Ok(from), Ok(to)) = (
-            self.rig.as_mut(),
-            usize::try_from(from),
-            usize::try_from(to),
-        ) else {
+    fn editor_move_rule(&mut self, from: i64, to: i64, revision: i64) -> bool {
+        let Some(rig) = self.rig.as_mut() else {
             return false;
         };
         self.panics.guard_or("editor_move_rule", false, || {
-            rig.editor_mut().move_rule(from, to)
+            let editor = rig.editor_mut();
+            match (
+                usize::try_from(from),
+                usize::try_from(to),
+                u64::try_from(revision),
+            ) {
+                (Ok(from), Ok(to), Ok(revision)) => editor.move_rule(from, to, revision).is_ok(),
+                (Err(_), _, _) | (_, Err(_), _) => refused(editor, RuleEditRefusal::NoSuchRule),
+                (_, _, Err(_)) => refused(editor, RuleEditRefusal::Changed),
+            }
         })
     }
 
@@ -1878,6 +1923,13 @@ fn apply(
         Some(resident) => resident.apply(&op, ColourQuantisation::RoundHalfUp),
         None => Ok(()),
     }
+}
+
+/// A rule-list ask the bridge could not name in Rust's types: refused through the editor, by
+/// its reason on the status line, and answered `false` to GDScript.
+fn refused(editor: &mut crate::editor::Editor, refusal: RuleEditRefusal) -> bool {
+    let _ = editor.refuse_rule_edit(refusal);
+    false
 }
 
 #[cfg(test)]

@@ -259,14 +259,20 @@ var _rules_status: Label
 var _rules_box: VBoxContainer
 ## The rule list's chips as the bridge last sent them, for a click on one to find its editor.
 var _rule_chips: Array = []
-## A number chip's editor: a field within the bounds sent, and the chip it is for.
+## The rendering the rule list on screen was drawn for (the bridge's `rules_revision`), and why
+## it takes no edit now (`rules_blocked`, "" when it takes one).
+var _rules_revision := -1
+var _rules_blocked := ""
+## A number chip's editor: a field within the bounds sent, and the chip it is for, named as
+## the bridge checks it: its index, the rendering and its pointer (M1).
 var _number_popup: PopupPanel
 var _number_heading: Label
+var _number_note: Label
 var _number_field: SpinBox
-var _number_chip := -1
-## An enum chip's editor: its values as sent, and the chip it is for.
+var _number_chip := {}
+## An enum chip's editor: its values as sent, and the chip it is for, named the same way.
 var _choice_menu: PopupMenu
-var _choice_chip := -1
+var _choice_chip := {}
 var _templates_drawn := ""
 var _wizard_drawn := ""
 ## Per counted button: how many presses (`button_down`) and handled clicks (`pressed`) it
@@ -603,9 +609,10 @@ func _pick_at(camera: Camera3D, at: Vector2) -> bool:
 		target = {"feature": String(vent["id"])}
 	else:
 		var picked: Dictionary = bridge.view_pick(camera.project_ray_origin(at), camera.project_ray_normal(at))
-		if not picked.get("hit", false):
-			return false
-		target = {"voxel": picked["at"]}
+		# A click on nothing (the sky) is still the pick's: the bridge refuses it by its reason,
+		# `no_target`, rather than the click passing in silence.
+		if picked.get("hit", false):
+			target = {"voxel": picked["at"]}
 	_take_map_click()
 	bridge.editor_pick(target)
 	return true
@@ -1050,21 +1057,34 @@ func _draw_rules(state: Dictionary, unchecked: String) -> void:
 		_rules_status.text = ""
 	var list: Dictionary = state.get("rule_list", {})
 	_rule_chips = list.get("chips", [])
-	RuleList.fill(_rules_box, list, state.get("rules_editable", false), int(state.get("picking", -1)), state.get("conflicts", []), state.get("rule_refusal", {}), Callable(self, "_on_rule_chip"), Callable(self, "_on_rule_move"))
+	_rules_revision = int(state.get("rules_revision", -1))
+	_rules_blocked = String(state.get("rules_blocked", ""))
+	var redrawn: bool = RuleList.fill(_rules_box, list, _rules_revision, state.get("rules_editable", false), int(state.get("picking", -1)), state.get("conflicts", []), state.get("rule_refusal", {}), Callable(self, "_on_rule_chip"), Callable(self, "_on_rule_move"))
+	# An editor opened on the list drawn before names chips that may not be there any more
+	# (M1): it closes with that list, and the bridge would refuse its edit anyway.
+	if redrawn:
+		_number_popup.hide()
+		_choice_menu.hide()
 
 
 ## A click on rule-list chip `index` opens its editor, by the shape the gateway sent: a number
 ## field within the bounds sent, the enum's values as sent, or a pick on the map; a chip the
 ## rule list does not edit says why. The edit itself is the bridge's one JSON Patch `replace`.
 func _on_rule_chip(index: int) -> void:
+	# No editor opens while the list takes no edit (M1): the bridge's reason is said instead.
+	if _rules_blocked != "":
+		_say_local("status_rule_refused_" + _rules_blocked, {})
+		return
 	if index < 0 or index >= _rule_chips.size():
+		_say_local("status_rule_refused_no_such_chip", {})
 		return
 	var chip: Dictionary = _rule_chips[index]
+	var named := {"index": index, "revision": _rules_revision, "pointer": String(chip.get("pointer", ""))}
 	match String(chip.get("editor", "")):
 		"number":
-			_open_number(index, chip)
+			_open_number(named, chip)
 		"choice":
-			_choice_chip = index
+			_choice_chip = named
 			_choice_menu.clear()
 			var values: PackedStringArray = chip.get("values", PackedStringArray())
 			for which in values.size():
@@ -1073,39 +1093,45 @@ func _on_rule_chip(index: int) -> void:
 			_choice_menu.position = Vector2i(get_viewport().get_mouse_position())
 			_choice_menu.popup()
 		"pick":
-			bridge.editor_begin_pick(index)
+			bridge.editor_begin_pick(index, _rules_revision, named["pointer"])
 		_:
 			_say_local("rule_chip_read_only_" + String(chip.get("why", "")), {})
 
 
-## The number field for chip `index`: the bounds the gateway sent, none where it set none, and
-## the unit beside it as sent. The field keeps its value inside those bounds; nothing else is
-## checked here.
-func _open_number(index: int, chip: Dictionary) -> void:
-	_number_chip = index
-	_number_field.allow_lesser = not chip.get("has_min", false)
-	_number_field.allow_greater = not chip.get("has_max", false)
-	_number_field.min_value = chip.get("min") if chip.get("has_min", false) else chip.get("now", 0)
+## The number field for the chip `named`: the bounds the gateway sent, none where it set none,
+## and the unit beside it as sent. The value is shown as the file holds it, never clamped into
+## range (L1): a value outside the bounds sent opens the field past them, and the note says so
+## with the gateway's two numbers (`outside` is the bridge's reading). The maximum is set before
+## the minimum, so a range above the field's old one is not cut by it.
+func _open_number(named: Dictionary, chip: Dictionary) -> void:
+	_number_chip = named
+	var outside: bool = chip.get("outside", false)
+	_number_field.allow_lesser = outside or not chip.get("has_min", false)
+	_number_field.allow_greater = outside or not chip.get("has_max", false)
 	_number_field.max_value = chip.get("max") if chip.get("has_max", false) else chip.get("now", 0)
+	_number_field.min_value = chip.get("min") if chip.get("has_min", false) else chip.get("now", 0)
 	_number_field.value = chip.get("now", 0)
 	_number_field.suffix = String(chip.get("unit", ""))
 	_number_heading.text = Strings.text("rule_number_heading", {"text": chip.get("text", "")})
+	_number_note.visible = outside
+	_number_note.text = Strings.text("rule_number_outside", {"now": chip.get("now", 0), "min": chip.get("min", "-"), "max": chip.get("max", "-")}) if outside else ""
 	_number_popup.position = Vector2i(get_viewport().get_mouse_position())
 	_number_popup.popup()
 
 
 func _on_number_send() -> void:
 	_number_popup.hide()
-	bridge.editor_set_number(_number_chip, int(_number_field.value))
+	bridge.editor_set_number(int(_number_chip.get("index", -1)), int(_number_chip.get("revision", -1)), String(_number_chip.get("pointer", "")), int(_number_field.value))
 
 
 func _on_choice(which: int) -> void:
-	bridge.editor_choose(_choice_chip, which)
+	bridge.editor_choose(int(_choice_chip.get("index", -1)), int(_choice_chip.get("revision", -1)), String(_choice_chip.get("pointer", "")), which)
 
 
-## A rule dropped on another of its list: the bridge's one JSON Patch `move`.
-func _on_rule_move(from: int, to: int) -> void:
-	bridge.editor_move_rule(from, to)
+## A rule dropped on another of its list, in the rendering the drag began on: the bridge's one
+## JSON Patch `move`.
+func _on_rule_move(from: int, to: int, revision: int) -> void:
+	bridge.editor_move_rule(from, to, revision)
 
 
 func _draw_notes(state: Dictionary) -> void:
@@ -1405,6 +1431,11 @@ func _build_menus() -> void:
 	_number_popup.add_child(box)
 	_number_heading = Label.new()
 	box.add_child(_number_heading)
+	_number_note = Label.new()
+	_number_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_number_note.custom_minimum_size = Vector2(PANEL_WIDTH - 40.0, 0)
+	_number_note.visible = false
+	box.add_child(_number_note)
 	_number_field = SpinBox.new()
 	_number_field.step = 1.0
 	_number_field.rounded = true

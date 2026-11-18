@@ -47,14 +47,15 @@ const DRAWN := "drawn"
 
 
 ## Replaces the rows in `container` with the rule list `list` (the bridge's `rule_list`),
-## unless what `drawn` describes is what is drawn already. `editable` is the bridge's
-## `rules_editable`, `picking` the chip a pick is on for (-1 none), `conflicts` and `refusal`
-## the bridge's. `on_chip` is called with a chip's index when it is clicked, `on_move` with
-## two rule indices when one is dropped on the other.
-static func fill(container: Container, list: Dictionary, editable: bool, picking: int, conflicts: Array, refusal: Dictionary, on_chip: Callable, on_move: Callable) -> void:
-	var drawn := var_to_str([list, editable, picking, conflicts, refusal])
+## rendered for `revision` (the bridge's `rules_revision`), unless that is what is drawn
+## already; returns whether it redrew. `editable` is the bridge's `rules_editable`, `picking`
+## the chip a pick is on for (-1 none), `conflicts` and `refusal` the bridge's. `on_chip` is
+## called with a chip's index when it is clicked, `on_move` with the two rule indices and the
+## rendering when one is dropped on the other.
+static func fill(container: Container, list: Dictionary, revision: int, editable: bool, picking: int, conflicts: Array, refusal: Dictionary, on_chip: Callable, on_move: Callable) -> bool:
+	var drawn := var_to_str([list, revision, editable, picking, conflicts, refusal])
 	if container.has_meta(DRAWN) and String(container.get_meta(DRAWN)) == drawn:
-		return
+		return false
 	container.set_meta(DRAWN, drawn)
 	container.set_meta("conflicts", conflicts)
 	for child in container.get_children():
@@ -72,13 +73,14 @@ static func fill(container: Container, list: Dictionary, editable: bool, picking
 		var row := _row(line, chips, editable, picking, on_chip)
 		row.set_meta("rule", rule)
 		if rule >= 0 and rule < rules.size():
-			_draggable(row, rule, String(rules[rule].get("parent", "")), editable, on_move)
+			_draggable(row, rule, String(rules[rule].get("parent", "")), revision, editable, on_move)
 		container.add_child(row)
 		if rule >= 0 and said.has(rule):
 			container.add_child(_note(Strings.text("rule_conflict", {"sentence": said[rule]})))
 		if rule >= 0 and int(refusal.get("rule", -1)) == rule:
 			container.add_child(_note(Strings.text("rule_refused", {"detail": refusal.get("detail", "")})))
 	container.queue_redraw()
+	return true
 
 
 ## One line: its runs drawn in order, the chips as links whose meta is the chip's index.
@@ -111,9 +113,11 @@ static func _row(line: Dictionary, chips: Array, editable: bool, picking: int, o
 	return row
 
 
-## A rule's sentence row can be dragged onto another rule of the same list, `parent`; the drop
-## asks for the move. Nothing is dragged while the rule list takes no click.
-static func _draggable(row: Control, rule: int, parent: String, editable: bool, on_move: Callable) -> void:
+## A rule's sentence row can be dragged onto another rule of the same list, `parent`, of the
+## same rendering, `revision`; the drop asks for the move. A drag down lands the rule after the
+## one it is dropped on, and a drag up before it: an RFC 6902 `move` takes the dropped-on
+## rule's place. Nothing is dragged while the rule list takes no click.
+static func _draggable(row: Control, rule: int, parent: String, revision: int, editable: bool, on_move: Callable) -> void:
 	row.set_drag_forwarding(
 		func(_at: Vector2) -> Variant:
 			if not editable:
@@ -121,11 +125,11 @@ static func _draggable(row: Control, rule: int, parent: String, editable: bool, 
 			var preview := Label.new()
 			preview.text = String(row.get_meta("line")).strip_edges()
 			row.set_drag_preview(preview)
-			return {"rule": rule, "parent": parent},
+			return {"rule": rule, "parent": parent, "revision": revision},
 		func(_at: Vector2, data: Variant) -> bool:
-			return editable and data is Dictionary and String(data.get("parent", "")) == parent and int(data.get("rule", -1)) != rule,
+			return editable and data is Dictionary and String(data.get("parent", "")) == parent and int(data.get("revision", -1)) == revision and int(data.get("rule", -1)) != rule,
 		func(_at: Vector2, data: Variant) -> void:
-			on_move.call(int(data["rule"]), rule)
+			on_move.call(int(data["rule"]), rule, int(data["revision"]))
 	)
 
 

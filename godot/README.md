@@ -211,7 +211,9 @@ Pull request 2 adds four things to the panel, each drawn as the gateway answered
   on the map (the next map click; Escape stops), each edit one JSON Patch `replace`. A
   duration is drawn as the gateway wrote it and not edited (it waits on a typed unit hint from
   the wire), and a step label or a rule id waits on part 2's picker. A step's or a rule's row
-  drags onto another of its own list: one JSON Patch `move`. The two rules a W0702 row names
+  drags onto another of its own list: one JSON Patch `move` to that rule's place, so a rule
+  dragged down lands after the rule it is dropped on, and one dragged up before it (RFC 6902
+  `move` removes, then inserts at the target index). The two rules a W0702 row names
   are joined by a connector in the list's margin, with the verifier's sentence under the later
   one, and the gateway's refusal of an edit shows under the rule it was of.
 - **The meter**: `get_economy_forecast`'s four numbers (`$`, supply, draw and headroom in

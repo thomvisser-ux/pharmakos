@@ -242,7 +242,7 @@ fn dormant_dictionary(editor: &Editor) -> VarDictionary {
 }
 
 /// The rule list's keys of the editor's state (S3's `ed3b`): `rule_list`
-/// ([`rule_list_dictionary`]), `rules_editable`, `picking` (the chip a pick is on for, -1 for
+/// ([`rule_list_dictionary`]), `rules_editable`, `rules_blocked` (why it takes no edit, by name; "" when it takes one), `rules_revision` (the rendering an editor names back; -1 before one), `picking` (the chip a pick is on for, -1 for
 /// none), `conflicts` (each `{earlier, later, sentence}`, rule indices) and `rule_refusal`
 /// (empty, or `{rule, detail}`: the gateway's refusal of the last rule-list edit and the rule
 /// it is shown on, -1 for none).
@@ -253,6 +253,18 @@ fn put_rule_list(state: &mut VarDictionary, editor: &Editor) {
         rule_list_dictionary(editor.rule_list()).to_variant(),
     );
     put("rules_editable", editor.rules_editable().to_variant());
+    // Why the list takes no edit, by its reason's name ("" when it takes one), and the
+    // rendering an editor opened now names back (-1 before one).
+    let blocked = match editor.rules_blocked() {
+        Some(refusal) => refusal.name(),
+        None => "",
+    };
+    put("rules_blocked", blocked.to_variant());
+    let revision = match editor.rules_revision() {
+        Some(revision) => counter(revision),
+        None => (-1_i64).to_variant(),
+    };
+    put("rules_revision", revision);
     put("picking", index_or_none(editor.picking()));
     let mut conflicts = VarArray::new();
     for conflict in editor.conflicts() {
@@ -316,7 +328,7 @@ pub(crate) fn rule_list_dictionary(list: &RuleList) -> VarDictionary {
 
 /// One rule-list chip as a dictionary: `pointer`, `text` and `value_json` as sent, and
 /// `editor`: `number` (with `min` and `max`, each beside a `has_` flag that is false when the
-/// gateway set no bound, `unit`, and `now`), `choice` (with `values`, the JSON texts as sent),
+/// gateway set no bound, `unit`, `now`, and `outside`: whether `now` lies outside those bounds), `choice` (with `values`, the JSON texts as sent),
 /// `pick` (with `kind` and `arms`), or `read_only` (with `why`).
 fn rule_chip_dictionary(chip: &RuleChip) -> VarDictionary {
     let mut out = VarDictionary::new();
@@ -341,6 +353,7 @@ fn rule_chip_dictionary(chip: &RuleChip) -> VarDictionary {
             }
             out.set(&"unit".to_variant(), &unit.to_variant());
             out.set(&"now".to_variant(), &now.to_variant());
+            out.set(&"outside".to_variant(), &chip.outside_bounds().to_variant());
             "number"
         }
         ChipEditor::Choice { values } => {

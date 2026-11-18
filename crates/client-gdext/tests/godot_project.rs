@@ -2242,9 +2242,14 @@ fn the_rule_list_draws_the_gateways_cut_and_forwards_every_click() {
     }
     let drag = gd_code(&list, "_draggable");
     assert!(
+        drag.iter().any(|line| line
+            .contains("on_move.call(int(data[\"rule\"]), rule, int(data[\"revision\"]))")),
+        "a drop names the rendering the drag began on: {drag:?}"
+    );
+    assert!(
         drag.iter()
-            .any(|line| line.contains("on_move.call(int(data[\"rule\"]), rule)")),
-        "{drag:?}"
+            .any(|line| line.contains("int(data.get(\"revision\", -1)) == revision")),
+        "a drag from another rendering drops nowhere: {drag:?}"
     );
     assert!(
         drag.iter().any(|line| line.contains("if not editable:")),
@@ -2269,27 +2274,20 @@ fn the_rule_list_draws_the_gateways_cut_and_forwards_every_click() {
         "\"number\":",
         "\"choice\":",
         "\"pick\":",
-        "bridge.editor_begin_pick(index)",
+        "bridge.editor_begin_pick(index, _rules_revision, named[\"pointer\"])",
         "_say_local(\"rule_chip_read_only_\" + String(chip.get(\"why\", \"\")), {})",
     ] {
         assert!(chip.contains(&wanted), "{wanted}: {chip:?}");
     }
     let number = gd_code(&editor, "_open_number");
     assert!(
-        number
-            .iter()
-            .any(|line| line
-                .contains("_number_field.allow_lesser = not chip.get(\"has_min\", false)"))
-            && number.iter().any(|line| line
-                .contains("_number_field.allow_greater = not chip.get(\"has_max\", false)")),
+        number.iter().any(|line| line
+            .contains("_number_field.allow_lesser = outside or not chip.get(\"has_min\", false)"))
+            && number.iter().any(|line| line.contains(
+                "_number_field.allow_greater = outside or not chip.get(\"has_max\", false)"
+            )),
         "the field's bounds are the ones sent, and none where none was sent: {number:?}"
     );
-    assert!(
-        gd_code(&editor, "_on_number_send")
-            .contains(&"bridge.editor_set_number(_number_chip, int(_number_field.value))")
-    );
-    assert!(gd_code(&editor, "_on_choice").contains(&"bridge.editor_choose(_choice_chip, which)"));
-    assert!(gd_code(&editor, "_on_rule_move").contains(&"bridge.editor_move_rule(from, to)"));
     let click = gd_code(&editor, "map_click");
     let pick = click
         .iter()
@@ -2412,5 +2410,67 @@ fn a_gone_ghost_closes_its_menu_and_a_modifier_is_not_an_input() {
     assert!(
         rig.contains("## PLACEHOLDER: the opening yaw — OWNER, S6.\nconst OPENING_YAW := 0.8"),
         "the opening yaw carries its marker (L6)"
+    );
+}
+
+/// **A chip's editor names its chip, and never clamps** (the `ed3b` resume, M1 and L1): an
+/// edit names the chip's index, the rendering and its pointer, so it cannot land on a chip of
+/// another rendering; no editor opens while the list takes no edit, and the editors close when
+/// the list is redrawn; the number field shows the file's value as it is, its maximum set before
+/// its minimum, and says when that value lies outside the bounds sent.
+#[test]
+fn a_chip_editor_names_its_chip_and_never_clamps() {
+    let editor = read("scripts/editor.gd");
+    let chip = gd_code(&editor, "_on_rule_chip");
+    let number = gd_code(&editor, "_open_number");
+    assert!(
+        gd_code(&editor, "_on_number_send").iter().any(|line| line.contains(
+            "bridge.editor_set_number(int(_number_chip.get(\"index\", -1)), int(_number_chip.get(\"revision\", -1)), String(_number_chip.get(\"pointer\", \"\")), int(_number_field.value))"
+        )),
+        "an edit names its chip's index, rendering and pointer (M1)"
+    );
+    assert!(
+        gd_code(&editor, "_on_choice").iter().any(|line| line.contains(
+            "bridge.editor_choose(int(_choice_chip.get(\"index\", -1)), int(_choice_chip.get(\"revision\", -1)), String(_choice_chip.get(\"pointer\", \"\")), which)"
+        ))
+    );
+    assert!(
+        gd_code(&editor, "_on_rule_move").contains(&"bridge.editor_move_rule(from, to, revision)")
+    );
+    // M1: no editor opens while the list takes no edit, and the editors close with the list.
+    assert!(
+        chip.iter()
+            .position(|line| line.contains("if _rules_blocked != \"\":"))
+            .is_some_and(|blocked| chip
+                .get(blocked.saturating_add(1))
+                .is_some_and(|line| line
+                    .contains("_say_local(\"status_rule_refused_\" + _rules_blocked, {})"))),
+        "the bridge's reason is said, and no editor opens: {chip:?}"
+    );
+    let rules = gd_code(&editor, "_draw_rules");
+    for wanted in ["if redrawn:", "_number_popup.hide()", "_choice_menu.hide()"] {
+        assert!(
+            rules.iter().any(|line| line.contains(wanted)),
+            "{wanted}: {rules:?}"
+        );
+    }
+    // L1: the field shows the file's value as it is; max is set before min.
+    let max_at = number
+        .iter()
+        .position(|line| line.starts_with("_number_field.max_value ="))
+        .expect("the max");
+    let min_at = number
+        .iter()
+        .position(|line| line.starts_with("_number_field.min_value ="))
+        .expect("the min");
+    assert!(max_at < min_at, "max before min: {number:?}");
+    assert!(
+        number
+            .iter()
+            .any(|line| line.contains("_number_field.allow_lesser = outside or"))
+            && number
+                .iter()
+                .any(|line| line.contains("rule_number_outside")),
+        "a value outside the bounds sent is shown and said, never clamped: {number:?}"
     );
 }

@@ -139,6 +139,22 @@ pub struct RuleChip {
     pub editor: ChipEditor,
 }
 
+impl RuleChip {
+    /// Whether a number chip's value, as the file holds it, lies outside the bounds the
+    /// gateway sent: the field then shows it as it is and says so, never clamping it into
+    /// range (L1). `false` for any other chip, and against a bound the gateway left unset.
+    #[must_use]
+    pub fn outside_bounds(&self) -> bool {
+        match &self.editor {
+            ChipEditor::Number { min, max, now, .. } => {
+                min.is_some_and(|min| *now < i64::from(min))
+                    || max.is_some_and(|max| *now > i64::from(max))
+            }
+            ChipEditor::Choice { .. } | ChipEditor::Pick { .. } | ChipEditor::ReadOnly(_) => false,
+        }
+    }
+}
+
 /// One rule or route step of the rendering.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct RuleRow {
@@ -625,6 +641,30 @@ mod tests {
         }
         let bad_rule = r#"{"prose":"a\n","rules":[{"pointer":"/declarative/route/0","line":0,"line_count":2}]}"#;
         assert!(rule_list_of(&json::read(bad_rule).expect("json")).is_err());
+    }
+
+    /// A number the file holds outside the bounds sent is said to be outside them, at each
+    /// end, and a bound the gateway left unset bounds nothing.
+    #[test]
+    fn a_number_outside_the_bounds_sent_is_said_to_be() {
+        let chip = |min: Option<i32>, max: Option<i32>, now: i64| RuleChip {
+            pointer: "/a".to_owned(),
+            line: 0,
+            start: 0,
+            text: "x".to_owned(),
+            value_json: now.to_string(),
+            editor: ChipEditor::Number {
+                min,
+                max,
+                unit: String::new(),
+                now,
+            },
+        };
+        assert!(!chip(Some(0), Some(100), 40).outside_bounds());
+        assert!(!chip(Some(0), Some(100), 100).outside_bounds());
+        assert!(chip(Some(0), Some(100), 140).outside_bounds());
+        assert!(chip(Some(10), None, 5).outside_bounds());
+        assert!(!chip(None, None, -5).outside_bounds());
     }
 
     #[test]

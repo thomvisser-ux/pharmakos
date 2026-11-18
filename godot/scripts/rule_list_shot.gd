@@ -48,7 +48,7 @@ func _ready() -> void:
 		_fail("the fixture did not decode; the reason is in the log")
 		return
 	rules.draw.connect(func() -> void: RuleList.draw_connectors(rules))
-	RuleList.fill(rules, list, true, -1, [SHOWN_CONFLICT], {}, func(_chip: int) -> void: pass, func(_from: int, _to: int) -> void: pass)
+	RuleList.fill(rules, list, 0, true, -1, [SHOWN_CONFLICT], {}, func(_chip: int) -> void: pass, func(_from: int, _to: int, _revision: int) -> void: pass)
 	for i in SETTLE_DRAWS:
 		await get_tree().process_frame
 	var lines: Array = list.get("lines", [])
