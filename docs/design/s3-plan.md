@@ -386,7 +386,7 @@ puts that reading to the owner.
   section 4.1 schedules `gwp` where no client lane runs. `prob` then draws the preset.
 - **E7. Untimed Lulls by preset.** A Probation match's Lulls are untimed: the gateway answers
   `_status.untimed`, which the rig already reads to hide the countdown, so the client makes no
-  decision about the preset. [Amended by items 160 (4) and 161 (8): the client cannot tell untimed-by-rule from "no countdown reported yet", which is all `Status.untimed` means; `gwu` adds a field saying a Lull is untimed by rule, and `ed3b` part 2 reads it.] The client still reports its clock through `report_host_clock`, so
+  decision about the preset. [Amended by items 160 (4) and 161 (8): item 160 (4) records PR #172's finding that the client cannot tell untimed-by-rule from "no countdown reported yet", which is all `Status.untimed` means; `gwu` adds a field saying a Lull is untimed by rule, and `ed3b` part 2 reads it.] The client still reports its clock through `report_host_clock`, so
   rate limits and token expiry advance (AGENTS.md §4.5); a report that carries a Lull countdown in
   a Probation match is refused with a typed error (`INVALID_ARGUMENT`, naming the preset), never
   clamped or ignored. The rules' `match.lull_ms` rows are unchanged; the preset overrides them,
