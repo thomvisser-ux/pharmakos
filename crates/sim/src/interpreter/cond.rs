@@ -344,6 +344,7 @@ fn units_by_role(view: &View<'_>, beacon: BeaconId, kind: UnitKind) -> i64 {
     {
         view.world.charge_decision(1);
         if *home == beacon && *owner == view.seat.raw() && *unit == kind.id() && hp.is_alive() {
+            // E7: rule: the count is at most the unit table's rows, a `u32`, far inside `i64`
             count = count.saturating_add(1);
         }
     }
@@ -434,6 +435,7 @@ fn count_sightings<F: Fn(Seen) -> bool>(view: &View<'_>, fresh: Freshness, keep:
                 at: *at,
             })
         {
+            // E7: rule: the count is at most the sighting table's capacity, a `u32`, far inside `i64`
             count = count.saturating_add(1);
         }
     }
@@ -1101,4 +1103,23 @@ fn octile(cardinal: i64, diagonal: i64, a: [Fx; 3], b: [Fx; 3]) -> i64 {
     cardinal
         .saturating_mul(long.saturating_sub(short))
         .saturating_add(diagonal.saturating_mul(short))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_fresh;
+    use crate::interpreter::Freshness;
+    use crate::math::quantity::Ms;
+
+    /// S3's `pred`, fix pass 1: the freshness boundary. `KNOWN_WITHIN` 500 ms
+    /// is 10 ticks: an age of 10 ticks is fresh and 11 is not; `VISIBLE_NOW`
+    /// is a sighting of this tick and not the one before.
+    #[test]
+    fn freshness_holds_at_its_window_and_not_a_tick_past_it() {
+        let within = Freshness::KnownWithin(Ms::new(500));
+        assert!(is_fresh(within, 90, 100), "an age of the window is fresh");
+        assert!(!is_fresh(within, 89, 100), "one tick past it is not");
+        assert!(is_fresh(Freshness::VisibleNow, 100, 100));
+        assert!(!is_fresh(Freshness::VisibleNow, 99, 100));
+    }
 }

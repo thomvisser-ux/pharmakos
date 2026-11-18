@@ -750,6 +750,9 @@ pub struct Stone {
     pub feature: usize,
     /// The site column.
     pub site: [i32; 2],
+    /// How many legal sites the search weighed for it: what a miss would
+    /// count, kept on a hit for the measurement of the search's cost.
+    pub weighed: u32,
 }
 
 /// The stepping-stone site toward `feature` (S3's plan, E23; S1's plan,
@@ -905,7 +908,11 @@ pub fn toward_counted(
                 .filter(|index| ground.is_live(*index))
                 .ok_or(StepFailed::counted(StepFailure::NoTarget, 0))?;
             match stone_site(ground, scratch, candidates, seat, commander, feature) {
-                (Some(site), _) => Ok(Stone { feature, site }),
+                (Some(site), weighed) => Ok(Stone {
+                    feature,
+                    site,
+                    weighed,
+                }),
                 (None, weighed) => Err(StepFailed::counted(StepFailure::IllegalSite, weighed)),
             }
         }
@@ -914,12 +921,23 @@ pub fn toward_counted(
                 matches_pick(ground, seat, index, kind, uncovered)
             });
             let mut reached = false;
+            // The sites weighed for every feature are the same legal sites:
+            // the candidate set is built from the seat's spheres and the
+            // commander's column alone, and only the feature each is measured
+            // to differs. So the count is that set's size, never a sum over
+            // the features tried (fix pass 1, C5).
             let mut weighed: u32 = 0;
             while let Some((feature, _)) = ranker.next(ground, scratch) {
                 reached = true;
                 match stone_site(ground, scratch, candidates, seat, commander, feature) {
-                    (Some(site), _) => return Ok(Stone { feature, site }),
-                    (None, count) => weighed = weighed.saturating_add(count),
+                    (Some(site), count) => {
+                        return Ok(Stone {
+                            feature,
+                            site,
+                            weighed: count,
+                        });
+                    }
+                    (None, count) => weighed = count,
                 }
             }
             if reached {
