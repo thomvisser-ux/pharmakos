@@ -20,6 +20,10 @@
 //!   with a `sustainable` boolean in the output;
 //! * `no_path_is_answered_by_the_oracle`, with a cost assertion.
 //!
+//! S3's plan adds E11's P3 accuracy gate (`p3_holds_on_real_commanders_*`):
+//! the estimate against seat 0's commander walked through the tick, on three
+//! seeds, never optimistic and within 15 % at p90.
+//!
 //! The bench the same section asks for is `tests/pathing_bench.rs`, which
 //! reports in **counted work** rather than in milliseconds, and says there why.
 
@@ -47,7 +51,7 @@ use pharmakos_sim::pathing::route::route;
 use pharmakos_sim::pathing::router::WalkState;
 use pharmakos_sim::pathing::search::{Bound, Scratch, astar, astar_with_order, dijkstra_bounded};
 use pharmakos_sim::pathing::surface::{DEFAULT_ORDER, Node, StepCosts, Surface};
-use pharmakos_sim::tables::{UnitId, UnitKind};
+use pharmakos_sim::tables::{SeatId, UnitId, UnitKind};
 use pharmakos_sim::voxels::{Material, VoxelEdit, VoxelStore};
 use pharmakos_sim::{MatchSettings, RulesTable, World, WorldConfig, mapgen};
 
@@ -260,22 +264,24 @@ impl Rng {
 
 /// `count` connected pairs of walkable columns, deterministic in `seed`.
 fn pairs(fixture: &Fixture, count: u32, seed: u64) -> Vec<(Node, Node)> {
+    pairs_on(&fixture.surface, &fixture.clusters, count, seed)
+}
+
+/// [`pairs`] over any graph: a [`World`]'s own, for the walks of P3's
+/// accuracy gate. The same draw, so a fixture's pair set is unchanged.
+fn pairs_on(surface: &Surface, clusters: &Clusters, count: u32, seed: u64) -> Vec<(Node, Node)> {
     let mut rng = Rng::new(seed);
-    let extent = fixture.surface.size();
+    let extent = surface.size();
     let mut out: Vec<(Node, Node)> = Vec::with_capacity(usize::try_from(count).expect("fits"));
     let mut attempts = 0;
     while u32::try_from(out.len()).expect("fits") < count && attempts < count * 200 {
         attempts += 1;
-        let a = fixture
-            .surface
-            .node_of(rng.below(extent[0]), rng.below(extent[1]));
-        let b = fixture
-            .surface
-            .node_of(rng.below(extent[0]), rng.below(extent[1]));
+        let a = surface.node_of(rng.below(extent[0]), rng.below(extent[1]));
+        let b = surface.node_of(rng.below(extent[0]), rng.below(extent[1]));
         let (Some(a), Some(b)) = (a, b) else {
             continue;
         };
-        if a == b || !fixture.clusters.connected(&fixture.surface, a, b) {
+        if a == b || !clusters.connected(surface, a, b) {
             continue;
         }
         out.push((a, b));
@@ -1738,4 +1744,499 @@ fn harness_world(movers: u32) -> World {
             .expect("the movers fit every seat's share");
     }
     world
+}
+
+// ---------------------------------------------------------------------------
+// P3's accuracy on real commanders (S3's plan, E11 and section 5.1 item 3)
+// ---------------------------------------------------------------------------
+//
+// Spec section 16's P3 row: the travel estimate is "within ±15% (p90) on
+// static terrain", and item 61 makes it never optimistic. E11 asks for that to
+// be checked against **real commanders walked through the tick**, not against
+// this file's own integrator (`walked_ticks`, which
+// `the_estimate_is_never_optimistic_at_any_percentile` uses), on three seeds.
+//
+// For each seed one `World` is built as `harness_world(0)` builds one (three
+// seats, the committed rules, no movers, no playbook sealed, so nothing digs,
+// builds or fights), and seat 0's commander walks every pair in turn:
+// `place_unit_directly` on the pair's start column, `send_unit_directly` to
+// its goal column, then `World::step` until the router lists it among the
+// tick's arrivals. The estimate is `pathing::estimate::estimate` over the
+// world's own graph, unfogged, at `Speed::commander` — the call the gateway's
+// route adapter makes. A digest of the surface and the abstract graph, taken
+// before the first walk and after the last, shows the terrain was static.
+//
+// **Walked time is counted from the tick that serves the route**: the tick
+// after the send serves it, and the walk is the number of `step` calls after
+// that one, up to and including the tick the commander arrives on. That is the
+// reading `a_walker_arrives_on_the_tick_the_estimate_promised` uses, and the
+// estimate (item 90: arrival on tick `ceil(cost * 20 / cost_per_second)`) does
+// not count the serving tick. The figure counted from the send (one tick more)
+// is printed beside it and asserted on nothing.
+//
+// A walk that cannot finish — no estimate, a route the router does not serve,
+// a partial route, a route that does not join the pair, an arrival later than
+// the served route's own promise plus `P3_LATE_TICKS` — is a failure of the
+// test, named by seed and pair index, never a skipped pair.
+
+/// The three seeds of P3's figures, the golden seed first: restated from
+/// `pharmakos-bench`'s `P3_SEEDS` (`crates/bench/src/p3.rs`), which the sim
+/// cannot depend on, so the accuracy and the latency figures are about the
+/// same three maps. The hold that keeps the two lists together is `bench`'s.
+const P3_SEEDS: [u64; 3] = [
+    0x0000_0000_ca5c_aded,
+    pharmakos_sim::DETERMINISM_MATCH_SEED,
+    0x0000_0000_0000_0014,
+];
+
+/// Pairs walked per seed, chosen by measurement for the `test` step's time;
+/// the pull request that set it records the figures.
+const P3_WALKS: u32 = 80;
+
+/// The pair draw's seed for [`pairs_on`]: uniform over connected walkable
+/// columns, the generator the never-optimistic test and the golden use.
+const P3_PAIR_DRAW: u64 = 0x5EED_0011;
+
+/// Spec section 16 and item 61: the p90 of |estimate − walked| over walked, per
+/// mille.
+const P3_BUDGET_PER_MILLE: i64 = 150;
+
+/// The short-route band's edge, in cells of straight-line distance between the
+/// pair's columns: the spike's `≤32` band (`docs/spikes/G2-P3-pathing.md`
+/// section 9), which `plan-core`'s travel module records at p90 9.2 %.
+/// Reported, never asserted on its own.
+const P3_SHORT_CELLS: i64 = 32;
+
+/// How far past the served route's own promise (`walked_ticks` over it) a walk
+/// may run before it is a failure: the margin the single-walker test uses.
+const P3_LATE_TICKS: i32 = 2;
+
+/// The seat whose commander walks: seat 0's, which nothing but this test moves
+/// in a world with no playbook sealed.
+const P3_SEAT: u8 = 0;
+
+/// One finished walk.
+#[derive(Clone, Copy, Debug)]
+struct Walk {
+    /// The pair's index in the seed's draw.
+    pair: usize,
+    /// `estimate(...).ticks`.
+    estimate: i32,
+    /// Ticks from the serving tick to the arrival.
+    walked: i32,
+    /// Whether the pair is in the short-route band.
+    short: bool,
+}
+
+/// Why a seed's walks could not all be read. Each names its pair.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum WalkFailure {
+    /// The world, or a scratch for its graph, would not build.
+    NoWorld,
+    /// Seat [`P3_SEAT`] has no commander, or the router walks
+    /// commanders at another speed than `Speed::commander` prices them at.
+    NotTheCommander,
+    /// The world refused a tick.
+    Tick { pair: usize, error: String },
+    /// The estimator had no answer for a pair the oracle connects.
+    NoEstimate { pair: usize },
+    /// The commander could not be placed.
+    Unplaced { pair: usize },
+    /// The serving tick left the commander in another state than walking.
+    NotServed { pair: usize, state: WalkState },
+    /// The served route stops short of the goal.
+    Partial { pair: usize },
+    /// The served route does not run from the pair's start to its goal.
+    WrongRoute { pair: usize },
+    /// The served route has a step the surface does not price.
+    Unwalkable { pair: usize },
+    /// The commander had not arrived by the promise plus the margin.
+    Late {
+        pair: usize,
+        ticks: i32,
+        promised: i32,
+    },
+    /// The ground moved during the walks: the terrain was not static.
+    TerrainMoved,
+}
+
+/// Every walk of one seed, and every walk that could not be read.
+#[derive(Debug)]
+struct SeedWalks {
+    seed: u64,
+    walks: Vec<Walk>,
+    failures: Vec<WalkFailure>,
+}
+
+/// A digest of the world's surface and abstract graph, so the walks can show
+/// the ground stood still under them.
+fn terrain_digest(world: &World) -> u64 {
+    let surface = world.surface();
+    let mut h = world.clusters().fingerprint();
+    let mut node: Node = 0;
+    while node < surface.node_count() {
+        let top = u64::from(surface.top(node).cast_unsigned());
+        let walkable = u64::from(surface.walkable(node));
+        h = pharmakos_sim::math::random::mix64(h ^ ((top << 1) | walkable));
+        node += 1;
+    }
+    h
+}
+
+/// Walk seed `match_seed`'s pairs with seat 0's commander. What goes wrong with a
+/// walk is a [`WalkFailure`], never a panic.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one walk read start to end, each refusal a typed failure beside the step it guards; split, the halves would share the world, the scratch and the failure list"
+)]
+fn walk_seed(match_seed: u64) -> SeedWalks {
+    let mut out = SeedWalks {
+        seed: match_seed,
+        walks: Vec::new(),
+        failures: Vec::new(),
+    };
+    let Ok(mut world) = World::new(&WorldConfig {
+        match_seed,
+        seats: SEATS,
+        rules: rules(),
+        match_settings: MatchSettings::default(),
+    }) else {
+        out.failures.push(WalkFailure::NoWorld);
+        return out;
+    };
+    let mut enc = pharmakos_sim::encoding::Enc::with_capacity(64 * 1024);
+    // The two opening ticks the single-walker test steps before its send.
+    for _ in 0..2 {
+        if let Err(error) = world.step(&mut enc) {
+            out.failures.push(WalkFailure::Tick {
+                pair: 0,
+                error: format!("{error:?}"),
+            });
+            return out;
+        }
+    }
+    let speed = Speed::commander(world.rules());
+    // The commander's id for the fixture calls, and its row for the router's.
+    let Some((commander, unit)) = world
+        .commander_of(SeatId::new(P3_SEAT))
+        .and_then(|id| Some((id, world.units().row_of(id).ok()?.raw())))
+    else {
+        out.failures.push(WalkFailure::NotTheCommander);
+        return out;
+    };
+    let kind = world
+        .units()
+        .kinds()
+        .get(usize::try_from(unit).expect("fits"))
+        .copied()
+        .and_then(UnitKind::from_id);
+    if kind != Some(UnitKind::Commander)
+        || world.router().speed_of(UnitKind::Commander) != speed.cost_per_second
+    {
+        out.failures.push(WalkFailure::NotTheCommander);
+        return out;
+    }
+    let Some(mut scratch) = Scratch::for_map(world.surface(), world.clusters().size()) else {
+        out.failures.push(WalkFailure::NoWorld);
+        return out;
+    };
+    let set = pairs_on(world.surface(), world.clusters(), P3_WALKS, P3_PAIR_DRAW);
+    let before = terrain_digest(&world);
+
+    for (pair, (start, goal)) in set.iter().copied().enumerate() {
+        let Some(estimated) = estimate(
+            world.surface(),
+            world.clusters(),
+            &mut scratch,
+            start,
+            goal,
+            Fog::Clear,
+            speed,
+        ) else {
+            out.failures.push(WalkFailure::NoEstimate { pair });
+            continue;
+        };
+        let (sx, sy) = world.surface().coord_of(start);
+        let (gx, gy) = world.surface().coord_of(goal);
+        let from = world.standing_point([sx, sy, 0]);
+        let to = world.standing_point([gx, gy, 0]);
+        if !world.place_unit_directly(commander, from) {
+            out.failures.push(WalkFailure::Unplaced { pair });
+            continue;
+        }
+        world.send_unit_directly(unit, to);
+        // The serving tick.
+        if let Err(error) = world.step(&mut enc) {
+            out.failures.push(WalkFailure::Tick {
+                pair,
+                error: format!("{error:?}"),
+            });
+            return out;
+        }
+        let state = world.router().state(unit);
+        if state != WalkState::Walking {
+            out.failures.push(WalkFailure::NotServed { pair, state });
+            continue;
+        }
+        if world.router().route_partial(unit) {
+            out.failures.push(WalkFailure::Partial { pair });
+            continue;
+        }
+        let route = world.router().route(unit).to_vec();
+        if route.first() != Some(&start) || route.last() != Some(&goal) {
+            out.failures.push(WalkFailure::WrongRoute { pair });
+            continue;
+        }
+        let Some(promised) = walked_ticks(world.surface(), &route, speed.cost_per_second) else {
+            out.failures.push(WalkFailure::Unwalkable { pair });
+            continue;
+        };
+        let mut ticks: i32 = 0;
+        let arrived = loop {
+            if let Err(error) = world.step(&mut enc) {
+                out.failures.push(WalkFailure::Tick {
+                    pair,
+                    error: format!("{error:?}"),
+                });
+                return out;
+            }
+            ticks += 1;
+            if world.router().arrived().contains(&unit) {
+                break true;
+            }
+            if ticks > promised + P3_LATE_TICKS {
+                break false;
+            }
+        };
+        if !arrived {
+            out.failures.push(WalkFailure::Late {
+                pair,
+                ticks,
+                promised,
+            });
+            continue;
+        }
+        let dx = i64::from(gx - sx);
+        let dy = i64::from(gy - sy);
+        out.walks.push(Walk {
+            pair,
+            estimate: estimated.ticks,
+            walked: ticks,
+            short: dx * dx + dy * dy <= P3_SHORT_CELLS * P3_SHORT_CELLS,
+        });
+    }
+    if terrain_digest(&world) != before {
+        out.failures.push(WalkFailure::TerrainMoved);
+    }
+    out
+}
+
+/// Each seed's walks, made once and shared by the per-seed, pooled and control
+/// tests that read them.
+fn seed_walks(index: usize) -> &'static SeedWalks {
+    static WALKS: [std::sync::OnceLock<SeedWalks>; 3] = [const { std::sync::OnceLock::new() }; 3];
+    WALKS[index].get_or_init(|| walk_seed(P3_SEEDS[index]))
+}
+
+/// The percentiles of one set of per-mille errors.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Spread {
+    count: usize,
+    min: i64,
+    p50: i64,
+    p90: i64,
+    p99: i64,
+    max: i64,
+}
+
+impl Spread {
+    fn of(mut values: Vec<i64>) -> Spread {
+        values.sort_unstable();
+        Spread {
+            count: values.len(),
+            min: values.first().copied().unwrap_or(0),
+            p50: percentile(&values, 50),
+            p90: percentile(&values, 90),
+            p99: percentile(&values, 99),
+            max: values.last().copied().unwrap_or(0),
+        }
+    }
+}
+
+impl std::fmt::Display for Spread {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "n {}, min {}, p50 {}, p90 {}, p99 {}, max {}",
+            self.count, self.min, self.p50, self.p90, self.p99, self.max
+        )
+    }
+}
+
+/// `(estimate − walked) × 1000 / walked`, the walked ticks the denominator as in
+/// `the_estimate_is_never_optimistic_at_any_percentile`; `extra` ticks are
+/// added to the walk (1 for the figure counted from the send).
+fn signed_per_mille(walk: &Walk, extra: i32) -> i64 {
+    let walked = i64::from(walk.walked) + i64::from(extra);
+    ((i64::from(walk.estimate) - walked) * 1000).div_euclid(walked.max(1))
+}
+
+/// What the gate says about a set of walks: the optimistic ones by pair, and
+/// the p90 of the absolute error per mille.
+#[derive(Debug, PartialEq, Eq)]
+struct Verdict {
+    optimistic: Vec<usize>,
+    abs_p90: i64,
+}
+
+impl Verdict {
+    fn of(walks: &[Walk]) -> Verdict {
+        let optimistic = walks
+            .iter()
+            .filter(|walk| walk.estimate < walk.walked)
+            .map(|walk| walk.pair)
+            .collect();
+        let mut absolute: Vec<i64> = walks
+            .iter()
+            .map(|walk| signed_per_mille(walk, 0).abs())
+            .collect();
+        absolute.sort_unstable();
+        Verdict {
+            optimistic,
+            abs_p90: percentile(&absolute, 90),
+        }
+    }
+
+    fn passes(&self) -> bool {
+        self.optimistic.is_empty() && self.abs_p90 <= P3_BUDGET_PER_MILLE
+    }
+}
+
+/// The `::notice::` line `cert3` records for a set of walks.
+fn p3_notice(label: &str, walks: &[Walk]) -> String {
+    let signed = |pick: &dyn Fn(&Walk) -> bool, extra: i32| {
+        Spread::of(
+            walks
+                .iter()
+                .filter(|walk| pick(walk))
+                .map(|walk| signed_per_mille(walk, extra))
+                .collect(),
+        )
+    };
+    let count = i64::try_from(walks.len()).expect("fits").max(1);
+    let total: i64 = walks.iter().map(|walk| i64::from(walk.walked)).sum();
+    format!(
+        "::notice::P3 accuracy on real commanders, {label}: {} walks, mean {} ticks walked; signed \
+         error per mille from the serve: {}; |error| p90 {}; from the send: {}; routes <= \
+         {P3_SHORT_CELLS} cells: {}; longer: {}",
+        walks.len(),
+        total.div_euclid(count),
+        signed(&|_| true, 0),
+        Verdict::of(walks).abs_p90,
+        signed(&|_| true, 1),
+        signed(&|walk| walk.short, 0),
+        signed(&|walk| !walk.short, 0),
+    )
+}
+
+/// One seed's gate: every walk read, none optimistic, the p90 in budget.
+fn assert_seed(index: usize) {
+    let walks = seed_walks(index);
+    let label = format!("seed {:#018x}", walks.seed);
+    assert!(
+        walks.failures.is_empty(),
+        "{label}: {} walk(s) could not be read: {:?}",
+        walks.failures.len(),
+        walks.failures
+    );
+    assert_eq!(
+        walks.walks.len(),
+        usize::try_from(P3_WALKS).expect("fits"),
+        "{label}: a walk went missing"
+    );
+    println!("{}", p3_notice(&label, &walks.walks));
+    let verdict = Verdict::of(&walks.walks);
+    assert!(
+        verdict.optimistic.is_empty(),
+        "{label}: the estimate was optimistic on pairs {:?}; item 61 makes never optimistic part \
+         of the contract",
+        verdict.optimistic
+    );
+    assert!(
+        verdict.abs_p90 <= P3_BUDGET_PER_MILLE,
+        "{label}: the p90 |error| is {} per mille, over spec section 16's 15 %",
+        verdict.abs_p90
+    );
+}
+
+#[test]
+fn p3_holds_on_real_commanders_on_the_golden_seed() {
+    assert_seed(0);
+}
+
+#[test]
+fn p3_holds_on_real_commanders_on_the_determinism_seed() {
+    assert_seed(1);
+}
+
+#[test]
+fn p3_holds_on_real_commanders_on_probations_seed() {
+    assert_seed(2);
+}
+
+#[test]
+fn p3_holds_on_real_commanders_over_the_three_seeds_pooled() {
+    let mut pooled: Vec<Walk> = Vec::new();
+    for index in 0..P3_SEEDS.len() {
+        let walks = seed_walks(index);
+        assert!(
+            walks.failures.is_empty(),
+            "seed {:#018x}: {:?}",
+            walks.seed,
+            walks.failures
+        );
+        pooled.extend_from_slice(&walks.walks);
+    }
+    println!("{}", p3_notice("three seeds pooled", &pooled));
+    let verdict = Verdict::of(&pooled);
+    assert!(
+        verdict.passes(),
+        "the pooled walks miss P3: {verdict:?} (budget {P3_BUDGET_PER_MILLE} per mille)"
+    );
+}
+
+#[test]
+fn p3_catches_an_optimistic_or_a_loose_estimate() {
+    // The control: the gate can fail. Without it, a harness that walked
+    // nothing, or read every walk as exact, would pass. The golden seed's real
+    // walks, their estimates replaced.
+    let walks = &seed_walks(0).walks;
+    assert!(!walks.is_empty(), "the control has no walks to read");
+    // One tick short of every walk: every pair is optimistic.
+    let short: Vec<Walk> = walks
+        .iter()
+        .map(|walk| Walk {
+            estimate: walk.walked - 1,
+            ..*walk
+        })
+        .collect();
+    let verdict = Verdict::of(&short);
+    assert_eq!(
+        verdict.optimistic.len(),
+        walks.len(),
+        "an estimate one tick short of the walk went unnoticed"
+    );
+    assert!(!verdict.passes());
+    // Never optimistic, but twice the walk: the p90 is 1000 per mille.
+    let loose: Vec<Walk> = walks
+        .iter()
+        .map(|walk| Walk {
+            estimate: walk.walked * 2,
+            ..*walk
+        })
+        .collect();
+    let verdict = Verdict::of(&loose);
+    assert!(verdict.optimistic.is_empty());
+    assert_eq!(verdict.abs_p90, 1000);
+    assert!(!verdict.passes(), "a 100 % error passed the 15 % budget");
 }
