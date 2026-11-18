@@ -440,6 +440,105 @@ fn a_toward_says_why_it_found_no_site() {
     assert_eq!(found.site, PINNED_SITES[0]);
 }
 
+/// S3's `pred`, fix pass 1 (C7): what one `toward` search costs, printed,
+/// with no bound asserted (whether one is wanted is the owner's). For seed
+/// 20, from the commander's start: toward the pinned second vent; toward the
+/// live vent farthest from the core, whose walk the octile bound prunes
+/// least; and toward the pinned vent again with a Resonance Spire finished at
+/// the core, its sphere grown. Each prints the legal sites weighed, the
+/// columns of the spheres scanned, the path searches run (the units charged
+/// less the columns scanned) and the decision units charged.
+#[test]
+#[ignore = "a measurement, run by hand: `cargo test --test probation_seed -- --ignored --nocapture toward_costs`"]
+fn toward_costs() {
+    use pharmakos_sim::seams::UnitTally;
+    let rules = rules();
+    let seat = SeatId::new(0);
+    let measure = |world: &World, label: &str, anchor: [i32; 2]| {
+        let commander = world.commander_of(seat).expect("a commander");
+        let row = world.units().row_of(commander).expect("a live commander");
+        let start = world.units().positions()[row.index()];
+        let tally = UnitTally::new();
+        let ground = Ground {
+            work: &tally,
+            ..world.ground()
+        };
+        let mut scratch = Scratch::for_map(ground.surface, ground.rules.hpa_cluster_voxels())
+            .expect("the map takes a search");
+        let mut stones: Vec<StoneCandidate> = Vec::new();
+        let spec = FeatureSpec::Name {
+            kind: FeatureKind::Vent,
+            anchor,
+        };
+        // The columns of every own sphere's disc, as the search scans them.
+        let columns: u32 = world
+            .beacons()
+            .seats()
+            .iter()
+            .zip(world.beacons().ids())
+            .filter(|(owner, _)| **owner == seat.raw())
+            .map(|(_, id)| {
+                let radius = ground
+                    .radius_of(Some(pharmakos_sim::tables::BeaconId::new(*id)))
+                    .floor_voxels();
+                u32::try_from(pharmakos_sim::targeting::spiral_offsets(radius).len())
+                    .expect("a count")
+            })
+            .sum();
+        let found = toward_counted(&ground, &mut scratch, &mut stones, seat, start, spec);
+        let units = tally.get();
+        match found {
+            Ok(stone) => println!(
+                "{label}: site {:?}, {} legal sites weighed, {columns} columns scanned, {} path \
+                 searches, {units} decision units",
+                stone.site,
+                stone.weighed,
+                units.saturating_sub(columns)
+            ),
+            Err(failed) => println!("{label}: no site, {failed:?}, {units} decision units"),
+        }
+    };
+    let world = world_of(PROBATION_SEED, &rules);
+    measure(&world, "the pinned vent", PINNED_VENT);
+    let core_row = world
+        .beacons()
+        .seats()
+        .iter()
+        .position(|owner| *owner == seat.raw())
+        .expect("a core");
+    let [cx, cy] = column_of(world.beacons().positions()[core_row]);
+    let far = world
+        .features()
+        .features()
+        .iter()
+        .filter(|feature| feature.kind == FeatureKind::Vent)
+        .map(|feature| feature.anchor)
+        .max_by_key(|anchor| (squared(*anchor, [cx, cy]), anchor[1], anchor[0]))
+        .expect("a vent");
+    measure(&world, &format!("the farthest vent {far:?}"), far);
+    let mut grown = world_of(PROBATION_SEED, &rules);
+    let core = pharmakos_sim::tables::BeaconId::new(
+        *grown.beacons().ids().get(core_row).expect("the core's id"),
+    );
+    let beside = grown
+        .ground()
+        .standing(cx + 3, cy)
+        .expect("a column beside the core");
+    grown
+        .raise_structure(
+            seat,
+            core,
+            pharmakos_sim::tables::StructureKind::ResonanceSpire,
+            beside,
+        )
+        .expect("room for a Spire");
+    measure(
+        &grown,
+        "the pinned vent, the core grown by a Spire",
+        PINNED_VENT,
+    );
+}
+
 #[test]
 #[ignore = "run by hand when a change moves the pinned answer"]
 fn every_passing_seed_is_listed() {
