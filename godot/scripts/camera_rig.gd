@@ -54,6 +54,9 @@ const FARTHEST := 900.0
 ## PLACEHOLDER, as above.
 const OPENING_DISTANCE := 120.0
 const OPENING_PITCH := -0.95
+## The heading the map opens at, in radians about the vertical: the whole map's own.
+## PLACEHOLDER: the opening yaw — OWNER, S6.
+const OPENING_YAW := 0.8
 
 ## The point the camera looks at.
 var focus := Vector3.ZERO
@@ -101,7 +104,7 @@ func frame_extent(extent: Vector3) -> void:
 ## free part of the window meets, on the level plane through `point`.
 func open_on(point: Vector3, cover: float) -> void:
 	target = null
-	yaw = 0.8
+	yaw = OPENING_YAW
 	pitch = OPENING_PITCH
 	distance = OPENING_DISTANCE
 	focus = point

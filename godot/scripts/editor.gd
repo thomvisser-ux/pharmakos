@@ -852,9 +852,12 @@ func _clear_highlight() -> void:
 
 
 ## Whether `event` is the player's next input: a key going down, or a mouse button (a click
-## or a wheel notch) going down. A mouse move is not.
+## or a wheel notch) going down. A mouse move is not, nor a bare modifier key.
 static func next_input(event: InputEvent) -> bool:
 	if event is InputEventKey:
+		# A modifier held for a click (Alt before an Alt-click) is not an input of its own.
+		if event.keycode in [KEY_ALT, KEY_SHIFT, KEY_CTRL, KEY_META]:
+			return false
 		return event.pressed and not event.echo
 	return event is InputEventMouseButton and event.pressed
 
@@ -1172,6 +1175,10 @@ func _draw_ghost(ghost: Dictionary) -> void:
 	if ghost.is_empty():
 		_ghost.visible = false
 		_ghost_label.text = ""
+		# The ghost the ground menu's first line waited on is gone (an edit landed under it, or
+		# the gateway refused it): the menu goes with it rather than say "waiting" for ever (L4).
+		if _menu.visible and _menu.get_item_index(ITEM_GHOST) >= 0:
+			_menu.hide()
 		return
 	var at: Vector3i = ghost["at"]
 	var state := String(ghost.get("state", "waiting"))

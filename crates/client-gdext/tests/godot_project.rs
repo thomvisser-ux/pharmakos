@@ -2374,3 +2374,43 @@ fn the_route_draws_the_gateways_rendered_travel_text() {
         "S3-18's marker is resolved by the gateway's text"
     );
 }
+
+/// **The fix pass's small items** (S3's `ed3b` resume, L4 and contract LOW-4): a ghost that goes
+/// while its ground menu shows takes the menu with it, rather than leave "waiting" on its first
+/// line; and a bare modifier key (Alt held before an Alt-click) does not take an answer's
+/// highlight down.
+#[test]
+fn a_gone_ghost_closes_its_menu_and_a_modifier_is_not_an_input() {
+    let editor = read("scripts/editor.gd");
+    let ghost = gd_code(&editor, "_draw_ghost");
+    let empty = ghost
+        .iter()
+        .position(|line| *line == "if ghost.is_empty():")
+        .expect("the empty ghost");
+    let returned = ghost
+        .iter()
+        .skip(empty)
+        .position(|line| *line == "return")
+        .expect("its return");
+    assert!(
+        ghost
+            .iter()
+            .skip(empty)
+            .take(returned)
+            .any(|line| *line == "_menu.hide()"),
+        "{ghost:?}"
+    );
+    let input = gd_code(&editor, "next_input");
+    assert!(
+        input
+            .iter()
+            .any(|line| line
+                .contains("if event.keycode in [KEY_ALT, KEY_SHIFT, KEY_CTRL, KEY_META]:")),
+        "{input:?}"
+    );
+    let rig = read("scripts/camera_rig.gd");
+    assert!(
+        rig.contains("## PLACEHOLDER: the opening yaw — OWNER, S6.\nconst OPENING_YAW := 0.8"),
+        "the opening yaw carries its marker (L6)"
+    );
+}
