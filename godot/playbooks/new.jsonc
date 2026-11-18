@@ -1,12 +1,8 @@
-// SPDX-FileCopyrightText: 2026 Pharmakos contributors
-// SPDX-License-Identifier: GPL-3.0-or-later
-//
-// What the editor's New puts on screen: a playbook with no step and no rule
-// yet. The client claims nothing about it; the checks say what it still
-// needs before it can be sealed.
 {
   "schema_version": {"major": 1},
   "meta": {"title": "New playbook", "author_kind": "HUMAN"},
   "kind": "PLAYBOOK",
-  "declarative": {"route": []}
+  "declarative": {"route": []},
+  "on_death": {"on_respawn": "CONTINUE", "max_deaths_before_fallback": 2},
+  "fallback": {"hold": {"at": {"beacon_anchor": {"safest": {}}}}}
 }

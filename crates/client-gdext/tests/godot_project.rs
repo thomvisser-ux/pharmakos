@@ -2091,17 +2091,38 @@ fn the_map_opens_on_the_seats_own_commander_clear_of_the_panel() {
 }
 
 /// **New** (the P6a finding, S3's `ed3b`): the Orders bar's New puts the empty playbook the
-/// client ships on screen. The text is one data file under `godot/` (`playbooks/new.jsonc`,
-/// with an SPDX header), never text assembled in code, and both export presets pack it: a
-/// `.jsonc` is not a resource, so `all_resources` alone would leave it out of the `.pck`. The
-/// button asks the bridge (`editor_new`) with the file's bytes, and the door gates it as it
-/// gates Fix.
+/// client ships on screen. The text is one data file under `godot/` (`playbooks/new.jsonc`),
+/// never text assembled in code, and both export presets pack it: a `.jsonc` is not a
+/// resource, so `all_resources` alone would leave it out of the `.pck`. It starts a player's
+/// own file, so it carries no comment (comments round-trip into the player's text) and no
+/// header: it is MIT OR Apache-2.0 by its own `REUSE.toml` entry (the owner's ruling of
+/// 2026-11-17). It carries the verifier's own `on_death` and `fallback` stubs, so one map
+/// step makes it sealable. The button asks the bridge (`editor_new`) with the file's bytes,
+/// and the door gates it as it gates Fix.
 #[test]
 fn new_puts_the_shipped_empty_playbook_on_screen() {
     let text = read("playbooks/new.jsonc");
     assert!(
-        text.starts_with("// SPDX-FileCopyrightText: 2026 Pharmakos contributors\n// SPDX-License-Identifier: GPL-3.0-or-later\n"),
-        "the data file carries its SPDX header"
+        !text.contains("//") && !text.contains("/*"),
+        "the new playbook carries no comment: {text}"
+    );
+    for wanted in [
+        "\"kind\": \"PLAYBOOK\"",
+        "\"route\": []",
+        "\"on_death\": {\"on_respawn\": \"CONTINUE\", \"max_deaths_before_fallback\": 2}",
+        "\"fallback\": {\"hold\": {\"at\": {\"beacon_anchor\": {\"safest\": {}}}}}",
+    ] {
+        assert!(text.contains(wanted), "{wanted}: {text}");
+    }
+    let reuse = fs::read_to_string(godot_dir().join("..").join("REUSE.toml")).expect("REUSE.toml");
+    let entry = reuse
+        .split("[[annotations]]")
+        .find(|block| block.contains("path = [\"godot/playbooks/new.jsonc\"]"))
+        .expect("new.jsonc's own REUSE.toml entry");
+    assert!(
+        entry.contains("precedence = \"override\"")
+            && entry.contains("SPDX-License-Identifier = \"MIT OR Apache-2.0\""),
+        "{entry}"
     );
     let presets = read("export_presets.cfg");
     let includes: Vec<&str> = presets
