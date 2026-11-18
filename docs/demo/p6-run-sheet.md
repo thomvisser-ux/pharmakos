@@ -142,7 +142,7 @@ the record says which.
   first." otherwise. The template gives you `on_death`, `fallback`, a `flee` handler and two route
   steps, none of which you write, and it costs one wizard page inside the time. So this times writing
   ten route steps, not a whole playbook, and the sheet has told you the way in. The main session
-  decided this and the owner can veto it.
+  decided this and the owner can veto it. [Since #183 (item 161 (3)) the editor can start an empty playbook: New puts `godot/playbooks/new.jsonc` on screen. Which start the timed card uses is not ruled here.]
 - **"Ten route steps" means ten added,** so the sealed route has twelve.
 - **The card is opened by you when the watch starts,** rather than shown by the main session, and it
   stays readable throughout. Opening it is inside the time.
