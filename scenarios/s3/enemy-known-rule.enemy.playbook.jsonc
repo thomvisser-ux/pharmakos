@@ -1,0 +1,24 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// S3's `pred`: seat 1's half of enemy-known-rule.scenario.jsonc. Its commander
+// walks down the map to the edge of seat 0's core sphere, where the core sees
+// it, and straight back out, where nothing of seat 0's does.
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {"title": "Look in and leave", "author_kind": "HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {"label": "in", "timeout_ms": 420000,
+        "move": {"to": {"voxel": {"x": 178, "y": 48, "z": 31}}, "pace": "DIRECT"},
+        "on_fail": {"action": "SKIP"}},
+      {"label": "out", "timeout_ms": 60000,
+        "move": {"to": {"voxel": {"x": 160, "y": 100, "z": 31}}, "pace": "DIRECT"},
+        "on_fail": {"action": "SKIP"}}
+    ],
+    "handlers": []
+  },
+  "on_death": {"on_respawn": "CONTINUE", "max_deaths_before_fallback": 2},
+  "fallback": {"hold": {"at": {"safest": {}}}}
+}

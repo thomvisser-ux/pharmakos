@@ -1,0 +1,36 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// S3's `pred`: seat 0's half of enemy-known-rule.scenario.jsonc. The commander
+// holds at the core, and one rule watches the core's ground: while the seat
+// holds a sighting of an enemy unit within 30 voxels of the core no older than
+// 10 s, it switches the core to Defend. Its cooldown, 30 s, is longer than
+// the sighting stays fresh once the unit has gone, so a stale sighting can
+// never fire it again.
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {"title": "Defend on a fresh sighting", "author_kind": "HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {"label": "watch", "hold": {"ms": 470000}, "on_fail": {"action": "SKIP"}}
+    ],
+    "handlers": [
+      {"id": "defend",
+        "when": {"enemy_units_near": {
+          "near": {"beacon_anchor": {"beacon_id": "b_00"}},
+          "radius_voxels": 30,
+          "count": {"op": "GE", "value": 1},
+          "freshness": {"kind": "KNOWN_WITHIN", "known_within_ms": 10000}}},
+        "body": [
+          {"label": "to_defend",
+            "interface": {"beacon": {"beacon_id": "b_00"}, "rows": [
+              {"set_mandate": {"defend": {}}}]},
+            "timeout_ms": 60000, "on_fail": {"action": "SKIP"}}
+        ],
+        "resume": "CONTINUE", "cooldown_ms": 30000, "max_fires": 4}
+    ]
+  },
+  "on_death": {"on_respawn": "CONTINUE", "max_deaths_before_fallback": 2},
+  "fallback": {"hold": {"at": {"safest": {}}}}
+}

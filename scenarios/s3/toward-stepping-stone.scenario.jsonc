@@ -1,0 +1,56 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// S3's `pred` (S3's plan, E23 and section 1.1; decisions-log item 156 (1)):
+// a stepping stone placed by `toward`, and the far vent covered from it, on
+// Probation's seed, 20, on section 1.1's schedule: the beacon covering the
+// start vent in round 1, the stone and the beacon covering the second vent in
+// round 2.
+//
+//   seat 0  seals scenarios/s3/toward-stepping-stone.playbook.jsonc every
+//           round: round 1, the stone is skipped (its guard waits for a
+//           running Generator, which it reads as the seat's supply above the
+//           core's 10 kW) and the beacon covering the start vent lands with a
+//           Generator on it; round 2, the stone is placed
+//           `toward` the second vent, `vent_232_96`, at the legal site whose
+//           estimated travel to the vent's anchor is least (the sim's own
+//           search, over clear terrain until S3-05's mask at S4), and the
+//           beacon covering the second vent from it;
+//   seat 1  seals nothing, so the gateway files the safe playbook for it.
+{
+  "format": "pharmakos.scenario.v1",
+  "name": "toward-stepping-stone",
+  "summary": "Seat 0 covers its start vent in round 1, then places a stepping stone toward the second vent with `toward` and covers that vent from it in round 2.",
+
+  "map": {
+    "seed": "0x0000000000000014",
+    "generator": "skeleton"
+  },
+
+  "rules": "rules/rules.v1.json",
+  "round_limit": 2,
+
+  "seats": [
+    { "seat": 0, "kind": "playbook", "playbook": "scenarios/s3/toward-stepping-stone.playbook.jsonc" },
+    { "seat": 1, "kind": "safe" }
+  ],
+
+  "segments": [
+    { "index": 0, "length_ms": 180000, "note": "Round 1: the stone skipped; the beacon covering the start vent and its Generator." },
+    { "index": 1, "length_ms": 300000, "note": "Round 2: the stone placed toward the second vent, and the beacon covering it." }
+  ],
+
+  "assertions": [
+    { "assert": "event_fired", "event": "step_skipped", "seat": 0, "by_tick": 1,
+      "note": "Round 1's stone is skipped at the Push's first decision: no Generator runs yet." },
+    { "assert": "event_fired", "event": "beacon_placed", "seat": 0, "by_tick": 721,
+      "note": "Round 1: the beacon covering the start vent lands at tick 721." },
+    { "assert": "event_fired", "event": "structure_completed", "seat": 0, "by_tick": 1682,
+      "note": "Round 1: its Generator is finished at tick 1682, so round 2's guard lets the stone through." },
+    { "assert": "event_fired", "event": "licence_awarded", "seat": 0, "by_tick": 9600,
+      "note": "Round 2's settlement, tick 9600: the beacon covering the second vent, placed from the stone's sphere, has its Generator running, so two Generators tap two vents and the Ledger awards the Resonance Spire's licence." },
+    { "assert": "hash_chain_equals",
+      "golden": "tests/golden/scenarios/toward-stepping-stone/expected.hashes.txt",
+      "note": "Pins the rest: the stone's site, which only `toward` chose, the walk to it and the cover from it; `event_fired` names no place (register M-05), so the chain is what pins where the stone stands. Byte-identical on Windows, Linux and macOS." }
+  ]
+}
