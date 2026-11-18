@@ -75,7 +75,7 @@ use crate::editor::Action;
 use crate::editor::{RuleEditRefusal, RuleNamed};
 use crate::editor_view::{
     instance_dictionary, meter_dictionary, name_into, recap_dictionary, rows_array,
-    rows_of_report_text, rule_list_dictionary, state_dictionary, target_of,
+    rows_of_report_text, rule_list_dictionary, state_dictionary, target_of, vocabulary_dictionary,
 };
 use crate::engine::ChunkRenderer;
 use crate::error::BridgeError;
@@ -1033,6 +1033,185 @@ impl PharmakosBridge {
                 (_, _, Err(_)) => refused(editor, RuleEditRefusal::Changed),
             }
         })
+    }
+
+    /// The condition picker took predicate `entry` of family `family` (indices into the editor
+    /// state's `vocabulary`) for the condition slot `slot` of rule `rule` (its index and pointer
+    /// in the rendering `rendering` the picker opened on); `present` says whether a condition
+    /// stands there now. One `replace`, or one `add` into an empty slot. Returns whether it was
+    /// taken; a refusal is on the status line.
+    #[func]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "GDScript passes plain values: the rule's three names, the slot, and the two \
+                  indices of the pick"
+    )]
+    fn editor_choose_predicate(
+        &mut self,
+        rule: i64,
+        rule_pointer: GString,
+        rendering: i64,
+        slot: GString,
+        present: bool,
+        family: i64,
+        entry: i64,
+    ) -> bool {
+        let Some(rig) = self.rig.as_mut() else {
+            return false;
+        };
+        let (rule_pointer, slot) = (rule_pointer.to_string(), slot.to_string());
+        self.panics.guard_or("editor_choose_predicate", false, || {
+            let editor = rig.editor_mut();
+            match (
+                usize::try_from(rule),
+                u64::try_from(rendering),
+                usize::try_from(family),
+                usize::try_from(entry),
+            ) {
+                (Ok(index), Ok(rendering), Ok(family), Ok(entry)) => editor
+                    .choose_predicate(
+                        &RuleNamed {
+                            index,
+                            rendering,
+                            pointer: rule_pointer,
+                        },
+                        &slot,
+                        present,
+                        family,
+                        entry,
+                    )
+                    .is_ok(),
+                (Err(_), _, _, _) => refused(editor, RuleEditRefusal::NoSuchRule),
+                (_, Err(_), _, _) => refused(editor, RuleEditRefusal::Changed),
+                (_, _, Err(_), _) | (_, _, _, Err(_)) => {
+                    refused(editor, RuleEditRefusal::NoSuchEntry)
+                }
+            }
+        })
+    }
+
+    /// Rule-list name chip `chip` took its `which`th choice from the editor state's
+    /// `step_labels` or `rule_ids`, by its kind: one `replace`.
+    #[func]
+    fn editor_choose_name(
+        &mut self,
+        chip: i64,
+        revision: i64,
+        pointer: GString,
+        which: i64,
+    ) -> bool {
+        let Some(rig) = self.rig.as_mut() else {
+            return false;
+        };
+        let pointer = pointer.to_string();
+        self.panics.guard_or("editor_choose_name", false, || {
+            let editor = rig.editor_mut();
+            match (
+                usize::try_from(chip),
+                u64::try_from(revision),
+                usize::try_from(which),
+            ) {
+                (Ok(chip), Ok(revision), Ok(which)) => {
+                    editor.choose_name(chip, revision, &pointer, which).is_ok()
+                }
+                (Err(_), _, _) => refused(editor, RuleEditRefusal::NoSuchChip),
+                (_, Err(_), _) => refused(editor, RuleEditRefusal::Changed),
+                (_, _, Err(_)) => refused(editor, RuleEditRefusal::NoSuchValue),
+            }
+        })
+    }
+
+    /// Visit & change: beacon `beacon`'s setting `setting` (its index and pointer in the editor
+    /// state's `beacon_detail`) to the number `value`. One route step, one row.
+    #[func]
+    fn editor_change_setting_number(
+        &mut self,
+        beacon: GString,
+        setting: i64,
+        pointer: GString,
+        value: i64,
+    ) -> bool {
+        let Some(rig) = self.rig.as_mut() else {
+            return false;
+        };
+        let (beacon, pointer) = (beacon.to_string(), pointer.to_string());
+        self.panics
+            .guard_or("editor_change_setting_number", false, || {
+                let editor = rig.editor_mut();
+                match usize::try_from(setting) {
+                    Ok(setting) => editor
+                        .change_setting_number(&beacon, setting, &pointer, value)
+                        .is_ok(),
+                    Err(_) => refused(editor, RuleEditRefusal::NoSuchEntry),
+                }
+            })
+    }
+
+    /// Visit & change: beacon `beacon`'s setting `setting` took its `which`th value as sent.
+    #[func]
+    fn editor_change_setting_choice(
+        &mut self,
+        beacon: GString,
+        setting: i64,
+        pointer: GString,
+        which: i64,
+    ) -> bool {
+        let Some(rig) = self.rig.as_mut() else {
+            return false;
+        };
+        let (beacon, pointer) = (beacon.to_string(), pointer.to_string());
+        self.panics
+            .guard_or("editor_change_setting_choice", false, || {
+                let editor = rig.editor_mut();
+                match (usize::try_from(setting), usize::try_from(which)) {
+                    (Ok(setting), Ok(which)) => editor
+                        .change_setting_choice(&beacon, setting, &pointer, which)
+                        .is_ok(),
+                    (Err(_), _) => refused(editor, RuleEditRefusal::NoSuchEntry),
+                    (_, Err(_)) => refused(editor, RuleEditRefusal::NoSuchValue),
+                }
+            })
+    }
+
+    /// Visit & change: one row on beacon `beacon` naming entry `which` of what `row` names:
+    /// `mandate` (switch to the vocabulary's mandate `which`), `add_target` (the next ground
+    /// click anchors the vocabulary's blueprint `which`), `remove_target` (the detail's target
+    /// `which`) or `queue` (queue the vocabulary's blueprint `which`).
+    #[func]
+    fn editor_visit_row(&mut self, beacon: GString, row: GString, which: i64) -> bool {
+        let Some(rig) = self.rig.as_mut() else {
+            return false;
+        };
+        let (beacon, row) = (beacon.to_string(), row.to_string());
+        self.panics.guard_or("editor_visit_row", false, || {
+            let editor = rig.editor_mut();
+            match (usize::try_from(which), row.as_str()) {
+                (Err(_), _) => refused(editor, RuleEditRefusal::NoSuchEntry),
+                (Ok(which), "mandate") => editor.switch_mandate(&beacon, which).is_ok(),
+                (Ok(which), "add_target") => editor.begin_build_target(&beacon, which).is_ok(),
+                (Ok(which), "remove_target") => editor.remove_build_target(&beacon, which).is_ok(),
+                (Ok(which), "queue") => editor.queue_structure(&beacon, which).is_ok(),
+                (Ok(_), _) => refused(editor, RuleEditRefusal::NotThisEditor),
+            }
+        })
+    }
+
+    /// The vocabulary from one `get_vocabulary` answer's text, with no gateway behind it: what
+    /// the hostless picker scene draws, in the shape of the editor state's `vocabulary`. An
+    /// empty dictionary means the reason is in the log.
+    #[func]
+    fn editor_vocabulary_of_response(&mut self, text: GString) -> VarDictionary {
+        let text = text.to_string();
+        match self.panics.guard("editor_vocabulary_of_response", || {
+            crate::vocabulary::vocabulary_of_text(&text)
+        }) {
+            Some(Ok(words)) => vocabulary_dictionary(Some(&words), None),
+            Some(Err(error)) => {
+                godot_error!("[pharmakos] editor_vocabulary_of_response: {error}");
+                VarDictionary::new()
+            }
+            None => VarDictionary::new(),
+        }
     }
 
     /// The features the map lists this Lull (`get_map_summary`), for the editor's vent

@@ -16,13 +16,15 @@ use pharmakos_proto::gp::api::v1::VerifyReport;
 use pharmakos_proto::json;
 
 use crate::editor::{
-    Check, Editor, Route, Row, RuleEditRefusal, Selector, SizeMeter, Target, Unchecked, rows_of,
+    Check, Editor, ReadFailed, Route, Row, RuleEditRefusal, Selector, SizeMeter, Target, Unchecked,
+    rows_of,
 };
 use crate::error::BridgeError;
 use crate::rig::{Meter, Recap};
-use crate::rule_list::{ChipEditor, RuleChip, RuleList};
+use crate::rule_list::{ChipEditor, NameKind, RuleChip, RuleList};
 use crate::targeting::{AttackAim, AttackMark, Chip, ChipFeature, FeatureKind, FeatureName};
 use crate::variant::{godot_int, text_or_empty};
+use crate::vocabulary::{BeaconDetail, Entry, ParameterShape, Setting, Vocabulary};
 use crate::wizard::{Instance, Wizard};
 
 /// The menu's target, from the dictionary GDScript builds: `voxel` (a `Vector3i` in the
@@ -271,6 +273,25 @@ fn put_rule_list(state: &mut VarDictionary, editor: &Editor) {
     put("rules_blocked", blocked.to_variant());
     put("rules_rendering", rendering.to_variant());
     put("picking", index_or_none(editor.picking()));
+    put("anchoring", editor.anchoring().to_variant());
+    let mut labels = PackedStringArray::new();
+    for label in editor.name_choices(NameKind::StepLabel) {
+        labels.push(label.as_str());
+    }
+    put("step_labels", labels.to_variant());
+    let mut ids = PackedStringArray::new();
+    for id in editor.name_choices(NameKind::RuleId) {
+        ids.push(id.as_str());
+    }
+    put("rule_ids", ids.to_variant());
+    put(
+        "vocabulary",
+        vocabulary_dictionary(editor.vocabulary(), editor.vocabulary_failed()).to_variant(),
+    );
+    put(
+        "beacon_detail",
+        beacon_detail_dictionary(editor.beacon_detail(), editor.beacon_failed()).to_variant(),
+    );
     let mut conflicts = VarArray::new();
     for conflict in editor.conflicts() {
         let mut one = VarDictionary::new();
@@ -378,12 +399,168 @@ fn rule_chip_dictionary(chip: &RuleChip) -> VarDictionary {
             out.set(&"arms".to_variant(), &listed.to_variant());
             "pick"
         }
+        ChipEditor::Name(kind) => {
+            out.set(&"kind".to_variant(), &kind.name().to_variant());
+            "name"
+        }
         ChipEditor::ReadOnly(why) => {
             out.set(&"why".to_variant(), &why.name().to_variant());
             "read_only"
         }
     };
     out.set(&"editor".to_variant(), &editor.to_variant());
+    out
+}
+
+/// The words the pickers draw (part 2's item 1): `known` (whether this Lull's answer is on
+/// hand), `failed` (`""`, `refused` or `unreadable`) with `detail`, and `families` (each
+/// `{family, title, locked, predicates}`), `mandates` and `blueprints`, every entry
+/// [`entry_dictionary`]. `locked` is the gateway's sentence, `""` when the entry can be used.
+pub(crate) fn vocabulary_dictionary(
+    words: Option<&Vocabulary>,
+    failed: Option<&ReadFailed>,
+) -> VarDictionary {
+    let mut out = VarDictionary::new();
+    out.set(&"known".to_variant(), &words.is_some().to_variant());
+    failed_into(&mut out, failed);
+    let mut families = VarArray::new();
+    let mut mandates = VarArray::new();
+    let mut blueprints = VarArray::new();
+    if let Some(words) = words {
+        for family in &words.families {
+            let mut one = VarDictionary::new();
+            one.set(&"family".to_variant(), &family.id.to_variant());
+            one.set(&"title".to_variant(), &family.title.to_variant());
+            one.set(
+                &"locked".to_variant(),
+                &text_or_empty(family.locked.as_deref()).to_variant(),
+            );
+            let mut predicates = VarArray::new();
+            for entry in &family.predicates {
+                predicates.push(&entry_dictionary(entry).to_variant());
+            }
+            one.set(&"predicates".to_variant(), &predicates.to_variant());
+            families.push(&one.to_variant());
+        }
+        for entry in &words.mandates {
+            mandates.push(&entry_dictionary(entry).to_variant());
+        }
+        for entry in &words.blueprints {
+            blueprints.push(&entry_dictionary(entry).to_variant());
+        }
+    }
+    out.set(&"families".to_variant(), &families.to_variant());
+    out.set(&"mandates".to_variant(), &mandates.to_variant());
+    out.set(&"blueprints".to_variant(), &blueprints.to_variant());
+    out
+}
+
+/// Why a read did not come, under `failed` (`refused` or `unreadable`, `""` when it came or is
+/// on its way) and `detail` (the gateway's words or the decode's reason).
+fn failed_into(out: &mut VarDictionary, failed: Option<&ReadFailed>) {
+    let (key, detail) = match failed {
+        Some(failed) => (failed.name(), failed.detail()),
+        None => ("", ""),
+    };
+    out.set(&"failed".to_variant(), &key.to_variant());
+    out.set(&"detail".to_variant(), &detail.to_variant());
+}
+
+/// One vocabulary entry: `name`, `title` and `locked` as sent, and `parameters`, each
+/// `{pointer, title, shape}` with `shape` `number` (with `has_min`/`min`, `has_max`/`max` and
+/// `unit`), `ms`, `choice` (with `values`), `reference` (with `kind`) or `unknown`.
+fn entry_dictionary(entry: &Entry) -> VarDictionary {
+    let mut one = VarDictionary::new();
+    one.set(&"name".to_variant(), &entry.name.to_variant());
+    one.set(&"title".to_variant(), &entry.title.to_variant());
+    one.set(
+        &"locked".to_variant(),
+        &text_or_empty(entry.locked.as_deref()).to_variant(),
+    );
+    let mut parameters = VarArray::new();
+    for parameter in &entry.parameters {
+        let mut drawn = VarDictionary::new();
+        drawn.set(&"pointer".to_variant(), &parameter.pointer.to_variant());
+        drawn.set(&"title".to_variant(), &parameter.title.to_variant());
+        drawn.set(&"shape".to_variant(), &parameter.shape.name().to_variant());
+        match &parameter.shape {
+            ParameterShape::Number { min, max, unit } => {
+                for (key, bound) in [("min", min), ("max", max)] {
+                    drawn.set(
+                        &format!("has_{key}").to_variant(),
+                        &bound.is_some().to_variant(),
+                    );
+                    if let Some(bound) = bound {
+                        drawn.set(&key.to_variant(), &i64::from(*bound).to_variant());
+                    }
+                }
+                drawn.set(&"unit".to_variant(), &unit.to_variant());
+            }
+            ParameterShape::Choice { values } => {
+                let mut listed = PackedStringArray::new();
+                for value in values {
+                    listed.push(value.as_str());
+                }
+                drawn.set(&"values".to_variant(), &listed.to_variant());
+            }
+            ParameterShape::Reference { kind } => {
+                drawn.set(&"kind".to_variant(), &kind.to_variant());
+            }
+            ParameterShape::Milliseconds | ParameterShape::Unknown => {}
+        }
+        parameters.push(&drawn.to_variant());
+    }
+    one.set(&"parameters".to_variant(), &parameters.to_variant());
+    one
+}
+
+/// The detail of the beacon last described (part 2's items 1 and 6): `known`, `failed` with
+/// `detail` as for the vocabulary, `id`, `mandate` (as the wire spells it, `""` for none),
+/// `settings` (each a chip-shaped dictionary, [`setting_dictionary`]) and `targets` (each
+/// `{blueprint_id, anchor}`, the anchor as JSON text as it came).
+fn beacon_detail_dictionary(
+    detail: Option<&BeaconDetail>,
+    failed: Option<&ReadFailed>,
+) -> VarDictionary {
+    let mut out = VarDictionary::new();
+    out.set(&"known".to_variant(), &detail.is_some().to_variant());
+    failed_into(&mut out, failed);
+    let mut settings = VarArray::new();
+    let mut targets = VarArray::new();
+    if let Some(detail) = detail {
+        out.set(&"id".to_variant(), &detail.id.to_variant());
+        out.set(&"mandate".to_variant(), &detail.mandate.to_variant());
+        for setting in &detail.settings {
+            settings.push(&setting_dictionary(setting).to_variant());
+        }
+        for target in &detail.targets {
+            let mut one = VarDictionary::new();
+            one.set(
+                &"blueprint_id".to_variant(),
+                &target.blueprint_id.to_variant(),
+            );
+            one.set(&"anchor".to_variant(), &target.anchor_text.to_variant());
+            targets.push(&one.to_variant());
+        }
+    }
+    out.set(&"settings".to_variant(), &settings.to_variant());
+    out.set(&"targets".to_variant(), &targets.to_variant());
+    out
+}
+
+/// One setting as the Visit & change menu draws it: `title`, and `pointer`, `value_json` and
+/// `editor` in a rule-list chip's shape ([`rule_chip_dictionary`]), the setting's title its
+/// text.
+fn setting_dictionary(setting: &Setting) -> VarDictionary {
+    let mut out = rule_chip_dictionary(&RuleChip {
+        pointer: setting.pointer.clone(),
+        line: 0,
+        start: 0,
+        text: setting.title.clone(),
+        value_json: setting.value_json.clone(),
+        editor: setting.editor.clone(),
+    });
+    out.set(&"title".to_variant(), &setting.title.to_variant());
     out
 }
 

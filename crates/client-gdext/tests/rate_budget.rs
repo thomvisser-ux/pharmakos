@@ -209,6 +209,14 @@ fn an_editing_burst_is_not_rate_limited_under_the_default_limits() {
             assert!(count("render_plan") >= 1, "{context}");
             assert_eq!(count("get_draft"), 1, "{context}: {:?}", gateway.methods);
             assert!(count("get_economy_forecast") >= 1, "{context}");
+            // Part 2's one read per Lull: the vocabulary the pickers draw (a beacon's detail is
+            // the `get_beacon` a click already asked).
+            assert_eq!(
+                count("get_vocabulary"),
+                1,
+                "{context}: {:?}",
+                gateway.methods
+            );
         }
     }
 }

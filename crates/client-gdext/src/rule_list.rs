@@ -16,14 +16,16 @@
 //! `replace` at the chip's pointer, a `move` of one rule onto another's place), and the
 //! patched text is `patch_plan`'s answer.
 //!
-//! Two shapes are drawn but not edited here, each a gap in the wire rather than a choice of
-//! the client's (the main session's rulings on `ed3b`'s pause report):
+//! One shape is drawn but not edited here, a gap in the wire rather than a choice of the
+//! client's (the main session's rulings on `ed3b`'s pause report): an integer whose unit is
+//! `ms`. The sentence shows the gateway's own rendering (`2:00`), and a number field would ask
+//! the player for raw milliseconds, which the client may not convert. It waits on a display
+//! unit from the wire ([`ReadOnly::Milliseconds`]).
 //!
-//! * an integer whose unit is `ms`: the sentence shows the gateway's own rendering (`2:00`),
-//!   and a number field would ask the player for raw milliseconds, which the client may not
-//!   convert. It waits on a typed unit hint from the wire ([`ReadOnly::Milliseconds`]);
-//! * a reference to a step label or a rule id, which is picked from the playbook and not
-//!   from the map: part 2's picker ([`ReadOnly::NotOnTheMap`]).
+//! A reference to a step label or a rule id is picked from the playbook, not from the map
+//! (part 2, [`ChipEditor::Name`]): from the labels or rule ids the player's own file holds, in
+//! file order ([`crate::vocabulary::step_labels`], [`crate::vocabulary::rule_ids`]), and the
+//! gateway's check says whether the pick is legal.
 
 use pharmakos_proto::gp::api::v1::reference_shape::Kind;
 use pharmakos_proto::gp::api::v1::value_shape::Shape;
@@ -50,9 +52,6 @@ const MILLISECONDS: &str = "ms";
 pub enum ReadOnly {
     /// An integer in milliseconds: it waits on a typed unit hint from the wire.
     Milliseconds,
-    /// A reference picked from the playbook (a step label, a rule id), not from the map:
-    /// part 2's picker.
-    NotOnTheMap,
     /// A chip whose shape the gateway left unset, or set to a kind this build does not know.
     NoShape,
     /// A whole number the number field cannot hold exactly: the field is a 64-bit float with
@@ -68,7 +67,6 @@ impl ReadOnly {
     pub const fn name(self) -> &'static str {
         match self {
             Self::Milliseconds => "ms",
-            Self::NotOnTheMap => "not_on_the_map",
             Self::NoShape => "no_shape",
             Self::NotExact => "not_exact",
         }
@@ -94,6 +92,27 @@ impl PickKind {
             Self::Beacon => "beacon",
             Self::Location => "location",
             Self::Feature => "feature",
+        }
+    }
+}
+
+/// What a name chip is picked from: the playbook's own names of that kind.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum NameKind {
+    /// A route step's label (`ReferenceShape.Kind.STEP_LABEL`).
+    StepLabel,
+    /// A rule's id (`ReferenceShape.Kind.HANDLER_ID`).
+    RuleId,
+}
+
+impl NameKind {
+    /// The name GDScript reads, and the state key its choices are listed under
+    /// (`step_label` reads `step_labels`, `rule_id` reads `rule_ids`).
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::StepLabel => "step_label",
+            Self::RuleId => "rule_id",
         }
     }
 }
@@ -124,6 +143,8 @@ pub enum ChipEditor {
         /// The oneof arms legal at this pointer, as sent.
         arms: Vec<String>,
     },
+    /// A name picked from the playbook's own (a step label, a rule id), listed in file order.
+    Name(NameKind),
     /// Drawn, not edited.
     ReadOnly(ReadOnly),
 }
@@ -156,7 +177,10 @@ impl RuleChip {
                 min.is_some_and(|min| *now < i64::from(min))
                     || max.is_some_and(|max| *now > i64::from(max))
             }
-            ChipEditor::Choice { .. } | ChipEditor::Pick { .. } | ChipEditor::ReadOnly(_) => false,
+            ChipEditor::Choice { .. }
+            | ChipEditor::Pick { .. }
+            | ChipEditor::Name(_)
+            | ChipEditor::ReadOnly(_) => false,
         }
     }
 }
@@ -332,8 +356,13 @@ fn rule_chip(chip: &Chip, lines: &[String]) -> Result<RuleChip, BridgeError> {
     })
 }
 
-/// The editor a chip's shape asks for.
-fn editor_of(chip: &Chip) -> Result<ChipEditor, BridgeError> {
+/// The editor a chip's shape asks for: a rule-list chip's, and a beacon setting's, which shares
+/// the shape (`gp.api.v1.ValueShape`: "one editor per shape").
+///
+/// # Errors
+///
+/// [`BridgeError::Rpc`] for an integer shape whose value is not an integer.
+pub(crate) fn editor_of(chip: &Chip) -> Result<ChipEditor, BridgeError> {
     let Some(shape) = chip.shape.as_ref().and_then(|shape| shape.shape.as_ref()) else {
         return Ok(ChipEditor::ReadOnly(ReadOnly::NoShape));
     };
@@ -361,9 +390,8 @@ fn editor_of(chip: &Chip) -> Result<ChipEditor, BridgeError> {
                 Ok(Kind::Beacon) => PickKind::Beacon,
                 Ok(Kind::Location) => PickKind::Location,
                 Ok(Kind::Feature) => PickKind::Feature,
-                Ok(Kind::StepLabel | Kind::HandlerId) => {
-                    return Ok(ChipEditor::ReadOnly(ReadOnly::NotOnTheMap));
-                }
+                Ok(Kind::StepLabel) => return Ok(ChipEditor::Name(NameKind::StepLabel)),
+                Ok(Kind::HandlerId) => return Ok(ChipEditor::Name(NameKind::RuleId)),
                 Ok(Kind::Unspecified) | Err(_) => {
                     return Ok(ChipEditor::ReadOnly(ReadOnly::NoShape));
                 }
