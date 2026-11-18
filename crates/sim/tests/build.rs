@@ -1008,7 +1008,7 @@ fn an_unknown_byte_in_a_coded_column_is_refused_by_name() {
         .expect("the control restores: every column names a defined value");
     assert!(!good.unit_kind.is_empty(), "the fixture has a unit row");
 
-    let spoils: [Spoil; 21] = [
+    let spoils: [Spoil; 22] = [
         ("credit_seat", |s| {
             *s.credit_seat.first_mut().expect("a credit row") = 3;
         }),
@@ -1070,6 +1070,11 @@ fn an_unknown_byte_in_a_coded_column_is_refused_by_name() {
         }),
         ("sighting_kind", |s| {
             *s.sighting_kind.first_mut().expect("a sighting") = 6;
+        }),
+        // S3's `pred`, fix pass 1 (C4): a sighting is taken on a tick
+        // already played, as an explore tick is.
+        ("sighting_seen_at", |s| {
+            *s.sighting_seen_at.first_mut().expect("a sighting") = s.tick + 1;
         }),
         // S3's `pred`: only a structure's sighting names a blueprint.
         ("sighting_blueprint", |s| {

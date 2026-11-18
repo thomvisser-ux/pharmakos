@@ -1681,6 +1681,11 @@ impl Snapshot {
     /// search assumes, so a file that broke it would restore into a table whose
     /// lookups silently missed.
     fn restore_sightings(&self, world: &World) -> Result<SightingTable, SnapshotError> {
+        // A sighting is taken on a tick already played (S3's `pred`, fix pass
+        // 1): freshness reads its age as the snapshot's tick less it.
+        if self.sighting_seen_at.iter().any(|seen| *seen > self.tick) {
+            return Err(SnapshotError::OutOfRange("sighting_seen_at"));
+        }
         let capacity = world.sightings().capacity();
         let mut sightings =
             SightingTable::with_room(world.seats().len(), world.sightings().per_seat());
