@@ -150,6 +150,8 @@ const TEXT := {
 	# "Rendering..." and "Reading the map..." (finding K): the gateway refused it, with the
 	# gateway's words, or the planning door is shut.
 	"unchecked_refused": "Not checked: the gateway refused ({detail}).",
+	# The gateway answered, and this client could not read the answer (M4).
+	"unchecked_unreadable": "Not shown: this client could not read the gateway's answer ({detail}).",
 	"unchecked_ready": "Not checked: after Ready this client sends no planning call for the rest of this Lull.",
 	"unchecked_push": "Not checked: planning is closed during the Push.",
 	"unchecked_recap": "Not checked: planning is closed during the recap.",

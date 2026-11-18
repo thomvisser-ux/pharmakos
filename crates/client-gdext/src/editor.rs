@@ -485,6 +485,10 @@ impl Door {
 pub enum Unchecked {
     /// The gateway refused a check of this text: `CODE: message`, as it came.
     Refused(String),
+    /// The gateway answered, and this client could not read the answer (a rendering whose
+    /// chips cannot be cut where it says, a report that is not a report): the reason, as the
+    /// client's decode wrote it. Shown as such rather than as a check still on its way.
+    Unreadable(String),
     /// The door is shut, so no check is sent.
     Closed(Door),
 }
@@ -519,17 +523,18 @@ impl Check {
     }
 }
 
-/// The gateway's refusal of each check, `CODE: message`, with the revision it checked.
+/// Why each check of a text will not come, with the revision it checked: the gateway's
+/// refusal, or an answer this client could not read.
 #[derive(Clone, Default, PartialEq, Eq, Debug)]
 struct CheckRefusals {
-    rows: Option<(u64, String)>,
-    route: Option<(u64, String)>,
-    prose: Option<(u64, String)>,
-    chips: Option<(u64, String)>,
+    rows: Option<(u64, Unchecked)>,
+    route: Option<(u64, Unchecked)>,
+    prose: Option<(u64, Unchecked)>,
+    chips: Option<(u64, Unchecked)>,
 }
 
 impl CheckRefusals {
-    const fn get(&self, check: Check) -> Option<&(u64, String)> {
+    const fn get(&self, check: Check) -> Option<&(u64, Unchecked)> {
         match check {
             Check::Rows => self.rows.as_ref(),
             Check::Route => self.route.as_ref(),
@@ -538,7 +543,7 @@ impl CheckRefusals {
         }
     }
 
-    const fn slot(&mut self, check: Check) -> &mut Option<(u64, String)> {
+    const fn slot(&mut self, check: Check) -> &mut Option<(u64, Unchecked)> {
         match check {
             Check::Rows => &mut self.rows,
             Check::Route => &mut self.route,
@@ -1786,10 +1791,10 @@ impl Editor {
     /// current; another check's refusal is not this one's.
     #[must_use]
     pub fn unchecked(&self, check: Check) -> Option<Unchecked> {
-        if let Some((revision, said)) = self.check_refusals.get(check)
+        if let Some((revision, why)) = self.check_refusals.get(check)
             && *revision == self.revision
         {
-            return Some(Unchecked::Refused(said.clone()));
+            return Some(why.clone());
         }
         (self.door != Door::Open).then_some(Unchecked::Closed(self.door))
     }
@@ -1969,10 +1974,19 @@ impl Editor {
             return Ok(Settled::Answered);
         };
         self.touch();
+        let check = check_of(&sent);
         let settled = match answer {
             Ok(result) => self.settle(sent, result).map(|()| Settled::Answered),
             Err((code, message)) => Ok(self.refused(&sent, code, message)),
         };
+        // An answer to a check of the text on screen that this client could not read will not
+        // be asked again by itself: its line says so rather than wait for ever (M4).
+        if let (Err(error), Some((check, revision))) = (&settled, check)
+            && revision == self.revision
+        {
+            *self.check_refusals.slot(check) =
+                Some((revision, Unchecked::Unreadable(error.to_string())));
+        }
         // An answer that lands after the door shut (sent in the Lull's last moment) may owe
         // more: a submission's briefing, a preview's check, a new text's checks. None of it
         // will go out, so none of it is kept waiting.
@@ -2966,17 +2980,10 @@ impl Editor {
         // says so, with the gateway's words, rather than "Checking..." for ever (finding K).
         // Each check's refusal is its own line's: a refused estimate leaves the chips'
         // "Reading the map..." alone while their own answer is on its way.
-        let check = match sent {
-            Sent::Quick { revision } | Sent::Full { revision } => Some((Check::Rows, *revision)),
-            Sent::Estimate { revision } => Some((Check::Route, *revision)),
-            Sent::Render { revision } => Some((Check::Prose, *revision)),
-            Sent::Resolve { revision } => Some((Check::Chips, *revision)),
-            _ => None,
-        };
-        if let Some((check, revision)) = check
+        if let Some((check, revision)) = check_of(sent)
             && revision == self.revision
         {
-            *self.check_refusals.slot(check) = Some((revision, detail.clone()));
+            *self.check_refusals.slot(check) = Some((revision, Unchecked::Refused(detail.clone())));
         }
         if let Sent::Edit { base, retry } = sent
             && let Job::RuleEdit { pointer, .. } = retry.as_ref()
@@ -3007,6 +3014,18 @@ impl Editor {
             _ => self.say("gateway_refused", &detail),
         }
         Settled::Refused
+    }
+}
+
+/// The check of the text a call is, and the revision it checks; `None` for a call that checks
+/// nothing.
+const fn check_of(sent: &Sent) -> Option<(Check, u64)> {
+    match sent {
+        Sent::Quick { revision } | Sent::Full { revision } => Some((Check::Rows, *revision)),
+        Sent::Estimate { revision } => Some((Check::Route, *revision)),
+        Sent::Render { revision } => Some((Check::Prose, *revision)),
+        Sent::Resolve { revision } => Some((Check::Chips, *revision)),
+        _ => None,
     }
 }
 
@@ -4001,6 +4020,42 @@ mod tests {
             .expect("its rule");
         assert_eq!(rule.pointer, "/declarative/handlers/0");
         assert_eq!(editor.status().key, "gateway_refused");
+    }
+
+    /// **A rendering this client cannot read is said, not waited on** (M4): a `render_plan`
+    /// answer whose chip runs past its line is refused by the client, and the rule list's
+    /// line says so from then on instead of "Rendering...".
+    #[test]
+    fn an_unreadable_rendering_is_said_and_not_waited_on() {
+        let mut editor = loaded(EXPAND_EAST);
+        for _ in 0..16 {
+            let Some(call) = editor.next_call(false) else {
+                break;
+            };
+            if call.method == "render_plan" {
+                let bad = read(
+                    r#"{"prose":"Route\n  1. go\n","rules":[{"pointer":"/declarative/route/0","line":1,"line_count":1,"chips":[{"pointer":"/a","line":1,"start":2,"end":99,"value_json":"1"}]}]}"#,
+                );
+                assert!(editor.answered(Ok(&bad)).is_err(), "the client refuses it");
+                continue;
+            }
+            let answer = match call.method {
+                "estimate_route" => read(r#"{"reachable":true}"#),
+                "resolve_refs" => read(r#"{"refs":[]}"#),
+                _ => quick_report("", true),
+            };
+            editor.answered(Ok(&answer)).expect("reads");
+        }
+        assert!(!editor.prose_current());
+        match editor.unchecked(Check::Prose) {
+            Some(Unchecked::Unreadable(said)) => assert!(said.contains("not inside"), "{said}"),
+            other => panic!("the rule list's line waits: {other:?}"),
+        }
+        assert_eq!(
+            editor.unchecked(Check::Rows),
+            None,
+            "one check's refusal is its own"
+        );
     }
 
     /// **The conflict connector's two rules** are the rules holding a W0702 row's path and its

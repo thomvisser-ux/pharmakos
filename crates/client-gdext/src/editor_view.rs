@@ -214,6 +214,7 @@ pub(crate) fn state_dictionary(editor: &Editor) -> VarDictionary {
         let (key, detail) = match editor.unchecked(check) {
             None => (String::new(), String::new()),
             Some(Unchecked::Refused(said)) => ("refused".to_owned(), said),
+            Some(Unchecked::Unreadable(said)) => ("unreadable".to_owned(), said),
             Some(Unchecked::Closed(door)) => (door.name().to_owned(), String::new()),
         };
         let mut why = VarDictionary::new();
