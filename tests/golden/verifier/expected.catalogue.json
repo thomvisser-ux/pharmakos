@@ -155,73 +155,73 @@
     "code": "E0020",
     "family": "decode and version",
     "severity": "ERROR",
-    "emitter": "structure",
-    "message": "predicate `beacon_units_by_role` has no effect until S3's predicate catalogue lands; it is refused rather than ignored.",
-    "beginner": "How many units of a role a beacon has can't be asked about yet."
+    "emitter": "none at the skeleton (retired by S3's `pred`, which built `beacon_units_by_role`)",
+    "message": "predicate `beacon_units_by_role` had no effect until S3's predicate catalogue landed; this code is retired and raised by nothing.",
+    "beginner": "How many units of a role a beacon has can be asked about in this build."
   },
   {
     "code": "E0021",
     "family": "decode and version",
     "severity": "ERROR",
-    "emitter": "structure",
-    "message": "predicate `beacon_mandate` has no effect until S3's predicate catalogue lands; it is refused rather than ignored.",
-    "beginner": "Which job a beacon has can't be asked about yet."
+    "emitter": "none at the skeleton (retired by S3's `pred`, which built `beacon_mandate`)",
+    "message": "predicate `beacon_mandate` had no effect until S3's predicate catalogue landed; this code is retired and raised by nothing.",
+    "beginner": "Which job a beacon has can be asked about in this build."
   },
   {
     "code": "E0022",
     "family": "decode and version",
     "severity": "ERROR",
-    "emitter": "structure",
-    "message": "predicate `beacon_has_structure` has no effect until S3's predicate catalogue lands; it is refused rather than ignored.",
-    "beginner": "Whether a beacon has a finished building can't be asked about yet."
+    "emitter": "none at the skeleton (retired by S3's `pred`, which built `beacon_has_structure`)",
+    "message": "predicate `beacon_has_structure` had no effect until S3's predicate catalogue landed; this code is retired and raised by nothing.",
+    "beginner": "Whether a beacon has a finished building can be asked about in this build."
   },
   {
     "code": "E0023",
     "family": "decode and version",
     "severity": "ERROR",
-    "emitter": "structure",
-    "message": "predicate `enemy_units_near` has no effect until S3's predicate catalogue lands; it is refused rather than ignored.",
-    "beginner": "Enemy units near a place can't be asked about yet."
+    "emitter": "none at the skeleton (retired by S3's `pred`, which built `enemy_units_near`)",
+    "message": "predicate `enemy_units_near` had no effect until S3's predicate catalogue landed; this code is retired and raised by nothing.",
+    "beginner": "Enemy units near a place can be asked about in this build."
   },
   {
     "code": "E0024",
     "family": "decode and version",
     "severity": "ERROR",
-    "emitter": "structure",
-    "message": "predicate `enemy_beacon_known` has no effect until S3's predicate catalogue lands; it is refused rather than ignored.",
-    "beginner": "Whether you know of an enemy beacon can't be asked about yet."
+    "emitter": "none at the skeleton (retired by S3's `pred`, which built `enemy_beacon_known`)",
+    "message": "predicate `enemy_beacon_known` had no effect until S3's predicate catalogue landed; this code is retired and raised by nothing.",
+    "beginner": "Whether you know of an enemy beacon can be asked about in this build."
   },
   {
     "code": "E0025",
     "family": "decode and version",
     "severity": "ERROR",
-    "emitter": "structure",
-    "message": "predicate `enemy_structure_near` has no effect until S3's predicate catalogue lands; it is refused rather than ignored.",
-    "beginner": "Enemy buildings near a place can't be asked about yet."
+    "emitter": "none at the skeleton (retired by S3's `pred`, which built `enemy_structure_near`)",
+    "message": "predicate `enemy_structure_near` had no effect until S3's predicate catalogue landed; this code is retired and raised by nothing.",
+    "beginner": "Enemy buildings near a place can be asked about in this build."
   },
   {
     "code": "E0026",
     "family": "decode and version",
     "severity": "ERROR",
-    "emitter": "structure",
-    "message": "predicate `kw_supply` has no effect until S3's predicate catalogue lands; it is refused rather than ignored.",
-    "beginner": "Your power supply can't be asked about yet. Asking about headroom works."
+    "emitter": "none at the skeleton (retired by S3's `pred`, which built `kw_supply`)",
+    "message": "predicate `kw_supply` had no effect until S3's predicate catalogue landed; this code is retired and raised by nothing.",
+    "beginner": "Your power supply can be asked about in this build."
   },
   {
     "code": "E0027",
     "family": "decode and version",
     "severity": "ERROR",
-    "emitter": "structure",
-    "message": "predicate `kw_draw` has no effect until S3's predicate catalogue lands; it is refused rather than ignored.",
-    "beginner": "Your power draw can't be asked about yet. Asking about headroom works."
+    "emitter": "none at the skeleton (retired by S3's `pred`, which built `kw_draw`)",
+    "message": "predicate `kw_draw` had no effect until S3's predicate catalogue landed; this code is retired and raised by nothing.",
+    "beginner": "Your power draw can be asked about in this build."
   },
   {
     "code": "E0028",
     "family": "decode and version",
     "severity": "ERROR",
-    "emitter": "structure",
-    "message": "site `toward` has no effect until S3's stepping-stone site search lands; it is refused rather than ignored.",
-    "beginner": "A beacon can't yet be placed as a stepping stone toward a feature. Pick a spot, or cover a feature you can reach."
+    "emitter": "none at the skeleton (retired by S3's `pred`, which built `toward`)",
+    "message": "site `toward` had no effect until S3's stepping-stone site search landed; this code is retired and raised by nothing.",
+    "beginner": "A beacon can be placed as a stepping stone toward a feature in this build."
   },
   {
     "code": "E0029",

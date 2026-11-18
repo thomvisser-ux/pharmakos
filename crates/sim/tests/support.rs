@@ -1723,6 +1723,9 @@ fn collapse_credits_the_blast() {
     // Re-blessed by S2's `site`: the staging moved to units, a wreck and a
     // ruin, because a live building's footing is anchored ground (the
     // owner's ruling of 2026-10-20) and a shelf carrying one cannot fall.
+    // Re-blessed by S3's `pred`: a seat sees the other's structure, so the
+    // sighted-blueprint block (snapshot 16) is hashed; the hash moved and the
+    // run did not (with the block written out, the old values hold).
     let pinned: Vec<(u32, u64)> = first
         .iter()
         .copied()
@@ -1731,9 +1734,9 @@ fn collapse_credits_the_blast() {
     assert_eq!(
         pinned,
         vec![
-            (CUT_TICK - 1, 0x587d_cd40_e04b_1202),
-            (CUT_TICK, 0x3c2d_c182_2e05_9669),
-            (CUT_TICK + 1, 0x5e5b_6acc_6546_e74b),
+            (CUT_TICK - 1, 0xb820_c7d4_fe2a_9ac1),
+            (CUT_TICK, 0x61d3_bda3_9bed_9157),
+            (CUT_TICK + 1, 0x0d51_ca3c_409f_31c4),
         ],
         "the staged blast's chain at the cut"
     );

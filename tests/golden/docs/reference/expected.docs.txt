@@ -983,41 +983,41 @@ E0019  ERROR  decode and version  raised at: none at the skeleton (retired by S2
   a Build target naming one of S2's base kit had no effect until S2's base kit landed; this code is retired and raised by nothing.
   Autocannons, mortars and walls can be built in this build.
 
-E0020  ERROR  decode and version  raised at: structure
-  predicate `beacon_units_by_role` has no effect until S3's predicate catalogue lands; it is refused rather than ignored.
-  How many units of a role a beacon has can't be asked about yet.
+E0020  ERROR  decode and version  raised at: none at the skeleton (retired by S3's `pred`, which built `beacon_units_by_role`)
+  predicate `beacon_units_by_role` had no effect until S3's predicate catalogue landed; this code is retired and raised by nothing.
+  How many units of a role a beacon has can be asked about in this build.
 
-E0021  ERROR  decode and version  raised at: structure
-  predicate `beacon_mandate` has no effect until S3's predicate catalogue lands; it is refused rather than ignored.
-  Which job a beacon has can't be asked about yet.
+E0021  ERROR  decode and version  raised at: none at the skeleton (retired by S3's `pred`, which built `beacon_mandate`)
+  predicate `beacon_mandate` had no effect until S3's predicate catalogue landed; this code is retired and raised by nothing.
+  Which job a beacon has can be asked about in this build.
 
-E0022  ERROR  decode and version  raised at: structure
-  predicate `beacon_has_structure` has no effect until S3's predicate catalogue lands; it is refused rather than ignored.
-  Whether a beacon has a finished building can't be asked about yet.
+E0022  ERROR  decode and version  raised at: none at the skeleton (retired by S3's `pred`, which built `beacon_has_structure`)
+  predicate `beacon_has_structure` had no effect until S3's predicate catalogue landed; this code is retired and raised by nothing.
+  Whether a beacon has a finished building can be asked about in this build.
 
-E0023  ERROR  decode and version  raised at: structure
-  predicate `enemy_units_near` has no effect until S3's predicate catalogue lands; it is refused rather than ignored.
-  Enemy units near a place can't be asked about yet.
+E0023  ERROR  decode and version  raised at: none at the skeleton (retired by S3's `pred`, which built `enemy_units_near`)
+  predicate `enemy_units_near` had no effect until S3's predicate catalogue landed; this code is retired and raised by nothing.
+  Enemy units near a place can be asked about in this build.
 
-E0024  ERROR  decode and version  raised at: structure
-  predicate `enemy_beacon_known` has no effect until S3's predicate catalogue lands; it is refused rather than ignored.
-  Whether you know of an enemy beacon can't be asked about yet.
+E0024  ERROR  decode and version  raised at: none at the skeleton (retired by S3's `pred`, which built `enemy_beacon_known`)
+  predicate `enemy_beacon_known` had no effect until S3's predicate catalogue landed; this code is retired and raised by nothing.
+  Whether you know of an enemy beacon can be asked about in this build.
 
-E0025  ERROR  decode and version  raised at: structure
-  predicate `enemy_structure_near` has no effect until S3's predicate catalogue lands; it is refused rather than ignored.
-  Enemy buildings near a place can't be asked about yet.
+E0025  ERROR  decode and version  raised at: none at the skeleton (retired by S3's `pred`, which built `enemy_structure_near`)
+  predicate `enemy_structure_near` had no effect until S3's predicate catalogue landed; this code is retired and raised by nothing.
+  Enemy buildings near a place can be asked about in this build.
 
-E0026  ERROR  decode and version  raised at: structure
-  predicate `kw_supply` has no effect until S3's predicate catalogue lands; it is refused rather than ignored.
-  Your power supply can't be asked about yet. Asking about headroom works.
+E0026  ERROR  decode and version  raised at: none at the skeleton (retired by S3's `pred`, which built `kw_supply`)
+  predicate `kw_supply` had no effect until S3's predicate catalogue landed; this code is retired and raised by nothing.
+  Your power supply can be asked about in this build.
 
-E0027  ERROR  decode and version  raised at: structure
-  predicate `kw_draw` has no effect until S3's predicate catalogue lands; it is refused rather than ignored.
-  Your power draw can't be asked about yet. Asking about headroom works.
+E0027  ERROR  decode and version  raised at: none at the skeleton (retired by S3's `pred`, which built `kw_draw`)
+  predicate `kw_draw` had no effect until S3's predicate catalogue landed; this code is retired and raised by nothing.
+  Your power draw can be asked about in this build.
 
-E0028  ERROR  decode and version  raised at: structure
-  site `toward` has no effect until S3's stepping-stone site search lands; it is refused rather than ignored.
-  A beacon can't yet be placed as a stepping stone toward a feature. Pick a spot, or cover a feature you can reach.
+E0028  ERROR  decode and version  raised at: none at the skeleton (retired by S3's `pred`, which built `toward`)
+  site `toward` had no effect until S3's stepping-stone site search landed; this code is retired and raised by nothing.
+  A beacon can be placed as a stepping stone toward a feature in this build.
 
 E0029  ERROR  decode and version  raised at: decode
   the playbook is longer than {max} characters, so none of it was read.

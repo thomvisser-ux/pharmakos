@@ -10,7 +10,7 @@
 /declarative/route/1  lines 6+1
   6:35-51 "voxel 96, 11, 62"
     /declarative/route/1/place_beacon/at
-    reference LOCATION [voxel, beacon_anchor, safest, covering]
+    reference LOCATION [voxel, beacon_anchor, safest, covering, toward]
     = {"voxel":{"x":96,"y":11,"z":62}}
   6:90-96 "normal"
     /declarative/route/1/place_beacon/initial/priority

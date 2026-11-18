@@ -1,12 +1,12 @@
 /declarative/route/0  lines 4+1
   4:30-133 "a site toward the nearest heat vent you do not cover yet (nearest by travel, read when the step starts)"
     /declarative/route/0/place_beacon/at
-    reference LOCATION [voxel, beacon_anchor, safest, covering]
+    reference LOCATION [voxel, beacon_anchor, safest, covering, toward]
     = {"toward":{"feature":{"vent":{"rank":"NEAREST","coverage":"UNCOVERED"}}}}
 /declarative/route/1  lines 5+1
   5:30-63 "a site toward Heat vent (120, 88)"
     /declarative/route/1/place_beacon/at
-    reference LOCATION [voxel, beacon_anchor, safest, covering]
+    reference LOCATION [voxel, beacon_anchor, safest, covering, toward]
     = {"toward":{"feature":{"feature_id":"vent_120_88"}}}
 /declarative/handlers/0  lines 8+4
   8:17-30 "beacon "b_00""
