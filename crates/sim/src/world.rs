@@ -2360,16 +2360,22 @@ impl World {
 
     /// Record a sighting. Crate-internal: [`crate::survey`] is the only caller,
     /// so nothing outside can put a memory in a seat's head.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one argument per column of the sighting being written, as `SightingTable::see`"
+    )]
     pub(crate) fn see(
         &mut self,
         seat: SeatId,
         asset: AssetId,
         owner: SeatId,
         kind: u8,
+        blueprint: u8,
         at: [Fx; 3],
         tick: u32,
     ) {
-        self.sightings.see(seat, asset.raw(), owner, kind, at, tick);
+        self.sightings
+            .see(seat, asset.raw(), owner, kind, blueprint, at, tick);
     }
 
     /// Forget sighting row `slot`. Crate-internal: [`crate::survey`]'s
@@ -3297,12 +3303,13 @@ impl World {
         true
     }
 
-    /// Mark a cell explored for a seat directly (S2's `surv` writes the table
-    /// in play): `true` when the mark is new.
+    /// Mark a cell explored for a seat directly, on the world's current tick
+    /// (S2's `surv` writes the table in play): `true` when the mark is new.
     ///
     /// Fixture API; see the block comment above.
     pub fn mark_explored_directly(&mut self, seat: SeatId, cell: u32) -> bool {
-        self.explored_mut().mark(seat, cell)
+        let tick = self.tick.raw();
+        self.explored_mut().mark(seat, cell, tick)
     }
 
     /// Write a beacon's Common settings directly: its rules of engagement and
@@ -6433,6 +6440,56 @@ impl World {
         // writing nothing while no Spire has ever been finished.
         self.encode_licences(enc);
         self.encode_grown(enc);
+        // S3's `pred`: the explore ticks, after the grown beacons, writing
+        // nothing while no seat has explored a cell; then the sighted
+        // structures' blueprints, writing nothing while no seat remembers a
+        // structure (item 136's block rule).
+        self.encode_explored_ticks(enc);
+        self.encode_sighted_blueprints(enc);
+    }
+
+    /// The tick each explored cell was last explored on (S3's `pred`,
+    /// decision 7), as a block after the grown-beacon block that **writes
+    /// nothing while the explored table holds no row** and otherwise writes its
+    /// tag, its count and each row's tick in the rows' ascending order. A
+    /// chain whose seats explore nothing does not move for the column; one
+    /// whose Survey scouts explore moves from the first tick a cell is marked.
+    fn encode_explored_ticks(&self, enc: &mut Enc) {
+        if self.explored.is_empty() {
+            return;
+        }
+        enc.u8(crate::tables::ExploredTable::TICK_HASH_TAG);
+        enc.len(table_len(self.explored.explored_at().len()));
+        for tick in self.explored.explored_at() {
+            enc.u32(*tick);
+        }
+    }
+
+    /// The blueprint each remembered structure was seen as (S3's `pred`:
+    /// `enemy_structure_near` names one), as a block after the explore-tick
+    /// block that **writes nothing while no sighting is of a structure** and
+    /// otherwise writes its tag, how many sightings are of one, and for each
+    /// in the table's `(seat, asset)` order its row and its blueprint id. A
+    /// chain in which no seat sees another's structure does not move for the
+    /// column; one in which a seat does moves from the first tick it does.
+    fn encode_sighted_blueprints(&self, enc: &mut Enc) {
+        let held = self
+            .sightings
+            .blueprints()
+            .iter()
+            .filter(|blueprint| **blueprint != crate::tables::NO_BLUEPRINT)
+            .count();
+        if held == 0 {
+            return;
+        }
+        enc.u8(crate::tables::SightingTable::BLUEPRINT_HASH_TAG);
+        enc.len(table_len(held));
+        for (row, blueprint) in self.sightings.blueprints().iter().enumerate() {
+            if *blueprint != crate::tables::NO_BLUEPRINT {
+                enc.u32(table_len(row));
+                enc.u8(*blueprint);
+            }
+        }
     }
 
     /// The Defend table (S2's `dfnd`), as a block after the site block that
@@ -7679,7 +7736,15 @@ mod ids_tests {
         let old = world.fabricate(SEAT, home, UnitKind::Scout).must("room");
         let old_asset = AssetId::of_unit(old).must("a value");
         let place = world.units.positions()[old.row().must("a value").index()];
-        world.see(other, old_asset, SEAT, 2, place, 0);
+        world.see(
+            other,
+            old_asset,
+            SEAT,
+            2,
+            crate::tables::NO_BLUEPRINT,
+            place,
+            0,
+        );
         kill_unit(&mut world, old);
         world.free_settled_rows();
         world.clear_events();

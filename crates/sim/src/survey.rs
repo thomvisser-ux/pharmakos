@@ -70,7 +70,9 @@
 //!   brought inside the first of its beacon's probe areas the cell overlaps,
 //!   the place it looks round the cell from. Only a Survey beacon's scouts
 //!   mark: a Defend beacon's pickets warn, they do not survey
-//!   ([`World::survey_scout_sensor`]). A cell once explored stays explored.
+//!   ([`World::survey_scout_sensor`]). A cell once explored stays explored,
+//!   and each mark writes the tick it was made on, so a scout standing on the
+//!   scan column again renews it.
 //! * **The scan.** The scout walks to the nearest unexplored cell of its
 //!   beacon's probe areas, ties to the lowest cell: to the cell's scan column,
 //!   when that column is ground the scout can reach (the router's own
@@ -119,7 +121,9 @@ use crate::knowledge::{AssetId, AssetKind, Position};
 use crate::math::fixed::{Fx, Sq};
 use crate::math::quantity::Ms;
 use crate::sight::{RadiusOnly, Sensor};
-use crate::tables::{BeaconId, ColumnBox, SeatId, StructureId, TargetKind, UnitId, UnitKind};
+use crate::tables::{
+    BeaconId, ColumnBox, NO_BLUEPRINT, SeatId, StructureId, TargetKind, UnitId, UnitKind,
+};
 use crate::targeting::column_of;
 use crate::world::World;
 
@@ -299,6 +303,7 @@ fn look_around(world: &mut World, sensor: &Sensor, tick: u32, found: &mut Vec<Ro
                 id,
                 owner: SeatId::new(owner),
                 kind,
+                blueprint: NO_BLUEPRINT,
                 place,
                 tick,
             };
@@ -328,6 +333,7 @@ fn look_around(world: &mut World, sensor: &Sensor, tick: u32, found: &mut Vec<Ro
                 id,
                 owner: SeatId::new(owner),
                 kind: AssetKind::Beacon,
+                blueprint: NO_BLUEPRINT,
                 place,
                 tick,
             };
@@ -337,11 +343,12 @@ fn look_around(world: &mut World, sensor: &Sensor, tick: u32, found: &mut Vec<Ro
 
     for at in 0..crate::math::index::row(world.structures().len()) {
         let s = world.structures();
-        let (Some(owner), Some(hp), Some(place), Some(id)) = (
+        let (Some(owner), Some(hp), Some(place), Some(id), Some(blueprint)) = (
             s.seats().get(at).copied(),
             s.hit_points().get(at).copied(),
             s.positions().get(at).copied(),
             s.ids().get(at).copied(),
+            s.kinds().get(at).copied(),
         ) else {
             continue;
         };
@@ -357,6 +364,7 @@ fn look_around(world: &mut World, sensor: &Sensor, tick: u32, found: &mut Vec<Ro
                 id,
                 owner: SeatId::new(owner),
                 kind: AssetKind::Structure,
+                blueprint,
                 place,
                 tick,
             };
@@ -372,6 +380,9 @@ struct Seen {
     id: AssetId,
     owner: SeatId,
     kind: AssetKind,
+    /// The structure's [`crate::tables::StructureKind::id`], or
+    /// [`NO_BLUEPRINT`]: a seat that sees a structure sees what it is.
+    blueprint: u8,
     place: [Fx; 3],
     tick: u32,
 }
@@ -386,6 +397,7 @@ fn note(world: &mut World, report: bool, seen: Seen) {
         seen.id,
         seen.owner,
         seen.kind.id(),
+        seen.blueprint,
         seen.place,
         seen.tick,
     );
@@ -430,6 +442,7 @@ fn seen_at(world: &World, seat: SeatId, asset: AssetId) -> Option<u32> {
 /// from; and report `area_surveyed` when that mark took the last scannable
 /// cell of its beacon's probe areas.
 fn explore(world: &mut World, sensor: &Sensor, home: BeaconId) {
+    let tick = world.tick().raw();
     let [x, y] = column_of(sensor.centre);
     let reach = world.arrive_radius().floor_voxels();
     let mut surveyed = false;
@@ -444,7 +457,7 @@ fn explore(world: &mut World, sensor: &Sensor, home: BeaconId) {
                 continue;
             };
             if on_scan_column(world, sensor.centre, home, cell)
-                && world.explored_mut().mark(sensor.seat, cell)
+                && world.explored_mut().mark(sensor.seat, cell, tick)
                 && in_probe_areas(world, home, cell)
             {
                 surveyed = true;
