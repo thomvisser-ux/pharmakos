@@ -273,6 +273,9 @@ var _number_chip := {}
 ## An enum chip's editor: its values as sent, and the chip it is for, named the same way.
 var _choice_menu: PopupMenu
 var _choice_chip := {}
+## The voxel whose ghost the ground menu's first line was filled from, or null: the menu closes
+## when that ghost goes, and not for a ghost that was never asked (fix pass 2, item 1).
+var _menu_ghost_at: Variant = null
 var _templates_drawn := ""
 var _wizard_drawn := ""
 ## Per counted button: how many presses (`button_down`) and handled clicks (`pressed`) it
@@ -730,15 +733,21 @@ func _on_beacon_clicked(beacon: Dictionary, alt: bool, at: Vector2) -> void:
 func _on_ground_clicked(at: Vector3i, where: Vector2) -> void:
 	_menu_target = {"voxel": at}
 	_menu_targets = {}
+	_menu_ghost_at = null
 	_selector = ""
 	_beacon_label.text = ""
 	# The ghost for this click: the draft with a beacon patched in here, checked by QUICK.
-	bridge.editor_preview_place(at)
+	var asked: bool = bridge.editor_preview_place(at)
 	_menu.clear()
 	# The ghost's words head the menu the click opened (the P6a finding: they showed only in
 	# the side panel, away from the click); `_ghost_in_menu` fills them in as QUICK answers.
 	_menu.add_item(Strings.text("ghost_waiting"), ITEM_GHOST)
 	_menu.set_item_disabled(_menu.get_item_index(ITEM_GHOST), true)
+	if not asked:
+		# Refused at once (a Push, a recap, after Ready, no playbook): the line says why, in the
+		# bridge's own words, and the menu stays open as it always did (item 139 (2)).
+		var state: Dictionary = bridge.editor_state()
+		_menu.set_item_text(_menu.get_item_index(ITEM_GHOST), Strings.text("status_" + String(state.get("status_key", "")), {"detail": state.get("status_detail", "")}))
 	_menu.add_item(Strings.text("menu_go"), ITEM_GO)
 	_menu.add_item(Strings.text("menu_place"), ITEM_PLACE)
 	_menu.position = Vector2i(where)
@@ -754,6 +763,7 @@ func _ghost_in_menu(ghost: Dictionary) -> void:
 	if not _menu_target.has("voxel") or _menu_target["voxel"] != ghost.get("at"):
 		return
 	_menu.set_item_text(_menu.get_item_index(ITEM_GHOST), _ghost_label.text)
+	_menu_ghost_at = ghost.get("at")
 	_menu.set_item_disabled(_menu.get_item_index(ITEM_PLACE), String(ghost.get("state", "")) == "illegal")
 	_menu.reset_size()
 
@@ -825,6 +835,13 @@ func _draw_state(state: Dictionary) -> void:
 	# verifier refused opened nothing, so the text on screen is still the one it counted.
 	var counted: bool = state.get("rows_current", false) or verdict == "refused"
 	_draw_size(state.get("size", {}), counted, unchecked if unchecked != "" else Strings.text("verdict_checking"))
+
+
+## Whether a ground menu closes because its ghost went: it is open, it has the ghost's line,
+## and that line was filled from a ghost (`filled_from`, the voxel, or null when no ghost ever
+## came for it, as when the bridge refused the preview at the click).
+static func ghost_went(open: bool, has_line: bool, filled_from: Variant) -> bool:
+	return open and has_line and filled_from != null
 
 
 ## The re-check made visible (the P6a finding: "i did not see the re-check and redraw"). While
@@ -1201,10 +1218,12 @@ func _draw_ghost(ghost: Dictionary) -> void:
 	if ghost.is_empty():
 		_ghost.visible = false
 		_ghost_label.text = ""
-		# The ghost the ground menu's first line waited on is gone (an edit landed under it, or
-		# the gateway refused it): the menu goes with it rather than say "waiting" for ever (L4).
-		if _menu.visible and _menu.get_item_index(ITEM_GHOST) >= 0:
+		# The ghost the ground menu's first line was filled from is gone (an edit landed under it,
+		# or the gateway refused it later): the menu goes with it rather than say "waiting" for
+		# ever (L4). A menu whose ghost was refused from the start stays, saying why.
+		if ghost_went(_menu.visible, _menu.get_item_index(ITEM_GHOST) >= 0, _menu_ghost_at):
 			_menu.hide()
+			_menu_ghost_at = null
 		return
 	var at: Vector3i = ghost["at"]
 	var state := String(ghost.get("state", "waiting"))

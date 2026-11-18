@@ -305,6 +305,7 @@ func _check_the_view(failures: Array[String]) -> void:
 	await _check_the_size_meter(editor, failures)
 	_check_the_box(editor, failures)
 	_check_escape(editor, failures)
+	_check_the_refused_ghost_line(editor, failures)
 	stage.queue_free()
 	_check_the_recap_words(failures)
 	_check_the_logs(failures)
@@ -615,6 +616,24 @@ func _check_escape(editor: CanvasLayer, failures: Array[String]) -> void:
 	editor._input(escape)
 	if editor.menu_open():
 		failures.append("Escape reaching the window did not close the map menu")
+
+
+## **A ground menu whose ghost was refused from the start stays open** (fix pass 2 item 1, the L4
+## fix's regression): a ground click whose preview the bridge refuses at once (here there is no
+## rig, as in a Push the door refuses it) keeps its menu after a redraw with no ghost, as the
+## menus always did (item 139 (2)); only a menu whose line was filled from a ghost that then went
+## closes.
+func _check_the_refused_ghost_line(editor: CanvasLayer, failures: Array[String]) -> void:
+	editor._on_ground_clicked(Vector3i(4, 4, 4), Vector2(200, 200))
+	if not editor.menu_open():
+		failures.append("the ground menu did not open for the refused-ghost check")
+		return
+	editor._draw_ghost({})
+	if not editor.menu_open():
+		failures.append("a ground menu whose ghost was never asked closed at the next redraw")
+	if EditorPanel.ghost_went(true, true, null) or not EditorPanel.ghost_went(true, true, Vector3i(4, 4, 4)):
+		failures.append("ghost_went does not close exactly a menu whose ghost existed and went")
+	editor.close_menu()
 
 
 ## **Every seat's tally at the match's end** (item 155 (3) 7): the gateway's prose, then one frame

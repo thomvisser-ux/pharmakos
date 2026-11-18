@@ -970,6 +970,9 @@ func _refused_in_the_push() -> bool:
 	var taken: bool = editor.map_click(at, false)
 	var opened: bool = editor.menu_open()
 	await get_tree().process_frame
+	# Still open after a redraw: a menu whose ghost was refused from the start stays, saying why
+	# (fix pass 2 item 1: the L4 fix closed it one frame after it opened).
+	var stayed: bool = editor.menu_open()
 	var after := _editor()
 	editor._on_menu(editor.ITEM_GO)
 	editor.close_menu()
@@ -983,6 +986,8 @@ func _refused_in_the_push() -> bool:
 		_failures.append("the editor's door in the Push is `%s`, not push" % after.get("door"))
 	if not taken or not opened:
 		_failures.append("a click on the map at %s opened no menu in the Push (taken %s)" % [at, taken])
+	elif not stayed:
+		_failures.append("the Push's map menu closed one frame after it opened")
 	if not (after.get("ghost", {}) as Dictionary).is_empty() or String(after.get("status_key", "")) != "closed_push":
 		_failures.append("the click's ghost was not refused at once in the Push: %s" % after)
 	if String(went.get("status_key", "")) != "closed_push" or went.get("pending", true) or went.get("busy", true):
