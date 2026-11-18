@@ -298,6 +298,7 @@ const SCRIPTS: &[&str] = &[
     "rows.gd",
     "rows_shot.gd",
     "rule_list.gd",
+    "rule_list_shot.gd",
     "smoke_check.gd",
     "strings.gd",
     "vista.gd",
@@ -344,6 +345,7 @@ fn every_script_is_listed_and_every_scene_names_files_that_exist() {
         "scenes/credits.tscn",
         "scenes/lobby.tscn",
         "scenes/rows_shot.tscn",
+        "scenes/rule_list_shot.tscn",
         "scenes/smoke_check.tscn",
         "scenes/vista.tscn",
         "scenes/vista_shot.tscn",
@@ -1468,7 +1470,7 @@ fn the_first_click_on_the_panel_reaches_its_handler() {
     );
     assert_eq!(
         unhandled.last().copied(),
-        Some("map_click(event.position, event.alt_pressed)"),
+        Some("map_click(event.position, alt_held(event))"),
         "a left press goes to the map surface's handler: {unhandled:?}"
     );
     let click = gd_code(&editor, "map_click");
@@ -1626,11 +1628,15 @@ fn the_lobby_draws_the_bridges_countdown_and_the_gateways_recap() {
     );
 }
 
-/// **A click on a vent names it, and Alt-click describes it** (`docs/design/targeting.md`,
-/// "Surfaces"; S1's plan, task `ui`). The editor picks a vent from the features the bridge
-/// lists, offers "Place beacon covering this vent" with the vent's name as the target, and
-/// on Alt-click "the nearest vent you can cover" with the description as the target; the
-/// menu item asks the bridge for `place_covering`, whose step the bridge writes.
+/// **A click on a vent offers both its name and its description** (`docs/design/targeting.md`,
+/// "Surfaces"; S1's plan, task `ui`; the P6a finding, S3's `ed3b`). At P6a, on a real Windows
+/// window, Alt-click and plain click both gave "Place beacon covering this vent": the Alt
+/// never reached the click. So the menu no longer hangs on a modifier: every vent click
+/// offers "Place beacon covering this vent" (the vent's name) AND "the nearest vent you can
+/// cover" (the description), and Alt only puts the description first. Alt is read from the
+/// event or from the key's own state, and `--log-input` logs both and the other modifiers on
+/// every map click, so a hand check can show what the window delivered. Each entry asks the
+/// bridge for `place_covering` with its own target, whose step the bridge writes.
 #[test]
 fn a_vent_click_offers_a_beacon_covering_it_and_alt_click_the_nearest_you_can_cover() {
     let editor = read("scripts/editor.gd");
@@ -1640,33 +1646,72 @@ fn a_vent_click_offers_a_beacon_covering_it_and_alt_click_the_nearest_you_can_co
             .any(|line| line.contains("bridge.editor_features()")),
         "the vents are the bridge's: {pick:?}"
     );
+    let choices = gd_code(&editor, "vent_choices");
+    for wanted in [
+        "var named := {\"key\": \"menu_cover\", \"id\": ITEM_COVER, \"target\": {\"feature\": vent_id}}",
+        "var described := {\"key\": \"menu_cover_nearest\", \"id\": ITEM_COVER_NEAREST, \"target\": {\"nearest_uncovered\": \"vent\"}}",
+        "return [described, named] if alt else [named, described]",
+    ] {
+        assert!(
+            choices.contains(&wanted),
+            "both entries, every time, Alt first-ing the description: {choices:?}"
+        );
+    }
     let click = gd_code(&editor, "_on_vent_clicked");
     assert!(
         click
             .iter()
-            .any(|line| line.contains("_menu_target = {\"nearest_uncovered\": \"vent\"}")),
-        "Alt-click describes the vent: {click:?}"
+            .any(|line| line.contains("vent_choices(String(vent[\"id\"]), alt)")),
+        "the menu is the two choices: {click:?}"
     );
+    let held = gd_code(&editor, "alt_held");
     assert!(
-        click
+        held.contains(&"return event.alt_pressed or Input.is_key_pressed(KEY_ALT)"),
+        "Alt is the event's flag or the key held: {held:?}"
+    );
+    let unhandled = gd_code(&editor, "_unhandled_input");
+    assert!(
+        unhandled
             .iter()
-            .any(|line| line.contains("_menu_target = {\"feature\": String(vent[\"id\"])}")),
-        "a click names it: {click:?}"
+            .any(|line| line.contains("map_click(event.position, alt_held(event))")),
+        "{unhandled:?}"
     );
     assert!(
-        click.iter().any(|line| line.contains(
-            "Strings.text(\"menu_cover_nearest\" if alt else \"menu_cover\"), ITEM_COVER"
-        )),
-        "{click:?}"
+        unhandled.iter().any(|line| line.contains("if log_input:"))
+            && unhandled
+                .iter()
+                .any(|line| line.contains("event.alt_pressed")
+                    && line.contains("Input.is_key_pressed(KEY_ALT)")
+                    && line.contains("event.shift_pressed")
+                    && line.contains("event.ctrl_pressed")),
+        "--log-input logs the modifiers of every map click: {unhandled:?}"
     );
     let menu = gd_code(&editor, "_on_menu");
     let cover = menu
         .iter()
-        .position(|line| *line == "ITEM_COVER:")
-        .expect("the menu routes ITEM_COVER");
+        .position(|line| *line == "ITEM_COVER, ITEM_COVER_NEAREST:")
+        .expect("the menu routes both cover entries");
     assert_eq!(
         menu.get(cover.saturating_add(1)).copied(),
-        Some("act(\"place_covering\", target)")
+        Some("act(\"place_covering\", _menu_targets.get(id, {}))")
+    );
+    // A beacon's target choice is in its menu every time too: this beacon, or a selector.
+    let beacon = gd_code(&editor, "_on_beacon_clicked");
+    assert!(
+        !beacon.contains(&"if alt:"),
+        "the target choice does not hang on Alt: {beacon:?}"
+    );
+    assert!(
+        beacon
+            .iter()
+            .any(|line| line.contains("_selector = SELECTORS[0] if alt else \"\"")),
+        "Alt pre-selects the nearest own beacon: {beacon:?}"
+    );
+    assert!(
+        beacon
+            .iter()
+            .any(|line| line.contains("Strings.text(\"selector_this\")")),
+        "this beacon is a choice of its own: {beacon:?}"
     );
     let unhandled = gd_code(&editor, "map_click");
     let beacon = unhandled
@@ -1950,4 +1995,499 @@ fn the_map_is_shut_once_the_match_ends_and_nothing_waits_on_a_shut_door() {
             "{check_click} clicks through the map surface's own handler"
         );
     }
+}
+
+/// **"Not here" at the click** (the P6a finding, S3's `ed3b`). The gateway's legality
+/// sentence for a ground click ("Not here: ..." or "A beacon can go here.") showed in the side
+/// panel, away from the menu the click opened. The ground menu now carries the ghost's words
+/// as its own first, disabled line, filled in when QUICK's answer comes, and "Place beacon" is
+/// greyed while the gateway says the spot is illegal. The words are the ghost's, which are the
+/// verifier's sentence; the client only places them.
+#[test]
+fn the_ground_menu_carries_the_ghosts_words_and_greys_place_when_the_gateway_says_no() {
+    let editor = read("scripts/editor.gd");
+    let ground = gd_code(&editor, "_on_ground_clicked");
+    let ghost = ground
+        .iter()
+        .position(|line| line.contains("ITEM_GHOST"))
+        .expect("the ground menu has the ghost's line");
+    let place = ground
+        .iter()
+        .position(|line| line.contains("ITEM_PLACE"))
+        .expect("the ground menu has Place beacon");
+    assert!(ghost < place, "the ghost's words head the menu: {ground:?}");
+    assert!(
+        ground
+            .iter()
+            .any(|line| line.contains("set_item_disabled(_menu.get_item_index(ITEM_GHOST), true)")),
+        "the words are a line, not an action: {ground:?}"
+    );
+    let draw = gd_code(&editor, "_draw_ghost");
+    assert!(
+        draw.iter().any(|line| line.contains("_ghost_in_menu(")),
+        "a redrawn ghost updates the open menu: {draw:?}"
+    );
+    let menu = gd_code(&editor, "_ghost_in_menu");
+    assert!(
+        menu.iter().any(|line| line
+            .contains("_menu.set_item_text(_menu.get_item_index(ITEM_GHOST), _ghost_label.text)")),
+        "the menu says what the panel's ghost line says: {menu:?}"
+    );
+    assert!(
+        menu.iter().any(|line| line.contains(
+            "_menu.set_item_disabled(_menu.get_item_index(ITEM_PLACE), String(ghost.get(\"state\", \"\")) == \"illegal\")"
+        )),
+        "Place beacon is greyed exactly when the gateway's ghost is illegal: {menu:?}"
+    );
+}
+
+/// **The map opens on the seat's own commander** (the P6a finding, S3's `ed3b`). At P6a the map
+/// opened framed on the whole map, too far out to read, with the core at the panel's edge. The
+/// first complete view now opens on this seat's commander, who stands at the core in round 1,
+/// at the rig's opening distance, with the commander drawn in the middle of what the editor's
+/// panel leaves of the window; with no commander in the view it frames the whole map as
+/// before, and the Whole map button still does. Camera only: the commander is the view's own
+/// marker, and nothing else is read.
+#[test]
+fn the_map_opens_on_the_seats_own_commander_clear_of_the_panel() {
+    let lobby = read("scripts/lobby.gd");
+    let received = gd_code(&lobby, "_on_received");
+    let first = received
+        .iter()
+        .position(|line| line.contains("if first and view.get(\"complete\", false):"))
+        .expect("the first complete view is framed");
+    assert_eq!(
+        received.get(first.saturating_add(1)).copied(),
+        Some("if not vista.open_on_own_commander(editor.PANEL_WIDTH):"),
+        "it opens on the commander, clear of the panel: {received:?}"
+    );
+    assert_eq!(
+        received.get(first.saturating_add(2)).copied(),
+        Some("vista.frame_whole_map()"),
+        "and frames the whole map when the view has no commander: {received:?}"
+    );
+    assert!(
+        lobby.contains("func() -> void: vista.frame_whole_map())"),
+        "Whole map stays"
+    );
+    let vista = read("scripts/vista.gd");
+    let open = gd_code(&vista, "open_on_own_commander");
+    assert!(
+        open.iter().any(|line| line.contains("my_commander()"))
+            && open
+                .iter()
+                .any(|line| line.contains("rig.open_on(commander.global_position, cover)")),
+        "{open:?}"
+    );
+    let rig = read("scripts/camera_rig.gd");
+    let on = gd_code(&rig, "open_on");
+    for wanted in [
+        "distance = OPENING_DISTANCE",
+        "pitch = OPENING_PITCH",
+        "target = null",
+    ] {
+        assert!(on.contains(&wanted), "{wanted}: {on:?}");
+    }
+}
+
+/// **New** (the P6a finding, S3's `ed3b`): the Orders bar's New puts the empty playbook the
+/// client ships on screen. The text is one data file under `godot/` (`playbooks/new.jsonc`),
+/// never text assembled in code, and both export presets pack it: a `.jsonc` is not a
+/// resource, so `all_resources` alone would leave it out of the `.pck`. It starts a player's
+/// own file, so it carries no comment (comments round-trip into the player's text) and no
+/// header: it is MIT OR Apache-2.0 by its own `REUSE.toml` entry (the owner's ruling of
+/// 2026-11-17). It carries the verifier's own `on_death` and `fallback` stubs, so one map
+/// step makes it sealable. The button asks the bridge (`editor_new`) with the file's bytes,
+/// and the door gates it as it gates Fix.
+#[test]
+fn new_puts_the_shipped_empty_playbook_on_screen() {
+    let text = read("playbooks/new.jsonc");
+    assert!(
+        !text.contains("//") && !text.contains("/*"),
+        "the new playbook carries no comment: {text}"
+    );
+    for wanted in [
+        "\"kind\": \"PLAYBOOK\"",
+        "\"route\": []",
+        "\"on_death\": {\"on_respawn\": \"CONTINUE\", \"max_deaths_before_fallback\": 2}",
+        "\"fallback\": {\"hold\": {\"at\": {\"beacon_anchor\": {\"safest\": {}}}}}",
+    ] {
+        assert!(text.contains(wanted), "{wanted}: {text}");
+    }
+    let reuse = fs::read_to_string(godot_dir().join("..").join("REUSE.toml")).expect("REUSE.toml");
+    let entry = reuse
+        .split("[[annotations]]")
+        .find(|block| block.contains("path = [\"godot/playbooks/new.jsonc\"]"))
+        .expect("new.jsonc's own REUSE.toml entry");
+    assert!(
+        entry.contains("precedence = \"override\"")
+            && entry.contains("SPDX-License-Identifier = \"MIT OR Apache-2.0\""),
+        "{entry}"
+    );
+    let presets = read("export_presets.cfg");
+    let includes: Vec<&str> = presets
+        .lines()
+        .filter_map(|line| line.strip_prefix("include_filter="))
+        .collect();
+    assert_eq!(includes.len(), 2, "two presets: {includes:?}");
+    for include in includes {
+        let patterns = filter_patterns(include.trim_matches('"'));
+        assert!(
+            excluded(&patterns, "playbooks/new.jsonc"),
+            "the export packs the new playbook: {patterns:?}"
+        );
+    }
+    let editor = read("scripts/editor.gd");
+    assert!(
+        editor.contains("const NEW_PLAYBOOK := \"res://playbooks/new.jsonc\""),
+        "New reads the shipped file"
+    );
+    let new = gd_code(&editor, "new_playbook");
+    assert!(
+        new.iter()
+            .any(|line| line.contains("FileAccess.get_file_as_bytes(NEW_PLAYBOOK)"))
+            && new
+                .iter()
+                .any(|line| line.contains("bridge.editor_new(bytes)")),
+        "{new:?}"
+    );
+    let draw = gd_code(&editor, "_draw_state");
+    assert!(
+        draw.iter()
+            .any(|line| line.contains("_new_button.disabled = not open")),
+        "the door gates New: {draw:?}"
+    );
+}
+
+/// **The re-check is visible** (the P6a finding, S3's `ed3b`: "i did not see the re-check and
+/// redraw"). While a check of the text on screen is on its way, the verdict line and the size
+/// meter's line wear the checking look; when its answer arrives, or the verdict changes, both
+/// are highlighted, and the highlight stays until the player's next input (a key, a click, a
+/// wheel notch). No clock: no timer, no tween (`no_arithmetic.rs`' clock scan holds the editor
+/// to that), so nothing flashes and nothing moves, and there is no motion for a reduced-motion
+/// setting to turn off. The words stay the gateway's.
+#[test]
+fn a_checks_answer_is_highlighted_until_the_next_input() {
+    let editor = read("scripts/editor.gd");
+    let mark = gd_code(&editor, "answer_arrived");
+    assert!(
+        mark.contains(&"return not checking and (was_checking or before != after)"),
+        "an answer arriving, or a changed verdict, is what lights the line: {mark:?}"
+    );
+    let draw = gd_code(&editor, "_draw_state");
+    assert!(
+        draw.iter()
+            .any(|line| line.contains("_mark_check(checking, line)")),
+        "every redraw tells the highlight whether a check is on its way: {draw:?}"
+    );
+    let look = gd_code(&editor, "_mark_check");
+    assert!(
+        look.iter()
+            .any(|line| line
+                .contains("answer_arrived(_was_checking, checking, _verdict.text, after)")),
+        "{look:?}"
+    );
+    for label in ["_verdict", "_size_line"] {
+        assert!(
+            look.iter()
+                .any(|line| line.contains(&format!("_look({label}, "))),
+            "{label} wears the look: {look:?}"
+        );
+    }
+    let input = gd_code(&editor, "_input");
+    assert!(
+        input.iter().any(|line| line.contains("_clear_highlight()")),
+        "the player's next input clears it: {input:?}"
+    );
+    let clear = gd_code(&editor, "next_input");
+    assert!(
+        clear.iter().any(|line| line.contains("InputEventKey"))
+            && clear
+                .iter()
+                .any(|line| line.contains("InputEventMouseButton")),
+        "a key, a click and a wheel notch are inputs; a mouse move is not: {clear:?}"
+    );
+}
+
+/// **The rule list draws the gateway's cut and forwards every click** (S3's `ed3b`). A line is
+/// drawn from the bridge's runs, a chip as a link whose meta is its index, and nothing in the
+/// script reads a sentence; a click on a chip opens the editor its shape names; a rule's row
+/// drags onto another of its own list and the drop asks the bridge for the move; the W0702
+/// connector is drawn on the list's own `draw`; the gateway's refusal of an edit and the
+/// verifier's conflict sentence are lines under the rule. A map click while a pick is on goes
+/// to the bridge's pick, not the menus, and Escape calls the pick off.
+#[test]
+fn the_rule_list_draws_the_gateways_cut_and_forwards_every_click() {
+    let list = read("scripts/rule_list.gd");
+    let code: Vec<&str> = list
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.starts_with('#'))
+        .collect();
+    for forbidden in [".split(", ".find(", ".substr(", "RegEx", ".begins_with("] {
+        assert!(
+            !code.iter().any(|line| line.contains(forbidden)),
+            "rule_list.gd reads a sentence with `{forbidden}`"
+        );
+    }
+    let row = gd_code(&list, "_row");
+    for wanted in [
+        "row.push_meta(chip)",
+        "row.add_text(piece)",
+        "row.meta_clicked.connect(func(meta: Variant) -> void: on_chip.call(int(meta)))",
+        "row.accessibility_name = text",
+        "row.set_meta(\"line\", text)",
+    ] {
+        assert!(row.contains(&wanted), "{wanted}: {row:?}");
+    }
+    let drag = gd_code(&list, "_draggable");
+    assert!(
+        drag.iter().any(|line| line.contains(
+            "on_move.call(int(data[\"rule\"]), String(data[\"pointer\"]), rule, pointer, int(data[\"revision\"]))"
+        )),
+        "a drop names both rules by index and pointer, and the rendering: {drag:?}"
+    );
+    assert!(
+        drag.iter()
+            .any(|line| line.contains("int(data.get(\"revision\", -1)) == revision")),
+        "a drag from another rendering drops nowhere: {drag:?}"
+    );
+    assert!(
+        drag.iter().any(|line| line.contains("if not editable:")),
+        "nothing drags while the list takes no click: {drag:?}"
+    );
+    let fill = gd_code(&list, "fill");
+    for wanted in ["rule_conflict", "rule_refused", "container.queue_redraw()"] {
+        assert!(
+            fill.iter().any(|line| line.contains(wanted)),
+            "{wanted}: {fill:?}"
+        );
+    }
+    let editor = read("scripts/editor.gd");
+    assert!(
+        editor.contains(
+            "_rules_box.draw.connect(func() -> void: RuleList.draw_connectors(_rules_box))"
+        ),
+        "the connector is drawn on the list's own draw"
+    );
+    let chip = gd_code(&editor, "_on_rule_chip");
+    for wanted in [
+        "\"number\":",
+        "\"choice\":",
+        "\"pick\":",
+        "bridge.editor_begin_pick(index, _rules_rendering, named[\"pointer\"])",
+        "_say_local(\"rule_chip_read_only_\" + String(chip.get(\"why\", \"\")), {})",
+    ] {
+        assert!(chip.contains(&wanted), "{wanted}: {chip:?}");
+    }
+    let number = gd_code(&editor, "_open_number");
+    assert!(
+        number.iter().any(|line| line
+            .contains("_number_field.allow_lesser = outside or not chip.get(\"has_min\", false)"))
+            && number.iter().any(|line| line.contains(
+                "_number_field.allow_greater = outside or not chip.get(\"has_max\", false)"
+            )),
+        "the field's bounds are the ones sent, and none where none was sent: {number:?}"
+    );
+    let click = gd_code(&editor, "map_click");
+    let pick = click
+        .iter()
+        .position(|line| line.contains("return _pick_at(camera, at)"))
+        .expect("a pick takes the click");
+    let beacon = click
+        .iter()
+        .position(|line| line.contains("_beacon_under("))
+        .expect("beacons are picked");
+    assert!(pick < beacon, "a pick comes before the menus: {click:?}");
+    assert!(
+        gd_code(&editor, "_pick_at").contains(&"bridge.editor_pick(target)"),
+        "the bridge composes the pick"
+    );
+    assert!(
+        gd_code(&editor, "_input").contains(&"bridge.editor_cancel_pick()"),
+        "Escape calls a pick off"
+    );
+}
+
+/// The hostless rule-list scene draws a byte-identical copy of the gateway's own render
+/// golden, as the wizard and vista shots draw theirs.
+#[test]
+fn the_rule_list_shot_draws_a_byte_copy_of_the_gateways_render_golden() {
+    let copy =
+        fs::read(godot_dir().join("fixtures").join("rule_list_render.json")).expect("the fixture");
+    let golden = fs::read(
+        godot_dir()
+            .join("..")
+            .join("tests")
+            .join("golden")
+            .join("gateway")
+            .join("demo_expand_and_mine_render")
+            .join("expected.response.json"),
+    )
+    .expect("the golden");
+    assert!(
+        copy == golden,
+        "godot/fixtures/rule_list_render.json is not the golden's bytes"
+    );
+    let shot = read("scripts/rule_list_shot.gd");
+    assert!(shot.contains("res://fixtures/rule_list_render.json"));
+    assert!(shot.contains("bridge.editor_rule_list_of_response("));
+    assert!(
+        !shot.contains("host_link") && !shot.contains("execute_with_pipe"),
+        "the shot starts no host"
+    );
+}
+
+/// **The route says the gateway's travel figure** (S3-18, S3's `ed3b`): the whole route and
+/// each leg are drawn with the text `estimate_route` rendered ("1 min 24 s", a fogged leg
+/// labelled as a bound), not the raw milliseconds; the client formats nothing. A figure the
+/// gateway sent no text for is drawn as the raw milliseconds it did send, and says so.
+#[test]
+fn the_route_draws_the_gateways_rendered_travel_text() {
+    let editor = read("scripts/editor.gd");
+    let route = gd_code(&editor, "_draw_route");
+    assert!(
+        route
+            .iter()
+            .any(|line| line.contains("route.get(\"whole_text\", \"\")")),
+        "the whole route's text: {route:?}"
+    );
+    assert!(
+        route
+            .iter()
+            .any(|line| line.contains("route.get(\"leg_texts\", PackedStringArray())")),
+        "each leg's text: {route:?}"
+    );
+    let strings = read("scripts/strings.gd");
+    for key in ["route_whole_text", "leg_text", "route_whole", "leg"] {
+        assert!(
+            strings.contains(&format!("\"{key}\":")),
+            "strings.gd has `{key}`"
+        );
+    }
+    assert!(
+        !strings.contains(concat!(
+            "PLACE",
+            "HOLDER: travel times as raw game milliseconds"
+        )),
+        "S3-18's marker is resolved by the gateway's text"
+    );
+}
+
+/// **The fix pass's small items** (S3's `ed3b` resume, L4 and contract LOW-4): a ghost that goes
+/// while its ground menu shows takes the menu with it, rather than leave "waiting" on its first
+/// line; and a bare modifier key (Alt held before an Alt-click) does not take an answer's
+/// highlight down.
+#[test]
+fn a_gone_ghost_closes_its_menu_and_a_modifier_is_not_an_input() {
+    let editor = read("scripts/editor.gd");
+    let ghost = gd_code(&editor, "_draw_ghost");
+    let empty = ghost
+        .iter()
+        .position(|line| *line == "if ghost.is_empty():")
+        .expect("the empty ghost");
+    let returned = ghost
+        .iter()
+        .skip(empty)
+        .position(|line| *line == "return")
+        .expect("its return");
+    assert!(
+        ghost
+            .iter()
+            .skip(empty)
+            .take(returned)
+            .any(|line| *line == "_menu.hide()"),
+        "{ghost:?}"
+    );
+    let input = gd_code(&editor, "next_input");
+    assert!(
+        input
+            .iter()
+            .any(|line| line
+                .contains("if event.keycode in [KEY_ALT, KEY_SHIFT, KEY_CTRL, KEY_META]:")),
+        "{input:?}"
+    );
+    let rig = read("scripts/camera_rig.gd");
+    assert!(
+        rig.contains("## PLACEHOLDER: the opening yaw — OWNER, S6.\nconst OPENING_YAW := 0.8"),
+        "the opening yaw carries its marker (L6)"
+    );
+}
+
+/// **A chip's editor names its chip, and never clamps** (the `ed3b` resume, M1 and L1): an
+/// edit names the chip's index, the rendering and its pointer, so it cannot land on a chip of
+/// another rendering; no editor opens while the list takes no edit, and the editors close when
+/// the list is redrawn; the number field shows the file's value as it is, its maximum set before
+/// its minimum, and says when that value lies outside the bounds sent.
+#[test]
+fn a_chip_editor_names_its_chip_and_never_clamps() {
+    let editor = read("scripts/editor.gd");
+    let chip = gd_code(&editor, "_on_rule_chip");
+    let number = gd_code(&editor, "_open_number");
+    assert!(
+        gd_code(&editor, "_on_number_send").iter().any(|line| line.contains(
+            "bridge.editor_set_number(int(_number_chip.get(\"index\", -1)), int(_number_chip.get(\"revision\", -1)), String(_number_chip.get(\"pointer\", \"\")), int(_number_field.value))"
+        )),
+        "an edit names its chip's index, rendering and pointer (M1)"
+    );
+    assert!(
+        gd_code(&editor, "_on_choice").iter().any(|line| line.contains(
+            "bridge.editor_choose(int(_choice_chip.get(\"index\", -1)), int(_choice_chip.get(\"revision\", -1)), String(_choice_chip.get(\"pointer\", \"\")), which)"
+        ))
+    );
+    assert!(
+        gd_code(&editor, "_on_rule_move")
+            .contains(&"bridge.editor_move_rule(from, from_pointer, to, to_pointer, rendering)")
+    );
+    // M1: no editor opens while the list takes no edit, and the editors close with the list.
+    assert!(
+        chip.iter()
+            .position(|line| line.contains("if _rules_blocked != \"\":"))
+            .is_some_and(|blocked| chip
+                .get(blocked.saturating_add(1))
+                .is_some_and(|line| line
+                    .contains("_say_local(\"status_rule_refused_\" + _rules_blocked, {})"))),
+        "the bridge's reason is said, and no editor opens: {chip:?}"
+    );
+    let rules = gd_code(&editor, "_draw_rules");
+    for wanted in ["if redrawn:", "_number_popup.hide()", "_choice_menu.hide()"] {
+        assert!(
+            rules.iter().any(|line| line.contains(wanted)),
+            "{wanted}: {rules:?}"
+        );
+    }
+    // L1, as Godot measured it (fix pass 2 item 3): the one field's bounds are opened fully,
+    // then set to the pair sent, so no earlier pair cuts either; client_check.gd runs it.
+    assert!(
+        number.contains(&"set_bounds(_number_field, chip)"),
+        "{number:?}"
+    );
+    let bounds = gd_code(&editor, "set_bounds");
+    let opened = bounds
+        .iter()
+        .position(|line| *line == "field.max_value = FIELD_OPEN")
+        .expect("both bounds opened");
+    let sent = bounds
+        .iter()
+        .position(|line| *line == "field.max_value = chip.get(\"max\")")
+        .expect("the sent maximum");
+    assert!(
+        bounds.first().copied() == Some("field.min_value = -FIELD_OPEN") && opened < sent,
+        "opened fully before the pair sent: {bounds:?}"
+    );
+    let check = read("scripts/client_check.gd");
+    assert!(
+        check.contains("_check_the_number_field(editor, failures)")
+            && check.contains("_check_the_refused_ghost_line(editor, failures)"),
+        "the client check runs both hostless checks"
+    );
+    assert!(
+        number
+            .iter()
+            .any(|line| line.contains("_number_field.allow_lesser = outside or"))
+            && number
+                .iter()
+                .any(|line| line.contains("rule_number_outside")),
+        "a value outside the bounds sent is shown and said, never clamped: {number:?}"
+    );
 }

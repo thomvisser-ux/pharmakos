@@ -135,6 +135,19 @@ func frame_whole_map() -> void:
 		rig.frame_extent(Vector3(extent))
 
 
+## Opens the camera on this seat's own commander, clear of a panel `cover` pixels wide on the
+## window's right; false, with the camera untouched, when the view shows no commander of this
+## seat's. The commander is the view's own marker: nothing else is read.
+func open_on_own_commander(cover: float) -> bool:
+	var commander := my_commander()
+	if commander == null:
+		return false
+	var extent: Vector3i = bridge.view_extent()
+	rig.map_extent = Vector3(extent)
+	rig.open_on(commander.global_position, cover)
+	return true
+
+
 ## This seat's commander marker, or null when the view shows none.
 func my_commander() -> Node3D:
 	for id in _markers:

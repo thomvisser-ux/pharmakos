@@ -55,12 +55,15 @@ exported build, whose extension list the package job's import wrote (decisions-l
 | `fixtures/needs_a_fix.jsonc` | the verifier's own E0108 case: a file with one machine-applicable Fix |
 | `fixtures/rows_report.json` | a `VerifyReport` of four committed verifier diagnostics, for the rows scene; the pull request that moves this fixture re-renders `tests/golden/vista/expected.rows.png` from CI's Linux run, as `tests/golden/vista/README.md` says |
 | `fixtures/instantiate_suggested.json` | a byte-identical copy of the gateway's `tests/golden/gateway/instantiate_suggested/expected.response.json` (seat 0's `instantiate_template{suggested: true}` answer for Hold & Build), for the wizard scene and the watch check's pin (the pull request that moves the golden always re-copies it, and re-renders `tests/golden/vista/expected.wizard.png` from CI's Linux run only when something the wizard's first page draws moved: its label, value, mark or why, and a template comment is none of them; `tests/golden/vista/README.md` says how); `crates/client-gdext/tests/wizard.rs` keeps it identical and pins its pages. **The lane that changes `library/` moves that golden and so owns this copy too**: re-copy it, and update the page pins, in the same pull request |
+| `fixtures/rule_list_render.json` | a byte-identical copy of the gateway's `tests/golden/gateway/demo_expand_and_mine_render/expected.response.json` (the Expand & Mine demo's `render_plan` answer, chips and all), for the hostless rule-list scene; `crates/client-gdext/tests/godot_project.rs` keeps it identical. **The lane that moves that golden re-copies it** in the same pull request, and re-renders the rule list's shot once `xtask` takes it |
+| `playbooks/new.jsonc` | what New puts on screen: kind PLAYBOOK, an empty route, and the verifier's own `on_death` and `fallback` stubs, so one map step makes it sealable. It starts a player's own file, so it carries no header and no comment (comments round-trip into the player's text); it is MIT OR Apache-2.0 by its own `REUSE.toml` entry (the owner's ruling of 2026-11-17). Both export presets pack it by their include filter, `playbooks/*.jsonc` |
 | `scenes/boot.tscn` | the main scene: `--scene=<res path>` after `--` sends the run there, otherwise to the lobby |
 | `scenes/lobby.tscn` | the game at the skeleton: starts `gamectl host`, watches the match (T16), and edits the seat's orders (T19) |
 | `scenes/vista.tscn` | the vista: the bridge, the camera rig, the entity markers, the Pall |
 | `scenes/vista_shot.tscn` | the vista golden's scene: the keyframe fixture with **no host running** |
-| `scenes/watch_check.tscn` | the headless-driven run against a real `gamectl host` (CI's `client` job): the watch rig, the editor, the wizard, the meter, the camera's keys (`_camera_keys`: W held in the focused notes box leaves the camera still, and moves it once a right-click on the view has released the focus), the first click on the panel (`_first_click_lands`: one injected click on Submit, a Fix button and Save reaches its handler exactly once, with the rows redrawn under the press, with a map menu open and after a panel scroll), the name Save as... offers (`_save_as_offers`: the opened file's, the saved file's under a name of its own, and none after a template or a carried draft; the native dialog's overwrite prompt is the package hand check), the map in a Push (`_refused_in_the_push`: a click opens the menu as before, and its ghost, its Go and a submission are refused at once), and a resume by a fresh client |
+| `scenes/watch_check.tscn` | the headless-driven run against a real `gamectl host` (CI's `client` job): the watch rig, the editor, the wizard, the meter, the camera's keys (`_camera_keys`: W held in the focused notes box leaves the camera still, and moves it once a right-click on the view has released the focus), the first click on the panel (`_first_click_lands`: one injected click on Submit, a Fix button and Save reaches its handler exactly once, with the rows redrawn under the press, with a map menu open and after a panel scroll), the name Save as... offers (`_save_as_offers`: the opened file's, the saved file's under a name of its own, and none after a template or a carried draft; the native dialog's overwrite prompt is the package hand check), the map in a Push (`_refused_in_the_push`: a click opens the menu as before, still open after a redraw, and its ghost, its Go and a submission are refused at once), New then one Go here qualifying at QUICK (`_new_then_go_here`), and a resume by a fresh client |
 | `scenes/rows_shot.tscn` | the validation rows drawn from `fixtures/rows_report.json` with no host; `cargo xtask screenshot` compares it with `tests/golden/vista/expected.rows.png` |
+| `scenes/rule_list_shot.tscn` | the rule list drawn from `fixtures/rule_list_render.json` (a byte copy of the gateway's Expand & Mine render golden) with no host, its chips and one conflict connector; not yet in `cargo xtask screenshot`'s list (an `xtask` change), so run by hand |
 | `scenes/wizard_shot.tscn` | the wizard's first page drawn from `fixtures/instantiate_suggested.json` with no host; `cargo xtask screenshot` compares it with `tests/golden/vista/expected.wizard.png` |
 | `scenes/client_check.tscn` | T12's headless acceptance scene |
 | `scenes/smoke_check.tscn` | the shipped smoke check (T21): the real lobby idles, opens and closes the credits overlay, starts a New match and reaches the Lull; the one check the export keeps |
@@ -86,7 +89,10 @@ else. Closing the window closes the host's standard input, which ends the host.
 The watch rig is what spec section 3 names for a Push and nothing more: free-look (WASD or
 the arrows, Q and E, the wheel, which zooms on what is under the cursor, the right mouse
 button), a follow-commander toggle, the live
-event list, 1x, 2x and 4x, and Skip. There is no pause (decisions-log item 108 (3)). The
+event list, 1x, 2x and 4x, and Skip. There is no pause (decisions-log item 108 (3)). The map
+opens on this seat's own commander (at the core in round 1), close enough to read, and drawn
+in the middle of what the editor's panel leaves of the window; with no commander in the view
+it frames the whole map, as the Whole map button does (S3's `ed3b`, a P6a finding). The
 Lull ends when every seat is ready or its timer runs out; Ready is this seat's `set_ready`,
 and Continue leaves the recap. What each connection sends and when — the pacer, the host
 clock reported four times a second outside a Push, the keep-alive — is the bridge's
@@ -103,15 +109,22 @@ godot --headless --path godot res://scenes/watch_check.tscn -- \
 
 `scripts/editor.gd` is the playbook editor: a panel on the right of the lobby and a route
 and a placement ghost on the map. It is one more client of the gateway on the seat
-connection the vista already holds, and a thin one. Load and Save read and write the
+connection the vista already holds, and a thin one. New puts the empty playbook the client ships (`playbooks/new.jsonc`, packed by both export
+presets' include filter) on screen as one edit Undo takes back, and the checks say what it
+still needs. Load and Save read and write the
 player's own JSONC file byte for byte; a file is opened only after QUICK has seen it, and an
 out-of-vocabulary construct is refused with the verifier's code and pointer. Click one of
 your beacons for Visit & change, Go here or Recycle; click the ground for Go here or Place
-beacon (the ghost shows QUICK's verdict for that click); Alt-click a beacon to make the
-step's target a selector. Every edit is a JSON Patch the gateway applies, QUICK runs on
-every edit and FULL after 600 ms idle, and the rows' Fix buttons apply the verifier's own
+beacon (the ghost shows QUICK's verdict for that click, and the menu the click opened carries
+the same words on its first line and greys Place beacon while the gateway says the spot is
+illegal). A beacon's menu offers its target
+every time: this beacon, or a selector (Alt held pre-selects the nearest own beacon). Every edit is a JSON Patch the gateway applies, QUICK runs on
+every edit and FULL after 600 ms idle (while a check is on its way the verdict line and the
+size meter wear a checking look, and when its answer arrives both are highlighted until the
+player's next key, click or wheel notch: no timer, nothing flashes), and the rows' Fix buttons apply the verifier's own
 machine-applicable patches. The route is the gateway's `estimate_route`, drawn as a polyline
-with each leg's travel time in game milliseconds as it came back; there are no dashed legs
+with the whole route's and each leg's travel as the gateway rendered it (`travel_text`, the
+register's S3-18; a figure sent with no text is drawn as its raw game milliseconds and says so); there are no dashed legs
 at the skeleton. The notebook, draft continuity, Submit and Ready go through the gateway
 too. Every sentence the client writes itself is in `scripts/strings.gd`.
 
@@ -191,9 +204,18 @@ Pull request 2 adds four things to the panel, each drawn as the gateway answered
   `playbook_jsonc` into the editor byte for byte, as one edit Undo takes back, and QUICK, the
   route, the rule list and FULL follow. Nothing in the client names a template, a pointer or
   a label, so a `library/` change needs no client change (`tests/wizard.rs`).
-- **The rule list** (`scripts/rule_list.gd`): `render_plan`'s prose for the text on screen,
-  one read-only row per line, its accessible name its line. No sentence is parsed; chips are
-  S3's.
+- **The rule list** (`scripts/rule_list.gd`; S3's `ed3b`): `render_plan`'s prose for the text
+  on screen, one row per line, its accessible name its line, each line cut by the bridge at the
+  chips `render_plan` placed on it. No sentence is parsed. A chip is a link: a number opens a
+  field within the bounds the gateway sent, an enum its values as sent, and a reference a pick
+  on the map (the next map click; Escape stops), each edit one JSON Patch `replace`. A
+  duration is drawn as the gateway wrote it and not edited (it waits on a typed unit hint from
+  the wire), and a step label or a rule id waits on part 2's picker. A step's or a rule's row
+  drags onto another of its own list: one JSON Patch `move` to that rule's place, so a rule
+  dragged down lands after the rule it is dropped on, and one dragged up before it (RFC 6902
+  `move` removes, then inserts at the target index). The two rules a W0702 row names
+  are joined by a connector in the list's margin, with the verifier's sentence under the later
+  one, and the gateway's refusal of an edit shows under the rule it was of.
 - **The meter**: `get_economy_forecast`'s four numbers (`$`, supply, draw and headroom in
   `kW`) put into `scripts/strings.gd`'s frame as they came. Headroom is the gateway's, never
   supply minus draw. The bridge's rig polls it when a Lull opens and whenever the match moved
@@ -243,9 +265,11 @@ schedules, and decides nothing (AGENTS.md section 3 rule 4).
   heading is hidden: the client words no claim about the orders of its own.
 * **The chips.** For every vent or seam the playbook names or describes, what it reads now,
   how far, and the next candidate, from `resolve_refs` for the text on screen.
-* **The vent click.** A click on a heat vent offers "Place beacon covering this vent" (a name);
-  Alt-click offers "the nearest vent you can cover" (a description). The vents are those
-  `get_map_summary` lists this Lull.
+* **The vent click.** A click on a heat vent offers "Place beacon covering this vent" (a name)
+  and "the nearest vent you can cover" (a description), both every time; Alt held puts the
+  description first (S3's `ed3b`: at P6a a real Windows window never delivered Alt with the
+  click). With `-- --log-input`, every map click logs `event.alt_pressed`, whether the Alt key
+  is held, Shift and Ctrl. The vents are those `get_map_summary` lists this Lull.
 * **The meter.** Beside the four numbers: the next BMI, labelled as the BMI at the band held
   now, ignoring committed spend (item 135 (2) (g)); the committed spend in a Lull; and that
   supply and draw leave out each beacon's base draw, which its key-core supplies (S1-31). A
@@ -394,7 +418,8 @@ one.
 
 ## What is not here yet
 
-Chips on the rule list, drag reordering and the pickers are S3's; unit display of wizard
+The rule list's condition picker, locks and Visit & change rows are S3's, in `ed3b`'s part
+2; unit display of wizard
 values, the typed parameter catalogue, the draft and save browsers and the real lobby are
 S6's; the `.vox` models and the art pass are S6's too. Entities are drawn as placeholder
 primitives until then.

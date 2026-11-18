@@ -230,7 +230,7 @@ func _notification(what: int) -> void:
 
 func _input(event: InputEvent) -> void:
 	if editor.log_input and event is InputEventMouseButton:
-		print("[lobby] _input: button %d %s at %s" % [event.button_index, "down" if event.pressed else "up", event.position])
+		print("[lobby] _input: button %d %s at %s, alt_pressed %s, KEY_ALT held %s" % [event.button_index, "down" if event.pressed else "up", event.position, event.alt_pressed, Input.is_key_pressed(KEY_ALT)])
 
 
 func _on_announced(_match_id: String) -> void:
@@ -253,7 +253,8 @@ func _on_received(answer: Dictionary) -> void:
 		var first: bool = vista.marker_count() == 0
 		vista.take_view(view)
 		if first and view.get("complete", false):
-			vista.frame_whole_map()
+			if not vista.open_on_own_commander(editor.PANEL_WIDTH):
+				vista.frame_whole_map()
 	if answer.get("phase_changed", false) and answer.get("phase", "") == "push":
 		_rows.clear()
 	if answer.get("phase_changed", false) and answer.get("phase", "") == "ended":

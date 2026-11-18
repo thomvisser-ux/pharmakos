@@ -19,12 +19,15 @@
 #   * click the ground: Go here, or Place beacon - the ghost shows QUICK's verdict for this
 #     click (per click at the skeleton, not live on hover: plan T19 amendment).
 #     PLACEHOLDER: the ghost per click, not live on hover — OWNER, S6 (w6 notes A4 item 5);
-#   * Alt-click a beacon: the step's target becomes a selector - nearest, weakest, safest
-#     or most threatened own beacon, chosen when the step starts;
+#   * the beacon menu's target choice: this beacon, or a selector - nearest, weakest, safest
+#     or most threatened own beacon, chosen when the step starts; Alt held pre-selects the
+#     nearest (S3's `ed3b`: the choice is in the menu every time, because at P6a a real
+#     Windows window never delivered Alt with the click);
 #   * click a heat vent: "Place beacon covering this vent", a place-beacon step whose site
-#     is `covering` the vent by its name; Alt-click a vent: "the nearest vent you can
-#     cover", the same step with a description the sim ranks when the step starts
-#     (docs/design/targeting.md, "Surfaces"; S1's plan, task `ui`). The vents are the ones
+#     is `covering` the vent by its name, and "the nearest vent you can cover", the same
+#     step with a description the sim ranks when the step starts, both every time; Alt held
+#     puts the description first (docs/design/targeting.md, "Surfaces"; S1's plan, task
+#     `ui`; S3's `ed3b`). `--log-input` logs every map click's modifiers. The vents are the ones
 #     `get_map_summary` lists this Lull, drawn where the view holds their anchor column,
 #     and picked by screen distance as the beacons are;
 #   * the route is drawn as a polyline from the gateway's `estimate_route` legs, each leg
@@ -46,6 +49,9 @@
 #     lists - label, raw value, the operator's mark and its why. Use puts the gateway's
 #     playbook into the editor byte for byte, as one edit Undo takes back;
 #   * the RULE LIST (scripts/rule_list.gd): `render_plan`'s lines for the text on screen;
+#     from S3's `ed3b`, with its chips (each edit one `replace`: a number field within the
+#     bounds sent, an enum's values as sent, a pick on the map), drag reordering (one `move`)
+#     and W0702's conflict connector, every patch composed by the bridge from the click;
 #   * the own $/kW METER: `get_economy_forecast`'s four numbers, as they came, through
 #     strings.gd's frame. Headroom is the gateway's, never supply minus draw. When it is
 #     read is the bridge's rig's scheduling (crates/client-gdext/src/rig.rs).
@@ -122,11 +128,10 @@
 # layout is S6's (skeleton plan T19).
 #
 # PLACEHOLDER: the segment clock and the "fits" pill — OWNER, S6.
-# Neither is built (skeleton plan T19, PLACEHOLDERs line; S3's plan's register row S3-16). A
-# rendered travel time is S3's: legs and the whole route are shown as the raw game
-# milliseconds the estimator answered, not the generously rounded or whole-second figure
-# decisions-log items 57 and 61 ask for, until the gateway answers one (see strings.gd's `leg`,
-# whose marker carries it).
+# Neither is built (skeleton plan T19, PLACEHOLDERs line; S3's plan's register row S3-16). The
+# rendered travel time is the gateway's from S3 (`estimate_route`'s `travel_text`, the
+# register's S3-18): the route and each leg say it as it came, and only a figure the gateway
+# sent no text for is drawn as its raw game milliseconds, saying so.
 
 extends CanvasLayer
 
@@ -151,6 +156,15 @@ const GHOST_COLOURS := {
 ## PLACEHOLDER: the size meter's look — OWNER, at S6.
 const SIZE_BAR := Vector2(64, 10)
 const SIZE_STALE_ALPHA := 0.35
+## The verdict line's and the size meter's two looks (the P6a finding): CHECKING while a check
+## of the text on screen is on its way, ANSWERED from its answer until the player's next input.
+## Still colours behind the words, never a flash: there is no motion, and no clock. Part of the
+## panel's look, whose marker heads this file.
+const CHECKING_LOOK := Color(0.55, 0.6, 0.7, 0.22)
+## How far the number field's bounds open before the pair a chip sent is set: past every value
+## the field can hold exactly (the bridge keeps chips outside `i32` read-only).
+const FIELD_OPEN := 1.0e18
+const ANSWERED_LOOK := Color(0.95, 0.78, 0.25, 0.38)
 ## The unticked box: its side in pixels, its outline's width, and its colour, shown or disabled.
 ## PLACEHOLDER: the checkbox's box — OWNER, at S6's art pass.
 const BOX_SIDE := 16
@@ -170,13 +184,21 @@ const ITEM_GO := 1
 const ITEM_RECYCLE := 2
 const ITEM_PLACE := 3
 const ITEM_COVER := 4
+const ITEM_COVER_NEAREST := 5
+## The ground menu's first line: the ghost's words, a line and not an action.
+const ITEM_GHOST := 6
 const ITEM_LOW := 11
 const ITEM_NORMAL := 12
 const ITEM_HIGH := 13
+## "This beacon": the clicked beacon itself, the first of the beacon menu's target choices.
+const ITEM_THIS := 19
 const ITEM_SELECTOR := 20
 const SELECTORS := ["nearest", "weakest", "safest", "most_threatened"]
 ## The user argument (after `--`) that turns on the click logging.
 const LOG_INPUT_ARG := "--log-input"
+## What New puts on screen: the empty playbook the client ships, one data file (the P6a
+## finding). The checks, not the client, say what it still needs.
+const NEW_PLAYBOOK := "res://playbooks/new.jsonc"
 ## The panel buttons whose clicks are counted and, with `--log-input`, logged.
 const COUNTED := ["submit", "fix", "save"]
 
@@ -199,6 +221,11 @@ var _notes: TextEdit
 var _notes_status: Label
 var _drafts: Label
 var _undo_button: Button
+## Whether a check of the text on screen was on its way at the last redraw, and whether its
+## answer's highlight is showing (`_mark_check`).
+var _was_checking := false
+var _highlit := false
+var _new_button: Button
 var _size_box: HBoxContainer
 var _size_bar: ProgressBar
 var _size_line: Label
@@ -207,6 +234,9 @@ var _save_dialog: FileDialog
 var _menu: PopupMenu
 var _visit_menu: PopupMenu
 var _menu_target := {}
+## The target each menu entry acts on, by its item id, where entries differ in target (the
+## vent menu's name and description).
+var _menu_targets := {}
 var _selector := ""
 var _route_mesh: MeshInstance3D
 var _route_labels: Node3D
@@ -230,9 +260,27 @@ var _templates_box: VBoxContainer
 var _wizard_box: VBoxContainer
 var _rules_status: Label
 var _rules_box: VBoxContainer
+## The rule list's chips as the bridge last sent them, for a click on one to find its editor.
+var _rule_chips: Array = []
+## The rendering id of the rule list on screen (the bridge's `rules_rendering`), and why
+## it takes no edit now (`rules_blocked`, "" when it takes one).
+var _rules_rendering := -1
+var _rules_blocked := ""
+## A number chip's editor: a field within the bounds sent, and the chip it is for, named as
+## the bridge checks it: its index, the rendering and its pointer (M1).
+var _number_popup: PopupPanel
+var _number_heading: Label
+var _number_note: Label
+var _number_field: SpinBox
+var _number_chip := {}
+## An enum chip's editor: its values as sent, and the chip it is for, named the same way.
+var _choice_menu: PopupMenu
+var _choice_chip := {}
+## The voxel whose ghost the ground menu's first line was filled from, or null: the menu closes
+## when that ghost goes, and not for a ghost that was never asked (fix pass 2, item 1).
+var _menu_ghost_at: Variant = null
 var _templates_drawn := ""
 var _wizard_drawn := ""
-var _rules_drawn := ""
 ## Per counted button: how many presses (`button_down`) and handled clicks (`pressed`) it
 ## has had, for `watch_check.gd`'s `_first_click_lands`.
 var _clicks := {}
@@ -268,6 +316,16 @@ func load_file(path: String) -> bool:
 		_say_local("status_open_failed", {"path": path})
 		return false
 	return bridge.editor_load_file(bytes, path)
+
+
+## New: puts the empty playbook the client ships on screen, as one edit Undo takes back
+## (the P6a finding). Its checks follow as for any edit.
+func new_playbook() -> bool:
+	var bytes := FileAccess.get_file_as_bytes(NEW_PLAYBOOK)
+	if bytes.is_empty():
+		_say_local("status_open_failed", {"path": NEW_PLAYBOOK})
+		return false
+	return bridge.editor_new(bytes)
 
 
 ## Opens a playbook from its bytes, which came from no file of the player's.
@@ -471,7 +529,13 @@ func _process(_delta: float) -> void:
 func _input(event: InputEvent) -> void:
 	if _panel == null:
 		return
+	if next_input(event):
+		_clear_highlight()
 	if close_menu_on_escape(event):
+		get_viewport().set_input_as_handled()
+		return
+	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE and int(bridge.editor_state().get("picking", -1)) >= 0:
+		bridge.editor_cancel_pick()
 		get_viewport().set_input_as_handled()
 		return
 	if not (event is InputEventMouseButton) or not event.pressed:
@@ -495,7 +559,17 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if not event.pressed or event.button_index != MOUSE_BUTTON_LEFT:
 		return
-	map_click(event.position, event.alt_pressed)
+	if log_input:
+		# The P6a hand check: what the window delivered with this click, both ways Alt can be read.
+		print("[editor] map click at %s: alt_pressed %s, KEY_ALT held %s, shift %s, ctrl %s" % [event.position, event.alt_pressed, Input.is_key_pressed(KEY_ALT), event.shift_pressed, event.ctrl_pressed])
+	map_click(event.position, alt_held(event))
+
+
+## Whether Alt is held for a map click: the event's own flag, or the key's state as the engine
+## reads it. At P6a, on a real Windows window, Alt-click never reached the map as an Alt-click;
+## Alt is a shortcut only, and every choice it makes is also in the menu without it.
+static func alt_held(event: InputEventWithModifiers) -> bool:
+	return event.alt_pressed or Input.is_key_pressed(KEY_ALT)
 
 
 ## A left-click on the map at `at` (screen pixels), Alt held or not: the map surface's menus
@@ -508,6 +582,8 @@ func map_click(at: Vector2, alt: bool) -> bool:
 		_say_local("status_closed_ended", {})
 		return false
 	var camera: Camera3D = vista.rig.camera
+	if int(bridge.editor_state().get("picking", -1)) >= 0:
+		return _pick_at(camera, at)
 	var beacon := _beacon_under(camera, at)
 	if not beacon.is_empty():
 		_take_map_click()
@@ -524,6 +600,28 @@ func map_click(at: Vector2, alt: bool) -> bool:
 		_on_ground_clicked(picked["at"], at)
 		return true
 	return false
+
+
+## A map click while a rule-list chip's pick is on: what is under it - a beacon (any seat's), a
+## vent or the ground - goes to the bridge, which writes the arm the click names when the
+## gateway lists it there, or says why not and keeps the pick on. No menu opens.
+func _pick_at(camera: Camera3D, at: Vector2) -> bool:
+	var target := {}
+	var beacon := _beacon_under(camera, at)
+	var vent := _vent_under(camera, at)
+	if not beacon.is_empty():
+		target = {"beacon": String(beacon["id"])}
+	elif not vent.is_empty():
+		target = {"feature": String(vent["id"])}
+	else:
+		var picked: Dictionary = bridge.view_pick(camera.project_ray_origin(at), camera.project_ray_normal(at))
+		# A click on nothing (the sky) is still the pick's: the bridge refuses it by its reason,
+		# `no_target`, rather than the click passing in silence.
+		if picked.get("hit", false):
+			target = {"voxel": picked["at"]}
+	_take_map_click()
+	bridge.editor_pick(target)
+	return true
 
 
 ## Whether the map offers its menus: until the match has ended, by the bridge's phase string
@@ -577,19 +675,29 @@ func _vent_under(camera: Camera3D, at: Vector2) -> Dictionary:
 	return best
 
 
-## A click on a vent offers a beacon covering it, by its name; Alt-click offers the
-## description instead, "the nearest vent you can cover" (docs/design/targeting.md).
+## A click on a vent offers a beacon covering it by its name AND by the description, "the
+## nearest vent you can cover" (docs/design/targeting.md), every time: no modifier is needed
+## (the P6a finding). Alt only puts the description first.
 func _on_vent_clicked(vent: Dictionary, alt: bool, at: Vector2) -> void:
 	_selector = ""
 	_beacon_label.text = Strings.text("feature_vent", {"x": vent.get("x", ""), "y": vent.get("y", "")})
-	if alt:
-		_menu_target = {"nearest_uncovered": "vent"}
-	else:
-		_menu_target = {"feature": String(vent["id"])}
+	_menu_target = {}
+	_menu_targets = {}
 	_menu.clear()
-	_menu.add_item(Strings.text("menu_cover_nearest" if alt else "menu_cover"), ITEM_COVER)
+	for choice in vent_choices(String(vent["id"]), alt):
+		_menu_targets[choice["id"]] = choice["target"]
+		_menu.add_item(Strings.text(choice["key"]), choice["id"])
 	_menu.position = Vector2i(at)
 	_menu.popup()
+
+
+## The vent menu's two entries, in the order shown: the vent by its name, and the description
+## of the nearest vent you can cover, each with the target its step names. Both are there every
+## time; Alt held puts the description first.
+static func vent_choices(vent_id: String, alt: bool) -> Array:
+	var named := {"key": "menu_cover", "id": ITEM_COVER, "target": {"feature": vent_id}}
+	var described := {"key": "menu_cover_nearest", "id": ITEM_COVER_NEAREST, "target": {"nearest_uncovered": "vent"}}
+	return [described, named] if alt else [named, described]
 
 
 func _on_beacon_clicked(beacon: Dictionary, alt: bool, at: Vector2) -> void:
@@ -604,16 +712,20 @@ func _on_beacon_clicked(beacon: Dictionary, alt: bool, at: Vector2) -> void:
 	# "T19" (4)); its description heads the panel while the menu is open.
 	bridge.editor_describe_beacon(id)
 	_beacon_label.text = Strings.text("beacon_heading", {"id": id})
+	# The target choice is in the menu every time (the P6a finding): this beacon, or a
+	# selector chosen when the step starts. Alt held pre-selects the nearest own beacon.
 	_selector = SELECTORS[0] if alt else ""
 	_menu_target = {"beacon": id}
+	_menu_targets = {}
 	_menu.clear()
-	if alt:
-		_menu.add_separator(Strings.text("menu_target"))
-		for index in SELECTORS.size():
-			var name: String = SELECTORS[index]
-			_menu.add_radio_check_item(Strings.text("selector_" + name), ITEM_SELECTOR + index)
-			_menu.set_item_checked(_menu.get_item_index(ITEM_SELECTOR + index), index == 0)
-		_menu.add_separator()
+	_menu.add_separator(Strings.text("menu_target"))
+	_menu.add_radio_check_item(Strings.text("selector_this"), ITEM_THIS)
+	_menu.set_item_checked(_menu.get_item_index(ITEM_THIS), _selector == "")
+	for index in SELECTORS.size():
+		var name: String = SELECTORS[index]
+		_menu.add_radio_check_item(Strings.text("selector_" + name), ITEM_SELECTOR + index)
+		_menu.set_item_checked(_menu.get_item_index(ITEM_SELECTOR + index), name == _selector)
+	_menu.add_separator()
 	_menu.add_submenu_node_item(Strings.text("menu_visit"), _visit_menu)
 	_menu.add_item(Strings.text("menu_go"), ITEM_GO)
 	_menu.add_item(Strings.text("menu_recycle"), ITEM_RECYCLE)
@@ -623,20 +735,46 @@ func _on_beacon_clicked(beacon: Dictionary, alt: bool, at: Vector2) -> void:
 
 func _on_ground_clicked(at: Vector3i, where: Vector2) -> void:
 	_menu_target = {"voxel": at}
+	_menu_targets = {}
+	_menu_ghost_at = null
 	_selector = ""
 	_beacon_label.text = ""
 	# The ghost for this click: the draft with a beacon patched in here, checked by QUICK.
-	bridge.editor_preview_place(at)
+	var asked: bool = bridge.editor_preview_place(at)
 	_menu.clear()
+	# The ghost's words head the menu the click opened (the P6a finding: they showed only in
+	# the side panel, away from the click); `_ghost_in_menu` fills them in as QUICK answers.
+	_menu.add_item(Strings.text("ghost_waiting"), ITEM_GHOST)
+	_menu.set_item_disabled(_menu.get_item_index(ITEM_GHOST), true)
+	if not asked:
+		# Refused at once (a Push, a recap, after Ready, no playbook): the line says why, in the
+		# bridge's own words, and the menu stays open as it always did (item 139 (2)).
+		var state: Dictionary = bridge.editor_state()
+		_menu.set_item_text(_menu.get_item_index(ITEM_GHOST), Strings.text("status_" + String(state.get("status_key", "")), {"detail": state.get("status_detail", "")}))
 	_menu.add_item(Strings.text("menu_go"), ITEM_GO)
 	_menu.add_item(Strings.text("menu_place"), ITEM_PLACE)
 	_menu.position = Vector2i(where)
 	_menu.popup()
 
 
+## The open ground menu, when it is the one for the ghost's voxel: its first line says what
+## the panel's ghost line says, and "Place beacon" is greyed while the gateway says the spot is
+## illegal. Nothing is decided here: the words and the verdict are QUICK's.
+func _ghost_in_menu(ghost: Dictionary) -> void:
+	if not _menu.visible or _menu.get_item_index(ITEM_GHOST) < 0 or ghost.is_empty():
+		return
+	if not _menu_target.has("voxel") or _menu_target["voxel"] != ghost.get("at"):
+		return
+	_menu.set_item_text(_menu.get_item_index(ITEM_GHOST), _ghost_label.text)
+	_menu_ghost_at = ghost.get("at")
+	_menu.set_item_disabled(_menu.get_item_index(ITEM_PLACE), String(ghost.get("state", "")) == "illegal")
+	_menu.reset_size()
+
+
 func _on_menu(id: int) -> void:
-	if id >= ITEM_SELECTOR and id < ITEM_SELECTOR + SELECTORS.size():
-		_selector = SELECTORS[id - ITEM_SELECTOR]
+	if id == ITEM_THIS or (id >= ITEM_SELECTOR and id < ITEM_SELECTOR + SELECTORS.size()):
+		_selector = "" if id == ITEM_THIS else SELECTORS[id - ITEM_SELECTOR]
+		_menu.set_item_checked(_menu.get_item_index(ITEM_THIS), _selector == "")
 		for index in SELECTORS.size():
 			_menu.set_item_checked(_menu.get_item_index(ITEM_SELECTOR + index), SELECTORS[index] == _selector)
 		return
@@ -650,8 +788,8 @@ func _on_menu(id: int) -> void:
 			act("recycle", target)
 		ITEM_PLACE:
 			act("place", target)
-		ITEM_COVER:
-			act("place_covering", target)
+		ITEM_COVER, ITEM_COVER_NEAREST:
+			act("place_covering", _menu_targets.get(id, {}))
 		ITEM_LOW:
 			act("visit_low", target)
 		ITEM_NORMAL:
@@ -669,16 +807,20 @@ func _draw_state(state: Dictionary) -> void:
 	# A check that will not come says why, on its own line, in place of the words that wait
 	# for it.
 	var unchecked := unchecked_text(state, "rows")
+	var checking := false
 	if state.get("busy", false) or (state.get("has_text", false) and not state.get("rows_current", false) and verdict != "refused"):
-		line = unchecked if unchecked != "" and not state.get("busy", false) else Strings.text("verdict_checking")
+		checking = unchecked == "" or state.get("busy", false)
+		line = Strings.text("verdict_checking") if checking else unchecked
 	elif String(state.get("seal", "")) != "":
 		# Whether the text can be sealed is the bridge's `seal`: said only in an open Lull,
 		# and outside one only that the gateway filed the safe playbook (finding J).
 		line += " - " + Strings.text("seal_" + String(state["seal"]))
+	_mark_check(checking, line)
 	_verdict.text = line
 	var open: bool = String(state.get("door", "open")) == "open"
 	Rows.fill(_rows, state.get("rows", []), Callable(self, "_on_fix_pressed"), state.get("rows_current", false) and not state.get("busy", false) and open, Callable(self, "_on_fix_down"))
 	_undo_button.disabled = int(state.get("undo_depth", 0)) == 0
+	_new_button.disabled = not open
 	if state.get("beacon_prose", "") != "":
 		_beacon_label.text = String(state["beacon_prose"])
 	_draw_notes(state)
@@ -687,7 +829,7 @@ func _draw_state(state: Dictionary) -> void:
 	_draw_ghost(state.get("ghost", {}))
 	_draw_templates(state.get("templates", []))
 	_draw_wizard(state.get("wizard", {}), state.get("templates", []))
-	_draw_rules(state.get("prose", PackedStringArray()), state.get("prose_current", false), state.get("has_text", false), unchecked_text(state, "prose"))
+	_draw_rules(state, unchecked_text(state, "prose"))
 	_draw_this_round(String(state.get("this_round", "")))
 	_draw_chips(state.get("chips", []), state.get("chips_current", false), state.get("has_text", false), unchecked_text(state, "chips"))
 	_draw_attack(state.get("attack_targets", []))
@@ -696,6 +838,65 @@ func _draw_state(state: Dictionary) -> void:
 	# verifier refused opened nothing, so the text on screen is still the one it counted.
 	var counted: bool = state.get("rows_current", false) or verdict == "refused"
 	_draw_size(state.get("size", {}), counted, unchecked if unchecked != "" else Strings.text("verdict_checking"))
+
+
+## Whether a ground menu closes because its ghost went: it is open, it has the ghost's line,
+## and that line was filled from a ghost (`filled_from`, the voxel, or null when no ghost ever
+## came for it, as when the bridge refused the preview at the click).
+static func ghost_went(open: bool, has_line: bool, filled_from: Variant) -> bool:
+	return open and has_line and filled_from != null
+
+
+## The re-check made visible (the P6a finding: "i did not see the re-check and redraw"). While
+## a check is on its way the verdict line and the size meter's line wear CHECKING_LOOK; when its
+## answer arrives, or the verdict line changes, both wear ANSWERED_LOOK until the player's next
+## input (`_clear_highlight`). `after` is the verdict line about to be drawn.
+func _mark_check(checking: bool, after: String) -> void:
+	if answer_arrived(_was_checking, checking, _verdict.text, after):
+		_highlit = true
+	_was_checking = checking
+	if checking:
+		_highlit = false
+	var colour := CHECKING_LOOK if checking else (ANSWERED_LOOK if _highlit else Color(0, 0, 0, 0))
+	_look(_verdict, colour)
+	_look(_size_line, colour)
+
+
+## Whether an answer is to be highlighted: no check is on its way now, and one was at the last
+## redraw, or the verdict line changes.
+static func answer_arrived(was_checking: bool, checking: bool, before: String, after: String) -> bool:
+	return not checking and (was_checking or before != after)
+
+
+## The player's next input took the answer's highlight down.
+func _clear_highlight() -> void:
+	if not _highlit:
+		return
+	_highlit = false
+	if not _was_checking:
+		_look(_verdict, Color(0, 0, 0, 0))
+		_look(_size_line, Color(0, 0, 0, 0))
+
+
+## Whether `event` is the player's next input: a key going down, or a mouse button (a click
+## or a wheel notch) going down. A mouse move is not, nor a bare modifier key.
+static func next_input(event: InputEvent) -> bool:
+	if event is InputEventKey:
+		# A modifier held for a click (Alt before an Alt-click) is not an input of its own.
+		if event.keycode in [KEY_ALT, KEY_SHIFT, KEY_CTRL, KEY_META]:
+			return false
+		return event.pressed and not event.echo
+	return event is InputEventMouseButton and event.pressed
+
+
+## Paints `colour` behind `label`'s words, or nothing when it is clear.
+static func _look(label: Label, colour: Color) -> void:
+	if colour.a <= 0.0:
+		label.remove_theme_stylebox_override("normal")
+		return
+	var box := StyleBoxFlat.new()
+	box.bg_color = colour
+	label.add_theme_stylebox_override("normal", box)
 
 
 ## Why `check` (`rows`, `route`, `prose` or `chips`) of the text on screen will not come, as
@@ -867,16 +1068,103 @@ func _draw_wizard(wizard: Dictionary, templates: Array) -> void:
 	Wizard.fill(_wizard_box, title, wizard, Callable(self, "wizard_send"), func() -> void: bridge.editor_wizard_use(), func() -> void: bridge.editor_wizard_close())
 
 
-func _draw_rules(lines: PackedStringArray, current: bool, has_text: bool, unchecked: String) -> void:
-	if has_text and not current:
+## The rule list: `render_plan`'s lines, cut at its chips by the bridge, with the conflict
+## connectors and the gateway's refusal of the last edit (S3's `ed3b`; scripts/rule_list.gd).
+func _draw_rules(state: Dictionary, unchecked: String) -> void:
+	if state.get("has_text", false) and not state.get("prose_current", false):
 		_rules_status.text = unchecked if unchecked != "" else Strings.text("rules_waiting")
 	else:
 		_rules_status.text = ""
-	var drawn := var_to_str(lines)
-	if drawn == _rules_drawn:
+	var list: Dictionary = state.get("rule_list", {})
+	_rule_chips = list.get("chips", [])
+	_rules_rendering = int(state.get("rules_rendering", -1))
+	_rules_blocked = String(state.get("rules_blocked", ""))
+	var redrawn: bool = RuleList.fill(_rules_box, list, _rules_rendering, state.get("rules_editable", false), int(state.get("picking", -1)), state.get("conflicts", []), state.get("rule_refusal", {}), Callable(self, "_on_rule_chip"), Callable(self, "_on_rule_move"))
+	# An editor opened on the list drawn before names chips that may not be there any more
+	# (M1): it closes with that list, and the bridge would refuse its edit anyway.
+	if redrawn:
+		_number_popup.hide()
+		_choice_menu.hide()
+
+
+## A click on rule-list chip `index` opens its editor, by the shape the gateway sent: a number
+## field within the bounds sent, the enum's values as sent, or a pick on the map; a chip the
+## rule list does not edit says why. The edit itself is the bridge's one JSON Patch `replace`.
+func _on_rule_chip(index: int) -> void:
+	# No editor opens while the list takes no edit (M1): the bridge's reason is said instead.
+	if _rules_blocked != "":
+		_say_local("status_rule_refused_" + _rules_blocked, {})
 		return
-	_rules_drawn = drawn
-	RuleList.fill(_rules_box, lines)
+	if index < 0 or index >= _rule_chips.size():
+		_say_local("status_rule_refused_no_such_chip", {})
+		return
+	var chip: Dictionary = _rule_chips[index]
+	var named := {"index": index, "revision": _rules_rendering, "pointer": String(chip.get("pointer", ""))}
+	match String(chip.get("editor", "")):
+		"number":
+			_open_number(named, chip)
+		"choice":
+			_choice_chip = named
+			_choice_menu.clear()
+			var values: PackedStringArray = chip.get("values", PackedStringArray())
+			for which in values.size():
+				_choice_menu.add_radio_check_item(values[which], which)
+				_choice_menu.set_item_checked(which, values[which] == String(chip.get("value_json", "")))
+			_choice_menu.position = Vector2i(get_viewport().get_mouse_position())
+			_choice_menu.popup()
+		"pick":
+			bridge.editor_begin_pick(index, _rules_rendering, named["pointer"])
+		_:
+			_say_local("rule_chip_read_only_" + String(chip.get("why", "")), {})
+
+
+## The number field for the chip `named`: the bounds the gateway sent, none where it set none,
+## and the unit beside it as sent. The value is shown as the file holds it, never clamped into
+## range (L1): a value outside the bounds sent opens the field past them, and the note says so
+## with the gateway's two numbers (`outside` is the bridge's reading). The one field serves every
+## chip, and Godot 4.7.2's `Range` keeps its maximum at least its minimum on every set (measured:
+## after 50..100, setting 0..10 maximum-first leaves 0..50), so both bounds are first opened
+## fully and only then set to the pair sent, which no earlier pair can cut (`set_bounds`).
+func _open_number(named: Dictionary, chip: Dictionary) -> void:
+	_number_chip = named
+	var outside: bool = chip.get("outside", false)
+	set_bounds(_number_field, chip)
+	_number_field.allow_lesser = outside or not chip.get("has_min", false)
+	_number_field.allow_greater = outside or not chip.get("has_max", false)
+	_number_field.value = chip.get("now", 0)
+	_number_field.suffix = String(chip.get("unit", ""))
+	_number_heading.text = Strings.text("rule_number_heading", {"text": chip.get("text", "")})
+	_number_note.visible = outside
+	_number_note.text = Strings.text("rule_number_outside", {"now": chip.get("now", 0), "min": chip.get("min", "-"), "max": chip.get("max", "-")}) if outside else ""
+	_number_popup.position = Vector2i(get_viewport().get_mouse_position())
+	_number_popup.popup()
+
+
+## Sets `field`'s bounds to the pair `chip` sent, whatever it held before: both bounds opened
+## fully first, then the maximum and the minimum sent. A bound the gateway did not send stays
+## open (`FIELD_OPEN`).
+static func set_bounds(field: Range, chip: Dictionary) -> void:
+	field.min_value = -FIELD_OPEN
+	field.max_value = FIELD_OPEN
+	if chip.get("has_max", false):
+		field.max_value = chip.get("max")
+	if chip.get("has_min", false):
+		field.min_value = chip.get("min")
+
+
+func _on_number_send() -> void:
+	_number_popup.hide()
+	bridge.editor_set_number(int(_number_chip.get("index", -1)), int(_number_chip.get("revision", -1)), String(_number_chip.get("pointer", "")), int(_number_field.value))
+
+
+func _on_choice(which: int) -> void:
+	bridge.editor_choose(int(_choice_chip.get("index", -1)), int(_choice_chip.get("revision", -1)), String(_choice_chip.get("pointer", "")), which)
+
+
+## A rule dropped on another of its list, each named by its index and pointer, in the
+## rendering the drag began on: the bridge's one JSON Patch `move`.
+func _on_rule_move(from: int, from_pointer: String, to: int, to_pointer: String, rendering: int) -> void:
+	bridge.editor_move_rule(from, from_pointer, to, to_pointer, rendering)
 
 
 func _draw_notes(state: Dictionary) -> void:
@@ -914,10 +1202,14 @@ func _draw_route(route: Dictionary, has_text: bool, unchecked: String) -> void:
 		_route_label.text = Strings.text("route_none")
 	elif (route.get("legs", PackedInt64Array()) as PackedInt64Array).is_empty():
 		_route_label.text = Strings.text("route_empty")
+	elif String(route.get("whole_text", "")) != "":
+		# The gateway's own rendered figure (S3-18): the client formats nothing.
+		_route_label.text = Strings.text("route_whole_text", {"text": route.get("whole_text", "")})
 	else:
 		_route_label.text = Strings.text("route_whole", {"ms": route.get("whole", 0)})
 	var points: Array = route.get("points", [])
 	var legs: PackedInt64Array = route.get("legs", PackedInt64Array())
+	var texts: PackedStringArray = route.get("leg_texts", PackedStringArray())
 	if points.size() < 2:
 		return
 	mesh.surface_begin(Mesh.PRIMITIVE_LINE_STRIP)
@@ -932,7 +1224,8 @@ func _draw_route(route: Dictionary, has_text: bool, unchecked: String) -> void:
 		label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 		label.no_depth_test = true
 		label.pixel_size = 0.05
-		label.text = Strings.text("leg", {"ms": legs[index]})
+		var said := texts[index] if index < texts.size() else ""
+		label.text = Strings.text("leg_text", {"text": said}) if said != "" else Strings.text("leg", {"ms": legs[index]})
 		label.position = _world(points[index]).lerp(_world(points[index + 1]), 0.5)
 		_route_labels.add_child(label)
 
@@ -941,6 +1234,12 @@ func _draw_ghost(ghost: Dictionary) -> void:
 	if ghost.is_empty():
 		_ghost.visible = false
 		_ghost_label.text = ""
+		# The ghost the ground menu's first line was filled from is gone (an edit landed under it,
+		# or the gateway refused it later): the menu goes with it rather than say "waiting" for
+		# ever (L4). A menu whose ghost was refused from the start stays, saying why.
+		if ghost_went(_menu.visible, _menu.get_item_index(ITEM_GHOST) >= 0, _menu_ghost_at):
+			_menu.hide()
+			_menu_ghost_at = null
 		return
 	var at: Vector3i = ghost["at"]
 	var state := String(ghost.get("state", "waiting"))
@@ -952,6 +1251,7 @@ func _draw_ghost(ghost: Dictionary) -> void:
 		_ghost_label.text = Strings.text("ghost_illegal", {"sentence": ghost.get("sentence", "")})
 	else:
 		_ghost_label.text = Strings.text("ghost_" + state)
+	_ghost_in_menu(ghost)
 
 
 ## The Attack beacons' targets the text on screen names (S2's plan, task `view`), read by
@@ -1059,6 +1359,7 @@ func _build_panel() -> void:
 	_size_box.add_child(_size_line)
 	var buttons := HBoxContainer.new()
 	column.add_child(buttons)
+	_new_button = _button(buttons, "new", new_playbook)
 	_button(buttons, "load", open_load)
 	_count(_button(buttons, "save", _save), "save")
 	_button(buttons, "save_as", open_save_as)
@@ -1066,6 +1367,7 @@ func _build_panel() -> void:
 	_count(_button(buttons, "submit", _on_submit_pressed), "submit")
 	_status = _label(column)
 	_verdict = _label(column)
+	_verdict.text = Strings.text("verdict_none")
 	_beacon_label = _label(column)
 	_ghost_label = _label(column)
 
@@ -1097,6 +1399,7 @@ func _build_panel() -> void:
 	_heading(column, "rules_heading")
 	_rules_status = _label(column)
 	_rules_box = VBoxContainer.new()
+	_rules_box.draw.connect(func() -> void: RuleList.draw_connectors(_rules_box))
 	column.add_child(_rules_box)
 
 	_heading(column, "route_heading")
@@ -1154,6 +1457,30 @@ func _build_menus() -> void:
 	_visit_menu.id_pressed.connect(_on_menu)
 	_visit_menu.window_input.connect(close_menu_on_escape)
 	_menu.add_child(_visit_menu)
+	# The rule list's chip editors (S3's `ed3b`).
+	_choice_menu = PopupMenu.new()
+	_choice_menu.id_pressed.connect(_on_choice)
+	add_child(_choice_menu)
+	_number_popup = PopupPanel.new()
+	var box := VBoxContainer.new()
+	_number_popup.add_child(box)
+	_number_heading = Label.new()
+	box.add_child(_number_heading)
+	_number_note = Label.new()
+	_number_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_number_note.custom_minimum_size = Vector2(PANEL_WIDTH - 40.0, 0)
+	_number_note.visible = false
+	box.add_child(_number_note)
+	_number_field = SpinBox.new()
+	_number_field.step = 1.0
+	_number_field.rounded = true
+	box.add_child(_number_field)
+	var send := Button.new()
+	send.text = Strings.text("rule_number_send")
+	send.accessibility_name = send.text
+	send.pressed.connect(_on_number_send)
+	box.add_child(send)
+	add_child(_number_popup)
 
 
 ## An unticked checkbox's box: a square outline in `colour`, clear inside.

@@ -49,6 +49,14 @@ const FOLLOW_RATE := 4.0
 ## PLACEHOLDER, as above.
 const NEAREST := 12.0
 const FARTHEST := 900.0
+## How far from the seat's own commander the map opens, and how steeply it looks down: close
+## enough that the core, a beacon and the vents and seams around it read (`open_on`).
+## PLACEHOLDER, as above.
+const OPENING_DISTANCE := 120.0
+const OPENING_PITCH := -0.95
+## The heading the map opens at, in radians about the vertical: the whole map's own.
+## PLACEHOLDER: the opening yaw — OWNER, S6.
+const OPENING_YAW := 0.8
 
 ## The point the camera looks at.
 var focus := Vector3.ZERO
@@ -86,6 +94,28 @@ func frame_extent(extent: Vector3) -> void:
 	yaw = 0.8
 	pitch = -1.0
 	target = null
+	_place()
+
+
+## Opens on `point` (the world's axes) at the opening distance and look-down, with `point`
+## drawn in the middle of the window less a panel `cover` pixels wide on its right edge (the
+## P6a finding: the map opened framed on the whole map, too far out to read, with the core at
+## the editor panel's edge). The focus moves to the ground the ray through the middle of the
+## free part of the window meets, on the level plane through `point`.
+func open_on(point: Vector3, cover: float) -> void:
+	target = null
+	yaw = OPENING_YAW
+	pitch = OPENING_PITCH
+	distance = OPENING_DISTANCE
+	focus = point
+	_place()
+	if camera == null:
+		return
+	var window := get_viewport().get_visible_rect().size
+	var aside := Vector2((window.x + cover) * 0.5, window.y * 0.5)
+	var crossing: Variant = Plane(Vector3.UP, point).intersects_ray(camera.project_ray_origin(aside), camera.project_ray_normal(aside))
+	if crossing != null:
+		focus = crossing
 	_place()
 
 

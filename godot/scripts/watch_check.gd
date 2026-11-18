@@ -970,6 +970,9 @@ func _refused_in_the_push() -> bool:
 	var taken: bool = editor.map_click(at, false)
 	var opened: bool = editor.menu_open()
 	await get_tree().process_frame
+	# Still open after a redraw: a menu whose ghost was refused from the start stays, saying why
+	# (fix pass 2 item 1: the L4 fix closed it one frame after it opened).
+	var stayed: bool = editor.menu_open()
 	var after := _editor()
 	editor._on_menu(editor.ITEM_GO)
 	editor.close_menu()
@@ -983,6 +986,8 @@ func _refused_in_the_push() -> bool:
 		_failures.append("the editor's door in the Push is `%s`, not push" % after.get("door"))
 	if not taken or not opened:
 		_failures.append("a click on the map at %s opened no menu in the Push (taken %s)" % [at, taken])
+	elif not stayed:
+		_failures.append("the Push's map menu closed one frame after it opened")
 	if not (after.get("ghost", {}) as Dictionary).is_empty() or String(after.get("status_key", "")) != "closed_push":
 		_failures.append("the click's ghost was not refused at once in the Push: %s" % after)
 	if String(went.get("status_key", "")) != "closed_push" or went.get("pending", true) or went.get("busy", true):
@@ -1155,6 +1160,38 @@ func _mouse_button(at: Vector2, button: MouseButton, pressed: bool) -> void:
 	Input.parse_input_event(event)
 
 
+## **New, then one Go here, qualifies at QUICK** (S3's `ed3b`, fix pass 2 item 4): New puts the
+## shipped playbook on screen, whose only error is its empty route; one Go here through the map
+## surface's own handlers (eight voxels west of the commander, as the committed playbook walks)
+## makes the live gateway's QUICK qualify it. Returns false when a step failed, with the reason
+## recorded.
+func _new_then_go_here() -> bool:
+	if not editor.new_playbook():
+		_failures.append("New was refused: %s" % _editor().get("status_key", ""))
+		return false
+	if not await _editor_until(func(s: Dictionary) -> bool: return String(s.get("status_key", "")) == "new_opened" and s.get("rows_current", false) and not s.get("busy", true), "New's playbook was never checked"):
+		return false
+	var codes: Array = []
+	for row in _editor().get("rows", []):
+		if String(row.get("severity", "")) == "error":
+			codes.append(String(row.get("code", "")))
+	if codes != ["E0102"]:
+		_failures.append("New's playbook has errors %s, where only the empty route's E0102 was due" % [codes])
+		return false
+	var commander: Vector3i = vista.my_commander_at()
+	var before := int(_editor().get("revision", 0))
+	editor._on_ground_clicked(Vector3i(commander.x - 8, commander.y, commander.z), Vector2.ZERO)
+	editor._on_menu(editor.ITEM_GO)
+	editor.close_menu()
+	if not await _editor_until(func(s: Dictionary) -> bool: return int(s.get("revision", 0)) > before and s.get("rows_current", false) and not s.get("busy", true), "New's Go here was never patched and checked"):
+		return false
+	if not _editor().get("qualifies", false):
+		_failures.append("New, then one Go here, does not qualify at QUICK: %s" % [_editor().get("rows", [])])
+		return false
+	print("[watch-check] New, then one Go here: QUICK qualifies it")
+	return true
+
+
 ## The editor's half of the run (pull request 1). Returns false when a step failed, with the
 ## reason recorded.
 func _edit() -> bool:
@@ -1174,6 +1211,12 @@ func _edit() -> bool:
 		_failures.append("the refusal did not show the code and the pointer: %s" % shown)
 	_check_accessible_names("the Load refusal")
 	print("[watch-check] Load refused the out-of-vocabulary file: %s" % shown)
+
+	# 1b. New, then one Go here, verifies clean at QUICK against the live gateway (the owner's
+	# ruling of 2026-11-17: the new playbook carries the verifier's own on_death and fallback, so
+	# only a route is missing). Load, next, replaces the text.
+	if not await _new_then_go_here():
+		return false
 
 	# 2. A Fix button applies the verifier's own patch through patch_plan.
 	editor.load_file(NEEDS_A_FIX)

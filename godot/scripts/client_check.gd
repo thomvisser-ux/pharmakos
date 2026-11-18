@@ -305,6 +305,8 @@ func _check_the_view(failures: Array[String]) -> void:
 	await _check_the_size_meter(editor, failures)
 	_check_the_box(editor, failures)
 	_check_escape(editor, failures)
+	_check_the_number_field(editor, failures)
+	_check_the_refused_ghost_line(editor, failures)
 	stage.queue_free()
 	_check_the_recap_words(failures)
 	_check_the_logs(failures)
@@ -615,6 +617,51 @@ func _check_escape(editor: CanvasLayer, failures: Array[String]) -> void:
 	editor._input(escape)
 	if editor.menu_open():
 		failures.append("Escape reaching the window did not close the map menu")
+
+
+## **The rule list's number field keeps the pair each chip sent** (S3's `ed3b`, fix pass 2 item
+## 3). One field serves every chip, and Godot's `Range` keeps its maximum at least its minimum on
+## every set, so the bounds are set through `set_bounds`: chip B (0..10) after chip A (50..100)
+## must hold 0..10, and A after B 50..100, where a maximum-first order left B at 0..50. A bound
+## the gateway did not send stays open. The field holds every `i32` exactly, the range the bridge
+## lets into it (wider is drawn read-only); 2^52 + 1 it does not, which is why.
+func _check_the_number_field(editor: CanvasLayer, failures: Array[String]) -> void:
+	var field: SpinBox = editor._number_field
+	var a := {"has_min": true, "min": 50, "has_max": true, "max": 100}
+	var b := {"has_min": true, "min": 0, "has_max": true, "max": 10}
+	for pair in [[a, b], [b, a], [a, a]]:
+		EditorPanel.set_bounds(field, pair[0])
+		EditorPanel.set_bounds(field, pair[1])
+		var want: Dictionary = pair[1]
+		if field.min_value != float(want["min"]) or field.max_value != float(want["max"]):
+			failures.append("the number field holds %s..%s, not the %s..%s sent" % [field.min_value, field.max_value, want["min"], want["max"]])
+	EditorPanel.set_bounds(field, a)
+	EditorPanel.set_bounds(field, {"has_min": true, "min": 0, "has_max": false})
+	if field.min_value != 0.0 or field.max_value < float(EditorPanel.FIELD_OPEN):
+		failures.append("a maximum the gateway did not send is not open: %s..%s" % [field.min_value, field.max_value])
+	EditorPanel.set_bounds(field, {"has_min": false, "has_max": false})
+	for exact in [2147483647, -2147483648, 0]:
+		field.value = exact
+		if int(field.value) != exact:
+			failures.append("the number field holds %d as %d" % [exact, int(field.value)])
+
+
+## **A ground menu whose ghost was refused from the start stays open** (fix pass 2 item 1, the L4
+## fix's regression): a ground click whose preview the bridge refuses at once (here there is no
+## rig, as in a Push the door refuses it) keeps its menu after a redraw with no ghost, as the
+## menus always did (item 139 (2)); only a menu whose line was filled from a ghost that then went
+## closes.
+func _check_the_refused_ghost_line(editor: CanvasLayer, failures: Array[String]) -> void:
+	editor._on_ground_clicked(Vector3i(4, 4, 4), Vector2(200, 200))
+	if not editor.menu_open():
+		failures.append("the ground menu did not open for the refused-ghost check")
+		return
+	editor._draw_ghost({})
+	if not editor.menu_open():
+		failures.append("a ground menu whose ghost was never asked closed at the next redraw")
+	if EditorPanel.ghost_went(true, true, null) or not EditorPanel.ghost_went(true, true, Vector3i(4, 4, 4)):
+		failures.append("ghost_went does not close exactly a menu whose ghost existed and went")
+	editor.close_menu()
 
 
 ## **Every seat's tally at the match's end** (item 155 (3) 7): the gateway's prose, then one frame
