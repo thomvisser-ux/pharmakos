@@ -1297,7 +1297,7 @@ fn refusal_of(error: &Json) -> Option<(String, String)> {
 
 /// The string field `name` of an answer: proto3's canonical JSON leaves an empty string
 /// out, so an absent field is `""`, and anything but a string is refused.
-fn proto3_text<'a>(answer: &'a Json, name: &str) -> Result<&'a str, BridgeError> {
+pub(crate) fn proto3_text<'a>(answer: &'a Json, name: &str) -> Result<&'a str, BridgeError> {
     match answer.get(name) {
         None => Ok(""),
         Some(value) => {

@@ -1,0 +1,8 @@
+{
+  "schema_version": {"major": 1},
+  "meta": {"title": "New playbook", "author_kind": "HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {"route": []},
+  "on_death": {"on_respawn": "CONTINUE", "max_deaths_before_fallback": 2},
+  "fallback": {"hold": {"at": {"beacon_anchor": {"safest": {}}}}}
+}

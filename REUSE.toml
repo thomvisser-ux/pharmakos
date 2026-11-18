@@ -70,12 +70,26 @@ SPDX-License-Identifier = "GPL-3.0-or-later"
 #     permissive template — library/hold_and_build.jsonc, header and all — inside a JSON
 #     string. The answer is the gateway's output and stays GPL (decisions-log item
 #     113 (10)); because the embedded header would otherwise be read as the file's own,
-#     the pair is recorded by the override block at the end of this file (item 114 (5)).
+#     the pair is recorded by the override block at the end of this file (item 114 (5));
+#   * rule_list_render.json copies tests/golden/gateway/demo_expand_and_mine_render/
+#     expected.response.json (the rule-list scene, S3's `ed3b`);
+#     crates/client-gdext/tests/godot_project.rs keeps the two identical.
 [[annotations]]
 path = ["godot/fixtures/**"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Pharmakos contributors"
 SPDX-License-Identifier = "GPL-3.0-or-later"
+
+# godot/playbooks/new.jsonc is the playbook the editor's New puts on screen, and so the
+# start of a player's own file: it carries no header and no comment, because comments
+# round-trip into the player's text. Like the template library's playbooks it is
+# MIT OR Apache-2.0 (the owner's ruling of 2026-11-17, decisions-log item 161), and
+# `precedence = "override"` keeps the godot/** block above from adding GPL-3.0-or-later.
+[[annotations]]
+path = ["godot/playbooks/new.jsonc"]
+precedence = "override"
+SPDX-FileCopyrightText = "2026 Pharmakos contributors"
+SPDX-License-Identifier = "MIT OR Apache-2.0"
 
 # --- Interfaces and words: reusable by anyone ------------------------------
 # The wire format (gp.v1, gp.api.v1), generated JSON Schema, documentation,

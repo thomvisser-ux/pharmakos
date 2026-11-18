@@ -15,9 +15,12 @@ use godot::meta::ToGodot;
 use pharmakos_proto::gp::api::v1::VerifyReport;
 use pharmakos_proto::json;
 
-use crate::editor::{Check, Editor, Route, Row, Selector, SizeMeter, Target, Unchecked, rows_of};
+use crate::editor::{
+    Check, Editor, Route, Row, RuleEditRefusal, Selector, SizeMeter, Target, Unchecked, rows_of,
+};
 use crate::error::BridgeError;
 use crate::rig::{Meter, Recap};
+use crate::rule_list::{ChipEditor, RuleChip, RuleList};
 use crate::targeting::{AttackAim, AttackMark, Chip, ChipFeature, FeatureKind, FeatureName};
 use crate::variant::{godot_int, text_or_empty};
 use crate::wizard::{Instance, Wizard};
@@ -104,6 +107,12 @@ fn route_dictionary(route: &Route) -> VarDictionary {
     drawn.set(&"points".to_variant(), &points.to_variant());
     drawn.set(&"legs".to_variant(), &legs.to_variant());
     drawn.set(&"whole".to_variant(), &route.whole.to_variant());
+    drawn.set(&"whole_text".to_variant(), &route.whole_text.to_variant());
+    let mut texts = PackedStringArray::new();
+    for text in &route.leg_texts {
+        texts.push(text.as_str());
+    }
+    drawn.set(&"leg_texts".to_variant(), &texts.to_variant());
     drawn.set(&"reachable".to_variant(), &route.reachable.to_variant());
     drawn.set(&"readable".to_variant(), &route.readable.to_variant());
     drawn.set(&"current".to_variant(), &route.current.to_variant());
@@ -207,6 +216,7 @@ pub(crate) fn state_dictionary(editor: &Editor) -> VarDictionary {
         let (key, detail) = match editor.unchecked(check) {
             None => (String::new(), String::new()),
             Some(Unchecked::Refused(said)) => ("refused".to_owned(), said),
+            Some(Unchecked::Unreadable(said)) => ("unreadable".to_owned(), said),
             Some(Unchecked::Closed(door)) => (door.name().to_owned(), String::new()),
         };
         let mut why = VarDictionary::new();
@@ -218,13 +228,172 @@ pub(crate) fn state_dictionary(editor: &Editor) -> VarDictionary {
     put("seal", editor.seal_line().name().to_variant());
     put("filed", editor.filed().to_variant());
     put("file", text_or_empty(editor.file()).to_variant());
+    put("dormant", dormant_dictionary(editor).to_variant());
+    put_rule_list(&mut state, editor);
+    state
+}
+
+/// The E0601 checkbox as the panel draws it: `shown`, `checked` and `enabled`.
+fn dormant_dictionary(editor: &Editor) -> VarDictionary {
     let dormant = editor.dormant();
     let mut option = VarDictionary::new();
     option.set(&"shown".to_variant(), &dormant.shown.to_variant());
     option.set(&"checked".to_variant(), &dormant.checked.to_variant());
     option.set(&"enabled".to_variant(), &dormant.enabled.to_variant());
-    put("dormant", option.to_variant());
-    state
+    option
+}
+
+/// The rule list's keys of the editor's state (S3's `ed3b`): `rule_list`
+/// ([`rule_list_dictionary`]), `rules_editable`, `rules_blocked` (why it takes no edit, by name; "" when it takes one), `rules_rendering` (the rendering id an editor names back; -1 before one), `picking` (the chip a pick is on for, -1 for
+/// none), `conflicts` (each `{earlier, later, sentence}`, rule indices) and `rule_refusal`
+/// (empty, or `{rule, detail}`: the gateway's refusal of the last rule-list edit and the rule
+/// it is shown on, -1 for none).
+fn put_rule_list(state: &mut VarDictionary, editor: &Editor) {
+    let mut put = |key: &str, value: Variant| state.set(&key.to_variant(), &value);
+    put(
+        "rule_list",
+        rule_list_dictionary(editor.rule_list()).to_variant(),
+    );
+    put("rules_editable", editor.rules_editable().to_variant());
+    // Why the list takes no edit, by its reason's name ("" when it takes one), and the
+    // rendering an editor opened now names back (-1 before one).
+    // The rendering id is converted as a typed refusal, never saturated: an id GDScript's
+    // `int` cannot hold blocks the list (`rendering_out_of_range`), so no control names it back.
+    let (rendering, blocked) = match editor.rules_rendering().map(i64::try_from) {
+        Some(Ok(rendering)) => (rendering, editor.rules_blocked()),
+        Some(Err(_)) => (-1, Some(RuleEditRefusal::RenderingOutOfRange)),
+        None => (-1, editor.rules_blocked()),
+    };
+    let blocked = match blocked {
+        Some(refusal) => refusal.name(),
+        None => "",
+    };
+    put("rules_blocked", blocked.to_variant());
+    put("rules_rendering", rendering.to_variant());
+    put("picking", index_or_none(editor.picking()));
+    let mut conflicts = VarArray::new();
+    for conflict in editor.conflicts() {
+        let mut one = VarDictionary::new();
+        one.set(&"earlier".to_variant(), &count(conflict.earlier));
+        one.set(&"later".to_variant(), &count(conflict.later));
+        one.set(&"sentence".to_variant(), &conflict.sentence.to_variant());
+        conflicts.push(&one.to_variant());
+    }
+    put("conflicts", conflicts.to_variant());
+    let mut refusal = VarDictionary::new();
+    if let Some(refused) = editor.rule_refusal() {
+        let rule = editor.rule_list().rule_holding(&refused.pointer);
+        refusal.set(&"rule".to_variant(), &index_or_none(rule));
+        refusal.set(&"detail".to_variant(), &refused.detail.to_variant());
+    }
+    put("rule_refusal", refusal.to_variant());
+}
+
+/// The rule list as a dictionary (S3's `ed3b`): `lines`, one per line of the prose, each
+/// `{segments, rule, in_rule}` (`segments` its runs, `{text, chip}`, with `chip` -1 for plain
+/// text; `rule` the rule whose sentence the line is, `in_rule` the rule whose lines hold it,
+/// each -1 for none); `rules`, each `{pointer, parent, line, line_count}`; and `chips`
+/// ([`rule_chip_dictionary`]).
+pub(crate) fn rule_list_dictionary(list: &RuleList) -> VarDictionary {
+    let mut lines = VarArray::new();
+    for (number, segments) in list.segments.iter().enumerate() {
+        let mut runs = VarArray::new();
+        for segment in segments {
+            let mut run = VarDictionary::new();
+            run.set(&"text".to_variant(), &segment.text.to_variant());
+            run.set(&"chip".to_variant(), &index_or_none(segment.chip));
+            runs.push(&run.to_variant());
+        }
+        let mut line = VarDictionary::new();
+        line.set(&"segments".to_variant(), &runs.to_variant());
+        line.set(&"rule".to_variant(), &index_or_none(list.rule_at(number)));
+        let holder = list.rules.iter().position(|rule| rule.holds_line(number));
+        line.set(&"in_rule".to_variant(), &index_or_none(holder));
+        lines.push(&line.to_variant());
+    }
+    let mut rules = VarArray::new();
+    for rule in &list.rules {
+        let mut one = VarDictionary::new();
+        one.set(&"pointer".to_variant(), &rule.pointer.to_variant());
+        one.set(&"parent".to_variant(), &rule.parent().to_variant());
+        one.set(&"line".to_variant(), &count(rule.line));
+        one.set(&"line_count".to_variant(), &count(rule.line_count));
+        rules.push(&one.to_variant());
+    }
+    let mut chips = VarArray::new();
+    for chip in &list.chips {
+        chips.push(&rule_chip_dictionary(chip).to_variant());
+    }
+    let mut out = VarDictionary::new();
+    out.set(&"lines".to_variant(), &lines.to_variant());
+    out.set(&"rules".to_variant(), &rules.to_variant());
+    out.set(&"chips".to_variant(), &chips.to_variant());
+    out
+}
+
+/// One rule-list chip as a dictionary: `pointer`, `text` and `value_json` as sent, and
+/// `editor`: `number` (with `min` and `max`, each beside a `has_` flag that is false when the
+/// gateway set no bound, `unit`, `now`, and `outside`: whether `now` lies outside those bounds), `choice` (with `values`, the JSON texts as sent),
+/// `pick` (with `kind` and `arms`), or `read_only` (with `why`).
+fn rule_chip_dictionary(chip: &RuleChip) -> VarDictionary {
+    let mut out = VarDictionary::new();
+    out.set(&"pointer".to_variant(), &chip.pointer.to_variant());
+    out.set(&"text".to_variant(), &chip.text.to_variant());
+    out.set(&"value_json".to_variant(), &chip.value_json.to_variant());
+    let editor = match &chip.editor {
+        ChipEditor::Number {
+            min,
+            max,
+            unit,
+            now,
+        } => {
+            for (key, bound) in [("min", min), ("max", max)] {
+                out.set(
+                    &format!("has_{key}").to_variant(),
+                    &bound.is_some().to_variant(),
+                );
+                if let Some(bound) = bound {
+                    out.set(&key.to_variant(), &i64::from(*bound).to_variant());
+                }
+            }
+            out.set(&"unit".to_variant(), &unit.to_variant());
+            out.set(&"now".to_variant(), &now.to_variant());
+            out.set(&"outside".to_variant(), &chip.outside_bounds().to_variant());
+            "number"
+        }
+        ChipEditor::Choice { values } => {
+            let mut listed = PackedStringArray::new();
+            for value in values {
+                listed.push(value.as_str());
+            }
+            out.set(&"values".to_variant(), &listed.to_variant());
+            "choice"
+        }
+        ChipEditor::Pick { kind, arms } => {
+            let mut listed = PackedStringArray::new();
+            for arm in arms {
+                listed.push(arm.as_str());
+            }
+            out.set(&"kind".to_variant(), &kind.name().to_variant());
+            out.set(&"arms".to_variant(), &listed.to_variant());
+            "pick"
+        }
+        ChipEditor::ReadOnly(why) => {
+            out.set(&"why".to_variant(), &why.name().to_variant());
+            "read_only"
+        }
+    };
+    out.set(&"editor".to_variant(), &editor.to_variant());
+    out
+}
+
+/// An index as GDScript reads it, -1 for none: the panel's own spelling of "no chip" or "no
+/// rule", which no index can be.
+fn index_or_none(index: Option<usize>) -> Variant {
+    match index {
+        Some(index) => count(index),
+        None => (-1_i64).to_variant(),
+    }
 }
 
 /// The size meter as a dictionary: empty before a report names a budget; otherwise `units`

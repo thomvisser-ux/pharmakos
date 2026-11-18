@@ -72,9 +72,10 @@ use pharmakos_proto::json;
 use crate::api;
 use crate::chunks;
 use crate::editor::Action;
+use crate::editor::{RuleEditRefusal, RuleNamed};
 use crate::editor_view::{
     instance_dictionary, meter_dictionary, name_into, recap_dictionary, rows_array,
-    rows_of_report_text, state_dictionary, target_of,
+    rows_of_report_text, rule_list_dictionary, state_dictionary, target_of,
 };
 use crate::engine::ChunkRenderer;
 use crate::error::BridgeError;
@@ -765,6 +766,19 @@ impl PharmakosBridge {
         })
     }
 
+    /// New: put `bytes`, the empty playbook the client ships, on screen as one edit Undo takes
+    /// back; its checks follow as for any edit. Returns `false` with the door shut or for
+    /// bytes that are not text.
+    #[func]
+    fn editor_new(&mut self, bytes: PackedByteArray) -> bool {
+        let Some(rig) = self.rig.as_mut() else {
+            return false;
+        };
+        self.panics.guard_or("editor_new", false, || {
+            rig.editor_mut().start_new(bytes.as_slice())
+        })
+    }
+
     /// The playbook on screen was written to `path`: from now on it is the text's file.
     #[func]
     fn editor_saved_to(&mut self, path: GString) {
@@ -874,6 +888,150 @@ impl PharmakosBridge {
         };
         self.panics.guard_or("editor_set_allow_dormant", false, || {
             rig.editor_mut().set_allow_dormant(on)
+        })
+    }
+
+    // --- The rule list (S3's `ed3b`) ---------------------------------------------------------
+    //
+    // Each edit names the rendering it was opened on (`revision`, the editor state's
+    // `rules_revision`) and the chip's `pointer`, so it never lands on a chip of another
+    // rendering. An index or a revision no Rust type holds (a negative int) is refused
+    // through the editor like any other refusal, by its reason on the status line.
+
+    /// Rule-list chip `chip`'s number field sent `value`: one `replace` through `patch_plan`.
+    /// Returns whether it was taken; a refusal is on the status line.
+    #[func]
+    fn editor_set_number(
+        &mut self,
+        chip: i64,
+        revision: i64,
+        pointer: GString,
+        value: i64,
+    ) -> bool {
+        let Some(rig) = self.rig.as_mut() else {
+            return false;
+        };
+        let pointer = pointer.to_string();
+        self.panics.guard_or("editor_set_number", false, || {
+            let editor = rig.editor_mut();
+            match (usize::try_from(chip), u64::try_from(revision)) {
+                (Ok(chip), Ok(revision)) => {
+                    editor.set_number(chip, revision, &pointer, value).is_ok()
+                }
+                (Err(_), _) => refused(editor, RuleEditRefusal::NoSuchChip),
+                (_, Err(_)) => refused(editor, RuleEditRefusal::Changed),
+            }
+        })
+    }
+
+    /// Rule-list chip `chip`'s enum took its `which`th value as sent: one `replace`.
+    #[func]
+    fn editor_choose(&mut self, chip: i64, revision: i64, pointer: GString, which: i64) -> bool {
+        let Some(rig) = self.rig.as_mut() else {
+            return false;
+        };
+        let pointer = pointer.to_string();
+        self.panics.guard_or("editor_choose", false, || {
+            let editor = rig.editor_mut();
+            match (
+                usize::try_from(chip),
+                u64::try_from(revision),
+                usize::try_from(which),
+            ) {
+                (Ok(chip), Ok(revision), Ok(which)) => {
+                    editor.choose(chip, revision, &pointer, which).is_ok()
+                }
+                (Err(_), _, _) => refused(editor, RuleEditRefusal::NoSuchChip),
+                (_, Err(_), _) => refused(editor, RuleEditRefusal::Changed),
+                (_, _, Err(_)) => refused(editor, RuleEditRefusal::NoSuchValue),
+            }
+        })
+    }
+
+    /// The next map click is rule-list chip `chip`'s pick.
+    #[func]
+    fn editor_begin_pick(&mut self, chip: i64, revision: i64, pointer: GString) -> bool {
+        let Some(rig) = self.rig.as_mut() else {
+            return false;
+        };
+        let pointer = pointer.to_string();
+        self.panics.guard_or("editor_begin_pick", false, || {
+            let editor = rig.editor_mut();
+            match (usize::try_from(chip), u64::try_from(revision)) {
+                (Ok(chip), Ok(revision)) => editor.begin_pick(chip, revision, &pointer).is_ok(),
+                (Err(_), _) => refused(editor, RuleEditRefusal::NoSuchChip),
+                (_, Err(_)) => refused(editor, RuleEditRefusal::Changed),
+            }
+        })
+    }
+
+    /// Calls the pick off.
+    #[func]
+    fn editor_cancel_pick(&mut self) {
+        if let Some(rig) = self.rig.as_mut() {
+            let _ = self
+                .panics
+                .guard("editor_cancel_pick", || rig.editor_mut().cancel_pick());
+        }
+    }
+
+    /// A map click while a pick is on, at a target dictionary as `editor_action` takes it (a
+    /// `beacon`, a `voxel` or a `feature`): one `replace` of the picked chip. Returns whether
+    /// it was taken; a refusal is on the status line.
+    #[func]
+    fn editor_pick(&mut self, target: VarDictionary) -> bool {
+        let Some(rig) = self.rig.as_mut() else {
+            return false;
+        };
+        self.panics.guard_or("editor_pick", false, || {
+            let editor = rig.editor_mut();
+            match target_of(&target) {
+                Some(target) => editor.pick(&target).is_ok(),
+                // A click on nothing: refused, and the pick stays on for the next click.
+                None => editor.pick_missed().is_ok(),
+            }
+        })
+    }
+
+    /// A drag of rule `from` onto rule `to`, each named by its index and its pointer, in the
+    /// rendering `rendering` the drag began on: one `move`.
+    #[func]
+    fn editor_move_rule(
+        &mut self,
+        from: i64,
+        from_pointer: GString,
+        to: i64,
+        to_pointer: GString,
+        rendering: i64,
+    ) -> bool {
+        let Some(rig) = self.rig.as_mut() else {
+            return false;
+        };
+        let (from_pointer, to_pointer) = (from_pointer.to_string(), to_pointer.to_string());
+        self.panics.guard_or("editor_move_rule", false, || {
+            let editor = rig.editor_mut();
+            match (
+                usize::try_from(from),
+                usize::try_from(to),
+                u64::try_from(rendering),
+            ) {
+                (Ok(from), Ok(to), Ok(rendering)) => editor
+                    .move_rule(
+                        &RuleNamed {
+                            index: from,
+                            rendering,
+                            pointer: from_pointer,
+                        },
+                        &RuleNamed {
+                            index: to,
+                            rendering,
+                            pointer: to_pointer,
+                        },
+                    )
+                    .is_ok(),
+                (Err(_), _, _) | (_, Err(_), _) => refused(editor, RuleEditRefusal::NoSuchRule),
+                (_, _, Err(_)) => refused(editor, RuleEditRefusal::Changed),
+            }
         })
     }
 
@@ -1062,6 +1220,25 @@ impl PharmakosBridge {
             .guard_or("watch_recap", VarDictionary::new(), || {
                 recap_dictionary(rig.recap())
             })
+    }
+
+    /// The rule list from one `render_plan` answer's text (a whole JSON-RPC answer, or its
+    /// result), with no gateway behind it: what the hostless rule-list scene draws, in the
+    /// shape of the editor state's `rule_list`. An empty dictionary means the reason is in
+    /// the log.
+    #[func]
+    fn editor_rule_list_of_response(&mut self, text: GString) -> VarDictionary {
+        let text = text.to_string();
+        match self.panics.guard("editor_rule_list_of_response", || {
+            crate::rule_list::rule_list_of_text(&text)
+        }) {
+            Some(Ok(list)) => rule_list_dictionary(&list),
+            Some(Err(error)) => {
+                godot_error!("[pharmakos] editor_rule_list_of_response: {error}");
+                VarDictionary::new()
+            }
+            None => VarDictionary::new(),
+        }
     }
 
     /// Validation rows from a `gp.api.v1.VerifyReport` JSON text, with no gateway behind
@@ -1768,6 +1945,13 @@ fn apply(
         Some(resident) => resident.apply(&op, ColourQuantisation::RoundHalfUp),
         None => Ok(()),
     }
+}
+
+/// A rule-list ask the bridge could not name in Rust's types: refused through the editor, by
+/// its reason on the status line, and answered `false` to GDScript.
+fn refused(editor: &mut crate::editor::Editor, refusal: RuleEditRefusal) -> bool {
+    let _ = editor.refuse_rule_edit(refusal);
+    false
 }
 
 #[cfg(test)]

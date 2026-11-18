@@ -74,6 +74,7 @@ const TEXT := {
 
 	# --- The editor's panel ------------------------------------------------------
 	"editor_title": "Orders",
+	"new": "New",
 	"load": "Load...",
 	"save": "Save",
 	"save_as": "Save as...",
@@ -107,6 +108,37 @@ const TEXT := {
 	"wizard_close": "Close",
 	"rules_heading": "What the playbook says",
 	"rules_waiting": "Rendering...",
+	# The rule list's chips, drag and connector (S3's `ed3b`). Every value is the gateway's as
+	# sent; a refusal is its words.
+	"rule_number_heading": "Change {text}:",
+	"rule_number_send": "Set this value",
+	"rule_conflict": "Never fires while the rule joined above it is true: {sentence}",
+	"rule_refused": "The gateway refused that edit: {detail}",
+	"rule_chip_read_only_ms": "This duration is shown as the gateway wrote it. Editing it here waits on a unit the gateway can send.",
+	"rule_chip_read_only_not_on_the_map": "This names a step or a rule; picking one is a later version's.",
+	"rule_chip_read_only_no_shape": "The gateway sent no way to edit this value.",
+	"rule_chip_read_only_not_exact": "This number is larger than the number field holds exactly, so it is shown and not edited here.",
+	# The file's value lies outside the gateway's bounds: shown as it is, never clamped (L1).
+	"rule_number_outside": "The file holds {now}, outside the range the gateway gives here ({min} to {max}). It is shown as it is; the checks say what it costs.",
+	# Why the rule list took no edit, by the bridge's reason (`RuleEditRefusal`), never in silence.
+	"status_rule_refused_shut": "The rule list takes no edit while planning is closed.",
+	"status_rule_refused_no_text": "Open a playbook first.",
+	"status_rule_refused_stale": "The rule list is being redrawn for the text on screen; try again when it is.",
+	"status_rule_refused_busy": "An edit is on its way; try again when it lands.",
+	"status_rule_refused_changed": "The rule list was redrawn since you opened that value; open it again.",
+	"status_rule_refused_no_such_chip": "That value is not in the rule list any more.",
+	"status_rule_refused_not_this_editor": "That value is not edited that way.",
+	"status_rule_refused_no_such_value": "That is not one of the values the gateway offers here.",
+	"status_rule_refused_not_json": "The gateway offered a value this client cannot read.",
+	"status_rule_refused_unchanged": "That is the value it already has: nothing was sent.",
+	"status_rule_refused_no_such_rule": "That rule is not in the rule list any more.",
+	"status_rule_refused_onto_itself": "A rule dropped on itself stays where it is.",
+	"status_rule_refused_other_list": "A step moves among the route's steps and a rule among the rules, not from one list to the other.",
+	"status_rule_refused_not_picking": "No value is being picked on the map.",
+	"status_rule_refused_no_target": "That click named nothing on the map to pick; click again, or Escape.",
+	"status_rule_refused_rendering_out_of_range": "The rule list cannot be edited until it is drawn again.",
+	"status_rule_refused_not_this_kind": "That is not a {detail}. Click one on the map, or Escape.",
+	"status_rule_refused_arm_not_here": "That cannot go here: the gateway takes no {detail} at this point. Click something else, or Escape.",
 	"meter_heading": "Your economy",
 	# The four numbers as the gateway sent them. Headroom is the gateway's own figure,
 	# never supply minus draw: nothing here adds or subtracts anything.
@@ -140,6 +172,8 @@ const TEXT := {
 	# "Rendering..." and "Reading the map..." (finding K): the gateway refused it, with the
 	# gateway's words, or the planning door is shut.
 	"unchecked_refused": "Not checked: the gateway refused ({detail}).",
+	# The gateway answered, and this client could not read the answer (M4).
+	"unchecked_unreadable": "Not shown: this client could not read the gateway's answer ({detail}).",
 	"unchecked_ready": "Not checked: after Ready this client sends no planning call for the rest of this Lull.",
 	"unchecked_push": "Not checked: planning is closed during the Push.",
 	"unchecked_recap": "Not checked: planning is closed during the recap.",
@@ -175,6 +209,9 @@ const TEXT := {
 	"status_saved_file": "Saved to {detail}.",
 	"status_save_failed": "Could not write {path}.",
 	"status_open_failed": "Could not read {path}.",
+	"status_new_opened": "A new playbook is in the editor; the checks say what it still needs. Undo takes it back.",
+	"status_picking": "Click the map for the new value; Escape stops.",
+	"status_rule_editing": "Editing...",
 	"status_wizard_used": "The template's playbook is in the editor. Undo takes it back.",
 	"status_wizard_refused": "The gateway refused that value: {detail}",
 	"status_dormant_allowing": "Allowing dormant beacons...",
@@ -192,13 +229,13 @@ const TEXT := {
 	"status_safe_filed": "{detail} The orders on screen were not sealed.",
 
 	# --- The route -------------------------------------------------------------
-	# PLACEHOLDER: travel times as raw game milliseconds — OWNER, S3, with plan-core/T18a.
-	# Travel times are shown as the raw game milliseconds the estimator
-	# answered, until the gateway answers a rendered figure (decisions-log items 57 and 61:
-	# a short route's ETA rounded generously or shown in whole seconds). OWNER, with
-	# plan-core/T18a, S3.
-	"leg": "{ms} ms",
-	"route_whole": "Travel, as estimated: {ms} ms",
+	# Travel is the gateway's rendered figure (`estimate_route`'s `travel_text`, the register's
+	# S3-18; decisions-log items 57 and 61), as it came, a fogged leg already labelled a bound.
+	# A figure it sent no text for is the raw game milliseconds it did send, and says so.
+	"leg_text": "{text}",
+	"route_whole_text": "Travel, as estimated: {text}",
+	"leg": "{ms} ms (raw)",
+	"route_whole": "Travel, as estimated: {ms} ms (the gateway sent no rendered figure)",
 	"route_none": "No route: the commander cannot get there.",
 	# The gateway's sentence when a waypoint resolves to nothing (a `covering` that covers
 	# nothing), shown as it came: its answer about the route, not a refused call.
@@ -247,10 +284,12 @@ const TEXT := {
 	"menu_go": "Go here",
 	"menu_recycle": "Recycle",
 	"menu_place": "Place beacon",
-	# A click on a vent names it; Alt-click describes it (docs/design/targeting.md).
+	# A click on a vent offers both: its name, and the description (docs/design/targeting.md).
+	# Alt held puts the description first.
 	"menu_cover": "Place beacon covering this vent",
 	"menu_cover_nearest": "Place beacon covering the nearest vent you can cover",
-	"menu_target": "Target, chosen when the step starts:",
+	"menu_target": "Target (a selector picks when the step starts):",
+	"selector_this": "this beacon",
 	"selector_nearest": "the nearest own beacon",
 	"selector_weakest": "the weakest own beacon",
 	"selector_safest": "the safest own beacon",

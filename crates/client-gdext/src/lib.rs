@@ -125,6 +125,7 @@ pub mod error;
 pub mod pacer;
 pub mod panics;
 pub mod rig;
+pub mod rule_list;
 pub mod rules;
 pub mod surface;
 pub mod targeting;
