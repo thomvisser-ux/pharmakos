@@ -919,17 +919,19 @@ fn resume_surface(
     continuation: crate::save::Continuation,
 ) -> Result<(Surface, Vec<SeatId>), Error> {
     let (host, seats) = host_for(rules_json, library, config)?;
-    let surface = Surface::resume(
+    let rules = host.rules().clone();
+    // The preset before the save goes in, so the first time synced is the
+    // preset's (S3's `gwu`, fix pass 1).
+    let surface = Surface::new(
         &config.match_id,
         config.seed,
+        rules,
         // Fogged, always, as `open_surface` says.
         FogPolicy::fogged(),
         &seats,
-        host,
-        &save.state,
-        continuation,
     )?
-    .with_preset(config.preset, config.human_seat.map(SeatId::new));
+    .with_preset(config.preset, config.human_seat.map(SeatId::new))
+    .resume(host, &save.state, continuation)?;
     Ok((surface, seats))
 }
 

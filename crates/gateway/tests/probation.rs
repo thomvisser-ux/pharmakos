@@ -376,6 +376,229 @@ fn a_countdown_reported_in_a_probation_match_is_refused_naming_the_preset() {
     assert!(!custom.time().untimed);
 }
 
+/// The `_status` footer `seat` reads off `get_status`, decoded as the
+/// schema's `gp.api.v1.Status` once its lower-case phase is translated
+/// (decisions-log item 80), so the wire's spelling of the new field is held
+/// to the schema's.
+fn footer_of(surface: &mut Surface, seat: u8) -> (Json, pharmakos_proto::gp::api::v1::Status) {
+    let token = seat_token(surface, seat);
+    let answer = result(&call(surface, &token, "get_status", "{}"), "get_status");
+    let footer = answer
+        .get("_status")
+        .cloned()
+        .expect("every result has one");
+    let Json::Object(entries) = &footer else {
+        panic!("the footer is an object: {footer:?}");
+    };
+    let canonical = Json::Object(
+        entries
+            .iter()
+            .map(|(key, value)| match (key.as_str(), value) {
+                ("phase", Json::String(wire)) => (
+                    key.clone(),
+                    Json::String(
+                        pharmakos_proto::scope::from_wire_name("gp.api.v1.Status.Phase", wire)
+                            .expect("a phase the schema names"),
+                    ),
+                ),
+                _ => (key.clone(), value.clone()),
+            })
+            .collect(),
+    );
+    let decoded = pharmakos_proto::json::decode_json(&canonical)
+        .unwrap_or_else(|error| panic!("not a gp.api.v1.Status: {error}: {footer:?}"));
+    (footer, decoded)
+}
+
+/// E7, as the client reads it (S3's `gwu`): a Probation Lull's footer says it
+/// is untimed **by rule**, `untimed_by_rule` beside `untimed`, before and
+/// after a report of the time spent, so a client starts no countdown and
+/// reports no `remaining_ms` in it. A Probation Push and recap carry no
+/// `untimed_by_rule`, and neither does a `custom` Lull, whether fresh (which
+/// is `untimed` until its host reports a countdown) or timed.
+#[test]
+fn a_probation_lull_is_untimed_by_rule_and_a_custom_lull_never_is() {
+    let mut probation = hosted_under("m-by-rule", Preset::Probation, Some(0), 1_000, 3);
+    let admin = admin_token(&mut probation);
+    let mut elapsed = 0;
+    for when in ["fresh", "after a report of the time spent"] {
+        let (footer, decoded) = footer_of(&mut probation, 0);
+        assert_eq!(
+            footer.get("untimed_by_rule"),
+            Some(&Json::Bool(true)),
+            "{when}: {footer:?}"
+        );
+        assert_eq!(footer.get("untimed"), Some(&Json::Bool(true)), "{when}");
+        assert!(decoded.untimed_by_rule && decoded.untimed, "{when}");
+        assert!(probation.time().untimed_by_rule, "{when}");
+        spend(&mut probation, &admin, &mut elapsed);
+    }
+
+    assert!(probation.begin_push().expect("the Push begins"));
+    let (footer, decoded) = footer_of(&mut probation, 0);
+    assert_eq!(footer.get("untimed_by_rule"), None, "a Push: {footer:?}");
+    assert!(!decoded.untimed_by_rule);
+    while let Some(report) = probation.step().expect("a tick") {
+        if report.segment_ended {
+            break;
+        }
+    }
+    assert_eq!(probation.time().phase, Phase::Recap);
+    let (footer, decoded) = footer_of(&mut probation, 0);
+    assert_eq!(footer.get("untimed"), Some(&Json::Bool(true)), "a recap");
+    assert_eq!(footer.get("untimed_by_rule"), None, "a recap: {footer:?}");
+    assert!(!decoded.untimed_by_rule);
+    next_lull(&mut probation);
+    let (footer, _) = footer_of(&mut probation, 0);
+    assert_eq!(
+        footer.get("untimed_by_rule"),
+        Some(&Json::Bool(true)),
+        "the next Lull: {footer:?}"
+    );
+
+    let mut custom = hosted_under("m-by-host", Preset::Custom, Some(0), 1_000, 3);
+    let (footer, decoded) = footer_of(&mut custom, 0);
+    assert_eq!(footer.get("untimed"), Some(&Json::Bool(true)), "fresh");
+    assert_eq!(footer.get("untimed_by_rule"), None, "fresh: {footer:?}");
+    assert!(!decoded.untimed_by_rule);
+    let admin = admin_token(&mut custom);
+    answered(
+        &call(
+            &mut custom,
+            &admin,
+            "report_host_clock",
+            "{\"elapsed_ms\":1000,\"remaining_ms\":120000}",
+        ),
+        "a custom match's countdown",
+    );
+    let (footer, decoded) = footer_of(&mut custom, 0);
+    assert_eq!(footer.get("untimed"), None, "timed: {footer:?}");
+    assert_eq!(footer.get("untimed_by_rule"), None, "timed: {footer:?}");
+    assert!(!decoded.untimed && !decoded.untimed_by_rule);
+}
+
+/// An in-process seat that reads the `_status` footer of its first call, as
+/// the built-in operator's own calls are answered.
+struct FooterReader(std::sync::Arc<std::sync::Mutex<Option<Json>>>);
+
+impl pharmakos_gateway::serve::BuiltInSeat for FooterReader {
+    fn plan(&mut self, _seat: u8, call: &mut dyn FnMut(&pharmakos_gateway::rpc::Request) -> Json) {
+        let request = pharmakos_gateway::rpc::parse(
+            r#"{"jsonrpc":"2.0","id":1,"method":"get_status","params":{}}"#,
+        )
+        .expect("well formed");
+        let answer = call(&request);
+        let footer = answer
+            .get("result")
+            .and_then(|result| result.get("_status"))
+            .cloned();
+        if let Ok(mut held) = self.0.lock() {
+            *held = footer;
+        }
+    }
+}
+
+/// Plays seat 0 with a [`FooterReader`] and advises nobody.
+struct PlaysSeatZero(Option<FooterReader>);
+
+impl pharmakos_gateway::serve::Operators for PlaysSeatZero {
+    fn built_in(&mut self, seat: u8) -> Option<Box<dyn pharmakos_gateway::serve::BuiltInSeat>> {
+        if seat != 0 {
+            return None;
+        }
+        let reader: Box<dyn pharmakos_gateway::serve::BuiltInSeat> = Box::new(self.0.take()?);
+        Some(reader)
+    }
+
+    fn advisor(&mut self, _seat: u8) -> Option<Box<dyn pharmakos_gateway::serve::Advisor>> {
+        None
+    }
+}
+
+/// S3's `gwu`, fix pass 1 (the review's C2): a resumed Probation Lull says
+/// it is untimed by rule on the very first call, to a socket seat and to an
+/// in-process seat alike, so the client starts no countdown the gateway would
+/// refuse; a resumed `custom` Lull never does.
+#[test]
+fn a_resumed_probation_lull_is_untimed_by_rule_from_its_first_call() {
+    for preset in [Preset::Probation, Preset::Custom] {
+        let probation = preset == Preset::Probation;
+        let surface = hosted_under("m-resume-rule", preset, Some(1), 1_000, 3);
+        let saved = surface.lull_save().expect("a Lull saves");
+        let mut resumed = resume("m-resume-rule", &saved, preset, 1_000, 3);
+        assert_eq!(resumed.time().untimed_by_rule, probation, "{preset:?}");
+        let (footer, decoded) = footer_of(&mut resumed, 1);
+        assert_eq!(decoded.untimed_by_rule, probation, "{preset:?}: {footer:?}");
+        assert!(decoded.untimed, "{preset:?}: no countdown reported yet");
+
+        let mut resumed = resume("m-resume-rule", &saved, preset, 1_000, 3);
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let mut operators = PlaysSeatZero(Some(FooterReader(std::sync::Arc::clone(&seen))));
+        let mut seats = pharmakos_gateway::serve::InProcessSeats::open(
+            &mut resumed,
+            &SEATS,
+            Some(1),
+            &mut operators,
+        )
+        .expect("in-process seats");
+        seats.plan(&mut resumed);
+        let footer = seen
+            .lock()
+            .ok()
+            .and_then(|held| held.clone())
+            .expect("the in-process seat read a footer");
+        assert_eq!(
+            footer.get("untimed_by_rule") == Some(&Json::Bool(true)),
+            probation,
+            "{preset:?}: an in-process seat's footer: {footer:?}"
+        );
+    }
+}
+
+/// S3's `gwu`, fix pass 1 (the review's C6): the last countdown the host
+/// reported is not in the save (its container is a contract this lane does
+/// not change), so a Lull resumed after a reported 0 and ended with no new 0
+/// files the neutral line; a 0 reported after the resume runs out.
+#[test]
+fn a_resumed_lull_forgets_a_countdown_of_0() {
+    let mut surface = hosted_under("m-resume-0", Preset::Custom, Some(1), 1_000, 3);
+    let admin = admin_token(&mut surface);
+    answered(
+        &call(
+            &mut surface,
+            &admin,
+            "report_host_clock",
+            "{\"elapsed_ms\":1000,\"remaining_ms\":0}",
+        ),
+        "report_host_clock",
+    );
+    let saved = surface.lull_save().expect("a Lull saves");
+    let filing = |surface: &mut Surface| -> String {
+        feed_of(surface, 1)
+            .into_iter()
+            .find(|(kind, ..)| kind == "safe_playbook_filed")
+            .map(|(_, text, _)| text)
+            .expect("a filing line")
+    };
+    for (again, line) in [(false, ENDED), (true, RAN_OUT)] {
+        let mut resumed = resume("m-resume-0", &saved, Preset::Custom, 1_000, 3);
+        let admin = admin_token(&mut resumed);
+        if again {
+            answered(
+                &call(
+                    &mut resumed,
+                    &admin,
+                    "report_host_clock",
+                    "{\"elapsed_ms\":1000,\"remaining_ms\":0}",
+                ),
+                "report_host_clock",
+            );
+        }
+        answered(&call(&mut resumed, &admin, "end_lull", "{}"), "end_lull");
+        assert_eq!(filing(&mut resumed), line, "a 0 reported again: {again}");
+    }
+}
+
 // ---------------------------------------------------------------------------
 // E5: the memos
 // ---------------------------------------------------------------------------
@@ -550,20 +773,19 @@ fn resume(
         Some(library_folder()),
     )
     .expect("a match");
-    Surface::resume(
-        match_id,
-        SEED,
-        FogPolicy::fogged(),
-        &SEATS,
-        host,
-        &save.state,
-        Continuation {
-            generation: 1,
-            last_tick: 0,
-        },
-    )
-    .expect("a Lull resumes")
-    .with_preset(preset, Some(SeatId::new(1)))
+    let rules = host.rules().clone();
+    Surface::new(match_id, SEED, rules, FogPolicy::fogged(), &SEATS)
+        .expect("a surface")
+        .with_preset(preset, Some(SeatId::new(1)))
+        .resume(
+            host,
+            &save.state,
+            Continuation {
+                generation: 1,
+                last_tick: 0,
+            },
+        )
+        .expect("a Lull resumes")
 }
 
 // ---------------------------------------------------------------------------
@@ -739,25 +961,67 @@ fn a_seats_map_summary_carries_no_seed() {
 }
 
 // ---------------------------------------------------------------------------
-// Item 143 (4): the filing line says what ended the Lull
+// Item 143 (4) and S3's `gwu`: the filing line says what ended the Lull
 // ---------------------------------------------------------------------------
 
-/// The line a seat's feed carries when the gateway filed its safe playbook
-/// says what ended the Lull where the gateway can tell: the seat's own Ready
-/// with nothing sealed has its line, and every other end -- the countdown
-/// spent, which the shipped rig ends with a last report of a few
-/// milliseconds and never 0, or the lobby's `end_lull` -- reads "the Lull
-/// ended". `ed3b` makes the rig report its 0 and restores "ran out".
-#[test]
-fn the_filing_line_says_what_ended_the_lull() {
-    let filing = |surface: &mut Surface, seat: u8| -> String {
-        feed_of(surface, seat)
+/// The line for a seat that said Ready with nothing sealed.
+const ON_READY: &str =
+    "You said Ready with nothing sealed, so the safe playbook was filed for you.";
+/// The line for a Lull whose last reported countdown was 0.
+const RAN_OUT: &str = "The Lull ran out, so the safe playbook was filed for you.";
+/// The line for every other end.
+const ENDED: &str = "The Lull ended before you sealed, so the safe playbook was filed for you.";
+
+/// End a two-seat match's opening Lull, neither seat having sealed: each seat
+/// in `ready` says Ready, the host reports each of `reports` in order (the
+/// elapsed time and, when given, the countdown), and the lobby calls
+/// `end_lull`. Answers each seat's filing line.
+fn filing_lines(
+    match_id: &str,
+    preset: Preset,
+    ready: &[u8],
+    reports: &[(i32, Option<i32>)],
+) -> [String; 2] {
+    let mut surface = hosted_under(match_id, preset, Some(0), 1_000, 1);
+    for seat in ready {
+        let token = seat_token(&mut surface, *seat);
+        answered(
+            &call(&mut surface, &token, "set_ready", "{\"ready\":true}"),
+            "set_ready",
+        );
+    }
+    let admin = admin_token(&mut surface);
+    for (elapsed, remaining) in reports {
+        let params = match remaining {
+            Some(left) => format!("{{\"elapsed_ms\":{elapsed},\"remaining_ms\":{left}}}"),
+            None => format!("{{\"elapsed_ms\":{elapsed}}}"),
+        };
+        answered(
+            &call(&mut surface, &admin, "report_host_clock", &params),
+            "report_host_clock",
+        );
+    }
+    answered(&call(&mut surface, &admin, "end_lull", "{}"), "end_lull");
+    [0, 1].map(|seat| {
+        feed_of(&mut surface, seat)
             .into_iter()
             .find(|(kind, ..)| kind == "safe_playbook_filed")
             .map(|(_, text, _)| text)
             .expect("a filing line")
-    };
+    })
+}
 
+/// The line a seat's feed carries when the gateway filed its safe playbook
+/// says what ended the Lull, from what the host reported and never from a
+/// clock of the gateway's own: the seat's own Ready with nothing sealed has
+/// its line, and wins over a countdown at 0 too; a Lull whose **last**
+/// reported countdown was 0 "ran out" (the rig reports its 0 once, then calls
+/// `end_lull`; S3's `ed3b`); and every other end -- a last countdown with
+/// time left, a report of the elapsed time alone, no report at all, or the
+/// lobby's `end_lull` -- reads "the Lull ended". A Probation match reports no
+/// countdown, so it never "runs out".
+#[test]
+fn the_filing_line_says_what_ended_the_lull() {
     // Ready, with nothing sealed: seat 0 says it is ready; seat 1 does not.
     let mut surface = hosted_under("m-ready", Preset::Custom, Some(0), 1_000, 1);
     let token = seat_token(&mut surface, 0);
@@ -766,37 +1030,74 @@ fn the_filing_line_says_what_ended_the_lull() {
         "set_ready",
     );
     assert!(surface.begin_push().expect("the Push begins"));
+    let lines = [0, 1].map(|seat| {
+        feed_of(&mut surface, seat)
+            .into_iter()
+            .find(|(kind, ..)| kind == "safe_playbook_filed")
+            .map(|(_, text, _)| text)
+            .expect("a filing line")
+    });
+    assert_eq!(lines, [ON_READY, ENDED]);
+
+    // The countdown at 0, last: "ran out".
     assert_eq!(
-        filing(&mut surface, 0),
-        "You said Ready with nothing sealed, so the safe playbook was filed for you."
+        filing_lines("m-ran-out", Preset::Custom, &[], &[(1_000, Some(0))]),
+        [RAN_OUT, RAN_OUT]
     );
     assert_eq!(
-        filing(&mut surface, 1),
-        "The Lull ended before you sealed, so the safe playbook was filed for you."
+        filing_lines(
+            "m-ran-out-then-spent",
+            Preset::Custom,
+            &[],
+            &[(1_000, Some(4_000)), (5_000, Some(0)), (5_200, None)]
+        ),
+        [RAN_OUT, RAN_OUT],
+        "an elapsed-only report after the 0 keeps the countdown at 0"
     );
 
-    // The countdown spent, as the shipped rig ends a Lull: its last report a
-    // few milliseconds left, then `end_lull`.
-    for left in [1, 120, 250] {
-        let mut surface = hosted_under("m-ran-out", Preset::Custom, Some(0), 1_000, 1);
-        let admin = admin_token(&mut surface);
-        answered(
-            &call(
-                &mut surface,
-                &admin,
-                "report_host_clock",
-                &format!("{{\"elapsed_ms\":1000,\"remaining_ms\":{left}}}"),
-            ),
-            "report_host_clock",
-        );
-        answered(&call(&mut surface, &admin, "end_lull", "{}"), "end_lull");
-        let line = filing(&mut surface, 0);
+    // Ready wins over the 0, seat by seat.
+    assert_eq!(
+        filing_lines("m-ready-and-0", Preset::Custom, &[0], &[(1_000, Some(0))]),
+        [ON_READY, RAN_OUT]
+    );
+    assert_eq!(
+        filing_lines("m-both-ready", Preset::Custom, &[0, 1], &[(1_000, Some(0))]),
+        [ON_READY, ON_READY]
+    );
+
+    // Any other end: a few milliseconds left (the rig before `ed3b`), time
+    // left, the elapsed time alone, no report, or a 0 the host reported and
+    // then took back with time left (the last report decides).
+    for left in [1, 120, 250, 5_000] {
         assert_eq!(
-            line, "The Lull ended before you sealed, so the safe playbook was filed for you.",
+            filing_lines("m-left", Preset::Custom, &[], &[(1_000, Some(left))]),
+            [ENDED, ENDED],
             "{left} ms left"
         );
-        assert!(!line.contains("Ready"), "{line}");
     }
+    assert_eq!(
+        filing_lines("m-elapsed", Preset::Custom, &[], &[(1_000, None)]),
+        [ENDED, ENDED]
+    );
+    assert_eq!(
+        filing_lines("m-no-report", Preset::Custom, &[], &[]),
+        [ENDED, ENDED]
+    );
+    assert_eq!(
+        filing_lines(
+            "m-0-then-more",
+            Preset::Custom,
+            &[],
+            &[(1_000, Some(0)), (2_000, Some(5_000))]
+        ),
+        [ENDED, ENDED]
+    );
+
+    // Probation: no countdown is ever reported, so Ready or "ended".
+    assert_eq!(
+        filing_lines("m-probation", Preset::Probation, &[0], &[(1_000, None)]),
+        [ON_READY, ENDED]
+    );
 }
 
 // ---------------------------------------------------------------------------

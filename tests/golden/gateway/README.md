@@ -11,7 +11,8 @@ gateway accepts, what the spec's own worked session answers call by call, and �
 since T16a — what a **camera** is shown, since T18a what the editor's
 **wizard** is handed, since T22a what the stage demo's own playbooks verify
 and render to, since S1's `tgtw` what a seat is told about the map's vents
-and seams, and since S1's `econ` what a seat is told about its own economy.
+and seams, and since S1's `econ` what a seat is told about its own economy, and since
+S3's `gwu` what the editor's picker and Visit & change rows read.
 Produced by `crates/gateway/tests/goldens.rs`,
 `crates/gateway/tests/methods.rs`, `crates/gateway/tests/view.rs`,
 `crates/gateway/tests/advice.rs`, `crates/gateway/tests/demo_playbooks.rs`,
@@ -26,10 +27,13 @@ the rule *does*, in a table a reviewer can read without running anything — and
 it is the shape of that table, not any one line of it, that v1.1 publishes. The
 fifth is T13's, and is the method slice answering the session spec §12 prints.
 The next three are T16a's, the ninth is T18a's, the next ten are T22a's, the
-next two are S1's targeting surfaces (task `tgtw`), and the last three are S1's
-economy surfaces (task `econ`).
+next two are S1's targeting surfaces (task `tgtw`), the next three are S1's
+economy surfaces (task `econ`), four more are the demo cases of S2's
+two templates (Defend the Core, Raid an Enemy Beacon), `sighting_verify` is
+S3's `gwr`'s, and the last three are S3's `gwu`'s: the answers the client's
+picker and Visit & change fixtures are byte copies of.
 
-## The twenty-four cases
+## The thirty-two cases
 
 | Case | File | What it pins |
 | --- | --- | --- |
@@ -52,12 +56,19 @@ economy surfaces (task `econ`).
 | `demo_against_easy_render/` | `expected.response.json` | As above, for `scenarios/skeleton/against-easy.playbook.jsonc` as committed |
 | `demo_deploy_and_visit_verify/` | `expected.response.json` | As above, for `scenarios/skeleton/deploy-and-visit.playbook.jsonc` as committed |
 | `demo_deploy_and_visit_render/` | `expected.response.json` | As above, for `scenarios/skeleton/deploy-and-visit.playbook.jsonc` as committed |
+| `demo_defend_the_core_verify/` | `expected.response.json` | As above, for the Defend the Core template (S2) |
+| `demo_defend_the_core_render/` | `expected.response.json` | As above, for the Defend the Core template (S2) |
+| `demo_raid_an_enemy_beacon_verify/` | `expected.response.json` | As above, for the Raid an Enemy Beacon template (S2) |
+| `demo_raid_an_enemy_beacon_render/` | `expected.response.json` | As above, for the Raid an Enemy Beacon template (S2) |
 | `map_summary/` | `expected.response.json` | Seat 0's `get_map_summary` in the opening Lull on the golden seed: every vent and seam, its grade, liveness, coverage by seat 0 and travel from its commander |
 | `resolve_refs/` | `expected.response.json` | Seat 0's `resolve_refs` in the same Lull for `scenarios/s1/cover-nearest-vent.playbook.jsonc`: what its `covering` and its `on {covered {}}` read, with every candidate in rank order |
 | `briefing/` | `expected.response.json` | Seat 0's `get_briefing` in the opening Lull on the golden seed: its own standing (score and displayed rank on the final audit's terms) and the prose |
 | `economy_forecast/` | `expected.response.json` | Seat 0's `get_economy_forecast` in the same Lull once it has sealed `scenarios/s1/cover-nearest-vent.playbook.jsonc`: the four present-state figures and the committed spend |
 | `recap/` | `expected.response.json` | Seat 0's `get_recap` in round 1's recap of the same match: the round's tick count and the seat's own settlement line |
 | `sighting_verify/` | `expected.response.json` | Seat 0's `verify_plan{depth: "full"}` in round 2's Lull of `tests/handles.rs`' match, its scout having sighted seat 1's outpost (`e_01`): a playbook naming `e_01` three ways (a `move` to its anchor, an interface step, an Attack target), its verdicts as they stand in S3's `gwr` (the register's S3-04), the walk refused since S3's `vfy6` (`E0421`) -- its `report_hash` moves with the scope's content |
+| `get_vocabulary/` | `expected.response.json` | Seat 0's `get_vocabulary` as its first call in the opening Lull of `tests/methods.rs`' golden match: every family, predicate, step, mandate and blueprint with its locks, the Resonance Spire locked — **the fixture `ed3b` part 2's picker copies** |
+| `get_beacon_core/` | `expected.response.json` | Seat 0's `get_beacon` of its opening core, `b_00`, in the same Lull: its summary, prose, writ and settings rows |
+| `get_beacon_build/` | `expected.response.json` | The same of a Build core holding one target of each way a target is written (`four_targets`: a wall with its box, `on` a named feature, `on` the nearest vent, a voxel) — with the core's, **the fixtures `ed3b` part 2's Visit & change rows copy** |
 
 ## What a diff means, case by case
 
@@ -443,7 +454,9 @@ What moves a demo case, and what a diff means:
   structure's rotation, and the version is the snapshot's first field.
 * **The verifier or the renderer moved.** A new diagnostic, a changed lint or a
   changed `verifier_version` moves the `_verify` cases; a template string in
-  `render_plan` moves every `_render` case. A report that stops qualifying is
+  `render_plan` moves every `_render` case, and so does a change in the condition
+  slots each rule lists (`slots`, from S3's `gwu`: a slot's pointer, title,
+  line, state, predicate or pick op). A report that stops qualifying is
   not re-blessed: the test asserts `qualifies: true`, and a demo playbook the
   game refuses is a demo that cannot be played.
 
@@ -544,6 +557,32 @@ The forecast's and the briefing's `_status` footers are the opening Lull's
 after the client frames the test reported before each call, counted from the
 first Lull's 600 000 ms (`rules.match.first_lull_ms`); the recap's carries
 `"untimed": true`, which a recap always does, since it has no countdown.
+
+### `get_vocabulary/`, `get_beacon_core/` and `get_beacon_build/`
+
+S3's `gwu`, produced by `crates/gateway/tests/methods.rs` on its own golden
+match (seed `0x00000000ca5caded`, two seats, a one-second segment, `custom`;
+`get_beacon_build` on the casual match `resumed_with` makes from an edited
+frozen snapshot),
+each as seat 0's first call of the opening Lull, so the footer's countdown and
+tick are the same on every run. They are the answers the client's fixtures are
+byte copies of (lane `ed3b` part 2, which holds each copy identical by a test of
+its own): the lane that moves one of them re-copies its fixture.
+
+* **The vocabulary moved.** A moved lock means a stage lifted or reserved a
+  construct: a predicate, a step, a mandate or a blueprint opened, or a
+  licence's or a family's lock changed its words. A moved parameter, its
+  pointer, title or shape (an integer's bounds, a choice's values), is the
+  verifier's or plan-core's vocabulary moving with it: say which check. A moved
+  skeleton changes what the picker writes when a player picks the entry.
+* **A beacon moved.** The settings rows are each setting's *effective* value,
+  the one the sim reads, so a changed default in the sim or the rules table
+  moves a row here although no file wrote it; a new row is a setting the writ
+  gained. `get_beacon_build`'s targets are the Build table's, in the
+  Quartermaster's order, each as it was written. Another seat's beacon carries
+  no detail, and no case here asks for one.
+* **The context moved.** The golden seed's map, the rules table, or the
+  snapshot's shape, as for the demo cases.
 
 ## Conventions
 

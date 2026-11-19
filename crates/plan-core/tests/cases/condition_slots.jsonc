@@ -1,0 +1,39 @@
+// condition_slots.jsonc - every place a condition stands or could stand (S3's
+// task `gwu`): a route step's `skip_if` filled and absent, a `wait_until`
+// step's condition filled and left out, a rule's `when` as an `all` holding a
+// leaf, a `not`, an `any` and an empty `{}` item (an EMPTY slot a pick
+// replaces), a body step's guard and a `not` with no item, and a rule with no
+// `when` at all. Pinned by expected.slots.txt alone.
+{ "schema_version": {"major":1},
+  "meta": {"title":"Condition slots","author_kind":"HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {"label":"out","move":{"to":{"voxel":{"x":90,"y":12,"z":11}}},
+        "skip_if":{"cmdr_hp_pct":{"cmp":"LE","pct":20}}},
+      {"label":"wait","wait_until":{"condition":{"treasury":{"dollars":{"op":"GE","value":200}}}},
+        "timeout_ms":30000},
+      {"label":"idle","wait_until":{},"timeout_ms":30000},
+      {"label":"stay","hold":{"ms":1000}}
+    ],
+    "handlers": [
+      {"id":"guarded","when":{"all":{"items":[
+        {"kw_headroom":{"kw":{"op":"LT","value":5}}},
+        {"not":{"item":{"step_reached":{"label":"wait"}}}},
+        {"any":{"items":[
+          {"segment_elapsed":{"ms":{"op":"GE","value":60000}}},
+          {"cmdr_deaths":{"deaths":{"op":"GE","value":1}}}
+        ]}},
+        {}
+      ]}},"body":[
+        {"label":"first","hold":{"ms":1000},"skip_if":{"not":{}}},
+        {"label":"second","wait_until":{"condition":{"rule_fired":{"handler_id":"guarded"}}},
+          "timeout_ms":5000}
+      ],"resume":"CONTINUE","cooldown_ms":5000,"max_fires":1},
+      {"id":"unwritten","body":[{"label":"third","hold":{"ms":1000}}],
+        "resume":"CONTINUE","cooldown_ms":5000,"max_fires":1}
+    ]
+  },
+  "on_death": {"on_respawn":"CONTINUE","max_deaths_before_fallback":2},
+  "fallback": {"hold":{"at":{"safest":{}}}}
+}

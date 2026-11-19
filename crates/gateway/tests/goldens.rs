@@ -321,6 +321,7 @@ fn the_audit_log_golden() {
         segment_length_ms: Ms::new(180_000),
         round: 1,
         untimed: false,
+        untimed_by_rule: false,
     });
 
     let full = ScopeSet::of(&[Scope::Observe, Scope::Plan, Scope::PlanSubmit, Scope::Docs]);

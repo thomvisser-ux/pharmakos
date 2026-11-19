@@ -222,8 +222,30 @@ pub struct Sealed {
     pub plan: Plan,
 }
 
+/// The footer's `(untimed, untimed_by_rule)` pair (`gp.api.v1.Status`) for a
+/// match in `phase` whose preset gives its Lulls no countdown when
+/// `untimed_lulls`, the host's last countdown for the Lull being `reported`.
+///
+/// A pure function of the three, so [`Surface::sync_time`] holds no rule of
+/// its own: a Push is timed by game time; a recap and an ended match have no
+/// countdown; a Lull is untimed by rule under such a preset, and then untimed
+/// whatever was reported, and otherwise untimed until a countdown is
+/// reported (S1-11; S3's plan, E7; S3's `gwu`).
+const fn untimed_pair(
+    phase: MatchPhase,
+    untimed_lulls: bool,
+    reported: Option<Ms>,
+) -> (bool, bool) {
+    match phase {
+        MatchPhase::Push => (false, false),
+        MatchPhase::Lull => (untimed_lulls || reported.is_none(), untimed_lulls),
+        MatchPhase::Recap | MatchPhase::Ended => (true, false),
+    }
+}
+
 /// The feed kind of the line a seat reads when the gateway filed its playbook
-/// ([`crate::strings::SAFE_PLAYBOOK_FILED`]). A gateway kind, beside the sim's
+/// (one of [`crate::strings::SAFE_PLAYBOOK_FILED`], its `_ON_READY` and its
+/// `_RAN_OUT`, as [`Surface::announce_filings`] picks). A gateway kind, beside the sim's
 /// bus: filing is the gateway's act, not the match's.
 pub const SAFE_PLAYBOOK_FILED_KIND: &str = "safe_playbook_filed";
 
@@ -717,8 +739,9 @@ impl Surface {
     /// is `human_seat` -- the config line's (`crate::serve::Config`).
     ///
     /// **Host-side**, and made once, before the surface serves anything: the
-    /// host loop calls it on the surface it has just built or resumed
-    /// ([`crate::serve`]), and no handler can, since a handler holds the
+    /// host loop calls it on the surface [`Surface::new`] has just built,
+    /// before it attaches a match or resumes a save into it ([`crate::serve`]),
+    /// and no handler can, since a handler holds the
     /// surface by reference. Every other host -- `gamectl scenario run`, the
     /// bench, the tests -- plays `custom`, which is what [`Surface::new`]
     /// makes.
@@ -726,6 +749,11 @@ impl Surface {
     pub fn with_preset(mut self, preset: Preset, human_seat: Option<SeatId>) -> Surface {
         self.preset = preset;
         self.human_seat = human_seat;
+        // Whatever the order a host builds in, the footer is the preset's from
+        // here on: `untimed_by_rule` is read from it (`sync_time`), and a
+        // surface that already hosts a match is synced again rather than left
+        // serving the old preset's footer. No host yet: nothing to sync.
+        self.sync_time();
         self
     }
 
@@ -787,21 +815,32 @@ impl Surface {
     /// entity handle the dead process issued is read as one of this view's;
     /// its last tick is the floor the resumed gateway tick starts at.
     ///
-    /// The rules table is the host's own: a resume regenerates the pristine
-    /// world under the table the save was checked against, and the surface
-    /// reads the same one rather than being handed a second copy that could
-    /// differ.
+    /// Called on a surface fresh from [`Surface::new`] and, for a Probation
+    /// match, [`Surface::with_preset`], so the preset is known before the
+    /// first time is synced and the footer's `untimed_by_rule` is right on the
+    /// resumed match's first call (S3's `gwu`, fix pass 1: a resume that
+    /// applied the preset afterwards served a Probation Lull as a timed one).
+    /// The surface's rules table must be the host's own, the one the save was
+    /// checked against and the world regenerated under: a different one is
+    /// refused, never read beside it.
     pub fn resume(
-        match_id: &str,
-        match_seed: u64,
-        fog: FogPolicy,
-        seats: &[SeatId],
+        self,
         host: Host,
         saved: &SavedMatch,
         continuation: Continuation,
     ) -> Result<Surface, Error> {
-        let rules = host.rules().clone();
-        let mut surface = Surface::new(match_id, match_seed, rules, fog, seats)?;
+        let mut surface = self;
+        if surface.host.is_some() {
+            return Err(Error::internal(
+                "a surface resumes a save once, before it hosts any match",
+            ));
+        }
+        if surface.rules.rules_hash() != host.rules().rules_hash() {
+            return Err(Error::internal(
+                "this surface was made with a rules table other than the one the save's host \
+                 regenerated its world under",
+            ));
+        }
         surface.views.resumed_after(continuation.generation);
         surface.attach(host)?;
         surface.host_mut()?.resume(&saved.snapshot)?;
@@ -1587,11 +1626,32 @@ impl Surface {
     /// plan; private, because whether a seat planned is its own business.
     ///
     /// The line says what ended the Lull where the gateway can tell
-    /// (decisions-log item 143 (4)): the seat's own Ready with nothing sealed
-    /// has a line of its own, and every other end -- the countdown spent or the
-    /// lobby's `end_lull`, which the shipped rig's reports do not tell apart --
-    /// reads "the Lull ended" ([`crate::strings::SAFE_PLAYBOOK_FILED`]).
+    /// (decisions-log item 143 (4); S3's `gwu`), in this order:
+    ///
+    /// 1. the seat's own Ready with nothing sealed
+    ///    ([`crate::strings::SAFE_PLAYBOOK_FILED_ON_READY`]), which wins over a
+    ///    countdown at 0 as well, the seat's own act being the better
+    ///    explanation;
+    /// 2. "the Lull ran out" ([`crate::strings::SAFE_PLAYBOOK_FILED_RAN_OUT`])
+    ///    when the **last** countdown the host reported for this Lull was 0,
+    ///    which the client's rig reports once before it calls `end_lull`;
+    /// 3. "the Lull ended" ([`crate::strings::SAFE_PLAYBOOK_FILED`]) for every
+    ///    other end: the lobby's `end_lull` with time left, a last report
+    ///    above 0 (a 0 the host then reported time after is not the last), a
+    ///    host that reported only its elapsed time or nothing.
+    ///
+    /// Read from `lull_remaining_ms`, the host's own last report, which
+    /// [`Surface::close_phase`] clears only after this runs: the gateway reads
+    /// no clock (AGENTS.md section 4.5). A Probation match takes no countdown
+    /// (E7), so its filings read Ready or "ended", never "ran out".
+    ///
+    /// The last reported countdown is not in a save (the save container is a
+    /// contract and does not carry it), so a Lull resumed after a reported 0
+    /// and ended with no new 0 files the neutral line; a 0 reported after the
+    /// resume runs out as usual (`tests/probation.rs`,
+    /// `a_resumed_lull_forgets_a_countdown_of_0`).
     fn announce_filings(&mut self, round: u32) -> Result<(), Error> {
+        let ran_out = self.lull_remaining_ms == Some(Ms::ZERO);
         let filed: Vec<(SeatId, &'static str)> = self
             .seats
             .iter()
@@ -1603,6 +1663,8 @@ impl Surface {
             .map(|slot| {
                 let line = if slot.ready {
                     crate::strings::SAFE_PLAYBOOK_FILED_ON_READY
+                } else if ran_out {
+                    crate::strings::SAFE_PLAYBOOK_FILED_RAN_OUT
                 } else {
                     crate::strings::SAFE_PLAYBOOK_FILED
                 };
@@ -1958,10 +2020,17 @@ impl Surface {
     /// evidence the gateway has of one, because the Lull's timer is the
     /// client's (decisions-log item 99). A Lull no host has put a countdown on
     /// -- before the first report that carries one, or one run with no timer
-    /// at all, as S6's untimed Probation Lulls will be, whose host reports
-    /// only the time it spends (`report_host_clock` with no `remaining_ms`)
-    /// -- reads `untimed` rather than a 0 a client would show as a timer that
-    /// ran out.
+    /// at all, as a Probation Lull is, whose host reports only the time it
+    /// spends (`report_host_clock` with no `remaining_ms`) -- reads `untimed`
+    /// rather than a 0 a client would show as a timer that ran out.
+    ///
+    /// `untimed_by_rule` tells those two apart (`gp.api.v1.Status.
+    /// untimed_by_rule`; S3's `gwu`): it is true in a Lull of a match whose
+    /// preset gives its Lulls no countdown ([`Preset::untimed_lulls`], the
+    /// Probation preset's, E7), and nowhere else, so a client starts no
+    /// countdown for that Lull, while a fresh `custom` Lull is `untimed` only
+    /// until its host's first countdown. It reads the preset and nothing
+    /// else: no clock, and nothing steps.
     fn sync_time(&mut self) {
         let Some(host) = self.host.as_ref() else {
             return;
@@ -1980,11 +2049,12 @@ impl Surface {
         // Outside a Push the figure is the client's own report, and 0 when
         // there is none; `untimed` is what says that 0 is no countdown rather
         // than one that ran out (S1-11, ruled by decision 12).
-        let untimed = match runner.phase() {
-            MatchPhase::Push => false,
-            MatchPhase::Lull => reported.is_none(),
-            MatchPhase::Recap | MatchPhase::Ended => true,
-        };
+        // A Probation Lull has no countdown by rule (E7): it is the one cause
+        // of `untimed` the preset decides, so it is said apart, and it implies
+        // `untimed` by construction rather than by the refusals that keep a
+        // countdown off it.
+        let (untimed, untimed_by_rule) =
+            untimed_pair(runner.phase(), self.preset.untimed_lulls(), reported);
         let remaining = if in_push {
             let elapsed = runner.tick().since(state.segment_started());
             Ms::from_ticks(state.segment_ticks().saturating_sub(elapsed))
@@ -2026,6 +2096,7 @@ impl Surface {
             segment_length_ms: runner.frozen().coming_segment_ms(),
             round: runner.round(),
             untimed,
+            untimed_by_rule,
         };
     }
 
@@ -4096,6 +4167,32 @@ mod tests {
     use pharmakos_sim::tables::SeatId;
     use std::path::Path;
 
+    /// S3's `gwu`, fix pass 1 (the review's surviving mutant): the footer's
+    /// pair as a pure function. A Lull untimed by rule is untimed **even with a
+    /// countdown reported**, so the implication holds by the rule itself and not
+    /// by the refusals that keep a countdown off a Probation Lull.
+    #[test]
+    fn untimed_by_rule_implies_untimed_without_the_refusals_help() {
+        use super::untimed_pair;
+        use pharmakos_sim::runner::MatchPhase;
+        let some = Some(Ms::new(5_000));
+        let zero = Some(Ms::ZERO);
+        assert_eq!(untimed_pair(MatchPhase::Lull, true, some), (true, true));
+        assert_eq!(untimed_pair(MatchPhase::Lull, true, zero), (true, true));
+        assert_eq!(untimed_pair(MatchPhase::Lull, true, None), (true, true));
+        assert_eq!(untimed_pair(MatchPhase::Lull, false, None), (true, false));
+        assert_eq!(untimed_pair(MatchPhase::Lull, false, some), (false, false));
+        for untimed_lulls in [false, true] {
+            assert_eq!(
+                untimed_pair(MatchPhase::Push, untimed_lulls, some),
+                (false, false)
+            );
+            for phase in [MatchPhase::Recap, MatchPhase::Ended] {
+                assert_eq!(untimed_pair(phase, untimed_lulls, some), (true, false));
+            }
+        }
+    }
+
     fn rules() -> RulesTable {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("..")
@@ -4177,6 +4274,7 @@ mod tests {
             segment_length_ms: Ms::new(180_000),
             round: 1,
             untimed: false,
+            untimed_by_rule: false,
         });
         surface
     }
@@ -4649,6 +4747,67 @@ mod tests {
     // What a seat sees of another seat's beacon, live and from memory (S2's
     // plan, decision 5 and E9), and its verifier scope's sightings
     // -----------------------------------------------------------------------
+
+    /// S3's `gwu`, fix pass 2: `with_preset` on a surface that already hosts a
+    /// match syncs the footer to the preset, whatever the order it was built in.
+    #[test]
+    fn with_preset_on_a_hosted_surface_moves_the_footer() {
+        let surface = hosted();
+        assert!(!surface.time().untimed_by_rule);
+        let probation =
+            surface.with_preset(crate::probation::Preset::Probation, Some(SeatId::new(0)));
+        assert!(
+            probation.time().untimed_by_rule,
+            "the footer follows the preset"
+        );
+        assert!(probation.time().untimed);
+    }
+
+    /// S3's `gwu`, fix pass 2: the two refusals `Surface::resume` makes before
+    /// it touches the save. A surface that already hosts a match resumes
+    /// nothing, and one made with a rules table other than its host's is
+    /// refused, never read beside it.
+    #[test]
+    fn resume_refuses_a_hosted_surface_and_a_rules_table_not_the_hosts() {
+        let saved = hosted().lull_save().expect("a Lull saves");
+        let continuation = crate::save::Continuation {
+            generation: 1,
+            last_tick: 0,
+        };
+        let host = || crate::host::Host::open(&short_config(), None).expect("a match");
+        let error = hosted()
+            .resume(host(), &saved, continuation)
+            .expect_err("already hosting");
+        assert_eq!(error.code, Code::Internal);
+        assert!(error.message.contains("once"), "{}", error.message);
+
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("rules")
+            .join("rules.v1.json");
+        let json = std::fs::read_to_string(path).expect("the rules table");
+        let other = json.replace("\"lull_ms\": 300000", "\"lull_ms\": 300001");
+        assert_ne!(other, json, "the table changed");
+        let other = RulesTable::from_canonical_json(&other).expect("another table loads");
+        let error = Surface::new(
+            "m-0001",
+            0x0000_0000_ca5c_aded,
+            other,
+            FogPolicy::fogged(),
+            &[SeatId::new(0), SeatId::new(1)],
+        )
+        .expect("a surface")
+        .resume(host(), &saved, continuation)
+        .expect_err("another rules table");
+        assert_eq!(error.code, Code::Internal);
+        assert_eq!(
+            error.message,
+            "this surface was made with a rules table other than the one the save's host \
+             regenerated its world under",
+            "one line, no stray line break"
+        );
+    }
 
     /// The config the intelligence tests host: two seats, one-second segments.
     fn short_config() -> pharmakos_sim::world::WorldConfig {

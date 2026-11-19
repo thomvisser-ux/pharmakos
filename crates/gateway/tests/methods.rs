@@ -42,6 +42,8 @@
     reason = "clippy.toml sets allow-expect-in-tests and allow-unwrap-in-tests, but that configuration only recognises #[test] functions and #[cfg(test)] modules -- not an integration test's helper functions. A panic is this file's failure report (clippy.toml's own wording)."
 )]
 
+mod support;
+
 use pharmakos_gateway::error::Code;
 use pharmakos_gateway::fog::{Blind, FogPolicy};
 use pharmakos_gateway::host::Host;
@@ -2941,6 +2943,371 @@ fn render_plan_answers_each_rule_with_its_lines_and_chips() {
     assert_eq!(broken.get("rules"), None, "{broken:?}");
 }
 
+/// A `render_plan` answer without its footer and its chips, each slot's lower-case state
+/// translated back (decisions-log item 80), decoded as the schema's
+/// `gp.api.v1.RenderPlanResponse`.
+fn decoded_rendering(answer: &Json) -> pharmakos_proto::gp::api::v1::RenderPlanResponse {
+    fn canonical(value: &Json, key: Option<&str>) -> Json {
+        match (value, key) {
+            (Json::String(wire), Some("state")) => Json::String(
+                pharmakos_proto::scope::from_wire_name("gp.api.v1.ConditionSlot.State", wire)
+                    .unwrap_or_else(|| panic!("`{wire}` is a state the schema names")),
+            ),
+            (Json::String(wire), Some("pick_op")) => Json::String(
+                pharmakos_proto::scope::from_wire_name("gp.api.v1.ConditionSlot.PickOp", wire)
+                    .unwrap_or_else(|| panic!("`{wire}` is an op the schema names")),
+            ),
+            (Json::Object(entries), _) => Json::Object(
+                entries
+                    .iter()
+                    // The chips carry lower-case enums of their own, pinned by
+                    // `render_plan_answers_each_rule_with_its_lines_and_chips`.
+                    .filter(|(name, _)| name != "_status" && name != "chips")
+                    .map(|(name, inner)| (name.clone(), canonical(inner, Some(name))))
+                    .collect(),
+            ),
+            (Json::Array(items), _) => {
+                Json::Array(items.iter().map(|item| canonical(item, None)).collect())
+            }
+            (other, _) => other.clone(),
+        }
+    }
+    pharmakos_proto::json::decode_json(&canonical(answer, None))
+        .unwrap_or_else(|error| panic!("not a RenderPlanResponse: {error}"))
+}
+
+/// The slot at `pointer` of a decoded rendering.
+fn slot_at<'a>(
+    rendering: &'a pharmakos_proto::gp::api::v1::RenderPlanResponse,
+    pointer: &str,
+) -> (
+    &'a pharmakos_proto::gp::api::v1::RenderedRule,
+    &'a pharmakos_proto::gp::api::v1::ConditionSlot,
+) {
+    rendering
+        .rules
+        .iter()
+        .find_map(|rule| {
+            rule.slots
+                .iter()
+                .find(|slot| slot.pointer == pointer)
+                .map(|slot| (rule, slot))
+        })
+        .unwrap_or_else(|| panic!("no slot at {pointer}"))
+}
+
+/// S3's `gwu`: `render_plan` answers each rule's and step's condition slots,
+/// every field written and the state lower case, decoded as the schema's
+/// `RenderedRule`: a route step's absent `skip_if` as an empty slot, a rule's
+/// `when` as a group followed by its leaves, and a body step's guard under
+/// its rule, on the rule's line.
+#[test]
+fn render_plan_answers_each_rules_condition_slots() {
+    use pharmakos_proto::gp::api::v1::condition_slot::State;
+    let mut surface = hosted();
+    let token = seat_token(&mut surface, 0);
+    let mut left = FIRST_LULL_MS;
+    let answer = result(
+        &call(
+            &mut surface,
+            &token,
+            &mut left,
+            "render_plan",
+            &format!(r#"{{"playbook_jsonc":{}}}"#, quote(&worked_example())),
+        ),
+        "render_plan",
+    );
+    let first = array_of(&answer, "rules")
+        .into_iter()
+        .next()
+        .expect("a first step");
+    let skip = array_of(&first, "slots")
+        .into_iter()
+        .next()
+        .expect("a route step has its skip_if slot");
+    let Json::Object(fields) = &skip else {
+        panic!("a slot is an object: {skip:?}");
+    };
+    let keys: Vec<&str> = fields.iter().map(|(key, _)| key.as_str()).collect();
+    assert_eq!(
+        keys,
+        ["pointer", "title", "line", "state", "predicate", "pick_op"],
+        "every field, the empty predicate included"
+    );
+    assert_eq!(text_of(&skip, "state"), "empty", "lower case on the wire");
+    assert_eq!(text_of(&skip, "pick_op"), "add", "lower case on the wire");
+
+    let rendering = decoded_rendering(&answer);
+    let (step, skip) = slot_at(&rendering, "/declarative/route/0/skip_if");
+    assert_eq!(step.pointer, "/declarative/route/0");
+    assert_eq!(
+        (skip.state(), skip.predicate.as_str(), skip.title.as_str()),
+        (State::Empty, "", "skip if")
+    );
+    assert_eq!(skip.line, step.line);
+
+    let (rule, when) = slot_at(&rendering, "/declarative/handlers/0/when");
+    assert_eq!(rule.pointer, "/declarative/handlers/0");
+    assert_eq!(
+        (when.state(), when.predicate.as_str()),
+        (State::Group, "all")
+    );
+    let (_, leaf) = slot_at(&rendering, "/declarative/handlers/0/when/all/items/0");
+    assert_eq!(
+        (leaf.state(), leaf.predicate.as_str(), leaf.title.as_str()),
+        (State::Leaf, "cmdr_hp_pct", "when, item 1 of all")
+    );
+    let (owner, guard) = slot_at(&rendering, "/declarative/handlers/0/body/0/skip_if");
+    assert_eq!(
+        owner.pointer, "/declarative/handlers/0",
+        "a body step's guard is its rule's"
+    );
+    assert_eq!(guard.line, owner.line, "on the rule's own line");
+    assert_eq!(guard.title, "step 1, skip if");
+}
+
+/// The `condition_slots` fixture plan-core's slots golden reads.
+fn condition_slots_fixture() -> String {
+    fs::read_to_string(
+        workspace_root()
+            .join("crates")
+            .join("plan-core")
+            .join("tests")
+            .join("cases")
+            .join("condition_slots.jsonc"),
+    )
+    .expect("the condition slots fixture")
+}
+
+/// The items of the group at `pointer` in a `render_plan` answer's file, as
+/// the slots directly under it.
+fn items_under(
+    rendering: &pharmakos_proto::gp::api::v1::RenderPlanResponse,
+    group: &str,
+) -> Vec<String> {
+    rendering
+        .rules
+        .iter()
+        .flat_map(|rule| &rule.slots)
+        .filter_map(|slot| {
+            let rest = slot.pointer.strip_prefix(group)?.strip_prefix('/')?;
+            (rest.split('/').count() == 1).then(|| slot.predicate.clone())
+        })
+        .collect()
+}
+
+/// S3's `gwu`, fix pass 1 (the review's C1, K1): a pick sends the op its slot
+/// names (`pick_op`), through `patch_plan`, with a vocabulary entry's name
+/// and skeleton, and fills or replaces that slot and nothing else: the old
+/// leaf is gone and a group keeps its count. RFC 6902 `add` at an array index
+/// inserts, so the op of an item of a group is `replace`; an absent member's
+/// is `add`; anything at the pointer, an empty `{}` included, is `replace`.
+#[test]
+fn a_pick_sends_the_op_its_slot_names_and_changes_that_slot_alone() {
+    use pharmakos_proto::gp::api::v1::condition_slot::PickOp;
+    let mut surface = hosted();
+    let token = seat_token(&mut surface, 0);
+    let mut left = FIRST_LULL_MS;
+    let mut ask = |method: &str, params: String| -> Json {
+        result(
+            &call(&mut surface, &token, &mut left, method, &params),
+            method,
+        )
+    };
+    let words = ask("get_vocabulary", String::from("{}"));
+    let fixture = condition_slots_fixture();
+    // The same file with a `when` that is one leaf, and an empty item in a
+    // group.
+    let variant = fixture
+        .replace(
+            r#"{"id":"unwritten","body""#,
+            r#"{"id":"unwritten","when":{"cmdr_deaths":{"deaths":{"op":"GE","value":2}}},"body""#,
+        )
+        .replace(r#"{"cmdr_deaths":{"deaths":{"op":"GE","value":1}}}"#, "{}");
+    // The worked example too, so the FULL verdict a pick keeps is checked on
+    // the spec's own playbook as well as on the fixture.
+    let example = worked_example();
+    // (file, slot, its op, its predicate before, the group it is an item of)
+    let cases: [(&str, &str, PickOp, &str, Option<&str>); 9] = [
+        (
+            &example,
+            "/declarative/handlers/0/when/all/items/0",
+            PickOp::Replace,
+            "cmdr_hp_pct",
+            Some("/declarative/handlers/0/when/all/items"),
+        ),
+        (
+            &fixture,
+            "/declarative/handlers/1/when",
+            PickOp::Add,
+            "",
+            None,
+        ),
+        (
+            &variant,
+            "/declarative/handlers/1/when",
+            PickOp::Replace,
+            "cmdr_deaths",
+            None,
+        ),
+        (
+            &fixture,
+            "/declarative/handlers/0/when/all/items/0",
+            PickOp::Replace,
+            "kw_headroom",
+            Some("/declarative/handlers/0/when/all/items"),
+        ),
+        (
+            &fixture,
+            "/declarative/handlers/0/when/all/items/2/any/items/1",
+            PickOp::Replace,
+            "cmdr_deaths",
+            Some("/declarative/handlers/0/when/all/items/2/any/items"),
+        ),
+        (
+            &variant,
+            "/declarative/handlers/0/when/all/items/2/any/items/1",
+            PickOp::Replace,
+            "",
+            Some("/declarative/handlers/0/when/all/items/2/any/items"),
+        ),
+        (
+            &fixture,
+            "/declarative/handlers/0/body/0/skip_if/not/item",
+            PickOp::Add,
+            "",
+            None,
+        ),
+        (
+            &fixture,
+            "/declarative/handlers/0/body/1/skip_if",
+            PickOp::Add,
+            "",
+            None,
+        ),
+        (
+            &fixture,
+            "/declarative/route/0/skip_if",
+            PickOp::Replace,
+            "cmdr_hp_pct",
+            None,
+        ),
+    ];
+    let skeleton = skeleton_of(&words, "treasury");
+    for case in cases {
+        check_pick(&mut ask, &skeleton, case);
+    }
+}
+
+/// One case of `a_pick_sends_the_op_its_slot_names_and_changes_that_slot_alone`:
+/// `(file, slot, its op, its predicate before, the group it is an item of)`.
+fn check_pick(
+    ask: &mut dyn FnMut(&str, String) -> Json,
+    skeleton: &str,
+    (text, pointer, op, was, group): (
+        &str,
+        &str,
+        pharmakos_proto::gp::api::v1::condition_slot::PickOp,
+        &str,
+        Option<&str>,
+    ),
+) {
+    use pharmakos_proto::gp::api::v1::condition_slot::{PickOp, State};
+    let render = |ask: &mut dyn FnMut(&str, String) -> Json, text: &str| {
+        decoded_rendering(&ask(
+            "render_plan",
+            format!(r#"{{"playbook_jsonc":{}}}"#, quote(text)),
+        ))
+    };
+    let before = render(ask, text);
+    let (_, slot) = slot_at(&before, pointer);
+    assert_eq!(slot.pick_op(), op, "{pointer}");
+    assert_eq!(slot.predicate, was, "{pointer}");
+    let count = group.map(|group| items_under(&before, group).len());
+    let wire = match op {
+        PickOp::Add => "add",
+        PickOp::Replace => "replace",
+        PickOp::Unspecified => panic!("{pointer} is a pick target"),
+    };
+    let patch =
+        format!(r#"[{{"op":"{wire}","path":"{pointer}","value":{{"treasury":{skeleton}}}}}]"#);
+    let patched = text_of(
+        &ask(
+            "patch_plan",
+            format!(
+                r#"{{"playbook_jsonc":{},"json_patch":{}}}"#,
+                quote(text),
+                quote(&patch)
+            ),
+        ),
+        "playbook_jsonc",
+    );
+    let after = render(ask, &patched);
+    let (_, slot) = slot_at(&after, pointer);
+    assert_eq!(
+        (slot.state(), slot.predicate.as_str()),
+        (State::Leaf, "treasury"),
+        "{pointer}"
+    );
+    if let Some(group) = group {
+        let items = items_under(&after, group);
+        assert_eq!(
+            Some(items.len()),
+            count,
+            "{pointer}: the group keeps its count"
+        );
+        if !was.is_empty() {
+            assert!(
+                !items.iter().any(|item| item == was),
+                "{pointer}: {was} is gone"
+            );
+        }
+    }
+    let slots = |rendering: &pharmakos_proto::gp::api::v1::RenderPlanResponse| {
+        rendering
+            .rules
+            .iter()
+            .map(|rule| rule.slots.len())
+            .sum::<usize>()
+    };
+    assert_eq!(
+        slots(&after),
+        slots(&before),
+        "{pointer}: no slot added or lost"
+    );
+    // And the verdict is the one the file had: a pick changes what a rule
+    // asks, not whether the playbook qualifies.
+    let qualifies = |ask: &mut dyn FnMut(&str, String) -> Json, text: &str| {
+        ask(
+            "verify_plan",
+            format!(r#"{{"depth":"full","playbook_jsonc":{}}}"#, quote(text)),
+        )
+        .get("report")
+        .and_then(|report| report.get("qualifies"))
+        .cloned()
+    };
+    assert_eq!(
+        qualifies(ask, &patched),
+        qualifies(ask, text),
+        "{pointer}: the FULL verdict moved"
+    );
+}
+
+/// The skeleton `get_vocabulary`'s answer `words` gives the predicate `name`.
+fn skeleton_of(words: &Json, name: &str) -> String {
+    let found = array_of(words, "families")
+        .iter()
+        .flat_map(|family| match family.get("predicates") {
+            Some(Json::Array(entries)) => entries.clone(),
+            _ => Vec::new(),
+        })
+        .find(|entry| text_of(entry, "name") == name);
+    match found {
+        Some(entry) => text_of(&entry, "skeleton_json"),
+        None => panic!("the vocabulary has {name}"),
+    }
+}
+
 /// E8: `get_vocabulary` answers every family, mandate, step and blueprint,
 /// each locked entry with its reason and no skeleton: whole families the
 /// schema reserves, predicates the verifier still refuses in its own words,
@@ -3378,6 +3745,80 @@ fn get_beacon_tells_each_kind_of_build_target_as_it_was_written() {
     assert!(voxel.contains(r#""voxel""#), "{voxel}");
 }
 
+// ---------------------------------------------------------------------------
+// S3's `gwu`: the answers the client's fixtures copy, as goldens
+// ---------------------------------------------------------------------------
+
+/// `method` called with `params` as a seat's first call of the golden match's
+/// opening Lull, the whole JSON-RPC answer, footer and all, written as
+/// `tests/golden/gateway/<case>/` pins it. The first call, so the footer's
+/// countdown and tick are the same on every run.
+fn first_answer(surface: &mut Surface, method: &str, params: &str) -> String {
+    let token = seat_token(surface, 0);
+    let mut left = FIRST_LULL_MS;
+    let response = call(surface, &token, &mut left, method, params);
+    let _ = result(&response, method);
+    rpc::render(&response)
+}
+
+/// `get_vocabulary` for seat 0 on the golden match, as a golden: every
+/// family, step, mandate and blueprint with its locks, the predicates S3's
+/// `pred` built open and the Resonance Spire locked (seat 0 holds no
+/// licence). The client's picker fixture is a byte copy of it (lane `ed3b`
+/// part 2).
+#[test]
+fn get_vocabulary_answers_its_golden() {
+    let mut surface = hosted();
+    let answer = first_answer(&mut surface, "get_vocabulary", "{}");
+    for open in [
+        "beacon_units_by_role",
+        "beacon_mandate",
+        "beacon_has_structure",
+        "enemy_units_near",
+        "enemy_beacon_known",
+        "enemy_structure_near",
+        "kw_supply",
+        "kw_draw",
+    ] {
+        let words = pharmakos_proto::json::read(&answer).expect("the answer reads");
+        let entry = array_of(&result(&words, "get_vocabulary"), "families")
+            .iter()
+            .flat_map(|family| match family.get("predicates") {
+                Some(Json::Array(entries)) => entries.clone(),
+                _ => Vec::new(),
+            })
+            .find(|entry| text_of(entry, "name") == open);
+        let Some(entry) = entry else {
+            panic!("the vocabulary lists {open}");
+        };
+        assert_eq!(entry.get("locked"), None, "{open} is open since `pred`");
+    }
+    support::write_golden("get_vocabulary", &answer);
+}
+
+/// `get_beacon` of seat 0's opening core on the golden match, as a golden:
+/// its summary, prose, writ and settings rows (each its effective value).
+#[test]
+fn get_beacon_of_the_opening_core_answers_its_golden() {
+    let mut surface = hosted();
+    let answer = first_answer(&mut surface, "get_beacon", r#"{"beacon_id":"b_00"}"#);
+    support::write_golden("get_beacon_core", &answer);
+}
+
+/// `get_beacon` of a Build beacon holding one target of each way a target is
+/// written (`four_targets`: a wall with its box, `on` a named feature, `on`
+/// the nearest vent, a voxel), as a golden: every `BuildTarget` arm the Visit
+/// & change rows read.
+#[test]
+fn get_beacon_of_a_build_beacon_answers_its_golden() {
+    let mut surface = resumed_with(|snapshot, world| {
+        let _ = four_targets(snapshot, world);
+    });
+    let answer = first_answer(&mut surface, "get_beacon", r#"{"beacon_id":"b_00"}"#);
+    assert!(answer.contains(r#""blueprint_id": "wall""#), "{answer}");
+    support::write_golden("get_beacon_build", &answer);
+}
+
 /// The review of `gwr`, item 7: a writ's settings rows show what the sim
 /// reads where the playbook left a setting out -- an unset `roe` as the
 /// writ's (`FREE_FIRE` on Defend and Attack), an empty Defend arm's
@@ -3442,4 +3883,44 @@ fn a_writs_settings_rows_show_what_the_sim_reads() {
             );
         }
     }
+}
+
+/// S3's `gwu`, fix pass 1 (the review's C3, K2): in a file that writes a
+/// step's `skip_if` in its camelCase name, a pick at the slot's `snake_case`
+/// pointer is refused by `patch_plan` with `INVALID_ARGUMENT`, naming both
+/// spellings, rather than handed back as a file that no longer decodes.
+#[test]
+fn patch_plan_refuses_a_second_spelling_of_a_field() {
+    let mut surface = hosted();
+    let token = seat_token(&mut surface, 0);
+    let mut left = FIRST_LULL_MS;
+    let camel = worked_example().replacen(
+        r#"{"label":"f1","#,
+        r#"{"label":"f1","skipIf":{"cmdrHpPct":{"cmp":"LE","pct":10}},"#,
+        1,
+    );
+    assert_ne!(camel, worked_example(), "the example has the step");
+    let patch = r#"[{"op":"add","path":"/declarative/handlers/0/body/0/skip_if","value":{"treasury":{"dollars":{"op":"GE","value":100}}}}]"#;
+    let answer = call(
+        &mut surface,
+        &token,
+        &mut left,
+        "patch_plan",
+        &format!(
+            r#"{{"playbook_jsonc":{},"json_patch":{}}}"#,
+            quote(&camel),
+            quote(patch)
+        ),
+    );
+    let error = answer.get("error").expect("refused");
+    let message = text_of(error, "message");
+    assert!(
+        message.contains("`skipIf`") && message.contains("`skip_if`"),
+        "{message}"
+    );
+    assert_eq!(
+        error.get("data").and_then(|data| data.get("code")),
+        Some(&Json::String(String::from("INVALID_ARGUMENT"))),
+        "{error:?}"
+    );
 }

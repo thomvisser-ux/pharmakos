@@ -600,23 +600,34 @@ const fn posture_words(id: u8) -> Option<&'static str> {
     }
 }
 
-/// The line a seat's own feed carries when the gateway filed its playbook for
-/// it because the Lull ended with nothing sealed (spec section 14). Decision 8
-/// of S1's plan, ruled by item 128, and the demo's F5: a timeout's filing used
-/// to read like the player's own seal.
-///
-/// Worded for either end the gateway cannot tell apart: the client's
-/// countdown running out and the lobby's `end_lull`. The shipped rig calls
-/// `end_lull` when its countdown is spent without reporting the countdown at
-/// 0 first, so the gateway's last report is a few milliseconds left either
-/// way (decisions-log item 143 (4)). S3's `ed3b` makes the rig send that last
-/// report at 0 and gives "the Lull ran out" its own line again.
+// The three lines a seat's own feed carries when the gateway filed its
+// playbook for it because the Lull ended with nothing sealed (spec section 14;
+// decision 8 of S1's plan, ruled by item 128, and the demo's F5: a timeout's
+// filing used to read like the player's own seal). Each says what ended the
+// Lull where the gateway can tell, from what the host reported and never from
+// a clock of its own (AGENTS.md section 4.5; decisions-log item 143 (4), and
+// S3's `gwu`). `crate::surface::Surface::announce_filings` picks one per seat:
+// the seat's own Ready first, then a last countdown of 0, then the neutral
+// line.
+
+/// The neutral line: the Lull ended in any way the gateway cannot name, the
+/// lobby's `end_lull` with time left, a last countdown above 0, a host that
+/// reported only its elapsed time or nothing at all (a scenario host, a
+/// Probation match, whose Lulls carry no countdown).
 pub const SAFE_PLAYBOOK_FILED: &str =
     "The Lull ended before you sealed, so the safe playbook was filed for you.";
 
-/// The same line when the Lull ended because every seat said Ready, this seat
-/// with nothing sealed (decisions-log item 143 (4): the line said "The Lull
-/// ran out" even when Ready ended it).
+// PLACEHOLDER: the ran-out line's wording, the game's line before decisions-log item 143 — owner, at S6's copy pass
+/// The line when the last countdown the host reported for the Lull was 0:
+/// the client's countdown ran out, and its rig reports the 0 once before it
+/// calls `end_lull` (S3's `ed3b`). The sentence the game used before item 143
+/// (4) split the line, when it was said for every end.
+pub const SAFE_PLAYBOOK_FILED_RAN_OUT: &str =
+    "The Lull ran out, so the safe playbook was filed for you.";
+
+/// The line when this seat said Ready with nothing sealed (decisions-log item
+/// 143 (4): the line said "The Lull ran out" even when Ready ended it). It
+/// wins over a countdown at 0: the seat's own act is the better explanation.
 pub const SAFE_PLAYBOOK_FILED_ON_READY: &str =
     "You said Ready with nothing sealed, so the safe playbook was filed for you.";
 

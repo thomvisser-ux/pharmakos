@@ -84,6 +84,26 @@
 //! Every chip is built where its words are written, through [`Text`]: a span
 //! is counted, never searched for, so a value written twice in one sentence
 //! is two chips in their own places.
+//!
+//! # The condition slots (S3's `gwu`)
+//!
+//! Beside its chips each rule and step lists its **condition slots**
+//! ([`ConditionSlot`]): every place a condition stands or could stand, filled
+//! or not, with its JSON Pointer, so the editor's picker anchors to a slot the
+//! file leaves empty (an absent `skip_if` has no chip) and composes no pointer
+//! of its own. A slot is filled or replaced by one JSON Patch operation at its
+//! pointer, whose op the slot names ([`PickOp`]): `add` where nothing is
+//! there, `replace` where anything is. RFC 6902 `add` at an array index
+//! inserts, so an item of a group is always replaced, never added beside. The
+//! slots are a separate walk over the file, not through [`Text`],
+//! so they move neither the prose nor the chips; they have a golden of their
+//! own (`expected.slots.txt`). A slot holding a group lists its items after
+//! it, so a leaf under an `all` is a slot too. Its pointer is in the canonical
+//! `snake_case` spelling, as a chip's is: in a file that writes the member
+//! in its camelCase JSON name, `patch_plan` refuses a patch at the pointer
+//! rather than write the field a second time ([`crate::patch`]), and a
+//! pointer under such a member finds nothing. Making those files editable is
+//! owed (carried from `ed3b` part 1).
 
 use pharmakos_proto::gp::v1::feature_ref::{self, Coverage, Rank};
 use pharmakos_proto::gp::v1::{
@@ -129,6 +149,84 @@ pub struct RenderedRule {
     pub line_count: u32,
     /// Its chips, in the order they stand in the prose.
     pub chips: Vec<Chip>,
+    /// Every place a condition stands or could stand in it, filled or not,
+    /// in document order ([`ConditionSlot`]).
+    pub slots: Vec<ConditionSlot>,
+}
+
+/// One place in a rule or step where a condition stands, or could
+/// (`gp.api.v1.ConditionSlot`; S3's `gwu`).
+///
+/// The schema's places are exactly a rule's `when`, a step's `skip_if`, a
+/// `wait_until` step's `condition`, and a group's items (`all` and `any`'s
+/// `items`, `not`'s `item`). A route step's slots are its own; a rule's body
+/// steps' slots belong to the rule, as their chips do.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ConditionSlot {
+    /// The `gp.v1.Condition`'s JSON Pointer, whether or not the file writes
+    /// it: an empty slot's is where a JSON Patch `add` puts one. Canonical
+    /// `snake_case`, as a chip's.
+    pub pointer: String,
+    /// The slot in the player's words ([`crate::strings`]'s `SLOT_*`).
+    pub title: String,
+    /// Its rule's or step's line ([`RenderedRule::line`]).
+    pub line: u32,
+    /// What it holds.
+    pub state: SlotState,
+    /// The arm of `gp.v1.Condition` it holds, by its proto JSON field name
+    /// (a vocabulary entry's `name`, or `all`, `any`, `not`); empty for an
+    /// [`SlotState::Empty`] slot.
+    pub predicate: &'static str,
+    /// The JSON Patch op a pick here sends: [`PickOp::Add`] where nothing is
+    /// at the pointer, [`PickOp::Replace`] where anything is (a leaf, an
+    /// empty object, an item of a group). `None` on a [`SlotState::Group`]
+    /// slot, which is not a pick target.
+    pub pick: Option<PickOp>,
+}
+
+/// The JSON Patch op a pick at a [`ConditionSlot`] sends
+/// (`gp.api.v1.ConditionSlot.PickOp`). RFC 6902 `add` at an array index
+/// inserts, so an item of a group is replaced, never added to.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PickOp {
+    /// Nothing is at the pointer: insert the member.
+    Add,
+    /// Something is at the pointer: replace it in place.
+    Replace,
+}
+
+impl PickOp {
+    /// The `gp.api.v1.ConditionSlot.PickOp` value's name.
+    #[must_use]
+    pub const fn proto_name(self) -> &'static str {
+        match self {
+            PickOp::Add => "ADD",
+            PickOp::Replace => "REPLACE",
+        }
+    }
+}
+
+/// What a [`ConditionSlot`] holds (`gp.api.v1.ConditionSlot.State`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SlotState {
+    /// No condition: the member is absent, or it holds no arm.
+    Empty,
+    /// One predicate.
+    Leaf,
+    /// `all`, `any` or `not`, whose items follow as slots of their own.
+    Group,
+}
+
+impl SlotState {
+    /// The `gp.api.v1.ConditionSlot.State` value's name.
+    #[must_use]
+    pub const fn proto_name(self) -> &'static str {
+        match self {
+            SlotState::Empty => "EMPTY",
+            SlotState::Leaf => "LEAF",
+            SlotState::Group => "GROUP",
+        }
+    }
 }
 
 /// One editable value in the prose (`gp.api.v1.Chip`).
@@ -506,6 +604,7 @@ struct Pending {
     line: u32,
     line_count: u32,
     marks: Vec<Placed>,
+    slots: Vec<ConditionSlot>,
 }
 
 impl Pending {
@@ -517,9 +616,89 @@ impl Pending {
                 line: out.line,
                 line_count: 0,
                 marks: Vec::new(),
+                slots: Vec::new(),
             },
             out.marks.len(),
         )
+    }
+
+    /// A condition slot of this rule or step at `here`, titled `title`, and
+    /// the slots of a group's items after it, recursively in document order.
+    fn slot(&mut self, node: Option<&Condition>, here: &str, title: &str, out: &mut Out) {
+        let held = node.and_then(|condition| condition.node.as_ref());
+        // No arm is what an empty slot is, not a default standing in for one.
+        let (state, predicate) = match held {
+            Some(node) => arm(node),
+            None => (SlotState::Empty, ""),
+        };
+        // What is at the pointer decides the op, not what it holds: an empty
+        // `{}` or an item of a group is there to be replaced.
+        let pick = match (state, node) {
+            (SlotState::Group, _) => None,
+            (_, Some(_)) => Some(PickOp::Replace),
+            (_, None) => Some(PickOp::Add),
+        };
+        self.slots.push(ConditionSlot {
+            pointer: here.to_owned(),
+            title: title.to_owned(),
+            line: self.line,
+            state,
+            predicate,
+            pick,
+        });
+        let titled = |words: String| format!("{title}{}{words}", s::SLOT_JOIN);
+        match held {
+            Some(condition::Node::All(group)) => {
+                let items_at = at(&at(here, "all"), "items");
+                for (index, item) in group.items.iter().enumerate() {
+                    let number = out.ordinal(index);
+                    let words = format!("{} {number} {}", s::SLOT_ITEM, s::SLOT_OF_ALL);
+                    self.slot(Some(item), &at(&items_at, index), &titled(words), out);
+                }
+            }
+            Some(condition::Node::Any(group)) => {
+                let items_at = at(&at(here, "any"), "items");
+                for (index, item) in group.items.iter().enumerate() {
+                    let number = out.ordinal(index);
+                    let words = format!("{} {number} {}", s::SLOT_ITEM, s::SLOT_OF_ANY);
+                    self.slot(Some(item), &at(&items_at, index), &titled(words), out);
+                }
+            }
+            Some(condition::Node::Not(inner)) => {
+                let item_at = at(&at(here, "not"), "item");
+                self.slot(
+                    inner.item.as_deref(),
+                    &item_at,
+                    &titled(String::from(s::SLOT_UNDER_NOT)),
+                    out,
+                );
+            }
+            _ => {}
+        }
+    }
+
+    /// A step's slots: its `skip_if`, then a `wait_until` step's
+    /// `condition`, each titled after `lead` (a body step's "step 2", or
+    /// nothing for a route step).
+    fn step_slots(&mut self, entry: &Step, here: &str, lead: Option<&str>, out: &mut Out) {
+        let titled = |words: &str| match lead {
+            Some(lead) => format!("{lead}{}{words}", s::SLOT_JOIN),
+            None => words.to_owned(),
+        };
+        self.slot(
+            entry.skip_if.as_ref(),
+            &at(here, "skip_if"),
+            &titled(s::SLOT_SKIP_IF),
+            out,
+        );
+        if let Some(step::Kind::WaitUntil(wait)) = entry.kind.as_ref() {
+            self.slot(
+                wait.condition.as_ref(),
+                &at(&at(here, "wait_until"), "condition"),
+                &titled(s::SLOT_WAIT_UNTIL),
+                out,
+            );
+        }
     }
 
     /// Closes it: every line since it opened, and every chip placed on them.
@@ -564,7 +743,39 @@ impl Pending {
             line: self.line,
             line_count: self.line_count,
             chips,
+            slots: self.slots,
         })
+    }
+}
+
+/// What a condition's arm makes its slot, and the arm's proto JSON field
+/// name, as the vocabulary's entries spell it. Exhaustive, so an arm the
+/// schema gains is a compile error here rather than a slot with no name.
+const fn arm(node: &condition::Node) -> (SlotState, &'static str) {
+    use condition::Node;
+    match node {
+        Node::All(_) => (SlotState::Group, "all"),
+        Node::Any(_) => (SlotState::Group, "any"),
+        Node::Not(_) => (SlotState::Group, "not"),
+        Node::CmdrHpPct(_) => (SlotState::Leaf, "cmdr_hp_pct"),
+        Node::CmdrTookDamageWithin(_) => (SlotState::Leaf, "cmdr_took_damage_within"),
+        Node::CmdrDeaths(_) => (SlotState::Leaf, "cmdr_deaths"),
+        Node::SegmentElapsed(_) => (SlotState::Leaf, "segment_elapsed"),
+        Node::BeaconHpPct(_) => (SlotState::Leaf, "beacon_hp_pct"),
+        Node::BeaconUnderAttack(_) => (SlotState::Leaf, "beacon_under_attack"),
+        Node::BeaconPowered(_) => (SlotState::Leaf, "beacon_powered"),
+        Node::BeaconUnitsByRole(_) => (SlotState::Leaf, "beacon_units_by_role"),
+        Node::BeaconMandate(_) => (SlotState::Leaf, "beacon_mandate"),
+        Node::BeaconHasStructure(_) => (SlotState::Leaf, "beacon_has_structure"),
+        Node::EnemyUnitsNear(_) => (SlotState::Leaf, "enemy_units_near"),
+        Node::EnemyBeaconKnown(_) => (SlotState::Leaf, "enemy_beacon_known"),
+        Node::EnemyStructureNear(_) => (SlotState::Leaf, "enemy_structure_near"),
+        Node::Treasury(_) => (SlotState::Leaf, "treasury"),
+        Node::KwHeadroom(_) => (SlotState::Leaf, "kw_headroom"),
+        Node::KwSupply(_) => (SlotState::Leaf, "kw_supply"),
+        Node::KwDraw(_) => (SlotState::Leaf, "kw_draw"),
+        Node::StepReached(_) => (SlotState::Leaf, "step_reached"),
+        Node::RuleFired(_) => (SlotState::Leaf, "rule_fired"),
     }
 }
 
@@ -621,7 +832,8 @@ fn route(book: &Playbook, ctx: &Ctx<'_>, out: &mut Out) -> Vec<Pending> {
     heading(s::HEADING_ROUTE, out);
     for (index, entry) in body.route.iter().enumerate() {
         let here = at("/declarative/route", index);
-        let (open, from) = Pending::open(here.clone(), out);
+        let (mut open, from) = Pending::open(here.clone(), out);
+        open.step_slots(entry, &here, None, out);
         let number = out.ordinal(index);
         line(
             1,
@@ -1877,7 +2089,12 @@ fn rules_section(book: &Playbook, ctx: &Ctx<'_>, out: &mut Out) -> Vec<Pending> 
     heading(s::HEADING_RULES, out);
     for (index, rule) in body.handlers.iter().enumerate() {
         let here = at("/declarative/handlers", index);
-        let (open, from) = Pending::open(here.clone(), out);
+        let (mut open, from) = Pending::open(here.clone(), out);
+        open.slot(rule.when.as_ref(), &at(&here, "when"), s::SLOT_WHEN, out);
+        for (position, entry) in rule.body.iter().enumerate() {
+            let lead = format!("{} {}", s::SLOT_STEP, out.ordinal(position));
+            open.step_slots(entry, &at(&at(&here, "body"), position), Some(&lead), out);
+        }
         let number = out.ordinal(index);
         line(
             1,
