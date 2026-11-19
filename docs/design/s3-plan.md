@@ -1148,6 +1148,22 @@ slot A runs `vfyq` (0–4) → `vfy6` (4–6.5) → `pred` (6.5–12) → `nite3
 other cargo, rustc or nextest runs (item 159 (2)). Decision 12's checkpoints (section 4.5) are
 re-based on this order (item 159 (4)).
 
+[Amended by items 161 (11) and 162 (5). The slot order above has been replaced twice. Item 161 (11)
+gave slot A `pred` > `p3acc` > `gwu` > `vfyq2` > `nite3` > `opr3` > `vcap` > `deps3` > `cert3` >
+`tune3` > `demo3` and slot B `ed3b` part 2 > `prob`. Item 162 (5), from 2026-11-19 and the main
+session's call (the owner can veto it), is: wave 0, `p3acc` and `ed3b` part 2; wave 1, `gwu` (with
+the proto doc-comment sweep) and `ed3b` part 2's wiring to it, then P6b by hand; wave 2, `vfyq2` and
+`opr3` (`opr3` merges first, `vfyq2`'s `VERIFIER_VERSION` bump last); wave 3, `nite3` and `prob`;
+wave 4, `vcap` and `prob`'s finish; wave 5, `deps3` alone; wave 6, `cert3` (the `xtask` `SHOTS` row
+as its first commit); wave 7, `tune3` and the harness docs PR; wave 8, `demo3`. The table and day
+counts above are the dependency order and are not re-derived. Item 162 (6) forecasts S3's demo for
+2026-12-12 (80% range 12-06 to 12-24). Five lanes the sections of section 3 do not cover are defined
+in the log, and the plan writes no section for them: `p3acc` (item 161 (11): the test-only P3
+accuracy lane, E11), `gwu` (items 161 (8) and (9), with the proto doc-comment sweep folded in by item
+162 (5)), `vfyq2` (items 160 (6), 161 (7) (c) and 162 (1): the editor's end-to-end wait, the canonical
+text cost of QUICK and the `E0209` Fix), `vcap` (item 160 (6): the per-code report cap) and `deps3`
+(items 161 (2) and (12): the toolchain and action bumps). The totals below predate them.]
+
 **Totals.** 19 tasks, **about 74.5 ad** (65–84), including about 1.5 ad of re-blesses after merges
 of `main`; 73.5 without decision 3's Survey post. **Two critical paths of about 31 working days:**
 the client's `con5` → `con6` → `gwp` → `gwr` → `ed3b` → (`opr3`'s merge) → `prob` → `demo3`, and
