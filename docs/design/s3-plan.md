@@ -1105,6 +1105,9 @@ change moves `report_hash` is granted, for the re-bless alone, `tests/golden/gat
 - **Implements:** AGENTS.md §10 items 7 and 8. **Needs:** every other lane merged. **Contract PR:**
   yes (design docs). **Agent-days:** 2.5.
 
+[Amended by item 162 (1) and (5): `demo3` also re-runs the editor's end-to-end 50 ms
+bar and QUICK at the final size budget, because `tune3` can change the budget after `cert3`.]
+
 ### `p6` — the owner's P6 timing sessions (main session and owner, not a lane)
 
 Two sittings, from `docs/demo/p6-run-sheet.md`, which the main session writes in a docs PR before
@@ -1148,6 +1151,26 @@ slot A runs `vfyq` (0–4) → `vfy6` (4–6.5) → `pred` (6.5–12) → `nite3
 other cargo, rustc or nextest runs (item 159 (2)). Decision 12's checkpoints (section 4.5) are
 re-based on this order (item 159 (4)).
 
+[Amended by items 160 (7), 161 (11) and 162 (5). The slot order above has been replaced by items 160
+(7), 161 (11) and 162 (5). Item 161 (11) gave slot A `pred` > `p3acc` >
+`gwu` > `vfyq2` > `nite3` > `opr3` > `vcap` > `deps3` > `cert3` > `tune3` > `demo3` and slot B
+`ed3b` part 2 > `prob`. Item 162 (5), of 2026-11-18, is the main session's call (the owner can
+veto it), in effect since the owner lifted the hold of item 162 (2) on 2026-11-18: wave 0, `p3acc` and `ed3b` part 2; wave 1, `gwu` (with the proto doc-comment
+sweep) and `ed3b` part 2's wiring to it, then P6b by hand, which needs an idle machine, so wave 2
+starts after it or P6b waits for a gap, as the main session decides at the time; wave 2, `vfyq2`
+and `opr3` (`opr3` merges first, `vfyq2`'s `VERIFIER_VERSION` bump last); wave 3, `nite3` and
+`prob`; wave 4, `vcap` (its place, and any named places in `crates/client-gdext`, are the main
+session's call at launch) and `prob`'s finish; wave 5, `deps3` alone; wave 6, `cert3` (the `xtask`
+`SHOTS` row as its first commit); wave 7, `tune3` and the harness docs PR; wave 8, `demo3`. The
+table and day counts above are the dependency order and are not re-derived. Item 162 (6) forecasts
+S3's demo for 2026-12-12 (80% range 12-06 to 12-24). Five lanes the sections of section 3 do not
+cover are defined in the log, and the plan writes no section for them: `p3acc` (item 161 (11): the
+test-only P3 accuracy lane, E11), `gwu` (items 161 (8) and (9), with the proto doc-comment sweep
+folded in by item 162 (5)), `vfyq2` (items 160 (6), 161 (7) (c) and 162 (1): the editor's end-to-end
+wait, the canonical text cost of QUICK and the `E0209` Fix), `vcap` (item 160 (6): the per-code
+report cap) and `deps3` (items 161 (2) and (12): the toolchain and action bumps). The totals below
+predate them.]
+
 **Totals.** 19 tasks, **about 74.5 ad** (65–84), including about 1.5 ad of re-blesses after merges
 of `main`; 73.5 without decision 3's Survey post. **Two critical paths of about 31 working days:**
 the client's `con5` → `con6` → `gwp` → `gwr` → `ed3b` → (`opr3`'s merge) → `prob` → `demo3`, and
@@ -1181,6 +1204,17 @@ Over the stage the scenario chains move twice for certain (`lic`'s, `tune3`) and
 result golden four times (`con5`, `nite3`, `opr3`, `tune3`), each naming its cause. Where two
 running lanes move one set, the second to merge re-blesses after its merge of `main` and names the
 lane it followed.
+
+[Amended by items 160 (6), 161 (8) and (9), and 162 (5). The ledger above predates five lanes. Every
+`report_hash` golden also moves at `vfyq2` and at `vcap`: each bumps `VERIFIER_VERSION` as its own
+last commit (item 162 (5) records the bumps, from the lanes' rulings; item 160 (6) defines the
+lanes), and the version is one of `report_hash`'s inputs, so those goldens move **eight times** over
+the stage, not six. Gateway goldens move at `gwu` (the additive `Status` field; each condition slot's
+pointer and state on a rendered rule or step; `get_vocabulary` and `get_beacon`, with the byte copy
+`godot/fixtures/rule_list_render.json` that item 161 (9) grants it by name) and at `opr3` (Easy's
+output: `instantiate_suggested` and the `demo_*` goldens, already in its row). Where two of these
+lanes move one set, item 162 (5) fixes the merge order: `opr3` first, `vfyq2`'s
+version bump last.]
 
 ### 4.3 Honest size
 
@@ -1360,6 +1394,18 @@ Fallback: "Smaller budget; debounce".
    together. The amendment is the main session's docs PR's (section 4.4). Decision 9 holds the
    direction: never above 128 in S3.
 6. **Re-run on the final rules** by `demo3`.
+
+[Amended by item 162 (1) and (5). Two rulings of 2026-11-18 change what this section certifies.
+QUICK's 5 ms bar binds on the verifier alone at the 128-unit size budget; the cost of reading the
+player's text and the figure at the text cap are published and never gated. And the editor's
+end-to-end wait for a check has its own bar: **50 ms p99 at the size budget**, certified by `cert3`;
+that it is certified on every shape item 1 certifies is the main session's reading, and a shape over
+the bar is reported and put to the owner. Measured on the route shape before the ruling: 25.5 to
+26.1 ms p50 and 30.5 to 32.7 ms p99 over three idle runs; the record's figure, the median of the
+three p99s, is 32.0 ms. `cert3` also records the largest text the editor can send and what the
+player sees past it; the socket's 256 KiB limit against the 512 KiB text cap is settled at
+hardening. `tune3` can change the size budget after `cert3`, so, by item 162 (5),
+`demo3` re-runs the 50 ms bar and QUICK at the final budget, with the rest of item 6.]
 
 **The fallback, written now.** If FULL at 128 misses, **a smaller budget** by E24's mechanics, never
 below its floor; if the floor itself misses, the owner rules (decision 18). **Debounce**: the editor
