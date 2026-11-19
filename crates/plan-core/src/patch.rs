@@ -289,22 +289,79 @@ pub fn apply(document: &Document, patch: &Patch) -> Result<(Document, Patch), Er
         next.append(&mut inverse);
         inverse = next;
     }
-    let before = written_twice(&document.to_json());
-    if let Some(twice) = written_twice(&working.to_json())
-        .into_iter()
-        .find(|found| !before.contains(found))
-    {
+    // One walk for almost every patch: the original is read only when the
+    // patched file names a field twice somewhere (S3's `gwu`, fix pass 2: two
+    // walks cost every `patch_plan` about 60% more at the text cap).
+    let after = written_twice(&working.to_json());
+    if after.is_empty() {
+        return Ok((working, Patch::new(inverse)));
+    }
+    let original = document.to_json();
+    let before = written_twice(&original);
+    // What is new is told by the field and its two spellings, and by how many
+    // objects write them so, never by an object's pointer, which a patch that
+    // adds or removes an array item before it moves.
+    let same = |one: &WrittenTwice, other: &WrittenTwice| {
+        one.field == other.field
+            && ((one.written == other.written && one.added == other.added)
+                || (one.written == other.added && one.added == other.written))
+    };
+    let new = after.iter().find(|found| {
+        let now = after.iter().filter(|other| same(found, other)).count();
+        let then = before.iter().filter(|other| same(found, other)).count();
+        now > then
+    });
+    if let Some(twice) = new {
+        // The file already wrote the first spelling where the patch put the
+        // second; otherwise the patch brought both.
+        let already = matches!(
+            json_at(&original, &twice.pointer),
+            Some(Json::Object(members))
+                if members.iter().any(|(key, _)| *key == twice.written)
+                    && !members.iter().any(|(key, _)| *key == twice.added)
+        );
+        let advice = if already {
+            format!(
+                "edit the member the file already writes, `{}`",
+                twice.written
+            )
+        } else {
+            String::from("the patch itself writes both; write the field once")
+        };
         return Err(Error::at(
             twice.pointer.clone(),
             format!(
                 "this patch would write the field `{}` twice in one object, as `{}` and as \
-                 `{}`, and a playbook writes each field once, under one of its names; edit the \
-                 member the file already writes, `{}`",
-                twice.field, twice.written, twice.added, twice.written
+                 `{}`, and a playbook writes each field once, under one of its names; {advice}",
+                twice.field, twice.written, twice.added
             ),
         ));
     }
     Ok((working, Patch::new(inverse)))
+}
+
+/// The value at an RFC 6901 pointer in plain JSON: `None` where nothing is
+/// (a pointer the walk wrote, so it always splits; an index that is not one
+/// names nothing).
+fn json_at<'a>(value: &'a Json, pointer: &str) -> Option<&'a Json> {
+    let Ok(tokens) = split_pointer(pointer) else {
+        return None;
+    };
+    let mut here = value;
+    for token in tokens {
+        here = match here {
+            Json::Object(members) => members
+                .iter()
+                .find(|(key, _)| *key == token)
+                .map(|(_, inner)| inner)?,
+            Json::Array(items) => match token.parse::<usize>() {
+                Ok(index) => items.get(index)?,
+                Err(_) => return None,
+            },
+            _ => return None,
+        };
+    }
+    Some(here)
 }
 
 /// One playbook field written under both its names in one object.
