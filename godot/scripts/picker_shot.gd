@@ -57,8 +57,10 @@ func _ready() -> void:
 		return
 	for i in SETTLE_DRAWS:
 		await get_tree().process_frame
-	if bridge.caught_panics() != 0:
-		_fail("%d panic(s) were caught at the bridge boundary" % bridge.caught_panics())
+	var caught: Variant = bridge.caught_panics()
+	# A count past what an int holds comes as the bridge's refusal, a Dictionary: a failure too.
+	if not (caught is int) or caught != 0:
+		_fail("panic(s) were caught at the bridge boundary: %s" % str(caught))
 		return
 	if shot != "":
 		await RenderingServer.frame_post_draw

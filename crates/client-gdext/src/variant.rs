@@ -72,7 +72,8 @@ pub(crate) fn int_variant<T: TryInto<i64> + Copy + std::fmt::Display>(count: T) 
         Ok(value) => value.to_variant(),
         Err(NotAnInt(digits)) => {
             godot::global::godot_error!(
-                "[pharmakos] a count of {digits} is past what Godot's int holds; it is sent as                  a refusal, not as a number"
+                "[pharmakos] a count of {digits} is past what Godot's int holds; it is sent as a \
+                 refusal, not as a number"
             );
             let mut refusal = VarDictionary::new();
             refusal.set(&"not_an_int".to_variant(), &digits.to_variant());

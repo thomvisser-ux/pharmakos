@@ -523,7 +523,9 @@ impl PharmakosBridge {
                         &surface,
                     )?;
                 }
-                uploaded = uploaded.saturating_add(1);
+                uploaded = uploaded.checked_add(1).ok_or(BridgeError::CountOverflow {
+                    what: "chunks uploaded",
+                })?;
             }
             Ok::<usize, BridgeError>(uploaded)
         });
@@ -1934,8 +1936,21 @@ pub fn self_check() -> SelfCheck {
                 }
             };
             if pass == 2 {
-                vertices = vertices.saturating_add(surface.vertex_count() as u64);
-                indices = indices.saturating_add(surface.indices().len() as u64);
+                if let (Some(more_vertices), Some(more_indices)) = (
+                    vertices.checked_add(surface.vertex_count() as u64),
+                    indices.checked_add(surface.indices().len() as u64),
+                ) {
+                    vertices = more_vertices;
+                    indices = more_indices;
+                } else {
+                    failures.push(format!(
+                        "chunk {case}: {}",
+                        BridgeError::CountOverflow {
+                            what: "self-check vertices and indices"
+                        }
+                    ));
+                    geometry_identical = false;
+                }
             }
 
             if let Err(error) = apply(&mut path_a, resident_a.get_mut(case), case, &surface) {
