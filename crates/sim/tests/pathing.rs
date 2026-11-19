@@ -49,7 +49,7 @@ use pharmakos_sim::pathing::MAX_ROUTE_NODES;
 use pharmakos_sim::pathing::clusters::Clusters;
 use pharmakos_sim::pathing::estimate::{Fog, Speed, estimate, ticks_for_cost};
 use pharmakos_sim::pathing::repair::{Repairer, conservative_affected, repair};
-use pharmakos_sim::pathing::route::route;
+use pharmakos_sim::pathing::route::{abstract_search, route};
 use pharmakos_sim::pathing::router::WalkState;
 use pharmakos_sim::pathing::search::{Bound, Scratch, astar, astar_with_order, dijkstra_bounded};
 use pharmakos_sim::pathing::surface::{DEFAULT_ORDER, Node, StepCosts, Surface};
@@ -2540,4 +2540,340 @@ fn p3_holds_on_short_routes() {
         }
     }
     assert!(problems.is_empty(), "{problems:#?}");
+}
+
+// ---------------------------------------------------------------------------
+// Near pairs (lane `p3fix`): priced at the route the router serves
+// ---------------------------------------------------------------------------
+
+/// Pairs drawn per seed by [`a_near_pair_is_priced_at_the_route_the_router_serves`].
+const NEAR_PAIRS: u32 = 200;
+
+/// `count` connected pairs at most `reach` cells apart on each axis, uniform
+/// over that square, deterministic in `seed`.
+fn square_pairs(
+    surface: &Surface,
+    clusters: &Clusters,
+    count: u32,
+    seed: u64,
+    reach: i32,
+) -> Vec<(Node, Node)> {
+    let mut rng = Rng::new(seed);
+    let extent = surface.size();
+    let mut out: Vec<(Node, Node)> = Vec::new();
+    let mut attempts: u32 = 0;
+    while u32::try_from(out.len()).expect("fits") < count && attempts < count * 2_000 {
+        attempts += 1;
+        let ax = rng.below(extent[0]);
+        let ay = rng.below(extent[1]);
+        let dx = rng.below(2 * reach + 1) - reach;
+        let dy = rng.below(2 * reach + 1) - reach;
+        let (Some(a), Some(b)) = (surface.node_of(ax, ay), surface.node_of(ax + dx, ay + dy))
+        else {
+            continue;
+        };
+        if a == b || !clusters.connected(surface, a, b) {
+            continue;
+        }
+        out.push((a, b));
+    }
+    assert_eq!(
+        u32::try_from(out.len()).expect("fits"),
+        count,
+        "the map did not yield {count} connected pairs"
+    );
+    out
+}
+
+/// The estimator's near pairs, on the three seeds of P3's figures: a pair
+/// whose clusters touch is priced at exactly the route the router serves it
+/// (its cost, and the tick the walk integrator arrives on: so never
+/// optimistic, and with no error at all), its `legs` stay the abstract edge
+/// count; a far pair is still the abstract search's answer, unchanged; and
+/// every pair at most one cluster edge apart on both axes is a near pair.
+#[test]
+fn a_near_pair_is_priced_at_the_route_the_router_serves() {
+    for (index, seed) in P3_SEEDS.into_iter().enumerate() {
+        let mut fixture = Fixture::build(seed, CLUSTER);
+        let speed = fixture.commander_speed();
+        let mut buffer: Vec<Node> =
+            Vec::with_capacity(usize::try_from(MAX_ROUTE_NODES).expect("fits"));
+        // Twice the cluster edge, so the draw holds far pairs as well.
+        let set = square_pairs(
+            &fixture.surface,
+            &fixture.clusters,
+            NEAR_PAIRS,
+            0x5EED_0013 ^ seed,
+            2 * CLUSTER,
+        );
+        let (mut near, mut far) = (0_u32, 0_u32);
+        for (pair, (start, goal)) in set.into_iter().enumerate() {
+            let label = format!("seed {index}, pair {pair}");
+            let (sx, sy) = fixture.surface.coord_of(start);
+            let (gx, gy) = fixture.surface.coord_of(goal);
+            let touching = fixture.clusters.touch(start, goal);
+            if (sx - gx).abs() <= CLUSTER && (sy - gy).abs() <= CLUSTER {
+                assert!(touching, "{label}: one cluster edge apart, yet not near");
+            }
+            let estimated = estimate(
+                &fixture.surface,
+                &fixture.clusters,
+                &mut fixture.scratch,
+                start,
+                goal,
+                Fog::Clear,
+                speed,
+            )
+            .unwrap_or_else(|| panic!("{label}: a connected pair has an estimate"));
+            let abstract_answer = abstract_search(
+                &fixture.surface,
+                &fixture.clusters,
+                &mut fixture.scratch,
+                start,
+                goal,
+                Fog::Clear,
+                speed,
+            )
+            .unwrap_or_else(|| panic!("{label}: a connected pair has an abstract answer"));
+            let served = route(
+                &fixture.surface,
+                &fixture.clusters,
+                &mut fixture.scratch,
+                start,
+                goal,
+                &mut buffer,
+            )
+            .unwrap_or_else(|_| panic!("{label}: a connected pair has a route"));
+            assert!(!served.partial, "{label}: the route fits the buffer");
+            let walked = walked_ticks(&fixture.surface, &buffer, speed.cost_per_second)
+                .unwrap_or_else(|| panic!("{label}: the route is walkable"));
+            assert_eq!(estimated.legs, abstract_answer.legs, "{label}: legs");
+            assert!(estimated.ticks >= walked, "{label}: optimistic");
+            if touching {
+                near += 1;
+                assert_eq!(estimated.cost, served.cost, "{label}: not the served cost");
+                assert_eq!(estimated.ticks, walked, "{label}: not the walked tick");
+            } else {
+                far += 1;
+                assert_eq!(
+                    estimated.cost, abstract_answer.cost,
+                    "{label}: a far pair moved off the abstract answer"
+                );
+            }
+        }
+        assert!(
+            near > 0 && far > 0,
+            "seed {index}: the draw must hold both kinds ({near} near, {far} far)"
+        );
+    }
+}
+
+/// What a near pair's estimate would tell a seat through fog (p3fix's ruling
+/// 5): the question that decides whether the near pairs reach a fogged query.
+///
+/// Both answers read true terrain. Today's fogged answer is the abstract
+/// search's, every abstract edge priced at ×3/2 when either end is unknown.
+/// The candidate is the served route's cost, each step priced at ×3/2 when
+/// either end is unknown. This test changes **only unknown columns** (a crater
+/// inside each pair's fogged box, every known column checked unchanged) and
+/// counts, per near pair, which answers moved: an answer that moved told the
+/// seat something about columns it has not seen.
+///
+/// Measured: the served-route answer moves on pairs where the abstract answer
+/// does not, so it tells a seat things the abstract answer does not. That is
+/// why `estimate` keeps the abstract path for any query with a fog mask, and
+/// why fog for near pairs is the owner's question (AGENTS.md section 7), not
+/// this lane's. The reverse (the abstract answer alone moving) is counted and
+/// printed too; on the golden seed it did not happen. Neither answer is a
+/// function of the known columns alone.
+#[test]
+fn a_near_route_through_fog_tells_what_the_abstract_one_does_not() {
+    let mut fixture = Fixture::build(SEED, CLUSTER);
+    let speed = fixture.commander_speed();
+    let (chosen, unknown) = fog_boxes(&fixture);
+    let answers = |fixture: &mut Fixture| fogged_answers(fixture, &chosen, &unknown, speed);
+    let known = |fixture: &Fixture| -> Vec<(i32, bool)> {
+        (0..fixture.surface.node_count())
+            .filter(|node| !unknown[usize::try_from(*node).expect("fits")])
+            .map(|node| (fixture.surface.top(node), fixture.surface.walkable(node)))
+            .collect()
+    };
+    let before = answers(&mut fixture);
+    let known_before = known(&fixture);
+    // One crater a pair, at the middle of its served route, where that lies
+    // deep inside the fog: three cells inside its box and six from either
+    // end. A pair whose middle does not is left out of the count.
+    let mut buffer: Vec<Node> = Vec::new();
+    let mut cratered: Vec<bool> = Vec::new();
+    for (start, goal, bounds) in &chosen {
+        route(
+            &fixture.surface,
+            &fixture.clusters,
+            &mut fixture.scratch,
+            *start,
+            *goal,
+            &mut buffer,
+        )
+        .expect("a route");
+        let middle = buffer[buffer.len().div_euclid(2)];
+        let (x, y) = fixture.surface.coord_of(middle);
+        let (sx, sy) = fixture.surface.coord_of(*start);
+        let (gx, gy) = fixture.surface.coord_of(*goal);
+        let deep = x >= bounds[0] + 3
+            && x <= bounds[2] - 3
+            && y >= bounds[1] + 3
+            && y <= bounds[3] - 3
+            && (x - sx).abs().max((y - sy).abs()) >= 6
+            && (x - gx).abs().max((y - gy).abs()) >= 6;
+        if deep {
+            fixture.crater(x, y, 1);
+        }
+        cratered.push(deep);
+    }
+    fixture.repair();
+    assert_eq!(
+        known(&fixture),
+        known_before,
+        "a crater reached a known column; the comparison would not be about unseen ground"
+    );
+    let after = answers(&mut fixture);
+    let (mut served_only, mut abstract_only, mut both) = (0, 0, 0);
+    for ((old, new), deep) in before.iter().zip(&after).zip(&cratered) {
+        if !deep {
+            continue;
+        }
+        match (old.0 != new.0, old.1 != new.1) {
+            (false, true) => served_only += 1,
+            (true, false) => abstract_only += 1,
+            (true, true) => both += 1,
+            (false, false) => {}
+        }
+    }
+    println!(
+        "::notice::fog, {} of {} near pairs cratered in unseen ground: the served-route answer \
+         alone moved on {served_only}, the abstract answer alone on {abstract_only}, both on {both}",
+        cratered.iter().filter(|deep| **deep).count(),
+        chosen.len()
+    );
+    assert!(
+        served_only > 0,
+        "the served-route answer never told more than the abstract one here: ruling 5's question \
+         would have the other answer, and the module docs' Fog section must change"
+    );
+}
+
+/// Each pair's two fogged answers, as `(abstract, served route)`: the
+/// abstract estimate under the mask, and the served route's steps priced at
+/// ×3/2 where either end is unknown (`-1` for no answer).
+fn fogged_answers(
+    fixture: &mut Fixture,
+    chosen: &[FogBox],
+    unknown: &[bool],
+    speed: Speed,
+) -> Vec<(i32, i32)> {
+    use pharmakos_sim::pathing::estimate::fog_price;
+    let mut buffer: Vec<Node> = Vec::new();
+    chosen
+        .iter()
+        .map(|(start, goal, _)| {
+            let abstract_fogged = estimate(
+                &fixture.surface,
+                &fixture.clusters,
+                &mut fixture.scratch,
+                *start,
+                *goal,
+                Fog::Unknown(unknown),
+                speed,
+            )
+            .map_or(-1, |found| found.cost);
+            let served_fogged = route(
+                &fixture.surface,
+                &fixture.clusters,
+                &mut fixture.scratch,
+                *start,
+                *goal,
+                &mut buffer,
+            )
+            .ok()
+            .map_or(-1, |_| {
+                buffer
+                    .windows(2)
+                    .map(|step| {
+                        let cost = fixture
+                            .surface
+                            .step_cost_between(step[0], step[1])
+                            .expect("a served step is legal");
+                        let fogged = unknown[usize::try_from(step[0]).expect("fits")]
+                            || unknown[usize::try_from(step[1]).expect("fits")];
+                        if fogged {
+                            fog_price(cost, speed.fog_numerator, speed.fog_denominator)
+                        } else {
+                            cost
+                        }
+                    })
+                    .sum()
+            });
+            (abstract_fogged, served_fogged)
+        })
+        .collect()
+}
+
+/// A near pair and its fogged box, `[x0, y0, x1, y1]` inclusive.
+type FogBox = (Node, Node, [i32; 4]);
+
+/// Near pairs whose fogged boxes (the pair's bounding box grown by four cells)
+/// lie at least eight cells apart, so each crater stays in its own, and the
+/// fog mask: each box, less a disc of three cells round each end.
+fn fog_boxes(fixture: &Fixture) -> (Vec<FogBox>, Vec<bool>) {
+    let size = fixture.surface.size();
+    let nodes = usize::try_from(fixture.surface.node_count()).expect("fits");
+    let mut chosen: Vec<FogBox> = Vec::new();
+    for (start, goal) in square_pairs(
+        &fixture.surface,
+        &fixture.clusters,
+        400,
+        0x5EED_0014,
+        CLUSTER.div_euclid(2),
+    ) {
+        let (sx, sy) = fixture.surface.coord_of(start);
+        let (gx, gy) = fixture.surface.coord_of(goal);
+        if (sx - gx).abs().max((sy - gy).abs()) < 12 {
+            continue;
+        }
+        let bounds = [
+            sx.min(gx) - 4,
+            sy.min(gy) - 4,
+            sx.max(gx) + 4,
+            sy.max(gy) + 4,
+        ];
+        if bounds[0] < 0 || bounds[1] < 0 || bounds[2] >= size[0] || bounds[3] >= size[1] {
+            continue;
+        }
+        let apart = chosen.iter().all(|(_, _, other)| {
+            bounds[2] + 8 < other[0]
+                || other[2] + 8 < bounds[0]
+                || bounds[3] + 8 < other[1]
+                || other[3] + 8 < bounds[1]
+        });
+        if apart && fixture.clusters.touch(start, goal) {
+            chosen.push((start, goal, bounds));
+        }
+    }
+    assert!(chosen.len() >= 10, "too few pairs: {}", chosen.len());
+    // Unknown: each box, less a disc of three cells round each end.
+    let mut unknown = vec![false; nodes];
+    for (start, goal, bounds) in &chosen {
+        let (sx, sy) = fixture.surface.coord_of(*start);
+        let (gx, gy) = fixture.surface.coord_of(*goal);
+        for y in bounds[1]..=bounds[3] {
+            for x in bounds[0]..=bounds[2] {
+                let near_end = (x - sx).abs().max((y - sy).abs()) <= 3
+                    || (x - gx).abs().max((y - gy).abs()) <= 3;
+                if !near_end && let Some(node) = fixture.surface.node_of(x, y) {
+                    unknown[usize::try_from(node).expect("fits")] = true;
+                }
+            }
+        }
+    }
+    (chosen, unknown)
 }

@@ -1,38 +1,79 @@
 // SPDX-FileCopyrightText: 2026 Pharmakos contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The travel estimate (decisions log item 61, amended by item 90).
+//! The travel estimate (decisions log item 61, amended by item 90 and by lane
+//! `p3fix`'s near pairs).
 //!
 //! # The contract, and what it forbids
 //!
 //! Spec section 11's allowed-estimates row reads *"Pathfinder travel estimates
 //! over known terrain; fogged voxels use last-known state or ×1.5 cost"*, and
 //! its forbidden column rules out stepping or forking the sim. AGENTS.md §3
-//! rule 2 says the same in dependency terms. So [`estimate`] does exactly three
-//! things and nothing else:
+//! rule 2 says the same in dependency terms. So [`estimate`] does these things
+//! and nothing else:
 //!
 //! 1. ask the connectivity oracle whether a route can exist at all;
-//! 2. search the **abstract** graph and sum integer edge costs;
+//! 2. for a **far** pair, search the **abstract** graph and sum integer edge
+//!    costs; for a **near** pair (below), compute the route the router would
+//!    serve and sum its steps;
 //! 3. divide by the walker's speed, rounding **up**.
 //!
-//! It never refines a leg, never walks a route and never touches the stepping
-//! API. The only low-level work it does is the two bounded sweeps that attach
-//! the endpoints to their own clusters' transition nodes, which are
-//! cluster-local by construction — and, at cluster 32, 91 % of a median query
-//! (item 58; the sweep is what S3 attacks if the budget bites, not the abstract
-//! graph).
+//! It never walks a route, never steps or forks the sim and never touches the
+//! stepping API: computing a route is a pure function of the graph, the same
+//! one the router calls, and nothing it computes is kept. The low-level work a
+//! far pair does is the two bounded sweeps that attach the endpoints to their
+//! own clusters' transition nodes, which are cluster-local by construction.
+//! Spike G2 measured them at 91 % of a median query (item 58); on the sim's
+//! generated map they are nearly all of it: a median far query popped about
+//! 2 050 nodes, of which the abstract search's own pops were a handful (lane
+//! `p3fix`'s step 0, `tests/pathing_bench.rs` publishes the share). The sweep is
+//! what S3 attacks if the budget bites, not the abstract graph.
+//!
+//! # Near pairs: the served route's cost
+//!
+//! The abstract cost is the cost of the **unsmoothed** refinement exactly. On a
+//! short route that crosses a cluster border, the border's transition node can
+//! lie several cells off the straight line, and the smoother cuts that detour
+//! for the walker while the abstract cost still charges it: before this, the
+//! p90 error was 822 per mille on routes of 4 to 8 cells, with the abstract
+//! cost up to six times the walk. Lane `p3fix`'s step 0 measured where it came
+//! from on 1 080 walks over three seeds: a single border crossing off the line
+//! carried 90 % to 99 % of the excess in every band of 32 cells and under, a
+//! cluster corner under 1 %.
+//!
+//! So a pair whose two clusters **touch** — the same cluster, or two that share
+//! a border or a corner ([`Clusters::touch`]) — is priced at the route the
+//! router serves it: [`crate::pathing::route::route_with`] under no surcharge,
+//! the router's own function on the same graph, written into the scratch's own
+//! buffer. The radius is the cluster edge and nothing picked: two columns at
+//! most one cluster edge apart on both axes always lie in touching clusters, so
+//! every route of 32 cells or less is priced exactly, which is where one
+//! crossing's detour is a large share of the walk. A far pair keeps the
+//! abstract answer, whose error the map-wide draw holds inside the gate. `legs`
+//! stays the abstract edge count either way.
+//!
+//! A near pair whose route does not fit [`crate::pathing::MAX_ROUTE_NODES`]
+//! (a detour longer than any map holds today) is answered at the abstract cost,
+//! the rule a far pair uses: the walker walks the partial route and asks for
+//! the rest from its end, and each of those asks costs no more than the raw
+//! refinement's remainder, so the abstract cost still bounds the walk. A route
+//! the router could not refine (`NoPath::Unrefinable` or `NoPath::Unpriced`)
+//! answers `None`, as no route: the walker would be sealed in too, and the
+//! estimate never falls back to the abstract answer for it.
 //!
 //! # The error contract
 //!
 //! Within ±15 % at p90 of walked time on static terrain (G2 measured 2.6 %),
 //! and **never optimistic** — the editor's rounding depends on that, so it is
-//! part of the contract rather than an implementation detail (item 61). Two
-//! things make it hold here rather than by luck:
+//! part of the contract rather than an implementation detail (item 61).
+//! "Walked" counts from the tick that serves the route, as `tests/pathing.rs`'s
+//! P3 gate reads it. Three things make it hold here rather than by luck:
 //!
-//! * the abstract cost is the cost of the **unsmoothed** refinement exactly,
-//!   because every intra edge is an exact bounded search cost and every inter
-//!   edge is one grid step; the smoother only ever removes cost, so the walker
-//!   is never later than the estimate;
+//! * a near pair's cost **is** the served route's cost, by construction;
+//! * a far pair's abstract cost is the cost of the unsmoothed refinement
+//!   exactly, because every intra edge is an exact bounded search cost and
+//!   every inter edge is one grid step; the smoother only ever removes cost,
+//!   so the walker is never later than the estimate;
 //! * `ticks` rounds up ([`ticks_for_cost`]), and the walker's own accumulator
 //!   arrives on `ceil(cost * 20 / cost_per_second)` exactly (item 90), so the
 //!   two computations of "when does it get there" agree at the tick.
@@ -40,17 +81,28 @@
 //! `tests/pathing.rs`'s `the_estimate_is_never_optimistic_at_any_percentile`
 //! asserts the **signed** error, not `|error|`: an estimate that came in under
 //! the walk is the failure mode, and an absolute-error percentile would hide
-//! it.
+//! it. Its P3 tests walk real commanders, map-wide and on short draws.
+//!
+//! What the estimate does not price: the route surcharge the router applies to
+//! a unit under an Attack beacon's avoid areas or on an `AVOID_KNOWN_THREATS`
+//! step ([`crate::pathing::route::Surcharge`]). Such a walk can be later than
+//! any estimate here; that predates the near pairs and is owed to the next
+//! pathing lane.
 //!
 //! # Fog
 //!
-//! Priced per **abstract edge**, ×3/2 rounded up, when either endpoint cell is
-//! unknown — `locomotion.fog_cost_numerator` over `fog_cost_denominator`. Edge
-//! granularity is a deliberate approximation of section 11's per-cell rule:
-//! counting an edge's unknown cells means walking them, and walking them is the
-//! refinement the estimator may not do. What the editor may render from a
-//! fogged leg is a dashed leg labelled as an upper bound, never an ETA
-//! (item 61).
+//! Priced per **abstract edge**, ×3/2 truncated ([`fog_price`]), when either
+//! endpoint cell is unknown — `locomotion.fog_cost_numerator` over
+//! `fog_cost_denominator`. Edge granularity is a deliberate approximation of
+//! section 11's per-cell rule. What the editor may render from a fogged leg is
+//! a dashed leg labelled as an upper bound, never an ETA (item 61).
+//!
+//! A query with a fog mask takes the abstract path for a near pair too: the
+//! served route read through fog would tell a seat things about columns it has
+//! not seen that the abstract answer does not, and fog policy is the
+//! gateway's and the owner's (AGENTS.md section 7), so it is not decided here.
+//! `tests/pathing.rs`'s `a_near_route_through_fog_tells_what_the_abstract_one_does_not`
+//! is the evidence.
 //!
 //! # No cache
 //!
@@ -76,7 +128,7 @@
 
 use crate::math::quantity::TICK_HZ;
 use crate::pathing::clusters::Clusters;
-use crate::pathing::route::abstract_search;
+use crate::pathing::route::{Surcharge, abstract_search, route_and_abstract};
 use crate::pathing::search::Scratch;
 use crate::pathing::surface::{Node, Surface};
 
@@ -208,7 +260,9 @@ pub fn fog_price(cost: i32, numerator: i32, denominator: i32) -> i32 {
 ///
 /// Everything else item 61 fixes is unchanged: `None` from the oracle before
 /// any search, `legs` as the abstract-edge count, fog at ×3/2 per abstract edge
-/// as integer `cost * 3 / 2`, never optimistic, and no cache.
+/// as integer `cost * 3 / 2`, never optimistic, and no cache. One sentence of
+/// item 61 is amended: a near pair is priced at the route the router serves
+/// rather than by the abstract search alone (the module docs' "Near pairs").
 ///
 /// `fog_numerator` and `fog_denominator` come from the rules table, so the
 /// multiplier is data rather than a constant here (AGENTS.md §12).
@@ -221,6 +275,9 @@ pub fn estimate(
     fog: Fog<'_>,
     speed: Speed,
 ) -> Option<Estimate> {
+    if fog.is_clear() && clusters.touch(start, goal) {
+        return near(world, clusters, scratch, (start, goal), speed);
+    }
     let result = abstract_search(world, clusters, scratch, start, goal, fog, speed)?;
     let ticks = ticks_for_cost(result.cost, speed.cost_per_second)?;
     Some(Estimate {
@@ -228,6 +285,44 @@ pub fn estimate(
         ticks,
         legs: result.legs,
         fogged: result.fogged,
+    })
+}
+
+/// A near pair's estimate: the cost of the route the router serves (the
+/// module docs' "Near pairs").
+fn near(
+    world: &Surface,
+    clusters: &Clusters,
+    scratch: &mut Scratch,
+    (start, goal): (Node, Node),
+    speed: Speed,
+) -> Option<Estimate> {
+    scratch.near_queries = scratch.near_queries.saturating_add(1);
+    let mut served = core::mem::take(&mut scratch.served);
+    let routed = route_and_abstract(
+        world,
+        clusters,
+        scratch,
+        (start, goal),
+        Surcharge::NONE,
+        &mut served,
+    );
+    scratch.served = served;
+    // Any `NoPath` is no route: the walker would be sealed in as well.
+    let (abstract_result, outcome) = routed.ok()?;
+    // A partial route is priced at the abstract cost, which bounds the walk
+    // of a partial route and its later asks (the module docs).
+    let cost = if outcome.partial {
+        abstract_result.cost
+    } else {
+        outcome.cost
+    };
+    let ticks = ticks_for_cost(cost, speed.cost_per_second)?;
+    Some(Estimate {
+        cost,
+        ticks,
+        legs: abstract_result.legs,
+        fogged: false,
     })
 }
 

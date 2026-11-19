@@ -180,11 +180,17 @@ pub struct Scratch {
     pub(crate) leg: Vec<u32>,
     pub(crate) line: Vec<u32>,
     pub(crate) prefix: Vec<i32>,
+    /// The route a near pair's estimate prices
+    /// ([`crate::pathing::estimate`]'s "Near pairs"): the router's own route,
+    /// written here rather than into a caller's buffer so that an estimate,
+    /// inside a tick or out of one, allocates nothing.
+    pub(crate) served: Vec<u32>,
 
     // --- counters, diagnostic only ---
     pub(crate) expansions: u64,
     pub(crate) endpoint_expansions: u64,
     pub(crate) abstract_expansions: u64,
+    pub(crate) near_queries: u64,
 }
 
 impl Scratch {
@@ -227,9 +233,15 @@ impl Scratch {
             prefix: Vec::with_capacity(
                 crate::math::index::row(crate::pathing::MAX_ROUTE_NODES).saturating_add(1),
             ),
+            // A smoothed route holds no more nodes than the raw walk it
+            // smooths (each shortcut is a straight walk no longer than the
+            // stretch it replaces), and the raw walk stops at
+            // `MAX_ROUTE_NODES`: the same bound as `raw`.
+            served: Vec::with_capacity(crate::math::index::row(crate::pathing::MAX_ROUTE_NODES)),
             expansions: 0,
             endpoint_expansions: 0,
             abstract_expansions: 0,
+            near_queries: 0,
         }
     }
 
@@ -288,10 +300,10 @@ impl Scratch {
 
     /// Nodes popped by the endpoint-insertion sweeps since the last reset.
     ///
-    /// The number spike G2 §9.11 says S3 needs and nobody else produces: at
-    /// cluster 32 the insertion sweeps were 91 % of a median query, which is
-    /// why the lever on the estimate budget is the sweep and not a second
-    /// abstract level (item 58).
+    /// The number spike G2 §9.11 says S3 needs and nobody else produces: in the
+    /// spike, at cluster 32, the insertion sweeps were 91 % of a median query,
+    /// which is why the lever on the estimate budget is the sweep and not a
+    /// second abstract level (item 58).
     #[must_use]
     pub const fn endpoint_expansions(&self) -> u64 {
         self.endpoint_expansions
@@ -303,11 +315,20 @@ impl Scratch {
         self.abstract_expansions
     }
 
-    /// Zero the three counters.
+    /// Estimates priced at the served route since the last reset (a near
+    /// pair, [`crate::pathing::estimate`]). Diagnostic: it is how a test
+    /// knows a tick or a draw exercised the near branch at all.
+    #[must_use]
+    pub const fn near_queries(&self) -> u64 {
+        self.near_queries
+    }
+
+    /// Zero the four counters.
     pub const fn reset_counters(&mut self) {
         self.expansions = 0;
         self.endpoint_expansions = 0;
         self.abstract_expansions = 0;
+        self.near_queries = 0;
     }
 
     /// The largest the low-level heap has grown. Diagnostic: it is what the

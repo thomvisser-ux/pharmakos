@@ -73,11 +73,17 @@ use std::path::PathBuf;
 const PROBATION_SEED: u64 = 20;
 
 /// What it finds: its second vent, the columns of the three placements that
-/// reach it, and the commander's estimated walk through them, 81 s of a 180 s
+/// reach it, and the commander's estimated walk through them, 82 s of a 180 s
 /// Push.
+///
+/// Re-pinned by lane `p3fix` (near pairs are priced at the served route):
+/// `toward` ranks its stepping stones by estimate, the stones are near pairs,
+/// and their exact prices picked the second and third stones `[207, 69]` and
+/// `[223, 86]` where the abstract prices had picked `[203, 72]` and
+/// `[222, 86]` (and 1 620 ticks). The seed still passes, so the answer stands.
 const PINNED_VENT: [i32; 2] = [232, 96];
-const PINNED_SITES: [[i32; 2]; 3] = [[192, 51], [203, 72], [222, 86]];
-const PINNED_WALK_TICKS: i32 = 1_620;
+const PINNED_SITES: [[i32; 2]; 3] = [[192, 51], [207, 69], [223, 86]];
+const PINNED_WALK_TICKS: i32 = 1_640;
 
 /// The golden seed, every other test's fixture: its second vent is about nine
 /// stones out (S3's plan, section 1.1), which is why Probation has a seed of

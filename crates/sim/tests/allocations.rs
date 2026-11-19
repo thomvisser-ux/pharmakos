@@ -264,6 +264,7 @@ fn a_tick_allocates_nothing() {
     );
 
     crowd_allocates_nothing(&mut runner, &mut enc);
+    near_estimates_allocate_nothing(runner.world_mut());
 }
 
 /// The attacking crowds' half of [`a_tick_allocates_nothing`].
@@ -434,4 +435,69 @@ fn collapse_at(world: &mut World, step: u32) {
             "the edit queue is full at step {step}"
         );
     }
+}
+
+/// The estimator's near pairs (lane `p3fix`): a pair whose clusters touch is
+/// priced at the route the router serves, built in the scratch's own buffer,
+/// so an estimate allocates nothing, inside a tick or out of one.
+///
+/// The tick reaches the near branch: the harness playbook's `covering`
+/// resolver ranks "nearest" by estimate, and its nearest vents are near pairs.
+/// It does so in the opening ticks, before the counted windows above (the
+/// first decision of each seat), so this half asserts the zero per call
+/// instead, on **the world's own scratch**, the buffer those ticks use, after
+/// checking that they did use the branch.
+fn near_estimates_allocate_nothing(world: &mut World) {
+    use pharmakos_sim::pathing::estimate::{Fog, Speed, estimate};
+    let in_ticks = world.scratch_mut().near_queries();
+    assert!(
+        in_ticks > 0,
+        "no near estimate ran inside a tick, so nothing here shows the tick reaches the near \
+         branch"
+    );
+    // The graph, copied out before counting so that the world's scratch can
+    // be borrowed beside it; the copy is the only allocation and it is not
+    // counted.
+    let surface = world.surface().clone();
+    let clusters = world.clusters().clone();
+    let speed = Speed::commander(world.rules());
+    // The pairs, drawn before counting: a column every 37 cells along the
+    // diagonal, each paired with the column 20 cells east and 9 north.
+    let [sx, sy, _] = surface.size();
+    let mut pairs: Vec<(u32, u32)> = Vec::new();
+    let mut x = 5;
+    while x + 20 < sx && x + 9 < sy {
+        if let (Some(a), Some(b)) = (surface.node_of(x, x), surface.node_of(x + 20, x + 9))
+            && clusters.touch(a, b)
+            && clusters.connected(&surface, a, b)
+        {
+            pairs.push((a, b));
+        }
+        x += 37;
+    }
+    assert!(
+        pairs.len() >= 3,
+        "too few near pairs drawn: {}",
+        pairs.len()
+    );
+    let scratch = world.scratch_mut();
+    scratch.reset_counters();
+    let before = allocations();
+    for (a, b) in &pairs {
+        let found = estimate(&surface, &clusters, scratch, *a, *b, Fog::Clear, speed);
+        assert!(found.is_some(), "a connected near pair has an estimate");
+    }
+    let during = allocations() - before;
+    assert_eq!(
+        during,
+        0,
+        "{} near estimates allocated {during} times; the route they price is built in the \
+         scratch's own buffer so that none does",
+        pairs.len()
+    );
+    assert_eq!(
+        scratch.near_queries(),
+        u64::try_from(pairs.len()).expect("fits"),
+        "every pair drawn went through the near branch"
+    );
 }

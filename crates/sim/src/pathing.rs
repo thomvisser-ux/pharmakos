@@ -27,8 +27,9 @@
 //!   entrances plus the neighbours whose shared border actually changed, then
 //!   their intra edges, then one connectivity rebuild per tick.
 //! * [`route`] — the abstract search, the per-leg refinement and the smoother.
-//! * [`estimate`] — item 61's query: abstract search alone, never a refinement,
-//!   never a step, never a fork.
+//! * [`estimate`] — item 61's query: the abstract search for a far pair, the
+//!   router's own route for a near one (its module docs), never a step, never
+//!   a fork.
 //! * [`router`] — per-unit routes, the integer speed accumulator of item 90,
 //!   the per-tick repath cap of 16 served round-robin by `(seat, beacon, unit)`
 //!   (items 60 and 69), and **"sealed in" as a designed state** — park and
@@ -40,8 +41,9 @@
 //! only item 61's frozen contract over a simpler search. The recommendation —
 //! and what is built here — is the mechanism: cluster-32 HPA\*, the repair, the
 //! oracle, the cap and the estimator, with the committed path-hash golden. S3
-//! keeps the ±15 % certification on real code, the corner entrance, and the
-//! endpoint-sweep work. A flat search could not produce `legs` or price fog per
+//! keeps the ±15 % certification on real code (the estimator's near pairs
+//! were what it needed; the corner entrance was measured and not built,
+//! [`clusters`]) and the endpoint-sweep work. A flat search could not produce `legs` or price fog per
 //! abstract edge, so the contract it claimed to freeze would be partly
 //! unimplementable.
 //!
