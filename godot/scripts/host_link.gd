@@ -79,17 +79,15 @@ const ROUND_LIMIT := 3
 const LADDER := "-"
 
 ## The preset the config line names (S3's plan, E6), `probation` or `custom`: the gateway
-## reads it and decides what it changes, so nothing here does. It is `custom` until S3's
-## `ed3b` lane turns it to `probation` and teaches the rig an untimed Lull: today's rig
-## counts every Lull down from the rules table and reports the countdown, which a Probation
-## match's gateway refuses (E7), and the rig learns `all_ready` only from that report's
-## answer. The `_status` footer's `untimed` means "no countdown reported yet", so the rig
-## needs the gateway to say a Lull is untimed by rule, a field `gp.api.v1.Status` does not
-## carry yet. A line remembered without a preset is refused by the gateway, naming the
-## field, and the lobby shows the refusal as it shows any host's; New match is the fresh
-## match.
-## PLACEHOLDER: the lobby's preset is `custom` until `ed3b` — OWNER, at S3's `ed3b`
-const PRESET := "custom"
+## reads it and decides what it changes, so nothing here does. The lobby hosts Probation
+## (decisions-log item 160 (4)): the gateway's footer says its Lulls are untimed by rule
+## (`_status.untimed_by_rule`), so the bridge's rig starts no countdown, reports only the time
+## spent, and the lobby shows none; the rig decides nothing about the preset. A line
+## remembered without a preset is refused by the gateway, naming the field, and the lobby
+## shows the refusal as it shows any host's; New match is the fresh match. The headless watch
+## check keeps `custom` for its main legs (its Lulls carry the countdown it drives) and plays
+## this preset on the lobby's own line in its last leg.
+const PRESET := "probation"
 
 ## The test-only launch option that sets the round limit in place of ROUND_LIMIT,
 ## `-- --rounds <n>` (or `-- --rounds=<n>`, as the readers beside it spell theirs), so a

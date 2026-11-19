@@ -476,6 +476,50 @@ impl HostClock {
         Some((wired, countdown))
     }
 
+    /// The next report of a timed Lull whose countdown has run out, as `(elapsed_ms,
+    /// remaining_ms, last)`. The gateway refuses a report that steps past its last by more than
+    /// [`MAX_CLOCK_STEP_MS`], so while its clock is further behind the Lull's end than that (after
+    /// a stall) this is a step of at most that much, with the countdown it leaves; once the end is
+    /// within one step it is the end itself, the countdown at zero, `last` true. The zero tells
+    /// the gateway the Lull ran out rather than being ended by Ready (decisions-log item 160 (4)).
+    /// The report never runs backwards: past an accepted report later than the end, it is that
+    /// report again. `None` outside a timed Lull that has run out, with a report in flight, before
+    /// the report cadence allows the next one, or when the time does not fit the wire's `int32`
+    /// ([`HostClock::unreportable`] then says so).
+    pub fn closing_report(&mut self) -> Option<(i32, i32, bool)> {
+        let ClockPhase::Lull {
+            countdown_ms: Some(total_ms),
+        } = self.phase
+        else {
+            return None;
+        };
+        if !self.run_out() || self.pending_ms.is_some() || self.since_report_us < CLOCK_REPORT_US {
+            return None;
+        }
+        let end = total_ms.max(self.accepted_ms);
+        // Neither step can fail on a reachable path: an accepted report is at most the time
+        // spent when it went out, and an ordinary report stops once the countdown has run out
+        // (the rig owes the closing reports instead), so `accepted_ms` never passes `total_ms`, a
+        // Lull's length, which fits an `i32`. Should either fail, the report is said to be one
+        // the wire cannot carry ([`HostClock::unreportable`]), never clamped.
+        let Some(step_end) = self.accepted_ms.checked_add(MAX_CLOCK_STEP_MS) else {
+            self.unreportable = true;
+            return None;
+        };
+        let report = end.min(step_end);
+        let Some(left) = total_ms.checked_sub(report) else {
+            self.unreportable = true;
+            return None;
+        };
+        let (Ok(wired), Ok(left_wired)) = (i32::try_from(report), i32::try_from(left)) else {
+            self.unreportable = true;
+            return None;
+        };
+        self.pending_ms = Some(report);
+        self.since_report_us = 0;
+        Some((wired, left_wired, report == end))
+    }
+
     /// The report in flight was accepted.
     pub fn answered(&mut self) {
         if let Some(report) = self.pending_ms.take() {

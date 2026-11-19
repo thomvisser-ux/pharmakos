@@ -12,9 +12,9 @@
 # This script draws the runs and forwards the clicks:
 #   * a CHIP is drawn as a link in its sentence; a click on it asks the editor for its editor,
 #     which the chip's shape names (a number field within the bounds sent, an enum's values as
-#     sent, a pick on the map). A chip the rule list does not edit (a duration, which waits on a
-#     typed unit hint from the wire; a step label or a rule id, part 2's picker) is drawn dim,
-#     and a click says why;
+#     sent, a pick on the map, or, for a step label or a rule id, the names the playbook itself
+#     holds, in file order). A chip the rule list does not edit (a duration, which waits on a
+#     display unit from the wire) is drawn dim, and a click says why;
 #   * a rule's or a step's sentence row can be DRAGGED onto another of the same list: the drop
 #     asks the bridge for one JSON Patch `move` of it to that rule's place;
 #   * the CONFLICT CONNECTOR joins the two rules a W0702 row names, a line in the list's left
@@ -53,7 +53,7 @@ const DRAWN := "drawn"
 ## called with a chip's index when it is clicked, `on_move` with the dragged rule's index and
 ## pointer, the dropped-on rule's index and pointer, and the rendering, when one is dropped on
 ## the other.
-static func fill(container: Container, list: Dictionary, revision: int, editable: bool, picking: int, conflicts: Array, refusal: Dictionary, on_chip: Callable, on_move: Callable) -> bool:
+static func fill(container: Container, list: Dictionary, revision: int, editable: bool, picking: int, conflicts: Array, refusal: Dictionary, on_chip: Callable, on_move: Callable, on_slot: Callable = Callable()) -> bool:
 	var drawn := var_to_str([list, revision, editable, picking, conflicts, refusal])
 	if container.has_meta(DRAWN) and String(container.get_meta(DRAWN)) == drawn:
 		return false
@@ -76,6 +76,8 @@ static func fill(container: Container, list: Dictionary, revision: int, editable
 		if rule >= 0 and rule < rules.size():
 			_draggable(row, rule, String(rules[rule].get("pointer", "")), String(rules[rule].get("parent", "")), revision, editable, on_move)
 		container.add_child(row)
+		if rule >= 0 and on_slot.is_valid():
+			_slots(container, list.get("slots", []), rule, editable, on_slot)
 		if rule >= 0 and said.has(rule):
 			container.add_child(_note(Strings.text("rule_conflict", {"sentence": said[rule]})))
 		if rule >= 0 and int(refusal.get("rule", -1)) == rule:
@@ -112,6 +114,28 @@ static func _row(line: Dictionary, chips: Array, editable: bool, picking: int, o
 	row.accessibility_name = text
 	row.set_meta("line", text)
 	return row
+
+
+## The condition slots the gateway sent for rule `rule` that take a pick (an empty or a leaf
+## slot, with the op the gateway named), each a button in the gateway's words ("when, item 1
+## of all", "step 1, skip if") that opens the condition picker on it. A group slot is drawn as
+## no button: its items are the pick targets. The titles are the gateway's; none is composed.
+static func _slots(container: Container, slots: Array, rule: int, editable: bool, on_slot: Callable) -> void:
+	for index in slots.size():
+		var slot: Dictionary = slots[index]
+		if int(slot.get("rule", -1)) != rule or not slot.get("pickable", false):
+			continue
+		var button := Button.new()
+		button.flat = true
+		button.focus_mode = Control.FOCUS_NONE
+		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		button.text = Strings.text("rule_slot", {"title": slot.get("title", "")})
+		button.accessibility_name = button.text
+		button.disabled = not editable
+		button.custom_minimum_size = Vector2(LINE_WIDTH, 0)
+		button.set_meta("slot", index)
+		button.pressed.connect(func() -> void: on_slot.call(index))
+		container.add_child(button)
 
 
 ## A rule's sentence row can be dragged onto another rule of the same list, `parent`, of the

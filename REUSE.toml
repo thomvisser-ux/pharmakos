@@ -10,10 +10,11 @@
 # throughout: a header in a file is combined with the entry below, so a file
 # that states its own copyright keeps it, and a file that cannot carry a header
 # (a .vox model, an .ogg, a binary golden file) is covered by this manifest.
-# Two blocks break that rule on purpose, each with precedence = "override":
-# docs/DCO.txt, which is somebody else's document, and the three files whose
-# own bytes quote another file's SPDX header (the last block below, decisions
-# log item 116 (6)(i)).
+# Three blocks break that rule on purpose, each with precedence = "override":
+# docs/DCO.txt, which is somebody else's document; godot/playbooks/new.jsonc,
+# which is permissive inside the GPL godot/** tree and can carry no header
+# (decisions-log item 161); and the three files whose own bytes quote another
+# file's SPDX header (the last block below, decisions log item 116 (6)(i)).
 #
 # ORDER MATTERS. When two blocks match the same path the LAST one wins, so the
 # narrow blocks (crates/proto/**, the per-directory LICENSE pointers,

@@ -91,6 +91,11 @@ pub enum BridgeError {
         /// The value the engine gave.
         value: i64,
     },
+    /// A count the bridge keeps ran past its integer type: refused, never saturated.
+    CountOverflow {
+        /// What was being counted.
+        what: &'static str,
+    },
 }
 
 impl fmt::Display for BridgeError {
@@ -139,6 +144,9 @@ impl fmt::Display for BridgeError {
                 formatter,
                 "the engine's {what} is {value}, which this bridge cannot use as one"
             ),
+            Self::CountOverflow { what } => {
+                write!(formatter, "the count of {what} ran past its integer type")
+            }
         }
     }
 }

@@ -139,6 +139,7 @@ const Strings := preload("res://scripts/strings.gd")
 const Rows := preload("res://scripts/rows.gd")
 const Wizard := preload("res://scripts/wizard.gd")
 const RuleList := preload("res://scripts/rule_list.gd")
+const ConditionPicker := preload("res://scripts/condition_picker.gd")
 
 ## How close, in screen pixels, a click must land to a beacon to pick it.
 ## PLACEHOLDER: the pick distance — OWNER, at S6.
@@ -276,6 +277,29 @@ var _number_chip := {}
 ## An enum chip's editor: its values as sent, and the chip it is for, named the same way.
 var _choice_menu: PopupMenu
 var _choice_chip := {}
+## A name chip's editor (a step label or a rule id): the names the bridge read out of the text on
+## screen, in file order, and the chip it is for, named the same way (S3's `ed3b`, part 2).
+var _name_menu: PopupMenu
+var _name_chip := {}
+var _step_labels := PackedStringArray()
+var _rule_ids := PackedStringArray()
+## The condition picker: the bridge's `vocabulary` as last drawn, and the slot it is open for,
+## named as the bridge checks it (the rule's index and pointer, the rendering, the slot's pointer
+## and whether a condition stands there).
+var _vocabulary := {}
+var _picker_popup: PopupPanel
+var _picker_line: Label
+var _picker_again: Button
+var _picker_tree: Tree
+var _picker_slot := {}
+## The rule list's condition slots as the bridge last sent them.
+var _rule_slots: Array = []
+## Visit & change (S3's `ed3b`, part 2): the beacon the menu is open for, the detail it was last
+## drawn from, the submenus built from it, and the setting a number field is open for.
+var _visit_beacon := ""
+var _visit_drawn := ""
+var _visit_submenus: Array[PopupMenu] = []
+var _number_setting := {}
 ## The voxel whose ghost the ground menu's first line was filled from, or null: the menu closes
 ## when that ghost goes, and not for a ghost that was never asked (fix pass 2, item 1).
 var _menu_ghost_at: Variant = null
@@ -534,7 +558,7 @@ func _input(event: InputEvent) -> void:
 	if close_menu_on_escape(event):
 		get_viewport().set_input_as_handled()
 		return
-	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE and int(bridge.editor_state().get("picking", -1)) >= 0:
+	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE and _a_pick_is_on():
 		bridge.editor_cancel_pick()
 		get_viewport().set_input_as_handled()
 		return
@@ -542,6 +566,12 @@ func _input(event: InputEvent) -> void:
 		return
 	if menu_open() and _panel.get_global_rect().has_point(event.position):
 		close_menu()
+
+
+## Whether a map pick is on: a rule-list chip's, or a Build target's anchor.
+func _a_pick_is_on() -> bool:
+	var state: Dictionary = bridge.editor_state()
+	return int(state.get("picking", -1)) >= 0 or state.get("anchoring", false)
 
 
 ## Closes a map menu that is open when `event` is Escape going down, and says whether it did
@@ -582,7 +612,8 @@ func map_click(at: Vector2, alt: bool) -> bool:
 		_say_local("status_closed_ended", {})
 		return false
 	var camera: Camera3D = vista.rig.camera
-	if int(bridge.editor_state().get("picking", -1)) >= 0:
+	var picking: Dictionary = bridge.editor_state()
+	if int(picking.get("picking", -1)) >= 0 or picking.get("anchoring", false):
 		return _pick_at(camera, at)
 	var beacon := _beacon_under(camera, at)
 	if not beacon.is_empty():
@@ -726,6 +757,9 @@ func _on_beacon_clicked(beacon: Dictionary, alt: bool, at: Vector2) -> void:
 		_menu.add_radio_check_item(Strings.text("selector_" + name), ITEM_SELECTOR + index)
 		_menu.set_item_checked(_menu.get_item_index(ITEM_SELECTOR + index), name == _selector)
 	_menu.add_separator()
+	_visit_beacon = id
+	_visit_drawn = ""
+	_fill_visit_menu(bridge.editor_state())
 	_menu.add_submenu_node_item(Strings.text("menu_visit"), _visit_menu)
 	_menu.add_item(Strings.text("menu_go"), ITEM_GO)
 	_menu.add_item(Strings.text("menu_recycle"), ITEM_RECYCLE)
@@ -830,6 +864,7 @@ func _draw_state(state: Dictionary) -> void:
 	_draw_templates(state.get("templates", []))
 	_draw_wizard(state.get("wizard", {}), state.get("templates", []))
 	_draw_rules(state, unchecked_text(state, "prose"))
+	_fill_visit_menu(state)
 	_draw_this_round(String(state.get("this_round", "")))
 	_draw_chips(state.get("chips", []), state.get("chips_current", false), state.get("has_text", false), unchecked_text(state, "chips"))
 	_draw_attack(state.get("attack_targets", []))
@@ -1079,12 +1114,21 @@ func _draw_rules(state: Dictionary, unchecked: String) -> void:
 	_rule_chips = list.get("chips", [])
 	_rules_rendering = int(state.get("rules_rendering", -1))
 	_rules_blocked = String(state.get("rules_blocked", ""))
-	var redrawn: bool = RuleList.fill(_rules_box, list, _rules_rendering, state.get("rules_editable", false), int(state.get("picking", -1)), state.get("conflicts", []), state.get("rule_refusal", {}), Callable(self, "_on_rule_chip"), Callable(self, "_on_rule_move"))
+	_step_labels = state.get("step_labels", PackedStringArray())
+	_rule_ids = state.get("rule_ids", PackedStringArray())
+	_vocabulary = state.get("vocabulary", {})
+	_picker_line.text = ConditionPicker.status_text(_vocabulary)
+	# A refused or unreadable vocabulary can be asked for once more, from the picker's line.
+	_picker_again.visible = String(_vocabulary.get("failed", "")) != ""
+	_rule_slots = list.get("slots", [])
+	var redrawn: bool = RuleList.fill(_rules_box, list, _rules_rendering, state.get("rules_editable", false), int(state.get("picking", -1)), state.get("conflicts", []), state.get("rule_refusal", {}), Callable(self, "_on_rule_chip"), Callable(self, "_on_rule_move"), Callable(self, "open_condition_picker"))
 	# An editor opened on the list drawn before names chips that may not be there any more
 	# (M1): it closes with that list, and the bridge would refuse its edit anyway.
 	if redrawn:
 		_number_popup.hide()
 		_choice_menu.hide()
+		_name_menu.hide()
+		_picker_popup.hide()
 
 
 ## A click on rule-list chip `index` opens its editor, by the shape the gateway sent: a number
@@ -1114,8 +1158,175 @@ func _on_rule_chip(index: int) -> void:
 			_choice_menu.popup()
 		"pick":
 			bridge.editor_begin_pick(index, _rules_rendering, named["pointer"])
+		"name":
+			_open_names(named, chip)
 		_:
 			_say_local("rule_chip_read_only_" + String(chip.get("why", "")), {})
+
+
+## The names a step-label or rule-id chip is picked from: the labels or rule ids the bridge read
+## out of the text on screen, in file order. Listed, never judged: whether a pick is legal there
+## is the gateway's check, on the rows.
+func _open_names(named: Dictionary, chip: Dictionary) -> void:
+	var names := _step_labels if String(chip.get("kind", "")) == "step_label" else _rule_ids
+	if names.is_empty():
+		_say_local("name_none", {})
+		return
+	_name_chip = named
+	_name_menu.clear()
+	for which in names.size():
+		_name_menu.add_radio_check_item(names[which], which)
+		_name_menu.set_item_checked(which, JSON.stringify(names[which]) == String(chip.get("value_json", "")))
+	_name_menu.position = Vector2i(get_viewport().get_mouse_position())
+	_name_menu.popup()
+
+
+func _on_name(which: int) -> void:
+	bridge.editor_choose_name(int(_name_chip.get("index", -1)), int(_name_chip.get("revision", -1)), String(_name_chip.get("pointer", "")), which)
+
+
+## Opens the condition picker for condition slot `slot` of the rule list on screen (its index in
+## the bridge's `slots`): family, predicate, parameters, as the bridge's `vocabulary` lists them,
+## locked ones greyed with their reason. The slot, its pointer and the op a pick there sends are
+## the gateway's: this client composes no pointer and chooses no op.
+func open_condition_picker(slot: int) -> void:
+	if _rules_blocked != "":
+		_say_local("status_rule_refused_" + _rules_blocked, {})
+		return
+	if slot < 0 or slot >= _rule_slots.size():
+		_say_local("status_rule_refused_no_such_slot", {})
+		return
+	_picker_slot = {"slot": slot, "pointer": String(_rule_slots[slot].get("pointer", "")), "revision": _rules_rendering, "title": String(_rule_slots[slot].get("title", ""))}
+	ConditionPicker.fill(_picker_tree, _vocabulary)
+	_picker_line.text = ConditionPicker.status_text(_vocabulary)
+	_picker_popup.popup_centered()
+
+
+func _on_picker_use() -> void:
+	var picked := ConditionPicker.chosen(_picker_tree)
+	if picked.is_empty():
+		return
+	_picker_popup.hide()
+	bridge.editor_choose_predicate(int(_picker_slot.get("slot", -1)), String(_picker_slot.get("pointer", "")), int(_picker_slot.get("revision", -1)), int(picked[0]), int(picked[1]))
+
+
+## The condition picker's rows as drawn, `[text, selectable]` each, for a check to read.
+func picker_rows() -> Array:
+	return ConditionPicker.rows(_picker_tree)
+
+
+# --- Visit & change (S3's `ed3b`, part 2; register row S3-01) ---------------------------
+
+## The Visit & change submenu for the beacon the map menu is open for: the priority rows (S1's),
+## then, from the bridge's `beacon_detail` and `vocabulary`, one row per setting (its title and
+## value now, its editor by its shape), Switch mandate, Add and Remove a build target, and Queue a
+## structure, every entry as sent and locked ones greyed with their reason. Each row the player
+## picks is one route step with one row, composed by the bridge. Redrawn only when what it draws
+## from changed.
+func _fill_visit_menu(state: Dictionary) -> void:
+	if _visit_beacon == "":
+		return
+	var detail: Dictionary = state.get("beacon_detail", {})
+	var vocabulary: Dictionary = state.get("vocabulary", {})
+	var drawn := var_to_str([_visit_beacon, detail, vocabulary.get("mandates", []), vocabulary.get("blueprints", [])])
+	if drawn == _visit_drawn:
+		return
+	_visit_drawn = drawn
+	for submenu in _visit_submenus:
+		_visit_menu.remove_child(submenu)
+		submenu.queue_free()
+	_visit_submenus.clear()
+	_visit_menu.clear()
+	# The priority rows, the one the beacon's summary sends marked as the value now.
+	var now := String(detail.get("priority", "")) if String(detail.get("id", "")) == _visit_beacon else ""
+	for row in [[ITEM_LOW, "low"], [ITEM_NORMAL, "normal"], [ITEM_HIGH, "high"]]:
+		_visit_menu.add_radio_check_item(Strings.text("menu_priority_" + String(row[1])), int(row[0]))
+		_visit_menu.set_item_checked(_visit_menu.item_count - 1, now == String(row[1]))
+	_visit_menu.add_separator()
+	if String(detail.get("id", "")) != _visit_beacon:
+		var failed := String(detail.get("failed", ""))
+		var line := Strings.text("menu_detail_" + failed, {"detail": detail.get("detail", "")}) if failed != "" else Strings.text("menu_detail_waiting")
+		_visit_menu.add_item(line)
+		_visit_menu.set_item_disabled(_visit_menu.item_count - 1, true)
+		return
+	var settings := _visit_submenu(Strings.text("menu_settings"))
+	settings.id_pressed.connect(_on_setting)
+	var rows: Array = detail.get("settings", [])
+	for which in rows.size():
+		_setting_row(settings, which, rows[which])
+	var mandates := _visit_submenu(Strings.text("menu_mandate"))
+	_entry_rows(mandates, vocabulary.get("mandates", []), "mandate")
+	var add := _visit_submenu(Strings.text("menu_add_target"))
+	_entry_rows(add, vocabulary.get("blueprints", []), "add_target")
+	var remove := _visit_submenu(Strings.text("menu_remove_target"))
+	var targets: Array = detail.get("targets", [])
+	for which in targets.size():
+		remove.add_item(Strings.text("menu_target_row", {"blueprint": targets[which].get("blueprint_id", ""), "anchor": targets[which].get("anchor", "")}), which)
+	remove.id_pressed.connect(func(which: int) -> void: bridge.editor_visit_row(_visit_beacon, "remove_target", which))
+	var queue := _visit_submenu(Strings.text("menu_queue"))
+	_entry_rows(queue, vocabulary.get("blueprints", []), "queue")
+
+
+## A submenu of the Visit & change menu, titled `title`.
+func _visit_submenu(title: String) -> PopupMenu:
+	var submenu := PopupMenu.new()
+	submenu.window_input.connect(close_menu_on_escape)
+	_visit_menu.add_child(submenu)
+	_visit_menu.add_submenu_node_item(title, submenu)
+	_visit_submenus.append(submenu)
+	return submenu
+
+
+## One setting's row: an enum's values as sent in a submenu of their own, a number opening the
+## number field within the bounds sent, a value not edited here greyed with its reason.
+func _setting_row(settings: PopupMenu, which: int, setting: Dictionary) -> void:
+	var title := Strings.text("menu_setting", {"title": setting.get("title", ""), "value": setting.get("value_json", "")})
+	match String(setting.get("editor", "")):
+		"choice":
+			var values := PopupMenu.new()
+			settings.add_child(values)
+			settings.add_submenu_node_item(title, values)
+			var listed: PackedStringArray = setting.get("values", PackedStringArray())
+			for value in listed.size():
+				values.add_radio_check_item(Strings.text("menu_setting_value", {"value": listed[value]}), value)
+				values.set_item_checked(value, listed[value] == String(setting.get("value_json", "")))
+			var pointer := String(setting.get("pointer", ""))
+			values.id_pressed.connect(func(value: int) -> void: bridge.editor_change_setting_choice(_visit_beacon, which, pointer, value))
+		"number":
+			settings.add_item(title, which)
+		_:
+			settings.add_item(title, which)
+			settings.set_item_disabled(settings.item_count - 1, true)
+			var why := String(setting.get("why", ""))
+			var said := Strings.text("rule_chip_read_only_" + why) if why != "" else Strings.text("menu_setting_not_here")
+			# A value the bridge could not read against its shape says what could not be read.
+			var cause := String(setting.get("unreadable", ""))
+			if cause != "":
+				said = Strings.text("menu_setting_unreadable", {"said": said, "cause": cause})
+			settings.set_item_tooltip(settings.item_count - 1, said)
+
+
+## A number setting's row was picked: the number field opens on it, as on a number chip.
+func _on_setting(which: int) -> void:
+	var rows: Array = bridge.editor_state().get("beacon_detail", {}).get("settings", [])
+	if which < 0 or which >= rows.size() or String(rows[which].get("editor", "")) != "number":
+		return
+	_number_setting = {"beacon": _visit_beacon, "index": which, "pointer": String(rows[which].get("pointer", ""))}
+	_open_number({}, rows[which])
+
+
+## A vocabulary list's rows (mandates or blueprints) as sent, a locked one greyed with its
+## reason; a pick is the bridge's row `row` on entry `which`.
+func _entry_rows(menu: PopupMenu, entries: Array, row: String) -> void:
+	for which in entries.size():
+		var entry: Dictionary = entries[which]
+		var locked := String(entry.get("locked", ""))
+		if locked != "":
+			menu.add_item(Strings.text("menu_entry_locked", {"title": entry.get("title", ""), "locked": locked}), which)
+			menu.set_item_disabled(menu.item_count - 1, true)
+		else:
+			menu.add_item(String(entry.get("title", "")), which)
+	menu.id_pressed.connect(func(which: int) -> void: bridge.editor_visit_row(_visit_beacon, row, which))
 
 
 ## The number field for the chip `named`: the bounds the gateway sent, none where it set none,
@@ -1127,6 +1338,8 @@ func _on_rule_chip(index: int) -> void:
 ## fully and only then set to the pair sent, which no earlier pair can cut (`set_bounds`).
 func _open_number(named: Dictionary, chip: Dictionary) -> void:
 	_number_chip = named
+	if not named.is_empty():
+		_number_setting = {}
 	var outside: bool = chip.get("outside", false)
 	set_bounds(_number_field, chip)
 	_number_field.allow_lesser = outside or not chip.get("has_min", false)
@@ -1154,6 +1367,10 @@ static func set_bounds(field: Range, chip: Dictionary) -> void:
 
 func _on_number_send() -> void:
 	_number_popup.hide()
+	if not _number_setting.is_empty():
+		bridge.editor_change_setting_number(String(_number_setting.get("beacon", "")), int(_number_setting.get("index", -1)), String(_number_setting.get("pointer", "")), int(_number_field.value))
+		_number_setting = {}
+		return
 	bridge.editor_set_number(int(_number_chip.get("index", -1)), int(_number_chip.get("revision", -1)), String(_number_chip.get("pointer", "")), int(_number_field.value))
 
 
@@ -1451,6 +1668,7 @@ func _build_menus() -> void:
 	_menu.window_input.connect(close_menu_on_escape)
 	add_child(_menu)
 	_visit_menu = PopupMenu.new()
+	# Filled per beacon (`_fill_visit_menu`): the priority rows, then the detail's.
 	_visit_menu.add_item(Strings.text("menu_priority_low"), ITEM_LOW)
 	_visit_menu.add_item(Strings.text("menu_priority_normal"), ITEM_NORMAL)
 	_visit_menu.add_item(Strings.text("menu_priority_high"), ITEM_HIGH)
@@ -1461,6 +1679,10 @@ func _build_menus() -> void:
 	_choice_menu = PopupMenu.new()
 	_choice_menu.id_pressed.connect(_on_choice)
 	add_child(_choice_menu)
+	_name_menu = PopupMenu.new()
+	_name_menu.id_pressed.connect(_on_name)
+	add_child(_name_menu)
+	_build_picker()
 	_number_popup = PopupPanel.new()
 	var box := VBoxContainer.new()
 	_number_popup.add_child(box)
@@ -1481,6 +1703,36 @@ func _build_menus() -> void:
 	send.pressed.connect(_on_number_send)
 	box.add_child(send)
 	add_child(_number_popup)
+
+
+## The condition picker's window: a heading, the line that says why the words are not on hand,
+## the tree of families, predicates and parameters, and Use.
+func _build_picker() -> void:
+	_picker_popup = PopupPanel.new()
+	var box := VBoxContainer.new()
+	_picker_popup.add_child(box)
+	var heading := Label.new()
+	heading.text = Strings.text("picker_heading")
+	box.add_child(heading)
+	_picker_line = Label.new()
+	_picker_line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_picker_line.custom_minimum_size = Vector2(PANEL_WIDTH - 40.0, 0)
+	box.add_child(_picker_line)
+	_picker_again = Button.new()
+	_picker_again.text = Strings.text("vocabulary_ask_again")
+	_picker_again.accessibility_name = _picker_again.text
+	_picker_again.visible = false
+	_picker_again.pressed.connect(func() -> void: bridge.editor_vocabulary_again())
+	box.add_child(_picker_again)
+	_picker_tree = Tree.new()
+	_picker_tree.custom_minimum_size = Vector2(PANEL_WIDTH, 320)
+	box.add_child(_picker_tree)
+	var use := Button.new()
+	use.text = Strings.text("picker_use")
+	use.accessibility_name = use.text
+	use.pressed.connect(_on_picker_use)
+	box.add_child(use)
+	add_child(_picker_popup)
 
 
 ## An unticked checkbox's box: a square outline in `colour`, clear inside.

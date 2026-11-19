@@ -1,0 +1,152 @@
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "summary": {
+      "beacon_id": "b_00",
+      "at": {
+        "x": 358,
+        "y": 24,
+        "z": 36
+      },
+      "owner": "seat.0",
+      "core": true,
+      "priority": "normal",
+      "powered": true,
+      "hp": 3000,
+      "max_hp": 3000,
+      "sphere_radius_voxels": 24
+    },
+    "prose": "Yours. Beacon b_00 carries the Build mandate and has 3000 HP.",
+    "mandate": "build",
+    "settings": [
+      {
+        "pointer": "/roe",
+        "title": "Rules of engagement",
+        "value_json": "\"RETURN_FIRE\"",
+        "shape": {
+          "choice": {
+            "values": [
+              "\"HOLD_FIRE\"",
+              "\"RETURN_FIRE\"",
+              "\"FREE_FIRE\""
+            ]
+          }
+        }
+      },
+      {
+        "pointer": "/retreat_hp_pct",
+        "title": "Retreat below HP",
+        "value_json": "0",
+        "shape": {
+          "integer": {
+            "min": 0,
+            "max": 100,
+            "unit": "%"
+          }
+        }
+      },
+      {
+        "pointer": "/build/repair_threshold_pct",
+        "title": "Repair below",
+        "value_json": "0",
+        "shape": {
+          "integer": {
+            "min": 0,
+            "max": 100,
+            "unit": "%"
+          }
+        }
+      },
+      {
+        "pointer": "/build/rebuild_destroyed",
+        "title": "Rebuild destroyed",
+        "value_json": "false",
+        "shape": {
+          "choice": {
+            "values": [
+              "true",
+              "false"
+            ]
+          }
+        }
+      },
+      {
+        "pointer": "/build/terraform",
+        "title": "Terraform",
+        "value_json": "\"NONE\"",
+        "shape": {
+          "choice": {
+            "values": [
+              "\"NONE\"",
+              "\"FILL\"",
+              "\"DIG\"",
+              "\"BOTH\""
+            ]
+          }
+        }
+      }
+    ],
+    "build_targets": [
+      {
+        "blueprint_id": "wall",
+        "anchor": {
+          "voxel": {
+            "x": 360,
+            "y": 24,
+            "z": 36
+          }
+        },
+        "wall_box": {
+          "min": {
+            "x": 360,
+            "y": 24,
+            "z": 0
+          },
+          "max": {
+            "x": 362,
+            "y": 24,
+            "z": 40
+          }
+        }
+      },
+      {
+        "blueprint_id": "generator",
+        "anchor": {
+          "on": {
+            "feature_id": "vent_324_16"
+          }
+        },
+        "order": 1
+      },
+      {
+        "blueprint_id": "generator",
+        "anchor": {
+          "on": {
+            "vent": {
+              "rank": "nearest"
+            }
+          }
+        },
+        "order": 2
+      },
+      {
+        "blueprint_id": "mortar",
+        "anchor": {
+          "voxel": {
+            "x": 360,
+            "y": 24,
+            "z": 36
+          }
+        },
+        "order": 3
+      }
+    ],
+    "_status": {
+      "phase": "lull",
+      "phase_remaining_ms": 599950,
+      "segment_length_ms": 1000,
+      "round": 1
+    }
+  }
+}
