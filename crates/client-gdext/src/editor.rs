@@ -2393,8 +2393,10 @@ impl Editor {
         }
     }
 
-    /// The anchor pick's click: ground gives the target's anchor, as a voxel, and one route
-    /// step with one `add_build_target` row. A click on anything else keeps the pick on.
+    /// The anchor pick's click: ground gives the target's anchor as a voxel, a vent gives it
+    /// `on` the feature by its name, and either makes one route step with one
+    /// `add_build_target` row. A click on a beacon or a selector is refused with its words
+    /// (`NotThisKind("location")`) and the pick stays on, for the player to click again.
     fn pick_anchor(
         &mut self,
         beacon: &str,

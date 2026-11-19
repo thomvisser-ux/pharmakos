@@ -2571,9 +2571,10 @@ mod tests {
         }
     }
 
-    /// **After a stall the run-out is caught up in steps the gateway takes** (the review of
-    /// decisions-log item 160 (4)'s pull request): a 120 s Lull polled again 125 s later reports at most 60 s past the last accepted
-    /// report each time, the zero only when the end is within a step, and `end_lull` after it.
+    /// **After a stall the run-out is caught up in steps the gateway takes**: the gateway
+    /// refuses a report more than `MAX_CLOCK_STEP_MS` past its last, so a 120 s Lull polled again
+    /// 125 s later reports at most 60 s past the last accepted report each time, the zero only
+    /// when the end is within a step, and `end_lull` after it.
     #[test]
     fn a_stalled_run_out_is_reported_in_steps_before_its_zero() {
         let mut rig = opened_with(r#"{"phase":"lull","phase_remaining_ms":120000,"round":2}"#);
@@ -2609,8 +2610,8 @@ mod tests {
         assert_eq!(sent.get(zero).and_then(|frame| frame.1), Some(120_000));
     }
 
-    /// **A zero the link lost is sent again** before `end_lull` (the review of decisions-log item 160 (4)'s pull request): the zero
-    /// counts as reported only on the gateway's answer.
+    /// **A zero the link lost is sent again** before `end_lull`: the zero counts as reported
+    /// only on the gateway's answer.
     #[test]
     fn a_zero_lost_with_its_link_is_sent_again() {
         let mut rig = opened_with(r#"{"phase":"lull","phase_remaining_ms":1000,"round":2}"#);
@@ -2705,7 +2706,7 @@ mod tests {
     }
 
     /// **A zero lost with its link, the link back inside one report interval**: no `end_lull`
-    /// goes out before the zero is sent again (the review's probe).
+    /// goes out before the zero is sent again.
     #[test]
     fn a_lost_zero_with_the_link_back_inside_the_cadence_holds_end_lull() {
         let mut rig = opened_with(r#"{"phase":"lull","phase_remaining_ms":1000,"round":2}"#);
@@ -2755,7 +2756,8 @@ mod tests {
     }
 
     /// **A zero the gateway refuses is sent again**, and `end_lull` waits for it (the
-    /// review's probe): one refusal, then an answer, is reported as before.
+    /// gateway may refuse a zero under a rate limit): one refusal, then an answer, is reported
+    /// as before.
     #[test]
     fn a_refused_zero_is_sent_again() {
         let mut rig = opened_with(r#"{"phase":"lull","phase_remaining_ms":1000,"round":2}"#);

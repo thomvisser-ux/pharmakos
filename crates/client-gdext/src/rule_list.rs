@@ -17,8 +17,8 @@
 //! patched text is `patch_plan`'s answer.
 //!
 //! One shape is drawn but not edited here, a gap in the wire rather than a choice of the
-//! client's (the owner's ruling of 2026-11-15: the player is never asked for milliseconds): an integer whose unit is
-//! `ms`. The sentence shows the gateway's own rendering (`2:00`), and a number field would ask
+//! client's (the owner's ruling of 2026-11-15, decisions-log item 160: the player is never
+//! asked for milliseconds): an integer whose unit is `ms`. The sentence shows the gateway's own rendering (`2:00`), and a number field would ask
 //! the player for raw milliseconds, which the client may not convert. It waits on a display
 //! unit from the wire ([`ReadOnly::Milliseconds`]).
 //!

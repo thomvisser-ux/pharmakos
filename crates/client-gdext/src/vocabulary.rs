@@ -17,8 +17,8 @@
 //! Two readers of the player's own file live here, as lax as the route's ([`step_labels`],
 //! [`rule_ids`]): the labels and rule ids a step-label or rule-id chip is picked from, in file
 //! order. The wire names the kind of the reference and sends no choices, and the gateway's
-//! check, not the client, says whether a pick is a legal one (the main session's ruling on
-//! decisions-log item 160 (4)).
+//! check, not the client, says whether a pick is a legal one: the client lists names and
+//! judges none (decisions-log item 160 (4)).
 
 use pharmakos_proto::gp::api::v1::reference_shape::Kind;
 use pharmakos_proto::gp::api::v1::value_shape::Shape;
@@ -34,7 +34,8 @@ use crate::rule_list::{self, ChipEditor};
 use crate::view::split_footer;
 
 /// The unit of a duration, which the client never asks the player to type (the owner's ruling
-/// of 2026-11-15, which holds for the picker's parameters as for the rule list's chips).
+/// of 2026-11-15, decisions-log item 160, which holds for the picker's parameters as for the
+/// rule list's chips).
 const MILLISECONDS: &str = "ms";
 
 /// What a picker's parameter holds, by the shape the gateway sent: drawn beside its title,

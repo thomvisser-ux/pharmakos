@@ -13,7 +13,7 @@
 # JSON Patch (`editor_choose_predicate`), the predicate's skeleton wrapped under its name. A
 # predicate's parameters are listed for reading: once it is in the file, they are its chips in
 # the rule list, edited there. A duration is shown with no field (the owner's ruling of
-# 2026-11-15: the player is never asked for milliseconds).
+# 2026-11-15, decisions-log item 160: the player is never asked for milliseconds).
 #
 # PLACEHOLDER: the picker's look — OWNER, at S6.
 

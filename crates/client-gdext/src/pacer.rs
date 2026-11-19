@@ -497,8 +497,20 @@ impl HostClock {
             return None;
         }
         let end = total_ms.max(self.accepted_ms);
-        let report = end.min(self.accepted_ms.saturating_add(MAX_CLOCK_STEP_MS));
-        let left = total_ms.saturating_sub(report);
+        // Neither step can fail on a reachable path: an accepted report is at most the time
+        // spent when it went out, and an ordinary report stops once the countdown has run out
+        // (the rig owes the closing reports instead), so `accepted_ms` never passes `total_ms`, a
+        // Lull's length, which fits an `i32`. Should either fail, the report is said to be one
+        // the wire cannot carry ([`HostClock::unreportable`]), never clamped.
+        let Some(step_end) = self.accepted_ms.checked_add(MAX_CLOCK_STEP_MS) else {
+            self.unreportable = true;
+            return None;
+        };
+        let report = end.min(step_end);
+        let Some(left) = total_ms.checked_sub(report) else {
+            self.unreportable = true;
+            return None;
+        };
         let (Ok(wired), Ok(left_wired)) = (i32::try_from(report), i32::try_from(left)) else {
             self.unreportable = true;
             return None;
