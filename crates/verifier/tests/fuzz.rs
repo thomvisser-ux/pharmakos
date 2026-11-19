@@ -102,9 +102,11 @@ const RUNS: u32 = 10_000;
 
 /// How many the ordinary `cargo test` run generates, so the generator is never
 /// dead code between nightly runs, and enough that every S3 construct the
-/// verifier no longer refuses qualifies in several of them (at the fuzz seed
-/// each of the nine qualifies in between 8 and 17), so a pull request that
-/// stops the generator reaching one goes red.
+/// verifier no longer refuses qualifies in many of them, so a pull request
+/// that stops the generator reaching one goes red, and a benign generator edit
+/// does not. At the fuzz seed, over nine disjoint blocks of this many runs
+/// against the smoke test's scope, the rarest construct (`toward`) qualifies
+/// 18.9 times on average and 11 at the least.
 const SMOKE_RUNS: u32 = 1_024;
 
 /// An arbitrary, pinned fuzz seed. It is a *harness* seed and not a game value.
@@ -173,10 +175,11 @@ struct Shape {
     /// every name is unique, every duration is positive, every voxel is on the
     /// map, every reference resolves, and it writes no construct the sim
     /// refuses at the seal (E0009 to E0017: no queued structure, no Build
-    /// target but a Generator on a voxel, no S2 selector or settings) and no
-    /// enum number this build does not name (E0018). It does write S3's
-    /// predicates and `toward`, whole, since S3's `pred` built them, so the
-    /// runs that qualify hold every S3 construct.
+    /// target but a Generator on a voxel, no S2 settings and no S2 selector
+    /// but `most_threatened`, legal since S2's `dfnd`) and no enum number this
+    /// build does not name (E0018). It does write S3's predicates and `toward`,
+    /// whole, since S3's `pred` built them, so between them the runs that
+    /// qualify hold every S3 construct.
     ///
     /// A generator that only ever produces rejected files exercises the decode
     /// stage and nothing else, and a green run over it would mean nothing — the
@@ -339,14 +342,14 @@ impl Shape {
     }
 
     /// A `place_beacon` site that covers a feature, or walks toward one (S3's
-    /// `toward`, one site in three, [`Shape::toward_site`]): a legal one on a
+    /// `toward`, one site in two, [`Shape::toward_site`]): a legal one on a
     /// clean run (an UNCOVERED vent pick, or a name the scope holds, lost or
     /// live), anything [`Shape::feature_site`] makes otherwise.
     fn covering_site(&mut self) -> Json {
         if !self.clean {
             return self.feature_site();
         }
-        if self.rarely(3) {
+        if self.rarely(2) {
             return self.toward_site();
         }
         let reference = if self.rarely(2) {
@@ -736,10 +739,16 @@ impl Shape {
                 fields.push(("move".to_owned(), Json::Object(walk)));
             }
             1 => {
-                // One site in three describes a feature instead, so the lint
-                // stage's targeting checks see sites they have something to
-                // say about.
-                let site = if self.below(3) == 0 {
+                // One site in three describes a feature instead (one in two
+                // on a clean run, so its `toward` share is wide enough for the
+                // smoke test), so the lint stage's targeting checks see sites
+                // they have something to say about.
+                let feature = if self.clean {
+                    self.rarely(2)
+                } else {
+                    self.below(3) == 0
+                };
+                let site = if feature {
                     self.covering_site()
                 } else {
                     Json::Object(vec![("voxel".to_owned(), self.voxel())])
@@ -772,7 +781,9 @@ impl Shape {
             }
             3 => {
                 let guard = self.condition(2);
-                if self.clean {
+                // A clean wait is timed, once: `guards` may have timed the
+                // step already, and a field written twice is E0001.
+                if self.clean && !fields.iter().any(|(key, _)| key == "timeout_ms") {
                     fields.push(("timeout_ms".to_owned(), Json::Number("30000".to_owned())));
                 }
                 fields.push((
@@ -1647,21 +1658,38 @@ fn count_s3_constructs(counts: &mut [u32], run: &Run) {
 /// none while its code still refuses it (S3's `pred` turns each on): the
 /// nightly run and the smoke test both hold their counts to this, so a pull
 /// request sees a construct the generator stops reaching.
+///
+/// Every construct is checked before any failure is reported, and the
+/// failures are named together, so one red run names every construct that
+/// went wrong.
 fn each_s3_construct_qualifies_once_lifted(counts: &[u32], runs: u32) {
+    assert_eq!(
+        counts.len(),
+        S3_CONSTRUCTS.len(),
+        "a count for each S3 construct"
+    );
+    let mut checked = 0_usize;
+    let mut failures: Vec<String> = Vec::new();
     for ((field, code), count) in S3_CONSTRUCTS.iter().zip(counts) {
+        checked = checked.saturating_add(1);
         let refused = pharmakos_verifier::REFUSED_CONSTRUCTS
             .iter()
             .any(|(_, refusing)| refusing == code);
         println!("{field}: {count} of {runs} runs qualify ({code} refusing: {refused})");
-        if refused {
-            assert_eq!(*count, 0, "{field} qualified while {code} refuses it");
-        } else {
-            assert!(
-                *count > 0,
+        if refused && *count != 0 {
+            failures.push(format!("{field} qualified while {code} refuses it"));
+        } else if !refused && *count == 0 {
+            failures.push(format!(
                 "{field} never qualified in {runs} runs once {code} stopped refusing it"
-            );
+            ));
         }
     }
+    assert_eq!(
+        checked,
+        S3_CONSTRUCTS.len(),
+        "every S3 construct was checked"
+    );
+    assert!(failures.is_empty(), "{}", failures.join("; "));
 }
 
 #[test]
