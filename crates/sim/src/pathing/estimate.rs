@@ -56,7 +56,10 @@
 //! (a detour longer than any map holds today) is answered at the abstract cost,
 //! the rule a far pair uses: the walker walks the partial route and asks for
 //! the rest from its end, and each of those asks costs no more than the raw
-//! refinement's remainder, so the abstract cost still bounds the walk. A route
+//! refinement's remainder, so the abstract cost still bounds the walk. Each
+//! further ask also waits for its own serving tick, which no estimate counts,
+//! as for a far pair's partial route. `tests/pathing.rs`'s
+//! `a_partial_near_route_is_answered_at_no_less_than_its_walk` builds one. A route
 //! the router could not refine (`NoPath::Unrefinable` or `NoPath::Unpriced`)
 //! answers `None`, as no route: the walker would be sealed in too, and the
 //! estimate never falls back to the abstract answer for it.
@@ -97,12 +100,32 @@
 //! section 11's per-cell rule. What the editor may render from a fogged leg is
 //! a dashed leg labelled as an upper bound, never an ETA (item 61).
 //!
-//! A query with a fog mask takes the abstract path for a near pair too: the
-//! served route read through fog would tell a seat things about columns it has
-//! not seen that the abstract answer does not, and fog policy is the
-//! gateway's and the owner's (AGENTS.md section 7), so it is not decided here.
+//! A query with a fog mask takes the abstract path for **every** pair, a near
+//! one included: the served route read through fog would tell a seat things
+//! about columns it has not seen that the abstract answer does not, and fog
+//! policy is the gateway's and the owner's (AGENTS.md section 7).
 //! `tests/pathing.rs`'s `a_near_route_through_fog_tells_what_the_abstract_one_does_not`
-//! is the evidence.
+//! is the evidence: cratering only unseen ground moved the served-route answer
+//! alone on 26 of 50 near pairs, the abstract answer alone on none, and both
+//! on 17.
+//!
+//! **The gap, plainly.** Under a mask a near pair is priced as it was before
+//! the near pairs existed, so the short-route miss the P3 gate measured comes
+//! back for any caller that sets a mask; and both fogged answers read true
+//! terrain under the unseen columns (the 17 above), which section 11's
+//! "last-known state" does not allow. Nothing reachable has the gap today: no
+//! production caller sets a mask (the gateway's `RouteAdapter` holds an empty
+//! one, so every query runs `Fog::Clear`). Before a stage wires the mask, the
+//! fogged estimate needs a design of its own and the owner's fog ruling.
+//!
+//! PLACEHOLDER: the fogged estimate's own design (last-known state) and the owner's fog ruling, before the mask is wired — owner, at S4, with the knowledge store's mask (S3's plan, decision 2: S3-05 moved to S4).
+//!
+//! The cap item 61 sets, "+50 % over the clear estimate", was written when the
+//! clear estimate was the abstract one; it reads as the markup's own bound, at
+//! most [`fog_price`] of the **abstract** clear cost.
+//! `fog_never_makes_a_route_look_cheaper` asserts that, and that the fogged
+//! answer is never below the clear one as answered, which holds because a
+//! served route never costs more than the abstract answer.
 //!
 //! # No cache
 //!

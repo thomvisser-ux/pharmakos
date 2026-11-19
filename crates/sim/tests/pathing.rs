@@ -739,33 +739,81 @@ fn the_estimate_is_never_optimistic_at_any_percentile() {
     );
 }
 
+/// Fog never makes a route look cheaper, and item 61's markup caps it.
+///
+/// Two properties, each against what is true since lane `p3fix` priced a near
+/// pair at its served route (`estimate`'s module docs, "Fog"):
+///
+/// 1. **The name's property, against the clear answer as given:** the fogged
+///    estimate is never below the clear one, which for a near pair is the
+///    served route's cost. A query with a mask takes the abstract path for
+///    every pair, so this rests on the served route never costing more than
+///    the abstract answer, asserted here too.
+/// 2. **Item 61's cap, as the markup's own property:** the fogged estimate is
+///    at most `fog_price` of the **abstract** clear cost. Item 61 capped it
+///    "over the clear estimate" when the clear estimate was the abstract one;
+///    a near pair's clear answer is now lower than that, and the cap was
+///    always about the ×3/2 markup on the abstract answer. The abstract clear
+///    cost is read with no new interface: a mask that marks nothing unknown
+///    takes the abstract path and prices nothing up.
 #[test]
 fn fog_never_makes_a_route_look_cheaper() {
+    use pharmakos_sim::pathing::estimate::fog_price;
     let mut fixture = Fixture::build(SEED, CLUSTER);
     let speed = fixture.commander_speed();
     let set = pairs(&fixture, 40, 0x5EED_0003);
-    let unknown = vec![true; usize::try_from(fixture.surface.node_count()).expect("fits")];
+    let nodes = usize::try_from(fixture.surface.node_count()).expect("fits");
+    let unknown = vec![true; nodes];
+    let nothing_unknown = vec![false; nodes];
+    let mut buffer: Vec<Node> = Vec::with_capacity(usize::try_from(MAX_ROUTE_NODES).expect("fits"));
+    let mut near = 0;
     for (start, goal) in &set {
-        let clear = estimate(
+        let mut ask = |fog: Fog<'_>| {
+            estimate(
+                &fixture.surface,
+                &fixture.clusters,
+                &mut fixture.scratch,
+                *start,
+                *goal,
+                fog,
+                speed,
+            )
+            .expect("an estimate")
+        };
+        let clear = ask(Fog::Clear);
+        let abstract_clear = ask(Fog::Unknown(&nothing_unknown));
+        let fogged = ask(Fog::Unknown(&unknown));
+        let served = route(
             &fixture.surface,
             &fixture.clusters,
             &mut fixture.scratch,
             *start,
             *goal,
-            Fog::Clear,
-            speed,
+            &mut buffer,
         )
-        .expect("an estimate");
-        let fogged = estimate(
-            &fixture.surface,
-            &fixture.clusters,
-            &mut fixture.scratch,
-            *start,
-            *goal,
-            Fog::Unknown(&unknown),
-            speed,
-        )
-        .expect("an estimate");
+        .expect("a route");
+        if fixture.clusters.touch(*start, *goal) {
+            near += 1;
+            assert_eq!(
+                clear.cost, served.cost,
+                "a near pair's clear answer is its route"
+            );
+        } else {
+            assert_eq!(
+                clear.cost, abstract_clear.cost,
+                "a far pair's is the abstract one"
+            );
+        }
+        assert!(
+            !abstract_clear.fogged,
+            "a mask that marks nothing unknown prices nothing through fog"
+        );
+        assert!(
+            served.cost <= abstract_clear.cost,
+            "the served route costs more than the abstract answer: {} against {}",
+            served.cost,
+            abstract_clear.cost
+        );
         assert!(
             fogged.cost >= clear.cost,
             "fog made a route cheaper: {} against {}",
@@ -777,18 +825,34 @@ fn fog_never_makes_a_route_look_cheaper() {
             "a route priced through fog must say so, or the editor renders a bound as an ETA"
         );
         assert!(!clear.fogged, "a clear route must not claim to be fogged");
-        // Item 61 caps the fogged estimate at +50 % over the clear one, because
-        // the multiplier is applied per edge, every edge is priced at most
-        // once, and the integer division truncates rather than rounding up.
-        // The cap is exact: no per-leg slack is allowed for here, and a
-        // rounding term reintroduced in `fog_price` would fail this line.
+        // Item 61 caps the fogged estimate at +50 % over the abstract clear
+        // one, because the multiplier is applied per edge, every edge is
+        // priced at most once, and the integer division truncates rather than
+        // rounding up. The cap is exact: no per-leg slack is allowed for here,
+        // and a rounding term reintroduced in `fog_price` would fail the second
+        // line.
         assert!(
-            i64::from(fogged.cost) * 2 <= i64::from(clear.cost) * 3,
-            "the fogged estimate is more than 3/2 of the clear one: {} against {}",
+            fogged.cost
+                <= fog_price(
+                    abstract_clear.cost,
+                    speed.fog_numerator,
+                    speed.fog_denominator
+                ),
+            "the fogged estimate is over the markup of the abstract clear one: {} against {}",
             fogged.cost,
-            clear.cost
+            abstract_clear.cost
+        );
+        assert!(
+            i64::from(fogged.cost) * 2 <= i64::from(abstract_clear.cost) * 3,
+            "the fogged estimate is more than 3/2 of the abstract clear one: {} against {}",
+            fogged.cost,
+            abstract_clear.cost
         );
     }
+    assert!(
+        near > 0,
+        "the draw holds no near pair, so property 1 is untested"
+    );
 }
 
 #[test]
@@ -2876,4 +2940,118 @@ fn fog_boxes(fixture: &Fixture) -> (Vec<FogBox>, Vec<bool>) {
         }
     }
     (chosen, unknown)
+}
+
+/// A near pair whose route does not fit `MAX_ROUTE_NODES` is answered at the
+/// abstract cost (`estimate`'s module docs, "Near pairs"), and that answer is
+/// not below what the walker then walks: the partial route, then each route
+/// the router serves from where the last one stopped, until one reaches the
+/// goal.
+///
+/// The fixture builds the case: a strip of the golden map 16 columns wide is
+/// levelled to one height, with sheer edges, and four walls across it, three
+/// voxels high, leave gaps at alternate ends, so two columns of one cluster
+/// eight cells apart are joined only by a serpentine of about 1 500 cells.
+///
+/// What this does not cover, and the docs say: each further ask waits for its
+/// own serving tick, which no estimate counts, the same as for a far pair's
+/// partial route.
+#[test]
+fn a_partial_near_route_is_answered_at_no_less_than_its_walk() {
+    let mut fixture = Fixture::build(SEED, CLUSTER);
+    let speed = fixture.commander_speed();
+    let size = fixture.surface.size();
+    let (x0, x1) = (3 * CLUSTER, 3 * CLUSTER + 15);
+    let mut level = 0;
+    for x in x0..=x1 {
+        for y in 0..size[1] {
+            level = level.max(fixture.store.top_solid_z(x, y).unwrap_or(0));
+        }
+    }
+    level += 1;
+    // The walls stand at x0 + 4, + 6, + 8 and + 10; the gaps alternate
+    // between the strip's far end and its near end.
+    let wall_top = |x: i32, y: i32| -> Option<i32> {
+        let far_gap = y >= size[1] - 4;
+        let near_gap = y < 4;
+        match x - x0 {
+            4 | 8 if !far_gap => Some(level + 3),
+            6 | 10 if !near_gap => Some(level + 3),
+            _ => None,
+        }
+    };
+    for x in x0..=x1 {
+        for y in 0..size[1] {
+            let target = wall_top(x, y).unwrap_or(level);
+            let mut z = fixture.store.top_solid_z(x, y).unwrap_or(-1) + 1;
+            while z <= target {
+                fixture.store.set([x, y, z], Material::STONE);
+                z += 1;
+            }
+        }
+    }
+    fixture.settle_and_mark();
+    fixture.repair();
+    let mid = size[1].div_euclid(2);
+    let start = fixture.surface.node_of(x0 + 2, mid).expect("on the map");
+    let goal = fixture.surface.node_of(x0 + 12, mid).expect("on the map");
+    assert!(
+        fixture.clusters.touch(start, goal),
+        "the pair is a near pair"
+    );
+    assert!(
+        fixture.clusters.connected(&fixture.surface, start, goal),
+        "the serpentine joins the pair"
+    );
+    let estimated = estimate(
+        &fixture.surface,
+        &fixture.clusters,
+        &mut fixture.scratch,
+        start,
+        goal,
+        Fog::Clear,
+        speed,
+    )
+    .expect("a connected pair has an estimate");
+    // The walk: the partial route, then the router's next ask from its end.
+    let mut buffer: Vec<Node> = Vec::with_capacity(usize::try_from(MAX_ROUTE_NODES).expect("fits"));
+    let mut from = start;
+    let mut walked: i32 = 0;
+    let mut asks = 0;
+    loop {
+        let served = route(
+            &fixture.surface,
+            &fixture.clusters,
+            &mut fixture.scratch,
+            from,
+            goal,
+            &mut buffer,
+        )
+        .expect("each ask has a route");
+        asks += 1;
+        walked += served.cost;
+        if !served.partial {
+            break;
+        }
+        from = *buffer.last().expect("a partial route has an end");
+        assert!(asks < 8, "the walk never reached the goal");
+    }
+    assert!(
+        asks > 1,
+        "the first route was not partial, so this tests nothing"
+    );
+    assert!(
+        estimated.cost >= walked,
+        "the partial near route's answer {} is below the {walked} its walk costs",
+        estimated.cost
+    );
+    assert_eq!(
+        Some(estimated.ticks),
+        ticks_for_cost(estimated.cost, speed.cost_per_second),
+        "ticks are the answered cost's"
+    );
+    println!(
+        "::notice::partial near route: answered {} cost units, walked {walked} in {asks} asks",
+        estimated.cost
+    );
 }
