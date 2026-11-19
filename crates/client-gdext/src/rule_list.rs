@@ -27,6 +27,7 @@
 //! file order ([`crate::vocabulary::step_labels`], [`crate::vocabulary::rule_ids`]), and the
 //! gateway's check says whether the pick is legal.
 
+use pharmakos_proto::gp::api::v1::condition_slot::{PickOp, State};
 use pharmakos_proto::gp::api::v1::reference_shape::Kind;
 use pharmakos_proto::gp::api::v1::value_shape::Shape;
 use pharmakos_proto::gp::api::v1::{Chip, RenderPlanResponse};
@@ -227,6 +228,86 @@ impl RuleRow {
     }
 }
 
+/// What a condition slot holds, as the gateway sent it (`gp.api.v1.ConditionSlot.State`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SlotState {
+    /// No condition there.
+    Empty,
+    /// One predicate.
+    Leaf,
+    /// `all`, `any` or `not`: its items follow as slots of their own. Not a pick target.
+    Group,
+    /// A state the gateway left unset, or one this build does not know.
+    Unknown,
+}
+
+impl SlotState {
+    /// The name GDScript reads.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Empty => "empty",
+            Self::Leaf => "leaf",
+            Self::Group => "group",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// The JSON Patch op a pick at a slot sends, as the gateway names it
+/// (`gp.api.v1.ConditionSlot.PickOp`): the client never chooses one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SlotOp {
+    /// Nothing is at the pointer: the patch inserts the member.
+    Add,
+    /// Something is at the pointer: the patch replaces it, an array item in place.
+    Replace,
+    /// No op: a group slot, or an op this build does not know. No pick goes out.
+    None,
+}
+
+impl SlotOp {
+    /// The name GDScript reads.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Add => "add",
+            Self::Replace => "replace",
+            Self::None => "none",
+        }
+    }
+}
+
+/// One condition slot of the rendering: where a condition stands or may stand, in the
+/// gateway's words, and the op a pick there sends.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct RuleSlot {
+    /// Its JSON Pointer, as sent.
+    pub pointer: String,
+    /// Its name in the player's words, as sent ("when, item 1 of all").
+    pub title: String,
+    /// The line of its rule's sentence, as sent.
+    pub line: usize,
+    /// The rule it was sent under, by its index in [`RuleList::rules`].
+    pub rule: Option<usize>,
+    /// What it holds.
+    pub state: SlotState,
+    /// The predicate or group it holds, as sent; empty for an empty slot.
+    pub predicate: String,
+    /// The op a pick there sends.
+    pub op: SlotOp,
+}
+
+impl RuleSlot {
+    /// Whether the picker is offered on this slot: an empty or a leaf slot whose op the gateway
+    /// named. A group, a state or an op this build does not know is no pick target.
+    #[must_use]
+    pub const fn pickable(&self) -> bool {
+        matches!(self.state, SlotState::Empty | SlotState::Leaf)
+            && matches!(self.op, SlotOp::Add | SlotOp::Replace)
+    }
+}
+
 /// A run of one line: plain text, or the text of the chip whose index it carries.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Segment {
@@ -247,6 +328,8 @@ pub struct RuleList {
     pub rules: Vec<RuleRow>,
     /// The chips, in the order the answer lists them.
     pub chips: Vec<RuleChip>,
+    /// The condition slots, in the order the answer lists them.
+    pub slots: Vec<RuleSlot>,
 }
 
 impl RuleList {
@@ -284,7 +367,8 @@ pub fn rule_list_of(result: &Json) -> Result<RuleList, BridgeError> {
     let lines: Vec<String> = response.prose.lines().map(str::to_owned).collect();
     let mut rules = Vec::with_capacity(response.rules.len());
     let mut chips = Vec::new();
-    for rule in &response.rules {
+    let mut slots = Vec::new();
+    for (number, rule) in response.rules.iter().enumerate() {
         let line = index(rule.line, "a rule's line")?;
         let line_count = index(rule.line_count, "a rule's line count")?;
         let last = line
@@ -305,6 +389,26 @@ pub fn rule_list_of(result: &Json) -> Result<RuleList, BridgeError> {
         for chip in &rule.chips {
             chips.push(rule_chip(chip, &lines)?);
         }
+        for slot in &rule.slots {
+            slots.push(RuleSlot {
+                pointer: slot.pointer.clone(),
+                title: slot.title.clone(),
+                line: index(slot.line, "a slot's line")?,
+                rule: Some(number),
+                state: match State::try_from(slot.state) {
+                    Ok(State::Empty) => SlotState::Empty,
+                    Ok(State::Leaf) => SlotState::Leaf,
+                    Ok(State::Group) => SlotState::Group,
+                    Ok(State::Unspecified) | Err(_) => SlotState::Unknown,
+                },
+                predicate: slot.predicate.clone(),
+                op: match PickOp::try_from(slot.pick_op) {
+                    Ok(PickOp::Add) => SlotOp::Add,
+                    Ok(PickOp::Replace) => SlotOp::Replace,
+                    Ok(PickOp::Unspecified) | Err(_) => SlotOp::None,
+                },
+            });
+        }
     }
     let segments = cut(&lines, &chips)?;
     Ok(RuleList {
@@ -312,6 +416,7 @@ pub fn rule_list_of(result: &Json) -> Result<RuleList, BridgeError> {
         segments,
         rules,
         chips,
+        slots,
     })
 }
 

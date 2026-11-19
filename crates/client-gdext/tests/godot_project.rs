@@ -2513,9 +2513,9 @@ fn the_picker_draws_the_vocabulary_as_sent_and_a_lock_with_its_reason() {
     let editor = read("scripts/editor.gd");
     assert!(
         gd_code(&editor, "_on_picker_use").iter().any(|line| line.contains(
-            "bridge.editor_choose_predicate(int(_picker_slot.get(\"rule\", -1)), String(_picker_slot.get(\"pointer\", \"\")), int(_picker_slot.get(\"revision\", -1)), String(_picker_slot.get(\"slot\", \"\")), _picker_slot.get(\"present\", false), int(picked[0]), int(picked[1]))"
+            "bridge.editor_choose_predicate(int(_picker_slot.get(\"slot\", -1)), String(_picker_slot.get(\"pointer\", \"\")), int(_picker_slot.get(\"revision\", -1)), int(picked[0]), int(picked[1]))"
         )),
-        "the pick names the rule, the rendering and the slot"
+        "the pick names the slot by index and pointer, and the rendering"
     );
     let open = gd_code(&editor, "open_condition_picker");
     assert!(
@@ -2533,6 +2533,26 @@ fn the_picker_draws_the_vocabulary_as_sent_and_a_lock_with_its_reason() {
             .iter()
             .any(|line| line.contains("_picker_popup.hide()")),
         "the picker closes with the list it was opened on: {rules:?}"
+    );
+    let list = read("scripts/rule_list.gd");
+    let slots = gd_code(&list, "_slots");
+    assert!(
+        slots.iter().any(|line| line.contains(
+            "if int(slot.get(\"rule\", -1)) != rule or not slot.get(\"pickable\", false):"
+        )),
+        "a button only on a slot the bridge calls pickable (no group, no unknown op): {slots:?}"
+    );
+    assert!(
+        slots.iter().any(|line| line.contains(
+            "button.text = Strings.text(\"rule_slot\", {\"title\": slot.get(\"title\", \"\")})"
+        )),
+        "the slot is named in the gateway's words: {slots:?}"
+    );
+    assert!(
+        rules
+            .iter()
+            .any(|line| line.contains("Callable(self, \"open_condition_picker\")")),
+        "the rule list opens the picker on a slot: {rules:?}"
     );
     let shot = read("scripts/picker_shot.gd");
     assert!(shot.contains("res://fixtures/vocabulary.json"));

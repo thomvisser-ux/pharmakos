@@ -1039,52 +1039,34 @@ impl PharmakosBridge {
     }
 
     /// The condition picker took predicate `entry` of family `family` (indices into the editor
-    /// state's `vocabulary`) for the condition slot `slot` of rule `rule` (its index and pointer
-    /// in the rendering `rendering` the picker opened on); `present` says whether a condition
-    /// stands there now. One `replace`, or one `add` into an empty slot. Returns whether it was
-    /// taken; a refusal is on the status line.
+    /// state's `vocabulary`) for condition slot `slot` (its index and `pointer` in the rendering
+    /// `rendering` the picker opened on): one patch with the op the slot names. Returns whether
+    /// it was taken; a refusal is on the status line.
     #[func]
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "GDScript passes plain values: the rule's three names, the slot, and the two \
-                  indices of the pick"
-    )]
     fn editor_choose_predicate(
         &mut self,
-        rule: i64,
-        rule_pointer: GString,
+        slot: i64,
+        pointer: GString,
         rendering: i64,
-        slot: GString,
-        present: bool,
         family: i64,
         entry: i64,
     ) -> bool {
         let Some(rig) = self.rig.as_mut() else {
             return false;
         };
-        let (rule_pointer, slot) = (rule_pointer.to_string(), slot.to_string());
+        let pointer = pointer.to_string();
         self.panics.guard_or("editor_choose_predicate", false, || {
             let editor = rig.editor_mut();
             match (
-                usize::try_from(rule),
+                usize::try_from(slot),
                 u64::try_from(rendering),
                 usize::try_from(family),
                 usize::try_from(entry),
             ) {
-                (Ok(index), Ok(rendering), Ok(family), Ok(entry)) => editor
-                    .choose_predicate(
-                        &RuleNamed {
-                            index,
-                            rendering,
-                            pointer: rule_pointer,
-                        },
-                        &slot,
-                        present,
-                        family,
-                        entry,
-                    )
+                (Ok(slot), Ok(rendering), Ok(family), Ok(entry)) => editor
+                    .choose_predicate(slot, rendering, &pointer, family, entry)
                     .is_ok(),
-                (Err(_), _, _, _) => refused(editor, RuleEditRefusal::NoSuchRule),
+                (Err(_), _, _, _) => refused(editor, RuleEditRefusal::NoSuchSlot),
                 (_, Err(_), _, _) => refused(editor, RuleEditRefusal::Changed),
                 (_, _, Err(_), _) | (_, _, _, Err(_)) => {
                     refused(editor, RuleEditRefusal::NoSuchEntry)

@@ -345,10 +345,24 @@ pub(crate) fn rule_list_dictionary(list: &RuleList) -> VarDictionary {
     for chip in &list.chips {
         chips.push(&rule_chip_dictionary(chip).to_variant());
     }
+    let mut slots = VarArray::new();
+    for slot in &list.slots {
+        let mut one = VarDictionary::new();
+        one.set(&"pointer".to_variant(), &slot.pointer.to_variant());
+        one.set(&"title".to_variant(), &slot.title.to_variant());
+        one.set(&"line".to_variant(), &int_variant(slot.line));
+        one.set(&"rule".to_variant(), &index_or_none(slot.rule));
+        one.set(&"state".to_variant(), &slot.state.name().to_variant());
+        one.set(&"predicate".to_variant(), &slot.predicate.to_variant());
+        one.set(&"pick_op".to_variant(), &slot.op.name().to_variant());
+        one.set(&"pickable".to_variant(), &slot.pickable().to_variant());
+        slots.push(&one.to_variant());
+    }
     let mut out = VarDictionary::new();
     out.set(&"lines".to_variant(), &lines.to_variant());
     out.set(&"rules".to_variant(), &rules.to_variant());
     out.set(&"chips".to_variant(), &chips.to_variant());
+    out.set(&"slots".to_variant(), &slots.to_variant());
     out
 }
 

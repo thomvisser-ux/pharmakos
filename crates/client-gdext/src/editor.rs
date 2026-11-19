@@ -747,6 +747,12 @@ pub enum RuleEditRefusal {
     NoPointer,
     /// The entry carries no lock and no name: the gateway's answer named no word to write.
     Unnamed,
+    /// No condition slot at that index.
+    NoSuchSlot,
+    /// The slot is a group (`all`, `any`, `not`): its items are the pick targets, not it.
+    GroupSlot,
+    /// The slot names no op this build knows (or none at all): no pick is guessed.
+    NoPickOp,
 }
 
 impl RuleEditRefusal {
@@ -780,6 +786,9 @@ impl RuleEditRefusal {
             Self::NoDetail => "no_detail",
             Self::NoPointer => "no_pointer",
             Self::Unnamed => "unnamed",
+            Self::NoSuchSlot => "no_such_slot",
+            Self::GroupSlot => "group_slot",
+            Self::NoPickOp => "no_pick_op",
         }
     }
 
@@ -2075,46 +2084,71 @@ impl Editor {
     // --- The condition picker and the name picks (S3's `ed3b`, part 2) -------------------
 
     /// The condition picker took predicate `entry` of family `family`, as `get_vocabulary`
-    /// sent them, for the condition slot at `slot` inside rule `rule` (named as a drag names
-    /// it: its index, the rendering the picker opened on, and its pointer). One JSON Patch: the
-    /// predicate's skeleton wrapped under its name, a `replace` where a condition stands
-    /// (`present`) or an `add` into an empty slot. The parameters then edit as chips once the
-    /// new rendering carries them.
-    ///
-    /// Where `slot` comes from is the wire's (`gwu` carries each condition slot's pointer and
-    /// whether it holds one): this client composes no
-    /// slot pointer from its own knowledge of the playbook's schema.
+    /// sent them, for condition slot `slot` of the rendering `rendering` (named, as a chip is, by
+    /// its index, the rendering the picker opened on and its `pointer`). One JSON Patch: the
+    /// predicate's skeleton wrapped under its name, sent with exactly the op the slot names
+    /// (`add` where nothing stands, `replace` where something does, an array item in place): the
+    /// client never chooses one. The parameters then edit as chips once the new rendering
+    /// carries them.
     ///
     /// # Errors
     ///
     /// A [`RuleEditRefusal`], said on the status line: the list takes no edit now, it was
-    /// redrawn since the picker opened, the slot is not inside that rule, the vocabulary was not
+    /// redrawn since the picker opened, there is no such slot, the slot is a group or names no op
+    /// this build knows, it is not inside the rule it was sent under, the vocabulary was not
     /// read this Lull, there is no such entry, or the gateway locked it or its family.
     pub fn choose_predicate(
         &mut self,
-        rule: &RuleNamed,
-        slot: &str,
-        present: bool,
+        slot: usize,
+        rendering: u64,
+        pointer: &str,
         family: usize,
         entry: usize,
     ) -> Result<(), RuleEditRefusal> {
-        let outcome = self.predicate_patch(rule, slot, present, family, entry);
+        let outcome = self.predicate_patch(slot, rendering, pointer, family, entry);
         self.ask_rule_edit(outcome)
     }
 
     fn predicate_patch(
         &self,
-        rule: &RuleNamed,
-        slot: &str,
-        present: bool,
+        slot: usize,
+        rendering: u64,
+        pointer: &str,
         family: usize,
         entry: usize,
     ) -> Result<(String, String), RuleEditRefusal> {
         if let Some(blocked) = self.rules_blocked() {
             return Err(blocked);
         }
-        let drawn = self.rule_drawn(rule)?;
-        if !drawn.holds(slot) || drawn.pointer == slot {
+        if self.rules_rendering != Some(rendering) {
+            return Err(RuleEditRefusal::Changed);
+        }
+        let found = self
+            .rule_list
+            .slots
+            .get(slot)
+            .ok_or(RuleEditRefusal::NoSuchSlot)?;
+        if found.pointer != pointer {
+            return Err(RuleEditRefusal::Changed);
+        }
+        let present = match (found.state, found.op) {
+            (rule_list::SlotState::Group, _) => return Err(RuleEditRefusal::GroupSlot),
+            (rule_list::SlotState::Empty | rule_list::SlotState::Leaf, rule_list::SlotOp::Add) => {
+                false
+            }
+            (
+                rule_list::SlotState::Empty | rule_list::SlotState::Leaf,
+                rule_list::SlotOp::Replace,
+            ) => true,
+            (_, rule_list::SlotOp::None) | (rule_list::SlotState::Unknown, _) => {
+                return Err(RuleEditRefusal::NoPickOp);
+            }
+        };
+        let inside = found
+            .rule
+            .and_then(|index| self.rule_list.rules.get(index))
+            .is_some_and(|rule| rule.holds(&found.pointer) && rule.pointer != found.pointer);
+        if !inside {
             return Err(RuleEditRefusal::NotInRule);
         }
         let words = self
@@ -2123,8 +2157,8 @@ impl Editor {
             .ok_or(RuleEditRefusal::NoVocabulary)?;
         let value = vocabulary::predicate_value(words, family, entry)?;
         Ok((
-            vocabulary::slot_patch(slot, value, present),
-            slot.to_owned(),
+            vocabulary::slot_patch(&found.pointer, value, present),
+            found.pointer.clone(),
         ))
     }
 
@@ -6638,29 +6672,50 @@ mod tests {
         );
     }
 
-    /// **Item 2: a predicate pick is one patch at the slot**: its skeleton under its name, a
-    /// `replace` over a condition that stands and an `add` into an empty slot, each exact.
+    /// A condition slot of the rule list on screen, as the picker opened on it names it: its
+    /// index, the rendering and its pointer.
+    fn slot_named(editor: &Editor, pointer: &str) -> (usize, u64, String) {
+        let index = editor
+            .rule_list()
+            .slots
+            .iter()
+            .position(|slot| slot.pointer == pointer)
+            .unwrap_or_else(|| panic!("no slot {pointer}"));
+        (
+            index,
+            editor.rules_rendering().expect("a rendering"),
+            pointer.to_owned(),
+        )
+    }
+
+    fn pick_slot(editor: &mut Editor, pointer: &str) -> Result<(), RuleEditRefusal> {
+        let (family, entry) = predicate_at(editor, "commander", "cmdr_hp_pct");
+        let (slot, rendering, at) = slot_named(editor, pointer);
+        editor.choose_predicate(slot, rendering, &at, family, entry)
+    }
+
+    /// **A pick sends the op the slot names, at its pointer** (decisions-log item 160 (4)): an
+    /// item of an `all` of two leaves is replaced in place, never inserted beside them (an
+    /// RFC 6902 `add` at a list index inserts); an empty slot takes an `add`.
     #[test]
-    fn a_predicate_pick_is_one_patch_at_the_slot() {
+    fn a_predicate_pick_sends_the_op_the_slot_names() {
         let mut editor = rendered(EXPAND_EAST);
         with_words(&mut editor);
-        let (family, entry) = predicate_at(&editor, "commander", "cmdr_hp_pct");
-        let rule = rule_named(&editor, rule_index(&editor, "/declarative/handlers/0"));
         assert_eq!(
-            editor.choose_predicate(&rule, "/declarative/handlers/0/when", true, family, entry),
+            pick_slot(&mut editor, "/declarative/handlers/0/when/all/items/0"),
             Ok(())
         );
         let call = editor.next_call(false).expect("the patch");
         assert_eq!(call.method, "patch_plan");
         assert_eq!(
             patch_of_call(&call),
-            r#"[{"op":"replace","path":"/declarative/handlers/0/when","value":{"cmdr_hp_pct":{"cmp":"LE","pct":40}}}]"#
+            r#"[{"op":"replace","path":"/declarative/handlers/0/when/all/items/0","value":{"cmdr_hp_pct":{"cmp":"LE","pct":40}}}]"#,
+            "one item replaced, so the all still holds two"
         );
         let mut editor = rendered(EXPAND_EAST);
         with_words(&mut editor);
-        let step = rule_named(&editor, rule_index(&editor, "/declarative/route/0"));
         assert_eq!(
-            editor.choose_predicate(&step, "/declarative/route/0/skip_if", false, family, entry),
+            pick_slot(&mut editor, "/declarative/route/0/skip_if"),
             Ok(())
         );
         let call = editor.next_call(false).expect("the patch");
@@ -6670,15 +6725,45 @@ mod tests {
         );
     }
 
-    /// **Item 2: what the picker refuses**, each by its reason and never sent: no vocabulary, a
-    /// locked entry, a locked family, a slot outside the rule, a rendering redrawn since.
+    /// **A group slot is no pick target, and an op the client does not know is no guess**:
+    /// each refused with its words, nothing sent.
+    #[test]
+    fn a_group_slot_and_an_unknown_op_are_refused() {
+        let mut editor = rendered(EXPAND_EAST);
+        with_words(&mut editor);
+        assert_eq!(
+            pick_slot(&mut editor, "/declarative/handlers/0/when"),
+            Err(RuleEditRefusal::GroupSlot)
+        );
+        assert_eq!(editor.status().key, "rule_refused_group_slot");
+        let mut editor = loaded(EXPAND_EAST);
+        let render = read(
+            r#"{"prose":"Rules\n  r1: when x.\n","rules":[{"pointer":"/declarative/handlers/0","line":1,"line_count":1,"slots":[{"pointer":"/declarative/handlers/0/when","title":"when","line":1,"state":"leaf","predicate":"cmdr_hp_pct","pick_op":"unspecified"},{"pointer":"/declarative/handlers/0/body/0/skip_if","title":"step 1, skip if","line":1,"state":"empty","predicate":"","pick_op":7}]}],"_status":{"phase":"lull"}}"#,
+        );
+        rerender(&mut editor, &render);
+        with_words(&mut editor);
+        for pointer in [
+            "/declarative/handlers/0/when",
+            "/declarative/handlers/0/body/0/skip_if",
+        ] {
+            assert_eq!(
+                pick_slot(&mut editor, pointer),
+                Err(RuleEditRefusal::NoPickOp)
+            );
+            assert_eq!(editor.status().key, "rule_refused_no_pick_op");
+        }
+        assert!(!editor.has_pending_jobs(), "nothing was sent");
+    }
+
+    /// **What else the picker refuses**, each by its reason and never sent: no vocabulary, a
+    /// locked entry, a locked family, a slot of another rendering or another pointer, a slot
+    /// outside the rule it belongs to.
     #[test]
     fn the_picker_refuses_a_locked_entry_and_a_stale_rendering() {
         let mut editor = rendered(EXPAND_EAST);
-        let rule = rule_named(&editor, rule_index(&editor, "/declarative/handlers/0"));
-        let slot = "/declarative/handlers/0/when";
+        let (slot, rendering, at) = slot_named(&editor, "/declarative/handlers/0/when/all/items/0");
         assert_eq!(
-            editor.choose_predicate(&rule, slot, true, 0, 0),
+            editor.choose_predicate(slot, rendering, &at, 0, 0),
             Err(RuleEditRefusal::NoVocabulary)
         );
         with_words(&mut editor);
@@ -6699,7 +6784,7 @@ mod tests {
             })
             .expect("a locked entry");
         assert_eq!(
-            editor.choose_predicate(&rule, slot, true, clock, locked),
+            editor.choose_predicate(slot, rendering, &at, clock, locked),
             Err(RuleEditRefusal::Locked)
         );
         assert_eq!(editor.status().key, "rule_refused_locked");
@@ -6709,24 +6794,27 @@ mod tests {
             .position(|family| family.locked.is_some())
             .expect("a locked family");
         assert_eq!(
-            editor.choose_predicate(&rule, slot, true, locked_family, 0),
+            editor.choose_predicate(slot, rendering, &at, locked_family, 0),
             Err(RuleEditRefusal::Locked)
         );
         assert_eq!(
-            editor.choose_predicate(&rule, "/declarative/handlers/1/when", true, clock, 0),
-            Err(RuleEditRefusal::NotInRule)
-        );
-        assert_eq!(
-            editor.choose_predicate(&rule, "/declarative/handlers/0", true, clock, 0),
-            Err(RuleEditRefusal::NotInRule)
-        );
-        let stale = RuleNamed {
-            rendering: rule.rendering.wrapping_add(1),
-            ..rule
-        };
-        assert_eq!(
-            editor.choose_predicate(&stale, slot, true, clock, 0),
+            editor.choose_predicate(slot, rendering.wrapping_add(1), &at, clock, 0),
             Err(RuleEditRefusal::Changed)
+        );
+        assert_eq!(
+            editor.choose_predicate(slot, rendering, "/declarative/handlers/1/when", clock, 0),
+            Err(RuleEditRefusal::Changed)
+        );
+        assert_eq!(
+            editor.choose_predicate(usize::MAX, rendering, &at, clock, 0),
+            Err(RuleEditRefusal::NoSuchSlot)
+        );
+        if let Some(found) = editor.rule_list.slots.get_mut(slot) {
+            found.rule = Some(0);
+        }
+        assert_eq!(
+            editor.choose_predicate(slot, rendering, &at, clock, 0),
+            Err(RuleEditRefusal::NotInRule)
         );
         assert!(!editor.has_pending_jobs(), "nothing was sent");
     }
@@ -6781,7 +6869,7 @@ mod tests {
             // control goes through the door itself.
             editor.door = door;
             for got in [
-                editor.choose_predicate(&rule, "/declarative/handlers/0/when", true, 1, 0),
+                editor.choose_predicate(0, rule.rendering, "/declarative/route/0/skip_if", 1, 0),
                 editor.choose_name(0, rule.rendering, "/x", 0),
                 editor.change_setting_choice("b_00", setting.0, &setting.1, 0),
                 editor.change_setting_number("b_00", number.0, &number.1, 30),

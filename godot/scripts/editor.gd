@@ -292,6 +292,8 @@ var _picker_line: Label
 var _picker_again: Button
 var _picker_tree: Tree
 var _picker_slot := {}
+## The rule list's condition slots as the bridge last sent them.
+var _rule_slots: Array = []
 ## Visit & change (S3's `ed3b`, part 2): the beacon the menu is open for, the detail it was last
 ## drawn from, the submenus built from it, and the setting a number field is open for.
 var _visit_beacon := ""
@@ -1118,7 +1120,8 @@ func _draw_rules(state: Dictionary, unchecked: String) -> void:
 	_picker_line.text = ConditionPicker.status_text(_vocabulary)
 	# A refused or unreadable vocabulary can be asked for once more, from the picker's line.
 	_picker_again.visible = String(_vocabulary.get("failed", "")) != ""
-	var redrawn: bool = RuleList.fill(_rules_box, list, _rules_rendering, state.get("rules_editable", false), int(state.get("picking", -1)), state.get("conflicts", []), state.get("rule_refusal", {}), Callable(self, "_on_rule_chip"), Callable(self, "_on_rule_move"))
+	_rule_slots = list.get("slots", [])
+	var redrawn: bool = RuleList.fill(_rules_box, list, _rules_rendering, state.get("rules_editable", false), int(state.get("picking", -1)), state.get("conflicts", []), state.get("rule_refusal", {}), Callable(self, "_on_rule_chip"), Callable(self, "_on_rule_move"), Callable(self, "open_condition_picker"))
 	# An editor opened on the list drawn before names chips that may not be there any more
 	# (M1): it closes with that list, and the bridge would refuse its edit anyway.
 	if redrawn:
@@ -1182,16 +1185,18 @@ func _on_name(which: int) -> void:
 	bridge.editor_choose_name(int(_name_chip.get("index", -1)), int(_name_chip.get("revision", -1)), String(_name_chip.get("pointer", "")), which)
 
 
-## Opens the condition picker for the condition slot `slot` of rule `rule` (its index and pointer
-## in the rule list on screen), `present` when a condition stands there now: family, predicate,
-## parameters, as the bridge's `vocabulary` lists them, locked ones greyed with their reason.
-## The slot's pointer is the gateway's (`gwu` adds it to each rendered rule): this client
-## composes none from its own knowledge of the playbook.
-func open_condition_picker(rule: int, rule_pointer: String, slot: String, present: bool) -> void:
+## Opens the condition picker for condition slot `slot` of the rule list on screen (its index in
+## the bridge's `slots`): family, predicate, parameters, as the bridge's `vocabulary` lists them,
+## locked ones greyed with their reason. The slot, its pointer and the op a pick there sends are
+## the gateway's: this client composes no pointer and chooses no op.
+func open_condition_picker(slot: int) -> void:
 	if _rules_blocked != "":
 		_say_local("status_rule_refused_" + _rules_blocked, {})
 		return
-	_picker_slot = {"rule": rule, "pointer": rule_pointer, "revision": _rules_rendering, "slot": slot, "present": present}
+	if slot < 0 or slot >= _rule_slots.size():
+		_say_local("status_rule_refused_no_such_slot", {})
+		return
+	_picker_slot = {"slot": slot, "pointer": String(_rule_slots[slot].get("pointer", "")), "revision": _rules_rendering, "title": String(_rule_slots[slot].get("title", ""))}
 	ConditionPicker.fill(_picker_tree, _vocabulary)
 	_picker_line.text = ConditionPicker.status_text(_vocabulary)
 	_picker_popup.popup_centered()
@@ -1202,7 +1207,7 @@ func _on_picker_use() -> void:
 	if picked.is_empty():
 		return
 	_picker_popup.hide()
-	bridge.editor_choose_predicate(int(_picker_slot.get("rule", -1)), String(_picker_slot.get("pointer", "")), int(_picker_slot.get("revision", -1)), String(_picker_slot.get("slot", "")), _picker_slot.get("present", false), int(picked[0]), int(picked[1]))
+	bridge.editor_choose_predicate(int(_picker_slot.get("slot", -1)), String(_picker_slot.get("pointer", "")), int(_picker_slot.get("revision", -1)), int(picked[0]), int(picked[1]))
 
 
 ## The condition picker's rows as drawn, `[text, selectable]` each, for a check to read.
