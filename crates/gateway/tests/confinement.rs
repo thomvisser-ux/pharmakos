@@ -1378,7 +1378,9 @@ fn no_handler_reads_the_save_or_the_replay() {
         "take_persistence",
         "lull_save",
         "Save::parse",
-        "Surface::resume",
+        // `Surface::new(..).with_preset(..).resume(..)` since S3's `gwu`, fix
+        // pass 1: the preset is set before the save goes in.
+        ".resume(",
     ] {
         assert!(
             serve_lines.iter().any(|(_, line)| uses(line, needle)),

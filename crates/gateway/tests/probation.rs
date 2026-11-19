@@ -477,6 +477,128 @@ fn a_probation_lull_is_untimed_by_rule_and_a_custom_lull_never_is() {
     assert!(!decoded.untimed && !decoded.untimed_by_rule);
 }
 
+/// An in-process seat that reads the `_status` footer of its first call, as
+/// the built-in operator's own calls are answered.
+struct FooterReader(std::sync::Arc<std::sync::Mutex<Option<Json>>>);
+
+impl pharmakos_gateway::serve::BuiltInSeat for FooterReader {
+    fn plan(&mut self, _seat: u8, call: &mut dyn FnMut(&pharmakos_gateway::rpc::Request) -> Json) {
+        let request = pharmakos_gateway::rpc::parse(
+            r#"{"jsonrpc":"2.0","id":1,"method":"get_status","params":{}}"#,
+        )
+        .expect("well formed");
+        let answer = call(&request);
+        let footer = answer
+            .get("result")
+            .and_then(|result| result.get("_status"))
+            .cloned();
+        if let Ok(mut held) = self.0.lock() {
+            *held = footer;
+        }
+    }
+}
+
+/// Plays seat 0 with a [`FooterReader`] and advises nobody.
+struct PlaysSeatZero(Option<FooterReader>);
+
+impl pharmakos_gateway::serve::Operators for PlaysSeatZero {
+    fn built_in(&mut self, seat: u8) -> Option<Box<dyn pharmakos_gateway::serve::BuiltInSeat>> {
+        if seat != 0 {
+            return None;
+        }
+        let reader: Box<dyn pharmakos_gateway::serve::BuiltInSeat> = Box::new(self.0.take()?);
+        Some(reader)
+    }
+
+    fn advisor(&mut self, _seat: u8) -> Option<Box<dyn pharmakos_gateway::serve::Advisor>> {
+        None
+    }
+}
+
+/// S3's `gwu`, fix pass 1 (the review's C2): a resumed Probation Lull says
+/// it is untimed by rule on the very first call, to a socket seat and to an
+/// in-process seat alike, so the client starts no countdown the gateway would
+/// refuse; a resumed `custom` Lull never does.
+#[test]
+fn a_resumed_probation_lull_is_untimed_by_rule_from_its_first_call() {
+    for preset in [Preset::Probation, Preset::Custom] {
+        let probation = preset == Preset::Probation;
+        let surface = hosted_under("m-resume-rule", preset, Some(1), 1_000, 3);
+        let saved = surface.lull_save().expect("a Lull saves");
+        let mut resumed = resume("m-resume-rule", &saved, preset, 1_000, 3);
+        assert_eq!(resumed.time().untimed_by_rule, probation, "{preset:?}");
+        let (footer, decoded) = footer_of(&mut resumed, 1);
+        assert_eq!(decoded.untimed_by_rule, probation, "{preset:?}: {footer:?}");
+        assert!(decoded.untimed, "{preset:?}: no countdown reported yet");
+
+        let mut resumed = resume("m-resume-rule", &saved, preset, 1_000, 3);
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let mut operators = PlaysSeatZero(Some(FooterReader(std::sync::Arc::clone(&seen))));
+        let mut seats = pharmakos_gateway::serve::InProcessSeats::open(
+            &mut resumed,
+            &SEATS,
+            Some(1),
+            &mut operators,
+        )
+        .expect("in-process seats");
+        seats.plan(&mut resumed);
+        let footer = seen
+            .lock()
+            .ok()
+            .and_then(|held| held.clone())
+            .expect("the in-process seat read a footer");
+        assert_eq!(
+            footer.get("untimed_by_rule") == Some(&Json::Bool(true)),
+            probation,
+            "{preset:?}: an in-process seat's footer: {footer:?}"
+        );
+    }
+}
+
+/// S3's `gwu`, fix pass 1 (the review's C6): the last countdown the host
+/// reported is not in the save (its container is a contract this lane does
+/// not change), so a Lull resumed after a reported 0 and ended with no new 0
+/// files the neutral line; a 0 reported after the resume runs out.
+#[test]
+fn a_resumed_lull_forgets_a_countdown_of_0() {
+    let mut surface = hosted_under("m-resume-0", Preset::Custom, Some(1), 1_000, 3);
+    let admin = admin_token(&mut surface);
+    answered(
+        &call(
+            &mut surface,
+            &admin,
+            "report_host_clock",
+            "{\"elapsed_ms\":1000,\"remaining_ms\":0}",
+        ),
+        "report_host_clock",
+    );
+    let saved = surface.lull_save().expect("a Lull saves");
+    let filing = |surface: &mut Surface| -> String {
+        feed_of(surface, 1)
+            .into_iter()
+            .find(|(kind, ..)| kind == "safe_playbook_filed")
+            .map(|(_, text, _)| text)
+            .expect("a filing line")
+    };
+    for (again, line) in [(false, ENDED), (true, RAN_OUT)] {
+        let mut resumed = resume("m-resume-0", &saved, Preset::Custom, 1_000, 3);
+        let admin = admin_token(&mut resumed);
+        if again {
+            answered(
+                &call(
+                    &mut resumed,
+                    &admin,
+                    "report_host_clock",
+                    "{\"elapsed_ms\":1000,\"remaining_ms\":0}",
+                ),
+                "report_host_clock",
+            );
+        }
+        answered(&call(&mut resumed, &admin, "end_lull", "{}"), "end_lull");
+        assert_eq!(filing(&mut resumed), line, "a 0 reported again: {again}");
+    }
+}
+
 // ---------------------------------------------------------------------------
 // E5: the memos
 // ---------------------------------------------------------------------------
@@ -651,20 +773,19 @@ fn resume(
         Some(library_folder()),
     )
     .expect("a match");
-    Surface::resume(
-        match_id,
-        SEED,
-        FogPolicy::fogged(),
-        &SEATS,
-        host,
-        &save.state,
-        Continuation {
-            generation: 1,
-            last_tick: 0,
-        },
-    )
-    .expect("a Lull resumes")
-    .with_preset(preset, Some(SeatId::new(1)))
+    let rules = host.rules().clone();
+    Surface::new(match_id, SEED, rules, FogPolicy::fogged(), &SEATS)
+        .expect("a surface")
+        .with_preset(preset, Some(SeatId::new(1)))
+        .resume(
+            host,
+            &save.state,
+            Continuation {
+                generation: 1,
+                last_tick: 0,
+            },
+        )
+        .expect("a Lull resumes")
 }
 
 // ---------------------------------------------------------------------------
