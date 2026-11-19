@@ -166,8 +166,10 @@ struct Shape {
     /// every name is unique, every duration is positive, every voxel is on the
     /// map, every reference resolves, and it writes no construct the sim
     /// refuses at the seal (E0009 to E0017: no queued structure, no Build
-    /// target but a Generator on a voxel, no S2 or S3 selector, predicate or
-    /// settings) and no enum number this build does not name (E0018).
+    /// target but a Generator on a voxel, no S2 selector or settings) and no
+    /// enum number this build does not name (E0018). It does write S3's
+    /// predicates and `toward`, whole, since S3's `pred` built them, so the
+    /// runs that qualify hold every S3 construct.
     ///
     /// A generator that only ever produces rejected files exercises the decode
     /// stage and nothing else, and a green run over it would mean nothing — the
@@ -326,13 +328,15 @@ impl Shape {
         }
     }
 
-    /// A `place_beacon` site that covers a feature: a legal one on a clean run
-    /// (an UNCOVERED vent pick, or a name the scope holds, lost or live),
-    /// anything [`Shape::feature_site`] makes otherwise.
+    /// A `place_beacon` site that covers a feature, or walks toward one (S3's
+    /// `toward`, one site in three): a legal one on a clean run (an UNCOVERED
+    /// vent pick, or a name the scope holds, lost or live), anything
+    /// [`Shape::feature_site`] makes otherwise.
     fn covering_site(&mut self) -> Json {
         if !self.clean {
             return self.feature_site();
         }
+        let toward = self.rarely(3);
         let reference = if self.rarely(2) {
             (
                 "vent",
@@ -346,10 +350,14 @@ impl Shape {
             let id = FEATURE_IDS.get(index).copied().unwrap_or("vent_150_25");
             ("feature_id", Json::String(id.to_owned()))
         };
-        Json::Object(vec![(
-            "covering".to_owned(),
-            Json::Object(vec![(reference.0.to_owned(), reference.1)]),
-        )])
+        let feature = Json::Object(vec![(reference.0.to_owned(), reference.1)]);
+        if toward {
+            return Json::Object(vec![(
+                "toward".to_owned(),
+                Json::Object(vec![("feature".to_owned(), feature)]),
+            )]);
+        }
+        Json::Object(vec![("covering".to_owned(), feature)])
     }
 
     /// `on`, `covering` or S3's `toward`, with a name, a pick (sometimes with
@@ -408,11 +416,17 @@ impl Shape {
                 Json::Object(vec![("items".to_owned(), Json::Array(items))]),
             )]);
         }
-        // A clean run keeps to the three predicates that need no reference to
-        // resolve; the rest are what the resolve stage is for.
-        // A damaged run reaches S3's eight predicates too, with what each
-        // holds damaged; a clean run generates none of them, so a qualifying
-        // run that holds one is a damaged run whose damage missed it.
+        // S3's eight predicates, one condition in three on a clean run and
+        // written whole there, so the runs that qualify hold each of them and
+        // the compile cross-check in [`check`] reaches every one (S2's E8). A
+        // damaged run reaches them below, with what each holds damaged, and
+        // almost never qualifies, so the clean runs are where they qualify.
+        // The draw is a clean run's alone: a damaged run's draws are unchanged.
+        if self.clean && self.rarely(3) {
+            return self.s3_predicate();
+        }
+        // Otherwise a clean run keeps to the three predicates that need no
+        // reference to resolve; the rest are what the resolve stage is for.
         let families = if self.clean { 3 } else { 9 };
         match self.below(families) {
             7 | 8 => self.s3_predicate(),
@@ -475,8 +489,9 @@ impl Shape {
         }
     }
 
-    /// One of S3's `con6` predicates, each field now and then left out or
-    /// out of range, as a hand editor writes them (S3's `vfy6`).
+    /// One of S3's `con6` predicates: written whole on a clean run, and on a
+    /// damaged one each field now and then left out or out of range, as a hand
+    /// editor writes them (S3's `vfy6`).
     fn s3_predicate(&mut self) -> Json {
         let (name, mut fields): (&str, Vec<(String, Json)>) = match self.below(8) {
             0 => {
@@ -517,7 +532,7 @@ impl Shape {
                 "enemy_units_near",
                 vec![
                     ("near".to_owned(), self.near()),
-                    ("radius_voxels".to_owned(), self.number(0, 64)),
+                    ("radius_voxels".to_owned(), self.radius()),
                     ("count".to_owned(), self.int_compare()),
                     ("freshness".to_owned(), self.freshness()),
                 ],
@@ -535,7 +550,7 @@ impl Shape {
                     "enemy_structure_near",
                     vec![
                         ("near".to_owned(), self.near()),
-                        ("radius_voxels".to_owned(), self.number(0, 64)),
+                        ("radius_voxels".to_owned(), self.radius()),
                         structure,
                         ("freshness".to_owned(), self.freshness()),
                     ],
@@ -544,8 +559,8 @@ impl Shape {
             6 => ("kw_supply", vec![("kw".to_owned(), self.int_compare())]),
             _ => ("kw_draw", vec![("kw".to_owned(), self.int_compare())]),
         };
-        // One field in four left out, whichever it is.
-        if !fields.is_empty() && self.rarely(4) {
+        // One field in four left out on a damaged run, whichever it is.
+        if !fields.is_empty() && self.damage(4) {
             let index =
                 usize::try_from(self.below(i32::try_from(fields.len()).unwrap_or(1))).unwrap_or(0);
             if index < fields.len() {
@@ -555,19 +570,49 @@ impl Shape {
         Json::Object(vec![(name.to_owned(), Json::Object(fields))])
     }
 
-    /// An enemy predicate's place: a voxel, a beacon, the safest, or none.
+    /// An enemy predicate's place: a voxel, a beacon, the safest, or (on a
+    /// damaged run) none; a damaged run's voxel ranges over the whole field.
     fn near(&mut self) -> Json {
-        match self.below(4) {
-            0 => Json::Object(vec![("voxel".to_owned(), self.wild_voxel())]),
+        let arms = if self.clean { 3 } else { 4 };
+        match self.below(arms) {
+            0 => {
+                let voxel = if self.clean {
+                    self.voxel()
+                } else {
+                    self.wild_voxel()
+                };
+                Json::Object(vec![("voxel".to_owned(), voxel)])
+            }
             1 => Json::Object(vec![("beacon_anchor".to_owned(), self.beacon_ref())]),
             2 => Json::Object(vec![("safest".to_owned(), Json::Object(Vec::new()))]),
             _ => Json::Object(Vec::new()),
         }
     }
 
-    /// A freshness: either kind, a window under either (or none), an unset
-    /// kind, or a number the enum does not name.
+    /// An enemy predicate's radius: positive on a clean run, sometimes 0 (no
+    /// radius, `E0101`) otherwise.
+    fn radius(&mut self) -> Json {
+        let low = i32::from(self.clean);
+        self.number(low, 64)
+    }
+
+    /// A freshness: on a clean run either kind, with a positive window under
+    /// `KNOWN_WITHIN` and none under `VISIBLE_NOW`; otherwise either kind, a
+    /// window under either (or none), an unset kind, or a number the enum does
+    /// not name.
     fn freshness(&mut self) -> Json {
+        if self.clean {
+            if self.rarely(2) {
+                return Json::Object(vec![(
+                    "kind".to_owned(),
+                    Json::String("VISIBLE_NOW".to_owned()),
+                )]);
+            }
+            return Json::Object(vec![
+                ("kind".to_owned(), Json::String("KNOWN_WITHIN".to_owned())),
+                ("known_within_ms".to_owned(), self.number(1, 240_000)),
+            ]);
+        }
         let mut fields: Vec<(String, Json)> = Vec::new();
         if !self.rarely(5) {
             let kind = self.wild_enum(&["VISIBLE_NOW", "KNOWN_WITHIN"]);
@@ -837,9 +882,10 @@ impl Shape {
         Json::Object(fields)
     }
 
-    /// An enum value by one of its names, or by a number it may not name.
+    /// An enum value by one of its names, or on a damaged run by a number it
+    /// may not name.
     fn wild_enum(&mut self, names: &[&str]) -> Json {
-        if self.rarely(3) {
+        if self.damage(3) {
             return self.number(-3, 40);
         }
         let index =
