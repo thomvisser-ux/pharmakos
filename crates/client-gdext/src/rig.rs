@@ -381,32 +381,6 @@ enum RanOut {
     Reported,
 }
 
-/// The footer field that says a Lull is untimed by rule (a Probation match's), which `gwu` adds
-/// to `gp.api.v1.Status` (decisions-log item 160 (4)). The client reads the field
-/// and decides nothing about the preset.
-///
-/// PLACEHOLDER: the untimed-by-rule field's name, read by name — `gwu`'s builder, when `gwu`
-/// merges. Until the generated `Status` carries the field, the rig reads it off the raw footer
-/// ([`untimed_by_rule`]) and [`crate::view::read_status`] reads the rest; once it does, this
-/// constant and that read go, and the field is the decoded `Status`'s.
-pub const UNTIMED_BY_RULE: &str = "untimed_by_rule";
-
-/// Whether `footer` says its Lull is untimed by rule ([`UNTIMED_BY_RULE`]): `true` only for a
-/// field that is `true`; absent, it is not.
-///
-/// # Errors
-///
-/// [`BridgeError::Rpc`] for the field holding anything but a boolean.
-pub fn untimed_by_rule(footer: &Json) -> Result<bool, BridgeError> {
-    match footer.get(UNTIMED_BY_RULE) {
-        None => Ok(false),
-        Some(Json::Bool(flag)) => Ok(*flag),
-        Some(_) => Err(BridgeError::Rpc(format!(
-            "`{UNTIMED_BY_RULE}` is not a boolean"
-        ))),
-    }
-}
-
 /// Where a phase's clock reports stand, for the seat's budget: a phase's first report
 /// moves no gateway tick, and every later one does (the module doc's "Not every clock
 /// answer moves the clock").
@@ -438,7 +412,7 @@ pub struct Rig {
     /// How long each Lull is, from the rules table's two Lull rows.
     lulls: LullLengths,
     /// Whether the admin connection's latest footer said the phase has no countdown
-    /// (`_status.untimed`), or that the Lull is untimed by rule ([`UNTIMED_BY_RULE`]): the
+    /// (`_status.untimed`), or that the Lull is untimed by rule (`_status.untimed_by_rule`): the
     /// lobby then shows none (S1-11's client half, item 135).
     untimed: bool,
     /// Where this Lull's run-out stands ([`RanOut`]).
@@ -855,8 +829,7 @@ impl Rig {
         if link == ADMIN
             && let (_, Some(footer)) = split_footer(result)
         {
-            let by_rule = untimed_by_rule(&footer)?;
-            answer.phase_changed = self.observe(&read_status(&footer)?, by_rule)?;
+            answer.phase_changed = self.observe(&read_status(&footer)?)?;
         }
         Ok(answer)
     }
@@ -1094,19 +1067,18 @@ impl Rig {
     fn observe(
         &mut self,
         footer: &pharmakos_proto::gp::api::v1::Status,
-        by_rule: bool,
     ) -> Result<bool, BridgeError> {
         let phase = Phase::of(footer.phase);
         // A Lull untimed by rule has no countdown at all: the rig starts none, reports only the
         // time spent, and the lobby shows none (decisions-log item 160 (4)). Which preset that is stays the
         // gateway's word.
-        let countdown = if phase == Phase::Lull && phase != self.phase && !by_rule {
+        let countdown = if phase == Phase::Lull && phase != self.phase && !footer.untimed_by_rule {
             self.lull_countdown(footer)?
         } else {
             None
         };
         self.round = footer.round;
-        self.untimed = footer.untimed || by_rule;
+        self.untimed = footer.untimed || footer.untimed_by_rule;
         if phase == self.phase {
             return Ok(false);
         }
@@ -2226,7 +2198,7 @@ mod tests {
             phase: pharmakos_proto::gp::api::v1::status::Phase::Recap.into(),
             ..Default::default()
         };
-        assert!(rig.observe(&footer, false).expect("a readable footer"));
+        assert!(rig.observe(&footer).expect("a readable footer"));
         assert_eq!(
             rig.seat_calls_left, 0,
             "the phase change refilled the budget"
@@ -2256,14 +2228,14 @@ mod tests {
             round: 1,
             ..Default::default()
         };
-        assert!(rig.observe(&recap, false).expect("a readable footer"));
+        assert!(rig.observe(&recap).expect("a readable footer"));
         let broken = pharmakos_proto::gp::api::v1::Status {
             phase: pharmakos_proto::gp::api::v1::status::Phase::Lull.into(),
             round: 2,
             phase_remaining_ms: -1,
             ..Default::default()
         };
-        assert!(rig.observe(&broken, false).is_err());
+        assert!(rig.observe(&broken).is_err());
         assert_eq!(
             rig.phase,
             Phase::Recap,
@@ -2274,7 +2246,7 @@ mod tests {
             phase_remaining_ms: 5_000,
             ..broken
         };
-        assert!(rig.observe(&good, false).expect("a readable footer"));
+        assert!(rig.observe(&good).expect("a readable footer"));
         assert_eq!(rig.phase, Phase::Lull);
         assert!(
             !rig.timer_text().is_empty(),
@@ -2680,14 +2652,30 @@ mod tests {
         );
     }
 
-    /// **A Lull untimed by rule** (decisions-log item 160 (4); a Probation match's, the field `gwu` adds):
-    /// the rig starts no countdown, never sends `remaining_ms` (which a Probation gateway would
-    /// refuse), and the lobby shows none; a custom match's Lull still counts down.
+    /// **The untimed-by-rule footer field is the generated `Status`'s** (`gp.api.v1.Status`
+    /// field 6): read by the strict decode itself, absent is false, and anything but a boolean is
+    /// the decode's refusal.
+    #[test]
+    fn the_footer_field_is_the_generated_statuss() {
+        // The footer as the gateway writes it in a Probation Lull (`gp.api.v1.Status` field 6,
+        // always with `untimed`): the generated type reads the field itself.
+        let footer =
+            json::read(r#"{"phase":"lull","round":1,"untimed":true,"untimed_by_rule":true}"#)
+                .expect("json");
+        let status = read_status(&footer).expect("a Status");
+        assert!(status.untimed_by_rule && status.untimed);
+        let custom = json::read(r#"{"phase":"lull","round":1,"untimed":true}"#).expect("json");
+        assert!(!read_status(&custom).expect("a Status").untimed_by_rule);
+        assert!(read_status(&json::read(r#"{"untimed_by_rule":1}"#).expect("json")).is_err());
+    }
+
+    /// **A Lull untimed by rule** (a Probation match's; decisions-log item 160 (4)): the rig
+    /// starts no countdown, never sends `remaining_ms` (which a Probation gateway would refuse),
+    /// and the lobby shows none; a custom match's Lull still counts down.
     #[test]
     fn a_lull_untimed_by_rule_sends_no_countdown() {
-        let footer =
-            format!(r#"{{"phase":"lull","round":1,"untimed":true,"{UNTIMED_BY_RULE}":true}}"#);
-        let mut probation = opened_with(&footer);
+        let footer = r#"{"phase":"lull","round":1,"untimed":true,"untimed_by_rule":true}"#;
+        let mut probation = opened_with(footer);
         assert_eq!(probation.timer_text(), "");
         assert!(probation.untimed());
         let calls = admin_calls(&mut probation, 1, 3_000);
@@ -2707,11 +2695,9 @@ mod tests {
         let mut custom =
             opened_with(r#"{"phase":"lull","phase_remaining_ms":0,"round":1,"untimed":true}"#);
         assert_eq!(reported_countdown(&mut custom, 1), Some(600_000));
-        let mut off = opened_with(&format!(
-            r#"{{"phase":"lull","round":1,"untimed":true,"{UNTIMED_BY_RULE}":false}}"#
-        ));
+        let mut off =
+            opened_with(r#"{"phase":"lull","round":1,"untimed":true,"untimed_by_rule":false}"#);
         assert_eq!(reported_countdown(&mut off, 1), Some(600_000));
-        assert!(untimed_by_rule(&json::read(r#"{"untimed_by_rule":1}"#).expect("json")).is_err());
     }
 
     /// A Lull the rules give no length is untimed: its reports carry no countdown, so the

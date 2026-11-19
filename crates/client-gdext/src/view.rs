@@ -288,22 +288,9 @@ pub fn split_footer(result: &Json) -> (Json, Option<Json>) {
 ///
 /// [`BridgeError::Schema`] when the footer is not a `Status`.
 pub fn read_status(footer: &Json) -> Result<Status, BridgeError> {
-    // The untimed-by-rule field is read by name off the raw footer until the generated `Status`
-    // carries it (`crate::rig::UNTIMED_BY_RULE`, a PLACEHOLDER that names `gwu`); the strict
-    // decode reads every other field.
-    let rest = match footer {
-        Json::Object(entries) => Json::Object(
-            entries
-                .iter()
-                .filter(|(key, _)| key != crate::rig::UNTIMED_BY_RULE)
-                .cloned()
-                .collect(),
-        ),
-        other => other.clone(),
-    };
     Ok(json::decode_json::<Status>(&enums::canonical(
         "gp.api.v1.Status",
-        &rest,
+        footer,
     ))?)
 }
 
