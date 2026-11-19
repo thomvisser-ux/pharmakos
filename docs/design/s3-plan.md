@@ -1198,6 +1198,16 @@ result golden four times (`con5`, `nite3`, `opr3`, `tune3`), each naming its cau
 running lanes move one set, the second to merge re-blesses after its merge of `main` and names the
 lane it followed.
 
+[Amended by items 160 (6), 161 (8) and (9), and 162 (5). The ledger above predates five lanes. Every
+`report_hash` golden also moves at `vfyq2` and at `vcap`: each bumps `VERIFIER_VERSION` as its own
+last commit (the `vfyq2` bump for the `E0209` Fix, the `vcap` bump for the capped report's body),
+and the version is one of `report_hash`'s inputs, so those goldens move **eight times** over
+the stage, not six. Gateway goldens move at `gwu` (the additive `Status` field; each condition slot's
+pointer and state on a rendered rule or step; `get_vocabulary` and `get_beacon`, with the byte copy
+`godot/fixtures/rule_list_render.json` that item 161 (9) grants it by name) and at `opr3` (Easy's
+output: `instantiate_suggested` and the `demo_*` goldens, already in its row). Where two of these
+lanes move one set, item 162 (5) fixes the merge order: `opr3` first, `vfyq2`'s version bump last.]
+
 ### 4.3 Honest size
 
 About 74.5 ad and a 31-day critical path, against the spec's 5 weeks (25 days); with a week of float
