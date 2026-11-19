@@ -456,7 +456,7 @@ What moves a demo case, and what a diff means:
   changed `verifier_version` moves the `_verify` cases; a template string in
   `render_plan` moves every `_render` case, and so does a change in the condition
   slots each rule lists (`slots`, from S3's `gwu`: a slot's pointer, title,
-  line, state or predicate). A report that stops qualifying is
+  line, state, predicate or pick op). A report that stops qualifying is
   not re-blessed: the test asserts `qualifies: true`, and a demo playbook the
   game refuses is a demo that cannot be played.
 
