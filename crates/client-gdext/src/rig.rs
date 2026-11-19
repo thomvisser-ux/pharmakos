@@ -364,6 +364,46 @@ struct Wants {
     ready: bool,
 }
 
+/// Whether the phase has a countdown, as the admin connection's latest footer says
+/// (`_status.untimed` and `_status.untimed_by_rule`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Untimed {
+    /// A countdown was reported: the lobby shows it.
+    Timed,
+    /// No countdown has been reported yet (`untimed`).
+    NotReported,
+    /// The Lull has none by rule (`untimed_by_rule`, a Probation match's).
+    ByRule,
+}
+
+/// Where a timed Lull's run-out stands: its countdown is reported at zero, and only once the
+/// gateway has answered that report is the Lull ended, so the gateway can tell a Lull that ran
+/// out from one Ready ended (decisions-log item 160 (4)). A refused or lost zero is sent again.
+/// Scheduling, as the pacer's clock is.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+enum RanOut {
+    /// The countdown has not run out this Lull, or the Lull is untimed.
+    #[default]
+    No,
+    /// It ran out: the closing reports are owed, ahead of `end_lull`.
+    Owed,
+    /// The zero is on its way.
+    InFlight,
+    /// The gateway answered the zero (or the wire could not carry it); `end_lull` follows.
+    Reported,
+    /// The gateway refused the zero [`ZERO_REFUSALS`] times: no further zero is sent this Lull,
+    /// its refusal is said ([`Rig::zero_refusal`]), and `end_lull` follows. What the gateway
+    /// then files is its own; the client claims nothing about it.
+    GivenUp,
+}
+
+/// How many times the gateway may refuse a Lull's closing zero before the rig gives it up and
+/// ends the Lull without it: enough for a rate limit to clear at the clock's cadence (one
+/// report a quarter-second apart), few enough that a gateway which will never take the zero
+/// does not hold the Lull open behind it. A zero lost with its link is no refusal, and is
+/// sent again when the link is back, uncounted.
+pub const ZERO_REFUSALS: u8 = 3;
+
 /// Where a phase's clock reports stand, for the seat's budget: a phase's first report
 /// moves no gateway tick, and every later one does (the module doc's "Not every clock
 /// answer moves the clock").
@@ -395,8 +435,20 @@ pub struct Rig {
     /// How long each Lull is, from the rules table's two Lull rows.
     lulls: LullLengths,
     /// Whether the admin connection's latest footer said the phase has no countdown
-    /// (`_status.untimed`): the lobby then shows none (S1-11's client half, item 135).
-    untimed: bool,
+    /// (`_status.untimed`), or that the Lull is untimed by rule (`_status.untimed_by_rule`): the
+    /// lobby then shows none (S1-11's client half, item 135).
+    untimed: Untimed,
+    /// How many `report_host_clock` calls the gateway answered, and how many the rig sent with
+    /// a countdown: what the watch check reads to see a Lull untimed by rule asked about and
+    /// sent no countdown.
+    clock_answers: u64,
+    countdowns_sent: u64,
+    /// Where this Lull's run-out stands ([`RanOut`]).
+    ran_out: RanOut,
+    /// How many times the gateway refused this Lull's closing zero.
+    zero_refusals: u8,
+    /// The gateway's refusal of this Lull's closing zero, as it came, once the rig gave it up.
+    zero_refusal: Option<String>,
     /// How many `get_view` pages this client refused after the gateway served them.
     view_refusals: u32,
     /// After a refused page: the wall time before which no keyframe is asked again.
@@ -449,7 +501,12 @@ impl Rig {
             all_ready: false,
             last_error: None,
             lulls: LullLengths::default(),
-            untimed: true,
+            untimed: Untimed::NotReported,
+            clock_answers: 0,
+            countdowns_sent: 0,
+            ran_out: RanOut::No,
+            zero_refusals: 0,
+            zero_refusal: None,
             view_refusals: 0,
             keyframe_not_before_us: 0,
             seat_calls_left: SEAT_CALLS_PER_REFILL,
@@ -500,6 +557,34 @@ impl Rig {
         }
     }
 
+    /// A zero report the gateway refused is owed again, up to [`ZERO_REFUSALS`] refusals, and
+    /// then given up ([`RanOut::GivenUp`]).
+    fn zero_refused(&mut self) {
+        if self.ran_out != RanOut::InFlight {
+            return;
+        }
+        self.zero_refusals = self.zero_refusals.saturating_add(1);
+        self.ran_out = if self.zero_refusals >= ZERO_REFUSALS {
+            RanOut::GivenUp
+        } else {
+            RanOut::Owed
+        };
+    }
+
+    /// The gateway's refusal of this Lull's closing zero, as it came, once the rig gave the zero
+    /// up: the lobby says it on the Lull's line. `None` otherwise.
+    #[must_use]
+    pub fn zero_refusal(&self) -> Option<&str> {
+        self.zero_refusal.as_deref()
+    }
+
+    /// A zero report lost with its link (no answer, no refusal) is owed again, uncounted.
+    fn zero_lost(&mut self) {
+        if self.ran_out == RanOut::InFlight {
+            self.ran_out = RanOut::Owed;
+        }
+    }
+
     /// Connection `link` dropped. Whatever it had in flight is carried or forgotten, and
     /// the drop is counted: the watch check asserts there were none.
     pub fn dropped(&mut self, link: usize) {
@@ -515,6 +600,7 @@ impl Rig {
             Some((_, Purpose::Clock)) => {
                 self.timing.clock.refused();
                 self.clock_reports = ClockReports::Refilling;
+                self.zero_lost();
             }
             Some((_, Purpose::Plan)) => self.editor.dropped(),
             Some((_, Purpose::Meter)) => self.reads.meter = true,
@@ -528,6 +614,9 @@ impl Rig {
         self.sync_editor();
         self.timing.advance(now_us);
         if self.phase == Phase::Lull && self.timing.clock.run_out() {
+            if self.ran_out == RanOut::No {
+                self.ran_out = RanOut::Owed;
+            }
             self.wants.end_lull = true;
         }
         let mut out = Vec::new();
@@ -565,7 +654,36 @@ impl Rig {
             }
             return None;
         }
-        if self.wants.end_lull && self.phase == Phase::Lull {
+        if self.ran_out == RanOut::Owed && self.phase == Phase::Lull {
+            // The countdown down to zero, in steps the gateway takes, ahead of `end_lull`: only a
+            // timed Lull that ran out owes it, never one Ready or the human ended.
+            if let Some((spent, left, last)) = self.timing.clock.closing_report() {
+                if last {
+                    self.ran_out = RanOut::InFlight;
+                }
+                self.clock_reports = ClockReports::Refilling;
+                self.countdowns_sent = self.countdowns_sent.wrapping_add(1);
+                return Some((
+                    Purpose::Clock,
+                    "report_host_clock",
+                    object(vec![
+                        ("elapsed_ms", number(i64::from(spent))),
+                        ("remaining_ms", number(i64::from(left))),
+                    ]),
+                ));
+            }
+            if self.timing.clock.unreportable() {
+                // The wire cannot carry the end; said where the lobby reads the rig's errors.
+                self.ran_out = RanOut::Reported;
+            }
+        }
+        if self.wants.end_lull
+            && self.phase == Phase::Lull
+            && matches!(
+                self.ran_out,
+                RanOut::No | RanOut::Reported | RanOut::GivenUp
+            )
+        {
             return Some((Purpose::EndLull, "end_lull", object(Vec::new())));
         }
         if self.wants.end_recap && self.phase == Phase::Recap {
@@ -580,7 +698,9 @@ impl Rig {
                 object(vec![("ms", number(i64::from(ask)))]),
             ));
         }
-        if let Some((spent, countdown)) = self.timing.clock.next_report() {
+        if self.ran_out == RanOut::No
+            && let Some((spent, countdown)) = self.timing.clock.next_report()
+        {
             self.clock_reports = match self.clock_reports {
                 ClockReports::Unsent => ClockReports::FirstOut,
                 ClockReports::FirstOut | ClockReports::Refilling => ClockReports::Refilling,
@@ -590,6 +710,7 @@ impl Rig {
             let mut params = vec![("elapsed_ms", number(i64::from(spent)))];
             if let Some(countdown) = countdown {
                 params.push(("remaining_ms", number(i64::from(countdown))));
+                self.countdowns_sent = self.countdowns_sent.wrapping_add(1);
             }
             return Some((Purpose::Clock, "report_host_clock", object(params)));
         }
@@ -750,6 +871,12 @@ impl Rig {
                 self.recap.refusal = format!("{code}: {message}");
             }
             let said = format!("{code}: {message}");
+            if purpose == Purpose::Clock
+                && self.ran_out == RanOut::GivenUp
+                && self.zero_refusal.is_none()
+            {
+                self.zero_refusal = Some(said.clone());
+            }
             self.last_error = Some(said.clone());
             answer.error = Some(said);
             return Ok(answer);
@@ -845,6 +972,10 @@ impl Rig {
             }
             Purpose::Clock => {
                 self.timing.clock.answered();
+                self.clock_answers = self.clock_answers.wrapping_add(1);
+                if self.ran_out == RanOut::InFlight {
+                    self.ran_out = RanOut::Reported;
+                }
                 // Every report but a phase's first moved the gateway's clock, and with it
                 // every token's budget (the module doc's "Not every clock answer moves the
                 // clock").
@@ -970,6 +1101,7 @@ impl Rig {
             Purpose::Clock => {
                 self.timing.clock.refused();
                 self.clock_reports = ClockReports::Refilling;
+                self.zero_refused();
             }
             Purpose::View => {
                 // A cursor from before an attach, or any other refusal: start again from
@@ -1006,13 +1138,22 @@ impl Rig {
         footer: &pharmakos_proto::gp::api::v1::Status,
     ) -> Result<bool, BridgeError> {
         let phase = Phase::of(footer.phase);
-        let countdown = if phase == Phase::Lull && phase != self.phase {
+        // A Lull untimed by rule has no countdown at all: the rig starts none, reports only the
+        // time spent, and the lobby shows none (decisions-log item 160 (4)). Which preset that is stays the
+        // gateway's word.
+        let countdown = if phase == Phase::Lull && phase != self.phase && !footer.untimed_by_rule {
             self.lull_countdown(footer)?
         } else {
             None
         };
         self.round = footer.round;
-        self.untimed = footer.untimed;
+        self.untimed = if footer.untimed_by_rule {
+            Untimed::ByRule
+        } else if footer.untimed {
+            Untimed::NotReported
+        } else {
+            Untimed::Timed
+        };
         if phase == self.phase {
             return Ok(false);
         }
@@ -1026,6 +1167,12 @@ impl Rig {
         self.clock_reports = ClockReports::Unsent;
         self.wants.end_lull = false;
         self.wants.end_recap = false;
+        self.ran_out = RanOut::No;
+        if phase == Phase::Lull {
+            // A given-up zero is said until the next Lull opens; the count starts again there.
+            self.zero_refusals = 0;
+            self.zero_refusal = None;
+        }
         self.all_ready = false;
         // Something about the view may have changed at the boundary: the unlock at match
         // end is a policy change, and a new segment makes the feed cursor stale.
@@ -1182,7 +1329,7 @@ impl Rig {
     /// which is no countdown until the gateway has been told one.
     #[must_use]
     pub fn timer_text(&self) -> String {
-        if self.untimed {
+        if self.untimed != Untimed::Timed {
             return String::new();
         }
         self.timing.clock.timer_text()
@@ -1190,8 +1337,27 @@ impl Rig {
 
     /// Whether the admin connection's latest footer said the phase has no countdown.
     #[must_use]
-    pub const fn untimed(&self) -> bool {
-        self.untimed
+    pub fn untimed(&self) -> bool {
+        self.untimed != Untimed::Timed
+    }
+
+    /// Whether the admin connection's latest footer said the Lull is untimed by rule
+    /// (`_status.untimed_by_rule`).
+    #[must_use]
+    pub fn untimed_by_rule(&self) -> bool {
+        self.untimed == Untimed::ByRule
+    }
+
+    /// How many `report_host_clock` calls the gateway answered.
+    #[must_use]
+    pub const fn clock_answers(&self) -> u64 {
+        self.clock_answers
+    }
+
+    /// How many `report_host_clock` calls carried a countdown (`remaining_ms`).
+    #[must_use]
+    pub const fn countdowns_sent(&self) -> u64 {
+        self.countdowns_sent
     }
 
     /// The recap's lines, as the gateway last wrote them.
@@ -2322,12 +2488,499 @@ mod tests {
         let mut rig = opened_with(r#"{"phase":"lull","phase_remaining_ms":42000,"round":1}"#);
         assert_eq!(reported_countdown(&mut rig, 1), Some(42_000));
         let mut ran_out = opened_with(r#"{"phase":"lull","phase_remaining_ms":0,"round":2}"#);
-        let sent = ran_out.poll(1);
-        assert!(
-            sent.iter()
-                .any(|frame| frame.link == ADMIN && method_of(frame) == "end_lull"),
-            "a Lull rejoined at zero has run out: {sent:?}"
+        assert_eq!(
+            admin_calls(&mut ran_out, 1, 2),
+            [
+                ("report_host_clock".to_owned(), Some(0)),
+                ("end_lull".to_owned(), None)
+            ],
+            "a Lull rejoined at zero has run out: its zero, then its end"
         );
+    }
+
+    /// The admin calls the rig sends over `polls` polls from `start`, a clock report's cadence
+    /// apart, each with the countdown it reported (`None` for none), every one answered with
+    /// a Lull's footer that is not all ready.
+    fn admin_calls(rig: &mut Rig, start: u64, polls: u64) -> Vec<(String, Option<i64>)> {
+        let mut out = Vec::new();
+        for poll in 0..polls {
+            let now = start.saturating_add(poll.saturating_mul(CLOCK_REPORT_US));
+            for frame in rig.poll(now) {
+                if frame.link != ADMIN {
+                    continue;
+                }
+                let method = method_of(&frame);
+                let countdown = json::read(&frame.text)
+                    .expect("json")
+                    .get("params")
+                    .and_then(|params| params.get("remaining_ms"))
+                    .and_then(json_integer);
+                let result = if method == "report_host_clock" {
+                    r#"{"all_ready":false}"#
+                } else {
+                    "{}"
+                };
+                // `end_lull` ends the Lull, as the gateway's answer to it says.
+                let phase = if method == "end_lull" { "push" } else { "lull" };
+                rig.receive(ADMIN, &answer(id_of(&frame), result, phase))
+                    .expect("reads");
+                out.push((method, countdown));
+            }
+        }
+        out
+    }
+
+    /// The admin frames the rig sends at `now`, each as `(method, elapsed_ms, remaining_ms)`,
+    /// answered as `answer_as` says (`Some` a result, `None` left unanswered).
+    fn admin_frames(
+        rig: &mut Rig,
+        now: u64,
+        answer_as: &dyn Fn(&str) -> Option<String>,
+    ) -> Vec<(String, Option<i64>, Option<i64>)> {
+        let mut out = Vec::new();
+        for frame in rig.poll(now) {
+            if frame.link != ADMIN {
+                continue;
+            }
+            let method = method_of(&frame);
+            let params = json::read(&frame.text)
+                .expect("json")
+                .get("params")
+                .cloned()
+                .unwrap_or(Json::Null);
+            let read = |key: &str| params.get(key).and_then(json_integer);
+            out.push((method.clone(), read("elapsed_ms"), read("remaining_ms")));
+            if let Some(answer) = answer_as(&method) {
+                let phase = if method == "end_lull" { "push" } else { "lull" };
+                rig.receive(ADMIN, &answer_frame(id_of(&frame), &answer, phase))
+                    .expect("reads");
+            }
+        }
+        out
+    }
+
+    fn answer_frame(id: i64, result: &str, phase: &str) -> String {
+        answer(id, result, phase)
+    }
+
+    fn plain_answer(method: &str) -> String {
+        if method == "report_host_clock" {
+            r#"{"all_ready":false}"#.to_owned()
+        } else {
+            "{}".to_owned()
+        }
+    }
+
+    /// **After a stall the run-out is caught up in steps the gateway takes**: the gateway
+    /// refuses a report more than `MAX_CLOCK_STEP_MS` past its last, so a 120 s Lull polled again
+    /// 125 s later reports at most 60 s past the last accepted report each time, the zero only
+    /// when the end is within a step, and `end_lull` after it.
+    #[test]
+    fn a_stalled_run_out_is_reported_in_steps_before_its_zero() {
+        let mut rig = opened_with(r#"{"phase":"lull","phase_remaining_ms":120000,"round":2}"#);
+        let mut sent = admin_frames(&mut rig, 1, &|method| Some(plain_answer(method)));
+        let mut now = 125_000_000_u64;
+        for _ in 0..12 {
+            sent.extend(admin_frames(&mut rig, now, &|method| {
+                Some(plain_answer(method))
+            }));
+            now = now.saturating_add(CLOCK_REPORT_US);
+        }
+        let mut last = 0_i64;
+        for (method, elapsed, _) in &sent {
+            if method == "report_host_clock"
+                && let Some(elapsed) = elapsed
+            {
+                assert!(
+                    elapsed.saturating_sub(last) <= 60_000,
+                    "a step past the gateway's limit: {sent:?}"
+                );
+                last = *elapsed;
+            }
+        }
+        let zero = sent
+            .iter()
+            .position(|(_, _, left)| *left == Some(0))
+            .expect("the zero");
+        let end = sent
+            .iter()
+            .position(|(method, _, _)| method == "end_lull")
+            .expect("end_lull");
+        assert!(zero < end, "{sent:?}");
+        assert_eq!(sent.get(zero).and_then(|frame| frame.1), Some(120_000));
+    }
+
+    /// **A zero the link lost is sent again** before `end_lull`: the zero counts as reported
+    /// only on the gateway's answer.
+    #[test]
+    fn a_zero_lost_with_its_link_is_sent_again() {
+        let mut rig = opened_with(r#"{"phase":"lull","phase_remaining_ms":1000,"round":2}"#);
+        let mut now = 1_u64;
+        let mut first_zero = false;
+        for _ in 0..12 {
+            let frames = admin_frames(&mut rig, now, &|method| {
+                (method != "report_host_clock").then(|| "{}".to_owned())
+            });
+            now = now.saturating_add(CLOCK_REPORT_US);
+            if frames.iter().any(|(_, _, left)| *left == Some(0)) {
+                first_zero = true;
+                break;
+            }
+            rig.dropped(ADMIN);
+            rig.opened(ADMIN);
+        }
+        assert!(first_zero, "the zero went out");
+        assert!(
+            !admin_frames(&mut rig, now, &|method| Some(plain_answer(method)))
+                .iter()
+                .any(|(method, _, _)| method == "end_lull"),
+            "no end_lull while the zero is unanswered"
+        );
+        rig.dropped(ADMIN);
+        rig.opened(ADMIN);
+        let mut after = Vec::new();
+        for _ in 0..8 {
+            now = now.saturating_add(CLOCK_REPORT_US);
+            after.extend(admin_frames(&mut rig, now, &|method| {
+                Some(plain_answer(method))
+            }));
+        }
+        let zero = after
+            .iter()
+            .position(|(_, _, left)| *left == Some(0))
+            .expect("the zero is sent again");
+        let end = after
+            .iter()
+            .position(|(method, _, _)| method == "end_lull")
+            .expect("end_lull");
+        assert!(zero < end, "{after:?}");
+    }
+
+    /// Drives `rig` (a timed Lull that runs out at once) for `polls` polls a clock report's
+    /// cadence apart, answering each admin call: a zero report with a refusal while `refuse`
+    /// says so (given how many zeros were refused so far), everything else plainly. Returns
+    /// what was sent, `(method, remaining_ms)`.
+    fn drive_zeros(
+        rig: &mut Rig,
+        start: u64,
+        polls: u64,
+        refuse: &dyn Fn(usize) -> bool,
+    ) -> Vec<(String, Option<i64>)> {
+        let mut sent = Vec::new();
+        let mut refused = 0_usize;
+        let mut now = start;
+        for _ in 0..polls {
+            for frame in rig.poll(now) {
+                if frame.link != ADMIN {
+                    continue;
+                }
+                let method = method_of(&frame);
+                let left = json::read(&frame.text)
+                    .expect("json")
+                    .get("params")
+                    .and_then(|params| params.get("remaining_ms"))
+                    .and_then(json_integer);
+                sent.push((method.clone(), left));
+                let text = if method == "report_host_clock" && left == Some(0) && refuse(refused) {
+                    refused = refused.saturating_add(1);
+                    refusal(id_of(&frame), "RATE_LIMITED", "too many reports")
+                } else {
+                    let phase = if method == "end_lull" { "push" } else { "lull" };
+                    answer_frame(id_of(&frame), &plain_answer(&method), phase)
+                };
+                let _ = rig.receive(ADMIN, &text);
+            }
+            // The Lull is over once `end_lull` is answered: the drive stops there.
+            if sent.iter().any(|(method, _)| method == "end_lull") {
+                break;
+            }
+            now = now.saturating_add(CLOCK_REPORT_US);
+        }
+        sent
+    }
+
+    fn zeros(sent: &[(String, Option<i64>)]) -> usize {
+        sent.iter()
+            .filter(|(method, left)| method == "report_host_clock" && *left == Some(0))
+            .count()
+    }
+
+    /// **A zero lost with its link, the link back inside one report interval**: no `end_lull`
+    /// goes out before the zero is sent again.
+    #[test]
+    fn a_lost_zero_with_the_link_back_inside_the_cadence_holds_end_lull() {
+        let mut rig = opened_with(r#"{"phase":"lull","phase_remaining_ms":1000,"round":2}"#);
+        let mut now = 1_u64;
+        let mut zero_at = None;
+        for _ in 0..12 {
+            let frames = admin_frames(&mut rig, now, &|method| {
+                (method != "report_host_clock").then(|| "{}".to_owned())
+            });
+            if frames.iter().any(|(_, _, left)| *left == Some(0)) {
+                zero_at = Some(now);
+                break;
+            }
+            rig.dropped(ADMIN);
+            rig.opened(ADMIN);
+            now = now.saturating_add(CLOCK_REPORT_US);
+        }
+        assert!(zero_at.is_some());
+        rig.dropped(ADMIN);
+        rig.opened(ADMIN);
+        let frames = admin_frames(&mut rig, now.saturating_add(1_000), &|method| {
+            Some(plain_answer(method))
+        });
+        assert!(
+            !frames.iter().any(|(method, _, _)| method == "end_lull"),
+            "end_lull before the zero was sent again: {frames:?}"
+        );
+    }
+
+    /// **After a stall, a poll inside the cadence once an intermediate step is answered sends
+    /// no `end_lull`**: the zero is still owed.
+    #[test]
+    fn a_poll_between_catch_up_steps_holds_end_lull() {
+        let mut rig = opened_with(r#"{"phase":"lull","phase_remaining_ms":120000,"round":2}"#);
+        let _ = admin_frames(&mut rig, 1, &|method| Some(plain_answer(method)));
+        let step = admin_frames(&mut rig, 125_000_000, &|method| Some(plain_answer(method)));
+        assert!(
+            step.iter()
+                .any(|(method, _, left)| method == "report_host_clock" && *left == Some(60_000)),
+            "an intermediate step: {step:?}"
+        );
+        let inside = admin_frames(&mut rig, 125_001_000, &|method| Some(plain_answer(method)));
+        assert!(
+            !inside.iter().any(|(method, _, _)| method == "end_lull"),
+            "end_lull while the zero is owed: {inside:?}"
+        );
+    }
+
+    /// **A zero the gateway refuses is sent again**, and `end_lull` waits for it (the
+    /// gateway may refuse a zero under a rate limit): one refusal, then an answer, is reported
+    /// as before.
+    #[test]
+    fn a_refused_zero_is_sent_again() {
+        let mut rig = opened_with(r#"{"phase":"lull","phase_remaining_ms":1000,"round":2}"#);
+        let sent = drive_zeros(&mut rig, 1, 30, &|refused| refused == 0);
+        assert_eq!(zeros(&sent), 2, "{sent:?}");
+        let end = sent
+            .iter()
+            .position(|(method, _)| method == "end_lull")
+            .expect("end_lull");
+        let last_zero = sent
+            .iter()
+            .rposition(|(method, left)| method == "report_host_clock" && *left == Some(0))
+            .expect("a zero");
+        assert!(last_zero < end, "{sent:?}");
+        assert_eq!(
+            rig.zero_refusal(),
+            None,
+            "an answered zero is no refusal to say"
+        );
+    }
+
+    /// **A zero the gateway keeps refusing is given up after `ZERO_REFUSALS`**: no further
+    /// zero this Lull, the gateway's own refusal is said, and `end_lull` goes out. The zeros go
+    /// at the clock's cadence, never faster.
+    #[test]
+    fn a_zero_refused_every_time_is_given_up_and_said() {
+        let mut rig = opened_with(r#"{"phase":"lull","phase_remaining_ms":1000,"round":2}"#);
+        let sent = drive_zeros(&mut rig, 1, 40, &|_| true);
+        assert_eq!(zeros(&sent), usize::from(ZERO_REFUSALS), "{sent:?}");
+        assert_eq!(
+            sent.iter()
+                .filter(|(method, _)| method == "end_lull")
+                .count(),
+            1,
+            "{sent:?}"
+        );
+        assert_eq!(rig.zero_refusal(), Some("RATE_LIMITED: too many reports"));
+        assert_eq!(rig.last_error(), Some("RATE_LIMITED: too many reports"));
+        // The next Lull starts its count again.
+        let next = read_status(
+            &json::read(r#"{"phase":"lull","phase_remaining_ms":1000,"round":3}"#).expect("json"),
+        )
+        .expect("a Status");
+        assert!(rig.observe(&next).expect("a readable footer"));
+        assert_eq!(rig.zero_refusal(), None);
+        let again = drive_zeros(&mut rig, 20_000_000, 40, &|refused| refused < 2);
+        assert_eq!(zeros(&again), 3, "{again:?}");
+        assert_eq!(rig.zero_refusal(), None);
+    }
+
+    /// The zero reports go out no faster than the clock's cadence: at most one per report
+    /// interval, however fast the poll.
+    #[test]
+    fn zero_retries_keep_the_clocks_cadence() {
+        let mut rig = opened_with(r#"{"phase":"lull","phase_remaining_ms":1000,"round":2}"#);
+        let mut sent = 0_usize;
+        let mut now = 1_000_000_u64;
+        for _ in 0..1_000 {
+            for frame in rig.poll(now) {
+                if frame.link != ADMIN {
+                    continue;
+                }
+                if method_of(&frame) == "report_host_clock"
+                    && frame.text.contains("\"remaining_ms\": 0")
+                {
+                    sent = sent.saturating_add(1);
+                }
+                let _ = rig.receive(ADMIN, &refusal(id_of(&frame), "RATE_LIMITED", "slow"));
+            }
+            now = now.saturating_add(1_000);
+        }
+        // 1000 polls 1 ms apart are one second: four report intervals at most.
+        assert!(sent <= usize::from(ZERO_REFUSALS), "{sent}");
+    }
+
+    /// **The "ran out" line's client half** (decisions-log item 160 (4)): when a timed Lull's countdown is
+    /// spent, the rig reports the countdown at zero once, and only then calls `end_lull`.
+    #[test]
+    fn a_spent_countdown_is_reported_at_zero_once_before_end_lull() {
+        let mut rig = opened_with(r#"{"phase":"lull","phase_remaining_ms":1000,"round":2}"#);
+        let calls = admin_calls(&mut rig, 1, 12);
+        let zero = calls
+            .iter()
+            .position(|(method, countdown)| method == "report_host_clock" && *countdown == Some(0))
+            .expect("the zero report");
+        let end = calls
+            .iter()
+            .position(|(method, _)| method == "end_lull")
+            .expect("end_lull");
+        assert!(zero < end, "{calls:?}");
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|(_, countdown)| *countdown == Some(0))
+                .count(),
+            1,
+            "once: {calls:?}"
+        );
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|(method, _)| method == "end_lull")
+                .count(),
+            1,
+            "{calls:?}"
+        );
+    }
+
+    /// An untimed Lull never runs out and never reports a zero; a Lull Ready ended reports no
+    /// zero before its `end_lull`.
+    #[test]
+    fn an_untimed_lull_and_a_ready_lull_send_no_zero() {
+        let mut untimed = Rig::new();
+        untimed.opened(ADMIN);
+        let sent = untimed.poll(0);
+        let status = sent.first().expect("the first get_status");
+        untimed
+            .receive(
+                ADMIN,
+                &answer_with(
+                    id_of(status),
+                    "{}",
+                    r#"{"phase":"lull","round":1,"untimed":true}"#,
+                ),
+            )
+            .expect("reads");
+        let calls = admin_calls(&mut untimed, 1, 40);
+        assert!(
+            calls
+                .iter()
+                .all(|(method, countdown)| countdown.is_none() && method != "end_lull"),
+            "{calls:?}"
+        );
+        // Every seat ready: the clock's answer says so, and `end_lull` follows with no zero.
+        let mut ready = opened_with(r#"{"phase":"lull","phase_remaining_ms":42000,"round":1}"#);
+        let mut sent_calls: Vec<(String, Option<i64>)> = Vec::new();
+        for poll in 0..6_u64 {
+            for frame in ready.poll(1 + poll * CLOCK_REPORT_US) {
+                if frame.link != ADMIN {
+                    continue;
+                }
+                let method = method_of(&frame);
+                let countdown = json::read(&frame.text)
+                    .expect("json")
+                    .get("params")
+                    .and_then(|params| params.get("remaining_ms"))
+                    .and_then(json_integer);
+                let result = if method == "report_host_clock" {
+                    r#"{"all_ready":true}"#
+                } else {
+                    "{}"
+                };
+                let phase = if method == "end_lull" { "push" } else { "lull" };
+                ready
+                    .receive(ADMIN, &answer(id_of(&frame), result, phase))
+                    .expect("reads");
+                sent_calls.push((method, countdown));
+            }
+        }
+        assert!(
+            sent_calls.iter().any(|(method, _)| method == "end_lull"),
+            "{sent_calls:?}"
+        );
+        assert!(
+            sent_calls
+                .iter()
+                .all(|(_, countdown)| *countdown != Some(0)),
+            "{sent_calls:?}"
+        );
+    }
+
+    /// **The untimed-by-rule footer field is the generated `Status`'s** (`gp.api.v1.Status`
+    /// field 6): read by the strict decode itself, absent is false, and anything but a boolean is
+    /// the decode's refusal.
+    #[test]
+    fn the_footer_field_is_the_generated_statuss() {
+        // The footer as the gateway writes it in a Probation Lull (`gp.api.v1.Status` field 6,
+        // always with `untimed`): the generated type reads the field itself.
+        let footer =
+            json::read(r#"{"phase":"lull","round":1,"untimed":true,"untimed_by_rule":true}"#)
+                .expect("json");
+        let status = read_status(&footer).expect("a Status");
+        assert!(status.untimed_by_rule && status.untimed);
+        let custom = json::read(r#"{"phase":"lull","round":1,"untimed":true}"#).expect("json");
+        assert!(!read_status(&custom).expect("a Status").untimed_by_rule);
+        assert!(read_status(&json::read(r#"{"untimed_by_rule":1}"#).expect("json")).is_err());
+    }
+
+    /// **A Lull untimed by rule** (a Probation match's; decisions-log item 160 (4)): the rig
+    /// starts no countdown, never sends `remaining_ms` (which a Probation gateway would refuse),
+    /// and the lobby shows none; a custom match's Lull still counts down.
+    #[test]
+    fn a_lull_untimed_by_rule_sends_no_countdown() {
+        let footer = r#"{"phase":"lull","round":1,"untimed":true,"untimed_by_rule":true}"#;
+        let mut probation = opened_with(footer);
+        assert_eq!(probation.timer_text(), "");
+        assert!(probation.untimed());
+        assert!(probation.untimed_by_rule());
+        let calls = admin_calls(&mut probation, 1, 3_000);
+        assert!(
+            calls
+                .iter()
+                .any(|(method, _)| method == "report_host_clock"),
+            "the time spent is still reported: {calls:?}"
+        );
+        assert!(
+            calls
+                .iter()
+                .all(|(method, countdown)| countdown.is_none() && method != "end_lull"),
+            "no countdown and no run-out: {calls:?}"
+        );
+        assert_eq!(probation.timer_text(), "");
+        // What the watch check reads: clock reports answered, and none carrying a countdown.
+        assert!(probation.clock_answers() > 0);
+        assert_eq!(probation.countdowns_sent(), 0);
+        let mut custom =
+            opened_with(r#"{"phase":"lull","phase_remaining_ms":0,"round":1,"untimed":true}"#);
+        assert_eq!(reported_countdown(&mut custom, 1), Some(600_000));
+        assert_eq!(custom.countdowns_sent(), 1);
+        assert!(!custom.untimed_by_rule());
+        let mut off =
+            opened_with(r#"{"phase":"lull","round":1,"untimed":true,"untimed_by_rule":false}"#);
+        assert_eq!(reported_countdown(&mut off, 1), Some(600_000));
     }
 
     /// A Lull the rules give no length is untimed: its reports carry no countdown, so the

@@ -51,16 +51,35 @@ pub(crate) fn json_to_variant(value: &Json) -> Variant {
     }
 }
 
-/// A count as Godot's `int`, which is an `i64`.
-///
-/// Every count the bridge hands GDScript (calls, bytes, chunks, vertices, panics) steps
-/// by a bounded amount per call or per frame from zero, so none reaches `i64::MAX`
-/// (9.2 × 10¹⁸) in the life of a process; at that bound the count is shown as
-/// `i64::MAX`, the largest `int` GDScript holds. A presentation rule: GDScript prints and
-/// compares these counts, and nothing decides on them. It is the one place the bridge
-/// narrows a count, so the rule is written once.
-pub(crate) fn godot_int<T: TryInto<i64>>(count: T) -> i64 {
-    count.try_into().unwrap_or(i64::MAX)
+/// A count that Godot's `int` (an `i64`) cannot hold: its value, as digits.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) struct NotAnInt(pub(crate) String);
+
+/// A count as Godot's `int`, which is an `i64`, or the typed refusal [`NotAnInt`] for one it
+/// cannot hold: never clamped to `i64::MAX` (no silent fallback: a saturation hides the value; carried from part 1's
+/// review). It is the one place the bridge narrows a count, so the rule is written once.
+pub(crate) fn godot_int<T: TryInto<i64> + Copy + std::fmt::Display>(
+    count: T,
+) -> Result<i64, NotAnInt> {
+    count.try_into().map_err(|_| NotAnInt(count.to_string()))
+}
+
+/// A count as the `Variant` a dictionary holds ([`godot_int`]). One past `i64` is not clamped:
+/// it reaches GDScript as `{"not_an_int": "<its digits>"}`, a typed refusal in the value's own
+/// place that no script can read as a number, and the log says which value it was.
+pub(crate) fn int_variant<T: TryInto<i64> + Copy + std::fmt::Display>(count: T) -> Variant {
+    match godot_int(count) {
+        Ok(value) => value.to_variant(),
+        Err(NotAnInt(digits)) => {
+            godot::global::godot_error!(
+                "[pharmakos] a count of {digits} is past what Godot's int holds; it is sent as a \
+                 refusal, not as a number"
+            );
+            let mut refusal = VarDictionary::new();
+            refusal.set(&"not_an_int".to_variant(), &digits.to_variant());
+            refusal.to_variant()
+        }
+    }
 }
 
 /// A text the bridge may not have, as GDScript reads it: `""` is none.
@@ -89,5 +108,27 @@ pub(crate) fn proto3_integer(answer: &Json, name: &str) -> Result<i64, crate::er
             lexeme.parse::<i64>().map_err(|_| refused())
         }
         Some(_) => Err(refused()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{NotAnInt, godot_int};
+
+    /// A count `i64` holds is itself; one it does not is refused with its digits, never
+    /// clamped to `i64::MAX`.
+    #[test]
+    fn a_count_past_i64_is_refused_not_clamped() {
+        assert_eq!(godot_int(42_u64), Ok(42));
+        assert_eq!(godot_int(usize::MIN), Ok(0));
+        assert_eq!(
+            godot_int(u64::MAX),
+            Err(NotAnInt("18446744073709551615".to_owned()))
+        );
+        assert_eq!(godot_int(i64::MAX.unsigned_abs()), Ok(i64::MAX));
+        assert_eq!(
+            godot_int(i64::MAX.unsigned_abs().saturating_add(1)),
+            Err(NotAnInt("9223372036854775808".to_owned()))
+        );
     }
 }

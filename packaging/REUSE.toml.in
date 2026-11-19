@@ -30,12 +30,15 @@ SPDX-FileCopyrightText = [
 # REUSE-IgnoreEnd
 SPDX-License-Identifier = "MIT"
 
-# The game's scenes and compiled scripts.
+# The game's scenes and compiled scripts, and the playbook New puts on screen
+# (playbooks/new.jsonc), which is MIT OR Apache-2.0 as the template library's
+# playbooks are (decisions-log item 161): the pack holds both, so its expression
+# is GPL-3.0-or-later AND (MIT OR Apache-2.0).
 [[annotations]]
 path = "@PCK@"
 precedence = "override"
 SPDX-FileCopyrightText = "2026 Pharmakos contributors"
-SPDX-License-Identifier = "GPL-3.0-or-later"
+SPDX-License-Identifier = "GPL-3.0-or-later AND (MIT OR Apache-2.0)"
 
 # The client library: the game's code and the crates compiled into it.
 [[annotations]]

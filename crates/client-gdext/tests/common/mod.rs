@@ -113,6 +113,11 @@ pub(crate) struct Gateway {
     pub(crate) rate_limited: u32,
     /// Every call, by method.
     pub(crate) methods: BTreeMap<String, u32>,
+    /// Whether a countdown report at zero is refused (`INVALID_ARGUMENT`), as a gateway that
+    /// will never take the Lull's closing zero would.
+    pub(crate) refuse_zero: bool,
+    /// How many zeros it refused.
+    pub(crate) zeros_refused: u32,
 }
 
 impl Gateway {
@@ -132,6 +137,8 @@ impl Gateway {
             in_window: 0,
             rate_limited: 0,
             methods: BTreeMap::new(),
+            refuse_zero: false,
+            zeros_refused: 0,
         }
     }
 
@@ -176,6 +183,13 @@ impl Gateway {
             return format!(
                 r#"{{"jsonrpc":"2.0","id":{id},"error":{{"code":-32000,"message":"over {} calls in one tick","data":{{"code":"RATE_LIMITED"}}}}}}"#,
                 self.limits.per_tick
+            );
+        }
+        let zero = matches!(params.get("remaining_ms"), Some(Json::Number(left)) if left == "0");
+        if method == "report_host_clock" && zero && self.refuse_zero {
+            self.zeros_refused += 1;
+            return format!(
+                r#"{{"jsonrpc":"2.0","id":{id},"error":{{"code":-32602,"message":"no countdown here","data":{{"code":"INVALID_ARGUMENT"}}}}}}"#
             );
         }
         let result = match method.as_str() {
