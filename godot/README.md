@@ -278,6 +278,18 @@ schedules, and decides nothing (AGENTS.md section 3 rule 4).
   shows no countdown while the admin connection's footer says `_status.untimed`, which it does
   until the gateway has been told one, and a Lull with no length is reported with no
   `remaining_ms` at all, never as a timer at 0 (decisions-log item 135; the register's S1-11).
+  **The lobby hosts Probation** (decisions-log item 160 (4)): its Lulls have no countdown by
+  rule, which the footer says as `_status.untimed_by_rule`, so the rig starts none, reports
+  only the time spent, and the status line shows none; Ready ends the Lull. A `custom` match
+  (the headless watch check's main legs, or a remembered line naming it) still counts each
+  Lull down as above.
+* **A Lull that ran out.** When a timed Lull's countdown is spent the rig reports it at 0
+  before it calls `end_lull`, so the gateway can say the Lull ran out rather than that Ready
+  ended it. After a stall it first catches up in steps no larger than the gateway takes
+  (60 s), and the 0 counts only once the gateway answers it: a 0 lost with its connection is
+  sent again. A 0 the gateway refuses is sent again at most three times
+  (`rig::ZERO_REFUSALS`), at the clock's cadence; then the rig gives it up, ends the Lull
+  without it, and the status line shows the gateway's refusal until the next Lull.
 * **The recap.** In a recap and after the match ends, the lobby's column shows `get_recap`'s
   prose: the settlement's, the shortfall's and the "found nothing" lines are its sentences.
 * **This round.** The panel shows the Lull's "This round: ..." sentence off `get_briefing`'s
@@ -356,22 +368,26 @@ the editor's debug VM logs as a SCRIPT ERROR per frame and the release template'
 not survive. `host_link.gd`'s `pump()` now reads nothing before `start()` has spawned the
 host, and `godot_project.rs` pins it.
 
-## The watch check's two hosts, and the folders it leaves
+## The watch check's three hosts, and the folders it leaves
 
-The watch check (above) now plays two seats: this one and seat 1, which the built-in
+The watch check (above) plays two seats: this one and seat 1, which the built-in
 operator plays. A one-seat match is decided at its Push's first tick, because the last seat
 standing wins (`crates/sim/src/runner.rs`, `MatchState::decide`), so it would have no round 2
 to quit in and resume. After round 1's recap it continues into round 2's Lull, idles there
 past the gateway's read timeout, closes the host's standard input (the host saves the Lull
 and exits), changes scene so the bridge, its rig and its editor are rebuilt, and starts a
-second host with the same six fields plus `resume`. There is one final `[watch-check] OK`
-line, naming both hosts' process ids.
+second host with the same six fields plus `resume`. Once that host has exited it changes scene
+again and starts a third host on the lobby's own line (the Probation seed and preset), whose
+Lull it watches for four seconds: clock reports answered, none carrying a countdown, the
+footer untimed by rule, no countdown shown and nothing refused. There is one final
+`[watch-check] OK` line, naming the three hosts' process ids.
 
 The check names its match `watch-check-<unix seconds>-<pid>` through the same helper as the
 lobby (decisions-log item 113 (13)): `gamectl host` keeps its matches in the real per-user
 private match cache, and a local re-run that reused a process id would be refused because
-the earlier run's save is still there. **Each local run therefore leaves one match folder
-behind** — `%LOCALAPPDATA%\Pharmakos\matches\watch-check-*` on Windows,
+the earlier run's save is still there. **Each local run therefore leaves two match folders
+behind**, the first match's (which the resumed host reuses) and the Probation leg's
+(`watch-check-probation-*`) — `%LOCALAPPDATA%\Pharmakos\matches\watch-check-*` on Windows,
 `$XDG_DATA_HOME/pharmakos/matches/` (default `~/.local/share`) on Linux, and
 `~/Library/Application Support/Pharmakos/matches/` on macOS. The client cannot remove it:
 it has no access to the cache, which is the gateway's (w6 notes, decision C9). Delete old
