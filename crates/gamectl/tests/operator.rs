@@ -795,7 +795,16 @@ fn the_safe_playbook_always_qualifies() {
 /// one beacon at risk (decision 14: lit and next in the shed order, since a
 /// raise relights), within reach, so it is raised to HIGH; in round 3 it is
 /// HIGH already and nothing is raised.
-const ROWS_THAT_RAISE: &[(&str, u8)] = &[("three-rounds-power-short/round-2", 0)];
+///
+/// Seat 1 does the same since lane `p3fix` (near pairs are priced at the
+/// served route): Easy's round-1 plan for it, costed on the exact prices,
+/// now places its own `b_01` (on the abstract prices it held no lit `b_01`
+/// in round 2); so in round 2 that `b_01` is its one beacon at risk,
+/// within reach, and is raised to HIGH, and in round 3 it is HIGH already.
+const ROWS_THAT_RAISE: &[(&str, u8)] = &[
+    ("three-rounds-power-short/round-2", 0),
+    ("three-rounds-power-short/round-2", 1),
+];
 
 /// Decisions-log item 128 (S1's plan, decision 14; the register's S1-21),
 /// hosted and unforced, on every corpus row with no answer rewritten: power
@@ -914,7 +923,18 @@ fn the_safe_playbook_raises_only_what_is_at_risk_unforced() {
 /// core, fills Easy's 42 s share exactly: it fits since the core's
 /// `deepen_core` step is paid out of the hold rather than out of the visit
 /// goals' share, and its hold, with nothing left for it, is taken out.
-const GENERATOR_ROWS: &[(&str, u8)] = &[("three-rounds/round-3", 0), ("three-rounds/round-3", 2)];
+///
+/// Seat 1 shows one from round 2 since lane `p3fix` (near pairs are priced at
+/// the served route): in round 1 Easy now seals Hold & Build for it, a Build
+/// beacon on the lean vent `vent_351_323` with a Generator as its first
+/// target, 40 s of route inside its 42 s share; on the abstract prices the
+/// route did not fit and the seat sealed the safe playbook in every round.
+const GENERATOR_ROWS: &[(&str, u8)] = &[
+    ("three-rounds/round-2", 1),
+    ("three-rounds/round-3", 0),
+    ("three-rounds/round-3", 1),
+    ("three-rounds/round-3", 2),
+];
 
 /// The rules text's `power.core_surplus_kw` and the lean vent's
 /// `power.generator_output_kw`, kW.

@@ -6,11 +6,11 @@
       {
         "pointer": "/declarative/route/0/place_beacon/at/covering",
         "feature_id": "vent_324_16",
-        "travel_ms": 45800,
+        "travel_ms": 39200,
         "candidates": [
           {
             "feature_id": "vent_324_16",
-            "travel_ms": 45800
+            "travel_ms": 39200
           },
           {
             "feature_id": "vent_148_117",

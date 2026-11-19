@@ -61,7 +61,7 @@
         "y": 31,
         "live": true,
         "covered": true,
-        "travel_ms": 15400,
+        "travel_ms": 13600,
         "reachable": true
       },
       {
@@ -105,7 +105,7 @@
         "y": 16,
         "live": true,
         "covered": false,
-        "travel_ms": 45800,
+        "travel_ms": 39200,
         "reachable": true
       },
       {
