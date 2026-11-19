@@ -1764,6 +1764,16 @@ impl World {
         self.repair_report
     }
 
+    /// Whether no cluster is waiting for a repair: the graph agrees with the
+    /// surface. True at every tick boundary (lane `settle`: the graph is
+    /// settled in the phase that edits the terrain), which is what a snapshot
+    /// relies on to carry no pending set.
+    #[must_use]
+    #[cfg(test)]
+    pub(crate) fn graph_settled(&self) -> bool {
+        !self.repairer.is_dirty()
+    }
+
     /// What the last tick's repath serving did.
     #[must_use]
     pub const fn serve_report(&self) -> ServeReport {
@@ -7445,6 +7455,79 @@ mod tests {
         assert_eq!(
             super::mark_chunk_clusters(&world.voxels, &world.clusters, &mut world.repairer, 0),
             Ok(())
+        );
+    }
+
+    /// Lane `settle`'s invariant: no cluster is waiting for a repair at any
+    /// tick boundary, and the graph there is the one a fresh build over the
+    /// surface makes, on the determinism harness's Push with a crater filed
+    /// every fifth tick on a column that walks the map. Before the lane the
+    /// marks an editing tick left were repaired in the next tick's Pathing
+    /// phase, so the boundary after every editing tick had some pending.
+    #[test]
+    fn no_mark_is_pending_at_a_tick_boundary() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..");
+        let world = crate::determinism_world(
+            &root.join("rules").join("rules.v1.json"),
+            &root.join(crate::DETERMINISM_PLAYBOOK_PATH),
+        )
+        .unwrap_or_else(|error| panic!("the harness world builds: {error}"));
+        let mut runner = crate::runner::Runner::new(world);
+        assert!(
+            runner
+                .begin_push()
+                .unwrap_or_else(|error| panic!("{error:?}")),
+            "the Push opens"
+        );
+        let mut edited: u32 = 0;
+        for tick in 1..=600_u32 {
+            if tick % 5 == 0 {
+                let world = runner.world_mut();
+                let size = world.voxels.size();
+                let x = i32::try_from(tick.wrapping_mul(37) % size[0]).unwrap_or(0);
+                let y = i32::try_from(tick.wrapping_mul(53) % size[1]).unwrap_or(0);
+                if let Some(z) = world.voxels.top_solid_z(x, y) {
+                    let filed = world.request_voxel_edit(VoxelEdit::Crater {
+                        centre: [x, y, z],
+                        radius: 3,
+                        by: None,
+                    });
+                    assert!(filed.is_ok(), "the edit queue has room");
+                }
+            }
+            let stepped = runner.step().unwrap_or_else(|error| panic!("{error:?}"));
+            assert!(stepped.is_some(), "the Push outlasts the run");
+            runner.clear_events();
+            let world = runner.world();
+            if !world.voxels.settled().is_empty() {
+                edited = edited.saturating_add(1);
+            }
+            assert!(
+                world.graph_settled(),
+                "a cluster is waiting for a repair after tick {tick}"
+            );
+            if tick % 60 == 0 {
+                let mut scratch =
+                    crate::pathing::Scratch::for_map(&world.surface, world.clusters.size())
+                        .unwrap_or_else(|| panic!("a scratch for the map"));
+                let fresh = crate::pathing::Clusters::new(
+                    &world.surface,
+                    world.clusters.shape(),
+                    &mut scratch,
+                )
+                .unwrap_or_else(|| panic!("a graph for the map"));
+                assert_eq!(
+                    world.clusters.fingerprint(),
+                    fresh.fingerprint(),
+                    "after tick {tick} the graph is not the one the terrain makes"
+                );
+            }
+        }
+        assert!(
+            edited >= 100,
+            "the run edited the terrain on {edited} ticks"
         );
     }
 

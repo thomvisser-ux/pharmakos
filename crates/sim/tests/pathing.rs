@@ -2530,3 +2530,272 @@ fn p3_short_routes_are_reported_and_never_optimistic() {
     }
     assert!(problems.is_empty(), "{problems:#?}");
 }
+
+// ---------------------------------------------------------------------------
+// The graph is settled in the phase that edits the terrain (lane `settle`)
+// ---------------------------------------------------------------------------
+//
+// A tick's Voxels phase writes the terrain and refreshes the surface; the
+// clusters an edit dirtied are repaired, and the walkers it sealed in re-armed,
+// before the phase ends. So no later phase, no next tick, no recap, no Lull and
+// no restore reads a cluster graph that disagrees with the surface, and a world
+// saved after any tick resumes onto the chain the live world plays.
+
+/// Wall seat 0's commander in: a solid voxel five above each of its eight
+/// neighbours' surfaces, every step out a five-voxel climb. Returns the wall.
+fn wall_in_commander(world: &mut World) -> Vec<[i32; 3]> {
+    let position = world.units().positions()[0];
+    let (x, y) = (position[0].floor_voxels(), position[1].floor_voxels());
+    let mut wall: Vec<[i32; 3]> = Vec::new();
+    for dy in -1..=1_i32 {
+        for dx in -1..=1_i32 {
+            if dx == 0 && dy == 0 {
+                continue;
+            }
+            let top = world
+                .voxels()
+                .top_solid_z(x + dx, y + dy)
+                .expect("a column with a floor");
+            for z in (top + 1)..=(top + 5) {
+                wall.push([x + dx, y + dy, z]);
+            }
+        }
+    }
+    file_wall(world, &wall, Material::STONE);
+    wall
+}
+
+/// File one `Set` per voxel of `wall`.
+fn file_wall(world: &mut World, wall: &[[i32; 3]], material: Material) {
+    for at in wall {
+        assert!(
+            world
+                .request_voxel_edit(VoxelEdit::Set {
+                    at: *at,
+                    material,
+                    by: None,
+                })
+                .is_ok(),
+            "the edit queue has room"
+        );
+    }
+}
+
+/// A world restored from `world`'s snapshot, on a fresh world built the same
+/// way: what a resumed match starts from.
+fn resumed_from(world: &World) -> World {
+    let bytes = pharmakos_sim::snapshot::Snapshot::capture(world)
+        .to_bytes()
+        .expect("a snapshot encodes");
+    let mut resumed = harness_world(0);
+    pharmakos_sim::snapshot::Snapshot::from_bytes(&bytes)
+        .expect("a snapshot decodes")
+        .restore_into(&mut resumed)
+        .expect("a snapshot restores");
+    assert_eq!(resumed.state_hash(), world.state_hash());
+    resumed
+}
+
+/// The first of `ticks` ticks on which `live` and `resumed` hash apart.
+fn first_parting(live: &mut World, resumed: &mut World, ticks: u32) -> Option<u32> {
+    let mut enc = pharmakos_sim::encoding::Enc::with_capacity(64 * 1024);
+    (1..=ticks).find(|_| live.step(&mut enc).unwrap() != resumed.step(&mut enc).unwrap())
+}
+
+/// The walled-in commander: sealed, and its wall comes down in tick t's
+/// Voxels phase; the world is saved after tick t. The live world and the one
+/// resumed from that save play the same chain from tick t + 1. Before lane
+/// `settle` the live world repaired and re-armed the commander in tick t + 1's
+/// Pathing phase while the resumed one, its graph rebuilt fresh with nothing
+/// marked, left it sealed: the chains parted on the first tick after the save.
+/// The control takes the wall down after the save, on both sides.
+#[test]
+fn a_world_saved_after_a_terrain_edit_resumes_onto_the_live_chain() {
+    for wall_down_before_the_save in [true, false] {
+        let mut world = harness_world(0);
+        let mut enc = pharmakos_sim::encoding::Enc::with_capacity(64 * 1024);
+        let _ = world.step(&mut enc).unwrap();
+        let _ = world.step(&mut enc).unwrap();
+        let wall = wall_in_commander(&mut world);
+        let far = world.standing_point([192, 192, 0]);
+        world.send_unit_directly(0, far);
+        for _ in 0..12 {
+            let _ = world.step(&mut enc).unwrap();
+        }
+        assert_eq!(
+            world.router().state(0),
+            WalkState::Sealed,
+            "the wall seals it in"
+        );
+        if wall_down_before_the_save {
+            file_wall(&mut world, &wall, Material::AIR);
+        }
+        // Tick t.
+        let _ = world.step(&mut enc).unwrap();
+        let mut resumed = resumed_from(&world);
+        if !wall_down_before_the_save {
+            file_wall(&mut world, &wall, Material::AIR);
+            file_wall(&mut resumed, &wall, Material::AIR);
+        }
+        assert_eq!(
+            first_parting(&mut world, &mut resumed, 40),
+            None,
+            "the resumed world left the live chain (wall down before the save: \
+             {wall_down_before_the_save})"
+        );
+        assert_eq!(
+            world.router().state(0),
+            WalkState::Walking,
+            "the commander walks once its wall is down"
+        );
+    }
+}
+
+/// A read in the tick after a crater sees the repaired graph: between tick t,
+/// whose Voxels phase craters seat 0's route to its nearest vent, and tick
+/// t + 1's Decision phase, the world's clusters are the ones a fresh build
+/// over the cratered surface makes, and the estimate and the "nearest" the
+/// Decision phase would read are the answers on that fresh graph. Before lane
+/// `settle` the window's estimate was 1 014 against 392 after the repair.
+#[test]
+fn the_tick_after_a_crater_reads_the_repaired_graph() {
+    use pharmakos_sim::features::FeatureKind;
+    use pharmakos_sim::targeting::{FeatureSpec, Ground, cover};
+    let mut world = harness_world(0);
+    let mut enc = pharmakos_sim::encoding::Enc::with_capacity(64 * 1024);
+    let _ = world.step(&mut enc).unwrap();
+    let _ = world.step(&mut enc).unwrap();
+    // Seat 0's commander stands at (24, 356); its nearest vent is (52, 335).
+    // A crater of radius 3 at (30, 350), on its route, rescans a border.
+    let z = world.voxels().top_solid_z(30, 350).expect("a column");
+    assert!(
+        world
+            .request_voxel_edit(VoxelEdit::Crater {
+                centre: [30, 350, z],
+                radius: 3,
+                by: None,
+            })
+            .is_ok()
+    );
+    // Tick t.
+    let _ = world.step(&mut enc).unwrap();
+    let surface = world.surface().clone();
+    let mut scratch = Scratch::for_map(&surface, world.clusters().size()).expect("a scratch");
+    let fresh = Clusters::new(&surface, world.clusters().shape(), &mut scratch).expect("a graph");
+    let speed = Speed::commander(world.rules());
+    let start = surface.node_of(24, 356).expect("the commander's column");
+    let goal = surface.node_of(52, 335).expect("the vent's column");
+    let read = estimate(
+        &surface,
+        world.clusters(),
+        &mut scratch,
+        start,
+        goal,
+        Fog::Clear,
+        speed,
+    );
+    let settled = estimate(
+        &surface,
+        &fresh,
+        &mut scratch,
+        start,
+        goal,
+        Fog::Clear,
+        speed,
+    );
+    assert_eq!(
+        read, settled,
+        "the estimate read in the window is not the settled one"
+    );
+    let commander = world.units().positions()[0];
+    let spec = FeatureSpec::Nearest {
+        kind: FeatureKind::Vent,
+        uncovered: true,
+    };
+    let in_window = cover(
+        &world.ground(),
+        &mut scratch,
+        SeatId::new(0),
+        commander,
+        spec,
+    );
+    let on_fresh = cover(
+        &Ground {
+            clusters: &fresh,
+            ..world.ground()
+        },
+        &mut scratch,
+        SeatId::new(0),
+        commander,
+        spec,
+    );
+    assert_eq!(
+        in_window, on_fresh,
+        "the nearest read in the window is not the settled one"
+    );
+    assert_eq!(
+        world.clusters().fingerprint(),
+        fresh.fingerprint(),
+        "the graph after the editing tick is not the graph the terrain makes"
+    );
+}
+
+/// The match's own save point: the Push's last tick takes the wall down, the
+/// recap closes, the Lull opens and the match is saved there. The live match
+/// and the one resumed from that save play the same next Push.
+#[test]
+fn a_lull_saved_after_a_last_tick_edit_resumes_onto_the_live_chain() {
+    use pharmakos_sim::runner::{MatchPhase, Runner};
+    let mut world = harness_world(0);
+    let mut enc = pharmakos_sim::encoding::Enc::with_capacity(64 * 1024);
+    let _ = world.step(&mut enc).unwrap();
+    let mut runner = Runner::new(world);
+    assert!(runner.begin_push().unwrap(), "the first Push opens");
+    let wall = wall_in_commander(runner.world_mut());
+    let far = runner.world().standing_point([192, 192, 0]);
+    runner.world_mut().send_unit_directly(0, far);
+    for _ in 0..12 {
+        let _ = runner.step().unwrap();
+        runner.clear_events();
+    }
+    assert_eq!(runner.world().router().state(0), WalkState::Sealed);
+    // The tick the segment ends on.
+    let last = runner.world().match_state().segment_started().raw()
+        + runner.world().match_state().segment_ticks();
+    let mut filed_on_last = false;
+    while runner.phase() == MatchPhase::Push {
+        if runner.tick().raw() + 1 == last {
+            file_wall(runner.world_mut(), &wall, Material::AIR);
+            filed_on_last = true;
+        }
+        let _ = runner.step().unwrap();
+        runner.clear_events();
+    }
+    assert!(filed_on_last, "the wall came down on the Push's last tick");
+    assert_eq!(
+        runner.tick().raw(),
+        last,
+        "the Push ended on the tick named"
+    );
+    while runner.phase() == MatchPhase::Recap {
+        assert!(runner.end_recap().unwrap());
+    }
+    assert_eq!(
+        runner.phase(),
+        MatchPhase::Lull,
+        "the Lull is the save point"
+    );
+    let snapshot = runner.capture().expect("a Lull is between ticks");
+    let mut resumed = Runner::new(harness_world(0));
+    resumed.restore(&snapshot).expect("the save restores");
+    assert!(runner.begin_push().unwrap());
+    assert!(resumed.begin_push().unwrap());
+    for tick in 1..=40 {
+        let live = runner.step().unwrap();
+        let again = resumed.step().unwrap();
+        assert_eq!(
+            live, again,
+            "the resumed match left the live chain on tick {tick} of the Push"
+        );
+    }
+}
