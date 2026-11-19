@@ -943,9 +943,10 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.Handler".into() }fn ty
 ///      (74-79) and posture (92-99).
 ///
 /// The numbers S3 fills are on the wire from S3's `con6` and have their effect
-/// from S3's `pred`, which retired the sim's `NotAtThisStage` and the
-/// verifier's codes (`E0020` to `E0027`) that refused each one before it, so
-/// none of them could be half-used.
+/// from S3's `pred`. Until then the sim's compile refused each of them with
+/// `NotAtThisStage` and the verifier with a code of its own (`E0020` to
+/// `E0027`), so none of them could be half-used; `pred` retired those codes,
+/// and that refusal, for these predicates.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Condition {
     #[prost(oneof="condition::Node", tags="1, 2, 3, 20, 21, 22, 30, 40, 41, 42, 43, 44, 45, 60, 61, 62, 70, 71, 72, 73, 90, 91")]
@@ -1727,8 +1728,9 @@ pub mod location {
         /// terrain the seat knows. Unreachable candidates are skipped, and ties go
         /// to the lowest anchor y, then x. Straight-line distance is not used.
         ///
-        /// On the wire from S3's `con6`, and built by S3's `pred`, which retired
-        /// the sim's NotAtThisStage and the verifier's E0028 that refused it before.
+        /// On the wire from S3's `con6`, and built by S3's `pred`. Before it the
+        /// sim's compile refused `toward` with NotAtThisStage and the verifier with
+        /// E0028; `pred` retired that refusal for `toward` and retired E0028.
         #[prost(message, tag="12")]
         Toward(super::Toward),
     }

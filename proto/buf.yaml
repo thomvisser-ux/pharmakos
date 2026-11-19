@@ -71,7 +71,8 @@ breaking:
   # un-reservation nobody intended never passes unnoticed (decisions-log items
   # 100 (10), 109 and 111).
   #
-  # There is no block today. S3's `con6` held one for gp/v1/playbook.proto and
-  # gp/api/v1/gateway.proto; S3's `gwu` discharges nothing (a new field on
-  # `Status` and on `RenderedRule`, a new message, none from a `reserved`
-  # statement), so it deleted it.
+  # So a block here is never permanent: it lives from the change that discharges
+  # a held number to the next proto change, which replaces it with its own or,
+  # discharging nothing, deletes it. When no `ignore_only:` key follows, the
+  # last proto change discharged nothing. The pull request that adds or deletes
+  # a block names it.
