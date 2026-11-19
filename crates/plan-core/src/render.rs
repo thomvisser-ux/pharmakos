@@ -91,13 +91,19 @@
 //! ([`ConditionSlot`]): every place a condition stands or could stand, filled
 //! or not, with its JSON Pointer, so the editor's picker anchors to a slot the
 //! file leaves empty (an absent `skip_if` has no chip) and composes no pointer
-//! of its own. A slot is filled or replaced by one JSON Patch `add` at its
-//! pointer. The slots are a separate walk over the file, not through [`Text`],
+//! of its own. A slot is filled or replaced by one JSON Patch operation at its
+//! pointer, whose op the slot names ([`PickOp`]): `add` where nothing is
+//! there, `replace` where anything is. RFC 6902 `add` at an array index
+//! inserts, so an item of a group is always replaced, never added beside. The
+//! slots are a separate walk over the file, not through [`Text`],
 //! so they move neither the prose nor the chips; they have a golden of their
 //! own (`expected.slots.txt`). A slot holding a group lists its items after
 //! it, so a leaf under an `all` is a slot too. Its pointer is in the canonical
-//! `snake_case` spelling, as a chip's is: a file written in camelCase can
-//! refuse a patch there (carried from `ed3b` part 1).
+//! `snake_case` spelling, as a chip's is: in a file that writes the member
+//! in its camelCase JSON name, `patch_plan` refuses a patch at the pointer
+//! rather than write the field a second time ([`crate::patch`]), and a
+//! pointer under such a member finds nothing. Making those files editable is
+//! owed (carried from `ed3b` part 1).
 
 use pharmakos_proto::gp::v1::feature_ref::{self, Coverage, Rank};
 use pharmakos_proto::gp::v1::{
@@ -171,6 +177,33 @@ pub struct ConditionSlot {
     /// (a vocabulary entry's `name`, or `all`, `any`, `not`); empty for an
     /// [`SlotState::Empty`] slot.
     pub predicate: &'static str,
+    /// The JSON Patch op a pick here sends: [`PickOp::Add`] where nothing is
+    /// at the pointer, [`PickOp::Replace`] where anything is (a leaf, an
+    /// empty object, an item of a group). `None` on a [`SlotState::Group`]
+    /// slot, which is not a pick target.
+    pub pick: Option<PickOp>,
+}
+
+/// The JSON Patch op a pick at a [`ConditionSlot`] sends
+/// (`gp.api.v1.ConditionSlot.PickOp`). RFC 6902 `add` at an array index
+/// inserts, so an item of a group is replaced, never added to.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PickOp {
+    /// Nothing is at the pointer: insert the member.
+    Add,
+    /// Something is at the pointer: replace it in place.
+    Replace,
+}
+
+impl PickOp {
+    /// The `gp.api.v1.ConditionSlot.PickOp` value's name.
+    #[must_use]
+    pub const fn proto_name(self) -> &'static str {
+        match self {
+            PickOp::Add => "ADD",
+            PickOp::Replace => "REPLACE",
+        }
+    }
 }
 
 /// What a [`ConditionSlot`] holds (`gp.api.v1.ConditionSlot.State`).
@@ -598,12 +631,20 @@ impl Pending {
             Some(node) => arm(node),
             None => (SlotState::Empty, ""),
         };
+        // What is at the pointer decides the op, not what it holds: an empty
+        // `{}` or an item of a group is there to be replaced.
+        let pick = match (state, node) {
+            (SlotState::Group, _) => None,
+            (_, Some(_)) => Some(PickOp::Replace),
+            (_, None) => Some(PickOp::Add),
+        };
         self.slots.push(ConditionSlot {
             pointer: here.to_owned(),
             title: title.to_owned(),
             line: self.line,
             state,
             predicate,
+            pick,
         });
         let titled = |words: String| format!("{title}{}{words}", s::SLOT_JOIN);
         match held {

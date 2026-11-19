@@ -24,7 +24,8 @@ Three kinds of golden live here, and they fail for different reasons:
 * `expected.slots.txt` — from S3's `gwu`, every condition slot of each route step
   and rule `render` lists (`gp.api.v1.ConditionSlot`): one line a slot, tab
   separated, with its rule's or step's pointer, the slot's pointer, its state
-  (`EMPTY`, `LEAF`, `GROUP`), the arm it holds (`-` for none), its line and its
+  (`EMPTY`, `LEAF`, `GROUP`), the arm it holds (`-` for none), the patch op a
+  pick there sends (`ADD`, `REPLACE`, or `-` for a group), its line and its
   title.
 
 ## What a diff means
@@ -46,7 +47,8 @@ Three kinds of golden live here, and they fail for different reasons:
   `place_beacon` arms list `toward` since S3's `pred` retired `E0028` (they
   dropped it while the verifier refused it).
 * **The slots moved.** A place a condition stands was added, dropped or
-  re-pointed, a state or an arm changed, or a title's words did (they are
+  re-pointed, a state or an arm changed, an op changed (a pick at a slot
+  with anything at its pointer, an item of a group included, is a `REPLACE`), or a title's words did (they are
   plan-core's `SLOT_*` strings, the player's). The chips and the prose cannot
   have moved with them: the slots are a separate walk over the file. A new place
   the schema puts a `gp.v1.Condition` fails

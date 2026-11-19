@@ -1,3 +1,3 @@
-/declarative/route/0	/declarative/route/0/skip_if	EMPTY	-	4	skip if
-/declarative/route/1	/declarative/route/1/skip_if	EMPTY	-	5	skip if
-/declarative/route/2	/declarative/route/2/skip_if	EMPTY	-	6	skip if
+/declarative/route/0	/declarative/route/0/skip_if	EMPTY	-	ADD	4	skip if
+/declarative/route/1	/declarative/route/1/skip_if	EMPTY	-	ADD	5	skip if
+/declarative/route/2	/declarative/route/2/skip_if	EMPTY	-	ADD	6	skip if

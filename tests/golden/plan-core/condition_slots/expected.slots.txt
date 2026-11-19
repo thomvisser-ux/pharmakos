@@ -1,19 +1,19 @@
-/declarative/route/0	/declarative/route/0/skip_if	LEAF	cmdr_hp_pct	4	skip if
-/declarative/route/1	/declarative/route/1/skip_if	EMPTY	-	6	skip if
-/declarative/route/1	/declarative/route/1/wait_until/condition	LEAF	treasury	6	wait until
-/declarative/route/2	/declarative/route/2/skip_if	EMPTY	-	8	skip if
-/declarative/route/2	/declarative/route/2/wait_until/condition	EMPTY	-	8	wait until
-/declarative/route/3	/declarative/route/3/skip_if	EMPTY	-	10	skip if
-/declarative/handlers/0	/declarative/handlers/0/when	GROUP	all	13	when
-/declarative/handlers/0	/declarative/handlers/0/when/all/items/0	LEAF	kw_headroom	13	when, item 1 of all
-/declarative/handlers/0	/declarative/handlers/0/when/all/items/1	GROUP	not	13	when, item 2 of all
-/declarative/handlers/0	/declarative/handlers/0/when/all/items/1/not/item	LEAF	step_reached	13	when, item 2 of all, under not
-/declarative/handlers/0	/declarative/handlers/0/when/all/items/2	GROUP	any	13	when, item 3 of all
-/declarative/handlers/0	/declarative/handlers/0/when/all/items/2/any/items/0	LEAF	segment_elapsed	13	when, item 3 of all, item 1 of any
-/declarative/handlers/0	/declarative/handlers/0/when/all/items/2/any/items/1	LEAF	cmdr_deaths	13	when, item 3 of all, item 2 of any
-/declarative/handlers/0	/declarative/handlers/0/body/0/skip_if	GROUP	not	13	step 1, skip if
-/declarative/handlers/0	/declarative/handlers/0/body/0/skip_if/not/item	EMPTY	-	13	step 1, skip if, under not
-/declarative/handlers/0	/declarative/handlers/0/body/1/skip_if	EMPTY	-	13	step 2, skip if
-/declarative/handlers/0	/declarative/handlers/0/body/1/wait_until/condition	LEAF	rule_fired	13	step 2, wait until
-/declarative/handlers/1	/declarative/handlers/1/when	EMPTY	-	20	when
-/declarative/handlers/1	/declarative/handlers/1/body/0/skip_if	EMPTY	-	20	step 1, skip if
+/declarative/route/0	/declarative/route/0/skip_if	LEAF	cmdr_hp_pct	REPLACE	4	skip if
+/declarative/route/1	/declarative/route/1/skip_if	EMPTY	-	ADD	6	skip if
+/declarative/route/1	/declarative/route/1/wait_until/condition	LEAF	treasury	REPLACE	6	wait until
+/declarative/route/2	/declarative/route/2/skip_if	EMPTY	-	ADD	8	skip if
+/declarative/route/2	/declarative/route/2/wait_until/condition	EMPTY	-	ADD	8	wait until
+/declarative/route/3	/declarative/route/3/skip_if	EMPTY	-	ADD	10	skip if
+/declarative/handlers/0	/declarative/handlers/0/when	GROUP	all	-	13	when
+/declarative/handlers/0	/declarative/handlers/0/when/all/items/0	LEAF	kw_headroom	REPLACE	13	when, item 1 of all
+/declarative/handlers/0	/declarative/handlers/0/when/all/items/1	GROUP	not	-	13	when, item 2 of all
+/declarative/handlers/0	/declarative/handlers/0/when/all/items/1/not/item	LEAF	step_reached	REPLACE	13	when, item 2 of all, under not
+/declarative/handlers/0	/declarative/handlers/0/when/all/items/2	GROUP	any	-	13	when, item 3 of all
+/declarative/handlers/0	/declarative/handlers/0/when/all/items/2/any/items/0	LEAF	segment_elapsed	REPLACE	13	when, item 3 of all, item 1 of any
+/declarative/handlers/0	/declarative/handlers/0/when/all/items/2/any/items/1	LEAF	cmdr_deaths	REPLACE	13	when, item 3 of all, item 2 of any
+/declarative/handlers/0	/declarative/handlers/0/body/0/skip_if	GROUP	not	-	13	step 1, skip if
+/declarative/handlers/0	/declarative/handlers/0/body/0/skip_if/not/item	EMPTY	-	ADD	13	step 1, skip if, under not
+/declarative/handlers/0	/declarative/handlers/0/body/1/skip_if	EMPTY	-	ADD	13	step 2, skip if
+/declarative/handlers/0	/declarative/handlers/0/body/1/wait_until/condition	LEAF	rule_fired	REPLACE	13	step 2, wait until
+/declarative/handlers/1	/declarative/handlers/1/when	EMPTY	-	ADD	20	when
+/declarative/handlers/1	/declarative/handlers/1/body/0/skip_if	EMPTY	-	ADD	20	step 1, skip if

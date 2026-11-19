@@ -1,17 +1,17 @@
-/declarative/route/0	/declarative/route/0/skip_if	EMPTY	-	4	skip if
-/declarative/route/1	/declarative/route/1/skip_if	EMPTY	-	5	skip if
-/declarative/handlers/0	/declarative/handlers/0/when	GROUP	all	8	when
-/declarative/handlers/0	/declarative/handlers/0/when/all/items/0	LEAF	beacon_units_by_role	8	when, item 1 of all
-/declarative/handlers/0	/declarative/handlers/0/when/all/items/1	LEAF	beacon_mandate	8	when, item 2 of all
-/declarative/handlers/0	/declarative/handlers/0/when/all/items/2	LEAF	beacon_has_structure	8	when, item 3 of all
-/declarative/handlers/0	/declarative/handlers/0/body/0/skip_if	EMPTY	-	8	step 1, skip if
-/declarative/handlers/1	/declarative/handlers/1/when	GROUP	any	12	when
-/declarative/handlers/1	/declarative/handlers/1/when/any/items/0	LEAF	enemy_units_near	12	when, item 1 of any
-/declarative/handlers/1	/declarative/handlers/1/when/any/items/1	LEAF	enemy_beacon_known	12	when, item 2 of any
-/declarative/handlers/1	/declarative/handlers/1/when/any/items/2	LEAF	enemy_structure_near	12	when, item 3 of any
-/declarative/handlers/1	/declarative/handlers/1/when/any/items/3	LEAF	enemy_structure_near	12	when, item 4 of any
-/declarative/handlers/1	/declarative/handlers/1/body/0/skip_if	EMPTY	-	12	step 1, skip if
-/declarative/handlers/2	/declarative/handlers/2/when	GROUP	all	16	when
-/declarative/handlers/2	/declarative/handlers/2/when/all/items/0	LEAF	kw_supply	16	when, item 1 of all
-/declarative/handlers/2	/declarative/handlers/2/when/all/items/1	LEAF	kw_draw	16	when, item 2 of all
-/declarative/handlers/2	/declarative/handlers/2/body/0/skip_if	EMPTY	-	16	step 1, skip if
+/declarative/route/0	/declarative/route/0/skip_if	EMPTY	-	ADD	4	skip if
+/declarative/route/1	/declarative/route/1/skip_if	EMPTY	-	ADD	5	skip if
+/declarative/handlers/0	/declarative/handlers/0/when	GROUP	all	-	8	when
+/declarative/handlers/0	/declarative/handlers/0/when/all/items/0	LEAF	beacon_units_by_role	REPLACE	8	when, item 1 of all
+/declarative/handlers/0	/declarative/handlers/0/when/all/items/1	LEAF	beacon_mandate	REPLACE	8	when, item 2 of all
+/declarative/handlers/0	/declarative/handlers/0/when/all/items/2	LEAF	beacon_has_structure	REPLACE	8	when, item 3 of all
+/declarative/handlers/0	/declarative/handlers/0/body/0/skip_if	EMPTY	-	ADD	8	step 1, skip if
+/declarative/handlers/1	/declarative/handlers/1/when	GROUP	any	-	12	when
+/declarative/handlers/1	/declarative/handlers/1/when/any/items/0	LEAF	enemy_units_near	REPLACE	12	when, item 1 of any
+/declarative/handlers/1	/declarative/handlers/1/when/any/items/1	LEAF	enemy_beacon_known	REPLACE	12	when, item 2 of any
+/declarative/handlers/1	/declarative/handlers/1/when/any/items/2	LEAF	enemy_structure_near	REPLACE	12	when, item 3 of any
+/declarative/handlers/1	/declarative/handlers/1/when/any/items/3	LEAF	enemy_structure_near	REPLACE	12	when, item 4 of any
+/declarative/handlers/1	/declarative/handlers/1/body/0/skip_if	EMPTY	-	ADD	12	step 1, skip if
+/declarative/handlers/2	/declarative/handlers/2/when	GROUP	all	-	16	when
+/declarative/handlers/2	/declarative/handlers/2/when/all/items/0	LEAF	kw_supply	REPLACE	16	when, item 1 of all
+/declarative/handlers/2	/declarative/handlers/2/when/all/items/1	LEAF	kw_draw	REPLACE	16	when, item 2 of all
+/declarative/handlers/2	/declarative/handlers/2/body/0/skip_if	EMPTY	-	ADD	16	step 1, skip if
