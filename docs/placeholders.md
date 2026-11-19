@@ -630,7 +630,7 @@ Eight rows, each added by hand because no line says PLACEHOLDER:
 | U-04 | `interface_times.*` are spec section 5's values, and "all of section 5 is marked Tuning", with no who or when. **Discharged by `proj` #85 per decision 15 (item 133): the times are ratified as section 5's; the Settled? cell is reworded to "ratified, decision 15" by the next lane that touches `rules/`.** | `rules/README.md` Settled? row `interface_times.*` | owner, S1, with the full mandate contract | plan T11 |
 | U-05 | No pause button, and whether a minimised window keeps pacing (a stalled client is a pause) | none in the code; the T16a notes, section D | owner; no stage proposed | T16a notes, section D |
 | U-06 | Entity ids are opaque per-viewer handles; revisited if v1.1 agents or S7's recordings need two seats to agree | none in the code; the T16a notes, section D | owner, v1.1 | T16a notes, section D |
-| U-07 | The full predicate catalogue is S3's, and the plan asked `playbook.proto` to say so in a stub; no stub names it | `proto/gp/v1/playbook.proto` (no entry) | owner, S3 | plan T1 |
+| U-07 | The full predicate catalogue is S3's, and the plan asked `playbook.proto` to say so in a stub; no stub names it. **Discharged: `con6` #169 gave `playbook.proto` the eight predicates and `toward`, and `pred` #184 (item 161 (7)) evaluates them in the sim and retires E0020 to E0028. The proto's own comments still say they are refused "until S3's `pred`"; that wording is owed to the proto doc-comment PR.** | `proto/gp/v1/playbook.proto` `Condition`, `Toward` | owner, S3 | plan T1 |
 | U-08 | Route figures (`estimate_route`, `resolve_refs`' travel) are priced over the hosted world's voxels, so over edits the asking seat cannot see (a crater, a cut, a wall), until S3's fog mask prices unseen columns as unknown; an estimate can show that an unseen route has changed (item 148 (3) (d)) | `crates/gateway/src/routes.rs` `RouteAdapter::refresh` and `set_unknown_columns` (no marker) | owner, S3, with the fog mask | item 148 (3) (d) |
 
 ### The owner at hardening
@@ -678,7 +678,7 @@ settled it) or **missing** from the code.
 | T1 | JSON-RPC parameter casing (decision 9) | resolved, item 80 (`gateway.proto`'s tombstone) |
 | T1 | Defend and Attack stubs at S2 | found, S2-13 |
 | T1 | broadcast bodies at S4 | found, S4-10 |
-| T1 | the full predicate catalogue at S3 | missing (U-07) |
+| T1 | the full predicate catalogue at S3 | resolved, item 161 (7) (U-07; `con6` #169 and `pred` #184) |
 | T2 | the CSR cell size | found, S2 delegation (`broadphase.cell_size_voxels`) |
 | T2 | `DETERMINISM_TICKS` raised from 1 200 (owner, at T20) | found, S1-26 (moved to S1 by item 116 (6)(e)) |
 | T2 | `rust-version` in the workspace manifest | found, S1-01 |
