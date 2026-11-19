@@ -106,9 +106,12 @@ pub enum Phase {
     /// The playbook interpreter's decision tick, every 250 ms of game time
     /// (T11).
     Decision,
-    /// Serve the per-tick repath cap and repair the abstract graph (T7).
+    /// Serve the per-tick repath cap (T7) on the graph the last Voxels phase
+    /// settled.
     Pathing,
-    /// Apply this tick's voxel edits and refresh the chunks they touched (T5).
+    /// Apply this tick's voxel edits, refresh the chunks they touched (T5), and
+    /// settle the pathing graph: repair the clusters they marked and re-arm the
+    /// units the repair freed (lane `settle`).
     Voxels,
     /// Settle the match: respawns, local elimination, seat elimination, the
     /// one-tick match-end rule and the segment's end (T10).
@@ -1758,7 +1761,7 @@ impl World {
         &mut self.scratch
     }
 
-    /// What the last tick's graph repair did.
+    /// What the last tick's graph repair did, in its Voxels phase.
     #[must_use]
     pub const fn repair_report(&self) -> RepairReport {
         self.repair_report
@@ -1769,7 +1772,6 @@ impl World {
     /// settled in the phase that edits the terrain), which is what a snapshot
     /// relies on to carry no pending set.
     #[must_use]
-    #[cfg(test)]
     pub(crate) fn graph_settled(&self) -> bool {
         !self.repairer.is_dirty()
     }
@@ -5022,33 +5024,16 @@ impl World {
             .max(1)
     }
 
-    /// Repair the abstract graph, re-arm the units it may have freed, and serve
-    /// the repath cap round-robin by `(seat, beacon, unit)`.
+    /// Serve the repath cap round-robin by `(seat, beacon, unit)`.
     ///
-    /// The order is item 60's, and it is the reason a route is never planned
-    /// over terrain that has moved: the repair runs **before** any repath this
-    /// tick, and the columns the search reads were refreshed in the same tick
-    /// the voxels changed (see [`World::phase_voxels`]). The one lag that does
-    /// exist is a cluster's *entrances*, which are repaired here on the tick
-    /// after the edit because [`PHASE_ORDER`] puts `Pathing` before `Voxels` —
-    /// and that lag can only withhold routes, never invent one, because every
-    /// step of a route is validated against the live columns as it is walked.
+    /// A route is never planned over terrain that has moved: the graph the
+    /// search reads was settled, columns and clusters both, in the Voxels
+    /// phase of the tick that moved it ([`World::settle_graph`]; lane
+    /// `settle`), so the repair item 60 orders before any repath has always
+    /// run by the time this phase does, and nothing is left for it here.
+    /// Every step of a route is still validated against the live columns as
+    /// it is walked.
     fn phase_pathing(&mut self) {
-        let report = repair(
-            &self.surface,
-            &mut self.clusters,
-            &mut self.scratch,
-            &mut self.repairer,
-        );
-        if report.dirty > 0 {
-            self.router.rearm_sealed(
-                &self.surface,
-                &self.clusters,
-                self.repairer.repaired(),
-                self.units.positions(),
-                self.units.destinations(),
-            );
-        }
         self.gather_route_zones();
         let zones = &self.route_zones;
         let spans = &self.route_spans;
@@ -5072,6 +5057,39 @@ impl World {
                 crate::pathing::route::Surcharge::new(zones, multiplier)
             },
         );
+    }
+
+    /// Repair the clusters this tick's edits marked and re-arm the units the
+    /// repair may have freed: the end of the Voxels phase, the phase that
+    /// edits the terrain (lane `settle`).
+    ///
+    /// Item 60's order, repair then the oracle asked again about every sealed
+    /// unit, unchanged; what moved is the tick it happens on. It used to run
+    /// in the next tick's Pathing phase, so the Programs, Quartermaster and
+    /// Decision phases in between, a recap, a whole Lull and the gateway's
+    /// reads of the hosted world saw a fresh surface against a stale graph;
+    /// and a world saved in that window restored with its graph rebuilt
+    /// fresh and nothing marked, so it repaired and re-armed nothing where the
+    /// live world did, and the two played different chains. Settled here, the
+    /// graph agrees with the surface at every tick boundary
+    /// ([`World::graph_settled`]), which is what lets a snapshot carry no
+    /// pending set. The repair is the same work it was, one phase earlier.
+    fn settle_graph(&mut self) {
+        let report = repair(
+            &self.surface,
+            &mut self.clusters,
+            &mut self.scratch,
+            &mut self.repairer,
+        );
+        if report.dirty > 0 {
+            self.router.rearm_sealed(
+                &self.surface,
+                &self.clusters,
+                self.repairer.repaired(),
+                self.units.positions(),
+                self.units.destinations(),
+            );
+        }
         self.repair_report = report;
     }
 
@@ -5241,11 +5259,13 @@ impl World {
             return Err(TickError::Collapse(error));
         }
         self.voxels.settle(&mut self.chunks);
-        // The pathing graph's columns are refreshed in the same phase that
-        // changed the bytes, so a walker's next step is validated against the
-        // terrain as it is; the *clusters* the edit dirtied are repaired at the
-        // next tick's `Pathing` phase, which is where the entrance rescan and
-        // the one connectivity rebuild live (item 60).
+        // The pathing graph is settled in the phase that changed the bytes
+        // (lane `settle`): the columns are refreshed and the clusters the edit
+        // dirtied are marked here, then repaired, and the walkers they sealed
+        // in re-armed, below, before the phase ends. So no later phase, no
+        // next tick, no recap, no Lull and no restore reads a cluster graph
+        // that disagrees with the surface, and no mark is pending at a tick
+        // boundary (`World::graph_settled`).
         let mut at = 0;
         while at < self.voxels.settled().len() {
             let Some(chunk) = self.voxels.settled().get(at).copied() else {
@@ -5264,6 +5284,7 @@ impl World {
                 return Err(TickError::Marking(error));
             }
         }
+        self.settle_graph();
         touched.clear();
         self.touched = touched;
         self.edits = edits;

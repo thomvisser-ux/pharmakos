@@ -1022,12 +1022,27 @@ impl Snapshot {
     /// putting it in the file would be a second source of truth. The pristine
     /// voxels are absent for the same reason one level up: the seed is the
     /// source of truth, and the file carries only what an edit has changed.
+    ///
+    /// The pathing graph is derived too, and it carries no pending set: the
+    /// graph is settled in the phase that edits the terrain (lane `settle`),
+    /// so at every tick boundary it is the one a fresh build over the restored
+    /// surface makes, which is what [`Snapshot::restore_into`] builds. The
+    /// debug assertion below is that invariant at the snapshot's door. It
+    /// holds at every tick boundary a match reaches: a tick is never captured
+    /// open (`Runner::capture` refuses one with `TickError::MidTick`), and the
+    /// only way out of a Voxels phase with a mark pending is a fatal
+    /// `TickError::Collapse` or `TickError::Marking`, after which a host steps
+    /// and saves that world no more.
     #[must_use]
     #[allow(
         clippy::too_many_lines,
         reason = "one line per column of a flat projection, and the whole point of the projection is that it is one expression: a `Snapshot` cannot be built in halves, so splitting it would mean a second struct whose only job is to be moved into this one"
     )]
     pub fn capture(world: &World) -> Snapshot {
+        debug_assert!(
+            world.graph_settled(),
+            "a snapshot taken with a cluster waiting for its repair would restore onto a different chain"
+        );
         let units = world.units();
         let seats = world.seats();
         let beacons = world.beacons();
