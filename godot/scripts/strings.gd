@@ -153,6 +153,7 @@ const TEXT := {
 	"rule_chip_read_only_unreadable": "This value does not fit what the gateway says it holds, so it is shown as it came and not edited.",
 	"picker_parameter_unknown": "{title}: the gateway sent no way to edit this value",
 	"vocabulary_ask_again": "Ask again",
+	"menu_setting_unreadable": "{said} ({cause})",
 	"menu_setting_not_here": "This value is not changed from this menu.",
 	# Part 2 (S3's `ed3b`): the condition picker, the name picks and Visit & change.
 	"picker_heading": "Pick a condition",

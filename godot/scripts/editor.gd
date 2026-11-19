@@ -1298,7 +1298,12 @@ func _setting_row(settings: PopupMenu, which: int, setting: Dictionary) -> void:
 			settings.add_item(title, which)
 			settings.set_item_disabled(settings.item_count - 1, true)
 			var why := String(setting.get("why", ""))
-			settings.set_item_tooltip(settings.item_count - 1, Strings.text("rule_chip_read_only_" + why) if why != "" else Strings.text("menu_setting_not_here"))
+			var said := Strings.text("rule_chip_read_only_" + why) if why != "" else Strings.text("menu_setting_not_here")
+			# A value the bridge could not read against its shape says what could not be read.
+			var cause := String(setting.get("unreadable", ""))
+			if cause != "":
+				said = Strings.text("menu_setting_unreadable", {"said": said, "cause": cause})
+			settings.set_item_tooltip(settings.item_count - 1, said)
 
 
 ## A number setting's row was picked: the number field opens on it, as on a number chip.

@@ -576,6 +576,10 @@ fn setting_dictionary(setting: &Setting) -> VarDictionary {
         editor: setting.editor.clone(),
     });
     out.set(&"title".to_variant(), &setting.title.to_variant());
+    out.set(
+        &"unreadable".to_variant(),
+        &text_or_empty(setting.unreadable.as_deref()).to_variant(),
+    );
     out
 }
 

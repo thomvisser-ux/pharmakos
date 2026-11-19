@@ -7304,6 +7304,23 @@ mod tests {
             detail.settings.get(1).map(|setting| &setting.editor),
             Some(ChipEditor::Choice { .. })
         ));
+        // The cause is kept, in the decode's words, for the row to say.
+        let why = detail
+            .settings
+            .first()
+            .and_then(|setting| setting.unreadable.clone())
+            .expect("the cause");
+        assert!(
+            why.contains("/retreat_hp_pct") && why.contains("many"),
+            "{why}"
+        );
+        assert_eq!(
+            detail
+                .settings
+                .get(1)
+                .and_then(|setting| setting.unreadable.clone()),
+            None
+        );
     }
 
     /// **a refused vocabulary can be asked again**, once more, within the seat's budget.

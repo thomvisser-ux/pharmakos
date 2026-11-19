@@ -294,6 +294,9 @@ pub struct Setting {
     pub value_json: String,
     /// Its editor, as a rule-list chip's would be.
     pub editor: ChipEditor,
+    /// Why its value could not be read against its shape, in the decode's words, when it could
+    /// not: the row is then read-only ([`crate::rule_list::ReadOnly::Unreadable`]) and says this.
+    pub unreadable: Option<String>,
 }
 
 /// One of a Build beacon's targets, as sent.
@@ -359,12 +362,17 @@ pub fn beacon_detail_of(id: &str, result: &Json) -> Result<(String, BeaconDetail
                 shape: row.shape,
                 ..Chip::default()
             };
-            let editor = match rule_list::editor_of(&chip) {
-                Ok(editor) => editor,
-                Err(_) => ChipEditor::ReadOnly(rule_list::ReadOnly::Unreadable),
+            // One unreadable row loses nothing else, and its cause is kept for the row to say.
+            let (editor, unreadable) = match rule_list::editor_of(&chip) {
+                Ok(editor) => (editor, None),
+                Err(error) => (
+                    ChipEditor::ReadOnly(rule_list::ReadOnly::Unreadable),
+                    Some(error.to_string()),
+                ),
             };
             Setting {
                 editor,
+                unreadable,
                 pointer: row.pointer,
                 title: row.title,
                 value_json: row.value_json,
