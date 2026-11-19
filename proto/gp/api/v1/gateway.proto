@@ -503,6 +503,16 @@ message Status {
   // is.
   bool untimed = 5;
 
+  // True only in a Lull whose match gives its Lulls no countdown by rule (the
+  // Probation preset; S3's plan, E7), as opposed to `untimed`'s other cause,
+  // a Lull no host has reported a countdown for yet. Always with `untimed`
+  // true. A client starts no countdown for such a Lull and reports no
+  // `remaining_ms` in it, which the gateway would refuse. The gateway decides
+  // it from the match's preset, so a client needs no knowledge of what a
+  // preset does. Absent (false) in every other phase, a Probation recap
+  // included, and in every Lull of any other preset.
+  bool untimed_by_rule = 6;
+
   enum Phase {
     PHASE_UNSPECIFIED = 0;
     LOBBY = 1;
@@ -1513,6 +1523,64 @@ message RenderedRule {
   uint32 line_count = 3;
 
   repeated Chip chips = 4;
+
+  // Every place in this rule or step where a condition stands or could stand,
+  // filled or not, in document order: a rule's `when`, then each of its body
+  // steps' `skip_if` and, for a `wait_until` step, its `condition`; a route
+  // step's `skip_if` and, for a `wait_until` step, its `condition`. A slot
+  // holding a group is followed by the slots of its items, recursively. So a
+  // route step has at least one slot, and a client composes no pointer to a
+  // condition of its own.
+  repeated ConditionSlot slots = 5;
+}
+
+// One place in a rule or step where a condition stands, or could. The gateway
+// names it, so a client composes no pointer from its own knowledge of the
+// schema.
+//
+// To fill or replace the condition a client sends one JSON Patch `add` at
+// `pointer` (RFC 6902: an `add` over an existing member replaces it, and over
+// an absent one inserts it), whose value is `{"<name>": <skeleton>}`, a
+// vocabulary entry's `name` and `skeleton_json` (get_vocabulary). A GROUP slot
+// is listed so its items read in place and is not a pick target: a leaf
+// written over it would discard its items, so a client offers a pick on an
+// EMPTY or a LEAF slot only (S3's picker fills or replaces one leaf and builds
+// no group).
+message ConditionSlot {
+  // RFC 6901 JSON Pointer of the `gp.v1.Condition`: "/declarative/handlers/2/when",
+  // "/declarative/route/0/skip_if", "/declarative/handlers/0/when/all/items/1".
+  // Written whether or not the file has the member: an EMPTY slot's pointer
+  // is where an `add` puts one. In the canonical snake_case spelling of the
+  // proto JSON mapping, as every chip's pointer is.
+  string pointer = 1;
+
+  // The slot in the player's words, from the renderer's own string table:
+  // "when", "skip if", "wait until", "step 2, skip if", "when, item 1 of all".
+  string title = 2;
+
+  // The zero-based line of RenderPlanResponse.prose of the rule or step this
+  // slot belongs to: always its RenderedRule's own `line`, a handler's body
+  // step's slots included, so a client attaches a control to a row.
+  uint32 line = 3;
+
+  State state = 4;
+
+  // The arm of `gp.v1.Condition` the slot holds, by its proto JSON field name,
+  // as a vocabulary entry's `name` spells it: "cmdr_hp_pct", or "all", "any",
+  // "not" for a group. Empty for an EMPTY slot.
+  string predicate = 5;
+
+  // What the slot holds. On the JSON-RPC wire it is lower case (decisions-log
+  // item 80): "empty", "leaf", "group".
+  enum State {
+    STATE_UNSPECIFIED = 0;
+    // No condition there: the member is absent, or it holds no arm.
+    EMPTY = 1;
+    // One predicate: a vocabulary entry's `name`.
+    LEAF = 2;
+    // `all`, `any` or `not`: its items follow as slots of their own.
+    GROUP = 3;
+  }
 }
 
 // One editable value in a rendered sentence. The gateway places it, so a client

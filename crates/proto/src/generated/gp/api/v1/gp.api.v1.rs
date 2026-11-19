@@ -266,6 +266,16 @@ pub struct Status {
     /// is.
     #[prost(bool, tag="5")]
     pub untimed: bool,
+    /// True only in a Lull whose match gives its Lulls no countdown by rule (the
+    /// Probation preset; S3's plan, E7), as opposed to `untimed`'s other cause,
+    /// a Lull no host has reported a countdown for yet. Always with `untimed`
+    /// true. A client starts no countdown for such a Lull and reports no
+    /// `remaining_ms` in it, which the gateway would refuse. The gateway decides
+    /// it from the match's preset, so a client needs no knowledge of what a
+    /// preset does. Absent (false) in every other phase, a Probation recap
+    /// included, and in every Lull of any other preset.
+    #[prost(bool, tag="6")]
+    pub untimed_by_rule: bool,
 }
 /// Nested message and enum types in `Status`.
 pub mod status {
@@ -1737,11 +1747,102 @@ pub struct RenderedRule {
     pub line_count: u32,
     #[prost(message, repeated, tag="4")]
     pub chips: ::prost::alloc::vec::Vec<Chip>,
+    /// Every place in this rule or step where a condition stands or could stand,
+    /// filled or not, in document order: a rule's `when`, then each of its body
+    /// steps' `skip_if` and, for a `wait_until` step, its `condition`; a route
+    /// step's `skip_if` and, for a `wait_until` step, its `condition`. A slot
+    /// holding a group is followed by the slots of its items, recursively. So a
+    /// route step has at least one slot, and a client composes no pointer to a
+    /// condition of its own.
+    #[prost(message, repeated, tag="5")]
+    pub slots: ::prost::alloc::vec::Vec<ConditionSlot>,
 }
 impl ::prost::Name for RenderedRule {
 const NAME: &'static str = "RenderedRule";
 const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.RenderedRule".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.RenderedRule".into() }}
+/// One place in a rule or step where a condition stands, or could. The gateway
+/// names it, so a client composes no pointer from its own knowledge of the
+/// schema.
+///
+/// To fill or replace the condition a client sends one JSON Patch `add` at
+/// `pointer` (RFC 6902: an `add` over an existing member replaces it, and over
+/// an absent one inserts it), whose value is `{"<name>": <skeleton>}`, a
+/// vocabulary entry's `name` and `skeleton_json` (get_vocabulary). A GROUP slot
+/// is listed so its items read in place and is not a pick target: a leaf
+/// written over it would discard its items, so a client offers a pick on an
+/// EMPTY or a LEAF slot only (S3's picker fills or replaces one leaf and builds
+/// no group).
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ConditionSlot {
+    /// RFC 6901 JSON Pointer of the `gp.v1.Condition`: "/declarative/handlers/2/when",
+    /// "/declarative/route/0/skip_if", "/declarative/handlers/0/when/all/items/1".
+    /// Written whether or not the file has the member: an EMPTY slot's pointer
+    /// is where an `add` puts one. In the canonical snake_case spelling of the
+    /// proto JSON mapping, as every chip's pointer is.
+    #[prost(string, tag="1")]
+    pub pointer: ::prost::alloc::string::String,
+    /// The slot in the player's words, from the renderer's own string table:
+    /// "when", "skip if", "wait until", "step 2, skip if", "when, item 1 of all".
+    #[prost(string, tag="2")]
+    pub title: ::prost::alloc::string::String,
+    /// The zero-based line of RenderPlanResponse.prose of the rule or step this
+    /// slot belongs to: always its RenderedRule's own `line`, a handler's body
+    /// step's slots included, so a client attaches a control to a row.
+    #[prost(uint32, tag="3")]
+    pub line: u32,
+    #[prost(enumeration="condition_slot::State", tag="4")]
+    pub state: i32,
+    /// The arm of `gp.v1.Condition` the slot holds, by its proto JSON field name,
+    /// as a vocabulary entry's `name` spells it: "cmdr_hp_pct", or "all", "any",
+    /// "not" for a group. Empty for an EMPTY slot.
+    #[prost(string, tag="5")]
+    pub predicate: ::prost::alloc::string::String,
+}
+/// Nested message and enum types in `ConditionSlot`.
+pub mod condition_slot {
+    /// What the slot holds. On the JSON-RPC wire it is lower case (decisions-log
+    /// item 80): "empty", "leaf", "group".
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum State {
+        Unspecified = 0,
+        /// No condition there: the member is absent, or it holds no arm.
+        Empty = 1,
+        /// One predicate: a vocabulary entry's `name`.
+        Leaf = 2,
+        /// `all`, `any` or `not`: its items follow as slots of their own.
+        Group = 3,
+    }
+    impl State {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "STATE_UNSPECIFIED",
+                Self::Empty => "EMPTY",
+                Self::Leaf => "LEAF",
+                Self::Group => "GROUP",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "STATE_UNSPECIFIED" => Some(Self::Unspecified),
+                "EMPTY" => Some(Self::Empty),
+                "LEAF" => Some(Self::Leaf),
+                "GROUP" => Some(Self::Group),
+                _ => None,
+            }
+        }
+    }
+}
+impl ::prost::Name for ConditionSlot {
+const NAME: &'static str = "ConditionSlot";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.ConditionSlot".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.ConditionSlot".into() }}
 /// One editable value in a rendered sentence. The gateway places it, so a client
 /// draws the span and parses no sentence.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
