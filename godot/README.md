@@ -224,10 +224,12 @@ Pull request 2 adds four things to the panel, each drawn as the gateway answered
 - **The condition picker** (`scripts/condition_picker.gd`; S3's `ed3b`, part 2): family, then
   predicate, then its parameters, every one `get_vocabulary`'s as sent (read once per Lull), a
   locked family or predicate greyed with the gateway's reason and not pickable. **Use** asks the
-  bridge for one JSON Patch at the condition slot: the predicate's skeleton under its name, a
-  `replace` over the condition there or an `add` into an empty slot; its parameters are then the
-  new rendering's chips. Where a slot is, and whether it holds a condition, is the gateway's to
-  say on each rendered rule (lane `gwu`): until that lands nothing opens the picker from a rule.
+  bridge for one JSON Patch at the condition slot: the predicate's skeleton under its name, sent
+  with exactly the op the gateway names for that slot (`add` where nothing stands, `replace`
+  where something does, a group's item in place); its parameters are then the new rendering's
+  chips. The rule list draws one button per slot the gateway sent (`render_plan`'s
+  `rules[].slots`), in its words ("when, item 1 of all", "step 1, skip if"), on empty and leaf
+  slots only: a group (`all`, `any`, `not`) is no pick target, its items are.
 - **Visit & change** (S3's `ed3b`, part 2): the beacon menu's Visit & change submenu, beside
   S1's three priority rows, lists from `get_beacon`'s detail one row per setting (its title and
   value now, its editor by its shape), Switch mandate, Add a build target (a blueprint, then a
@@ -437,9 +439,8 @@ one.
 
 ## What is not here yet
 
-The condition picker opens from a rule once the gateway sends each condition slot's pointer
-(lane `gwu`); a Probation match's untimed Lull and the "the Lull ran out" line wait on `gwu`'s
-footer field and line; unit display of wizard
+Groups (`all`, `any`, `not`) and an "Add rule" control are not built in S3 (a group's items
+are picked as leaves; a new rule comes from a template or the file); unit display of wizard
 values, the typed parameter catalogue, the draft and save browsers and the real lobby are
 S6's; the `.vox` models and the art pass are S6's too. Entities are drawn as placeholder
 primitives until then.
