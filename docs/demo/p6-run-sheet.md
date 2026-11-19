@@ -36,7 +36,8 @@ The main session does these, and fills them in on the record:
    deleted.
 
 You need a stopwatch. The main session can't read the screen's timing to the second, so your watch is
-the measure. Don't open `docs/demo/p6-task-card.md` until the scratch watch starts.
+the measure. Don't open `docs/demo/p6-task-card.md` until the scratch watch starts (at P6b, each of
+its two cards until its own watch starts).
 
 Each timing is its own match. Closing the window ends the host: there is no close control. The
 opponent is fixed as Easy.
@@ -56,7 +57,7 @@ opponent is fixed as Easy.
 
 1. Run `Pharmakos\Pharmakos.exe` and press "New match", never "Resume last match".
 2. **Start the watch when the status line first shows round 1's Lull, and open
-   `docs/demo/p6-task-card.md` now.**
+   `docs/demo/p6-task-card.md` now** (at P6b, `docs/demo/p6b-task-card-a2.md`).
 3. Open the **Safe playbook** template and press "Use this playbook". This is your starting playbook.
    Its two steps (the walk to the safest beacon and the core's dig depth) don't count as your ten.
 4. Add the card's ten steps, then press "Submit".
@@ -96,8 +97,9 @@ For each timing, at each sitting:
 After each scratch run the main session reads `seats\0\sealed\1.jsonc` in the match's cache
 (`%LOCALAPPDATA%\Pharmakos\matches\<match-id>\`) and checks the route against the card: the template's
 two steps, then ten steps of the card's kinds in its order, with priority high at 2 and normal at 7,
-and step 5 a description or, if you said so, a vent's name. A run that differs doesn't meet the gate's
-scratch clause, whatever its time.
+and step 5 a description or, if you said so, a vent's name (at P6b, card A2: high at 1, normal at 9,
+and step 2 the description or the name). A run that differs doesn't meet the gate's scratch clause,
+whatever its time.
 
 As a cross-check on the watch, the main session reads the last `submit_plan` entry's tick in the audit
 log. That clock isn't calibrated for this, so a disagreement of more than a few seconds is reported to
@@ -105,23 +107,156 @@ you rather than resolved.
 
 ## P6b's additions
 
-The main session writes these after `ed3b` merges, because they use its controls:
+Written after `ed3b` merged (#183 and #188), for the build below. Every card and set-up here was
+checked on that build; "How P6b's cards were checked" says how.
 
-- **Card A's kinds in a different order,** because you will know the card by then. The record states
-  that practice bias beside the result.
-- **Card B, timed once after both timings:** one guard, one chip edit and one mandate row. It is
+- **Card A's kinds in a different order** (card A2), because you will know card A by then. The
+  record states that practice bias beside the result.
+- **Card B, timed once after both timings:** one mandate row, one guard and one chip edit. It is
   recorded beside the others and doesn't decide the gate. It measures what card A can't.
-- **Untimed, afterwards:** change three number chips and drag one rule. Your words here close the
-  typing clause.
-
-Carried from P6a, written now:
-
-- **The hand checks P6a didn't make, and the one it failed.** The unticked E0601 checkbox and the
-  structure names (checks 4 and 5), each with a set-up that shows it, and Alt-click on a vent again
-  once `ed3b` has fixed it.
+- **Untimed, afterwards:** change three number chips and drag one rule, then the hand checks P6a
+  didn't make and the one it failed.
 - **P6a's times are no baseline for "not slower".** They were driven by the AI, not by a person (see
   "P6a as run"), so a P6b time is read against the limits, and beside P6a's only with that caveat.
 - **The practice bias** stated beside P6b's result includes having watched card A driven at P6a.
+
+### Before you start, for P6b
+
+1. **The build** (done): `D:\build\p6b\play\Pharmakos\Pharmakos.exe`, packaged from `main` at
+   `39d0d13c` (after `ed3b` part 2, #188), zip `D:\build\p6b\play\pharmakos-windows-x86_64.zip`,
+   SHA-256 `c3c5446ff4b0d34342c5ba1ea6c1de68eca43b0421a8f159af1b263a5a746a8e`.
+2. **The cards** (done): card A2, card B and the two set-up files, checked on that build.
+3. **`user://`** (the main session, just before the sitting): step 3 above, the sitting's folder
+   renamed `Pharmakos.p6b` afterwards.
+4. **The set-up files** (the main session, before the sitting): copies of
+   `docs/demo/p6b-short-of-power.jsonc` and `docs/demo/p6b-structures.jsonc` beside
+   `Pharmakos.exe`, where Load's dialog opens.
+
+### The Probation facts
+
+- The lobby hosts the Probation preset: seed `0x0000000000000014` (20), two seats, you at seat 0
+  and Easy at seat 1, three rounds.
+- **The Lulls are untimed.** No countdown shows, and only Ready ends a Lull. Your stopwatch is the
+  only clock; the audit log's tick still cross-checks it.
+- Your core, `b_00`, stands at (188, 28) on flat ground, and its sphere reaches 24 voxels. The heat
+  vent nearest it is at (175, 66), about 40 voxels away; click it and the panel heads the menu "Heat
+  vent (175, 66)". The next vents are about 80 voxels out.
+- At round 1's Lull the meter reads `$200   supply 10 kW   draw 4 kW   headroom 6 kW`.
+
+### The order of the sitting
+
+Four matches, each from "New match", with the window closed between them:
+
+1. The template timing, as above.
+2. The scratch timing, as above, with card A2.
+3. Card B, timed.
+4. Untimed: the chips, the drag and the hand checks.
+
+### Card A2
+
+`docs/demo/p6b-task-card-a2.md`: card A's ten kinds of step, no step in card A's place, and the
+places still yours. The route check is the one above. **Practice bias:** you know card A's kinds
+and its controls, and you watched card A driven at P6a; A2 changes only the order.
+
+### Card B
+
+1. Run `Pharmakos.exe` and press "New match".
+2. **Start the watch when the status line first shows round 1's Lull, and open
+   `docs/demo/p6b-task-card-b.md`.**
+3. Do the card.
+4. **Stop the watch when you see "Submitted. This is now your sealed order."**
+5. Untimed: press "Ready — end the Lull", wait for the Push to begin, and close the window.
+
+The main session reads its sealed route: the template's two steps, then a visit to `b_00` that adds
+an autocannon, skipped if the grid's headroom is below 3 kW.
+
+### Untimed, afterwards
+
+Launch the fourth match from a terminal, so that every map click's modifiers go to the instance's
+log, which the main session reads afterwards:
+
+```sh
+D:\build\p6b\play\Pharmakos\Pharmakos.exe -- --log-input
+```
+
+Press "New match". In round 1's Lull:
+
+1. **Alt-click on a vent** (the check P6a failed). Hold Alt and click the vent at (175, 66). You
+   should see "Place beacon covering the nearest vent you can cover" first and "Place beacon
+   covering this vent" second. Press Escape. Click it again without Alt: the same two, the other
+   way round. Press Escape. Since `ed3b` both are always offered, and Alt only puts the description
+   first. **Write down** which came first each time.
+2. **The unticked E0601 checkbox** (check 4). Press "Load..." and open `p6b-short-of-power.jsonc`.
+   It adds three mortars at your core; a mortar draws 3 kW and you have 6 kW of headroom. When the
+   full check has run, about a second after it opened, the rows under "Checks" show an Error,
+   "There is not enough power for everything this playbook switches on.", marked "E0601 at
+   /declarative/route/0", and under them the checkbox "Allow dormant beacons: let this route draw
+   more power than you supply, so some beacons go dark." Tick it: the status line says "Dormant
+   beacons allowed.", E0601 gives way to W0603, and the box is ticked. Untick it, and E0601 is
+   back. **Write down** whether the box read as unticked before you ticked
+   it, and as ticked after.
+3. **Three number chips and one rule drag.** Press "Load..." and open `p6b-structures.jsonc`. Under
+   "What the playbook says", click each of these chips, type the new value in the "Change ...:"
+   field and press "Set this value": 40 in flee's "at or below 40% HP" to 30; 3 in "Fires at most 3
+   times" to 2; 1 in regroup's "has died at or above 1 times" to 2. Then drag rule 2's line
+   ("regroup") onto rule 1's ("flee"): it lands before it. **Write down** your words on the re-check
+   and the redraw after each edit, and on typing into the field.
+4. **The structure names** (check 5). Press "Submit", then "Ready — end the Lull". In the Push the
+   core's drones build an autocannon at (196, 20), a wall from (184, 38) to (188, 38) and a mortar
+   at (180, 22): at 1x the autocannon stands about 0:25 into the Push, the wall about 1:05 and the
+   mortar about 1:25 (2x and 4x shorten the wait). A name draws only within 55 voxels of the
+   camera, so wheel out until a name goes, then in until it comes back: that is about 50 voxels.
+   **Write down** whether you can read each name and tell the three apart, close up and from about
+   50 voxels. Then close the window.
+
+**What "typing" means on this build.** Nothing you type into the playbook feeds the re-check as you
+type: a chip's number is sent when you press "Set this value", and the re-check follows the edit.
+Your words in item 3 are about that, and whether they close the gate's typing clause is your
+reading, recorded as you give it.
+
+**What was promised and isn't on this build.**
+
+- **A wall has no name.** A wall is wall voxels in your colour, not a structure the view lists, so
+  only the autocannon and the mortar carry a name; the wall is told apart by its look.
+- **No rule to drag except from a file.** Dragging a rule onto another is built, but every template
+  on this build has one rule and there is no "Add rule" control, so the drag uses
+  `p6b-structures.jsonc`, which has two.
+- **The two set-ups are files, not clicks.** No control can give a wall its box, so the names
+  set-up has to be a file. The E0601 set-up could be clicked (three "Add a build target" mortars),
+  but a file is quicker and is the one that was checked.
+
+**Known gaps to step round** (PR #188's owed list): "Queue a structure" offers Generator,
+Autocannon, Mortar and Wall, though the verifier refuses every structure there but the Resonance
+Spire; "Add a build target" offers Wall, but no control can give a wall its box; a duration (3 s,
+30 s) is drawn as the gateway wrote it and can't be edited; and a choice's values keep their quotes
+(`"HIGH"`).
+
+### How P6b's cards were checked
+
+On the packaged build itself: its own `gamectl.exe host`, started on the lobby's Probation line
+(seed 20, two seats, seat 0 the human's, three rounds) with its data folders in a scratch folder,
+and reached on its two connections as the lobby reaches it. An uncommitted script made the calls
+the editor's controls make: `instantiate_template` for the Safe playbook's text; one `patch_plan`
+per card step, carrying the patch the client composes (the map menu's step, the Visit & change
+row, the condition slot's `add` as its `pick_op` names, the chip's `replace`); QUICK after each
+edit, FULL at the end, and `render_plan` for the rule list's words; then `submit_plan`, Ready,
+`end_lull`, and round 1's Push played to its end with the segment feed read. The places were one
+set near the core, at the ground's height read from the view, so it doesn't show that every place
+you might click works.
+
+- **Card A2**: QUICK qualified after every edit; FULL qualifies, 12 steps, 15 of 128 size units;
+  accepted. In the Push all 12 steps completed and three beacons were placed, the vent's at 0:41.
+  From New's empty playbook instead of the Safe playbook, the same ten steps also qualify and
+  complete.
+- **Card B**: FULL qualifies, 7 size units; accepted. All three steps completed, and the autocannon
+  stood at 0:21.
+- **`p6b-short-of-power.jsonc`**: QUICK qualifies, so Load opens it; FULL raises E0601, "the
+  playbook adds 3 kW of draw beyond supply", with "Allow dormant beacons" as its suggestion, and with
+  that applied it qualifies with W0603.
+- **`p6b-structures.jsonc`**: qualifies; the autocannon stood at 0:24, the wall filled from 0:50 to
+  1:05, and the mortar stood at 1:22. The three chip edits and the rule move each still qualify.
+- `gamectl verify` is no check here: it verifies against its fixed reference view, whose core is
+  `b_01`, so every `b_00` in these files is E0401 there.
 
 ## If a timing misses
 
@@ -282,14 +417,22 @@ Until then the two P6a rows below are marked "not decided".
 
 One row per sitting and timing. Fixed for every row: the tester is the owner, not a first-time user
 (item 153 (4), R5), except in P6a's two rows, which the main AI session drove by computer control
-with the owner watching; card A is shaped to the map menu; and the main session's checks (the card's
-headless check, the sealed route read against the card, the audit log's cross-check) are the AI's
-own, not independent review.
+with the owner watching; card A (and P6b's card A2) is shaped to the map menu; and the main session's
+checks (the card's headless check, the sealed route read against the card, the audit log's
+cross-check) are the AI's own, not independent review.
 
 | Sitting | Timing | Build, SHA-256 | Seed, preset | Template, values changed | Time | Limit, pass or miss | Repeat? | Refusals | Mis-clicks | Route count, card match | Alt-click check | Edit or typing feel |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | P6a | Template | zip from `83c63a0`, `bb05bd62741ddaa78c8022b817537bd1adc32588a1477359480aef22cd4e8a98` | golden `0x00000000ca5caded`, no preset (the build predates presets: the lobby's fixed match), round 1's Lull 10 min | Expand & Mine, none | about 0:15 (countdown 9:45; audit tick 246, 12.3 s) | 2 min: inside the limit, driven by the main AI session by computer control with the owner watching, so not a first-time person's time; not decided (see the open question) | none (`local-1794786057-2556` void, see above) | none | none named (the owner did not drive) | n/a | n/a | no edit made; see the scratch row |
 | P6a | Scratch | zip from `83c63a0`, `bb05bd62741ddaa78c8022b817537bd1adc32588a1477359480aef22cd4e8a98` | golden `0x00000000ca5caded`, no preset (the build predates presets: the lobby's fixed match), round 1's Lull 10 min | Safe playbook, none | about 1:52 (countdown 8:08; audit tick 2183, 109 s) | 5 min: inside the limit, driven by the main AI session by computer control with the owner watching, so not a first-time person's time; not decided (see the open question) | none | none | none named (the owner did not drive) | 12, matches; step 5 a vent's name | failed: no description menu, for the AI and for the owner by hand | as a watcher: "i did not see the re-check and redraw. most of the map has been too far zoomed out for me to see useful detail." |
-| P6b | Template | | | | | 2 min | | | | n/a | n/a | |
-| P6b | Scratch | | | Safe playbook | | 5 min | | | | | n/a | |
-| P6b | Card B | | | | | none | | | | | n/a | |
+| P6b | Template | zip from `39d0d13c`, `c3c5446ff4b0d34342c5ba1ea6c1de68eca43b0421a8f159af1b263a5a746a8e` | Probation `0x0000000000000014` (20), preset `probation`, untimed Lulls | | | 2 min | | | | n/a | n/a | |
+| P6b | Scratch | zip from `39d0d13c`, `c3c5446ff4b0d34342c5ba1ea6c1de68eca43b0421a8f159af1b263a5a746a8e` | Probation `0x0000000000000014` (20), preset `probation`, untimed Lulls | Safe playbook, card A2 (practice bias: card A's kinds known, card A watched at P6a) | | 5 min | | | | | n/a | |
+| P6b | Card B | zip from `39d0d13c`, `c3c5446ff4b0d34342c5ba1ea6c1de68eca43b0421a8f159af1b263a5a746a8e` | Probation `0x0000000000000014` (20), preset `probation`, untimed Lulls | Safe playbook | | none | | | | | n/a | |
+| P6b | Untimed and hand checks | zip from `39d0d13c`, `c3c5446ff4b0d34342c5ba1ea6c1de68eca43b0421a8f159af1b263a5a746a8e` | Probation `0x0000000000000014` (20), preset `probation`, untimed Lulls | `p6b-short-of-power.jsonc`, `p6b-structures.jsonc` | none | none | n/a | | | n/a | | |
+
+P6b's checks 4 and 5, which the table has no column for:
+
+| P6b hand check | Set-up | What you saw |
+|---|---|---|
+| 4. The E0601 checkbox: unticked before, ticked after | `p6b-short-of-power.jsonc` | |
+| 5. The names (autocannon, mortar; the wall by its look), close up and from about 50 voxels | `p6b-structures.jsonc`, round 1's Push | |
