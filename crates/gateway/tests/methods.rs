@@ -3858,3 +3858,43 @@ fn a_writs_settings_rows_show_what_the_sim_reads() {
         }
     }
 }
+
+/// S3's `gwu`, fix pass 1 (the review's C3, K2): in a file that writes a
+/// step's `skip_if` in its camelCase name, a pick at the slot's `snake_case`
+/// pointer is refused by `patch_plan` with `INVALID_ARGUMENT`, naming both
+/// spellings, rather than handed back as a file that no longer decodes.
+#[test]
+fn patch_plan_refuses_a_second_spelling_of_a_field() {
+    let mut surface = hosted();
+    let token = seat_token(&mut surface, 0);
+    let mut left = FIRST_LULL_MS;
+    let camel = worked_example().replacen(
+        r#"{"label":"f1","#,
+        r#"{"label":"f1","skipIf":{"cmdrHpPct":{"cmp":"LE","pct":10}},"#,
+        1,
+    );
+    assert_ne!(camel, worked_example(), "the example has the step");
+    let patch = r#"[{"op":"add","path":"/declarative/handlers/0/body/0/skip_if","value":{"treasury":{"dollars":{"op":"GE","value":100}}}}]"#;
+    let answer = call(
+        &mut surface,
+        &token,
+        &mut left,
+        "patch_plan",
+        &format!(
+            r#"{{"playbook_jsonc":{},"json_patch":{}}}"#,
+            quote(&camel),
+            quote(patch)
+        ),
+    );
+    let error = answer.get("error").expect("refused");
+    let message = text_of(error, "message");
+    assert!(
+        message.contains("`skipIf`") && message.contains("`skip_if`"),
+        "{message}"
+    );
+    assert_eq!(
+        error.get("data").and_then(|data| data.get("code")),
+        Some(&Json::String(String::from("INVALID_ARGUMENT"))),
+        "{error:?}"
+    );
+}

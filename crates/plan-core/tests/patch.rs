@@ -384,3 +384,41 @@ fn the_wire_form_of_an_inverse_loses_the_trivia_it_carried() {
         ]
     );
 }
+
+/// A file that writes a step's `skip_if` in its camelCase JSON name.
+const CAMEL: &str = r#"{"schema_version":{"major":1},"declarative":{"route":[
+  {"label":"a","hold":{"ms":1000},"skipIf":{"cmdrHpPct":{"cmp":"LE","pct":10}}},
+  {"label":"b","waitUntil":{},"timeoutMs":3000}
+]}}"#;
+
+/// S3's `gwu`, fix pass 1 (the review's C3, K2): a patch that would leave one
+/// field written under both its names in one object is refused, naming both
+/// spellings, and the file is not touched; the decoder would refuse the
+/// result (`BothNames`), so accepting it would hand back a file that no
+/// longer decodes.
+#[test]
+fn a_patch_that_would_write_a_field_twice_is_refused_naming_both_spellings() {
+    let patch = r#"[{"op":"add","path":"/declarative/route/0/skip_if","value":{"treasury":{"dollars":{"op":"GE","value":100}}}}]"#;
+    let error = pharmakos_plan_core::patch_text(CAMEL, patch)
+        .expect_err("a second spelling of skip_if is refused");
+    assert!(
+        error.message.contains("`skipIf`") && error.message.contains("`skip_if`"),
+        "{}",
+        error.message
+    );
+    assert_eq!(error.pointer, "/declarative/route/0");
+
+    // Under a camelCase member a snake_case pointer finds nothing, as before.
+    let under = r#"[{"op":"add","path":"/declarative/route/1/wait_until/condition","value":{"treasury":{"dollars":{"op":"GE","value":100}}}}]"#;
+    let error = pharmakos_plan_core::patch_text(CAMEL, under)
+        .expect_err("nothing at wait_until in a file that writes waitUntil");
+    assert!(error.message.contains("nothing"), "{}", error.message);
+
+    // The same edit in the camelCase name, and a snake_case file, are taken.
+    let camel_edit = r#"[{"op":"replace","path":"/declarative/route/0/skipIf","value":{"treasury":{"dollars":{"op":"GE","value":100}}}}]"#;
+    let (patched, _) = pharmakos_plan_core::patch_text(CAMEL, camel_edit).expect("one spelling");
+    assert!(patched.contains("\"treasury\""), "{patched}");
+    let snake = CAMEL.replace("skipIf", "skip_if");
+    let (patched, _) = pharmakos_plan_core::patch_text(&snake, patch).expect("a snake_case file");
+    assert!(patched.contains("\"treasury\""), "{patched}");
+}
