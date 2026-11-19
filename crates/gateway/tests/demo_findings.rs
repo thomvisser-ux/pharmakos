@@ -67,15 +67,15 @@ fn a_timeout_filing_is_named_in_the_seats_own_feed() {
         result(&submitted, "submit_plan").get("accepted"),
         Some(&Json::Bool(true))
     );
-    // The Lull runs out as the shipped rig ends one: its last report is a few
-    // milliseconds left (its report cadence), never 0, and then `end_lull`.
+    // The Lull runs out as the rig ends one from S3's `ed3b`: its last report
+    // is the countdown at 0, and then `end_lull` (here the host-side door).
     surface
-        .set_phase_remaining_ms(pharmakos_sim::math::quantity::Ms::new(120))
+        .set_phase_remaining_ms(pharmakos_sim::math::quantity::Ms::ZERO)
         .expect("a custom match takes a countdown");
     surface.begin_push().expect("the Push begins");
     let _ = step(&mut surface, 2);
 
-    let filed = pharmakos_gateway::strings::SAFE_PLAYBOOK_FILED;
+    let filed = pharmakos_gateway::strings::SAFE_PLAYBOOK_FILED_RAN_OUT;
     let mine = feed(&mut surface, &seat0, &mut left);
     assert_eq!(
         mine.first(),
@@ -83,8 +83,8 @@ fn a_timeout_filing_is_named_in_the_seats_own_feed() {
         "seat 0's feed opens by saying its playbook was filed for it: {mine:?}"
     );
     assert_eq!(
-        filed, "The Lull ended before you sealed, so the safe playbook was filed for you.",
-        "a Lull spent or ended by the lobby reads the same until `ed3b`'s rig reports its 0"
+        filed, "The Lull ran out, so the safe playbook was filed for you.",
+        "a Lull whose last reported countdown was 0 ran out"
     );
     let sealed = mine
         .iter()

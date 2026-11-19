@@ -840,25 +840,67 @@ fn a_seats_map_summary_carries_no_seed() {
 }
 
 // ---------------------------------------------------------------------------
-// Item 143 (4): the filing line says what ended the Lull
+// Item 143 (4) and S3's `gwu`: the filing line says what ended the Lull
 // ---------------------------------------------------------------------------
 
-/// The line a seat's feed carries when the gateway filed its safe playbook
-/// says what ended the Lull where the gateway can tell: the seat's own Ready
-/// with nothing sealed has its line, and every other end -- the countdown
-/// spent, which the shipped rig ends with a last report of a few
-/// milliseconds and never 0, or the lobby's `end_lull` -- reads "the Lull
-/// ended". `ed3b` makes the rig report its 0 and restores "ran out".
-#[test]
-fn the_filing_line_says_what_ended_the_lull() {
-    let filing = |surface: &mut Surface, seat: u8| -> String {
-        feed_of(surface, seat)
+/// The line for a seat that said Ready with nothing sealed.
+const ON_READY: &str =
+    "You said Ready with nothing sealed, so the safe playbook was filed for you.";
+/// The line for a Lull whose last reported countdown was 0.
+const RAN_OUT: &str = "The Lull ran out, so the safe playbook was filed for you.";
+/// The line for every other end.
+const ENDED: &str = "The Lull ended before you sealed, so the safe playbook was filed for you.";
+
+/// End a two-seat match's opening Lull, neither seat having sealed: each seat
+/// in `ready` says Ready, the host reports each of `reports` in order (the
+/// elapsed time and, when given, the countdown), and the lobby calls
+/// `end_lull`. Answers each seat's filing line.
+fn filing_lines(
+    match_id: &str,
+    preset: Preset,
+    ready: &[u8],
+    reports: &[(i32, Option<i32>)],
+) -> [String; 2] {
+    let mut surface = hosted_under(match_id, preset, Some(0), 1_000, 1);
+    for seat in ready {
+        let token = seat_token(&mut surface, *seat);
+        answered(
+            &call(&mut surface, &token, "set_ready", "{\"ready\":true}"),
+            "set_ready",
+        );
+    }
+    let admin = admin_token(&mut surface);
+    for (elapsed, remaining) in reports {
+        let params = match remaining {
+            Some(left) => format!("{{\"elapsed_ms\":{elapsed},\"remaining_ms\":{left}}}"),
+            None => format!("{{\"elapsed_ms\":{elapsed}}}"),
+        };
+        answered(
+            &call(&mut surface, &admin, "report_host_clock", &params),
+            "report_host_clock",
+        );
+    }
+    answered(&call(&mut surface, &admin, "end_lull", "{}"), "end_lull");
+    [0, 1].map(|seat| {
+        feed_of(&mut surface, seat)
             .into_iter()
             .find(|(kind, ..)| kind == "safe_playbook_filed")
             .map(|(_, text, _)| text)
             .expect("a filing line")
-    };
+    })
+}
 
+/// The line a seat's feed carries when the gateway filed its safe playbook
+/// says what ended the Lull, from what the host reported and never from a
+/// clock of the gateway's own: the seat's own Ready with nothing sealed has
+/// its line, and wins over a countdown at 0 too; a Lull whose **last**
+/// reported countdown was 0 "ran out" (the rig reports its 0 once, then calls
+/// `end_lull`; S3's `ed3b`); and every other end -- a last countdown with
+/// time left, a report of the elapsed time alone, no report at all, or the
+/// lobby's `end_lull` -- reads "the Lull ended". A Probation match reports no
+/// countdown, so it never "runs out".
+#[test]
+fn the_filing_line_says_what_ended_the_lull() {
     // Ready, with nothing sealed: seat 0 says it is ready; seat 1 does not.
     let mut surface = hosted_under("m-ready", Preset::Custom, Some(0), 1_000, 1);
     let token = seat_token(&mut surface, 0);
@@ -867,37 +909,74 @@ fn the_filing_line_says_what_ended_the_lull() {
         "set_ready",
     );
     assert!(surface.begin_push().expect("the Push begins"));
+    let lines = [0, 1].map(|seat| {
+        feed_of(&mut surface, seat)
+            .into_iter()
+            .find(|(kind, ..)| kind == "safe_playbook_filed")
+            .map(|(_, text, _)| text)
+            .expect("a filing line")
+    });
+    assert_eq!(lines, [ON_READY, ENDED]);
+
+    // The countdown at 0, last: "ran out".
     assert_eq!(
-        filing(&mut surface, 0),
-        "You said Ready with nothing sealed, so the safe playbook was filed for you."
+        filing_lines("m-ran-out", Preset::Custom, &[], &[(1_000, Some(0))]),
+        [RAN_OUT, RAN_OUT]
     );
     assert_eq!(
-        filing(&mut surface, 1),
-        "The Lull ended before you sealed, so the safe playbook was filed for you."
+        filing_lines(
+            "m-ran-out-then-spent",
+            Preset::Custom,
+            &[],
+            &[(1_000, Some(4_000)), (5_000, Some(0)), (5_200, None)]
+        ),
+        [RAN_OUT, RAN_OUT],
+        "an elapsed-only report after the 0 keeps the countdown at 0"
     );
 
-    // The countdown spent, as the shipped rig ends a Lull: its last report a
-    // few milliseconds left, then `end_lull`.
-    for left in [1, 120, 250] {
-        let mut surface = hosted_under("m-ran-out", Preset::Custom, Some(0), 1_000, 1);
-        let admin = admin_token(&mut surface);
-        answered(
-            &call(
-                &mut surface,
-                &admin,
-                "report_host_clock",
-                &format!("{{\"elapsed_ms\":1000,\"remaining_ms\":{left}}}"),
-            ),
-            "report_host_clock",
-        );
-        answered(&call(&mut surface, &admin, "end_lull", "{}"), "end_lull");
-        let line = filing(&mut surface, 0);
+    // Ready wins over the 0, seat by seat.
+    assert_eq!(
+        filing_lines("m-ready-and-0", Preset::Custom, &[0], &[(1_000, Some(0))]),
+        [ON_READY, RAN_OUT]
+    );
+    assert_eq!(
+        filing_lines("m-both-ready", Preset::Custom, &[0, 1], &[(1_000, Some(0))]),
+        [ON_READY, ON_READY]
+    );
+
+    // Any other end: a few milliseconds left (the rig before `ed3b`), time
+    // left, the elapsed time alone, no report, or a 0 the host reported and
+    // then took back with time left (the last report decides).
+    for left in [1, 120, 250, 5_000] {
         assert_eq!(
-            line, "The Lull ended before you sealed, so the safe playbook was filed for you.",
+            filing_lines("m-left", Preset::Custom, &[], &[(1_000, Some(left))]),
+            [ENDED, ENDED],
             "{left} ms left"
         );
-        assert!(!line.contains("Ready"), "{line}");
     }
+    assert_eq!(
+        filing_lines("m-elapsed", Preset::Custom, &[], &[(1_000, None)]),
+        [ENDED, ENDED]
+    );
+    assert_eq!(
+        filing_lines("m-no-report", Preset::Custom, &[], &[]),
+        [ENDED, ENDED]
+    );
+    assert_eq!(
+        filing_lines(
+            "m-0-then-more",
+            Preset::Custom,
+            &[],
+            &[(1_000, Some(0)), (2_000, Some(5_000))]
+        ),
+        [ENDED, ENDED]
+    );
+
+    // Probation: no countdown is ever reported, so Ready or "ended".
+    assert_eq!(
+        filing_lines("m-probation", Preset::Probation, &[0], &[(1_000, None)]),
+        [ON_READY, ENDED]
+    );
 }
 
 // ---------------------------------------------------------------------------

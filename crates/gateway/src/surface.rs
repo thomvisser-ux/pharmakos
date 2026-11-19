@@ -223,7 +223,8 @@ pub struct Sealed {
 }
 
 /// The feed kind of the line a seat reads when the gateway filed its playbook
-/// ([`crate::strings::SAFE_PLAYBOOK_FILED`]). A gateway kind, beside the sim's
+/// (one of [`crate::strings::SAFE_PLAYBOOK_FILED`], its `_ON_READY` and its
+/// `_RAN_OUT`, as [`Surface::announce_filings`] picks). A gateway kind, beside the sim's
 /// bus: filing is the gateway's act, not the match's.
 pub const SAFE_PLAYBOOK_FILED_KIND: &str = "safe_playbook_filed";
 
@@ -1587,11 +1588,26 @@ impl Surface {
     /// plan; private, because whether a seat planned is its own business.
     ///
     /// The line says what ended the Lull where the gateway can tell
-    /// (decisions-log item 143 (4)): the seat's own Ready with nothing sealed
-    /// has a line of its own, and every other end -- the countdown spent or the
-    /// lobby's `end_lull`, which the shipped rig's reports do not tell apart --
-    /// reads "the Lull ended" ([`crate::strings::SAFE_PLAYBOOK_FILED`]).
+    /// (decisions-log item 143 (4); S3's `gwu`), in this order:
+    ///
+    /// 1. the seat's own Ready with nothing sealed
+    ///    ([`crate::strings::SAFE_PLAYBOOK_FILED_ON_READY`]), which wins over a
+    ///    countdown at 0 as well, the seat's own act being the better
+    ///    explanation;
+    /// 2. "the Lull ran out" ([`crate::strings::SAFE_PLAYBOOK_FILED_RAN_OUT`])
+    ///    when the **last** countdown the host reported for this Lull was 0,
+    ///    which the client's rig reports once before it calls `end_lull`;
+    /// 3. "the Lull ended" ([`crate::strings::SAFE_PLAYBOOK_FILED`]) for every
+    ///    other end: the lobby's `end_lull` with time left, a last report
+    ///    above 0 (a 0 the host then reported time after is not the last), a
+    ///    host that reported only its elapsed time or nothing.
+    ///
+    /// Read from `lull_remaining_ms`, the host's own last report, which
+    /// [`Surface::close_phase`] clears only after this runs: the gateway reads
+    /// no clock (AGENTS.md section 4.5). A Probation match takes no countdown
+    /// (E7), so its filings read Ready or "ended", never "ran out".
     fn announce_filings(&mut self, round: u32) -> Result<(), Error> {
+        let ran_out = self.lull_remaining_ms == Some(Ms::ZERO);
         let filed: Vec<(SeatId, &'static str)> = self
             .seats
             .iter()
@@ -1603,6 +1619,8 @@ impl Surface {
             .map(|slot| {
                 let line = if slot.ready {
                     crate::strings::SAFE_PLAYBOOK_FILED_ON_READY
+                } else if ran_out {
+                    crate::strings::SAFE_PLAYBOOK_FILED_RAN_OUT
                 } else {
                     crate::strings::SAFE_PLAYBOOK_FILED
                 };
