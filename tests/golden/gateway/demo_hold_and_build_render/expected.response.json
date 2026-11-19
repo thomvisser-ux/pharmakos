@@ -48,7 +48,8 @@
             "title": "skip if",
             "line": 5,
             "state": "empty",
-            "predicate": ""
+            "predicate": "",
+            "pick_op": "add"
           }
         ]
       },
@@ -77,7 +78,8 @@
             "title": "skip if",
             "line": 8,
             "state": "empty",
-            "predicate": ""
+            "predicate": "",
+            "pick_op": "add"
           }
         ]
       },
@@ -196,35 +198,40 @@
             "title": "when",
             "line": 11,
             "state": "group",
-            "predicate": "all"
+            "predicate": "all",
+            "pick_op": "unspecified"
           },
           {
             "pointer": "/declarative/handlers/0/when/all/items/0",
             "title": "when, item 1 of all",
             "line": 11,
             "state": "leaf",
-            "predicate": "cmdr_hp_pct"
+            "predicate": "cmdr_hp_pct",
+            "pick_op": "replace"
           },
           {
             "pointer": "/declarative/handlers/0/when/all/items/1",
             "title": "when, item 2 of all",
             "line": 11,
             "state": "leaf",
-            "predicate": "cmdr_took_damage_within"
+            "predicate": "cmdr_took_damage_within",
+            "pick_op": "replace"
           },
           {
             "pointer": "/declarative/handlers/0/body/0/skip_if",
             "title": "step 1, skip if",
             "line": 11,
             "state": "empty",
-            "predicate": ""
+            "predicate": "",
+            "pick_op": "add"
           },
           {
             "pointer": "/declarative/handlers/0/body/1/skip_if",
             "title": "step 2, skip if",
             "line": 11,
             "state": "empty",
-            "predicate": ""
+            "predicate": "",
+            "pick_op": "add"
           }
         ]
       }

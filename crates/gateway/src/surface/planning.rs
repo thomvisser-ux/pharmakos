@@ -1379,7 +1379,8 @@ fn rendered_rule(rule: &pharmakos_plan_core::RenderedRule) -> Json {
 }
 
 /// One `gp.api.v1.ConditionSlot`, every field written, the empty predicate
-/// of an empty slot included, its state lower case (decisions-log item 80).
+/// of an empty slot and a group's `unspecified` op included, its state and
+/// its op lower case (decisions-log item 80).
 fn condition_slot(slot: &pharmakos_plan_core::ConditionSlot) -> Json {
     Json::Object(vec![
         (String::from("pointer"), Json::String(slot.pointer.clone())),
@@ -1395,6 +1396,17 @@ fn condition_slot(slot: &pharmakos_plan_core::ConditionSlot) -> Json {
         (
             String::from("predicate"),
             Json::String(slot.predicate.to_owned()),
+        ),
+        (
+            String::from("pick_op"),
+            Json::String(pharmakos_proto::scope::wire_name(
+                "gp.api.v1.ConditionSlot.PickOp",
+                // A group is no pick target, and says so with the zero value.
+                match slot.pick {
+                    Some(op) => op.proto_name(),
+                    None => "PICK_OP_UNSPECIFIED",
+                },
+            )),
         ),
     ])
 }

@@ -2953,6 +2953,10 @@ fn decoded_rendering(answer: &Json) -> pharmakos_proto::gp::api::v1::RenderPlanR
                 pharmakos_proto::scope::from_wire_name("gp.api.v1.ConditionSlot.State", wire)
                     .unwrap_or_else(|| panic!("`{wire}` is a state the schema names")),
             ),
+            (Json::String(wire), Some("pick_op")) => Json::String(
+                pharmakos_proto::scope::from_wire_name("gp.api.v1.ConditionSlot.PickOp", wire)
+                    .unwrap_or_else(|| panic!("`{wire}` is an op the schema names")),
+            ),
             (Json::Object(entries), _) => Json::Object(
                 entries
                     .iter()
@@ -3027,10 +3031,11 @@ fn render_plan_answers_each_rules_condition_slots() {
     let keys: Vec<&str> = fields.iter().map(|(key, _)| key.as_str()).collect();
     assert_eq!(
         keys,
-        ["pointer", "title", "line", "state", "predicate"],
+        ["pointer", "title", "line", "state", "predicate", "pick_op"],
         "every field, the empty predicate included"
     );
     assert_eq!(text_of(&skip, "state"), "empty", "lower case on the wire");
+    assert_eq!(text_of(&skip, "pick_op"), "add", "lower case on the wire");
 
     let rendering = decoded_rendering(&answer);
     let (step, skip) = slot_at(&rendering, "/declarative/route/0/skip_if");
@@ -3061,16 +3066,45 @@ fn render_plan_answers_each_rules_condition_slots() {
     assert_eq!(guard.title, "step 1, skip if");
 }
 
-/// S3's `gwu`: a slot is filled or replaced by one JSON Patch `add` at its
-/// pointer whose value is a vocabulary entry's name and skeleton, as the
-/// picker sends it: at an empty slot (a route step's absent `skip_if`) the
-/// member is inserted, and over a leaf (an item of a rule's `all`) it is
-/// replaced. Either way `render_plan` re-renders the slot with the new
-/// predicate and `verify_plan` raises nothing at it, and the file qualifies
-/// as the original did.
+/// The `condition_slots` fixture plan-core's slots golden reads.
+fn condition_slots_fixture() -> String {
+    fs::read_to_string(
+        workspace_root()
+            .join("crates")
+            .join("plan-core")
+            .join("tests")
+            .join("cases")
+            .join("condition_slots.jsonc"),
+    )
+    .expect("the condition slots fixture")
+}
+
+/// The items of the group at `pointer` in a `render_plan` answer's file, as
+/// the slots directly under it.
+fn items_under(
+    rendering: &pharmakos_proto::gp::api::v1::RenderPlanResponse,
+    group: &str,
+) -> Vec<String> {
+    rendering
+        .rules
+        .iter()
+        .flat_map(|rule| &rule.slots)
+        .filter_map(|slot| {
+            let rest = slot.pointer.strip_prefix(group)?.strip_prefix('/')?;
+            (rest.split('/').count() == 1).then(|| slot.predicate.clone())
+        })
+        .collect()
+}
+
+/// S3's `gwu`, fix pass 1 (the review's C1, K1): a pick sends the op its slot
+/// names (`pick_op`), through `patch_plan`, with a vocabulary entry's name
+/// and skeleton, and fills or replaces that slot and nothing else: the old
+/// leaf is gone and a group keeps its count. RFC 6902 `add` at an array index
+/// inserts, so the op of an item of a group is `replace`; an absent member's
+/// is `add`; anything at the pointer, an empty `{}` included, is `replace`.
 #[test]
-fn a_slot_is_filled_or_replaced_by_one_add_at_its_pointer() {
-    use pharmakos_proto::gp::api::v1::condition_slot::State;
+fn a_pick_sends_the_op_its_slot_names_and_changes_that_slot_alone() {
+    use pharmakos_proto::gp::api::v1::condition_slot::PickOp;
     let mut surface = hosted();
     let token = seat_token(&mut surface, 0);
     let mut left = FIRST_LULL_MS;
@@ -3081,71 +3115,156 @@ fn a_slot_is_filled_or_replaced_by_one_add_at_its_pointer() {
         )
     };
     let words = ask("get_vocabulary", String::from("{}"));
-    let verify = |ask: &mut dyn FnMut(&str, String) -> Json, text: &str| -> Json {
-        ask(
-            "verify_plan",
-            format!(r#"{{"depth":"full","playbook_jsonc":{}}}"#, quote(text)),
+    let fixture = condition_slots_fixture();
+    // The same file with a `when` that is one leaf, and an empty item in a
+    // group.
+    let variant = fixture
+        .replace(
+            r#"{"id":"unwritten","body""#,
+            r#"{"id":"unwritten","when":{"cmdr_deaths":{"deaths":{"op":"GE","value":2}}},"body""#,
         )
-        .get("report")
-        .cloned()
-        .expect("a report")
-    };
+        .replace(r#"{"cmdr_deaths":{"deaths":{"op":"GE","value":1}}}"#, "{}");
+    // (file, slot, its op, its predicate before, the group it is an item of)
+    let cases: [(&str, &str, PickOp, &str, Option<&str>); 8] = [
+        (
+            &fixture,
+            "/declarative/handlers/1/when",
+            PickOp::Add,
+            "",
+            None,
+        ),
+        (
+            &variant,
+            "/declarative/handlers/1/when",
+            PickOp::Replace,
+            "cmdr_deaths",
+            None,
+        ),
+        (
+            &fixture,
+            "/declarative/handlers/0/when/all/items/0",
+            PickOp::Replace,
+            "kw_headroom",
+            Some("/declarative/handlers/0/when/all/items"),
+        ),
+        (
+            &fixture,
+            "/declarative/handlers/0/when/all/items/2/any/items/1",
+            PickOp::Replace,
+            "cmdr_deaths",
+            Some("/declarative/handlers/0/when/all/items/2/any/items"),
+        ),
+        (
+            &variant,
+            "/declarative/handlers/0/when/all/items/2/any/items/1",
+            PickOp::Replace,
+            "",
+            Some("/declarative/handlers/0/when/all/items/2/any/items"),
+        ),
+        (
+            &fixture,
+            "/declarative/handlers/0/body/0/skip_if/not/item",
+            PickOp::Add,
+            "",
+            None,
+        ),
+        (
+            &fixture,
+            "/declarative/handlers/0/body/1/skip_if",
+            PickOp::Add,
+            "",
+            None,
+        ),
+        (
+            &fixture,
+            "/declarative/route/0/skip_if",
+            PickOp::Replace,
+            "cmdr_hp_pct",
+            None,
+        ),
+    ];
+    let skeleton = skeleton_of(&words, "treasury");
+    for case in cases {
+        check_pick(&mut ask, &skeleton, case);
+    }
+}
+
+/// One case of `a_pick_sends_the_op_its_slot_names_and_changes_that_slot_alone`:
+/// `(file, slot, its op, its predicate before, the group it is an item of)`.
+fn check_pick(
+    ask: &mut dyn FnMut(&str, String) -> Json,
+    skeleton: &str,
+    (text, pointer, op, was, group): (
+        &str,
+        &str,
+        pharmakos_proto::gp::api::v1::condition_slot::PickOp,
+        &str,
+        Option<&str>,
+    ),
+) {
+    use pharmakos_proto::gp::api::v1::condition_slot::{PickOp, State};
     let render = |ask: &mut dyn FnMut(&str, String) -> Json, text: &str| {
         decoded_rendering(&ask(
             "render_plan",
             format!(r#"{{"playbook_jsonc":{}}}"#, quote(text)),
         ))
     };
-    let example = worked_example();
-    let before = verify(&mut ask, &example);
-
-    for (pointer, name, was) in [
-        ("/declarative/route/0/skip_if", "treasury", State::Empty),
-        (
-            "/declarative/handlers/0/when/all/items/0",
-            "kw_headroom",
-            State::Leaf,
-        ),
-    ] {
-        assert_eq!(slot_at(&render(&mut ask, &example), pointer).1.state(), was);
-        let patch = format!(
-            r#"[{{"op":"add","path":"{pointer}","value":{{"{name}":{}}}}}]"#,
-            skeleton_of(&words, name)
-        );
-        let patched = text_of(
-            &ask(
-                "patch_plan",
-                format!(
-                    r#"{{"playbook_jsonc":{},"json_patch":{}}}"#,
-                    quote(&example),
-                    quote(&patch)
-                ),
+    let before = render(ask, text);
+    let (_, slot) = slot_at(&before, pointer);
+    assert_eq!(slot.pick_op(), op, "{pointer}");
+    assert_eq!(slot.predicate, was, "{pointer}");
+    let count = group.map(|group| items_under(&before, group).len());
+    let wire = match op {
+        PickOp::Add => "add",
+        PickOp::Replace => "replace",
+        PickOp::Unspecified => panic!("{pointer} is a pick target"),
+    };
+    let patch =
+        format!(r#"[{{"op":"{wire}","path":"{pointer}","value":{{"treasury":{skeleton}}}}}]"#);
+    let patched = text_of(
+        &ask(
+            "patch_plan",
+            format!(
+                r#"{{"playbook_jsonc":{},"json_patch":{}}}"#,
+                quote(text),
+                quote(&patch)
             ),
-            "playbook_jsonc",
-        );
-        let rendering = render(&mut ask, &patched);
-        let (_, slot) = slot_at(&rendering, pointer);
+        ),
+        "playbook_jsonc",
+    );
+    let after = render(ask, &patched);
+    let (_, slot) = slot_at(&after, pointer);
+    assert_eq!(
+        (slot.state(), slot.predicate.as_str()),
+        (State::Leaf, "treasury"),
+        "{pointer}"
+    );
+    if let Some(group) = group {
+        let items = items_under(&after, group);
         assert_eq!(
-            (slot.state(), slot.predicate.as_str()),
-            (State::Leaf, name),
-            "{pointer}"
+            Some(items.len()),
+            count,
+            "{pointer}: the group keeps its count"
         );
-        let report = verify(&mut ask, &patched);
-        let at_slot: Vec<String> = match report.get("diagnostics") {
-            Some(Json::Array(found)) => found
-                .iter()
-                .filter(|diagnostic| text_of(diagnostic, "path").starts_with(pointer))
-                .map(|diagnostic| text_of(diagnostic, "code"))
-                .collect(),
-            _ => Vec::new(),
-        };
-        assert!(at_slot.is_empty(), "{pointer}: {at_slot:?}");
-        assert_eq!(
-            report.get("qualifies"),
-            before.get("qualifies"),
-            "{pointer}: {report:?}"
-        );
+        if !was.is_empty() {
+            assert!(
+                !items.iter().any(|item| item == was),
+                "{pointer}: {was} is gone"
+            );
+        }
     }
+    let slots = |rendering: &pharmakos_proto::gp::api::v1::RenderPlanResponse| {
+        rendering
+            .rules
+            .iter()
+            .map(|rule| rule.slots.len())
+            .sum::<usize>()
+    };
+    assert_eq!(
+        slots(&after),
+        slots(&before),
+        "{pointer}: no slot added or lost"
+    );
 }
 
 /// The skeleton `get_vocabulary`'s answer `words` gives the predicate `name`.

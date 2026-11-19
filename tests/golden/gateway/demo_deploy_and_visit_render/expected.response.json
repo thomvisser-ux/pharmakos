@@ -46,7 +46,8 @@
             "title": "skip if",
             "line": 5,
             "state": "empty",
-            "predicate": ""
+            "predicate": "",
+            "pick_op": "add"
           }
         ]
       },
@@ -110,7 +111,8 @@
             "title": "skip if",
             "line": 8,
             "state": "empty",
-            "predicate": ""
+            "predicate": "",
+            "pick_op": "add"
           }
         ]
       },
@@ -156,7 +158,8 @@
             "title": "skip if",
             "line": 11,
             "state": "empty",
-            "predicate": ""
+            "predicate": "",
+            "pick_op": "add"
           }
         ]
       },
@@ -220,7 +223,8 @@
             "title": "skip if",
             "line": 14,
             "state": "empty",
-            "predicate": ""
+            "predicate": "",
+            "pick_op": "add"
           }
         ]
       }
