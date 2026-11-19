@@ -19,8 +19,12 @@
 //! inner loop. `.github/workflows/nightly-scenarios.yml`'s `fuzz` job runs it,
 //! as above with `--locked`, behind that workflow's variable gate (decisions-log
 //! item 116 (6)(j)). `the_generator_still_produces_shapes_the_verifier_reads`
-//! runs a small slice of the same generator on every ordinary `cargo test`, so
-//! the generator cannot rot between two nightly runs.
+//! runs the first [`SMOKE_RUNS`] of the same generator on every ordinary
+//! `cargo test`, every invariant [`check`] holds a run to included, and holds
+//! them to the nightly run's S3 construct check, so a generator that stops
+//! producing qualifying runs, or stops reaching a construct the verifier no
+//! longer refuses, goes red on the pull request. The nightly run's other
+//! tallies (the codes it must reach) are its own.
 //!
 //! # Seeded, not random
 //!
@@ -97,8 +101,11 @@ const DRAW: i32 = 2;
 const RUNS: u32 = 10_000;
 
 /// How many the ordinary `cargo test` run generates, so the generator is never
-/// dead code between nightly runs.
-const SMOKE_RUNS: u32 = 64;
+/// dead code between nightly runs, and enough that every S3 construct the
+/// verifier no longer refuses qualifies in several of them (at the fuzz seed
+/// each of the nine qualifies in between 8 and 17), so a pull request that
+/// stops the generator reaching one goes red.
+const SMOKE_RUNS: u32 = 1_024;
 
 /// An arbitrary, pinned fuzz seed. It is a *harness* seed and not a game value.
 const FUZZ_SEED: u64 = 0x5052_4F42_4C45_4D53;
@@ -271,13 +278,16 @@ impl Shape {
 
     fn beacon_ref(&mut self) -> Json {
         if self.clean {
-            return if self.rarely(2) {
-                Json::Object(vec![(
+            return match self.below(3) {
+                0 => Json::Object(vec![(
                     "beacon_id".to_owned(),
                     Json::String("b_01".to_owned()),
-                )])
-            } else {
-                Json::Object(vec![("safest".to_owned(), Json::Object(Vec::new()))])
+                )]),
+                1 => Json::Object(vec![("safest".to_owned(), Json::Object(Vec::new()))]),
+                _ => Json::Object(vec![(
+                    "most_threatened".to_owned(),
+                    Json::Object(Vec::new()),
+                )]),
             };
         }
         // `most_threatened`, legal since S2's `dfnd` built the threat model.
@@ -329,14 +339,16 @@ impl Shape {
     }
 
     /// A `place_beacon` site that covers a feature, or walks toward one (S3's
-    /// `toward`, one site in three): a legal one on a clean run (an UNCOVERED
-    /// vent pick, or a name the scope holds, lost or live), anything
-    /// [`Shape::feature_site`] makes otherwise.
+    /// `toward`, one site in three, [`Shape::toward_site`]): a legal one on a
+    /// clean run (an UNCOVERED vent pick, or a name the scope holds, lost or
+    /// live), anything [`Shape::feature_site`] makes otherwise.
     fn covering_site(&mut self) -> Json {
         if !self.clean {
             return self.feature_site();
         }
-        let toward = self.rarely(3);
+        if self.rarely(3) {
+            return self.toward_site();
+        }
         let reference = if self.rarely(2) {
             (
                 "vent",
@@ -350,14 +362,33 @@ impl Shape {
             let id = FEATURE_IDS.get(index).copied().unwrap_or("vent_150_25");
             ("feature_id", Json::String(id.to_owned()))
         };
-        let feature = Json::Object(vec![(reference.0.to_owned(), reference.1)]);
-        if toward {
-            return Json::Object(vec![(
-                "toward".to_owned(),
-                Json::Object(vec![("feature".to_owned(), feature)]),
-            )]);
-        }
-        Json::Object(vec![("covering".to_owned(), feature)])
+        Json::Object(vec![(
+            "covering".to_owned(),
+            Json::Object(vec![(reference.0.to_owned(), reference.1)]),
+        )])
+    }
+
+    /// A clean run's S3 `toward` site: a vent or a seam picked NEAREST under
+    /// either coverage, or a name the scope holds, vent or seam, lost or live.
+    fn toward_site(&mut self) -> Json {
+        let feature = if self.rarely(3) {
+            let id = pick(self, &FEATURE_IDS);
+            Json::Object(vec![("feature_id".to_owned(), Json::String(id.to_owned()))])
+        } else {
+            let kind = pick(self, &["vent", "seam"]);
+            let coverage = pick(self, &["ANY", "UNCOVERED"]);
+            Json::Object(vec![(
+                kind.to_owned(),
+                Json::Object(vec![
+                    ("rank".to_owned(), Json::String("NEAREST".to_owned())),
+                    ("coverage".to_owned(), Json::String(coverage.to_owned())),
+                ]),
+            )])
+        };
+        Json::Object(vec![(
+            "toward".to_owned(),
+            Json::Object(vec![("feature".to_owned(), feature)]),
+        )])
     }
 
     /// `on`, `covering` or S3's `toward`, with a name, a pick (sometimes with
@@ -525,7 +556,7 @@ impl Shape {
                 "beacon_has_structure",
                 vec![
                     ("beacon".to_owned(), self.beacon_ref()),
-                    ("blueprint_id".to_owned(), self.blueprint()),
+                    ("blueprint_id".to_owned(), self.structure_kind()),
                 ],
             ),
             3 => (
@@ -544,7 +575,7 @@ impl Shape {
             5 => {
                 let structure = match self.below(3) {
                     0 => ("any_kind".to_owned(), Json::Object(Vec::new())),
-                    _ => ("blueprint_id".to_owned(), self.blueprint()),
+                    _ => ("blueprint_id".to_owned(), self.structure_kind()),
                 };
                 (
                     "enemy_structure_near",
@@ -626,7 +657,12 @@ impl Shape {
 
     fn int_compare(&mut self) -> Json {
         let mut fields: Vec<(String, Json)> = Vec::new();
-        if !self.damage(5) {
+        // A clean run's operator is any of the six; a damaged run's is `GE`,
+        // or now and then none.
+        if self.clean {
+            let op = pick(self, &["LT", "LE", "EQ", "NE", "GE", "GT"]);
+            fields.push(("op".to_owned(), Json::String(op.to_owned())));
+        } else if !self.damage(5) {
             fields.push(("op".to_owned(), Json::String("GE".to_owned())));
         }
         let value = if self.clean {
@@ -965,6 +1001,20 @@ impl Shape {
         Json::Number(count.to_string())
     }
 
+    /// A predicate's blueprint id: on a clean run any kind that stands as a
+    /// structure, since which beacon has which is the Push's and a predicate
+    /// may ask about one not yet buildable; [`Shape::blueprint`]'s otherwise.
+    fn structure_kind(&mut self) -> Json {
+        if !self.clean {
+            return self.blueprint();
+        }
+        let id = pick(
+            self,
+            &["generator", "autocannon", "mortar", "resonance_spire"],
+        );
+        Json::String(id.to_owned())
+    }
+
     /// A blueprint id: one the rules table prices, or on a damaged run one it
     /// does not, which ends the projection at its step.
     fn blueprint(&mut self) -> Json {
@@ -1139,6 +1189,13 @@ impl Shape {
         }
         Json::Object(fields)
     }
+}
+
+/// One of `names`, drawn evenly.
+fn pick<'a>(shape: &mut Shape, names: &[&'a str]) -> &'a str {
+    let count = i32::try_from(names.len()).unwrap_or(1);
+    let index = usize::try_from(shape.below(count)).unwrap_or(0);
+    names.get(index).copied().unwrap_or_default()
 }
 
 // ---------------------------------------------------------------------------
@@ -1573,6 +1630,40 @@ fn certain_scout_draw(playbook: &Playbook, per_unit: i128) -> i128 {
     draw
 }
 
+/// Counts `run` against each of [`S3_CONSTRUCTS`] whose field its text holds,
+/// if QUICK qualified it. A run QUICK qualifies is one [`check`] has already
+/// put through the sim's compile, which panics on a refusal, so each count is
+/// of runs the compile accepted with the construct in them.
+fn count_s3_constructs(counts: &mut [u32], run: &Run) {
+    if !run.quick {
+        return;
+    }
+    for (count, (field, _)) in counts.iter_mut().zip(S3_CONSTRUCTS) {
+        *count = count.saturating_add(u32::from(run.text.contains(field)));
+    }
+}
+
+/// Each S3 construct qualifies in some run once `pred` lifts its code, and in
+/// none while its code still refuses it (S3's `pred` turns each on): the
+/// nightly run and the smoke test both hold their counts to this, so a pull
+/// request sees a construct the generator stops reaching.
+fn each_s3_construct_qualifies_once_lifted(counts: &[u32], runs: u32) {
+    for ((field, code), count) in S3_CONSTRUCTS.iter().zip(counts) {
+        let refused = pharmakos_verifier::REFUSED_CONSTRUCTS
+            .iter()
+            .any(|(_, refusing)| refusing == code);
+        println!("{field}: {count} of {runs} runs qualify ({code} refusing: {refused})");
+        if refused {
+            assert_eq!(*count, 0, "{field} qualified while {code} refuses it");
+        } else {
+            assert!(
+                *count > 0,
+                "{field} never qualified in {runs} runs once {code} stopped refusing it"
+            );
+        }
+    }
+}
+
 #[test]
 fn the_generator_still_produces_shapes_the_verifier_reads() {
     let rules = rules();
@@ -1581,11 +1672,14 @@ fn the_generator_still_produces_shapes_the_verifier_reads() {
     let snapshot = snapshot();
     let mut qualified = 0_u32;
     let mut past = 0_u32;
+    let mut constructs: Vec<u32> = vec![0; S3_CONSTRUCTS.len()];
     for index in 0..SMOKE_RUNS {
         let run = check(index, &rules, &widest, &scope, &snapshot);
         past = past.saturating_add(u32::from(run.report.size_units >= PADDED_PAST));
         qualified = qualified.saturating_add(u32::from(run.quick));
+        count_s3_constructs(&mut constructs, &run);
     }
+    each_s3_construct_qualifies_once_lifted(&constructs, SMOKE_RUNS);
     // A generator that never produces a valid playbook is a generator that only
     // ever exercises the decode stage, and a green fuzz run over it would mean
     // nothing (the lesson G3-prime wrote down about a sweep with nothing in it).
@@ -1644,10 +1738,8 @@ fn ten_thousand_playbooks_come_back_as_reports() {
         applied = applied.saturating_add(u32::from(run.applied));
         if run.quick {
             padded_qualified = padded_qualified.saturating_add(u32::from(run.padded));
-            for (count, (field, _)) in constructs.iter_mut().zip(S3_CONSTRUCTS) {
-                *count = count.saturating_add(u32::from(run.text.contains(field)));
-            }
         }
+        count_s3_constructs(&mut constructs, &run);
         let report = run.report;
         past = past.saturating_add(u32::from(report.size_units >= PADDED_PAST));
         for diagnostic in report.diagnostics {
@@ -1722,22 +1814,7 @@ fn ten_thousand_playbooks_come_back_as_reports() {
         padded_qualified > 0,
         "no padded playbook qualified against a budget of {PADDED_PAST}"
     );
-    // Each S3 construct qualifies in some run once `pred` lifts its code; while
-    // its code still refuses it, none can (S3's `pred` turns each on).
-    for ((field, code), count) in S3_CONSTRUCTS.iter().zip(&constructs) {
-        let refused = pharmakos_verifier::REFUSED_CONSTRUCTS
-            .iter()
-            .any(|(_, refusing)| refusing == code);
-        println!("{field}: {count} qualifying runs ({code} refusing: {refused})");
-        if refused {
-            assert_eq!(*count, 0, "{field} qualified while {code} refuses it");
-        } else {
-            assert!(
-                *count > 0,
-                "{field} never qualified once {code} stopped refusing it"
-            );
-        }
-    }
+    each_s3_construct_qualifies_once_lifted(&constructs, RUNS);
     // Every emitting branch of targeting's three lints is reached, so a green
     // run says something about each of them.
     lints.sort();
