@@ -2941,6 +2941,226 @@ fn render_plan_answers_each_rule_with_its_lines_and_chips() {
     assert_eq!(broken.get("rules"), None, "{broken:?}");
 }
 
+/// A `render_plan` answer without its footer and its chips, each slot's lower-case state
+/// translated back (decisions-log item 80), decoded as the schema's
+/// `gp.api.v1.RenderPlanResponse`.
+fn decoded_rendering(answer: &Json) -> pharmakos_proto::gp::api::v1::RenderPlanResponse {
+    fn canonical(value: &Json, key: Option<&str>) -> Json {
+        match (value, key) {
+            (Json::String(wire), Some("state")) => Json::String(
+                pharmakos_proto::scope::from_wire_name("gp.api.v1.ConditionSlot.State", wire)
+                    .unwrap_or_else(|| panic!("`{wire}` is a state the schema names")),
+            ),
+            (Json::Object(entries), _) => Json::Object(
+                entries
+                    .iter()
+                    // The chips carry lower-case enums of their own, pinned by
+                    // `render_plan_answers_each_rule_with_its_lines_and_chips`.
+                    .filter(|(name, _)| name != "_status" && name != "chips")
+                    .map(|(name, inner)| (name.clone(), canonical(inner, Some(name))))
+                    .collect(),
+            ),
+            (Json::Array(items), _) => {
+                Json::Array(items.iter().map(|item| canonical(item, None)).collect())
+            }
+            (other, _) => other.clone(),
+        }
+    }
+    pharmakos_proto::json::decode_json(&canonical(answer, None))
+        .unwrap_or_else(|error| panic!("not a RenderPlanResponse: {error}"))
+}
+
+/// The slot at `pointer` of a decoded rendering.
+fn slot_at<'a>(
+    rendering: &'a pharmakos_proto::gp::api::v1::RenderPlanResponse,
+    pointer: &str,
+) -> (
+    &'a pharmakos_proto::gp::api::v1::RenderedRule,
+    &'a pharmakos_proto::gp::api::v1::ConditionSlot,
+) {
+    rendering
+        .rules
+        .iter()
+        .find_map(|rule| {
+            rule.slots
+                .iter()
+                .find(|slot| slot.pointer == pointer)
+                .map(|slot| (rule, slot))
+        })
+        .unwrap_or_else(|| panic!("no slot at {pointer}"))
+}
+
+/// S3's `gwu`: `render_plan` answers each rule's and step's condition slots,
+/// every field written and the state lower case, decoded as the schema's
+/// `RenderedRule`: a route step's absent `skip_if` as an empty slot, a rule's
+/// `when` as a group followed by its leaves, and a body step's guard under
+/// its rule, on the rule's line.
+#[test]
+fn render_plan_answers_each_rules_condition_slots() {
+    use pharmakos_proto::gp::api::v1::condition_slot::State;
+    let mut surface = hosted();
+    let token = seat_token(&mut surface, 0);
+    let mut left = FIRST_LULL_MS;
+    let answer = result(
+        &call(
+            &mut surface,
+            &token,
+            &mut left,
+            "render_plan",
+            &format!(r#"{{"playbook_jsonc":{}}}"#, quote(&worked_example())),
+        ),
+        "render_plan",
+    );
+    let first = array_of(&answer, "rules")
+        .into_iter()
+        .next()
+        .expect("a first step");
+    let skip = array_of(&first, "slots")
+        .into_iter()
+        .next()
+        .expect("a route step has its skip_if slot");
+    let Json::Object(fields) = &skip else {
+        panic!("a slot is an object: {skip:?}");
+    };
+    let keys: Vec<&str> = fields.iter().map(|(key, _)| key.as_str()).collect();
+    assert_eq!(
+        keys,
+        ["pointer", "title", "line", "state", "predicate"],
+        "every field, the empty predicate included"
+    );
+    assert_eq!(text_of(&skip, "state"), "empty", "lower case on the wire");
+
+    let rendering = decoded_rendering(&answer);
+    let (step, skip) = slot_at(&rendering, "/declarative/route/0/skip_if");
+    assert_eq!(step.pointer, "/declarative/route/0");
+    assert_eq!(
+        (skip.state(), skip.predicate.as_str(), skip.title.as_str()),
+        (State::Empty, "", "skip if")
+    );
+    assert_eq!(skip.line, step.line);
+
+    let (rule, when) = slot_at(&rendering, "/declarative/handlers/0/when");
+    assert_eq!(rule.pointer, "/declarative/handlers/0");
+    assert_eq!(
+        (when.state(), when.predicate.as_str()),
+        (State::Group, "all")
+    );
+    let (_, leaf) = slot_at(&rendering, "/declarative/handlers/0/when/all/items/0");
+    assert_eq!(
+        (leaf.state(), leaf.predicate.as_str(), leaf.title.as_str()),
+        (State::Leaf, "cmdr_hp_pct", "when, item 1 of all")
+    );
+    let (owner, guard) = slot_at(&rendering, "/declarative/handlers/0/body/0/skip_if");
+    assert_eq!(
+        owner.pointer, "/declarative/handlers/0",
+        "a body step's guard is its rule's"
+    );
+    assert_eq!(guard.line, owner.line, "on the rule's own line");
+    assert_eq!(guard.title, "step 1, skip if");
+}
+
+/// S3's `gwu`: a slot is filled or replaced by one JSON Patch `add` at its
+/// pointer whose value is a vocabulary entry's name and skeleton, as the
+/// picker sends it: at an empty slot (a route step's absent `skip_if`) the
+/// member is inserted, and over a leaf (an item of a rule's `all`) it is
+/// replaced. Either way `render_plan` re-renders the slot with the new
+/// predicate and `verify_plan` raises nothing at it, and the file qualifies
+/// as the original did.
+#[test]
+fn a_slot_is_filled_or_replaced_by_one_add_at_its_pointer() {
+    use pharmakos_proto::gp::api::v1::condition_slot::State;
+    let mut surface = hosted();
+    let token = seat_token(&mut surface, 0);
+    let mut left = FIRST_LULL_MS;
+    let mut ask = |method: &str, params: String| -> Json {
+        result(
+            &call(&mut surface, &token, &mut left, method, &params),
+            method,
+        )
+    };
+    let words = ask("get_vocabulary", String::from("{}"));
+    let verify = |ask: &mut dyn FnMut(&str, String) -> Json, text: &str| -> Json {
+        ask(
+            "verify_plan",
+            format!(r#"{{"depth":"full","playbook_jsonc":{}}}"#, quote(text)),
+        )
+        .get("report")
+        .cloned()
+        .expect("a report")
+    };
+    let render = |ask: &mut dyn FnMut(&str, String) -> Json, text: &str| {
+        decoded_rendering(&ask(
+            "render_plan",
+            format!(r#"{{"playbook_jsonc":{}}}"#, quote(text)),
+        ))
+    };
+    let example = worked_example();
+    let before = verify(&mut ask, &example);
+
+    for (pointer, name, was) in [
+        ("/declarative/route/0/skip_if", "treasury", State::Empty),
+        (
+            "/declarative/handlers/0/when/all/items/0",
+            "kw_headroom",
+            State::Leaf,
+        ),
+    ] {
+        assert_eq!(slot_at(&render(&mut ask, &example), pointer).1.state(), was);
+        let patch = format!(
+            r#"[{{"op":"add","path":"{pointer}","value":{{"{name}":{}}}}}]"#,
+            skeleton_of(&words, name)
+        );
+        let patched = text_of(
+            &ask(
+                "patch_plan",
+                format!(
+                    r#"{{"playbook_jsonc":{},"json_patch":{}}}"#,
+                    quote(&example),
+                    quote(&patch)
+                ),
+            ),
+            "playbook_jsonc",
+        );
+        let rendering = render(&mut ask, &patched);
+        let (_, slot) = slot_at(&rendering, pointer);
+        assert_eq!(
+            (slot.state(), slot.predicate.as_str()),
+            (State::Leaf, name),
+            "{pointer}"
+        );
+        let report = verify(&mut ask, &patched);
+        let at_slot: Vec<String> = match report.get("diagnostics") {
+            Some(Json::Array(found)) => found
+                .iter()
+                .filter(|diagnostic| text_of(diagnostic, "path").starts_with(pointer))
+                .map(|diagnostic| text_of(diagnostic, "code"))
+                .collect(),
+            _ => Vec::new(),
+        };
+        assert!(at_slot.is_empty(), "{pointer}: {at_slot:?}");
+        assert_eq!(
+            report.get("qualifies"),
+            before.get("qualifies"),
+            "{pointer}: {report:?}"
+        );
+    }
+}
+
+/// The skeleton `get_vocabulary`'s answer `words` gives the predicate `name`.
+fn skeleton_of(words: &Json, name: &str) -> String {
+    let found = array_of(words, "families")
+        .iter()
+        .flat_map(|family| match family.get("predicates") {
+            Some(Json::Array(entries)) => entries.clone(),
+            _ => Vec::new(),
+        })
+        .find(|entry| text_of(entry, "name") == name);
+    match found {
+        Some(entry) => text_of(&entry, "skeleton_json"),
+        None => panic!("the vocabulary has {name}"),
+    }
+}
+
 /// E8: `get_vocabulary` answers every family, mandate, step and blueprint,
 /// each locked entry with its reason and no skeleton: whole families the
 /// schema reserves, predicates the verifier still refuses in its own words,

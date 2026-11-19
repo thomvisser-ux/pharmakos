@@ -1371,6 +1371,31 @@ fn rendered_rule(rule: &pharmakos_plan_core::RenderedRule) -> Json {
                     .collect(),
             ),
         ),
+        (
+            String::from("slots"),
+            Json::Array(rule.slots.iter().map(condition_slot).collect()),
+        ),
+    ])
+}
+
+/// One `gp.api.v1.ConditionSlot`, every field written, the empty predicate
+/// of an empty slot included, its state lower case (decisions-log item 80).
+fn condition_slot(slot: &pharmakos_plan_core::ConditionSlot) -> Json {
+    Json::Object(vec![
+        (String::from("pointer"), Json::String(slot.pointer.clone())),
+        (String::from("title"), Json::String(slot.title.clone())),
+        (String::from("line"), Json::Number(slot.line.to_string())),
+        (
+            String::from("state"),
+            Json::String(pharmakos_proto::scope::wire_name(
+                "gp.api.v1.ConditionSlot.State",
+                slot.state.proto_name(),
+            )),
+        ),
+        (
+            String::from("predicate"),
+            Json::String(slot.predicate.to_owned()),
+        ),
     ])
 }
 
