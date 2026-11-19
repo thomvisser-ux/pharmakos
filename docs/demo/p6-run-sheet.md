@@ -10,17 +10,19 @@ template in ≤2 min, and writes a 10-step playbook from scratch in ≤5 min. Ed
 (debounced re-check, redraw) is judged here, not by P1". The fallback is "Move the editor model into
 Rust; simplify". The protocol is `docs/design/s3-plan.md` section 5.3.
 
-**There are two sittings** (decision 15, decisions-log item 154). **P6a**, after `ed3a` merges, is the
-record: the wizard and the map route with the size meter. **P6b**, after `ed3b` merges, confirms that
-the rule list did not make either timing slower.
+**There are two sittings** (decision 15, decisions-log item 154). As planned, **P6a**, after `ed3a`
+merged, was the record: the wizard and the map route with the size meter; and **P6b**, after `ed3b`
+merges, was to confirm that the rule list did not make either timing slower. P6a was then driven by
+the AI (see "P6a as run"), and decisions-log item 160 (4) records the main session's recommendation,
+which you can veto, that P6b, which you drive by hand, decides instead.
 
 **You stand in for the first-time tester** (decisions-log item 153 (4), risk R5). You are not new to
 this game, so a pass is weaker evidence than the gate asks. The fun gate's testers are the first true
 first-time users, and the record says so.
 
-**What a pass here shows.** Task card A is built from what the map menu can do today. It places on
-ground because no seam can be picked from the map. It has no guard, handler, chip or mandate, because
-`ed3b` brings those. So a pass at P6a shows that ten map-menu steps fit in the limit, not that a
+**What a pass here shows.** Task card A was built from what the map menu could do at P6a. It placed
+on ground because no seam could be picked from the map. It had no guard, handler, chip or mandate,
+because `ed3b` had not yet brought those. So a pass at P6a shows that ten map-menu steps fit in the limit, not that a
 tester can write the playbook they want. That weakens the evidence beyond R5's caveat, and the record
 says so too.
 
@@ -92,7 +94,11 @@ For each timing, at each sitting:
   closes a menu on a real window, whether Load's dialog opens with an empty box, whether the
   unticked checkbox reads as unticked, and whether you can read each structure's name and tell an
   autocannon, a wall and a mortar apart, close up and from about 50 voxels (names draw within 55). The last four come after
-  the timings, untimed.
+  the timings, untimed;
+- at P6b, the same for card B and the untimed part: each refusal and each mis-click you name; your
+  words on the re-check and the redraw after each edit and on typing into the number fields, and
+  whether each number went in whole; the three hand checks (Alt-click on a vent, the E0601
+  checkbox, the names); and your answers to the two questions under the record.
 
 After each scratch run the main session reads `seats\0\sealed\1.jsonc` in the match's cache
 (`%LOCALAPPDATA%\Pharmakos\matches\<match-id>\`) and checks the route against the card: the template's
@@ -110,6 +116,10 @@ you rather than resolved.
 Written after `ed3b` merged (#183 and #188), for the build below. Every card and set-up here was
 checked on that build; "How P6b's cards were checked" says how.
 
+**You drive P6b by hand, and P6b decides.** Decisions-log item 160 (4) records the main session's
+recommendation, which you can veto, that decisions 15 and 17 are read on P6b rather than on the
+AI-driven P6a. So a P6b time is read against the limits, not against P6a's.
+
 - **Card A's kinds in a different order** (card A2), because you will know card A by then. The
   record states that practice bias beside the result.
 - **Card B, timed once after both timings:** one mandate row, one guard and one chip edit. It is
@@ -118,7 +128,10 @@ checked on that build; "How P6b's cards were checked" says how.
   didn't make and the one it failed.
 - **P6a's times are no baseline for "not slower".** They were driven by the AI, not by a person (see
   "P6a as run"), so a P6b time is read against the limits, and beside P6a's only with that caveat.
-- **The practice bias** stated beside P6b's result includes having watched card A driven at P6a.
+- **The practice bias** stated beside every P6b timing (template, scratch and card B) includes
+  having watched card A driven at P6a.
+- **The scratch timing starts from the Safe playbook**, as at P6a and as the first deviation below
+  says (the main session's recommendation; you have been told).
 
 ### Before you start, for P6b
 
@@ -129,18 +142,25 @@ checked on that build; "How P6b's cards were checked" says how.
 3. **`user://`** (the main session, just before the sitting): step 3 above, the sitting's folder
    renamed `Pharmakos.p6b` afterwards.
 4. **The set-up files** (the main session, before the sitting): copies of
-   `docs/demo/p6b-short-of-power.jsonc` and `docs/demo/p6b-structures.jsonc` beside
-   `Pharmakos.exe`, where Load's dialog opens.
+   `docs/demo/p6b-short-of-power.jsonc` and `docs/demo/p6b-structures.jsonc` in
+   `D:\build\p6b\play\Pharmakos`, beside `Pharmakos.exe`.
 
 ### The Probation facts
+
+Read these before the first watch starts.
 
 - The lobby hosts the Probation preset: seed `0x0000000000000014` (20), two seats, you at seat 0
   and Easy at seat 1, three rounds.
 - **The Lulls are untimed.** No countdown shows, and only Ready ends a Lull. Your stopwatch is the
   only clock; the audit log's tick still cross-checks it.
-- Your core, `b_00`, stands at (188, 28) on flat ground, and its sphere reaches 24 voxels. The heat
-  vent nearest it is at (175, 66), about 40 voxels away; click it and the panel heads the menu "Heat
-  vent (175, 66)". The next vents are about 80 voxels out.
+- Your core stands on flat ground, and its sphere reaches 24 voxels. The map opens on your
+  commander, at your core.
+- **The vent.** The heat vent nearest your core is about 40 voxels from it. On the map's opening
+  view it should lie to the left of your core and a little below it on the screen (worked out from
+  the map's axes and the camera's opening angle, not seen on a window). A vent is drawn in the
+  blue-teal of its ore, against grey stone and the green and brown of the ground; a scrap seam is
+  ochre. Clicked, the panel heads its menu "Heat vent (175, 66)". The next vents are about 80
+  voxels out.
 - At round 1's Lull the meter reads `$200   supply 10 kW   draw 4 kW   headroom 6 kW`.
 
 ### The order of the sitting
@@ -154,9 +174,12 @@ Four matches, each from "New match", with the window closed between them:
 
 ### Card A2
 
-`docs/demo/p6b-task-card-a2.md`: card A's ten kinds of step, no step in card A's place, and the
-places still yours. The route check is the one above. **Practice bias:** you know card A's kinds
-and its controls, and you watched card A driven at P6a; A2 changes only the order.
+`docs/demo/p6b-task-card-a2.md`. It differs from card A in three ways and no other: the same ten
+kinds of step in another order, no step in card A's place; the vent step takes one of the vent
+menu's two rows, where card A asked for an Alt-click; and it is played on the Probation map. It
+gives the same level of hint as card A, and the places are still yours. The route check is the one
+above. **Practice bias:** you know card A's kinds and its controls, and you watched card A driven at
+P6a.
 
 ### Card B
 
@@ -172,47 +195,56 @@ an autocannon, skipped if the grid's headroom is below 3 kW.
 
 ### Untimed, afterwards
 
-Launch the fourth match from a terminal, so that every map click's modifiers go to the instance's
-log, which the main session reads afterwards:
+Launch the fourth match from a Command Prompt (cmd, not PowerShell, which can drop the `--`), in
+the game's folder, so that every map click's modifiers go to the instance's log, which the main
+session reads afterwards:
 
 ```sh
-D:\build\p6b\play\Pharmakos\Pharmakos.exe -- --log-input
+cd /d D:\build\p6b\play\Pharmakos
+Pharmakos.exe -- --log-input
 ```
 
 Press "New match". In round 1's Lull:
 
-1. **Alt-click on a vent** (the check P6a failed). Hold Alt and click the vent at (175, 66). You
-   should see "Place beacon covering the nearest vent you can cover" first and "Place beacon
-   covering this vent" second. Press Escape. Click it again without Alt: the same two, the other
-   way round. Press Escape. Since `ed3b` both are always offered, and Alt only puts the description
-   first. **Write down** which came first each time.
-2. **The unticked E0601 checkbox** (check 4). Press "Load..." and open `p6b-short-of-power.jsonc`.
-   It adds three mortars at your core; a mortar draws 3 kW and you have 6 kW of headroom. When the
-   full check has run, about a second after it opened, the rows under "Checks" show an Error,
-   "There is not enough power for everything this playbook switches on.", marked "E0601 at
-   /declarative/route/0", and under them the checkbox "Allow dormant beacons: let this route draw
-   more power than you supply, so some beacons go dark." Tick it: the status line says "Dormant
-   beacons allowed.", E0601 gives way to W0603, and the box is ticked. Untick it, and E0601 is
-   back. **Write down** whether the box read as unticked before you ticked
-   it, and as ticked after.
-3. **Three number chips and one rule drag.** Press "Load..." and open `p6b-structures.jsonc`. Under
-   "What the playbook says", click each of these chips, type the new value in the "Change ...:"
-   field and press "Set this value": 40 in flee's "at or below 40% HP" to 30; 3 in "Fires at most 3
-   times" to 2; 1 in regroup's "has died at or above 1 times" to 2. Then drag rule 2's line
-   ("regroup") onto rule 1's ("flee"): it lands before it. **Write down** your words on the re-check
-   and the redraw after each edit, and on typing into the field.
+1. **Alt-click on a vent** (the check P6a failed). Hold Alt and click the vent (see "The Probation
+   facts"). You should see "Place beacon covering the nearest vent you can cover" first and "Place
+   beacon covering this vent" second. Press Escape. Click it again without Alt: the same two, the
+   other way round. Press Escape. Since `ed3b` both are always offered, and Alt only puts the
+   description first. **Write down** which came first each time.
+2. **The unticked E0601 checkbox** (check 4). Press "Load...". The dialog may open in any folder:
+   paste `D:\build\p6b\play\Pharmakos` into its address bar, press Enter, and open
+   `p6b-short-of-power.jsonc`. It adds three mortars at your core; a mortar draws 3 kW and you have
+   6 kW of headroom. When the full check has run, about a second after it opened, the rows under
+   "Checks" show an Error, "There is not enough power for everything this playbook switches on.",
+   marked "E0601 at /declarative/route/0", and under them the checkbox "Allow dormant beacons: let
+   this route draw more power than you supply, so some beacons go dark." A Warning row is there too,
+   before and after the tick, and is expected: "This playbook spends more than the seat is likely
+   to have." (W0602). Tick the box: the status line says "Dormant beacons allowed.", E0601 gives
+   way to W0603, and the box is ticked. Untick it, and E0601 is back. **Write down** whether the box
+   read as unticked before you ticked it, and as ticked after.
+3. **Three number chips and one rule drag.** Press "Load..." and open `p6b-structures.jsonc` from
+   the same folder (`D:\build\p6b\play\Pharmakos`). Under "What the playbook says", change three
+   chips: 40 in flee's "at or below 40% HP" to 30; 3 in "Fires at most 3 times" to 2; 1 in
+   regroup's "has died at or above 1 times" to 2. For each, click the chip, select the old number in
+   the "Change ...:" field first (double-click it, or Ctrl+A), type the new one, press "Set this
+   value", and read the chip afterwards: it should say the new number. A chip that holds the old and
+   new digits together (for 40 to 30, "4030" or "3040") means the typing went in beside the old
+   number: that is a finding to write down, not a miss; set it right and go on.
+   Then drag rule 2's line ("regroup") onto rule 1's ("flee"): it lands before it. **Write down**
+   your words on the re-check and the redraw after each edit, and on typing into the field.
 4. **The structure names** (check 5). Press "Submit", then "Ready — end the Lull". In the Push the
-   core's drones build an autocannon at (196, 20), a wall from (184, 38) to (188, 38) and a mortar
-   at (180, 22): at 1x the autocannon stands about 0:25 into the Push, the wall about 1:05 and the
-   mortar about 1:25 (2x and 4x shorten the wait). A name draws only within 55 voxels of the
-   camera, so wheel out until a name goes, then in until it comes back: that is about 50 voxels.
-   **Write down** whether you can read each name and tell the three apart, close up and from about
-   50 voxels. Then close the window.
+   core's drones build an autocannon, a wall and a mortar beside your core. A structure's name
+   shows from when it is placed, about 0:10 into the Push, before it stands: at 1x the autocannon
+   stands about 0:26, the wall about 1:05 and the mortar about 1:22 (2x and 4x shorten the wait).
+   The map opens too far out for any name: a name draws only within 55 voxels of the camera, and
+   the map opens at 120. So wheel in until the names show, then out until they go, and note about
+   how far that was. **Write down** whether you can read each name and tell the three apart, close
+   up and at the farthest you can still read them. Then close the window.
 
 **What "typing" means on this build.** Nothing you type into the playbook feeds the re-check as you
 type: a chip's number is sent when you press "Set this value", and the re-check follows the edit.
-Your words in item 3 are about that, and whether they close the gate's typing clause is your
-reading, recorded as you give it.
+Whether your words in item 3 close the gate's typing clause is your question to answer, in the
+record below.
 
 **What was promised and isn't on this build.**
 
@@ -263,10 +295,12 @@ you might click works.
 A miss is a time over the limit. A P6b time over P6a's but inside the limit isn't a miss: it is
 recorded and shown to you with the practice and seed caveats.
 
-P6a is the record, so a miss there moves these levers into `ed3b`'s brief before it starts, on your
-word (decision 17): chips that open on the value a template suggests, map picks in place of typed
-coordinates, and fewer pages in the guided pick. A miss at P6b goes into `prob` or a short added lane,
-after cut 1. The editor's model is already largely in Rust, so the spec's first lever is spent. Card A
+As planned, a miss at P6a, the record, was to move these levers into `ed3b`'s brief before it
+started, on your word (decision 17): chips that open on the value a template suggests, map picks in
+place of typed coordinates, and fewer pages in the guided pick. That did not happen: P6a was driven
+by the AI, so decisions-log item 160 (4) reads no miss from it, and `ed3b` (#183 and #188, now
+merged) took your P6a findings instead of the levers wholesale. A miss at P6b goes into `prob` or a
+short added lane, after cut 1. The editor's model is already largely in Rust, so the spec's first lever is spent. Card A
 touches few of these levers, so a scratch miss may point at the map menu and the camera instead, and
 the record says which.
 
@@ -300,6 +334,14 @@ the record says which.
   (`instantiate_template` at tick 126 in its audit log) and before any playbook was checked or
   submitted. The match was abandoned and the template timing ran in a new one. The repeat rule
   covers only Ready before Submit, so this restart is outside it.
+- **P6b's untimed Lulls.** Section 5.3 times from round 1's Lull opening; at P6b no countdown shows
+  and only Ready ends a Lull, so your stopwatch is the only clock.
+- **P6b's names check tells the wall by its look.** A wall has no name on this build (see "What was
+  promised and isn't on this build").
+- **P6b's rule drag and both of its set-ups are loaded from files,** not built with the editor's
+  controls: no template has two rules, and no control gives a wall its box.
+- **P6b's typing clause.** Nothing typed feeds the re-check as you type on this build, so the
+  clause is put to you as a question under the record rather than read from your timings.
 
 **The missing "New" command is a finding in its own right,** whatever P6a's time, and so is the opening
 camera, which leaves the core at the panel's edge. The main session carries both into `ed3b`'s brief.
@@ -411,7 +453,9 @@ AI-driven sitting is neither a pass nor a miss for a person, so neither decision
 main session recommends that P6b, driven by the owner by hand, become the deciding sitting, and that
 `ed3b` take the owner's findings rather than the three levers wholesale. That is a recommendation
 awaiting the owner's word, not a ruling; when the owner gives it, it needs a decisions-log item.
-Until then the two P6a rows below are marked "not decided".
+Until then the two P6a rows below are marked "not decided". [Since then decisions-log item 160 (4)
+records it, still as the main session's recommendation that the owner can veto, and `ed3b` took the
+owner's findings. The P6a rows stay "not decided".]
 
 ## The record
 
@@ -420,6 +464,9 @@ One row per sitting and timing. Fixed for every row: the tester is the owner, no
 with the owner watching; card A (and P6b's card A2) is shaped to the map menu; and the main session's
 checks (the card's headless check, the sealed route read against the card, the audit log's
 cross-check) are the AI's own, not independent review.
+
+Every P6b row (template, scratch and card B alike) carries the practice bias: you know card A's kinds
+and the controls, and you watched card A driven at P6a.
 
 | Sitting | Timing | Build, SHA-256 | Seed, preset | Template, values changed | Time | Limit, pass or miss | Repeat? | Refusals | Mis-clicks | Route count, card match | Alt-click check | Edit or typing feel |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -435,4 +482,16 @@ P6b's checks 4 and 5, which the table has no column for:
 | P6b hand check | Set-up | What you saw |
 |---|---|---|
 | 4. The E0601 checkbox: unticked before, ticked after | `p6b-short-of-power.jsonc` | |
-| 5. The names (autocannon, mortar; the wall by its look), close up and from about 50 voxels | `p6b-structures.jsonc`, round 1's Push | |
+| 5. The names (autocannon, mortar; the wall by its look), close up and at the farthest you can read them (note about how far) | `p6b-structures.jsonc`, round 1's Push | |
+
+Two questions for you to answer at the sitting:
+
+1. "Nothing you type on this build feeds the re-check as you type; a number goes when you press 'Set
+   this value'. Do your words on the number fields close the gate's typing clause, or does it stay
+   open?"
+
+   Your answer:
+
+2. "A wall has no name on this build. Is telling it by its look enough for check 5?"
+
+   Your answer:
