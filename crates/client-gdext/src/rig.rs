@@ -364,6 +364,18 @@ struct Wants {
     ready: bool,
 }
 
+/// Whether the phase has a countdown, as the admin connection's latest footer says
+/// (`_status.untimed` and `_status.untimed_by_rule`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Untimed {
+    /// A countdown was reported: the lobby shows it.
+    Timed,
+    /// No countdown has been reported yet (`untimed`).
+    NotReported,
+    /// The Lull has none by rule (`untimed_by_rule`, a Probation match's).
+    ByRule,
+}
+
 /// Where a timed Lull's run-out stands: its countdown is reported at zero, and only once the
 /// gateway has answered that report is the Lull ended, so the gateway can tell a Lull that ran
 /// out from one Ready ended (decisions-log item 160 (4)). A refused or lost zero is sent again.
@@ -425,7 +437,12 @@ pub struct Rig {
     /// Whether the admin connection's latest footer said the phase has no countdown
     /// (`_status.untimed`), or that the Lull is untimed by rule (`_status.untimed_by_rule`): the
     /// lobby then shows none (S1-11's client half, item 135).
-    untimed: bool,
+    untimed: Untimed,
+    /// How many `report_host_clock` calls the gateway answered, and how many the rig sent with
+    /// a countdown: what the watch check reads to see a Lull untimed by rule asked about and
+    /// sent no countdown.
+    clock_answers: u64,
+    countdowns_sent: u64,
     /// Where this Lull's run-out stands ([`RanOut`]).
     ran_out: RanOut,
     /// How many times the gateway refused this Lull's closing zero.
@@ -484,7 +501,9 @@ impl Rig {
             all_ready: false,
             last_error: None,
             lulls: LullLengths::default(),
-            untimed: true,
+            untimed: Untimed::NotReported,
+            clock_answers: 0,
+            countdowns_sent: 0,
             ran_out: RanOut::No,
             zero_refusals: 0,
             zero_refusal: None,
@@ -643,6 +662,7 @@ impl Rig {
                     self.ran_out = RanOut::InFlight;
                 }
                 self.clock_reports = ClockReports::Refilling;
+                self.countdowns_sent = self.countdowns_sent.wrapping_add(1);
                 return Some((
                     Purpose::Clock,
                     "report_host_clock",
@@ -690,6 +710,7 @@ impl Rig {
             let mut params = vec![("elapsed_ms", number(i64::from(spent)))];
             if let Some(countdown) = countdown {
                 params.push(("remaining_ms", number(i64::from(countdown))));
+                self.countdowns_sent = self.countdowns_sent.wrapping_add(1);
             }
             return Some((Purpose::Clock, "report_host_clock", object(params)));
         }
@@ -951,6 +972,7 @@ impl Rig {
             }
             Purpose::Clock => {
                 self.timing.clock.answered();
+                self.clock_answers = self.clock_answers.wrapping_add(1);
                 if self.ran_out == RanOut::InFlight {
                     self.ran_out = RanOut::Reported;
                 }
@@ -1125,7 +1147,13 @@ impl Rig {
             None
         };
         self.round = footer.round;
-        self.untimed = footer.untimed || footer.untimed_by_rule;
+        self.untimed = if footer.untimed_by_rule {
+            Untimed::ByRule
+        } else if footer.untimed {
+            Untimed::NotReported
+        } else {
+            Untimed::Timed
+        };
         if phase == self.phase {
             return Ok(false);
         }
@@ -1301,7 +1329,7 @@ impl Rig {
     /// which is no countdown until the gateway has been told one.
     #[must_use]
     pub fn timer_text(&self) -> String {
-        if self.untimed {
+        if self.untimed != Untimed::Timed {
             return String::new();
         }
         self.timing.clock.timer_text()
@@ -1309,8 +1337,27 @@ impl Rig {
 
     /// Whether the admin connection's latest footer said the phase has no countdown.
     #[must_use]
-    pub const fn untimed(&self) -> bool {
-        self.untimed
+    pub fn untimed(&self) -> bool {
+        self.untimed != Untimed::Timed
+    }
+
+    /// Whether the admin connection's latest footer said the Lull is untimed by rule
+    /// (`_status.untimed_by_rule`).
+    #[must_use]
+    pub fn untimed_by_rule(&self) -> bool {
+        self.untimed == Untimed::ByRule
+    }
+
+    /// How many `report_host_clock` calls the gateway answered.
+    #[must_use]
+    pub const fn clock_answers(&self) -> u64 {
+        self.clock_answers
+    }
+
+    /// How many `report_host_clock` calls carried a countdown (`remaining_ms`).
+    #[must_use]
+    pub const fn countdowns_sent(&self) -> u64 {
+        self.countdowns_sent
     }
 
     /// The recap's lines, as the gateway last wrote them.
@@ -2906,6 +2953,7 @@ mod tests {
         let mut probation = opened_with(footer);
         assert_eq!(probation.timer_text(), "");
         assert!(probation.untimed());
+        assert!(probation.untimed_by_rule());
         let calls = admin_calls(&mut probation, 1, 3_000);
         assert!(
             calls
@@ -2920,9 +2968,14 @@ mod tests {
             "no countdown and no run-out: {calls:?}"
         );
         assert_eq!(probation.timer_text(), "");
+        // What the watch check reads: clock reports answered, and none carrying a countdown.
+        assert!(probation.clock_answers() > 0);
+        assert_eq!(probation.countdowns_sent(), 0);
         let mut custom =
             opened_with(r#"{"phase":"lull","phase_remaining_ms":0,"round":1,"untimed":true}"#);
         assert_eq!(reported_countdown(&mut custom, 1), Some(600_000));
+        assert_eq!(custom.countdowns_sent(), 1);
+        assert!(!custom.untimed_by_rule());
         let mut off =
             opened_with(r#"{"phase":"lull","round":1,"untimed":true,"untimed_by_rule":false}"#);
         assert_eq!(reported_countdown(&mut off, 1), Some(600_000));

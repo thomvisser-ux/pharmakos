@@ -1001,28 +1001,6 @@ fn the_lobby_hosts_a_three_round_match() {
         ["const PRESET := \"probation\""],
         "the lobby hosts Probation, whose untimed Lull the rig reads from the footer"
     );
-    let check = read("scripts/watch_check.gd");
-    assert!(
-        check.contains("const CHECK_PRESET := \"custom\""),
-        "the watch check's main legs keep `custom`, whose countdown they drive"
-    );
-    assert!(
-        check.contains(
-            "_line = HostLink.config_line(HostLink.match_id(\"watch-check-probation\"), HostLink.LADDER)"
-        ),
-        "the watch check's last leg hosts the lobby's own line, Probation's preset and seed"
-    );
-    let leg = gd_code(&check, "_run_probation");
-    for wanted in [
-        "if _refusals.size() != refused_before:",
-        "if not state.get(\"untimed\", false):",
-        "if String(state.get(\"timer\", \"\")) != \"\":",
-    ] {
-        assert!(
-            leg.iter().any(|line| line.contains(wanted)),
-            "the Probation leg checks `{wanted}`: {leg:?}"
-        );
-    }
     let limit = gd_function(&text, "round_limit");
     let code: Vec<&str> = limit
         .iter()
@@ -1039,6 +1017,61 @@ fn the_lobby_hosts_a_three_round_match() {
             "return str(ROUND_LIMIT)",
         ],
         "absent `--rounds`, the line keeps ROUND_LIMIT: {limit:?}"
+    );
+}
+
+/// **The watch check plays the lobby's Probation match** (decisions-log item 160 (4)): its main
+/// legs keep `custom`, whose countdown they drive, and its last leg hosts the lobby's own line,
+/// chained after the resume leg, asserting what a Probation Lull must be; there is one OK line.
+#[test]
+fn the_watch_check_plays_the_lobbys_probation_match() {
+    let check = read("scripts/watch_check.gd");
+    assert!(
+        check.contains("const CHECK_PRESET := \"custom\""),
+        "the watch check's main legs keep `custom`, whose countdown they drive"
+    );
+    assert!(
+        check.contains(
+            "_line = HostLink.config_line(HostLink.match_id(\"watch-check-probation\"), HostLink.LADDER)"
+        ),
+        "the watch check's last leg hosts the lobby's own line, Probation's preset and seed"
+    );
+    let leg = gd_code(&check, "_run_probation");
+    for wanted in [
+        "if _refusals.size() != refused_before:",
+        "if not state.get(\"untimed\", false):",
+        "if String(state.get(\"timer\", \"\")) != \"\":",
+        "if answered < 1:",
+        "if countdowns != 0:",
+        "if not state.get(\"untimed_by_rule\", false):",
+    ] {
+        assert!(
+            leg.iter().any(|line| line.contains(wanted)),
+            "the Probation leg checks `{wanted}`: {leg:?}"
+        );
+    }
+    // The leg is chained, not optional: the resumed leg hands over to it, the scene's start
+    // routes to it, and the one OK line is the Probation leg's, naming the three hosts.
+    let finish = gd_code(&check, "_finish");
+    for wanted in [
+        "carried[\"stage\"] = \"probation\"",
+        "get_tree().change_scene_to_file(\"res://scenes/watch_check.tscn\")",
+        "print(\"[watch-check] OK (host pids %d, %d and %d)\" % [int(carried.get(\"first_pid\", -1)), int(carried.get(\"resumed_pid\", -1)), pid])",
+    ] {
+        assert!(
+            finish.iter().any(|line| line.contains(wanted)),
+            "`{wanted}`: {finish:?}"
+        );
+    }
+    assert_eq!(
+        check.matches("[watch-check] OK").count(),
+        1,
+        "exactly one OK line"
+    );
+    assert!(
+        check.contains("_probation = _resumed and String((Engine.get_meta(CARRY) as Dictionary).get(\"stage\", \"\")) == \"probation\"")
+            && gd_code(&check, "_ready").iter().any(|line| line.contains("_run_probation()")),
+        "the scene's start routes the third scene to the Probation leg"
     );
 }
 

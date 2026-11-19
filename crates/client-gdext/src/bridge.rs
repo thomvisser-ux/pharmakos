@@ -1592,6 +1592,18 @@ fn rig_state(rig: &Rig, pending: usize) -> VarDictionary {
     state.set(&"timer".to_variant(), &rig.timer_text().to_variant());
     state.set(&"untimed".to_variant(), &rig.untimed().to_variant());
     state.set(
+        &"untimed_by_rule".to_variant(),
+        &rig.untimed_by_rule().to_variant(),
+    );
+    state.set(
+        &"clock_answers".to_variant(),
+        &int_variant(rig.clock_answers()),
+    );
+    state.set(
+        &"countdowns_sent".to_variant(),
+        &int_variant(rig.countdowns_sent()),
+    );
+    state.set(
         &"zero_refusal".to_variant(),
         &text_or_empty(rig.zero_refusal()).to_variant(),
     );

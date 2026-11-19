@@ -483,8 +483,18 @@ func _run_probation() -> void:
 		_finish()
 		return
 	var refused_before := _refusals.size()
+	var before := _state()
 	await get_tree().create_timer(PROBATION_WATCH).timeout
 	var state := _state()
+	# Asked, not merely silent: clock reports went out and were answered, none with a countdown.
+	var answered := int(state.get("clock_answers", 0)) - int(before.get("clock_answers", 0))
+	var countdowns := int(state.get("countdowns_sent", 0)) - int(before.get("countdowns_sent", 0))
+	if answered < 1:
+		_failures.append("the Probation Lull: no clock report was answered in %.0f s, so nothing was asked" % PROBATION_WATCH)
+	if countdowns != 0:
+		_failures.append("the Probation Lull: %d clock report(s) carried a countdown" % countdowns)
+	if not state.get("untimed_by_rule", false):
+		_failures.append("the Probation Lull's footer does not say untimed by rule: %s" % state)
 	if _refusals.size() != refused_before:
 		_failures.append("the Probation Lull: the gateway refused %s (a countdown report would be INVALID_ARGUMENT)" % "; ".join(_refusals.slice(refused_before)))
 	if not state.get("untimed", false):
@@ -493,7 +503,7 @@ func _run_probation() -> void:
 		_failures.append("the Probation Lull shows a countdown: `%s`" % state.get("timer"))
 	if state.get("phase", "") != "lull":
 		_failures.append("the Probation Lull ended by itself: %s" % state)
-	print("[watch-check] Probation: %.0f s of the Lull, no countdown sent or shown, untimed %s, %d refusal(s)" % [PROBATION_WATCH, state.get("untimed"), _refusals.size() - refused_before])
+	print("[watch-check] Probation: %.0f s of the Lull, %d clock report(s) answered, %d countdown(s) sent, none shown, untimed by rule %s, %d refusal(s)" % [PROBATION_WATCH, answered, countdowns, state.get("untimed_by_rule"), _refusals.size() - refused_before])
 	_finish()
 
 
