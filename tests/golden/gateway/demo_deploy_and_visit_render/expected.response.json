@@ -39,6 +39,16 @@
             },
             "value_json": "30000"
           }
+        ],
+        "slots": [
+          {
+            "pointer": "/declarative/route/0/skip_if",
+            "title": "skip if",
+            "line": 5,
+            "state": "empty",
+            "predicate": "",
+            "pick_op": "add"
+          }
         ]
       },
       {
@@ -94,6 +104,16 @@
             },
             "value_json": "30000"
           }
+        ],
+        "slots": [
+          {
+            "pointer": "/declarative/route/1/skip_if",
+            "title": "skip if",
+            "line": 8,
+            "state": "empty",
+            "predicate": "",
+            "pick_op": "add"
+          }
         ]
       },
       {
@@ -130,6 +150,16 @@
               }
             },
             "value_json": "60000"
+          }
+        ],
+        "slots": [
+          {
+            "pointer": "/declarative/route/2/skip_if",
+            "title": "skip if",
+            "line": 11,
+            "state": "empty",
+            "predicate": "",
+            "pick_op": "add"
           }
         ]
       },
@@ -185,6 +215,16 @@
               }
             },
             "value_json": "20000"
+          }
+        ],
+        "slots": [
+          {
+            "pointer": "/declarative/route/3/skip_if",
+            "title": "skip if",
+            "line": 14,
+            "state": "empty",
+            "predicate": "",
+            "pick_op": "add"
           }
         ]
       }

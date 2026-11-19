@@ -55,8 +55,16 @@ pub struct MatchTime {
     /// (`gp.api.v1.Status.untimed`; S1's plan, decision 12, the register's
     /// S1-11). [`crate::surface::Surface`] decides it in one place: the lobby,
     /// a recap and an ended match are untimed, a Push never is, and a Lull is
-    /// untimed until the host reports a countdown for it.
+    /// untimed until the host reports a countdown for it, or for good when it
+    /// is `untimed_by_rule`.
     pub untimed: bool,
+    /// True only in a Lull whose match gives its Lulls no countdown by rule,
+    /// the Probation preset's (`gp.api.v1.Status.untimed_by_rule`; S3's plan,
+    /// E7), and then always with `untimed`. [`crate::surface::Surface`]
+    /// decides it from the preset, in the same place as `untimed`, so a client
+    /// tells "no countdown yet" from "no countdown at all" without knowing
+    /// what a preset does.
+    pub untimed_by_rule: bool,
 }
 
 impl MatchTime {
@@ -71,6 +79,7 @@ impl MatchTime {
             segment_length_ms: Ms::ZERO,
             round: 0,
             untimed: true,
+            untimed_by_rule: false,
         }
     }
 
@@ -96,7 +105,9 @@ impl MatchTime {
     /// So a timed footer -- every Lull with a countdown, every Push -- keeps
     /// the four fields it had before S1 byte for byte, and the client
     /// fixtures copied from the gateway's goldens with it (S1's plan, task
-    /// `econ`).
+    /// `econ`). `untimed_by_rule` is written the same way, only when it is
+    /// true, so every footer that is not a Probation Lull's keeps its bytes
+    /// (S3's `gwu`).
     #[must_use]
     pub fn footer(self) -> Json {
         let mut entries = vec![
@@ -116,6 +127,9 @@ impl MatchTime {
         ];
         if self.untimed {
             entries.push((String::from("untimed"), Json::Bool(true)));
+        }
+        if self.untimed_by_rule {
+            entries.push((String::from("untimed_by_rule"), Json::Bool(true)));
         }
         Json::Object(entries)
     }
@@ -336,6 +350,7 @@ mod tests {
             segment_length_ms: Ms::new(180_000),
             round: 1,
             untimed: false,
+            untimed_by_rule: false,
         }
     }
 
@@ -368,6 +383,46 @@ mod tests {
             footer.get("segment_length_ms"),
             Some(&Json::Number(String::from("180000")))
         );
+    }
+
+    /// `untimed_by_rule` is written only when it is true, after `untimed`, in
+    /// the schema's order; false leaves it out, at proto3's default, so every
+    /// footer that is not a Probation Lull's keeps its bytes.
+    #[test]
+    fn the_footer_says_untimed_by_rule_only_when_it_is_true() {
+        let mut probation = lull();
+        probation.untimed = true;
+        probation.untimed_by_rule = true;
+        let Json::Object(entries) = probation.footer() else {
+            panic!("the footer is an object");
+        };
+        let keys: Vec<&str> = entries.iter().map(|(key, _)| key.as_str()).collect();
+        assert_eq!(
+            keys,
+            vec![
+                "phase",
+                "phase_remaining_ms",
+                "segment_length_ms",
+                "round",
+                "untimed",
+                "untimed_by_rule"
+            ]
+        );
+        assert_eq!(
+            entries.last(),
+            Some(&(String::from("untimed_by_rule"), Json::Bool(true)))
+        );
+
+        let mut untimed = lull();
+        untimed.untimed = true;
+        let Json::Object(entries) = untimed.footer() else {
+            panic!("the footer is an object");
+        };
+        assert!(
+            entries.iter().all(|(key, _)| key != "untimed_by_rule"),
+            "false is left out: {entries:?}"
+        );
+        assert!(!MatchTime::lobby().untimed_by_rule, "the lobby is no Lull");
     }
 
     #[test]

@@ -266,6 +266,16 @@ pub struct Status {
     /// is.
     #[prost(bool, tag="5")]
     pub untimed: bool,
+    /// True only in a Lull whose match gives its Lulls no countdown by rule (the
+    /// Probation preset; S3's plan, E7), as opposed to `untimed`'s other cause,
+    /// a Lull no host has reported a countdown for yet. Always with `untimed`
+    /// true. A client starts no countdown for such a Lull and reports no
+    /// `remaining_ms` in it, which the gateway would refuse. The gateway decides
+    /// it from the match's preset, so a client needs no knowledge of what a
+    /// preset does. Absent (false) in every other phase, a Probation recap
+    /// included, and in every Lull of any other preset.
+    #[prost(bool, tag="6")]
+    pub untimed_by_rule: bool,
 }
 /// Nested message and enum types in `Status`.
 pub mod status {
@@ -816,8 +826,13 @@ pub struct GetBeaconResponse {
     /// (decisions-log item 80): "build".
     #[prost(enumeration="super::super::v1::beacon_filter::MandateKind", tag="3")]
     pub mandate: i32,
-    /// The settings this beacon's mandate has now, one row per setting that is
-    /// set, in the schema's field order.
+    /// The settings this beacon's mandate has now, one row per setting the writ
+    /// holds a value for, in the schema's field order: the common two first, then
+    /// the writ's own. Each row shows the setting's effective value, the one the
+    /// sim reads, so a setting the file leaves unset has a row with its reading
+    /// (S3's `gwr` review, item 7). An Attack's launch and retreat triggers, which
+    /// are off rather than defaulted when unwritten, have a row only when written;
+    /// a list and an Attack's target and staging point have none.
     #[prost(message, repeated, tag="4")]
     pub settings: ::prost::alloc::vec::Vec<BeaconSettingRow>,
     /// A Build beacon's targets, in the order the Quartermaster reads them. Empty
@@ -840,9 +855,9 @@ pub struct BeaconSettingRow {
     /// The setting's name in the player's words.
     #[prost(string, tag="2")]
     pub title: ::prost::alloc::string::String,
-    /// The value now, as JSON text in the playbook's canonical spelling, as
-    /// EnumShape.values spells a value: `"RETURN_FIRE"` with its quotes, `true`
-    /// without.
+    /// The effective value now, as JSON text in the playbook's canonical
+    /// spelling, as EnumShape.values spells a value: `"RETURN_FIRE"` with its
+    /// quotes, `true` without.
     #[prost(string, tag="3")]
     pub value_json: ::prost::alloc::string::String,
     /// What may be written there.
@@ -1084,10 +1099,11 @@ pub struct EstimateRouteResponse {
     pub ms: i32,
     #[prost(message, repeated, tag="3")]
     pub legs: ::prost::alloc::vec::Vec<Leg>,
-    /// Whole-route travel as the player reads it: "1 min 24 s". The gateway
-    /// renders the figure, so the editor draws it and does no time maths (the
-    /// register's S3-18, items 57 and 61). Says it is a bound when any leg is
-    /// fogged. Empty when `reachable` is false. Filled from S3's `gwr`.
+    /// Whole-route travel as the player reads it, rounded up to a whole second:
+    /// "1:24", or "9 s" under a minute. The gateway renders the figure, so the
+    /// editor draws it and does no time maths (the register's S3-18, items 57 and
+    /// 61). Says it is a bound when any leg is fogged: "at most 1:24". Empty when
+    /// `reachable` is false. Filled from S3's `gwr`.
     #[prost(string, tag="4")]
     pub travel_text: ::prost::alloc::string::String,
 }
@@ -1737,11 +1753,148 @@ pub struct RenderedRule {
     pub line_count: u32,
     #[prost(message, repeated, tag="4")]
     pub chips: ::prost::alloc::vec::Vec<Chip>,
+    /// Every place in this rule or step where a condition stands or could stand,
+    /// filled or not, in document order: a rule's `when`, then each of its body
+    /// steps' `skip_if` and, for a `wait_until` step, its `condition`; a route
+    /// step's `skip_if` and, for a `wait_until` step, its `condition`. A slot
+    /// holding a group is followed by the slots of its items, recursively. So a
+    /// route step has at least one slot, and a client composes no pointer to a
+    /// condition of its own.
+    #[prost(message, repeated, tag="5")]
+    pub slots: ::prost::alloc::vec::Vec<ConditionSlot>,
 }
 impl ::prost::Name for RenderedRule {
 const NAME: &'static str = "RenderedRule";
 const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.RenderedRule".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.RenderedRule".into() }}
+/// One place in a rule or step where a condition stands, or could. The gateway
+/// names it, so a client composes no pointer from its own knowledge of the
+/// schema.
+///
+/// To fill or replace the condition a client sends one JSON Patch operation at
+/// `pointer` whose `op` is the one `pick_op` names, and whose value is
+/// `{"<name>": <skeleton>}`, a vocabulary entry's `name` and `skeleton_json`
+/// (get_vocabulary). The gateway names the op because RFC 6902 makes them
+/// differ where it matters: an `add` at an array index inserts, so an `add` at
+/// an item of an `all` or an `any` would keep the old item beside the new one
+/// and silently change what the rule means; and a `replace` needs something
+/// there to replace. A GROUP slot is listed so its items read in place and is
+/// not a pick target: a leaf written over it would discard its items, so a
+/// client offers a pick on an EMPTY or a LEAF slot only (S3's picker fills or
+/// replaces one leaf and builds no group).
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ConditionSlot {
+    /// RFC 6901 JSON Pointer of the `gp.v1.Condition`: "/declarative/handlers/2/when",
+    /// "/declarative/route/0/skip_if", "/declarative/handlers/0/when/all/items/1".
+    /// Written whether or not the file has the member: an EMPTY slot's pointer
+    /// with nothing at it is where an `add` puts one. In the canonical snake_case
+    /// spelling of the proto JSON mapping, as every chip's pointer is: in a file
+    /// that writes the member in its camelCase JSON name instead (`skipIf`), a
+    /// patch at this pointer is refused by `patch_plan` rather than written beside
+    /// it, and a pointer under such a member finds nothing.
+    #[prost(string, tag="1")]
+    pub pointer: ::prost::alloc::string::String,
+    /// The slot in the player's words, from the renderer's own string table:
+    /// "when", "skip if", "wait until", "step 2, skip if", "when, item 1 of all".
+    #[prost(string, tag="2")]
+    pub title: ::prost::alloc::string::String,
+    /// The zero-based line of RenderPlanResponse.prose of the rule or step this
+    /// slot belongs to: always its RenderedRule's own `line`, a handler's body
+    /// step's slots included, so a client attaches a control to a row.
+    #[prost(uint32, tag="3")]
+    pub line: u32,
+    #[prost(enumeration="condition_slot::State", tag="4")]
+    pub state: i32,
+    /// The arm of `gp.v1.Condition` the slot holds, by its proto JSON field name,
+    /// as a vocabulary entry's `name` spells it: "cmdr_hp_pct", or "all", "any",
+    /// "not" for a group. Empty for an EMPTY slot.
+    #[prost(string, tag="5")]
+    pub predicate: ::prost::alloc::string::String,
+    /// The JSON Patch `op` a pick at this slot sends: ADD where nothing is at
+    /// `pointer` (the member is absent), REPLACE where anything is (a leaf, an
+    /// empty object, an item of a group). PICK_OP_UNSPECIFIED on a GROUP slot,
+    /// which is not a pick target. On the JSON-RPC wire it is lower case
+    /// (decisions-log item 80): "add", "replace", "unspecified".
+    #[prost(enumeration="condition_slot::PickOp", tag="6")]
+    pub pick_op: i32,
+}
+/// Nested message and enum types in `ConditionSlot`.
+pub mod condition_slot {
+    /// What the slot holds. On the JSON-RPC wire it is lower case (decisions-log
+    /// item 80): "empty", "leaf", "group".
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum State {
+        Unspecified = 0,
+        /// No condition there: the member is absent, or it holds no arm.
+        Empty = 1,
+        /// One predicate: a vocabulary entry's `name`.
+        Leaf = 2,
+        /// `all`, `any` or `not`: its items follow as slots of their own.
+        Group = 3,
+    }
+    impl State {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "STATE_UNSPECIFIED",
+                Self::Empty => "EMPTY",
+                Self::Leaf => "LEAF",
+                Self::Group => "GROUP",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "STATE_UNSPECIFIED" => Some(Self::Unspecified),
+                "EMPTY" => Some(Self::Empty),
+                "LEAF" => Some(Self::Leaf),
+                "GROUP" => Some(Self::Group),
+                _ => None,
+            }
+        }
+    }
+    /// The JSON Patch operation a pick sends.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum PickOp {
+        Unspecified = 0,
+        /// Nothing is at the pointer: the patch inserts the member.
+        Add = 1,
+        /// Something is at the pointer: the patch replaces it, an array item in
+        /// place.
+        Replace = 2,
+    }
+    impl PickOp {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "PICK_OP_UNSPECIFIED",
+                Self::Add => "ADD",
+                Self::Replace => "REPLACE",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "PICK_OP_UNSPECIFIED" => Some(Self::Unspecified),
+                "ADD" => Some(Self::Add),
+                "REPLACE" => Some(Self::Replace),
+                _ => None,
+            }
+        }
+    }
+}
+impl ::prost::Name for ConditionSlot {
+const NAME: &'static str = "ConditionSlot";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.ConditionSlot".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.ConditionSlot".into() }}
 /// One editable value in a rendered sentence. The gateway places it, so a client
 /// draws the span and parses no sentence.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]

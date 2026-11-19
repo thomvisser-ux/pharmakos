@@ -36,6 +36,11 @@
 //! produces something that is no longer a playbook is caught by the verifier,
 //! with a code and a pointer, exactly as a hand-edit would be — the editor
 //! runs no validation of its own (spec section 12).
+//! One exception, because it would leave a file that no longer decodes: a
+//! patch that writes a field under both its names in one object is refused
+//! ([`apply`]; S3's `gwu`). Making a file written in camelCase JSON names
+//! fully editable (pointers in the file's own spelling, or aliases resolved
+//! here) is owed, for chips and condition slots alike.
 
 use pharmakos_proto::json::{Json, read, write};
 
@@ -267,7 +272,13 @@ impl Patch {
 /// # Errors
 ///
 /// When a path does not resolve, when `test` does not hold, or when an
-/// operation asks for something the document's shape cannot do.
+/// operation asks for something the document's shape cannot do. And when the
+/// patched file would write one playbook field under both its names, its
+/// `.proto` name and its camelCase JSON name, in one object where the file
+/// did not ([`WrittenTwice`]; S3's `gwu`, fix pass 1): the decoder refuses
+/// such a file, so a patch that made one would hand back a file that no
+/// longer decodes. An edit at a `snake_case` pointer in a file that writes the
+/// member in its camelCase name is the common way to get there.
 pub fn apply(document: &Document, patch: &Patch) -> Result<(Document, Patch), Error> {
     let mut working = document.clone();
     let mut inverse: Vec<Operation> = Vec::new();
@@ -278,7 +289,151 @@ pub fn apply(document: &Document, patch: &Patch) -> Result<(Document, Patch), Er
         next.append(&mut inverse);
         inverse = next;
     }
+    // One walk for almost every patch: the original is read only when the
+    // patched file names a field twice somewhere (S3's `gwu`, fix pass 2: two
+    // walks cost every `patch_plan` about 60% more at the text cap).
+    let after = written_twice(&working.to_json());
+    if after.is_empty() {
+        return Ok((working, Patch::new(inverse)));
+    }
+    let original = document.to_json();
+    let before = written_twice(&original);
+    // What is new is told by the field and its two spellings, and by how many
+    // objects write them so, never by an object's pointer, which a patch that
+    // adds or removes an array item before it moves.
+    let same = |one: &WrittenTwice, other: &WrittenTwice| {
+        one.field == other.field
+            && ((one.written == other.written && one.added == other.added)
+                || (one.written == other.added && one.added == other.written))
+    };
+    let new = after.iter().find(|found| {
+        let now = after.iter().filter(|other| same(found, other)).count();
+        let then = before.iter().filter(|other| same(found, other)).count();
+        now > then
+    });
+    if let Some(twice) = new {
+        // The file already wrote the first spelling where the patch put the
+        // second; otherwise the patch brought both.
+        let already = matches!(
+            json_at(&original, &twice.pointer),
+            Some(Json::Object(members))
+                if members.iter().any(|(key, _)| *key == twice.written)
+                    && !members.iter().any(|(key, _)| *key == twice.added)
+        );
+        let advice = if already {
+            format!(
+                "edit the member the file already writes, `{}`",
+                twice.written
+            )
+        } else {
+            String::from("the patch itself writes both; write the field once")
+        };
+        return Err(Error::at(
+            twice.pointer.clone(),
+            format!(
+                "this patch would write the field `{}` twice in one object, as `{}` and as \
+                 `{}`, and a playbook writes each field once, under one of its names; {advice}",
+                twice.field, twice.written, twice.added
+            ),
+        ));
+    }
     Ok((working, Patch::new(inverse)))
+}
+
+/// The value at an RFC 6901 pointer in plain JSON: `None` where nothing is
+/// (a pointer the walk wrote, so it always splits; an index that is not one
+/// names nothing).
+fn json_at<'a>(value: &'a Json, pointer: &str) -> Option<&'a Json> {
+    let Ok(tokens) = split_pointer(pointer) else {
+        return None;
+    };
+    let mut here = value;
+    for token in tokens {
+        here = match here {
+            Json::Object(members) => members
+                .iter()
+                .find(|(key, _)| *key == token)
+                .map(|(_, inner)| inner)?,
+            Json::Array(items) => match token.parse::<usize>() {
+                Ok(index) => items.get(index)?,
+                Err(_) => return None,
+            },
+            _ => return None,
+        };
+    }
+    Some(here)
+}
+
+/// One playbook field written under both its names in one object.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct WrittenTwice {
+    /// The object's JSON Pointer.
+    pub pointer: String,
+    /// The field's `.proto` name.
+    pub field: String,
+    /// The spelling met first in the object.
+    pub written: String,
+    /// The other spelling.
+    pub added: String,
+}
+
+/// Every object of a playbook's JSON that names one field under both its
+/// names, read against the schema from `gp.v1.Playbook` down: each member is
+/// matched to its field by either name, and each message-typed member is
+/// walked in turn. A member the schema does not declare is not walked (the
+/// decoder refuses it on its own terms).
+fn written_twice(value: &Json) -> Vec<WrittenTwice> {
+    let mut found = Vec::new();
+    walk_twice(value, "gp.v1.Playbook", "", &mut found);
+    found
+}
+
+fn walk_twice(value: &Json, message: &str, pointer: &str, found: &mut Vec<WrittenTwice>) {
+    let Json::Object(members) = value else {
+        return;
+    };
+    let Some(declared) = pharmakos_proto::descriptor::schema().message(message) else {
+        return;
+    };
+    let mut named: Vec<(i32, &str)> = Vec::new();
+    for (key, inner) in members {
+        let Some(field) = declared
+            .fields
+            .iter()
+            .find(|field| field.name == *key || field.json_name == *key)
+        else {
+            continue;
+        };
+        if let Some((_, first)) = named.iter().find(|(number, _)| *number == field.number) {
+            if *first != key.as_str() {
+                found.push(WrittenTwice {
+                    pointer: pointer.to_owned(),
+                    field: field.name.clone(),
+                    written: (*first).to_owned(),
+                    added: key.clone(),
+                });
+            }
+        } else {
+            named.push((field.number, key.as_str()));
+        }
+        if field.kind != pharmakos_proto::descriptor::ScalarKind::Message {
+            continue;
+        }
+        let here = push_pointer(pointer, key);
+        match inner {
+            Json::Array(items) if field.repeated => {
+                for (index, item) in items.iter().enumerate() {
+                    walk_twice(
+                        item,
+                        &field.type_name,
+                        &push_pointer(&here, &index.to_string()),
+                        found,
+                    );
+                }
+            }
+            _ => walk_twice(inner, &field.type_name, &here, found),
+        }
+    }
 }
 
 /// Applies a patch given as RFC 6902 text and returns the patched file and the

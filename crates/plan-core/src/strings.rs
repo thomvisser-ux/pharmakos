@@ -207,6 +207,33 @@ pub const NOT: &str = "it is not the case that";
 pub const EMPTY_GROUP: &str = "nothing";
 /// A `Condition` with no node set.
 pub const CONDITION_NOTHING: &str = "nothing the file names";
+
+// --- Condition slots (S3's `gwu`) ---------------------------------------------
+
+// PLACEHOLDER: the condition slots' titles — owner, at S6's copy pass
+// The words a `gp.api.v1.ConditionSlot.title` is made of, the renderer's own
+// for each place a condition stands, so a slot's title and its sentence agree:
+// "when", "skip if", "wait until", "step 2, skip if", "when, item 1 of all",
+// "when, item 2 of all, under not". The client composes none.
+
+/// A rule's `when`.
+pub const SLOT_WHEN: &str = "when";
+/// A step's `skip_if`.
+pub const SLOT_SKIP_IF: &str = "skip if";
+/// A `wait_until` step's `condition`: the step's own words.
+pub const SLOT_WAIT_UNTIL: &str = STEP_WAIT_UNTIL;
+/// A rule's body step, before its number: "step 2".
+pub const SLOT_STEP: &str = "step";
+/// An item of a group, before its number: "item 1".
+pub const SLOT_ITEM: &str = "item";
+/// After an `all` item's number: "item 1 of all".
+pub const SLOT_OF_ALL: &str = "of all";
+/// After an `any` item's number: "item 1 of any".
+pub const SLOT_OF_ANY: &str = "of any";
+/// The item of a `not`.
+pub const SLOT_UNDER_NOT: &str = "under not";
+/// Between a slot's title and the title of a slot inside it.
+pub const SLOT_JOIN: &str = ", ";
 /// `LT`.
 pub const CMP_LT: &str = "below";
 /// `LE`.
