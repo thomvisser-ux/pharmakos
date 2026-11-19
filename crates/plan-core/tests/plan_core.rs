@@ -991,6 +991,11 @@ fn diagnosed(text: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// The verifier's codes for a condition missing where one is required: a
+/// rule with no `when` (`E0106`) and a `not` with no item (`E0203`). A pick
+/// that fills the slot answers them, at the place above it they are raised.
+const MISSING_CONDITION: [&str; 2] = ["E0106", "E0203"];
+
 /// S3's `gwu`, fix pass 1 (the review's C1, K1): for every pickable slot of
 /// every committed playbook, the op the slot names, sent with a vocabulary
 /// entry's skeleton, fills or replaces that slot and nothing else. The
@@ -1073,16 +1078,27 @@ fn a_pick_with_the_op_its_slot_names_changes_that_slot_alone() {
                     now.iter().filter(|found| !before.contains(found)).collect();
                 let lost: Vec<&(String, String)> =
                     before.iter().filter(|found| !now.contains(found)).collect();
+                // By path segment: `/items/1` holds `/items/1/..`, never
+                // `/items/10`.
+                let under = |path: &str, base: &str| {
+                    path == base
+                        || path
+                            .strip_prefix(base)
+                            .is_some_and(|rest| rest.starts_with('/'))
+                };
                 assert!(
-                    gained
-                        .iter()
-                        .all(|(_, path)| path.starts_with(&slot.pointer)),
+                    gained.iter().all(|(_, path)| under(path, &slot.pointer)),
                     "{case}: picking {} drew {gained:?} elsewhere",
                     slot.pointer
                 );
+                // Lost: what the new leaf answers at or under the slot, and,
+                // above it, only the codes that say this slot's own
+                // condition was missing: a rule with no `when` (`E0106`), a
+                // `not` with no item (`E0203`).
                 assert!(
-                    lost.iter().all(|(_, path)| path.starts_with(&slot.pointer)
-                        || slot.pointer.starts_with(path.as_str())),
+                    lost.iter().all(|(code, path)| under(path, &slot.pointer)
+                        || (MISSING_CONDITION.contains(&code.as_str())
+                            && under(&slot.pointer, path))),
                     "{case}: picking {} answered {lost:?} elsewhere",
                     slot.pointer
                 );

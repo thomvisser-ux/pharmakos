@@ -3124,8 +3124,18 @@ fn a_pick_sends_the_op_its_slot_names_and_changes_that_slot_alone() {
             r#"{"id":"unwritten","when":{"cmdr_deaths":{"deaths":{"op":"GE","value":2}}},"body""#,
         )
         .replace(r#"{"cmdr_deaths":{"deaths":{"op":"GE","value":1}}}"#, "{}");
+    // The worked example too, so the FULL verdict a pick keeps is checked on
+    // the spec's own playbook as well as on the fixture.
+    let example = worked_example();
     // (file, slot, its op, its predicate before, the group it is an item of)
-    let cases: [(&str, &str, PickOp, &str, Option<&str>); 8] = [
+    let cases: [(&str, &str, PickOp, &str, Option<&str>); 9] = [
+        (
+            &example,
+            "/declarative/handlers/0/when/all/items/0",
+            PickOp::Replace,
+            "cmdr_hp_pct",
+            Some("/declarative/handlers/0/when/all/items"),
+        ),
         (
             &fixture,
             "/declarative/handlers/1/when",
@@ -3264,6 +3274,22 @@ fn check_pick(
         slots(&after),
         slots(&before),
         "{pointer}: no slot added or lost"
+    );
+    // And the verdict is the one the file had: a pick changes what a rule
+    // asks, not whether the playbook qualifies.
+    let qualifies = |ask: &mut dyn FnMut(&str, String) -> Json, text: &str| {
+        ask(
+            "verify_plan",
+            format!(r#"{{"depth":"full","playbook_jsonc":{}}}"#, quote(text)),
+        )
+        .get("report")
+        .and_then(|report| report.get("qualifies"))
+        .cloned()
+    };
+    assert_eq!(
+        qualifies(ask, &patched),
+        qualifies(ask, text),
+        "{pointer}: the FULL verdict moved"
     );
 }
 

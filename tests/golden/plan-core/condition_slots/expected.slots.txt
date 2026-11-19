@@ -11,6 +11,7 @@
 /declarative/handlers/0	/declarative/handlers/0/when/all/items/2	GROUP	any	-	13	when, item 3 of all
 /declarative/handlers/0	/declarative/handlers/0/when/all/items/2/any/items/0	LEAF	segment_elapsed	REPLACE	13	when, item 3 of all, item 1 of any
 /declarative/handlers/0	/declarative/handlers/0/when/all/items/2/any/items/1	LEAF	cmdr_deaths	REPLACE	13	when, item 3 of all, item 2 of any
+/declarative/handlers/0	/declarative/handlers/0/when/all/items/3	EMPTY	-	REPLACE	13	when, item 4 of all
 /declarative/handlers/0	/declarative/handlers/0/body/0/skip_if	GROUP	not	-	13	step 1, skip if
 /declarative/handlers/0	/declarative/handlers/0/body/0/skip_if/not/item	EMPTY	-	ADD	13	step 1, skip if, under not
 /declarative/handlers/0	/declarative/handlers/0/body/1/skip_if	EMPTY	-	ADD	13	step 2, skip if

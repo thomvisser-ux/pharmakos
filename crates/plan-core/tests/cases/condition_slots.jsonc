@@ -1,8 +1,9 @@
 // condition_slots.jsonc - every place a condition stands or could stand (S3's
 // task `gwu`): a route step's `skip_if` filled and absent, a `wait_until`
 // step's condition filled and left out, a rule's `when` as an `all` holding a
-// leaf, a `not` and an `any`, a body step's guard and a `not` with no item,
-// and a rule with no `when` at all. Pinned by expected.slots.txt alone.
+// leaf, a `not`, an `any` and an empty `{}` item (an EMPTY slot a pick
+// replaces), a body step's guard and a `not` with no item, and a rule with no
+// `when` at all. Pinned by expected.slots.txt alone.
 { "schema_version": {"major":1},
   "meta": {"title":"Condition slots","author_kind":"HUMAN"},
   "kind": "PLAYBOOK",
@@ -22,7 +23,8 @@
         {"any":{"items":[
           {"segment_elapsed":{"ms":{"op":"GE","value":60000}}},
           {"cmdr_deaths":{"deaths":{"op":"GE","value":1}}}
-        ]}}
+        ]}},
+        {}
       ]}},"body":[
         {"label":"first","hold":{"ms":1000},"skip_if":{"not":{}}},
         {"label":"second","wait_until":{"condition":{"rule_fired":{"handler_id":"guarded"}}},
