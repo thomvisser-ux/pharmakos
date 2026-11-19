@@ -11,7 +11,8 @@
 //!
 //! * **Untimed Lulls** (E7). The rules table's `match.lull_ms` rows are left as
 //!   they are; a Probation match's Lulls simply carry no countdown, so the
-//!   `_status` footer answers `untimed`, and a host that reports one is refused
+//!   `_status` footer answers `untimed` and `untimed_by_rule` (S3's `gwu`), by
+//!   which a client knows to start none, and a host that reports one is refused
 //!   ([`crate::surface::Surface::set_host_clock`]), never clamped or ignored.
 //! * **The Ledger's memos** (E5): for the seat the person plays, the first
 //!   power shortfall, the first beacon lost, the first death and the first

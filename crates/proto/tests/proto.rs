@@ -1778,9 +1778,9 @@ fn the_s3_rule_list_wire_round_trips_in_its_documented_spellings() {
         .expect("GetBeaconResponse is in the schema");
     assert_eq!(message.reserved_ranges, [(6, 15)]);
 
-    let route = r#"{"reachable":true,"ms":84000,"legs":[{"ms":84000,"travel_text":"1 min 24 s"}],"travel_text":"1 min 24 s"}"#;
+    let route = r#"{"reachable":true,"ms":84000,"legs":[{"ms":84000,"travel_text":"1:24"}],"travel_text":"1:24"}"#;
     let decoded: EstimateRouteResponse = json::decode(route).expect("the route decodes");
-    assert_eq!(decoded.travel_text, "1 min 24 s");
+    assert_eq!(decoded.travel_text, "1:24");
 
     let templates = r#"{"templates":[{"template_id":"t","guided_pick":true,"guided_pick_reason":"Start here."}]}"#;
     let decoded: ListTemplatesResponse = json::decode(templates).expect("the list decodes");
@@ -1789,6 +1789,59 @@ fn the_s3_rule_list_wire_round_trips_in_its_documented_spellings() {
             .templates
             .first()
             .is_some_and(|template| template.guided_pick)
+    );
+}
+
+/// S3's `gwu`: a rendered rule's condition slots, in their documented
+/// spellings, each state spelt by its bare name, and on a number no
+/// `reserved` statement held.
+#[test]
+fn the_condition_slots_round_trip_in_their_documented_spellings() {
+    use gp_api::condition_slot::{PickOp, State};
+    use gp_api::{ConditionSlot, RenderedRule};
+    let rule = RenderedRule {
+        pointer: String::from("/declarative/handlers/0"),
+        line: 3,
+        line_count: 4,
+        chips: Vec::new(),
+        slots: vec![
+            ConditionSlot {
+                pointer: String::from("/declarative/handlers/0/when"),
+                title: String::from("when"),
+                line: 3,
+                state: State::Group.into(),
+                predicate: String::from("all"),
+                pick_op: PickOp::Unspecified.into(),
+            },
+            ConditionSlot {
+                pointer: String::from("/declarative/handlers/0/when/all/items/0"),
+                title: String::from("when, item 1 of all"),
+                line: 3,
+                state: State::Leaf.into(),
+                predicate: String::from("cmdr_hp_pct"),
+                pick_op: PickOp::Replace.into(),
+            },
+            ConditionSlot {
+                pointer: String::from("/declarative/handlers/0/body/0/skip_if"),
+                title: String::from("step 1, skip if"),
+                line: 3,
+                state: State::Empty.into(),
+                predicate: String::new(),
+                pick_op: PickOp::Add.into(),
+            },
+        ],
+    };
+    round_trips(
+        &rule,
+        r#"{"pointer":"/declarative/handlers/0","line":3,"line_count":4,"slots":[{"pointer":"/declarative/handlers/0/when","title":"when","line":3,"state":"GROUP","predicate":"all"},{"pointer":"/declarative/handlers/0/when/all/items/0","title":"when, item 1 of all","line":3,"state":"LEAF","predicate":"cmdr_hp_pct","pick_op":"REPLACE"},{"pointer":"/declarative/handlers/0/body/0/skip_if","title":"step 1, skip if","line":3,"state":"EMPTY","pick_op":"ADD"}]}"#,
+        &["slots", "state", "predicate", "pick_op"],
+    );
+    let message = schema()
+        .message("gp.api.v1.RenderedRule")
+        .expect("RenderedRule is in the schema");
+    assert!(
+        message.reserved_ranges.is_empty(),
+        "slots discharged nothing"
     );
 }
 
@@ -1806,9 +1859,25 @@ fn the_s1_status_and_resolve_refs_round_trip_in_their_documented_spellings() {
             segment_length_ms: 300_000,
             round: 2,
             untimed: true,
+            untimed_by_rule: false,
         },
         r#"{"phase":"RECAP","segment_length_ms":300000,"round":2,"untimed":true}"#,
         &["untimed"],
+    );
+
+    // S3's `gwu`: a Probation Lull has no countdown by rule, and says so in a
+    // field of its own beside `untimed`.
+    round_trips(
+        &Status {
+            phase: status::Phase::Lull.into(),
+            phase_remaining_ms: 0,
+            segment_length_ms: 300_000,
+            round: 1,
+            untimed: true,
+            untimed_by_rule: true,
+        },
+        r#"{"phase":"LULL","segment_length_ms":300000,"round":1,"untimed":true,"untimed_by_rule":true}"#,
+        &["untimed", "untimed_by_rule"],
     );
 
     // resolve_refs.

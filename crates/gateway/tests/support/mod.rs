@@ -611,3 +611,42 @@ pub fn data_root(name: &str) -> PathBuf {
     std::fs::create_dir(&root).expect("a fresh scratch data root");
     root
 }
+
+/// Write a gateway answer's fresh text to
+/// `<target>/golden/gateway/<case>/actual.response.json` and compare it with
+/// the committed `tests/golden/gateway/<case>/expected.response.json`, as
+/// `tests/demo_playbooks.rs` does for its own cases. `rendered` is the whole
+/// JSON-RPC answer, its `_status` footer included (`rpc::render`), with LF
+/// endings and a trailing newline.
+///
+/// A case with no committed golden fails, saying how one is committed: by
+/// copying the fresh output beside it once it is right, since
+/// `cargo xtask golden --bless` rewrites only goldens that exist.
+pub fn write_golden(case: &str, rendered: &str) {
+    let file = "response.json";
+    assert!(!rendered.contains('\r') && rendered.ends_with('\n'));
+    let fresh = target_dir().join("golden").join("gateway").join(case);
+    std::fs::create_dir_all(&fresh).expect("the fresh output's folder");
+    std::fs::write(fresh.join(format!("actual.{file}")), rendered).expect("the fresh output");
+    let committed = workspace_root()
+        .join("tests")
+        .join("golden")
+        .join("gateway")
+        .join(case)
+        .join(format!("expected.{file}"));
+    let Ok(expected) = std::fs::read_to_string(&committed) else {
+        panic!(
+            "no committed golden at {}. A new case is committed by copying the fresh output \
+             beside it, byte for byte, once it is right; `cargo xtask golden --bless` rewrites \
+             only goldens that exist.",
+            committed.display()
+        );
+    };
+    assert_eq!(
+        expected,
+        rendered,
+        "the golden at {} moved. tests/golden/gateway/README.md says what a diff means; the \
+         pull request has to say which input moved it.",
+        committed.display()
+    );
+}

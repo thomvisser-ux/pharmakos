@@ -15,6 +15,9 @@
 //! 5. From S3's `gwr`, `expected.chips.txt` for each rendered case: the rules,
 //!    steps and chips `render` places beside the prose (S3's plan, E8), with
 //!    the promises they keep and the verifier's agreement on their bounds.
+//! 6. From S3's `gwu`, `expected.slots.txt` for each rendered case and for
+//!    `condition_slots`: every place a condition stands or could stand, and a
+//!    check that the walk lists every place the schema puts one.
 //!
 //! The producing tests write `actual.*` under `<target>/golden/plan-core/`,
 //! where `cargo xtask ci`'s `golden` step byte-compares them with what is
@@ -31,7 +34,7 @@ use pharmakos_plan_core::context::PlanContext;
 use pharmakos_plan_core::error::split_pointer;
 use pharmakos_plan_core::jsonc::Document;
 use pharmakos_plan_core::patch::patch_text;
-use pharmakos_plan_core::render::{Rendering, render, render_plan};
+use pharmakos_plan_core::render::{PickOp, Rendering, render, render_plan};
 use pharmakos_plan_core::shape::Shape;
 use pharmakos_plan_core::verify::verify_jsonc;
 use pharmakos_proto::gp::api::v1::verify_plan::Depth;
@@ -668,6 +671,184 @@ fn every_rendered_case_has_its_chips_golden_and_keeps_their_promises() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 6. The condition slots (S3's task `gwu`)
+// ---------------------------------------------------------------------------
+
+/// The case that holds every kind of condition slot: filled, empty, a group
+/// and its items, a body step's guard, a rule with no `when`.
+fn condition_slots_case() -> String {
+    read(
+        &Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("cases")
+            .join("condition_slots.jsonc"),
+    )
+}
+
+/// The rendering's condition slots, one line a slot: its rule's or step's
+/// pointer, the slot's pointer, its state, its predicate (`-` for none), the
+/// op a pick there sends (`-` for a group), its line and its title.
+fn slots_text(rendering: &Rendering) -> String {
+    let mut out = String::new();
+    for rule in &rendering.rules {
+        for slot in &rule.slots {
+            let predicate = if slot.predicate.is_empty() {
+                "-"
+            } else {
+                slot.predicate
+            };
+            let _ = writeln!(
+                out,
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                rule.pointer,
+                slot.pointer,
+                slot.state.proto_name(),
+                predicate,
+                slot.pick.map_or("-", PickOp::proto_name),
+                slot.line,
+                slot.title
+            );
+        }
+    }
+    out
+}
+
+/// The cases the slots golden covers: every rendered case, and the one built
+/// to hold every kind of slot.
+fn slot_cases() -> Vec<(&'static str, String)> {
+    let mut cases = rendered_cases();
+    cases.push(("condition_slots", condition_slots_case()));
+    cases
+}
+
+/// Each case's slots, against `expected.slots.txt`, and the promises a slot
+/// keeps whatever the case: it sits on its own rule's line; its pointer is
+/// under its rule's; a filled slot's pointer names a member the canonical
+/// file has, holding the arm the slot names, and an empty one names a member
+/// the file leaves out or writes with no arm; every route step has its
+/// `skip_if`; a group's items follow it.
+#[test]
+fn every_case_has_its_slots_golden_and_each_slot_names_its_place() {
+    use pharmakos_plan_core::render::SlotState;
+    for (case, text) in slot_cases() {
+        let canonical = canonicalise_text(&text)
+            .unwrap_or_else(|error| panic!("{case} canonicalises: {error:?}"));
+        let rendering = render(&canonical.playbook, &context(), &rules())
+            .unwrap_or_else(|error| panic!("the committed rules table is complete: {error:?}"));
+        let document = pharmakos_proto::json::read(&canonical.json)
+            .unwrap_or_else(|error| panic!("canonical JSON reads: {error:?}"));
+        for rule in &rendering.rules {
+            if rule.pointer.starts_with("/declarative/route/") {
+                assert!(
+                    rule.slots
+                        .first()
+                        .is_some_and(|slot| slot.pointer == format!("{}/skip_if", rule.pointer)),
+                    "{case}: {} lists its skip_if first",
+                    rule.pointer
+                );
+            }
+            for (index, slot) in rule.slots.iter().enumerate() {
+                assert_eq!(slot.line, rule.line, "{case}: {}", slot.pointer);
+                assert!(
+                    slot.pointer.starts_with(&format!("{}/", rule.pointer)),
+                    "{case}: {} under {}",
+                    slot.pointer,
+                    rule.pointer
+                );
+                let held = at_pointer(&document, &slot.pointer);
+                let arm = match held {
+                    Some(Json::Object(members)) => members.first().map(|(key, _)| key.as_str()),
+                    _ => None,
+                };
+                match slot.state {
+                    SlotState::Empty => {
+                        assert!(arm.is_none(), "{case}: {} is empty", slot.pointer);
+                        assert!(slot.predicate.is_empty(), "{case}: {}", slot.pointer);
+                    }
+                    SlotState::Leaf | SlotState::Group => {
+                        assert_eq!(arm, Some(slot.predicate), "{case}: {}", slot.pointer);
+                    }
+                }
+                let pick = match (slot.state, held) {
+                    (SlotState::Group, _) => None,
+                    (_, Some(_)) => Some(PickOp::Replace),
+                    (_, None) => Some(PickOp::Add),
+                };
+                assert_eq!(slot.pick, pick, "{case}: {} names its op", slot.pointer);
+                if slot.state == SlotState::Group {
+                    let next = rule.slots.get(index.saturating_add(1));
+                    assert!(
+                        next.is_some_and(|item| item
+                            .pointer
+                            .starts_with(&format!("{}/{}/", slot.pointer, slot.predicate))),
+                        "{case}: {}'s items follow it",
+                        slot.pointer
+                    );
+                }
+            }
+        }
+        assert_golden(case, "slots.txt", &slots_text(&rendering));
+    }
+}
+
+/// Every place `playbook.proto` puts a `gp.v1.Condition` is one the slots
+/// walk lists: the schema's own fields of that type, read from the
+/// descriptor set, against a table of where each one's slot points, and the
+/// `condition_slots` case holds a slot at each. A new place a condition can
+/// stand fails here until the walk lists it.
+#[test]
+fn the_slots_walk_lists_every_place_the_schema_puts_a_condition() {
+    // (message.field, the tail of a slot pointer that stands there)
+    let table: [(&str, &str); 6] = [
+        ("gp.v1.Handler.when", "/when"),
+        ("gp.v1.Step.skip_if", "/skip_if"),
+        ("gp.v1.WaitUntilStep.condition", "/wait_until/condition"),
+        ("gp.v1.All.items", "/all/items/"),
+        ("gp.v1.Any.items", "/any/items/"),
+        ("gp.v1.Not.item", "/not/item"),
+    ];
+    let mut in_schema: Vec<String> = pharmakos_proto::descriptor::schema()
+        .messages()
+        .flat_map(|message| {
+            message
+                .fields
+                .iter()
+                .filter(|field| field.type_name == "gp.v1.Condition")
+                .map(|field| format!("{}.{}", message.full_name, field.name))
+        })
+        .collect();
+    in_schema.sort();
+    let mut listed: Vec<String> = table.iter().map(|(name, _)| (*name).to_owned()).collect();
+    listed.sort();
+    assert_eq!(
+        in_schema, listed,
+        "the schema puts a condition somewhere the slots walk does not list"
+    );
+
+    let canonical = canonicalise_text(&condition_slots_case())
+        .unwrap_or_else(|error| panic!("the case canonicalises: {error:?}"));
+    let rendering = render(&canonical.playbook, &context(), &rules())
+        .unwrap_or_else(|error| panic!("the committed rules table is complete: {error:?}"));
+    let pointers: Vec<&str> = rendering
+        .rules
+        .iter()
+        .flat_map(|rule| rule.slots.iter().map(|slot| slot.pointer.as_str()))
+        .collect();
+    for (name, tail) in table {
+        assert!(
+            pointers.iter().any(|pointer| {
+                pointer.ends_with(tail)
+                    || (tail.ends_with('/')
+                        && pointer
+                            .rsplit_once('/')
+                            .is_some_and(|(head, _)| format!("{head}/").ends_with(tail)))
+            }),
+            "no slot of the case stands at {name}: {pointers:?}"
+        );
+    }
+}
+
 /// The verifier at QUICK over `text`, as the paths of its diagnostics.
 fn diagnosed_paths(text: &str) -> Vec<String> {
     let scope = Scope::new(
@@ -754,4 +935,176 @@ fn an_integer_chips_bounds_are_the_verifiers() {
             }
         }
     }
+}
+
+/// Every committed playbook a slot can be read from: the slot cases, the
+/// worked example, and every scenario playbook, by path.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "each folder's listing is collected and sorted before it is used, as the lint asks"
+)]
+fn committed_playbooks() -> Vec<(String, String)> {
+    let mut found: Vec<(String, String)> = slot_cases()
+        .into_iter()
+        .map(|(case, text)| (case.to_owned(), text))
+        .collect();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    let scenarios = root.join("scenarios");
+    let mut folders = vec![scenarios];
+    while let Some(folder) = folders.pop() {
+        let Ok(entries) = fs::read_dir(&folder) else {
+            continue;
+        };
+        let mut paths: Vec<PathBuf> = entries
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .collect();
+        paths.sort();
+        for path in paths {
+            if path.is_dir() {
+                folders.push(path);
+            } else if path
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().ends_with(".playbook.jsonc"))
+            {
+                found.push((path.display().to_string(), read(&path)));
+            }
+        }
+    }
+    found
+}
+
+/// The verifier at QUICK over `text`, as `(code, path)` pairs.
+fn diagnosed(text: &str) -> Vec<(String, String)> {
+    let scope = Scope::new(
+        pharmakos_sim::tables::SeatId::new(0),
+        pharmakos_sim::knowledge::SeatEconomy {
+            treasury: pharmakos_sim::math::quantity::Money::new(200),
+            supply: pharmakos_sim::math::quantity::Kw::new(10),
+            draw: pharmakos_sim::math::quantity::Kw::new(2),
+        },
+    );
+    verify_jsonc(text, &[], &scope, &rules(), Depth::Quick)
+        .unwrap_or_else(|error| panic!("the committed rules table is complete: {error:?}"))
+        .diagnostics
+        .into_iter()
+        .map(|diagnostic| (diagnostic.code, diagnostic.path))
+        .collect()
+}
+
+/// The verifier's codes for a condition missing where one is required: a
+/// rule with no `when` (`E0106`) and a `not` with no item (`E0203`). A pick
+/// that fills the slot answers them, at the place above it they are raised.
+const MISSING_CONDITION: [&str; 2] = ["E0106", "E0203"];
+
+/// S3's `gwu`, fix pass 1 (the review's C1, K1): for every pickable slot of
+/// every committed playbook, the op the slot names, sent with a vocabulary
+/// entry's skeleton, fills or replaces that slot and nothing else. The
+/// re-rendered rule has as many slots as before, every one where it was and
+/// as it was but the picked one, now the new leaf; and the verifier draws
+/// nothing new but at the slot, where the new leaf may draw its own, and
+/// drops nothing but at the slot or above it, where a complaint about the
+/// missing condition (a rule with no `when`, a `not` with no item) is the
+/// pick's to answer.
+/// An `add` at an item of a group would insert and fail here.
+#[test]
+fn a_pick_with_the_op_its_slot_names_changes_that_slot_alone() {
+    use pharmakos_plan_core::render::SlotState;
+    let words = pharmakos_plan_core::vocabulary::vocabulary(&[])
+        .unwrap_or_else(|error| panic!("the vocabulary: {error:?}"));
+    let found = words
+        .families
+        .iter()
+        .flat_map(|family| &family.predicates)
+        .find(|entry| entry.name == "treasury");
+    let Some(skeleton) = found.map(|entry| entry.skeleton_json.clone()) else {
+        panic!("the vocabulary has treasury");
+    };
+    let mut picked = 0_usize;
+    for (case, text) in committed_playbooks() {
+        let Ok(canonical) = canonicalise_text(&text) else {
+            continue;
+        };
+        let rendering = render(&canonical.playbook, &context(), &rules())
+            .unwrap_or_else(|error| panic!("{case}: a rendering: {error:?}"));
+        let before = diagnosed(&text);
+        for (rule_index, rule) in rendering.rules.iter().enumerate() {
+            for (slot_index, slot) in rule.slots.iter().enumerate() {
+                let Some(op) = slot.pick else {
+                    assert_eq!(slot.state, SlotState::Group, "{case}: {}", slot.pointer);
+                    continue;
+                };
+                let op = match op {
+                    PickOp::Add => "add",
+                    PickOp::Replace => "replace",
+                };
+                let patch = format!(
+                    r#"[{{"op":"{op}","path":"{}","value":{{"treasury":{skeleton}}}}}]"#,
+                    slot.pointer
+                );
+                let (patched, _) = patch_text(&text, &patch)
+                    .unwrap_or_else(|error| panic!("{case}: {op} at {}: {error:?}", slot.pointer));
+                let again = canonicalise_text(&patched)
+                    .unwrap_or_else(|error| panic!("{case}: {}: {error:?}", slot.pointer));
+                let after = render(&again.playbook, &context(), &rules())
+                    .unwrap_or_else(|error| panic!("{case}: {}: {error:?}", slot.pointer));
+                let rule_after = after
+                    .rules
+                    .get(rule_index)
+                    .unwrap_or_else(|| panic!("{case}: {} lost its rule", slot.pointer));
+                assert_eq!(
+                    rule_after.slots.len(),
+                    rule.slots.len(),
+                    "{case}: {}",
+                    slot.pointer
+                );
+                for (index, (was, now)) in rule.slots.iter().zip(&rule_after.slots).enumerate() {
+                    if index == slot_index {
+                        assert_eq!(
+                            (now.pointer.as_str(), now.state, now.predicate),
+                            (slot.pointer.as_str(), SlotState::Leaf, "treasury"),
+                            "{case}: the picked slot"
+                        );
+                    } else {
+                        assert_eq!(
+                            (&now.pointer, now.state, now.predicate),
+                            (&was.pointer, was.state, was.predicate),
+                            "{case}: picking {} moved another slot",
+                            slot.pointer
+                        );
+                    }
+                }
+                let now = diagnosed(&patched);
+                let gained: Vec<&(String, String)> =
+                    now.iter().filter(|found| !before.contains(found)).collect();
+                let lost: Vec<&(String, String)> =
+                    before.iter().filter(|found| !now.contains(found)).collect();
+                // By path segment: `/items/1` holds `/items/1/..`, never
+                // `/items/10`.
+                let under = |path: &str, base: &str| {
+                    path == base
+                        || path
+                            .strip_prefix(base)
+                            .is_some_and(|rest| rest.starts_with('/'))
+                };
+                assert!(
+                    gained.iter().all(|(_, path)| under(path, &slot.pointer)),
+                    "{case}: picking {} drew {gained:?} elsewhere",
+                    slot.pointer
+                );
+                // Lost: what the new leaf answers at or under the slot, and,
+                // above it, only the codes that say this slot's own
+                // condition was missing: a rule with no `when` (`E0106`), a
+                // `not` with no item (`E0203`).
+                assert!(
+                    lost.iter().all(|(code, path)| under(path, &slot.pointer)
+                        || (MISSING_CONDITION.contains(&code.as_str())
+                            && under(&slot.pointer, path))),
+                    "{case}: picking {} answered {lost:?} elsewhere",
+                    slot.pointer
+                );
+                picked = picked.saturating_add(1);
+            }
+        }
+    }
+    assert!(picked > 20, "the property ran over {picked} picks");
 }

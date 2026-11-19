@@ -110,15 +110,18 @@ const CONTINUATION: Continuation = Continuation {
 /// Resume a saved match on a new surface.
 fn resume(match_id: &str, saved: &SavedMatch) -> Result<Surface, pharmakos_gateway::Error> {
     let state = through_the_file(match_id, saved);
-    Surface::resume(
-        match_id,
-        SEED,
-        FogPolicy::fogged(),
-        &SEATS,
-        pristine(),
-        &state,
-        CONTINUATION,
-    )
+    {
+        let host = pristine();
+        Surface::new(
+            match_id,
+            SEED,
+            host.rules().clone(),
+            FogPolicy::fogged(),
+            &SEATS,
+        )
+        .expect("a surface")
+        .resume(host, &state, CONTINUATION)
+    }
 }
 
 /// What each seat submits in a round: seat 0 walks east a little further every
@@ -751,15 +754,18 @@ fn a_sealed_resume_starts_no_lower_than_the_audit_logs_last_tick() {
         generation: 7,
         last_tick: dead.raw(),
     };
-    let resumed = Surface::resume(
-        MATCH_ID,
-        SEED,
-        FogPolicy::fogged(),
-        &SEATS,
-        pristine(),
-        &state,
-        floor,
-    )
+    let resumed = {
+        let host = pristine();
+        Surface::new(
+            MATCH_ID,
+            SEED,
+            host.rules().clone(),
+            FogPolicy::fogged(),
+            &SEATS,
+        )
+        .expect("a surface")
+        .resume(host, &state, floor)
+    }
     .expect("a Push resumes");
     assert_eq!(resumed.time().phase, Phase::Push);
     assert_eq!(

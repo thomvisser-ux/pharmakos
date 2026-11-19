@@ -384,3 +384,91 @@ fn the_wire_form_of_an_inverse_loses_the_trivia_it_carried() {
         ]
     );
 }
+
+/// A file that writes a step's `skip_if` in its camelCase JSON name.
+const CAMEL: &str = r#"{"schema_version":{"major":1},"declarative":{"route":[
+  {"label":"a","hold":{"ms":1000},"skipIf":{"cmdrHpPct":{"cmp":"LE","pct":10}}},
+  {"label":"b","waitUntil":{},"timeoutMs":3000}
+]}}"#;
+
+/// S3's `gwu`, fix pass 1 (the review's C3, K2): a patch that would leave one
+/// field written under both its names in one object is refused, naming both
+/// spellings, and the file is not touched; the decoder would refuse the
+/// result (`BothNames`), so accepting it would hand back a file that no
+/// longer decodes.
+#[test]
+fn a_patch_that_would_write_a_field_twice_is_refused_naming_both_spellings() {
+    let patch = r#"[{"op":"add","path":"/declarative/route/0/skip_if","value":{"treasury":{"dollars":{"op":"GE","value":100}}}}]"#;
+    let error = pharmakos_plan_core::patch_text(CAMEL, patch)
+        .expect_err("a second spelling of skip_if is refused");
+    assert!(
+        error.message.contains("`skipIf`") && error.message.contains("`skip_if`"),
+        "{}",
+        error.message
+    );
+    assert_eq!(error.pointer, "/declarative/route/0");
+
+    // Under a camelCase member a snake_case pointer finds nothing, as before.
+    let under = r#"[{"op":"add","path":"/declarative/route/1/wait_until/condition","value":{"treasury":{"dollars":{"op":"GE","value":100}}}}]"#;
+    let error = pharmakos_plan_core::patch_text(CAMEL, under)
+        .expect_err("nothing at wait_until in a file that writes waitUntil");
+    assert!(error.message.contains("nothing"), "{}", error.message);
+
+    // The same edit in the camelCase name, and a snake_case file, are taken.
+    let camel_edit = r#"[{"op":"replace","path":"/declarative/route/0/skipIf","value":{"treasury":{"dollars":{"op":"GE","value":100}}}}]"#;
+    let (patched, _) = pharmakos_plan_core::patch_text(CAMEL, camel_edit).expect("one spelling");
+    assert!(patched.contains("\"treasury\""), "{patched}");
+    let snake = CAMEL.replace("skipIf", "skip_if");
+    let (patched, _) = pharmakos_plan_core::patch_text(&snake, patch).expect("a snake_case file");
+    assert!(patched.contains("\"treasury\""), "{patched}");
+}
+
+/// A rule that writes its cooldown under both names, and one that writes it
+/// once.
+const COOLED_TWICE: &str = r#"{"id":"twice","body":[{"label":"b","hold":{"ms":1000}}],"resume":"CONTINUE","cooldown_ms":5000,"cooldownMs":6000,"max_fires":1}"#;
+const COOLED_ONCE: &str = r#"{"id":"once","body":[{"label":"c","hold":{"ms":1000}}],"resume":"CONTINUE","cooldown_ms":5000,"max_fires":1}"#;
+
+/// S3's `gwu`, fix pass 2 (the re-review's item 3): what a patch adds is
+/// told by field and count, not by the object's pointer. A file that already
+/// writes a field twice is the decoder's to refuse; a patch that moves that
+/// object to another index (a rule added before it) writes nothing twice, and
+/// is taken. A patch that itself brings both spellings is refused, and says
+/// so rather than "edit the member the file already writes".
+#[test]
+fn a_field_written_twice_is_told_by_field_and_count_not_by_pointer() {
+    let file = format!(
+        r#"{{"schema_version":{{"major":1}},"declarative":{{"handlers":[{COOLED_TWICE}]}}}}"#
+    );
+    let before_it =
+        format!(r#"[{{"op":"add","path":"/declarative/handlers/0","value":{COOLED_ONCE}}}]"#);
+    let (patched, _) = pharmakos_plan_core::patch_text(&file, &before_it)
+        .expect("a rule added before an old pair writes nothing twice");
+    assert!(patched.contains("\"once\""), "{patched}");
+
+    let clean = format!(
+        r#"{{"schema_version":{{"major":1}},"declarative":{{"handlers":[{COOLED_ONCE}]}}}}"#
+    );
+    let brings_both =
+        format!(r#"[{{"op":"add","path":"/declarative/handlers/-","value":{COOLED_TWICE}}}]"#);
+    let error = pharmakos_plan_core::patch_text(&clean, &brings_both)
+        .expect_err("the patch writes cooldown twice");
+    assert!(
+        error.message.contains("the patch itself"),
+        "{}",
+        error.message
+    );
+    assert!(
+        !error.message.contains("already writes"),
+        "{}",
+        error.message
+    );
+    assert_eq!(error.pointer, "/declarative/handlers/1");
+
+    let patch = r#"[{"op":"add","path":"/declarative/route/0/skip_if","value":{"treasury":{"dollars":{"op":"GE","value":100}}}}]"#;
+    let error = pharmakos_plan_core::patch_text(CAMEL, patch).expect_err("refused");
+    assert!(
+        error.message.contains("already writes"),
+        "{}",
+        error.message
+    );
+}

@@ -212,15 +212,18 @@ const CONTINUATION: Continuation = Continuation {
 /// Resume a saved match on a new surface.
 fn resume(match_id: &str, saved: &SavedMatch) -> Surface {
     let state = through_the_file(match_id, saved);
-    Surface::resume(
-        match_id,
-        SEED,
-        FogPolicy::fogged(),
-        &SEATS,
-        pristine(),
-        &state,
-        CONTINUATION,
-    )
+    {
+        let host = pristine();
+        Surface::new(
+            match_id,
+            SEED,
+            host.rules().clone(),
+            FogPolicy::fogged(),
+            &SEATS,
+        )
+        .expect("a surface")
+        .resume(host, &state, CONTINUATION)
+    }
     .expect("a Lull resumes")
 }
 
