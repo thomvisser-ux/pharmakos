@@ -998,9 +998,31 @@ fn the_lobby_hosts_a_three_round_match() {
         .collect();
     assert_eq!(
         presets,
-        ["const PRESET := \"custom\""],
-        "the lobby writes `custom` until `ed3b` brings the client's half of an untimed Lull"
+        ["const PRESET := \"probation\""],
+        "the lobby hosts Probation, whose untimed Lull the rig reads from the footer"
     );
+    let check = read("scripts/watch_check.gd");
+    assert!(
+        check.contains("const CHECK_PRESET := \"custom\""),
+        "the watch check's main legs keep `custom`, whose countdown they drive"
+    );
+    assert!(
+        check.contains(
+            "_line = HostLink.config_line(HostLink.match_id(\"watch-check-probation\"), HostLink.LADDER)"
+        ),
+        "the watch check's last leg hosts the lobby's own line, Probation's preset and seed"
+    );
+    let leg = gd_code(&check, "_run_probation");
+    for wanted in [
+        "if _refusals.size() != refused_before:",
+        "if not state.get(\"untimed\", false):",
+        "if String(state.get(\"timer\", \"\")) != \"\":",
+    ] {
+        assert!(
+            leg.iter().any(|line| line.contains(wanted)),
+            "the Probation leg checks `{wanted}`: {leg:?}"
+        );
+    }
     let limit = gd_function(&text, "round_limit");
     let code: Vec<&str> = limit
         .iter()

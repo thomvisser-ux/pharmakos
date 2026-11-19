@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! **The client names no word of the vocabulary** (S3's plan, task `ed3b`, part 2, decisions-log
-//! item 160 (4); an engineering call the owner can veto): every predicate, mandate, step and blueprint the pickers and the
-//! Visit & change rows offer is `get_vocabulary`'s, drawn as sent. This scan reads the names out
+//! item 160 (4); an engineering call the owner can veto): every predicate, mandate, step and
+//! blueprint the pickers, the Visit & change rows and the map's steps offer is
+//! `get_vocabulary`'s, drawn as sent. This scan reads the names out
 //! of the committed answer (`godot/fixtures/vocabulary.json`), so a new name there needs no
 //! change here, and fails when the client's code names one: a Rust source under `src/` (its unit
 //! tests left out) or a GDScript under `godot/scripts/` (the checks left out, which pin what a
@@ -297,7 +298,7 @@ fn the_client_names_no_word_of_the_vocabulary() {
     }
     assert!(
         found.is_empty(),
-        "every predicate, mandate and blueprint is get_vocabulary's, drawn as sent: the client \
+        "every predicate, mandate, step and blueprint is get_vocabulary's, drawn as sent: the client \
          names none of them.\n{}",
         found.join("\n")
     );
