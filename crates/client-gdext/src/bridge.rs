@@ -1591,6 +1591,10 @@ fn rig_state(rig: &Rig, pending: usize) -> VarDictionary {
     state.set(&"round".to_variant(), &i64::from(rig.round()).to_variant());
     state.set(&"timer".to_variant(), &rig.timer_text().to_variant());
     state.set(&"untimed".to_variant(), &rig.untimed().to_variant());
+    state.set(
+        &"zero_refusal".to_variant(),
+        &text_or_empty(rig.zero_refusal()).to_variant(),
+    );
     state.set(&"speed".to_variant(), &i64::from(rig.speed()).to_variant());
     state.set(&"skipping".to_variant(), &rig.skipping().to_variant());
     state.set(&"all_ready".to_variant(), &rig.all_ready().to_variant());

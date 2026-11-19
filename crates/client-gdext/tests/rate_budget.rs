@@ -35,7 +35,9 @@ mod common;
 
 use common::{EXPAND_EAST, Gateway, limits};
 use pharmakos_client_gdext::editor::{Action, Selector, Target};
-use pharmakos_client_gdext::rig::{ADMIN, LullLengths, Phase, Rig, SEAT, SEAT_CALLS_PER_REFILL};
+use pharmakos_client_gdext::rig::{
+    ADMIN, LullLengths, Phase, Rig, SEAT, SEAT_CALLS_PER_REFILL, ZERO_REFUSALS,
+};
 use pharmakos_client_gdext::view::{Entity, EntityKind};
 
 /// One frame of a 60 Hz client, in wall microseconds.
@@ -233,5 +235,42 @@ fn the_rigs_margin_is_under_the_gateways_limit() {
         SEAT_CALLS_PER_REFILL < limits().per_tick,
         "SEAT_CALLS_PER_REFILL is {SEAT_CALLS_PER_REFILL} and the gateway admits {} a tick",
         limits().per_tick
+    );
+}
+
+/// **A Lull's closing zero the gateway keeps refusing stays inside the budgets** (the bound on
+/// the run-out's retries): a 2 s Lull runs out, the stand-in refuses every countdown at zero,
+/// the rig sends it `ZERO_REFUSALS` times at the clock's cadence, gives it up, says the
+/// refusal and ends the Lull; no seat call is refused `RATE_LIMITED` meanwhile.
+#[test]
+fn a_refused_closing_zero_is_retried_within_the_budget_and_then_given_up() {
+    let mut gateway = Gateway::new("lull");
+    gateway.refuse_zero = true;
+    let mut rig = Rig::new();
+    rig.set_lull_length(LullLengths {
+        first_ms: Some(2_000),
+        later_ms: Some(2_000),
+    });
+    rig.opened(ADMIN);
+    rig.opened(SEAT);
+    rig.editor_mut().set_seat("seat.0");
+    let mut now = 0_u64;
+    for _ in 0..1_200_usize {
+        now += FRAME_US;
+        for outgoing in rig.poll(now) {
+            let answer = gateway.serve(&outgoing);
+            let _ = rig.receive(outgoing.link, &answer);
+        }
+        if gateway.phase == "push" {
+            break;
+        }
+    }
+    assert_eq!(gateway.phase, "push", "{:?}", gateway.methods);
+    assert_eq!(gateway.zeros_refused, u32::from(ZERO_REFUSALS));
+    assert_eq!(gateway.count("end_lull"), 1);
+    assert_eq!(gateway.rate_limited, 0, "{:?}", gateway.methods);
+    assert_eq!(
+        rig.zero_refusal(),
+        Some("INVALID_ARGUMENT: no countdown here")
     );
 }

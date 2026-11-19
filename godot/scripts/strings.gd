@@ -254,6 +254,7 @@ const TEXT := {
 	"status_open_failed": "Could not read {path}.",
 	"status_new_opened": "A new playbook is in the editor; the checks say what it still needs. Undo takes it back.",
 	"status_picking": "Click the map for the new value; Escape stops.",
+	"lobby_zero_refused": "The Lull ran out, and the gateway refused to be told so: {detail}",
 	"status_anchoring": "Click the ground where the target goes; Escape stops.",
 	"status_visit_changing": "Adding the visit...",
 	"status_rule_editing": "Editing...",
