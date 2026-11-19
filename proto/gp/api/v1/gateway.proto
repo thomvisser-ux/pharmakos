@@ -1544,20 +1544,26 @@ message RenderedRule {
 // names it, so a client composes no pointer from its own knowledge of the
 // schema.
 //
-// To fill or replace the condition a client sends one JSON Patch `add` at
-// `pointer` (RFC 6902: an `add` over an existing member replaces it, and over
-// an absent one inserts it), whose value is `{"<name>": <skeleton>}`, a
-// vocabulary entry's `name` and `skeleton_json` (get_vocabulary). A GROUP slot
-// is listed so its items read in place and is not a pick target: a leaf
-// written over it would discard its items, so a client offers a pick on an
-// EMPTY or a LEAF slot only (S3's picker fills or replaces one leaf and builds
-// no group).
+// To fill or replace the condition a client sends one JSON Patch operation at
+// `pointer` whose `op` is the one `pick_op` names, and whose value is
+// `{"<name>": <skeleton>}`, a vocabulary entry's `name` and `skeleton_json`
+// (get_vocabulary). The gateway names the op because RFC 6902 makes them
+// differ where it matters: an `add` at an array index inserts, so an `add` at
+// an item of an `all` or an `any` would keep the old item beside the new one
+// and silently change what the rule means; and a `replace` needs something
+// there to replace. A GROUP slot is listed so its items read in place and is
+// not a pick target: a leaf written over it would discard its items, so a
+// client offers a pick on an EMPTY or a LEAF slot only (S3's picker fills or
+// replaces one leaf and builds no group).
 message ConditionSlot {
   // RFC 6901 JSON Pointer of the `gp.v1.Condition`: "/declarative/handlers/2/when",
   // "/declarative/route/0/skip_if", "/declarative/handlers/0/when/all/items/1".
   // Written whether or not the file has the member: an EMPTY slot's pointer
-  // is where an `add` puts one. In the canonical snake_case spelling of the
-  // proto JSON mapping, as every chip's pointer is.
+  // with nothing at it is where an `add` puts one. In the canonical snake_case
+  // spelling of the proto JSON mapping, as every chip's pointer is: in a file
+  // that writes the member in its camelCase JSON name instead (`skipIf`), a
+  // patch at this pointer is refused by `patch_plan` rather than written beside
+  // it, and a pointer under such a member finds nothing.
   string pointer = 1;
 
   // The slot in the player's words, from the renderer's own string table:
@@ -1576,6 +1582,13 @@ message ConditionSlot {
   // "not" for a group. Empty for an EMPTY slot.
   string predicate = 5;
 
+  // The JSON Patch `op` a pick at this slot sends: ADD where nothing is at
+  // `pointer` (the member is absent), REPLACE where anything is (a leaf, an
+  // empty object, an item of a group). PICK_OP_UNSPECIFIED on a GROUP slot,
+  // which is not a pick target. On the JSON-RPC wire it is lower case
+  // (decisions-log item 80): "add", "replace", "unspecified".
+  PickOp pick_op = 6;
+
   // What the slot holds. On the JSON-RPC wire it is lower case (decisions-log
   // item 80): "empty", "leaf", "group".
   enum State {
@@ -1586,6 +1599,16 @@ message ConditionSlot {
     LEAF = 2;
     // `all`, `any` or `not`: its items follow as slots of their own.
     GROUP = 3;
+  }
+
+  // The JSON Patch operation a pick sends.
+  enum PickOp {
+    PICK_OP_UNSPECIFIED = 0;
+    // Nothing is at the pointer: the patch inserts the member.
+    ADD = 1;
+    // Something is at the pointer: the patch replaces it, an array item in
+    // place.
+    REPLACE = 2;
   }
 }
 

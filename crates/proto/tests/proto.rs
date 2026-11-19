@@ -1797,7 +1797,7 @@ fn the_s3_rule_list_wire_round_trips_in_its_documented_spellings() {
 /// `reserved` statement held.
 #[test]
 fn the_condition_slots_round_trip_in_their_documented_spellings() {
-    use gp_api::condition_slot::State;
+    use gp_api::condition_slot::{PickOp, State};
     use gp_api::{ConditionSlot, RenderedRule};
     let rule = RenderedRule {
         pointer: String::from("/declarative/handlers/0"),
@@ -1811,6 +1811,7 @@ fn the_condition_slots_round_trip_in_their_documented_spellings() {
                 line: 3,
                 state: State::Group.into(),
                 predicate: String::from("all"),
+                pick_op: PickOp::Unspecified.into(),
             },
             ConditionSlot {
                 pointer: String::from("/declarative/handlers/0/when/all/items/0"),
@@ -1818,6 +1819,7 @@ fn the_condition_slots_round_trip_in_their_documented_spellings() {
                 line: 3,
                 state: State::Leaf.into(),
                 predicate: String::from("cmdr_hp_pct"),
+                pick_op: PickOp::Replace.into(),
             },
             ConditionSlot {
                 pointer: String::from("/declarative/handlers/0/body/0/skip_if"),
@@ -1825,13 +1827,14 @@ fn the_condition_slots_round_trip_in_their_documented_spellings() {
                 line: 3,
                 state: State::Empty.into(),
                 predicate: String::new(),
+                pick_op: PickOp::Add.into(),
             },
         ],
     };
     round_trips(
         &rule,
-        r#"{"pointer":"/declarative/handlers/0","line":3,"line_count":4,"slots":[{"pointer":"/declarative/handlers/0/when","title":"when","line":3,"state":"GROUP","predicate":"all"},{"pointer":"/declarative/handlers/0/when/all/items/0","title":"when, item 1 of all","line":3,"state":"LEAF","predicate":"cmdr_hp_pct"},{"pointer":"/declarative/handlers/0/body/0/skip_if","title":"step 1, skip if","line":3,"state":"EMPTY"}]}"#,
-        &["slots", "state", "predicate"],
+        r#"{"pointer":"/declarative/handlers/0","line":3,"line_count":4,"slots":[{"pointer":"/declarative/handlers/0/when","title":"when","line":3,"state":"GROUP","predicate":"all"},{"pointer":"/declarative/handlers/0/when/all/items/0","title":"when, item 1 of all","line":3,"state":"LEAF","predicate":"cmdr_hp_pct","pick_op":"REPLACE"},{"pointer":"/declarative/handlers/0/body/0/skip_if","title":"step 1, skip if","line":3,"state":"EMPTY","pick_op":"ADD"}]}"#,
+        &["slots", "state", "predicate", "pick_op"],
     );
     let message = schema()
         .message("gp.api.v1.RenderedRule")

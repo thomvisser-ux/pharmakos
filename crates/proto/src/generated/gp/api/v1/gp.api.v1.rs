@@ -1771,21 +1771,27 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.RenderedRule".into
 /// names it, so a client composes no pointer from its own knowledge of the
 /// schema.
 ///
-/// To fill or replace the condition a client sends one JSON Patch `add` at
-/// `pointer` (RFC 6902: an `add` over an existing member replaces it, and over
-/// an absent one inserts it), whose value is `{"<name>": <skeleton>}`, a
-/// vocabulary entry's `name` and `skeleton_json` (get_vocabulary). A GROUP slot
-/// is listed so its items read in place and is not a pick target: a leaf
-/// written over it would discard its items, so a client offers a pick on an
-/// EMPTY or a LEAF slot only (S3's picker fills or replaces one leaf and builds
-/// no group).
+/// To fill or replace the condition a client sends one JSON Patch operation at
+/// `pointer` whose `op` is the one `pick_op` names, and whose value is
+/// `{"<name>": <skeleton>}`, a vocabulary entry's `name` and `skeleton_json`
+/// (get_vocabulary). The gateway names the op because RFC 6902 makes them
+/// differ where it matters: an `add` at an array index inserts, so an `add` at
+/// an item of an `all` or an `any` would keep the old item beside the new one
+/// and silently change what the rule means; and a `replace` needs something
+/// there to replace. A GROUP slot is listed so its items read in place and is
+/// not a pick target: a leaf written over it would discard its items, so a
+/// client offers a pick on an EMPTY or a LEAF slot only (S3's picker fills or
+/// replaces one leaf and builds no group).
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ConditionSlot {
     /// RFC 6901 JSON Pointer of the `gp.v1.Condition`: "/declarative/handlers/2/when",
     /// "/declarative/route/0/skip_if", "/declarative/handlers/0/when/all/items/1".
     /// Written whether or not the file has the member: an EMPTY slot's pointer
-    /// is where an `add` puts one. In the canonical snake_case spelling of the
-    /// proto JSON mapping, as every chip's pointer is.
+    /// with nothing at it is where an `add` puts one. In the canonical snake_case
+    /// spelling of the proto JSON mapping, as every chip's pointer is: in a file
+    /// that writes the member in its camelCase JSON name instead (`skipIf`), a
+    /// patch at this pointer is refused by `patch_plan` rather than written beside
+    /// it, and a pointer under such a member finds nothing.
     #[prost(string, tag="1")]
     pub pointer: ::prost::alloc::string::String,
     /// The slot in the player's words, from the renderer's own string table:
@@ -1804,6 +1810,13 @@ pub struct ConditionSlot {
     /// "not" for a group. Empty for an EMPTY slot.
     #[prost(string, tag="5")]
     pub predicate: ::prost::alloc::string::String,
+    /// The JSON Patch `op` a pick at this slot sends: ADD where nothing is at
+    /// `pointer` (the member is absent), REPLACE where anything is (a leaf, an
+    /// empty object, an item of a group). PICK_OP_UNSPECIFIED on a GROUP slot,
+    /// which is not a pick target. On the JSON-RPC wire it is lower case
+    /// (decisions-log item 80): "add", "replace", "unspecified".
+    #[prost(enumeration="condition_slot::PickOp", tag="6")]
+    pub pick_op: i32,
 }
 /// Nested message and enum types in `ConditionSlot`.
 pub mod condition_slot {
@@ -1840,6 +1853,39 @@ pub mod condition_slot {
                 "EMPTY" => Some(Self::Empty),
                 "LEAF" => Some(Self::Leaf),
                 "GROUP" => Some(Self::Group),
+                _ => None,
+            }
+        }
+    }
+    /// The JSON Patch operation a pick sends.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum PickOp {
+        Unspecified = 0,
+        /// Nothing is at the pointer: the patch inserts the member.
+        Add = 1,
+        /// Something is at the pointer: the patch replaces it, an array item in
+        /// place.
+        Replace = 2,
+    }
+    impl PickOp {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "PICK_OP_UNSPECIFIED",
+                Self::Add => "ADD",
+                Self::Replace => "REPLACE",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "PICK_OP_UNSPECIFIED" => Some(Self::Unspecified),
+                "ADD" => Some(Self::Add),
+                "REPLACE" => Some(Self::Replace),
                 _ => None,
             }
         }
