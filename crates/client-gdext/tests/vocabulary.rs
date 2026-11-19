@@ -31,55 +31,71 @@ use std::path::{Path, PathBuf};
 
 use pharmakos_proto::json::{self, Json};
 
-/// A vocabulary name the client's code says with another meaning: the file, the name, and
-/// what it means there.
-const OTHER_MEANINGS: &[(&str, &str, &str)] = &[
+/// A vocabulary name the client's code says with another meaning: the file, the name, how many
+/// times that file's code says it, and what it means there.
+///
+/// Pinned by the count of uses, not only by file (decided; the owner can veto): a file of
+/// thousands of lines that may say `move` would let a new use pass unread, so any new use, or
+/// one gone, turns the scan red and has to be read and recounted here. A count rather than a
+/// function scope, because the scan reads code with no parser: a count needs none.
+const OTHER_MEANINGS: &[(&str, &str, usize, &str)] = &[
     (
         "editor.rs",
         "attack",
+        4,
         "the editor's field holding the Attack targets the S2 targeting reader found",
     ),
     (
         "targeting.rs",
         "attack",
+        1,
         "S2's `attack_targets`, the lax reader of the Attack beacon's targets (AGENTS.md \
          section 3 rule 4 names it)",
     ),
-    ("bridge.rs", "wall", "the bridge's wall clock"),
+    ("bridge.rs", "wall", 3, "the bridge's wall clock"),
     (
         "editor.rs",
         "move",
-        "the map route surface's step composer (`step_value`): a click on the map becomes one          route step, which AGENTS.md section 3 rule 4 lets the client compose",
+        2,
+        "the map route surface's step composer (`step_value`), a click on the map becoming one \
+         route step, which AGENTS.md section 3 rule 4 lets the client compose; and \
+         `route_waypoints`, the lax reader of where each step goes",
     ),
     (
         "editor.rs",
         "interface",
-        "the same composer's Visit and Recycle steps (`step_value`)",
+        3,
+        "the same composer's Visit and Recycle steps (`step_value`), and `route_waypoints`",
     ),
     (
         "editor.rs",
         "place_beacon",
-        "the same composer's placement steps (`step_value`)",
+        3,
+        "the same composer's placement steps (`step_value`), and `route_waypoints`",
     ),
     (
         "vocabulary.rs",
         "interface",
+        1,
         "`visit_step`: one Visit & change row's route step, composed from the menu's pick",
     ),
     (
         "rule_list.rs",
         "move",
+        1,
         "the RFC 6902 `move` op a drag composes",
     ),
-    ("camera_rig.gd", "move", "the camera's own movement"),
+    ("camera_rig.gd", "move", 12, "the camera's own movement"),
     (
         "view.rs",
         "build",
+        2,
         "the view model's own `build` of its chunk grid",
     ),
     (
         "editor.gd",
         "treasury",
+        1,
         "the meter's frame key for the gateway's `treasury_now`",
     ),
 ];
@@ -213,18 +229,25 @@ fn code_of_line(line: &str, comment: &str) -> String {
     out
 }
 
-/// Whether `code` names `needle` whole.
-fn names(code: &str, needle: &str) -> bool {
+/// How many times `code` names `needle` whole.
+fn uses(code: &str, needle: &str) -> usize {
     let identifier = |character: Option<char>| {
         character.is_some_and(|character| character.is_ascii_alphanumeric() || character == '_')
     };
-    code.match_indices(needle).any(|(at, _)| {
-        let before = code.get(..at).and_then(|head| head.chars().next_back());
-        let after = code
-            .get(at.saturating_add(needle.len())..)
-            .and_then(|tail| tail.chars().next());
-        !identifier(before) && !identifier(after)
-    })
+    code.match_indices(needle)
+        .filter(|(at, _)| {
+            let before = code.get(..*at).and_then(|head| head.chars().next_back());
+            let after = code
+                .get(at.saturating_add(needle.len())..)
+                .and_then(|tail| tail.chars().next());
+            !identifier(before) && !identifier(after)
+        })
+        .count()
+}
+
+/// Whether `code` names `needle` whole.
+fn names(code: &str, needle: &str) -> bool {
+    uses(code, needle) > 0
 }
 
 /// **The fixtures are the gateway's goldens, byte for byte**: the picker scene, the client's
@@ -284,25 +307,35 @@ fn the_client_names_no_word_of_the_vocabulary() {
             .unwrap_or("")
             .to_owned();
         for needle in &needles {
-            if !names(&code, needle) {
+            let count = uses(&code, needle);
+            if count == 0 {
                 continue;
             }
             match OTHER_MEANINGS
                 .iter()
-                .find(|(listed, name, _)| *listed == file && name == needle)
+                .find(|(listed, name, _, _)| *listed == file && name == needle)
             {
-                Some((listed, name, _)) => used_exceptions.push((listed, name)),
-                None => found.push(format!("{file} names `{needle}`")),
+                Some((listed, name, pinned, _)) if *pinned == count => {
+                    used_exceptions.push((listed, name));
+                }
+                Some((listed, name, pinned, _)) => {
+                    used_exceptions.push((listed, name));
+                    found.push(format!(
+                        "{file} names `{needle}` {count} time(s), and OTHER_MEANINGS pins {pinned}: \
+                         read the new use, then recount"
+                    ));
+                }
+                None => found.push(format!("{file} names `{needle}` {count} time(s)")),
             }
         }
     }
     assert!(
         found.is_empty(),
-        "every predicate, mandate, step and blueprint is get_vocabulary's, drawn as sent: the client \
-         names none of them.\n{}",
+        "every predicate, mandate, step and blueprint is get_vocabulary's, drawn as sent: the \
+         client names none of them.\n{}",
         found.join("\n")
     );
-    for (file, name, _) in OTHER_MEANINGS {
+    for (file, name, _, _) in OTHER_MEANINGS {
         assert!(
             used_exceptions.contains(&(file, name)),
             "OTHER_MEANINGS lists `{name}` in {file}, which no longer says it: drop the line"
