@@ -826,8 +826,13 @@ pub struct GetBeaconResponse {
     /// (decisions-log item 80): "build".
     #[prost(enumeration="super::super::v1::beacon_filter::MandateKind", tag="3")]
     pub mandate: i32,
-    /// The settings this beacon's mandate has now, one row per setting that is
-    /// set, in the schema's field order.
+    /// The settings this beacon's mandate has now, one row per setting the writ
+    /// holds a value for, in the schema's field order: the common two first, then
+    /// the writ's own. Each row shows the setting's effective value, the one the
+    /// sim reads, so a setting the file leaves unset has a row with its reading
+    /// (S3's `gwr` review, item 7). An Attack's launch and retreat triggers, which
+    /// are off rather than defaulted when unwritten, have a row only when written;
+    /// a list and an Attack's target and staging point have none.
     #[prost(message, repeated, tag="4")]
     pub settings: ::prost::alloc::vec::Vec<BeaconSettingRow>,
     /// A Build beacon's targets, in the order the Quartermaster reads them. Empty
@@ -850,9 +855,9 @@ pub struct BeaconSettingRow {
     /// The setting's name in the player's words.
     #[prost(string, tag="2")]
     pub title: ::prost::alloc::string::String,
-    /// The value now, as JSON text in the playbook's canonical spelling, as
-    /// EnumShape.values spells a value: `"RETURN_FIRE"` with its quotes, `true`
-    /// without.
+    /// The effective value now, as JSON text in the playbook's canonical
+    /// spelling, as EnumShape.values spells a value: `"RETURN_FIRE"` with its
+    /// quotes, `true` without.
     #[prost(string, tag="3")]
     pub value_json: ::prost::alloc::string::String,
     /// What may be written there.
@@ -1094,10 +1099,11 @@ pub struct EstimateRouteResponse {
     pub ms: i32,
     #[prost(message, repeated, tag="3")]
     pub legs: ::prost::alloc::vec::Vec<Leg>,
-    /// Whole-route travel as the player reads it: "1 min 24 s". The gateway
-    /// renders the figure, so the editor draws it and does no time maths (the
-    /// register's S3-18, items 57 and 61). Says it is a bound when any leg is
-    /// fogged. Empty when `reachable` is false. Filled from S3's `gwr`.
+    /// Whole-route travel as the player reads it, rounded up to a whole second:
+    /// "1:24", or "9 s" under a minute. The gateway renders the figure, so the
+    /// editor draws it and does no time maths (the register's S3-18, items 57 and
+    /// 61). Says it is a bound when any leg is fogged: "at most 1:24". Empty when
+    /// `reachable` is false. Filled from S3's `gwr`.
     #[prost(string, tag="4")]
     pub travel_text: ::prost::alloc::string::String,
 }

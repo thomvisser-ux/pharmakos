@@ -559,8 +559,8 @@ pub struct QueueStructureRow {
     ///
     /// `resonance_spire` is the one S3 accepts, for a seat that holds
     /// `Licence.RESONANCE_SPIRE` (decisions-log item 153 (3); S3's plan, E4). The
-    /// verifier and the sim refuse every other id until S4, and until S3's `lic`
-    /// and `vfy5` have merged they refuse this one too.
+    /// verifier and the sim refuse every other id until S4 (S3's `vfy5` and `lic`
+    /// built the one they accept).
     #[prost(string, tag="1")]
     pub blueprint_id: ::prost::alloc::string::String,
 }
@@ -942,10 +942,10 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.Handler".into() }fn ty
 ///      (50-59), the rest of enemy knowledge (63-69), the income forecast
 ///      (74-79) and posture (92-99).
 ///
-/// The numbers S3 fills are on the wire from S3's `con6`, and a predicate has
-/// its effect only from S3's `pred`. Until then the sim's compile refuses each
-/// one with `NotAtThisStage` and the verifier with a code of its own
-/// (`E0020` to `E0027`), so none of them can be half-used.
+/// The numbers S3 fills are on the wire from S3's `con6` and have their effect
+/// from S3's `pred`, which retired the sim's `NotAtThisStage` and the
+/// verifier's codes (`E0020` to `E0027`) that refused each one before it, so
+/// none of them could be half-used.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Condition {
     #[prost(oneof="condition::Node", tags="1, 2, 3, 20, 21, 22, 30, 40, 41, 42, 43, 44, 45, 60, 61, 62, 70, 71, 72, 73, 90, 91")]
@@ -1390,7 +1390,10 @@ const NAME: &'static str = "EnemyBeaconKnown";
 const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.EnemyBeaconKnown".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.EnemyBeaconKnown".into() }}
 /// Whether the seat knows of an enemy structure within a radius of a place,
-/// under a freshness window (spec section 10, "enemy knowledge").
+/// under a freshness window (spec section 10, "enemy knowledge"). A sighted
+/// structure counts whether it is finished or still under construction (the
+/// owner's ruling, decisions-log item 161 (12)), unlike BeaconHasStructure,
+/// which counts a finished structure only.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct EnemyStructureNear {
     #[prost(message, optional, tag="1")]
@@ -1404,18 +1407,16 @@ pub struct EnemyStructureNear {
     #[prost(message, optional, tag="4")]
     pub freshness: ::core::option::Option<Freshness>,
     /// Which structure: one blueprint, or any kind, said explicitly so that no
-    /// empty value stands for a default. Required: a predicate with neither arm is
-    /// refused (the sim's compile until S3's `pred`; S3's `vfy6` gives it a code of
-    /// its own).
+    /// empty value stands for a default. Required: the verifier refuses a
+    /// predicate with neither arm (`E0111`, at the predicate).
     #[prost(oneof="enemy_structure_near::Structure", tags="3, 5")]
     pub structure: ::core::option::Option<enemy_structure_near::Structure>,
 }
 /// Nested message and enum types in `EnemyStructureNear`.
 pub mod enemy_structure_near {
     /// Which structure: one blueprint, or any kind, said explicitly so that no
-    /// empty value stands for a default. Required: a predicate with neither arm is
-    /// refused (the sim's compile until S3's `pred`; S3's `vfy6` gives it a code of
-    /// its own).
+    /// empty value stands for a default. Required: the verifier refuses a
+    /// predicate with neither arm (`E0111`, at the predicate).
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum Structure {
         /// A blueprint, spelt as BuildTarget.blueprint_id spells one.
@@ -1726,8 +1727,8 @@ pub mod location {
         /// terrain the seat knows. Unreachable candidates are skipped, and ties go
         /// to the lowest anchor y, then x. Straight-line distance is not used.
         ///
-        /// On the wire from S3's `con6`. Until S3's `pred` builds it the sim's
-        /// compile answers NotAtThisStage and the verifier E0028.
+        /// On the wire from S3's `con6`, and built by S3's `pred`, which retired
+        /// the sim's NotAtThisStage and the verifier's E0028 that refused it before.
         #[prost(message, tag="12")]
         Toward(super::Toward),
     }

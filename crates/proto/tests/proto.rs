@@ -1778,9 +1778,9 @@ fn the_s3_rule_list_wire_round_trips_in_its_documented_spellings() {
         .expect("GetBeaconResponse is in the schema");
     assert_eq!(message.reserved_ranges, [(6, 15)]);
 
-    let route = r#"{"reachable":true,"ms":84000,"legs":[{"ms":84000,"travel_text":"1 min 24 s"}],"travel_text":"1 min 24 s"}"#;
+    let route = r#"{"reachable":true,"ms":84000,"legs":[{"ms":84000,"travel_text":"1:24"}],"travel_text":"1:24"}"#;
     let decoded: EstimateRouteResponse = json::decode(route).expect("the route decodes");
-    assert_eq!(decoded.travel_text, "1 min 24 s");
+    assert_eq!(decoded.travel_text, "1:24");
 
     let templates = r#"{"templates":[{"template_id":"t","guided_pick":true,"guided_pick_reason":"Start here."}]}"#;
     let decoded: ListTemplatesResponse = json::decode(templates).expect("the list decodes");
