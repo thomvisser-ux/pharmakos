@@ -42,6 +42,8 @@
     reason = "clippy.toml sets allow-expect-in-tests and allow-unwrap-in-tests, but that configuration only recognises #[test] functions and #[cfg(test)] modules -- not an integration test's helper functions. A panic is this file's failure report (clippy.toml's own wording)."
 )]
 
+mod support;
+
 use pharmakos_gateway::error::Code;
 use pharmakos_gateway::fog::{Blind, FogPolicy};
 use pharmakos_gateway::host::Host;
@@ -3596,6 +3598,80 @@ fn get_beacon_tells_each_kind_of_build_target_as_it_was_written() {
     let voxel = targets.get(3).expect("the voxel target, order 3");
     assert!(voxel.contains(r#""blueprint_id": "mortar""#), "{voxel}");
     assert!(voxel.contains(r#""voxel""#), "{voxel}");
+}
+
+// ---------------------------------------------------------------------------
+// S3's `gwu`: the answers the client's fixtures copy, as goldens
+// ---------------------------------------------------------------------------
+
+/// `method` called with `params` as a seat's first call of the golden match's
+/// opening Lull, the whole JSON-RPC answer, footer and all, written as
+/// `tests/golden/gateway/<case>/` pins it. The first call, so the footer's
+/// countdown and tick are the same on every run.
+fn first_answer(surface: &mut Surface, method: &str, params: &str) -> String {
+    let token = seat_token(surface, 0);
+    let mut left = FIRST_LULL_MS;
+    let response = call(surface, &token, &mut left, method, params);
+    let _ = result(&response, method);
+    rpc::render(&response)
+}
+
+/// `get_vocabulary` for seat 0 on the golden match, as a golden: every
+/// family, step, mandate and blueprint with its locks, the predicates S3's
+/// `pred` built open and the Resonance Spire locked (seat 0 holds no
+/// licence). The client's picker fixture is a byte copy of it (lane `ed3b`
+/// part 2).
+#[test]
+fn get_vocabulary_answers_its_golden() {
+    let mut surface = hosted();
+    let answer = first_answer(&mut surface, "get_vocabulary", "{}");
+    for open in [
+        "beacon_units_by_role",
+        "beacon_mandate",
+        "beacon_has_structure",
+        "enemy_units_near",
+        "enemy_beacon_known",
+        "enemy_structure_near",
+        "kw_supply",
+        "kw_draw",
+    ] {
+        let words = pharmakos_proto::json::read(&answer).expect("the answer reads");
+        let entry = array_of(&result(&words, "get_vocabulary"), "families")
+            .iter()
+            .flat_map(|family| match family.get("predicates") {
+                Some(Json::Array(entries)) => entries.clone(),
+                _ => Vec::new(),
+            })
+            .find(|entry| text_of(entry, "name") == open);
+        let Some(entry) = entry else {
+            panic!("the vocabulary lists {open}");
+        };
+        assert_eq!(entry.get("locked"), None, "{open} is open since `pred`");
+    }
+    support::write_golden("get_vocabulary", &answer);
+}
+
+/// `get_beacon` of seat 0's opening core on the golden match, as a golden:
+/// its summary, prose, writ and settings rows (each its effective value).
+#[test]
+fn get_beacon_of_the_opening_core_answers_its_golden() {
+    let mut surface = hosted();
+    let answer = first_answer(&mut surface, "get_beacon", r#"{"beacon_id":"b_00"}"#);
+    support::write_golden("get_beacon_core", &answer);
+}
+
+/// `get_beacon` of a Build beacon holding one target of each way a target is
+/// written (`four_targets`: a wall with its box, `on` a named feature, `on`
+/// the nearest vent, a voxel), as a golden: every `BuildTarget` arm the Visit
+/// & change rows read.
+#[test]
+fn get_beacon_of_a_build_beacon_answers_its_golden() {
+    let mut surface = resumed_with(|snapshot, world| {
+        let _ = four_targets(snapshot, world);
+    });
+    let answer = first_answer(&mut surface, "get_beacon", r#"{"beacon_id":"b_00"}"#);
+    assert!(answer.contains(r#""blueprint_id": "wall""#), "{answer}");
+    support::write_golden("get_beacon_build", &answer);
 }
 
 /// The review of `gwr`, item 7: a writ's settings rows show what the sim
