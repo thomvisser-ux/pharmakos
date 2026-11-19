@@ -21,6 +21,11 @@ Three kinds of golden live here, and they fail for different reasons:
   span, the words it marks, its pointer, its shape (`integer min..max unit`,
   `choice` with the values, or `reference KIND [arms]`) and its value as compact
   canonical JSON.
+* `expected.slots.txt` — from S3's `gwu`, every condition slot of each route step
+  and rule `render` lists (`gp.api.v1.ConditionSlot`): one line a slot, tab
+  separated, with its rule's or step's pointer, the slot's pointer, its state
+  (`EMPTY`, `LEAF`, `GROUP`), the arm it holds (`-` for none), its line and its
+  title.
 
 ## What a diff means
 
@@ -40,6 +45,13 @@ Three kinds of golden live here, and they fail for different reasons:
   every integer chip's bounds to the verifier's own checks, and a reference's
   `place_beacon` arms list `toward` since S3's `pred` retired `E0028` (they
   dropped it while the verifier refused it).
+* **The slots moved.** A place a condition stands was added, dropped or
+  re-pointed, a state or an arm changed, or a title's words did (they are
+  plan-core's `SLOT_*` strings, the player's). The chips and the prose cannot
+  have moved with them: the slots are a separate walk over the file. A new place
+  the schema puts a `gp.v1.Condition` fails
+  `the_slots_walk_lists_every_place_the_schema_puts_a_condition` before it can
+  move a golden here.
 * **The prose moved.** Either a template string changed (say so; it is the one
   the player reads) or the plan itself renders differently, which is a semantic
   change wearing a typographic disguise. The prose says **nothing** about the
@@ -63,6 +75,7 @@ Three kinds of golden live here, and they fail for different reasons:
 | `cover_the_nearest_vent/` | `expected.jsonc` | the same, from `crates/plan-core/tests/cases/cover_the_nearest_vent.jsonc` (S1, task `tgtv`) |
 | `cover_the_nearest_vent/` | `expected.prose.txt` | that fixture's `render_plan` |
 | `expand_east/`, `cover_the_nearest_vent/`, `defend_and_attack/`, `predicates_and_toward/` | `expected.chips.txt` | each case's `render`, in `every_rendered_case_has_its_chips_golden_and_keeps_their_promises` (S3's `gwr`) |
+| `expand_east/`, `cover_the_nearest_vent/`, `defend_and_attack/`, `predicates_and_toward/`, `condition_slots/` | `expected.slots.txt` | each case's `render`, in `every_case_has_its_slots_golden_and_each_slot_names_its_place` (S3's `gwu`); `condition_slots/` from `crates/plan-core/tests/cases/condition_slots.jsonc` |
 
 `expand_east/` has no `expected.canonical.json` of its own on purpose: its
 canonical JSON is byte-identical to `tests/golden/proto/expected.expand_east.json`,
@@ -104,10 +117,18 @@ and its golden is in the permissive tier.
 
 `predicates_and_toward/` (S3's `con6`) pins S3's constructs the same way, from
 `crates/plan-core/tests/cases/predicates_and_toward.jsonc`: the eight predicates
-and the site `toward`, named and described. The sim and the verifier refuse each
-of them until S3's `pred`, but a refused file still round-trips and renders, and
-that is what this case holds. It too carries no SPDX header, and its golden is in
+and the site `toward`, named and described. They were refused until S3's `pred`
+gave them their effect; the case held that a refused file still round-trips and
+renders, and now holds them as accepted constructs. It too carries no SPDX header, and its golden is in
 the permissive tier.
+
+`condition_slots/` (S3's `gwu`) has only `expected.slots.txt`: its fixture,
+`crates/plan-core/tests/cases/condition_slots.jsonc`, is built to hold every kind
+of condition slot (a `skip_if` filled and absent, a `wait_until` with a condition
+and with none, a `when` that is an `all` holding a leaf, a `not` and an `any`, a
+body step's guard that is a `not` with no item, and a rule with no `when`), and
+its round trip and prose are not this case's concern. Like the other fixtures it
+carries no SPDX header, and its golden is in the permissive tier.
 
 ## Licensing
 

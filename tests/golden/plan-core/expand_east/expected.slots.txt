@@ -1,0 +1,8 @@
+/declarative/route/0	/declarative/route/0/skip_if	EMPTY	-	4	skip if
+/declarative/route/1	/declarative/route/1/skip_if	EMPTY	-	6	skip if
+/declarative/route/2	/declarative/route/2/skip_if	EMPTY	-	7	skip if
+/declarative/handlers/0	/declarative/handlers/0/when	GROUP	all	10	when
+/declarative/handlers/0	/declarative/handlers/0/when/all/items/0	LEAF	cmdr_hp_pct	10	when, item 1 of all
+/declarative/handlers/0	/declarative/handlers/0/when/all/items/1	LEAF	cmdr_took_damage_within	10	when, item 2 of all
+/declarative/handlers/0	/declarative/handlers/0/body/0/skip_if	EMPTY	-	10	step 1, skip if
+/declarative/handlers/0	/declarative/handlers/0/body/1/skip_if	EMPTY	-	10	step 2, skip if

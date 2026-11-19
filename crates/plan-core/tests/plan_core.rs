@@ -15,6 +15,9 @@
 //! 5. From S3's `gwr`, `expected.chips.txt` for each rendered case: the rules,
 //!    steps and chips `render` places beside the prose (S3's plan, E8), with
 //!    the promises they keep and the verifier's agreement on their bounds.
+//! 6. From S3's `gwu`, `expected.slots.txt` for each rendered case and for
+//!    `condition_slots`: every place a condition stands or could stand, and a
+//!    check that the walk lists every place the schema puts one.
 //!
 //! The producing tests write `actual.*` under `<target>/golden/plan-core/`,
 //! where `cargo xtask ci`'s `golden` step byte-compares them with what is
@@ -665,6 +668,177 @@ fn every_rendered_case_has_its_chips_golden_and_keeps_their_promises() {
         );
         assert_chips_hold(case, &rendering, &canonical.json);
         assert_golden(case, "chips.txt", &chips_text(&rendering));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 6. The condition slots (S3's task `gwu`)
+// ---------------------------------------------------------------------------
+
+/// The case that holds every kind of condition slot: filled, empty, a group
+/// and its items, a body step's guard, a rule with no `when`.
+fn condition_slots_case() -> String {
+    read(
+        &Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("cases")
+            .join("condition_slots.jsonc"),
+    )
+}
+
+/// The rendering's condition slots, one line a slot: its rule's or step's
+/// pointer, the slot's pointer, its state, its predicate (`-` for none), its
+/// line and its title.
+fn slots_text(rendering: &Rendering) -> String {
+    let mut out = String::new();
+    for rule in &rendering.rules {
+        for slot in &rule.slots {
+            let predicate = if slot.predicate.is_empty() {
+                "-"
+            } else {
+                slot.predicate
+            };
+            let _ = writeln!(
+                out,
+                "{}\t{}\t{}\t{}\t{}\t{}",
+                rule.pointer,
+                slot.pointer,
+                slot.state.proto_name(),
+                predicate,
+                slot.line,
+                slot.title
+            );
+        }
+    }
+    out
+}
+
+/// The cases the slots golden covers: every rendered case, and the one built
+/// to hold every kind of slot.
+fn slot_cases() -> Vec<(&'static str, String)> {
+    let mut cases = rendered_cases();
+    cases.push(("condition_slots", condition_slots_case()));
+    cases
+}
+
+/// Each case's slots, against `expected.slots.txt`, and the promises a slot
+/// keeps whatever the case: it sits on its own rule's line; its pointer is
+/// under its rule's; a filled slot's pointer names a member the canonical
+/// file has, holding the arm the slot names, and an empty one names a member
+/// the file leaves out or writes with no arm; every route step has its
+/// `skip_if`; a group's items follow it.
+#[test]
+fn every_case_has_its_slots_golden_and_each_slot_names_its_place() {
+    use pharmakos_plan_core::render::SlotState;
+    for (case, text) in slot_cases() {
+        let canonical = canonicalise_text(&text)
+            .unwrap_or_else(|error| panic!("{case} canonicalises: {error:?}"));
+        let rendering = render(&canonical.playbook, &context(), &rules())
+            .unwrap_or_else(|error| panic!("the committed rules table is complete: {error:?}"));
+        let document = pharmakos_proto::json::read(&canonical.json)
+            .unwrap_or_else(|error| panic!("canonical JSON reads: {error:?}"));
+        for rule in &rendering.rules {
+            if rule.pointer.starts_with("/declarative/route/") {
+                assert!(
+                    rule.slots
+                        .first()
+                        .is_some_and(|slot| slot.pointer == format!("{}/skip_if", rule.pointer)),
+                    "{case}: {} lists its skip_if first",
+                    rule.pointer
+                );
+            }
+            for (index, slot) in rule.slots.iter().enumerate() {
+                assert_eq!(slot.line, rule.line, "{case}: {}", slot.pointer);
+                assert!(
+                    slot.pointer.starts_with(&format!("{}/", rule.pointer)),
+                    "{case}: {} under {}",
+                    slot.pointer,
+                    rule.pointer
+                );
+                let held = at_pointer(&document, &slot.pointer);
+                let arm = match held {
+                    Some(Json::Object(members)) => members.first().map(|(key, _)| key.as_str()),
+                    _ => None,
+                };
+                match slot.state {
+                    SlotState::Empty => {
+                        assert!(arm.is_none(), "{case}: {} is empty", slot.pointer);
+                        assert!(slot.predicate.is_empty(), "{case}: {}", slot.pointer);
+                    }
+                    SlotState::Leaf | SlotState::Group => {
+                        assert_eq!(arm, Some(slot.predicate), "{case}: {}", slot.pointer);
+                    }
+                }
+                if slot.state == SlotState::Group {
+                    let next = rule.slots.get(index.saturating_add(1));
+                    assert!(
+                        next.is_some_and(|item| item
+                            .pointer
+                            .starts_with(&format!("{}/{}/", slot.pointer, slot.predicate))),
+                        "{case}: {}'s items follow it",
+                        slot.pointer
+                    );
+                }
+            }
+        }
+        assert_golden(case, "slots.txt", &slots_text(&rendering));
+    }
+}
+
+/// Every place `playbook.proto` puts a `gp.v1.Condition` is one the slots
+/// walk lists: the schema's own fields of that type, read from the
+/// descriptor set, against a table of where each one's slot points, and the
+/// `condition_slots` case holds a slot at each. A new place a condition can
+/// stand fails here until the walk lists it.
+#[test]
+fn the_slots_walk_lists_every_place_the_schema_puts_a_condition() {
+    // (message.field, the tail of a slot pointer that stands there)
+    let table: [(&str, &str); 6] = [
+        ("gp.v1.Handler.when", "/when"),
+        ("gp.v1.Step.skip_if", "/skip_if"),
+        ("gp.v1.WaitUntilStep.condition", "/wait_until/condition"),
+        ("gp.v1.All.items", "/all/items/"),
+        ("gp.v1.Any.items", "/any/items/"),
+        ("gp.v1.Not.item", "/not/item"),
+    ];
+    let mut in_schema: Vec<String> = pharmakos_proto::descriptor::schema()
+        .messages()
+        .flat_map(|message| {
+            message
+                .fields
+                .iter()
+                .filter(|field| field.type_name == "gp.v1.Condition")
+                .map(|field| format!("{}.{}", message.full_name, field.name))
+        })
+        .collect();
+    in_schema.sort();
+    let mut listed: Vec<String> = table.iter().map(|(name, _)| (*name).to_owned()).collect();
+    listed.sort();
+    assert_eq!(
+        in_schema, listed,
+        "the schema puts a condition somewhere the slots walk does not list"
+    );
+
+    let canonical = canonicalise_text(&condition_slots_case())
+        .unwrap_or_else(|error| panic!("the case canonicalises: {error:?}"));
+    let rendering = render(&canonical.playbook, &context(), &rules())
+        .unwrap_or_else(|error| panic!("the committed rules table is complete: {error:?}"));
+    let pointers: Vec<&str> = rendering
+        .rules
+        .iter()
+        .flat_map(|rule| rule.slots.iter().map(|slot| slot.pointer.as_str()))
+        .collect();
+    for (name, tail) in table {
+        assert!(
+            pointers.iter().any(|pointer| {
+                pointer.ends_with(tail)
+                    || (tail.ends_with('/')
+                        && pointer
+                            .rsplit_once('/')
+                            .is_some_and(|(head, _)| format!("{head}/").ends_with(tail)))
+            }),
+            "no slot of the case stands at {name}: {pointers:?}"
+        );
     }
 }
 

@@ -101,6 +101,6 @@ pub use patch::{Patch, patch_text};
 /// verifier.
 pub use pharmakos_verifier::interface;
 pub use projection::{Projection, project};
-pub use render::{Chip, RenderedRule, Rendering, render, render_plan};
+pub use render::{Chip, ConditionSlot, RenderedRule, Rendering, SlotState, render, render_plan};
 pub use travel::{Estimate, TravelEstimator};
 pub use verify::verify_jsonc;
