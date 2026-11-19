@@ -476,31 +476,36 @@ impl HostClock {
         Some((wired, countdown))
     }
 
-    /// The last report of a timed Lull whose countdown has run out: the countdown at zero, so
-    /// the gateway can tell a Lull that ran out from one ended by Ready (part 2's item 5; the
-    /// gateway's own line for it is `gwu`'s). `elapsed_ms` is the Lull's whole length, or the
-    /// last report the gateway accepted if that was later, so the report never runs backwards.
-    /// `None` outside a timed Lull that has run out, with a report in flight, or when the time
-    /// does not fit the wire's `int32`.
-    pub fn closing_report(&mut self) -> Option<i32> {
+    /// The next report of a timed Lull whose countdown has run out, as `(elapsed_ms,
+    /// remaining_ms, last)`. The gateway refuses a report that steps past its last by more than
+    /// [`MAX_CLOCK_STEP_MS`], so while its clock is further behind the Lull's end than that (after
+    /// a stall) this is a step of at most that much, with the countdown it leaves; once the end is
+    /// within one step it is the end itself, the countdown at zero, `last` true. The zero tells
+    /// the gateway the Lull ran out rather than being ended by Ready (decisions-log item 160 (4)).
+    /// The report never runs backwards: past an accepted report later than the end, it is that
+    /// report again. `None` outside a timed Lull that has run out, with a report in flight, before
+    /// the report cadence allows the next one, or when the time does not fit the wire's `int32`
+    /// ([`HostClock::unreportable`] then says so).
+    pub fn closing_report(&mut self) -> Option<(i32, i32, bool)> {
         let ClockPhase::Lull {
             countdown_ms: Some(total_ms),
         } = self.phase
         else {
             return None;
         };
-        if !self.run_out() || self.pending_ms.is_some() {
+        if !self.run_out() || self.pending_ms.is_some() || self.since_report_us < CLOCK_REPORT_US {
             return None;
         }
-        let report = total_ms.max(self.accepted_ms);
-        let Ok(wired) = i32::try_from(report) else {
-            // Said as any report the wire cannot carry is ([`HostClock::unreportable`]).
+        let end = total_ms.max(self.accepted_ms);
+        let report = end.min(self.accepted_ms.saturating_add(MAX_CLOCK_STEP_MS));
+        let left = total_ms.saturating_sub(report);
+        let (Ok(wired), Ok(left_wired)) = (i32::try_from(report), i32::try_from(left)) else {
             self.unreportable = true;
             return None;
         };
         self.pending_ms = Some(report);
         self.since_report_us = 0;
-        Some(wired)
+        Some((wired, left_wired, report == end))
     }
 
     /// The report in flight was accepted.
