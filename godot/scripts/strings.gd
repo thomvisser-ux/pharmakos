@@ -145,6 +145,11 @@ const TEXT := {
 	"status_rule_refused_locked": "That is locked: its reason is shown beside it.",
 	"status_rule_refused_no_detail": "This beacon's detail has not come yet (or was refused); open its menu again.",
 	"status_rule_refused_no_pointer": "The gateway sent a setting this client cannot place.",
+	"status_rule_refused_unnamed": "The gateway's answer named nothing to write for that entry, so nothing was sent.",
+	"rule_chip_read_only_unreadable": "This value does not fit what the gateway says it holds, so it is shown as it came and not edited.",
+	"picker_parameter_unknown": "{title}: the gateway sent no way to edit this value",
+	"vocabulary_ask_again": "Ask again",
+	"menu_setting_not_here": "This value is not changed from this menu.",
 	# Part 2 (S3's `ed3b`): the condition picker, the name picks and Visit & change.
 	"picker_heading": "Pick a condition",
 	"picker_family_locked": "{title} (locked: {locked})",

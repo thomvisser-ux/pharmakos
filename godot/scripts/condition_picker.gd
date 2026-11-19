@@ -81,7 +81,9 @@ static func parameter_text(parameter: Dictionary) -> String:
 		"reference":
 			return Strings.text("picker_parameter_reference", {"title": title, "kind": parameter.get("kind", "")})
 		_:
-			return Strings.text("picker_parameter", {"title": title})
+			# A shape the gateway left unset or this build does not know, said in words, as the
+			# rule list says a chip's `no_shape`.
+			return Strings.text("picker_parameter_unknown", {"title": title})
 
 
 ## The selected predicate as `[family, entry]`, or an empty array when none is selected.

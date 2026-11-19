@@ -382,7 +382,7 @@ enum RanOut {
 }
 
 /// The footer field that says a Lull is untimed by rule (a Probation match's), which `gwu` adds
-/// to `gp.api.v1.Status` (the rulings on part 2's first question). The client reads the field
+/// to `gp.api.v1.Status` (decisions-log item 160 (4)). The client reads the field
 /// and decides nothing about the preset.
 ///
 /// PLACEHOLDER: the untimed-by-rule field's name, read by name — `gwu`'s builder, when `gwu`
@@ -1098,7 +1098,7 @@ impl Rig {
     ) -> Result<bool, BridgeError> {
         let phase = Phase::of(footer.phase);
         // A Lull untimed by rule has no countdown at all: the rig starts none, reports only the
-        // time spent, and the lobby shows none (part 2's item 4). Which preset that is stays the
+        // time spent, and the lobby shows none (decisions-log item 160 (4)). Which preset that is stays the
         // gateway's word.
         let countdown = if phase == Phase::Lull && phase != self.phase && !by_rule {
             self.lull_countdown(footer)?
@@ -2500,8 +2500,8 @@ mod tests {
         }
     }
 
-    /// **After a stall the run-out is caught up in steps the gateway takes** (fix pass 1,
-    /// C-M1): a 120 s Lull polled again 125 s later reports at most 60 s past the last accepted
+    /// **After a stall the run-out is caught up in steps the gateway takes** (the review of
+    /// decisions-log item 160 (4)'s pull request): a 120 s Lull polled again 125 s later reports at most 60 s past the last accepted
     /// report each time, the zero only when the end is within a step, and `end_lull` after it.
     #[test]
     fn a_stalled_run_out_is_reported_in_steps_before_its_zero() {
@@ -2538,7 +2538,7 @@ mod tests {
         assert_eq!(sent.get(zero).and_then(|frame| frame.1), Some(120_000));
     }
 
-    /// **A zero the link lost is sent again** before `end_lull` (fix pass 1, C-M1): the zero
+    /// **A zero the link lost is sent again** before `end_lull` (the review of decisions-log item 160 (4)'s pull request): the zero
     /// counts as reported only on the gateway's answer.
     #[test]
     fn a_zero_lost_with_its_link_is_sent_again() {
@@ -2584,7 +2584,7 @@ mod tests {
         assert!(zero < end, "{after:?}");
     }
 
-    /// **The "ran out" line's client half** (part 2's item 5): when a timed Lull's countdown is
+    /// **The "ran out" line's client half** (decisions-log item 160 (4)): when a timed Lull's countdown is
     /// spent, the rig reports the countdown at zero once, and only then calls `end_lull`.
     #[test]
     fn a_spent_countdown_is_reported_at_zero_once_before_end_lull() {
@@ -2680,7 +2680,7 @@ mod tests {
         );
     }
 
-    /// **A Lull untimed by rule** (part 2's item 4; a Probation match's, the field `gwu` adds):
+    /// **A Lull untimed by rule** (decisions-log item 160 (4); a Probation match's, the field `gwu` adds):
     /// the rig starts no countdown, never sends `remaining_ms` (which a Probation gateway would
     /// refuse), and the lobby shows none; a custom match's Lull still counts down.
     #[test]

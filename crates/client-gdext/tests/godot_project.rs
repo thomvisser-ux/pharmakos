@@ -2590,4 +2590,18 @@ fn a_name_chip_and_the_visit_rows_go_through_the_bridge() {
             .any(|line| line.contains("state.get(\"anchoring\", false)")),
         "Escape stops an anchor pick as it stops a chip's"
     );
+    assert!(
+        gd_code(&editor, "_build_picker")
+            .iter()
+            .any(|line| line.contains("bridge.editor_vocabulary_again()")),
+        "a refused vocabulary can be asked for again from the picker"
+    );
+    assert!(
+        gd_code(&editor, "_fill_visit_menu")
+            .iter()
+            .any(|line| line.contains(
+                "_visit_menu.set_item_checked(_visit_menu.item_count - 1, now == String(row[1]))"
+            )),
+        "the priority the beacon's summary sends is marked"
+    );
 }

@@ -289,6 +289,7 @@ var _rule_ids := PackedStringArray()
 var _vocabulary := {}
 var _picker_popup: PopupPanel
 var _picker_line: Label
+var _picker_again: Button
 var _picker_tree: Tree
 var _picker_slot := {}
 ## Visit & change (S3's `ed3b`, part 2): the beacon the menu is open for, the detail it was last
@@ -1115,6 +1116,8 @@ func _draw_rules(state: Dictionary, unchecked: String) -> void:
 	_rule_ids = state.get("rule_ids", PackedStringArray())
 	_vocabulary = state.get("vocabulary", {})
 	_picker_line.text = ConditionPicker.status_text(_vocabulary)
+	# A refused or unreadable vocabulary can be asked for once more, from the picker's line.
+	_picker_again.visible = String(_vocabulary.get("failed", "")) != ""
 	var redrawn: bool = RuleList.fill(_rules_box, list, _rules_rendering, state.get("rules_editable", false), int(state.get("picking", -1)), state.get("conflicts", []), state.get("rule_refusal", {}), Callable(self, "_on_rule_chip"), Callable(self, "_on_rule_move"))
 	# An editor opened on the list drawn before names chips that may not be there any more
 	# (M1): it closes with that list, and the bridge would refuse its edit anyway.
@@ -1229,9 +1232,11 @@ func _fill_visit_menu(state: Dictionary) -> void:
 		submenu.queue_free()
 	_visit_submenus.clear()
 	_visit_menu.clear()
-	_visit_menu.add_item(Strings.text("menu_priority_low"), ITEM_LOW)
-	_visit_menu.add_item(Strings.text("menu_priority_normal"), ITEM_NORMAL)
-	_visit_menu.add_item(Strings.text("menu_priority_high"), ITEM_HIGH)
+	# The priority rows, the one the beacon's summary sends marked as the value now.
+	var now := String(detail.get("priority", "")) if String(detail.get("id", "")) == _visit_beacon else ""
+	for row in [[ITEM_LOW, "low"], [ITEM_NORMAL, "normal"], [ITEM_HIGH, "high"]]:
+		_visit_menu.add_radio_check_item(Strings.text("menu_priority_" + String(row[1])), int(row[0]))
+		_visit_menu.set_item_checked(_visit_menu.item_count - 1, now == String(row[1]))
 	_visit_menu.add_separator()
 	if String(detail.get("id", "")) != _visit_beacon:
 		var failed := String(detail.get("failed", ""))
@@ -1287,7 +1292,8 @@ func _setting_row(settings: PopupMenu, which: int, setting: Dictionary) -> void:
 		_:
 			settings.add_item(title, which)
 			settings.set_item_disabled(settings.item_count - 1, true)
-			settings.set_item_tooltip(settings.item_count - 1, Strings.text("rule_chip_read_only_" + String(setting.get("why", ""))))
+			var why := String(setting.get("why", ""))
+			settings.set_item_tooltip(settings.item_count - 1, Strings.text("rule_chip_read_only_" + why) if why != "" else Strings.text("menu_setting_not_here"))
 
 
 ## A number setting's row was picked: the number field opens on it, as on a number chip.
@@ -1702,6 +1708,12 @@ func _build_picker() -> void:
 	_picker_line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_picker_line.custom_minimum_size = Vector2(PANEL_WIDTH - 40.0, 0)
 	box.add_child(_picker_line)
+	_picker_again = Button.new()
+	_picker_again.text = Strings.text("vocabulary_ask_again")
+	_picker_again.accessibility_name = _picker_again.text
+	_picker_again.visible = false
+	_picker_again.pressed.connect(func() -> void: bridge.editor_vocabulary_again())
+	box.add_child(_picker_again)
 	_picker_tree = Tree.new()
 	_picker_tree.custom_minimum_size = Vector2(PANEL_WIDTH, 320)
 	box.add_child(_picker_tree)

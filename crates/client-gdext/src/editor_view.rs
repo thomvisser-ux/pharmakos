@@ -412,7 +412,7 @@ fn rule_chip_dictionary(chip: &RuleChip) -> VarDictionary {
     out
 }
 
-/// The words the pickers draw (part 2's item 1): `known` (whether this Lull's answer is on
+/// The words the pickers draw (decisions-log item 160 (4)): `known` (whether this Lull's answer is on
 /// hand), `failed` (`""`, `refused` or `unreadable`) with `detail`, and `families` (each
 /// `{family, title, locked, predicates}`), `mandates` and `blueprints`, every entry
 /// [`entry_dictionary`]. `locked` is the gateway's sentence, `""` when the entry can be used.
@@ -514,7 +514,7 @@ fn entry_dictionary(entry: &Entry) -> VarDictionary {
     one
 }
 
-/// The detail of the beacon last described (part 2's items 1 and 6): `known`, `failed` with
+/// The detail of the beacon last described (decisions-log item 160 (4)): `known`, `failed` with
 /// `detail` as for the vocabulary, `id`, `mandate` (as the wire spells it, `""` for none),
 /// `settings` (each a chip-shaped dictionary, [`setting_dictionary`]) and `targets` (each
 /// `{blueprint_id, anchor}`, the anchor as JSON text as it came).
@@ -530,6 +530,7 @@ fn beacon_detail_dictionary(
     if let Some(detail) = detail {
         out.set(&"id".to_variant(), &detail.id.to_variant());
         out.set(&"mandate".to_variant(), &detail.mandate.to_variant());
+        out.set(&"priority".to_variant(), &detail.priority.to_variant());
         for setting in &detail.settings {
             settings.push(&setting_dictionary(setting).to_variant());
         }

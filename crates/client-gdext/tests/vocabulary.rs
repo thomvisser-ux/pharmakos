@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Pharmakos contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! **The client names no word of the vocabulary** (S3's plan, task `ed3b`, part 2; decided by
-//! the brief, the owner can veto): every predicate, mandate and blueprint the pickers and the
+//! **The client names no word of the vocabulary** (S3's plan, task `ed3b`, part 2, decisions-log
+//! item 160 (4); an engineering call the owner can veto): every predicate, mandate and blueprint the pickers and the
 //! Visit & change rows offer is `get_vocabulary`'s, drawn as sent. This scan reads the names out
 //! of the committed answer (`godot/fixtures/vocabulary.json`), so a new name there needs no
 //! change here, and fails when the client's code names one: a Rust source under `src/` (its unit

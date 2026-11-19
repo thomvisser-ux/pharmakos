@@ -56,7 +56,7 @@ pub(crate) fn json_to_variant(value: &Json) -> Variant {
 pub(crate) struct NotAnInt(pub(crate) String);
 
 /// A count as Godot's `int`, which is an `i64`, or the typed refusal [`NotAnInt`] for one it
-/// cannot hold: never clamped to `i64::MAX` (the rulings on part 2, carried from part 1's
+/// cannot hold: never clamped to `i64::MAX` (no silent fallback: a saturation hides the value; carried from part 1's
 /// review). It is the one place the bridge narrows a count, so the rule is written once.
 pub(crate) fn godot_int<T: TryInto<i64> + Copy + std::fmt::Display>(
     count: T,

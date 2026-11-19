@@ -76,6 +76,7 @@ fn burst(edits: usize, order: Order, latency: usize) -> (Gateway, Rig) {
     let mut ready_asked = false;
     let mut typed = false;
     let mut used = false;
+    let mut asked_again = false;
     for frame in 0..6_000_usize {
         now += FRAME_US;
         if !loading && rig.phase() == Phase::Lull {
@@ -94,6 +95,8 @@ fn burst(edits: usize, order: Order, latency: usize) -> (Gateway, Rig) {
                 assert!(rig.editor_mut().act(Action::Go, &target));
             }
             rig.editor_mut().wizard_open("t");
+            // The picker's "Ask again": one more vocabulary read inside the same budget.
+            asked_again = rig.editor_mut().ask_vocabulary_again();
         }
         // The wizard, as a player uses it: one page typed once its answer is on screen, then
         // Use once the answer to that is.
@@ -137,6 +140,7 @@ fn burst(edits: usize, order: Order, latency: usize) -> (Gateway, Rig) {
             break;
         }
     }
+    assert!(asked_again, "the burst asked the vocabulary again");
     (gateway, rig)
 }
 
@@ -209,11 +213,11 @@ fn an_editing_burst_is_not_rate_limited_under_the_default_limits() {
             assert!(count("render_plan") >= 1, "{context}");
             assert_eq!(count("get_draft"), 1, "{context}: {:?}", gateway.methods);
             assert!(count("get_economy_forecast") >= 1, "{context}");
-            // Part 2's one read per Lull: the vocabulary the pickers draw (a beacon's detail is
-            // the `get_beacon` a click already asked).
+            // The vocabulary the pickers draw, read once per Lull, and once more by the picker's
+            // "Ask again" (a beacon's detail is the `get_beacon` a click already asked).
             assert_eq!(
                 count("get_vocabulary"),
-                1,
+                2,
                 "{context}: {:?}",
                 gateway.methods
             );

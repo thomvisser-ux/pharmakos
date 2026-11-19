@@ -18,7 +18,7 @@
 //! [`rule_ids`]): the labels and rule ids a step-label or rule-id chip is picked from, in file
 //! order. The wire names the kind of the reference and sends no choices, and the gateway's
 //! check, not the client, says whether a pick is a legal one (the main session's ruling on
-//! part 2's sixth question).
+//! decisions-log item 160 (4)).
 
 use pharmakos_proto::gp::api::v1::reference_shape::Kind;
 use pharmakos_proto::gp::api::v1::value_shape::Shape;
@@ -34,8 +34,7 @@ use crate::rule_list::{self, ChipEditor};
 use crate::view::split_footer;
 
 /// The unit of a duration, which the client never asks the player to type (the owner's ruling
-/// of 2026-11-15, applied to the picker's parameters by the rulings on part 2's seventh
-/// question).
+/// of 2026-11-15, which holds for the picker's parameters as for the rule list's chips).
 const MILLISECONDS: &str = "ms";
 
 /// What a picker's parameter holds, by the shape the gateway sent: drawn beside its title,
@@ -230,6 +229,8 @@ pub enum PickError {
     NotJson,
     /// A setting's pointer names no field.
     NoPointer,
+    /// The entry carries no lock and no name: the answer named no word to write.
+    Unnamed,
 }
 
 /// The value a predicate pick writes into a condition slot: `{"<name>": <skeleton>}`, from
@@ -263,9 +264,7 @@ pub fn predicate_value(
 /// [`PickError::Locked`] for a locked or nameless entry, [`PickError::NotJson`] for a skeleton
 /// that is not JSON.
 pub fn named_skeleton(entry: &Entry) -> Result<Json, PickError> {
-    if entry.locked.is_some() || entry.name.is_empty() {
-        return Err(PickError::Locked);
-    }
+    usable_name(entry)?;
     let skeleton = json::read(&entry.skeleton_json).map_err(|_| PickError::NotJson)?;
     Ok(Json::Object(vec![(entry.name.clone(), skeleton)]))
 }
@@ -317,6 +316,9 @@ pub struct BeaconDetail {
     /// The mandate it carries, as the wire spells it (lower case), or empty for none: drawn
     /// with the vocabulary's title for the mandate of that name, when there is one.
     pub mandate: String,
+    /// Its Quartermaster priority now, as the summary's wire spells it (`normal`), or empty
+    /// when the summary sent none: the Visit & change menu marks the priority row it names.
+    pub priority: String,
     /// The settings its mandate has now, in the gateway's order.
     pub settings: Vec<Setting>,
     /// A Build beacon's targets, in the gateway's order.
@@ -324,19 +326,27 @@ pub struct BeaconDetail {
 }
 
 /// A `get_beacon` answer's detail, for the beacon `id`. Another seat's beacon has none of it:
-/// the gateway leaves all three fields out, and so the detail is empty.
+/// the gateway leaves all three fields out, and so the detail is empty. A setting whose value
+/// does not fit its shape is kept as a read-only row with its reason
+/// ([`crate::rule_list::ReadOnly::Unreadable`]), so one bad row loses nothing else.
 ///
 /// # Errors
 ///
 /// [`BridgeError::Schema`] when the answer is not a `GetBeaconResponse`, and
-/// [`BridgeError::Rpc`] for a setting whose value does not fit its shape (an integer that is
-/// not one) or a target with no anchor.
+/// [`BridgeError::Rpc`] for a target with no anchor.
 pub fn beacon_detail_of(id: &str, result: &Json) -> Result<(String, BeaconDetail), BridgeError> {
     let (answer, _) = split_footer(result);
     let canonical = enums::canonical("gp.api.v1.GetBeaconResponse", &answer);
     let response: GetBeaconResponse = json::decode_json(&canonical)?;
     let mandate = match answer.get("mandate") {
         Some(Json::String(mandate)) => mandate.clone(),
+        _ => String::new(),
+    };
+    let priority = match answer
+        .get("summary")
+        .and_then(|summary| summary.get("priority"))
+    {
+        Some(Json::String(priority)) => priority.clone(),
         _ => String::new(),
     };
     let settings = response
@@ -349,14 +359,18 @@ pub fn beacon_detail_of(id: &str, result: &Json) -> Result<(String, BeaconDetail
                 shape: row.shape,
                 ..Chip::default()
             };
-            Ok(Setting {
-                editor: rule_list::editor_of(&chip)?,
+            let editor = match rule_list::editor_of(&chip) {
+                Ok(editor) => editor,
+                Err(_) => ChipEditor::ReadOnly(rule_list::ReadOnly::Unreadable),
+            };
+            Setting {
+                editor,
                 pointer: row.pointer,
                 title: row.title,
                 value_json: row.value_json,
-            })
+            }
         })
-        .collect::<Result<Vec<_>, BridgeError>>()?;
+        .collect::<Vec<_>>();
     let mut targets = Vec::with_capacity(response.build_targets.len());
     if let Some(Json::Array(held)) = canonical.get("build_targets") {
         for target in held {
@@ -379,6 +393,7 @@ pub fn beacon_detail_of(id: &str, result: &Json) -> Result<(String, BeaconDetail
         BeaconDetail {
             id: id.to_owned(),
             mandate,
+            priority,
             settings,
             targets,
         },
@@ -437,6 +452,16 @@ pub fn mandate_row(mandate: &Entry) -> Result<Json, PickError> {
     )]))
 }
 
+/// A Build target's anchor on the feature `id`, `{"on":{"feature_id":"<id>"}}`: a vent a
+/// Generator stands on, named as `RemoveBuildTargetRow`'s comment names one.
+#[must_use]
+pub fn on_feature(id: &str) -> Json {
+    Json::Object(vec![(
+        "on".to_owned(),
+        Json::Object(vec![("feature_id".to_owned(), Json::String(id.to_owned()))]),
+    )])
+}
+
 /// The interface row that adds a Build target of `blueprint` anchored at `anchor`.
 ///
 /// # Errors
@@ -478,9 +503,19 @@ pub fn queue_row(blueprint: &Entry) -> Result<Json, PickError> {
     )]))
 }
 
-fn usable_name(entry: &Entry) -> Result<String, PickError> {
-    if entry.locked.is_some() || entry.name.is_empty() {
+/// The word an entry writes: refused as [`PickError::Locked`] when the gateway locked it (its
+/// reason is drawn beside it), and as [`PickError::Unnamed`] when it carries no lock and no name,
+/// which says what is true: the answer named nothing to write.
+///
+/// # Errors
+///
+/// As above.
+pub fn usable_name(entry: &Entry) -> Result<String, PickError> {
+    if entry.locked.is_some() {
         return Err(PickError::Locked);
+    }
+    if entry.name.is_empty() {
+        return Err(PickError::Unnamed);
     }
     Ok(entry.name.clone())
 }

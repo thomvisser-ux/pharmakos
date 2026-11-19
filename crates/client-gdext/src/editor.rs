@@ -263,10 +263,10 @@ impl Priority {
 pub enum Action {
     /// Go here: a move step.
     Go,
-    /// Visit & change: an interface step with one row, the beacon's priority.
-    ///
-    /// PLACEHOLDER: a priority row as the menu's one change — OWNER, S3, with the pickers.
-    /// The mandate and build-target rows arrive with S3's pickers.
+    /// Visit & change's priority rows: an interface step with one row, the beacon's
+    /// Quartermaster priority. The menu's other rows (a setting, a mandate, a Build target, a
+    /// queued structure) are composed from `get_beacon`'s detail and `get_vocabulary`
+    /// ([`Editor::change_setting_number`] and its siblings), not as an `Action`.
     Visit(Priority),
     /// Recycle: an interface step with the recycle row.
     Recycle,
@@ -745,6 +745,8 @@ pub enum RuleEditRefusal {
     NoDetail,
     /// A setting's pointer names no field.
     NoPointer,
+    /// The entry carries no lock and no name: the gateway's answer named no word to write.
+    Unnamed,
 }
 
 impl RuleEditRefusal {
@@ -777,6 +779,7 @@ impl RuleEditRefusal {
             Self::Locked => "locked",
             Self::NoDetail => "no_detail",
             Self::NoPointer => "no_pointer",
+            Self::Unnamed => "unnamed",
         }
     }
 
@@ -809,6 +812,7 @@ impl From<PickError> for RuleEditRefusal {
             PickError::Locked => Self::Locked,
             PickError::NotJson => Self::NotJson,
             PickError::NoPointer => Self::NoPointer,
+            PickError::Unnamed => Self::Unnamed,
         }
     }
 }
@@ -829,7 +833,7 @@ enum PickOn {
 }
 
 /// What one of the editor's reads of the gateway's words came to, when it did not come: the
-/// vocabulary's or a beacon's detail (part 2's item 1). Shown on its own line, and nothing
+/// vocabulary's or a beacon's detail (decisions-log item 160 (4)). Shown on its own line, and nothing
 /// waits on it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum ReadFailed {
@@ -1746,10 +1750,7 @@ impl Editor {
         let ChipEditor::Number { now, .. } = &found.editor else {
             return Err(RuleEditRefusal::NotThisEditor);
         };
-        // An unbounded field opens to 1e18, past what its float holds exactly: a typed value
-        // outside `i32` may already be another number by the time it is here, so it is refused
-        // rather than written.
-        if i32::try_from(value).is_err() {
+        if !held_exactly(value) {
             return Err(RuleEditRefusal::NotExact);
         }
         if *now == value {
@@ -1853,7 +1854,7 @@ impl Editor {
     }
 
     /// Whether the next map click is a Build target's anchor (Visit & change's "Add a build
-    /// target", part 2's item 6).
+    /// target", decisions-log item 160 (4)).
     #[must_use]
     pub const fn anchoring(&self) -> bool {
         matches!(self.picking, Some(PickOn::Anchor { .. }))
@@ -2081,7 +2082,7 @@ impl Editor {
     /// new rendering carries them.
     ///
     /// Where `slot` comes from is the wire's (`gwu` carries each condition slot's pointer and
-    /// whether it holds one; the rulings on part 2's fourth question): this client composes no
+    /// whether it holds one): this client composes no
     /// slot pointer from its own knowledge of the playbook's schema.
     ///
     /// # Errors
@@ -2181,6 +2182,24 @@ impl Editor {
         }
     }
 
+    /// Ask for the vocabulary once more (the picker's "Ask again", offered when its read was
+    /// refused or could not be read). Returns `false`, asking nothing, with the door shut or
+    /// with a read already queued or on its way: one more call within the seat's budget.
+    pub fn ask_vocabulary_again(&mut self) -> bool {
+        if self.shut_to_asks() {
+            return false;
+        }
+        let waiting = self.queue.iter().any(|job| matches!(job, Job::Vocabulary))
+            || matches!(self.in_flight, Some(Sent::Vocabulary { .. }));
+        if waiting {
+            return false;
+        }
+        self.vocabulary_failed = None;
+        self.queue.push_back(Job::Vocabulary);
+        self.touch();
+        true
+    }
+
     /// The words the pickers draw, as `get_vocabulary` answered this Lull.
     #[must_use]
     pub const fn vocabulary(&self) -> Option<&Vocabulary> {
@@ -2235,14 +2254,13 @@ impl Editor {
         value: i64,
     ) -> Result<Json, RuleEditRefusal> {
         let found = self.setting_drawn(beacon, setting, pointer)?;
-        let ChipEditor::Number { now, .. } = &found.editor else {
+        let ChipEditor::Number { .. } = &found.editor else {
             return Err(RuleEditRefusal::NotThisEditor);
         };
-        if i32::try_from(value).is_err() {
+        // No `Unchanged` here: the detail is the beacon as the Lull sees it, and an earlier
+        // step may change it, so setting it back is a row the verifier judges.
+        if !held_exactly(value) {
             return Err(RuleEditRefusal::NotExact);
-        }
-        if *now == value {
-            return Err(RuleEditRefusal::Unchanged);
         }
         let settings = vocabulary::nested_setting(&found.pointer, Json::Number(value.to_string()))?;
         Ok(vocabulary::settings_row(settings))
@@ -2277,10 +2295,8 @@ impl Editor {
         let ChipEditor::Choice { values } = &found.editor else {
             return Err(RuleEditRefusal::NotThisEditor);
         };
+        // No `Unchanged`, as for a number: the verifier says what the row does.
         let text = values.get(which).ok_or(RuleEditRefusal::NoSuchValue)?;
-        if *text == found.value_json {
-            return Err(RuleEditRefusal::Unchanged);
-        }
         let value = json::read(text).map_err(|_| RuleEditRefusal::NotJson)?;
         let settings = vocabulary::nested_setting(&found.pointer, value)?;
         Ok(vocabulary::settings_row(settings))
@@ -2327,9 +2343,7 @@ impl Editor {
                 .blueprints
                 .get(which)
                 .ok_or(RuleEditRefusal::NoSuchEntry)?;
-            if blueprint.locked.is_some() || blueprint.name.is_empty() {
-                return Err(RuleEditRefusal::Locked);
-            }
+            vocabulary::usable_name(blueprint)?;
             Ok(())
         });
         match outcome {
@@ -2353,8 +2367,12 @@ impl Editor {
         blueprint: usize,
         target: &Target,
     ) -> Result<(), RuleEditRefusal> {
-        let Target::Voxel(at) = target else {
-            return Err(self.refuse_rule_edit(RuleEditRefusal::NotThisKind("location")));
+        let anchor = match target {
+            Target::Voxel(at) => voxel_location(*at),
+            Target::Feature(id) => vocabulary::on_feature(id),
+            Target::Beacon(_) | Target::Selector(_) | Target::NearestUncovered(_) => {
+                return Err(self.refuse_rule_edit(RuleEditRefusal::NotThisKind("location")));
+            }
         };
         self.picking = None;
         let outcome = self.visit_gate(beacon).and_then(|()| {
@@ -2363,7 +2381,7 @@ impl Editor {
                 .blueprints
                 .get(blueprint)
                 .ok_or(RuleEditRefusal::NoSuchEntry)?;
-            Ok(vocabulary::add_target_row(entry, voxel_location(*at))?)
+            Ok(vocabulary::add_target_row(entry, anchor)?)
         });
         self.ask_visit(beacon, outcome)
     }
@@ -2494,7 +2512,7 @@ impl Editor {
             self.beacon = None;
             self.beacon_failed = None;
         }
-        // The vocabulary every Lull, never carried across one (part 2's item 1), and again in
+        // The vocabulary every Lull, never carried across one (decisions-log item 160 (4)), and again in
         // the same Lull only when it is not on hand.
         if self.vocabulary.is_none() {
             self.queue.retain(|job| !matches!(job, Job::Vocabulary));
@@ -3543,7 +3561,11 @@ impl Editor {
             Sent::MapSummary => self.features = targeting::features_of(result)?,
             Sent::Beacon { id } => {
                 // The detail beside the prose: another seat's beacon carries none, and so its
-                // detail lists nothing (part 2's item 1).
+                // detail lists nothing (decisions-log item 160 (4)).
+                // The prose first, alone, so an answer whose detail cannot be read still heads
+                // the menu with the gateway's sentence.
+                let (answer, _) = split_footer(result);
+                proto3_text(&answer, "prose")?.clone_into(&mut self.beacon_prose);
                 match vocabulary::beacon_detail_of(&id, result) {
                     Ok((prose, detail)) => {
                         self.beacon_prose = prose;
@@ -3895,6 +3917,17 @@ impl Editor {
         }
         Settled::Refused
     }
+}
+
+/// The largest whole number the editor's number field (a 64-bit float) holds exactly: 2^53.
+/// A value past it may already be another number by the time it reaches the bridge, so it is
+/// refused ([`RuleEditRefusal::NotExact`]); every other value goes to the gateway, whose bounds
+/// and wire type are its to refuse. About the control's shape, not the game.
+const FIELD_EXACT: u64 = 9_007_199_254_740_992;
+
+/// Whether the number field holds `value` exactly ([`FIELD_EXACT`]).
+const fn held_exactly(value: i64) -> bool {
+    value.unsigned_abs() <= FIELD_EXACT
 }
 
 /// The check of the text a call is, and the revision it checks; `None` for a call that checks
@@ -6830,23 +6863,21 @@ mod tests {
     }
 
     /// **The number field refuses a value it cannot hold exactly** (carried from part 1's
-    /// review): past `i32`, it is never sent.
+    /// review): past 2^53, never sent, for a chip and for a setting alike.
     #[test]
-    fn a_number_past_i32_is_refused_not_sent() {
+    fn a_number_past_two_to_the_53_is_refused_not_sent() {
         let mut editor = rendered(EXPAND_EAST);
         let (pct, revision, at) = drawn(&editor, "/cmdr_hp_pct/pct");
-        for value in [4_503_599_627_370_497_i64, -2_147_483_649] {
-            assert_eq!(
-                editor.set_number(pct, revision, &at, value),
-                Err(RuleEditRefusal::NotExact)
-            );
-            assert_eq!(editor.status().key, "rule_refused_not_exact");
-        }
+        assert_eq!(
+            editor.set_number(pct, revision, &at, 9_007_199_254_740_993),
+            Err(RuleEditRefusal::NotExact)
+        );
+        assert_eq!(editor.status().key, "rule_refused_not_exact");
         assert!(!editor.has_pending_jobs());
         let mut editor = visit_editor();
         let (at, pointer) = setting_named(&editor, "/retreat_hp_pct");
         assert_eq!(
-            editor.change_setting_number("b_00", at, &pointer, 4_503_599_627_370_497),
+            editor.change_setting_number("b_00", at, &pointer, 9_007_199_254_740_993),
             Err(RuleEditRefusal::NotExact)
         );
     }
@@ -6969,7 +7000,7 @@ mod tests {
     }
 
     /// **Item 6: what a Visit & change row refuses**: a locked blueprint, another beacon's
-    /// detail, no detail, an unchanged setting; and a gateway refusal of the patch is said in
+    /// detail, no detail, a setting named by a stale pointer; and a gateway refusal of the patch is said in
     /// the gateway's words.
     #[test]
     fn a_visit_and_change_row_refuses_by_its_reason() {
@@ -6996,10 +7027,6 @@ mod tests {
         );
         let (at, pointer) = setting_named(&editor, "/build/rebuild_destroyed");
         assert_eq!(
-            editor.change_setting_choice("b_00", at, &pointer, 1),
-            Err(RuleEditRefusal::Unchanged)
-        );
-        assert_eq!(
             editor.change_setting_choice("b_00", at, "/roe", 0),
             Err(RuleEditRefusal::Changed)
         );
@@ -7025,5 +7052,168 @@ mod tests {
             editor.status().detail,
             "INVALID_ARGUMENT: the patch does not apply"
         );
+    }
+
+    // --- The review of the pull request ---------------------------------------------
+
+    /// **a Visit row may set a setting to the value the Lull sees**: an earlier step may
+    /// have changed it, so the client composes the row and the verifier says what it does.
+    #[test]
+    fn a_visit_row_may_set_the_value_the_lull_sees() {
+        let mut editor = visit_editor();
+        let (at, pointer) = setting_named(&editor, "/build/rebuild_destroyed");
+        assert_eq!(
+            editor.change_setting_choice("b_00", at, &pointer, 1),
+            Ok(())
+        );
+        assert_eq!(
+            visit_patch(&mut editor),
+            visit_step_patch(r#"{"set_mandate_settings":{"build":{"rebuild_destroyed":false}}}"#)
+        );
+        let mut editor = visit_editor();
+        let (at, pointer) = setting_named(&editor, "/retreat_hp_pct");
+        assert_eq!(
+            editor.change_setting_number("b_00", at, &pointer, 0),
+            Ok(())
+        );
+        assert_eq!(
+            visit_patch(&mut editor),
+            visit_step_patch(r#"{"set_mandate_settings":{"retreat_hp_pct":0}}"#)
+        );
+    }
+
+    /// **an entry the answer names no word for is refused as such**, not as the gateway's
+    /// lock.
+    #[test]
+    fn a_nameless_entry_with_no_lock_is_refused_as_unnamed() {
+        let mut editor = visit_editor();
+        if let Some(words) = editor.vocabulary.as_mut() {
+            words.blueprints.push(vocabulary::Entry {
+                name: String::new(),
+                title: "Nameless".to_owned(),
+                parameters: Vec::new(),
+                skeleton_json: String::new(),
+                locked: None,
+            });
+        }
+        let nameless = editor
+            .vocabulary()
+            .map(|words| words.blueprints.len().saturating_sub(1))
+            .expect("words");
+        assert_eq!(
+            editor.begin_build_target("b_00", nameless),
+            Err(RuleEditRefusal::Unnamed)
+        );
+        assert_eq!(editor.status().key, "rule_refused_unnamed");
+        assert_eq!(
+            editor.queue_structure("b_00", nameless),
+            Err(RuleEditRefusal::Unnamed)
+        );
+    }
+
+    /// **a Build target anchors on a feature as well as on ground**: a vent click names
+    /// the feature under `on`.
+    #[test]
+    fn a_build_target_anchors_on_a_feature() {
+        let mut editor = visit_editor();
+        let blueprints = editor
+            .vocabulary()
+            .map(|words| words.blueprints.clone())
+            .expect("words");
+        let generator = entry_named(&blueprints, "generator");
+        assert_eq!(editor.begin_build_target("b_00", generator), Ok(()));
+        assert_eq!(
+            editor.pick(&Target::Feature("vent_120_88".to_owned())),
+            Ok(())
+        );
+        assert_eq!(
+            visit_patch(&mut editor),
+            visit_step_patch(
+                r#"{"add_build_target":{"target":{"blueprint_id":"generator","anchor":{"on":{"feature_id":"vent_120_88"}}}}}"#
+            )
+        );
+    }
+
+    /// **only a number the field cannot hold exactly is refused**: past 2^53. A number
+    /// outside `i32` goes to the gateway, whose bounds are its to refuse.
+    #[test]
+    fn only_a_number_past_two_to_the_53_is_refused() {
+        let mut editor = rendered(EXPAND_EAST);
+        let (pct, revision, at) = drawn(&editor, "/cmdr_hp_pct/pct");
+        assert_eq!(editor.set_number(pct, revision, &at, 2_147_483_648), Ok(()));
+        let mut editor = rendered(EXPAND_EAST);
+        assert_eq!(
+            editor.set_number(pct, revision, &at, 9_007_199_254_740_993),
+            Err(RuleEditRefusal::NotExact)
+        );
+        assert_eq!(
+            editor.set_number(pct, revision, &at, -9_007_199_254_740_993),
+            Err(RuleEditRefusal::NotExact)
+        );
+        assert_eq!(
+            editor.set_number(pct, revision, &at, -9_007_199_254_740_992),
+            Ok(())
+        );
+    }
+
+    /// **a setting this client cannot read keeps the rest**: the prose and the other
+    /// settings are drawn, and that setting is a read-only row with its reason.
+    #[test]
+    fn an_unreadable_setting_keeps_the_prose_and_the_rest() {
+        let mut editor = loaded(EXPAND_EAST);
+        drain_checks(&mut editor);
+        editor.describe_beacon("b_00");
+        let _ = editor.next_call(false).expect("get_beacon");
+        let answer = read(
+            r#"{"prose":"Yours.","mandate":"build","settings":[{"pointer":"/retreat_hp_pct","title":"Retreat below HP","value_json":"\"many\"","shape":{"integer":{"min":0,"max":100,"unit":"%"}}},{"pointer":"/roe","title":"Rules of engagement","value_json":"\"RETURN_FIRE\"","shape":{"choice":{"values":["\"HOLD_FIRE\"","\"RETURN_FIRE\""]}}}]}"#,
+        );
+        editor.answered(Ok(&answer)).expect("reads");
+        assert_eq!(editor.beacon_prose(), "Yours.");
+        let detail = editor.beacon_detail().expect("the detail");
+        assert_eq!(
+            detail
+                .settings
+                .first()
+                .map(|setting| setting.editor.clone()),
+            Some(ChipEditor::ReadOnly(rule_list::ReadOnly::Unreadable))
+        );
+        assert!(matches!(
+            detail.settings.get(1).map(|setting| &setting.editor),
+            Some(ChipEditor::Choice { .. })
+        ));
+    }
+
+    /// **a refused vocabulary can be asked again**, once more, within the seat's budget.
+    #[test]
+    fn a_refused_vocabulary_can_be_asked_again() {
+        let mut editor = Editor::new("seat.0");
+        editor.lull_opened(1);
+        let refuse = |editor: &mut Editor| {
+            let _ = editor.answered(Err(("RATE_LIMITED", "slow down")));
+        };
+        assert_eq!(lull_reads(&mut editor, &refuse), 1);
+        assert!(editor.vocabulary_failed().is_some());
+        assert!(editor.ask_vocabulary_again());
+        assert!(
+            !editor.ask_vocabulary_again(),
+            "one ask on its way is enough"
+        );
+        assert!(
+            editor.vocabulary_failed().is_none(),
+            "the line says it is asked"
+        );
+        let answer = |editor: &mut Editor| {
+            let words = read(VOCABULARY).get("result").cloned().expect("a result");
+            editor.answered(Ok(&words)).expect("reads");
+        };
+        assert_eq!(lull_reads(&mut editor, &answer), 1);
+        assert!(editor.vocabulary().is_some());
+    }
+
+    /// **The Quartermaster priority's value now is the detail's**, as `get_beacon`'s summary
+    /// sends it.
+    #[test]
+    fn the_detail_carries_the_priority_as_sent() {
+        assert_eq!(beacon_detail().priority, "normal");
     }
 }

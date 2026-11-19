@@ -1199,6 +1199,19 @@ impl PharmakosBridge {
         })
     }
 
+    /// Ask for the vocabulary once more, as the picker's "Ask again" does after a refused or
+    /// unreadable read. Returns whether it was asked: not with the door shut or a read already
+    /// on its way.
+    #[func]
+    fn editor_vocabulary_again(&mut self) -> bool {
+        let Some(rig) = self.rig.as_mut() else {
+            return false;
+        };
+        self.panics.guard_or("editor_vocabulary_again", false, || {
+            rig.editor_mut().ask_vocabulary_again()
+        })
+    }
+
     /// The vocabulary from one `get_vocabulary` answer's text, with no gateway behind it: what
     /// the hostless picker scene draws, in the shape of the editor state's `vocabulary`. An
     /// empty dictionary means the reason is in the log.

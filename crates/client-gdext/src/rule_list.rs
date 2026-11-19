@@ -17,7 +17,7 @@
 //! patched text is `patch_plan`'s answer.
 //!
 //! One shape is drawn but not edited here, a gap in the wire rather than a choice of the
-//! client's (the main session's rulings on `ed3b`'s pause report): an integer whose unit is
+//! client's (the owner's ruling of 2026-11-15: the player is never asked for milliseconds): an integer whose unit is
 //! `ms`. The sentence shows the gateway's own rendering (`2:00`), and a number field would ask
 //! the player for raw milliseconds, which the client may not convert. It waits on a display
 //! unit from the wire ([`ReadOnly::Milliseconds`]).
@@ -54,6 +54,9 @@ pub enum ReadOnly {
     Milliseconds,
     /// A chip whose shape the gateway left unset, or set to a kind this build does not know.
     NoShape,
+    /// A value that does not fit the shape sent with it (an integer shape holding no integer):
+    /// drawn as it came, with the reason, and not edited.
+    Unreadable,
     /// A whole number the number field cannot hold exactly: the field is a 64-bit float with
     /// a step, which Godot 4.7.2 measured holding every `i32` exactly and not 2^52 + 1. A value
     /// outside `i32` (the wire's type for the bounds) would come back as another number, so it
@@ -68,6 +71,7 @@ impl ReadOnly {
         match self {
             Self::Milliseconds => "ms",
             Self::NoShape => "no_shape",
+            Self::Unreadable => "unreadable",
             Self::NotExact => "not_exact",
         }
     }
