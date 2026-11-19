@@ -845,6 +845,61 @@ mod tests {
         );
     }
 
+    /// A slot takes a pick only when it is empty or a leaf with an op the gateway named: the
+    /// golden's group (`when` holding `all`) does not, its two leaves and the empty `skip_if`s do.
+    #[test]
+    fn only_an_empty_or_a_leaf_slot_with_an_op_is_pickable() {
+        let list = golden();
+        let pickable = |pointer: &str| {
+            list.slots
+                .iter()
+                .find(|slot| slot.pointer == pointer)
+                .unwrap_or_else(|| panic!("no slot {pointer}"))
+                .pickable()
+        };
+        assert!(!pickable("/declarative/handlers/0/when"));
+        assert!(pickable("/declarative/handlers/0/when/all/items/0"));
+        assert!(pickable("/declarative/route/0/skip_if"));
+        let mut leaf = list
+            .slots
+            .iter()
+            .find(|slot| slot.state == SlotState::Leaf)
+            .cloned()
+            .expect("a leaf");
+        leaf.op = SlotOp::None;
+        assert!(!leaf.pickable(), "a leaf with no op is no pick target");
+        let mut group = leaf;
+        group.state = SlotState::Group;
+        group.op = SlotOp::Replace;
+        assert!(
+            !group.pickable(),
+            "a group is no pick target whatever op it carries"
+        );
+        group.state = SlotState::Unknown;
+        assert!(!group.pickable(), "nor is a state this build does not know");
+    }
+
+    /// An op or a state STRING this build does not know (the gateway writes lower-case names;
+    /// the schema's own `ADD` is a name it knows) is the decode's own refusal of the whole
+    /// rendering, never a slot drawn with a guessed op.
+    #[test]
+    fn an_unknown_op_or_state_string_refuses_the_rendering() {
+        for (op, state) in [
+            ("insert", "leaf"),
+            ("Add", "leaf"),
+            ("add", "branch"),
+            ("PICK_OP_ADD", "STATE_LEAF"),
+        ] {
+            let text = format!(
+                r#"{{"prose":"Rules\n  r1: when x.\n","rules":[{{"pointer":"/declarative/handlers/0","line":1,"line_count":1,"slots":[{{"pointer":"/declarative/handlers/0/when","title":"when","line":1,"state":"{state}","predicate":"cmdr_hp_pct","pick_op":"{op}"}}]}}]}}"#
+            );
+            assert!(
+                rule_list_of(&json::read(&text).expect("json")).is_err(),
+                "op {op}, state {state}"
+            );
+        }
+    }
+
     #[test]
     fn the_patches_are_exact() {
         assert_eq!(

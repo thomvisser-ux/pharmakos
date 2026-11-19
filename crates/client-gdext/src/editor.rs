@@ -6755,6 +6755,41 @@ mod tests {
         assert!(!editor.has_pending_jobs(), "nothing was sent");
     }
 
+    /// **An op string the gateway never sends is the decode's refusal**: the rendering is
+    /// refused whole, so the list stays stale and a pick is refused with that reason, never sent.
+    /// (`NoPickOp` is reached only by `unspecified` on a slot that is not a group.)
+    #[test]
+    fn an_unknown_op_string_leaves_the_list_stale_and_sends_nothing() {
+        let mut editor = loaded(EXPAND_EAST);
+        let render = read(
+            r#"{"prose":"Rules\n  r1: when x.\n","rules":[{"pointer":"/declarative/handlers/0","line":1,"line_count":1,"slots":[{"pointer":"/declarative/handlers/0/when","title":"when","line":1,"state":"leaf","predicate":"cmdr_hp_pct","pick_op":"insert"}]}],"_status":{"phase":"lull"}}"#,
+        );
+        for _ in 0..24 {
+            let Some(call) = editor.next_call(false) else {
+                break;
+            };
+            let answer = match call.method {
+                "render_plan" => render.clone(),
+                "estimate_route" => read(r#"{"reachable":true}"#),
+                "resolve_refs" => read(r#"{"refs":[]}"#),
+                _ => quick_report("", true),
+            };
+            let _ = editor.answered(Ok(&answer));
+        }
+        assert!(!editor.prose_current());
+        assert!(matches!(
+            editor.unchecked(Check::Prose),
+            Some(Unchecked::Unreadable(_))
+        ));
+        assert_eq!(editor.rules_blocked(), Some(RuleEditRefusal::Stale));
+        with_words(&mut editor);
+        assert_eq!(
+            editor.choose_predicate(0, 0, "/declarative/handlers/0/when", 1, 0),
+            Err(RuleEditRefusal::Stale)
+        );
+        assert!(!editor.has_pending_jobs(), "nothing was sent");
+    }
+
     /// **What else the picker refuses**, each by its reason and never sent: no vocabulary, a
     /// locked entry, a locked family, a slot of another rendering or another pointer, a slot
     /// outside the rule it belongs to.
