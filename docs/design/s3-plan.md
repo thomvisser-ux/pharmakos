@@ -1105,7 +1105,7 @@ change moves `report_hash` is granted, for the re-bless alone, `tests/golden/gat
 - **Implements:** AGENTS.md §10 items 7 and 8. **Needs:** every other lane merged. **Contract PR:**
   yes (design docs). **Agent-days:** 2.5.
 
-[Amended by item 162 (1) and (5), as proposed: `demo3` also re-runs the editor's end-to-end 50 ms
+[Amended by item 162 (1) and (5): `demo3` also re-runs the editor's end-to-end 50 ms
 bar and QUICK at the final size budget, because `tune3` can change the budget after `cert3`.]
 
 ### `p6` — the owner's P6 timing sessions (main session and owner, not a lane)
@@ -1152,11 +1152,10 @@ other cargo, rustc or nextest runs (item 159 (2)). Decision 12's checkpoints (se
 re-based on this order (item 159 (4)).
 
 [Amended by items 160 (7), 161 (11) and 162 (5). The slot order above has been replaced by items 160
-(7) and 161 (11) and, as proposed, by item 162 (5). Item 161 (11) gave slot A `pred` > `p3acc` >
+(7), 161 (11) and 162 (5). Item 161 (11) gave slot A `pred` > `p3acc` >
 `gwu` > `vfyq2` > `nite3` > `opr3` > `vcap` > `deps3` > `cert3` > `tune3` > `demo3` and slot B
-`ed3b` part 2 > `prob`. Item 162 (5), of 2026-11-18, is the main session's proposal (the owner can
-veto it) and takes effect when the owner lifts the hold of item 162 (2), which "Start gwu now"
-lifted for `gwu` only: wave 0, `p3acc` and `ed3b` part 2; wave 1, `gwu` (with the proto doc-comment
+`ed3b` part 2 > `prob`. Item 162 (5), of 2026-11-18, is the main session's call (the owner can
+veto it), in effect since the owner lifted the hold of item 162 (2) on 2026-11-18: wave 0, `p3acc` and `ed3b` part 2; wave 1, `gwu` (with the proto doc-comment
 sweep) and `ed3b` part 2's wiring to it, then P6b by hand, which needs an idle machine, so wave 2
 starts after it or P6b waits for a gap, as the main session decides at the time; wave 2, `vfyq2`
 and `opr3` (`opr3` merges first, `vfyq2`'s `VERIFIER_VERSION` bump last); wave 3, `nite3` and
@@ -1214,7 +1213,7 @@ the stage, not six. Gateway goldens move at `gwu` (the additive `Status` field; 
 pointer and state on a rendered rule or step; `get_vocabulary` and `get_beacon`, with the byte copy
 `godot/fixtures/rule_list_render.json` that item 161 (9) grants it by name) and at `opr3` (Easy's
 output: `instantiate_suggested` and the `demo_*` goldens, already in its row). Where two of these
-lanes move one set, item 162 (5), as proposed, fixes the merge order: `opr3` first, `vfyq2`'s
+lanes move one set, item 162 (5) fixes the merge order: `opr3` first, `vfyq2`'s
 version bump last.]
 
 ### 4.3 Honest size
@@ -1405,7 +1404,7 @@ the bar is reported and put to the owner. Measured on the route shape before the
 26.1 ms p50 and 30.5 to 32.7 ms p99 over three idle runs; the record's figure, the median of the
 three p99s, is 32.0 ms. `cert3` also records the largest text the editor can send and what the
 player sees past it; the socket's 256 KiB limit against the 512 KiB text cap is settled at
-hardening. `tune3` can change the size budget after `cert3`, so, as proposed in item 162 (5),
+hardening. `tune3` can change the size budget after `cert3`, so, by item 162 (5),
 `demo3` re-runs the 50 ms bar and QUICK at the final budget, with the rest of item 6.]
 
 **The fallback, written now.** If FULL at 128 misses, **a smaller budget** by E24's mechanics, never
