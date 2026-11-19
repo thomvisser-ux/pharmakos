@@ -22,10 +22,9 @@
 //!
 //! S3's plan adds E11's P3 accuracy gate (`p3_holds_on_real_commanders_*`):
 //! the estimate against seat 0's commander walked through the tick, on three
-//! seeds, never optimistic and within 15 % at p90 on the map-wide draw; and
-//! the short routes' figures, reported and held to never optimistic only
-//! (`p3_short_routes_are_reported_and_never_optimistic`). Certifying the
-//! figures is `cert3`'s.
+//! seeds, never optimistic and within 15 % at p90 on the map-wide draw and on
+//! each short draw of 64 cells and under, per seed and pooled
+//! (`p3_holds_on_short_routes`). Certifying the figures is `cert3`'s.
 //!
 //! The bench the same section asks for is `tests/pathing_bench.rs`, which
 //! reports in **counted work** rather than in milliseconds, and says there why.
@@ -1765,9 +1764,8 @@ fn harness_world(movers: u32) -> World {
 // connected walkable columns, seeded per map) is the one the `p3_holds_*`
 // tests hold to the spec's figure. On these maps it holds no route of 32 cells
 // or less, so the **short draws** (`P3_SHORT_DRAWS`: rings of straight-line
-// distance and a disc) are walked beside it and reported by
-// `p3_short_routes_are_reported_and_never_optimistic`, which asserts what holds
-// today and not the 15 %: see its doc comment.
+// distance and a disc) are walked beside it and held to the same figure by
+// `p3_holds_on_short_routes`: see its doc comment.
 //
 // For each seed and draw one `World` is built as `harness_world(0)` builds one
 // (three seats, the committed rules, no movers, no playbook sealed, so nothing
@@ -2463,15 +2461,17 @@ fn p3_catches_an_optimistic_or_a_loose_estimate() {
     assert_eq!(off_the_integrator(&slow).len(), walks.len());
 }
 
-/// Short routes, walked by real commanders and **reported**, not held to the
-/// gate's 15 %.
+/// Short routes, walked by real commanders and held to the gate: on each
+/// short draw of 64 cells and under (`P3_SHORT_DRAWS`), per seed and over the
+/// three seeds pooled, the estimate is never optimistic and its p90 |error| is
+/// at most [`P3_BUDGET_PER_MILLE`].
 ///
-/// The map-wide draw holds no route of 32 cells or less on these maps, and
-/// short routes **miss the gate's 150 per mille today**. Measured at this
-/// test's draw (`P3_SHORT_WALKS` = 60 pairs a draw on each seed, counted from
-/// the serving tick, measured 2026-11-18 on Windows and WSL2 alike), the p90
+/// The map-wide draw holds no route of 32 cells or less on these maps, which is
+/// why the short draws exist. Before lane `p3fix` (#187, measured 2026-11-18 on
+/// Windows and WSL2 alike, `P3_SHORT_WALKS` = 60 pairs a draw on each seed,
+/// counted from the serving tick) short routes missed the gate. The p90
 /// |error| per mille by seed (`0xca5caded`, `DETERMINISM_MATCH_SEED`, 20) and
-/// pooled, and the pooled maximum:
+/// pooled, and the pooled maximum, were:
 ///
 /// | draw (straight-line cells) | p90 by seed | p90 pooled | max pooled |
 /// |---|---|---|---|
@@ -2482,17 +2482,15 @@ fn p3_catches_an_optimistic_or_a_loose_estimate() {
 /// | 32 to 64         | 79 / 59 / 93      | 81  | 167  |
 /// | the 32-cell disc | 202 / 222 / 241   | 234 | 1243 |
 ///
-/// Every band at 32 cells and under misses 150 at p90 on some seed; only the
-/// 32-to-64 band is inside it. The estimate was never optimistic on any walk.
-///
-/// So this asserts only what holds today: every walk finishes (typed failures,
-/// none skipped), the walker arrives on the integrator's tick, and the estimate
-/// is never optimistic on any walk. Lane `p3fix` (`crates/sim/src/pathing`)
-/// fixes the estimator's short routes and makes the 150 per mille bound an
-/// assertion here. Read the figures with
+/// The cause (p3fix's step 0): the abstract estimate prices the unsmoothed
+/// refinement exactly, and on a short route that crosses one cluster border
+/// the crossing's transition node can lie several cells off the line, a detour
+/// the smoother removes and the estimate still charged. The fix prices a pair
+/// whose clusters touch at the route the router serves
+/// (`pharmakos_sim::pathing::estimate`'s module docs). Read the figures with
 /// `cargo test -p pharmakos-sim --test pathing -- --nocapture`.
 #[test]
-fn p3_short_routes_are_reported_and_never_optimistic() {
+fn p3_holds_on_short_routes() {
     static SHORT: [std::sync::OnceLock<SeedWalks>; 3] = [const { std::sync::OnceLock::new() }; 3];
     // The three maps' walks on three threads: each thread has its own world.
     std::thread::scope(|scope| {
@@ -2513,18 +2511,31 @@ fn p3_short_routes_are_reported_and_never_optimistic() {
             let label = format!("seed {:#018x}, {draw}", walks.seed);
             let mine = walks.walks_of(draw);
             problems.extend(unread(&label, &walks.failures_of(draw), &mine));
+            if mine.len() != usize::try_from(P3_SHORT_WALKS).expect("fits") {
+                problems.push(format!(
+                    "{label}: {} walks, not {P3_SHORT_WALKS}",
+                    mine.len()
+                ));
+            }
             println!("{}", p3_notice(&label, &mine));
+            let verdict = Verdict::of(&mine);
+            if !verdict.passes() {
+                problems.push(format!(
+                    "{label} misses P3: optimistic on (seed, pair) {:?}, p90 {} per mille \
+                     (budget {P3_BUDGET_PER_MILLE})",
+                    verdict.optimistic, verdict.abs_p90
+                ));
+            }
             pooled.extend_from_slice(&mine);
         }
-        println!(
-            "{}",
-            p3_notice(&format!("three seeds pooled, {draw}"), &pooled)
-        );
+        let label = format!("three seeds pooled, {draw}");
+        println!("{}", p3_notice(&label, &pooled));
         let verdict = Verdict::of(&pooled);
-        if !verdict.optimistic.is_empty() {
+        if !verdict.passes() {
             problems.push(format!(
-                "{draw}: the estimate was optimistic on (seed, pair) {:?}",
-                verdict.optimistic
+                "{label} misses P3: optimistic on (seed, pair) {:?}, p90 {} per mille (budget \
+                 {P3_BUDGET_PER_MILLE})",
+                verdict.optimistic, verdict.abs_p90
             ));
         }
     }
