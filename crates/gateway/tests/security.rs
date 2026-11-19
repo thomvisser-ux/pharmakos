@@ -68,6 +68,7 @@ fn surface() -> Surface {
         segment_length_ms: Ms::new(180_000),
         round: 1,
         untimed: false,
+        untimed_by_rule: false,
     });
     surface
 }

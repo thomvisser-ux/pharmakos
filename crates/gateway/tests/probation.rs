@@ -376,6 +376,107 @@ fn a_countdown_reported_in_a_probation_match_is_refused_naming_the_preset() {
     assert!(!custom.time().untimed);
 }
 
+/// The `_status` footer `seat` reads off `get_status`, decoded as the
+/// schema's `gp.api.v1.Status` once its lower-case phase is translated
+/// (decisions-log item 80), so the wire's spelling of the new field is held
+/// to the schema's.
+fn footer_of(surface: &mut Surface, seat: u8) -> (Json, pharmakos_proto::gp::api::v1::Status) {
+    let token = seat_token(surface, seat);
+    let answer = result(&call(surface, &token, "get_status", "{}"), "get_status");
+    let footer = answer
+        .get("_status")
+        .cloned()
+        .expect("every result has one");
+    let Json::Object(entries) = &footer else {
+        panic!("the footer is an object: {footer:?}");
+    };
+    let canonical = Json::Object(
+        entries
+            .iter()
+            .map(|(key, value)| match (key.as_str(), value) {
+                ("phase", Json::String(wire)) => (
+                    key.clone(),
+                    Json::String(
+                        pharmakos_proto::scope::from_wire_name("gp.api.v1.Status.Phase", wire)
+                            .expect("a phase the schema names"),
+                    ),
+                ),
+                _ => (key.clone(), value.clone()),
+            })
+            .collect(),
+    );
+    let decoded = pharmakos_proto::json::decode_json(&canonical)
+        .unwrap_or_else(|error| panic!("not a gp.api.v1.Status: {error}: {footer:?}"));
+    (footer, decoded)
+}
+
+/// E7, as the client reads it (S3's `gwu`): a Probation Lull's footer says it
+/// is untimed **by rule**, `untimed_by_rule` beside `untimed`, before and
+/// after a report of the time spent, so a client starts no countdown and
+/// reports no `remaining_ms` in it. A Probation Push and recap carry no
+/// `untimed_by_rule`, and neither does a `custom` Lull, whether fresh (which
+/// is `untimed` until its host reports a countdown) or timed.
+#[test]
+fn a_probation_lull_is_untimed_by_rule_and_a_custom_lull_never_is() {
+    let mut probation = hosted_under("m-by-rule", Preset::Probation, Some(0), 1_000, 3);
+    let admin = admin_token(&mut probation);
+    let mut elapsed = 0;
+    for when in ["fresh", "after a report of the time spent"] {
+        let (footer, decoded) = footer_of(&mut probation, 0);
+        assert_eq!(
+            footer.get("untimed_by_rule"),
+            Some(&Json::Bool(true)),
+            "{when}: {footer:?}"
+        );
+        assert_eq!(footer.get("untimed"), Some(&Json::Bool(true)), "{when}");
+        assert!(decoded.untimed_by_rule && decoded.untimed, "{when}");
+        assert!(probation.time().untimed_by_rule, "{when}");
+        spend(&mut probation, &admin, &mut elapsed);
+    }
+
+    assert!(probation.begin_push().expect("the Push begins"));
+    let (footer, decoded) = footer_of(&mut probation, 0);
+    assert_eq!(footer.get("untimed_by_rule"), None, "a Push: {footer:?}");
+    assert!(!decoded.untimed_by_rule);
+    while let Some(report) = probation.step().expect("a tick") {
+        if report.segment_ended {
+            break;
+        }
+    }
+    assert_eq!(probation.time().phase, Phase::Recap);
+    let (footer, decoded) = footer_of(&mut probation, 0);
+    assert_eq!(footer.get("untimed"), Some(&Json::Bool(true)), "a recap");
+    assert_eq!(footer.get("untimed_by_rule"), None, "a recap: {footer:?}");
+    assert!(!decoded.untimed_by_rule);
+    next_lull(&mut probation);
+    let (footer, _) = footer_of(&mut probation, 0);
+    assert_eq!(
+        footer.get("untimed_by_rule"),
+        Some(&Json::Bool(true)),
+        "the next Lull: {footer:?}"
+    );
+
+    let mut custom = hosted_under("m-by-host", Preset::Custom, Some(0), 1_000, 3);
+    let (footer, decoded) = footer_of(&mut custom, 0);
+    assert_eq!(footer.get("untimed"), Some(&Json::Bool(true)), "fresh");
+    assert_eq!(footer.get("untimed_by_rule"), None, "fresh: {footer:?}");
+    assert!(!decoded.untimed_by_rule);
+    let admin = admin_token(&mut custom);
+    answered(
+        &call(
+            &mut custom,
+            &admin,
+            "report_host_clock",
+            "{\"elapsed_ms\":1000,\"remaining_ms\":120000}",
+        ),
+        "a custom match's countdown",
+    );
+    let (footer, decoded) = footer_of(&mut custom, 0);
+    assert_eq!(footer.get("untimed"), None, "timed: {footer:?}");
+    assert_eq!(footer.get("untimed_by_rule"), None, "timed: {footer:?}");
+    assert!(!decoded.untimed && !decoded.untimed_by_rule);
+}
+
 // ---------------------------------------------------------------------------
 // E5: the memos
 // ---------------------------------------------------------------------------

@@ -1958,10 +1958,17 @@ impl Surface {
     /// evidence the gateway has of one, because the Lull's timer is the
     /// client's (decisions-log item 99). A Lull no host has put a countdown on
     /// -- before the first report that carries one, or one run with no timer
-    /// at all, as S6's untimed Probation Lulls will be, whose host reports
-    /// only the time it spends (`report_host_clock` with no `remaining_ms`)
-    /// -- reads `untimed` rather than a 0 a client would show as a timer that
-    /// ran out.
+    /// at all, as a Probation Lull is, whose host reports only the time it
+    /// spends (`report_host_clock` with no `remaining_ms`) -- reads `untimed`
+    /// rather than a 0 a client would show as a timer that ran out.
+    ///
+    /// `untimed_by_rule` tells those two apart (`gp.api.v1.Status.
+    /// untimed_by_rule`; S3's `gwu`): it is true in a Lull of a match whose
+    /// preset gives its Lulls no countdown ([`Preset::untimed_lulls`], the
+    /// Probation preset's, E7), and nowhere else, so a client starts no
+    /// countdown for that Lull, while a fresh `custom` Lull is `untimed` only
+    /// until its host's first countdown. It reads the preset and nothing
+    /// else: no clock, and nothing steps.
     fn sync_time(&mut self) {
         let Some(host) = self.host.as_ref() else {
             return;
@@ -1980,9 +1987,14 @@ impl Surface {
         // Outside a Push the figure is the client's own report, and 0 when
         // there is none; `untimed` is what says that 0 is no countdown rather
         // than one that ran out (S1-11, ruled by decision 12).
+        // A Probation Lull has no countdown by rule (E7): it is the one cause
+        // of `untimed` the preset decides, so it is said apart, and it implies
+        // `untimed` by construction rather than by the refusals that keep a
+        // countdown off it.
+        let untimed_by_rule = in_lull && self.preset.untimed_lulls();
         let untimed = match runner.phase() {
             MatchPhase::Push => false,
-            MatchPhase::Lull => reported.is_none(),
+            MatchPhase::Lull => untimed_by_rule || reported.is_none(),
             MatchPhase::Recap | MatchPhase::Ended => true,
         };
         let remaining = if in_push {
@@ -2026,6 +2038,7 @@ impl Surface {
             segment_length_ms: runner.frozen().coming_segment_ms(),
             round: runner.round(),
             untimed,
+            untimed_by_rule,
         };
     }
 
@@ -4177,6 +4190,7 @@ mod tests {
             segment_length_ms: Ms::new(180_000),
             round: 1,
             untimed: false,
+            untimed_by_rule: false,
         });
         surface
     }
