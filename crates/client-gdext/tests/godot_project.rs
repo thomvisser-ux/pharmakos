@@ -2498,7 +2498,7 @@ fn a_chip_editor_names_its_chip_and_never_clamps() {
 /// **The condition picker draws the vocabulary as sent** (S3's `ed3b`, part 2): every family,
 /// predicate and parameter is the bridge's `vocabulary`, a locked one greyed with the gateway's
 /// reason and not selectable, and Use asks the bridge for the one patch, naming the rule, the
-/// rendering and the slot. The hostless scene draws the captured answer and starts no host.
+/// rendering and the slot. The hostless scene draws the gateway's golden and starts no host.
 #[test]
 fn the_picker_draws_the_vocabulary_as_sent_and_a_lock_with_its_reason() {
     let picker = read("scripts/condition_picker.gd");

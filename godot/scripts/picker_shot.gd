@@ -4,8 +4,9 @@
 # The condition picker, drawn with NO host running (S3's `ed3b`, part 2, item 7): the render-only
 # scene for the picker's screenshot, as `rule_list_shot.gd` is the rule list's.
 #
-# `godot/fixtures/vocabulary.json` is a `get_vocabulary` answer captured from a hosted match
-# (godot/README.md says how and when); it goes through the bridge's own decode
+# `godot/fixtures/vocabulary.json` is a byte-identical copy of the gateway's own `get_vocabulary`
+# golden (tests/golden/gateway/get_vocabulary/expected.response.json; tests/vocabulary.rs keeps the
+# two identical); it goes through the bridge's own decode
 # (`editor_vocabulary_of_response`) and the editor's own picker drawing
 # (`scripts/condition_picker.gd`), so the picture is the editor's picture of that answer: each
 # family with its predicates and their parameters, and the locked ones greyed with the gateway's

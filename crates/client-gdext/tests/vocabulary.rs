@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! **The client names no word of the vocabulary** (S3's plan, task `ed3b`, part 2, decisions-log
-//! item 160 (4); an engineering call the owner can veto): every predicate, mandate and blueprint the pickers and the
+//! item 160 (4); an engineering call the owner can veto): every predicate, mandate, step and blueprint the pickers and the
 //! Visit & change rows offer is `get_vocabulary`'s, drawn as sent. This scan reads the names out
 //! of the committed answer (`godot/fixtures/vocabulary.json`), so a new name there needs no
 //! change here, and fails when the client's code names one: a Rust source under `src/` (its unit
@@ -45,6 +45,32 @@ const OTHER_MEANINGS: &[(&str, &str, &str)] = &[
          section 3 rule 4 names it)",
     ),
     ("bridge.rs", "wall", "the bridge's wall clock"),
+    (
+        "editor.rs",
+        "move",
+        "the map route surface's step composer (`step_value`): a click on the map becomes one          route step, which AGENTS.md section 3 rule 4 lets the client compose",
+    ),
+    (
+        "editor.rs",
+        "interface",
+        "the same composer's Visit and Recycle steps (`step_value`)",
+    ),
+    (
+        "editor.rs",
+        "place_beacon",
+        "the same composer's placement steps (`step_value`)",
+    ),
+    (
+        "vocabulary.rs",
+        "interface",
+        "`visit_step`: one Visit & change row's route step, composed from the menu's pick",
+    ),
+    (
+        "rule_list.rs",
+        "move",
+        "the RFC 6902 `move` op a drag composes",
+    ),
+    ("camera_rig.gd", "move", "the camera's own movement"),
     (
         "view.rs",
         "build",
@@ -95,6 +121,7 @@ fn vocabulary_names() -> Vec<String> {
         }
     }
     take(result.get("mandates"));
+    take(result.get("steps"));
     take(result.get("blueprints"));
     names
 }
@@ -197,6 +224,32 @@ fn names(code: &str, needle: &str) -> bool {
             .and_then(|tail| tail.chars().next());
         !identifier(before) && !identifier(after)
     })
+}
+
+/// **The fixtures are the gateway's goldens, byte for byte**: the picker scene, the client's
+/// tests and this scan read the answers the gateway's own tests pin.
+#[test]
+fn the_fixtures_are_byte_copies_of_the_gateways_goldens() {
+    for (fixture, golden) in [
+        ("vocabulary.json", "get_vocabulary"),
+        ("beacon_core.json", "get_beacon_core"),
+        ("beacon_build.json", "get_beacon_build"),
+    ] {
+        let copy = fs::read(root().join("godot").join("fixtures").join(fixture)).expect("the copy");
+        let original = fs::read(
+            root()
+                .join("tests")
+                .join("golden")
+                .join("gateway")
+                .join(golden)
+                .join("expected.response.json"),
+        )
+        .expect("the golden");
+        assert!(
+            copy == original,
+            "godot/fixtures/{fixture} is not tests/golden/gateway/{golden}'s bytes: re-copy it"
+        );
+    }
 }
 
 #[test]

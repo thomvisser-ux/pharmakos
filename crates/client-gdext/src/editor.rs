@@ -6524,7 +6524,7 @@ mod tests {
     // --- Part 2: the reads, the picker, the name picks and the Visit & change rows ---------
 
     const VOCABULARY: &str = include_str!("../../../godot/fixtures/vocabulary.json");
-    const BEACON: &str = include_str!("../../../godot/fixtures/beacon_detail.json");
+    const BEACON: &str = include_str!("../../../godot/fixtures/beacon_core.json");
 
     fn with_words(editor: &mut Editor) {
         editor.vocabulary = Some(vocabulary::vocabulary_of_text(VOCABULARY).expect("reads"));

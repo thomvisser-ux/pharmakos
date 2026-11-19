@@ -87,9 +87,64 @@
         }
       }
     ],
+    "build_targets": [
+      {
+        "blueprint_id": "wall",
+        "anchor": {
+          "voxel": {
+            "x": 360,
+            "y": 24,
+            "z": 36
+          }
+        },
+        "wall_box": {
+          "min": {
+            "x": 360,
+            "y": 24,
+            "z": 0
+          },
+          "max": {
+            "x": 362,
+            "y": 24,
+            "z": 40
+          }
+        }
+      },
+      {
+        "blueprint_id": "generator",
+        "anchor": {
+          "on": {
+            "feature_id": "vent_324_16"
+          }
+        },
+        "order": 1
+      },
+      {
+        "blueprint_id": "generator",
+        "anchor": {
+          "on": {
+            "vent": {
+              "rank": "nearest"
+            }
+          }
+        },
+        "order": 2
+      },
+      {
+        "blueprint_id": "mortar",
+        "anchor": {
+          "voxel": {
+            "x": 360,
+            "y": 24,
+            "z": 36
+          }
+        },
+        "order": 3
+      }
+    ],
     "_status": {
       "phase": "lull",
-      "phase_remaining_ms": 599900,
+      "phase_remaining_ms": 599950,
       "segment_length_ms": 1000,
       "round": 1
     }

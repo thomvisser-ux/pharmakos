@@ -585,10 +585,27 @@ fn names_under(text: &str, list: &str, key: &str) -> Vec<String> {
 mod tests {
     use super::*;
 
-    /// A `get_vocabulary` answer captured from a hosted match (`godot/fixtures/vocabulary.json`).
+    /// The gateway's `get_vocabulary` golden, by its byte copy (`godot/fixtures/vocabulary.json`).
     const VOCABULARY: &str = include_str!("../../../godot/fixtures/vocabulary.json");
-    /// A `get_beacon` answer for an own Build beacon (`godot/fixtures/beacon_detail.json`).
-    const BEACON: &str = include_str!("../../../godot/fixtures/beacon_detail.json");
+    /// The gateway's `get_beacon` golden for seat 0's core, by its byte copy.
+    const BEACON: &str = include_str!("../../../godot/fixtures/beacon_core.json");
+    /// The gateway's `get_beacon` golden for a Build beacon with targets (a wall among them).
+    const BUILD: &str = include_str!("../../../godot/fixtures/beacon_build.json");
+
+    fn entry<'a>(entries: &'a [Entry], name: &str) -> &'a Entry {
+        entries
+            .iter()
+            .find(|entry| entry.name == name)
+            .unwrap_or_else(|| panic!("no entry {name}"))
+    }
+
+    fn parameter<'a>(entry: &'a Entry, pointer: &str) -> &'a Parameter {
+        entry
+            .parameters
+            .iter()
+            .find(|parameter| parameter.pointer == pointer)
+            .unwrap_or_else(|| panic!("no parameter {pointer}"))
+    }
 
     fn compact(value: &Json) -> String {
         json::write(value).split_whitespace().collect()
@@ -617,11 +634,12 @@ mod tests {
             .find(|entry| entry.name.is_empty())
             .expect("the locked rest of the clock");
         assert_eq!(rest.locked.as_deref(), Some("from S6"));
-        let elapsed = clock.predicates.first().expect("segment_elapsed");
-        let time = elapsed.parameters.get(1).expect("its time");
-        assert_eq!(time.pointer, "/ms/value");
-        assert_eq!(time.shape, ParameterShape::Milliseconds);
-        let compared = elapsed.parameters.first().expect("its comparison");
+        let elapsed = entry(&clock.predicates, "segment_elapsed");
+        assert_eq!(
+            parameter(elapsed, "/ms/value").shape,
+            ParameterShape::Milliseconds
+        );
+        let compared = parameter(elapsed, "/ms/op");
         assert!(
             matches!(&compared.shape, ParameterShape::Choice { values } if values.first().map(String::as_str) == Some("\"LT\""))
         );
@@ -719,6 +737,31 @@ mod tests {
         let (_, theirs) = beacon_detail_of("e_00", &foreign).expect("reads");
         assert_eq!(theirs.mandate, "");
         assert!(theirs.settings.is_empty() && theirs.targets.is_empty());
+    }
+
+    /// The Build beacon's golden: every target read with its anchor as sent, a wall's and a
+    /// described vent's included, and a removal names the anchor in the playbook's canonical
+    /// spelling (the wire's lower-case `nearest` back to `NEAREST`).
+    #[test]
+    fn a_build_beacons_targets_are_read_as_sent() {
+        let frame = json::read(BUILD).expect("json");
+        let (_, detail) =
+            beacon_detail_of("b_00", frame.get("result").expect("a result")).expect("reads");
+        let blueprints: Vec<&str> = detail
+            .targets
+            .iter()
+            .map(|target| target.blueprint_id.as_str())
+            .collect();
+        assert!(blueprints.contains(&"wall"), "{blueprints:?}");
+        let described = detail
+            .targets
+            .iter()
+            .find(|target| target.anchor_text.contains("\"vent\""))
+            .expect("a target on a described vent");
+        assert_eq!(
+            compact(&remove_target_row(described)),
+            r#"{"remove_build_target":{"anchor":{"on":{"vent":{"rank":"NEAREST"}}}}}"#
+        );
     }
 
     #[test]
