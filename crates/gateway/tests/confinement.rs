@@ -1322,6 +1322,10 @@ fn no_handler_reads_the_save_or_the_replay() {
             "lull_save",
             "a Lull is saved by the host loop, on end of file",
         ),
+        // Since S3's `gwu` the surface's resume is a method, reached as
+        // `.resume(` (the entry below, which also covers `Host::resume`); this
+        // one still blocks the path form, `Surface::resume(..)` or a
+        // `Surface::resume` handed around as a function value.
         (
             "Surface::resume",
             "a surface is built over a save by the host loop's resume, and by nothing else",
@@ -1378,8 +1382,6 @@ fn no_handler_reads_the_save_or_the_replay() {
         "take_persistence",
         "lull_save",
         "Save::parse",
-        // `Surface::new(..).with_preset(..).resume(..)` since S3's `gwu`, fix
-        // pass 1: the preset is set before the save goes in.
         ".resume(",
     ] {
         assert!(
@@ -1387,6 +1389,31 @@ fn no_handler_reads_the_save_or_the_replay() {
             "`{needle}` is never called by serve.rs, so the exemption is guarding nothing"
         );
     }
+    serve_resumes_with_its_preset_first(&serve_lines);
+}
+
+/// The `.resume(` the host loop calls is the surface's, built with its preset
+/// first (S3's `gwu`): one statement takes a surface through `.with_preset(`
+/// and then `.resume(host`, so a host loop that restored the host alone, or
+/// set the preset after the save went in, fails here.
+fn serve_resumes_with_its_preset_first(serve_lines: &[(usize, String)]) {
+    let statements: Vec<String> = serve_lines
+        .iter()
+        .map(|(_, line)| line.trim().to_owned())
+        .collect::<Vec<String>>()
+        .join(" ")
+        .split(';')
+        .map(str::to_owned)
+        .collect();
+    assert!(
+        statements.iter().any(|statement| {
+            statement
+                .find(".with_preset(")
+                .and_then(|preset| statement.get(preset..))
+                .is_some_and(|rest| rest.contains(".resume(host"))
+        }),
+        "serve.rs no longer resumes a save into a surface whose preset is set first"
+    );
 }
 
 /// Inside surface.rs, where every dispatch arm lives, the surface's host-side

@@ -1472,3 +1472,35 @@ fn the_replay_files_reproduce_the_matchs_chain() {
         assert!(host.end_recap().expect("the host answers"));
     }
 }
+
+/// S3's `gwu`, fix pass 2: a Probation match quit in its opening Lull and
+/// resumed through the host loop's own resume (`serve::run_in` with a resume
+/// line) says the Lull is untimed by rule on the resumed host's very first
+/// call, so the rig starts no countdown the gateway refuses. A `custom`
+/// match's resumed Lull never does.
+#[test]
+fn a_probation_lull_resumed_by_the_host_loop_is_untimed_by_rule_on_its_first_call() {
+    for preset in [
+        pharmakos_gateway::probation::Preset::Probation,
+        pharmakos_gateway::probation::Preset::Custom,
+    ] {
+        let probation = preset == pharmakos_gateway::probation::Preset::Probation;
+        let line = Config {
+            preset,
+            ..config(&format!("m-gwu-resume-{}", preset.name()), Some(0))
+        };
+        let root = data_root(&format!("gwu-resume-{}", preset.name()));
+        host_and_quit(&root, &new_line(line.clone())).expect("a Lull to save");
+        let mut running = start_in(&root, &resume_line(line), Box::new(NoOperators));
+        let mut lobby = Client::open(running.announce.port, &running.announce.admin_token);
+        let status = result(&lobby.call("get_status", "{}"), "get_status");
+        let footer = status.get("_status").expect("a footer");
+        assert_eq!(
+            footer.get("untimed_by_rule") == Some(&Json::Bool(true)),
+            probation,
+            "{preset:?}: {footer:?}"
+        );
+        assert_eq!(footer.get("untimed"), Some(&Json::Bool(true)), "{preset:?}");
+        running.quit();
+    }
+}

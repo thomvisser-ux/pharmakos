@@ -837,7 +837,8 @@ impl Surface {
         }
         if surface.rules.rules_hash() != host.rules().rules_hash() {
             return Err(Error::internal(
-                "this surface was made with a rules table other than the one the save's host \n                 regenerated its world under",
+                "this surface was made with a rules table other than the one the save's host \
+                 regenerated its world under",
             ));
         }
         surface.views.resumed_after(continuation.generation);
@@ -4746,6 +4747,67 @@ mod tests {
     // What a seat sees of another seat's beacon, live and from memory (S2's
     // plan, decision 5 and E9), and its verifier scope's sightings
     // -----------------------------------------------------------------------
+
+    /// S3's `gwu`, fix pass 2: `with_preset` on a surface that already hosts a
+    /// match syncs the footer to the preset, whatever the order it was built in.
+    #[test]
+    fn with_preset_on_a_hosted_surface_moves_the_footer() {
+        let surface = hosted();
+        assert!(!surface.time().untimed_by_rule);
+        let probation =
+            surface.with_preset(crate::probation::Preset::Probation, Some(SeatId::new(0)));
+        assert!(
+            probation.time().untimed_by_rule,
+            "the footer follows the preset"
+        );
+        assert!(probation.time().untimed);
+    }
+
+    /// S3's `gwu`, fix pass 2: the two refusals `Surface::resume` makes before
+    /// it touches the save. A surface that already hosts a match resumes
+    /// nothing, and one made with a rules table other than its host's is
+    /// refused, never read beside it.
+    #[test]
+    fn resume_refuses_a_hosted_surface_and_a_rules_table_not_the_hosts() {
+        let saved = hosted().lull_save().expect("a Lull saves");
+        let continuation = crate::save::Continuation {
+            generation: 1,
+            last_tick: 0,
+        };
+        let host = || crate::host::Host::open(&short_config(), None).expect("a match");
+        let error = hosted()
+            .resume(host(), &saved, continuation)
+            .expect_err("already hosting");
+        assert_eq!(error.code, Code::Internal);
+        assert!(error.message.contains("once"), "{}", error.message);
+
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("rules")
+            .join("rules.v1.json");
+        let json = std::fs::read_to_string(path).expect("the rules table");
+        let other = json.replace("\"lull_ms\": 300000", "\"lull_ms\": 300001");
+        assert_ne!(other, json, "the table changed");
+        let other = RulesTable::from_canonical_json(&other).expect("another table loads");
+        let error = Surface::new(
+            "m-0001",
+            0x0000_0000_ca5c_aded,
+            other,
+            FogPolicy::fogged(),
+            &[SeatId::new(0), SeatId::new(1)],
+        )
+        .expect("a surface")
+        .resume(host(), &saved, continuation)
+        .expect_err("another rules table");
+        assert_eq!(error.code, Code::Internal);
+        assert_eq!(
+            error.message,
+            "this surface was made with a rules table other than the one the save's host \
+             regenerated its world under",
+            "one line, no stray line break"
+        );
+    }
 
     /// The config the intelligence tests host: two seats, one-second segments.
     fn short_config() -> pharmakos_sim::world::WorldConfig {
