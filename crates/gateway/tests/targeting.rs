@@ -752,7 +752,7 @@ fn a_non_seat_is_told_the_map_and_nothing_about_a_seat() {
         }),
         "the starting seam is covered"
     );
-    write_golden(
+    support::write_golden(
         "map_summary",
         &rpc::render(&call_in_lull(
             &mut surface,
@@ -791,7 +791,7 @@ fn resolve_refs_is_goldened_for_the_cover_and_build_playbook() {
         ),
     );
     let _ = result(&answer, "resolve_refs");
-    write_golden("resolve_refs", &rpc::render(&answer));
+    support::write_golden("resolve_refs", &rpc::render(&answer));
 }
 
 #[test]
@@ -999,40 +999,6 @@ fn a_step_that_found_nothing_says_why_in_the_feed() {
     assert!(line.contains("(no_target)"), "{line}");
     assert!(line.contains("found nothing"), "{line}");
     assert!(!line.contains("code"), "named, not numbered: {line}");
-}
-
-/// Write the fresh answer and compare it with the committed golden, as
-/// `tests/demo_playbooks.rs` does for its own cases.
-fn write_golden(case: &str, rendered: &str) {
-    let file = "response.json";
-    assert!(!rendered.contains('\r') && rendered.ends_with('\n'));
-    let fresh = support::target_dir()
-        .join("golden")
-        .join("gateway")
-        .join(case);
-    std::fs::create_dir_all(&fresh).expect("the fresh output's folder");
-    std::fs::write(fresh.join(format!("actual.{file}")), rendered).expect("the fresh output");
-    let committed = support::workspace_root()
-        .join("tests")
-        .join("golden")
-        .join("gateway")
-        .join(case)
-        .join(format!("expected.{file}"));
-    let Ok(expected) = std::fs::read_to_string(&committed) else {
-        panic!(
-            "no committed golden at {}. A new case is committed by copying the fresh output \
-             beside it, byte for byte, once it is right; `cargo xtask golden --bless` rewrites \
-             only goldens that exist.",
-            committed.display()
-        );
-    };
-    assert_eq!(
-        expected,
-        rendered,
-        "the golden at {} moved. tests/golden/gateway/README.md says what a diff means; the \
-         pull request has to say which input moved it.",
-        committed.display()
-    );
 }
 
 #[test]
