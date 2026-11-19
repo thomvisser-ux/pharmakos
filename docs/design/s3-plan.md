@@ -1100,7 +1100,8 @@ change moves `report_hash` is granted, for the re-bless alone, `tests/golden/gat
   rows. **Branch** `docs/s3-demo`.
 - **Builds:** section 1.1's run sheet with its staged beats said to be staged; section 1.4's
   readiness list checked; the fun gate's tester sheet; P1 FULL and G2 + P3 re-run on `tune3`'s rules
-  (section 5's last steps) and recorded; the register's S3 rows closed or moved with their owners;
+  (section 5's last steps) and recorded [with the editor's end-to-end 50 ms bar and QUICK, at the
+  final size budget: items 162 (1) and (5)]; the register's S3 rows closed or moved with their owners;
   the decisions-log item handing S3 to its demo.
 - **Implements:** AGENTS.md §10 items 7 and 8. **Needs:** every other lane merged. **Contract PR:**
   yes (design docs). **Agent-days:** 2.5.
@@ -1386,6 +1387,16 @@ Fallback: "Smaller budget; debounce".
    together. The amendment is the main session's docs PR's (section 4.4). Decision 9 holds the
    direction: never above 128 in S3.
 6. **Re-run on the final rules** by `demo3`.
+
+[Amended by item 162 (1) and (5). Two rulings of 2026-11-19 change what this section certifies.
+QUICK's 5 ms bar binds on the verifier alone at the 128-unit size budget; the cost of reading the
+player's text and the figure at the text cap are published and never gated. And the editor's
+end-to-end wait for a check has its own bar: **50 ms p99 at the size budget**, certified by `cert3`
+on every shape item 1 certifies, with a shape over the bar reported and put to the owner (measured
+idle on the route shape before the ruling: 25.5 ms p50, 30.5 ms p99). `cert3` also records the
+largest text the editor can send and what the player sees past it; the socket's 256 KiB limit against
+the 512 KiB text cap is settled at hardening. `tune3` can change the size budget after `cert3`, so
+`demo3` re-runs the 50 ms bar and QUICK at the final budget, with the rest of item 6.]
 
 **The fallback, written now.** If FULL at 128 misses, **a smaller budget** by E24's mechanics, never
 below its floor; if the floor itself misses, the owner rules (decision 18). **Debounce**: the editor
