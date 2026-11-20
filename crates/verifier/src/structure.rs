@@ -1661,7 +1661,9 @@ fn radius(found: u32, at: &str, predicate: &str, out: &mut Builder) {
 /// (`crates/plan-core/src/vocabulary.rs`'s `enemy_knowledge_family`), so a
 /// picked predicate and a fixed one start alike.
 /// `crates/plan-core/tests/fix_window.rs` holds the two homes to one number.
-const FIX_WINDOW_MS: i32 = 30_000;
+/// The seconds are `strings::fix_window_seconds!`, which the Fix's title is
+/// written from too.
+const FIX_WINDOW_MS: i32 = strings::fix_window_seconds!() * 1_000;
 
 /// `E0209`: "enemy predicates must declare freshness (`VISIBLE_NOW` or
 /// `KNOWN_WITHIN` ms)" (spec section 10). A block left out, a kind left unset
