@@ -649,7 +649,7 @@ fn index_of(token: &str) -> Option<usize> {
 // ---------------------------------------------------------------------------
 
 /// Where a comment was written, relative to the node it belongs to.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Anchor {
     /// Before the root value: a file header.
     Prologue,

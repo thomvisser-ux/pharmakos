@@ -39,6 +39,8 @@
 //! * **Save canonically** — [`canonicalise`], which is what `submit_plan`
 //!   hashes and what the goldens pin.
 
+use std::collections::BTreeMap;
+
 use pharmakos_proto::gp::v1::Playbook;
 use pharmakos_proto::json::{self, Json};
 
@@ -114,7 +116,7 @@ pub fn canonicalise(document: &Document) -> Result<Canonical, Error> {
         text.push_str(&comment.1.text);
         text.push('\n');
     }
-    write_value(&value, "", 0, &placed, &mut text);
+    write_value(&value, "", 0, &Placed::new(&placed), &mut text);
     text.push('\n');
     for comment in placed
         .iter()
@@ -232,17 +234,6 @@ fn indent(depth: usize, out: &mut String) {
     }
 }
 
-fn comments_at<'a>(
-    placed: &'a [(Anchor, Comment)],
-    wanted: &Anchor,
-) -> impl Iterator<Item = &'a Comment> {
-    let wanted = wanted.clone();
-    placed
-        .iter()
-        .filter(move |(anchor, _)| *anchor == wanted)
-        .map(|(_, comment)| comment)
-}
-
 /// Writes one own-line comment at `depth`.
 fn write_own_line(comment: &Comment, depth: usize, out: &mut String) {
     indent(depth, out);
@@ -261,13 +252,7 @@ fn write_trailing(comment: &Comment, out: &mut String) {
     }
 }
 
-fn write_value(
-    value: &Json,
-    pointer: &str,
-    depth: usize,
-    placed: &[(Anchor, Comment)],
-    out: &mut String,
-) {
+fn write_value(value: &Json, pointer: &str, depth: usize, placed: &Placed<'_>, out: &mut String) {
     match value {
         Json::Null => out.push_str("null"),
         Json::Bool(true) => out.push_str("true"),
@@ -283,7 +268,7 @@ fn write_value(
             out.push_str("[\n");
             for (index, item) in items.iter().enumerate() {
                 let child = push_pointer(pointer, &index.to_string());
-                for comment in comments_at(placed, &Anchor::Before(child.clone())) {
+                for comment in placed.at(&Anchor::Before(child.clone())) {
                     write_own_line(comment, inner, out);
                 }
                 indent(inner, out);
@@ -291,12 +276,12 @@ fn write_value(
                 if index.saturating_add(1) < items.len() {
                     out.push(',');
                 }
-                for comment in comments_at(placed, &Anchor::After(child)) {
+                for comment in placed.at(&Anchor::After(child)) {
                     write_trailing(comment, out);
                 }
                 out.push('\n');
             }
-            for comment in comments_at(placed, &Anchor::Inside(pointer.to_owned())) {
+            for comment in placed.at(&Anchor::Inside(pointer.to_owned())) {
                 write_own_line(comment, inner, out);
             }
             indent(depth, out);
@@ -311,7 +296,7 @@ fn write_value(
             out.push_str("{\n");
             for (index, (key, item)) in entries.iter().enumerate() {
                 let child = push_pointer(pointer, key);
-                for comment in comments_at(placed, &Anchor::Before(child.clone())) {
+                for comment in placed.at(&Anchor::Before(child.clone())) {
                     write_own_line(comment, inner, out);
                 }
                 indent(inner, out);
@@ -321,12 +306,12 @@ fn write_value(
                 if index.saturating_add(1) < entries.len() {
                     out.push(',');
                 }
-                for comment in comments_at(placed, &Anchor::After(child)) {
+                for comment in placed.at(&Anchor::After(child)) {
                     write_trailing(comment, out);
                 }
                 out.push('\n');
             }
-            for comment in comments_at(placed, &Anchor::Inside(pointer.to_owned())) {
+            for comment in placed.at(&Anchor::Inside(pointer.to_owned())) {
                 write_own_line(comment, inner, out);
             }
             indent(depth, out);
@@ -340,11 +325,11 @@ fn write_value(
 fn write_empty(
     pointer: &str,
     depth: usize,
-    placed: &[(Anchor, Comment)],
+    placed: &Placed<'_>,
     brackets: (char, char),
     out: &mut String,
 ) {
-    let inside: Vec<&Comment> = comments_at(placed, &Anchor::Inside(pointer.to_owned())).collect();
+    let inside: Vec<&Comment> = placed.at(&Anchor::Inside(pointer.to_owned())).collect();
     out.push(brackets.0);
     if inside.is_empty() {
         out.push(brackets.1);
@@ -383,6 +368,55 @@ fn write_string(text: &str, out: &mut String) {
     out.push('"');
 }
 
+/// Every placed comment, indexed by the anchor it was placed at, so the
+/// writer finds a node's comments in a lookup rather than by reading every
+/// comment at every node (S3's `vfyq2`: the scan made canonicalising a
+/// commented file quadratic, 2.7 s for a commented file at the size budget).
+/// Each anchor's comments keep the order they were written in.
+struct Placed<'c> {
+    by_anchor: BTreeMap<&'c Anchor, Vec<&'c Comment>>,
+}
+
+impl<'c> Placed<'c> {
+    fn new(placed: &'c [(Anchor, Comment)]) -> Placed<'c> {
+        let mut by_anchor: BTreeMap<&'c Anchor, Vec<&'c Comment>> = BTreeMap::new();
+        for (anchor, comment) in placed {
+            by_anchor.entry(anchor).or_default().push(comment);
+        }
+        Placed { by_anchor }
+    }
+
+    /// The comments placed at `anchor`, in the order they were written.
+    fn at(&self, anchor: &Anchor) -> impl Iterator<Item = &'c Comment> + '_ {
+        let found: &[&'c Comment] = match self.by_anchor.get(anchor) {
+            Some(comments) => comments.as_slice(),
+            None => &[],
+        };
+        #[cfg(test)]
+        examined::count(found.len());
+        found.iter().copied()
+    }
+}
+
+/// How many comments the writer has looked at, for the test that holds it to
+/// the comments a file has rather than the comments times the nodes.
+#[cfg(test)]
+mod examined {
+    use std::cell::Cell;
+
+    thread_local! {
+        static EXAMINED: Cell<u64> = const { Cell::new(0) };
+    }
+
+    pub(super) fn count(found: usize) {
+        let found = u64::try_from(found).unwrap_or(u64::MAX);
+        EXAMINED.with(|seen| seen.set(seen.get().saturating_add(found).saturating_add(1)));
+    }
+
+    pub(super) fn take() -> u64 {
+        EXAMINED.with(|seen| seen.replace(0))
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::{canonical_json, canonicalise_text};
@@ -396,6 +430,48 @@ mod tests {
         "\"on_death\":{\"on_respawn\":\"CONTINUE\"},",
         "\"fallback\":{\"hold\":{\"at\":{\"beacon_anchor\":{\"safest\":{}}}}}}"
     );
+
+    /// A route of `steps` steps with a comment above and beside each one.
+    fn commented_route(steps: usize) -> String {
+        let route: Vec<String> = (0..steps)
+            .map(|index| {
+                format!(
+                    "// step {index}\n{{\"label\":\"s{index}\",\"hold\":{{\"ms\":1000}}}} /* after {index} */"
+                )
+            })
+            .collect();
+        MINIMAL.replace(
+            "[{\"label\":\"a\",\"hold\":{\"ms\":1000}}]",
+            &format!("[\n{}\n]", route.join(",\n")),
+        )
+    }
+
+    /// S3's `vfyq2`: the writer looked at every comment at every node, so
+    /// canonicalising a commented file was quadratic in its size (2.7 s for a
+    /// commented file at the size budget). It looks a node's comments up now:
+    /// twice the file, twice the comments looked at, give or take the nodes.
+    #[test]
+    fn the_writer_looks_at_each_comment_a_bounded_number_of_times() {
+        let mut examined = Vec::new();
+        for steps in [200, 400] {
+            let text = commented_route(steps);
+            let _ = super::examined::take();
+            let canonical = canonicalise_text(&text).expect("a commented route");
+            examined.push(super::examined::take());
+            assert_eq!(
+                canonical.text.matches("// step ").count(),
+                steps,
+                "every comment comes back"
+            );
+        }
+        let &[small, large] = examined.as_slice() else {
+            panic!("two sizes measured: {examined:?}");
+        };
+        assert!(
+            large <= small.saturating_mul(2).saturating_add(64),
+            "200 steps looked at {small} comments, 400 at {large}: more than twice"
+        );
+    }
 
     #[test]
     fn fields_come_back_in_field_number_order() {
