@@ -238,6 +238,8 @@ mod annotate;
 mod budget;
 mod g3;
 mod golden;
+#[cfg(test)]
+mod licence_quotes;
 mod package;
 mod placeholders;
 mod png;
@@ -4594,6 +4596,7 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
             ("budget.rs", include_str!("budget.rs")),
             ("g3.rs", include_str!("g3.rs")),
             ("golden.rs", include_str!("golden.rs")),
+            ("licence_quotes.rs", include_str!("licence_quotes.rs")),
             ("package.rs", include_str!("package.rs")),
             ("placeholders.rs", include_str!("placeholders.rs")),
             ("png.rs", include_str!("png.rs")),
