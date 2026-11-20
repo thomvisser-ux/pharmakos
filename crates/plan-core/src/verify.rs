@@ -40,11 +40,13 @@
 
 use pharmakos_proto::gp::api::v1::VerifyReport;
 use pharmakos_proto::gp::api::v1::verify_plan::Depth;
+use pharmakos_proto::json::grammar;
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_verifier::{Input, Scope};
 
 use crate::canonical::canonicalise_text;
 use crate::error::Error;
+use crate::jsonc::comment_end;
 
 /// Verifies a JSONC playbook file.
 ///
@@ -90,86 +92,56 @@ pub fn verify_jsonc(
     Ok(pharmakos_verifier::verify(&input, depth))
 }
 
-/// The file with every `//` and `/* */` comment blanked to spaces, line
-/// breaks kept, so every byte offset is the offset in `text`.
+/// The file with every closed `//` and `/* */` comment blanked to spaces,
+/// line breaks kept, so every byte offset is the offset in `text`.
 ///
-/// A comment is recognised outside a string only, the same rule the JSONC
-/// layer reads comments by; a `//` inside a string value is text. An
-/// unterminated block comment is blanked to the end of the file, which leaves
-/// the verifier to report whatever the file then lacks. A comment's bytes are
-/// replaced one for one, so a multi-byte character inside one becomes as many
-/// spaces as it had bytes and the result is still UTF-8.
+/// A comment is what [`crate::jsonc`]'s `comment_end` says is one, outside a
+/// string, where the string is what the grammar reads as one: the JSONC
+/// reader's own rules, so a comment this blanks is one that reader reads as
+/// trivia. A block comment that never closes is not one, and its `/` is left
+/// in place for the codec to refuse at that byte, as the JSONC reader does; so
+/// is the rest of a text once a string in it breaks the grammar, where both
+/// readers stop. A comment's bytes are replaced one for one, so a multi-byte
+/// character inside one becomes as many spaces as it had bytes and the result
+/// is still UTF-8.
 fn blank_comments(text: &str) -> String {
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    enum At {
-        Code,
-        Text,
-        Escape,
-        Line,
-        Block,
-    }
-    // Read by character, so a blanked character becomes exactly as many spaces
-    // as it had bytes and the result is a `String` by construction: there is
-    // no byte buffer to convert back, and so no conversion that could fail.
-    let blank = |out: &mut String, character: char| {
-        for _ in 0..character.len_utf8() {
-            out.push(' ');
-        }
-    };
+    let bytes = text.as_bytes();
     let mut out = String::with_capacity(text.len());
-    let mut at = At::Code;
-    let mut characters = text.chars().peekable();
-    while let Some(byte) = characters.next() {
-        match at {
-            At::Code => {
-                if byte == '/' && characters.peek() == Some(&'/') {
-                    let _ = characters.next();
-                    out.push_str("  ");
-                    at = At::Line;
-                } else if byte == '/' && characters.peek() == Some(&'*') {
-                    let _ = characters.next();
-                    out.push_str("  ");
-                    at = At::Block;
-                } else {
-                    if byte == '"' {
-                        at = At::Text;
-                    }
-                    out.push(byte);
+    // Up to where the current comment is blanked, and up to where the current
+    // string, or the rest of a text whose string broke the grammar, is copied.
+    let mut blank_until = 0usize;
+    let mut copy_until = 0usize;
+    for (at, character) in text.char_indices() {
+        if at < blank_until {
+            if character == '\n' || character == '\r' {
+                out.push(character);
+            } else {
+                for _ in 0..character.len_utf8() {
+                    out.push(' ');
                 }
             }
-            At::Text => {
-                if byte == '\\' {
-                    at = At::Escape;
-                } else if byte == '"' {
-                    at = At::Code;
+            continue;
+        }
+        if at < copy_until {
+            out.push(character);
+            continue;
+        }
+        match character {
+            '"' => {
+                copy_until = match grammar::string(text, at, None) {
+                    Ok((end, _)) => end,
+                    Err(_breaks_the_grammar) => text.len(),
+                };
+                out.push(character);
+            }
+            '/' => match comment_end(bytes, at) {
+                Some((end, _)) => {
+                    blank_until = end;
+                    out.push(' ');
                 }
-                out.push(byte);
-            }
-            At::Escape => {
-                at = At::Text;
-                out.push(byte);
-            }
-            At::Line => {
-                if byte == '\n' {
-                    at = At::Code;
-                    out.push(byte);
-                } else if byte == '\r' {
-                    out.push(byte);
-                } else {
-                    blank(&mut out, byte);
-                }
-            }
-            At::Block => {
-                if byte == '*' && characters.peek() == Some(&'/') {
-                    let _ = characters.next();
-                    out.push_str("  ");
-                    at = At::Code;
-                } else if byte == '\n' || byte == '\r' {
-                    out.push(byte);
-                } else {
-                    blank(&mut out, byte);
-                }
-            }
+                None => out.push(character),
+            },
+            other => out.push(other),
         }
     }
     out
