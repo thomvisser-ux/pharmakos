@@ -473,6 +473,21 @@ pub fn parse<'t, B: Build<'t>, T: Trivia>(
     build: &mut B,
     trivia: &mut T,
 ) -> Result<Document<'t, B::Value>, Error> {
+    parse_refusing(text, build, trivia).map_err(Error::from)
+}
+
+/// [`parse`], answering the [`Refusal`] itself: its byte as a number, for a
+/// caller that must know where the text stopped being JSON (`plan-core`'s
+/// hand-over, which blanks comments up to that byte and no further).
+///
+/// # Errors
+///
+/// As [`parse`].
+pub fn parse_refusing<'t, B: Build<'t>, T: Trivia>(
+    text: &'t str,
+    build: &mut B,
+    trivia: &mut T,
+) -> Result<Document<'t, B::Value>, Refusal> {
     let mut reader = Reader {
         text,
         bytes: text.as_bytes(),
@@ -484,7 +499,7 @@ pub fn parse<'t, B: Build<'t>, T: Trivia>(
         #[cfg(test)]
         steps: 0,
     };
-    reader.document().map_err(Error::from)
+    reader.document()
 }
 
 struct Reader<'t, 'b, B, T> {

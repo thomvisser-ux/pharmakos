@@ -49,11 +49,30 @@ use super::{HandedOver, blank_comments, hand_over};
 use crate::canonical::canonicalise_text;
 use crate::jsonc::Document;
 
-/// The JSONC chain: what `verify_jsonc` handed over before `vfyq2`.
+/// The JSONC chain: the canonical JSON `canonicalise_text` writes, or the
+/// text by the module's rule for a refusal: blanked up to the byte the JSONC
+/// reader refuses it at (its own refusal, read off its pointer), as written
+/// from there; blanked throughout when the schema refuses it.
 fn reference_hand_over(text: &str) -> Handed {
     match canonicalise_text(text) {
         Ok(canonical) => Handed::Canonical(canonical.json),
-        Err(_no_canonical_form) => Handed::Blanked(blank_comments(text)),
+        Err(refused) => {
+            let blanked = blank_comments(text);
+            let at = refused
+                .pointer
+                .strip_prefix("/byte/")
+                .map(|offset| offset.parse::<usize>().expect("a byte offset"));
+            Handed::Blanked(match at {
+                Some(at) => format!(
+                    "{}{}",
+                    blanked
+                        .get(..at)
+                        .unwrap_or_else(|| panic!("blanked {at} of {text:?} -> {blanked:?}")),
+                    &text[at..]
+                ),
+                None => blanked,
+            })
+        }
     }
 }
 
@@ -66,9 +85,9 @@ enum Handed {
 
 /// [`hand_over`]'s answer, as [`reference_hand_over`] spells one.
 fn lean_hand_over(text: &str) -> Handed {
-    match hand_over(text) {
+    match hand_over(text).expect("a refusal at a character boundary") {
         HandedOver::Canonical(canonical) => Handed::Canonical(canonical.into_text()),
-        HandedOver::Blanked(blanked) => Handed::Blanked(blanked),
+        HandedOver::Refused { bytes, .. } => Handed::Blanked(bytes),
     }
 }
 
@@ -117,9 +136,43 @@ impl Seen {
         self.texts += 1;
         match handed {
             Handed::Canonical(_) => self.canonical += 1,
-            Handed::Blanked(_) => self.blanked += 1,
+            Handed::Blanked(bytes) => {
+                self.blanked += 1;
+                refused_reports_agree(what, text, &bytes);
+            }
         }
     }
+}
+
+/// The committed rules table, read once.
+fn shared_rules() -> &'static pharmakos_sim::rules::RulesTable {
+    static RULES: std::sync::OnceLock<pharmakos_sim::rules::RulesTable> =
+        std::sync::OnceLock::new();
+    RULES.get_or_init(|| {
+        pharmakos_sim::rules::RulesTable::load(&workspace_root().join("rules/rules.v1.json"))
+            .expect("the committed rules table")
+    })
+}
+
+/// A refused text's report, made from the refusal its one decode found
+/// (`Input::refused`, which reads nothing again), is the report the verifier
+/// makes of the same bytes by decoding them (`Input::new`): fix pass 1, item
+/// 10.
+fn refused_reports_agree(what: &str, text: &str, bytes: &str) {
+    use pharmakos_proto::gp::api::v1::verify_plan::Depth;
+    let rules = shared_rules();
+    let scope = pharmakos_verifier::Scope::new(
+        pharmakos_sim::tables::SeatId::new(0),
+        pharmakos_sim::knowledge::SeatEconomy::default(),
+    );
+    let carried = super::verify_jsonc(text, &[], &scope, rules, Depth::Quick).expect("a report");
+    let input =
+        pharmakos_verifier::Input::new(bytes.as_bytes(), &[], &scope, rules).expect("an input");
+    let read_again = pharmakos_verifier::verify(&input, Depth::Quick);
+    assert_eq!(
+        carried, read_again,
+        "{what}: the carried refusal reports otherwise"
+    );
 }
 fn summary(handed: &Handed) -> String {
     let (kind, text) = match handed {

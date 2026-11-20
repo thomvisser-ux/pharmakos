@@ -278,20 +278,90 @@ impl<M> Canonicalised<M> {
     }
 }
 
+/// Why a text has no canonical form, as [`canonical_decode`] found it: the
+/// codec's error, the byte the text stopped being JSON at when it did, and
+/// the tree when the text was JSON and the schema refused it.
+///
+/// The one decode's answer, carried whole, so a reader that reports the
+/// refusal (the verifier's decode stage) reports it from this and never reads
+/// the text a second time.
+#[derive(Clone, PartialEq, Debug)]
+pub struct Refused {
+    error: Error,
+    at: Option<usize>,
+    tree: Option<Json>,
+}
+
+impl Refused {
+    /// The codec's error, with its pointer and its words.
+    #[must_use]
+    pub const fn error(&self) -> &Error {
+        &self.error
+    }
+
+    /// The byte the text stopped being JSON at; `None` when it is JSON and
+    /// the schema refused it.
+    #[must_use]
+    pub const fn at(&self) -> Option<usize> {
+        self.at
+    }
+
+    /// The text as a tree, when it is JSON and the schema refused it.
+    #[must_use]
+    pub const fn tree(&self) -> Option<&Json> {
+        self.tree.as_ref()
+    }
+}
+
 /// A JSON text decoded as `M` and written back in its canonical form, the
-/// message kept beside the text.
+/// message kept beside the text; or why it has none.
 ///
 /// The text is what [`decode`] then [`encode`] answer for the same input,
 /// written from the wire bytes the message was decoded from rather than from
 /// the message encoded again ([`Encoded`] says why the two are one text).
+/// The direct reader answers when it can; when it cannot, the exact path
+/// reads the tree once and keeps it, with its refusal, in [`Refused`].
 ///
 /// # Errors
 ///
-/// As [`decode`].
+/// [`Refused`]: as [`decode`], carried with what the decode found.
 pub fn canonical_decode<M: Message + Name + Default>(
     text: &str,
-) -> Result<Canonicalised<M>, Error> {
-    let decoded = decode_encoded::<M>(text)?;
-    let text = write_wire(&M::full_name(), decoded.encoded().bytes())?;
-    Ok(Canonicalised { text, decoded })
+) -> Result<Canonicalised<M>, Refused> {
+    let decoded = match decode_direct::<M>(text) {
+        Direct::Wire(decoded) => decoded,
+        Direct::NeedsExactPath(_) => {
+            let mut trivia = grammar::Whitespace;
+            let tree = match grammar::parse_refusing(text, &mut value::Tree, &mut trivia) {
+                Ok(document) => document.value,
+                Err(refusal) => {
+                    return Err(Refused {
+                        at: Some(refusal.at),
+                        error: Error::from(refusal),
+                        tree: None,
+                    });
+                }
+            };
+            match decode_json_encoded::<M>(&tree) {
+                Ok(decoded) => decoded,
+                Err(error) => {
+                    return Err(Refused {
+                        error,
+                        at: None,
+                        tree: Some(tree),
+                    });
+                }
+            }
+        }
+    };
+    let canonical =
+        write_wire(&M::full_name(), decoded.encoded().bytes()).map_err(|error| Refused {
+            error,
+            at: None,
+            tree: None,
+        })?;
+    Ok(Canonicalised {
+        text: canonical,
+        decoded,
+    })
 }

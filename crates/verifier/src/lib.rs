@@ -345,10 +345,10 @@ pub const VERIFIER_VERSION: &str = "0.1.0-s3.5";
 #[derive(Clone, Copy, Debug)]
 pub struct Input<'a> {
     playbook: &'a [u8],
-    /// The playbook already decoded from exactly `playbook`, when the caller
-    /// holds it ([`Input::canonical`]), so the decode stage does not decode it
-    /// again.
-    decoded: Option<&'a json::Decoded<Playbook>>,
+    /// What the caller handed beside `playbook`: nothing, the message decoded
+    /// from exactly it, or the refusal its one decode found; so the decode
+    /// stage reads it at most once.
+    handed: decode::Handed<'a>,
     snapshot: &'a [u8],
     scope: &'a Scope,
     rules: &'a RulesTable,
@@ -448,7 +448,14 @@ impl<'a> Input<'a> {
         scope: &'a Scope,
         rules: &'a RulesTable,
     ) -> Result<Input<'a>, InputError> {
-        Input::assemble(playbook, None, snapshot, scope, rules, false)
+        Input::assemble(
+            playbook,
+            decode::Handed::Bytes,
+            snapshot,
+            scope,
+            rules,
+            false,
+        )
     }
 
     /// [`Input::new`] for a playbook already canonicalised (S3's `vfyq2`):
@@ -469,7 +476,35 @@ impl<'a> Input<'a> {
     ) -> Result<Input<'a>, InputError> {
         Input::assemble(
             playbook.text().as_bytes(),
-            Some(playbook.decoded()),
+            decode::Handed::Decoded(playbook.decoded()),
+            snapshot,
+            scope,
+            rules,
+            false,
+        )
+    }
+
+    /// [`Input::new`] for a text whose one decode refused it (S3's `vfyq2`):
+    /// the bytes handed over, and `report_hash` taken over, are `playbook`,
+    /// exactly as [`Input::new`] given them; and the decode stage reports the
+    /// refusal it is handed, with the tree that decode kept, rather than
+    /// reading the bytes again. `refused` must be the refusal of exactly
+    /// `playbook`: `plan-core`'s `verify_jsonc` makes both from one decode,
+    /// and its differential tests hold the report to [`Input::new`]'s.
+    ///
+    /// # Errors
+    ///
+    /// As [`Input::new`].
+    pub fn refused(
+        playbook: &'a [u8],
+        refused: &'a json::Refused,
+        snapshot: &'a [u8],
+        scope: &'a Scope,
+        rules: &'a RulesTable,
+    ) -> Result<Input<'a>, InputError> {
+        Input::assemble(
+            playbook,
+            decode::Handed::Refused(refused),
             snapshot,
             scope,
             rules,
@@ -495,12 +530,12 @@ impl<'a> Input<'a> {
         scope: &'a Scope,
         rules: &'a RulesTable,
     ) -> Result<Input<'a>, InputError> {
-        Input::assemble(&[], None, snapshot, scope, rules, true)
+        Input::assemble(&[], decode::Handed::Bytes, snapshot, scope, rules, true)
     }
 
     fn assemble(
         playbook: &'a [u8],
-        decoded: Option<&'a json::Decoded<Playbook>>,
+        handed: decode::Handed<'a>,
         snapshot: &'a [u8],
         scope: &'a Scope,
         rules: &'a RulesTable,
@@ -519,7 +554,7 @@ impl<'a> Input<'a> {
             .map_err(InputError::View)?;
         Ok(Input {
             playbook,
-            decoded,
+            handed,
             snapshot,
             scope,
             rules,
@@ -642,7 +677,7 @@ pub fn verify(input: &Input<'_>, depth: Depth) -> VerifyReport {
 
     if input.too_long {
         out.emit(report::Diag::new("E0029", pointer::ROOT).arg("max", MAX_PLAYBOOK_CHARS));
-    } else if let Some(decoded) = decode::run(input.playbook, input.decoded, &mut out) {
+    } else if let Some(decoded) = decode::run(input.playbook, input.handed, &mut out) {
         let playbook = &decoded.playbook;
         units = size::size_units(playbook);
         if let Some(digest) = decoded.fingerprint {

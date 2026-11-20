@@ -111,6 +111,19 @@ const RESERVED_NAMES: &[&str] = &[
     "probe_directions",
 ];
 
+/// What the caller handed the decode stage beside the bytes (S3's `vfyq2`):
+/// nothing, so it decodes them; the message decoded from exactly them; or the
+/// refusal the one decode of them found.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Handed<'a> {
+    /// The bytes alone ([`crate::Input::new`]).
+    Bytes,
+    /// Their message ([`crate::Input::canonical`]).
+    Decoded(&'a json::Decoded<Playbook>),
+    /// Their refusal ([`crate::Input::refused`]).
+    Refused(&'a json::Refused),
+}
+
 /// What the decode stage hands the later stages: the playbook, and its plan
 /// fingerprint, computed once here from the bytes it was decoded from.
 pub(crate) struct Decoded<'a> {
@@ -143,11 +156,15 @@ pub(crate) struct Decoded<'a> {
 /// message declares, and no message in the schema declares a reserved name
 /// (`no_message_declares_a_reserved_name` below), so the scan would find
 /// nothing.
-pub(crate) fn run<'a>(
-    bytes: &[u8],
-    handed: Option<&'a json::Decoded<Playbook>>,
-    out: &mut Builder,
-) -> Option<Decoded<'a>> {
+pub(crate) fn run<'a>(bytes: &[u8], handed: Handed<'a>, out: &mut Builder) -> Option<Decoded<'a>> {
+    let handed = match handed {
+        Handed::Bytes => None,
+        Handed::Decoded(decoded) => Some(decoded),
+        Handed::Refused(refused) => {
+            diagnose_refused(refused, out);
+            return None;
+        }
+    };
     if let Some(decoded) = handed {
         // Decoded from exactly `bytes` by the codec (`Input::canonical`):
         // what the first path below would answer, without reading them again.
@@ -200,26 +217,13 @@ fn diagnose(text: &str, out: &mut Builder) -> Option<Decoded<'static>> {
     let value = match json::read(text) {
         Ok(value) => value,
         Err(error) => {
-            out.emit(Diag::new("E0001", error.pointer.clone()).arg("detail", &error.message));
+            refuse(&error, out);
             return None;
         }
     };
-
-    // Reserved names first, so a held-back construct is named as one rather than
-    // reported as an unknown field by the codec that reaches it first.
-    let mut reserved: Vec<(String, String)> = Vec::new();
-    scan_reserved(&value, pointer::ROOT, &mut reserved);
-    if !reserved.is_empty() {
-        for (path, name) in &reserved {
-            out.emit(Diag::new("E0003", path.clone()).arg("field", name).fix(
-                format!("Delete `{name}`"),
-                patch_remove(path),
-                Applicability::MaybeIncorrect,
-            ));
-        }
+    if named_reserved(&value, out) {
         return None;
     }
-
     match json::decode_json::<Playbook>(&value) {
         // The direct reader answers for every document the codec accepts, so
         // this arm is reached only if the two disagree; it answers as the
@@ -232,30 +236,63 @@ fn diagnose(text: &str, out: &mut Builder) -> Option<Decoded<'static>> {
             })
         }
         Err(error) => {
-            // The codec's kind says which (S3's `vfy6`, the review of PR #179):
-            // the message is for the player and never read here, so author
-            // text quoted back in it (an enum value it does not know) cannot
-            // talk this into the wrong code. A pointer with no last token is
-            // the document itself, which no unknown field can be: that error
-            // is `E0001`'s.
-            let unknown = (error.kind == json::ErrorKind::UnknownField)
-                .then(|| pointer::last_token(&error.pointer))
-                .flatten();
-            if let Some(name) = unknown {
-                out.emit(
-                    Diag::new("E0002", error.pointer.clone())
-                        .arg_text("field", &name)
-                        .fix(
-                            format!("Delete `{name}`"),
-                            patch_remove(&error.pointer),
-                            Applicability::MaybeIncorrect,
-                        ),
-                );
-            } else {
-                out.emit(Diag::new("E0001", error.pointer.clone()).arg("detail", &error.message));
-            }
+            refuse(&error, out);
             None
         }
+    }
+}
+
+/// The diagnostic path for a text whose one decode already refused it
+/// ([`crate::Input::refused`]; S3's `vfyq2`): what [`diagnose`] reports for
+/// the same bytes, from the refusal and the tree that decode kept, without
+/// reading the text again.
+fn diagnose_refused(refused: &json::Refused, out: &mut Builder) {
+    if let Some(tree) = refused.tree()
+        && named_reserved(tree, out)
+    {
+        return;
+    }
+    refuse(refused.error(), out);
+}
+
+/// Reserved names first, so a held-back construct is named as one rather than
+/// reported as an unknown field by the codec that reaches it first: each one
+/// `E0003`, and whether there was any.
+fn named_reserved(value: &Json, out: &mut Builder) -> bool {
+    let mut reserved: Vec<(String, String)> = Vec::new();
+    scan_reserved(value, pointer::ROOT, &mut reserved);
+    for (path, name) in &reserved {
+        out.emit(Diag::new("E0003", path.clone()).arg("field", name).fix(
+            format!("Delete `{name}`"),
+            patch_remove(path),
+            Applicability::MaybeIncorrect,
+        ));
+    }
+    !reserved.is_empty()
+}
+
+/// The codec's refusal as the catalogue names it. The codec's kind says which
+/// (S3's `vfy6`, the review of PR #179): the message is for the player and
+/// never read here, so author text quoted back in it (an enum value it does
+/// not know) cannot talk this into the wrong code. A pointer with no last
+/// token is the document itself, which no unknown field can be: that error is
+/// `E0001`'s.
+fn refuse(error: &json::Error, out: &mut Builder) {
+    let unknown = (error.kind == json::ErrorKind::UnknownField)
+        .then(|| pointer::last_token(&error.pointer))
+        .flatten();
+    if let Some(name) = unknown {
+        out.emit(
+            Diag::new("E0002", error.pointer.clone())
+                .arg_text("field", &name)
+                .fix(
+                    format!("Delete `{name}`"),
+                    patch_remove(&error.pointer),
+                    Applicability::MaybeIncorrect,
+                ),
+        );
+    } else {
+        out.emit(Diag::new("E0001", error.pointer.clone()).arg("detail", &error.message));
     }
 }
 
