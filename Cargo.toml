@@ -157,6 +157,24 @@ panic = "abort"
 [profile.dev]
 overflow-checks = true
 
+# The suite runs the sim optimised, its checks on (decisions-log item 116 (6)(f)'s profile
+# question, taken at its 75-minute threshold). Every slow test builds a hosted match, a map
+# or a route graph, or plays ticks, and at opt-level 0 the sim's integer code ran 25 to 50
+# times slower than optimised, which held CI's shards at 35 to 54 of 90 minutes. A package
+# table changes only the optimisation: debug assertions and overflow checks are inherited
+# from [profile.dev], on, and `[profile.test]` inherits all of it. `cargo xtask ci`'s
+# `profiles` step fails if the sim drops to opt-level 0 or any dev or test table switches
+# debug assertions off. Optimisation moves no hash: the sim has no floats, and the same
+# chains are produced at `release-checked`. To step through the sim in a debugger, override
+# it in the environment: CARGO_PROFILE_DEV_PACKAGE_PHARMAKOS_SIM_OPT_LEVEL=0.
+[profile.dev.package.pharmakos-sim]
+opt-level = 2
+
+# Third-party crates (imbl, xxh3, prost, postcard, ...): `"*"` matches no workspace member,
+# so the walled float crates and the tests' own code stay unoptimised.
+[profile.dev.package."*"]
+opt-level = 2
+
 # Determinism CI builds this to compare hashes across operating systems at optimisation
 # levels the release build uses, with debug assertions still on.
 [profile.release-checked]
