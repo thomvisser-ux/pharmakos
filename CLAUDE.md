@@ -39,7 +39,8 @@ Open a PR and stop — do not merge, do not work around it — when a task takes
 
 - a contract file: `proto/**`, `buf.*`, `clippy.toml`, workspace `[lints]`, `[profile.*]`,
   determinism code (state hash, the plan fingerprint, RNG streams, fixed-point types,
-  snapshot/replay format, tick loop, the `research` feature), `.github/workflows/**`, `xtask`'s
+  snapshot/replay format, tick loop, the `research` feature), `.github/workflows/**`,
+  `.cargo/config.toml` (the linker table, the wrapper keys, the aliases), `xtask`'s
   definition of `ci` and of `package`, licence files, or these harness docs (AGENTS.md §5);
 - adding a dependency that is not on the approved list (AGENTS.md §3);
 - anything on the "what not to build in v1" list (AGENTS.md §11) — script runtimes, MCP, an SDK, a
@@ -137,13 +138,16 @@ make: `cargo xtask determinism-run --seed <0x...> --ticks <n> --out <file>`, `ca
 build-gamectl [--release]` and `cargo xtask checked-test --package <name> --test <target>
 [--ignored] [--nocapture]` (decisions-log item 165). The `cargo xtask` and `cargo ci` aliases
 build xtask in its own profile, so the running xtask lives in `target/xtask/` and the `test`
-step's build of xtask never rewrites it. Every command checks at the door that the pinned `rustc`
-and `$CARGO` report `rust-toolchain.toml`'s release: `cargo +other xtask` is refused before any
-step. A `CARGO_TARGET_DIR` whose path holds whitespace is refused when a plan that runs tests
-starts. xtask runs tests through its own runner and pins the linker per host triple (the
-repository's `.cargo/config.toml` holds the same table), so inside this repository a user-level
-linker or wrapper setting does not apply, and a host other than the three CI triples is refused
-with the row to add (AGENTS.md §9 item 5).
+step's build of xtask never rewrites it. Every command except the hidden runner `__run-test`
+(which cargo starts, and which is dispatched first) checks at the door that the pinned `rustc` and
+`$CARGO` report `rust-toolchain.toml`'s release: `cargo +other xtask` is refused before any step.
+A plan that runs tests is refused when xtask's own path (`<target>/xtask/xtask`) holds whitespace
+or a quote in both its checkout-relative and its absolute spelling, as it does for a target folder
+outside the checkout whose path holds one. xtask runs tests through its own runner and pins the
+linker per host triple (the repository's `.cargo/config.toml` holds the same table), so inside
+this repository a user-level linker or wrapper setting does not apply, and when it builds, lints
+or runs tests on a host other than the three CI triples it refuses, with the row to add
+(AGENTS.md §9 item 5).
 
 ## When you finish
 
