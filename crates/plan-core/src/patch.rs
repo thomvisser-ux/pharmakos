@@ -264,6 +264,16 @@ impl Patch {
     }
 }
 
+/// The most operations one patch may carry (S3's `vfyq2`, fix pass 1).
+///
+/// The largest patch anything in the game composes is `instantiate`'s: one
+/// operation per parameter a template declares (four, in `library/` today)
+/// and per parameter the caller names, and two more. The editor composes one
+/// or two per click, and every verifier Fix is one. Sixty-four leaves room
+/// for templates many times richer; past it a patch is refused before any
+/// operation is applied ([`crate::error::Bound::Operations`]).
+pub const MAX_PATCH_OPERATIONS: usize = 64;
+
 /// Applies a patch to a document and returns the patch that undoes it.
 ///
 /// The inverse is the reverse-ordered inverse of each operation, so applying

@@ -23,6 +23,25 @@ pub struct Error {
     pub pointer: String,
     /// English, precise, and safe to show a player beside the pointer.
     pub message: String,
+    /// The bound that refused it, when one did: a caller tells a refusal by
+    /// its bound, never by reading the message.
+    pub bound: Option<Bound>,
+}
+
+/// A bound on the work one call may do (S3's `vfyq2`, fix pass 1): what a
+/// refusal that is not about the playbook's meaning was refused by.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Bound {
+    /// More operations in one patch than [`crate::patch::MAX_PATCH_OPERATIONS`].
+    Operations,
+    /// A patched document longer than the playbook's cap,
+    /// `pharmakos_verifier::MAX_PLAYBOOK_CHARS` characters.
+    Size,
+    /// A patched document nested past the grammar's
+    /// `pharmakos_proto::json::grammar::MAX_DEPTH`.
+    Depth,
+    /// An inverse patch longer than the playbook's cap.
+    Inverse,
 }
 
 impl Error {
@@ -32,6 +51,17 @@ impl Error {
         Self {
             pointer: pointer.into(),
             message: message.into(),
+            bound: None,
+        }
+    }
+
+    /// A refusal by a bound on the work one call may do.
+    #[must_use]
+    pub fn bounded(bound: Bound, pointer: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            pointer: pointer.into(),
+            message: message.into(),
+            bound: Some(bound),
         }
     }
 
@@ -118,6 +148,7 @@ impl From<pharmakos_proto::json::Error> for Error {
         Self {
             pointer: error.pointer,
             message: error.message,
+            bound: None,
         }
     }
 }
