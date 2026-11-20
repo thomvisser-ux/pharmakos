@@ -257,7 +257,9 @@ type: a chip's number is sent when you press "Set this value", and the re-check 
 Whether your words in item 3 close the gate's typing clause is your question to answer, in the
 record below.
 
-**What was promised and isn't on this build.**
+**What was promised and isn't on this build.** [Since P6b as run: each is now the `fixp` lane's
+(item 163 (7)), except the wall's name, which the owner's accepted call 3 closes: a wall is told by
+its look.]
 
 - **A wall has no name.** A wall is wall voxels in your colour, not a structure the view lists, so
   only the autocannon and the mortar carry a name; the wall is told apart by its look.
@@ -267,6 +269,9 @@ record below.
 - **The two set-ups are files, not clicks.** No control can give a wall its box, so the names
   set-up has to be a file. The E0601 set-up could be clicked (three "Add a build target" mortars),
   but a file is quicker and is the one that was checked.
+
+[Since P6b as run: each gap below is now the `fixp` lane's (item 163 (7)), except the wall's name,
+which the owner's accepted call 3 closes: a wall is told by its look.]
 
 **Known gaps to step round** (PR #188's owed list): "Queue a structure" offers Generator,
 Autocannon, Mortar and Wall, though the verifier refuses every structure there but the Resonance
@@ -481,10 +486,12 @@ owner's findings. The P6a rows stay "not decided".]
 ## P6b as run (2026-11-19)
 
 **Who drove.** The owner wrote "i am ready for p6b", declined the access request for the AI
-pre-flight, and then wrote "you run this." So the main AI session drove all four matches by computer
+pre-flight (the tool's answer), and then wrote "you run this." So the main AI session drove all four matches by computer
 control, as at P6a. No person's time was taken, and the sheet's premise "You drive P6b by hand, and
 P6b decides" did not happen. The machine was idle: both lanes (`settle`'s review and `vfyq2`'s
-builder) were held first. The driver knew the controls. Card A2 was read about 15 s before its watch
+builder) were held first, as the main session recalls; no file retains that. The preset is the config
+line in `%APPDATA%/Godot/app_userdata/Pharmakos.p6b/last_match.txt` (match `local-1795132885-6124`,
+seed `0x0000000000000014`, two seats, three rounds, `probation`), which holds no token. The driver knew the controls. Card A2 was read about 15 s before its watch
 started (a tool call made in parallel with a New match click that missed); card B was opened when its
 Lull showed. The time is the audit log's `submit_plan` tick at 20 Hz, because no countdown shows in
 an untimed Lull.
@@ -501,13 +508,18 @@ an untimed Lull.
 zip SHA-256 `c3c5446ff4b0d34342c5ba1ea6c1de68eca43b0421a8f159af1b263a5a746a8e`. Probation preset,
 seed `0x0000000000000014`, Easy at seat 1, untimed Lulls.
 
-**The timings.**
+**The timings.** The tick is the gateway's count from the match's opening, at 20 Hz; the Lull opened
+at tick 0 (the main session saw the feed's `lull_opened` at 0:00 on its screenshots), and in an
+untimed Lull the count is the client's reported clock. No timing met a refusal. (`estimate_route`'s
+`NOT_FOUND` answers, ten at tick 0 in each match and one at tick 230 in the first, are answers, not
+refusals: AGENTS.md section 3 rule 4.) In each timing the gateway accepted the submission
+(`submit_plan` `ok` in the audit log) and the status line read "Submitted. This is now your sealed
+order." The seal line before the submission is recorded only for check 4 ("Ready to seal.").
 
-- Template: Expand & Mine, no value changed. `submit_plan` tick 290 (14.5 s). No refusal. Match
+- Template: Expand & Mine, no value changed. `submit_plan` tick 290 (14.5 s). Match
   `local-1795132518-4284`. Limit 2 min.
-- Scratch, card A2: Safe playbook, then ten steps. `submit_plan` tick 2322 (116.1 s, about 1:56). No
-  refusal. 14 seat-0 `patch_plan` calls for the ten steps. Match `local-1795132604-12216`. Limit
-  5 min.
+- Scratch, card A2: Safe playbook, then ten steps. `submit_plan` tick 2322 (116.1 s, about 1:56).
+  14 seat-0 `patch_plan` calls for the ten steps. Match `local-1795132604-12216`. Limit 5 min.
 - Card B: `submit_plan` tick 1893 (94.7 s, about 1:35). Three `patch_plan` calls (ticks 462, 959,
   1702). The time includes one failed "Set this value" (finding 2). Match `local-1795132757-3532`.
   No limit: card B doesn't decide the gate.
@@ -518,15 +530,17 @@ seed `0x0000000000000014`, Easy at seat 1, untimed Lulls.
   set_priority HIGH), `place_1` (place_beacon covering vent NEAREST UNCOVERED: the description row),
   `go_1` (`b_00`'s anchor), `place_2` (voxel 201,25,28), `go_2` (voxel 213,24,28), `go_3` (voxel
   200,33,28), `place_3` (voxel 180,29,28), `go_4` (`b_00`'s anchor), `visit_2` (set_priority
-  NORMAL), `go_5` (voxel 199,42,28). The Push began: "sealed: 12 route steps".
+  NORMAL), `go_5` (voxel 199,42,28). The Push began, and the feed read "The playbook of seat 0 was sealed: 12 route steps."
 - Card B: `visit_1` adds an autocannon target at voxel 201,25,28, skipped if `kw_headroom` is below 3.
 
 **The hand checks,** made untimed in match `local-1795132885-6124`, launched with `-- --log-input`
 (the log copy is `D:/build/p6b/p6b-match4-input.log`). Numbered as the sheet numbers them.
 
-1. Alt-click on a vent: **pass.** Alt-click showed "nearest vent you can cover" first and "this vent"
-   second; a plain click showed them the other way round. Escape closed each. The input log reads
-   "alt_pressed false, KEY_ALT held true" for the Alt-click.
+1. Alt-click on a vent: **pass.** Alt-click showed "Place beacon covering the nearest vent you can
+   cover" first and "Place beacon covering this vent" second; a plain click showed them the other way
+   round. The client reads the Alt key's state (`KEY_ALT held`), as `godot/README.md` describes,
+   which is why the input log's "alt_pressed false" beside "KEY_ALT held true" is no failure. The
+   main session saw Escape close each menu on its screenshots; no file retains that.
 2. Load's dialog (P6a's check 3): native, opened in `D:\build\p6b\play\Pharmakos` (the launch
    folder), File name empty.
 3. Chips and drag: 40 to 30, 3 to 2 and 1 to 2 all set (with Enter, see findings 1 and 2); regroup
@@ -537,7 +551,8 @@ seed `0x0000000000000014`, Easy at seat 1, untimed Lulls.
    "Dormant beacons no longer allowed."
 5. The names: "autocannon" and "mortar" were readable from five and four wheel ticks in from the
    opening view, tiny at three and gone at two. Placed at 0:09; finished at 0:24 and 1:21. The wall
-   is a pale slab with no name, told by its look.
+   is a pale slab with no name, told by its look. The wheel-tick distances and the feed's 0:09, 0:24
+   and 1:21 are the main session's observation from its screenshots, not from a retained file.
 
 **The findings** (client; for the next client lane).
 
@@ -548,9 +563,9 @@ seed `0x0000000000000014`, Easy at seat 1, untimed Lulls.
 3. After a "Visit & change" pick the core's menu is open again; the next map click only closes it
    (one wasted click each time; seen after both priority picks).
 4. "With nothing sealed, Ready files the safe playbook for you." stays on screen after Submit.
-5. "Add a build target" opens its third-level menu at the bottom-left of the window, full width, far
+5. "Add a build target (then click the ground)" opens its third-level menu at the bottom-left of the window, full width, far
    from its parent menu (the long "locked" lines size it).
-6. The chip's "Change N:" popup has no opaque background; the rule text shows through it.
+6. The chip's popup, headed "Change 5:" in the instance seen, has no opaque background; the rule text shows through it.
 7. A build target added from the menu leaves no mark on the map in the Lull.
 8. Autocannon and mortar are drawn as the same teal block; only the name tells them apart.
 9. Possible, not confirmed as the game's: a second click on the dormant checkbox without moving the
@@ -563,17 +578,23 @@ and a little below the core, as the sheet predicted).
 **What it shows** (the main session's reading; the owner can veto it). All three times are inside
 their limits with the rule list in place, for a driver who knew the controls. As at P6a that is not
 a person's time, so the gate's two timing clauses are not shown for a person. Decisions 15 and 17
-therefore still have no person's input.
+therefore still have no person's input. Section 5.3's closing rule, added by item 163, says how the
+clauses are read next. The AI review is not independent review.
 
-**The owner's answer to the two questions.** The owner was asked three calls, each with the main
-session's recommendation, and answered: "go with your recommendations.  be ambitious." The
-recommendations accepted, written as the main session's and not as the owner's words:
+**The owner's answer to the three calls.** The owner was asked three calls, each with the main
+session's recommendation, and answered: "go with your recommendations.  be ambitious." Calls 2 and 3
+are the record's two questions below. The recommendations accepted, written as the main session's and
+not as the owner's words:
 
 1. The gate's two timing clauses (template within 2 minutes, scratch within 5) stay open for a
    person. They are read when the owner plays S3's stage demo by hand; no separate sitting is held.
+   [Superseded the same evening by the owner's later sentence, "you drive the testing completely
+   until further notice.  let me know when i must be involved". No sitting by the owner is planned,
+   and the owner did not agree to sit. The clauses stay "not shown for a person", neither met nor
+   waived, and section 5.3's closing rule says how the main session reads them.]
 2. The typing clause stays open until findings 1 and 2 (the number field does not select the old
    number; "Set this value" ignores a number not committed with Enter) are fixed in the next client
-   lane, and is read at the same demo.
+   lane, and is read by section 5.3's closing rule.
 3. A wall told by its look is enough for check 5.
 
 The main session's checks (the sealed routes read against the cards, the audit log's ticks, the hand
@@ -614,7 +635,7 @@ Two questions for you to answer at the sitting:
    this value'. Do your words on the number fields close the gate's typing clause, or does it stay
    open?"
 
-   Answer: the typing clause stays open until findings 1 and 2 are fixed in the next client lane, and is read when the owner plays S3's stage demo by hand (the main session's recommendation, accepted in "go with your recommendations.  be ambitious.").
+   Answer: the typing clause stays open until findings 1 and 2 are fixed in the next client lane, and is then read by section 5.3's closing rule (the main session's recommendation, accepted in "go with your recommendations.  be ambitious."; the owner's sitting it named is superseded, see above).
 
 2. "A wall has no name on this build. Is telling it by its look enough for check 5?"
 
