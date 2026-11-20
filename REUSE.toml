@@ -10,11 +10,23 @@
 # throughout: a header in a file is combined with the entry below, so a file
 # that states its own copyright keeps it, and a file that cannot carry a header
 # (a .vox model, an .ogg, a binary golden file) is covered by this manifest.
-# Three blocks break that rule on purpose, each with precedence = "override":
+# Four blocks break that rule on purpose, each with precedence = "override":
 # docs/DCO.txt, which is somebody else's document; godot/playbooks/new.jsonc,
 # which is permissive inside the GPL godot/** tree and can carry no header
-# (decisions-log item 161); and the three files whose own bytes quote another
-# file's SPDX header (the last block below, decisions log item 116 (6)(i)).
+# (decisions-log item 161); and the two blocks at the end for the three files whose
+# own bytes quote another file's SPDX header (decisions log item 116 (6)(i)).
+#
+# One rule runs through the whole tree, and a test holds it (xtask's `licence_quotes`,
+# which asks `reuse` for every file's licence): a tracked file outside library/ that
+# reproduces a library template's expression carries the library's licence
+# (MIT OR Apache-2.0) beside its own, as GPL-3.0-or-later AND (MIT OR Apache-2.0), or the
+# library's alone where the file is purely the library's text, as the operator goldens
+# and the docs are. The expression is a sentence of at least 8 words ending in a full stop,
+# or any run of at least 12 consecutive words of one library string (a parameter's
+# description has no full stop and is expression). A title, a name or a step label is short
+# and is not covered. The two licences are one combined expression, never two separate ones.
+# Decisions-log item 113 (10), which kept the instantiate_template answers GPL-only, is
+# amended to it.
 #
 # ORDER MATTERS. When two blocks match the same path the LAST one wins, so the
 # narrow blocks (crates/proto/**, the per-directory LICENSE pointers,
@@ -69,9 +81,11 @@ SPDX-License-Identifier = "GPL-3.0-or-later"
 #   * instantiate_suggested.json copies tests/golden/gateway/instantiate_suggested/
 #     expected.response.json (the wizard shot, T19), a gateway answer that EMBEDS a
 #     permissive template — library/hold_and_build.jsonc, header and all — inside a JSON
-#     string. The answer is the gateway's output and stays GPL (decisions-log item
-#     113 (10)); because the embedded header would otherwise be read as the file's own,
-#     the pair is recorded by the override block at the end of this file (item 114 (5));
+#     string. The answer is the gateway's output AND a whole copy of the template, so it
+#     carries both licences: GPL-3.0-or-later AND (MIT OR Apache-2.0) (decisions-log item
+#     113 (10), amended); because the embedded header would otherwise be read as the
+#     file's own, the pair is recorded by the override block at the end of this file
+#     (item 114 (5));
 #   * rule_list_render.json copies tests/golden/gateway/demo_expand_and_mine_render/
 #     expected.response.json (the rule-list scene, S3's `ed3b`);
 #     crates/client-gdext/tests/godot_project.rs keeps the two identical.
@@ -213,8 +227,8 @@ precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Pharmakos contributors"
 SPDX-License-Identifier = "MIT OR Apache-2.0"
 
-# The three templates' render goldens quote library/: the renderer prints each
-# playbook's `meta` title and summary and its step labels, and for these three cases
+# The templates' render goldens quote library/: the renderer prints each
+# playbook's `meta` title and summary and its step labels, and for these cases
 # those strings come from library/'s permissive templates. The answer is the gateway's
 # output, in the game tier like the rest of tests/golden/gateway/, and the quotation is
 # small; T22a judged no override necessary and wrote this block in its pull request for
@@ -222,11 +236,24 @@ SPDX-License-Identifier = "MIT OR Apache-2.0"
 # takes it (item 128), so each file records both licences it carries: the gateway's GPL
 # and the templates' MIT OR Apache-2.0. Aggregate, so a header a file ever states is
 # combined with this, and AFTER the tests/** block, so it wins.
+#
+# The list is by name, so a new golden that quotes library/ could be added without it:
+# S3's defend_the_core, raid_an_enemy_beacon and against-easy render goldens were, and so
+# was the Godot copy of expand_and_mine's. The xtask test `licence_quotes` now reads
+# library/ and fails on any tracked file that reproduces a sentence of it without the
+# library's licence, so the next one cannot be missed. A render golden that quotes no
+# template (demo_deploy_and_visit_render) is not listed: an entry states what the file
+# carries.
 [[annotations]]
 path = [
     "tests/golden/gateway/demo_hold_and_build_render/**",
     "tests/golden/gateway/demo_expand_and_mine_render/**",
     "tests/golden/gateway/demo_safe_playbook_render/**",
+    "tests/golden/gateway/demo_defend_the_core_render/**",
+    "tests/golden/gateway/demo_raid_an_enemy_beacon_render/**",
+    "tests/golden/gateway/demo_against_easy_render/**",
+    "godot/fixtures/rule_list_render.json",
+    "tests/golden/determinism/hold_and_build.playbook.json",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Pharmakos contributors"
@@ -386,15 +413,17 @@ SPDX-FileCopyrightText = "2004, 2006 The Linux Foundation and its contributors"
 SPDX-License-Identifier = "LicenseRef-DCO-1.1"
 
 # --- Files whose bytes quote another file's header ---------------------------
-# Three files carry, inside their own bytes, text that `reuse` reads as their
-# own header, and in each case that text is not their licence:
+# Three files carry, inside their own bytes, text that `reuse` reads as their own
+# header, and in each case that text is not their licence:
 #   * tests/golden/gateway/instantiate_suggested/expected.response.json and its
 #     byte-identical Godot copy godot/fixtures/instantiate_suggested.json are the
 #     gateway's answer to instantiate_template, which embeds library/'s permissive
 #     Hold & Build template, header included, inside a JSON string. `reuse spdx`
 #     recorded the whole embedded template, escapes and all, as the files'
-#     copyright text. The answer is the gateway's output: GPL (decisions-log item
-#     113 (10)).
+#     copyright text. The answer is the gateway's output and a whole copy of the
+#     template, so it carries both licences (decisions-log item 113 (10), amended: it
+#     had kept the pair GPL-only; the embedded header is a reason for this entry, not
+#     for dropping the template's licence).
 #   * tests/golden/plan-core/awkward/expected.jsonc is the round trip of
 #     plan-core's own `awkward` fixture, whose GPL-3.0-or-later header it carries
 #     through byte for byte, as expand_east's golden carries the example's
@@ -403,15 +432,20 @@ SPDX-License-Identifier = "LicenseRef-DCO-1.1"
 #     awkward/expected.canonical.json has no header and stays permissive (item 100).
 # precedence = "override": the manifest is the last word for exactly these paths.
 # Its downside: an override also stops reading any header these files carry in
-# future, so a change of licence here is an edit to this block. AFTER every block
+# future, so a change of licence here is an edit to these blocks. AFTER every block
 # that matches them (godot/**, godot/fixtures/**, tests/**, tests/golden/plan-core/**),
-# so it is the last match (decisions-log item 116 (6)(i)).
+# so each is the last match (decisions-log item 116 (6)(i)).
 [[annotations]]
 path = [
     "godot/fixtures/instantiate_suggested.json",
     "tests/golden/gateway/instantiate_suggested/expected.response.json",
-    "tests/golden/plan-core/awkward/expected.jsonc",
 ]
+precedence = "override"
+SPDX-FileCopyrightText = "2026 Pharmakos contributors"
+SPDX-License-Identifier = "GPL-3.0-or-later AND (MIT OR Apache-2.0)"
+
+[[annotations]]
+path = ["tests/golden/plan-core/awkward/expected.jsonc"]
 precedence = "override"
 SPDX-FileCopyrightText = "2026 Pharmakos contributors"
 SPDX-License-Identifier = "GPL-3.0-or-later"
