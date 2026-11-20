@@ -754,7 +754,10 @@ pub(crate) fn comment_end(bytes: &[u8], at: usize) -> Option<(usize, CommentKind
     let found = match bytes.get(at.checked_add(1)?) {
         Some(b'/') => {
             let rest = bytes.get(body..)?;
-            let end = match rest.iter().position(|byte| *byte == b'\n') {
+            let end = match rest
+                .iter()
+                .position(|byte| *byte == b'\n' || *byte == b'\r')
+            {
                 Some(offset) => body.saturating_add(offset),
                 // No terminator: the comment is the rest of the text.
                 None => bytes.len(),
