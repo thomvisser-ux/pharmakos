@@ -14,7 +14,8 @@ Rust; simplify". The protocol is `docs/design/s3-plan.md` section 5.3.
 merged, was the record: the wizard and the map route with the size meter; and **P6b**, after `ed3b`
 merges, was to confirm that the rule list did not make either timing slower. P6a was then driven by
 the AI (see "P6a as run"), and decisions-log item 160 (4) records the main session's recommendation,
-which you can veto, that P6b, which you drive by hand, decides instead.
+which you can veto, that P6b, which you were to drive by hand, decides instead. [Since then P6b was
+driven by the AI too, at the owner's word: see "P6b as run".]
 
 **You stand in for the first-time tester** (decisions-log item 153 (4), risk R5). You are not new to
 this game, so a pass is weaker evidence than the gate asks. The fun gate's testers are the first true
@@ -116,9 +117,12 @@ you rather than resolved.
 Written after `ed3b` merged (#183 and #188), for the build below. Every card and set-up here was
 checked on that build; "How P6b's cards were checked" says how.
 
-**You drive P6b by hand, and P6b decides.** Decisions-log item 160 (4) records the main session's
-recommendation, which you can veto, that decisions 15 and 17 are read on P6b rather than on the
-AI-driven P6a. So a P6b time is read against the limits, not against P6a's.
+**As planned, you were to drive P6b by hand, and P6b was to decide.** Decisions-log item 160 (4)
+records the main session's recommendation, which you can veto, that decisions 15 and 17 are read on
+P6b rather than on the AI-driven P6a. So a P6b time was to be read against the limits, not against
+P6a's. [Since then the owner declined the AI pre-flight and wrote "you run this", so the main AI
+session drove all four matches and no person's time was taken. The sentences below that speak to
+"you" are the plan as written; "P6b as run" says what happened.]
 
 - **Card A's kinds in a different order** (card A2), because you will know card A by then. The
   record states that practice bias beside the result.
@@ -127,9 +131,12 @@ AI-driven P6a. So a P6b time is read against the limits, not against P6a's.
 - **Untimed, afterwards:** change three number chips and drag one rule, then the hand checks P6a
   didn't make and the one it failed.
 - **P6a's times are no baseline for "not slower".** They were driven by the AI, not by a person (see
-  "P6a as run"), so a P6b time is read against the limits, and beside P6a's only with that caveat.
-- **The practice bias** stated beside every P6b timing (template, scratch and card B) includes
-  having watched card A driven at P6a.
+  "P6a as run"), so a P6b time was to be read against the limits, and beside P6a's only with that
+  caveat. [P6b's times were driven by the AI as well.]
+- **The practice bias** was to be stated beside every P6b timing (template, scratch and card B),
+  including having watched card A driven at P6a. [As run, the bias is the driver's: it knew the
+  controls, card A2 was read about 15 s before its watch started, and card B was opened when its
+  Lull showed.]
 - **The scratch timing starts from the Safe playbook**, as at P6a and as the first deviation below
   says (the main session's recommendation; you have been told).
 
@@ -230,6 +237,10 @@ Press "New match". In round 1's Lull:
    value", and read the chip afterwards: it should say the new number. A chip that holds the old and
    new digits together (for 40 to 30, "4030" or "3040") means the typing went in beside the old
    number: that is a finding to write down, not a miss; set it right and go on.
+   [Since P6b as run: a number typed into the field is not sent by "Set this value" unless Enter
+   committed it first, and a click into the field does not select the old number. These are
+   findings 1 and 2 under "P6b as run". The fix is the product's: the `fixp` lane makes "Set this
+   value" take what was typed, after which this step is right as written.]
    Then drag rule 2's line ("regroup") onto rule 1's ("flee"): it lands before it. **Write down**
    your words on the re-check and the redraw after each edit, and on typing into the field.
 4. **The structure names** (check 5). Press "Submit", then "Ready — end the Lull". In the Push the
@@ -246,7 +257,10 @@ type: a chip's number is sent when you press "Set this value", and the re-check 
 Whether your words in item 3 close the gate's typing clause is your question to answer, in the
 record below.
 
-**What was promised and isn't on this build.**
+**What was promised and isn't on this build.** [Since P6b as run: each is now a client lane's, as
+item 163 (7) and the plan's amendment name them (`fixp`, `probw` or `fixq`), except the wall's
+name, which the owner's accepted call 3 closes for P6b's check 5 (and `fixq` gives a wall its name
+anyway).]
 
 - **A wall has no name.** A wall is wall voxels in your colour, not a structure the view lists, so
   only the autocannon and the mortar carry a name; the wall is told apart by its look.
@@ -256,6 +270,10 @@ record below.
 - **The two set-ups are files, not clicks.** No control can give a wall its box, so the names
   set-up has to be a file. The E0601 set-up could be clicked (three "Add a build target" mortars),
   but a file is quicker and is the one that was checked.
+
+[Since P6b as run: each gap below is now a client lane's, as item 163 (7) and the plan's amendment
+name them (`fixp`, `probw` or `fixq`), except the wall's name, which the owner's accepted call 3
+closes for P6b's check 5 (and `fixq` gives a wall its name anyway).]
 
 **Known gaps to step round** (PR #188's owed list): "Queue a structure" offers Generator,
 Autocannon, Mortar and Wall, though the verifier refuses every structure there but the Resonance
@@ -341,7 +359,17 @@ the record says which.
 - **P6b's rule drag and both of its set-ups are loaded from files,** not built with the editor's
   controls: no template has two rules, and no control gives a wall its box.
 - **P6b's typing clause.** Nothing typed feeds the re-check as you type on this build, so the
-  clause is put to you as a question under the record rather than read from your timings.
+  clause was put as a question under the record rather than read from your timings.
+- **P6b as run was AI-driven, at the owner's word.** The owner wrote "you run this", so the main AI
+  session drove all four matches by computer control and no person's time was taken. The sheet's
+  premise, that you drive P6b by hand and P6b decides, did not happen.
+- **Card A2 was read about 15 s before its watch started.** A tool call that opened it ran in
+  parallel with a New match click that missed, so the card was not first opened when the watch
+  started. Card B was opened when its Lull showed.
+- **The fourth match's Load dialog opened in the launch folder,** `D:\build\p6b\play\Pharmakos`,
+  because the match was started from it, so the address-bar step of "Untimed, afterwards" was not
+  needed.
+- **The chip edits needed Enter.** The sheet's instructions did not say so (findings 1 and 2).
 
 **The missing "New" command is a finding in its own right,** whatever P6a's time, and so is the opening
 camera, which leaves the core at the panel's edge. The main session carries both into `ed3b`'s brief.
@@ -457,41 +485,168 @@ Until then the two P6a rows below are marked "not decided". [Since then decision
 records it, still as the main session's recommendation that the owner can veto, and `ed3b` took the
 owner's findings. The P6a rows stay "not decided".]
 
+## P6b as run (2026-11-19)
+
+**Who drove.** The owner wrote "i am ready for p6b", declined the access request for the AI
+pre-flight (the tool's answer), and then wrote "you run this." So the main AI session drove all four matches by computer
+control, as at P6a. No person's time was taken, and the sheet's premise "You drive P6b by hand, and
+P6b decides" did not happen. The machine was idle: both lanes (`settle`'s review and `vfyq2`'s
+builder) were held first, as the main session recalls; no file retains that. The preset is the config
+line in `%APPDATA%/Godot/app_userdata/Pharmakos.p6b/last_match.txt` (match `local-1795132885-6124`,
+seed `0x0000000000000014`, two seats, three rounds, `probation`), which holds no token. The driver knew the controls. Card A2 was read about 15 s before its watch
+started (a tool call made in parallel with a New match click that missed); card B was opened when its
+Lull showed. The time is the audit log's `submit_plan` tick at 20 Hz, because no countdown shows in
+an untimed Lull.
+
+**Before you start, as done.**
+
+1. The build is named below, and the set-up files were copied beside it.
+2. The cards were checked headless on that build, as "How P6b's cards were checked" says.
+3. `%APPDATA%\Godot\app_userdata\Pharmakos\` was renamed before the sitting; the sitting's folder is
+   `Pharmakos.p6b`, the original is back as `Pharmakos`, and the folder of the aborted pre-flight
+   launch is `Pharmakos.p6b-launch-check`. Nothing was deleted.
+
+**The build.** `D:/build/p6b/play/Pharmakos/Pharmakos.exe`, packaged from `main` at `39d0d13c`,
+zip SHA-256 `c3c5446ff4b0d34342c5ba1ea6c1de68eca43b0421a8f159af1b263a5a746a8e`. Probation preset,
+seed `0x0000000000000014`, Easy at seat 1, untimed Lulls.
+
+**The timings.** The tick is the gateway's count from the match's opening, at 20 Hz; the Lull opened
+at tick 0 (the main session saw the feed's `lull_opened` at 0:00 on its screenshots), and in an
+untimed Lull the count is the client's reported clock. No timing met a refusal. (`estimate_route`'s
+`NOT_FOUND` answers, ten at tick 0 in each match and one at tick 230 in the first, are answers, not
+refusals: AGENTS.md section 3 rule 4.) In each timing the gateway accepted the submission
+(`submit_plan` `ok` in the audit log) and the status line read "Submitted. This is now your sealed
+order." The status line is the main session's observation from its screenshots, not from a retained file.
+In each of the three timings, before Submit the verdict line read the full check's form, "Full
+check - Ready to seal.", and after Submit, under that status line, it read the form for a
+submission checked at submission, "Checked at submission - Ready to seal.". The editor builds the line
+from the verdict's words (`verdict_full`, `verdict_submitted` in `godot/scripts/strings.gd`), then
+" - ", then `seal_ready` ("Ready to seal."), in `godot/scripts/editor.gd`'s `_draw_state`. So each
+timing ended in a sealed and qualifying playbook.
+
+- Template: Expand & Mine, no value changed. `submit_plan` tick 290 (14.5 s). Match
+  `local-1795132518-4284`. Limit 2 min.
+- Scratch, card A2: Safe playbook, then ten steps. `submit_plan` tick 2322 (116.1 s, about 1:56).
+  14 seat-0 `patch_plan` calls for the ten steps. Match `local-1795132604-12216`. Limit 5 min.
+- Card B: `submit_plan` tick 1893 (94.7 s, about 1:35). Three `patch_plan` calls (ticks 462, 959,
+  1702). The time includes one failed "Set this value" (finding 2). Match `local-1795132757-3532`.
+  No limit: card B doesn't decide the gate.
+
+**The sealed routes, read against the cards.**
+
+- Scratch, card A2: 12 steps, matching the card: `to_safety`, `deepen_core`, `visit_1` (`b_00`
+  set_priority HIGH), `place_1` (place_beacon covering vent NEAREST UNCOVERED: the description row),
+  `go_1` (`b_00`'s anchor), `place_2` (voxel 201,25,28), `go_2` (voxel 213,24,28), `go_3` (voxel
+  200,33,28), `place_3` (voxel 180,29,28), `go_4` (`b_00`'s anchor), `visit_2` (set_priority
+  NORMAL), `go_5` (voxel 199,42,28). The Push began, and the feed read "The playbook of seat 0 was sealed: 12 route steps."
+- Card B: `visit_1` adds an autocannon target at voxel 201,25,28, skipped if `kw_headroom` is below 3.
+
+**The hand checks,** made untimed in match `local-1795132885-6124`, launched with `-- --log-input`
+(the log copy is `D:/build/p6b/p6b-match4-input.log`). Numbered as the sheet numbers them.
+
+1. Alt-click on a vent: **pass.** Alt-click showed "Place beacon covering the nearest vent you can
+   cover" first and "Place beacon covering this vent" second; a plain click showed them the other way
+   round. The client reads the Alt key's state (`KEY_ALT held`), as `godot/README.md` describes,
+   which is why the input log's "alt_pressed false" beside "KEY_ALT held true" is no failure. The
+   main session saw Escape close each menu on its screenshots; no file retains that.
+2. Load's dialog (P6a's check 3): native, opened in `D:\build\p6b\play\Pharmakos` (the launch
+   folder), File name empty.
+3. Chips and drag: 40 to 30, 3 to 2 and 1 to 2 all set (with Enter, see findings 1 and 2); regroup
+   dragged onto flee landed before it (rule 1 regroup, rule 2 flee). `patch_plan` ticks 1818, 2124,
+   2521 and 2592.
+4. The E0601 checkbox: **pass.** Unticked it showed E0601 and W0602. Ticked: "Dormant beacons
+   allowed.", E0601 gave way to W0603, the box ticked, "Ready to seal". Unticked again: E0601 back,
+   "Dormant beacons no longer allowed."
+5. The names: "autocannon" and "mortar" were readable from five and four wheel ticks in from the
+   opening view, tiny at three and gone at two. Placed at 0:09; finished at 0:24 and 1:21. The wall
+   is a pale slab with no name, told by its look. The wheel-tick distances and the feed's 0:09, 0:24
+   and 1:21 are the main session's observation from its screenshots, not from a retained file.
+
+**The findings** (client; for the next client lane).
+
+1. A click into a chip's number field does not select the old number: typing 30 gave "4030".
+2. "Set this value" ignores a typed number that was not committed with Enter: the chip stays at the
+   old value, no patch is sent, nothing is said. Seen twice (card B's 5 to 3; 40 to 30). With Enter
+   first it works. A person following card B as written would be stuck here.
+3. After a "Visit & change" pick the core's menu is open again; the next map click only closes it
+   (one wasted click each time; seen after both priority picks).
+4. "With nothing sealed, Ready files the safe playbook for you." stays on screen after Submit.
+5. "Add a build target (then click the ground)" opens its third-level menu at the bottom-left of the window, full width, far
+   from its parent menu (the long "locked" lines size it).
+6. The chip's popup, headed "Change 5:" in the instance seen, has no opaque background; the rule text shows through it.
+7. A build target added from the menu leaves no mark on the map in the Lull.
+8. Autocannon and mortar are drawn as the same teal block; only the name tells them apart.
+9. Possible, not confirmed as the game's: a second click on the dormant checkbox without moving the
+   mouse did nothing; after a mouse move it unticked.
+
+**Confirmed fixed since P6a:** Alt-click on a vent; the "A beacon can go here." / "Not here: ..."
+sentence now shows in the menu at the click; the map opens on the core with the vent in view (left
+and a little below the core, as the sheet predicted).
+
+**What it shows** (the main session's reading; the owner can veto it). All three times are inside
+their limits with the rule list in place, for a driver who knew the controls. As at P6a that is not
+a person's time, so the gate's two timing clauses are not shown for a person. Decisions 15 and 17
+therefore still have no person's input. Section 5.3's closing rule, added by item 163, says how the
+clauses are read next. The AI review is not independent review.
+
+**The owner's answer to the three calls.** The owner was asked three calls, each with the main
+session's recommendation, and answered: "go with your recommendations.  be ambitious." Calls 2 and 3
+are the record's two questions below. The recommendations accepted, written as the main session's and
+not as the owner's words:
+
+1. The gate's two timing clauses (template within 2 minutes, scratch within 5) stay open for a
+   person. They are read when the owner plays S3's stage demo by hand; no separate sitting is held.
+   [Superseded the same evening by the owner's later sentence, "you drive the testing completely
+   until further notice.  let me know when i must be involved". The main session reads that as planning
+   no sitting by the owner; the owner did not agree to sit. The clauses stay "not shown for a person", neither met nor
+   waived, and section 5.3's closing rule says how the main session reads them.]
+2. The typing clause stays open until findings 1 and 2 (the number field does not select the old
+   number; "Set this value" ignores a number not committed with Enter) are fixed in the next client
+   lane, and is read by section 5.3's closing rule.
+3. A wall told by its look is enough for check 5.
+
+The main session's checks (the sealed routes read against the cards, the audit log's ticks, the hand
+checks) are its own, not independent review.
+
 ## The record
 
 One row per sitting and timing. Fixed for every row: the tester is the owner, not a first-time user
 (item 153 (4), R5), except in P6a's two rows, which the main AI session drove by computer control
-with the owner watching; card A (and P6b's card A2) is shaped to the map menu; and the main session's
+with the owner watching, and in P6b's four rows, which it drove at the owner's word "you run this"; card A (and P6b's card A2) is shaped to the map menu; and the main session's
 checks (the card's headless check, the sealed route read against the card, the audit log's
 cross-check) are the AI's own, not independent review.
 
-Every P6b row (template, scratch and card B alike) carries the practice bias: you know card A's kinds
-and the controls, and you watched card A driven at P6a.
+Every P6b row (template, scratch and card B alike) carries the practice bias: the driver knew the
+controls, card A2 was read about 15 s before its watch started, and card B was opened when its Lull
+showed. [As planned, the bias was that you knew card A's kinds and the controls and had watched card A
+driven at P6a.]
 
 | Sitting | Timing | Build, SHA-256 | Seed, preset | Template, values changed | Time | Limit, pass or miss | Repeat? | Refusals | Mis-clicks | Route count, card match | Alt-click check | Edit or typing feel |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | P6a | Template | zip from `83c63a0`, `bb05bd62741ddaa78c8022b817537bd1adc32588a1477359480aef22cd4e8a98` | golden `0x00000000ca5caded`, no preset (the build predates presets: the lobby's fixed match), round 1's Lull 10 min | Expand & Mine, none | about 0:15 (countdown 9:45; audit tick 246, 12.3 s) | 2 min: inside the limit, driven by the main AI session by computer control with the owner watching, so not a first-time person's time; not decided (see the open question) | none (`local-1794786057-2556` void, see above) | none | none named (the owner did not drive) | n/a | n/a | no edit made; see the scratch row |
 | P6a | Scratch | zip from `83c63a0`, `bb05bd62741ddaa78c8022b817537bd1adc32588a1477359480aef22cd4e8a98` | golden `0x00000000ca5caded`, no preset (the build predates presets: the lobby's fixed match), round 1's Lull 10 min | Safe playbook, none | about 1:52 (countdown 8:08; audit tick 2183, 109 s) | 5 min: inside the limit, driven by the main AI session by computer control with the owner watching, so not a first-time person's time; not decided (see the open question) | none | none | none named (the owner did not drive) | 12, matches; step 5 a vent's name | failed: no description menu, for the AI and for the owner by hand | as a watcher: "i did not see the re-check and redraw. most of the map has been too far zoomed out for me to see useful detail." |
-| P6b | Template | zip from `39d0d13c`, `c3c5446ff4b0d34342c5ba1ea6c1de68eca43b0421a8f159af1b263a5a746a8e` | Probation `0x0000000000000014` (20), preset `probation`, untimed Lulls | | | 2 min | | | | n/a | n/a | |
-| P6b | Scratch | zip from `39d0d13c`, `c3c5446ff4b0d34342c5ba1ea6c1de68eca43b0421a8f159af1b263a5a746a8e` | Probation `0x0000000000000014` (20), preset `probation`, untimed Lulls | Safe playbook, card A2 (practice bias: card A's kinds known, card A watched at P6a) | | 5 min | | | | | n/a | |
-| P6b | Card B | zip from `39d0d13c`, `c3c5446ff4b0d34342c5ba1ea6c1de68eca43b0421a8f159af1b263a5a746a8e` | Probation `0x0000000000000014` (20), preset `probation`, untimed Lulls | Safe playbook | | none | | | | | n/a | |
-| P6b | Untimed and hand checks | zip from `39d0d13c`, `c3c5446ff4b0d34342c5ba1ea6c1de68eca43b0421a8f159af1b263a5a746a8e` | Probation `0x0000000000000014` (20), preset `probation`, untimed Lulls | `p6b-short-of-power.jsonc`, `p6b-structures.jsonc` | none | none | n/a | | | n/a | | |
+| P6b | Template | zip from `39d0d13c`, `c3c5446ff4b0d34342c5ba1ea6c1de68eca43b0421a8f159af1b263a5a746a8e` | Probation `0x0000000000000014` (20), preset `probation`, untimed Lulls | Expand & Mine, none | 14.5 s (audit tick 290) | 2 min: inside the limit, driven by the main AI session by computer control, so not a person's time | none | none | none named (the AI drove) | n/a | n/a | no edit made |
+| P6b | Scratch | zip from `39d0d13c`, `c3c5446ff4b0d34342c5ba1ea6c1de68eca43b0421a8f159af1b263a5a746a8e` | Probation `0x0000000000000014` (20), preset `probation`, untimed Lulls | Safe playbook, card A2 (practice bias: the driver knew the controls; card A2 read about 15 s before the watch) | 116.1 s, about 1:56 (audit tick 2322) | 5 min: inside the limit, driven by the main AI session by computer control, so not a person's time | none | none | none named (the AI drove) | 12, matches | n/a | no person's feel; 14 `patch_plan` calls for ten steps |
+| P6b | Card B | zip from `39d0d13c`, `c3c5446ff4b0d34342c5ba1ea6c1de68eca43b0421a8f159af1b263a5a746a8e` | Probation `0x0000000000000014` (20), preset `probation`, untimed Lulls | Safe playbook, one chip edit (5 to 3) | 94.7 s, about 1:35 (audit tick 1893) | none: driven by the main AI session by computer control, so not a person's time | none | none | none named (the AI drove) | 3 steps; the autocannon target at voxel 201,25,28, skip if headroom below 3 | n/a | one failed "Set this value" (finding 2) |
+| P6b | Untimed and hand checks | zip from `39d0d13c`, `c3c5446ff4b0d34342c5ba1ea6c1de68eca43b0421a8f159af1b263a5a746a8e` | Probation `0x0000000000000014` (20), preset `probation`, untimed Lulls | `p6b-short-of-power.jsonc`, `p6b-structures.jsonc` | none | none | n/a | none | none named | n/a | pass: "nearest vent you can cover" first on Alt-click, "this vent" first on a plain click | chips 40 to 30, 3 to 2 and 1 to 2 set with Enter; the drag landed (findings 1 and 2) |
 
 P6b's checks 4 and 5, which the table has no column for:
 
 | P6b hand check | Set-up | What you saw |
 |---|---|---|
-| 4. The E0601 checkbox: unticked before, ticked after | `p6b-short-of-power.jsonc` | |
-| 5. The names (autocannon, mortar; the wall by its look), close up and at the farthest you can read them (note about how far) | `p6b-structures.jsonc`, round 1's Push | |
+| 4. The E0601 checkbox: unticked before, ticked after | `p6b-short-of-power.jsonc` | Pass. Unticked: E0601 and W0602. Ticked: "Dormant beacons allowed.", E0601 gave way to W0603, "Ready to seal". Unticked again: E0601 back. |
+| 5. The names (autocannon, mortar; the wall by its look), close up and at the farthest you can read them (note about how far) | `p6b-structures.jsonc`, round 1's Push | Readable from five and four wheel ticks in from the opening view, tiny at three, gone at two. The wall is a pale slab with no name, told by its look. |
 
-Two questions for you to answer at the sitting:
+Two questions for you to answer at the sitting: [no sitting by the owner took place; the answers are
+under "The owner's answer to the three calls" in "P6b as run", and the questions were not put to the
+owner as written.]
 
 1. "Nothing you type on this build feeds the re-check as you type; a number goes when you press 'Set
    this value'. Do your words on the number fields close the gate's typing clause, or does it stay
    open?"
 
-   Your answer:
+   Answer: the typing clause stays open until findings 1 and 2 are fixed in the next client lane, and is then read by section 5.3's closing rule (the main session's recommendation, accepted in "go with your recommendations.  be ambitious."; the owner's sitting it named is superseded, see above).
 
 2. "A wall has no name on this build. Is telling it by its look enough for check 5?"
 
-   Your answer:
+   Answer: yes, a wall told by its look is enough for check 5 (the main session's recommendation, accepted in the same words).
