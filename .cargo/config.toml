@@ -36,12 +36,30 @@ overflow-checks = true
 # hash chain byte-identical on Windows, Linux and macOS at the pinned 1.98.1
 # (docs/spikes/G4-determinism.md section 9), so the toolchain pin in rust-toolchain.toml is
 # the whole of what cross-OS hash equality asked of the build (S1-02). No target-dir
-# override, no shared cache and no linker choice either: each is a developer's own, set in
-# their environment or a user-level config, never here. What may change the code a checked
-# build compiles is not a developer's to set: every build `cargo xtask ci` and
-# `cargo xtask package` check pins its own rustflags and rustdocflags and turns off any
-# rustc wrapper, whatever a config file says, and refuses a flags, compiler, wrapper or
-# `RUSTC_BOOTSTRAP` variable set in the environment (xtask/src/resolved.rs).
+# override and no shared cache: each is a developer's own, set in their environment or a
+# user-level config, never here. What may change the code a checked build compiles is not a
+# developer's to set: every build `cargo xtask ci` and `cargo xtask package` check pins its
+# own rustflags and rustdocflags and turns off any rustc wrapper, whatever a config file
+# says, and refuses a flags, compiler, wrapper or `RUSTC_BOOTSTRAP` variable set in the
+# environment (xtask/src/resolved.rs).
+
+# The linker: this repository names each CI host's default linker, the one rustc uses when
+# none is named, so that every build of it, `cargo xtask` (which pins the same value on its
+# command line) and a plain `cargo` or rust-analyzer alike, resolves one linker and shares
+# one build: the linker is part of cargo's fingerprint, and two settings would rebuild each
+# other's units. A developer's user-level linker setting for these hosts is overridden
+# inside this repository. On a host not listed here nothing is set, so a plain `cargo`
+# builds with that host's own default; `cargo xtask` refuses a host it has no default
+# for. xtask's DEFAULT_LINKERS (xtask/src/resolved.rs) holds the same rows, and its
+# `the_repository_config_names_the_linkers_xtask_pins` holds the two together.
+[target.x86_64-pc-windows-msvc]
+linker = "link.exe"
+
+[target.x86_64-unknown-linux-gnu]
+linker = "cc"
+
+[target.aarch64-apple-darwin]
+linker = "cc"
 
 [net]
 git-fetch-with-cli = true

@@ -2365,7 +2365,7 @@ fn runner_spelling(xtask: &Path, root: &Path) -> Result<String, String> {
             .collect();
         parts.map(|parts| parts.join("/"))
     });
-    if let Some(relative) = relative.filter(|text| text.is_empty() && clean(text)) {
+    if let Some(relative) = relative.filter(|text| !text.is_empty() && clean(text)) {
         return Ok(relative);
     }
     let absolute = xtask.to_str().ok_or_else(|| {

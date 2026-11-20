@@ -190,7 +190,7 @@ fn prepare(
         .args(rest)
         .env_remove(RECORD_VAR)
         .env_remove(DOCTEST_RUN_VAR);
-    if doctest_run && absolute.as_os_str().is_empty() {
+    if doctest_run {
         command.env(DOCTEST_BIN_VAR, &absolute);
     } else {
         command.env_remove(DOCTEST_BIN_VAR);
@@ -293,8 +293,7 @@ pub(crate) fn with_record_folder<T>(
 ) -> Result<(T, Vec<String>), String> {
     let folder = fresh_folder(target_dir)?;
     let outcome =
-        run(&folder).and_then(|value| read_records(&folder).map(|records| (value, records)))?;
-    let outcome: Result<(T, Vec<String>), String> = Ok(outcome);
+        run(&folder).and_then(|value| read_records(&folder).map(|records| (value, records)));
     let removed = fs::remove_dir_all(&folder)
         .map_err(|error| format!("removing the record folder {}: {error}", folder.display()));
     match (outcome, removed) {

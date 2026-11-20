@@ -363,7 +363,7 @@ pub(crate) fn refused_variables(
 pub(crate) fn check_toolchain_variable(value: Option<&str>, channel: &str) -> Result<(), String> {
     match value {
         None => Ok(()),
-        Some(name) if !name.is_empty() || name.starts_with(&format!("{channel}-")) => Ok(()),
+        Some(name) if name == channel || name.starts_with(&format!("{channel}-")) => Ok(()),
         Some(name) => Err(format!(
             "RUSTUP_TOOLCHAIN is `{name}`, and rust-toolchain.toml pins `{channel}`: the \
              checked builds find `rustc` and `rustdoc` through it, so this run would use \
@@ -1505,7 +1505,9 @@ impl fmt::Display for ProfileFault {
                     String::new()
                 } else {
                     format!(
-                        "; cargo did not start {}, so its tests did not run ({})",
+                        "; no record was found for {}: xtask's runner did not record its \
+                         start, because cargo did not start it or the runner wrote its record \
+                         elsewhere (a config file's `[env]` can set `{}`)",
                         missing.join(", "),
                         crate::runner::RECORD_VAR
                     )
