@@ -1219,6 +1219,9 @@ designed properly, and each wire message and golden moves once, in the lane that
   `crates/gateway/src/host.rs`'s hand-kept `SAFE_PLAYBOOK` copy of `library/safe_playbook.jsonc` with
   the one source (embedded at compile time, instantiated at start-up) and returns that file's header to
   `GPL-3.0-or-later` alone: the main session's call, recorded in item 164 (3a).
+  Nothing enforces that header's return today: the check demands the library's licence of a file
+  that quotes it and does not fail a file that carries it and quotes nothing. The main session plans
+  a change to the check that fails such a file; that change does not exist yet.
 - **`fixq`:** the editor's planning wire and the client halves that need it, with named places in
   `crates/gateway`, `proto/**` and `crates/plan-core` (which `vfyq2` owns until it merges, one more
   reason `fixq` follows it), and, for `retreat_hp_pct` as `optional`, in the sim's interpreter and the
