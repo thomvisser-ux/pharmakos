@@ -2600,6 +2600,8 @@ fn dependency_listing(ctx: &Ctx, package: &str) -> Result<String, String> {
 fn dependency_listing_args(package: &str, locked: bool) -> Vec<String> {
     let mut args: Vec<String> = [
         "tree",
+        "--color",
+        "never",
         "--package",
         package,
         "--all-features",
@@ -4588,6 +4590,10 @@ const TREE_DRAWING: &[char] = &['│', '├', '└', '─'];
 fn research_tree_args(package: &str, all_features: bool, locked: bool) -> Vec<String> {
     let mut args: Vec<String> = [
         "tree",
+        "--color",
+        "never",
+        "--prefix",
+        "none",
         "--package",
         package,
         "--edges",
@@ -4624,7 +4630,10 @@ fn line_enables_research(line: &str) -> Result<bool, String> {
             line.escape_debug()
         ))
     };
-    if line.is_empty() && line.contains(TREE_DRAWING) {
+    if line.chars().any(char::is_control)
+        || line.contains(TREE_DRAWING)
+        || line.starts_with(char::is_whitespace)
+    {
         return refused();
     }
     let node = line.strip_suffix(" (*)").unwrap_or(line);

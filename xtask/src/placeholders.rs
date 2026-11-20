@@ -285,7 +285,19 @@ impl Register {
 ///
 /// When `git grep` cannot be run or cannot read the tree.
 pub(crate) fn collect(root: &Path, require_tools: bool) -> Result<Register, String> {
-    let mut args: Vec<&str> = vec!["grep", "-n", "-I", "-w", "-e", WORD, "--", "."];
+    // `--no-color`: the lines are parsed, and a `color.grep = always` in a
+    // git config would otherwise put escapes in them.
+    let mut args: Vec<&str> = vec![
+        "grep",
+        "--no-color",
+        "-n",
+        "-I",
+        "-w",
+        "-e",
+        WORD,
+        "--",
+        ".",
+    ];
     args.extend_from_slice(EXCLUDED);
     let output = child_command(require_tools, "git", &args, root)
         .stdin(Stdio::null())
