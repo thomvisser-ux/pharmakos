@@ -57,6 +57,11 @@ and register row S1-40's); one real licence through a general mechanism, the Spi
 match seed from S3 (item 127 (13)); and the carries of items 151 (4) and 152 (1) and (3), placed in
 section 2.
 
+[Amended by item 163. The row's "P6 editor gate (template ≤ 2 min, scratch ≤ 5 min)" is read by the
+closing rule of section 5.3, which the main session runs, and not by a sitting of the owner's: neither
+P6a nor P6b was a person's time, and the owner has said no sitting is planned (item 163 (9)). Its
+evidence is AI-driven and is stated as such wherever the result is given.]
+
 ### 1.1 The demo the owner reviews
 
 One unsigned Windows zip (the same build on Linux), started as `Pharmakos.exe -- --rounds 4` (item
@@ -65,6 +70,11 @@ named **Probation**: the owner against Easy on the preset's map seed (decision 1
 / 8 ladder with round 4 taking its last entry, untimed Lulls, and a **Playtest mode** checkbox, off
 by default, which the owner ticks. As at S1 and S2 the main session drives the zip by computer use
 while the owner watches, and presses Ready to end a Lull.
+
+[Amended by item 163. The editor beats of steps 1 and 2 are also where section 5.3's closing rule is
+read, by the main session, with its own card and the empty playbook, on this same zip and the
+lobby's Probation preset. The owner watches those beats as the demo shows them; the owner does not
+sit them. The owner is told the gate's state in one line at the demo review (section 5.3).]
 
 1. **Round 1's Lull, the guided pick.** No countdown shows: the Lull is untimed. The wizard opens
    by itself on the guided pick (decision 5): a template marked as the place to start, with the
@@ -147,7 +157,7 @@ whose second vent lies a few stepping stones away; decision 13 puts the choice t
 
 Beside the demo: the G2 + P3 certification report and the P1 FULL report, each measured on the
 owner's machine under Windows and WSL2 Linux, with the size budget's derivation (section 5); the
-owner's two P6 timing records (section 5.3); the nightly report and the balance check re-run on
+P6 timing record, driven by the main session (section 5.3's closing rule, item 163); the nightly report and the balance check re-run on
 S3's rules; and the fun-gate readiness list of section 1.4, checked.
 
 ### 1.2 The machine-checkable half — AGENTS.md §10, item by item
@@ -159,9 +169,9 @@ S3's rules; and the fun-gate readiness list of section 1.4, checked.
 | 3. Golden playbooks round-trip, verify and render identically | the new constructs' canonical, verify and render goldens under `tests/golden/plan-core/` and `tests/golden/verifier/`; render's chip spans in their own golden; the library's templates re-blessed with reasons | `con6`, `gwr`, `vfy5`, `vfy6`, `opr3` |
 | 4. Headless scenarios assert on events **and** hashes | new scenarios under `scenarios/s3/`: the Spire's licence, queue, growth and loss; `toward`'s stepping stone; an enemy-knowledge rule firing; a Probation match whose memos fire (their gateway half asserted in `crates/gateway/tests`) | `lic`, `pred`, `gwp` |
 | 5. The nightly adversarial scenarios | the three arms on the fixed seed set, each band re-read on S3's rules, with the Rusher's launch now checked (item 151 (4)) | `nite3`, `tune3`, `demo3` |
-| 6. Depth task and gate, or the written fallback | G2 + P3 certified, and P1 FULL with the size budget, by recorded runs (section 5), or the spec's fallback taken in writing | `bench3`, `cert3`, `tune3` |
+| 6. Depth task and gate, or the written fallback | G2 + P3 certified, and P1 FULL with the size budget, by recorded runs (section 5), or the spec's fallback taken in writing. [Item 163: and P6, read by section 5.3's closing rule; AI-driven, so not a person's time.] | `bench3`, `cert3`, `tune3`, `demo3` |
 | 7. Docs in the same PR | the spec amendments and AGENTS.md sentences of section 4.4, in the main session's docs PRs | main session |
-| 8. The owner reviews the demo | §1.1, from `docs/demo/s3-run-sheet.md` | `demo3` |
+| 8. The owner reviews the demo | §1.1, from `docs/demo/s3-run-sheet.md`. [Item 163: the gate's state is put to the owner in one line at this review, and the owner says whether S3 closes on it (section 5.3).] | `demo3` |
 
 ### 1.3 What "ends playable" means here
 
@@ -1108,6 +1118,12 @@ change moves `report_hash` is granted, for the re-bless alone, `tests/golden/gat
 [Amended by item 162 (1) and (5): `demo3` also re-runs the editor's end-to-end 50 ms
 bar and QUICK at the final size budget, because `tune3` can change the budget after `cert3`.]
 
+[Amended by item 163. `demo3` also writes the new task card that section 5.3's closing rule needs
+(card A's ten kinds in an order not used before) and runs the rule on its own zip, as that section
+says, so `docs/demo/` holds the card and the run's record beside the run sheet. It needs `fixp`
+merged, because the rule's typing check runs on the build that holds it. This extends Builds and
+Owns above.]
+
 ### `p6` — the owner's P6 timing sessions (main session and owner, not a lane)
 
 Two sittings, from `docs/demo/p6-run-sheet.md`, which the main session writes in a docs PR before
@@ -1116,7 +1132,7 @@ the template wizard and the map route with the size meter. **P6b**, after `ed3b`
 both timings again with the rule list. Decision 15 says which is the record. Section 5.3 gives the
 protocol.
 
-[Amended by items 160 (4), 161 and 163. P6a was driven by the main AI session with the owner
+[Amended by items 160 (4) and 163. P6a was driven by the main AI session with the owner
 watching, so item 160 (4) records the main session's recommendation, which the owner can veto, that
 P6b decides decisions 15 and 17. P6b's run sheet (`docs/demo/p6-run-sheet.md`, "P6b's additions")
 changed three things against section 5.3: the Probation preset's seed 20 (`0x0000000000000014`),
@@ -1126,7 +1142,9 @@ one chip edit, which does not decide the gate. P6b was then run on 2026-11-19 an
 main AI session too, at the owner's word "you run this", so no person's time was taken and P6b did
 not decide. Item 163 records the run: the three times (14.5 s, 116.1 s and 94.7 s by the audit log's
 ticks, each inside its limit), the hand checks and nine client findings. The two timing clauses and
-the typing clause stay open for a person and are read at the owner's hand-played S3 stage demo.]
+the typing clause stay open for a person. The owner then wrote that the main session drives the
+testing and no sitting by the owner is planned (item 163 (9)), so section 5.3's closing rule reads
+them, on the main session's evidence.]
 
 ---
 
@@ -1183,7 +1201,33 @@ wait, the canonical text cost of QUICK and the `E0209` Fix), `vcap` (item 160 (6
 report cap) and `deps3` (items 161 (2) and (12): the toolchain and action bumps). The totals below
 predate them.]
 
-[Amended by item 163. A sixth lane the sections of section 3 do not cover, `fixp`: a client lane that takes every known client gap, designed properly, and not only the nine findings of P6b's run. It includes the run sheet's "Known gaps to step round" and "What was promised and isn't on this build". It may be split in two lanes by seam. It owns `crates/client-gdext` and `godot/`, with named places in the gateway or the proto where a fix needs the wire, and runs after `vfyq2`'s draft and before S3's demo. It is the main session's call; the owner can veto it.]
+[Amended by item 163. A further lane the sections of section 3 do not cover, `fixp`, the main
+session's call; the owner can veto it. It takes every known client gap, designed properly, as a list
+a reviewer can check:
+
+- P6b's nine findings (item 163 (6)): the number field does not select the old number; "Set this
+  value" ignores a number not committed with Enter; the core's menu opens again after a "Visit &
+  change" pick; the "Ready files the safe playbook" line stays after Submit; the "Add a build
+  target" menu opens far from its parent; the "Change N:" popup has no opaque background; a build
+  target added from the menu leaves no mark on the map in the Lull; autocannon and mortar are drawn
+  as the same block; and the dormant checkbox's second click, which was possibly the client's.
+- The run sheet's "Known gaps to step round": "Queue a structure" offers structures the verifier
+  refuses; "Add a build target" offers Wall with no control for its box; a duration cannot be edited;
+  a choice's values keep their quotes.
+- From "What was promised and isn't on this build": no "Add rule" control, so there is no rule to
+  drag except from a file. Not the wall's name: the owner's accepted call 3 (item 163 (4)) closes
+  that, since a wall is told by its look.
+- The client findings of #192's reviews: Load sets no folder; a structure's name shows from 1 hit
+  point; an unbounded number field lets a value past 2^53 round.
+
+Where a fix needs the gateway to say what is offered or allowed, the lane holds a named place in
+`crates/gateway` and, if a field is added, in `proto/**` (contract paths its PR names); nothing in
+the verifier changes. It owns `crates/client-gdext` and `godot/`. Its split into two lanes, if any,
+and its seams are fixed by its brief and named in its PR. It runs after `vfyq2`'s draft and before
+S3's demo. `prob`'s client part and `tune3`'s `godot/` grant start only after it merges. It changes
+`godot/`, so the main session runs `cargo xtask package` before its merge. The AGENTS.md section 3
+rule-4 list is amended in a harness docs PR at its merge, not left for `cert3`; that moves item
+162 (5)'s "harness docs PR after `cert3`" for the rule-4 text only.]
 
 **Totals.** 19 tasks, **about 74.5 ad** (65–84), including about 1.5 ad of re-blesses after merges
 of `main`; 73.5 without decision 3's Survey post. **Two critical paths of about 31 working days:**
@@ -1450,9 +1494,33 @@ so the spec's first lever is spent; the second, **simplify**, is taken on the ow
 fewer pages in the guided pick. A miss at P6a moves those into `ed3b`'s brief before it starts; a
 miss at P6b goes into `prob` or a short added lane, after cut 1.
 
-[Amended by item 163. Which sitting decided: neither. P6a and P6b were both driven by the main AI
-session, so decision 15's record and decision 17's trigger have no person's input. The hand-played
-S3 stage demo gives it, and a miss there is read by this paragraph.]
+[Amended by item 163. **Which sitting decided: neither.** Item 153 (4) put the owner at the keyboard as
+P6's stand-in tester. P6a and P6b were both driven by the main AI session, and the owner has since
+written that the main session drives the testing and no sitting by the owner is planned (item 163
+(9)). So decisions 15 and 17 have no person's input, the gate's person clauses are neither met nor
+waived, and the miss rule above, "goes into `prob` or a short added lane, after cut 1", no longer
+fits a read at the demo; this amendment replaces it.
+
+**The closing rule.** The main session reads the P6 gate once, in `demo3`, by computer control, as
+section 1.1 already has it drive the demo, and records every cell as AI-driven, as at P6a and P6b. The
+build is `demo3`'s zip on the final rules, hosting the lobby's Probation preset. `demo3` writes a
+new task card, card A's ten kinds of step in an order not used before, and the driver first opens it
+when the scratch watch starts (at P6b card A2 was read about 15 s early; the rule forbids that). The
+clock is the audit log's seat-0 `submit_plan` tick at 20 Hz from the Lull's opening. The template
+timing, at most 2 minutes, runs from round 1's Lull opening to "Submitted. This is now your sealed
+order." with a verdict that qualifies, from any template but the Safe playbook. The scratch timing, at
+most 5 minutes, runs on the same clock: ten route steps added to the empty playbook that "New" puts
+on screen (the spec says "from an empty playbook", and since #183 the editor can start one, so the
+Safe-playbook stand-in of P6a and P6b is no longer used; the main session's call). The typing clause is
+read on the build that holds `fixp`: the driver changes three number chips by typing as a person
+would, clicking the field, typing and pressing "Set this value", with no Enter and no select-all, and
+each chip must read the new number; anything else is a miss. A miss is a time over its limit (a
+verifier refusal counts inside the time), or any control the card needs that does not work as the
+card says. A miss opens a short added lane before S3 closes, the clause is read again on that lane's
+build, and AGENTS.md section 10 item 6 is not met until then. What this evidence is: it shows the
+controls work and the steps fit the limits when driven without hesitation, and it does not show a
+person's time. That is stated beside the result, and the owner rules at the stage demo review
+(section 1.2 row 8) whether S3 closes on it. The AI review is not independent review.]
 
 ---
 
@@ -1683,6 +1751,10 @@ fallback is still affordable". *Gates the `p6` sheet.*
 - *P6b is the record, the owner accepting its lateness:* *Downside:* a miss at day 24 leaves only
   `prob`'s four days for the fallback, so "simplify" would delay the stage.
 
+[Amended by items 160 (4) and 163. Neither sitting was a person's time, so neither is the record.
+Section 5.3's closing rule reads the gate on the main session's evidence, and the owner rules at the
+stage demo review whether S3 closes on it.]
+
 ---
 
 ## 7. Owner decisions during the stage
@@ -1696,6 +1768,10 @@ merges unless someone reads the job.
 **17. If P6 misses** (whichever sitting decision 15 makes the record): spec §16's fallback,
 "simplify", lever by lever as section 5.3 lists, on the owner's word; the editor model is already
 largely in Rust.
+
+[Amended by item 163. A miss under section 5.3's closing rule opens a short added lane before S3
+closes. A lever of "simplify" that the lane would take is taken on the owner's word, as above; a
+control that does not work as the card says is an engineering defect and is fixed without it.]
 
 **18. If G2 + P3 or P1 FULL misses** after the engineering levers: section 5's written fallbacks,
 each on the owner's word: ranges and arrival triggers for a P3 accuracy miss; for a repath-latency
