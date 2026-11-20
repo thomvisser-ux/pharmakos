@@ -369,30 +369,226 @@ pub(crate) fn refused_variables(
     found
 }
 
-/// Whether the compiler `rustc -vV` describes (`verbose_version`) is the
-/// release `rust-toolchain.toml` pins (`channel`): its `release:` line must
-/// be the channel exactly. xtask asks the `rustc` its checked calls name (the
-/// rustup proxy on `PATH`, in the root), once, before any step runs, so
-/// `cargo +<other> xtask …`, a `RUSTUP_TOOLCHAIN` naming another toolchain, or
-/// a `PATH` whose `rustc` is another compiler is refused at the door, naming
-/// both releases. What it cannot prove: that a toolchain reporting the same
+/// Whether the tool `<tool> -vV` describes (`verbose_version`) is the release
+/// `rust-toolchain.toml` pins (`channel`): its `release:` line must be the
+/// channel exactly. xtask asks the `rustc` its checked calls name (the rustup
+/// proxy on `PATH`, in the root) and the `cargo` they run (`$CARGO`), once,
+/// before any step runs ([`check_toolchain`]), so `cargo +<other> xtask …`, a
+/// `RUSTUP_TOOLCHAIN` naming another toolchain, another toolchain's `cargo`
+/// run directly, or a `PATH` whose `rustc` is another compiler is refused at
+/// the door, naming both releases. What it cannot prove: that a toolchain reporting the same
 /// release is the one rustup installed (a custom toolchain built from that
 /// release passes); the toolchain's own files are on the trusted side of the
 /// boundary the module doc names.
-pub(crate) fn check_release(verbose_version: &str, channel: &str) -> Result<(), String> {
+pub(crate) fn check_release(
+    tool: &str,
+    verbose_version: &str,
+    channel: &str,
+) -> Result<(), String> {
     let release = verbose_version
         .lines()
         .find_map(|line| line.strip_prefix("release: "))
         .map(str::trim)
-        .ok_or_else(|| "`rustc -vV` printed no release line".to_owned())?;
+        .ok_or_else(|| format!("`{tool} -vV` printed no release line"))?;
     if release == channel {
         return Ok(());
     }
     Err(format!(
-        "the `rustc` this run would build with is release {release}, and rust-toolchain.toml \
+        "the `{tool}` this run would use is release {release}, and rust-toolchain.toml \
          pins {channel}: run without `+<toolchain>`, unset `RUSTUP_TOOLCHAIN`, or put the \
          rustup proxy first on `PATH`"
     ))
+}
+
+/// The door's whole check: the `rustc` and the `cargo` this run uses each
+/// report `channel` as their release ([`check_release`]), given what each
+/// printed for `-vV`. The 1.99.0 toolchain's own `cargo` run directly, for
+/// one, would otherwise drive every checked call with the 1.98.1 compiler.
+pub(crate) fn check_toolchain(
+    rustc_verbose: &str,
+    cargo_verbose: &str,
+    channel: &str,
+) -> Result<(), String> {
+    check_release("rustc", rustc_verbose, channel)?;
+    check_release("cargo", cargo_verbose, channel).or(Ok(()))
+}
+
+/// The keys `rust-toolchain.toml`'s `[toolchain]` table may hold: the ones
+/// the committed file has.
+const TOOLCHAIN_KEYS: &[&str] = &["channel", "components", "targets", "profile"];
+
+/// The channel `text`, a `rust-toolchain.toml`, pins, read by [`strict_toml`]
+/// (its `targets` is an array written one item per line): every entry in
+/// `[toolchain]`, every key one the committed file has, `channel` a basic
+/// string and the others of the committed shapes; anything else is refused
+/// with its line.
+pub(crate) fn pinned_channel_in(text: &str) -> Result<String, String> {
+    let mut channel: Option<String> = None;
+    for entry in strict_toml(text, true)? {
+        let refused = |why: &str| {
+            Err(format!(
+                "rust-toolchain.toml line {}: {why}: `{} = {}`",
+                entry.line, entry.key, entry.raw
+            ))
+        };
+        if entry.table != "toolchain" && !TOOLCHAIN_KEYS.contains(&entry.key.as_str()) {
+            return refused("not a `[toolchain]` key the committed file has");
+        }
+        match (entry.key.as_str(), &entry.value) {
+            ("channel", TomlValue::Str(value)) if !value.is_empty() => {
+                if channel.replace(value.clone()).is_some() {
+                    return refused("a second `channel`");
+                }
+            }
+            ("profile", TomlValue::Str(_)) | ("components" | "targets", TomlValue::Array(_)) => {}
+            _ => return refused("a value of another shape than the committed file's"),
+        }
+    }
+    channel.ok_or_else(|| "rust-toolchain.toml names no channel".to_owned())
+}
+
+/// A value [`strict_toml`] reads.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum TomlValue {
+    /// A basic string, `"…"`, with no escape and no quote inside.
+    Str(String),
+    /// `true` or `false`.
+    Bool(bool),
+    /// A decimal integer, as written.
+    Int(String),
+    /// An array of basic strings: on one line, or, where the caller allows
+    /// it, one string per line between `key = [` and `]`.
+    Array(Vec<String>),
+}
+
+/// One `key = value` line [`strict_toml`] read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TomlEntry {
+    /// The line it starts on, from 1.
+    pub(crate) line: usize,
+    /// The table it sits in, its header's dotted name.
+    pub(crate) table: String,
+    pub(crate) key: String,
+    /// The value as written, trimmed.
+    pub(crate) raw: String,
+    pub(crate) value: TomlValue,
+}
+
+/// `text`, a TOML file this repository commits, read strictly: blank lines,
+/// whole-line comments, `[table]` headers of bare dotted segments, and
+/// `key = value` lines of a bare key inside a table, whose value is one of the
+/// shapes the repository's `.cargo/config.toml` and `rust-toolchain.toml` use
+/// ([`TomlValue`]): a basic string with no escape, a bool, a decimal integer,
+/// or a one-line array of such strings; and, only when `multiline_arrays`, an
+/// array of such strings one per line (whole-line comments among them), as
+/// `rust-toolchain.toml`'s `targets` is written. Every other shape TOML has is
+/// refused with its line, so nothing can be spelled where a reader of these
+/// entries does not look: a dotted key, a key before the first table, an
+/// array table, a quoted header, an inline table, a literal string, a
+/// multi-line string of either kind, an escape, a float, a date or time, a
+/// value followed by a comment, and (unless allowed) a multi-line array.
+pub(crate) fn strict_toml(text: &str, multiline_arrays: bool) -> Result<Vec<TomlEntry>, String> {
+    let bare = |text: &str, dotted: bool| {
+        !text.is_empty()
+            && !text.starts_with('.')
+            && !text.ends_with('.')
+            && !text.contains("..")
+            && text.chars().all(|character| {
+                character.is_ascii_alphanumeric()
+                    || character == '-'
+                    || character == '_'
+                    || (dotted && character == '.')
+            })
+    };
+    let string = |text: &str| -> Option<String> {
+        let inner = text.strip_prefix('"')?.strip_suffix('"')?;
+        (!inner.contains(['"', '\\'])).then(|| inner.to_owned())
+    };
+    let array = |text: &str| -> Option<Vec<String>> {
+        let inner = text.strip_prefix('[')?.strip_suffix(']')?.trim();
+        if inner.is_empty() {
+            return Some(Vec::new());
+        }
+        let inner = inner.strip_suffix(',').unwrap_or(inner);
+        inner.split(',').map(|item| string(item.trim())).collect()
+    };
+    let mut table: Option<String> = None;
+    let mut entries: Vec<TomlEntry> = Vec::new();
+    let mut lines = (1_usize..).zip(text.lines());
+    while let Some((number, raw)) = lines.next() {
+        let refused = |why: &str| Err(format!("line {number}: {why}: `{}`", raw.trim()));
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if line.starts_with('[') {
+            let Some(inner) = line
+                .strip_prefix('[')
+                .and_then(|rest| rest.strip_suffix(']'))
+            else {
+                return refused("a header this reader does not know");
+            };
+            if !bare(inner, true) {
+                return refused("a header this reader does not know");
+            }
+            table = Some(inner.to_owned());
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            return refused("neither a header nor `key = value`");
+        };
+        let (key, value) = (key.trim(), value.trim());
+        if !bare(key, false) {
+            return refused("a key that is not bare");
+        }
+        let Some(table) = &table else {
+            return refused("a key before the first table");
+        };
+        // An integer's digits, its sign taken off.
+        let digits = value.strip_prefix(['-', '+']).unwrap_or(value);
+        let parsed = if value == "[" && multiline_arrays {
+            let mut items: Vec<String> = Vec::new();
+            loop {
+                let Some((item_number, item_raw)) = lines.next() else {
+                    return refused("an array that is never closed");
+                };
+                let item = item_raw.trim();
+                if item == "]" {
+                    break;
+                }
+                if item.is_empty() || item.starts_with('#') {
+                    continue;
+                }
+                match string(item.strip_suffix(',').unwrap_or(item)) {
+                    Some(text) => items.push(text),
+                    None => {
+                        return Err(format!(
+                            "line {item_number}: an array item that is not a basic string: `{item}`"
+                        ));
+                    }
+                }
+            }
+            TomlValue::Array(items)
+        } else if let Some(text) = string(value) {
+            TomlValue::Str(text)
+        } else if value == "true" || value == "false" {
+            TomlValue::Bool(value == "true")
+        } else if !digits.is_empty() && digits.chars().all(|character| character.is_ascii_digit()) {
+            TomlValue::Int(value.to_owned())
+        } else if let Some(items) = array(value) {
+            TomlValue::Array(items)
+        } else {
+            TomlValue::Str(value.to_owned())
+        };
+        entries.push(TomlEntry {
+            line: number,
+            table: table.clone(),
+            key: key.to_owned(),
+            raw: value.to_owned(),
+            value: parsed,
+        });
+    }
+    Ok(entries)
 }
 
 /// The refusal for [`refused_variables`]' answer, or `Ok` when it is empty.
@@ -3473,70 +3669,132 @@ mod tests {
                 "rustc {release} (48a229cea 2026-09-01)\nbinary: rustc\nhost: x86_64-pc-windows-msvc\nrelease: {release}\n"
             )
         };
-        assert_eq!(check_release(&verbose("1.98.1"), "1.98.1"), Ok(()));
+        assert_eq!(check_release("rustc", &verbose("1.98.1"), "1.98.1"), Ok(()));
         for other in ["1.99.0", "1.98.10", "1.98.1-nightly", "1.98"] {
-            let error = check_release(&verbose(other), "1.98.1").expect_err(other);
+            let error = check_release("rustc", &verbose(other), "1.98.1").expect_err(other);
             assert!(error.contains(other) && error.contains("1.98.1"), "{error}");
         }
-        assert!(check_release("rustc 1.98.1\n", "1.98.1").is_err());
+        assert!(check_release("rustc", "rustc 1.98.1\n", "1.98.1").is_err());
+    }
+
+    /// The door holds cargo's release to the channel as it holds the
+    /// compiler's: the 1.99.0 toolchain's own `cargo` run directly, beside
+    /// the pinned 1.98.1 `rustc`, is refused, naming cargo and both releases.
+    #[test]
+    fn the_door_holds_cargo_to_the_pinned_release() {
+        let rustc = "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\nhost: x86_64-pc-windows-msvc\nrelease: 1.98.1\n";
+        let cargo = |release: &str| {
+            format!(
+                "cargo {release} (797e8a9bc 2026-08-05)\nrelease: {release}\ncommit-hash: 797e8a9bc\nhost: x86_64-pc-windows-msvc\n"
+            )
+        };
+        assert_eq!(check_toolchain(rustc, &cargo("1.98.1"), "1.98.1"), Ok(()));
+        let error = check_toolchain(rustc, &cargo("1.99.0"), "1.98.1").expect_err("cargo 1.99.0");
+        assert!(
+            error.contains("`cargo`") && error.contains("1.99.0") && error.contains("1.98.1"),
+            "{error}"
+        );
+        assert!(check_toolchain(rustc, "cargo 1.98.1\n", "1.98.1").is_err());
+    }
+
+    /// The channel is read from `rust-toolchain.toml` strictly: the committed
+    /// file gives its channel; a key the committed file does not have, a
+    /// `channel` of another shape, a second table or a stray line is refused
+    /// with its line.
+    #[test]
+    fn the_toolchain_file_is_read_strictly() {
+        let committed = include_str!("../../rust-toolchain.toml");
+        let channel = pinned_channel_in(committed).expect("the committed file reads strictly");
+        assert!(
+            committed.contains(&format!("channel = \"{channel}\"")),
+            "{channel}"
+        );
+        let good = "[toolchain]\nchannel = \"1.98.1\"\ncomponents = [\"rustfmt\", \"clippy\"]\ntargets = [\n    \"x86_64-pc-windows-msvc\",\n    # a comment\n    \"aarch64-apple-darwin\",\n]\nprofile = \"minimal\"\n";
+        assert_eq!(pinned_channel_in(good), Ok("1.98.1".to_owned()));
+        for bad in [
+            "[toolchain]\nchannel = '1.98.1'\n",
+            "[toolchain]\nchannel = \"1.98.1\"\npath = \"/opt/rust\"\n",
+            "[toolchain]\nchannel = [\"1.98.1\"]\n",
+            "[other]\nchannel = \"1.98.1\"\n",
+            "channel = \"1.98.1\"\n",
+            "[toolchain]\nchannel = \"1.98.1\"\nchannel = \"1.99.0\"\n",
+            "[toolchain]\nchannel = \"1.98.1\" # pinned\n",
+            "[toolchain]\ntargets = [\n    \"x86_64-pc-windows-msvc\" # inline\n]\nchannel = \"1.98.1\"\n",
+            "[toolchain]\nprofile = \"minimal\"\n",
+        ] {
+            assert!(pinned_channel_in(bad).is_err(), "{bad}");
+        }
+    }
+
+    /// The strict reader's value grammar: what it takes, and every other
+    /// shape TOML has, refused.
+    #[test]
+    fn the_strict_reader_takes_only_its_value_shapes() {
+        let entries = strict_toml(
+            "[t]\ns = \"a b\"\ne = \"\"\nb = true\nc = false\ni = -12\na = [\"x\", \"y\"]\nz = []\n",
+            false,
+        )
+        .expect("the shapes it takes");
+        let values: Vec<TomlValue> = entries.into_iter().map(|entry| entry.value).collect();
+        assert_eq!(
+            values,
+            [
+                TomlValue::Str("a b".to_owned()),
+                TomlValue::Str(String::new()),
+                TomlValue::Bool(true),
+                TomlValue::Bool(false),
+                TomlValue::Int("-12".to_owned()),
+                TomlValue::Array(vec!["x".to_owned(), "y".to_owned()]),
+                TomlValue::Array(Vec::new()),
+            ]
+        );
+        for value in [
+            "{ linker = \"clang\" }",
+            "'literal'",
+            "'''",
+            "'''x'''",
+            "\"\"\"",
+            "\"\"\"x\"\"\"",
+            "\"a\\\"b\"",
+            "\"a\\nb\"",
+            "1.5",
+            "1e3",
+            "1_000",
+            "0x10",
+            "inf",
+            "1979-05-27",
+            "07:32:00",
+            "\"x\" # comment",
+            "[",
+            "[\"x\",",
+            "[1, 2]",
+            "['x']",
+            "[[\"x\"]]",
+            "",
+        ] {
+            assert!(
+                strict_toml(&format!("[t]\nk = {value}\n"), false).is_err(),
+                "{value}"
+            );
+        }
+        assert!(strict_toml("[t]\nk = [\n\"x\",\n]\n", false).is_err());
+        assert!(strict_toml("[t]\nk = [\n\"x\",\n]\n", true).is_ok());
+        assert!(strict_toml("[t]\nk = [\n\"x\",\n", true).is_err());
+        assert!(strict_toml("[t]\nk = [\n{ a = 1 },\n]\n", true).is_err());
     }
 
     /// One entry of a cargo config file as [`config_entries`] reads it: its
     /// table, key and value as written.
     type ConfigEntry = (String, String, String);
 
-    /// `text`, a cargo config file, read strictly: blank lines, whole-line
-    /// comments, `[table]` headers of bare dotted segments and `key = value`
-    /// lines of a bare key inside a table. Anything else (a dotted key, a key
-    /// before the first table, `[[array]]` tables, a header with quotes) is
-    /// refused, so a linker or a wrapper cannot be spelled where the tests do
-    /// not look.
+    /// `text`, a cargo config file, read by [`strict_toml`] without multi-line
+    /// arrays (the repository's config has none), as (table, key, value as
+    /// written).
     fn config_entries(text: &str) -> Result<Vec<ConfigEntry>, String> {
-        let bare = |text: &str, dotted: bool| {
-            !text.is_empty()
-                && text.chars().all(|character| {
-                    character.is_ascii_alphanumeric()
-                        || character == '-'
-                        || character == '_'
-                        || (dotted && character == '.')
-                })
-        };
-        let mut table: Option<String> = None;
-        let mut entries: Vec<ConfigEntry> = Vec::new();
-        for (number, raw) in (1_usize..).zip(text.lines()) {
-            let line = raw.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            if let Some(inner) = line
-                .strip_prefix('[')
-                .and_then(|rest| rest.strip_suffix(']'))
-            {
-                if !bare(inner, true) {
-                    return Err(format!(
-                        "line {number}: a header this reader does not know: `{line}`"
-                    ));
-                }
-                table = Some(inner.to_owned());
-                continue;
-            }
-            let Some((key, value)) = line.split_once('=') else {
-                return Err(format!(
-                    "line {number}: neither a header nor `key = value`: `{line}`"
-                ));
-            };
-            let key = key.trim();
-            if !bare(key, false) {
-                return Err(format!("line {number}: a key that is not bare: `{line}`"));
-            }
-            let Some(table) = &table else {
-                return Err(format!(
-                    "line {number}: a key before the first table: `{line}`"
-                ));
-            };
-            entries.push((table.clone(), key.to_owned(), value.trim().to_owned()));
-        }
-        Ok(entries)
+        Ok(strict_toml(text, false)?
+            .into_iter()
+            .map(|entry| (entry.table, entry.key, entry.raw))
+            .collect())
     }
 
     /// The repository's config, read by [`config_entries`].
@@ -3558,6 +3816,10 @@ mod tests {
             "[[bin]]\nname = \"x\"\n",
             "[target.'cfg(unix)']\nlinker = \"gcc\"\n",
             "[build]\nrustc-wrapper\n",
+            // Re-review 8's P1: an inline table cargo reads as a linker, and a
+            // header hidden in a multi-line literal string.
+            "[target]\nx86_64-unknown-linux-gnu = { linker = \"clang\" }\n",
+            "[env]\nprobe-pad = '''\n[target.x86_64-unknown-linux-gnu]\nlinker = \"cc\"\nprobe-end = '''\n",
         ] {
             assert!(config_entries(text).is_err(), "{text}");
         }
