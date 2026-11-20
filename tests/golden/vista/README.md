@@ -1,6 +1,6 @@
 <!--
 SPDX-FileCopyrightText: 2026 Pharmakos contributors
-SPDX-License-Identifier: GPL-3.0-or-later
+SPDX-License-Identifier: GPL-3.0-or-later AND (MIT OR Apache-2.0)
 -->
 
 # `vista/` — the rendered screenshots, and the client's two text goldens

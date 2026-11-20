@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Pharmakos contributors
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: GPL-3.0-or-later AND (MIT OR Apache-2.0)
 
 //! The match host: the one place in this crate that steps a [`Runner`].
 //!
