@@ -18,10 +18,13 @@
 #
 # One rule runs through the whole tree, and a test holds it (xtask's `licence_quotes`,
 # which asks `reuse` for every file's licence): a tracked file outside library/ that
-# reproduces a sentence of a library template carries the library's licence
+# reproduces a library template's expression carries the library's licence
 # (MIT OR Apache-2.0) beside its own, as GPL-3.0-or-later AND (MIT OR Apache-2.0), or the
 # library's alone where the file is purely the library's text, as the operator goldens
-# and the docs are. A title, a name or a label is not a sentence and is not covered.
+# and the docs are. The expression is a sentence of at least 8 words ending in a full stop,
+# or any run of at least 12 consecutive words of one library string (a parameter's
+# description has no full stop and is expression). A title, a name or a step label is short
+# and is not covered. The two licences are one combined expression, never two separate ones.
 # Decisions-log item 113 (10), which kept the instantiate_template answers GPL-only, is
 # amended to it.
 #
@@ -250,6 +253,7 @@ path = [
     "tests/golden/gateway/demo_raid_an_enemy_beacon_render/**",
     "tests/golden/gateway/demo_against_easy_render/**",
     "godot/fixtures/rule_list_render.json",
+    "tests/golden/determinism/hold_and_build.playbook.json",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Pharmakos contributors"
