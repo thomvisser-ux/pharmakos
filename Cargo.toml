@@ -168,28 +168,40 @@ overflow-checks = true
 # inherits all of it. Optimisation moves no hash: the sim has no floats, and the same
 # chains are produced at `release-checked`.
 #
-# `cargo xtask ci`'s `test` step asks cargo for the profile it resolved for every unit
-# before the tests run, and fails if the sim is at opt-level 0, if a crate the sim runs is,
-# if a workspace unit has debug assertions or overflow checks off, or if a godot crate is
-# optimised; it runs only `crates/sim/tests/allocations.rs` with the sim at opt-level 0,
-# because the optimiser deletes allocations whose value is never read, which that test
-# exists to catch. Cargo reads no environment variable for a package table: to step
-# through the sim in a debugger, build with
+# `cargo xtask ci` checks what cargo resolves, from cargo's own report, on every build it
+# makes to test, to hash or to ship (xtask/src/resolved.rs). Before each test invocation
+# the `test` and `test-research` steps fail if the sim is at opt-level 0, if a third-party
+# crate the sim runs is, if a workspace unit has debug assertions or overflow checks off,
+# or if a crate of the godot family is optimised. Rustflags override all of this and never
+# show in that report, so every checked build pins its own (`CARGO_ENCODED_RUSTFLAGS`,
+# which cargo reads before every other source, config files included) and a flags
+# variable set in the environment is refused. Only `crates/sim/tests/allocations.rs` runs
+# with the sim at opt-level 0, because the optimiser deletes allocations whose value is
+# never read, which that test exists to catch. Cargo reads no environment variable for a
+# package table: to step through the sim in a debugger, build with
 #   --config 'profile.dev.package.pharmakos-sim.opt-level=0'
 # which the `test` step sees and refuses, so it is for a local debugging build only.
 [profile.dev.package.pharmakos-sim]
 opt-level = 2
 
-# Third-party crates (imbl, xxh3, prost, postcard, ...) and their build scripts and proc
-# macros: `"*"` matches no workspace member, so the walled float crates and the tests' own
-# code stay unoptimised.
+# The third-party crates the sim runs (imbl, xxh3, prost, postcard, ...), and with them
+# every other third-party crate, build scripts and proc-macros included: `"*"` matches no
+# workspace member, so the walled float crates and the tests' own code stay unoptimised.
+# pharmakos-proto, a workspace crate the sim runs, is not named: optimising it saves about
+# 0.4 ms per world load (20 decodes of the rules table, 10.6 ms at opt-level 0 against
+# 2.1 ms at 2), which holds no shard.
 [profile.dev.package."*"]
 opt-level = 2
 
-# The godot crates serve the walled client alone, which no test of the sim runs, and
-# optimising them doubled a cold client build. A named table outranks `"*"`; the `test`
-# step fails if any godot crate is optimised, so a new one the lock file gains must be
-# named here too.
+# The godot family: every package reachable from the walled client's `godot` dependency and
+# from no other workspace member except through it, read from cargo's resolve graph. It
+# serves the client alone, which no test of the sim runs, and optimising it doubled a cold
+# client build. Cargo has no glob but `"*"`, and a named table outranks it, so each is named;
+# the `test` step fails on any optimised member of the family and names the table it needs.
+[profile.dev.package.gdextension-api]
+opt-level = 0
+[profile.dev.package.glam]
+opt-level = 0
 [profile.dev.package.godot]
 opt-level = 0
 [profile.dev.package.godot-bindings]
@@ -203,6 +215,14 @@ opt-level = 0
 [profile.dev.package.godot-ffi]
 opt-level = 0
 [profile.dev.package.godot-macros]
+opt-level = 0
+[profile.dev.package.heck]
+opt-level = 0
+[profile.dev.package.nanoserde]
+opt-level = 0
+[profile.dev.package.nanoserde-derive]
+opt-level = 0
+[profile.dev.package.venial]
 opt-level = 0
 
 # Determinism CI builds this to compare hashes across operating systems at optimisation
