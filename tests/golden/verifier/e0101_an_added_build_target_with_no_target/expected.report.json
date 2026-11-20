@@ -1,0 +1,19 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0101",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/interface/rows/0/add_build_target/target",
+      "message": "`target` is required and is missing.",
+      "beginner": "A part that every playbook must have is not here."
+    }
+  ],
+  "report_hash": "Pfs0k1ag5mU=",
+  "rules_hash": "GybFJQaL/2E=",
+  "plan_fingerprint": "tz23PRAWTYM=",
+  "verifier_version": "0.1.0-s3.5",
+  "size_units": 1,
+  "size_budget": 128
+}
+

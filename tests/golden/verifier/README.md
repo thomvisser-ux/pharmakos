@@ -418,3 +418,11 @@ blanked, though the verifier read it); and a key written twice is refused at its
 opening quote, a trailing comma in words of its own. No committed case holds any of
 those texts, so no report moved for them; every other byte of every report is as
 before the bump, which the commits before it show.
+
+**S3's `vfyq2`, fix pass 2.** Six cases are new, each on the plain fixture, one for
+each shape the structure stage now refuses because the sim's compile requires it:
+`e0101_a_patrol_with_no_waypoint`, `e0101_an_added_build_target_with_no_target`,
+`e0101_a_build_target_with_no_anchor`, `e0101_a_removal_with_no_anchor`,
+`e0111_a_build_target_anchor_naming_no_place` and
+`e0111_a_removal_anchor_naming_no_place`. Each pins its code and its pointer. No
+existing report moved.
