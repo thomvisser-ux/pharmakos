@@ -1692,6 +1692,181 @@ fn each_s3_construct_qualifies_once_lifted(counts: &[u32], runs: u32) {
     assert!(failures.is_empty(), "{}", failures.join("; "));
 }
 
+/// Hand-written bases for [`every_one_node_edit_that_qualifies_compiles`]:
+/// each qualifies in [`scope`] and carries a construct the generator does not
+/// write qualifying (a patrolling fallback; a Build target under each of its
+/// three carriers; a removal), so the edits reach every block those
+/// constructs require.
+const EDIT_BASES: [&str; 2] = [
+    concat!(
+        r#"{"schema_version":{"major":1},"meta":{"title":"patrol","author_kind":"HUMAN"},"#,
+        r#""kind":"PLAYBOOK","declarative":{"route":[{"label":"s1","hold":{"ms":1000}}]},"#,
+        r#""on_death":{"on_respawn":"CONTINUE","max_deaths_before_fallback":1},"#,
+        r#""fallback":{"patrol":{"waypoints":[{"voxel":{"x":80,"y":12,"z":55}},"#,
+        r#"{"beacon_anchor":{"beacon_id":"b_01"}}]}}}"#
+    ),
+    concat!(
+        r#"{"schema_version":{"major":1},"meta":{"title":"targets","author_kind":"HUMAN"},"#,
+        r#""kind":"PLAYBOOK","declarative":{"route":[{"label":"s1","on_fail":{"action":"SKIP"},"#,
+        r#""interface":{"beacon":{"beacon_id":"b_01"},"rows":["#,
+        r#"{"set_mandate_settings":{"build":{"targets":[{"blueprint_id":"generator","#,
+        r#""anchor":{"voxel":{"x":82,"y":12,"z":55}}}]}}},"#,
+        r#"{"add_build_target":{"target":{"blueprint_id":"generator","#,
+        r#""anchor":{"voxel":{"x":78,"y":10,"z":55}}}}},"#,
+        r#"{"remove_build_target":{"anchor":{"voxel":{"x":82,"y":12,"z":55}}}}]}}],"#,
+        r#""options":{"allow_dormant_beacons":true}},"#,
+        r#""on_death":{"on_respawn":"CONTINUE","max_deaths_before_fallback":1},"#,
+        r#""fallback":{"hold":{"at":{"beacon_anchor":{"safest":{}}}}}}"#
+    ),
+];
+
+/// How many of the generator's runs [`every_one_node_edit_that_qualifies_compiles`]
+/// edits, beside [`EDIT_BASES`].
+const EDITED_RUNS: u32 = 96;
+
+/// Every copy of `root` with one node replaced by `null`, `{}`, `[]`, `0` or
+/// `""`, or removed: the population of "a block written empty or left out"
+/// that the sim's compile reads as required, one node at a time.
+fn one_node_edits(root: &Json) -> Vec<Json> {
+    fn walk(node: &Json, path: &mut Vec<usize>, root: &Json, out: &mut Vec<Json>) {
+        let children: Vec<&Json> = match node {
+            Json::Object(members) => members.iter().map(|(_, value)| value).collect(),
+            Json::Array(items) => items.iter().collect(),
+            _ => Vec::new(),
+        };
+        for (index, child) in children.into_iter().enumerate() {
+            path.push(index);
+            for with in [
+                Some(Json::Null),
+                Some(Json::Object(Vec::new())),
+                Some(Json::Array(Vec::new())),
+                Some(Json::Number("0".to_owned())),
+                Some(Json::String(String::new())),
+                None,
+            ] {
+                out.push(edited(root, path, with));
+            }
+            walk(child, path, root, out);
+            path.pop();
+        }
+    }
+    fn edited(root: &Json, path: &[usize], with: Option<Json>) -> Json {
+        let mut copy = root.clone();
+        let Some((last, parents)) = path.split_last() else {
+            return copy;
+        };
+        let mut node = &mut copy;
+        for index in parents {
+            node = match node {
+                Json::Object(members) => members.get_mut(*index).map(|(_, value)| value),
+                Json::Array(items) => items.get_mut(*index),
+                _ => None,
+            }
+            .unwrap_or_else(|| panic!("the walk's path {path:?} is in the tree"));
+        }
+        match (node, with) {
+            (Json::Object(members), Some(value)) => {
+                if let Some(member) = members.get_mut(*last) {
+                    member.1 = value;
+                }
+            }
+            (Json::Object(members), None) => {
+                members.remove(*last);
+            }
+            (Json::Array(items), Some(value)) => {
+                if let Some(item) = items.get_mut(*last) {
+                    *item = value;
+                }
+            }
+            (Json::Array(items), None) => {
+                items.remove(*last);
+            }
+            _ => panic!("the walk's path {path:?} ends under a container"),
+        }
+        copy
+    }
+    let mut out = Vec::new();
+    walk(root, &mut Vec::new(), root, &mut out);
+    out
+}
+
+/// What qualifies at FULL, the sim compiles (S3's `vfyq2`, fix pass 1, item
+/// 6). The security review's generator found 16 of 240,000 playbooks the
+/// verifier qualified and `Plan::compile` refused, every one a block the
+/// compile requires and the structure stage never asked for: a patrol with no
+/// waypoint, an `add_build_target` with no target, a Build target with no
+/// anchor or an anchor naming no place. This edits every node of qualifying
+/// playbooks, one at a time, and holds every edit that still qualifies to the
+/// sim's compile, so a required block the verifier does not require goes red
+/// here, by the error the compile names.
+#[test]
+fn every_one_node_edit_that_qualifies_compiles() {
+    let rules = rules();
+    let widest = rules_at_the_widest_budget(&rules);
+    let scope = scope();
+    let snapshot = snapshot();
+    let qualifies = |text: &str, rules: &RulesTable| {
+        let input = Input::new(text.as_bytes(), &snapshot, &scope, rules)
+            .unwrap_or_else(|error| panic!("assembling the input: {error}"));
+        verify(&input, Depth::Full).qualifies
+    };
+    let mut bases: Vec<(Json, bool)> = Vec::new();
+    for base in EDIT_BASES {
+        let tree = json::read(base).unwrap_or_else(|error| panic!("an edit base: {error}"));
+        assert!(
+            qualifies(base, &rules),
+            "an edit base does not qualify: {base}"
+        );
+        bases.push((tree, false));
+    }
+    for index in 0..EDITED_RUNS {
+        let mut shape = Shape::new(index);
+        let padded = shape.padded;
+        let tree = shape.playbook();
+        if qualifies(&json::write(&tree), if padded { &widest } else { &rules }) {
+            bases.push((tree, padded));
+        }
+    }
+    let mut refused: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    let mut checked = 0_u32;
+    for (tree, padded) in &bases {
+        let rules = if *padded { &widest } else { &rules };
+        for edit in one_node_edits(tree) {
+            let text = json::write(&edit);
+            if !qualifies(&text, rules) {
+                continue;
+            }
+            checked = checked.saturating_add(1);
+            let playbook: Playbook = json::decode(&text)
+                .unwrap_or_else(|error| panic!("qualifies and does not decode: {error}\n{text}"));
+            if let Err(error) = Plan::compile(&playbook, rules) {
+                let flat: String = text.split_whitespace().collect();
+                let slot = refused
+                    .entry(format!("{error:?}"))
+                    .or_insert_with(|| flat.clone());
+                if flat.len() < slot.len() {
+                    *slot = flat;
+                }
+            }
+        }
+    }
+    assert!(
+        bases.len() > EDIT_BASES.len() && checked > 0,
+        "the property was never tested: {} bases, {checked} qualifying edits",
+        bases.len()
+    );
+    let report: Vec<String> = refused
+        .iter()
+        .map(|(error, text)| format!("{error}, the smallest: {text}"))
+        .collect();
+    assert!(
+        report.is_empty(),
+        "{} kinds of edit qualify at FULL and the sim's compile refuses them:\n{}",
+        report.len(),
+        report.join("\n")
+    );
+}
+
 #[test]
 fn the_generator_still_produces_shapes_the_verifier_reads() {
     let rules = rules();
