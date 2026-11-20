@@ -225,9 +225,11 @@ fn the_deploy_and_visit_playbook_qualifies_and_renders_in_the_lobbys_lull() {
 /// The answers carry no header and no comment: a report names codes, pointers
 /// and hashes, and the prose is the renderer's English, which quotes the
 /// playbook's meta title and summary and its step labels. So no golden here
-/// carries a licence header, and the files sit in this area's
-/// `GPL-3.0-or-later` tier as they are (a gateway answer that embeds a
-/// template's strings stays GPL, decisions-log item 113 (10)).
+/// carries a licence header. A render golden that quotes a template from
+/// `library/` carries `GPL-3.0-or-later AND (MIT OR Apache-2.0)`, recorded
+/// for it by `REUSE.toml` (decisions-log item 113 (10), as amended by item
+/// 164), and the xtask test `licence_quotes` fails on one that is not; a
+/// golden that quotes no template sits in this area's `GPL-3.0-or-later` tier.
 fn write_golden(case: &str, rendered: &str) {
     let file = "response.json";
     assert!(!rendered.contains('\r') && rendered.ends_with('\n'));
