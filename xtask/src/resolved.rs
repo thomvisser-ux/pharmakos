@@ -2091,6 +2091,38 @@ mod tests {
         );
     }
 
+    /// Every path a report names is absolute, as cargo writes it (it joins a
+    /// relative `CARGO_TARGET_DIR` to its working directory), so what xtask
+    /// removes, runs, stages and packages never depends on xtask's own
+    /// working directory. A relative one is refused, not resolved.
+    #[test]
+    fn a_reported_path_is_absolute_or_refused() {
+        let base = artifact(SIM_ID, "pharmakos_sim", "2", true, true);
+        for (field, absolute, relative) in [
+            (
+                "\"executable\":null",
+                "\"executable\":\"/w/target/debug/deps/sim-1\"",
+                "\"executable\":\"target/debug/deps/sim-1\"",
+            ),
+            (
+                "\"filenames\":[]",
+                "\"filenames\":[\"D:\\\\w\\\\target\\\\debug\\\\libsim.rlib\"]",
+                "\"filenames\":[\"target\\\\debug\\\\libsim.rlib\"]",
+            ),
+        ] {
+            let held = base.replace(field, absolute);
+            assert!(read(&format!("{held}\n{FINISHED}")).is_ok(), "{held}");
+            let refused = base.replace(field, relative);
+            assert!(
+                matches!(
+                    read(&format!("{refused}\n{FINISHED}")),
+                    Err(ProfileFault::Unreadable { line: 1, .. })
+                ),
+                "{refused}"
+            );
+        }
+    }
+
     #[test]
     fn the_messages_are_read_strictly() {
         let fails = |text: &str| read(text).expect_err(text);
