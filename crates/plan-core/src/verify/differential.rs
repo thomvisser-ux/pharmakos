@@ -314,10 +314,12 @@ fn boundaries(text: &str) -> Vec<usize> {
 /// The comments injected at a boundary: a line comment and a block comment,
 /// each holding a multi-byte character and the characters a comment reader
 /// could mistake for its end or for a string.
-const COMMENTS: [&str; 3] = [
+const COMMENTS: [&str; 5] = [
     "// a note, \u{e9}t\u{e9} \"quoted\" /* not a block */\n",
     "/* a note, \u{1f4a1} // not a line \"*/",
     "/**/",
+    "/* across\n   two lines */",
+    "// a line\n/* then a block\n */",
 ];
 
 fn with_comment(text: &str, at: usize, comment: &str) -> String {
@@ -986,5 +988,88 @@ fn a_leading_zero_is_refused_by_both() {
     assert_eq!(
         verified(&text).1,
         [("E0001".to_owned(), format!("/byte/{at}"))]
+    );
+}
+
+/// Every comment a text holds, by its text, in order of where it stands.
+fn comment_texts(text: &str) -> Vec<String> {
+    let mut texts: Vec<String> = Document::parse(text)
+        .map(|document| {
+            document
+                .comments()
+                .into_iter()
+                .map(|comment| comment.text)
+                .collect()
+        })
+        .unwrap_or_default();
+    texts.sort();
+    texts
+}
+
+/// The two promises the canonical writer makes of every text it writes
+/// (fix pass 1, item 8): every comment comes out, text for text (a comment
+/// on a written-out default is moved, never dropped), and canonicalising the
+/// canonical text gives it back unchanged.
+#[derive(Default, Debug)]
+struct Kept {
+    cases: u64,
+    lost: Vec<String>,
+    unstable: Vec<String>,
+}
+
+impl Kept {
+    fn check(&mut self, what: &str, text: &str) {
+        let Ok(once) = canonicalise_text(text) else {
+            return;
+        };
+        self.cases += 1;
+        if comment_texts(text) != comment_texts(&once.text) {
+            self.lost.push(format!(
+                "{what}: {:?}",
+                text.chars().take(300).collect::<String>()
+            ));
+        }
+        match canonicalise_text(&once.text) {
+            Ok(twice) if twice.text == once.text => {}
+            _ => self.unstable.push(format!(
+                "{what}: {:?}",
+                text.chars().take(300).collect::<String>()
+            )),
+        }
+    }
+}
+
+#[test]
+fn every_comment_comes_out_and_canonicalising_twice_is_once() {
+    let mut kept = Kept::default();
+    let mut texts: Vec<(String, String)> = corpus();
+    texts.extend(probes());
+    for (index, (name, text)) in texts.into_iter().enumerate() {
+        kept.check(&name, &text);
+        let start = 0xc0de_0000_u64 + u64::try_from(index).expect("an index");
+        let mut rng = Rng(start);
+        for (how, mutated) in mutations(&text, &mut rng, 24) {
+            kept.check(&format!("{name} (seed {start:#x}), {how}"), &mutated);
+        }
+        let spots = boundaries(&text);
+        for (at_index, at) in spots.iter().enumerate().take(32) {
+            for comment in COMMENTS {
+                kept.check(
+                    &format!("{name}, {comment:?} at byte {at} ({at_index})"),
+                    &with_comment(&text, *at, comment),
+                );
+            }
+        }
+    }
+    println!("comments kept over {} canonical cases", kept.cases);
+    assert!(kept.cases > 10_000, "{}", kept.cases);
+    assert!(
+        kept.lost.is_empty() && kept.unstable.is_empty(),
+        "{} of {} cases lost a comment, {} were not stable:\nlost: {:#?}\nunstable: {:#?}",
+        kept.lost.len(),
+        kept.cases,
+        kept.unstable.len(),
+        kept.lost.iter().take(5).collect::<Vec<_>>(),
+        kept.unstable.iter().take(5).collect::<Vec<_>>()
     );
 }
