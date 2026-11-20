@@ -1,0 +1,63 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// S3's `settle`: breach-and-raze with seat 1's ring built as four wall boxes
+// that meet only corner to corner (its four corner columns open), on the
+// golden seed, in one eight-minute segment.
+//
+//   seat 0  seals scenarios/s2/breach-and-raze.playbook.jsonc: an Attack
+//           beacon by its core with `breach_allowed`, launching three raiders
+//           at the column of seat 1's walled beacon;
+//   seat 1  seals scenarios/s3/breach-at-a-corner.enemy.playbook.jsonc: the
+//           walled beacon, its ring's corners open.
+//
+// A walker cannot step diagonally between two wall sides, so the open
+// corners do not open the ring: the oracle calls the target cut off. The
+// breach search reads a diagonal's sides as a walker does, so it does not
+// slip through a corner either: it names a wall column of a box, the lead
+// raider plants a charge there, the charge cuts the wall flat, and the
+// raiders walk the gap and destroy the beacon inside.
+//
+// Before lane `settle`'s second fix pass the breach search read a diagonal's
+// sides at their footing: it walked through an open corner, reached the
+// target across no wall, and the attack ended sealed with nothing planted.
+// This scenario pins the rule in a played chain that every operating system
+// compares.
+{
+  "format": "pharmakos.scenario.v1",
+  "name": "breach-at-a-corner",
+  "summary": "Seat 0's raiders breach a ring of wall boxes joined only at their corners, and destroy the beacon inside.",
+
+  "map": {
+    "seed": "0x00000000ca5caded",
+    "generator": "skeleton"
+  },
+
+  "rules": "rules/rules.v1.json",
+  "round_limit": 1,
+
+  "seats": [
+    { "seat": 0, "kind": "playbook", "playbook": "scenarios/s2/breach-and-raze.playbook.jsonc" },
+    { "seat": 1, "kind": "playbook", "playbook": "scenarios/s3/breach-at-a-corner.enemy.playbook.jsonc" }
+  ],
+
+  "segments": [
+    { "index": 0, "length_ms": 480000, "note": "The ring, the raid, the breach and the raze." }
+  ],
+
+  "assertions": [
+    { "assert": "event_fired", "event": "attack_launched", "seat": 0, "by_tick": 800,
+      "note": "Seat 0's three raiders launch at the walled beacon." },
+    { "assert": "event_fired", "event": "charge_planted", "seat": 0, "by_tick": 5826,
+      "note": "The ring seals their way through its open corners too: the lead raider plants a charge at a box's wall. Before lane `settle`'s second fix pass nothing was planted, and the attack ended sealed at tick 3120." },
+    { "assert": "event_fired", "event": "charge_detonated", "seat": 0, "by_tick": 5926,
+      "note": "The charge cuts the wall flat to its footing." },
+    { "assert": "event_fired", "event": "beacon_destroyed", "seat": 1, "by_tick": 6300,
+      "note": "Through the gap, the raiders destroy the beacon inside the ring." },
+    { "assert": "event_fired", "event": "attack_ended", "seat": 0, "by_tick": 6450,
+      "note": "With nothing left in reach, the attack is over." },
+    { "assert": "hash_chain_equals",
+      "golden": "tests/golden/scenarios/breach-at-a-corner/expected.hashes.txt",
+      "note": "Byte-identical on Windows, Linux and macOS; pins the breach at a box's wall, the cut and the raze. Re-blessed with `cargo xtask golden --bless`, and never to turn a red build green." }
+  ]
+}

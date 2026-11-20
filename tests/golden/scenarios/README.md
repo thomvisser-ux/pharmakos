@@ -353,6 +353,18 @@ as they do here, and `breach-and-raze` differs from this change from line 3233
 on (the attack read). Called just before `attack::update`, each chain is this
 change's but for its re-arm line (5926, 5732).
 
+**S3's `settle` added `breach-at-a-corner`** (`scenarios/s3/`):
+`breach-and-raze` with seat 1's ring built as four wall boxes that meet only
+corner to corner, its four corner columns open. A walker cannot step
+diagonally between two wall sides, so the ring still seals the way, and the
+breach search reads a diagonal's sides the same way, so it does not slip
+through a corner either. It names a box's wall; the lead raider plants a
+charge at tick 5826, the charge fires at 5926, the raiders destroy the beacon
+at 6300, and the attack ends at 6450. Before the lane's second fix pass the
+breach search read a diagonal's sides at their footing, walked through an open
+corner, reached the target across no wall, and the attack ended sealed at
+tick 3120 with nothing planted. The chain is that rule, played.
+
 `expand-east-segment` carries one more thing worth knowing before its chain is
 read. The playbook it seals **does not qualify against either seat's own frozen
 snapshot** on this map: `E0401` for `b_01`, which since S1 names each seat's own
