@@ -1116,6 +1116,18 @@ the template wizard and the map route with the size meter. **P6b**, after `ed3b`
 both timings again with the rule list. Decision 15 says which is the record. Section 5.3 gives the
 protocol.
 
+[Amended by items 160 (4), 161 and 163. P6a was driven by the main AI session with the owner
+watching, so item 160 (4) records the main session's recommendation, which the owner can veto, that
+P6b decides decisions 15 and 17. P6b's run sheet (`docs/demo/p6-run-sheet.md`, "P6b's additions")
+changed three things against section 5.3: the Probation preset's seed 20 (`0x0000000000000014`),
+with untimed Lulls, in place of the golden seed; card A2, card A's ten kinds of step in another
+order, played on that map; and card B, timed once after both timings, one mandate row, one guard and
+one chip edit, which does not decide the gate. P6b was then run on 2026-11-19 and was driven by the
+main AI session too, at the owner's word "you run this", so no person's time was taken and P6b did
+not decide. Item 163 records the run: the three times (14.5 s, 116.1 s and 94.7 s by the audit log's
+ticks, each inside its limit), the hand checks and nine client findings. The two timing clauses and
+the typing clause stay open for a person and are read at the owner's hand-played S3 stage demo.]
+
 ---
 
 ## 4. The schedule
@@ -1170,6 +1182,13 @@ folded in by item 162 (5)), `vfyq2` (items 160 (6), 161 (7) (c) and 162 (1): the
 wait, the canonical text cost of QUICK and the `E0209` Fix), `vcap` (item 160 (6): the per-code
 report cap) and `deps3` (items 161 (2) and (12): the toolchain and action bumps). The totals below
 predate them.]
+
+[Amended by item 163. A sixth lane the sections of section 3 do not cover, `fixp`: a short client
+lane, in `crates/client-gdext` and `godot/`, that takes the nine findings of P6b's run (the number
+field's selection and Enter, the menu's reopening, the stale Ready line, the third-level menu's place,
+the popup's background, the build target's mark, the two structures' look, and the dormant
+checkbox's second click). It runs after `vfyq2`'s draft and before S3's demo, and is the main
+session's call; the owner can veto it.]
 
 **Totals.** 19 tasks, **about 74.5 ad** (65–84), including about 1.5 ad of re-blesses after merges
 of `main`; 73.5 without decision 3's Survey post. **Two critical paths of about 31 working days:**
@@ -1435,6 +1454,10 @@ so the spec's first lever is spent; the second, **simplify**, is taken on the ow
 17): chips that open on the value a template suggests, map picks in place of typed coordinates,
 fewer pages in the guided pick. A miss at P6a moves those into `ed3b`'s brief before it starts; a
 miss at P6b goes into `prob` or a short added lane, after cut 1.
+
+[Amended by item 163. Which sitting decided: neither. P6a and P6b were both driven by the main AI
+session, so decision 15's record and decision 17's trigger have no person's input. The hand-played
+S3 stage demo gives it, and a miss there is read by this paragraph.]
 
 ---
 
