@@ -361,13 +361,6 @@ const KEPT_FALLBACKS: &[(&str, &str, usize, &str)] = &[
     ),
     (
         "jsonc.rs",
-        ".map_or(bytes.len(), |offset| body.saturating_add(offset));",
-        1,
-        "a line comment with no line feed after it runs to the end of the text, the rule \
-         `comment_end` states (S3's `vfyq2`: one comment scanner)",
-    ),
-    (
-        "jsonc.rs",
         "char::from_digit(nibble, 16).unwrap_or('0')",
         1,
         "as canonical.rs': a masked nibble is a hex digit",

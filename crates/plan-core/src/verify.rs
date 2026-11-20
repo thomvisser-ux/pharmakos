@@ -41,7 +41,7 @@
 use pharmakos_proto::gp::api::v1::VerifyReport;
 use pharmakos_proto::gp::api::v1::verify_plan::Depth;
 use pharmakos_proto::gp::v1::Playbook;
-use pharmakos_proto::json::{self, grammar};
+use pharmakos_proto::json::{self, grammar, work};
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_verifier::{Input, Scope};
 
@@ -181,11 +181,14 @@ fn blank_comments(text: &str) -> String {
             other => out.push(other),
         }
     }
+    work::add(text.len());
     out
 }
 
 #[cfg(test)]
 mod differential;
+#[cfg(test)]
+mod linearity;
 
 #[cfg(test)]
 mod tests {

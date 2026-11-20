@@ -75,9 +75,12 @@ pub const fn is_whitespace(byte: u8) -> bool {
 #[must_use]
 pub fn whitespace_end(bytes: &[u8], at: usize) -> usize {
     let mut pos = at;
+    let mut examined: usize = 1;
     while bytes.get(pos).copied().is_some_and(is_whitespace) {
         pos = pos.saturating_add(1);
+        examined = examined.saturating_add(1);
     }
+    super::work::add(examined);
     pos
 }
 
@@ -123,6 +126,10 @@ impl From<Refusal> for Error {
 ///
 /// A [`Refusal`] at the first byte that is not `word`'s.
 pub fn literal(bytes: &[u8], at: usize, word: &'static str) -> Result<usize, Refusal> {
+    metered(at, literal_unmetered(bytes, at, word))
+}
+
+fn literal_unmetered(bytes: &[u8], at: usize, word: &'static str) -> Result<usize, Refusal> {
     let mut pos = at;
     for expected in word.bytes() {
         if bytes.get(pos) != Some(&expected) {
@@ -143,6 +150,10 @@ pub fn literal(bytes: &[u8], at: usize, word: &'static str) -> Result<usize, Ref
 ///
 /// A [`Refusal`] at the byte that breaks the grammar.
 pub fn number(bytes: &[u8], at: usize) -> Result<usize, Refusal> {
+    metered(at, number_unmetered(bytes, at))
+}
+
+fn number_unmetered(bytes: &[u8], at: usize) -> Result<usize, Refusal> {
     let mut pos = at;
     let digit = |pos: usize| bytes.get(pos).is_some_and(u8::is_ascii_digit);
     let digits = |mut pos: usize| {
@@ -207,6 +218,20 @@ pub enum Body {
 /// control character, an escape it does not know, a `\u` that is not four
 /// hex digits, a lone surrogate, or the text ending inside the string.
 pub fn string(
+    text: &str,
+    at: usize,
+    unescaped: Option<&mut String>,
+) -> Result<(usize, Body), Refusal> {
+    let answer = string_unmetered(text, at, unescaped);
+    let end = match &answer {
+        Ok((end, _)) => *end,
+        Err(refusal) => refusal.at,
+    };
+    super::work::add(end.saturating_sub(at).saturating_add(1));
+    answer
+}
+
+fn string_unmetered(
     text: &str,
     at: usize,
     mut unescaped: Option<&mut String>,
@@ -725,4 +750,16 @@ pub(crate) fn parse_counting<'t, B: Build<'t>>(
         .map(|document| document.value)
         .map_err(Error::from);
     (value, reader.comparisons, reader.steps)
+}
+
+/// A token's answer, its examined bytes counted on the work meter
+/// ([`super::work`]): from `at` to the byte after it, or to the byte it was
+/// refused at.
+fn metered(at: usize, answer: Result<usize, Refusal>) -> Result<usize, Refusal> {
+    let end = match &answer {
+        Ok(end) => *end,
+        Err(refusal) => refusal.at,
+    };
+    super::work::add(end.saturating_sub(at).saturating_add(1));
+    answer
 }

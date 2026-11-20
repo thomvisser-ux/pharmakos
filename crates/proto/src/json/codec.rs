@@ -235,8 +235,10 @@ pub fn write_wire_into(
         depth: 0,
         indent: 0,
     };
+    let before = out.len();
     decoder.write_message(at, bytes, place, omit, out)?;
     out.push('\n');
+    super::work::add(out.len().saturating_sub(before));
     Ok(())
 }
 

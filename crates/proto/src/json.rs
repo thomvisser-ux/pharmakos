@@ -32,6 +32,7 @@ mod path;
 #[cfg(test)]
 mod reference;
 mod value;
+pub mod work;
 
 pub use codec::{
     Encoded, json_to_encoded, json_to_wire, wire_to_json, write_wire, write_wire_into,

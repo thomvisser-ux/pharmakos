@@ -46,7 +46,7 @@
 //! playbook at all is [`crate::canonical`]'s question, and whether it is a
 //! *valid* one is the verifier's.
 
-use pharmakos_proto::json::{Json, grammar};
+use pharmakos_proto::json::{Json, grammar, work};
 
 use crate::error::{Error, push_pointer};
 
@@ -731,36 +731,53 @@ fn collect(trivia: &str, anchor: &Anchor, found: &mut Vec<Comment>) {
 ///
 /// **The one place a comment is recognised** (S3's `vfyq2`): the JSONC
 /// reader's trivia, the comments it collects and `verify::blank_comments` all
-/// ask this, so they cannot part on where a comment ends. A line comment runs
-/// to the line feed that ends it, which it leaves out, or to the end of the
-/// text. A block comment runs to the first `*/` after its `/*`; one that never
-/// closes is no comment at all, so its `/` is left to the grammar, which
-/// refuses it there, at the byte where the comment opens.
+/// ask this, so they cannot part on where a comment ends.
+///
+/// - A line comment runs to the first line terminator, which it leaves out, or
+///   to the end of the text. The terminators are a line feed and a carriage
+///   return, each alone (so a CRLF ends at its CR, and the LF is whitespace
+///   after it): a file written with CR line endings has every line comment end
+///   where its line does, rather than swallow the rest of the file.
+/// - A block comment runs to the first `*/` that starts after its `/*` (so
+///   `/*/` does not close itself). One that never closes is no comment at all:
+///   its `/` is left to the grammar, which refuses it there, at the byte where
+///   the comment opens.
+///
+/// Every byte it reads is counted on the work meter
+/// (`pharmakos_proto::json::work`).
 #[must_use]
 pub(crate) fn comment_end(bytes: &[u8], at: usize) -> Option<(usize, CommentKind)> {
     if bytes.get(at) != Some(&b'/') {
         return None;
     }
     let body = at.checked_add(2)?;
-    match bytes.get(at.checked_add(1)?) {
+    let found = match bytes.get(at.checked_add(1)?) {
         Some(b'/') => {
             let rest = bytes.get(body..)?;
-            let end = rest
-                .iter()
-                .position(|byte| *byte == b'\n')
-                .map_or(bytes.len(), |offset| body.saturating_add(offset));
+            let end = match rest.iter().position(|byte| *byte == b'\n') {
+                Some(offset) => body.saturating_add(offset),
+                // No terminator: the comment is the rest of the text.
+                None => bytes.len(),
+            };
             Some((end, CommentKind::Line))
         }
         Some(b'*') => {
             let rest = bytes.get(body..)?;
-            let close = rest.windows(2).position(|pair| pair == b"*/")?;
+            let Some(close) = rest.windows(2).position(|pair| pair == b"*/") else {
+                work::add(rest.len());
+                return None;
+            };
             Some((
                 body.saturating_add(close).saturating_add(2),
                 CommentKind::Block,
             ))
         }
         _ => None,
+    };
+    if let Some((end, _)) = found {
+        work::add(end.saturating_sub(at));
     }
+    found
 }
 
 /// The JSONC reader's trivia: whitespace and closed comments, in any order.

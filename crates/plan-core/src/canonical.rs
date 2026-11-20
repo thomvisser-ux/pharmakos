@@ -42,7 +42,7 @@
 use std::collections::BTreeMap;
 
 use pharmakos_proto::gp::v1::Playbook;
-use pharmakos_proto::json::{self, Json};
+use pharmakos_proto::json::{self, Json, work};
 
 use crate::error::{Error, push_pointer, split_pointer};
 use crate::jsonc::{Anchor, Comment, CommentKind, Document};
@@ -125,6 +125,7 @@ pub fn canonicalise(document: &Document) -> Result<Canonical, Error> {
         text.push_str(&comment.1.text);
         text.push('\n');
     }
+    work::add(text.len());
 
     Ok(Canonical {
         playbook,
@@ -392,33 +393,18 @@ impl<'c> Placed<'c> {
             Some(comments) => comments.as_slice(),
             None => &[],
         };
-        #[cfg(test)]
-        examined::count(found.len());
+        // The lookup and the comments it yields, on the work meter: the
+        // writer's cost is the comments a file has, not the comments times
+        // its nodes.
+        work::add(found.len().saturating_add(1));
         found.iter().copied()
     }
 }
 
-/// How many comments the writer has looked at, for the test that holds it to
-/// the comments a file has rather than the comments times the nodes.
-#[cfg(test)]
-mod examined {
-    use std::cell::Cell;
-
-    thread_local! {
-        static EXAMINED: Cell<u64> = const { Cell::new(0) };
-    }
-
-    pub(super) fn count(found: usize) {
-        let found = u64::try_from(found).unwrap_or(u64::MAX);
-        EXAMINED.with(|seen| seen.set(seen.get().saturating_add(found).saturating_add(1)));
-    }
-
-    pub(super) fn take() -> u64 {
-        EXAMINED.with(|seen| seen.replace(0))
-    }
-}
 #[cfg(test)]
 mod tests {
+    use pharmakos_proto::json::work;
+
     use super::{canonical_json, canonicalise_text};
 
     /// The smallest file the schema accepts, written the awkward way round:
@@ -455,9 +441,9 @@ mod tests {
         let mut examined = Vec::new();
         for steps in [200, 400] {
             let text = commented_route(steps);
-            let _ = super::examined::take();
+            let _ = work::take();
             let canonical = canonicalise_text(&text).expect("a commented route");
-            examined.push(super::examined::take());
+            examined.push(work::take());
             assert_eq!(
                 canonical.text.matches("// step ").count(),
                 steps,
@@ -468,8 +454,8 @@ mod tests {
             panic!("two sizes measured: {examined:?}");
         };
         assert!(
-            large <= small.saturating_mul(2).saturating_add(64),
-            "200 steps looked at {small} comments, 400 at {large}: more than twice"
+            large <= small.saturating_mul(2).saturating_add(small >> 4),
+            "200 steps cost {small} bytes of work, 400 cost {large}: more than twice, give or take"
         );
     }
 
