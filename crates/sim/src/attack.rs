@@ -861,11 +861,7 @@ impl Ended {
 pub struct AttackCounts {
     /// A breach search that spent [`BREACH_EXPANSIONS`] and found no way.
     pub breach_exhausted: u64,
-    /// A breach search whose way crossed no wall after the oracle called the
-    /// way sealed: the attack ends sealed. Zero on a graph settled in the
-    /// phase that edits the terrain (lane `settle`), and held there by a test.
-    pub breach_no_wall: u64,
-    /// A breach search that found no way at all, wall or none.
+    /// A breach search that found no way across a wall.
     pub breach_no_way: u64,
     /// A charge's cut the edit queue could not take.
     pub cut_refused: u64,
@@ -1663,11 +1659,6 @@ fn seal_or_breach(
         match found {
             Ok(breach) => row.breach = Some(breach),
             // Every refusal ends the attack sealed, counted under its reason.
-            // `NoWall` among them: the graph is settled in the phase that
-            // edits the terrain (lane `settle`), so the oracle that called
-            // the way sealed agrees with the columns the search walked, and a
-            // wall-free way after a "sealed" answer is two readers of one
-            // terrain disagreeing, which `tests/attack.rs` holds at zero.
             Err(refused) => {
                 world.count_breach_refused(refused);
                 end(world, row, post, Ended::Sealed);
@@ -1941,16 +1932,25 @@ pub(crate) fn raid_target(
 pub enum BreachRefused {
     /// It spent [`BREACH_EXPANSIONS`] without reaching the goal.
     Exhausted,
-    /// It reached the goal without crossing a wall: the seal is not a wall's,
-    /// and the oracle that called it sealed disagrees with the columns the
-    /// search walked. The attack ends sealed and counts it.
-    NoWall,
-    /// No way exists even through walls.
+    /// No way that crosses a wall reaches the goal.
     NoWay,
 }
 
+/// The first wall a way crosses, and where the way stands before it: what a
+/// breach is made of. The breach search carries it forward from the column
+/// that first steps onto a wall, so a way that reaches the goal holds one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct Crossing {
+    /// The wall column's top wall voxel.
+    wall: [i32; 3],
+    /// The voxel a unit stands on in the column before it.
+    plant: [i32; 3],
+    /// The wall's footing.
+    footing: i32,
+}
+
 /// The breach search's own buffers: the per-column stamps, costs and
-/// predecessors, and the heap, reserved once with the world so a search
+/// crossings, and the heap, reserved once with the world so a search
 /// allocates nothing.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct BreachScratch {
@@ -1958,7 +1958,7 @@ pub struct BreachScratch {
     stamp: Vec<u32>,
     closed: Vec<u32>,
     g: Vec<i32>,
-    came: Vec<u32>,
+    crossing: Vec<Option<Crossing>>,
     heap: crate::pathing::search::Heap,
 }
 
@@ -1972,7 +1972,7 @@ impl BreachScratch {
             stamp: vec![0; n],
             closed: vec![0; n],
             g: vec![0; n],
-            came: vec![0; n],
+            crossing: vec![None; n],
             heap: crate::pathing::search::Heap::with_capacity(BREACH_HEAP),
         }
     }
@@ -2016,7 +2016,7 @@ impl BreachScratch {
         Self::slot(node).and_then(|at| self.g.get(at).copied())
     }
 
-    fn reach(&mut self, node: Node, cost: i32, from: Node) {
+    fn reach(&mut self, node: Node, cost: i32, crossing: Option<Crossing>) {
         let Some(at) = Self::slot(node) else {
             return;
         };
@@ -2026,13 +2026,19 @@ impl BreachScratch {
         if let Some(slot) = self.g.get_mut(at) {
             *slot = cost;
         }
-        if let Some(slot) = self.came.get_mut(at) {
-            *slot = from;
+        if let Some(slot) = self.crossing.get_mut(at) {
+            *slot = crossing;
         }
     }
 
-    fn came_from(&self, node: Node) -> Option<Node> {
-        Self::slot(node).and_then(|at| self.came.get(at).copied())
+    /// The first wall the way held for `node` crosses, if it crosses one.
+    fn crossing(&self, node: Node) -> Option<Crossing> {
+        if !self.seen(node) {
+            return None;
+        }
+        Self::slot(node)
+            .and_then(|at| self.crossing.get(at).copied())
+            .flatten()
     }
 }
 
@@ -2073,6 +2079,15 @@ fn breach_column(world: &World, seat: SeatId, node: Node) -> Option<(i32, Option
 /// and costs [`BREACH_COLUMN_COST`] on top of the step onto it. Its way's
 /// first wall column is the breach, the column before it the plant point.
 ///
+/// Its steps are the surface's own ([`Surface::step_over`]): a wall-free move
+/// is a walker's move, and a diagonal between two wall sides is closed to it
+/// as it is to a walker (lane `settle`). So on a way the oracle calls sealed,
+/// every way to the goal crosses a wall. The start is read where the lead
+/// stands, at its own top: a lead on an enemy wall (a one-high stub a walker
+/// climbs) plants from that wall's top at the wall beyond it. The goal is
+/// taken only by a way that crosses a wall, so a breach always names one; the
+/// attack asks only of a way the oracle calls sealed.
+///
 /// Bounded by [`BREACH_EXPANSIONS`] closed columns, and ordered `(f, h,
 /// node)` as every search here is (item 62), so the answer is a function of
 /// the world.
@@ -2080,10 +2095,6 @@ fn breach_column(world: &World, seat: SeatId, node: Node) -> Option<(i32, Option
 /// # Errors
 ///
 /// [`BreachRefused`], naming why there is no breach.
-#[allow(
-    clippy::too_many_lines,
-    reason = "one A* with its eight-neighbour legality written out beside the breach mode's two differences, then the walk back; split, the scratch and the column reads would be handed between functions as long parameter lists"
-)]
 pub fn breach_search(
     world: &World,
     scratch: &mut BreachScratch,
@@ -2093,9 +2104,15 @@ pub fn breach_search(
 ) -> Result<Breach, BreachRefused> {
     use crate::pathing::search::Item;
     let surface = world.surface();
-    let costs = surface.costs();
+    let height = |node: Node| {
+        if node == start {
+            surface.standing(node)
+        } else {
+            breach_column(world, seat, node).map(|(z, _)| z)
+        }
+    };
     scratch.begin();
-    scratch.reach(start, 0, start);
+    scratch.reach(start, 0, None);
     let h0 = surface.heuristic(start, goal);
     scratch.heap.push(Item {
         f: h0,
@@ -2103,75 +2120,58 @@ pub fn breach_search(
         n: start,
     });
     let mut expansions: u32 = 0;
-    let mut found = false;
+    let mut reached: Option<Crossing> = None;
     while let Some(item) = scratch.heap.pop() {
         if scratch.is_closed(item.n) {
             continue;
         }
         scratch.close(item.n);
         if item.n == goal {
-            found = true;
             break;
         }
         expansions = expansions.saturating_add(1);
         if expansions > BREACH_EXPANSIONS {
             return Err(BreachRefused::Exhausted);
         }
-        let Some((from_top, _)) = breach_column(world, seat, item.n) else {
+        // E7: cannot miss: a popped column was reached when it was pushed, at a height it stands at
+        let (Some(here), Some(stand)) = (scratch.cost(item.n), height(item.n)) else {
             continue;
         };
-        // E7: cannot miss: a popped column was reached when it was pushed
-        let Some(here) = scratch.cost(item.n) else {
-            continue;
-        };
+        let crossed = scratch.crossing(item.n);
         let (x, y) = surface.coord_of(item.n);
-        for (dx, dy) in NEIGHBOURS {
-            let Some(next) = x
-                .checked_add(dx)
-                .zip(y.checked_add(dy))
-                .and_then(|(nx, ny)| surface.node_of(nx, ny))
-            else {
+        for k in 0..NEIGHBOURS.len() {
+            let Some((next, step)) = surface.step_over(item.n, k, height) else {
                 continue;
             };
             if scratch.is_closed(next) {
                 continue;
             }
-            let Some((to_top, wall)) = breach_column(world, seat, next) else {
-                continue;
-            };
-            if to_top.saturating_sub(from_top).abs() > 1 {
-                continue;
-            }
-            if dx != 0 && dy != 0 {
-                let sides = [
-                    surface.node_of(x.saturating_add(dx), y),
-                    surface.node_of(x, y.saturating_add(dy)),
-                ];
-                let clear = sides.iter().all(|side| {
-                    side.and_then(|side| breach_column(world, seat, side))
-                        .is_some_and(|(top, _)| {
-                            top.saturating_sub(from_top).abs() <= 1
-                                && top.saturating_sub(to_top).abs() <= 1
-                        })
-                });
-                if !clear {
-                    continue;
-                }
-            }
-            let step = if dx != 0 && dy != 0 {
-                costs.diagonal()
+            let footing = if next == start {
+                None
             } else {
-                costs.cardinal()
+                breach_column(world, seat, next).and_then(|(_, footing)| footing)
             };
-            let climb = if to_top == from_top { 0 } else { costs.climb() };
-            let demolish = if wall.is_some() {
+            let crossing = crossed.or_else(|| {
+                footing.map(|footing| {
+                    let (nx, ny) = surface.coord_of(next);
+                    Crossing {
+                        wall: [nx, ny, surface.top(next)],
+                        plant: [x, y, stand],
+                        footing,
+                    }
+                })
+            });
+            // The goal is taken only by a way that crosses a wall.
+            if next == goal && crossing.is_none() {
+                continue;
+            }
+            let demolish = if footing.is_some() {
                 BREACH_COLUMN_COST
             } else {
                 0
             };
             let Some(cost) = here
                 .checked_add(step)
-                .and_then(|cost| cost.checked_add(climb))
                 .and_then(|cost| cost.checked_add(demolish))
             else {
                 continue;
@@ -2182,7 +2182,10 @@ pub fn breach_search(
             if scratch.heap.len() >= BREACH_HEAP {
                 return Err(BreachRefused::Exhausted);
             }
-            scratch.reach(next, cost, item.n);
+            scratch.reach(next, cost, crossing);
+            if next == goal {
+                reached = crossing;
+            }
             let h = surface.heuristic(next, goal);
             scratch.heap.push(Item {
                 f: cost.saturating_add(h),
@@ -2191,35 +2194,14 @@ pub fn breach_search(
             });
         }
     }
-    if !found {
-        return Err(BreachRefused::NoWay);
-    }
-    // Walk the way back; the last wall column met is the one nearest the
-    // start, which is the breach.
-    let mut breach: Option<Breach> = None;
-    let mut current = goal;
-    let mut guard: u32 = 0;
-    while current != start && guard <= BREACH_EXPANSIONS {
-        guard = guard.saturating_add(1);
-        let Some(previous) = scratch.came_from(current) else {
-            break;
-        };
-        if let Some((_, Some(footing))) = breach_column(world, seat, current)
-            && let Some((before, None)) = breach_column(world, seat, previous)
-        {
-            let (x, y) = surface.coord_of(current);
-            let (px, py) = surface.coord_of(previous);
-            breach = Some(Breach {
-                wall: [x, y, surface.top(current)],
-                plant: [px, py, before],
-                footing,
-                charge: ChargeState::Wanted,
-                carrier: NO_CARRIER,
-            });
-        }
-        current = previous;
-    }
-    breach.ok_or(BreachRefused::NoWall)
+    let crossing = reached.ok_or(BreachRefused::NoWay)?;
+    Ok(Breach {
+        wall: crossing.wall,
+        plant: crossing.plant,
+        footing: crossing.footing,
+        charge: ChargeState::Wanted,
+        carrier: NO_CARRIER,
+    })
 }
 
 /// The Attack table as a snapshot carries it (S2's `atk`, snapshot version

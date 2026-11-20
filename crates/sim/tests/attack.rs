@@ -634,10 +634,11 @@ fn a_breach_sends_a_charge_to_the_wall_and_resumes() {
         0,
         "a breach cut drops nothing"
     );
+    let counts = runner.world().attack_counts();
     assert_eq!(
-        runner.world().attack_counts().breach_no_wall,
-        0,
-        "a breach search found a wall-free way the settled oracle called sealed"
+        (counts.breach_exhausted, counts.breach_no_way),
+        (0, 0),
+        "no breach search is refused"
     );
 }
 
@@ -978,11 +979,11 @@ fn an_attack_in_a_breach_survives_save_and_restore() {
     }
     assert_eq!(
         (
-            runner.world().attack_counts().breach_no_wall,
-            copy.world().attack_counts().breach_no_wall
+            runner.world().attack_counts().breach_no_way,
+            copy.world().attack_counts().breach_no_way
         ),
         (0, 0),
-        "a breach search found a wall-free way the settled oracle called sealed"
+        "no breach search is refused, before the save or after it"
     );
 }
 

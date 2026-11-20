@@ -1569,9 +1569,6 @@ impl World {
             crate::attack::BreachRefused::Exhausted => {
                 counts.breach_exhausted = counts.breach_exhausted.saturating_add(1);
             }
-            crate::attack::BreachRefused::NoWall => {
-                counts.breach_no_wall = counts.breach_no_wall.saturating_add(1);
-            }
             crate::attack::BreachRefused::NoWay => {
                 counts.breach_no_way = counts.breach_no_way.saturating_add(1);
             }

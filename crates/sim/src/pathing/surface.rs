@@ -316,26 +316,43 @@ impl Surface {
     ///   the connectivity oracle and the repair equivalence both rely on.
     #[must_use]
     pub fn neighbour(&self, node: Node, k: usize) -> Option<(Node, i32)> {
+        self.step_over(node, k, |column| self.standing(column))
+    }
+
+    /// The height a walker stands at on `node`: its top, when it is
+    /// walkable.
+    #[must_use]
+    pub fn standing(&self, node: Node) -> Option<i32> {
+        self.walkable(node).then(|| self.top(node))
+    }
+
+    /// The step rule of [`Surface::neighbour`], with the two endpoints read
+    /// at the heights `height` gives (`None`: no column to stand on) and a
+    /// diagonal's two sides read where a walker stands on them
+    /// ([`Surface::standing`]). [`Surface::neighbour`] is this rule with
+    /// `height` the same reading; the breach search's is this rule with a
+    /// breachable wall's column read at its footing (lane `settle`), so its
+    /// wall-free moves are the walkers' moves, a side's wall blocks its
+    /// diagonal for both, and a way the oracle calls sealed crosses a wall.
+    #[must_use]
+    pub fn step_over(
+        &self,
+        node: Node,
+        k: usize,
+        height: impl Fn(Node) -> Option<i32>,
+    ) -> Option<(Node, i32)> {
         let (dx, dy) = NEIGHBOURS.get(k).copied()?;
         let (x, y) = self.coord_of(node);
         let other = self.node_of(x.checked_add(dx)?, y.checked_add(dy)?)?;
-        if !self.walkable(node) || !self.walkable(other) {
-            return None;
-        }
-        let from = self.top(node);
-        let to = self.top(other);
+        let from = height(node)?;
+        let to = height(other)?;
         if to.saturating_sub(from).abs() > 1 {
             return None;
         }
         let climb = if to == from { 0 } else { self.costs.climb() };
         if dx != 0 && dy != 0 {
-            let side_x = self.node_of(x.checked_add(dx)?, y)?;
-            let side_y = self.node_of(x, y.checked_add(dy)?)?;
-            if !self.walkable(side_x) || !self.walkable(side_y) {
-                return None;
-            }
-            let tx = self.top(side_x);
-            let ty = self.top(side_y);
+            let tx = self.standing(self.node_of(x.checked_add(dx)?, y)?)?;
+            let ty = self.standing(self.node_of(x, y.checked_add(dy)?)?)?;
             if tx.saturating_sub(from).abs() > 1
                 || ty.saturating_sub(from).abs() > 1
                 || tx.saturating_sub(to).abs() > 1
