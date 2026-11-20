@@ -130,13 +130,28 @@ fn sources() -> Vec<PathBuf> {
         for path in here {
             if path.is_dir() {
                 stack.push(path);
-            } else if path.extension().is_some_and(|extension| extension == "rs") {
+            } else if path.extension().is_some_and(|extension| extension == "rs")
+                && !is_test_only(&path)
+            {
                 found.push(path);
             }
         }
     }
     found.sort();
     found
+}
+
+/// Whether a file under `src/` is a unit-test module and nothing else: it
+/// opens with `#![cfg(test)]` (S3's `vfyq2`, `src/verify/differential.rs`), so
+/// none of it is compiled into the game, as a `#[cfg(test)]` module inside a
+/// file is not.
+fn is_test_only(path: &std::path::Path) -> bool {
+    std::fs::read_to_string(path).is_ok_and(|text| {
+        text.lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty() && !line.starts_with("//"))
+            == Some("#![cfg(test)]")
+    })
 }
 
 /// The file's shipped code: comment-only lines removed, so prose about a

@@ -40,11 +40,11 @@
 
 use pharmakos_proto::gp::api::v1::VerifyReport;
 use pharmakos_proto::gp::api::v1::verify_plan::Depth;
-use pharmakos_proto::json::grammar;
+use pharmakos_proto::gp::v1::Playbook;
+use pharmakos_proto::json::{self, grammar};
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_verifier::{Input, Scope};
 
-use crate::canonical::canonicalise_text;
 use crate::error::Error;
 use crate::jsonc::comment_end;
 
@@ -76,20 +76,55 @@ pub fn verify_jsonc(
         let input = Input::too_long(snapshot, scope, rules).map_err(Error::from)?;
         return Ok(pharmakos_verifier::verify(&input, depth));
     }
-    let canonical = canonicalise_text(playbook_jsonc).map(|canonical| canonical.json);
-    let blanked: String;
-    let bytes: &[u8] = match canonical.as_ref() {
-        Ok(json) => json.as_bytes(),
-        // Any file with no canonical form, syntax error or schema refusal
-        // alike: see the module doc for why the comment-invariance promise is
-        // conditional on this branch not being taken.
-        Err(_no_canonical_form) => {
-            blanked = blank_comments(playbook_jsonc);
-            blanked.as_bytes()
-        }
+    let handed = hand_over(playbook_jsonc);
+    let bytes = match &handed {
+        HandedOver::Canonical(text) | HandedOver::Blanked(text) => text.as_bytes(),
     };
     let input = Input::new(bytes, snapshot, scope, rules).map_err(Error::from)?;
     Ok(pharmakos_verifier::verify(&input, depth))
+}
+
+/// The bytes [`verify_jsonc`] hands the verifier, and which they are.
+#[derive(Clone, PartialEq, Eq, Debug)]
+enum HandedOver {
+    /// The file's canonical JSON, comments discarded.
+    Canonical(String),
+    /// The file as written with its comments blanked ([`blank_comments`]): it
+    /// has no canonical form. Any such file, syntax error or schema refusal
+    /// alike: see the module doc for why the comment-invariance promise is
+    /// conditional on this arm.
+    Blanked(String),
+}
+
+/// The bytes the verifier is handed for a player's text (S3's `vfyq2`): the
+/// comments blanked ([`blank_comments`]), the blanked text decoded through the
+/// codec ([`json::decode_encoded`], which reads it in one pass when it can),
+/// and the canonical form written from the message; or the blanked text when
+/// it has no canonical form.
+///
+/// **It answers what [`crate::canonical::canonicalise_text`]'s `json` answers**, and nothing is
+/// sent another way. The JSONC reader and the codec's reader are one grammar
+/// (`pharmakos_proto::json::grammar`), the one reading its comments as trivia
+/// and the other reading their blanks as whitespace, and both recognise a
+/// comment by one scanner ([`crate::jsonc`]'s `comment_end`). So a text one
+/// accepts the other accepts, as the same tree, and a text one refuses the
+/// other refuses at the same byte in the same words.
+/// The `differential` tests (`the_readers_agree_*`) hold the two
+/// to the same bytes over every committed file, their mutations, the edge
+/// cases and arbitrary bytes, with no exception.
+fn hand_over(text: &str) -> HandedOver {
+    let blanked = blank_comments(text);
+    match lean_canonical(&blanked) {
+        Ok(canonical) => HandedOver::Canonical(canonical),
+        Err(_no_canonical_form) => HandedOver::Blanked(blanked),
+    }
+}
+
+/// The canonical JSON of a JSON text with no comments: decoded, then written
+/// from the message, as [`crate::canonical::canonicalise_text`] writes its `json`.
+fn lean_canonical(json_text: &str) -> Result<String, json::Error> {
+    let decoded = json::decode_encoded::<Playbook>(json_text)?;
+    json::encode(decoded.message())
 }
 
 /// The file with every closed `//` and `/* */` comment blanked to spaces,
@@ -146,6 +181,9 @@ fn blank_comments(text: &str) -> String {
     }
     out
 }
+
+#[cfg(test)]
+mod differential;
 
 #[cfg(test)]
 mod tests {
