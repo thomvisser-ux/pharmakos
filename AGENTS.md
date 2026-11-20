@@ -495,7 +495,13 @@ to full quality once and changed only with the owner's explicit approval.
 - Lint configuration: `clippy.toml`, workspace `[lints]` tables, `deny.toml`, `rustfmt.toml` *if one
   is ever added* (there is none today — formatting is rustfmt's defaults for edition 2024, which is
   also what `scripts/pre-commit.sh` runs), and the `[profile.*]` blocks that keep
-  `overflow-checks = true`
+  `overflow-checks = true` (`[profile.xtask]` among them, which the `xtask` and `ci` aliases build
+  xtask in)
+- The repository's cargo config, `.cargo/config.toml`: the `xtask` and `ci` aliases (each carries
+  `--profile xtask`), the `[build]` wrapper keys set empty, and the per-host-triple `linker`
+  tables. The tables and the wrapper keys are held equal to xtask's own (`DEFAULT_LINKERS` and
+  `PINNED_TOOLS` in `xtask/src/resolved.rs`) by tests that read the file strictly, and
+  `rust-toolchain.toml` is read the same way (decisions-log item 165)
 - Determinism code: the state hash, the plan fingerprint (`pharmakos_sim::hash`, which a save
   stamps beside every seal; decisions-log item 136), the RNG stream enum, the fixed-point types,
   the snapshot and replay formats, the tick loop, the `research` feature and the `fork`
@@ -751,14 +757,37 @@ merge train's local check.
    features and once with `--features research`. Never `--all-features` (it would enable `research`
    everywhere and hide the ban). Determinism lints: float arithmetic, `as` conversions, disallowed
    types (`HashMap`, `HashSet`, `Instant`, `SystemTime`), and the walled-module allowance audit.
+   Clippy's calls carry the host's pinned linker, as every checked build does (item 5), so the
+   units the two share are not rebuilt between them.
 3. **Dependency policy** — the research-feature ban (§3 rule 1) by walking `cargo tree -e features`;
    the no-dry-runs ban (`plan-core` and `verifier` never enable `research` and never reach the sim's
    stepping API); the banned-crate list; `cargo deny` for licences and advisories.
-4. **Profiles** — `overflow-checks = true` in every profile, release included.
+4. **Profiles** — `overflow-checks = true` in `[profile.release]` and `[profile.dev]`, and switched
+   off in no profile of `Cargo.toml` or `.cargo/config.toml` (a custom profile inherits one of the
+   two, which cargo enforces); a `[profile.*]` line the scan cannot read fails; and every
+   `[profile.dev.package.<name>]` table must name a package cargo resolves, with only the godot
+   family at opt-level 0 (decisions-log item 165).
 5. **Tests** — `cargo test --workspace` without `research`, and `pharmakos-sim`'s own tests with it
-   (`cargo test --package pharmakos-sim --features pharmakos-sim/research`): the sim is the one crate
+   (`cargo test --package pharmakos-sim --features pharmakos-sim/research`), each run through the
+   checked call: xtask hands cargo the command and reads the profile cargo resolved for every unit
+   back from cargo's own report, which the test, `determinism` and `package` builds all take. Every
+   test executable and every doctest is started through xtask's own runner (`xtask/src/runner.rs`),
+   which records each start; a step fails when a test target the build reported did not run, or
+   ran from a file the build did not report, and a doctest run is one process per doctest. The
+   linker is pinned per host triple and the rustc wrappers are off, on xtask's command line and in
+   `.cargo/config.toml`, so inside this repository a user-level linker or wrapper setting does not
+   apply; `cargo xtask` runs on the three CI host triples and refuses another, naming the row to
+   add. Every command checks at the door that the pinned `rustc` and `$CARGO` report
+   `rust-toolchain.toml`'s release, so `cargo +other xtask` is refused; a target folder whose path
+   holds whitespace is refused when a plan that runs tests starts. `cargo xtask checked-test
+   --package <name> --test <target> [--ignored] [--nocapture]` runs one test target through the same
+   call (the nightly fuzz job's), and `cargo xtask determinism-run` and `cargo xtask build-gamectl
+   [--release]` are the nightly and watch jobs' checked builds; none is a step (decisions-log item
+   165). The sim is the one crate
    whose code the feature changes, and clippy's research pass (item 2) still compiles every
-   non-walled crate against a research sim (decisions-log items 113 (9) and 115 (5)). An unscoped
+   non-walled crate against a research sim (decisions-log items 113 (9) and 115 (5)). The suite builds
+   the sim and the third-party crates it runs at opt-level 2, checks on, except the allocation test,
+   which runs as an invocation of its own with the sim at opt-level 0 (decisions-log item 165). An unscoped
    run first empties `<target>/golden/`, so every `actual.*` the `golden` step reads was written by
    this run; a `--package` run empties nothing (decisions-log item 131). A check run by hand, such
    as `crates/gamectl/tests/balance.rs`'s 80-match balance report, is an `#[ignore]`d test: never a

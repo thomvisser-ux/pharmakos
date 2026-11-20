@@ -103,6 +103,9 @@ cargo xtask ci --shard 2/3   # one of a CI leg's three shards (AGENTS.md §9); n
 cargo xtask ci --quick    # fmt, clippy, unit tests — the inner loop
 cargo xtask ci --fix      # rustfmt plus machine-applicable clippy fixes
 cargo xtask package       # the unsigned zip for this platform (T21); --bless its manifest
+cargo xtask build-gamectl [--release]   # the checked gamectl build the watch run and nightly use
+cargo xtask determinism-run --seed <0x...> --ticks <n> --out <file>   # nightly G4's match
+cargo xtask checked-test --package <name> --test <target> [--ignored] [--nocapture]   # one test target
 git config core.hooksPath scripts/githooks   # once per clone: the versioned hooks (item 132)
 git commit -s             # DCO sign-off is mandatory on every commit
 git worktree add ../pharmakos-<task> -b feat/<crate>-<task>
@@ -128,6 +131,19 @@ table; `perf-alarms [mesher|p1|g3|allocations]` never fails on a measurement (an
 missing verdict, and `scripts/merge-train.sh` stops on it, and `package` runs alone (AGENTS.md §9). `cargo xtask placeholders` lists the register and never
 fails; its `--check` is one of the sixteen steps, `placeholders`, run after `reuse`, and fails on any
 marker off the register's grammar (decisions-log item 137).
+
+Three more commands sit outside the step table, each a checked build the nightly and watch jobs
+make: `cargo xtask determinism-run --seed <0x...> --ticks <n> --out <file>`, `cargo xtask
+build-gamectl [--release]` and `cargo xtask checked-test --package <name> --test <target>
+[--ignored] [--nocapture]` (decisions-log item 165). The `cargo xtask` and `cargo ci` aliases
+build xtask in its own profile, so the running xtask lives in `target/xtask/` and the `test`
+step's build of xtask never rewrites it. Every command checks at the door that the pinned `rustc`
+and `$CARGO` report `rust-toolchain.toml`'s release: `cargo +other xtask` is refused before any
+step. A `CARGO_TARGET_DIR` whose path holds whitespace is refused when a plan that runs tests
+starts. xtask runs tests through its own runner and pins the linker per host triple (the
+repository's `.cargo/config.toml` holds the same table), so inside this repository a user-level
+linker or wrapper setting does not apply, and a host other than the three CI triples is refused
+with the row to add (AGENTS.md §9 item 5).
 
 ## When you finish
 
