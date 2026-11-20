@@ -46,11 +46,22 @@ thread_local! {
     /// holding a type with no destructor, so touching it from inside the
     /// global allocator neither allocates nor registers a teardown hook.
     static ALLOCATIONS: Cell<u64> = const { Cell::new(0) };
+    /// How many bytes this thread has asked for, every allocation and every
+    /// growth counted at its new size: what a quadratic rebuild of a string
+    /// shows in.
+    static BYTES: Cell<u64> = const { Cell::new(0) };
 }
 
-/// Count one allocation against the calling thread.
-fn charge() {
+/// Count one allocation of `size` bytes against the calling thread.
+fn charge(size: usize) {
     let _ = ALLOCATIONS.try_with(|count| count.set(count.get().saturating_add(1)));
+    let size = u64::try_from(size).unwrap_or(u64::MAX);
+    let _ = BYTES.try_with(|count| count.set(count.get().saturating_add(size)));
+}
+
+/// How many bytes this thread has asked for so far.
+fn bytes() -> u64 {
+    BYTES.try_with(Cell::get).unwrap_or(0)
 }
 
 /// How many times this thread has allocated so far.
@@ -76,7 +87,7 @@ struct Counting;
 )]
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        charge();
+        charge(layout.size());
         unsafe { System.alloc(layout) }
     }
 
@@ -85,12 +96,12 @@ unsafe impl GlobalAlloc for Counting {
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        charge();
+        charge(new_size);
         unsafe { System.realloc(ptr, layout, new_size) }
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        charge();
+        charge(layout.size());
         unsafe { System.alloc_zeroed(layout) }
     }
 }
@@ -251,6 +262,69 @@ fn verify_jsonc_allocates_within_its_bound_on_both_shapes_at_the_size_budget() {
         assert!(
             counted <= bound,
             "{name}: verify_jsonc made {counted} allocations, past its bound of {bound}"
+        );
+    }
+}
+
+/// A pointer of `tokens` tokens, `/ab` each.
+fn long_pointer(tokens: usize) -> String {
+    "/ab".repeat(tokens)
+}
+
+/// The bytes one call asks for, per byte of its input.
+fn bytes_per_byte(input: usize, call: impl FnOnce()) -> u64 {
+    let before = bytes();
+    call();
+    bytes()
+        .saturating_sub(before)
+        .checked_div(u64::try_from(input.max(1)).expect("a length"))
+        .expect("a length of at least one")
+}
+
+/// A pointer is read in one pass, and a pointer with more tokens than a
+/// playbook has nodes is refused (S3's `vfyq2`, fix pass 2, item A2). The
+/// security review measured `patch_plan` at 0.64 to 0.82 s and `instantiate`
+/// at 0.93 s on a 240 KB pointer: the pointer was rebuilt from its tokens at
+/// every token, so the bytes asked for grew with its square. Held in bytes
+/// asked for per input byte, at two sizes sixteen times apart.
+#[test]
+fn a_long_pointer_costs_bytes_linear_in_its_length() {
+    const BOUND: u64 = 64;
+    let document = "{\"a\":1}";
+    for tokens in [500, 8_000] {
+        let pointer = long_pointer(tokens);
+        let quoted =
+            pharmakos_proto::json::write(&pharmakos_proto::json::Json::String(pointer.clone()));
+        for patch in [
+            format!(r#"[{{"op":"test","path":{quoted},"value":1}}]"#),
+            format!(r#"[{{"op":"remove","path":{quoted}}}]"#),
+            format!(r#"[{{"op":"add","path":{quoted},"value":1}}]"#),
+            format!(r#"[{{"op":"copy","from":{quoted},"path":"/b"}}]"#),
+        ] {
+            let per = bytes_per_byte(patch.len(), || {
+                let _ = pharmakos_plan_core::patch::patch_text(document, &patch);
+            });
+            assert!(
+                per <= BOUND,
+                "{tokens} tokens: patch_text asked for {per} bytes per byte of its patch, past \
+                 {BOUND}"
+            );
+        }
+        let parameter = pharmakos_plan_core::library::Parameter {
+            name: pointer.clone(),
+            value: "1".to_owned(),
+        };
+        let per = bytes_per_byte(pointer.len(), || {
+            let _ = pharmakos_plan_core::library::instantiate(
+                document,
+                std::slice::from_ref(&parameter),
+                &[],
+            );
+        });
+        assert!(
+            per <= BOUND,
+            "{tokens} tokens: instantiate asked for {per} bytes per byte of its parameter, past \
+             {BOUND}"
         );
     }
 }
