@@ -574,18 +574,6 @@ const ENTRY_SYMBOL: &str = "gdext_rust_init";
 /// disagreed.
 const CLIENT_CHECK_SCENE: &str = "res://scenes/client_check.tscn";
 
-/// The profile `stage-client` and `screenshot` stage the client from.
-///
-/// Debug, and deliberately: the guard is real there and the inner loop fast.
-/// `[profile.release]` sets `panic = "abort"`, under which `catch_unwind`
-/// catches nothing, so the bridge's caught-panic counter would be dead. The
-/// packaged library is built with `[profile.release-client]` instead, which
-/// inherits `release` with `panic = "unwind"` (decisions-log item 102 (1),
-/// named by item 117 (4)); `cargo xtask package` builds it, and its smoke
-/// check asserts the counter at zero in the packaged build. CI's `client
-/// extension` job keeps the debug library, as this does.
-const CLIENT_PROFILE_DIR: &str = "debug";
-
 // ---------------------------------------------------------------------------
 // Step table
 // ---------------------------------------------------------------------------
@@ -804,6 +792,62 @@ fn run_cli(args: &[String]) -> Result<bool, String> {
                     }
                 };
                 perf_alarms(only);
+                return Ok(true);
+            }
+            // Not steps: builds and runs the nightly jobs and the watch check
+            // make, each through the checked call, so what they test, hash or
+            // compare comes from a checked build.
+            "determinism-run" => {
+                let mut seed: Option<&String> = None;
+                let mut ticks: Option<&String> = None;
+                let mut out: Option<&String> = None;
+                let mut rest = args.iter().skip(index + 1);
+                while let Some(flag) = rest.next() {
+                    let slot = match flag.as_str() {
+                        "--seed" => &mut seed,
+                        "--ticks" => &mut ticks,
+                        "--out" => &mut out,
+                        other => {
+                            return Err(format!(
+                                "`determinism-run` takes --seed, --ticks and --out, and was \
+                                 given `{other}`"
+                            ));
+                        }
+                    };
+                    if slot.is_some() {
+                        return Err(format!("`determinism-run` was given {flag} twice"));
+                    }
+                    *slot = Some(rest.next().ok_or_else(|| format!("{flag} needs a value"))?);
+                }
+                let (Some(seed), Some(ticks), Some(out)) = (seed, ticks, out) else {
+                    return Err("`determinism-run` needs --seed, --ticks and --out".to_owned());
+                };
+                let ctx = standalone_ctx(require_tools)?;
+                determinism_run(&ctx, seed, ticks, out)?;
+                return Ok(true);
+            }
+            "build-gamectl" => {
+                let release = match args.get(index + 1).map(String::as_str) {
+                    None => false,
+                    Some("--release") if args.get(index + 2).is_none() => true,
+                    Some(other) => {
+                        return Err(format!(
+                            "`build-gamectl` takes only `--release`, and was given `{other}`"
+                        ));
+                    }
+                };
+                let ctx = standalone_ctx(require_tools)?;
+                let owner = metadata(&ctx)?
+                    .package_with_bin(SCENARIO_BIN)
+                    .ok_or_else(|| format!("no `{SCENARIO_BIN}` binary in the workspace"))?;
+                let path = checked_gamectl(&ctx, &owner, release)?;
+                println!("   built {path}");
+                return Ok(true);
+            }
+            "checked-test" => {
+                let ctx = standalone_ctx(require_tools)?;
+                let rest: Vec<String> = args.iter().skip(index + 1).cloned().collect();
+                checked_test(&ctx, &rest)?;
                 return Ok(true);
             }
             // Not a step: G3′-real's CI alarm (S2's plan, E18; task `g3r`).
@@ -1389,9 +1433,12 @@ struct ProfileScan {
     opt_levels: BTreeMap<String, String>,
 }
 
-/// The optimisation `profile` promises, from a committed manifest's scan: its
-/// own `opt-level`, or else, for `release-checked`, which inherits `release`,
-/// the release profile's, or else cargo's default for a release profile, 3.
+/// The optimisation the hash gate's `profile` (which inherits `release`)
+/// promises, from a committed manifest's scan: the release profile's
+/// `opt-level`, or cargo's default for a release profile, 3, and never one of
+/// its own. An `opt-level` in any of `profile`'s tables (its own, or a package
+/// or build override) is refused: the gate hashes the code release ships, so
+/// it may not be built at another level.
 fn promised_opt_level(scan: &ProfileScan, profile: &str) -> Result<resolved::OptLevel, String> {
     let chain = [format!("profile.{profile}"), "profile.release".to_owned()];
     let written = chain.iter().find_map(|table| scan.opt_levels.get(table));
@@ -1912,10 +1959,16 @@ fn run_units(
             .map_err(|fault| fault.to_string())?;
     }
     let colour = colour();
-    let mut cargo = ProcessCargo { ctx };
+    let mut cargo = ProcessCargo::of(ctx);
     for invocation in runs {
         let test = resolved::TestRun::new(selection.to_vec(), invocation, ctx.locked, colour);
-        resolved::execute(&test, &graph, &mut cargo, &mut print_diagnostic)?;
+        resolved::execute(
+            &test,
+            &graph,
+            &mut cargo,
+            &mut print_diagnostic,
+            &mut print_line,
+        )?;
     }
     Ok(())
 }
@@ -1976,32 +2029,77 @@ pub(crate) fn print_diagnostic(rendered: &str) {
     eprint!("{rendered}");
 }
 
+/// Writes one line of a checked run's test output to standard output, as the
+/// test printed it.
+pub(crate) fn print_line(line: &str) {
+    println!("{line}");
+}
+
 /// The package graph [`resolved::faults`] judges by, from `cargo metadata`
 /// with its dependencies (the cached metadata has none).
 pub(crate) fn sim_graph(ctx: &Ctx) -> Result<resolved::Graph, String> {
+    graph_with(&mut ProcessCargo::of(ctx), ctx.locked)
+}
+
+/// [`sim_graph`] through `cargo`: `cargo metadata` as a checked call (the
+/// pinned tools and environment), because cargo asks rustc about the target
+/// here, and a config file's compiler or wrapper would otherwise run for it.
+pub(crate) fn graph_with(
+    cargo: &mut ProcessCargo,
+    locked: bool,
+) -> Result<resolved::Graph, String> {
     let mut args: Vec<String> = ["metadata", "--format-version", "1"]
         .map(str::to_owned)
         .to_vec();
-    if ctx.locked {
+    if locked {
         args.push("--locked".to_owned());
     }
-    // In the checked builds' environment: cargo asks rustc about the target
-    // here, and a config file's wrapper would otherwise run for that too.
-    let (success, text) =
-        resolved::Cargo::report(&mut ProcessCargo { ctx }, &args, &resolved::pinned_env(""))?;
+    let call = resolved::CargoCall::pinned(args, "");
+    let mut text = String::new();
+    let success = resolved::Cargo::report(cargo, &call.command_line(), &call.env, &mut |line| {
+        text.push_str(line);
+        text.push('\n');
+    })?;
     if !success {
-        return Err(format!("`{} {}` failed", ctx.cargo, args.join(" ")));
+        return Err(format!("`cargo {}` failed", call.command_line().join(" ")));
     }
     resolved::graph(&text).map_err(|fault| fault.to_string())
 }
 
-/// The real [`resolved::Cargo`]: `ctx`'s cargo, in the workspace root, with
+/// The real [`resolved::Cargo`]: a cargo, in the workspace root, with
 /// exactly the command line and environment it is handed.
-pub(crate) struct ProcessCargo<'a> {
-    pub(crate) ctx: &'a Ctx,
+pub(crate) struct ProcessCargo {
+    cargo: String,
+    root: PathBuf,
+    require_tools: bool,
 }
 
-impl ProcessCargo<'_> {
+impl ProcessCargo {
+    pub(crate) fn of(ctx: &Ctx) -> ProcessCargo {
+        ProcessCargo {
+            cargo: ctx.cargo.clone(),
+            root: ctx.root.clone(),
+            require_tools: ctx.require_tools,
+        }
+    }
+
+    /// For the commands that run outside `ci`, with no `Ctx`: the cargo that
+    /// started xtask (`CARGO`), or the one on `PATH` when xtask was started
+    /// some other way.
+    pub(crate) fn new(root: &Path, require_tools: bool) -> Result<ProcessCargo, String> {
+        let cargo = match env::var_os("CARGO") {
+            None => "cargo".to_owned(),
+            Some(value) => value
+                .into_string()
+                .map_err(|_| "`CARGO` holds a value that is not Unicode".to_owned())?,
+        };
+        Ok(ProcessCargo {
+            cargo,
+            root: root.to_path_buf(),
+            require_tools,
+        })
+    }
+
     /// The command line, with its environment changes before it, as printed.
     fn render(&self, line: &[String], env: &[resolved::EnvChange]) -> String {
         let mut prefix = String::new();
@@ -2017,16 +2115,11 @@ impl ProcessCargo<'_> {
                 prefix.push(' ');
             }
         }
-        format!("{prefix}{}", render_command(&self.ctx.cargo, line))
+        format!("{prefix}{}", render_command(&self.cargo, line))
     }
 
     fn command(&self, line: &[String], env: &[resolved::EnvChange]) -> Command {
-        let mut command = child_command(
-            self.ctx.require_tools,
-            &self.ctx.cargo,
-            line,
-            &self.ctx.root,
-        );
+        let mut command = child_command(self.require_tools, &self.cargo, line, &self.root);
         for (key, value) in env {
             match value {
                 Some(value) => command.env(key, value),
@@ -2035,40 +2128,94 @@ impl ProcessCargo<'_> {
         }
         command
     }
+
+    /// Hands `each` every line of `reader` as it arrives.
+    fn lines(
+        reader: impl std::io::Read,
+        each: &mut dyn FnMut(&str),
+        what: &str,
+    ) -> Result<(), String> {
+        use std::io::BufRead;
+        for line in std::io::BufReader::new(reader).lines() {
+            let line = line.map_err(|error| format!("reading {what}: {error}"))?;
+            each(&line);
+        }
+        Ok(())
+    }
 }
 
-impl resolved::Cargo for ProcessCargo<'_> {
+impl resolved::Cargo for ProcessCargo {
     fn report(
         &mut self,
         line: &[String],
         env: &[resolved::EnvChange],
-    ) -> Result<(bool, String), String> {
+        stdout: &mut dyn FnMut(&str),
+    ) -> Result<bool, String> {
         println!("   $ {}", self.render(line, env));
-        let output = self
+        // Standard error goes straight to ours; standard output is read here
+        // as it arrives, so neither pipe can fill and stall the child.
+        let mut child = self
             .command(line, env)
+            .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
-            .output()
-            .map_err(|error| format!("failed to launch `{}`: {error}", self.ctx.cargo))?;
-        let stdout = String::from_utf8(output.stdout)
-            .map_err(|error| format!("`{}` produced non-UTF-8 output: {error}", self.ctx.cargo))?;
-        Ok((output.status.success(), stdout))
+            .spawn()
+            .map_err(|error| format!("failed to launch `{}`: {error}", self.cargo))?;
+        let read = match child.stdout.take() {
+            Some(out) => ProcessCargo::lines(out, stdout, "cargo's report"),
+            None => Err("cargo's standard output was not captured".to_owned()),
+        };
+        let status = child
+            .wait()
+            .map_err(|error| format!("waiting for `{}`: {error}", self.cargo))?;
+        read?;
+        Ok(status.success())
     }
 
-    fn run(&mut self, line: &[String], env: &[resolved::EnvChange]) -> Result<(), String> {
+    fn run(
+        &mut self,
+        line: &[String],
+        env: &[resolved::EnvChange],
+        stdout: &mut dyn FnMut(&str),
+    ) -> Result<(bool, Vec<String>), String> {
         println!("   $ {}", self.render(line, env));
-        let status = self
+        // Both pipes are read as they arrive: standard output here, standard
+        // error on a thread of its own that echoes and keeps each line, so
+        // neither pipe can fill and stall the child.
+        let mut child = self
             .command(line, env)
-            .status()
-            .map_err(|error| format!("failed to launch `{}`: {error}", self.ctx.cargo))?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(format!(
-                "`{}` failed ({})",
-                self.render(line, env),
-                describe_exit(status)
-            ))
-        }
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|error| format!("failed to launch `{}`: {error}", self.cargo))?;
+        let errors = child.stderr.take().map(|stderr| {
+            std::thread::spawn(move || {
+                let mut kept: Vec<String> = Vec::new();
+                let read = ProcessCargo::lines(
+                    stderr,
+                    &mut |line| {
+                        eprintln!("{line}");
+                        kept.push(line.to_owned());
+                    },
+                    "cargo's standard error",
+                );
+                read.map(|()| kept)
+            })
+        });
+        let read = match child.stdout.take() {
+            Some(out) => ProcessCargo::lines(out, stdout, "cargo's standard output"),
+            None => Err("cargo's standard output was not captured".to_owned()),
+        };
+        let status = child
+            .wait()
+            .map_err(|error| format!("waiting for `{}`: {error}", self.cargo))?;
+        let kept = match errors {
+            Some(handle) => handle
+                .join()
+                .map_err(|_| "the thread reading cargo's standard error panicked".to_owned())??,
+            None => return Err("cargo's standard error was not captured".to_owned()),
+        };
+        read?;
+        Ok((status.success(), kept))
     }
 }
 
@@ -2094,11 +2241,9 @@ fn empty_fresh_outputs(golden: &Path) -> Result<(), String> {
 }
 
 fn step_test_research(ctx: &Ctx) -> Result<Outcome, String> {
-    let sim = ctx
-        .workspace
-        .as_ref()
-        .ok()
-        .and_then(|workspace| workspace.package_with_feature(SIM_PACKAGES, RESEARCH_FEATURE));
+    // Metadata that cannot be read is a failure of its own, never "no crate
+    // declares the feature".
+    let sim = metadata(ctx)?.package_with_feature(SIM_PACKAGES, RESEARCH_FEATURE);
     // `--locked` is added by `run_units`, after the selectors.
     let (args, feature) = match research_test_args(sim.as_deref(), &ctx.packages, false)? {
         ResearchTests::Run { args, feature } => (args, feature),
@@ -2263,10 +2408,12 @@ fn step_research_guard(ctx: &Ctx) -> Result<Outcome, String> {
                 args.push("--locked".to_owned());
             }
             let tree = capture(ctx, &ctx.cargo, &args)?;
-            let offenders: Vec<&str> = tree
-                .lines()
-                .filter(|line| line_enables_research(line))
-                .collect();
+            let mut offenders: Vec<&str> = Vec::new();
+            for line in tree.lines().filter(|line| !line.trim().is_empty()) {
+                if line_enables_research(line)? {
+                    offenders.push(line);
+                }
+            }
             if !offenders.is_empty() {
                 let how = if all_features {
                     "with --all-features"
@@ -2634,46 +2781,7 @@ fn step_determinism(ctx: &Ctx) -> Result<Outcome, String> {
             .map_err(|error| format!("removing {}: {error}", hash_path.display()))?;
     }
 
-    // The cross-OS hash gate's build, checked as it is made against the whole
-    // of what `release-checked` promises ([`resolved::Expect::release_checked`]):
-    // every workspace unit at the release profile's optimisation, as the
-    // committed manifest declares it, with overflow checks and debug
-    // assertions on, the sim's library among them, and its flags pinned to
-    // none. The binary is then run from the path the build reported, so what
-    // is checked is what runs.
-    refuse_codegen_variables()?;
-    let manifest_path = ctx.root.join("Cargo.toml");
-    let manifest = fs::read_to_string(&manifest_path)
-        .map_err(|error| format!("cannot read {}: {error}", manifest_path.display()))?;
-    let promised = promised_opt_level(&scan_profiles(&manifest), DETERMINISM_PROFILE)?;
-    let graph = sim_graph(ctx)?;
-    let colour = colour();
-    let mut args: Vec<String> = vec![
-        "build".to_owned(),
-        "--profile".to_owned(),
-        DETERMINISM_PROFILE.to_owned(),
-        "--package".to_owned(),
-        owner,
-        "--bin".to_owned(),
-        DETERMINISM_BIN.to_owned(),
-        resolved::message_format(colour).to_owned(),
-    ];
-    if ctx.locked {
-        args.push("--locked".to_owned());
-    }
-    let call = resolved::CargoCall {
-        config: Vec::new(),
-        env: resolved::pinned_env(""),
-        args,
-    };
-    let built = resolved::checked(
-        &mut ProcessCargo { ctx },
-        &call,
-        &graph,
-        resolved::Expect::release_checked(promised),
-        &mut print_diagnostic,
-    )?;
-    let binary = determinism_executable(&built)?;
+    let binary = checked_determinism_binary(ctx, &owner)?;
     run(
         ctx,
         &binary,
@@ -2726,6 +2834,73 @@ fn step_determinism(ctx: &Ctx) -> Result<Outcome, String> {
             first_difference(golden.as_deref().unwrap_or_default(), &fresh)
         )),
     }
+}
+
+/// The cross-OS hash gate's build of the `determinism` binary, made through
+/// the checked call and held to the whole of what `release-checked` promises
+/// ([`resolved::Expect::release_checked`]): `[profile.release]`'s
+/// optimisation, as the committed manifest declares it, in every workspace
+/// unit and every crate the sim runs, overflow checks and debug assertions
+/// on, the sim's library built, and its tools and flags pinned. A manifest
+/// that gives `release-checked` an `opt-level` of its own is refused: the
+/// gate hashes the code release ships. Returns the binary's path as the build
+/// reported it, so what is checked is what runs. The `determinism` step and
+/// `cargo xtask determinism-run` (G4's nightly matches) both build it here.
+fn checked_determinism_binary(ctx: &Ctx, owner: &str) -> Result<String, String> {
+    refuse_codegen_variables()?;
+    let manifest_path = ctx.root.join("Cargo.toml");
+    let manifest = fs::read_to_string(&manifest_path)
+        .map_err(|error| format!("cannot read {}: {error}", manifest_path.display()))?;
+    let promised = promised_opt_level(&scan_profiles(&manifest), DETERMINISM_PROFILE)?;
+    let graph = sim_graph(ctx)?;
+    let mut args: Vec<String> = vec![
+        "build".to_owned(),
+        "--profile".to_owned(),
+        DETERMINISM_PROFILE.to_owned(),
+        "--package".to_owned(),
+        owner.to_owned(),
+        "--bin".to_owned(),
+        DETERMINISM_BIN.to_owned(),
+        resolved::message_format(colour()).to_owned(),
+    ];
+    if ctx.locked {
+        args.push("--locked".to_owned());
+    }
+    let built = resolved::checked(
+        &mut ProcessCargo::of(ctx),
+        &resolved::CargoCall::pinned(args, ""),
+        &graph,
+        resolved::Expect::release_checked(promised),
+        &mut print_diagnostic,
+    )?;
+    determinism_executable(&built)
+}
+
+/// `cargo xtask determinism-run --seed <0x...> --ticks <n> --out <file>`:
+/// builds the `determinism` binary as the `determinism` step does
+/// ([`checked_determinism_binary`]) and plays one match with it. G4's
+/// nightly job plays its ten seeds through this, so its chains come from the
+/// checked build.
+fn determinism_run(ctx: &Ctx, seed: &str, ticks: &str, out: &str) -> Result<(), String> {
+    let workspace = metadata(ctx)?;
+    let Some(owner) = workspace.package_with_bin(DETERMINISM_BIN) else {
+        return Err(format!(
+            "no `{DETERMINISM_BIN}` binary in the workspace; `pharmakos-sim` builds it"
+        ));
+    };
+    let binary = checked_determinism_binary(ctx, &owner)?;
+    run(
+        ctx,
+        &binary,
+        &[
+            "--ticks".to_owned(),
+            ticks.to_owned(),
+            "--seed".to_owned(),
+            seed.to_owned(),
+            "--out".to_owned(),
+            out.to_owned(),
+        ],
+    )
 }
 
 /// The `determinism` binary's path, from the units its build reported: the
@@ -2889,8 +3064,11 @@ fn step_scenario(ctx: &Ctx) -> Result<Outcome, String> {
         ));
     };
 
-    let probe = cargo_run_args(ctx, &owner, &[SCENARIO_SUBCOMMAND, "--help"]);
-    if !command_succeeds(ctx, &ctx.cargo, &probe) {
+    // The runner, built through the checked call and run from the path its
+    // build reported: the chains it compares come from a checked build.
+    let gamectl = checked_gamectl(ctx, &owner, false)?;
+    let probe = [SCENARIO_SUBCOMMAND.to_owned(), "--help".to_owned()];
+    if !command_succeeds(ctx, &gamectl, &probe) {
         return Err(format!(
             "{checked}; `{SCENARIO_BIN} {SCENARIO_SUBCOMMAND} --help` did not succeed, so the \
              runner is missing or does not build, and none of them was played"
@@ -2924,8 +3102,12 @@ fn step_scenario(ctx: &Ctx) -> Result<Outcome, String> {
         // Forward slashes: the path goes on a command line that is quoted in
         // workflow files and in scenario logs on three operating systems.
         let relative = scenario_shard_key(&item.relative);
-        let args = cargo_run_args(ctx, &owner, &[SCENARIO_SUBCOMMAND, "run", &relative]);
-        run(ctx, &ctx.cargo, &args)
+        let args = [
+            SCENARIO_SUBCOMMAND.to_owned(),
+            "run".to_owned(),
+            relative.clone(),
+        ];
+        run(ctx, &gamectl, &args)
             .map_err(|error| format!("scenario `{}` failed: {error}", item.name))?;
     }
     let ran = valid
@@ -3393,28 +3575,58 @@ fn stage_library(
         ));
     }
 
+    // Built through the checked call, in the dev profile the suite builds
+    // with, and staged from the path the build reported, after a build that
+    // produced it ([`fresh_reported`]): what the client check loads is what was
+    // built and checked. The dev profile deliberately: the guard is real there
+    // and the inner loop fast. `[profile.release]` sets `panic = "abort"`,
+    // under which `catch_unwind` catches nothing, so the bridge's caught-panic
+    // counter would be dead. The packaged library is built with
+    // `[profile.release-client]` instead, which inherits `release` with
+    // `panic = "unwind"` (decisions-log item 102 (1), named by item 117 (4));
+    // `cargo xtask package` builds it, and its smoke check asserts the counter
+    // at zero in the packaged build. CI's `client extension` job keeps the
+    // debug library, as this does.
+    refuse_codegen_variables()?;
+    let graph = sim_graph(ctx)?;
     let mut args: Vec<String> = vec![
         "build".to_owned(),
         "--package".to_owned(),
         CLIENT_PACKAGE.to_owned(),
         "--lib".to_owned(),
+        resolved::message_format(colour()).to_owned(),
     ];
     if ctx.locked {
         args.push("--locked".to_owned());
     }
-    run(ctx, &ctx.cargo, &args)?;
-
     let library = client_library_name();
-    let built = workspace.target_dir.join(CLIENT_PROFILE_DIR).join(&library);
-    if !built.is_file() {
-        return Err(format!(
-            "{} was not produced. Cargo's target directory for this workspace is {}, which is \
-             what `cargo metadata` reports and what this step stages from — if the library is \
-             somewhere else, a second target directory is in play (spike G1 section 10.12)",
-            built.display(),
-            workspace.target_dir.display()
-        ));
-    }
+    let built = fresh_reported(
+        &mut ProcessCargo::of(ctx),
+        &resolved::CargoCall::pinned(args, ""),
+        &graph,
+        resolved::Expect::suite(resolved::SimRule::OptimisedIfBuilt),
+        |units| {
+            let files: Vec<PathBuf> = units
+                .iter()
+                .filter(|unit| unit.is("cdylib"))
+                .flat_map(|unit| unit.filenames.iter())
+                .map(PathBuf::from)
+                .filter(|path| {
+                    path.file_name()
+                        .is_some_and(|name| name == OsStr::new(&library))
+                })
+                .collect();
+            match files.as_slice() {
+                [one] => Ok(one.clone()),
+                [] => Err(format!(
+                    "cargo's report of the client build names no `{library}`"
+                )),
+                _ => Err(format!(
+                    "cargo's report of the client build names `{library}` more than once"
+                )),
+            }
+        },
+    )?;
 
     // The extension file is the contract between this step and Godot; read it
     // back rather than trusting that the two have stayed in step.
@@ -3573,23 +3785,196 @@ fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 }
 
 /// The `cargo run` argument list for one of the workspace's own binaries.
-fn cargo_run_args(ctx: &Ctx, package: &str, tail: &[&str]) -> Vec<String> {
-    let mut args: Vec<String> = vec![
-        "run".to_owned(),
-        "--quiet".to_owned(),
-        "--package".to_owned(),
-        package.to_owned(),
-        "--bin".to_owned(),
-        SCENARIO_BIN.to_owned(),
-    ];
+/// `gamectl`, built through the checked call (`release` for the release
+/// profile, else the dev profile the suite builds with) and returned as the
+/// build reported it, after a build that produced it ([`fresh_reported`]).
+/// The `scenario` step, `cargo xtask build-gamectl` (the watch check's and the
+/// nightly arms' runner) and nothing else build it.
+fn checked_gamectl(ctx: &Ctx, owner: &str, release: bool) -> Result<String, String> {
+    refuse_codegen_variables()?;
+    let graph = sim_graph(ctx)?;
+    let mut args: Vec<String> = vec!["build".to_owned()];
+    if release {
+        args.push("--release".to_owned());
+    }
+    for arg in ["--package", owner, "--bin", SCENARIO_BIN] {
+        args.push(arg.to_owned());
+    }
+    args.push(resolved::message_format(colour()).to_owned());
     if ctx.locked {
         args.push("--locked".to_owned());
     }
-    args.push("--".to_owned());
-    for argument in tail {
-        args.push((*argument).to_owned());
+    let expect = if release {
+        resolved::Expect::RELEASE
+    } else {
+        resolved::Expect::suite(resolved::SimRule::OptimisedIfBuilt)
+    };
+    fresh_reported(
+        &mut ProcessCargo::of(ctx),
+        &resolved::CargoCall::pinned(args, ""),
+        &graph,
+        expect,
+        |built| reported_bin(built, SCENARIO_BIN),
+    )
+    .map(|path| path.to_string_lossy().into_owned())
+}
+
+/// The executable of the one `bin` unit called `name` a build reported. None,
+/// or more than one, is refused.
+pub(crate) fn reported_bin(built: &[resolved::Built], name: &str) -> Result<PathBuf, String> {
+    let found: Vec<&resolved::Built> = built
+        .iter()
+        .filter(|unit| unit.target == name && unit.is("bin") && !unit.test)
+        .collect();
+    match found.as_slice() {
+        [unit] => unit
+            .executable
+            .as_ref()
+            .map(PathBuf::from)
+            .ok_or_else(|| format!("cargo reported the `{name}` binary with no executable")),
+        [] => Err(format!("cargo's report names no `{name}` binary")),
+        _ => Err(format!(
+            "cargo's report names more than one `{name}` binary"
+        )),
     }
-    args
+}
+
+/// The artefact `pick` takes from `call`'s report, as a build just produced
+/// it. Cargo fingerprints a unit's inputs and never its outputs, so a file
+/// planted at the artefact's path survives a build in which every unit is
+/// fresh. So the build runs, the reported artefact is removed, and the build
+/// runs again: cargo re-links what is missing, and the second report must name
+/// the same path, now holding what cargo wrote.
+pub(crate) fn fresh_reported(
+    cargo: &mut ProcessCargo,
+    call: &resolved::CargoCall,
+    graph: &resolved::Graph,
+    expect: resolved::Expect,
+    pick: impl Fn(&[resolved::Built]) -> Result<PathBuf, String>,
+) -> Result<PathBuf, String> {
+    let first = pick(&resolved::checked(
+        cargo,
+        call,
+        graph,
+        expect,
+        &mut print_diagnostic,
+    )?)?;
+    match fs::remove_file(&first) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("removing {}: {error}", first.display())),
+    }
+    let second = pick(&resolved::checked(
+        cargo,
+        call,
+        graph,
+        expect,
+        &mut print_diagnostic,
+    )?)?;
+    if second != first {
+        return Err(format!(
+            "cargo reported {} and then {} for the same build",
+            first.display(),
+            second.display()
+        ));
+    }
+    if !second.is_file() {
+        return Err(format!(
+            "cargo reported {}, and did not write it",
+            second.display()
+        ));
+    }
+    Ok(second)
+}
+
+/// The context for a command run outside `ci` and its steps, from the
+/// environment alone: the root, the cargo, `--locked` as CI has it, the
+/// workspace's metadata.
+fn standalone_ctx(require_tools: bool) -> Result<Ctx, String> {
+    let root = workspace_root()?;
+    // As `ci` reads it: the cargo that started xtask sets `CARGO`; started some
+    // other way, the cargo on `PATH` is the rule, not a fallback.
+    let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
+    let locked = env::var_os("CI").is_some() && root.join("Cargo.lock").is_file();
+    let workspace = load_workspace(require_tools, &cargo, &root);
+    Ok(Ctx {
+        root,
+        cargo,
+        bless: false,
+        require_tools,
+        locked,
+        packages: Vec::new(),
+        client_check: false,
+        workspace,
+        shard: None,
+    })
+}
+
+/// `cargo xtask checked-test --package <name> --test <target> [--ignored]
+/// [--nocapture]`: one test target, run through the checked call and the
+/// one door ([`resolved::execute`]), with the harness options it names. The
+/// nightly fuzz job runs the verifier's ignored fuzz target through this.
+fn checked_test(ctx: &Ctx, args: &[String]) -> Result<(), String> {
+    let mut package: Option<String> = None;
+    let mut target: Option<String> = None;
+    let mut harness: Vec<resolved::Harness> = Vec::new();
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "--package" | "-p" => {
+                let value = rest
+                    .next()
+                    .ok_or_else(|| "--package needs a package name".to_owned())?;
+                package = Some(package_spec_name(value)?.to_owned());
+            }
+            "--test" => {
+                target = Some(
+                    rest.next()
+                        .ok_or_else(|| "--test needs a test target's name".to_owned())?
+                        .clone(),
+                );
+            }
+            "--ignored" => harness.push(resolved::Harness::Ignored),
+            "--nocapture" => harness.push(resolved::Harness::Nocapture),
+            other => {
+                return Err(format!(
+                    "`checked-test` takes --package, --test, --ignored and --nocapture, and was \
+                     given `{other}`"
+                ));
+            }
+        }
+    }
+    let package = package.ok_or_else(|| "`checked-test` needs --package".to_owned())?;
+    let target = target.ok_or_else(|| "`checked-test` needs --test".to_owned())?;
+    let workspace = metadata(ctx)?;
+    if !test_target_owners(workspace, &target).contains(&package) {
+        return Err(format!("{package} has no test target called `{target}`"));
+    }
+    let sim = if package == resolved::SIM && resolved::UNOPTIMISED_TESTS.contains(&target.as_str())
+    {
+        resolved::SimRule::Unoptimised
+    } else {
+        resolved::SimRule::OptimisedIfBuilt
+    };
+    refuse_codegen_variables()?;
+    let graph = sim_graph(ctx)?;
+    let test = resolved::TestRun::new(
+        vec!["--package".to_owned(), package],
+        resolved::Invocation {
+            selectors: vec!["--test".to_owned(), target],
+            sim,
+        },
+        ctx.locked,
+        colour(),
+    )
+    .with_harness(harness);
+    resolved::execute(
+        &test,
+        &graph,
+        &mut ProcessCargo::of(ctx),
+        &mut print_diagnostic,
+        &mut print_line,
+    )
 }
 
 /// Runs a command for its exit status alone, swallowing its output. Used to ask
@@ -3761,7 +4146,7 @@ fn alarm_selection(name: &str) -> Result<AlarmSelection, String> {
 /// so a failed measurement is a `::warning::` and the command still answers
 /// success.
 ///
-/// * every [`ALARMS`] entry, run as [`alarm_args`] builds it: `--release` is
+/// * every [`ALARMS`] entry, run as [`alarm_test`] builds it: `--release` is
 ///   not optional (a debug figure is a different number, not a slow version of
 ///   the real one), `--ignored`, `--nocapture` so the target's own
 ///   `::notice::` lines reach the annotations. No `--test-threads=1`: on one
@@ -3784,7 +4169,6 @@ fn alarm_selection(name: &str) -> Result<AlarmSelection, String> {
 /// know is refused before anything runs ([`alarm_selection`]): the command
 /// never fails over a measurement, but a typo is not a measurement.
 fn perf_alarms(only: Option<AlarmSelection>) {
-    let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
     let root = match workspace_root() {
         Ok(root) => root,
         Err(error) => {
@@ -3813,22 +4197,12 @@ fn perf_alarms(only: Option<AlarmSelection>) {
         Some(AlarmSelection::Allocations) => false,
     };
     for alarm in ALARMS.iter().filter(selected) {
-        let args = alarm_args(alarm, locked);
-        println!("   $ {}", render_command(&cargo, &args));
-        let status = child_command(require_tools, &cargo, &args, &root).status();
-        match status {
-            Ok(status) if status.success() => {}
-            Ok(status) => println!(
-                "::warning title={}::not measured on {os}: `{}` failed ({}); an alarm, not a \
-                 gate, so this job stays green",
-                alarm.title,
-                render_command(&cargo, &args),
-                describe_exit(status)
-            ),
-            Err(error) => println!(
-                "::warning title={}::not measured on {os}: could not launch `{cargo}`: {error}",
+        if let Err(error) = run_measurement(&root, require_tools, &alarm_test(alarm, locked)) {
+            println!(
+                "::warning title={}::not measured on {os}: {error}; an alarm, not a gate, so \
+                 this job stays green",
                 alarm.title
-            ),
+            );
         }
     }
     if matches!(only, None | Some(AlarmSelection::Allocations)) {
@@ -3836,29 +4210,52 @@ fn perf_alarms(only: Option<AlarmSelection>) {
     }
 }
 
-/// The cargo arguments one alarm runs with. Pure, so the flags every alarm
-/// needs are pinned by a unit test.
-fn alarm_args(alarm: &Alarm, locked: bool) -> Vec<String> {
-    let mut args: Vec<String> = vec!["test".to_owned(), "--release".to_owned()];
-    if locked {
-        args.push("--locked".to_owned());
-    }
-    for arg in [
-        "--package",
-        alarm.package,
-        "--test",
-        alarm.test,
-        "--",
-        "--ignored",
-        "--nocapture",
-    ] {
-        args.push(arg.to_owned());
-    }
+/// The checked run one alarm measures, through the one door
+/// ([`resolved::execute`]). Pure, so its command line is pinned by a unit
+/// test.
+fn alarm_test(alarm: &Alarm, locked: bool) -> resolved::TestRun {
+    let mut harness = vec![resolved::Harness::Ignored, resolved::Harness::Nocapture];
     if let Some(name) = alarm.exact {
-        args.push("--exact".to_owned());
-        args.push(name.to_owned());
+        harness.push(resolved::Harness::Exact(name.to_owned()));
     }
-    args
+    resolved::TestRun::new(
+        vec!["--package".to_owned(), alarm.package.to_owned()],
+        resolved::Invocation {
+            selectors: vec!["--test".to_owned(), alarm.test.to_owned()],
+            sim: resolved::SimRule::OptimisedIfBuilt,
+        },
+        locked,
+        false,
+    )
+    .release()
+    .with_harness(harness)
+}
+
+/// Runs a measurement, `test`, through the checked call and the one door
+/// ([`resolved::execute`]), its tools and environment pinned and its build
+/// held to the release profile's promise, echoing what the test prints as it
+/// comes; answers that output, for the alarm to read its report from.
+pub(crate) fn run_measurement(
+    root: &Path,
+    require_tools: bool,
+    test: &resolved::TestRun,
+) -> Result<String, String> {
+    refuse_codegen_variables()?;
+    let mut cargo = ProcessCargo::new(root, require_tools)?;
+    let graph = graph_with(&mut cargo, test.locked())?;
+    let mut output = String::new();
+    resolved::execute(
+        test,
+        &graph,
+        &mut cargo,
+        &mut print_diagnostic,
+        &mut |line| {
+            println!("{line}");
+            output.push_str(line);
+            output.push('\n');
+        },
+    )?;
+    Ok(output)
 }
 
 /// The allocations-per-tick notice, word for word. Pure, so its text is pinned.
@@ -4149,16 +4546,23 @@ fn golden_target_dir(workspace: &Result<Workspace, String>) -> Result<PathBuf, S
         })
 }
 
-/// True when a `cargo tree -e features --format {p}|{f}` line shows the
-/// research feature enabled — as a feature node, or in a package's feature list.
-fn line_enables_research(line: &str) -> bool {
+/// Whether a `cargo tree -e features --format {p}|{f}` line shows the
+/// research feature enabled — as a feature node, or in a package's feature
+/// list. A line without the `|` the format puts in every line is not one this
+/// reads, and is a failure: read as "no feature", it would let the guard pass
+/// on output whose shape changed.
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the tests come first: the next commit refuses a line it cannot read"
+)]
+fn line_enables_research(line: &str) -> Result<bool, String> {
     let (package, features) = line.split_once('|').unwrap_or((line, ""));
     if package.contains(&format!("feature \"{RESEARCH_FEATURE}\"")) {
-        return true;
+        return Ok(true);
     }
-    features
+    Ok(features
         .split(',')
-        .any(|feature| feature.trim() == RESEARCH_FEATURE)
+        .any(|feature| feature.trim() == RESEARCH_FEATURE))
 }
 
 // ---------------------------------------------------------------------------
@@ -4919,6 +5323,7 @@ mod tests {
             opt_level: resolved::OptLevel::O3,
             debug_assertions: true,
             overflow_checks: true,
+            test: false,
             filenames: Vec::new(),
             executable: executable.map(str::to_owned),
         };
@@ -4959,7 +5364,7 @@ mod tests {
     /// `release-checked` promises the release profile's optimisation: its own
     /// `opt-level` if it states one, else release's, else cargo's 3.
     #[test]
-    fn the_promised_release_level_is_read_from_the_manifest() {
+    fn the_gate_is_promised_releases_level_and_no_other() {
         let level = |text: &str| promised_opt_level(&scan_profiles(text), "release-checked");
         assert_eq!(
             level("[profile.release]\nlto = true\n"),
@@ -4969,12 +5374,21 @@ mod tests {
             level("[profile.release]\nopt-level = 2\n"),
             Ok(resolved::OptLevel::O2)
         );
-        assert_eq!(
-            level(
-                "[profile.release]\nopt-level = 2\n[profile.release-checked]\nopt-level = \"s\"\n"
-            ),
-            Ok(resolved::OptLevel::S)
-        );
+        // The gate is built at release's level and no other: an `opt-level`
+        // anywhere in `release-checked`'s tables is refused.
+        for own in [
+            "[profile.release-checked]\nopt-level = 1\n",
+            "[profile.release-checked.package.xxhash-rust]\nopt-level = 0\n",
+            "[profile.release-checked.build-override]\nopt-level = 3\n",
+        ] {
+            let refused = level(&format!("[profile.release]\nopt-level = 2\n{own}"));
+            assert!(
+                refused
+                    .as_ref()
+                    .is_err_and(|why| why.contains("release-checked")),
+                "{own}: {refused:?}"
+            );
+        }
         assert!(level("[profile.release]\nopt-level = 7\n").is_err());
         assert_eq!(
             promised_opt_level(
@@ -5036,6 +5450,36 @@ mod tests {
                 .is_some_and(|failure| failure.contains("`heck` is of the godot family")),
             "{missing:?}"
         );
+        // Tables are matched as cargo matches a spec: a family member's table
+        // by name and version is its table; a version no package has is a
+        // stale table; a family table at another level says so.
+        let versioned = committed.replace(
+            "[profile.dev.package.glam]\nopt-level = 0\n",
+            "[profile.dev.package.\"glam@0.32.1\"]\nopt-level = 0\n",
+        );
+        assert_ne!(versioned, committed, "the glam table is committed");
+        assert_eq!(
+            dev_package_table_failures(&scan_profiles(&versioned), &graph),
+            Vec::<String>::new()
+        );
+        let wrong_version = with("\n[profile.dev.package.\"syn@0.0.1\"]\nopt-level = 3\n");
+        assert!(
+            wrong_version
+                .first()
+                .is_some_and(|failure| failure.contains("matches no package")),
+            "{wrong_version:?}"
+        );
+        let family_at_one = committed.replace(
+            "[profile.dev.package.glam]\nopt-level = 0\n",
+            "[profile.dev.package.glam]\nopt-level = 1\n",
+        );
+        let at_one = dev_package_table_failures(&scan_profiles(&family_at_one), &graph);
+        assert!(
+            at_one
+                .iter()
+                .any(|failure| failure.contains("at opt-level 1; the family")),
+            "{at_one:?}"
+        );
         // An optimised table for a crate that exists is no business of this.
         assert_eq!(
             with("\n[profile.dev.package.syn]\nopt-level = 3\n"),
@@ -5051,16 +5495,26 @@ mod tests {
 
     #[test]
     fn research_edges_are_detected() {
-        assert!(line_enables_research(
-            "pharmakos-sim v0.0.0|default,research"
-        ));
-        assert!(line_enables_research("pharmakos-sim feature \"research\"|"));
-        assert!(!line_enables_research(
-            "pharmakos-sim v0.0.0|default,replay"
-        ));
-        assert!(!line_enables_research("pharmakos-gateway v0.0.0|"));
+        assert_eq!(
+            line_enables_research("pharmakos-sim v0.0.0|default,research"),
+            Ok(true)
+        );
+        assert_eq!(
+            line_enables_research("pharmakos-sim feature \"research\"|"),
+            Ok(true)
+        );
+        assert_eq!(
+            line_enables_research("pharmakos-sim v0.0.0|default,replay"),
+            Ok(false)
+        );
+        assert_eq!(
+            line_enables_research("pharmakos-gateway v0.0.0|"),
+            Ok(false)
+        );
         // `researching` must not trip it.
-        assert!(!line_enables_research("crate v1|researching"));
+        assert_eq!(line_enables_research("crate v1|researching"), Ok(false));
+        // A line in another shape is a failure, not "no feature".
+        assert!(line_enables_research("pharmakos-sim v0.0.0 (research)").is_err());
     }
 
     #[test]
@@ -5855,10 +6309,10 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
         );
         for alarm in ALARMS {
             for locked in [false, true] {
-                let args = alarm_args(alarm, locked);
+                let args = alarm_test(alarm, locked).run_line();
                 let (cargo, test) =
                     args.split_at(args.iter().position(|arg| arg == "--").expect("a `--`"));
-                assert_eq!(cargo.first().map(String::as_str), Some("test"));
+                assert!(cargo.iter().any(|arg| arg == "test"), "{args:?}");
                 assert!(cargo.iter().any(|arg| arg == "--release"), "{args:?}");
                 assert_eq!(cargo.iter().any(|arg| arg == "--locked"), locked);
                 assert!(

@@ -9,17 +9,20 @@
 //! TOML cannot hold that in place: cargo also takes dotted keys, inline tables,
 //! `--config` on the command line and config files outside the repository, and
 //! a reader of the text would have to be cargo to see them all. So every build
-//! xtask makes to test, to hash or to ship is checked from cargo's own answer,
-//! through the one door [`checked`]:
+//! of workspace code that xtask makes to test, to hash, to measure for a gate
+//! or to ship goes through the one checked call [`checked`]:
 //!
-//! * the `test` and `test-research` steps run each `cargo test` invocation
-//!   through [`execute`], which builds the invocation's [`TestRun`] with
-//!   `--no-run` and a JSON report first; a doctest invocation, which cargo will
-//!   not build without running, is checked through the test-profile build of
-//!   the same libraries ([`doc_check`]);
-//! * the `determinism` step's `release-checked` build and `cargo xtask
-//!   package`'s two release builds are read from their own JSON report, as they
-//!   are made, and what runs or ships is the artefact that report names.
+//! * every `cargo test` it runs (the `test` and `test-research` steps,
+//!   `checked-test`, which the nightly fuzz job runs, and the alarms'
+//!   measurements) goes through [`execute`], which builds the invocation's
+//!   [`TestRun`] with `--no-run` and a JSON report first; a doctest invocation,
+//!   which cargo will not build without running, is checked through the
+//!   test-profile build of the same libraries ([`doc_check`]);
+//! * the `determinism` step's and `determinism-run`'s `release-checked` build,
+//!   the `scenario` step's and `build-gamectl`'s `gamectl`, the client the
+//!   `stage-client` and `screenshot` steps stage, and `cargo xtask package`'s
+//!   two release builds are read from their own JSON report, as they are made,
+//!   and what runs or ships is the artefact that report names.
 //!
 //! [`faults`] reads the profile cargo RESOLVED for every unit it built, fresh
 //! units included, against an [`Expect`]:
@@ -27,25 +30,31 @@
 //! * overflow checks on in every workspace unit, always;
 //! * debug assertions on in every workspace unit where the profile promises
 //!   them (the suite's and `release-checked`);
-//! * for `release-checked`, every workspace unit at the optimisation the
-//!   release profile promises, and the sim's library built;
+//! * for `release-checked`, `[profile.release]`'s optimisation in every
+//!   workspace unit and every crate the sim runs, and the sim's library built;
 //! * for the suite, `pharmakos-sim` optimised, every third-party crate the sim
 //!   runs optimised, no crate of the godot family optimised, and no other
 //!   third-party crate unoptimised.
 //!
-//! The compiler's diagnostics travel in the same JSON report; [`parse_messages`]
-//! hands each one's rendered text to its caller as it reads it, so a failed
-//! build shows its errors.
+//! A build script runs on the host at the build-override's level and is
+//! judged by no optimisation rule. The compiler's diagnostics travel in the
+//! same JSON report, read a line at a time as cargo writes it ([`Report`]),
+//! and each is written once for an invocation's check and run together, as it
+//! arrives, so a failed build shows its errors.
 //!
 //! # What changes codegen behind the report
 //!
 //! Rustflags and rustdocflags override the profile and never show in the
 //! resolved JSON: `RUSTFLAGS="-C debug-assertions=off"` builds a unit the JSON
 //! still reports with assertions on. So do a rustc wrapper, which can add any
-//! flag; another compiler; and `RUSTC_BOOTSTRAP`, which turns on cargo's
-//! unstable `profile-rustflags`. So a checked build takes all of these from
-//! nowhere but its own value ([`pinned_env`]):
+//! flag; another compiler or doc compiler; and `RUSTC_BOOTSTRAP`, which turns
+//! on cargo's unstable `profile-rustflags`. So a checked call takes all of
+//! these from nowhere but its own value ([`CargoCall::pinned`]):
 //!
+//! * `--config 'build.rustc="rustc"'` and `--config 'build.rustdoc="rustdoc"'`
+//!   ([`pinned_config`]): a command line's `--config` overrides every config
+//!   file, and the plain names are resolved by the rustup proxy on `PATH` to the
+//!   pinned toolchain's tools.
 //! * `CARGO_ENCODED_RUSTFLAGS` and `CARGO_ENCODED_RUSTDOCFLAGS` are set to
 //!   exactly what that build passes: nothing, except the Windows package's
 //!   `+crt-static`. Cargo takes rustflags from the first of
@@ -59,13 +68,27 @@
 //!   `build.rustc-workspace-wrapper`.
 //! * `RUSTC_BOOTSTRAP` is removed.
 //!
-//! And each of these variables set in the environment, which the caller meant
-//! to reach the build and which this would silently override, is refused by
-//! name before anything builds ([`refused_variables`]), together with `RUSTC`
-//! and `CARGO_BUILD_RUSTC`, which name another compiler. Cargo itself sets
-//! none of them for a nested `cargo run`, and neither the versioned hooks nor
-//! `wsl-ci.sh` set one. On Windows, where a variable's name is read without
-//! regard to case, so is the refusal.
+//! And each variable that would change these, set in the environment, which
+//! the caller meant to reach the build and which this would silently override,
+//! is refused by name before anything builds ([`refused_variables`]): the
+//! flags variables, `RUSTC`, `CARGO_BUILD_RUSTC`, `RUSTDOC`,
+//! `CARGO_BUILD_RUSTDOC`, the wrapper variables, `RUSTC_BOOTSTRAP`, and every
+//! `CARGO_TARGET_<triple>_` variable that sets rustflags, rustdocflags, a
+//! runner or a linker. Cargo itself sets none of them for a nested `cargo
+//! run`, and neither the versioned hooks nor `wsl-ci.sh` set one. On Windows,
+//! where a variable's name is read without regard to case, so is the refusal.
+//!
+//! # What ran
+//!
+//! A config file's `runner` cannot be pinned empty (cargo refuses `""`), so a
+//! test run proves its tests ran: every test executable the check reported
+//! must be started (cargo's `Running` line) and every start must end in
+//! libtest's `test result:` line, or the run is
+//! [`ProfileFault::TestsDidNotRun`] ([`judge_run`]). A doctest run is held to
+//! its exit status alone: libtest's output does not tie a doctest result to the
+//! crate it came from. A runner that wraps `cargo xtask` itself and fakes its
+//! exit status is outside what xtask can see; CI's clean checkout has no config
+//! file but the repository's.
 //!
 //! # The allocation test runs the sim unoptimised
 //!
@@ -79,6 +102,12 @@
 //! shard its unit falls to; the unit list, and so the split, is the same as
 //! before. The invocation selects every target of that name, so it is exempt
 //! for exactly the packages [`UNOPTIMISED_OWNERS`] names.
+
+#![expect(
+    dead_code,
+    unused_mut,
+    reason = "the tests come first: the next commit implements the checks"
+)]
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -116,10 +145,25 @@ pub(crate) const UNOPTIMISED_OWNERS: &[(&str, &str, &str)] = &[
 /// The `--config` value that builds [`SIM`] at opt-level 0.
 const SIM_UNOPTIMISED: &str = "profile.dev.package.pharmakos-sim.opt-level=0";
 
-/// The environment variables that change what rustc or rustdoc compiles
-/// behind cargo's report: flags, another compiler, a wrapper, unstable
-/// features. A `CARGO_TARGET_<triple>_RUSTFLAGS` or `..._RUSTDOCFLAGS`
-/// variable is matched by [`is_refused_variable`] too.
+/// The `--config` values every checked call carries: the compiler and the
+/// doc compiler by their plain names, so the rustup proxy on `PATH` resolves
+/// the pinned toolchain's, and a config file's `build.rustc` or
+/// `build.rustdoc` (which a command line's `--config` overrides) never runs.
+const PINNED_TOOLS: &[&str] = &["build.rustc=\"rustc\"", "build.rustdoc=\"rustdoc\""];
+
+/// The `--config` values every checked call carries ([`PINNED_TOOLS`]).
+pub(crate) fn pinned_config() -> Vec<String> {
+    PINNED_TOOLS
+        .iter()
+        .map(|value| (*value).to_owned())
+        .collect()
+}
+
+/// The environment variables that change what rustc or rustdoc compiles, or
+/// what runs a built test, behind cargo's report: flags, another compiler or
+/// doc compiler, a wrapper, unstable features. A `CARGO_TARGET_<triple>_`
+/// variable that sets `RUSTFLAGS`, `RUSTDOCFLAGS`, `RUNNER` or `LINKER` is
+/// matched by [`is_refused_variable`] too.
 const REFUSED_VARIABLES: &[&str] = &[
     "RUSTFLAGS",
     "CARGO_ENCODED_RUSTFLAGS",
@@ -129,12 +173,18 @@ const REFUSED_VARIABLES: &[&str] = &[
     "CARGO_BUILD_RUSTDOCFLAGS",
     "RUSTC",
     "CARGO_BUILD_RUSTC",
+    "RUSTDOC",
+    "CARGO_BUILD_RUSTDOC",
     "RUSTC_WRAPPER",
     "RUSTC_WORKSPACE_WRAPPER",
     "CARGO_BUILD_RUSTC_WRAPPER",
     "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER",
     "RUSTC_BOOTSTRAP",
 ];
+
+/// The suffixes of the `CARGO_TARGET_<triple>_` variables [`REFUSED_VARIABLES`]
+/// stands for.
+const REFUSED_TARGET_SUFFIXES: &[&str] = &["_RUSTFLAGS", "_RUSTDOCFLAGS", "_RUNNER", "_LINKER"];
 
 /// The variable a checked build sets its rustflags through.
 const ENCODED_RUSTFLAGS: &str = "CARGO_ENCODED_RUSTFLAGS";
@@ -201,7 +251,7 @@ pub(crate) fn pinned_env(rustflags: &str) -> Vec<EnvChange> {
     ]
 }
 
-/// The `--message-format` a checked build reports with: cargo's JSON, whose
+/// The `--message-format` a checked call reports with: cargo's JSON, whose
 /// diagnostics carry their rendered text, with ANSI colour when `colour` (the
 /// caller's terminal, or `CARGO_TERM_COLOR=always`, as CI sets).
 pub(crate) fn message_format(colour: bool) -> &'static str {
@@ -222,6 +272,16 @@ pub(crate) struct CargoCall {
 }
 
 impl CargoCall {
+    /// A checked call: `args`, with the pinned tools and the pinned
+    /// environment, rustflags exactly `rustflags`.
+    pub(crate) fn pinned(args: Vec<String>, rustflags: &str) -> CargoCall {
+        CargoCall {
+            config: pinned_config(),
+            env: pinned_env(rustflags),
+            args,
+        }
+    }
+
     /// The command line after `cargo`: each `--config` value, then the
     /// arguments.
     pub(crate) fn command_line(&self) -> Vec<String> {
@@ -239,12 +299,25 @@ impl CargoCall {
 /// which hand it the final command line and environment, so nothing between
 /// a [`TestRun`] and the process can change what runs.
 pub(crate) trait Cargo {
-    /// Runs cargo with `line` and `env`; its standard error goes to the
-    /// caller's, and its standard output is returned with whether it
-    /// succeeded.
-    fn report(&mut self, line: &[String], env: &[EnvChange]) -> Result<(bool, String), String>;
-    /// Runs cargo with `line` and `env`, its output the caller's.
-    fn run(&mut self, line: &[String], env: &[EnvChange]) -> Result<(), String>;
+    /// Runs cargo with `line` and `env` and hands `stdout` each line of its
+    /// standard output as it arrives; its standard error goes to the
+    /// caller's. Answers whether it succeeded.
+    fn report(
+        &mut self,
+        line: &[String],
+        env: &[EnvChange],
+        stdout: &mut dyn FnMut(&str),
+    ) -> Result<bool, String>;
+    /// Runs cargo with `line` and `env`, handing `stdout` each line of its
+    /// standard output as it arrives, while its standard error is echoed to
+    /// the caller's as it arrives and kept. Answers whether it succeeded and
+    /// the standard error's lines.
+    fn run(
+        &mut self,
+        line: &[String],
+        env: &[EnvChange],
+        stdout: &mut dyn FnMut(&str),
+    ) -> Result<(bool, Vec<String>), String>;
 }
 
 /// What a checked build requires of the sim.
@@ -271,7 +344,8 @@ pub(crate) enum SimRule {
 pub(crate) struct Expect {
     /// Debug assertions on in every workspace unit.
     pub(crate) debug_assertions: bool,
-    /// Every workspace unit but a build script at this level.
+    /// Every workspace unit but a build script at this level, and every
+    /// third-party crate the sim runs too.
     pub(crate) workspace_opt: Option<OptLevel>,
     pub(crate) sim: SimRule,
     /// Every third-party crate in the sim's closure optimised.
@@ -282,7 +356,8 @@ pub(crate) struct Expect {
 }
 
 impl Expect {
-    /// A test invocation: the dev profile the suite builds with.
+    /// A test invocation, or a dev build of something tested: the dev profile
+    /// the suite builds with.
     pub(crate) const fn suite(sim: SimRule) -> Expect {
         Expect {
             debug_assertions: true,
@@ -294,9 +369,10 @@ impl Expect {
     }
 
     /// `release-checked`, the cross-OS hash gate's build: the release
-    /// profile's optimisation (`release_opt`, what the committed manifest
-    /// promises), its overflow checks, debug assertions on, and the sim's
-    /// library built.
+    /// profile's optimisation (`release_opt`, `[profile.release]`'s as the
+    /// committed manifest declares it) in every workspace unit and every
+    /// third-party crate the sim runs, overflow checks and debug assertions
+    /// on, and the sim's library built.
     pub(crate) const fn release_checked(release_opt: OptLevel) -> Expect {
         Expect {
             debug_assertions: true,
@@ -307,7 +383,8 @@ impl Expect {
         }
     }
 
-    /// `release` and `release-client`, what ships: overflow checks on, debug
+    /// `release` and `release-client`, what ships, and `cargo test
+    /// --release`, what the alarms measure: overflow checks on, debug
     /// assertions off.
     pub(crate) const RELEASE: Expect = Expect {
         debug_assertions: false,
@@ -396,6 +473,28 @@ pub(crate) fn check_owners(
     Ok(())
 }
 
+/// An argument for the test harness, after `--`: typed, so a caller cannot
+/// pass the harness (or cargo) anything this does not name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Harness {
+    /// `--ignored`: run the tests marked `#[ignore]`, and only those.
+    Ignored,
+    /// `--nocapture`: the tests' own output as it comes.
+    Nocapture,
+    /// `--exact <name>`: the one test of that name.
+    Exact(String),
+}
+
+impl Harness {
+    fn args(&self) -> Vec<String> {
+        match self {
+            Harness::Ignored => vec!["--ignored".to_owned()],
+            Harness::Nocapture => vec!["--nocapture".to_owned()],
+            Harness::Exact(name) => vec!["--exact".to_owned(), name.clone()],
+        }
+    }
+}
+
 /// One test invocation, the single description both its check and its run
 /// are derived from. Its parts, its check and its run are private to this
 /// module: the only way to run one is [`execute`].
@@ -407,6 +506,9 @@ pub(crate) struct TestRun {
     invocation: Invocation,
     locked: bool,
     colour: bool,
+    /// `--release`: the alarms' measurements.
+    release: bool,
+    harness: Vec<Harness>,
 }
 
 impl TestRun {
@@ -421,12 +523,46 @@ impl TestRun {
             invocation,
             locked,
             colour,
+            release: false,
+            harness: Vec::new(),
         }
+    }
+
+    /// The same run in the release profile, as the alarms measure; its sim
+    /// rule is the release profile's.
+    pub(crate) fn release(mut self) -> TestRun {
+        self
+    }
+
+    /// The command line the run makes, after `cargo`: for the tests that pin
+    /// it. Running it is [`execute`]'s alone.
+    #[cfg(test)]
+    pub(crate) fn run_line(&self) -> Vec<String> {
+        self.run().command_line()
+    }
+
+    /// Whether the run passes `--locked`.
+    pub(crate) fn locked(&self) -> bool {
+        self.locked
+    }
+
+    /// The same run with `harness`'s arguments for the test harness.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "the tests come first: the next commit implements it"
+    )]
+    pub(crate) fn with_harness(mut self, harness: Vec<Harness>) -> TestRun {
+        let _ = harness;
+        self
     }
 
     /// What the check holds this invocation's build to.
     fn expect(&self) -> Expect {
-        Expect::suite(self.invocation.sim)
+        if self.release {
+            Expect::RELEASE
+        } else {
+            Expect::suite(self.invocation.sim)
+        }
     }
 
     /// Whether this is a doctest invocation.
@@ -434,18 +570,22 @@ impl TestRun {
         self.invocation.selectors == ["--doc"]
     }
 
-    /// The command that runs the tests.
-    fn run(&self) -> CargoCall {
-        let config = match self.invocation.sim {
-            SimRule::Unoptimised => vec![SIM_UNOPTIMISED.to_owned()],
-            SimRule::OptimisedIfBuilt | SimRule::Built | SimRule::Unjudged => Vec::new(),
-        };
+    /// The run's cargo arguments, before `--` and the harness's.
+    fn cargo_args(&self) -> CargoCall {
+        let mut config = pinned_config();
+        if self.invocation.sim == SimRule::Unoptimised {
+            config.push(SIM_UNOPTIMISED.to_owned());
+        }
         let mut args: Vec<String> = vec!["test".to_owned()];
+        if self.release {
+            args.push("--release".to_owned());
+        }
         args.extend(self.selection.iter().cloned());
         args.extend(self.invocation.selectors.iter().cloned());
         if self.locked {
             args.push("--locked".to_owned());
         }
+        args.push(message_format(self.colour).to_owned());
         CargoCall {
             config,
             env: pinned_env(""),
@@ -453,38 +593,156 @@ impl TestRun {
         }
     }
 
-    /// The command that builds what [`TestRun::run`] will run, and reports
-    /// it: the run itself with `--no-run` and the JSON report, or for a
-    /// doctest invocation [`doc_check`] of it.
-    fn check(&self) -> CargoCall {
-        let run = self.run();
-        if self.doc() {
-            return doc_check(&run, self.colour);
+    /// The command that runs the tests: its report, then `--` and the
+    /// harness's arguments.
+    fn run(&self) -> CargoCall {
+        let mut run = self.cargo_args();
+        if !self.harness.is_empty() {
+            run.args.push("--".to_owned());
+            for harness in &self.harness {
+                run.args.extend(harness.args());
+            }
         }
-        let mut check = run;
+        run
+    }
+
+    /// The command that builds what [`TestRun::run`] will run, and reports
+    /// it: the run's cargo arguments with `--no-run`, or for a doctest
+    /// invocation [`doc_check`] of the run.
+    fn check(&self) -> CargoCall {
+        if self.doc() {
+            return doc_check(&self.run(), self.colour);
+        }
+        let mut check = self.cargo_args();
         check.args.push("--no-run".to_owned());
-        check.args.push(message_format(self.colour).to_owned());
         check
     }
 }
 
+/// The paths of the test executables a check's report names: the units
+/// built as test harnesses (`profile.test`) with an executable, which the
+/// run then runs.
+fn test_executables(built: &[Built]) -> Vec<String> {
+    let mut paths: Vec<String> = built
+        .iter()
+        .filter(|unit| unit.test)
+        .filter_map(|unit| unit.executable.clone())
+        .collect();
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+/// A path as the run's `Running` line and the report spell it, made
+/// comparable: one separator, and on Windows one case.
+fn comparable_path(path: &str, case_insensitive: bool) -> String {
+    let path = path.replace('\\', "/");
+    if case_insensitive {
+        path.to_lowercase()
+    } else {
+        path
+    }
+}
+
+/// `text` with ANSI escape sequences (`ESC [ ... letter`) taken out, as cargo
+/// colours its status lines when told to.
+fn without_ansi(text: &str) -> String {
+    text.to_owned()
+}
+
+/// The executable a cargo `Running` line names: `Running unittests src\lib.rs
+/// (D:/t\debug\deps\x.exe)` names `D:/t\debug\deps\x.exe`.
+fn running_path(line: &str) -> Option<String> {
+    let _ = line;
+    None
+}
+
+/// Whether the run ran every test executable the check reported: each named
+/// by a `Running` line on the run's standard error, and as many libtest
+/// `test result:` lines on its standard output as `Running` lines. A runner
+/// that ran nothing (a config file's `runner` that exits 0) leaves the
+/// `Running` lines and no result, and is [`ProfileFault::TestsDidNotRun`].
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the tests come first: the next commit implements it"
+)]
+fn judge_run(
+    expected: &[String],
+    stderr: &[String],
+    results: usize,
+    case_insensitive: bool,
+) -> Result<(), ProfileFault> {
+    let _ = (expected, stderr, results, case_insensitive);
+    Ok(())
+}
+
 /// Runs `test`: its check through [`checked`], then, when the check holds,
-/// its run, both through `cargo` and nothing else.
+/// its run, both through `cargo` and nothing else. Each diagnostic is
+/// written to `diagnostics` once for the two, as it arrives; each line the
+/// tests print goes to `test_output` as it arrives. After the run, every test
+/// executable the check reported must have run and given its result
+/// ([`judge_run`]); a doctest run is held to its exit status alone, because
+/// libtest's output does not tie a doctest result to the crate it came from.
 pub(crate) fn execute(
     test: &TestRun,
     graph: &Graph,
     cargo: &mut impl Cargo,
     diagnostics: &mut impl FnMut(&str),
+    test_output: &mut impl FnMut(&str),
 ) -> Result<(), String> {
-    checked(cargo, &test.check(), graph, test.expect(), diagnostics)?;
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut once = |rendered: &str| {
+        if seen.insert(rendered.to_owned()) {
+            diagnostics(rendered);
+        }
+    };
+    let built = checked(cargo, &test.check(), graph, test.expect(), &mut once)?;
     let run = test.run();
-    cargo.run(&run.command_line(), &run.env)
+    let mut results: usize = 0;
+    let mut stdout = |line: &str| {
+        if let Some(message) = cargo_message(line) {
+            if let Some(rendered) = message
+                .get("message")
+                .and_then(|diagnostic| diagnostic.get("rendered"))
+                .and_then(Json::as_str)
+            {
+                once(rendered);
+            }
+        } else {
+            if line.trim_start().starts_with("test result: ") {
+                results += 1;
+            }
+            test_output(line);
+        }
+    };
+    let (success, stderr) = cargo.run(&run.command_line(), &run.env, &mut stdout)?;
+    if !success {
+        return Err(format!(
+            "`cargo {}` failed; its output is above",
+            run.command_line().join(" ")
+        ));
+    }
+    if !test.doc() {
+        judge_run(&test_executables(&built), &stderr, results, cfg!(windows))
+            .map_err(|fault| fault.to_string())?;
+    }
+    Ok(())
 }
 
-/// Makes `call`, a build that reports itself, through `cargo`, handing each
-/// diagnostic's rendered text to `diagnostics` as it is read, and holds every
-/// unit it built to `expect` ([`faults`]). Returns the units, so a caller can
-/// take what the build produced from them.
+/// `line` read as one of cargo's JSON messages: an object with a `reason`
+/// cargo writes. A test's own output is never one, unless it prints exactly
+/// such an object, which a test of this workspace does not.
+fn cargo_message(line: &str) -> Option<Json> {
+    let message = Json::parse(line).ok()?;
+    let reason = message.get("reason").and_then(Json::as_str)?;
+    REASONS.contains(&reason).then_some(message)
+}
+
+/// Makes `call`, a build that reports itself, through `cargo`, reading its
+/// report as it arrives ([`Report`]), handing each diagnostic's rendered
+/// text to `diagnostics`, and holds every unit it built to `expect`
+/// ([`faults`]). Returns the units, so a caller can take what the build
+/// produced from them.
 pub(crate) fn checked(
     cargo: &mut impl Cargo,
     call: &CargoCall,
@@ -492,8 +750,11 @@ pub(crate) fn checked(
     expect: Expect,
     diagnostics: &mut impl FnMut(&str),
 ) -> Result<Vec<Built>, String> {
-    let (success, stdout) = cargo.report(&call.command_line(), &call.env)?;
-    let built = parse_messages(&stdout, diagnostics).map_err(|fault| fault.to_string())?;
+    let mut report = Report::default();
+    let success = cargo.report(&call.command_line(), &call.env, &mut |line| {
+        report.feed(line, diagnostics);
+    })?;
+    let built = report.finish().map_err(|fault| fault.to_string())?;
     if !success {
         return Err(
             "cargo failed, and its report ends in a successful `build-finished`".to_owned(),
@@ -518,17 +779,20 @@ pub(crate) fn checked(
 /// only for doctests is not in this build; each one a package's doctests use
 /// is built, and checked, for that package's unit or integration tests in
 /// another invocation of the same leg. The doctest bodies are compiled by
-/// rustdoc, whose flags the pinned `CARGO_ENCODED_RUSTDOCFLAGS` holds empty.
+/// rustdoc, whose flags the pinned `CARGO_ENCODED_RUSTDOCFLAGS` holds empty
+/// and which the pinned `build.rustdoc` names.
 pub(crate) fn doc_check(run: &CargoCall, colour: bool) -> CargoCall {
+    let format = message_format(colour);
     let mut args: Vec<String> = Vec::new();
     for (index, arg) in run.args.iter().enumerate() {
         match (index, arg.as_str()) {
             (0, "test") => args.push("build".to_owned()),
             (_, "--doc") => {}
+            (_, other) if other == format => {}
             _ => args.push(arg.clone()),
         }
     }
-    for extra in ["--profile", "test", "--lib", message_format(colour)] {
+    for extra in ["--profile", "test", "--lib", format] {
         args.push(extra.to_owned());
     }
     CargoCall {
@@ -590,6 +854,9 @@ pub(crate) struct Built {
     pub(crate) opt_level: OptLevel,
     pub(crate) debug_assertions: bool,
     pub(crate) overflow_checks: bool,
+    /// Built as a test harness (`profile.test`): a test executable the run
+    /// runs.
+    pub(crate) test: bool,
     /// The files the unit produced.
     pub(crate) filenames: Vec<String>,
     /// The executable the unit produced, when it is one.
@@ -610,6 +877,8 @@ impl Built {
 pub(crate) struct Graph {
     members: BTreeSet<String>,
     names: BTreeMap<String, String>,
+    /// Every package's version, by id.
+    versions: BTreeMap<String, String>,
     sim: Option<String>,
     /// The sim's normal-dependency closure, proc-macros and what only they
     /// reach left out: the code the sim runs.
@@ -633,9 +902,28 @@ impl Graph {
         names
     }
 
-    /// Whether some package in the graph is called `name`.
-    pub(crate) fn has_package(&self, name: &str) -> bool {
-        self.names.values().any(|package| package == name)
+    /// The ids of the packages a cargo package spec (`name`, or
+    /// `name@version` with a whole or partial version) matches, as cargo
+    /// matches them.
+    fn spec_ids(&self, spec: &str) -> Vec<String> {
+        let name = spec.split_once('@').map_or(spec, |(name, _)| name);
+        self.names
+            .iter()
+            .filter(|(_, package)| package.as_str() == name)
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+
+    /// Whether a cargo package spec matches some package in the graph.
+    pub(crate) fn has_package(&self, spec: &str) -> bool {
+        !self.spec_ids(spec).is_empty()
+    }
+
+    /// Whether every package a spec matches is of the godot family (and it
+    /// matches one).
+    pub(crate) fn spec_in_family(&self, spec: &str) -> bool {
+        let ids = self.spec_ids(spec);
+        !ids.is_empty() && ids.iter().all(|id| self.godot_family.contains(id))
     }
 
     /// Whether the package called `from` depends on the one called `to`,
@@ -726,6 +1014,13 @@ pub(crate) enum ProfileFault {
     },
     /// A third-party crate outside the godot family at opt-level 0.
     StrayUnoptimised { package: String, target: String },
+    /// A run that did not run every test executable its check reported.
+    TestsDidNotRun {
+        expected: usize,
+        started: usize,
+        results: usize,
+        missing: Vec<String>,
+    },
     /// Variables set in the environment that change codegen behind the
     /// report.
     RefusedInEnvironment { variables: Vec<String> },
@@ -797,7 +1092,8 @@ impl fmt::Display for ProfileFault {
             } => write!(
                 f,
                 "{package}'s target `{target}` builds at opt-level {found}; this build promises \
-                 the release profile's {promised} for every workspace unit"
+                 the release profile's {promised} for every workspace unit and every crate the \
+                 sim runs"
             ),
             Self::SimUnoptimised { target } => write!(
                 f,
@@ -840,12 +1136,29 @@ impl fmt::Display for ProfileFault {
                  the godot family, the only third-party crates the suite builds unoptimised: \
                  remove `[profile.dev.package.{package}]` (or the setting that names it)"
             ),
+            Self::TestsDidNotRun {
+                expected,
+                started,
+                results,
+                missing,
+            } => write!(
+                f,
+                "the check built {expected} test executable(s); cargo started {started} and \
+                 libtest reported {results} result(s){}. Something ran in their place (a \
+                 config file's `runner`, say) and reported success without running them",
+                if missing.is_empty() {
+                    String::new()
+                } else {
+                    format!("; never started: {}", missing.join(", "))
+                }
+            ),
             Self::RefusedInEnvironment { variables } => write!(
                 f,
                 "{} set in the environment; each changes what rustc compiles behind the \
-                 profile cargo reports (flags, another compiler, a wrapper, or unstable \
-                 features), and a checked build pins its own, so it would override them in \
-                 silence. Unset {} and run it again",
+                 profile cargo reports, or what runs a built test (flags, another compiler or \
+                 doc compiler, a wrapper, a runner or linker, or unstable features), and a \
+                 checked build pins its own, so it would override them in silence. Unset {} \
+                 and run it again",
                 variables.join(", "),
                 if variables.len() == 1 { "it" } else { "them" }
             ),
@@ -914,27 +1227,49 @@ const REASONS: &[&str] = &[
     "build-finished",
 ];
 
-/// Every unit cargo built, from the stdout of a build that reports itself.
-/// Every line must be a JSON object with a known `reason`; every
+/// A build's JSON report, read a line at a time as cargo writes it. Every
+/// line must be a JSON object with a known `reason`; every
 /// `compiler-artifact` must carry its package, target, resolved profile and
 /// files; every `compiler-message` must carry its message, whose rendered
-/// text goes to `diagnostics` as it is read; and the stream must end in
-/// exactly one `build-finished` that says the build succeeded.
-pub(crate) fn parse_messages(
-    text: &str,
-    diagnostics: &mut impl FnMut(&str),
-) -> Result<Vec<Built>, ProfileFault> {
-    let mut built: Vec<Built> = Vec::new();
-    let mut finished = false;
-    let mut any = false;
-    // Numbered from 1 by a range that cannot overflow: a string holds fewer
-    // lines than bytes, and fewer bytes than `usize::MAX`.
-    for (line, text) in (1_usize..).zip(text.lines()) {
+/// text goes to the caller's `diagnostics` as it is read; and the stream
+/// must end in exactly one `build-finished` that says the build succeeded.
+/// The first fault is kept and the rest of the stream is still read, so the
+/// process's output is drained and every diagnostic is shown.
+#[derive(Debug, Default)]
+pub(crate) struct Report {
+    built: Vec<Built>,
+    finished: bool,
+    any: bool,
+    /// Lines read, the last one's number.
+    line: usize,
+    fault: Option<ProfileFault>,
+}
+
+impl Report {
+    /// Reads one line of the report.
+    pub(crate) fn feed(&mut self, text: &str, diagnostics: &mut impl FnMut(&str)) {
+        // One more line than were read: a stream holds fewer lines than its
+        // bytes, and fewer bytes than `usize::MAX`.
+        self.line += 1;
         if text.trim().is_empty() {
-            continue;
+            return;
         }
-        any = true;
-        if finished {
+        let line = self.line;
+        if let Err(fault) = self.read(line, text, diagnostics)
+            && self.fault.is_none()
+        {
+            self.fault = Some(fault);
+        }
+    }
+
+    fn read(
+        &mut self,
+        line: usize,
+        text: &str,
+        diagnostics: &mut impl FnMut(&str),
+    ) -> Result<(), ProfileFault> {
+        self.any = true;
+        if self.finished {
             return Err(ProfileFault::FinishedTwice { line });
         }
         let unreadable = |why: String| ProfileFault::Unreadable { line, why };
@@ -950,24 +1285,24 @@ pub(crate) fn parse_messages(
             if !bool_of(&message, "success").map_err(unreadable)? {
                 return Err(ProfileFault::BuildFailed);
             }
-            finished = true;
-            continue;
+            self.finished = true;
+            return Ok(());
         }
         if reason == "compiler-message" {
             let diagnostic = member(&message, "message").map_err(unreadable)?;
-            match member(diagnostic, "rendered").map_err(unreadable)? {
-                Json::Str(rendered) => diagnostics(rendered),
-                Json::Null => {}
-                _ => {
-                    return Err(unreadable(
-                        "a diagnostic's `rendered` is neither text nor null".to_owned(),
-                    ));
+            return match member(diagnostic, "rendered").map_err(unreadable)? {
+                Json::Str(rendered) => {
+                    diagnostics(rendered);
+                    Ok(())
                 }
-            }
-            continue;
+                Json::Null => Ok(()),
+                _ => Err(unreadable(
+                    "a diagnostic's `rendered` is neither text nor null".to_owned(),
+                )),
+            };
         }
         if reason != "compiler-artifact" {
-            continue;
+            return Ok(());
         }
         let target = member(&message, "target").map_err(unreadable)?;
         let profile = member(&message, "profile").map_err(unreadable)?;
@@ -985,7 +1320,7 @@ pub(crate) fn parse_messages(
                 ));
             }
         };
-        built.push(Built {
+        self.built.push(Built {
             package_id: string_of(&message, "package_id")
                 .map_err(unreadable)?
                 .to_owned(),
@@ -994,17 +1329,41 @@ pub(crate) fn parse_messages(
             opt_level,
             debug_assertions: bool_of(profile, "debug_assertions").map_err(unreadable)?,
             overflow_checks: bool_of(profile, "overflow_checks").map_err(unreadable)?,
+            test: bool_of(profile, "test").map_err(unreadable)?,
             filenames: strings_of(&message, "filenames").map_err(unreadable)?,
             executable,
         });
+        Ok(())
     }
-    if !any {
-        return Err(ProfileFault::NothingBuilt);
+
+    /// The units the build reported, or the first fault, or why the stream
+    /// was no whole report.
+    pub(crate) fn finish(self) -> Result<Vec<Built>, ProfileFault> {
+        if let Some(fault) = self.fault {
+            return Err(fault);
+        }
+        if !self.any {
+            return Err(ProfileFault::NothingBuilt);
+        }
+        if !self.finished {
+            return Err(ProfileFault::Unfinished);
+        }
+        Ok(self.built)
     }
-    if !finished {
-        return Err(ProfileFault::Unfinished);
+}
+
+/// Every unit cargo built, from the whole stdout of a build that reports
+/// itself, read as [`Report`] reads it.
+#[cfg(test)]
+pub(crate) fn parse_messages(
+    text: &str,
+    diagnostics: &mut impl FnMut(&str),
+) -> Result<Vec<Built>, ProfileFault> {
+    let mut report = Report::default();
+    for line in text.lines() {
+        report.feed(line, diagnostics);
     }
-    Ok(built)
+    report.finish()
 }
 
 /// The graph [`faults`] needs, from `cargo metadata --format-version 1`
@@ -1027,6 +1386,10 @@ pub(crate) fn graph(metadata: &str) -> Result<Graph, ProfileFault> {
             }
         }
         graph.names.insert(id.to_owned(), name.to_owned());
+        graph.versions.insert(
+            id.to_owned(),
+            string_of(package, "version").map_err(fault)?.to_owned(),
+        );
     }
     for id in array_of(&json, "workspace_members").map_err(fault)? {
         let id = id
@@ -1232,8 +1595,9 @@ mod tests {
     ///   gdextension-api (no `godot` prefix) and syn, which others reach too.
     fn metadata() -> String {
         let package = |id: &str, name: &str, kind: &str| {
+            let version = id.rsplit_once('@').map_or("0.0.0", |(_, version)| version);
             format!(
-                r#"{{"id":"{id}","name":"{name}","targets":[{{"kind":["{kind}"],"name":"x"}}]}}"#
+                r#"{{"id":"{id}","name":"{name}","version":"{version}","targets":[{{"kind":["{kind}"],"name":"x"}}]}}"#
             )
         };
         let dep = |pkg: &str, kind: &str| {
@@ -1749,16 +2113,30 @@ mod tests {
         if test.invocation.selectors == ["--doc"] {
             assert_eq!(check, doc_check(&run, test.colour), "{test:?}");
         } else {
+            // The run's cargo arguments, before `--` and the harness's, with
+            // `--no-run`: nothing else differs.
             let mut expected = run.clone();
+            if let Some(at) = expected.args.iter().position(|arg| arg == "--") {
+                expected.args.truncate(at);
+            }
             expected.args.push("--no-run".to_owned());
-            expected.args.push(message_format(test.colour).to_owned());
             assert_eq!(check, expected, "{test:?}");
         }
         assert_eq!(check.env, pinned_env(""), "{test:?}");
         assert_eq!(check.config, run.config, "{test:?}");
+        assert!(
+            pinned_config()
+                .iter()
+                .all(|value| run.config.contains(value)),
+            "the run names the pinned tools: {test:?}"
+        );
+        assert!(
+            run.args.contains(&message_format(test.colour).to_owned()),
+            "the run reports itself: {test:?}"
+        );
         let unoptimised = test.invocation.sim == SimRule::Unoptimised;
         assert_eq!(
-            run.config == [SIM_UNOPTIMISED],
+            run.config.contains(&SIM_UNOPTIMISED.to_owned()),
             unoptimised,
             "the run carries the sim's level: {test:?}"
         );
@@ -1841,6 +2219,10 @@ mod tests {
         assert_eq!(
             doc.check().command_line(),
             [
+                "--config",
+                "build.rustc=\"rustc\"",
+                "--config",
+                "build.rustdoc=\"rustdoc\"",
                 "build",
                 "--workspace",
                 "--locked",
@@ -1863,17 +2245,45 @@ mod tests {
             alloc.run().command_line(),
             [
                 "--config",
+                "build.rustc=\"rustc\"",
+                "--config",
+                "build.rustdoc=\"rustdoc\"",
+                "--config",
                 "profile.dev.package.pharmakos-sim.opt-level=0",
                 "test",
                 "--workspace",
                 "--test",
-                "allocations"
+                "allocations",
+                "--message-format=json-diagnostic-rendered-ansi"
             ]
         );
         assert_eq!(
             alloc.check().args.last().map(String::as_str),
-            Some("--message-format=json-diagnostic-rendered-ansi")
+            Some("--no-run")
         );
+        // The harness's arguments go after `--`, in the run and never in the
+        // check, which only builds.
+        let fuzz = TestRun::new(
+            vec!["--package".to_owned(), "pharmakos-verifier".to_owned()],
+            Invocation {
+                selectors: vec!["--test".to_owned(), "fuzz".to_owned()],
+                sim: SimRule::OptimisedIfBuilt,
+            },
+            true,
+            false,
+        )
+        .with_harness(vec![Harness::Ignored, Harness::Nocapture]);
+        assert!(fuzz.run().args.ends_with(&[
+            "--".to_owned(),
+            "--ignored".to_owned(),
+            "--nocapture".to_owned()
+        ]));
+        assert!(!fuzz.check().args.iter().any(|arg| arg == "--ignored"));
+        assert_check_is_the_run(&fuzz);
+        let measured = fuzz.clone().release();
+        assert!(measured.run().args.contains(&"--release".to_owned()));
+        assert_eq!(measured.expect(), Expect::RELEASE);
+        assert_check_is_the_run(&measured);
     }
 
     /// What a [`Cargo`] was asked to do, in order.
@@ -1891,23 +2301,34 @@ mod tests {
     }
 
     impl Cargo for Recording {
-        fn report(&mut self, line: &[String], env: &[EnvChange]) -> Result<(bool, String), String> {
+        fn report(
+            &mut self,
+            line: &[String],
+            env: &[EnvChange],
+            stdout: &mut dyn FnMut(&str),
+        ) -> Result<bool, String> {
             self.asked.push(Asked::Report(line.to_vec(), env.to_vec()));
-            Ok((
+            let report = finished(&[artifact(
+                SIM_ID,
+                "pharmakos_sim",
+                self.sim_level,
                 true,
-                finished(&[artifact(
-                    SIM_ID,
-                    "pharmakos_sim",
-                    self.sim_level,
-                    true,
-                    true,
-                )]),
-            ))
+                true,
+            )]);
+            for line in report.lines() {
+                stdout(line);
+            }
+            Ok(true)
         }
 
-        fn run(&mut self, line: &[String], env: &[EnvChange]) -> Result<(), String> {
+        fn run(
+            &mut self,
+            line: &[String],
+            env: &[EnvChange],
+            _stdout: &mut dyn FnMut(&str),
+        ) -> Result<(bool, Vec<String>), String> {
             self.asked.push(Asked::Run(line.to_vec(), env.to_vec()));
-            Ok(())
+            Ok((true, Vec::new()))
         }
     }
 
@@ -1925,7 +2346,7 @@ mod tests {
                     "2"
                 },
             };
-            execute(&test, &graph, &mut cargo, &mut |_| {}).expect("the check holds");
+            execute(&test, &graph, &mut cargo, &mut |_| {}, &mut |_| {}).expect("the check holds");
             let (check, run) = (test.check(), test.run());
             assert_eq!(
                 cargo.asked,
@@ -1950,7 +2371,8 @@ mod tests {
             asked: Vec::new(),
             sim_level: "2",
         };
-        let error = execute(&alloc, &graph, &mut cargo, &mut |_| {}).expect_err("optimised");
+        let error =
+            execute(&alloc, &graph, &mut cargo, &mut |_| {}, &mut |_| {}).expect_err("optimised");
         assert!(error.contains("opt-level 2"), "{error}");
         assert_eq!(cargo.asked.len(), 1, "the run never started");
     }
@@ -1989,9 +2411,24 @@ mod tests {
         let good = vec![
             artifact(SIM_ID, "pharmakos_sim", "3", true, true),
             artifact(PROTO_ID, "pharmakos_proto", "3", true, true),
-            artifact(XXH_ID, "xxhash_rust", "0", true, true),
+            artifact(XXH_ID, "xxhash_rust", "3", true, true),
+            // A crate the sim does not run is not the gate's to judge.
+            artifact(LEXOPT_ID, "lexopt", "0", true, true),
         ];
         assert_eq!(judged(&good, promise), Vec::new());
+        // The state hash's own crate, or any crate the sim runs, off the
+        // release level: the gate would hash code release does not ship.
+        let mut hash_crate = good.clone();
+        hash_crate.push(artifact(XXH_ID, "xxhash_rust", "0", true, true));
+        assert_eq!(
+            judged(&hash_crate, promise),
+            [ProfileFault::WrongOptLevel {
+                package: "xxhash-rust".to_owned(),
+                target: "xxhash_rust".to_owned(),
+                found: OptLevel::O0,
+                promised: OptLevel::O3
+            }]
+        );
         let unoptimised = vec![artifact(SIM_ID, "pharmakos_sim", "0", true, true)];
         assert_eq!(
             judged(&unoptimised, promise),
@@ -2079,6 +2516,162 @@ mod tests {
         );
     }
 
+    /// A run that ran its test executables: each started (`Running`) and as
+    /// many libtest results as starts. A runner that runs nothing leaves the
+    /// starts and no result.
+    #[test]
+    fn a_run_whose_tests_did_not_run_is_refused() {
+        let expected = vec![
+            "D:\\t\\debug\\deps\\proto-1.exe".to_owned(),
+            "D:\\t\\debug\\deps\\fallbacks-2.exe".to_owned(),
+        ];
+        let stderr = vec![
+            "   Compiling pharmakos-proto v0.0.0".to_owned(),
+            "     Running unittests src\\lib.rs (D:/t\\debug\\deps\\proto-1.exe)".to_owned(),
+            "\u{1b}[1m\u{1b}[92m     Running\u{1b}[0m tests\\fallbacks.rs (D:/t\\debug\\deps\\fallbacks-2.exe)"
+                .to_owned(),
+        ];
+        assert_eq!(judge_run(&expected, &stderr, 2, true), Ok(()));
+        // The runner ran nothing: both started, no result.
+        assert_eq!(
+            judge_run(&expected, &stderr, 0, true),
+            Err(ProfileFault::TestsDidNotRun {
+                expected: 2,
+                started: 2,
+                results: 0,
+                missing: Vec::new()
+            })
+        );
+        // An executable never started.
+        let one = stderr.get(..2).map(<[String]>::to_vec).unwrap_or_default();
+        assert!(matches!(
+            judge_run(&expected, &one, 1, true),
+            Err(ProfileFault::TestsDidNotRun { started: 1, ref missing, .. }) if missing.len() == 1
+        ));
+        // Case matters where the file system's names do, and on Windows it
+        // does not: cargo spells the drive one way and the report another.
+        let lower: Vec<String> = expected
+            .iter()
+            .map(|path| path.replace("D:", "d:"))
+            .collect();
+        assert_eq!(judge_run(&lower, &stderr, 2, true), Ok(()));
+        assert!(judge_run(&lower, &stderr, 2, false).is_err());
+        assert_eq!(
+            running_path("     Running unittests src/lib.rs (/t/debug/deps/x-1)"),
+            Some("/t/debug/deps/x-1".to_owned())
+        );
+        assert_eq!(running_path("   Compiling x v1.0.0 (/t/x)"), None);
+        assert_eq!(without_ansi("\u{1b}[1mRunning\u{1b}[0m"), "Running");
+    }
+
+    /// A [`Cargo`] whose check and run both carry the same warning, and whose
+    /// run prints a test's result and a cargo message among its output.
+    struct Noisy {
+        printed: Vec<String>,
+    }
+
+    const WARNING: &str = r#"{"reason":"compiler-message","package_id":"x","manifest_path":"m","target":{"kind":["lib"],"name":"x"},"message":{"rendered":"warning: unused variable: `x`\n","message":"unused"}}"#;
+
+    impl Cargo for Noisy {
+        fn report(
+            &mut self,
+            _line: &[String],
+            _env: &[EnvChange],
+            stdout: &mut dyn FnMut(&str),
+        ) -> Result<bool, String> {
+            for line in [
+                WARNING,
+                artifact(SIM_ID, "pharmakos_sim", "2", true, true)
+                    .replace("\"test\":false}", "\"test\":true}")
+                    .replace("\"executable\":null", "\"executable\":\"D:/t/sim-1.exe\"")
+                    .as_str(),
+                WARNING,
+                FINISHED,
+            ] {
+                stdout(line);
+            }
+            Ok(true)
+        }
+
+        fn run(
+            &mut self,
+            _line: &[String],
+            _env: &[EnvChange],
+            stdout: &mut dyn FnMut(&str),
+        ) -> Result<(bool, Vec<String>), String> {
+            for line in [
+                WARNING,
+                FINISHED,
+                "running 0 tests",
+                "test result: ok. 0 passed",
+            ] {
+                stdout(line);
+            }
+            self.printed.push("ran".to_owned());
+            Ok((
+                true,
+                vec!["     Running unittests src/lib.rs (D:/t/sim-1.exe)".to_owned()],
+            ))
+        }
+    }
+
+    /// Each diagnostic is written once for the check and the run together,
+    /// and what the tests print reaches the caller as it comes.
+    #[test]
+    fn a_diagnostic_is_written_once_and_the_tests_output_is_handed_on() {
+        let graph = graph(&metadata()).expect("the graph reads");
+        let test = TestRun::new(
+            vec!["--package".to_owned(), "pharmakos-sim".to_owned()],
+            Invocation {
+                selectors: vec!["--lib".to_owned()],
+                sim: SimRule::OptimisedIfBuilt,
+            },
+            false,
+            false,
+        );
+        let mut cargo = Noisy {
+            printed: Vec::new(),
+        };
+        let mut diagnostics: Vec<String> = Vec::new();
+        let mut output: Vec<String> = Vec::new();
+        execute(
+            &test,
+            &graph,
+            &mut cargo,
+            &mut |text| diagnostics.push(text.to_owned()),
+            &mut |line| output.push(line.to_owned()),
+        )
+        .expect("it runs");
+        assert_eq!(diagnostics, ["warning: unused variable: `x`\n"]);
+        assert_eq!(output, ["running 0 tests", "test result: ok. 0 passed"]);
+    }
+
+    /// Package specs are matched as cargo matches them: by name, and by
+    /// version when the spec gives one, whole or partial.
+    #[test]
+    fn a_package_spec_is_matched_by_name_and_version() {
+        let graph = graph(&metadata()).expect("the graph reads");
+        assert!(graph.has_package("godot-core"));
+        assert!(graph.has_package("godot-core@0.5.5"));
+        assert!(graph.has_package("godot-core@0.5"));
+        assert!(!graph.has_package("godot-core@0.5.6"));
+        assert!(!graph.has_package("godot-core@0.0.1"));
+        assert!(graph.spec_in_family("godot-core@0.5.5"));
+        assert!(!graph.spec_in_family("syn"));
+        assert!(!graph.spec_in_family("godot-core@9"));
+    }
+
+    /// A build script is not the code its package's rules are about: the
+    /// sim's at the build-override's level raises nothing.
+    #[test]
+    fn a_build_script_of_the_sim_raises_nothing() {
+        let script = artifact(SIM_ID, "build-script-build", "0", true, true)
+            .replace("\"kind\":[\"lib\"]", "\"kind\":[\"custom-build\"]");
+        let mut lines = good();
+        lines.push(script);
+        assert_eq!(judged(&lines, suite()), Vec::new());
+    }
+
     #[test]
     fn a_variable_that_changes_codegen_is_refused_by_name() {
         let pairs = |list: &[(&str, &str)]| {
@@ -2108,20 +2701,28 @@ mod tests {
             ("CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER", "x"),
             ("RUSTC_BOOTSTRAP", "1"),
             ("RUSTUP_TOOLCHAIN", "1.98.1"),
+            ("RUSTDOC", "x"),
+            ("CARGO_BUILD_RUSTDOC", "x"),
+            ("CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUNNER", "x"),
+            ("CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER", "x"),
         ]);
         let refused = [
             "CARGO_BUILD_RUSTC",
             "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER",
             "CARGO_BUILD_RUSTC_WRAPPER",
+            "CARGO_BUILD_RUSTDOC",
             "CARGO_BUILD_RUSTDOCFLAGS",
             "CARGO_BUILD_RUSTFLAGS",
             "CARGO_ENCODED_RUSTDOCFLAGS",
+            "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUNNER",
             "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS",
+            "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER",
             "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTDOCFLAGS",
             "RUSTC",
             "RUSTC_BOOTSTRAP",
             "RUSTC_WORKSPACE_WRAPPER",
             "RUSTC_WRAPPER",
+            "RUSTDOC",
             "RUSTDOCFLAGS",
             "RUSTFLAGS",
         ];

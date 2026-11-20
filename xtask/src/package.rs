@@ -104,7 +104,7 @@ const CRT_NEEDLES: &[&str] = &["vcruntime", "msvcp", "ucrtbase", "api-ms-win-crt
 
 /// The one flag `package`'s two builds pass, on Windows alone: the static C
 /// runtime (item 117 (5)). It reaches rustc through
-/// [`resolved::ENCODED_RUSTFLAGS`] in the build's own value
+/// `CARGO_ENCODED_RUSTFLAGS` in the build's own value
 /// ([`build_calls`]), which cargo reads before every other source of
 /// rustflags, so the two builds carry exactly this flag on Windows and none on
 /// Linux, whatever a config file says.
@@ -189,6 +189,10 @@ pub(crate) fn run_package(ctx: &Ctx) -> Result<String, String> {
     } else {
         &LINUX
     };
+    // The two builds pin their own tools and flags, so a variable the caller
+    // set would be overridden in silence: refused by name, on every platform,
+    // before any tool runs, the host query below included.
+    refuse_codegen_variables()?;
     let host = host_triple(ctx)?;
     if host != platform.triple {
         return Err(format!(
@@ -197,9 +201,6 @@ pub(crate) fn run_package(ctx: &Ctx) -> Result<String, String> {
             platform.triple
         ));
     }
-    // The two builds pin their own flags, so a flags variable the caller set
-    // would be overridden in silence: refused by name, on every platform.
-    refuse_codegen_variables()?;
 
     let godot = godot_program();
     if !tool_available(ctx, &godot) {
@@ -692,24 +693,41 @@ fn pck_name(platform: &Platform) -> String {
 // Building
 // ---------------------------------------------------------------------------
 
-fn host_triple(ctx: &Ctx) -> Result<String, String> {
-    let rustc = env::var("RUSTC").unwrap_or_else(|_| "rustc".to_owned());
-    let output = child_command(ctx.require_tools, &rustc, &["-vV"], &ctx.root)
+/// The pinned compiler's answer to `args`: `rustc` by its plain name, as
+/// every checked call names it (`build.rustc`), which the rustup proxy on
+/// `PATH` resolves to the pinned toolchain's. A query that fails is a
+/// failure, never an empty answer.
+fn rustc_query(ctx: &Ctx, args: &[&str]) -> Result<String, String> {
+    let rendered = format!("rustc {}", args.join(" "));
+    let output = child_command(ctx.require_tools, "rustc", args, &ctx.root)
+        .stderr(Stdio::inherit())
         .output()
-        .map_err(|error| format!("failed to run `{rustc} -vV`: {error}"))?;
-    let text = String::from_utf8_lossy(&output.stdout);
+        .map_err(|error| format!("failed to run `{rendered}`: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "`{rendered}` failed ({})",
+            describe_exit(output.status)
+        ));
+    }
+    String::from_utf8(output.stdout)
+        .map_err(|error| format!("`{rendered}` printed something that is not UTF-8: {error}"))
+}
+
+fn host_triple(ctx: &Ctx) -> Result<String, String> {
+    let text = rustc_query(ctx, &["-vV"])?;
     text.lines()
         .find_map(|line| line.strip_prefix("host: "))
         .map(|host| host.trim().to_owned())
-        .ok_or_else(|| format!("`{rustc} -vV` printed no host line"))
+        .ok_or_else(|| "`rustc -vV` printed no host line".to_owned())
 }
 
 fn rustc_version(ctx: &Ctx) -> Result<String, String> {
-    let rustc = env::var("RUSTC").unwrap_or_else(|_| "rustc".to_owned());
-    let output = child_command(ctx.require_tools, &rustc, &["-V"], &ctx.root)
-        .output()
-        .map_err(|error| format!("failed to run `{rustc} -V`: {error}"))?;
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    let text = rustc_query(ctx, &["-V"])?;
+    let version = text.trim();
+    if version.is_empty() {
+        return Err("`rustc -V` printed nothing".to_owned());
+    }
+    Ok(version.to_owned())
 }
 
 /// The environment `package`'s own builds run with: their rustflags pinned to
@@ -734,7 +752,7 @@ fn build_calls(platform: &Platform, locked: bool, colour: bool) -> [resolved::Ca
             args.push("--locked".to_owned());
         }
         resolved::CargoCall {
-            config: Vec::new(),
+            config: resolved::pinned_config(),
             env: build_env(platform),
             args,
         }
@@ -766,38 +784,66 @@ fn build_calls(platform: &Platform, locked: bool, colour: bool) -> [resolved::Ca
 /// Builds the client library and `gamectl` for the host triple, checked as
 /// they are made: every workspace unit with overflow checks on, which both
 /// release profiles promise ([`resolved::Expect::RELEASE`]). Returns both
-/// paths as cargo's report names them, so what is zipped is what was built
-/// and checked, never a stale file at a conventional path.
+/// paths as cargo's report names them, after a build that produced them: see
+/// [`fresh_artefact`].
 fn build(ctx: &Ctx, platform: &Platform) -> Result<(PathBuf, PathBuf), String> {
     let graph = sim_graph(ctx)?;
-    let colour = colour();
-    let mut cargo = ProcessCargo { ctx };
-    let [client, host] = build_calls(platform, ctx.locked, colour);
-    let client = resolved::checked(
-        &mut cargo,
-        &client,
-        &graph,
-        resolved::Expect::RELEASE,
-        &mut print_diagnostic,
-    )?;
-    let host = resolved::checked(
-        &mut cargo,
-        &host,
-        &graph,
-        resolved::Expect::RELEASE,
-        &mut print_diagnostic,
-    )?;
-    let library = reported_library(&client, platform)?;
-    let gamectl = reported_executable(&host, SCENARIO_BIN)?;
-    for built in [&library, &gamectl] {
-        if !built.is_file() {
-            return Err(format!(
-                "cargo reported {}, and it is not there",
-                built.display()
-            ));
-        }
-    }
+    let mut cargo = ProcessCargo::of(ctx);
+    let [client, host] = build_calls(platform, ctx.locked, colour());
+    let library = fresh_artefact(&mut cargo, &client, &graph, |built| {
+        reported_library(built, platform)
+    })?;
+    let gamectl = fresh_artefact(&mut cargo, &host, &graph, |built| {
+        reported_executable(built, SCENARIO_BIN)
+    })?;
     Ok((library, gamectl))
+}
+
+/// The artefact `pick` takes from `call`'s report, as a build just produced
+/// it. Cargo fingerprints a unit's inputs and never its outputs, so a file
+/// planted at the artefact's path survives a build in which every unit is
+/// fresh. So the build runs, the reported artefact is removed, and the build
+/// runs again: cargo re-links what is missing, and the second report must name
+/// the same path, now holding what cargo wrote.
+fn fresh_artefact(
+    cargo: &mut ProcessCargo,
+    call: &resolved::CargoCall,
+    graph: &resolved::Graph,
+    pick: impl Fn(&[resolved::Built]) -> Result<PathBuf, String>,
+) -> Result<PathBuf, String> {
+    let first = pick(&resolved::checked(
+        cargo,
+        call,
+        graph,
+        resolved::Expect::RELEASE,
+        &mut print_diagnostic,
+    )?)?;
+    match fs::remove_file(&first) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("removing {}: {error}", first.display())),
+    }
+    let second = pick(&resolved::checked(
+        cargo,
+        call,
+        graph,
+        resolved::Expect::RELEASE,
+        &mut print_diagnostic,
+    )?)?;
+    if second != first {
+        return Err(format!(
+            "cargo reported {} and then {} for the same build",
+            first.display(),
+            second.display()
+        ));
+    }
+    if !second.is_file() {
+        return Err(format!(
+            "cargo reported {}, and did not write it",
+            second.display()
+        ));
+    }
+    Ok(second)
 }
 
 /// The client library a build reported: the file called `platform.library`
@@ -1442,9 +1488,12 @@ fn licence_files(registry: &Path, item: &Crate) -> Result<Vec<(String, String)>,
     let folder = format!("{}-{}", item.name, item.version);
     let mut indexes: Vec<PathBuf> = fs::read_dir(registry)
         .map_err(|error| format!("reading {}: {error}", registry.display()))?
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .collect();
+        .map(|entry| {
+            entry
+                .map(|entry| entry.path())
+                .map_err(|error| format!("reading an entry of {}: {error}", registry.display()))
+        })
+        .collect::<Result<_, _>>()?;
     indexes.sort();
     let Some(source) = indexes
         .iter()
@@ -1458,8 +1507,13 @@ fn licence_files(registry: &Path, item: &Crate) -> Result<Vec<(String, String)>,
     };
     let mut files: Vec<PathBuf> = fs::read_dir(&source)
         .map_err(|error| format!("reading {}: {error}", source.display()))?
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
+        .map(|entry| {
+            entry
+                .map(|entry| entry.path())
+                .map_err(|error| format!("reading an entry of {}: {error}", source.display()))
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
         .filter(|path| path.is_file())
         .collect();
     files.sort();
@@ -1742,11 +1796,14 @@ fn compare_manifest(
         );
         return Ok(());
     }
-    manifest_verdict(
-        fs::read(&golden).ok().as_deref(),
-        actual.as_bytes(),
-        &golden,
-    )
+    // Only a golden that is not there is "no committed manifest"; any other
+    // read error is a failure of its own.
+    let committed = match fs::read(&golden) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(format!("reading {}: {error}", golden.display())),
+    };
+    manifest_verdict(committed.as_deref(), actual.as_bytes(), &golden)
 }
 
 /// The manifest's verdict. Pure, so the readable diff is unit-tested.
@@ -1909,7 +1966,7 @@ mod tests {
                         call.env.first(),
                         Some(&("CARGO_ENCODED_RUSTFLAGS".to_owned(), Some(flags.to_owned())))
                     );
-                    assert!(call.config.is_empty());
+                    assert_eq!(call.config, resolved::pinned_config());
                     assert_eq!(
                         call.args
                             .iter()
@@ -1948,6 +2005,7 @@ mod tests {
                 opt_level: resolved::OptLevel::O3,
                 debug_assertions: false,
                 overflow_checks: true,
+                test: false,
                 filenames: files.iter().map(|file| (*file).to_owned()).collect(),
                 executable: executable.map(str::to_owned),
             };
