@@ -307,6 +307,50 @@ mod tests {
         );
     }
 
+    /// A line break inside a blanked comment stays a line break, so a line
+    /// number the verifier reports is the line in the file the author wrote.
+    #[test]
+    fn blanking_keeps_every_line_break_inside_a_comment() {
+        let text = "{ /* one\ntwo\r\nthree */ \"a\" // x\n: 1 }";
+        let blanked = blank_comments(text);
+        assert_eq!(blanked.len(), text.len());
+        let breaks = |of: &str| -> Vec<(usize, char)> {
+            of.char_indices()
+                .filter(|(_, character)| *character == '\n' || *character == '\r')
+                .collect()
+        };
+        assert_eq!(breaks(&blanked), breaks(text));
+        assert_eq!(blanked, "{       \n   \r\n         \"a\"     \n: 1 }");
+    }
+
+    /// `/*/` does not close itself: a block comment closes at the first `*/`
+    /// that starts after its `/*`.
+    #[test]
+    fn a_block_comment_does_not_close_on_its_own_slash() {
+        assert_eq!(blank_comments("/*/ x */1"), "        1");
+        let unclosed = "1 /*/";
+        assert_eq!(blank_comments(unclosed), unclosed);
+    }
+
+    /// A text past `MAX_PLAYBOOK_CHARS` is `E0029` and nothing else: it is not
+    /// blanked, decoded or hashed.
+    #[test]
+    fn a_text_past_the_cap_is_refused_whole() {
+        let past = format!(
+            "{MINIMAL}{}",
+            " ".repeat(pharmakos_verifier::MAX_PLAYBOOK_CHARS)
+        );
+        let report = verify_jsonc(&past, &[], &scope(), &rules(), Depth::Quick).expect("a report");
+        let codes: Vec<&str> = report
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect();
+        assert_eq!(codes, ["E0029"]);
+        assert!(!report.qualifies);
+        assert!(report.plan_fingerprint.is_empty());
+    }
+
     #[test]
     fn quick_and_full_are_both_reachable() {
         let quick = verify_jsonc(MINIMAL, &[], &scope(), &rules(), Depth::Quick).expect("a report");
