@@ -474,3 +474,33 @@ fn a_field_written_twice_is_told_by_field_and_count_not_by_pointer() {
         pharmakos_plan_core::patch_text(&file, edit_twice).expect("an old pair is not new");
     assert!(patched.contains("\"cooldownMs\":7000"), "{patched}");
 }
+
+/// A `move` and a `copy` whose `from` names a field in the other spelling
+/// take the member the file writes (S3's `vfyq2`, fix pass 2, item A6: the
+/// `from_untranslated` mutant survived before).
+#[test]
+fn a_from_in_either_spelling_takes_the_member_the_file_writes() {
+    for (op, keeps) in [("move", false), ("copy", true)] {
+        let patch = format!(
+            r#"[{{"op":"{op}","from":"/declarative/route/0/skip_if","path":"/declarative/route/1/skip_if"}}]"#
+        );
+        let (patched, inverse) = pharmakos_plan_core::patch_text(CAMEL, &patch)
+            .unwrap_or_else(|error| panic!("{op}: {error}"));
+        let document = Document::parse(&patched).expect("a document");
+        let json = document.to_json();
+        let route = json
+            .get("declarative")
+            .and_then(|declarative| declarative.get("route"))
+            .expect("a route");
+        let Json::Array(steps) = route else {
+            panic!("{op}: the route is an array");
+        };
+        let first = steps.first().expect("a first step");
+        let second = steps.get(1).expect("a second step");
+        assert!(second.get("skip_if").is_some(), "{op}: {patched}");
+        assert_eq!(first.get("skipIf").is_some(), keeps, "{op}: {patched}");
+        let (back, _) = pharmakos_plan_core::patch_text(&patched, &inverse)
+            .unwrap_or_else(|error| panic!("{op}: undo: {error}"));
+        assert_eq!(back, CAMEL, "{op}: undo");
+    }
+}
