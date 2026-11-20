@@ -117,6 +117,9 @@ fn the_fix_for_a_missing_window_writes_the_skeletons_window_and_qualifies() {
     for freshness in [
         r#"{"kind": "KNOWN_WITHIN"}"#,
         r#"{"kind": "KNOWN_WITHIN", "known_within_ms": 0}"#,
+        // The JSON name, which proto3's mapping reads as the same field: the
+        // Fix addresses the member the file writes (fix pass 1, item 9).
+        r#"{"kind": "KNOWN_WITHIN", "knownWithinMs": 0}"#,
     ] {
         let text = playbook(freshness);
         let report = check(&text);
