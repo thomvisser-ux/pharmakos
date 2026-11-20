@@ -324,6 +324,35 @@ moved for it.
   played (the scenario's header says why); `crates/sim/tests/attack.rs`'
   `the_last_beacon_lost_ends_the_match_that_tick` plays it headless.
 
+**S3's `settle` moved `breach-and-raze` and `mortar-breaks-wall`, and no other
+chain.** The rule: the pathing graph is settled in the phase that edits the
+terrain. The cluster repair, and the re-arming of the walkers it frees, ran in
+the next tick's Pathing phase; they run at the end of the Voxels phase of the
+tick that edited the terrain, so no later phase, Lull or restore reads a graph
+that disagrees with the surface (`crates/sim/src/world.rs`,
+`World::settle_graph`). Each chain moves where a read in the tick after an edit
+changed:
+
+* `breach-and-raze` from line 1697 and `mortar-breaks-wall` from line 1828:
+  a read in the Programs phase's unit programs, the build drones'
+  reachability (`crates/sim/src/world/site.rs`, `reachable`). The stale graph
+  said a column was reachable that the wall the drones had just closed had
+  cut off; the settled one says it is not.
+* `attack::seal_or_breach`, in the same phase before the unit programs, reads
+  differently from `breach-and-raze`'s line 3233.
+* The single lines 5926 (`breach-and-raze`) and 5732 (`mortar-breaks-wall`)
+  are the re-arm's tick: a walker the repair frees is `Waiting` one tick
+  sooner, and is served on the same tick as before.
+
+The bisection repeats on this tick loop with the repair and the re-arm
+(`World::settle_graph`) taken out of the Voxels phase and called from one line
+of `programs::run_all` instead. Called just after the unit programs' loop,
+both chains are the old ones, line for line. Called just after
+`attack::update`, before the loop, the stretches from lines 1697 and 1828 move
+as they do here, and `breach-and-raze` differs from this change from line 3233
+on (the attack read). Called just before `attack::update`, each chain is this
+change's but for its re-arm line (5926, 5732).
+
 `expand-east-segment` carries one more thing worth knowing before its chain is
 read. The playbook it seals **does not qualify against either seat's own frozen
 snapshot** on this map: `E0401` for `b_01`, which since S1 names each seat's own

@@ -263,9 +263,9 @@ impl Surface {
     /// Called from the voxel phase with the chunks
     /// [`VoxelStore::settle`](crate::voxels::VoxelStore::settle) just settled,
     /// so the tops never lag the bytes: a walker's next step is validated
-    /// against the terrain as it is, and the *cluster* repair that follows a
-    /// tick later (the phase order puts `Pathing` before `Voxels`) only ever
-    /// changes which routes exist, never whether a step is legal.
+    /// against the terrain as it is. The *cluster* repair follows in the same
+    /// phase, before it ends (`World::settle_graph`, lane `settle`), so the
+    /// graph never lags the surface either.
     pub fn refresh_chunk(&mut self, store: &VoxelStore, chunk: u32) {
         let Some(origin) = store.chunk_origin(chunk) else {
             return;
