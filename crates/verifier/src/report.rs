@@ -67,6 +67,19 @@ impl Diag {
         self
     }
 
+    /// One substitution that is the player's own text (a label, an id, a
+    /// key), quoted through the codec's one rule
+    /// (`pharmakos_proto::json::grammar::quoted`; S3's `vfyq2`): control
+    /// characters escaped and the length capped, so a report never carries a
+    /// terminal control sequence or the whole of a 200 KB name.
+    pub(crate) fn arg_text(mut self, name: &'static str, value: impl AsRef<str>) -> Diag {
+        self.args.push((
+            name,
+            Cow::Owned(pharmakos_proto::json::grammar::quoted(value.as_ref())),
+        ));
+        self
+    }
+
     /// One substitution that is a word of the string table, held without a
     /// copy (S3's `vfy6`: a note raised once per step pays for every copy).
     pub(crate) fn arg_word(mut self, name: &'static str, value: &'static str) -> Diag {

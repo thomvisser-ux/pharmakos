@@ -95,7 +95,7 @@ use crate::wire::{
 // Deeper than any message in either package, and shallow enough that a
 // hostile document cannot exhaust the stack: the grammar's one limit
 // ([`super::grammar::MAX_DEPTH`]), a message nesting counted as a value does.
-use super::grammar::may_nest;
+use super::grammar::{may_nest, quoted};
 
 fn unknown_message(full_name: &str) -> Error {
     Error::at(
@@ -851,8 +851,10 @@ impl<'j> Encoder<'j> {
                 ErrorKind::BothNames,
                 &Path::Key(path, key).render(),
                 format!(
-                    "`{first}` and `{key}` both name the field `{}`. A field is written once, \
+                    "`{}` and `{}` both name the field `{}`. A field is written once, \
                      under one of its names.",
+                    quoted(first),
+                    quoted(key),
                     field.field.name
                 ),
             ));
@@ -906,8 +908,9 @@ impl<'j> Encoder<'j> {
                     ErrorKind::UnknownField,
                     &Path::Key(path, key).render(),
                     format!(
-                        "`{key}` is not a field of `{}`. Unknown fields are rejected, never \
+                        "`{}` is not a field of `{}`. Unknown fields are rejected, never \
                          stripped.",
+                        quoted(key),
                         message.message.full_name
                     ),
                 )
@@ -930,8 +933,10 @@ impl<'j> Encoder<'j> {
                         ErrorKind::OneofArms,
                         &Path::Key(path, key).render(),
                         format!(
-                            "`{key}` and `{previous}` are both set, but only one member of a \
-                             oneof may be"
+                            "`{}` and `{}` are both set, but only one member of a \
+                             oneof may be",
+                            quoted(key),
+                            quoted(previous)
                         ),
                     ));
                 }
@@ -1096,7 +1101,8 @@ impl<'j> Encoder<'j> {
                                 at(
                                     ErrorKind::Value,
                                     &format!(
-                                        "`{name}` is not a value of `{}`",
+                                        "`{}` is not a value of `{}`",
+                                        quoted(name),
                                         field.field.type_name
                                     ),
                                 )
@@ -1239,15 +1245,16 @@ fn is_zero(lexeme: &str) -> bool {
 fn integer_refusal(lexeme: &str, otherwise: &str, signed: bool) -> String {
     if is_misspelt_integer(lexeme) {
         format!(
-            "`{lexeme}` is not an integer as JSON writes one: RFC 8259 has no `+` and no \
-             leading zero"
+            "`{}` is not an integer as JSON writes one: RFC 8259 has no `+` and no \
+             leading zero",
+            quoted(lexeme)
         )
     } else if is_integer_lexeme(lexeme) && (signed || !lexeme.starts_with('-')) {
         // A whole number too large for the field's 64 bits (the review of
         // PR #179): out of range, not a fraction.
-        format!("`{lexeme}` is out of range for a 64-bit integer")
+        format!("`{}` is out of range for a 64-bit integer", quoted(lexeme))
     } else {
-        format!("`{lexeme}` {otherwise}")
+        format!("`{}` {otherwise}", quoted(lexeme))
     }
 }
 

@@ -336,7 +336,7 @@ impl Visit for Semantics<'_> {
         {
             self.out.emit(
                 Diag::new("E0421", pointer::child(at, "beacon_id"))
-                    .arg("id", id)
+                    .arg_text("id", id)
                     .arg_word("role", role),
             );
         }
@@ -375,7 +375,7 @@ impl Visit for Semantics<'_> {
                     "E0405",
                     pointer::child(&pointer::child(at, "beacon"), "beacon_id"),
                 )
-                .arg("id", id),
+                .arg_text("id", id),
             );
             return;
         }
@@ -387,7 +387,7 @@ impl Visit for Semantics<'_> {
                 Some(interface_row::Row::Recycle(_)) if known.is_core => {
                     self.out.emit(
                         Diag::new("E0504", pointer::child(&row_at, "recycle"))
-                            .arg("id", id)
+                            .arg_text("id", id)
                             .related(pointer::child(&pointer::child(at, "beacon"), "beacon_id")),
                     );
                 }
@@ -396,7 +396,7 @@ impl Visit for Semantics<'_> {
                 {
                     self.out.emit(
                         Diag::new("E0503", pointer::child(&row_at, "add_build_target"))
-                            .arg("id", id)
+                            .arg_text("id", id)
                             .arg("mandate", known.mandate.as_str_name())
                             .related(pointer::child(&pointer::child(at, "beacon"), "beacon_id")),
                     );
@@ -604,7 +604,7 @@ impl Semantics<'_> {
                             "beacon_id",
                         ),
                     )
-                    .arg("id", id)
+                    .arg_text("id", id)
                     .arg("side", strings::SIDE_ENEMY)
                     .arg("role", strings::ROLE_PROTECT)
                     .arg("wanted", strings::WANTED_OWN),
@@ -657,7 +657,7 @@ impl Semantics<'_> {
                 if known.side == Ownership::Own {
                     self.out.emit(
                         Diag::new("E0414", here)
-                            .arg("id", id)
+                            .arg_text("id", id)
                             .arg("side", strings::SIDE_OWN)
                             .arg("role", strings::ROLE_ATTACK_TARGET)
                             .arg("wanted", strings::WANTED_ENEMY),
@@ -956,7 +956,7 @@ impl Semantics<'_> {
                         "blueprint_id",
                     ),
                 )
-                .arg("id", &queue.blueprint_id)
+                .arg_text("id", &queue.blueprint_id)
                 .arg("licence", name),
             );
         }
@@ -1000,14 +1000,14 @@ impl Semantics<'_> {
             if let Some(first) = earlier {
                 self.out.emit(
                     Diag::new("E0513", here.clone())
-                        .arg("id", id)
+                        .arg_text("id", id)
                         .arg("why", strings::SPIRE_QUEUED_EARLIER)
                         .related(first.at.clone()),
                 );
             } else if list == List::Route && !step.guarded && self.scope.spire_at(id) {
                 self.out.emit(
                     Diag::new("E0513", here.clone())
-                        .arg("id", id)
+                        .arg_text("id", id)
                         .arg("why", strings::SPIRE_STANDS)
                         .related(beacon_at.clone())
                         .map_ref(known.at),
@@ -1044,7 +1044,7 @@ impl Semantics<'_> {
         if target <= index {
             self.out.emit(
                 Diag::new("E0301", pointer::child(&here, "jump_to_label"))
-                    .arg("label", &on_fail.jump_to_label)
+                    .arg_text("label", &on_fail.jump_to_label)
                     .related(list_entry(list, target)),
             );
         }

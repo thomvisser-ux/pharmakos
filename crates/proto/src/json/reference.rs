@@ -32,6 +32,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use super::base64;
+use super::grammar::quoted;
 use super::value::{Error, ErrorKind, Json, is_integer_lexeme, is_misspelt_integer, push_pointer};
 use crate::descriptor::{Field, Message, ScalarKind, Schema, schema};
 use crate::wire::{
@@ -154,7 +155,7 @@ impl JsonReader<'_> {
             let key = self.string()?;
             if entries.iter().any(|(name, _)| *name == key) {
                 self.pos = key_at;
-                return Err(self.error(format!("duplicate key `{key}`")));
+                return Err(self.error(format!("duplicate key `{}`", super::grammar::quoted(&key))));
             }
             self.skip_whitespace();
             self.expect(b':')?;
@@ -286,8 +287,27 @@ impl JsonReader<'_> {
                     char::from_u32(code).ok_or_else(|| self.error("not a Unicode scalar value"))?;
                 out.push(character);
             }
-            other => {
-                return Err(self.error(format!("unknown escape `\\{}`", char::from(other))));
+            _ => {
+                // S3's `vfyq2`, fix pass 1: the escaped character whole, quoted,
+                // and the refusal after it, at a character boundary.
+                let start = self.pos.saturating_sub(1);
+                let width = match self.bytes.get(start) {
+                    Some(lead) if *lead >= 0xf0 => 4,
+                    Some(lead) if *lead >= 0xe0 => 3,
+                    Some(lead) if *lead >= 0xc0 => 2,
+                    _ => 1,
+                };
+                let end = start.saturating_add(width);
+                let Some(Ok(character)) = self.bytes.get(start..end).map(std::str::from_utf8)
+                else {
+                    return Err(self.error("invalid UTF-8 in a string"));
+                };
+                let character = character.to_owned();
+                self.pos = end;
+                return Err(self.error(format!(
+                    "unknown escape `\\{}`",
+                    super::grammar::quoted(&character)
+                )));
             }
         }
         Ok(())
@@ -754,7 +774,8 @@ fn json_to_message(
             classified(
                 &key_pointer,
                 format!(
-                    "`{key}` is not a field of `{}`. Unknown fields are rejected, never stripped.",
+                    "`{}` is not a field of `{}`. Unknown fields are rejected, never stripped.",
+                    quoted(key),
                     message.full_name
                 ),
             )
@@ -764,8 +785,10 @@ fn json_to_message(
             return Err(classified(
                 &key_pointer,
                 format!(
-                    "`{first}` and `{key}` both name the field `{}`. A field is written once, \
+                    "`{}` and `{}` both name the field `{}`. A field is written once, \
                      under one of its names.",
+                    quoted(first),
+                    quoted(key),
                     field.name
                 ),
             ));
@@ -782,7 +805,9 @@ fn json_to_message(
                 return Err(classified(
                     &key_pointer,
                     format!(
-                        "`{key}` and `{previous}` are both set, but only one member of a oneof may be"
+                        "`{}` and `{}` are both set, but only one member of a oneof may be",
+                        quoted(key),
+                        quoted(previous)
                     ),
                 ));
             }
@@ -908,15 +933,16 @@ fn is_zero(lexeme: &str) -> bool {
 fn integer_refusal(lexeme: &str, otherwise: &str, signed: bool) -> String {
     if is_misspelt_integer(lexeme) {
         format!(
-            "`{lexeme}` is not an integer as JSON writes one: RFC 8259 has no `+` and no \
-             leading zero"
+            "`{}` is not an integer as JSON writes one: RFC 8259 has no `+` and no \
+             leading zero",
+            quoted(lexeme)
         )
     } else if is_integer_lexeme(lexeme) && (signed || !lexeme.starts_with('-')) {
         // A whole number too large for the field's 64 bits (the review of
         // PR #179): out of range, not a fraction.
-        format!("`{lexeme}` is out of range for a 64-bit integer")
+        format!("`{}` is out of range for a 64-bit integer", quoted(lexeme))
     } else {
-        format!("`{lexeme}` {otherwise}")
+        format!("`{}` {otherwise}", quoted(lexeme))
     }
 }
 
@@ -1041,7 +1067,11 @@ fn write_scalar(
                         .ok_or_else(|| {
                             classified(
                                 pointer,
-                                format!("`{name}` is not a value of `{}`", field.type_name),
+                                format!(
+                                    "`{}` is not a value of `{}`",
+                                    quoted(name),
+                                    field.type_name
+                                ),
                             )
                         })?
                         .number

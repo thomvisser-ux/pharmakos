@@ -141,8 +141,8 @@ fn shadowed(playbook: &Playbook, out: &mut Builder) {
         };
         out.emit(
             Diag::new("W0702", at(later_index))
-                .arg("id", &later.id)
-                .arg("winner", &earlier.id)
+                .arg_text("id", &later.id)
+                .arg_text("winner", &earlier.id)
                 .related(at(earlier_index)),
         );
     }
@@ -568,7 +568,10 @@ impl Visit for Lints<'_> {
                 if self.scope.feature(id).is_some_and(|known| !known.live) {
                     self.out.emit(
                         Diag::new("W0704", here)
-                            .arg("what", format!("`{id}`"))
+                            .arg(
+                                "what",
+                                format!("`{}`", pharmakos_proto::json::grammar::quoted(id)),
+                            )
                             .arg("why", strings::WHY_LOST),
                     );
                 }

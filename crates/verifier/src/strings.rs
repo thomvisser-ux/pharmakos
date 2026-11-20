@@ -901,7 +901,10 @@ pub const FIX_DROP_ROTATION: &str = "Leave the rotation out";
 /// E0418's `{what}` for a beacon the view holds no sighting of.
 #[must_use]
 pub fn never_sighted(beacon_id: &str) -> String {
-    format!("the seat has no sighting of `{beacon_id}`")
+    format!(
+        "the seat has no sighting of `{}`",
+        pharmakos_proto::json::grammar::quoted(beacon_id)
+    )
 }
 
 /// E0418's and W0708's `{what}` for a sighting older than the window.

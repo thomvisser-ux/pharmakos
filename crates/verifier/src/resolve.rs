@@ -152,7 +152,7 @@ pub(crate) fn run(playbook: &Playbook, scope: &Scope, out: &mut Builder) -> Symb
                 );
                 out.emit(
                     Diag::new("E0305", at)
-                        .arg("label", &handler.resume_at_label)
+                        .arg_text("label", &handler.resume_at_label)
                         .arg("scope", "route"),
                 );
             }
@@ -189,7 +189,7 @@ impl Visit for Resolver<'_> {
                     "E0305",
                     pointer::child(&pointer::child(at, "on_fail"), "jump_to_label"),
                 )
-                .arg("label", &on_fail.jump_to_label)
+                .arg_text("label", &on_fail.jump_to_label)
                 .arg("scope", scope),
             );
         }
@@ -201,7 +201,7 @@ impl Visit for Resolver<'_> {
         };
         if self.scope.beacon(id).is_none() {
             self.out
-                .emit(Diag::new("E0401", pointer::child(at, "beacon_id")).arg("id", id));
+                .emit(Diag::new("E0401", pointer::child(at, "beacon_id")).arg_text("id", id));
         }
     }
 
@@ -229,7 +229,7 @@ impl Visit for Resolver<'_> {
                     "E0412",
                     pointer::child(&pointer::join(at, arm), "feature_id"),
                 )
-                .arg("id", id),
+                .arg_text("id", id),
             );
         }
     }
@@ -245,7 +245,7 @@ impl Visit for Resolver<'_> {
                         "E0207",
                         pointer::child(&pointer::child(at, "rule_fired"), "handler_id"),
                     )
-                    .arg("id", &predicate.handler_id),
+                    .arg_text("id", &predicate.handler_id),
                 );
             }
             Some(condition::Node::StepReached(predicate))
@@ -257,7 +257,7 @@ impl Visit for Resolver<'_> {
                         "E0208",
                         pointer::child(&pointer::child(at, "step_reached"), "label"),
                     )
-                    .arg("label", &predicate.label),
+                    .arg_text("label", &predicate.label),
                 );
             }
             _ => {}

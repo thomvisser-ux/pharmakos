@@ -244,7 +244,7 @@ fn diagnose(text: &str, out: &mut Builder) -> Option<Decoded<'static>> {
             if let Some(name) = unknown {
                 out.emit(
                     Diag::new("E0002", error.pointer.clone())
-                        .arg("field", &name)
+                        .arg_text("field", &name)
                         .fix(
                             format!("Delete `{name}`"),
                             patch_remove(&error.pointer),

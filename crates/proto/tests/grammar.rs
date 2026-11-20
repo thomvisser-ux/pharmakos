@@ -177,3 +177,20 @@ fn an_overlong_integer_is_out_of_range() {
         negative.message
     );
 }
+
+/// One quoting rule for a player's text in a refusal (S3's `vfyq2`, fix
+/// pass 1, item 5): controls as `\u00XX`, at most `MAX_QUOTED_CHARS`
+/// characters, the rest `…`.
+#[test]
+fn a_quote_escapes_controls_and_stops_at_the_cap() {
+    use pharmakos_proto::json::grammar::{MAX_QUOTED_CHARS, quoted};
+    assert_eq!(quoted("plain é"), "plain é");
+    assert_eq!(quoted("\u{1b}]0;x\u{7}"), r"\u001b]0;x\u0007");
+    assert_eq!(quoted("a\u{7f}b\nc"), r"a\u007fb\u000ac");
+    let exact = "k".repeat(MAX_QUOTED_CHARS);
+    assert_eq!(quoted(&exact), exact);
+    let long = "é".repeat(200_000);
+    let shown = quoted(&long);
+    assert_eq!(shown.chars().count(), MAX_QUOTED_CHARS + 1);
+    assert!(shown.ends_with('…'), "{shown}");
+}

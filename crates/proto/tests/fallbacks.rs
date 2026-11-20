@@ -32,11 +32,18 @@ use std::path::{Path, PathBuf};
 
 /// Statements allowed to keep a fallback: (file, a fragment of the statement,
 /// the reason). An entry needs its reason.
-const ALLOWED: &[(&str, &str, &str)] = &[(
-    "json/codec.rs",
-    "declared.value_by_number(number).map_or_else(",
-    "the proto3 JSON mapping's rule, not a fallback: an enum value the schema does not name is written as its number, so a reader of a newer value keeps it",
-)];
+const ALLOWED: &[(&str, &str, &str)] = &[
+    (
+        "json/codec.rs",
+        "declared.value_by_number(number).map_or_else(",
+        "the proto3 JSON mapping's rule, not a fallback: an enum value the schema does not name is written as its number, so a reader of a newer value keeps it",
+    ),
+    (
+        "json/work.rs",
+        "u64::try_from(bytes).unwrap_or(u64::MAX)",
+        "the work meter is a measure and never an answer: a count past u64 reads as u64::MAX, which every bound refuses (S3's `vfyq2`)",
+    ),
+];
 
 /// What reads a value that may be missing or may not fit.
 const RISKY: &[&str] = &["try_from(", ".get(", ".first()", ".last()", ".checked_"];

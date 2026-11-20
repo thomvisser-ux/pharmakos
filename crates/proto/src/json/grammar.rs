@@ -44,6 +44,7 @@
 
 use std::borrow::Cow;
 use std::collections::BTreeSet;
+use std::fmt::Write as _;
 
 use super::value::{Error, ErrorKind};
 
@@ -276,7 +277,7 @@ fn string_unmetered(
                         out.push_str(before);
                     }
                 }
-                pos = escape(bytes, pos.saturating_add(1), unescaped.as_deref_mut())?;
+                pos = escape(text, pos.saturating_add(1), unescaped.as_deref_mut())?;
             }
             Some(_) => return Err(Refusal::grammar(pos, "a raw control character in a string")),
         }
@@ -285,7 +286,8 @@ fn string_unmetered(
 
 /// One escape, its backslash read: the byte after it, its character written
 /// to `out` when given.
-fn escape(bytes: &[u8], at: usize, out: Option<&mut String>) -> Result<usize, Refusal> {
+fn escape(text: &str, at: usize, out: Option<&mut String>) -> Result<usize, Refusal> {
+    let bytes = text.as_bytes();
     let Some(&byte) = bytes.get(at) else {
         return Err(Refusal::grammar(at, "the document ended inside an escape"));
     };
@@ -330,10 +332,19 @@ fn escape(bytes: &[u8], at: usize, out: Option<&mut String>) -> Result<usize, Re
             char::from_u32(code)
                 .ok_or_else(|| Refusal::grammar(pos, "not a Unicode scalar value"))?
         }
-        other => {
+        _ => {
+            // The escaped character as a character, not its first byte: a
+            // multi-byte one is quoted whole and refused after it, at a
+            // character boundary.
+            let Some(other) = text.get(at..).and_then(|rest| rest.chars().next()) else {
+                return Err(Refusal::grammar(pos, "invalid UTF-8 in a string"));
+            };
             return Err(Refusal::grammar(
-                pos,
-                format!("unknown escape `\\{}`", char::from(other)),
+                at.saturating_add(other.len_utf8()),
+                format!(
+                    "unknown escape `\\{}`",
+                    quoted(other.encode_utf8(&mut [0; 4]))
+                ),
             ));
         }
     };
@@ -627,7 +638,7 @@ impl<'t, B: Build<'t>, T: Trivia> Reader<'t, '_, B, T> {
                 return Err(Refusal {
                     kind: ErrorKind::DuplicateField,
                     at: key_at,
-                    message: Cow::Owned(format!("duplicate key `{key}`")),
+                    message: Cow::Owned(format!("duplicate key `{}`", quoted(&key))),
                 });
             }
             let pre_colon = self.skip()?;
@@ -762,4 +773,34 @@ fn metered(at: usize, answer: Result<usize, Refusal>) -> Result<usize, Refusal> 
     };
     super::work::add(end.saturating_sub(at).saturating_add(1));
     answer
+}
+
+/// The most characters of a player's text a refusal quotes back (S3's
+/// `vfyq2`, fix pass 1, item 5): enough to recognise a key, a value or a
+/// lexeme, and never the whole of a 200 KB one.
+pub const MAX_QUOTED_CHARS: usize = 64;
+
+/// A player's text, as a refusal or a diagnostic quotes it back: control
+/// characters (and DEL) written as `\u00XX`, so a key holding ESC or BEL
+/// cannot drive the terminal or the client that shows the message, and at
+/// most [`MAX_QUOTED_CHARS`] characters, the rest shown as `…`. Every quote
+/// of player text in the codec's refusals and the verifier's diagnostics
+/// goes through here, so there is one rule.
+#[must_use]
+pub fn quoted(text: &str) -> String {
+    let mut out = String::with_capacity(text.len().min(MAX_QUOTED_CHARS.saturating_mul(6)));
+    for (index, character) in text.chars().enumerate() {
+        if index == MAX_QUOTED_CHARS {
+            out.push('…');
+            break;
+        }
+        if character.is_control() {
+            for unit in character.encode_utf16(&mut [0; 2]) {
+                let _infallible = write!(out, "\\u{unit:04x}");
+            }
+        } else {
+            out.push(character);
+        }
+    }
+    out
 }

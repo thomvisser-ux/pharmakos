@@ -213,7 +213,8 @@ impl Visit for Refusals<'_> {
             return;
         }
         self.out.emit(
-            Diag::new("E0010", pointer::child(at, "blueprint_id")).arg("id", &target.blueprint_id),
+            Diag::new("E0010", pointer::child(at, "blueprint_id"))
+                .arg_text("id", &target.blueprint_id),
         );
     }
 
