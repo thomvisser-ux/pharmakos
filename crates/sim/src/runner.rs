@@ -1176,8 +1176,7 @@ impl Runner {
     /// [`LayoutRefused::NotInTheLobby`] outside it, the world's refusals of
     /// the layout ([`LayoutRefused`]), which leave the world as it was, and
     /// [`LayoutRefused::Unsettled`] when the snapshot's door finds a cluster
-    /// waiting for its repair, before anything is placed or at the freeze
-    /// after.
+    /// waiting for its repair, before anything is placed.
     ///
     /// Whether the match was laid out is read from the world, not remembered
     /// beside it: a beacon or a unit past what the generator placed, which only
@@ -1212,11 +1211,11 @@ impl Runner {
         if self.world.interpreter().any_sealed() {
             return Err(LayoutRefused::AfterASeal);
         }
-        // The snapshot's door, before anything is placed, so a refusal leaves
-        // the world as it was; and again at the freeze after placement.
-        let _: Closed<'_> = Snapshot::door(&self.world)?;
-        self.world.seed_layout(layout, settings)?;
-        self.frozen = FrozenSnapshot::of(&self.world)?;
+        // The snapshot's door, once, before anything is placed: a refusal
+        // leaves the world as it was, and the placement hands back the closed
+        // world it was given.
+        let closed = Snapshot::door_for_layout(&mut self.world)?.seed_layout(layout, settings)?;
+        self.frozen = FrozenSnapshot::passed(closed);
         Ok(())
     }
 

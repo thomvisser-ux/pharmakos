@@ -878,6 +878,34 @@ impl Default for Snapshot {
 #[must_use = "a world that passed the door is copied with `Snapshot::through`"]
 pub(crate) struct Closed<'w>(&'w World);
 
+/// A world that passed [`Snapshot::door`] (between ticks, its graph settled),
+/// held mutably for one thing: a lobby layout. Placing one writes beacon, unit
+/// and Attack rows ([`World::seed_layout`]: `place_beacon`, `set_attack`,
+/// `fabricate`) and opens no tick and edits no voxel, so the world it hands
+/// back is the closed world the door passed, with no second door after the
+/// placement. `a_layout_leaves_the_world_the_door_passed` holds it to that.
+#[derive(Debug)]
+#[must_use = "a world closed for a layout is laid out with `ClosedForLayout::seed_layout`"]
+pub(crate) struct ClosedForLayout<'w>(&'w mut World);
+
+impl<'w> ClosedForLayout<'w> {
+    /// Place `layout` and its `settings` on the closed world, and hand it
+    /// back closed.
+    ///
+    /// # Errors
+    ///
+    /// The world's refusals of the layout, which leave it as it was.
+    pub(crate) fn seed_layout(
+        self,
+        layout: &crate::runner::Layout,
+        settings: &[crate::runner::LayoutSettings],
+    ) -> Result<Closed<'w>, crate::runner::LayoutRefused> {
+        let world = self.0;
+        world.seed_layout(layout, settings)?;
+        Ok(Closed(world))
+    }
+}
+
 impl<'w> Closed<'w> {
     /// The world the token holds.
     pub(crate) const fn world(&self) -> &'w World {
@@ -1102,13 +1130,31 @@ impl Snapshot {
     /// [`Unclosed::MidTick`] while a tick is open between two of its phases,
     /// [`Unclosed::Unsettled`] when a cluster is waiting for its repair.
     pub(crate) fn door(world: &World) -> Result<Closed<'_>, Unclosed> {
+        Snapshot::unclosed(world)?;
+        Ok(Closed(world))
+    }
+
+    /// The door's two refusals, asked of `world`.
+    fn unclosed(world: &World) -> Result<(), Unclosed> {
         if world.tick_is_open() {
             return Err(Unclosed::MidTick);
         }
         if !world.graph_settled() {
             return Err(Unclosed::Unsettled);
         }
-        Ok(Closed(world))
+        Ok(())
+    }
+
+    /// [`Snapshot::door`] for a world about to be laid out: the same two
+    /// refusals, and a token that holds the world mutably, whose one use is
+    /// [`ClosedForLayout::seed_layout`].
+    ///
+    /// # Errors
+    ///
+    /// As [`Snapshot::door`].
+    pub(crate) fn door_for_layout(world: &mut World) -> Result<ClosedForLayout<'_>, Unclosed> {
+        Snapshot::unclosed(world)?;
+        Ok(ClosedForLayout(world))
     }
 
     /// Copy the world `closed` holds, which passed [`Snapshot::door`] or was

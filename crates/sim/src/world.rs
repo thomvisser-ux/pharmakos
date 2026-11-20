@@ -7702,6 +7702,46 @@ mod tests {
         );
     }
 
+    /// A layout's placement hands back the closed world the door passed
+    /// before it (lane `settle`): no tick open, the graph settled, and the
+    /// match's frozen snapshot the very bytes a capture of it writes. The door
+    /// is not asked again after the placement, so this is what holds the
+    /// placement to touching nothing the door reads.
+    #[test]
+    fn a_layout_leaves_the_world_the_door_passed() {
+        use crate::runner::{Layout, LayoutBeacon, Runner};
+        let mut runner = Runner::new(world())
+            .unwrap_or_else(|error| panic!("a world from `World::new`: {error}"));
+        let layout = Layout {
+            beacons: vec![LayoutBeacon {
+                seat: SeatId::new(0),
+                column: [200, 200],
+                mandate: crate::seams::MandateKind::Build,
+                units: vec![(crate::tables::UnitKind::Raider, 1)],
+            }],
+        };
+        assert_eq!(runner.seed_layout(&layout), Ok(()));
+        assert!(runner.world().is_laid_out(), "the layout is placed");
+        assert!(
+            runner.world().graph_settled() && !runner.world().tick_is_open(),
+            "the placement leaves the world the door passed"
+        );
+        let captured = runner
+            .capture()
+            .unwrap_or_else(|error| panic!("a laid-out lobby captures: {error}"));
+        assert_eq!(
+            runner
+                .frozen()
+                .snapshot()
+                .to_bytes()
+                .unwrap_or_else(|error| panic!("{error}")),
+            captured
+                .to_bytes()
+                .unwrap_or_else(|error| panic!("{error}")),
+            "the frozen snapshot is the laid-out world"
+        );
+    }
+
     fn hit(unit: u32, amount: i64) -> DamageOrder {
         DamageOrder {
             target: DamageTarget::Unit(UnitId::new(unit)),
