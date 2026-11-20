@@ -133,6 +133,34 @@ mod tests {
         );
     }
 
+    /// A multi-byte character before a `%`: the cut steps by characters, so
+    /// it neither falls inside the character nor leaves half an escape.
+    #[test]
+    fn truncation_steps_by_characters_before_an_escape() {
+        let text = encode("é\n");
+        // `é` is two bytes, then `%0A`: every cap from 1 to 4 cuts inside the
+        // character or the escape.
+        for cap in 1..text.len() {
+            let cut = truncate(&text, cap);
+            let body = cut.trim_end_matches(" …");
+            assert!(
+                body.is_empty() || body == "é",
+                "cap {cap}: {body:?} splits a character or an escape"
+            );
+            assert!(body.len() <= cap, "cap {cap}: {body:?}");
+        }
+        let text = encode("aé%é");
+        for cap in 1..text.len() {
+            let body = truncate(&text, cap).trim_end_matches(" …").to_owned();
+            assert!(
+                !body.ends_with('%') && !body.ends_with("%2"),
+                "cap {cap}: {body:?}"
+            );
+            assert!(text.starts_with(&body), "cap {cap}: {body:?}");
+        }
+        assert_eq!(truncate("short", 10), "short");
+    }
+
     #[test]
     fn empty_text_still_says_something() {
         // Exercised for the panic-free path; the assertion is that it does not
