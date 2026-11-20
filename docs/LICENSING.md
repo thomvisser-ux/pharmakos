@@ -38,17 +38,71 @@ built-in operator seals from `library/`'s permissive templates) — decisions lo
 §2.7 items 100 (11) and 113. `REUSE.toml` carves each out with a later
 annotation, and `tests/LICENSE` says so in prose.
 
-**A file that quotes `library/`.** A tracked file outside `library/` that reproduces a
-template's expression carries the library's licence beside its own, as one combined
-expression, `GPL-3.0-or-later AND (MIT OR Apache-2.0)` (the library's alone where the
-file is purely the library's text, as the operator goldens and these docs are).
-Expression is a sentence of at least 8 words ending in a full stop, or a run of at
-least 12 consecutive words of one library string; a title, a name or a step label is
-not covered. The render goldens, the `instantiate_template` answers and their Godot
-copies, and a scenario file that copies a template are the cases (decisions log §2.7
-item 164, which amends item 113 (10)). The `reuse` step enforces it: it asks `reuse`
-for each tracked file's licence, scans every file outside `library/`, and compares
-byte copies under `godot/fixtures/` with their sources.
+**A file that quotes `library/`.** This is the standing statement of the rule; every other
+file points here. A tracked file outside `library/` that reproduces a library template's
+expression carries the library's licence (`MIT OR Apache-2.0`) beside the game's, as one
+combined expression, `GPL-3.0-or-later AND (MIT OR Apache-2.0)`. The two are never two
+separate expressions. A file in one of the areas the manifest licenses permissively (the
+operator goldens and the other permissive golden areas above) that carries no game
+expression carries the library's licence alone. The `docs/` tree is permissive by its own
+tier, not because it is library text. The rule was recorded in decisions log §2.7 item 164,
+which amends item 113 (10).
+
+*What counts as expression.* A sentence of at least 8 words ending in a full stop, or a run
+of at least 12 consecutive words of one library string, full stop or not (a parameter's
+description or a long label has no full stop and is expression). The two numbers are the
+constants `MIN_WORDS` (8) and `RUN_WORDS` (12) in `xtask/src/licence_quotes.rs`. A title, a
+name or a short step label is below both and is not covered. The line is the main session's,
+not a finding about copyright: below it the project treats a file as quoting no expression,
+a contributor may always add the library's licence to a file below it (the check demands the
+licence only above it), and the owner can move the line.
+
+*What the check reads from `library/`.* Every tracked file under `library/` that `reuse`
+reports; a file `reuse` ignores (a `LICENSE`, `LICENCE` or `COPYING` file, a licence text under
+`LICENSES/`, a `.license` sidecar, `REUSE.toml`, an empty file) is not read. In a `.json` or
+`.jsonc` file the strings are the *library strings* and the `//` comment lines are comment
+paragraphs (consecutive whole-line comments form one paragraph, a blank comment line ends it,
+and a trailing comment is a paragraph of its own); a string or paragraph that contains
+`SPDX` is skipped. Sentences come from strings and comment paragraphs; 12-word runs come from
+strings only. Any other library file (a Markdown note) is read by its paragraphs, which give
+both. It reads `library/`'s current text on every run, so a changed template changes what is
+covered.
+
+*Which files, and how words are counted.* Every file `git ls-files` lists outside `library/`,
+except files with a binary extension (`png`, `jpg`, `jpeg`, `gif`, `ico`, `vox`, `ogg`, `wav`,
+`mp3`, `zip`, `pck`, `ttf`, `otf`, `woff`, `woff2`, `dll`, `so`, `dylib`, `exe`, `wasm`, `bin`,
+`binpb`) and the files `reuse` itself ignores (the list above). Any other file that is not
+UTF-8 text fails the check, and so does a file `reuse` should report and does not. Words are
+runs of letters and digits with punctuation dropped; text is compared with whitespace
+collapsed, JSON string escapes undone (all of them, Unicode escapes included) and comment markers
+removed, so a re-wrapped comment, an escaped quote or an escaped newline inside a sentence still matches.
+A byte copy under `godot/fixtures/` of a file under `tests/golden/` or `scenarios/` must carry
+exactly the same expressions as its source.
+
+*Which mechanism.* The file's own SPDX header where the file can carry one; a `.license`
+sidecar or a `REUSE.toml` block where it cannot (JSON, a byte copy, a hash chain); an
+`override` entry only where the file embeds another file's SPDX header, as the gateway's
+`instantiate_suggested` answer and its Godot copy do, because `reuse` would otherwise read the
+embedded header as the file's own. An override is the last word for its paths, so a change of
+licence there is an edit to the block.
+
+*Where it runs and where it fails.* In the `reuse` step of `cargo xtask ci` (`cargo xtask
+reuse`), after `reuse lint`, so it also runs on the docs-only fast path. It asks `reuse lint
+--json` for each file's expressions and reads no manifest by hand. It has no exemption for an
+override block and no allow table. A failure names each file, the first words it quotes and
+the licence to write:
+
+    these quote library/ (MIT OR Apache-2.0) without carrying its licence: give each
+    `GPL-3.0-or-later AND (MIT OR Apache-2.0)` (REUSE.toml, or its own header), or
+    `MIT OR Apache-2.0` if it is purely the library's text:
+      <file> quotes "<first 60 characters>..." and is licensed `GPL-3.0-or-later` only; write
+      `GPL-3.0-or-later AND (MIT OR Apache-2.0)`
+
+A positive control keeps "nothing found" from meaning "nothing looked at": the check fails
+unless it read more than 800 files, at least 5 library files and more than 100 word runs, and
+found each of eleven named files (the six template render goldens, the `instantiate_suggested`
+pair, `godot/fixtures/rule_list_render.json`, `scenarios/skeleton/against-easy.playbook.jsonc`
+and `crates/gateway/src/host.rs`) quoting the library.
 
 **`rules/`** is `MIT OR Apache-2.0` for the reason `proto/` is: `rules.v1.json`
 is the canonical JSON of one `gp.v1.RulesTable` (decisions log §2.7 item 78) —
