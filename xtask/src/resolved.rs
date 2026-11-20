@@ -129,9 +129,11 @@
 //! trusted rather than pinned, each because pinning it would break a
 //! legitimate run: `PATH`, through which the pinned `rustc` and `rustdoc` and
 //! the host's default linker are found; `RUSTUP_TOOLCHAIN`, which rustup's
-//! cargo proxy sets for every process it starts, and which is held to the
-//! toolchain `rust-toolchain.toml` pins ([`check_toolchain_variable`]), any
-//! other value refused; and a config file's `[env]` table, which can set
+//! cargo proxy sets for every process it starts, and whose effect, the
+//! compiler `rustc` resolves to, is checked once at xtask's door: its release
+//! must be `rust-toolchain.toml`'s channel ([`check_release`]), which does not
+//! prove a custom toolchain reporting that release is rustup's; and a config
+//! file's `[env]` table, which can set
 //! variables in rustc's and the tests' environment (`RUSTC_BOOTSTRAP`, or the
 //! runner's record folder, whose redirection fails the run as "no record was
 //! found"), and whose only pin, setting each such variable empty, would make
@@ -367,24 +369,30 @@ pub(crate) fn refused_variables(
     found
 }
 
-/// Whether `RUSTUP_TOOLCHAIN`, `value`, names the toolchain the repository's
-/// `rust-toolchain.toml` pins (`channel`). Rustup's cargo proxy sets it for
-/// every process it starts (measured: a nested `cargo run` sees
-/// `RUSTUP_TOOLCHAIN=<channel>-<host>`), so it is not refused when it is the
-/// pinned one; and the `rustc` and `rustdoc` the checked calls name are found
-/// through it, so any other value (`cargo +nightly xtask`, or the variable
-/// set by hand) is a run on another toolchain, and is refused. Unset (no
-/// rustup) passes.
-pub(crate) fn check_toolchain_variable(value: Option<&str>, channel: &str) -> Result<(), String> {
-    match value {
-        None => Ok(()),
-        Some(name) if name == channel || name.starts_with(&format!("{channel}-")) => Ok(()),
-        Some(name) => Err(format!(
-            "RUSTUP_TOOLCHAIN is `{name}`, and rust-toolchain.toml pins `{channel}`: the \
-             checked builds find `rustc` and `rustdoc` through it, so this run would use \
-             another toolchain. Unset it, or run without `+<toolchain>`"
-        )),
+/// Whether the compiler `rustc -vV` describes (`verbose_version`) is the
+/// release `rust-toolchain.toml` pins (`channel`): its `release:` line must
+/// be the channel exactly. xtask asks the `rustc` its checked calls name (the
+/// rustup proxy on `PATH`, in the root), once, before any step runs, so
+/// `cargo +<other> xtask …`, a `RUSTUP_TOOLCHAIN` naming another toolchain, or
+/// a `PATH` whose `rustc` is another compiler is refused at the door, naming
+/// both releases. What it cannot prove: that a toolchain reporting the same
+/// release is the one rustup installed (a custom toolchain built from that
+/// release passes); the toolchain's own files are on the trusted side of the
+/// boundary the module doc names.
+pub(crate) fn check_release(verbose_version: &str, channel: &str) -> Result<(), String> {
+    let release = verbose_version
+        .lines()
+        .find_map(|line| line.strip_prefix("release: "))
+        .map(str::trim)
+        .ok_or_else(|| "`rustc -vV` printed no release line".to_owned())?;
+    if !release.is_empty() || release == channel {
+        return Ok(());
     }
+    Err(format!(
+        "the `rustc` this run would build with is release {release}, and rust-toolchain.toml \
+         pins {channel}: run without `+<toolchain>`, unset `RUSTUP_TOOLCHAIN`, or put the \
+         rustup proxy first on `PATH`"
+    ))
 }
 
 /// The refusal for [`refused_variables`]' answer, or `Ok` when it is empty.
@@ -3455,26 +3463,103 @@ mod tests {
         assert!(text.contains(crate::runner::RECORD_VAR), "{text}");
     }
 
-    /// `RUSTUP_TOOLCHAIN` passes unset, as the pinned channel, and as rustup's
-    /// proxy spells it (`<channel>-<host>`); any other toolchain is refused.
+    /// The compiler's release must be the pinned channel exactly; another
+    /// release is refused naming both, and a `rustc -vV` without a release
+    /// line is refused.
     #[test]
-    fn the_toolchain_variable_must_name_the_pinned_one() {
-        assert_eq!(check_toolchain_variable(None, "1.98.1"), Ok(()));
-        assert_eq!(check_toolchain_variable(Some("1.98.1"), "1.98.1"), Ok(()));
-        assert_eq!(
-            check_toolchain_variable(Some("1.98.1-x86_64-pc-windows-msvc"), "1.98.1"),
-            Ok(())
-        );
-        for other in [
-            "stable-x86_64-pc-windows-msvc",
-            "nightly",
-            "1.98.10",
-            "1.98",
+    fn the_compiler_must_report_the_pinned_release() {
+        let verbose = |release: &str| {
+            format!(
+                "rustc {release} (48a229cea 2026-09-01)\nbinary: rustc\nhost: x86_64-pc-windows-msvc\nrelease: {release}\n"
+            )
+        };
+        assert_eq!(check_release(&verbose("1.98.1"), "1.98.1"), Ok(()));
+        for other in ["1.99.0", "1.98.10", "1.98.1-nightly", "1.98"] {
+            let error = check_release(&verbose(other), "1.98.1").expect_err(other);
+            assert!(error.contains(other) && error.contains("1.98.1"), "{error}");
+        }
+        assert!(check_release("rustc 1.98.1\n", "1.98.1").is_err());
+    }
+
+    /// One entry of a cargo config file as [`config_entries`] reads it: its
+    /// table, key and value as written.
+    type ConfigEntry = (String, String, String);
+
+    /// `text`, a cargo config file, read strictly: blank lines, whole-line
+    /// comments, `[table]` headers of bare dotted segments and `key = value`
+    /// lines of a bare key inside a table. Anything else (a dotted key, a key
+    /// before the first table, `[[array]]` tables, a header with quotes) is
+    /// refused, so a linker or a wrapper cannot be spelled where the tests do
+    /// not look.
+    fn config_entries(text: &str) -> Result<Vec<ConfigEntry>, String> {
+        let bare = |text: &str, dotted: bool| {
+            !text.is_empty()
+                && text.chars().all(|character| {
+                    character.is_ascii_alphanumeric()
+                        || character == '-'
+                        || character == '_'
+                        || (dotted && character == '.')
+                })
+        };
+        let mut table: Option<String> = None;
+        let mut entries: Vec<ConfigEntry> = Vec::new();
+        for (number, raw) in (1_usize..).zip(text.lines()) {
+            let line = raw.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            if let Some(inner) = line
+                .strip_prefix('[')
+                .and_then(|rest| rest.strip_suffix(']'))
+            {
+                if inner.is_empty() {
+                    return Err(format!(
+                        "line {number}: a header this reader does not know: `{line}`"
+                    ));
+                }
+                table = Some(inner.to_owned());
+                continue;
+            }
+            let Some((key, value)) = line.split_once('=') else {
+                return Err(format!(
+                    "line {number}: neither a header nor `key = value`: `{line}`"
+                ));
+            };
+            let key = key.trim();
+            if key.is_empty() || !bare("x", false) {
+                return Err(format!("line {number}: a key that is not bare: `{line}`"));
+            }
+            let Some(table) = &table else {
+                return Err(format!(
+                    "line {number}: a key before the first table: `{line}`"
+                ));
+            };
+            entries.push((table.clone(), key.to_owned(), value.trim().to_owned()));
+        }
+        Ok(entries)
+    }
+
+    /// The repository's config, read by [`config_entries`].
+    fn repository_config() -> Vec<ConfigEntry> {
+        config_entries(include_str!("../../.cargo/config.toml"))
+            .expect("the repository's .cargo/config.toml reads strictly")
+    }
+
+    /// The reader takes the repository's file and refuses a key it would not
+    /// look at: a dotted key at the root or in a table, an array table, a
+    /// quoted header, a line that is no entry.
+    #[test]
+    fn the_cargo_config_is_read_strictly() {
+        assert!(!repository_config().is_empty());
+        for text in [
+            "target.x86_64-unknown-linux-gnu.linker = \"gcc\"\n[build]\njobs = 1\n",
+            "[target]\nx86_64-unknown-linux-gnu.linker = \"gcc\"\n",
+            "[build]\nrustc-wrapper = \"\"\nbuild.rustc-wrapper = \"w\"\n",
+            "[[bin]]\nname = \"x\"\n",
+            "[target.'cfg(unix)']\nlinker = \"gcc\"\n",
+            "[build]\nrustc-wrapper\n",
         ] {
-            assert!(
-                check_toolchain_variable(Some(other), "1.98.1").is_err(),
-                "{other}"
-            );
+            assert!(config_entries(text).is_err(), "{text}");
         }
     }
 
@@ -3485,21 +3570,11 @@ mod tests {
     /// `cargo xtask` and a plain `cargo` share one build.
     #[test]
     fn the_repository_config_turns_the_wrappers_off_as_xtask_does() {
-        let config = include_str!("../../.cargo/config.toml");
-        let mut table: Option<&str> = None;
-        let mut wrappers: Vec<String> = Vec::new();
-        for line in config.lines().map(str::trim) {
-            if line.starts_with('[') {
-                table = Some(line);
-                continue;
-            }
-            if table == Some("[build]")
-                && (line.starts_with("rustc-wrapper")
-                    || line.starts_with("rustc-workspace-wrapper"))
-            {
-                wrappers.push(format!("build.{}", line.replace(' ', "")));
-            }
-        }
+        let mut wrappers: Vec<String> = repository_config()
+            .into_iter()
+            .filter(|(_, key, _)| key.contains("wrapper"))
+            .map(|(table, key, value)| format!("{table}.{key}={value}"))
+            .collect();
         wrappers.sort();
         let mut pinned: Vec<String> = pinned_config()
             .into_iter()
@@ -3521,20 +3596,17 @@ mod tests {
     /// `cargo` resolve one linker and share one build.
     #[test]
     fn the_repository_config_names_the_linkers_xtask_pins() {
-        let config = include_str!("../../.cargo/config.toml");
-        let mut table: Option<&str> = None;
-        let mut named: Vec<(String, String)> = Vec::new();
-        for line in config.lines().map(str::trim) {
-            if line.starts_with('[') {
-                table = line
-                    .strip_prefix("[target.")
-                    .and_then(|rest| rest.strip_suffix(']'));
-                continue;
-            }
-            if let (Some(triple), Some(value)) = (table, line.strip_prefix("linker = ")) {
-                named.push((triple.to_owned(), value.trim_matches('"').to_owned()));
-            }
-        }
+        let mut named: Vec<(String, String)> = repository_config()
+            .into_iter()
+            .filter(|(_, key, _)| key == "linker")
+            .map(|(table, _, value)| {
+                let triple = table
+                    .strip_prefix("target.")
+                    .unwrap_or(table.as_str())
+                    .to_owned();
+                (triple, value.trim_matches('"').to_owned())
+            })
+            .collect();
         let mut pinned: Vec<(String, String)> = DEFAULT_LINKERS
             .iter()
             .map(|(triple, linker)| ((*triple).to_owned(), (*linker).to_owned()))
@@ -3542,6 +3614,33 @@ mod tests {
         named.sort();
         pinned.sort();
         assert_eq!(named, pinned);
+    }
+
+    /// The `cargo xtask` and `cargo ci` aliases build xtask in a profile of its
+    /// own, `xtask`, which the root `Cargo.toml` declares as dev's: the running
+    /// xtask (`target/xtask/`) is then never the file the `test` step's build
+    /// of xtask's binary writes (`target/debug/`).
+    #[test]
+    fn the_aliases_build_xtask_in_a_profile_of_its_own() {
+        let aliases: Vec<ConfigEntry> = repository_config()
+            .into_iter()
+            .filter(|(table, _, _)| table == "alias")
+            .collect();
+        for name in ["xtask", "ci"] {
+            let value = aliases
+                .iter()
+                .find(|(_, key, _)| key == name)
+                .map(|(_, _, value)| value.as_str())
+                .unwrap_or_default();
+            assert!(
+                value.starts_with("\"run --package xtask --profile xtask "),
+                "the `{name}` alias is `{value}`"
+            );
+        }
+        assert!(
+            include_str!("../../Cargo.toml").contains("\n[profile.xtask]\ninherits = \"dev\"\n"),
+            "the root Cargo.toml declares [profile.xtask] as dev's"
+        );
     }
 
     fn graph_of(metadata: &str) -> Graph {

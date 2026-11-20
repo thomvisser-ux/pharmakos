@@ -226,7 +226,7 @@
     clippy::struct_excessive_bools // `Ctx` is the parsed flag list; each bool IS a flag
 )]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::ffi::OsStr;
 use std::fs;
@@ -691,6 +691,10 @@ const STEPS: &[Step] = &[
 // Entry point
 // ---------------------------------------------------------------------------
 
+/// The hidden subcommand that prints the runner's `--config` value
+/// ([`runner_config_for`]).
+const RUNNER_CONFIG_SUBCOMMAND: &str = "__runner-config";
+
 fn main() -> ExitCode {
     // xtask's test runner (`runner.rs`), as cargo starts it in a checked run:
     // read before anything else, and as the operating system's strings, so a
@@ -700,6 +704,37 @@ fn main() -> ExitCode {
         && first == runner::SUBCOMMAND
     {
         return runner::main(rest);
+    }
+    // Every command, a step or not, passes the toolchain's door first, before
+    // anything builds (`fmt`, `clippy` and `deny` included).
+    if let Err(message) = toolchain_at_the_door() {
+        eprintln!("xtask: {message}");
+        return ExitCode::FAILURE;
+    }
+    // The runner's `--config` value for a cargo working in the folder named,
+    // for `xtask/tests/doctest_runner.rs`: the one spelling rule, asked of
+    // xtask itself.
+    if let Some((first, rest)) = raw.split_first()
+        && first == RUNNER_CONFIG_SUBCOMMAND
+    {
+        let answer = match rest {
+            [cwd] => env::current_exe()
+                .map_err(|error| format!("finding xtask's own executable: {error}"))
+                .and_then(|xtask| runner_config_for(&xtask, Path::new(cwd))),
+            _ => Err(format!(
+                "`{RUNNER_CONFIG_SUBCOMMAND}` takes one argument, the folder cargo works in"
+            )),
+        };
+        return match answer {
+            Ok(value) => {
+                println!("{value}");
+                ExitCode::SUCCESS
+            }
+            Err(message) => {
+                eprintln!("xtask: {message}");
+                ExitCode::FAILURE
+            }
+        };
     }
     let args: Vec<String> = env::args().skip(1).collect();
     match run_cli(&args) {
@@ -1051,6 +1086,19 @@ fn run_cli(args: &[String]) -> Result<bool, String> {
                 .ok_or_else(|| format!("unknown command `{name}` (try `cargo xtask list`)"))?;
             plan.push(step);
         }
+    }
+
+    // A plan that runs tests needs this xtask named as their runner: settled
+    // here, by the same function the run uses, before any step builds
+    // anything, so a target folder cargo cannot be given fails first, not
+    // after fmt, clippy and deny.
+    if plan
+        .iter()
+        .any(|step| step.name == "test" || step.name == "test-research")
+    {
+        let xtask = env::current_exe()
+            .map_err(|error| format!("finding xtask's own executable: {error}"))?;
+        runner_config_for(&xtask, &ctx.root)?;
     }
 
     let mut results: Vec<(&'static str, String)> = Vec::new();
@@ -1441,6 +1489,9 @@ struct ProfileScan {
     /// Each profile table's `opt-level`, as written (quotes taken off), by the
     /// table's name.
     opt_levels: BTreeMap<String, String>,
+    /// Every profile a `[profile.<name>]` table declares, by name, with the
+    /// profile its `inherits` names, if it names one.
+    profiles: BTreeMap<String, Option<String>>,
 }
 
 /// The optimisation the hash gate's `profile` (which inherits `release`)
@@ -1565,6 +1616,18 @@ fn profile_failures(manifest: &ProfileScan, config: Option<&ProfileScan>) -> Vec
         failures.push(
             "Cargo.toml must set `overflow-checks = true` under `[profile.release]`".to_owned(),
         );
+    }
+    let mut off_chain = profiles_off_the_chain(manifest);
+    if let Some(config) = config {
+        off_chain.extend(profiles_off_the_chain(config));
+    }
+    if !off_chain.is_empty() {
+        failures.push(format!(
+            "the profile(s) {} inherit from neither `dev` nor `release` (through the profiles \
+             declared beside them), so their overflow checks would be cargo's default, not this \
+             workspace's: give each `inherits = \"dev\"` or `\"release\"`, or a profile that does",
+            off_chain.join(", ")
+        ));
     }
     let mut unreadable: Vec<String> = manifest
         .unreadable
@@ -1737,7 +1800,12 @@ fn scan_profiles(text: &str) -> ProfileScan {
         if line.starts_with('[') {
             in_root = false;
             table = match read_header(line) {
-                Header::Profile(name) => Some(Some(name)),
+                Header::Profile(name) => {
+                    if let Some(profile) = top_level_profile(&name) {
+                        scan.profiles.entry(profile.to_owned()).or_insert(None);
+                    }
+                    Some(Some(name))
+                }
                 Header::UnreadableProfile => {
                     unreadable(&mut scan);
                     Some(None)
@@ -1782,8 +1850,61 @@ fn scan_profiles(text: &str) -> ProfileScan {
             scan.opt_levels
                 .insert(name.clone(), value.trim_matches(['"', '\'']).to_owned());
         }
+        if key == "inherits"
+            && let Some(profile) = top_level_profile(name)
+        {
+            scan.profiles.insert(
+                profile.to_owned(),
+                Some(value.trim_matches(['"', '\'']).to_owned()),
+            );
+        }
     }
     scan
+}
+
+/// The profile a `profile.<name>` table names, when it is the profile's own
+/// table and not a package or build-override table of it.
+fn top_level_profile(table: &str) -> Option<&str> {
+    table
+        .strip_prefix("profile.")
+        .filter(|rest| !rest.contains('.'))
+}
+
+/// The profiles cargo defines itself, each with its checks set as this
+/// workspace sets them (`dev` and `release` here; `test` and `bench` inherit
+/// them).
+const BUILT_IN_PROFILES: &[&str] = &["dev", "release", "test", "bench"];
+
+/// Every profile a scan declares that is not built in and does not reach
+/// `dev` or `release` through the `inherits` of profiles the same scan
+/// declares: its checks would then be cargo's defaults, not this workspace's,
+/// so a new profile is covered by the overflow rule by construction, never by
+/// luck.
+fn profiles_off_the_chain(scan: &ProfileScan) -> Vec<String> {
+    let mut off: Vec<String> = Vec::new();
+    for profile in scan.profiles.keys() {
+        if BUILT_IN_PROFILES.contains(&profile.as_str()) {
+            continue;
+        }
+        let mut current = profile.as_str();
+        let mut seen: BTreeSet<&str> = BTreeSet::new();
+        let reaches = loop {
+            if current == "dev" || current == "release" {
+                break true;
+            }
+            if !seen.insert(current) {
+                break false;
+            }
+            match scan.profiles.get(current) {
+                Some(Some(parent)) => current = parent.as_str(),
+                _ => break false,
+            }
+        };
+        if !reaches && profile.is_empty() {
+            off.push(profile.clone());
+        }
+    }
+    off
 }
 
 /// `cargo test --workspace` without `research`, after emptying
@@ -2045,15 +2166,7 @@ pub(crate) fn refuse_codegen_variables() -> Result<(), String> {
         })
         .collect();
     let all: Vec<String> = found.into_iter().chain(unreadable).collect();
-    resolved::refuse_variables(&all).map_err(|fault| fault.to_string())?;
-    let toolchain = env::var_os("RUSTUP_TOOLCHAIN")
-        .map(|value| {
-            value
-                .into_string()
-                .map_err(|_| "RUSTUP_TOOLCHAIN holds a value that is not Unicode".to_owned())
-        })
-        .transpose()?;
-    resolved::check_toolchain_variable(toolchain.as_deref(), &pinned_channel()?)
+    resolved::refuse_variables(&all).map_err(|fault| fault.to_string())
 }
 
 /// The channel `rust-toolchain.toml` pins, read from the file this xtask was
@@ -2157,25 +2270,51 @@ pub(crate) fn cargo_program() -> Result<String, String> {
 /// pinned `build.rustc` names) and kept for the process.
 pub(crate) fn host() -> Result<&'static resolved::Host, String> {
     static HOST: std::sync::OnceLock<Result<resolved::Host, String>> = std::sync::OnceLock::new();
-    HOST.get_or_init(|| {
-        // In the root, as cargo runs: the rustup proxy picks the toolchain by
-        // the directory it starts in.
-        let output = child_command(false, "rustc", &["-vV"], &workspace_root()?)
-            .stderr(Stdio::inherit())
-            .output()
-            .map_err(|error| format!("failed to run `rustc -vV`: {error}"))?;
-        if !output.status.success() {
-            return Err(format!(
-                "`rustc -vV` failed ({})",
-                describe_exit(output.status)
-            ));
-        }
-        let text = String::from_utf8(output.stdout)
-            .map_err(|error| format!("`rustc -vV` printed something that is not UTF-8: {error}"))?;
-        resolved::Host::from_rustc(&text)
-    })
-    .as_ref()
-    .map_err(Clone::clone)
+    HOST.get_or_init(|| resolved::Host::from_rustc(rustc_verbose()?))
+        .as_ref()
+        .map_err(Clone::clone)
+}
+
+/// `rustc -vV` of the `rustc` the checked calls name, run once in the root, as
+/// cargo runs (the rustup proxy picks the toolchain by the directory it starts
+/// in), and kept for the process.
+fn rustc_verbose() -> Result<&'static str, String> {
+    static VERBOSE: std::sync::OnceLock<Result<String, String>> = std::sync::OnceLock::new();
+    VERBOSE
+        .get_or_init(|| {
+            let output = child_command(false, "rustc", &["-vV"], &workspace_root()?)
+                .stderr(Stdio::inherit())
+                .output()
+                .map_err(|error| format!("failed to run `rustc -vV`: {error}"))?;
+            if !output.status.success() {
+                return Err(format!(
+                    "`rustc -vV` failed ({})",
+                    describe_exit(output.status)
+                ));
+            }
+            String::from_utf8(output.stdout).map_err(|error| {
+                format!("`rustc -vV` printed something that is not UTF-8: {error}")
+            })
+        })
+        .as_deref()
+        .map_err(Clone::clone)
+}
+
+/// The door every command passes before it runs anything: the compiler the
+/// checked calls will use is the release `rust-toolchain.toml` pins
+/// ([`resolved::check_release`]).
+fn toolchain_at_the_door() -> Result<(), String> {
+    resolved::check_release(rustc_verbose()?, &pinned_channel()?)
+}
+
+/// The `--config` value naming this xtask, `xtask`, as the runner for a cargo
+/// working in `cwd`: [`runner_exists`], [`runner_spelling`] and the host's
+/// runner key ([`resolved::Host::runner_config`]), the one rule for both the
+/// checked calls and `xtask/tests/doctest_runner.rs`, which asks for it
+/// through `xtask __runner-config <cwd>`.
+pub(crate) fn runner_config_for(xtask: &Path, cwd: &Path) -> Result<String, String> {
+    runner_exists(xtask)?;
+    host()?.runner_config(&runner_spelling(xtask, cwd)?)
 }
 
 /// `args`, a cargo command xtask runs outside the checked calls (clippy),
@@ -5800,9 +5939,10 @@ mod tests {
     #[test]
     fn the_runner_is_named_without_whitespace_or_refused() {
         let root = Path::new("/home/a b/pharmakos");
+        // The `cargo xtask` alias runs xtask from its own profile's folder.
         assert_eq!(
-            runner_spelling(&root.join("target/debug/xtask"), root),
-            Ok("target/debug/xtask".to_owned())
+            runner_spelling(&root.join("target/xtask/xtask"), root),
+            Ok("target/xtask/xtask".to_owned())
         );
         assert_eq!(
             runner_spelling(Path::new("/build/citime/debug/xtask"), root),
@@ -5899,6 +6039,45 @@ overflow-checks = true\n";
         // A key outside a profile table must not be mistaken for one.
         let elsewhere = "[workspace.metadata]\noverflow-checks = false\n";
         assert_eq!(scan_profiles(elsewhere), ProfileScan::default());
+    }
+
+    /// A profile of the workspace's own is covered by the overflow rule
+    /// because it inherits, through profiles declared beside it, from `dev`
+    /// or `release`; one that inherits from nothing, or from a profile the
+    /// scan does not know, or in a loop, is a failure. The committed manifest
+    /// passes, `[profile.xtask]` included.
+    #[test]
+    fn every_profile_of_our_own_inherits_the_workspaces_checks() {
+        let base = "[profile.release]\noverflow-checks = true\n\
+                    [profile.dev]\noverflow-checks = true\n";
+        for good in [
+            "[profile.xtask]\ninherits = \"dev\"\n",
+            "[profile.release-checked]\ninherits = \"release\"\n\
+             [profile.deeper]\ninherits = \"release-checked\"\n",
+        ] {
+            let scan = scan_profiles(&format!("{base}{good}"));
+            assert!(profiles_off_the_chain(&scan).is_empty(), "{good}");
+        }
+        for bad in [
+            "[profile.xtask]\nopt-level = 1\n",
+            "[profile.xtask]\ninherits = \"elsewhere\"\n",
+            "[profile.a]\ninherits = \"b\"\n[profile.b]\ninherits = \"a\"\n",
+        ] {
+            let scan = scan_profiles(&format!("{base}{bad}"));
+            assert!(!profiles_off_the_chain(&scan).is_empty(), "{bad}");
+            assert!(
+                profile_failures(&scan, None)
+                    .iter()
+                    .any(|failure| failure.contains("inherit from neither")),
+                "{bad}"
+            );
+        }
+        let committed = scan_profiles(include_str!("../../Cargo.toml"));
+        assert_eq!(
+            committed.profiles.get("xtask"),
+            Some(&Some("dev".to_owned()))
+        );
+        assert!(profiles_off_the_chain(&committed).is_empty());
     }
 
     /// The `profiles` step reads the TOML only for what the suite never

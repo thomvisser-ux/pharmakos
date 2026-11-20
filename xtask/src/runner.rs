@@ -99,7 +99,7 @@ impl fmt::Display for RunnerError {
             Self::NoExecutable => write!(f, "no executable was named"),
             Self::BadDoctestRun { value } => write!(
                 f,
-                "`{DOCTEST_RUN_VAR}` is `{}`; xtask sets it to `1` for a doctest run, and to \
+                "`{DOCTEST_RUN_VAR}` is `{}`; xtask sets it to `1` for a doctest run and to \
                  nothing else",
                 value.display()
             ),
@@ -445,6 +445,11 @@ mod tests {
             ),
             Err(RunnerError::BadDoctestRun { .. })
         ));
+        let refusal = RunnerError::BadDoctestRun {
+            value: OsString::from("0"),
+        }
+        .to_string();
+        assert!(refusal.contains("`[env]` table"), "{refusal}");
         assert_eq!(read_records(&folder), Ok(vec![executable]));
     }
 
