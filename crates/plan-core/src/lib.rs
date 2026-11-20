@@ -116,4 +116,4 @@ pub use render::{
     Chip, ConditionSlot, PickOp, RenderedRule, Rendering, SlotState, render, render_plan,
 };
 pub use travel::{Estimate, TravelEstimator};
-pub use verify::verify_jsonc;
+pub use verify::{Verified, decode_jsonc, verify_jsonc, verify_jsonc_canonical};

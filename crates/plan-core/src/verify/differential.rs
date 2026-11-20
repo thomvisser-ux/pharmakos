@@ -121,6 +121,7 @@ struct Seen {
 impl Seen {
     fn check(&mut self, what: &str, text: &str) {
         readers_agree(what, text);
+        decode_agrees(what, text);
         let expected = reference_hand_over(text);
         let handed = lean_hand_over(text);
         if handed != expected {
@@ -141,6 +142,42 @@ impl Seen {
                 refused_reports_agree(what, text, &bytes);
             }
         }
+    }
+}
+
+/// `decode_jsonc`, the one decode the gateway's readers share (fix pass 1,
+/// item 3), answers what the JSONC chain answers: the same message and
+/// canonical JSON for a file with a canonical form, and the same pointer and
+/// words for one without. Past the playbook's cap it refuses by
+/// `Bound::Size`, as `verify_jsonc` does and before any reading; the chain,
+/// which the editor's writer uses on texts the gateway has already bounded,
+/// has no cap of its own.
+fn decode_agrees(what: &str, text: &str) {
+    let lean = super::decode_jsonc(text);
+    if pharmakos_verifier::is_too_long(text) {
+        assert_eq!(
+            lean.map_err(|error| error.bound),
+            Err(Some(crate::error::Bound::Size)),
+            "{what}: past the cap"
+        );
+        return;
+    }
+    let chain = crate::canonical::canonicalise_text(text);
+    match (&lean, &chain) {
+        (Ok(lean), Ok(chain)) => {
+            assert_eq!(lean.text(), chain.json, "{what}: the canonical JSON");
+            assert_eq!(
+                lean.decoded().message(),
+                &chain.playbook,
+                "{what}: the message"
+            );
+        }
+        (Err(lean), Err(chain)) => assert_eq!(
+            (&lean.pointer, &lean.message),
+            (&chain.pointer, &chain.message),
+            "{what}: the refusal"
+        ),
+        _ => panic!("{what}: decode_jsonc answers {lean:?}, the JSONC chain {chain:?}"),
     }
 }
 

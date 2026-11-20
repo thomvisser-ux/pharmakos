@@ -59,7 +59,8 @@ use crate::jsonc::comment_end;
 ///
 /// `snapshot` is the seat's frozen planning snapshot as postcard bytes, and
 /// `scope` is the seat's view of it — both opaque here and both hashed inputs
-/// of the report.
+/// of the report. [`verify_jsonc_canonical`] answers the same report with the
+/// playbook it was taken over.
 ///
 /// # Errors
 ///
@@ -75,26 +76,122 @@ pub fn verify_jsonc(
     rules: &RulesTable,
     depth: Depth,
 ) -> Result<VerifyReport, Error> {
+    verify_jsonc_canonical(playbook_jsonc, snapshot, scope, rules, depth).map(Verified::into_report)
+}
+
+/// What [`verify_jsonc_canonical`] answers: the report, and the one decode it
+/// was taken over when the file has a canonical form (S3's `vfyq2`, fix pass
+/// 1, item 3).
+///
+/// A caller that goes on to act on a qualifying file (the gateway's
+/// `submit_plan` compiles, prices and seals it) acts on
+/// [`Verified::Canonical`]'s `canonical`, so the playbook it acts on is the
+/// one the report was taken over, by construction, and the file is decoded
+/// once from the socket to the seal.
+#[derive(Clone, PartialEq, Debug)]
+pub enum Verified {
+    /// The file has a canonical form: the report taken over it, and it.
+    Canonical {
+        /// The verifier's report.
+        report: VerifyReport,
+        /// The canonical form the report's bytes are, with the message they
+        /// were decoded to.
+        canonical: Box<json::Canonicalised<Playbook>>,
+    },
+    /// The file has no canonical form, or is past the cap: a report that
+    /// never qualifies, and nothing to act on.
+    Refused {
+        /// The verifier's report.
+        report: VerifyReport,
+    },
+}
+
+impl Verified {
+    /// The report, either way.
+    #[must_use]
+    pub const fn report(&self) -> &VerifyReport {
+        match self {
+            Self::Canonical { report, .. } | Self::Refused { report } => report,
+        }
+    }
+
+    /// The report, either way, by value.
+    #[must_use]
+    pub fn into_report(self) -> VerifyReport {
+        match self {
+            Self::Canonical { report, .. } | Self::Refused { report } => report,
+        }
+    }
+}
+
+/// [`verify_jsonc`], answering the canonical form beside the report.
+///
+/// # Errors
+///
+/// As [`verify_jsonc`].
+pub fn verify_jsonc_canonical(
+    playbook_jsonc: &str,
+    snapshot: &[u8],
+    scope: &Scope,
+    rules: &RulesTable,
+    depth: Depth,
+) -> Result<Verified, Error> {
     // The cap is on the text the player wrote, here where it enters, and
     // never on the canonical text below, which runs to several times its
     // length (`pharmakos_verifier::MAX_PLAYBOOK_CHARS`). A text past it is not
     // canonicalised, blanked or copied: it is `E0029`, at once.
     if pharmakos_verifier::is_too_long(playbook_jsonc) {
         let input = Input::too_long(snapshot, scope, rules).map_err(Error::from)?;
-        return Ok(pharmakos_verifier::verify(&input, depth));
+        return Ok(Verified::Refused {
+            report: pharmakos_verifier::verify(&input, depth),
+        });
     }
-    let handed = hand_over(playbook_jsonc)?;
     // The one decode's answer goes to the verifier whole: a canonical form
     // with the message it was decoded to, or the refusal with the tree it
     // kept, so the verifier hashes the bytes and reads nothing a second time.
-    let input = match &handed {
-        HandedOver::Canonical(canonical) => Input::canonical(canonical, snapshot, scope, rules),
-        HandedOver::Refused { bytes, refused } => {
-            Input::refused(bytes.as_bytes(), refused, snapshot, scope, rules)
+    Ok(match hand_over(playbook_jsonc)? {
+        HandedOver::Canonical(canonical) => {
+            let input =
+                Input::canonical(&canonical, snapshot, scope, rules).map_err(Error::from)?;
+            let report = pharmakos_verifier::verify(&input, depth);
+            Verified::Canonical { report, canonical }
         }
+        HandedOver::Refused { bytes, refused } => {
+            let input = Input::refused(bytes.as_bytes(), &refused, snapshot, scope, rules)
+                .map_err(Error::from)?;
+            Verified::Refused {
+                report: pharmakos_verifier::verify(&input, depth),
+            }
+        }
+    })
+}
+
+/// A JSONC playbook file's canonical form, decoded once: the decode
+/// [`verify_jsonc`] takes its report over, for a reader that needs the
+/// playbook and not a report (the gateway's `render_plan`, `resolve_refs`,
+/// its compile of a file it holds) and no comment (S3's `vfyq2`, fix pass 1,
+/// item 3). [`crate::canonical::canonicalise_text`] reads the same file to the
+/// same message and keeps its comments, for a reader that writes the file
+/// back.
+///
+/// # Errors
+///
+/// A text past `pharmakos_verifier::MAX_PLAYBOOK_CHARS` is refused by
+/// [`crate::error::Bound::Size`]; a text with no canonical form is refused at
+/// the codec's pointer, in its words, which are the JSONC reader's.
+pub fn decode_jsonc(playbook_jsonc: &str) -> Result<json::Canonicalised<Playbook>, Error> {
+    if pharmakos_verifier::is_too_long(playbook_jsonc) {
+        return Err(Error::bounded(
+            crate::error::Bound::Size,
+            "",
+            format!(
+                "the playbook is past {} characters",
+                pharmakos_verifier::MAX_PLAYBOOK_CHARS
+            ),
+        ));
     }
-    .map_err(Error::from)?;
-    Ok(pharmakos_verifier::verify(&input, depth))
+    json::canonical_decode::<Playbook>(&blank_comments(playbook_jsonc))
+        .map_err(|refused| Error::from(refused.error().clone()))
 }
 
 /// The bytes [`verify_jsonc`] hands the verifier, and which they are.
