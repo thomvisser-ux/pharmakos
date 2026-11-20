@@ -41,10 +41,8 @@ annotation, and `tests/LICENSE` says so in prose.
 **A file that quotes `library/`.** This is the standing statement of the rule; every other
 file points here. A tracked file outside `library/` that reproduces a library template's
 expression carries the library's licence (`MIT OR Apache-2.0`) beside the game's, as one
-combined expression, `GPL-3.0-or-later AND (MIT OR Apache-2.0)`. The two are never two
-separate expressions. A file in one of the areas the manifest licenses permissively (the
-operator goldens and the other permissive golden areas above) that carries no game
-expression carries the library's licence alone. The `docs/` tree is permissive by its own
+combined expression, `GPL-3.0-or-later AND (MIT OR Apache-2.0)`, or, where the file carries no
+game expression at all, the library's licence alone. The `docs/` tree is permissive by its own
 tier, not because it is library text. The rule was recorded in decisions log §2.7 item 164,
 which amends item 113 (10).
 
@@ -57,9 +55,23 @@ not a finding about copyright: below it the project treats a file as quoting no 
 a contributor may always add the library's licence to a file below it (the check demands the
 licence only above it), and the owner can move the line.
 
+*What passes.* `reuse` often reports more than one expression for a file (one from a manifest
+block, one from the file's header; `crates/gateway/src/host.rs`, `crates/client-gdext/tests/wizard.rs`,
+`scenarios/skeleton/against-easy.playbook.jsonc` and `tests/golden/vista/README.md` each have both).
+The check requires each expression a quoting file carries to be exactly one of three forms,
+`GPL-3.0-or-later`, `MIT OR Apache-2.0` or `GPL-3.0-or-later AND (MIT OR Apache-2.0)`, compared
+as written (`OR` where `AND` is meant fails). The file passes if the combined form is among its
+expressions, or if it carries `MIT OR Apache-2.0` and no `GPL-3.0-or-later`. `GPL-3.0-or-later`
+and `MIT OR Apache-2.0` as two separate expressions, with no combined one, fails. The check does
+not test the area a file sits in: a quoting file passes with the library's licence alone
+wherever it is, provided it carries no game expression. A file under a game-tier manifest block
+always carries one from the manifest, which is what keeps the library's licence alone to the
+permissively licensed areas.
+
 *What the check reads from `library/`.* Every tracked file under `library/` that `reuse`
-reports; a file `reuse` ignores (a `LICENSE`, `LICENCE` or `COPYING` file, a licence text under
-`LICENSES/`, a `.license` sidecar, `REUSE.toml`, an empty file) is not read. In a `.json` or
+reports; a file that `reuse` does not report because it ignores it (one whose name starts with `LICENSE`,
+`LICENCE` or `COPYING`, or ends `.license`; a licence text under `LICENSES/`; `REUSE.toml`; an
+empty file) is not read. In a `.json` or
 `.jsonc` file the strings are the *library strings* and the `//` comment lines are comment
 paragraphs (consecutive whole-line comments form one paragraph, a blank comment line ends it,
 and a trailing comment is a paragraph of its own); a string or paragraph that contains
@@ -71,9 +83,14 @@ covered.
 *Which files, and how words are counted.* Every file `git ls-files` lists outside `library/`,
 except files with a binary extension (`png`, `jpg`, `jpeg`, `gif`, `ico`, `vox`, `ogg`, `wav`,
 `mp3`, `zip`, `pck`, `ttf`, `otf`, `woff`, `woff2`, `dll`, `so`, `dylib`, `exe`, `wasm`, `bin`,
-`binpb`) and the files `reuse` itself ignores (the list above). Any other file that is not
-UTF-8 text fails the check, and so does a file `reuse` should report and does not. Words are
-runs of letters and digits with punctuation dropped; text is compared with whitespace
+`binpb`) and the files `reuse` does not report because it ignores them (the list above). Any other file that is not
+UTF-8 text fails the check, and so does a file `reuse` should report and does not. The 8-word minimum counts whitespace-separated tokens
+of a library string or comment paragraph (whitespace collapsed), punctuation included. A
+sentence ends at a full stop followed by a space, or at a full stop that ends the text; the
+text is split at every such full stop, so "e.g. " ends a piece, and a piece counts only if it
+ends in a full stop and has at least 8 tokens. A sentence is matched as written,
+punctuation included, as a substring of the file's text. A 12-word run counts runs of letters
+and digits, punctuation dropped, and is matched the same way. Text is compared with whitespace
 collapsed, JSON string escapes undone (all of them, Unicode escapes included) and comment markers
 removed, so a re-wrapped comment, an escaped quote or an escaped newline inside a sentence still matches.
 A byte copy under `godot/fixtures/` of a file under `tests/golden/` or `scenarios/` must carry
@@ -90,13 +107,25 @@ licence there is an edit to the block.
 reuse`), after `reuse lint`, so it also runs on the docs-only fast path. It asks `reuse lint
 --json` for each file's expressions and reads no manifest by hand. It has no exemption for an
 override block and no allow table. A failure names each file, the first words it quotes and
-the licence to write:
+the licence to write. This is the usual wording, one of several:
 
     these quote library/ (MIT OR Apache-2.0) without carrying its licence: give each
     `GPL-3.0-or-later AND (MIT OR Apache-2.0)` (REUSE.toml, or its own header), or
     `MIT OR Apache-2.0` if it is purely the library's text:
       <file> quotes "<first 60 characters>..." and is licensed `GPL-3.0-or-later` only; write
       `GPL-3.0-or-later AND (MIT OR Apache-2.0)`
+
+Other file lines end differently, as the case needs:
+
+    ... and carries <X>; write <the combined form>          (the combined form in another order)
+    ... and carries <X>, which is none of the three forms
+    ... and carries GPL-3.0-or-later and MIT OR Apache-2.0 as two separate expressions;
+        give it the combined expression: write <the combined form>
+    <copy> is a byte copy of <source>, which is licensed [...], not [...]
+
+Other refusals say that `reuse lint --json` did not run or gave an unreadable answer, that a file
+is not readable as text (add its extension to the binary list if it is binary), that `reuse`'s
+report has no entry for a file, or that the positive control failed.
 
 A positive control keeps "nothing found" from meaning "nothing looked at": the check fails
 unless it read more than 800 files, at least 5 library files and more than 100 word runs, and
@@ -268,7 +297,7 @@ file is combined with the manifest entry rather than being overridden by it —
 so a third-party file with its own header keeps it.
 
 Conformance is checked with `reuse lint`, which runs as the `reuse` step of
-`cargo xtask ci`, followed by the quotation check below. The check is platform-independent, so in CI it runs on the
+`cargo xtask ci`, followed by the quotation check described above. The check is platform-independent, so in CI it runs on the
 Linux leg only: the Windows and macOS legs pass `--skip reuse`
 (`.github/workflows/ci.yml`). Locally the step reports `skipped` when the tool
 is not installed (`pipx install reuse`); in CI it cannot, because

@@ -18,8 +18,8 @@
 #
 # One rule runs through the whole tree: a tracked file outside library/ that reproduces a
 # library template's expression carries the library's licence beside its own, as
-# GPL-3.0-or-later AND (MIT OR Apache-2.0), or the library's alone in an area licensed
-# permissively that carries no game expression. docs/LICENSING.md ("A file that quotes
+# GPL-3.0-or-later AND (MIT OR Apache-2.0), or the library's alone where it carries no game
+# expression. docs/LICENSING.md ("A file that quotes
 # library/") is the standing statement, with the thresholds; the `reuse` step holds it
 # (`cargo xtask reuse` runs xtask's `licence_quotes` check after `reuse lint`). Decisions-log
 # item 113 (10), which kept the instantiate_suggested golden and its Godot copy under the
