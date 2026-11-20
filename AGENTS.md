@@ -683,6 +683,10 @@ of that premise.
   | `proto/`, generated JSON Schema, `docs/`, `llms.txt`, example playbooks, the template library `library/`, `packaging/` (the zips' note and manifest templates; its two licence texts keep their own terms), `CHANGELOG.md` | `MIT OR Apache-2.0` |
   | art and audio assets | `CC-BY-SA-4.0` |
 
+  A file outside `library/` that reproduces a library template's expression carries the library's
+  licence beside its own; `docs/LICENSING.md` ("A file that quotes `library/`") is the standing
+  statement of the rule, and the `reuse` step checks it (§9 item 9).
+
   Third-party assets keep their own SPDX line and their entry in the credits screen (CC-BY
   attribution is a shipping requirement, not a nicety). Audio comes from CC0/CC-BY sources only.
 - **The versioned hooks.** `scripts/githooks/` holds them, wired once per clone with
@@ -787,7 +791,10 @@ merge train's local check.
    generated JSON Schema joins it with v1.1. The `buf` step fails, rather than skipping `breaking`,
    when there is no local `main` to compare against (decisions-log item 116 (6)(g) and (p)).
 9. **Licensing** — REUSE check: every file has an SPDX header or a `REUSE.toml` entry, and the
-   manifest is complete; the `LICENSE` pointers are §8's rule, which no step checks. The
+   manifest is complete, and every tracked file outside `library/` that reproduces a template's
+   expression carries the library's licence (§8; `docs/LICENSING.md` states the rule and
+   `xtask/src/licence_quotes.rs` runs it);
+   the `LICENSE` pointers are §8's rule, which no step checks. The
    `placeholders` step, `cargo xtask placeholders --check`, runs after it and fails on any
    `PLACEHOLDER` marker off the register's grammar (below; decisions-log item 137).
 10. **Scenarios** — the `scenario` step validates every committed scenario file and plays each with
