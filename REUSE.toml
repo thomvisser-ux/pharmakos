@@ -16,8 +16,9 @@
 # (decisions-log item 161); and the two blocks at the end for the three files whose
 # own bytes quote another file's SPDX header (decisions log item 116 (6)(i)).
 #
-# One rule runs through the whole tree, and a test holds it (xtask's `licence_quotes`,
-# which asks `reuse` for every file's licence): a tracked file outside library/ that
+# One rule runs through the whole tree, and the `reuse` step holds it (`cargo xtask reuse`
+# runs xtask's `licence_quotes` check after `reuse lint`; it asks `reuse` for every file's
+# licence): a tracked file outside library/ that
 # reproduces a library template's expression carries the library's licence
 # (MIT OR Apache-2.0) beside its own, as GPL-3.0-or-later AND (MIT OR Apache-2.0), or the
 # library's alone where the file is purely the library's text, as the operator goldens
@@ -239,7 +240,7 @@ SPDX-License-Identifier = "MIT OR Apache-2.0"
 #
 # The list is by name, so a new golden that quotes library/ could be added without it:
 # S3's defend_the_core, raid_an_enemy_beacon and against-easy render goldens were, and so
-# was the Godot copy of expand_and_mine's. The xtask test `licence_quotes` now reads
+# was the Godot copy of expand_and_mine's. The `reuse` step's `licence_quotes` check now reads
 # library/ and fails on any tracked file that reproduces a sentence of it without the
 # library's licence, so the next one cannot be missed. A render golden that quotes no
 # template (demo_deploy_and_visit_render) is not listed: an entry states what the file
