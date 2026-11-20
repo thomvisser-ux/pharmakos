@@ -60,6 +60,7 @@ pub(crate) fn text_to_encoded(full_name: &str, text: &str) -> Option<Encoded> {
         index,
         text,
         bytes: text.as_bytes(),
+        scan: grammar::Scan::new(text),
         pos: 0,
         out: Vec::with_capacity(text.len()),
         members: Vec::new(),
@@ -112,6 +113,9 @@ struct Direct<'t> {
     index: &'static Index,
     text: &'t str,
     bytes: &'t [u8],
+    /// The grammar's scanners read the text through this, so their every
+    /// byte is on the work meter.
+    scan: grammar::Scan<'t>,
     pos: usize,
     out: Vec<u8>,
     /// The members of every object on the way down, as a stack.
@@ -130,7 +134,7 @@ struct Direct<'t> {
 
 impl<'t> Direct<'t> {
     fn peek(&self) -> Option<u8> {
-        self.bytes.get(self.pos).copied()
+        self.scan.get(self.pos)
     }
 
     fn bump(&mut self) {
@@ -138,7 +142,7 @@ impl<'t> Direct<'t> {
     }
 
     fn skip_whitespace(&mut self) {
-        self.pos = grammar::whitespace_end(self.bytes, self.pos);
+        self.pos = grammar::whitespace_end(&self.scan, self.pos);
     }
 
     fn expect(&mut self, byte: u8) -> Option<()> {
@@ -146,7 +150,7 @@ impl<'t> Direct<'t> {
     }
 
     fn literal(&mut self, word: &'static str) -> Option<()> {
-        self.pos = grammar::literal(self.bytes, self.pos, word).ok()?;
+        self.pos = grammar::literal(&self.scan, self.pos, word).ok()?;
         Some(())
     }
 
@@ -309,7 +313,7 @@ impl<'t> Direct<'t> {
     /// The grammar's number ([`grammar::number`]), as its lexeme.
     fn number(&mut self) -> Option<&'t str> {
         let start = self.pos;
-        self.pos = grammar::number(self.bytes, start).ok()?;
+        self.pos = grammar::number(&self.scan, start).ok()?;
         self.text.get(start..self.pos)
     }
 
@@ -317,7 +321,7 @@ impl<'t> Direct<'t> {
     /// `unescaped` only when it holds an escape.
     fn string(&mut self) -> Option<Text> {
         let start = self.pos;
-        let (end, body) = grammar::string(self.text, start, Some(&mut self.unescaped)).ok()?;
+        let (end, body) = grammar::string(&self.scan, start, Some(&mut self.unescaped)).ok()?;
         self.pos = end;
         Some(match body {
             grammar::Body::Plain => Text::Slice(start.checked_add(1)?, end.checked_sub(1)?),

@@ -43,6 +43,7 @@
 //!   a save, a scenario), whose sizes those boundaries own.
 
 use std::borrow::Cow;
+use std::cell::Cell;
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
@@ -72,16 +73,74 @@ pub const fn is_whitespace(byte: u8) -> bool {
     matches!(byte, b' ' | b'\t' | b'\n' | b'\r')
 }
 
+/// A text as the grammar's scanners read it (S3's `vfyq2`, fix pass 1, item
+/// 1): a byte at a time ([`Scan::get`]), or a piece already read
+/// ([`Scan::slice`]), each byte counted, and no other way in. The count goes
+/// to the work meter ([`super::work`]) when the scan is dropped, so every byte
+/// a scanner looks at, a second look included, is on the meter: a scanner
+/// that rereads the text fails the linearity tests rather than only running
+/// slower, which a meter fed by the scanners' own reports could not promise.
+#[derive(Debug)]
+pub struct Scan<'t> {
+    text: &'t str,
+    read: Cell<usize>,
+}
+
+impl<'t> Scan<'t> {
+    /// A scan of `text`, nothing read yet.
+    #[must_use]
+    pub const fn new(text: &'t str) -> Scan<'t> {
+        Scan {
+            text,
+            read: Cell::new(0),
+        }
+    }
+
+    /// The byte at `at`, counted.
+    #[must_use]
+    pub fn get(&self, at: usize) -> Option<u8> {
+        self.count(1);
+        self.text.as_bytes().get(at).copied()
+    }
+
+    /// The text from `from` to `to`, every byte of it counted; `None` past
+    /// the end or off a character boundary.
+    #[must_use]
+    pub fn slice(&self, from: usize, to: usize) -> Option<&'t str> {
+        self.count(to.saturating_sub(from));
+        self.text.get(from..to)
+    }
+
+    /// How many bytes the text has.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.text.len()
+    }
+
+    /// Whether the text is empty.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.text.is_empty()
+    }
+
+    fn count(&self, bytes: usize) {
+        self.read.set(self.read.get().saturating_add(bytes));
+    }
+}
+
+impl Drop for Scan<'_> {
+    fn drop(&mut self) {
+        super::work::add(self.read.get());
+    }
+}
+
 /// The byte after the run of whitespace that starts at `at`.
 #[must_use]
-pub fn whitespace_end(bytes: &[u8], at: usize) -> usize {
+pub fn whitespace_end(scan: &Scan<'_>, at: usize) -> usize {
     let mut pos = at;
-    let mut examined: usize = 1;
-    while bytes.get(pos).copied().is_some_and(is_whitespace) {
+    while scan.get(pos).is_some_and(is_whitespace) {
         pos = pos.saturating_add(1);
-        examined = examined.saturating_add(1);
     }
-    super::work::add(examined);
     pos
 }
 
@@ -178,14 +237,10 @@ impl From<Refusal> for Error {
 /// # Errors
 ///
 /// A [`Refusal`] at the first byte that is not `word`'s.
-pub fn literal(bytes: &[u8], at: usize, word: &'static str) -> Result<usize, Refusal> {
-    metered(at, literal_unmetered(bytes, at, word))
-}
-
-fn literal_unmetered(bytes: &[u8], at: usize, word: &'static str) -> Result<usize, Refusal> {
+pub fn literal(scan: &Scan<'_>, at: usize, word: &'static str) -> Result<usize, Refusal> {
     let mut pos = at;
     for expected in word.bytes() {
-        if bytes.get(pos) != Some(&expected) {
+        if scan.get(pos) != Some(expected) {
             return Err(Refusal::grammar(pos, format!("expected `{word}`")));
         }
         pos = pos.saturating_add(1);
@@ -202,23 +257,19 @@ fn literal_unmetered(bytes: &[u8], at: usize, word: &'static str) -> Result<usiz
 /// # Errors
 ///
 /// A [`Refusal`] at the byte that breaks the grammar.
-pub fn number(bytes: &[u8], at: usize) -> Result<usize, Refusal> {
-    metered(at, number_unmetered(bytes, at))
-}
-
-fn number_unmetered(bytes: &[u8], at: usize) -> Result<usize, Refusal> {
+pub fn number(scan: &Scan<'_>, at: usize) -> Result<usize, Refusal> {
     let mut pos = at;
-    let digit = |pos: usize| bytes.get(pos).is_some_and(u8::is_ascii_digit);
+    let digit = |pos: usize| scan.get(pos).is_some_and(|byte| byte.is_ascii_digit());
     let digits = |mut pos: usize| {
         while digit(pos) {
             pos = pos.saturating_add(1);
         }
         pos
     };
-    if bytes.get(pos) == Some(&b'-') {
+    if scan.get(pos) == Some(b'-') {
         pos = pos.saturating_add(1);
     }
-    match bytes.get(pos) {
+    match scan.get(pos) {
         Some(b'0') => {
             pos = pos.saturating_add(1);
             if digit(pos) {
@@ -228,16 +279,16 @@ fn number_unmetered(bytes: &[u8], at: usize) -> Result<usize, Refusal> {
         Some(b'1'..=b'9') => pos = digits(pos),
         _ => return Err(Refusal::grammar(pos, EXPECTED_VALUE)),
     }
-    if bytes.get(pos) == Some(&b'.') {
+    if scan.get(pos) == Some(b'.') {
         pos = pos.saturating_add(1);
         if !digit(pos) {
             return Err(Refusal::grammar(pos, FRACTION_WITHOUT_DIGIT));
         }
         pos = digits(pos);
     }
-    if matches!(bytes.get(pos), Some(b'e' | b'E')) {
+    if matches!(scan.get(pos), Some(b'e' | b'E')) {
         pos = pos.saturating_add(1);
-        if matches!(bytes.get(pos), Some(b'+' | b'-')) {
+        if matches!(scan.get(pos), Some(b'+' | b'-')) {
             pos = pos.saturating_add(1);
         }
         if !digit(pos) {
@@ -271,26 +322,11 @@ pub enum Body {
 /// control character, an escape it does not know, a `\u` that is not four
 /// hex digits, a lone surrogate, or the text ending inside the string.
 pub fn string(
-    text: &str,
-    at: usize,
-    unescaped: Option<&mut String>,
-) -> Result<(usize, Body), Refusal> {
-    let answer = string_unmetered(text, at, unescaped);
-    let end = match &answer {
-        Ok((end, _)) => *end,
-        Err(refusal) => refusal.at,
-    };
-    super::work::add(end.saturating_sub(at).saturating_add(1));
-    answer
-}
-
-fn string_unmetered(
-    text: &str,
+    scan: &Scan<'_>,
     at: usize,
     mut unescaped: Option<&mut String>,
 ) -> Result<(usize, Body), Refusal> {
-    let bytes = text.as_bytes();
-    if bytes.get(at) != Some(&b'"') {
+    if scan.get(at) != Some(b'"') {
         return Err(Refusal::grammar(at, EXPECTED_QUOTE));
     }
     let start = at.saturating_add(1);
@@ -301,7 +337,7 @@ fn string_unmetered(
         // character, in one piece. Each of those is ASCII, so a run never ends
         // inside a UTF-8 sequence.
         let run = pos;
-        while let Some(&byte) = bytes.get(pos) {
+        while let Some(byte) = scan.get(pos) {
             if byte == b'"' || byte == b'\\' || byte < 0x20 {
                 break;
             }
@@ -310,12 +346,12 @@ fn string_unmetered(
         if body == Body::Escaped
             && let Some(out) = unescaped.as_deref_mut()
         {
-            let piece = text
-                .get(run..pos)
+            let piece = scan
+                .slice(run, pos)
                 .ok_or_else(|| Refusal::grammar(run, INVALID_UTF8))?;
             out.push_str(piece);
         }
-        match bytes.get(pos) {
+        match scan.get(pos) {
             None => return Err(Refusal::grammar(pos, UNTERMINATED_STRING)),
             Some(b'"') => return Ok((pos.saturating_add(1), body)),
             Some(b'\\') => {
@@ -323,13 +359,13 @@ fn string_unmetered(
                     body = Body::Escaped;
                     if let Some(out) = unescaped.as_deref_mut() {
                         out.clear();
-                        let before = text
-                            .get(start..pos)
+                        let before = scan
+                            .slice(start, pos)
                             .ok_or_else(|| Refusal::grammar(start, INVALID_UTF8))?;
                         out.push_str(before);
                     }
                 }
-                pos = escape(text, pos.saturating_add(1), unescaped.as_deref_mut())?;
+                pos = escape(scan, pos.saturating_add(1), unescaped.as_deref_mut())?;
             }
             Some(_) => return Err(Refusal::grammar(pos, RAW_CONTROL)),
         }
@@ -338,9 +374,8 @@ fn string_unmetered(
 
 /// One escape, its backslash read: the byte after it, its character written
 /// to `out` when given.
-fn escape(text: &str, at: usize, out: Option<&mut String>) -> Result<usize, Refusal> {
-    let bytes = text.as_bytes();
-    let Some(&byte) = bytes.get(at) else {
+fn escape(scan: &Scan<'_>, at: usize, out: Option<&mut String>) -> Result<usize, Refusal> {
+    let Some(byte) = scan.get(at) else {
         return Err(Refusal::grammar(at, ENDED_IN_ESCAPE));
     };
     let mut pos = at.saturating_add(1);
@@ -355,18 +390,18 @@ fn escape(text: &str, at: usize, out: Option<&mut String>) -> Result<usize, Refu
         b't' => '\t',
         b'u' => {
             let first;
-            (first, pos) = hex4(bytes, pos)?;
+            (first, pos) = hex4(scan, pos)?;
             let code = if (0xd800..0xdc00).contains(&first) {
-                if bytes.get(pos) != Some(&b'\\') {
+                if scan.get(pos) != Some(b'\\') {
                     return Err(Refusal::grammar(pos, EXPECTED_BACKSLASH));
                 }
                 pos = pos.saturating_add(1);
-                if bytes.get(pos) != Some(&b'u') {
+                if scan.get(pos) != Some(b'u') {
                     return Err(Refusal::grammar(pos, EXPECTED_U));
                 }
                 pos = pos.saturating_add(1);
                 let second;
-                (second, pos) = hex4(bytes, pos)?;
+                (second, pos) = hex4(scan, pos)?;
                 if !(0xdc00..0xe000).contains(&second) {
                     return Err(Refusal::grammar(pos, LONE_HIGH_SURROGATE));
                 }
@@ -384,7 +419,10 @@ fn escape(text: &str, at: usize, out: Option<&mut String>) -> Result<usize, Refu
             // The escaped character as a character, not its first byte: a
             // multi-byte one is quoted whole and refused after it, at a
             // character boundary.
-            let Some(other) = text.get(at..).and_then(|rest| rest.chars().next()) else {
+            let Some(other) = utf8_width(byte)
+                .and_then(|width| scan.slice(at, at.saturating_add(width)))
+                .and_then(|piece| piece.chars().next())
+            else {
                 return Err(Refusal::grammar(pos, INVALID_UTF8));
             };
             return Err(Refusal::grammar(
@@ -403,11 +441,11 @@ fn escape(text: &str, at: usize, out: Option<&mut String>) -> Result<usize, Refu
 }
 
 /// Four hex digits at `at`: their value, and the byte after them.
-fn hex4(bytes: &[u8], at: usize) -> Result<(u32, usize), Refusal> {
+fn hex4(scan: &Scan<'_>, at: usize) -> Result<(u32, usize), Refusal> {
     let mut value: u32 = 0;
     let mut pos = at;
     for _ in 0..4 {
-        let Some(&byte) = bytes.get(pos) else {
+        let Some(byte) = scan.get(pos) else {
             return Err(Refusal::grammar(pos, SHORT_U_ESCAPE));
         };
         let digit = char::from(byte)
@@ -427,7 +465,7 @@ pub trait Trivia {
     /// The byte after the run of trivia that starts at `at`. It never
     /// refuses: it stops at the first byte that is not trivia, and the
     /// grammar refuses that byte if it does not belong.
-    fn skip(&mut self, bytes: &[u8], at: usize) -> usize;
+    fn skip(&mut self, scan: &Scan<'_>, at: usize) -> usize;
 }
 
 /// The codec's trivia: whitespace, and nothing else.
@@ -435,8 +473,8 @@ pub trait Trivia {
 pub struct Whitespace;
 
 impl Trivia for Whitespace {
-    fn skip(&mut self, bytes: &[u8], at: usize) -> usize {
-        whitespace_end(bytes, at)
+    fn skip(&mut self, scan: &Scan<'_>, at: usize) -> usize {
+        whitespace_end(scan, at)
     }
 }
 
@@ -538,7 +576,7 @@ pub fn parse_refusing<'t, B: Build<'t>, T: Trivia>(
 ) -> Result<Document<'t, B::Value>, Refusal> {
     let mut reader = Reader {
         text,
-        bytes: text.as_bytes(),
+        scan: Scan::new(text),
         pos: 0,
         build,
         trivia,
@@ -551,8 +589,9 @@ pub fn parse_refusing<'t, B: Build<'t>, T: Trivia>(
 }
 
 struct Reader<'t, 'b, B, T> {
+    /// The text, for slicing out what the scan has read.
     text: &'t str,
-    bytes: &'t [u8],
+    scan: Scan<'t>,
     pos: usize,
     build: &'b mut B,
     trivia: &'b mut T,
@@ -579,12 +618,12 @@ impl<'t, B: Build<'t>, T: Trivia> Reader<'t, '_, B, T> {
             self.steps = self.steps.saturating_add(1);
         }
         let start = self.pos;
-        self.pos = self.trivia.skip(self.bytes, start);
+        self.pos = self.trivia.skip(&self.scan, start);
         self.slice(start, self.pos)
     }
 
     fn peek(&self) -> Option<u8> {
-        self.bytes.get(self.pos).copied()
+        self.scan.get(self.pos)
     }
 
     fn bump(&mut self) {
@@ -595,7 +634,7 @@ impl<'t, B: Build<'t>, T: Trivia> Reader<'t, '_, B, T> {
         let prologue = self.skip()?;
         let value = self.value(0)?;
         let epilogue = self.skip()?;
-        if self.pos < self.bytes.len() {
+        if self.pos < self.scan.len() {
             return Err(Refusal::grammar(self.pos, TRAILING_CONTENT));
         }
         Ok(Document {
@@ -623,7 +662,7 @@ impl<'t, B: Build<'t>, T: Trivia> Reader<'t, '_, B, T> {
             Some(b'"') => {
                 let start = self.pos;
                 let mut unescaped = String::new();
-                let (end, body) = string(self.text, start, Some(&mut unescaped))?;
+                let (end, body) = string(&self.scan, start, Some(&mut unescaped))?;
                 self.pos = end;
                 let raw = self.slice(start, end)?;
                 let text = match body {
@@ -635,20 +674,20 @@ impl<'t, B: Build<'t>, T: Trivia> Reader<'t, '_, B, T> {
                 Ok(self.build.string(raw, text))
             }
             Some(b't') => {
-                self.pos = literal(self.bytes, self.pos, "true")?;
+                self.pos = literal(&self.scan, self.pos, "true")?;
                 Ok(self.build.boolean(true))
             }
             Some(b'f') => {
-                self.pos = literal(self.bytes, self.pos, "false")?;
+                self.pos = literal(&self.scan, self.pos, "false")?;
                 Ok(self.build.boolean(false))
             }
             Some(b'n') => {
-                self.pos = literal(self.bytes, self.pos, "null")?;
+                self.pos = literal(&self.scan, self.pos, "null")?;
                 Ok(self.build.null())
             }
             Some(_) => {
                 let start = self.pos;
-                self.pos = number(self.bytes, start)?;
+                self.pos = number(&self.scan, start)?;
                 let lexeme = self.slice(start, self.pos)?;
                 Ok(self.build.number(lexeme))
             }
@@ -672,7 +711,7 @@ impl<'t, B: Build<'t>, T: Trivia> Reader<'t, '_, B, T> {
         loop {
             let key_at = self.pos;
             let mut unescaped = String::new();
-            let (end, body) = string(self.text, key_at, Some(&mut unescaped))?;
+            let (end, body) = string(&self.scan, key_at, Some(&mut unescaped))?;
             self.pos = end;
             let key_raw = self.slice(key_at, end)?;
             let key = match body {
@@ -806,7 +845,7 @@ pub(crate) fn parse_counting<'t, B: Build<'t>>(
     let mut trivia = Whitespace;
     let mut reader = Reader {
         text,
-        bytes: text.as_bytes(),
+        scan: Scan::new(text),
         pos: 0,
         build,
         trivia: &mut trivia,
@@ -820,16 +859,16 @@ pub(crate) fn parse_counting<'t, B: Build<'t>>(
     (value, reader.comparisons, reader.steps)
 }
 
-/// A token's answer, its examined bytes counted on the work meter
-/// ([`super::work`]): from `at` to the byte after it, or to the byte it was
-/// refused at.
-fn metered(at: usize, answer: Result<usize, Refusal>) -> Result<usize, Refusal> {
-    let end = match &answer {
-        Ok(end) => *end,
-        Err(refusal) => refusal.at,
-    };
-    super::work::add(end.saturating_sub(at).saturating_add(1));
-    answer
+/// How many bytes the UTF-8 sequence led by `lead` takes; `None` for a byte
+/// that leads none.
+const fn utf8_width(lead: u8) -> Option<usize> {
+    match lead {
+        0x00..=0x7f => Some(1),
+        0xc0..=0xdf => Some(2),
+        0xe0..=0xef => Some(3),
+        0xf0..=0xf7 => Some(4),
+        _ => None,
+    }
 }
 
 /// The most characters of a player's text a refusal quotes back (S3's

@@ -284,7 +284,7 @@ fn refused_bytes(text: &str, blanked: &str, at: Option<usize>) -> Result<String,
 /// character inside one becomes as many spaces as it had bytes and the result
 /// is still UTF-8.
 fn blank_comments(text: &str) -> String {
-    let bytes = text.as_bytes();
+    let scan = grammar::Scan::new(text);
     let mut out = String::with_capacity(text.len());
     // Up to where the current comment is blanked, and up to where the current
     // string, or the rest of a text whose string broke the grammar, is copied.
@@ -307,7 +307,7 @@ fn blank_comments(text: &str) -> String {
         }
         match character {
             '"' => {
-                copy_until = match grammar::string(text, at, None) {
+                copy_until = match grammar::string(&scan, at, None) {
                     Ok((end, _)) => end,
                     Err(_breaks_the_grammar) => text.len(),
                 };
@@ -318,7 +318,7 @@ fn blank_comments(text: &str) -> String {
                 // text at or before it, so nothing after it is read as code or
                 // comment, and the blanker stops looking: one scan to the end,
                 // never one for each `/*` after it.
-                if let Some((end, _)) = comment_end(bytes, at) {
+                if let Some((end, _)) = comment_end(&scan, at) {
                     blank_until = end;
                     out.push(' ');
                 } else {

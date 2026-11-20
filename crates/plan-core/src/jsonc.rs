@@ -46,7 +46,7 @@
 //! playbook at all is [`crate::canonical`]'s question, and whether it is a
 //! *valid* one is the verifier's.
 
-use pharmakos_proto::json::{Json, grammar, work};
+use pharmakos_proto::json::{Json, grammar};
 
 use crate::error::{Error, push_pointer};
 
@@ -725,13 +725,13 @@ fn closing(trivia: &str, child: &str, container: &str, last: bool, found: &mut V
 /// Splitting at a line break inside it would cut the comment in two, and the
 /// halves are not comments ([`collect`] would find neither).
 fn first_line_break(trivia: &str) -> Option<usize> {
-    let bytes = trivia.as_bytes();
+    let scan = grammar::Scan::new(trivia);
     let mut pos = 0usize;
-    while let Some(&byte) = bytes.get(pos) {
+    while let Some(byte) = scan.get(pos) {
         if byte == b'\n' || byte == b'\r' {
             return Some(pos);
         }
-        pos = match comment_end(bytes, pos) {
+        pos = match comment_end(&scan, pos) {
             Some((end, _)) => end,
             None => pos.saturating_add(1),
         };
@@ -805,10 +805,10 @@ pub struct Comment {
 
 /// Pulls the comments out of one trivia slot, in order.
 fn collect(trivia: &str, anchor: &Anchor, found: &mut Vec<Comment>) {
-    let bytes = trivia.as_bytes();
+    let scan = grammar::Scan::new(trivia);
     let mut pos = 0usize;
-    while pos < bytes.len() {
-        let Some((end, kind)) = comment_end(bytes, pos) else {
+    while pos < scan.len() {
+        let Some((end, kind)) = comment_end(&scan, pos) else {
             pos = pos.saturating_add(1);
             continue;
         };
@@ -847,55 +847,44 @@ fn collect(trivia: &str, anchor: &Anchor, found: &mut Vec<Comment>) {
 ///   its `/` is left to the grammar, which refuses it there, at the byte where
 ///   the comment opens.
 ///
-/// Every byte it reads is counted on the work meter
-/// (`pharmakos_proto::json::work`).
+/// It reads the text through the grammar's [`grammar::Scan`], so every byte
+/// it looks at is counted on the work meter (`pharmakos_proto::json::work`).
 #[must_use]
-pub(crate) fn comment_end(bytes: &[u8], at: usize) -> Option<(usize, CommentKind)> {
-    if bytes.get(at) != Some(&b'/') {
+pub(crate) fn comment_end(scan: &grammar::Scan<'_>, at: usize) -> Option<(usize, CommentKind)> {
+    if scan.get(at) != Some(b'/') {
         return None;
     }
-    let body = at.checked_add(2)?;
-    let found = match bytes.get(at.checked_add(1)?) {
-        Some(b'/') => {
-            let rest = bytes.get(body..)?;
-            let end = match rest
-                .iter()
-                .position(|byte| *byte == b'\n' || *byte == b'\r')
-            {
-                Some(offset) => body.saturating_add(offset),
+    let mut pos = at.checked_add(2)?;
+    match scan.get(at.checked_add(1)?)? {
+        b'/' => loop {
+            match scan.get(pos) {
                 // No terminator: the comment is the rest of the text.
-                None => bytes.len(),
-            };
-            Some((end, CommentKind::Line))
-        }
-        Some(b'*') => {
-            let rest = bytes.get(body..)?;
-            let Some(close) = rest.windows(2).position(|pair| pair == b"*/") else {
-                work::add(rest.len());
-                return None;
-            };
-            Some((
-                body.saturating_add(close).saturating_add(2),
-                CommentKind::Block,
-            ))
-        }
+                None => return Some((scan.len(), CommentKind::Line)),
+                Some(b'\n' | b'\r') => return Some((pos, CommentKind::Line)),
+                Some(_) => pos = pos.saturating_add(1),
+            }
+        },
+        b'*' => loop {
+            match scan.get(pos)? {
+                b'*' if scan.get(pos.saturating_add(1)) == Some(b'/') => {
+                    return Some((pos.saturating_add(2), CommentKind::Block));
+                }
+                _ => pos = pos.saturating_add(1),
+            }
+        },
         _ => None,
-    };
-    if let Some((end, _)) = found {
-        work::add(end.saturating_sub(at));
     }
-    found
 }
 
 /// The JSONC reader's trivia: whitespace and closed comments, in any order.
 struct Comments;
 
 impl grammar::Trivia for Comments {
-    fn skip(&mut self, bytes: &[u8], at: usize) -> usize {
+    fn skip(&mut self, scan: &grammar::Scan<'_>, at: usize) -> usize {
         let mut pos = at;
         loop {
-            pos = grammar::whitespace_end(bytes, pos);
-            match comment_end(bytes, pos) {
+            pos = grammar::whitespace_end(scan, pos);
+            match comment_end(scan, pos) {
                 Some((end, _)) => pos = end,
                 None => return pos,
             }
@@ -982,7 +971,7 @@ impl<'t> grammar::Build<'t> for Nodes {
 /// one string token, and `None` when it is not one.
 fn unescaped(raw: &str) -> Option<String> {
     let mut escaped = String::new();
-    match grammar::string(raw, 0, Some(&mut escaped)) {
+    match grammar::string(&grammar::Scan::new(raw), 0, Some(&mut escaped)) {
         Ok((end, body)) if end == raw.len() => match body {
             grammar::Body::Plain => raw.get(1..end.checked_sub(1)?).map(str::to_owned),
             grammar::Body::Escaped => Some(escaped),
@@ -1024,7 +1013,7 @@ fn escape(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{Anchor, CommentKind, Document, comment_end};
-    use pharmakos_proto::json::Json;
+    use pharmakos_proto::json::{Json, grammar};
 
     fn round_trip(text: &str) {
         let document = Document::parse(text).expect("a document the reader accepts");
@@ -1141,13 +1130,13 @@ mod tests {
                 "{name}"
             );
             assert_eq!(
-                comment_end(text.as_bytes(), 0),
+                comment_end(&grammar::Scan::new(&text), 0),
                 Some(("// a note".len(), CommentKind::Line)),
                 "{name}"
             );
         }
         assert_eq!(
-            comment_end(b"// to the end", 0),
+            comment_end(&grammar::Scan::new("// to the end"), 0),
             Some(("// to the end".len(), CommentKind::Line))
         );
     }
