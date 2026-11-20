@@ -1394,9 +1394,52 @@ fn resumed_from(saved: &pharmakos_gateway::save::SavedMatch) -> Surface {
     .expect("the Lull resumes")
 }
 
-/// Play one Push, filing `craters` on its last tick, and return its chain:
-/// each tick and its state hash.
-fn push_cratered_on_its_last_tick(surface: &mut Surface, craters: &[[i32; 3]]) -> Vec<(u32, u64)> {
+/// The voxels of a wall five high round seat 0's commander: the eight
+/// columns about it, from one above each column's top.
+fn wall_round_the_commander(surface: &Surface) -> Vec<[i32; 3]> {
+    let [x, y, _] = support::commander_voxel(surface, 0);
+    let world = surface.host().expect("hosted").world();
+    let mut wall = Vec::new();
+    for dy in -1..=1_i32 {
+        for dx in -1..=1_i32 {
+            if (dx, dy) == (0, 0) {
+                continue;
+            }
+            let top = world
+                .voxels()
+                .top_solid_z(x + dx, y + dy)
+                .expect("a column with a floor");
+            for z in top + 1..=top + 5 {
+                wall.push([x + dx, y + dy, z]);
+            }
+        }
+    }
+    wall
+}
+
+/// File one `Set` of `material` per voxel of `wall` through the host.
+fn file_wall(surface: &mut Surface, wall: &[[i32; 3]], material: pharmakos_sim::voxels::Material) {
+    use pharmakos_sim::voxels::VoxelEdit;
+    for &at in wall {
+        surface
+            .host_mut()
+            .expect("hosted")
+            .file_voxel_edit(VoxelEdit::Set {
+                at,
+                material,
+                by: None,
+            })
+            .expect("the queue takes a wall voxel");
+    }
+}
+
+/// Play one Push, filing `craters` on its last tick, with `wall` taken down
+/// on the same tick, and return its chain: each tick and its state hash.
+fn push_cratered_on_its_last_tick(
+    surface: &mut Surface,
+    craters: &[[i32; 3]],
+    wall: &[[i32; 3]],
+) -> Vec<(u32, u64)> {
     use pharmakos_sim::voxels::VoxelEdit;
     surface.begin_push().expect("the Push begins");
     let ticks = surface
@@ -1419,6 +1462,7 @@ fn push_cratered_on_its_last_tick(surface: &mut Surface, craters: &[[i32; 3]]) -
                     })
                     .expect("the queue takes a crater");
             }
+            file_wall(surface, wall, pharmakos_sim::voxels::Material::AIR);
         }
         let report = surface
             .step()
@@ -1433,7 +1477,12 @@ fn push_cratered_on_its_last_tick(surface: &mut Surface, craters: &[[i32; 3]]) -
 /// Every Lull of a hosted three-round match reads the graph its save
 /// restores, and plays on to the chain its save plays on to (lane `settle`).
 /// Each Push craters seat 0's way to its nearest vent on its last tick, so
-/// every Lull after the first opens on a terrain edit. The graph is settled
+/// every Lull after the first opens on a terrain edit. In round 1 seat 0's
+/// commander, sealed to walk forty columns, is walled in for the whole Push and its
+/// wall comes down on the last tick: the Voxels phase that takes it down
+/// re-arms it, so at round 2's Lull it is waiting rather than sealed, saved
+/// that way, and walks in round 2 live and resumed alike (a dropped
+/// re-arm leaves it sealed in place). The graph is settled
 /// in the phase that edits the terrain, so at every Lull the hosted world
 /// that `get_map_summary`, `resolve_refs` and `estimate_route` read is the one
 /// a resume from that Lull's save rebuilds: the answers are byte-equal, and
@@ -1446,7 +1495,25 @@ fn push_cratered_on_its_last_tick(surface: &mut Surface, craters: &[[i32; 3]]) -
 fn every_lull_reads_and_plays_on_as_its_save_does() {
     let mut surface = support::hosted(2, SHORT_SEGMENT_MS, SHORT_ROUNDS);
     let (vent, craters) = nearest_vent_and_its_way(&mut surface);
+    let walled_at = support::commander_voxel(&surface, 0);
     for round in 1..=SHORT_ROUNDS {
+        let token = support::seat_token(&mut surface, 0);
+        let mut left = LULL_MS;
+        // Forty columns towards the middle of the map.
+        let toward = if walled_at[0] > 192 { -40 } else { 40 };
+        let east = support::walk_east(&surface, 0, toward, 4);
+        let sealed = call_in_lull(
+            &mut surface,
+            &token,
+            &mut left,
+            "submit_plan",
+            &format!(r#"{{"playbook_jsonc":{}}}"#, support::quote(&east)),
+        );
+        assert_eq!(
+            result(&sealed, "submit_plan").get("accepted"),
+            Some(&Json::Bool(true)),
+            "round {round}: seat 0 seals its walk"
+        );
         let live = graph_reads(&mut surface, &vent);
         let mut resumed = resumed_from(&surface.lull_save().expect("a Lull saves"));
         let again = graph_reads(&mut resumed, &vent);
@@ -1461,12 +1528,32 @@ fn every_lull_reads_and_plays_on_as_its_save_does() {
                 "round {round}: {method} reads one graph in the live Lull and another after its save resumes"
             );
         }
-        let played = push_cratered_on_its_last_tick(&mut surface, &craters);
-        let replayed = push_cratered_on_its_last_tick(&mut resumed, &craters);
+        let wall = if round == 1 {
+            wall_round_the_commander(&surface)
+        } else {
+            Vec::new()
+        };
+        file_wall(&mut surface, &wall, pharmakos_sim::voxels::Material::STONE);
+        file_wall(&mut resumed, &wall, pharmakos_sim::voxels::Material::STONE);
+        let played = push_cratered_on_its_last_tick(&mut surface, &craters, &wall);
+        let replayed = push_cratered_on_its_last_tick(&mut resumed, &craters, &wall);
         assert_eq!(
             played, replayed,
             "round {round}: the Push after the Lull plays one chain live and another after its save resumes"
         );
+        let [x, _, _] = support::commander_voxel(&surface, 0);
+        if round == 1 {
+            assert_eq!(
+                x, walled_at[0],
+                "round 1: the wall holds the commander in place"
+            );
+        } else {
+            assert!(
+                (x - walled_at[0]).abs() >= 5,
+                "round {round}: the commander freed on round 1's last tick walks (at x {x}, walled at {})",
+                walled_at[0]
+            );
+        }
         if round < SHORT_ROUNDS {
             surface.end_recap().expect("the recap ends");
             surface
