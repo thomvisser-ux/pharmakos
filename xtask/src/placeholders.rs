@@ -106,6 +106,8 @@ pub(crate) fn classify(text: &str) -> Line {
         let end = start + WORD.len();
         from = end;
         let before = text.get(..start).and_then(|head| head.chars().next_back());
+        // `end` closes an ASCII word found in `text`: a boundary inside it, so
+        // the default is never read.
         let after = text.get(end..).unwrap_or_default();
         if before.is_some_and(is_word_char) || after.chars().next().is_some_and(is_word_char) {
             continue; // HAS_PLACEHOLDERS, PLACEHOLDERs
@@ -240,6 +242,8 @@ impl Register {
         self.filed
             .values()
             .map(Vec::len)
+            // A count of markers held in memory: it cannot reach `usize::MAX`,
+            // so it never saturates.
             .fold(0, usize::saturating_add)
     }
 
@@ -249,6 +253,7 @@ impl Register {
         let _ = writeln!(
             out,
             "PLACEHOLDER register: {} marker(s) in {} file(s); {} in the grammar, {} to reword",
+            // Two counts of markers held in memory; their sum never saturates.
             self.in_grammar().saturating_add(self.off_grammar.len()),
             self.files,
             self.in_grammar(),
@@ -280,7 +285,19 @@ impl Register {
 ///
 /// When `git grep` cannot be run or cannot read the tree.
 pub(crate) fn collect(root: &Path, require_tools: bool) -> Result<Register, String> {
-    let mut args: Vec<&str> = vec!["grep", "-n", "-I", "-w", "-e", WORD, "--", "."];
+    // `--no-color`: the lines are parsed, and a `color.grep = always` in a
+    // git config would otherwise put escapes in them.
+    let mut args: Vec<&str> = vec![
+        "grep",
+        "--no-color",
+        "-n",
+        "-I",
+        "-w",
+        "-e",
+        WORD,
+        "--",
+        ".",
+    ];
     args.extend_from_slice(EXCLUDED);
     let output = child_command(require_tools, "git", &args, root)
         .stdin(Stdio::null())

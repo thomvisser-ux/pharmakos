@@ -24,9 +24,7 @@
 //! as a pass.
 
 use std::fmt;
-use std::io::{BufRead, BufReader};
 use std::path::Path;
-use std::process::Stdio;
 
 /// The report line's prefix and format version, as
 /// `crates/bench/src/g3.rs`'s `BUDGET_REPORT_PREFIX` spells it; a unit test
@@ -51,12 +49,9 @@ pub(crate) const GATE_MEAN_NS: u128 = 12_500_000;
 /// Why the alarm gave no verdict. Each one fails the command.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) enum BudgetError {
-    /// cargo could not be started.
-    Launch { cargo: String, reason: String },
-    /// The child's output could not be read.
-    Read(String),
-    /// The measurement exited unsuccessfully.
-    Exited { command: String, status: String },
+    /// The checked run gave no output to read: a refused environment, a build
+    /// that broke its profile's promise, a launch, a read or a failed exit.
+    Run(String),
     /// The output held no report line.
     NoReport,
     /// The output held more than one report line.
@@ -77,16 +72,12 @@ pub(crate) enum BudgetError {
     ShortSegment { ticks: u128, segment_ticks: u128 },
     /// A report whose figures cannot all be true at once.
     Inconsistent(&'static str),
-    /// `CARGO` holds a value that is not Unicode.
-    CargoNotUnicode,
 }
 
 impl fmt::Display for BudgetError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Launch { cargo, reason } => write!(f, "could not launch `{cargo}`: {reason}"),
-            Self::Read(reason) => write!(f, "could not read the measurement's output: {reason}"),
-            Self::Exited { command, status } => write!(f, "`{command}` failed ({status})"),
+            Self::Run(reason) => write!(f, "the measurement did not run: {reason}"),
             Self::NoReport => write!(f, "the measurement printed no `{REPORT_PREFIX}` line"),
             Self::SeveralReports(count) => {
                 write!(
@@ -110,7 +101,6 @@ impl fmt::Display for BudgetError {
                 "the report covers {ticks} ticks of a segment of {segment_ticks}: a short run"
             ),
             Self::Inconsistent(why) => write!(f, "the report's figures disagree: {why}"),
-            Self::CargoNotUnicode => write!(f, "`CARGO` is set to a value that is not Unicode"),
         }
     }
 }
@@ -251,78 +241,32 @@ pub(crate) fn verdict(report: &Report, os: &str) -> (Vec<String>, bool) {
     (lines, !p99_over && !mean_over)
 }
 
-/// The cargo arguments the alarm runs. Pure, so its flags are pinned.
-pub(crate) fn args(locked: bool) -> Vec<String> {
-    let mut args: Vec<String> = vec!["test".to_owned(), "--release".to_owned()];
-    if locked {
-        args.push("--locked".to_owned());
-    }
-    for arg in [
-        "--package",
-        "pharmakos-bench",
-        "--test",
-        "g3_real",
-        "--",
-        "--ignored",
-        "--nocapture",
-        "--exact",
-        BUDGET_TEST,
-    ] {
-        args.push(arg.to_owned());
-    }
-    args
+/// The checked run the alarm measures: the one released test, by its exact
+/// name, through the one door ([`crate::resolved::execute`]). Pure, so its
+/// command line is pinned.
+pub(crate) fn test_run(locked: bool) -> crate::resolved::TestRun {
+    crate::resolved::TestRun::new(
+        vec!["--package".to_owned(), "pharmakos-bench".to_owned()],
+        crate::resolved::Invocation {
+            selectors: vec!["--test".to_owned(), "g3_real".to_owned()],
+            sim: crate::resolved::SimRule::OptimisedIfBuilt,
+        },
+        locked,
+        false,
+    )
+    .release()
+    .with_harness(vec![
+        crate::resolved::Harness::Ignored,
+        crate::resolved::Harness::Nocapture,
+        crate::resolved::Harness::Exact(BUDGET_TEST.to_owned()),
+    ])
 }
 
-/// Run the measurement, echoing its output as it comes, and answer whether
-/// the alarm passed.
+/// Run the measurement through the checked call, echoing its output as it
+/// comes, and answer whether the alarm passed.
 pub(crate) fn run(root: &Path, require_tools: bool, locked: bool) -> Result<bool, BudgetError> {
-    // cargo sets `CARGO` for the commands it runs, `cargo xtask` among them;
-    // unset (xtask run some other way), the one on PATH is the rule.
-    let cargo = match std::env::var_os("CARGO") {
-        None => "cargo".to_owned(),
-        Some(value) => value
-            .into_string()
-            .map_err(|_| BudgetError::CargoNotUnicode)?,
-    };
-    let args = args(locked);
-    let command = crate::render_command(&cargo, &args);
-    println!("   $ {command}");
-    let mut child = crate::child_command(require_tools, &cargo, &args, root)
-        .stdout(Stdio::piped())
-        .spawn()
-        .map_err(|error| BudgetError::Launch {
-            cargo: cargo.clone(),
-            reason: error.to_string(),
-        })?;
-    let mut output = String::new();
-    if let Some(stdout) = child.stdout.take() {
-        for line in BufReader::new(stdout).lines() {
-            match line {
-                Ok(line) => {
-                    println!("{line}");
-                    output.push_str(&line);
-                    output.push('\n');
-                }
-                Err(error) => {
-                    // Never leave the measurement running unattended. The
-                    // read error is the one reported; the kill's and the
-                    // wait's would only repeat that the child is gone.
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(BudgetError::Read(error.to_string()));
-                }
-            }
-        }
-    }
-    let status = child
-        .wait()
-        .map_err(|error| BudgetError::Read(error.to_string()))?;
-    if !status.success() {
-        return Err(BudgetError::Exited {
-            command,
-            status: crate::describe_exit(status),
-        });
-    }
+    let output =
+        crate::run_measurement(root, require_tools, &test_run(locked)).map_err(BudgetError::Run)?;
     let report = parse(&output)?;
     let (lines, passed) = verdict(&report, std::env::consts::OS);
     for line in lines {
@@ -443,12 +387,20 @@ mod tests {
 
     #[test]
     fn the_alarm_runs_one_released_test_by_its_exact_name() {
-        assert_eq!(
-            args(true).join(" "),
-            "test --release --locked --package pharmakos-bench --test g3_real -- --ignored \
-             --nocapture --exact g3_budget_segment"
+        let line = test_run(true).run_line().join(" ");
+        assert!(
+            line.contains(
+                "test --release --package pharmakos-bench --test g3_real --locked \
+                 --message-format=json -- --ignored --nocapture --exact g3_budget_segment"
+            ),
+            "{line}"
         );
-        assert!(!args(false).iter().any(|arg| arg == "--locked"));
+        assert!(
+            !test_run(false)
+                .run_line()
+                .iter()
+                .any(|arg| arg == "--locked")
+        );
     }
 
     #[test]

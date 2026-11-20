@@ -150,9 +150,15 @@ jobs:
     # system's shards plus that operating system's leg job, and no other operating
     # system's shards hold it back (decisions-log item 148, the main session's call). A
     # fourth shard is a change to CI_SHARDS and the three shard matrices. Item 116 (6)(f)'s
-    # `[profile.*]` question stays the owner's, a contract change (AGENTS.md section 5), not
-    # a way out of the rule. The legs' measured times, shard by shard, are
-    # in each xtask pull request.
+    # `[profile.*]` question was taken ahead of its 75-minute threshold, by the main
+    # session's ruling, which the owner can veto (no healthy leg had reached 75; shards sat
+    # at 35 to 54 of 90 and one degraded runner hit the limit, so the margin was thin, and
+    # this removes the cost at its cause; the decisions-log item that records this change
+    # says so): the suite runs pharmakos-sim and the third-party crates it runs optimised,
+    # debug assertions and overflow checks on, and xtask's `test` step asks cargo for the
+    # profile it resolved for every unit and refuses anything else. A further profile change
+    # is still a contract change (AGENTS.md section 5), not a way out of the rule. The legs'
+    # measured times, shard by shard, are in each xtask pull request.
     timeout-minutes: 90
     # Each operating system's `xtask_args`, set in its shard job's matrix:
     # The REUSE licence check is platform-independent, so it runs once, on the ubuntu
@@ -376,7 +382,34 @@ jobs:
               if [ -f determinism/hashes.txt ]; then echo determinism/hashes.txt; fi
             ) > shard-out/files.txt
             if [ -s shard-out/files.txt ]; then
-              tar -C target -cf - -T shard-out/files.txt | tar -C shard-out/target -xf -
+              # Through one archive file, not a pipe: a pipe's reading half can die and
+              # leave only "tar: Write error" (run 44706396313), while each command here
+              # names itself when it fails. On any failure the step says which, prints
+              # the disk and the listed files' count and size, and stays red: the leg
+              # job needs these outputs. The archive is a relative path because Git
+              # Bash's tar reads `D:\...` as a remote host; it is not under shard-out/,
+              # so it is never uploaded.
+              archive=shard-outputs.tar
+              staging_failed() {
+                echo "::error title=Staging the shard's outputs failed::$1"
+                df -h . || echo "df -h . failed too"
+                listed=$(wc -l < shard-out/files.txt)
+                bytes=0
+                while IFS= read -r file; do
+                  if ! size=$(wc -c < "target/$file"); then
+                    echo "cannot read target/${file}"
+                    size=0
+                  fi
+                  bytes=$((bytes + size))
+                done < shard-out/files.txt
+                echo "listed: ${listed} file(s), ${bytes} byte(s) in all"
+                exit 1
+              }
+              tar -C target -cf "$archive" -T shard-out/files.txt \
+                || staging_failed "writing ${archive} from target/ failed (tar exit $?)"
+              tar -C shard-out/target -xf "$archive" \
+                || staging_failed "extracting ${archive} into shard-out/target failed (tar exit $?)"
+              rm -f "$archive"
             fi
             echo "$(wc -l < shard-out/files.txt) fresh output(s) staged"
           fi
@@ -553,8 +586,19 @@ jobs:
           rm -rf target/golden target/determinism
           status=0
           merged=0
+          # The listing goes through a file, not a process substitution: a `find`
+          # that fails inside `< <(...)` is seen by neither `set -e` nor `pipefail`, and
+          # its outputs would be merged in part with nothing red. Here its failure stops
+          # the step and says which shard's tree it was listing.
+          listing=merge-listing.bin
           for dir in shards/shard-${{ matrix.os }}-*; do
             [ -d "$dir/target" ] || continue
+            find "$dir/target" -type f -print0 > "$listing" || {
+              code=$?
+              echo "::error title=Merging the shards' outputs failed::listing ${dir}/target failed (find exit ${code})"
+              df -h . || echo "df -h . failed too"
+              exit 1
+            }
             while IFS= read -r -d '' file; do
               relative="${file#"$dir/target/"}"
               destination="target/$relative"
@@ -568,8 +612,9 @@ jobs:
               mkdir -p "$(dirname "$destination")"
               cp "$file" "$destination"
               merged=$((merged + 1))
-            done < <(find "$dir/target" -type f -print0)
+            done < "$listing"
           done
+          rm -f "$listing"
           echo "${merged} fresh output(s) merged"
           exit "$status"
 
@@ -1211,10 +1256,12 @@ jobs:
       - name: Build gamectl for the headless watch run
         # The watch run below spawns `gamectl host` as the lobby does (decisions-log
         # item 107 (2), confirmed as item 108 (2)). A debug build, like the staged
-        # client, so a panic in the host is a panic rather than an abort.
+        # client, so a panic in the host is a panic rather than an abort. Built through
+        # xtask's checked call (its tools and flags pinned, its build checked from
+        # cargo's own report), at the path the watch run reads.
         if: steps.scope.outputs.prose_only != 'true'
         shell: bash
-        run: cargo build --package pharmakos-gamectl --bin gamectl
+        run: cargo xtask build-gamectl
 
       - name: Headless watch run against a real gamectl host
         # T16's live acceptance, grown by T19 (docs/design/skeleton-plan-t16a-notes.md
