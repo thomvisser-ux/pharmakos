@@ -171,13 +171,19 @@ fn blank_comments(text: &str) -> String {
                 };
                 out.push(character);
             }
-            '/' => match comment_end(bytes, at) {
-                Some((end, _)) => {
+            '/' => {
+                // A `/` that opens no closed comment: the grammar refuses the
+                // text at or before it, so nothing after it is read as code or
+                // comment, and the blanker stops looking: one scan to the end,
+                // never one for each `/*` after it.
+                if let Some((end, _)) = comment_end(bytes, at) {
                     blank_until = end;
                     out.push(' ');
+                } else {
+                    copy_until = text.len();
+                    out.push(character);
                 }
-                None => out.push(character),
-            },
+            }
             other => out.push(other),
         }
     }
