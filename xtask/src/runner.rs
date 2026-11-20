@@ -5,13 +5,14 @@
 //! doctests included, in a checked run.
 //!
 //! A checked run ([`crate::resolved::execute`]) hands cargo
-//! `target.<host>.runner = [<this xtask>, "__run-test"]` on its command line,
-//! which a config file's `target.<host>.runner` and `target.'cfg(…)'.runner`
-//! cannot override (measured with cargo 1.98.1 on Windows and Linux: the
-//! command line's table wins over a `cfg` runner in a file, and a file's
-//! runner for the same triple written as a string, not an array, makes cargo
-//! refuse to merge the two and fail). Cargo then starts each test executable,
-//! and rustdoc each doctest, as `<xtask> __run-test <executable> <args…>`.
+//! `target.<host>.runner='<this xtask> __run-test'` on its command line
+//! ([`crate::resolved::Host::runner_config`]), which a config file's
+//! `target.<host>.runner` and `target.'cfg(…)'.runner` cannot override
+//! (measured with cargo 1.98.1: the command line's string replaces a file's
+//! string, for the triple and for a `cfg(…)`, and beside a file's array cargo
+//! refuses to merge and fails, so the run goes red and nothing runs). Cargo
+//! then starts each test executable, and rustdoc each doctest, as
+//! `<xtask> __run-test <executable> <args…>`.
 //!
 //! The runner records the start, then runs the executable with standard input,
 //! output and error inherited and its exit status passed through exactly. The

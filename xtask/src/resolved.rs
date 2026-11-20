@@ -225,17 +225,25 @@ impl Host {
     }
 
     /// The `--config` value pinning the host's runner to `xtask`'s test
-    /// runner (`runner.rs`): an array, as TOML literal strings, so the path is
-    /// taken as written. A path TOML's literal string cannot hold is refused.
+    /// runner (`runner.rs`): one string, a TOML literal string so the path is
+    /// taken as written, which cargo splits on whitespace into the program
+    /// and its argument. A string, not an array: cargo 1.98.1 merges a config
+    /// file's runner array with the command line's, in an order that varied
+    /// between runs, so the file's could run first; a string replaces a
+    /// file's string, for the triple and for a `cfg(…)`, and beside a file's
+    /// array cargo refuses to merge and fails. A path holding whitespace
+    /// (cargo would split it) or a quote (the literal string cannot hold it)
+    /// is refused.
     pub(crate) fn runner_config(&self, xtask: &str) -> Result<String, String> {
-        if xtask.contains(['\'', '\n', '\r']) {
+        if xtask.contains(|character: char| character == '\'' || character.is_whitespace()) {
             return Err(format!(
-                "xtask's own path `{xtask}` holds a quote or a line break, which cargo's \
-                 `--config` cannot be given as a runner"
+                "xtask's own path `{xtask}` holds whitespace or a quote: cargo splits a runner \
+                 on whitespace, so it cannot be named as one; build xtask under a path without \
+                 either"
             ));
         }
         Ok(format!(
-            "target.{}.runner=['{xtask}', '{}']",
+            "target.{}.runner='{xtask} {}'",
             self.triple,
             crate::runner::SUBCOMMAND
         ))
