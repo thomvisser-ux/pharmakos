@@ -16,14 +16,18 @@
 //!
 //! # The rule
 //!
-//! * **What is quoted:** a *sentence* of a library file: a run of at least [`MIN_WORDS`] words
-//!   that ends in a full stop, taken from a string value or from a paragraph of `//` comment
-//!   (consecutive comment lines are one paragraph). Titles, names, step labels and parameter
-//!   labels do not end in a full stop; they are names, not quoted expression, and are not
-//!   covered, and neither is a few words of a sentence, such as a decision cited in a comment.
-//! * **How it is matched:** on text with whitespace collapsed, JSON string escapes undone and
-//!   comment markers removed, on both sides, so a re-wrapped comment, a `\n` inside a sentence
-//!   and an escaped quote all match.
+//! * **What is quoted:** a *sentence* of a library file, a run of at least [`MIN_WORDS`] words
+//!   that ends in a full stop (from a string, or from a paragraph of `//` comment, whose
+//!   consecutive lines are one paragraph); or any run of at least [`RUN_WORDS`] consecutive
+//!   words of one library *string*, full stop or not, because a parameter's description is
+//!   expression too. Titles, names and step labels are short and are not covered, and neither
+//!   is a few words of a sentence, such as a decision cited in a comment.
+//! * **How it is matched:** on text with whitespace collapsed, JSON string escapes undone
+//!   (the whole of JSON's set, `\uXXXX` and `\/` included, by one reader for both sides) and
+//!   comment markers removed, so a re-wrapped comment, a `\n` inside a sentence and an escaped
+//!   quote all match; a run of words is compared with punctuation dropped.
+//! * **What the library is:** every tracked file under `library/` that `reuse` reports (a
+//!   `.jsonc` or `.json` by its strings and comments, anything else by its paragraphs).
 //! * **What is read:** every file `git ls-files` lists outside `library/`, so a file not yet
 //!   added is seen once it is. A binary file is skipped by extension from the named
 //!   [`BINARY`] list; any other read or UTF-8 error is a [`Refusal`], never a skip.
@@ -32,7 +36,8 @@
 //!   with `reuse lint` by construction (precedence and globs included) and no manifest is read
 //!   by hand. Every expression of a quoting file must be one of the three [`ALLOWED`] forms,
 //!   compared exactly (`OR` where `AND` is meant fails), and the file must carry the combined
-//!   expression or the library's.
+//!   expression, or the library's with no game expression beside it (a game expression and the
+//!   library's as two separate expressions is neither).
 //! * **Byte copies:** a file under `godot/fixtures/` that is byte-identical to one under
 //!   `tests/golden/` or `scenarios/` carries exactly the same expressions as it.
 //! * **A positive control:** the test asserts it scanned a plausible number of files and that
@@ -43,15 +48,22 @@
 //! `PHARMAKOS_REQUIRE_TOOLS=1`. The test runs with the rest of xtask's tests in the `test`
 //! step and adds no step to `cargo xtask ci`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
+use std::iter::Peekable;
 use std::path::Path;
+use std::str::Chars;
 
 use crate::Json;
 
-/// The fewest words in a sentence that counts as quoted expression.
+/// The fewest words in a sentence (ending in a full stop) that counts as quoted expression.
 const MIN_WORDS: usize = 8;
+
+/// The fewest consecutive words of one library string that count as quoted expression, full
+/// stop or not: a parameter's description is expression; a title or a step label is a name
+/// (they are short).
+const RUN_WORDS: usize = 12;
 
 /// The library's licence, as the manifest and the headers spell it.
 const LIBRARY: &str = "MIT OR Apache-2.0";
@@ -108,6 +120,9 @@ impl fmt::Display for Refusal {
 pub(crate) struct Outcome {
     /// Text files read.
     pub(crate) scanned: usize,
+    /// Library files read, and the word runs taken from them.
+    pub(crate) library_files: usize,
+    pub(crate) library_runs: usize,
     /// Files that quote the library, with the expressions each carries.
     pub(crate) quoting: BTreeMap<String, Vec<String>>,
     /// Quoting files whose licences are wrong, and copies that differ from their source.
@@ -118,14 +133,14 @@ pub(crate) struct Outcome {
 // Text: units, sentences, normalisation
 // ---------------------------------------------------------------------------
 
-/// The strings and the comment paragraphs of one JSONC file, in order. Read with a scanner
+/// The strings (`true`) and the comment paragraphs (`false`) of one JSONC file, in order. Read with a scanner
 /// that knows a string from a comment, so a `//` or a quote inside either is not a delimiter.
-fn units(text: &str) -> Vec<String> {
+fn units(text: &str) -> Vec<(String, bool)> {
     let mut units = Vec::new();
     let mut paragraph = String::new();
-    let flush = |paragraph: &mut String, units: &mut Vec<String>| {
+    let flush = |paragraph: &mut String, units: &mut Vec<(String, bool)>| {
         if !paragraph.trim().is_empty() {
-            units.push(std::mem::take(paragraph));
+            units.push((std::mem::take(paragraph), false));
         }
         paragraph.clear();
     };
@@ -141,22 +156,13 @@ fn units(text: &str) -> Vec<String> {
                 comment.push(c);
             } else if in_string {
                 match c {
-                    '\\' => match chars.next() {
-                        Some('n' | 't' | 'r') => current.push(' '),
-                        Some('u') => {
-                            let hex: String = chars.by_ref().take(4).collect();
-                            let decoded = u32::from_str_radix(&hex, 16)
-                                .ok()
-                                .and_then(char::from_u32)
-                                .unwrap_or('\u{fffd}');
-                            current.push(decoded);
-                        }
-                        Some(other) => current.push(other),
-                        None => {}
+                    '\\' => match escape(&mut chars) {
+                        Some(decoded) => current.push_str(&decoded),
+                        None => current.extend(chars.next()),
                     },
                     '"' => {
                         in_string = false;
-                        units.push(std::mem::take(&mut current));
+                        units.push((std::mem::take(&mut current), true));
                     }
                     other => current.push(other),
                 }
@@ -180,7 +186,7 @@ fn units(text: &str) -> Vec<String> {
                 }
             } else {
                 flush(&mut paragraph, &mut units);
-                units.push(comment.to_owned());
+                units.push((comment.to_owned(), false));
             }
         } else {
             flush(&mut paragraph, &mut units);
@@ -194,28 +200,70 @@ fn collapse(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// A file's text in the form sentences are matched against: JSON string escapes undone
-/// (`\n` and its kin become a space, `\"` a quote, `\\` a backslash), the leading `//` of
-/// each comment line removed, the pieces of a Rust `concat!` joined, whitespace collapsed.
+/// The four hex digits of a `\u` escape.
+fn hex4(chars: &mut Peekable<Chars<'_>>) -> Option<u32> {
+    let digits: String = chars.by_ref().take(4).collect();
+    if digits.chars().count() == 4 {
+        u32::from_str_radix(&digits, 16).ok()
+    } else {
+        None
+    }
+}
+
+/// One JSON string escape, read after its backslash: the whole of JSON's set (`\n \t \r \b
+/// \f` become a space, `\" \\ \/` themselves, `\uXXXX` its character, a surrogate pair the
+/// one character it spells). `None`, with `chars` untouched, when what follows is not one.
+fn escape(chars: &mut Peekable<Chars<'_>>) -> Option<String> {
+    let next = *chars.peek()?;
+    match next {
+        'n' | 't' | 'r' | 'b' | 'f' => {
+            chars.next();
+            Some(" ".to_owned())
+        }
+        '"' | '\\' | '/' => {
+            chars.next();
+            Some(next.to_string())
+        }
+        'u' => {
+            let mut look = chars.clone();
+            look.next();
+            let unit = hex4(&mut look)?;
+            let decoded = match unit {
+                0xD800..=0xDBFF => {
+                    let mut pair = look.clone();
+                    let low = (pair.next() == Some('\\') && pair.next() == Some('u'))
+                        .then(|| hex4(&mut pair))
+                        .flatten()
+                        .filter(|low| (0xDC00..=0xDFFF).contains(low));
+                    match low {
+                        Some(low) => {
+                            look = pair;
+                            char::from_u32(0x10000 + ((unit - 0xD800) << 10) + (low - 0xDC00))
+                        }
+                        None => None,
+                    }
+                }
+                other => char::from_u32(other),
+            };
+            *chars = look;
+            Some(decoded.unwrap_or('\u{fffd}').to_string())
+        }
+        _ => None,
+    }
+}
+
+/// A file's text in the form quotations are matched against: JSON string escapes undone, the
+/// leading `//` of each comment line removed, the pieces of a Rust `concat!` joined,
+/// whitespace collapsed. A library string is decoded by the same escape reader, so the two
+/// sides cannot read an escape differently.
 fn normalise(text: &str) -> String {
     let mut unescaped = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {
         if c == '\\' {
-            match chars.peek() {
-                Some('n' | 't' | 'r') => {
-                    chars.next();
-                    unescaped.push(' ');
-                }
-                Some('"') => {
-                    chars.next();
-                    unescaped.push('"');
-                }
-                Some('\\') => {
-                    chars.next();
-                    unescaped.push('\\');
-                }
-                _ => unescaped.push(c),
+            match escape(&mut chars) {
+                Some(decoded) => unescaped.push_str(&decoded),
+                None => unescaped.push(c),
             }
         } else {
             unescaped.push(c);
@@ -236,6 +284,13 @@ fn normalise(text: &str) -> String {
     collapse(&joined.replace("\", \"", " "))
 }
 
+/// The words of a text, punctuation dropped: runs of letters and digits.
+fn words(text: &str) -> Vec<&str> {
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect()
+}
+
 /// The sentences of a unit: pieces of its collapsed text ending in a full stop, of at least
 /// [`MIN_WORDS`] words.
 fn sentences(unit: &str) -> Vec<String> {
@@ -252,37 +307,91 @@ fn sentences(unit: &str) -> Vec<String> {
     found
 }
 
-/// Every library sentence, from the tracked `library/*.jsonc`.
-fn library_sentences(root: &Path, files: &[String]) -> Result<Vec<String>, Refusal> {
-    let mut all = Vec::new();
-    for file in files.iter().filter(|f| {
-        f.starts_with("library/")
-            && Path::new(f.as_str())
-                .extension()
-                .is_some_and(|e| e == "jsonc")
-    }) {
-        let text = fs::read_to_string(root.join(file))
-            .map_err(|e| Refusal::Library(format!("{file}: {e}")))?;
-        for unit in units(&text) {
-            if unit.contains("SPDX") {
-                continue;
-            }
-            all.extend(sentences(&unit));
-        }
-    }
-    all.sort();
-    all.dedup();
-    if all.is_empty() {
-        return Err(Refusal::Library("no sentence was read".to_owned()));
-    }
-    Ok(all)
+/// What the library says, from every tracked file under `library/` that `reuse` reports.
+#[derive(Debug, Default)]
+struct Library {
+    /// Sentences: at least [`MIN_WORDS`] words ending in a full stop.
+    sentences: Vec<String>,
+    /// Every run of [`RUN_WORDS`] consecutive words of one library string, full stop or not.
+    runs: BTreeSet<String>,
+    /// The library files read.
+    files: usize,
 }
 
-fn quotes(normalised: &str, sentences: &[String]) -> Option<String> {
-    sentences
-        .iter()
-        .find(|s| normalised.contains(s.as_str()))
-        .cloned()
+impl Library {
+    /// A sentence is taken from any unit; a run of words only from a string (or a paragraph of
+    /// prose), which is what the library says to the player, not a comment about it.
+    fn add_unit(&mut self, unit: &str, string: bool) {
+        if unit.contains("SPDX") {
+            return;
+        }
+        self.sentences.extend(sentences(unit));
+        if string {
+            let tokens = words(unit);
+            for window in tokens.windows(RUN_WORDS) {
+                self.runs.insert(window.join(" "));
+            }
+        }
+    }
+
+    /// One library file: a JSON or JSONC file by its strings and comment paragraphs, anything
+    /// else (a note in Markdown) by its paragraphs.
+    fn add_file(&mut self, name: &str, text: &str) {
+        self.files += 1;
+        let json = Path::new(name)
+            .extension()
+            .is_some_and(|e| e == "jsonc" || e == "json");
+        if json {
+            for (unit, string) in units(text) {
+                self.add_unit(&unit, string);
+            }
+        } else {
+            let mut paragraph = String::new();
+            for line in text.lines() {
+                if line.trim().is_empty() {
+                    self.add_unit(&std::mem::take(&mut paragraph), true);
+                } else {
+                    paragraph.push(' ');
+                    paragraph.push_str(line);
+                }
+            }
+            self.add_unit(&paragraph, true);
+        }
+    }
+
+    fn read(root: &Path, files: &[String]) -> Result<Library, Refusal> {
+        let mut library = Library::default();
+        for file in files
+            .iter()
+            .filter(|f| f.starts_with("library/") && !reuse_ignores(f, false))
+        {
+            let text = fs::read_to_string(root.join(file))
+                .map_err(|e| Refusal::Library(format!("{file}: {e}")))?;
+            library.add_file(file, &text);
+        }
+        library.sentences.sort();
+        library.sentences.dedup();
+        if library.sentences.is_empty() && library.runs.is_empty() {
+            return Err(Refusal::Library("no sentence was read".to_owned()));
+        }
+        Ok(library)
+    }
+
+    /// What `normalised` quotes: a sentence of the library, or a run of [`RUN_WORDS`]
+    /// consecutive words of one of its strings.
+    fn quoted_in(&self, normalised: &str) -> Option<String> {
+        if let Some(sentence) = self
+            .sentences
+            .iter()
+            .find(|s| normalised.contains(s.as_str()))
+        {
+            return Some(sentence.clone());
+        }
+        words(normalised)
+            .windows(RUN_WORDS)
+            .map(|window| window.join(" "))
+            .find(|run| self.runs.contains(run))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -341,19 +450,43 @@ fn reuse_ignores(file: &str, empty: bool) -> bool {
         || name.ends_with(".LICENSE")
 }
 
-/// Why a quoting file's expressions are wrong, if they are.
+/// An expression's licence identifiers, sorted: two spellings of the same terms agree.
+fn terms(expression: &str) -> Vec<&str> {
+    let mut found: Vec<&str> = expression
+        .split(|c: char| !(c.is_alphanumeric() || c == '-' || c == '.'))
+        .filter(|t| !t.is_empty())
+        .collect();
+    found.sort_unstable();
+    found
+}
+
+/// Why a quoting file's expressions are wrong, if they are. The file passes by carrying the
+/// combined expression, or by carrying the library's and no game expression at all (it is
+/// purely the library's text). A game expression and the library's as two separate
+/// expressions is neither.
 fn licence_problem(expressions: &[String]) -> Option<String> {
-    if let Some(other) = expressions.iter().find(|e| !ALLOWED.contains(&e.as_str())) {
-        return Some(format!(
-            "carries `{other}`, which is none of the three allowed forms"
-        ));
+    let set = sorted_set(expressions);
+    for expression in &set {
+        if !ALLOWED.contains(&expression.as_str()) {
+            return Some(if terms(expression) == terms(COMBINED) {
+                format!("carries `{expression}`; write `{COMBINED}`")
+            } else {
+                format!(
+                    "carries `{expression}`, which is none of `{GAME}`, `{LIBRARY}`, `{COMBINED}`"
+                )
+            });
+        }
     }
-    if expressions.iter().any(|e| e == COMBINED || e == LIBRARY) {
+    let has = |wanted: &str| set.iter().any(|e| e == wanted);
+    if has(COMBINED) || (has(LIBRARY) && !has(GAME)) {
         None
-    } else {
+    } else if has(LIBRARY) {
         Some(format!(
-            "is licensed {expressions:?}, without the library's {LIBRARY}"
+            "carries `{GAME}` and `{LIBRARY}` as two separate expressions; give it the combined \
+             expression: write `{COMBINED}`"
         ))
+    } else {
+        Some(format!("is licensed `{GAME}` only; write `{COMBINED}`"))
     }
 }
 
@@ -374,8 +507,12 @@ pub(crate) fn check(
     files: &[String],
     report: &BTreeMap<String, Vec<String>>,
 ) -> Result<Outcome, Refusal> {
-    let sentences = library_sentences(root, files)?;
-    let mut outcome = Outcome::default();
+    let library = Library::read(root, files)?;
+    let mut outcome = Outcome {
+        library_files: library.files,
+        library_runs: library.runs.len(),
+        ..Outcome::default()
+    };
     let mut contents: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut raw: BTreeMap<String, String> = BTreeMap::new();
     for file in files.iter().filter(|f| !f.starts_with("library/")) {
@@ -400,7 +537,7 @@ pub(crate) fn check(
             None if reuse_ignores(file, text.is_empty()) => continue,
             None => return Err(Refusal::NotReported(file.clone())),
         };
-        if let Some(quoted) = quotes(&normalise(&text), &sentences) {
+        if let Some(quoted) = library.quoted_in(&normalise(&text)) {
             if let Some(problem) = licence_problem(&expressions) {
                 let shown: String = quoted.chars().take(60).collect();
                 outcome
@@ -443,15 +580,15 @@ mod tests {
 
     #[test]
     fn a_sentence_is_a_full_stop_and_eight_words() {
-        let unit = "Hold & Build. Grow the grid: place a Build beacon covering a heat vent you \
-                    do not cover yet. Why: short one.";
+        let unit = "Hold & Build. Raise the lantern above the harbour wall when fog comes in \
+                    and keep it lit until dawn. Why: short one.";
         assert_eq!(
             sentences(unit),
             vec![s(
-                "Grow the grid: place a Build beacon covering a heat vent you do not cover yet."
+                "Raise the lantern above the harbour wall when fog comes in and keep it lit until dawn."
             )]
         );
-        assert!(sentences("How long to hold by the new beacon, in game milliseconds").is_empty());
+        assert!(sentences("How long to keep the lantern, in game milliseconds").is_empty());
         assert!(sentences("commander died (S2's plan, decision 35).").is_empty());
     }
 
@@ -461,32 +598,38 @@ mod tests {
         assert_eq!(
             units(text),
             vec![
-                s("first line of one paragraph."),
-                s("another."),
-                s("a"),
-                s("say \"hi\" // not a comment"),
-                s("trailing"),
-                s("b"),
-                s("two lines"),
+                (s("first line of one paragraph."), false),
+                (s("another."), false),
+                (s("a"), true),
+                (s("say \"hi\" // not a comment"), true),
+                (s("trailing"), false),
+                (s("b"), true),
+                (s("two lines"), true),
             ]
         );
     }
 
     #[test]
     fn a_rewrapped_escaped_or_commented_quotation_still_matches() {
-        let library = vec![s(
-            "Grow the grid: place a Build beacon covering a heat vent you do not cover yet.",
-        )];
+        let mut library = Library::default();
+        library.add_unit(
+            "Raise the lantern above the harbour wall when fog comes in and keep it lit until dawn.",
+            true,
+        );
         for text in [
-            "// Grow the grid: place a Build beacon\n// covering a heat vent you do not\n// cover yet.\n",
-            "\"note\": \"Grow the grid: place a Build beacon covering a heat vent you do not cover\\nyet.\"",
-            "\"Grow the grid:  place a Build beacon covering a heat vent you do not cover yet.\"",
-            "concat!(\"Grow the grid: place a Build beacon\\n\",\n    \"covering a heat vent you do not cover yet.\\n\")",
-            "{\"x\": \"Grow the grid: place a Build beacon covering a heat vent you do not cover yet.\"}",
+            "// Raise the lantern above the harbour\n// wall when fog comes in and keep it\n// lit until dawn.\n",
+            "\"note\": \"Raise the lantern above the harbour wall when fog comes in and keep it lit until\\ndawn.\"",
+            "\"Raise  the lantern above the harbour wall when fog comes in and keep it lit until dawn.\"",
+            "concat!(\"Raise the lantern above the harbour wall\\n\",\n    \"when fog comes in and keep it lit until dawn.\\n\")",
+            "{\"x\": \"Raise the lantern above the harbour wall when fog comes in and keep it lit until dawn.\"}",
         ] {
-            assert!(quotes(&normalise(text), &library).is_some(), "{text}");
+            assert!(library.quoted_in(&normalise(text)).is_some(), "{text}");
         }
-        assert!(quotes(&normalise("a Build beacon covering a heat vent"), &library).is_none());
+        assert!(
+            library
+                .quoted_in(&normalise("a lantern above the harbour wall"))
+                .is_none()
+        );
     }
 
     #[test]
@@ -494,7 +637,8 @@ mod tests {
         let e = |t: &[&str]| -> Vec<String> { t.iter().map(|x| s(x)).collect() };
         assert_eq!(licence_problem(&e(&[GAME, COMBINED])), None);
         assert_eq!(licence_problem(&e(&[LIBRARY])), None);
-        assert_eq!(licence_problem(&e(&[LIBRARY, GAME])), None);
+        assert!(licence_problem(&e(&[LIBRARY, GAME])).is_some());
+        assert_eq!(licence_problem(&e(&[LIBRARY, LIBRARY])), None);
         assert!(licence_problem(&e(&[GAME])).is_some());
         assert!(licence_problem(&e(&["GPL-3.0-or-later OR (MIT OR Apache-2.0)"])).is_some());
         assert!(licence_problem(&e(&[GAME, "GPL-3.0-or-later AND MIT OR Apache-2.0"])).is_some());
@@ -537,7 +681,7 @@ mod tests {
     }
 
     const SENTENCE: &str =
-        "Grow the grid: place a Build beacon covering a heat vent you do not cover yet.";
+        "Raise the lantern above the harbour wall when fog comes in and keep it lit until dawn.";
 
     #[test]
     fn a_quoting_file_anywhere_in_the_tree_is_a_miss_unless_it_carries_the_library_licence() {
@@ -563,7 +707,7 @@ mod tests {
         write(
             &dir,
             "examples/b.md",
-            "a re-wrapped\n// Grow the grid: place a Build beacon\n// covering a heat vent you do not\n// cover yet.\n",
+            "a re-wrapped\n// Raise the lantern above the harbour\n// wall when fog comes in and keep it\n// lit until dawn.\n",
         );
         write(
             &dir,
@@ -660,7 +804,7 @@ mod tests {
         assert_eq!(same.map(|o| o.misses.len()), Ok(0));
     }
 
-    const LABEL: &str = "Which heat vent the Build beacon covers: the nearest one you do not cover yet, or one by name";
+    const LABEL: &str = "Which lantern the keeper lights first: the nearest one on the wall that is not lit yet, or one by name";
 
     fn one_file(
         library: &[(&str, &str)],
@@ -687,9 +831,7 @@ mod tests {
     fn a_long_description_with_no_full_stop_is_expression_and_a_short_label_is_a_name() {
         let library = [(
             "library/t.jsonc",
-            format!(
-                "{{\"label\": \"{LABEL}\", \"name\": \"How long to hold by the new beacon\"}}\n"
-            ),
+            format!("{{\"label\": \"{LABEL}\", \"name\": \"How long to keep the lantern\"}}\n"),
         )];
         let library: Vec<(&str, &str)> = library.iter().map(|(a, b)| (*a, b.as_str())).collect();
         let long = one_file(
@@ -702,7 +844,7 @@ mod tests {
         let short = one_file(
             &library,
             "crates/c/tests/b.rs",
-            "x(\"How long to hold by the new beacon\");\n",
+            "x(\"How long to keep the lantern\");\n",
             &[GAME],
         );
         assert_eq!(short.map(|o| o.misses.len()), Ok(0));
@@ -730,13 +872,6 @@ mod tests {
             "library/notes.md",
             "A note: the guard post covers the nearest scrap seam you do not cover yet, and holds.\n",
         )];
-        let found = one_file(
-            &library,
-            "docs/x.txt",
-            "the guard post covers the nearest scrap seam you do not cover yet, and holds.",
-            &[GAME],
-        );
-        assert_eq!(found.map(|o| o.misses.len()), Ok(0));
         let found = one_file(
             &library,
             "crates/x/src/a.rs",
@@ -771,7 +906,11 @@ mod tests {
         let text = format!("// {SENTENCE}\n");
         let doubled = one_file(&library, "crates/x/src/a.rs", &text, &[GAME, GAME]);
         let message = doubled.map(|o| o.misses.join("\n")).unwrap_or_default();
-        assert_eq!(message.matches(GAME).count(), 1, "{message}");
+        assert_eq!(
+            message.matches(&format!("`{GAME}`")).count(),
+            1,
+            "{message}"
+        );
         let reordered = one_file(
             &library,
             "crates/x/src/b.rs",
@@ -852,6 +991,12 @@ mod tests {
             Ok(outcome) => outcome,
             Err(refusal) => panic!("{refusal}"),
         };
+        assert!(
+            outcome.library_files >= 5 && outcome.library_runs > 100,
+            "the library was not read: {} files, {} word runs",
+            outcome.library_files,
+            outcome.library_runs
+        );
         assert!(
             outcome.scanned > 800,
             "only {} files were read",
