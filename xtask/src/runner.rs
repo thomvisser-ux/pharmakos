@@ -139,10 +139,9 @@ fn prepare(args: &[OsString], folder: Option<OsString>) -> Result<(Command, Stri
             path: absolute.clone().into_os_string(),
         })?
         .to_owned();
-    let given = executable.to_string_lossy().into_owned();
-    record_start(Path::new(&folder), &given)?;
+    record_start(Path::new(&folder), &text)?;
     let mut command = Command::new(&absolute);
-    command.args(rest);
+    command.args(rest).env_remove(RECORD_VAR);
     Ok((command, text))
 }
 
@@ -248,7 +247,7 @@ pub(crate) fn read_records(folder: &Path) -> Result<Vec<String>, String> {
             .file_name()
             .and_then(|name| name.to_str())
             .is_some_and(|name| name.ends_with(RECORD_SUFFIX));
-        if !is_record && path.is_dir() {
+        if !is_record {
             return Err(format!(
                 "{} is in a run's record folder and is not a record",
                 path.display()
@@ -256,7 +255,7 @@ pub(crate) fn read_records(folder: &Path) -> Result<Vec<String>, String> {
         }
         let text = fs::read_to_string(&path)
             .map_err(|error| format!("reading {}: {error}", path.display()))?;
-        if text.is_empty() && path.is_dir() {
+        if text.is_empty() {
             return Err(format!(
                 "{} records a start with no path: its runner stopped while writing it",
                 path.display()

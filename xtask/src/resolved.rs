@@ -205,13 +205,7 @@ impl Host {
         let linker = DEFAULT_LINKERS
             .iter()
             .find(|(host, _)| *host == triple)
-            .map(|(host, linker)| {
-                if host.contains("apple") {
-                    "ld"
-                } else {
-                    *linker
-                }
-            })
+            .map(|(_, linker)| *linker)
             .ok_or_else(|| {
                 format!(
                     "no default linker is recorded for the host `{triple}`, so a config file's \
@@ -806,7 +800,7 @@ fn comparable_path(path: &str, case_insensitive: bool) -> String {
     let mut parts: Vec<&str> = Vec::new();
     for part in rest.split('/') {
         match part {
-            "" => {}
+            "" | "." => {}
             ".." => {
                 if parts.last().is_some_and(|last| *last != "..") {
                     parts.pop();
@@ -851,7 +845,7 @@ fn judge_starts(
         .collect();
     let unreported: Vec<String> = started
         .iter()
-        .filter(|path| reported.is_empty() && !path.is_empty())
+        .filter(|path| !reported.contains(&comparable_path(path, case_insensitive)))
         .cloned()
         .collect();
     if missing.is_empty() && unreported.is_empty() {
@@ -906,8 +900,10 @@ pub(crate) fn execute(
                 }
             }
             None => {
-                if output_error.is_none() && test_output(line).is_err() {
-                    output_error = None;
+                if output_error.is_none()
+                    && let Err(error) = test_output(line)
+                {
+                    output_error = Some(error);
                 }
             }
         }
@@ -1091,7 +1087,9 @@ pub(crate) fn reported_artefact(
 ) -> Result<std::path::PathBuf, String> {
     let units: Vec<&Built> = built
         .iter()
-        .filter(|unit| graph.names.contains_key(&unit.package_id))
+        .filter(|unit| {
+            !unit.test && graph.names.get(&unit.package_id).map(String::as_str) == Some(package)
+        })
         .filter(|unit| match wanted {
             Wanted::Bin(name) => unit.target == name && unit.is("bin"),
             Wanted::Cdylib(_) => unit.is("cdylib"),
@@ -1157,7 +1155,7 @@ impl Graph {
     /// Cargo's target directory, as `cargo metadata` names it: absolute, or
     /// refused.
     pub(crate) fn target_dir(&self) -> Result<&str, ProfileFault> {
-        if self.target_dir.is_empty() {
+        if split_root(&slashed(&self.target_dir)).0.is_empty() {
             return Err(ProfileFault::Metadata(format!(
                 "`target_directory` is `{}`, not an absolute path",
                 self.target_dir

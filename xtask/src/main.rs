@@ -2120,8 +2120,9 @@ pub(crate) struct ProcessCargo {
 fn cargo_program_from(value: Option<std::ffi::OsString>) -> Result<String, String> {
     match value {
         None => Ok("cargo".to_owned()),
-        Some(value) if value.is_empty() => Err("`CARGO` is empty".to_owned()),
-        Some(value) => Ok(value.into_string().unwrap_or_else(|_| "cargo".to_owned())),
+        Some(value) => value
+            .into_string()
+            .map_err(|_| "`CARGO` holds a value that is not Unicode".to_owned()),
     }
 }
 
@@ -4585,7 +4586,7 @@ const TREE_SECTION_HEADERS: &[&str] = &["[dev-dependencies]", "[build-dependenci
 fn line_enables_research(line: &str) -> Result<bool, String> {
     let Some((package, features)) = line.split_once('|') else {
         let node = line.trim_end();
-        let header = node;
+        let header = node.trim_start_matches(['│', ' ']);
         if TREE_SECTION_HEADERS.contains(&header) {
             return Ok(false);
         }
@@ -4606,6 +4607,7 @@ fn line_enables_research(line: &str) -> Result<bool, String> {
         return Ok(true);
     }
     let features = features.trim_end();
+    let features = features.strip_suffix(" (*)").unwrap_or(features);
     Ok(features
         .split(',')
         .any(|feature| feature.trim() == RESEARCH_FEATURE))
