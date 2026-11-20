@@ -48,7 +48,7 @@
 use pharmakos_proto::gp::api::v1::VerifyReport;
 use pharmakos_proto::gp::api::v1::verify_plan::Depth;
 use pharmakos_proto::gp::v1::Playbook;
-use pharmakos_proto::json::{self, grammar, work};
+use pharmakos_proto::json::{self, grammar};
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_verifier::{Input, Scope};
 
@@ -190,7 +190,7 @@ pub fn decode_jsonc(playbook_jsonc: &str) -> Result<json::Canonicalised<Playbook
             ),
         ));
     }
-    json::canonical_decode::<Playbook>(&blank_comments(playbook_jsonc))
+    json::canonical_decode::<Playbook>(&blank_comments(playbook_jsonc)?)
         .map_err(|refused| Error::from(refused.error().clone()))
 }
 
@@ -227,7 +227,7 @@ enum HandedOver {
 /// same bytes over every committed file, their mutations, the edge cases and
 /// arbitrary text, with no exception.
 fn hand_over(text: &str) -> Result<HandedOver, Error> {
-    let blanked = blank_comments(text);
+    let blanked = blank_comments(text)?;
     Ok(match json::canonical_decode::<Playbook>(&blanked) {
         Ok(canonical) => HandedOver::Canonical(Box::new(canonical)),
         Err(refused) => HandedOver::Refused {
@@ -284,54 +284,74 @@ fn refused_bytes(text: &str, blanked: &str, at: Option<usize>) -> Result<String,
 /// readers stop. A comment's bytes are replaced one for one, so a multi-byte
 /// character inside one becomes as many spaces as it had bytes and the result
 /// is still UTF-8.
-fn blank_comments(text: &str) -> String {
+fn blank_comments(text: &str) -> Result<String, Error> {
+    // Every byte is read through the grammar's scan, so the meter counts what
+    // the blanker reads, as it does every other reader (fix pass 2, item D3).
     let scan = grammar::Scan::new(text);
     let mut out = String::with_capacity(text.len());
-    // Up to where the current comment is blanked, and up to where the current
-    // string, or the rest of a text whose string broke the grammar, is copied.
-    let mut blank_until = 0usize;
-    let mut copy_until = 0usize;
-    for (at, character) in text.char_indices() {
-        if at < blank_until {
-            if character == '\n' || character == '\r' {
-                out.push(character);
-            } else {
-                for _ in 0..character.len_utf8() {
-                    out.push(' ');
-                }
-            }
-            continue;
-        }
-        if at < copy_until {
-            out.push(character);
-            continue;
-        }
-        match character {
-            '"' => {
-                copy_until = match grammar::string(&scan, at, None) {
+    // A cut at `at` falls on `"`, `/` or the text's end, each a character
+    // boundary, so a copy between two of them is always one.
+    let copy = |out: &mut String, from: usize, to: usize| -> Result<(), Error> {
+        let piece = scan.slice(from, to).ok_or_else(|| {
+            Error::at(
+                "",
+                pharmakos_proto::said!(
+                    "the blanker cut the text at bytes {} and {}, not at characters",
+                    from,
+                    to
+                ),
+            )
+        })?;
+        out.push_str(piece);
+        Ok(())
+    };
+    let mut at = 0usize;
+    while let Some(byte) = scan.get(at) {
+        match byte {
+            b'"' => {
+                let end = match grammar::string(&scan, at, None) {
                     Ok((end, _)) => end,
-                    Err(_breaks_the_grammar) => text.len(),
+                    // A string that breaks the grammar: both readers stop
+                    // there, so the rest is copied as written.
+                    Err(_breaks_the_grammar) => scan.len(),
                 };
-                out.push(character);
+                copy(&mut out, at, end)?;
+                at = end;
             }
-            '/' => {
-                // A `/` that opens no closed comment: the grammar refuses the
-                // text at or before it, so nothing after it is read as code or
-                // comment, and the blanker stops looking: one scan to the end,
-                // never one for each `/*` after it.
+            b'/' => {
                 if let Some((end, _)) = comment_end(&scan, at) {
-                    blank_until = end;
-                    out.push(' ');
+                    // A comment's bytes become spaces one for one, its line
+                    // breaks kept, so every offset is the file's.
+                    for inside in at..end {
+                        if let Some(break_byte @ (b'\n' | b'\r')) = scan.get(inside) {
+                            out.push(char::from(break_byte));
+                        } else {
+                            out.push(' ');
+                        }
+                    }
+                    at = end;
                 } else {
-                    copy_until = text.len();
-                    out.push(character);
+                    // A `/` that opens no closed comment: the grammar refuses
+                    // the text at or before it, so nothing after it is read as
+                    // code or comment, and the blanker stops looking: one scan
+                    // to the end, never one for each `/*` after it.
+                    copy(&mut out, at, scan.len())?;
+                    at = scan.len();
                 }
             }
-            other => out.push(other),
+            _ => {
+                let from = at;
+                while let Some(byte) = scan.get(at) {
+                    if byte == b'"' || byte == b'/' {
+                        break;
+                    }
+                    at = at.saturating_add(1);
+                }
+                copy(&mut out, from, at)?;
+            }
         }
     }
-    work::add(text.len());
-    out
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -442,7 +462,7 @@ mod tests {
     #[test]
     fn blanking_keeps_every_byte_offset_and_every_string() {
         let text = "{\"a\": \"// not a comment\", /* \u{e9} */ \"b\": 1 // end\n}\r\n";
-        let blanked = blank_comments(text);
+        let blanked = blank_comments(text).expect("blanked");
         assert_eq!(blanked.len(), text.len());
         assert_eq!(
             blanked,
@@ -455,7 +475,7 @@ mod tests {
     #[test]
     fn blanking_keeps_every_line_break_inside_a_comment() {
         let text = "{ /* one\ntwo\r\nthree */ \"a\" // x\n: 1 }";
-        let blanked = blank_comments(text);
+        let blanked = blank_comments(text).expect("blanked");
         assert_eq!(blanked.len(), text.len());
         let breaks = |of: &str| -> Vec<(usize, char)> {
             of.char_indices()
@@ -470,9 +490,9 @@ mod tests {
     /// that starts after its `/*`.
     #[test]
     fn a_block_comment_does_not_close_on_its_own_slash() {
-        assert_eq!(blank_comments("/*/ x */1"), "        1");
+        assert_eq!(blank_comments("/*/ x */1").expect("blanked"), "        1");
         let unclosed = "1 /*/";
-        assert_eq!(blank_comments(unclosed), unclosed);
+        assert_eq!(blank_comments(unclosed).expect("blanked"), unclosed);
     }
 
     /// A text past `MAX_PLAYBOOK_CHARS` is `E0029` and nothing else: it is not

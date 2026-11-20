@@ -57,7 +57,7 @@ fn reference_hand_over(text: &str) -> Handed {
     match canonicalise_text(text) {
         Ok(canonical) => Handed::Canonical(canonical.json),
         Err(refused) => {
-            let blanked = blank_comments(text);
+            let blanked = blank_comments(text).expect("blanked");
             let at = refused
                 .pointer
                 .strip_prefix("/byte/")
@@ -97,7 +97,7 @@ fn readers_agree(what: &str, text: &str) {
     let jsonc = Document::parse(text)
         .map(|_| ())
         .map_err(|error| (error.pointer, error.message));
-    let codec = json::read(&blank_comments(text))
+    let codec = json::read(&blank_comments(text).expect("blanked"))
         .map(|_| ())
         .map_err(|error| (error.pointer, error.message));
     if jsonc != codec {
@@ -472,7 +472,7 @@ fn mutations(text: &str, rng: &mut Rng, comments_at: usize) -> Vec<(String, Stri
         with_comment(text, at, "/* never closed"),
     ));
     // The tree, rewritten.
-    if let Ok(tree) = json::read(&blank_comments(text)) {
+    if let Ok(tree) = json::read(&blank_comments(text).expect("blanked")) {
         out.push(("compact".to_owned(), compact(&tree)));
         out.push(("indented".to_owned(), json::write(&tree)));
         let mut reordered = tree.clone();

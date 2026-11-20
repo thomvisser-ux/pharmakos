@@ -176,26 +176,82 @@ fn shapes() -> Vec<(&'static str, Shape)> {
     ]
 }
 
-/// The work one call does on `text`, per byte of it.
-fn per_byte(text: &str, call: &dyn Fn(&str)) -> u64 {
-    let _ = work::take();
+/// The bytes one call examines on `text`.
+fn work_of(text: &str, call: &dyn Fn(&str)) -> u64 {
+    work::take().expect("the meter counts");
     call(text);
-    work::take() / u64::try_from(text.len().max(1)).expect("a length")
+    u64::try_from(work::take().expect("the meter counts")).expect("a count")
 }
 
-fn holds(path: &str, call: &dyn Fn(&str)) {
-    let base: usize = 512;
+/// The work one call does on `text`, per byte of it.
+fn per_byte(text: &str, call: &dyn Fn(&str)) -> u64 {
+    work_of(text, call) / u64::try_from(text.len().max(1)).expect("a length")
+}
+
+/// The sizes each shape is measured at: 512 B to 512 KiB (fix pass 2, item
+/// D1), the last at the playbook's cap.
+const SIZES: [usize; 4] = [512, 8 * 1024, 32 * 1024, 512 * 1024];
+
+/// Holds `call` to its work on every shape at every size (fix pass 2, item
+/// D1): at least one byte examined per byte of input, so a scanner that reads
+/// without counting fails; at most [`WORK_PER_BYTE`]; and from each size to
+/// the next, the work grows at most 1.25 times as fast as the input. A text
+/// `refused_unread` holds (past the cap, for `verify_jsonc`) must show no
+/// work at all, since it is refused before anything reads it.
+fn holds(path: &str, call: &dyn Fn(&str), refused_unread: &dyn Fn(&str) -> bool) {
     for (name, shape) in shapes() {
-        for size in [base, base * SCALE] {
+        let mut previous: Option<(u64, u64)> = None;
+        for size in SIZES {
             let text = shape(size);
-            let work = per_byte(&text, call);
+            let length = u64::try_from(text.len()).expect("a length");
+            let work = work_of(&text, call);
+            if refused_unread(&text) {
+                assert_eq!(
+                    work, 0,
+                    "{path} on {name} at {length} bytes read a refused text"
+                );
+                previous = None;
+                continue;
+            }
+            // Every path reads by one grammar, so each reads at least as far
+            // as the JSONC reader does: the whole text, or up to the byte it
+            // refuses the text at.
+            let read = Document::parse(&text)
+                .err()
+                .and_then(|refused| {
+                    refused
+                        .pointer
+                        .strip_prefix("/byte/")
+                        .and_then(|at| at.parse::<u64>().ok())
+                })
+                .map_or(length, |at| at.min(length));
             assert!(
-                work <= WORK_PER_BYTE,
-                "{path} on {name} at {} bytes examined {work} bytes per byte, past {WORK_PER_BYTE}",
-                text.len()
+                work >= read,
+                "{path} on {name} at {length} bytes examined {work} bytes, fewer than the \
+                 {read} it read"
             );
+            assert!(
+                work <= WORK_PER_BYTE * length,
+                "{path} on {name} at {length} bytes examined {} bytes per byte, past \
+                 {WORK_PER_BYTE}",
+                work / length
+            );
+            if let Some((was_length, was_work)) = previous {
+                // work / was_work <= 1.25 * length / was_length, in integers.
+                assert!(
+                    4 * work * was_length <= 5 * was_work * length,
+                    "{path} on {name}: from {was_length} to {length} bytes the work grew from \
+                     {was_work} to {work}, faster than the input"
+                );
+            }
+            previous = Some((length, work));
         }
     }
+}
+
+/// No text is refused unread.
+fn reads_all(_: &str) -> bool {
+    false
 }
 
 fn rules() -> pharmakos_sim::rules::RulesTable {
@@ -209,9 +265,13 @@ fn rules() -> pharmakos_sim::rules::RulesTable {
 
 #[test]
 fn handing_a_text_over_is_linear_in_its_bytes() {
-    holds("hand_over", &|text| {
-        let _ = hand_over(text);
-    });
+    holds(
+        "hand_over",
+        &|text| {
+            let _ = hand_over(text);
+        },
+        &reads_all,
+    );
 }
 
 #[test]
@@ -221,23 +281,35 @@ fn verifying_a_text_reads_it_in_linear_work() {
         pharmakos_sim::tables::SeatId::new(0),
         pharmakos_sim::knowledge::SeatEconomy::default(),
     );
-    holds("verify_jsonc", &|text| {
-        let _ = verify_jsonc(text, &[], &scope, &rules, Depth::Quick);
-    });
+    holds(
+        "verify_jsonc",
+        &|text| {
+            let _ = verify_jsonc(text, &[], &scope, &rules, Depth::Quick);
+        },
+        &pharmakos_verifier::is_too_long,
+    );
 }
 
 #[test]
 fn canonicalising_a_text_is_linear_in_its_bytes() {
-    holds("canonicalise_text", &|text| {
-        let _ = canonicalise_text(text);
-    });
+    holds(
+        "canonicalise_text",
+        &|text| {
+            let _ = canonicalise_text(text);
+        },
+        &reads_all,
+    );
 }
 
 #[test]
 fn parsing_a_document_is_linear_in_its_bytes() {
-    holds("Document::parse", &|text| {
-        let _ = Document::parse(text);
-    });
+    holds(
+        "Document::parse",
+        &|text| {
+            let _ = Document::parse(text);
+        },
+        &reads_all,
+    );
 }
 
 /// Pointer-heavy patches at about `size` bytes (S3's `vfyq2`, fix pass 2,
@@ -288,7 +360,7 @@ fn patching_by_a_long_pointer_is_linear_in_its_bytes() {
             );
         }
         for (name, pointer) in pointers(size) {
-            let _ = work::take();
+            work::take().expect("the meter counts");
             let _ = crate::library::instantiate(
                 MINIMAL,
                 &[crate::library::Parameter {
@@ -298,7 +370,8 @@ fn patching_by_a_long_pointer_is_linear_in_its_bytes() {
                 &[],
             );
             let input = u64::try_from(pointer.len() + MINIMAL.len()).expect("a length");
-            let per = work::take() / input;
+            let per =
+                u64::try_from(work::take().expect("the meter counts")).expect("a count") / input;
             assert!(
                 per <= WORK_PER_BYTE,
                 "instantiate by {name} at {input} bytes examined {per} bytes per byte"
