@@ -346,17 +346,10 @@ const KEPT_FALLBACKS: &[(&str, &str, usize, &str)] = &[
     ),
     (
         "jsonc.rs",
-        ".map_or(trivia.len(), |offset|",
-        2,
-        "a comment with no end runs to the end of its trivia, which is how the reader reads an \
-         unterminated one",
-    ),
-    (
-        "jsonc.rs",
-        "self.text.get(self.pos..).unwrap_or_default()",
+        ".map_or(bytes.len(), |offset| body.saturating_add(offset));",
         1,
-        "`pos` is a character boundary the reader advanced to, and an empty rest is refused on \
-         the next line as a string that ended inside a character",
+        "a line comment with no line feed after it runs to the end of the text, the rule \
+         `comment_end` states (S3's `vfyq2`: one comment scanner)",
     ),
     (
         "jsonc.rs",
@@ -415,12 +408,6 @@ const KEPT_FALLBACKS: &[(&str, &str, usize, &str)] = &[
         "token.parse::<usize>().ok()",
         1,
         "`index_of` answers whether a token is an RFC 6901 array index; a token that is not one is `None`, its documented answer",
-    ),
-    (
-        "jsonc.rs",
-        "reader.string().ok().map(|(_raw, text)| text)",
-        1,
-        "a key spelling that does not read back is not the same key, so the canonical spelling is written, the module's stated rule",
     ),
     (
         "jsonc.rs",
