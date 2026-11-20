@@ -4839,6 +4839,56 @@ mod tests {
     ///
     /// Returns the surface, seat 1's core's voxel and seat 1's commander's.
     fn remembering() -> (Surface, [i32; 3], [i32; 3]) {
+        let (bytes, core_at, commander_at) = remembered();
+        let seats = [SeatId::new(0), SeatId::new(1)];
+        let mut surface = Surface::new(
+            "m-0001",
+            0x0000_0000_ca5c_aded,
+            rules(),
+            FogPolicy::fogged(),
+            &seats,
+        )
+        .expect("a match id");
+        surface
+            .attach(crate::host::Host::open(&short_config(), None).expect("a match"))
+            .expect("attached");
+        surface
+            .host_mut()
+            .expect("hosted")
+            .resume(bytes)
+            .expect("the remembering snapshot resumes");
+        surface
+            .set_phase_remaining_ms(Ms::new(300_000))
+            .expect("a custom match takes a countdown");
+        surface.open_lull().expect("round 2's Lull");
+        let voxel = |at: [pharmakos_sim::math::fixed::Fx; 3]| {
+            let voxel = crate::view::voxel_of(at);
+            [voxel.x, voxel.y, voxel.z]
+        };
+        (surface, voxel(*core_at), voxel(*commander_at))
+    }
+
+    /// [`remembering`]'s snapshot, seat 1's core's place and its commander's:
+    /// round 1 played out and the sightings written in, once per test binary.
+    /// The match is the same in every call (a seed, a config, no orders), so
+    /// each test resumes a fresh host from the same immutable bytes rather
+    /// than playing the round again.
+    fn remembered() -> &'static Remembered {
+        static REMEMBERED: std::sync::OnceLock<Remembered> = std::sync::OnceLock::new();
+        REMEMBERED.get_or_init(play_and_remember)
+    }
+
+    /// Round 2's frozen snapshot with seat 0's sightings written in, seat 1's
+    /// core's place and seat 1's commander's.
+    type Remembered = (
+        Vec<u8>,
+        [pharmakos_sim::math::fixed::Fx; 3],
+        [pharmakos_sim::math::fixed::Fx; 3],
+    );
+
+    /// Plays [`remembered`]'s round 1 and writes seat 0's sightings into round
+    /// 2's frozen snapshot.
+    fn play_and_remember() -> Remembered {
         use pharmakos_sim::knowledge::{AssetId, AssetKind};
         use pharmakos_sim::snapshot::Snapshot;
         use pharmakos_sim::tables::{BeaconId, UnitId, UnitKind};
@@ -4912,32 +4962,7 @@ mod tests {
             snapshot.sighting_seen_at.push(0);
         }
         let bytes = snapshot.to_bytes().expect("it encodes");
-
-        let mut surface = Surface::new(
-            "m-0001",
-            0x0000_0000_ca5c_aded,
-            rules(),
-            FogPolicy::fogged(),
-            &seats,
-        )
-        .expect("a match id");
-        surface
-            .attach(crate::host::Host::open(&short_config(), None).expect("a match"))
-            .expect("attached");
-        surface
-            .host_mut()
-            .expect("hosted")
-            .resume(&bytes)
-            .expect("the remembering snapshot resumes");
-        surface
-            .set_phase_remaining_ms(Ms::new(300_000))
-            .expect("a custom match takes a countdown");
-        surface.open_lull().expect("round 2's Lull");
-        let voxel = |at: [pharmakos_sim::math::fixed::Fx; 3]| {
-            let voxel = crate::view::voxel_of(at);
-            [voxel.x, voxel.y, voxel.z]
-        };
-        (surface, voxel(core_at), voxel(commander_at))
+        (bytes, core_at, commander_at)
     }
 
     /// The keys of one JSON object, in order.
@@ -5348,6 +5373,33 @@ mod tests {
         assert!(refused.message.contains("no place"), "{}", refused.message);
     }
 
+    /// The short-config match's opening Lull, hosted once per test binary: its
+    /// frozen snapshot's bytes and its world. The opening Lull is the same in
+    /// every call (a seed, a config, nothing played), so [`resumed_with`]
+    /// edits a decoded copy of these bytes rather than opening a second host
+    /// to make them; the host it resumes is still a fresh one.
+    fn opening() -> &'static (Vec<u8>, pharmakos_sim::world::World) {
+        static OPENING: std::sync::OnceLock<(Vec<u8>, pharmakos_sim::world::World)> =
+            std::sync::OnceLock::new();
+        OPENING.get_or_init(|| {
+            let mut first = Surface::new(
+                "m-0001",
+                0x0000_0000_ca5c_aded,
+                rules(),
+                FogPolicy::fogged(),
+                &[SeatId::new(0), SeatId::new(1)],
+            )
+            .expect("a match id");
+            first
+                .attach(crate::host::Host::open(&short_config(), None).expect("a match"))
+                .expect("attached");
+            first.open_lull().expect("the opening Lull");
+            let bytes = first.snapshot_bytes().expect("the frozen snapshot");
+            let world = first.host().expect("hosted").world().clone();
+            (bytes, world)
+        })
+    }
+
     /// A fresh match's opening Lull, its frozen snapshot edited by `edit` and
     /// resumed from by a fresh host under `policy`: how a test outside the sim
     /// puts a row the opening map has none of into a hosted world.
@@ -5357,22 +5409,9 @@ mod tests {
     ) -> Surface {
         use pharmakos_sim::snapshot::Snapshot;
         let seats = [SeatId::new(0), SeatId::new(1)];
-        let mut first = Surface::new(
-            "m-0001",
-            0x0000_0000_ca5c_aded,
-            rules(),
-            FogPolicy::fogged(),
-            &seats,
-        )
-        .expect("a match id");
-        first
-            .attach(crate::host::Host::open(&short_config(), None).expect("a match"))
-            .expect("attached");
-        first.open_lull().expect("the opening Lull");
-        let mut snapshot =
-            Snapshot::from_bytes(&first.snapshot_bytes().expect("the frozen snapshot"))
-                .expect("it decodes");
-        edit(&mut snapshot, first.host().expect("hosted").world());
+        let (opening_bytes, opening_world) = opening();
+        let mut snapshot = Snapshot::from_bytes(opening_bytes).expect("it decodes");
+        edit(&mut snapshot, opening_world);
         let bytes = snapshot.to_bytes().expect("it encodes");
         let mut surface = Surface::new("m-0001", 0x0000_0000_ca5c_aded, rules(), policy, &seats)
             .expect("a match id");
