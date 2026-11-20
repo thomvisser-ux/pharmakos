@@ -976,14 +976,64 @@ impl<'j> Encoder<'j> {
                 };
                 for (index, element) in items.iter().enumerate() {
                     let element_path = Path::Index(&field_path, index);
-                    self.write_scalar(field, element, &element_path, depth, &mut writer)?;
+                    self.write_field(field, element, &element_path, depth, &mut writer)?;
                 }
             } else {
-                self.write_scalar(field, item, &field_path, depth, &mut writer)?;
+                self.write_field(field, item, &field_path, depth, &mut writer)?;
             }
         }
         self.fields.truncate(base);
         Ok(writer.into_vec())
+    }
+
+    /// One field's value: a message through [`Encoder::write_nested`], which
+    /// is the recursion, and anything else through [`Encoder::write_scalar`],
+    /// which is not. The recursion is one frame of this, of `write_nested` and
+    /// of [`Encoder::json_to_message`] per message level, so the scalar arms'
+    /// temporaries live in a frame of their own that is gone before the next
+    /// level starts (S3's `vfyq2`, fix pass 2, item E: a debug build spent
+    /// about 10 KiB a level here).
+    fn write_field(
+        &mut self,
+        field: &'static IndexedField,
+        value: &'j Json,
+        path: &Path<'_>,
+        depth: usize,
+        writer: &mut Writer,
+    ) -> Result<(), Error> {
+        if matches!(field.field.kind, ScalarKind::Message) {
+            self.write_nested(field, value, path, depth, writer)
+        } else {
+            self.write_scalar(field, value, path, depth, writer)
+        }
+    }
+
+    /// A message-typed field's value: encoded, then written length-delimited.
+    fn write_nested(
+        &mut self,
+        field: &'static IndexedField,
+        value: &'j Json,
+        path: &Path<'_>,
+        depth: usize,
+        writer: &mut Writer,
+    ) -> Result<(), Error> {
+        let Some(nested) = field.nested else {
+            return Err(Error::at(
+                ErrorKind::Schema,
+                &path.render(),
+                format!("`{}` is not in the schema", field.field.type_name),
+            ));
+        };
+        let payload = self.json_to_message(nested, value, path, depth.saturating_add(1))?;
+        writer
+            .delimited_field(field.field.number, &payload)
+            .map_err(|_| {
+                Error::at(
+                    ErrorKind::Value,
+                    &path.render(),
+                    "a message too long for its length prefix",
+                )
+            })
     }
 
     #[allow(
@@ -991,6 +1041,7 @@ impl<'j> Encoder<'j> {
         reason = "one arm per Protobuf scalar kind; splitting it would hide the \
                   one-to-one correspondence with the descriptor's type enum"
     )]
+    #[inline(never)]
     fn write_scalar(
         &mut self,
         field: &'static IndexedField,
@@ -1120,17 +1171,10 @@ impl<'j> Encoder<'j> {
                 };
                 writer.varint_field(number, i64_bits_to_u64(i64::from(found)));
             }
+            // `write_field` sends a message to `write_nested`; one that comes
+            // here is written the same way.
             ScalarKind::Message => {
-                let nested = field.nested.ok_or_else(|| {
-                    at(
-                        ErrorKind::Schema,
-                        &format!("`{}` is not in the schema", field.field.type_name),
-                    )
-                })?;
-                let payload = self.json_to_message(nested, value, path, depth.saturating_add(1))?;
-                writer.delimited_field(number, &payload).map_err(|_| {
-                    at(ErrorKind::Value, "a message too long for its length prefix")
-                })?;
+                self.write_nested(field, value, path, depth, writer)?;
             }
         }
         Ok(())

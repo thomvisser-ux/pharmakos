@@ -655,21 +655,41 @@ impl<'t, B: Build<'t>, T: Trivia> Reader<'t, '_, B, T> {
         })
     }
 
+    /// One value. This, [`Reader::object`] and [`Reader::array`] are the
+    /// recursion, one frame of each per container, so they hold only what a
+    /// level needs: a scalar, a key and the depth refusal are read in frames
+    /// of their own that are gone before the next level starts (S3's `vfyq2`,
+    /// fix pass 2, item E).
     fn value(&mut self, depth: usize) -> Result<B::Value, Refusal> {
         #[cfg(test)]
         {
             self.steps = self.steps.saturating_add(1);
         }
         if !may_nest(depth) {
-            return Err(Refusal {
-                kind: ErrorKind::Depth,
-                at: self.pos,
-                message: Cow::Owned(format!("JSON nested deeper than {MAX_DEPTH} levels")),
-            });
+            return Err(self.too_deep());
         }
         match self.peek() {
             Some(b'{') => self.object(depth),
             Some(b'[') => self.array(depth),
+            _ => self.scalar(),
+        }
+    }
+
+    /// The refusal of a value past [`MAX_DEPTH`] containers.
+    #[cold]
+    #[inline(never)]
+    fn too_deep(&self) -> Refusal {
+        Refusal {
+            kind: ErrorKind::Depth,
+            at: self.pos,
+            message: Cow::Owned(format!("JSON nested deeper than {MAX_DEPTH} levels")),
+        }
+    }
+
+    /// A value that is not a container.
+    #[inline(never)]
+    fn scalar(&mut self) -> Result<B::Value, Refusal> {
+        match self.peek() {
             Some(b'"') => {
                 let start = self.pos;
                 let mut unescaped = String::new();
@@ -720,34 +740,7 @@ impl<'t, B: Build<'t>, T: Trivia> Reader<'t, '_, B, T> {
             return Ok(self.build.object(members, before));
         }
         loop {
-            let key_at = self.pos;
-            let mut unescaped = String::new();
-            let (end, body) = string(&self.scan, key_at, Some(&mut unescaped))?;
-            self.pos = end;
-            let key_raw = self.slice(key_at, end)?;
-            let key = match body {
-                Body::Plain => self
-                    .slice(key_at.saturating_add(1), end.saturating_sub(1))?
-                    .to_owned(),
-                Body::Escaped => unescaped,
-            };
-            let (seen, compared) = seen_before(&mut keys, &mut sorted, &key);
-            // Counted for the test that holds the check below quadratic, and
-            // nothing else.
-            #[cfg(test)]
-            {
-                self.comparisons = self.comparisons.saturating_add(compared);
-            }
-            #[cfg(not(test))]
-            let _: u64 = compared;
-            if seen {
-                // At the key's own opening quote: the byte a reader would look at.
-                return Err(Refusal {
-                    kind: ErrorKind::DuplicateField,
-                    at: key_at,
-                    message: Cow::Owned(format!("duplicate key `{}`", quoted(&key))),
-                });
-            }
+            let (key_raw, key) = self.key(&mut keys, &mut sorted)?;
             let pre_colon = self.skip()?;
             if self.peek() != Some(b':') {
                 return Err(Refusal::grammar(self.pos, EXPECTED_COLON));
@@ -785,6 +778,44 @@ impl<'t, B: Build<'t>, T: Trivia> Reader<'t, '_, B, T> {
                 }
             }
         }
+    }
+
+    /// One member's key, refused when the object already holds it.
+    #[inline(never)]
+    fn key(
+        &mut self,
+        keys: &mut Vec<String>,
+        sorted: &mut Option<BTreeSet<String>>,
+    ) -> Result<(&'t str, String), Refusal> {
+        let key_at = self.pos;
+        let mut unescaped = String::new();
+        let (end, body) = string(&self.scan, key_at, Some(&mut unescaped))?;
+        self.pos = end;
+        let key_raw = self.slice(key_at, end)?;
+        let key = match body {
+            Body::Plain => self
+                .slice(key_at.saturating_add(1), end.saturating_sub(1))?
+                .to_owned(),
+            Body::Escaped => unescaped,
+        };
+        let (seen, compared) = seen_before(keys, sorted, &key);
+        // Counted for the test that holds the check below quadratic, and
+        // nothing else.
+        #[cfg(test)]
+        {
+            self.comparisons = self.comparisons.saturating_add(compared);
+        }
+        #[cfg(not(test))]
+        let _: u64 = compared;
+        if seen {
+            // At the key's own opening quote: the byte a reader would look at.
+            return Err(Refusal {
+                kind: ErrorKind::DuplicateField,
+                at: key_at,
+                message: Cow::Owned(format!("duplicate key `{}`", quoted(&key))),
+            });
+        }
+        Ok((key_raw, key))
     }
 
     fn array(&mut self, depth: usize) -> Result<B::Value, Refusal> {

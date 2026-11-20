@@ -27,12 +27,14 @@
 
 /// The stack, in bytes, of every thread that reads player text.
 ///
-/// Measured when it was set (2026-11-20, Windows, MSVC): the deepest
-/// playbook through every planning method needed under 1 MiB in a debug
-/// build and about 96 KiB in a release one, so 4 MiB is more than twice the
-/// debug need and about forty times the release one. A thread's stack is
-/// reserved address space, committed only as it is touched, so the figure
-/// costs no memory a reader does not use.
+/// Measured when it was set (2026-11-20, Windows, MSVC, a debug build,
+/// bisected to 4 KiB): the deepest playbook needed at most 322 KiB through
+/// every planning method's door in the gateway (most of it the hosted
+/// match's own, the same at any depth), 259 KiB through `gamectl verify`, and
+/// 259 KiB through every reader, writer and renderer in plan-core, about
+/// 3.6 KiB a container. So half of 4 MiB is more than six times the worst
+/// debug need. A thread's stack is reserved address space, committed only as
+/// it is touched, so the figure costs no memory a reader does not use.
 pub const PLAYER_TEXT_STACK: usize = 4 << 20;
 
 /// A thread builder for work that reads player text: named, and on

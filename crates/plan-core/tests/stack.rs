@@ -1,31 +1,19 @@
 // SPDX-FileCopyrightText: 2026 Pharmakos contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The deepest playbook the readers accept, read on the smallest stack any
-//! caller really has (S3's `vfyq2`, fix pass 1, item 7).
+//! The deepest playbook the readers accept, read on half the stack every
+//! reader of player text is given (S3's `vfyq2`, fix pass 1, item 7, and fix
+//! pass 2, item E).
 //!
 //! Every reader, writer and renderer of a playbook recurses on its nesting,
 //! and the grammar bounds that nesting at `MAX_DEPTH` containers. What the
-//! bound is worth depends on the stack the caller runs on, so this test runs
-//! each of them, on a playbook at the bound, on a thread no larger than the
-//! smallest real caller's:
-//!
-//! * `gamectl`'s main thread, which reads a playbook in `gamectl verify` and
-//!   `gamectl seat doctor`: on Windows a 1 MiB reserve, the MSVC linker's
-//!   default (read from `gamectl.exe`'s PE header, 2026-11-20); 8 MiB on
-//!   Linux and macOS.
-//! * the gateway's surface thread and its connection threads (`serve.rs`,
-//!   `net.rs`), which answer `verify_plan`, `render_plan`, `patch_plan` and
-//!   `submit_plan` and parse every frame: `std::thread::spawn`'s 2 MiB.
-//! * the Godot client's main thread, which calls the bridge and reads the
-//!   gateway's answers with the codec: 8 MiB (`Pharmakos.exe`'s PE header,
-//!   Godot's own linker flag).
-//!
-//! The smallest is `gamectl`'s 1 MiB on Windows, and the test runs at that, in
-//! the build the tests are (debug, where frames are largest). A reader that
-//! needs more is a stack overflow, which aborts this test binary: red. When
-//! this was written the whole set needed between 640 KiB (overflowed) and
-//! 768 KiB (passed) in a Windows debug build.
+//! bound is worth depends on the stack, so every entry point that reads a
+//! player's text runs on [`PLAYER_TEXT_STACK`] bytes (`src/stack.rs` names
+//! them), and this test runs each reader on a playbook at the bound on a
+//! thread of half that, in the build the tests are (debug, where frames are
+//! largest). A reader that needs more is a stack overflow, which aborts this
+//! test binary: red. The gateway's and `gamectl`'s own `tests/stack.rs` do
+//! the same through their real doors.
 
 #![allow(
     clippy::expect_used,
@@ -40,6 +28,7 @@ use pharmakos_plan_core::context::PlanContext;
 use pharmakos_plan_core::jsonc::Document;
 use pharmakos_plan_core::patch::patch_text;
 use pharmakos_plan_core::render::render_plan;
+use pharmakos_plan_core::stack::PLAYER_TEXT_STACK;
 use pharmakos_plan_core::verify::verify_jsonc;
 use pharmakos_proto::gp::api::v1::verify_plan::Depth;
 use pharmakos_proto::gp::v1::Playbook;
@@ -50,9 +39,8 @@ use pharmakos_sim::snapshot::Snapshot;
 use pharmakos_sim::tables::SeatId;
 use pharmakos_verifier::Scope;
 
-/// The smallest stack a real caller reads a playbook on: `gamectl`'s main
-/// thread on Windows (above).
-const SMALLEST_CALLER_STACK: usize = 1 << 20;
+/// Half the stack every reader of player text is given.
+const HALF_THE_STATED_STACK: usize = PLAYER_TEXT_STACK >> 1;
 
 const MINIMAL: &str = concat!(
     "{\"schema_version\":{\"major\":1},",
@@ -134,7 +122,7 @@ fn read_everything(text: &str, nots: usize) {
 }
 
 #[test]
-fn the_deepest_playbook_is_read_on_the_smallest_callers_stack() {
+fn the_deepest_playbook_is_read_on_half_the_stated_stack() {
     // The deepest the grammar accepts, and one level past it, refused.
     let deepest = 27;
     assert!(Document::parse(&nested(deepest, false)).is_ok());
@@ -147,11 +135,11 @@ fn the_deepest_playbook_is_read_on_the_smallest_callers_stack() {
     for commented in [false, true] {
         let text = nested(deepest, commented);
         std::thread::Builder::new()
-            .name(format!("smallest caller, commented {commented}"))
-            .stack_size(SMALLEST_CALLER_STACK)
+            .name(format!("half the stated stack, commented {commented}"))
+            .stack_size(HALF_THE_STATED_STACK)
             .spawn(move || read_everything(&text, deepest))
             .expect("a thread")
             .join()
-            .expect("every reader returns on the smallest caller's stack");
+            .expect("every reader returns on half the stated stack");
     }
 }
