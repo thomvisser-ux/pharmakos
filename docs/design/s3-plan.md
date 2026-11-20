@@ -1282,6 +1282,8 @@ last commit, comes last"), `fixp`, `probw`, `fixq`, then `prob`. `probw` starts 
 `fixp` have merged, `fixq` after `probw` and `vfyq2`, and `prob` (both its parts) after `fixq` merges. `fixq` and `vcap` both edit `crates/gateway` and never run at once: the second to
 start waits for the other's merge.]
 
+[Amended by item 164. A licensing lane ran outside the plan's sections, `fix/reuse-demo-goldens` (PR #195, merged 2026-11-19 at `56bfe5b0`): the rule that a file reproducing `library/` text carries the library's licence, the `reuse` step's quotation check, and the files it re-licensed. `probw` returns `crates/gateway/src/host.rs`'s header to GPL alone when it replaces the `SAFE_PLAYBOOK` copy with the one source (item 164 (3)).]
+
 **Totals.** 19 tasks, **about 74.5 ad** (65–84), including about 1.5 ad of re-blesses after merges
 of `main`; 73.5 without decision 3's Survey post. **Two critical paths of about 31 working days:**
 the client's `con5` → `con6` → `gwp` → `gwr` → `ed3b` → (`opr3`'s merge) → `prob` → `demo3`, and
