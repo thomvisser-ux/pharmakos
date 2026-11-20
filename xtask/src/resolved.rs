@@ -103,12 +103,6 @@
 //! before. The invocation selects every target of that name, so it is exempt
 //! for exactly the packages [`UNOPTIMISED_OWNERS`] names.
 
-#![expect(
-    dead_code,
-    unused_mut,
-    reason = "the tests come first: the next commit implements the checks"
-)]
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
@@ -201,9 +195,11 @@ pub(crate) fn is_refused_variable(name: &str, case_insensitive: bool) -> bool {
         name.to_owned()
     };
     REFUSED_VARIABLES.contains(&name.as_str())
-        || name
-            .strip_prefix("CARGO_TARGET_")
-            .is_some_and(|rest| rest.ends_with("_RUSTFLAGS") || rest.ends_with("_RUSTDOCFLAGS"))
+        || name.strip_prefix("CARGO_TARGET_").is_some_and(|rest| {
+            REFUSED_TARGET_SUFFIXES
+                .iter()
+                .any(|suffix| rest.ends_with(suffix))
+        })
 }
 
 /// The refused variables `environment` sets to something other than nothing,
@@ -531,6 +527,8 @@ impl TestRun {
     /// The same run in the release profile, as the alarms measure; its sim
     /// rule is the release profile's.
     pub(crate) fn release(mut self) -> TestRun {
+        self.release = true;
+        self.invocation.sim = SimRule::Unjudged;
         self
     }
 
@@ -547,12 +545,8 @@ impl TestRun {
     }
 
     /// The same run with `harness`'s arguments for the test harness.
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "the tests come first: the next commit implements it"
-    )]
     pub(crate) fn with_harness(mut self, harness: Vec<Harness>) -> TestRun {
-        let _ = harness;
+        self.harness = harness;
         self
     }
 
@@ -647,14 +641,30 @@ fn comparable_path(path: &str, case_insensitive: bool) -> String {
 /// `text` with ANSI escape sequences (`ESC [ ... letter`) taken out, as cargo
 /// colours its status lines when told to.
 fn without_ansi(text: &str) -> String {
-    text.to_owned()
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(character) = chars.next() {
+        if character == '\u{1b}' {
+            for inner in chars.by_ref() {
+                if inner.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            out.push(character);
+        }
+    }
+    out
 }
 
 /// The executable a cargo `Running` line names: `Running unittests src\lib.rs
 /// (D:/t\debug\deps\x.exe)` names `D:/t\debug\deps\x.exe`.
 fn running_path(line: &str) -> Option<String> {
-    let _ = line;
-    None
+    let line = without_ansi(line);
+    let rest = line.trim().strip_prefix("Running ")?;
+    let inner = rest.strip_suffix(')')?;
+    let (_, path) = inner.rsplit_once(" (")?;
+    Some(path.to_owned())
 }
 
 /// Whether the run ran every test executable the check reported: each named
@@ -662,17 +672,30 @@ fn running_path(line: &str) -> Option<String> {
 /// `test result:` lines on its standard output as `Running` lines. A runner
 /// that ran nothing (a config file's `runner` that exits 0) leaves the
 /// `Running` lines and no result, and is [`ProfileFault::TestsDidNotRun`].
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "the tests come first: the next commit implements it"
-)]
 fn judge_run(
     expected: &[String],
     stderr: &[String],
     results: usize,
     case_insensitive: bool,
 ) -> Result<(), ProfileFault> {
-    let _ = (expected, stderr, results, case_insensitive);
+    let ran: Vec<String> = stderr
+        .iter()
+        .filter_map(|line| running_path(line))
+        .map(|path| comparable_path(&path, case_insensitive))
+        .collect();
+    let missing: Vec<String> = expected
+        .iter()
+        .filter(|path| !ran.contains(&comparable_path(path, case_insensitive)))
+        .cloned()
+        .collect();
+    if !missing.is_empty() || results != ran.len() {
+        return Err(ProfileFault::TestsDidNotRun {
+            expected: expected.len(),
+            started: ran.len(),
+            results,
+            missing,
+        });
+    }
     Ok(())
 }
 
@@ -906,10 +929,23 @@ impl Graph {
     /// `name@version` with a whole or partial version) matches, as cargo
     /// matches them.
     fn spec_ids(&self, spec: &str) -> Vec<String> {
-        let name = spec.split_once('@').map_or(spec, |(name, _)| name);
+        let (name, version) = match spec.split_once('@') {
+            Some((name, version)) => (name, Some(version)),
+            None => (spec, None),
+        };
         self.names
             .iter()
-            .filter(|(_, package)| package.as_str() == name)
+            .filter(|(id, package)| {
+                package.as_str() == name
+                    && version.is_none_or(|wanted| {
+                        self.versions.get(*id).is_some_and(|have| {
+                            let wanted: Vec<&str> = wanted.split('.').collect();
+                            let have: Vec<&str> = have.split(['.', '-', '+']).collect();
+                            wanted.len() <= have.len()
+                                && wanted.iter().zip(&have).all(|(want, part)| want == part)
+                        })
+                    })
+            })
             .map(|(id, _)| id.clone())
             .collect()
     }
@@ -1514,7 +1550,26 @@ pub(crate) fn faults(built: &[Built], graph: &Graph, expect: Expect) -> Vec<Prof
                 });
             }
         }
-        if graph.sim.as_deref() == Some(unit.package_id.as_str()) {
+        // A build script runs on the host at the build-override's level; it is
+        // not the sim, nor a crate the sim runs, so no optimisation rule judges
+        // one (a future `build.rs` of the sim raises nothing).
+        let script = unit.is("custom-build");
+        if !member
+            && !script
+            && graph.sim_closure.contains(&unit.package_id)
+            && let Some(promised) = expect.workspace_opt
+            && unit.opt_level != promised
+        {
+            faults.push(ProfileFault::WrongOptLevel {
+                package: package.clone(),
+                target: target.clone(),
+                found: unit.opt_level,
+                promised,
+            });
+        }
+        if script {
+            // Its checks are judged above when it is a member's.
+        } else if graph.sim.as_deref() == Some(unit.package_id.as_str()) {
             if unit.is("lib") || unit.is("rlib") {
                 sim_library = true;
             }

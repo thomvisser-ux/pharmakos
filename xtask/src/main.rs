@@ -1440,13 +1440,32 @@ struct ProfileScan {
 /// or build override) is refused: the gate hashes the code release ships, so
 /// it may not be built at another level.
 fn promised_opt_level(scan: &ProfileScan, profile: &str) -> Result<resolved::OptLevel, String> {
-    let chain = [format!("profile.{profile}"), "profile.release".to_owned()];
-    let written = chain.iter().find_map(|table| scan.opt_levels.get(table));
-    match written {
+    let own = format!("profile.{profile}");
+    let set_here: Vec<&String> = scan
+        .opt_levels
+        .keys()
+        .filter(|table| {
+            table.as_str() == own
+                || table
+                    .strip_prefix(own.as_str())
+                    .is_some_and(|rest| rest.starts_with('.'))
+        })
+        .collect();
+    if !set_here.is_empty() {
+        return Err(format!(
+            "Cargo.toml sets an `opt-level` in [{}]; `{profile}` is built at the release \
+             profile's optimisation and no other, so the hash gate hashes the code release \
+             ships: remove it",
+            set_here
+                .iter()
+                .map(|table| table.as_str())
+                .collect::<Vec<_>>()
+                .join("], [")
+        ));
+    }
+    match scan.opt_levels.get("profile.release") {
         Some(text) => resolved::OptLevel::parse(text).ok_or_else(|| {
-            format!(
-                "Cargo.toml gives `{profile}` the opt-level `{text}`, which cargo does not take"
-            )
+            format!("Cargo.toml gives `release` the opt-level `{text}`, which cargo does not take")
         }),
         None => Ok(resolved::OptLevel::O3),
     }
@@ -1459,6 +1478,9 @@ fn promised_opt_level(scan: &ProfileScan, profile: &str) -> Result<resolved::Opt
 fn dev_package_table_failures(scan: &ProfileScan, graph: &resolved::Graph) -> Vec<String> {
     let family = graph.godot_family_names();
     let mut failures: Vec<String> = Vec::new();
+    // The family members a table names, as cargo matches a spec: by name, and
+    // by version when the spec gives one.
+    let mut tabled: Vec<String> = Vec::new();
     for (table, level) in &scan.opt_levels {
         let Some(spec) = table.strip_prefix("profile.dev.package.") else {
             continue;
@@ -1467,15 +1489,21 @@ fn dev_package_table_failures(scan: &ProfileScan, graph: &resolved::Graph) -> Ve
             continue;
         }
         let name = spec.split_once('@').map_or(spec, |(name, _)| name);
-        if !graph.has_package(name) {
+        if !graph.has_package(spec) {
             failures.push(format!(
-                "Cargo.toml's [{table}] names `{name}`, which no package cargo resolves is \
-                 called: remove the table"
+                "Cargo.toml's [{table}] names `{spec}`, which matches no package cargo \
+                 resolves: remove the table"
             ));
-        } else if level == "0"
-            && name != resolved::SIM
-            && !family.iter().any(|member| member == name)
-        {
+        } else if graph.spec_in_family(spec) {
+            if level == "0" {
+                tabled.push(name.to_owned());
+            } else {
+                failures.push(format!(
+                    "Cargo.toml's [{table}] puts `{name}`, of the godot family, at opt-level \
+                     {level}; the family serves the walled client alone and stays at 0"
+                ));
+            }
+        } else if level == "0" && name != resolved::SIM {
             failures.push(format!(
                 "Cargo.toml's [{table}] keeps `{name}` at opt-level 0, and `{name}` is not of \
                  the godot family ({}), the only third-party crates the suite builds \
@@ -1485,12 +1513,7 @@ fn dev_package_table_failures(scan: &ProfileScan, graph: &resolved::Graph) -> Ve
         }
     }
     for member in &family {
-        if scan
-            .opt_levels
-            .get(&format!("profile.dev.package.{member}"))
-            .map(String::as_str)
-            != Some("0")
-        {
+        if !tabled.contains(member) {
             failures.push(format!(
                 "`{member}` is of the godot family, and Cargo.toml has no \
                  `[profile.dev.package.{member}]` with `opt-level = 0`"
@@ -4551,12 +4574,13 @@ fn golden_target_dir(workspace: &Result<Workspace, String>) -> Result<PathBuf, S
 /// list. A line without the `|` the format puts in every line is not one this
 /// reads, and is a failure: read as "no feature", it would let the guard pass
 /// on output whose shape changed.
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "the tests come first: the next commit refuses a line it cannot read"
-)]
 fn line_enables_research(line: &str) -> Result<bool, String> {
-    let (package, features) = line.split_once('|').unwrap_or((line, ""));
+    let Some((package, features)) = line.split_once('|') else {
+        return Err(format!(
+            "`cargo tree --format {{p}}|{{f}}` printed a line without its `|`: `{line}`; the \
+             research guard reads every line, and does not guess at this one"
+        ));
+    };
     if package.contains(&format!("feature \"{RESEARCH_FEATURE}\"")) {
         return Ok(true);
     }
