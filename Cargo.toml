@@ -157,6 +157,77 @@ panic = "abort"
 [profile.dev]
 overflow-checks = true
 
+# The suite runs the sim optimised, its checks on. Every slow test builds a hosted match, a
+# map or a route graph, or plays ticks, and at opt-level 0 the sim's integer code ran 25 to
+# 50 times slower than optimised, which held CI's shards at 35 to 54 of 90 minutes. This
+# takes decisions-log item 116 (6)(f)'s profile question ahead of its 75-minute threshold
+# (no healthy leg had reached 75; the margin was thin, and this removes the cost at its
+# cause), by the main session's ruling, which the owner can veto; the decisions-log item
+# that records this change says so. A package table changes only the optimisation: debug
+# assertions and overflow checks are inherited from [profile.dev], on, and [profile.test]
+# inherits all of it. Optimisation moves no hash: the sim has no floats, and the same
+# chains are produced at `release-checked`.
+#
+# `cargo xtask ci` checks what cargo resolves, from cargo's own report, on every build it
+# makes to test, to hash or to ship (xtask/src/resolved.rs). Before each test invocation
+# the `test` and `test-research` steps fail if the sim is at opt-level 0, if a third-party
+# crate the sim runs is, if a workspace unit has debug assertions or overflow checks off,
+# or if a crate of the godot family is optimised, or any other third-party crate is not.
+# Rustflags, a rustc wrapper and `RUSTC_BOOTSTRAP` change codegen behind that report, so
+# every checked build pins its own: `CARGO_ENCODED_RUSTFLAGS` set (cargo takes rustflags
+# from the first of it, `RUSTFLAGS`, `target.*.rustflags` and `build.rustflags` that is
+# set, so a set one, even empty, is the only source), the wrapper variables set empty,
+# `RUSTC_BOOTSTRAP` removed; and each of those variables, and `RUSTC`, set in the
+# environment is refused. Only `crates/sim/tests/allocations.rs` runs
+# with the sim at opt-level 0, because the optimiser deletes allocations whose value is
+# never read, which that test exists to catch. Cargo reads no environment variable for a
+# package table: to step through the sim in a debugger, build with
+#   --config 'profile.dev.package.pharmakos-sim.opt-level=0'
+# which the `test` step sees and refuses, so it is for a local debugging build only.
+[profile.dev.package.pharmakos-sim]
+opt-level = 2
+
+# The third-party crates the sim runs (imbl, xxh3, prost, postcard, ...), and with them
+# every other third-party crate, build scripts and proc-macros included: `"*"` matches no
+# workspace member, so the walled float crates and the tests' own code stay unoptimised.
+# pharmakos-proto, a workspace crate the sim runs, is not named: optimising it saves about
+# 0.4 ms per world load (20 decodes of the rules table, 10.6 ms at opt-level 0 against
+# 2.1 ms at 2), which holds no shard.
+[profile.dev.package."*"]
+opt-level = 2
+
+# The godot family: every package reachable from the walled client's `godot` dependency and
+# from no other workspace member except through it, read from cargo's resolve graph. It
+# serves the client alone, which no test of the sim runs, and optimising it doubled a cold
+# client build. Cargo has no glob but `"*"`, and a named table outranks it, so each is named;
+# the `test` step fails on any optimised member of the family and names the table it needs.
+[profile.dev.package.gdextension-api]
+opt-level = 0
+[profile.dev.package.glam]
+opt-level = 0
+[profile.dev.package.godot]
+opt-level = 0
+[profile.dev.package.godot-bindings]
+opt-level = 0
+[profile.dev.package.godot-cell]
+opt-level = 0
+[profile.dev.package.godot-codegen]
+opt-level = 0
+[profile.dev.package.godot-core]
+opt-level = 0
+[profile.dev.package.godot-ffi]
+opt-level = 0
+[profile.dev.package.godot-macros]
+opt-level = 0
+[profile.dev.package.heck]
+opt-level = 0
+[profile.dev.package.nanoserde]
+opt-level = 0
+[profile.dev.package.nanoserde-derive]
+opt-level = 0
+[profile.dev.package.venial]
+opt-level = 0
+
 # Determinism CI builds this to compare hashes across operating systems at optimisation
 # levels the release build uses, with debug assertions still on.
 [profile.release-checked]
@@ -169,3 +240,10 @@ panic = "unwind"                 # so determinism tests can catch and report a d
 [profile.release-client]
 inherits = "release"
 panic = "unwind"
+
+# The `cargo xtask` alias's own build of xtask (.cargo/config.toml), in target/xtask/, so the
+# running xtask is never a file another build writes: the `test` step builds xtask's binary
+# into target/debug/ for its integration tests, and a build there with other settings would
+# replace the running file. Its checks are dev's, which the profiles step holds it to.
+[profile.xtask]
+inherits = "dev"
