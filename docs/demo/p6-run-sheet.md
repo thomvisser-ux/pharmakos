@@ -257,9 +257,10 @@ type: a chip's number is sent when you press "Set this value", and the re-check 
 Whether your words in item 3 close the gate's typing clause is your question to answer, in the
 record below.
 
-**What was promised and isn't on this build.** [Since P6b as run: each is now the `fixp` lane's
-(item 163 (7)), except the wall's name, which the owner's accepted call 3 closes: a wall is told by
-its look.]
+**What was promised and isn't on this build.** [Since P6b as run: each is now a client lane's, as
+item 163 (7) and the plan's amendment name them (`fixp`, `probw` or `fixq`), except the wall's
+name, which the owner's accepted call 3 closes for P6b's check 5 (and `fixq` gives a wall its name
+anyway).]
 
 - **A wall has no name.** A wall is wall voxels in your colour, not a structure the view lists, so
   only the autocannon and the mortar carry a name; the wall is told apart by its look.
@@ -270,8 +271,9 @@ its look.]
   set-up has to be a file. The E0601 set-up could be clicked (three "Add a build target" mortars),
   but a file is quicker and is the one that was checked.
 
-[Since P6b as run: each gap below is now the `fixp` lane's (item 163 (7)), except the wall's name,
-which the owner's accepted call 3 closes: a wall is told by its look.]
+[Since P6b as run: each gap below is now a client lane's, as item 163 (7) and the plan's amendment
+name them (`fixp`, `probw` or `fixq`), except the wall's name, which the owner's accepted call 3
+closes for P6b's check 5 (and `fixq` gives a wall its name anyway).]
 
 **Known gaps to step round** (PR #188's owed list): "Queue a structure" offers Generator,
 Autocannon, Mortar and Wall, though the verifier refuses every structure there but the Resonance
@@ -514,7 +516,13 @@ untimed Lull the count is the client's reported clock. No timing met a refusal. 
 `NOT_FOUND` answers, ten at tick 0 in each match and one at tick 230 in the first, are answers, not
 refusals: AGENTS.md section 3 rule 4.) In each timing the gateway accepted the submission
 (`submit_plan` `ok` in the audit log) and the status line read "Submitted. This is now your sealed
-order." The seal line before the submission is recorded only for check 4 ("Ready to seal.").
+order." The status line is the main session's observation from its screenshots, not from a retained file.
+In each of the three timings, before Submit the verdict line read the full check's form, "Full
+check - Ready to seal.", and after Submit, under that status line, it read the form for a
+submission checked at submission, "Checked at submission - Ready to seal.". The editor builds the line
+from the verdict's words (`verdict_full`, `verdict_submitted` in `godot/scripts/strings.gd`), then
+" - ", then `seal_ready` ("Ready to seal."), in `godot/scripts/editor.gd`'s `_draw_state`. So each
+timing ended in a sealed and qualifying playbook.
 
 - Template: Expand & Mine, no value changed. `submit_plan` tick 290 (14.5 s). Match
   `local-1795132518-4284`. Limit 2 min.
@@ -629,7 +637,9 @@ P6b's checks 4 and 5, which the table has no column for:
 | 4. The E0601 checkbox: unticked before, ticked after | `p6b-short-of-power.jsonc` | Pass. Unticked: E0601 and W0602. Ticked: "Dormant beacons allowed.", E0601 gave way to W0603, "Ready to seal". Unticked again: E0601 back. |
 | 5. The names (autocannon, mortar; the wall by its look), close up and at the farthest you can read them (note about how far) | `p6b-structures.jsonc`, round 1's Push | Readable from five and four wheel ticks in from the opening view, tiny at three, gone at two. The wall is a pale slab with no name, told by its look. |
 
-Two questions for you to answer at the sitting:
+Two questions for you to answer at the sitting: [no sitting by the owner took place; the answers are
+under "The owner's answer to the three calls" in "P6b as run", and the questions were not put to the
+owner as written.]
 
 1. "Nothing you type on this build feeds the re-check as you type; a number goes when you press 'Set
    this value'. Do your words on the number fields close the gate's typing clause, or does it stay
