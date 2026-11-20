@@ -135,18 +135,31 @@ impl Listener {
     /// accept between them. A peer that is somehow not loopback is dropped
     /// before it reaches the channel: it cannot happen on a loopback bind, and
     /// if it ever does, the gateway's answer is to hang up.
-    #[must_use]
-    pub fn accept(self) -> Accepting {
+    ///
+    /// Each accept thread is made by
+    /// [`pharmakos_plan_core::stack::player_text_thread`], as every gateway
+    /// thread is: it reads no text, and no thread here is made any other way
+    /// (S3's `vfyq2`, fix pass 2, item E).
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] when the operating system will not
+    /// make an accept thread: a host that cannot accept on every socket it
+    /// announced does not announce.
+    pub fn accept(self) -> Result<Accepting, Error> {
         let (sender, receiver): (Sender<Connection>, Receiver<Connection>) = channel();
         let mut threads: Vec<JoinHandle<()>> = Vec::new();
         for socket in self.sockets {
             let sender = sender.clone();
-            threads.push(std::thread::spawn(move || {
-                accept_loop(&socket, &sender);
-            }));
+            let thread = pharmakos_plan_core::stack::player_text_thread("gateway accept")
+                .spawn(move || {
+                    accept_loop(&socket, &sender);
+                })
+                .map_err(|error| Error::internal(format!("starting an accept thread: {error}")))?;
+            threads.push(thread);
         }
         drop(sender);
-        Accepting { receiver, threads }
+        Ok(Accepting { receiver, threads })
     }
 }
 
@@ -272,7 +285,7 @@ mod tests {
     fn a_loopback_client_is_accepted() {
         let listener = Listener::bind(0).expect("bound");
         let port = listener.port();
-        let accepting = listener.accept();
+        let accepting = listener.accept().expect("accepting");
         let mut client = TcpStream::connect(("127.0.0.1", port)).expect("connected");
         client.write_all(b"GET / HTTP/1.1\r\n\r\n").expect("wrote");
         let connection = accepting.recv().expect("a connection");

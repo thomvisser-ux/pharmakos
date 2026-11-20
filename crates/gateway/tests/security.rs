@@ -131,7 +131,7 @@ fn binding_is_localhost_only() {
     }
 
     // The socket is reachable from loopback.
-    let accepting = listener.accept();
+    let accepting = listener.accept().expect("accepting");
     let mut client = TcpStream::connect(("127.0.0.1", port)).expect("loopback connects");
     client.write_all(b"GET /seat HTTP/1.1\r\n").expect("wrote");
     let connection = accepting.recv().expect("accepted");

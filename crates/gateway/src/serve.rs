@@ -786,26 +786,33 @@ pub fn run_in<C: Read, A: Write>(
         seat_token: minted.seat.as_ref().map(Token::render),
     };
     let written = announcement.render();
-    announce
-        .write_all(written.as_bytes())
-        .and_then(|()| announce.flush())
-        .map_err(|error| Error::internal(format!("writing the announce line: {error}")))?;
 
     // The private match cache was opened above. The audit log, the saves and
     // the replay's inputs are flushed into it as the match runs, which is also
     // what makes
     // `a_token_appears_on_the_announce_line_and_nowhere_else_the_host_writes`
     // a test of something rather than of nothing.
+    //
+    // The surface thread answers every method, so it reads every player's
+    // text, and it does so on the stated stack (S3's `vfyq2`, fix pass 2,
+    // item E). It and the threads that accept are made before the announce
+    // line goes out: a host that cannot serve does not announce.
     let (jobs, work) = sync_channel::<Job>(QUEUE_DEPTH);
     let writer = Writer {
         cache,
         config,
         rules_hash: rules_hash.0,
     };
-    let surface_thread = std::thread::spawn(move || {
-        serve_surface(&mut surface, &writer, &mut in_process, &work);
-    });
-    let dispatcher = spawn_dispatcher(listener.accept(), policy, jobs.clone());
+    let surface_thread = pharmakos_plan_core::stack::player_text_thread("gateway surface")
+        .spawn(move || {
+            serve_surface(&mut surface, &writer, &mut in_process, &work);
+        })
+        .map_err(|error| Error::internal(format!("starting the surface thread: {error}")))?;
+    let dispatcher = spawn_dispatcher(listener.accept()?, policy, jobs.clone())?;
+    announce
+        .write_all(written.as_bytes())
+        .and_then(|()| announce.flush())
+        .map_err(|error| Error::internal(format!("writing the announce line: {error}")))?;
 
     // The parent holds this pipe open for the life of the match. Reading it to
     // end of file is the whole of the shutdown protocol -- no heartbeat, no
@@ -1201,48 +1208,73 @@ fn advisor_call(
 }
 
 /// Accept connections, bounded by [`MAX_CONNECTIONS`], one reader thread each.
+///
+/// A connection thread parses every frame its socket sends, so it is made on
+/// the stated stack like the surface thread (S3's `vfyq2`, fix pass 2, item
+/// E). When the operating system will not make one, the connection is
+/// hung up on and the refusal audited, as a connection over the cap is.
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] when the dispatcher's own thread cannot
+/// be made.
 fn spawn_dispatcher(
     accepting: crate::net::Accepting,
     policy: crate::handshake::Policy,
     jobs: SyncSender<Job>,
-) -> std::thread::JoinHandle<()> {
+) -> Result<std::thread::JoinHandle<()>, Error> {
     let live = Arc::new(AtomicUsize::new(0));
-    std::thread::spawn(move || {
-        while let Some(connection) = accepting.recv() {
-            let held = live.fetch_add(1, Ordering::SeqCst);
-            if held >= MAX_CONNECTIONS {
-                live.fetch_sub(1, Ordering::SeqCst);
-                // Refused before the upgrade, and audited: a connection the
-                // host would not serve is still a connection somebody made.
-                let mut stream = connection.stream;
-                let _ = stream.write_all(OVER_CAPACITY.as_bytes());
-                // `try_send`, and not `send`: this is the accept loop, the
-                // queue in front of the surface is bounded, and the surface
-                // thread can be inside a whole `advance_push`. A blocking
-                // send here would let a flood of refusals stop the host
-                // accepting the connection that matters, which is the very
-                // thing the cap exists to prevent. The 503 has already gone
-                // out on the socket; the audit line is what is dropped when
-                // the queue is full, and a full queue is itself a fact the
-                // log shows as a gap.
-                let _ = jobs.try_send(Job::Refused {
-                    reason: format!(
-                        "this host serves at most {MAX_CONNECTIONS} connections at once"
-                    ),
-                    status: 503,
-                });
-                continue;
+    pharmakos_plan_core::stack::player_text_thread("gateway dispatcher")
+        .spawn(move || {
+            while let Some(connection) = accepting.recv() {
+                let held = live.fetch_add(1, Ordering::SeqCst);
+                if held >= MAX_CONNECTIONS {
+                    live.fetch_sub(1, Ordering::SeqCst);
+                    // Refused before the upgrade, and audited: a connection the
+                    // host would not serve is still a connection somebody made.
+                    let mut stream = connection.stream;
+                    let _ = stream.write_all(OVER_CAPACITY.as_bytes());
+                    // `try_send`, and not `send`: this is the accept loop, the
+                    // queue in front of the surface is bounded, and the surface
+                    // thread can be inside a whole `advance_push`. A blocking
+                    // send here would let a flood of refusals stop the host
+                    // accepting the connection that matters, which is the very
+                    // thing the cap exists to prevent. The 503 has already gone
+                    // out on the socket; the audit line is what is dropped when
+                    // the queue is full, and a full queue is itself a fact the
+                    // log shows as a gap.
+                    let _ = jobs.try_send(Job::Refused {
+                        reason: format!(
+                            "this host serves at most {MAX_CONNECTIONS} connections at once"
+                        ),
+                        status: 503,
+                    });
+                    continue;
+                }
+                let refusals = jobs.clone();
+                let jobs = jobs.clone();
+                let mine = Arc::clone(&live);
+                let policy = policy.clone();
+                let started = pharmakos_plan_core::stack::player_text_thread("gateway connection")
+                    .spawn(move || {
+                        let mut door = RemoteDoor::new(jobs);
+                        let _ = session::serve_connection_through(connection, &mut door, &policy);
+                        mine.fetch_sub(1, Ordering::SeqCst);
+                    });
+                if let Err(error) = started {
+                    // The closure, and the socket with it, was dropped unrun: the
+                    // peer is hung up on. Its slot is given back, and the refusal
+                    // is audited as an over-capacity one is (`try_send`, for the
+                    // same reason).
+                    live.fetch_sub(1, Ordering::SeqCst);
+                    let _ = refusals.try_send(Job::Refused {
+                        reason: format!("this host could not start a connection thread: {error}"),
+                        status: 503,
+                    });
+                }
             }
-            let jobs = jobs.clone();
-            let live = Arc::clone(&live);
-            let policy = policy.clone();
-            std::thread::spawn(move || {
-                let mut door = RemoteDoor::new(jobs);
-                let _ = session::serve_connection_through(connection, &mut door, &policy);
-                live.fetch_sub(1, Ordering::SeqCst);
-            });
-        }
-    })
+        })
+        .map_err(|error| Error::internal(format!("starting the connection dispatcher: {error}")))
 }
 
 /// What the surface thread writes into the private match cache, and with.

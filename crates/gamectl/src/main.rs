@@ -29,7 +29,32 @@ fn main() -> ExitCode {
             return ExitCode::from(pharmakos_gamectl::exit::Exit::Input.code());
         }
     };
-    let outcome = pharmakos_gamectl::run(args, &cwd);
+    // The whole command runs on the stated stack (S3's `vfyq2`, fix pass 2,
+    // item E): `verify`, `host`, `scenario run` and `seat doctor` all read a
+    // player's text, and the main thread's size is the platform's (1 MiB on
+    // Windows), which the depth bound was never measured against.
+    let work = pharmakos_plan_core::stack::player_text_thread("gamectl")
+        .spawn(move || pharmakos_gamectl::run(args, &cwd));
+    let outcome = match work.map(std::thread::JoinHandle::join) {
+        Ok(Ok(outcome)) => outcome,
+        Ok(Err(_)) => {
+            // The panic hook has already printed what panicked.
+            let _ = writeln!(
+                std::io::stderr(),
+                "{}",
+                pharmakos_gamectl::strings::command_panicked()
+            );
+            return ExitCode::from(pharmakos_gamectl::exit::Exit::Internal.code());
+        }
+        Err(error) => {
+            let _ = writeln!(
+                std::io::stderr(),
+                "{}",
+                pharmakos_gamectl::strings::no_command_thread(&error.to_string())
+            );
+            return ExitCode::from(pharmakos_gamectl::exit::Exit::Internal.code());
+        }
+    };
 
     // A closed pipe is not a failure of the command: `gamectl docs | head` is
     // an ordinary thing to type, and the exit code belongs to what was asked

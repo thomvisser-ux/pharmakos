@@ -208,6 +208,18 @@ pub fn no_working_directory(why: &str) -> String {
     )
 }
 
+/// The operating system would not make the thread a command runs on.
+#[must_use]
+pub fn no_command_thread(why: &str) -> String {
+    format!("{BINARY}: the command's thread could not be started ({why}), so nothing ran.")
+}
+
+/// The command's thread ended in a panic: a bug, whatever the input.
+#[must_use]
+pub fn command_panicked() -> String {
+    format!("{BINARY}: the command stopped on an internal error; this is a bug.")
+}
+
 /// A flag's value that is none of the values it takes, naming them.
 #[must_use]
 pub fn bad_value(flag: &str, given: &str, values: &[&str]) -> String {
