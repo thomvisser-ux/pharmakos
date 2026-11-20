@@ -924,6 +924,22 @@ pub enum TickError {
     /// [`TickError::Collapse`] is: a cluster left unmarked would keep a stale
     /// graph that a replay would not, so the world refuses every later step.
     Marking(MarkError),
+    /// A tick closed with a cluster of the pathing graph waiting for its
+    /// repair, so the segment's frozen snapshot cannot be taken (lane
+    /// `settle`): the Voxels phase settles the graph before it returns, so no
+    /// tick that returned `Ok` from its phases holds one. Refused at the
+    /// freeze rather than copied into a snapshot whose restore would rebuild a
+    /// graph the live world does not hold.
+    Unsettled,
+}
+
+impl From<crate::snapshot::Unclosed> for TickError {
+    fn from(unclosed: crate::snapshot::Unclosed) -> TickError {
+        match unclosed {
+            crate::snapshot::Unclosed::MidTick => TickError::MidTick,
+            crate::snapshot::Unclosed::Unsettled => TickError::Unsettled,
+        }
+    }
 }
 
 /// Why the Voxels phase could not mark a settled chunk's clusters for repair
@@ -988,6 +1004,10 @@ impl core::fmt::Display for TickError {
                     "the voxel phase could not mark a chunk's clusters: {error}"
                 )
             }
+            TickError::Unsettled => write!(
+                f,
+                "a tick closed with a cluster of the pathing graph waiting for its repair"
+            ),
         }
     }
 }
@@ -7507,7 +7527,8 @@ mod tests {
             &root.join(crate::DETERMINISM_PLAYBOOK_PATH),
         )
         .unwrap_or_else(|error| panic!("the harness world builds: {error}"));
-        let mut runner = crate::runner::Runner::new(world);
+        let mut runner = crate::runner::Runner::new(world)
+            .unwrap_or_else(|error| panic!("a world from `World::new`: {error}"));
         assert!(
             runner
                 .begin_push()
@@ -7574,10 +7595,12 @@ mod tests {
 
     /// The snapshot's door (lane `settle`): a capture refuses a world whose
     /// tick is open, and one with a cluster waiting for its repair, with a
-    /// typed error each; a closed, settled world captures, and to the very
-    /// bytes the runner's own frozen capture writes.
+    /// typed error each, and so does a match opened on either
+    /// ([`crate::runner::Runner::new`]); a closed, settled world captures, and
+    /// to the very bytes the runner opened on it freezes.
     #[test]
-    fn a_snapshot_refuses_an_open_tick_and_an_unsettled_graph() {
+    fn a_snapshot_and_a_match_refuse_an_open_tick_and_an_unsettled_graph() {
+        use crate::runner::Runner;
         use crate::snapshot::{Snapshot, SnapshotError};
         let mut world = world();
         let mut enc = Enc::with_capacity(64 * 1024);
@@ -7586,13 +7609,17 @@ mod tests {
             .unwrap_or_else(|error| panic!("{error:?}"));
 
         let captured = Snapshot::capture(&world).unwrap_or_else(|error| panic!("{error}"));
-        let closed = Snapshot::capture_closed(&world);
+        let runner = Runner::new(world.clone()).unwrap_or_else(|error| panic!("{error}"));
         assert_eq!(
             captured
                 .to_bytes()
                 .unwrap_or_else(|error| panic!("{error}")),
-            closed.to_bytes().unwrap_or_else(|error| panic!("{error}")),
-            "the checked capture writes other bytes than the unchecked one"
+            runner
+                .frozen()
+                .snapshot()
+                .to_bytes()
+                .unwrap_or_else(|error| panic!("{error}")),
+            "the capture writes other bytes than the runner's freeze"
         );
 
         // A tick opened and not finished: the state a fatal step leaves too.
@@ -7601,6 +7628,11 @@ mod tests {
         assert_eq!(
             Snapshot::capture(&open).map(|_| ()),
             Err(SnapshotError::MidTick)
+        );
+        assert_eq!(
+            Runner::new(open).map(|_| ()),
+            Err(SnapshotError::MidTick),
+            "a match opened over an open tick"
         );
 
         // A cluster marked and not repaired: no tick of a match leaves one.
@@ -7618,6 +7650,11 @@ mod tests {
         assert_eq!(
             Snapshot::capture(&unsettled).map(|_| ()),
             Err(SnapshotError::Unsettled)
+        );
+        assert_eq!(
+            Runner::new(unsettled).map(|_| ()),
+            Err(SnapshotError::Unsettled),
+            "a match opened over an unsettled graph"
         );
     }
 
@@ -7796,7 +7833,8 @@ mod tests {
             crate::power::core_of(&world, seat).unwrap_or_else(|| panic!("seat 0 has a core"));
         world.set_writ(core, crate::seams::MandateKind::Mine);
         world.set_mine_settings(core, crate::mining::MineSettings::default());
-        let mut runner = crate::runner::Runner::new(world);
+        let mut runner = crate::runner::Runner::new(world)
+            .unwrap_or_else(|error| panic!("a world from `World::new`: {error}"));
         assert_eq!(runner.begin_push(), Ok(true));
         let mut found: Vec<Option<SeatId>> = Vec::new();
         for _ in 0..4_000 {
@@ -8362,7 +8400,8 @@ mod ids_tests {
             pharmakos_proto::json::decode(text).must("a canonical playbook");
         let plan = crate::interpreter::Plan::compile(&playbook, world.rules()).must("compiles");
         assert!(world.seal_playbook(SEAT, plan));
-        let mut runner = Runner::new(world);
+        let mut runner =
+            Runner::new(world).unwrap_or_else(|error| panic!("a world from `World::new`: {error}"));
         assert_eq!(runner.begin_push(), Ok(true));
         // Tick 1 is the first decision: the visit to b_01 begins.
         assert!(runner.step().must("a value").is_some());

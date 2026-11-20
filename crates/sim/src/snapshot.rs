@@ -869,6 +869,33 @@ impl Default for Snapshot {
     }
 }
 
+/// A world passed [`Snapshot::door`]: between ticks, with its pathing graph
+/// settled. Only the door makes one, and [`Snapshot::through`] spends it, so
+/// every copy of a world names the check it passed (lane `settle`).
+#[derive(Debug)]
+#[must_use = "a world that passed the door is copied with `Snapshot::through`"]
+pub(crate) struct Closed(());
+
+/// Why a world did not pass [`Snapshot::door`]. Each arm becomes the caller's
+/// own error: [`SnapshotError`] for a capture, a restore or a match's
+/// opening, [`crate::world::TickError`] for the freeze at a segment's end.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Unclosed {
+    /// A tick is open between two of its phases.
+    MidTick,
+    /// A cluster is waiting for its repair.
+    Unsettled,
+}
+
+impl From<Unclosed> for SnapshotError {
+    fn from(unclosed: Unclosed) -> SnapshotError {
+        match unclosed {
+            Unclosed::MidTick => SnapshotError::MidTick,
+            Unclosed::Unsettled => SnapshotError::Unsettled,
+        }
+    }
+}
+
 /// What went wrong saving or restoring.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum SnapshotError {
@@ -1048,25 +1075,39 @@ impl Snapshot {
     /// its repair: the restore would rebuild a graph the live world does not
     /// hold, and the two would play different chains.
     pub fn capture(world: &World) -> Result<Snapshot, SnapshotError> {
-        if world.tick_is_open() {
-            return Err(SnapshotError::MidTick);
-        }
-        if !world.graph_settled() {
-            return Err(SnapshotError::Unsettled);
-        }
-        Ok(Snapshot::capture_closed(world))
+        let closed = Snapshot::door(world)?;
+        Ok(Snapshot::through(world, closed))
     }
 
-    /// [`Snapshot::capture`] without its two refusals, for a caller that
-    /// holds a world at a closed, settled tick by construction: the runner's
-    /// frozen snapshot ([`crate::runner::FrozenSnapshot`]), whose every caller
-    /// says why at the call.
+    /// The snapshot's door, shared by every copy of a world (lane `settle`):
+    /// a world passes it only between ticks with its pathing graph settled.
+    /// What it hands back, [`Closed`], is the one way to reach
+    /// [`Snapshot::through`], so no copy is taken that did not pass it.
+    ///
+    /// # Errors
+    ///
+    /// [`Unclosed::MidTick`] while a tick is open between two of its phases,
+    /// [`Unclosed::Unsettled`] when a cluster is waiting for its repair.
+    pub(crate) fn door(world: &World) -> Result<Closed, Unclosed> {
+        if world.tick_is_open() {
+            return Err(Unclosed::MidTick);
+        }
+        if !world.graph_settled() {
+            return Err(Unclosed::Unsettled);
+        }
+        Ok(Closed(()))
+    }
+
+    /// Copy `world`, which passed [`Snapshot::door`]: the [`Closed`] it
+    /// handed back is spent here.
     #[must_use]
     #[allow(
         clippy::too_many_lines,
         reason = "one line per column of a flat projection, and the whole point of the projection is that it is one expression: a `Snapshot` cannot be built in halves, so splitting it would mean a second struct whose only job is to be moved into this one"
     )]
-    pub(crate) fn capture_closed(world: &World) -> Snapshot {
+    pub(crate) fn through(world: &World, closed: Closed) -> Snapshot {
+        // Spent: one pass through the door buys one copy.
+        drop(closed);
         let units = world.units();
         let seats = world.seats();
         let beacons = world.beacons();

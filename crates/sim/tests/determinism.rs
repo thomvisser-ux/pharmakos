@@ -147,7 +147,7 @@ fn world_of(rules: RulesTable, movers: u32) -> World {
 /// for byte. The host's part — opening a Push the moment a Lull is reached and
 /// closing a recap the moment one opens — is the same one the binary plays.
 fn chain(world: World, ticks: u32) -> String {
-    let mut runner = Runner::new(world);
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
     let mut out = String::with_capacity(usize::try_from(ticks).unwrap_or(0).saturating_mul(24));
     for tick in 0..ticks {
         let hash = if tick == 0 {

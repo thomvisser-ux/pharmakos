@@ -141,7 +141,7 @@ fn within(a: [Fx; 3], b: [Fx; 3], voxels: i16) -> bool {
 }
 
 fn pushing(world: World) -> Runner {
-    let mut runner = Runner::new(world);
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(runner.begin_push(), Ok(true), "the Push begins");
     runner
 }
@@ -751,7 +751,7 @@ fn a_guard_in_pursuit_survives_save_and_restore() {
         .expect("a world between ticks")
         .to_bytes()
         .unwrap();
-    let mut copy = Runner::new(world());
+    let mut copy = Runner::new(world()).unwrap_or_else(|error| panic!("{error}"));
     Snapshot::from_bytes(&bytes)
         .unwrap()
         .restore_into(copy.world_mut())

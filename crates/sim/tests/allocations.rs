@@ -141,7 +141,7 @@ fn a_tick_allocates_nothing() {
     // deaths, elimination, the respawns, the one-tick match-end rule, the
     // segment's end and every event they emit — would sit outside the counted
     // loop.
-    let mut runner = Runner::new(world);
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
     // Every seat seals the harness playbook, for the same reason: the decision
     // phase returns immediately for a seat that sealed nothing, so without this
     // the whole interpreter — the `covering` resolver with its "nearest"

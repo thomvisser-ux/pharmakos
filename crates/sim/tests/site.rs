@@ -148,7 +148,7 @@ fn idle() -> String {
 /// Open a Push with `route` sealed for seat 0.
 fn push(world: World, route: &str) -> Runner {
     let plan = Plan::compile(&playbook(route), &rules()).expect("compiles");
-    let mut runner = Runner::new(world);
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
     runner
         .seal_playbook(SEAT, plan)
         .expect("a Lull takes a seal");
@@ -1471,7 +1471,7 @@ fn duel(seat0: BuildSettings) -> Runner {
             .field_unit(SEAT, ours, UnitKind::BuildDrone, at)
             .expect("room for a drone");
     }
-    let mut runner = Runner::new(world);
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
     for seat in [SEAT, other] {
         let plan = Plan::compile(&playbook(&idle()), &rules()).expect("compiles");
         runner

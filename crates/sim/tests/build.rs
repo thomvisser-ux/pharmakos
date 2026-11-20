@@ -122,7 +122,7 @@ fn visit_writing(build: &str) -> String {
 /// returning the runner and every `structure_queued` event's tick.
 fn play(world: World, route: &str, ticks: u32) -> (Runner, Vec<u32>, bool) {
     let plan = Plan::compile(&playbook(route), &rules()).expect("compiles");
-    let mut runner = Runner::new(world);
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
     runner
         .seal_playbook(SEAT, plan)
         .expect("a Lull takes a seal");
@@ -816,7 +816,7 @@ fn a_build_list_that_cannot_be_written_whole_writes_nothing() {
     // while the visit runs.
     fixture.set_treasury(SEAT, Money::new(0));
     let plan = Plan::compile(&playbook(&visit_writing(&build)), &rules()).expect("compiles");
-    let mut runner = Runner::new(fixture);
+    let mut runner = Runner::new(fixture).unwrap_or_else(|error| panic!("{error}"));
     runner
         .seal_playbook(SEAT, plan)
         .expect("a Lull takes a seal");

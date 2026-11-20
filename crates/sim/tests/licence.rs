@@ -147,7 +147,7 @@ fn with_generators(stands: &[[Fx; 3]]) -> Runner {
             .raise_structure(seat, core, StructureKind::Generator, *at)
             .expect("room for a Generator");
     }
-    Runner::new(world)
+    Runner::new(world).unwrap_or_else(|error| panic!("{error}"))
 }
 
 #[test]
@@ -333,7 +333,7 @@ fn an_eliminated_seats_licences_are_voided_on_the_tick_it_falls() {
     let mut world = world(3);
     world.award_licence_directly(SeatId::new(2), Licence::ResonanceSpire, 1);
     world.award_licence_directly(SeatId::new(0), Licence::ResonanceSpire, 1);
-    let mut runner = Runner::new(world);
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
     assert!(runner.begin_push().expect("the runner answers"));
     runner.clear_events();
     let core = core_of(runner.world(), SeatId::new(2));
@@ -397,7 +397,7 @@ fn an_empty_licence_table_hashes_nothing() {
 /// tick books as before.
 #[test]
 fn an_eliminated_seats_damage_books_it_no_credit() {
-    let mut runner = Runner::new(world(3));
+    let mut runner = Runner::new(world(3)).unwrap_or_else(|error| panic!("{error}"));
     assert!(runner.begin_push().expect("the runner answers"));
     let core = core_of(runner.world(), SeatId::new(2));
     let target = runner

@@ -83,7 +83,7 @@ use crate::events::{Emission, Event, EventKind};
 use crate::interpreter::Plan;
 use crate::math::quantity::{MS_PER_TICK, Ms, Tick};
 use crate::rules::RulesTable;
-use crate::snapshot::{Snapshot, SnapshotError};
+use crate::snapshot::{Closed, Snapshot, SnapshotError, Unclosed};
 use crate::tables::SeatId;
 use crate::world::{Phase, TickError, World};
 
@@ -704,13 +704,23 @@ pub struct FrozenSnapshot {
 }
 
 impl FrozenSnapshot {
-    /// Freeze `world` as it stands, at a closed and settled tick: every
-    /// caller is the runner's own, and each says at the call why its world
-    /// is one ([`Snapshot::capture_closed`]).
-    #[must_use]
-    pub(crate) fn of(world: &World) -> FrozenSnapshot {
+    /// Freeze `world` as it stands, through the snapshot's door
+    /// ([`Snapshot::door`]): between ticks, with its pathing graph settled.
+    ///
+    /// # Errors
+    ///
+    /// [`Unclosed`] when the world does not pass the door; each caller turns
+    /// it into its own typed error.
+    pub(crate) fn of(world: &World) -> Result<FrozenSnapshot, Unclosed> {
+        let closed = Snapshot::door(world)?;
+        Ok(FrozenSnapshot::passed(world, closed))
+    }
+
+    /// Freeze `world`, which passed the snapshot's door earlier in the
+    /// caller: the [`Closed`] the door handed back is spent here.
+    fn passed(world: &World, closed: Closed) -> FrozenSnapshot {
         FrozenSnapshot {
-            snapshot: Snapshot::capture_closed(world),
+            snapshot: Snapshot::through(world, closed),
             state_hash: world.state_hash(),
         }
     }
@@ -844,8 +854,15 @@ impl Runner {
     /// The world arrives in its opening Lull (see [`MatchState::new`]), so this
     /// takes the first frozen snapshot — the one the first Lull plans against —
     /// and emits `match_started` and `lull_opened`.
-    #[must_use]
-    pub fn new(mut world: World) -> Runner {
+    ///
+    /// # Errors
+    ///
+    /// The snapshot's door's refusals (lane `settle`):
+    /// [`SnapshotError::MidTick`] for a world left with a tick open (also the
+    /// state a fatal [`World::step`] leaves), [`SnapshotError::Unsettled`] for
+    /// one with a cluster waiting for its repair. A world from
+    /// [`World::new`] passes.
+    pub fn new(mut world: World) -> Result<Runner, SnapshotError> {
         let tick = world.tick();
         let round = world.match_state().round();
         let coming = world.match_state().coming_segment_ms().raw();
@@ -857,18 +874,14 @@ impl Runner {
             tick,
             Emission::of(EventKind::LullOpened).value(i64::from(round)),
         );
-        // Closed and settled: `World::new` returns a world with no tick open
-        // and nothing marked, which is what both of this crate's callers
-        // outside tests hand in (the gateway's `Host::open`, the bench's
-        // fourth seat).
-        let frozen = FrozenSnapshot::of(&world);
-        Runner {
+        let frozen = FrozenSnapshot::of(&world)?;
+        Ok(Runner {
             world,
             // One encoder for the whole match: a tick allocates nothing
             // (G3′ §9.17), and `tests/allocations.rs` asserts it.
             enc: Enc::with_capacity(64 * 1024),
             frozen,
-        }
+        })
     }
 
     /// The world, to read.
@@ -1044,7 +1057,7 @@ impl Runner {
             return Ok(None);
         }
         let hash = self.world.step(&mut self.enc)?;
-        Ok(Some(self.close_tick(hash)))
+        Ok(Some(self.close_tick(hash)?))
     }
 
     /// One tick of the Push, **phase by phase**: the open tick, which the
@@ -1078,23 +1091,27 @@ impl Runner {
 
     /// What a tick's end owes the host: the frozen snapshot when the segment
     /// closed, and the report.
-    fn close_tick(&mut self, hash: u64) -> TickReport {
+    ///
+    /// # Errors
+    ///
+    /// [`TickError::Unsettled`] when the segment's freeze finds a cluster
+    /// waiting for its repair, and [`TickError::MidTick`] when it finds a tick
+    /// open: the snapshot's door refusing the world (lane `settle`).
+    fn close_tick(&mut self, hash: u64) -> Result<TickReport, TickError> {
         let phase = self.phase();
         let segment_ended = phase != MatchPhase::Push;
         if segment_ended {
             // Outside the tick, deliberately: a capture allocates, and a tick
             // must not. It happens once a segment.
-            // Closed and settled: `world.step` or `end_tick` returned `Ok`, so
-            // the tick closed and its Voxels phase settled the graph.
-            self.frozen = FrozenSnapshot::of(&self.world);
+            self.frozen = FrozenSnapshot::of(&self.world)?;
         }
-        TickReport {
+        Ok(TickReport {
             tick: self.world.tick(),
             hash,
             phase,
             segment_ended,
             match_ended: self.outcome().is_some(),
-        }
+        })
     }
 
     /// Close the recap: the next round's Lull, or the end of the match.
@@ -1185,18 +1202,19 @@ impl Runner {
         let lobby = self.phase() == MatchPhase::Lull
             && self.round() == 1
             && self.tick() == Tick::ZERO
-            && !self.world.tick_is_open()
             && !self.world.is_laid_out();
-        if !lobby {
-            return Err(LayoutRefused::NotInTheLobby);
-        }
+        // The snapshot's door, passed before the layout: a world with a tick
+        // open or a cluster waiting for its repair has stepped, so it is not
+        // in the lobby. The layout places beacons and units and edits no voxel.
+        let closed = match Snapshot::door(&self.world) {
+            Ok(closed) if lobby => closed,
+            Ok(_) | Err(_) => return Err(LayoutRefused::NotInTheLobby),
+        };
         if self.world.interpreter().any_sealed() {
             return Err(LayoutRefused::AfterASeal);
         }
         self.world.seed_layout(layout, settings)?;
-        // Closed and settled: the lobby check above refused an open tick, and
-        // a layout places beacons and units and edits no voxel.
-        self.frozen = FrozenSnapshot::of(&self.world);
+        self.frozen = FrozenSnapshot::passed(&self.world, closed);
         Ok(())
     }
 
@@ -1235,16 +1253,18 @@ impl Runner {
     ///
     /// # Errors
     ///
-    /// Whatever [`Snapshot::restore_into`] returns. The world is left exactly as
-    /// it was on any error.
+    /// Whatever [`Snapshot::restore_into`] returns, and the world is then left
+    /// exactly as it was. [`SnapshotError::MidTick`] while a tick is open,
+    /// before anything is restored. And the door's [`SnapshotError::Unsettled`]
+    /// at the freeze of the restored world, which a restore never leaves (it
+    /// rebuilds the graph fresh, between ticks): the world is then the
+    /// restored one, and the frozen snapshot is the one from before.
     pub fn restore(&mut self, snapshot: &Snapshot) -> Result<(), SnapshotError> {
         if self.world.tick_is_open() {
             return Err(SnapshotError::MidTick);
         }
         snapshot.restore_into(&mut self.world)?;
-        // Closed and settled: a restore lands between ticks with its graph
-        // rebuilt fresh from the restored store and nothing marked.
-        self.frozen = FrozenSnapshot::of(&self.world);
+        self.frozen = FrozenSnapshot::of(&self.world)?;
         Ok(())
     }
 }
@@ -1303,7 +1323,7 @@ impl PhasedTick<'_> {
         while self.run_next_phase()?.is_some() {}
         let runner = self.runner;
         let hash = runner.world.end_tick(&mut runner.enc)?;
-        Ok(runner.close_tick(hash))
+        runner.close_tick(hash)
     }
 }
 

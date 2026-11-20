@@ -161,7 +161,7 @@ fn within(a: [Fx; 3], b: [Fx; 3], voxels: i16) -> bool {
 }
 
 fn pushing(world: World) -> Runner {
-    let mut runner = Runner::new(world);
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(runner.begin_push(), Ok(true), "the Push begins");
     runner
 }
@@ -437,7 +437,7 @@ fn a_seal_refuses_a_hunt_for_the_own_or_an_absent_commander() {
         let playbook: gp::v1::Playbook = pharmakos_proto::json::decode(&text).unwrap();
         Plan::compile(&playbook, &rules).expect("it compiles")
     };
-    let mut runner = Runner::new(world());
+    let mut runner = Runner::new(world()).unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(
         runner.seal_playbook(seat(0), hunting(0)),
         Err(SealRefused::CommanderSeat {
@@ -590,7 +590,7 @@ fn walled(height: i32) -> (Runner, BeaconId, UnitId, [Fx; 3]) {
         },
     );
     let raider = unit(&mut fixture, seat(0), post, UnitKind::Raider, here);
-    let mut runner = Runner::new(fixture);
+    let mut runner = Runner::new(fixture).unwrap_or_else(|error| panic!("{error}"));
     // The walls go in at a tick of their own, before the Push.
     runner
         .world_mut()
@@ -746,7 +746,7 @@ fn only_a_breach_shells_an_enemy_wall() {
         .expect("a mortar");
     let wall_at = ground(&fixture, here, 16, 0);
     wall_ring(&mut fixture, wall_at, 3, 2, seat(1));
-    let mut runner = Runner::new(fixture);
+    let mut runner = Runner::new(fixture).unwrap_or_else(|error| panic!("{error}"));
     runner.world_mut().step(&mut Enc::default()).unwrap();
     assert_eq!(runner.begin_push(), Ok(true));
     let mut log = Vec::new();

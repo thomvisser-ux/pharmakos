@@ -254,7 +254,7 @@ fn a_starting_seam_yields_more_than_its_exposed_rim() {
         },
     );
     let pristine = world(&[180_000]);
-    let mut runner = Runner::new(fixture);
+    let mut runner = Runner::new(fixture).unwrap_or_else(|error| panic!("{error}"));
     let mut delivered: Vec<usize> = Vec::new();
     for _ in 0..3 {
         let mut feed = Vec::new();
@@ -354,7 +354,7 @@ fn a_restored_match_keeps_the_unbroken_runs_unit_limit() {
     fixture
         .place_beacon_directly(seat, offset(at, 6), MandateKind::Mine, PRIORITY_NORMAL)
         .unwrap_or_else(|| panic!("the beacon table has room"));
-    let mut runner = Runner::new(fixture);
+    let mut runner = Runner::new(fixture).unwrap_or_else(|error| panic!("{error}"));
     let starting = runner.world().units().len();
     let limit = runner.world().unit_limit();
     let mut feed = Vec::new();
@@ -513,7 +513,7 @@ fn paid_means_yours_survives_a_mid_build_death() {
     let cost = world.structure_cost(StructureKind::Generator);
     let purse = treasury(&world, seat);
 
-    let mut runner = Runner::new(world);
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
     let mut feed: Vec<Event> = Vec::new();
     assert_eq!(runner.begin_push(), Ok(true), "the Push begins");
     // Step until the Quartermaster has paid for the target.
@@ -626,7 +626,8 @@ fn a_dormant_beacon_powers_down_everything_homed_to_it() {
         .saturating_add(grid.margin)
         .saturating_sub(1);
     let rules = rules_with_core_surplus(u32::try_from(surplus).unwrap_or(0));
-    let mut runner = Runner::new(world_with(rules, &[20_000]));
+    let mut runner =
+        Runner::new(world_with(rules, &[20_000])).unwrap_or_else(|error| panic!("{error}"));
     let seat = SeatId::new(0);
     let core = core_of(runner.world(), seat);
 
@@ -702,7 +703,7 @@ fn a_dormant_beacon_powers_down_everything_homed_to_it() {
 
 #[test]
 fn the_brownout_order_is_priority_then_distance_then_the_core_last() {
-    let mut runner = Runner::new(world(&[20_000]));
+    let mut runner = Runner::new(world(&[20_000])).unwrap_or_else(|error| panic!("{error}"));
     let seat = SeatId::new(0);
     let core = core_of(runner.world(), seat);
     let at = runner
@@ -805,8 +806,8 @@ fn a_placed_beacon_adds_no_draw() {
     // neither column. Two identical matches, one with the beacon placed, read
     // tick by tick: whatever else the grid does, it does in both.
     let seat = SeatId::new(0);
-    let mut plain = Runner::new(world(&[20_000]));
-    let mut placed = Runner::new(world(&[20_000]));
+    let mut plain = Runner::new(world(&[20_000])).unwrap_or_else(|error| panic!("{error}"));
+    let mut placed = Runner::new(world(&[20_000])).unwrap_or_else(|error| panic!("{error}"));
     let core = core_of(placed.world(), seat);
     let at = placed
         .world()
@@ -843,7 +844,8 @@ fn a_placed_beacon_adds_no_draw() {
     // shed at the first settle.
     let grid = Grid::of(&rules());
     let tight = rules_with_core_surplus(u32::try_from(grid.starting_load()).unwrap_or(0));
-    let mut runner = Runner::new(world_with(tight, &[20_000]));
+    let mut runner =
+        Runner::new(world_with(tight, &[20_000])).unwrap_or_else(|error| panic!("{error}"));
     let beacon = runner
         .world_mut()
         .place_beacon_directly(seat, offset(at, 8), MandateKind::None, PRIORITY_LOW)
@@ -896,7 +898,7 @@ fn a_shed_core_revives_once_its_load_leaves_the_margin_spare() {
         "the margin has to span more than one post for the dark-but-not-short \
          band to be visible: {grid:?}"
     );
-    let mut runner = Runner::new(world(&[60_000]));
+    let mut runner = Runner::new(world(&[60_000])).unwrap_or_else(|error| panic!("{error}"));
     let seat = SeatId::new(0);
     let core = core_of(runner.world(), seat);
     let at = runner
@@ -1015,7 +1017,7 @@ fn a_beacon_whose_shed_relieves_nothing_is_skipped_and_stays_lit() {
     // (a) The deficit is the core's own: its homed load outruns its surplus.
     // The idle beacon is skipped and stays lit; the core is shed, and is the
     // only beacon shed.
-    let mut runner = Runner::new(world(&[20_000]));
+    let mut runner = Runner::new(world(&[20_000])).unwrap_or_else(|error| panic!("{error}"));
     let core = core_of(runner.world(), seat);
     let at = runner
         .world()
@@ -1065,7 +1067,7 @@ fn a_beacon_whose_shed_relieves_nothing_is_skipped_and_stays_lit() {
     // priority, comes first in the order and is skipped; the loaded one is
     // shed and settles the deficit. The idle beacon never goes dark, not even
     // for the tick a revival would have taken.
-    let mut runner = Runner::new(world(&[20_000]));
+    let mut runner = Runner::new(world(&[20_000])).unwrap_or_else(|error| panic!("{error}"));
     let idle = runner
         .world_mut()
         .place_beacon_directly(seat, offset(at, 10), MandateKind::None, PRIORITY_LOW)
@@ -1118,7 +1120,7 @@ fn a_beacon_whose_shed_would_deepen_the_deficit_is_skipped() {
     // nothing either, so it is skipped like an idle beacon's.
     let grid = Grid::of(&rules());
     let seat = SeatId::new(0);
-    let mut runner = Runner::new(world(&[20_000]));
+    let mut runner = Runner::new(world(&[20_000])).unwrap_or_else(|error| panic!("{error}"));
     let core = core_of(runner.world(), seat);
     let at = runner
         .world()
@@ -1247,7 +1249,7 @@ fn raise_fixture(raised_posts: i32, other_posts: i32) -> Raise {
         .unwrap_or_else(|error| panic!("the raise is canonical gp.v1 JSON: {error:?}"));
     let plan = pharmakos_sim::interpreter::Plan::compile(&playbook, &rules)
         .unwrap_or_else(|error| panic!("the raise compiles: {error:?}"));
-    let mut runner = Runner::new(world);
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
     runner
         .seal_playbook(seat, plan)
         .unwrap_or_else(|error| panic!("a Lull takes a seal: {error:?}"));
@@ -1417,7 +1419,7 @@ fn raise_posts(world: &mut World, beacon: BeaconId, at: [Fx; 3], posts: i32, vox
 /// Step once after the Push begins with `dark` set dormant, and return the
 /// runner and that settle's events.
 fn settle_once_with_dark(world: World, dark: &[BeaconId]) -> (Runner, Vec<Event>) {
-    let mut runner = Runner::new(world);
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(runner.begin_push(), Ok(true), "the Push begins");
     for beacon in dark {
         runner.world_mut().set_dormant(*beacon, true);
@@ -1618,7 +1620,8 @@ fn the_commander_walks_through_a_blackout_drawing_nothing() {
     let seat = SeatId::new(0);
 
     // Lit: the commander is in the draw.
-    let mut lit = Runner::new(world_with(varied(), &[20_000]));
+    let mut lit =
+        Runner::new(world_with(varied(), &[20_000])).unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(lit.begin_push(), Ok(true), "the Push begins");
     lit.play_tick();
     let (_, draw) = supply_and_draw(lit.world(), seat);
@@ -1630,7 +1633,8 @@ fn the_commander_walks_through_a_blackout_drawing_nothing() {
     );
 
     // Dark: the core is dormant, and the commander walks on, drawing nothing.
-    let mut runner = Runner::new(world_with(varied(), &[20_000]));
+    let mut runner =
+        Runner::new(world_with(varied(), &[20_000])).unwrap_or_else(|error| panic!("{error}"));
     let core = core_of(runner.world(), seat);
     let at = runner
         .world()
@@ -1702,7 +1706,7 @@ fn a_beacons_key_core_supplies_exactly_its_base() {
     // supply the deep bore's surplus. A placed expansion is net zero too,
     // tick by tick: `a_placed_beacon_adds_no_draw`.
     let grid = Grid::of(&rules);
-    let mut runner = Runner::new(world(&[20_000]));
+    let mut runner = Runner::new(world(&[20_000])).unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(runner.begin_push(), Ok(true), "the Push begins");
     runner.play_tick();
     assert_eq!(
@@ -1719,7 +1723,7 @@ fn the_dark_load_is_what_the_brownout_took_off_the_grid() {
     // shed by a deficit: the dark load is their two Mortars, no supply went
     // dark with them, and the shed kW is the same two Mortars.
     let grid = Grid::of(&rules());
-    let mut runner = Runner::new(world(&[20_000]));
+    let mut runner = Runner::new(world(&[20_000])).unwrap_or_else(|error| panic!("{error}"));
     let seat = SeatId::new(0);
     let core = core_of(runner.world(), seat);
     let at = runner
@@ -1793,7 +1797,8 @@ fn the_dark_load_is_what_the_brownout_took_off_the_grid() {
             .unwrap_or(0),
         ),
         &[20_000],
-    ));
+    ))
+    .unwrap_or_else(|error| panic!("{error}"));
     let core = core_of(runner.world(), seat);
     assert_eq!(runner.begin_push(), Ok(true), "the Push begins");
     runner.world_mut().set_dormant(core, true);
@@ -1816,7 +1821,7 @@ fn the_dark_load_is_what_the_brownout_took_off_the_grid() {
 
 #[test]
 fn the_autocannon_is_never_shed() {
-    let mut runner = Runner::new(world(&[20_000]));
+    let mut runner = Runner::new(world(&[20_000])).unwrap_or_else(|error| panic!("{error}"));
     let seat = SeatId::new(0);
     let core = core_of(runner.world(), seat);
     let at = runner
@@ -1856,7 +1861,7 @@ fn only_one_generator_per_vent_adds_to_the_supply() {
     // rule is enforced where the heat is counted, so a seat may stand a second
     // Generator on a tapped vent and waste the `$`; what it may not do is
     // double its supply.
-    let mut runner = Runner::new(world(&[20_000]));
+    let mut runner = Runner::new(world(&[20_000])).unwrap_or_else(|error| panic!("{error}"));
     let seat = SeatId::new(0);
     let core = core_of(runner.world(), seat);
     let at = runner
@@ -1911,7 +1916,7 @@ fn a_generator_on_a_tapped_vent_does_not_buy_its_beacon_a_revival() {
     // Mortars, the fewest whose draw outruns the grid.
     let rules = rules();
     let grid = Grid::of(&rules);
-    let mut runner = Runner::new(world(&[20_000]));
+    let mut runner = Runner::new(world(&[20_000])).unwrap_or_else(|error| panic!("{error}"));
     let seat = SeatId::new(0);
     let core = core_of(runner.world(), seat);
     let at = runner
@@ -2210,7 +2215,7 @@ fn no_beacon_starves_another_within_a_band() {
     // the sort. Topping the treasury up to one Generator a tick makes "who is
     // served next" the only thing that decides, and the answer has to
     // alternate.
-    let mut runner = Runner::new(world);
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(runner.begin_push(), Ok(true), "the Push begins");
     runner.clear_events();
     let mut served: Vec<pharmakos_sim::tables::BeaconId> = Vec::new();
@@ -2419,7 +2424,7 @@ impl HeldOrder {
             Money::new(scout_cost.raw().saturating_add(generator_cost.raw())),
         );
         HeldOrder {
-            runner: Runner::new(world),
+            runner: Runner::new(world).unwrap_or_else(|error| panic!("{error}")),
             grid,
             seat,
             survey,
@@ -2577,7 +2582,7 @@ fn a_survey_beacon_fields_its_scout_count_and_stops_there() {
         "the probe area fits"
     );
 
-    let mut runner = Runner::new(world);
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
     let mut feed: Vec<Event> = Vec::new();
     play_segment(&mut runner, &mut feed);
 
@@ -2626,7 +2631,7 @@ fn a_sighting_stores_the_tick_it_was_taken_at_so_the_lull_adds_nothing() {
         .place_beacon_directly(watcher, offset(at, 4), MandateKind::None, PRIORITY_HIGH)
         .unwrap_or_else(|| panic!("room for a beacon"));
 
-    let mut runner = Runner::new(world);
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
     let mut feed: Vec<Event> = Vec::new();
     play_segment(&mut runner, &mut feed);
 
@@ -2788,7 +2793,7 @@ fn a_tie_on_held_value_places_the_lower_seat_id_ahead() {
     // golden, where the tie is a coincidence of the numbers rather than a
     // stated case, so it gets one here: written the other way round the sim
     // would pay the catch-up dial to whoever happened to be seat 0.
-    let mut runner = Runner::new(world(&[1_000]));
+    let mut runner = Runner::new(world(&[1_000])).unwrap_or_else(|error| panic!("{error}"));
     let mut feed: Vec<Event> = Vec::new();
     play_segment(&mut runner, &mut feed);
 
@@ -2850,7 +2855,8 @@ fn a_tie_on_held_value_places_the_lower_seat_id_ahead() {
 /// A fixed three-round match, settled at each recap, read line by line.
 #[test]
 fn the_settlement_ledger_matches_its_golden() {
-    let mut runner = Runner::new(world(&[120_000, 120_000, 120_000]));
+    let mut runner =
+        Runner::new(world(&[120_000, 120_000, 120_000])).unwrap_or_else(|error| panic!("{error}"));
     let mut feed: Vec<Event> = Vec::new();
     let mut body = String::new();
     // The four state columns are the seat's state at the **close of the
@@ -2954,7 +2960,7 @@ fn the_tick_bench_reports_counted_work() {
     // `economy.mining_ms_per_voxel` plus the walk, which is most of two
     // thousand ticks, so a shorter segment would report a spend count of zero
     // and tell S1 nothing about the work a tick actually does.
-    let mut runner = Runner::new(world(&[120_000]));
+    let mut runner = Runner::new(world(&[120_000])).unwrap_or_else(|error| panic!("{error}"));
     let mut feed: Vec<Event> = Vec::new();
     play_segment(&mut runner, &mut feed);
 

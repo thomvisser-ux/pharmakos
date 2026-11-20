@@ -2750,7 +2750,7 @@ fn a_lull_saved_after_a_last_tick_edit_resumes_onto_the_live_chain() {
     let mut world = harness_world(0);
     let mut enc = pharmakos_sim::encoding::Enc::with_capacity(64 * 1024);
     let _ = world.step(&mut enc).unwrap();
-    let mut runner = Runner::new(world);
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
     assert!(runner.begin_push().unwrap(), "the first Push opens");
     let wall = wall_in_commander(runner.world_mut());
     let far = runner.world().standing_point([192, 192, 0]);
@@ -2787,7 +2787,7 @@ fn a_lull_saved_after_a_last_tick_edit_resumes_onto_the_live_chain() {
         "the Lull is the save point"
     );
     let snapshot = runner.capture().expect("a Lull is between ticks");
-    let mut resumed = Runner::new(harness_world(0));
+    let mut resumed = Runner::new(harness_world(0)).unwrap_or_else(|error| panic!("{error}"));
     resumed.restore(&snapshot).expect("the save restores");
     assert!(runner.begin_push().unwrap());
     assert!(resumed.begin_push().unwrap());

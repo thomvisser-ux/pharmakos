@@ -170,7 +170,7 @@ fn transcript(case: &str) -> String {
     let plan = compile(&decode(&text))
         .unwrap_or_else(|error| panic!("compiling {case}'s playbook: {error}"));
 
-    let mut runner = Runner::new(fresh_world());
+    let mut runner = Runner::new(fresh_world()).unwrap_or_else(|error| panic!("{error}"));
     assert!(
         runner
             .world_mut()
@@ -534,7 +534,7 @@ fn a_jump_only_goes_forward() {
         }];
     }
     let plan = compile(&forward).expect("a forward-resolved label compiles");
-    let mut runner = Runner::new(fresh_world());
+    let mut runner = Runner::new(fresh_world()).unwrap_or_else(|error| panic!("{error}"));
     runner
         .world_mut()
         .seal_playbook(SeatId::new(CASE_SEAT), plan);
@@ -847,7 +847,7 @@ fn rows_of_the_visit_case(damage: &[(u32, i32)]) -> Vec<u32> {
     let text = std::fs::read_to_string(case_dir("visit").join("playbook.json"))
         .expect("the visit case is committed");
     let plan = compile(&decode(&text)).expect("it compiles");
-    let mut runner = Runner::new(fresh_world());
+    let mut runner = Runner::new(fresh_world()).unwrap_or_else(|error| panic!("{error}"));
     runner
         .world_mut()
         .seal_playbook(SeatId::new(CASE_SEAT), plan);
@@ -932,7 +932,7 @@ fn a_move_to_a_voxel_arrives_on_the_ground_under_it() {
             ..gp::v1::Step::default()
         });
     let plan = compile(&playbook).expect("a voxel inside the map compiles");
-    let mut runner = Runner::new(world);
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
     runner
         .world_mut()
         .seal_playbook(SeatId::new(CASE_SEAT), plan);
@@ -997,7 +997,7 @@ fn a_move_a_commander_cannot_walk_fails_with_no_path() {
     // `on_fail` decides. Without this, such a step would run until its timeout
     // with nothing in the feed to say why.
     let plan = compile(&far_move()).expect("a move to a voxel inside the map compiles");
-    let mut runner = Runner::new(fresh_world());
+    let mut runner = Runner::new(fresh_world()).unwrap_or_else(|error| panic!("{error}"));
     // Seal first, then wall the commander in, so the step is already running
     // when the graph says there is nowhere to go.
     runner
@@ -1073,7 +1073,7 @@ fn a_predicate_reads_only_its_own_seats_knowledge() {
     );
     let plan = compile(&decode(&text)).expect("the rules compile");
     let run = |carry: bool| -> (String, u32) {
-        let mut runner = Runner::new(fresh_world());
+        let mut runner = Runner::new(fresh_world()).unwrap_or_else(|error| panic!("{error}"));
         assert!(
             runner
                 .world_mut()
@@ -1215,7 +1215,7 @@ fn a_playbook_reads_only_its_own_seats_beacons() {
         ));
     }
     let plan = compile(&playbook).expect("the reference compiles; it is a run-time refusal");
-    let mut runner = Runner::new(fresh_world());
+    let mut runner = Runner::new(fresh_world()).unwrap_or_else(|error| panic!("{error}"));
     runner
         .world_mut()
         .seal_playbook(SeatId::new(CASE_SEAT), plan);
@@ -1331,7 +1331,7 @@ fn a_seat_with_no_playbook_leaves_its_commander_where_it_stands() {
     // The harness's destination draw does not reach a commander any more
     // (T11), so a seat that sealed nothing is a seat whose commander is still
     // exactly where the generator put it.
-    let mut runner = Runner::new(fresh_world());
+    let mut runner = Runner::new(fresh_world()).unwrap_or_else(|error| panic!("{error}"));
     let commander = runner
         .world()
         .commander_of(SeatId::new(1))
@@ -1370,7 +1370,7 @@ fn the_interpreters_state_survives_a_save_and_a_restore() {
             .expect("the visit case is committed"),
     ))
     .expect("it compiles");
-    let mut runner = Runner::new(fresh_world());
+    let mut runner = Runner::new(fresh_world()).unwrap_or_else(|error| panic!("{error}"));
     runner
         .world_mut()
         .seal_playbook(SeatId::new(CASE_SEAT), plan.clone());
@@ -1391,7 +1391,7 @@ fn the_interpreters_state_survives_a_save_and_a_restore() {
     let snapshot = runner.capture().unwrap();
     let before = runner.world().state_hash();
 
-    let mut resumed = Runner::new(fresh_world());
+    let mut resumed = Runner::new(fresh_world()).unwrap_or_else(|error| panic!("{error}"));
     resumed
         .world_mut()
         .seal_playbook(SeatId::new(CASE_SEAT), plan);
@@ -1450,7 +1450,7 @@ fn every_playbook_halts() {
         let decisions = steps.saturating_mul(MAX_MS_DECISIONS).saturating_add(8);
         let ticks = u32::try_from(decisions.saturating_mul(5)).unwrap_or(u32::MAX);
 
-        let mut runner = Runner::new(fresh_world());
+        let mut runner = Runner::new(fresh_world()).unwrap_or_else(|error| panic!("{error}"));
         runner
             .world_mut()
             .seal_playbook(SeatId::new(CASE_SEAT), plan);
@@ -2348,7 +2348,7 @@ fn commander_walk(world: &World) -> pharmakos_sim::pathing::router::WalkState {
 #[test]
 fn a_commander_freed_in_the_tick_before_a_decision_walks_on() {
     let plan = compile(&far_move()).expect("a move to a voxel inside the map compiles");
-    let mut runner = Runner::new(fresh_world());
+    let mut runner = Runner::new(fresh_world()).unwrap_or_else(|error| panic!("{error}"));
     runner
         .world_mut()
         .seal_playbook(SeatId::new(CASE_SEAT), plan);

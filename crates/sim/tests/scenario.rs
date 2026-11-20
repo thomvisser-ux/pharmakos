@@ -144,7 +144,7 @@ fn scenario_world() -> World {
 /// reason: to see what the segment actually did.
 fn play() -> (String, String) {
     let plan = Plan::compile(&playbook(), &rules()).expect("the worked example compiles");
-    let mut runner = Runner::new(scenario_world());
+    let mut runner = Runner::new(scenario_world()).unwrap_or_else(|error| panic!("{error}"));
     for seat in 0..SEATS {
         let id = SeatId::new(u8::try_from(seat).expect("two seats"));
         assert!(

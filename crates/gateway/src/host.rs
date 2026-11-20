@@ -199,8 +199,9 @@ impl Host {
     /// [`crate::error::Code::InvalidArgument`] for a seat count
     /// [`Host::check_seats`] refuses and a lobby setting
     /// [`Host::check_settings`] refuses, and [`crate::error::Code::Internal`]
-    /// when the map generator or the search graph will not build — neither is
-    /// something a caller did.
+    /// when the map generator or the search graph will not build, or the
+    /// match will not open on the generated world (the snapshot's door,
+    /// [`Runner::new`]) — none is something a caller did.
     pub fn open(config: &WorldConfig, library: Option<PathBuf>) -> Result<Host, Error> {
         Host::check_seats(config.seats)?;
         Host::check_settings(&config.match_settings)?;
@@ -208,8 +209,13 @@ impl Host {
             Error::internal(format!("this match's map could not be generated: {error}"))
         })?;
         let routes = RouteAdapter::new(world.voxels(), world.rules())?;
+        let runner = Runner::new(world).map_err(|error| {
+            Error::internal(format!(
+                "this match could not be opened on its world: {error}"
+            ))
+        })?;
         Ok(Host {
-            runner: Runner::new(world),
+            runner,
             routes,
             library,
             safe_playbook: String::from(SAFE_PLAYBOOK),
