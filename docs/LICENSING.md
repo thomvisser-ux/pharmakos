@@ -38,6 +38,18 @@ built-in operator seals from `library/`'s permissive templates) — decisions lo
 §2.7 items 100 (11) and 113. `REUSE.toml` carves each out with a later
 annotation, and `tests/LICENSE` says so in prose.
 
+**A file that quotes `library/`.** A tracked file outside `library/` that reproduces a
+template's expression carries the library's licence beside its own, as one combined
+expression, `GPL-3.0-or-later AND (MIT OR Apache-2.0)` (the library's alone where the
+file is purely the library's text, as the operator goldens and these docs are).
+Expression is a sentence of at least 8 words ending in a full stop, or a run of at
+least 12 consecutive words of one library string; a title, a name or a step label is
+not covered. The render goldens, the `instantiate_template` answers and their Godot
+copies, and a scenario file that copies a template are the cases (decisions log §2.7
+item 164, which amends item 113 (10)). The `reuse` step enforces it: it asks `reuse`
+for each tracked file's licence, scans every file outside `library/`, and compares
+byte copies under `godot/fixtures/` with their sources.
+
 **`rules/`** is `MIT OR Apache-2.0` for the reason `proto/` is: `rules.v1.json`
 is the canonical JSON of one `gp.v1.RulesTable` (decisions log §2.7 item 78) —
 the shape is schema and the values are data — and an alternative verifier or
@@ -202,7 +214,7 @@ file is combined with the manifest entry rather than being overridden by it —
 so a third-party file with its own header keeps it.
 
 Conformance is checked with `reuse lint`, which runs as the `reuse` step of
-`cargo xtask ci`. The check is platform-independent, so in CI it runs on the
+`cargo xtask ci`, followed by the quotation check below. The check is platform-independent, so in CI it runs on the
 Linux leg only: the Windows and macOS legs pass `--skip reuse`
 (`.github/workflows/ci.yml`). Locally the step reports `skipped` when the tool
 is not installed (`pipx install reuse`); in CI it cannot, because
