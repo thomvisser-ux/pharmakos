@@ -37,7 +37,11 @@ overflow-checks = true
 # (docs/spikes/G4-determinism.md section 9), so the toolchain pin in rust-toolchain.toml is
 # the whole of what cross-OS hash equality asked of the build (S1-02). No target-dir
 # override, no shared cache and no linker choice either: each is a developer's own, set in
-# their environment or a user-level config, never here.
+# their environment or a user-level config, never here. What may change the code a checked
+# build compiles is not a developer's to set: every build `cargo xtask ci` and
+# `cargo xtask package` check pins its own rustflags and rustdocflags and turns off any
+# rustc wrapper, whatever a config file says, and refuses a flags, compiler, wrapper or
+# `RUSTC_BOOTSTRAP` variable set in the environment (xtask/src/resolved.rs).
 
 [net]
 git-fetch-with-cli = true

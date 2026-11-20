@@ -172,10 +172,13 @@ overflow-checks = true
 # makes to test, to hash or to ship (xtask/src/resolved.rs). Before each test invocation
 # the `test` and `test-research` steps fail if the sim is at opt-level 0, if a third-party
 # crate the sim runs is, if a workspace unit has debug assertions or overflow checks off,
-# or if a crate of the godot family is optimised. Rustflags override all of this and never
-# show in that report, so every checked build pins its own (`CARGO_ENCODED_RUSTFLAGS`,
-# which cargo reads before every other source, config files included) and a flags
-# variable set in the environment is refused. Only `crates/sim/tests/allocations.rs` runs
+# or if a crate of the godot family is optimised, or any other third-party crate is not.
+# Rustflags, a rustc wrapper and `RUSTC_BOOTSTRAP` change codegen behind that report, so
+# every checked build pins its own: `CARGO_ENCODED_RUSTFLAGS` set (cargo takes rustflags
+# from the first of it, `RUSTFLAGS`, `target.*.rustflags` and `build.rustflags` that is
+# set, so a set one, even empty, is the only source), the wrapper variables set empty,
+# `RUSTC_BOOTSTRAP` removed; and each of those variables, and `RUSTC`, set in the
+# environment is refused. Only `crates/sim/tests/allocations.rs` runs
 # with the sim at opt-level 0, because the optimiser deletes allocations whose value is
 # never read, which that test exists to catch. Cargo reads no environment variable for a
 # package table: to step through the sim in a debugger, build with
