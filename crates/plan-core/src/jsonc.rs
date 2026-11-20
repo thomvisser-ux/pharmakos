@@ -334,7 +334,7 @@ impl Fragment {
 /// How large a node is as written ([`Node::measure`]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Measure {
-    /// Its characters, counted with room for every separator.
+    /// Its characters, exactly as written.
     pub chars: usize,
     /// The most containers a value inside it stands in.
     pub depth: usize,
@@ -654,14 +654,25 @@ impl Node {
         Ok(document.root)
     }
 
-    /// How large this node is as written: its characters (counted with room:
-    /// a separator for every member and item), and the most containers a value
-    /// inside it stands in (0 for a scalar or an empty container, 1 for `[1]`),
-    /// the count the grammar's nesting rule reads. One walk, no text built
-    /// (S3's `vfyq2`: `patch`'s budget).
+    /// How large this node is as written: its characters, exactly as many as
+    /// [`Node::written`] writes (S3's `vfyq2`, fix pass 2, item A3: it used to
+    /// count a separator after every member, so a playbook at the cap could
+    /// not be patched), and the most containers a value inside it stands in
+    /// (0 for a scalar or an empty container, 1 for `[1]`), the count the
+    /// grammar's nesting rule reads. One walk, no text built (`patch`'s
+    /// budget).
     #[must_use]
     pub fn measure(&self) -> Measure {
         let count = |text: &str| text.chars().count();
+        // A container writes its brackets, its inner trivia only when it is
+        // empty, and a comma between each two of its members or items.
+        let shell = |inner: &str, len: usize| {
+            if len == 0 {
+                count(inner).saturating_add(2)
+            } else {
+                len.saturating_add(1)
+            }
+        };
         match &self.value {
             Value::Null | Value::Bool(true) => Measure { chars: 4, depth: 0 },
             Value::Bool(false) => Measure { chars: 5, depth: 0 },
@@ -675,7 +686,7 @@ impl Node {
             },
             Value::Array(items, inner) => {
                 let mut total = Measure {
-                    chars: count(inner).saturating_add(2),
+                    chars: shell(inner, items.len()),
                     depth: 0,
                 };
                 for item in items {
@@ -684,15 +695,14 @@ impl Node {
                         .chars
                         .saturating_add(count(&item.before))
                         .saturating_add(inside.chars)
-                        .saturating_add(count(&item.after))
-                        .saturating_add(1);
+                        .saturating_add(count(&item.after));
                     total.depth = total.depth.max(inside.depth.saturating_add(1));
                 }
                 total
             }
             Value::Object(members, inner) => {
                 let mut total = Measure {
-                    chars: count(inner).saturating_add(2),
+                    chars: shell(inner, members.len()),
                     depth: 0,
                 };
                 for member in members {
@@ -702,10 +712,10 @@ impl Node {
                         .saturating_add(count(&member.before))
                         .saturating_add(count(&member.key_raw))
                         .saturating_add(count(&member.pre_colon))
+                        .saturating_add(1)
                         .saturating_add(count(&member.post_colon))
                         .saturating_add(inside.chars)
-                        .saturating_add(count(&member.after))
-                        .saturating_add(2);
+                        .saturating_add(count(&member.after));
                     total.depth = total.depth.max(inside.depth.saturating_add(1));
                 }
                 total

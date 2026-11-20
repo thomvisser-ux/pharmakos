@@ -208,9 +208,7 @@ fn no_seeded_patch_grows_a_document_past_the_cap() {
             match patch_text(&text, &patch) {
                 Ok((patched, inverse)) => {
                     applied += 1;
-                    assert!(
-                        patched.chars().count() <= MAX_PLAYBOOK_CHARS + 2 * MAX_PATCH_OPERATIONS
-                    );
+                    assert!(patched.chars().count() <= MAX_PLAYBOOK_CHARS);
                     assert!(inverse.chars().count() <= 2 * MAX_PLAYBOOK_CHARS);
                 }
                 Err(error) => {
