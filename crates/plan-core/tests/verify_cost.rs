@@ -214,10 +214,10 @@ fn verify_allocations(text: &str) -> (u64, u32, bool) {
 /// compact shapes and 186,518 and 360,689 on the commented ones (`main` at
 /// `64b6607`); a commented file now costs what a compact one does, because
 /// its comments are blanked in one copy and never parsed.
-const HANDLER_SHAPE_BOUND: u64 = 3_050; // measured 2,427
-const ROUTE_SHAPE_BOUND: u64 = 4_100; // measured 3,266
-const HANDLER_COMMENTED_BOUND: u64 = 3_050; // measured 2,427
-const ROUTE_COMMENTED_BOUND: u64 = 4_100; // measured 3,266
+const HANDLER_SHAPE_BOUND: u64 = 2_300; // measured 1,841
+const ROUTE_SHAPE_BOUND: u64 = 2_950; // measured 2,361
+const HANDLER_COMMENTED_BOUND: u64 = 2_300; // measured 1,841
+const ROUTE_COMMENTED_BOUND: u64 = 2_950; // measured 2,361
 
 #[test]
 fn verify_jsonc_allocates_within_its_bound_on_both_shapes_at_the_size_budget() {

@@ -178,6 +178,8 @@ mod walk;
 
 use pharmakos_proto::gp::api::v1::VerifyReport;
 use pharmakos_proto::gp::api::v1::verify_plan::Depth;
+use pharmakos_proto::gp::v1::Playbook;
+use pharmakos_proto::json;
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::snapshot::{Snapshot, SnapshotError};
 
@@ -337,6 +339,10 @@ pub const VERIFIER_VERSION: &str = "0.1.0-s3.4";
 #[derive(Clone, Copy, Debug)]
 pub struct Input<'a> {
     playbook: &'a [u8],
+    /// The playbook already decoded from exactly `playbook`, when the caller
+    /// holds it ([`Input::canonical`]), so the decode stage does not decode it
+    /// again.
+    decoded: Option<&'a json::Decoded<Playbook>>,
     snapshot: &'a [u8],
     scope: &'a Scope,
     rules: &'a RulesTable,
@@ -436,7 +442,33 @@ impl<'a> Input<'a> {
         scope: &'a Scope,
         rules: &'a RulesTable,
     ) -> Result<Input<'a>, InputError> {
-        Input::assemble(playbook, snapshot, scope, rules, false)
+        Input::assemble(playbook, None, snapshot, scope, rules, false)
+    }
+
+    /// [`Input::new`] for a playbook already canonicalised (S3's `vfyq2`):
+    /// the bytes handed over, and `report_hash` taken over, are its canonical
+    /// text, exactly as [`Input::new`] given that text; and the decode stage
+    /// reads the message canonicalising decoded, rather than decoding the text
+    /// a second time. A [`json::Canonicalised`] is made only by decoding, so
+    /// its text and its message cannot disagree.
+    ///
+    /// # Errors
+    ///
+    /// As [`Input::new`].
+    pub fn canonical(
+        playbook: &'a json::Canonicalised<Playbook>,
+        snapshot: &'a [u8],
+        scope: &'a Scope,
+        rules: &'a RulesTable,
+    ) -> Result<Input<'a>, InputError> {
+        Input::assemble(
+            playbook.text().as_bytes(),
+            Some(playbook.decoded()),
+            snapshot,
+            scope,
+            rules,
+            false,
+        )
     }
 
     /// The input for a player's text past [`MAX_PLAYBOOK_CHARS`] (S3's `vfy6`):
@@ -457,11 +489,12 @@ impl<'a> Input<'a> {
         scope: &'a Scope,
         rules: &'a RulesTable,
     ) -> Result<Input<'a>, InputError> {
-        Input::assemble(&[], snapshot, scope, rules, true)
+        Input::assemble(&[], None, snapshot, scope, rules, true)
     }
 
     fn assemble(
         playbook: &'a [u8],
+        decoded: Option<&'a json::Decoded<Playbook>>,
         snapshot: &'a [u8],
         scope: &'a Scope,
         rules: &'a RulesTable,
@@ -480,6 +513,7 @@ impl<'a> Input<'a> {
             .map_err(InputError::View)?;
         Ok(Input {
             playbook,
+            decoded,
             snapshot,
             scope,
             rules,
@@ -602,7 +636,7 @@ pub fn verify(input: &Input<'_>, depth: Depth) -> VerifyReport {
 
     if input.too_long {
         out.emit(report::Diag::new("E0029", pointer::ROOT).arg("max", MAX_PLAYBOOK_CHARS));
-    } else if let Some(decoded) = decode::run(input.playbook, &mut out) {
+    } else if let Some(decoded) = decode::run(input.playbook, input.decoded, &mut out) {
         let playbook = &decoded.playbook;
         units = size::size_units(playbook);
         if let Some(digest) = decoded.fingerprint {

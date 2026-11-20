@@ -77,18 +77,21 @@ pub fn verify_jsonc(
         return Ok(pharmakos_verifier::verify(&input, depth));
     }
     let handed = hand_over(playbook_jsonc);
-    let bytes = match &handed {
-        HandedOver::Canonical(text) | HandedOver::Blanked(text) => text.as_bytes(),
-    };
-    let input = Input::new(bytes, snapshot, scope, rules).map_err(Error::from)?;
+    // A canonical form is handed over with the message it was decoded to, so
+    // the verifier hashes its text and does not decode it again.
+    let input = match &handed {
+        HandedOver::Canonical(canonical) => Input::canonical(canonical, snapshot, scope, rules),
+        HandedOver::Blanked(text) => Input::new(text.as_bytes(), snapshot, scope, rules),
+    }
+    .map_err(Error::from)?;
     Ok(pharmakos_verifier::verify(&input, depth))
 }
 
 /// The bytes [`verify_jsonc`] hands the verifier, and which they are.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 enum HandedOver {
-    /// The file's canonical JSON, comments discarded.
-    Canonical(String),
+    /// The file's canonical JSON, comments discarded, with its message.
+    Canonical(Box<json::Canonicalised<Playbook>>),
     /// The file as written with its comments blanked ([`blank_comments`]): it
     /// has no canonical form. Any such file, syntax error or schema refusal
     /// alike: see the module doc for why the comment-invariance promise is
@@ -115,16 +118,15 @@ enum HandedOver {
 fn hand_over(text: &str) -> HandedOver {
     let blanked = blank_comments(text);
     match lean_canonical(&blanked) {
-        Ok(canonical) => HandedOver::Canonical(canonical),
+        Ok(canonical) => HandedOver::Canonical(Box::new(canonical)),
         Err(_no_canonical_form) => HandedOver::Blanked(blanked),
     }
 }
 
-/// The canonical JSON of a JSON text with no comments: decoded, then written
-/// from the message, as [`crate::canonical::canonicalise_text`] writes its `json`.
-fn lean_canonical(json_text: &str) -> Result<String, json::Error> {
-    let decoded = json::decode_encoded::<Playbook>(json_text)?;
-    json::encode(decoded.message())
+/// The canonical JSON of a JSON text with no comments, with its message, as
+/// [`crate::canonical::canonicalise_text`] writes its `json`.
+fn lean_canonical(json_text: &str) -> Result<json::Canonicalised<Playbook>, json::Error> {
+    json::canonical_decode::<Playbook>(json_text)
 }
 
 /// The file with every closed `//` and `/* */` comment blanked to spaces,

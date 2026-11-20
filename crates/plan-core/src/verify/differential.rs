@@ -67,7 +67,7 @@ enum Handed {
 /// [`hand_over`]'s answer, as [`reference_hand_over`] spells one.
 fn lean_hand_over(text: &str) -> Handed {
     match hand_over(text) {
-        HandedOver::Canonical(canonical) => Handed::Canonical(canonical),
+        HandedOver::Canonical(canonical) => Handed::Canonical(canonical.into_text()),
         HandedOver::Blanked(blanked) => Handed::Blanked(blanked),
     }
 }

@@ -242,3 +242,55 @@ pub fn canonicalise(full_name: &str, text: &str) -> Result<String, Error> {
     let bytes = json_to_wire(full_name, &value)?;
     write_wire(full_name, &bytes)
 }
+
+/// A message's canonical JSON text, with the message decoded and the wire
+/// bytes it was decoded from (S3's `vfyq2`).
+///
+/// Made by [`canonical_decode`] and nothing else, so the three always belong
+/// together: the text is the message's canonical form, written from the bytes
+/// the message was decoded from. A caller that needs the canonical text and
+/// the message both, as the verifier does (it hashes the one and checks the
+/// other), holds this and never decodes the text a second time.
+#[derive(Clone, PartialEq, Debug)]
+pub struct Canonicalised<M> {
+    text: String,
+    decoded: Decoded<M>,
+}
+
+impl<M> Canonicalised<M> {
+    /// The canonical JSON text.
+    #[must_use]
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// The message, and the wire bytes it was decoded from.
+    #[must_use]
+    pub const fn decoded(&self) -> &Decoded<M> {
+        &self.decoded
+    }
+
+    /// The canonical text, without the message.
+    #[must_use]
+    pub fn into_text(self) -> String {
+        self.text
+    }
+}
+
+/// A JSON text decoded as `M` and written back in its canonical form, the
+/// message kept beside the text.
+///
+/// The text is what [`decode`] then [`encode`] answer for the same input,
+/// written from the wire bytes the message was decoded from rather than from
+/// the message encoded again ([`Encoded`] says why the two are one text).
+///
+/// # Errors
+///
+/// As [`decode`].
+pub fn canonical_decode<M: Message + Name + Default>(
+    text: &str,
+) -> Result<Canonicalised<M>, Error> {
+    let decoded = decode_encoded::<M>(text)?;
+    let text = write_wire(&M::full_name(), decoded.encoded().bytes())?;
+    Ok(Canonicalised { text, decoded })
+}

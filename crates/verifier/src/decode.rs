@@ -49,6 +49,8 @@
 //! (decisions-log item 74, skeleton plan T8); nothing here accepts a comment,
 //! and nothing here rewrites the input.
 
+use std::borrow::Cow;
+
 use pharmakos_proto::gp::api::v1::patch_suggestion::Applicability;
 use pharmakos_proto::gp::v1::meta::AuthorKind;
 use pharmakos_proto::gp::v1::playbook::Kind;
@@ -111,9 +113,10 @@ const RESERVED_NAMES: &[&str] = &[
 
 /// What the decode stage hands the later stages: the playbook, and its plan
 /// fingerprint, computed once here from the bytes it was decoded from.
-pub(crate) struct Decoded {
-    /// The playbook.
-    pub(crate) playbook: Playbook,
+pub(crate) struct Decoded<'a> {
+    /// The playbook: the caller's, when it handed one in already decoded
+    /// ([`crate::Input::canonical`]), or the one decoded here.
+    pub(crate) playbook: Cow<'a, Playbook>,
     /// Its plan fingerprint, or `None` when it has none
     /// ([`hash::plan_fingerprint`] says when).
     pub(crate) fingerprint: Option<u64>,
@@ -140,7 +143,23 @@ pub(crate) struct Decoded {
 /// message declares, and no message in the schema declares a reserved name
 /// (`no_message_declares_a_reserved_name` below), so the scan would find
 /// nothing.
-pub(crate) fn run(bytes: &[u8], out: &mut Builder) -> Option<Decoded> {
+pub(crate) fn run<'a>(
+    bytes: &[u8],
+    handed: Option<&'a json::Decoded<Playbook>>,
+    out: &mut Builder,
+) -> Option<Decoded<'a>> {
+    if let Some(decoded) = handed {
+        // Decoded from exactly `bytes` by the codec (`Input::canonical`):
+        // what the first path below would answer, without reading them again.
+        let fingerprint = pharmakos_sim::hash::plan_fingerprint_of(decoded).ok();
+        return Some(checked(
+            Decoded {
+                playbook: Cow::Borrowed(decoded.message()),
+                fingerprint,
+            },
+            out,
+        ));
+    }
     let text = match core::str::from_utf8(bytes) {
         Ok(text) => text,
         Err(error) => {
@@ -156,24 +175,28 @@ pub(crate) fn run(bytes: &[u8], out: &mut Builder) -> Option<Decoded> {
         json::Direct::Wire(decoded) => {
             let fingerprint = pharmakos_sim::hash::plan_fingerprint_of(&decoded).ok();
             Decoded {
-                playbook: decoded.into_message(),
+                playbook: Cow::Owned(decoded.into_message()),
                 fingerprint,
             }
         }
         json::Direct::NeedsExactPath(_) => diagnose(text, out)?,
     };
+    Some(checked(decoded, out))
+}
 
+/// The checks the decode stage makes of every playbook it hands on.
+fn checked<'a>(decoded: Decoded<'a>, out: &mut Builder) -> Decoded<'a> {
     check_version(&decoded.playbook, out);
     check_kind(&decoded.playbook, out);
     check_author(&decoded.playbook, out);
     check_fingerprint(&decoded.playbook, decoded.fingerprint, out);
     crate::enums::run(&decoded.playbook, out);
-    Some(decoded)
+    decoded
 }
 
 /// The diagnostic path: the tree, the reserved names, then the codec's own
 /// refusal, each reported as the first that applies.
-fn diagnose(text: &str, out: &mut Builder) -> Option<Decoded> {
+fn diagnose(text: &str, out: &mut Builder) -> Option<Decoded<'static>> {
     let value = match json::read(text) {
         Ok(value) => value,
         Err(error) => {
@@ -204,7 +227,7 @@ fn diagnose(text: &str, out: &mut Builder) -> Option<Decoded> {
         Ok(playbook) => {
             let fingerprint = hash::plan_fingerprint(&playbook);
             Some(Decoded {
-                playbook,
+                playbook: Cow::Owned(playbook),
                 fingerprint,
             })
         }
