@@ -26,7 +26,7 @@
 //! | `buf`            | `buf lint` and `buf breaking --against .git#branch=main`                      |
 //! | `golden`         | `tests/golden/**/expected.*` against the fresh `target/golden/**/actual.*`    |
 //! | `determinism`    | runs the determinism binary and compares its per-tick hash chain              |
-//! | `reuse`          | REUSE licence-manifest check                                                  |
+//! | `reuse`          | REUSE licence-manifest check, then the library-quotation licence check        |
 //! | `placeholders`   | every `PLACEHOLDER` marker in the tracked tree parses against the grammar     |
 //! | `scenario`     | validates `scenarios/**`, then plays each with `gamectl scenario run`         |
 //! | `screenshot`     | stages the client, renders the three shots under xvfb + lavapipe, compares    |
@@ -238,7 +238,6 @@ mod annotate;
 mod budget;
 mod g3;
 mod golden;
-#[cfg(test)]
 mod licence_quotes;
 mod package;
 mod placeholders;
@@ -665,7 +664,7 @@ const STEPS: &[Step] = &[
     },
     Step {
         name: "reuse",
-        about: "REUSE licence-manifest check",
+        about: "REUSE licence-manifest check, and the library-quotation licence check",
         run: step_reuse,
     },
     Step {
@@ -2167,9 +2166,13 @@ fn step_reuse(ctx: &Ctx) -> Result<Outcome, String> {
         );
     }
     run(ctx, "reuse", &["lint".to_owned()])?;
-    Ok(Outcome::Done(
-        "every file carries an SPDX header and the manifest is complete".to_owned(),
-    ))
+    // The manifest is complete; now a file that reproduces the template library's text has to
+    // carry the library's licence beside the game's (`licence_quotes.rs`). It needs `reuse`,
+    // so it runs here, where the tool is guaranteed, and not in a unit test.
+    let quotes = licence_quotes::check_tree(&ctx.root, ctx.require_tools)?;
+    Ok(Outcome::Done(format!(
+        "every file carries an SPDX header and the manifest is complete; {quotes}"
+    )))
 }
 
 /// The PLACEHOLDER register's grammar, as a step (S1's plan, decision 9; the

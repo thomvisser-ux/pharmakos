@@ -11,7 +11,7 @@
 //! the library's text (the operator goldens, the docs). Decisions-log items 124 (5) (e), 128 and
 //! 136 started the rule for the render goldens; item 113 (10) is amended to it (the three
 //! `instantiate_template` answers carry both licences, not GPL alone). It used to depend on
-//! someone listing each new file by name, and PR #189's review found three missed. This test
+//! someone listing each new file by name, and PR #189's review found three missed. This check
 //! finds the quotation instead of trusting a list.
 //!
 //! # The rule
@@ -40,13 +40,18 @@
 //!   library's as two separate expressions is neither).
 //! * **Byte copies:** a file under `godot/fixtures/` that is byte-identical to one under
 //!   `tests/golden/` or `scenarios/` carries exactly the same expressions as it.
-//! * **A positive control:** the test asserts it scanned a plausible number of files and that
+//! * **A positive control:** the check asserts it scanned a plausible number of files and that
 //!   the files known to quote the library are found quoting it, so "nothing found" cannot mean
 //!   "nothing looked at".
 //!
-//! `reuse` missing follows xtask's rule for a test's tool: a skip, or a failure under
-//! `PHARMAKOS_REQUIRE_TOOLS=1`. The test runs with the rest of xtask's tests in the `test`
-//! step and adds no step to `cargo xtask ci`.
+//! # Where it runs
+//!
+//! In the `reuse` step of `cargo xtask ci` (`cargo xtask reuse`), after `reuse lint` has passed,
+//! through [`check_tree`]: that is the one job that has the tool, and the docs-only fast path
+//! runs the step too. `reuse` missing is the step's own rule (a skip locally, a failure under
+//! `PHARMAKOS_REQUIRE_TOOLS=1`), decided before this runs. The checker itself, [`check`], takes
+//! the tracked files' bytes and the licence report as values, so its unit tests need no tool,
+//! no filesystem and no `git`, and cannot race one another. No step is added to `ci`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -96,6 +101,10 @@ pub(crate) enum Refusal {
     NotReported(String),
     /// A library file could not be read.
     Library(String),
+    /// The positive control failed: the check looked at too little to mean anything.
+    Control(String),
+    /// Files that quote the library without carrying its licence.
+    Misses(Vec<String>),
 }
 
 impl fmt::Display for Refusal {
@@ -111,6 +120,14 @@ impl fmt::Display for Refusal {
             }
             Refusal::NotReported(file) => write!(f, "reuse's report has no entry for {file}"),
             Refusal::Library(why) => write!(f, "library/: {why}"),
+            Refusal::Control(why) => write!(f, "the quotation check's positive control: {why}"),
+            Refusal::Misses(misses) => write!(
+                f,
+                "these quote library/ (MIT OR Apache-2.0) without carrying its licence: give each \
+                 `{COMBINED}` (REUSE.toml, or its own header), or `{LIBRARY}` if it is purely the \
+                 library's text:\n  {}",
+                misses.join("\n  ")
+            ),
         }
     }
 }
@@ -359,15 +376,15 @@ impl Library {
         }
     }
 
-    fn read(root: &Path, files: &[String]) -> Result<Library, Refusal> {
+    fn read(files: &[(String, Vec<u8>)]) -> Result<Library, Refusal> {
         let mut library = Library::default();
-        for file in files
+        for (file, bytes) in files
             .iter()
-            .filter(|f| f.starts_with("library/") && !reuse_ignores(f, false))
+            .filter(|(f, _)| f.starts_with("library/") && !reuse_ignores(f, false))
         {
-            let text = fs::read_to_string(root.join(file))
-                .map_err(|e| Refusal::Library(format!("{file}: {e}")))?;
-            library.add_file(file, &text);
+            let text =
+                std::str::from_utf8(bytes).map_err(|e| Refusal::Library(format!("{file}: {e}")))?;
+            library.add_file(file, text);
         }
         library.sentences.sort();
         library.sentences.dedup();
@@ -503,42 +520,34 @@ fn sorted_set(expressions: &[String]) -> Vec<String> {
 
 /// Run the check over `files` (the tracked paths) with `report` as `reuse`'s answer.
 pub(crate) fn check(
-    root: &Path,
-    files: &[String],
+    files: &[(String, Vec<u8>)],
     report: &BTreeMap<String, Vec<String>>,
 ) -> Result<Outcome, Refusal> {
-    let library = Library::read(root, files)?;
+    let library = Library::read(files)?;
     let mut outcome = Outcome {
         library_files: library.files,
         library_runs: library.runs.len(),
         ..Outcome::default()
     };
-    let mut contents: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut raw: BTreeMap<String, String> = BTreeMap::new();
-    for file in files.iter().filter(|f| !f.starts_with("library/")) {
-        let extension = Path::new(file.as_str())
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("");
-        if BINARY.contains(&extension) {
+    let mut contents: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    let mut fixtures: BTreeMap<&str, &str> = BTreeMap::new();
+    let mut texts: Vec<(&str, &str)> = Vec::new();
+    for (file, bytes) in files.iter().filter(|(f, _)| !f.starts_with("library/")) {
+        if is_binary(file) {
             continue;
         }
-        let bytes = fs::read(root.join(file)).map_err(|e| Refusal::Unreadable {
-            file: file.clone(),
-            why: e.to_string(),
-        })?;
-        let text = String::from_utf8(bytes).map_err(|e| Refusal::Unreadable {
+        let text = std::str::from_utf8(bytes).map_err(|e| Refusal::Unreadable {
             file: file.clone(),
             why: e.to_string(),
         })?;
         outcome.scanned += 1;
         let expressions = match report.get(file) {
-            Some(expressions) => expressions.clone(),
+            Some(expressions) => expressions,
             None if reuse_ignores(file, text.is_empty()) => continue,
             None => return Err(Refusal::NotReported(file.clone())),
         };
-        if let Some(quoted) = library.quoted_in(&normalise(&text)) {
-            if let Some(problem) = licence_problem(&expressions) {
+        if let Some(quoted) = library.quoted_in(&normalise(text)) {
+            if let Some(problem) = licence_problem(expressions) {
                 let shown: String = quoted.chars().take(60).collect();
                 outcome
                     .misses
@@ -546,19 +555,22 @@ pub(crate) fn check(
             }
             outcome.quoting.insert(file.clone(), expressions.clone());
         }
+        texts.push((file, text));
+    }
+    for (file, text) in texts {
         if file.starts_with("tests/golden/") || file.starts_with("scenarios/") {
-            contents.entry(text.clone()).or_default().push(file.clone());
+            contents.entry(text).or_default().push(file);
         }
         if file.starts_with("godot/fixtures/") {
-            raw.insert(file.clone(), text);
+            fixtures.insert(file, text);
         }
     }
-    for (copy, text) in &raw {
-        let (Some(sources), Some(mine)) = (contents.get(text), report.get(copy)) else {
+    for (copy, text) in &fixtures {
+        let (Some(sources), Some(mine)) = (contents.get(text), report.get(*copy)) else {
             continue;
         };
         for source in sources {
-            let theirs = report.get(source).map(|e| sorted_set(e));
+            let theirs = report.get(*source).map(|e| sorted_set(e));
             if theirs.as_ref() != Some(&sorted_set(mine)) {
                 outcome.misses.push(format!(
                     "{copy} is a byte copy of {source}, which is licensed {theirs:?}, not {:?}",
@@ -568,6 +580,93 @@ pub(crate) fn check(
         }
     }
     Ok(outcome)
+}
+
+/// A file read as bytes and never as text, by its extension.
+fn is_binary(file: &str) -> bool {
+    Path::new(file)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| BINARY.contains(&e))
+}
+
+/// The files the manifest and the reviews named as quoting the library; the check has to find
+/// every one, or it is looking at nothing.
+const KNOWN: &[&str] = &[
+    "tests/golden/gateway/demo_hold_and_build_render/expected.response.json",
+    "tests/golden/gateway/demo_expand_and_mine_render/expected.response.json",
+    "tests/golden/gateway/demo_safe_playbook_render/expected.response.json",
+    "tests/golden/gateway/demo_defend_the_core_render/expected.response.json",
+    "tests/golden/gateway/demo_raid_an_enemy_beacon_render/expected.response.json",
+    "tests/golden/gateway/demo_against_easy_render/expected.response.json",
+    "tests/golden/gateway/instantiate_suggested/expected.response.json",
+    "godot/fixtures/instantiate_suggested.json",
+    "godot/fixtures/rule_list_render.json",
+    "scenarios/skeleton/against-easy.playbook.jsonc",
+    "crates/gateway/src/host.rs",
+];
+
+/// The `reuse` step's quotation check over the tracked tree: `git ls-files`, the files'
+/// bytes, and `reuse lint --json`, handed to [`check`] as values, then the positive control.
+/// `Ok` is a line for the step to print; `Err` is the step's failure message.
+pub(crate) fn check_tree(root: &Path, require_tools: bool) -> Result<String, String> {
+    check_tree_refusing(root, require_tools).map_err(|refusal| refusal.to_string())
+}
+
+fn check_tree_refusing(root: &Path, require_tools: bool) -> Result<String, Refusal> {
+    let listed = crate::child_command(require_tools, "git", &["ls-files", "-z"], root)
+        .output()
+        .map_err(|e| Refusal::Git(e.to_string()))?;
+    if !listed.status.success() {
+        return Err(Refusal::Git(
+            String::from_utf8_lossy(&listed.stderr).into_owned(),
+        ));
+    }
+    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+    for name in String::from_utf8_lossy(&listed.stdout)
+        .split('\0')
+        .filter(|f| !f.is_empty())
+        .filter(|f| !is_binary(f))
+    {
+        let bytes = fs::read(root.join(name)).map_err(|e| Refusal::Unreadable {
+            file: name.to_owned(),
+            why: e.to_string(),
+        })?;
+        files.push((name.to_owned(), bytes));
+    }
+    // `reuse lint` exits non-zero on a non-compliant tree and still writes the report; the step
+    // has already run it and passed, so only a failure to run it, or an answer that is not the
+    // report, is a refusal.
+    let answer = crate::child_command(require_tools, "reuse", &["lint", "--json"], root)
+        .output()
+        .map_err(|e| Refusal::Reuse(e.to_string()))?;
+    let report = read_report(&String::from_utf8_lossy(&answer.stdout))?;
+    let outcome = check(&files, &report)?;
+    if outcome.scanned <= 800 {
+        return Err(Refusal::Control(format!(
+            "only {} files were read",
+            outcome.scanned
+        )));
+    }
+    if outcome.library_files < 5 || outcome.library_runs <= 100 {
+        return Err(Refusal::Control(format!(
+            "the library was not read: {} files, {} word runs",
+            outcome.library_files, outcome.library_runs
+        )));
+    }
+    if let Some(known) = KNOWN.iter().find(|k| !outcome.quoting.contains_key(**k)) {
+        return Err(Refusal::Control(format!(
+            "{known} is known to quote the library and was not found quoting it"
+        )));
+    }
+    if !outcome.misses.is_empty() {
+        return Err(Refusal::Misses(outcome.misses));
+    }
+    Ok(format!(
+        "{} files read; every one that quotes the library ({}) carries its licence",
+        outcome.scanned,
+        outcome.quoting.len()
+    ))
 }
 
 #[cfg(test)]
@@ -664,72 +763,80 @@ mod tests {
         assert_eq!(ok.map(|r| r.len()), Ok(1));
     }
 
-    fn scratch(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("xtask-licence-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(dir.join("library"))
-            .map_err(|e| e.to_string())
-            .unwrap_or(());
-        dir
-    }
-
-    fn write(dir: &Path, file: &str, text: &str) {
-        if let Some(parent) = Path::new(file).parent() {
-            fs::create_dir_all(dir.join(parent)).unwrap_or(());
-        }
-        fs::write(dir.join(file), text).unwrap_or(());
-    }
-
     const SENTENCE: &str =
         "Raise the lantern above the harbour wall when fog comes in and keep it lit until dawn.";
 
+    /// The checker over in-memory files and an in-memory report: no filesystem, no process,
+    /// nothing a parallel test could share.
+    fn run(files: &[(&str, &str)], report: &[(&str, &[&str])]) -> Result<Outcome, Refusal> {
+        let files: Vec<(String, Vec<u8>)> = files
+            .iter()
+            .map(|(path, text)| (s(path), text.as_bytes().to_vec()))
+            .collect();
+        let report: BTreeMap<String, Vec<String>> = report
+            .iter()
+            .map(|(path, expressions)| (s(path), expressions.iter().map(|e| s(e)).collect()))
+            .collect();
+        check(&files, &report)
+    }
+
+    fn library_of(text: &str) -> (String, String) {
+        (s("library/t.jsonc"), text.to_owned())
+    }
+
+    /// One file beside a library file, with the expressions `reuse` would report for it.
+    fn one_file(
+        library: &[(&str, &str)],
+        file: &str,
+        text: &str,
+        expressions: &[&str],
+    ) -> Result<Outcome, Refusal> {
+        let mut files: Vec<(&str, &str)> = library.to_vec();
+        files.push((file, text));
+        run(&files, &[(file, expressions)])
+    }
+
+    fn sentence_library() -> Vec<(String, String)> {
+        vec![library_of(&format!("{{\"note\": \"{SENTENCE}\"}}\n"))]
+    }
+
+    fn as_refs(library: &[(String, String)]) -> Vec<(&str, &str)> {
+        library
+            .iter()
+            .map(|(a, b)| (a.as_str(), b.as_str()))
+            .collect()
+    }
+
     #[test]
     fn a_quoting_file_anywhere_in_the_tree_is_a_miss_unless_it_carries_the_library_licence() {
-        let dir = scratch("tree");
-        write(
-            &dir,
-            "library/t.jsonc",
-            &format!("{{\"note\": \"{SENTENCE}\"}}\n"),
-        );
-        let files: Vec<String> = [
-            "library/t.jsonc",
-            "docs/a.md",
-            "examples/b.md",
-            "crates/gateway/tests/c.rs",
-            "tests/golden/x/ok.json",
-            "tests/golden/x/bad.json",
-            "tests/golden/x/or.json",
-        ]
-        .iter()
-        .map(|f| s(f))
-        .collect();
-        write(&dir, "docs/a.md", &format!("// {SENTENCE}\n"));
-        write(
-            &dir,
-            "examples/b.md",
-            "a re-wrapped\n// Raise the lantern above the harbour\n// wall when fog comes in and keep it\n// lit until dawn.\n",
-        );
-        write(
-            &dir,
-            "crates/gateway/tests/c.rs",
-            &format!("let x = \"{SENTENCE}\";\n"),
-        );
-        write(&dir, "tests/golden/x/ok.json", &format!("\"{SENTENCE}\""));
-        write(&dir, "tests/golden/x/bad.json", &format!("\"{SENTENCE}\""));
-        write(&dir, "tests/golden/x/or.json", &format!("\"{SENTENCE}\""));
-        let mut report: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        report.insert(s("docs/a.md"), vec![s(LIBRARY)]);
-        report.insert(s("examples/b.md"), vec![s(GAME)]);
-        report.insert(s("crates/gateway/tests/c.rs"), vec![s(GAME)]);
-        report.insert(s("tests/golden/x/ok.json"), vec![s(COMBINED)]);
-        report.insert(s("tests/golden/x/bad.json"), vec![s(GAME)]);
-        report.insert(
-            s("tests/golden/x/or.json"),
-            vec![s("GPL-3.0-or-later OR (MIT OR Apache-2.0)")],
-        );
-        let outcome = check(&dir, &files, &report);
-        let _ = fs::remove_dir_all(&dir);
-        let outcome = outcome.unwrap_or_default();
+        let library = format!("{{\"note\": \"{SENTENCE}\"}}\n");
+        let doc = format!("// {SENTENCE}\n");
+        let code = format!("let x = \"{SENTENCE}\";\n");
+        let json = format!("\"{SENTENCE}\"");
+        let wrapped = "a re-wrapped\n// Raise the lantern above the harbour\n// wall when fog comes in and keep it\n// lit until dawn.\n";
+        let outcome = run(
+            &[
+                ("library/t.jsonc", &library),
+                ("docs/a.md", &doc),
+                ("examples/b.md", wrapped),
+                ("crates/gateway/tests/c.rs", &code),
+                ("tests/golden/x/ok.json", &json),
+                ("tests/golden/x/bad.json", &json),
+                ("tests/golden/x/or.json", &json),
+            ],
+            &[
+                ("docs/a.md", &[LIBRARY]),
+                ("examples/b.md", &[GAME]),
+                ("crates/gateway/tests/c.rs", &[GAME]),
+                ("tests/golden/x/ok.json", &[COMBINED]),
+                ("tests/golden/x/bad.json", &[GAME]),
+                (
+                    "tests/golden/x/or.json",
+                    &["GPL-3.0-or-later OR (MIT OR Apache-2.0)"],
+                ),
+            ],
+        )
+        .unwrap_or_default();
         let missed: Vec<&str> = outcome
             .misses
             .iter()
@@ -751,20 +858,20 @@ mod tests {
 
     #[test]
     fn a_file_the_report_lacks_or_cannot_be_read_is_a_refusal() {
-        let dir = scratch("refuse");
-        write(
-            &dir,
-            "library/t.jsonc",
-            &format!("{{\"note\": \"{SENTENCE}\"}}\n"),
-        );
-        write(&dir, "a/unlisted.txt", "plain");
-        fs::write(dir.join("a/binary.dat"), [0xff_u8, 0xfe, 0x00]).unwrap_or(());
-        let mut report: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        report.insert(s("a/other.txt"), vec![s(GAME)]);
-        let library = s("library/t.jsonc");
-        let unlisted = check(&dir, &[library.clone(), s("a/unlisted.txt")], &report);
-        let unreadable = check(&dir, &[library, s("a/binary.dat")], &report);
-        let _ = fs::remove_dir_all(&dir);
+        let library = format!("{{\"note\": \"{SENTENCE}\"}}\n");
+        let report: BTreeMap<String, Vec<String>> =
+            BTreeMap::from([(s("a/other.txt"), vec![s(GAME)])]);
+        let with = |file: &str, bytes: &[u8]| {
+            check(
+                &[
+                    (s("library/t.jsonc"), library.clone().into_bytes()),
+                    (s(file), bytes.to_vec()),
+                ],
+                &report,
+            )
+        };
+        let unlisted = with("a/unlisted.txt", b"plain");
+        let unreadable = with("a/binary.dat", &[0xff, 0xfe, 0x00]);
         assert!(
             matches!(unlisted, Err(Refusal::NotReported(_))),
             "{unlisted:?}"
@@ -773,67 +880,45 @@ mod tests {
             matches!(unreadable, Err(Refusal::Unreadable { .. })),
             "{unreadable:?}"
         );
+        // A binary by extension is not read; an empty file is one `reuse` does not report.
+        assert_eq!(with("a/x.png", &[0xff]).map(|o| o.scanned), Ok(0));
+        assert_eq!(with("a/empty", b"").map(|o| o.scanned), Ok(1));
     }
 
     #[test]
     fn a_byte_copy_carries_every_expression_its_source_does() {
-        let dir = scratch("copy");
-        write(
-            &dir,
-            "library/t.jsonc",
-            &format!("{{\"note\": \"{SENTENCE}\"}}\n"),
+        let library = format!("{{\"note\": \"{SENTENCE}\"}}\n");
+        let files = [
+            ("library/t.jsonc", library.as_str()),
+            ("tests/golden/a/r.json", "same bytes"),
+            ("godot/fixtures/r.json", "same bytes"),
+        ];
+        let differing = run(
+            &files,
+            &[
+                ("tests/golden/a/r.json", &[COMBINED]),
+                ("godot/fixtures/r.json", &[GAME]),
+            ],
         );
-        write(&dir, "tests/golden/a/r.json", "same bytes");
-        write(&dir, "godot/fixtures/r.json", "same bytes");
-        let files: Vec<String> = [
-            "library/t.jsonc",
-            "tests/golden/a/r.json",
-            "godot/fixtures/r.json",
-        ]
-        .iter()
-        .map(|f| s(f))
-        .collect();
-        let mut report: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        report.insert(s("tests/golden/a/r.json"), vec![s(COMBINED)]);
-        report.insert(s("godot/fixtures/r.json"), vec![s(GAME)]);
-        let differing = check(&dir, &files, &report);
-        report.insert(s("godot/fixtures/r.json"), vec![s(COMBINED), s(COMBINED)]);
-        let same = check(&dir, &files, &report);
-        let _ = fs::remove_dir_all(&dir);
+        let same = run(
+            &files,
+            &[
+                ("tests/golden/a/r.json", &[COMBINED]),
+                ("godot/fixtures/r.json", &[COMBINED, COMBINED]),
+            ],
+        );
         assert_eq!(differing.map(|o| o.misses.len()), Ok(1));
         assert_eq!(same.map(|o| o.misses.len()), Ok(0));
     }
 
     const LABEL: &str = "Which lantern the keeper lights first: the nearest one on the wall that is not lit yet, or one by name";
 
-    fn one_file(
-        library: &[(&str, &str)],
-        file: &str,
-        text: &str,
-        expressions: &[&str],
-    ) -> Result<Outcome, Refusal> {
-        let dir = scratch("one");
-        let mut files = Vec::new();
-        for (name, body) in library {
-            write(&dir, name, body);
-            files.push(s(name));
-        }
-        write(&dir, file, text);
-        files.push(s(file));
-        let mut report: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        report.insert(s(file), expressions.iter().map(|e| s(e)).collect());
-        let outcome = check(&dir, &files, &report);
-        let _ = fs::remove_dir_all(&dir);
-        outcome
-    }
-
     #[test]
     fn a_long_description_with_no_full_stop_is_expression_and_a_short_label_is_a_name() {
-        let library = [(
-            "library/t.jsonc",
-            format!("{{\"label\": \"{LABEL}\", \"name\": \"How long to keep the lantern\"}}\n"),
-        )];
-        let library: Vec<(&str, &str)> = library.iter().map(|(a, b)| (*a, b.as_str())).collect();
+        let library = [library_of(&format!(
+            "{{\"label\": \"{LABEL}\", \"name\": \"How long to keep the lantern\"}}\n"
+        ))];
+        let library = as_refs(&library);
         let long = one_file(
             &library,
             "crates/c/tests/a.rs",
@@ -852,10 +937,10 @@ mod tests {
 
     #[test]
     fn json_escapes_are_decoded_on_both_sides() {
-        let library = [(
-            "library/t.jsonc",
+        let library = [library_of(
             "{\"note\": \"Le caf\\u00e9 est ouvert, et il y a du th\\u00e9 et du lait pour tous les gens.\"}\n",
         )];
+        let library = as_refs(&library);
         let literal =
             "Le caf\u{e9} est ouvert, et il y a du th\u{e9} et du lait pour tous les gens.";
         let escaped = "{\"x\": \"Le caf\\u00e9 est ouvert, et il y a du th\\u00e9 et du lait pour tous les gens.\"}";
@@ -869,11 +954,13 @@ mod tests {
     #[test]
     fn every_tracked_file_under_library_is_library_text() {
         let library = [(
-            "library/notes.md",
-            "A note: the guard post covers the nearest scrap seam you do not cover yet, and holds.\n",
+            s("library/notes.md"),
+            s(
+                "A note: the guard post covers the nearest scrap seam you do not cover yet, and holds.\n",
+            ),
         )];
         let found = one_file(
-            &library,
+            &as_refs(&library),
             "crates/x/src/a.rs",
             "// A note: the guard post covers the nearest scrap seam you do not cover yet, and holds.",
             &[GAME],
@@ -883,8 +970,8 @@ mod tests {
 
     #[test]
     fn the_library_licence_beside_a_game_one_is_not_the_combined_expression() {
-        let library = [("library/t.jsonc", format!("{{\"note\": \"{SENTENCE}\"}}\n"))];
-        let library: Vec<(&str, &str)> = library.iter().map(|(a, b)| (*a, b.as_str())).collect();
+        let library = sentence_library();
+        let library = as_refs(&library);
         let text = format!("// {SENTENCE}\n");
         for ok in [
             &[LIBRARY][..],
@@ -901,8 +988,8 @@ mod tests {
 
     #[test]
     fn the_failure_names_each_expression_once_and_the_exact_combined_form() {
-        let library = [("library/t.jsonc", format!("{{\"note\": \"{SENTENCE}\"}}\n"))];
-        let library: Vec<(&str, &str)> = library.iter().map(|(a, b)| (*a, b.as_str())).collect();
+        let library = sentence_library();
+        let library = as_refs(&library);
         let text = format!("// {SENTENCE}\n");
         let doubled = one_file(&library, "crates/x/src/a.rs", &text, &[GAME, GAME]);
         let message = doubled.map(|o| o.misses.join("\n")).unwrap_or_default();
@@ -921,99 +1008,6 @@ mod tests {
         assert!(
             message.contains(&format!("write `{COMBINED}`")),
             "{message}"
-        );
-    }
-
-    /// The files the manifest and the reviews named as quoting the library; the check has to
-    /// find every one, or it is looking at nothing.
-    const KNOWN: &[&str] = &[
-        "tests/golden/gateway/demo_hold_and_build_render/expected.response.json",
-        "tests/golden/gateway/demo_expand_and_mine_render/expected.response.json",
-        "tests/golden/gateway/demo_safe_playbook_render/expected.response.json",
-        "tests/golden/gateway/demo_defend_the_core_render/expected.response.json",
-        "tests/golden/gateway/demo_raid_an_enemy_beacon_render/expected.response.json",
-        "tests/golden/gateway/demo_against_easy_render/expected.response.json",
-        "tests/golden/gateway/instantiate_suggested/expected.response.json",
-        "godot/fixtures/instantiate_suggested.json",
-        "godot/fixtures/rule_list_render.json",
-        "scenarios/skeleton/against-easy.playbook.jsonc",
-        "crates/gateway/src/host.rs",
-    ];
-
-    /// The check itself, over the tracked tree, with `reuse`'s own answer.
-    #[test]
-    fn every_file_that_quotes_the_library_carries_its_licence() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .map(Path::to_path_buf);
-        let Some(root) = root else {
-            panic!("xtask sits one level below the root");
-        };
-        let required = match crate::require_tools_from(
-            std::env::var_os(crate::REQUIRE_TOOLS_VAR).as_deref(),
-        ) {
-            Ok(required) => required,
-            Err(why) => panic!("{why}"),
-        };
-        let listed = crate::child_command(required, "git", &["ls-files", "-z"], &root).output();
-        let files: Vec<String> = match listed {
-            Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout)
-                .split('\0')
-                .filter(|f| !f.is_empty())
-                .map(str::to_owned)
-                .collect(),
-            Ok(out) => panic!(
-                "{}",
-                Refusal::Git(String::from_utf8_lossy(&out.stderr).into_owned())
-            ),
-            Err(e) => panic!("{}", Refusal::Git(e.to_string())),
-        };
-        // `reuse lint` exits non-zero on a non-compliant tree and still writes the report, so
-        // only a failure to run it, or an answer that is not the report, is a refusal.
-        let ran = crate::child_command(required, "reuse", &["lint", "--json"], &root).output();
-        let out = match ran {
-            Ok(out) => out,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                assert!(
-                    !required,
-                    "reuse is not installed, and PHARMAKOS_REQUIRE_TOOLS is set (`pipx install reuse`)"
-                );
-                println!("skipped: reuse is not installed (`pipx install reuse`)");
-                return;
-            }
-            Err(e) => panic!("{}", Refusal::Reuse(e.to_string())),
-        };
-        let report = match read_report(&String::from_utf8_lossy(&out.stdout)) {
-            Ok(report) => report,
-            Err(refusal) => panic!("{refusal}"),
-        };
-        let outcome = match check(&root, &files, &report) {
-            Ok(outcome) => outcome,
-            Err(refusal) => panic!("{refusal}"),
-        };
-        assert!(
-            outcome.library_files >= 5 && outcome.library_runs > 100,
-            "the library was not read: {} files, {} word runs",
-            outcome.library_files,
-            outcome.library_runs
-        );
-        assert!(
-            outcome.scanned > 800,
-            "only {} files were read",
-            outcome.scanned
-        );
-        for known in KNOWN {
-            assert!(
-                outcome.quoting.contains_key(*known),
-                "{known} is known to quote the library and was not found quoting it"
-            );
-        }
-        assert!(
-            outcome.misses.is_empty(),
-            "these quote library/ (MIT OR Apache-2.0) without carrying its licence: give each \
-             `{COMBINED}` (REUSE.toml, or its own header), or `{LIBRARY}` if it is purely the \
-             library's text:\n  {}",
-            outcome.misses.join("\n  ")
         );
     }
 }
