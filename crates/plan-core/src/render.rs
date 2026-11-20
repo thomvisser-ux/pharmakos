@@ -2355,13 +2355,14 @@ fn separated(parts: Vec<Text>, separator: &str) -> Text {
 ///
 /// Exact rather than rounded, unlike [`crate::travel::whole_seconds`]: these
 /// are authored numbers and rules-table arithmetic, not estimates, and
-/// rounding one would be the rendering inventing a fact. In `i64`, so the
-/// least `i32`, negated, is still the number it is.
+/// rounding one would be the rendering inventing a fact. The magnitude is
+/// the `i32`'s `unsigned_abs`, widened, so the least `i32` is still the number
+/// it is.
 #[must_use]
 pub fn duration(ms: Ms) -> String {
-    let total = i64::from(ms.raw());
-    if total < 0 {
-        return format!("minus {}", magnitude(-total));
+    let total = i64::from(ms.raw().unsigned_abs());
+    if ms.raw() < 0 {
+        return format!("minus {}", magnitude(total));
     }
     magnitude(total)
 }

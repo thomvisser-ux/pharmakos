@@ -140,7 +140,8 @@ impl std::error::Error for Error {}
 /// reference's, and the tests'.
 #[cfg(test)]
 pub(crate) fn push_pointer(base: &str, token: &str) -> String {
-    let mut pointer = String::with_capacity(base.len().saturating_add(token.len()) + 1);
+    let mut pointer =
+        String::with_capacity(base.len().saturating_add(token.len()).saturating_add(1));
     pointer.push_str(base);
     pointer.push('/');
     for character in token.chars() {

@@ -423,7 +423,7 @@ impl Visit for Semantics<'_> {
             return;
         }
         let inside = self.scope.own_beacons().any(|beacon| {
-            squared_distance(&beacon.at, voxel) <= squared(self.radius_of(Some(beacon)))
+            i128::from(squared_distance(&beacon.at, voxel)) <= squared(self.radius_of(Some(beacon)))
         });
         if !inside {
             self.out.emit(
@@ -1169,17 +1169,17 @@ enum Radius {
     Grown(u32),
 }
 
-/// A radius squared, in whole voxels squared. Neither arm can overflow: an
-/// `i32` squared is at most `2^62`, inside an `i64`, and a grown radius is at
-/// most `i16::MAX`, which `Scope::set_sphere_radius` holds it to, so no
-/// saturation is needed
-/// and none is written.
-fn squared(radius: Radius) -> i64 {
+/// A radius squared, in whole voxels squared, as an `i128`: both arms are
+/// 32-bit, so the square is below `2^64`, far inside an `i128`, whatever
+/// bound a caller holds the radius to. `saturating_mul` is how the product is
+/// written without an operator the crate's lints refuse; by the type, it
+/// never saturates.
+fn squared(radius: Radius) -> i128 {
     let radius = match radius {
-        Radius::Base(base) => i64::from(base),
-        Radius::Grown(grown) => i64::from(grown),
+        Radius::Base(base) => i128::from(base),
+        Radius::Grown(grown) => i128::from(grown),
     };
-    radius * radius
+    radius.saturating_mul(radius)
 }
 
 /// Whether a column lies wholly outside the sphere of `radius` about
@@ -1187,7 +1187,7 @@ fn squared(radius: Radius) -> i64 {
 /// it at any height is inside.
 fn column_outside(centre: &Voxel, radius: Radius, x: i32, y: i32) -> bool {
     let column = Voxel { x, y, z: centre.z };
-    squared_distance(centre, &column) > squared(radius)
+    i128::from(squared_distance(centre, &column)) > squared(radius)
 }
 
 /// Squared distance between two voxels, in whole voxels squared.
