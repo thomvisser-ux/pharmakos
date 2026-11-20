@@ -26,6 +26,27 @@ pub struct Error {
     /// The bound that refused it, when one did: a caller tells a refusal by
     /// its bound, never by reading the message.
     pub bound: Option<Bound>,
+    /// What was malformed in a patch or a pointer, when that is why: a caller
+    /// tells it by this, never by reading the message.
+    pub malformed: Option<Malformed>,
+}
+
+/// Something a patch or a pointer wrote that its grammar does not have
+/// (S3's `vfyq2`, fix pass 2).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Malformed {
+    /// A `~` in a JSON Pointer not followed by `0` or `1` (RFC 6901 section
+    /// 3 has no other escape).
+    PointerEscape,
+    /// A member of a patch operation that its operation does not have, or a
+    /// member of an undo it does not have.
+    UnknownMember,
+    /// A patch that mixes forward operations and undo operations: an undo is
+    /// the whole inverse of one patch, applied as it was handed back.
+    MixedUndo,
+    /// An undo operation whose written member, item or value is not exactly
+    /// one of them, as the JSONC reader reads it.
+    UndoText,
 }
 
 /// A bound on the work one call may do (S3's `vfyq2`, fix pass 1): what a
@@ -34,6 +55,10 @@ pub struct Error {
 pub enum Bound {
     /// More operations in one patch than [`crate::patch::MAX_PATCH_OPERATIONS`].
     Operations,
+    /// A JSON Pointer with more tokens than any node of a playbook can have:
+    /// `pharmakos_proto::json::grammar::MAX_DEPTH` containers, and one token
+    /// past the last of them ([`MAX_POINTER_TOKENS`]).
+    PointerTokens,
     /// A patched document longer than the playbook's cap,
     /// `pharmakos_verifier::MAX_PLAYBOOK_CHARS` characters.
     Size,
@@ -52,6 +77,22 @@ impl Error {
             pointer: pointer.into(),
             message: message.into(),
             bound: None,
+            malformed: None,
+        }
+    }
+
+    /// A refusal of something malformed in a patch or a pointer.
+    #[must_use]
+    pub fn malformed(
+        malformed: Malformed,
+        pointer: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            pointer: pointer.into(),
+            message: message.into(),
+            bound: None,
+            malformed: Some(malformed),
         }
     }
 
@@ -62,6 +103,7 @@ impl Error {
             pointer: pointer.into(),
             message: message.into(),
             bound: Some(bound),
+            malformed: None,
         }
     }
 
@@ -149,6 +191,7 @@ impl From<pharmakos_proto::json::Error> for Error {
             pointer: error.pointer,
             message: error.message,
             bound: None,
+            malformed: None,
         }
     }
 }
@@ -175,26 +218,108 @@ pub fn push_pointer(base: &str, token: &str) -> String {
     pointer
 }
 
-/// Splits an RFC 6901 pointer into its unescaped tokens.
+/// The most tokens a JSON Pointer into a playbook can have: a value inside
+/// `pharmakos_proto::json::grammar::MAX_DEPTH` containers is named by one
+/// token per container, and an `add` names one slot past the last of them.
+pub const MAX_POINTER_TOKENS: usize = pharmakos_proto::json::grammar::MAX_DEPTH + 1;
+
+/// Splits an RFC 6901 pointer into its unescaped tokens, in one pass over its
+/// text, read through the grammar's [`pharmakos_proto::json::grammar::Scan`]
+/// so the work is on the meter (S3's `vfyq2`, fix pass 2, item A2).
 ///
 /// # Errors
 ///
 /// When the pointer is neither empty nor starts with `/`, which RFC 6901
-/// requires of every non-root pointer.
+/// requires of every non-root pointer; when a `~` is followed by anything
+/// but `0` or `1` ([`Malformed::PointerEscape`]); and when it has more than
+/// [`MAX_POINTER_TOKENS`] tokens ([`Bound::PointerTokens`]), which no node of
+/// a playbook has.
 pub fn split_pointer(pointer: &str) -> Result<Vec<String>, Error> {
-    if pointer.is_empty() {
-        return Ok(Vec::new());
+    let scan = pharmakos_proto::json::grammar::Scan::new(pointer);
+    match scan.get(0) {
+        None => return Ok(Vec::new()),
+        Some(b'/') => {}
+        Some(_) => {
+            return Err(Error::at(
+                pointer,
+                "a JSON Pointer is empty or starts with `/` (RFC 6901)",
+            ));
+        }
     }
-    let Some(body) = pointer.strip_prefix('/') else {
-        return Err(Error::at(
-            pointer,
-            "a JSON Pointer is empty or starts with `/` (RFC 6901)",
-        ));
-    };
-    Ok(body
-        .split('/')
-        .map(|token| token.replace("~1", "/").replace("~0", "~"))
-        .collect())
+    let mut tokens: Vec<String> = Vec::new();
+    let mut token = String::new();
+    // Bytes from `run` up to the next `/` or `~` are copied as one piece;
+    // both are ASCII, so a run never ends inside a character.
+    let mut pos: usize = 1;
+    let mut run: usize = 1;
+    loop {
+        match scan.get(pos) {
+            None | Some(b'/') => {
+                token.push_str(scan.slice(run, pos).ok_or_else(|| {
+                    Error::at(pointer, "a JSON Pointer token ended inside a character")
+                })?);
+                if tokens.len() == MAX_POINTER_TOKENS {
+                    return Err(Error::bounded(
+                        Bound::PointerTokens,
+                        "",
+                        format!(
+                            "a JSON Pointer here names at most {MAX_POINTER_TOKENS} tokens, \
+                             one per container a playbook may nest and one past them"
+                        ),
+                    ));
+                }
+                tokens.push(std::mem::take(&mut token));
+                if scan.get(pos).is_none() {
+                    return Ok(tokens);
+                }
+                pos = pos.saturating_add(1);
+                run = pos;
+            }
+            Some(b'~') => {
+                token.push_str(scan.slice(run, pos).ok_or_else(|| {
+                    Error::at(pointer, "a JSON Pointer token ended inside a character")
+                })?);
+                let escaped = match scan.get(pos.saturating_add(1)) {
+                    Some(b'0') => '~',
+                    Some(b'1') => '/',
+                    _ => {
+                        return Err(Error::malformed(
+                            Malformed::PointerEscape,
+                            "",
+                            format!(
+                                "a JSON Pointer's `~` is followed by `0` or `1` (RFC 6901), \
+                                 and the one at byte {pos} is not"
+                            ),
+                        ));
+                    }
+                };
+                token.push(escaped);
+                pos = pos.saturating_add(2);
+                run = pos;
+            }
+            Some(_) => pos = pos.saturating_add(1),
+        }
+    }
+}
+
+/// The parent's pointer and the last token's text, unescaped: the pointer
+/// cut at its last `/`, with no tokens rebuilt (S3's `vfyq2`, fix pass 2,
+/// item A2).
+///
+/// # Errors
+///
+/// As [`split_pointer`] over the last token, and the root, which has no
+/// parent.
+pub fn parent_of(pointer: &str) -> Result<(&str, String), Error> {
+    let cut = pointer
+        .rfind('/')
+        .ok_or_else(|| Error::at(pointer, "the document root cannot be added or removed"))?;
+    let (parent, last) = pointer.split_at(cut);
+    let mut tokens = split_pointer(last)?;
+    let token = tokens
+        .pop()
+        .ok_or_else(|| Error::at(pointer, "the document root cannot be added or removed"))?;
+    Ok((parent, token))
 }
 
 #[cfg(test)]

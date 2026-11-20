@@ -415,7 +415,11 @@ fn undoing_a_remove_beside_the_other_spelling_restores_it() {
 #[test]
 fn a_tilde_not_followed_by_zero_or_one_is_refused() {
     for pointer in ["/a~2", "/a~", "/~x/b"] {
-        assert!(split_pointer(pointer).is_err(), "{pointer}");
+        assert_eq!(
+            split_pointer(pointer).map_err(|error| error.malformed),
+            Err(Some(pharmakos_plan_core::error::Malformed::PointerEscape)),
+            "{pointer}"
+        );
         let text = "{\"a~2\":1,\"a\":2}";
         let document = Document::parse(text).expect("a document");
         let quoted = write(&Json::String(pointer.to_owned()));
@@ -423,11 +427,13 @@ fn a_tilde_not_followed_by_zero_or_one_is_refused() {
             format!(r#"[{{"op":"remove","path":{quoted}}}]"#),
             format!(r#"[{{"op":"copy","from":{quoted},"path":"/c"}}]"#),
         ] {
-            let refused =
-                Patch::from_text(&patch).and_then(|patch| apply(&document, &patch).map(|_| ()));
-            assert!(
-                refused.is_err(),
-                "{patch}: an escape RFC 6901 does not have"
+            let refused = Patch::from_text(&patch)
+                .and_then(|patch| apply(&document, &patch).map(|_| ()))
+                .expect_err("an escape RFC 6901 does not have");
+            assert_eq!(
+                refused.malformed,
+                Some(pharmakos_plan_core::error::Malformed::PointerEscape),
+                "{patch}: {refused:?}"
             );
         }
     }

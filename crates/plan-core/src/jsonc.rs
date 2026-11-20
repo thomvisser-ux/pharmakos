@@ -244,6 +244,91 @@ impl Fragment {
     pub fn into_node(self) -> Node {
         self.node
     }
+
+    /// The fragment exactly as it was written where it was cut out: a member
+    /// as its leading trivia, key, colon, value and trailing trivia; an
+    /// element as its trivia and value; a plain value as its text (S3's
+    /// `vfyq2`, fix pass 2: what an undo carries on the wire).
+    #[must_use]
+    pub fn written(&self) -> String {
+        let mut out = String::new();
+        match &self.trivia {
+            Trivia::None => self.node.write(&mut out),
+            Trivia::Member {
+                before,
+                key_raw,
+                pre_colon,
+                post_colon,
+                after,
+            } => {
+                out.push_str(before);
+                out.push_str(key_raw);
+                out.push_str(pre_colon);
+                out.push(':');
+                out.push_str(post_colon);
+                self.node.write(&mut out);
+                out.push_str(after);
+            }
+            Trivia::Item { before, after } => {
+                out.push_str(before);
+                self.node.write(&mut out);
+                out.push_str(after);
+            }
+        }
+        out
+    }
+
+    /// The one member `written` writes, read as the JSONC reader reads a
+    /// member, trivia and key spelling kept; its key must be `key`.
+    ///
+    /// # Errors
+    ///
+    /// When `written` is not exactly one member named `key`
+    /// ([`crate::error::Malformed::UndoText`]).
+    pub fn member_from_written(written: &str, key: &str) -> Result<Self, Error> {
+        let not_one = || {
+            Error::malformed(
+                crate::error::Malformed::UndoText,
+                "",
+                "an undo's `jsonc` is exactly the one member it puts back, as it was written",
+            )
+        };
+        let mut wrapped = String::with_capacity(written.len().saturating_add(2));
+        wrapped.push('{');
+        wrapped.push_str(written);
+        wrapped.push('}');
+        let mut document = Document::parse(&wrapped).map_err(|_| not_one())?;
+        if document.root.len() != Some(1) {
+            return Err(not_one());
+        }
+        document.root.take_member(key).ok_or_else(not_one)
+    }
+
+    /// The one array element `written` writes, read as the JSONC reader reads
+    /// an element, trivia kept.
+    ///
+    /// # Errors
+    ///
+    /// When `written` is not exactly one element
+    /// ([`crate::error::Malformed::UndoText`]).
+    pub fn item_from_written(written: &str) -> Result<Self, Error> {
+        let not_one = || {
+            Error::malformed(
+                crate::error::Malformed::UndoText,
+                "",
+                "an undo's `jsonc` is exactly the one element it puts back, as it was written",
+            )
+        };
+        let mut wrapped = String::with_capacity(written.len().saturating_add(2));
+        wrapped.push('[');
+        wrapped.push_str(written);
+        wrapped.push(']');
+        let mut document = Document::parse(&wrapped).map_err(|_| not_one())?;
+        if document.root.len() != Some(1) {
+            return Err(not_one());
+        }
+        document.root.take_item(0).ok_or_else(not_one)
+    }
 }
 
 /// How large a node is as written ([`Node::measure`]).
@@ -536,6 +621,37 @@ impl Node {
     #[must_use]
     pub fn set(&mut self, node: Self) -> Self {
         std::mem::replace(self, node)
+    }
+
+    /// The node exactly as it is written, its inner trivia included.
+    #[must_use]
+    pub fn written(&self) -> String {
+        let mut out = String::new();
+        self.write(&mut out);
+        out
+    }
+
+    /// The one value `written` writes, read as the JSONC reader reads it, its
+    /// inner trivia kept, with no trivia around it.
+    ///
+    /// # Errors
+    ///
+    /// When `written` is not exactly one value with nothing around it
+    /// ([`crate::error::Malformed::UndoText`]).
+    pub fn from_written(written: &str) -> Result<Self, Error> {
+        let not_one = || {
+            Error::malformed(
+                crate::error::Malformed::UndoText,
+                "",
+                "an undo's `jsonc` is exactly the value it puts back, as it was written, with \
+                 nothing around it",
+            )
+        };
+        let document = Document::parse(written).map_err(|_| not_one())?;
+        if !document.prologue.is_empty() || !document.epilogue.is_empty() {
+            return Err(not_one());
+        }
+        Ok(document.root)
     }
 
     /// How large this node is as written: its characters (counted with room:

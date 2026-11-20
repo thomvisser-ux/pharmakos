@@ -241,7 +241,6 @@ fn move_and_copy_then_undo_are_the_identity() {
                         path: target.to_owned(),
                         from: Some(pointer.clone()),
                         value: None,
-                        position: None,
                     }]);
                     applied += usize::from(round_trip(
                         name,
@@ -349,40 +348,38 @@ fn add_over_an_existing_member_keeps_its_comment_and_its_spacing() {
     }
 }
 
-/// The one place the wire form is lossy, asserted rather than left to be
-/// discovered: an inverse patch serialised to RFC 6902 text carries a value,
-/// and a value has no comments.
+/// The inverse's text is as exact as the inverse (S3's `vfyq2`, fix pass 2,
+/// item A1; before, the wire form flattened it to RFC 6902 values and lost
+/// the comment and the member's slot): read back from its text, it gives the
+/// file back byte for byte, comment and slot included.
 #[test]
-fn the_wire_form_of_an_inverse_loses_the_trivia_it_carried() {
+fn the_wire_form_of_an_inverse_keeps_the_trivia_and_the_slot() {
     let text = "{\n  // why\n  \"a\": 1,\n  \"b\": 2\n}";
     let document = Document::parse(text).expect("a document");
     let patch = Patch::from_text(r#"[{"op":"remove","path":"/a"}]"#).expect("a patch");
     let (patched, inverse) = apply(&document, &patch).expect("it applies");
-
-    // In memory: byte-exact.
     let (back, _again) = apply(&patched, &inverse).expect("the inverse applies");
     assert_eq!(back.to_text(), text);
-
-    // Through the wire: the value comes back, the comment does not.
-    let on_the_wire = Patch::from_text(&inverse.to_text()).expect("its own text");
-    let (flattened, _again) = apply(&patched, &on_the_wire).expect("the wire inverse applies");
-    assert_ne!(flattened.to_text(), text);
-    assert!(!flattened.to_text().contains("// why"));
-    // The *value* is intact; only the trivia and the member's slot are gone,
-    // and a member's slot is not semantic JSON — which is exactly why RFC 6902
-    // does not carry one and why an in-memory inverse does.
-    let mut restored = match flattened.to_json() {
-        Json::Object(entries) => entries,
-        other => panic!("the patched document is still an object, not {other:?}"),
-    };
-    restored.sort_by(|left, right| left.0.cmp(&right.0));
+    let wire = inverse.to_text();
+    let undo = Json::Object(vec![
+        ("at".to_owned(), Json::Number("0".to_owned())),
+        (
+            "jsonc".to_owned(),
+            Json::String("\n  // why\n  \"a\": 1".to_owned()),
+        ),
+    ]);
     assert_eq!(
-        restored,
-        vec![
-            ("a".to_owned(), Json::Number("1".to_owned())),
-            ("b".to_owned(), Json::Number("2".to_owned())),
-        ]
+        pharmakos_proto::json::read(&wire).expect("JSON"),
+        Json::Array(vec![Json::Object(vec![
+            ("op".to_owned(), Json::String("add".to_owned())),
+            ("path".to_owned(), Json::String("/a".to_owned())),
+            ("undo".to_owned(), undo),
+        ])])
     );
+    let on_the_wire = Patch::from_text(&wire).expect("its own text");
+    assert_eq!(on_the_wire, inverse);
+    let (again, _) = apply(&patched, &on_the_wire).expect("the wire inverse applies");
+    assert_eq!(again.to_text(), text);
 }
 
 /// A file that writes a step's `skip_if` in its camelCase JSON name.

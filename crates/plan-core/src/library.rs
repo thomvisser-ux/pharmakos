@@ -458,6 +458,25 @@ pub fn instantiate(
     explicit: &[Parameter],
     suggested: &[Parameter],
 ) -> Result<Instance, Error> {
+    // Bounded before anything is read (S3's `vfyq2`, fix pass 2, item A2):
+    // each parameter becomes at most one operation of one patch, and each
+    // name is a pointer, read as one.
+    for list in [explicit, suggested] {
+        if list.len() > crate::patch::MAX_PATCH_OPERATIONS {
+            return Err(Error::bounded(
+                crate::error::Bound::Operations,
+                "",
+                format!(
+                    "{} parameters, and an instantiation applies at most {}",
+                    list.len(),
+                    crate::patch::MAX_PATCH_OPERATIONS
+                ),
+            ));
+        }
+        for parameter in list {
+            crate::error::split_pointer(&parameter.name)?;
+        }
+    }
     let document = Document::parse(template_jsonc)?;
     let template = document.to_json();
     let declarations = declared_in(&template)?;

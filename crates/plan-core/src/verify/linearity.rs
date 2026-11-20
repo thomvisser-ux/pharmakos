@@ -239,3 +239,70 @@ fn parsing_a_document_is_linear_in_its_bytes() {
         let _ = Document::parse(text);
     });
 }
+
+/// Pointer-heavy patches at about `size` bytes (S3's `vfyq2`, fix pass 2,
+/// item A2): one pointer of as many tokens as a playbook can be deep, each
+/// token long; and one of more tokens than that, which is refused.
+fn pointers(size: usize) -> [(&'static str, String); 2] {
+    let tokens = crate::error::MAX_POINTER_TOKENS;
+    [
+        (
+            "long tokens",
+            format!("/{}", "k".repeat(size / tokens)).repeat(tokens),
+        ),
+        ("too many tokens", "/k".repeat(size / 2)),
+    ]
+}
+
+fn pointer_patches(size: usize) -> Vec<(&'static str, String)> {
+    let quote = |pointer: &str| {
+        pharmakos_proto::json::write(&pharmakos_proto::json::Json::String(pointer.to_owned()))
+    };
+    let mut found = Vec::new();
+    for (name, pointer) in pointers(size) {
+        let quoted = quote(&pointer);
+        found.push((
+            name,
+            format!(r#"[{{"op":"test","path":{quoted},"value":1}}]"#),
+        ));
+        found.push((name, format!(r#"[{{"op":"remove","path":{quoted}}}]"#)));
+        found.push((
+            name,
+            format!(r#"[{{"op":"copy","from":{quoted},"path":"/b"}}]"#),
+        ));
+    }
+    found
+}
+
+#[test]
+fn patching_by_a_long_pointer_is_linear_in_its_bytes() {
+    for size in [512, 512 * SCALE] {
+        for (name, patch) in pointer_patches(size) {
+            let work = per_byte(&patch, &|patch| {
+                let _ = crate::patch::patch_text(MINIMAL, patch);
+            });
+            assert!(
+                work <= WORK_PER_BYTE,
+                "patch_text by {name} at {} bytes examined {work} bytes per byte",
+                patch.len()
+            );
+        }
+        for (name, pointer) in pointers(size) {
+            let _ = work::take();
+            let _ = crate::library::instantiate(
+                MINIMAL,
+                &[crate::library::Parameter {
+                    name: pointer.clone(),
+                    value: "1".to_owned(),
+                }],
+                &[],
+            );
+            let input = u64::try_from(pointer.len() + MINIMAL.len()).expect("a length");
+            let per = work::take() / input;
+            assert!(
+                per <= WORK_PER_BYTE,
+                "instantiate by {name} at {input} bytes examined {per} bytes per byte"
+            );
+        }
+    }
+}

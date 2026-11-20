@@ -9,46 +9,59 @@
 //! once — apply the edit, and hand back something the editor's undo stack can
 //! apply to get the *file* back, not merely the value.
 //!
-//! # Why an inverse patch carries a fragment and the wire form does not
+//! # An undo is exact, by its type and on the wire
 //!
-//! RFC 6902's `add` and `replace` carry a **value**, and a value has no
-//! comments and no spacing. An inverse patch built out of plain values would
-//! therefore undo a `remove` by putting the member back without the comment
-//! that sat above it — a silently dropped comment, which
-//! `tests/golden/plan-core/README.md` calls a bug even when the JSON is
-//! identical.
+//! A forward patch is RFC 6902: its pointers name a playbook field by either
+//! of its names and address the member the file writes, under the file's
+//! spelling (`as_the_file_spells`; S3's `vfyq2`). Its inverse is not: it is a
+//! patch of [`Undo`] operations, a type of its own, each naming the member it
+//! acts on exactly as the file spells it now, and putting back exactly what
+//! was there — the value with its inner comments, the member's key spelling,
+//! the trivia around it and its slot in its object or array (S3's `vfyq2`,
+//! fix pass 2). An undo is never translated by spelling and never refused as
+//! writing a field twice: it restores what the file held.
 //!
-//! So an [`Operation`] carries a [`Fragment`]: the node **and** the trivia it
-//! was cut out with. [`apply`] returns an inverse patch of fragments, and
-//! `undo_is_byte_exact_on_every_fixture` in `tests/patch.rs` asserts that
-//! applying it gives the original bytes back. [`Patch::to_text`] flattens the
-//! fragments to plain values because that is what RFC 6902 can say, and
-//! `gp.api.v1.PatchPlanResponse.inverse_json_patch` is that text — the loss is
-//! the wire format's, and it is stated here rather than discovered later.
+//! The editor holds the inverse as text ([`Patch::to_text`]) and sends it back
+//! to undo, so the exactness is spelled in the text by one documented member
+//! of each operation, `undo`:
+//!
+//! * `{"op":"add","path":P,"undo":{"at":N,"jsonc":T}}` puts back at slot `N`
+//!   the member or element `T` writes, as it was written (a member: its
+//!   leading trivia, its key, the colon, its value and its trailing trivia);
+//! * `{"op":"remove","path":P,"undo":{}}` takes out what the forward patch
+//!   put in;
+//! * `{"op":"replace","path":P,"undo":{"jsonc":T}}` puts back the value `T`
+//!   writes, its inner comments included.
+//!
+//! [`Patch::from_json`] reads every operation strictly: a member its operation
+//! does not have is refused, in an undo too ([`Malformed::UnknownMember`]); an
+//! undo's `jsonc` is read by the JSONC reader and must be exactly one member,
+//! element or value ([`Malformed::UndoText`]); and a patch is all forward or
+//! all undo ([`Malformed::MixedUndo`]). That is stricter than RFC 6902's
+//! "ignore what you do not know", on purpose: a member the editor did not mean
+//! is a mistake to report, not to drop.
 //!
 //! # What is supported
 //!
 //! All six operations: `add`, `remove`, `replace`, `move`, `copy` and `test`.
 //! `move` and `copy` are expanded into the pair they are defined as, which is
-//! also how their inverse is expressed.
+//! also how their inverse is expressed; a `move` onto itself changes nothing
+//! (RFC 6902 section 4.4).
 //!
 //! The patch is applied to the **document**, not to the schema. A patch that
 //! produces something that is no longer a playbook is caught by the verifier,
 //! with a code and a pointer, exactly as a hand-edit would be — the editor
 //! runs no validation of its own (spec section 12).
 //! One exception, because it would leave a file that no longer decodes: a
-//! patch that writes a field under both its names in one object is refused
-//! ([`apply`]; S3's `gwu`). A pointer names a field by either of its names
-//! and addresses the member the file writes, under the file's spelling
-//! (`as_the_file_spells`; S3's `vfyq2`), so an edit to a file written in
-//! camelCase JSON names, a Fix's or a click's, never writes a field twice.
+//! forward patch that writes a field under both its names in one object is
+//! refused ([`apply`]; S3's `gwu`).
 
 use pharmakos_proto::json::{Json, read, write};
 
 use pharmakos_proto::json::grammar::{MAX_DEPTH, may_nest};
 use pharmakos_verifier::MAX_PLAYBOOK_CHARS;
 
-use crate::error::{Bound, Error, push_pointer, split_pointer};
+use crate::error::{Bound, Error, Malformed, parent_of, push_pointer, split_pointer};
 use crate::jsonc::{Document, Fragment, Node};
 
 /// The six RFC 6902 operations.
@@ -93,9 +106,18 @@ impl Op {
             _ => None,
         }
     }
+
+    /// The members an operation of this kind writes, `op` and `path` included.
+    const fn members(self) -> &'static [&'static str] {
+        match self {
+            Self::Add | Self::Replace | Self::Test => &["op", "path", "value"],
+            Self::Remove => &["op", "path"],
+            Self::Move | Self::Copy => &["op", "path", "from"],
+        }
+    }
 }
 
-/// One patch operation.
+/// One forward patch operation, RFC 6902's.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Operation {
     /// Which operation.
@@ -104,18 +126,8 @@ pub struct Operation {
     pub path: String,
     /// The source pointer, for `move` and `copy`.
     pub from: Option<String>,
-    /// The value, for `add`, `replace` and `test`. A fragment rather than a
-    /// plain value so that an inverse patch can restore comments.
+    /// The value, for `add`, `replace` and `test`.
     pub value: Option<Fragment>,
-    /// Which slot of an object an `add` should go into.
-    ///
-    /// RFC 6902 has no such field, and [`Patch::to_json`] does not write one:
-    /// an object's member order is not semantic JSON. It is semantic *text*,
-    /// though, and an undo has to give the file back exactly, so an inverse
-    /// patch this crate produces remembers which slot the member came out of.
-    /// A patch read off the wire never carries one and appends, as RFC 6902
-    /// says.
-    pub position: Option<usize>,
 }
 
 impl Operation {
@@ -127,15 +139,7 @@ impl Operation {
             path: path.into(),
             from: None,
             value: Some(value),
-            position: None,
         }
-    }
-
-    /// The same operation, remembering which slot of an object it belongs in.
-    #[must_use]
-    pub const fn at(mut self, position: usize) -> Self {
-        self.position = Some(position);
-        self
     }
 
     /// An operation with no value: `remove`.
@@ -146,42 +150,119 @@ impl Operation {
             path: path.into(),
             from: None,
             value: None,
-            position: None,
         }
     }
 }
 
-/// A sequence of operations, applied in order.
-#[derive(Clone, PartialEq, Eq, Debug, Default)]
+/// One operation of an undo: what it does, at a pointer that names a member
+/// exactly as the file spells it (S3's `vfyq2`, fix pass 2).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Undo {
+    /// The member or element acted on, exactly.
+    pub path: String,
+    /// What is done there.
+    pub step: UndoStep,
+}
+
+/// What an [`Undo`] does.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum UndoStep {
+    /// Put back, at slot `at` of the object or array, the member or element
+    /// `written` writes, exactly as it was written.
+    Put {
+        /// The member or element, as written ([`Fragment::written`]).
+        written: String,
+        /// Its slot.
+        at: usize,
+    },
+    /// Take out what the forward operation put in.
+    Take,
+    /// Put back the value `written` writes, its inner trivia included
+    /// ([`Node::written`]).
+    Swap {
+        /// The value, as written.
+        written: String,
+    },
+}
+
+/// A sequence of operations, applied in order: all forward, or all undo.
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Patch {
-    operations: Vec<Operation>,
+    steps: Steps,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+enum Steps {
+    Forward(Vec<Operation>),
+    Undo(Vec<Undo>),
+}
+
+impl Default for Patch {
+    fn default() -> Self {
+        Self::new(Vec::new())
+    }
 }
 
 impl Patch {
-    /// A patch from its operations.
+    /// A forward patch from its operations.
     #[must_use]
     pub const fn new(operations: Vec<Operation>) -> Self {
-        Self { operations }
+        Self {
+            steps: Steps::Forward(operations),
+        }
     }
 
-    /// The operations, in order.
+    /// An undo patch from its operations.
+    #[must_use]
+    pub const fn undo(steps: Vec<Undo>) -> Self {
+        Self {
+            steps: Steps::Undo(steps),
+        }
+    }
+
+    /// The forward operations, in order; none for an undo.
     #[must_use]
     pub fn operations(&self) -> &[Operation] {
-        &self.operations
+        match &self.steps {
+            Steps::Forward(operations) => operations,
+            Steps::Undo(_) => &[],
+        }
+    }
+
+    /// The undo operations, in order; none for a forward patch.
+    #[must_use]
+    pub fn undos(&self) -> &[Undo] {
+        match &self.steps {
+            Steps::Forward(_) => &[],
+            Steps::Undo(undos) => undos,
+        }
+    }
+
+    /// How many operations there are.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        match &self.steps {
+            Steps::Forward(operations) => operations.len(),
+            Steps::Undo(undos) => undos.len(),
+        }
     }
 
     /// True when there is nothing to do.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.operations.is_empty()
+        self.len() == 0
     }
 
-    /// Reads a patch from its RFC 6902 JSON text.
+    /// Reads a patch from its JSON text: RFC 6902, or an undo this module
+    /// wrote (the module docs).
     ///
     /// # Errors
     ///
     /// When the text is not a JSON array of operation objects, when an `op` is
-    /// not one of the six, or when a required member is missing.
+    /// not one of the six, when a required member is missing, when an
+    /// operation carries a member it does not have, when an undo is
+    /// malformed, when forward and undo operations are mixed, and when a
+    /// pointer is not one ([`split_pointer`]).
     pub fn from_text(text: &str) -> Result<Self, Error> {
         Self::from_json(&read(text)?)
     }
@@ -195,21 +276,48 @@ impl Patch {
         let Json::Array(items) = value else {
             return Err(Error::at("", "a JSON Patch is an array of operations"));
         };
-        let mut operations = Vec::with_capacity(items.len());
+        if items.len() > MAX_PATCH_OPERATIONS {
+            return Err(too_many(items.len()));
+        }
+        let mut forward: Vec<Operation> = Vec::new();
+        let mut undo: Vec<Undo> = Vec::new();
         for (index, item) in items.iter().enumerate() {
             let at = format!("/{index}");
+            let Json::Object(members) = item else {
+                return Err(Error::at(at, "an operation is an object"));
+            };
             let name = match item.get("op") {
                 Some(Json::String(name)) => name.clone(),
                 _ => return Err(Error::at(at, "an operation needs a string `op`")),
             };
-            let op = Op::from_name(&name)
-                .ok_or_else(|| Error::at(&at, format!("`{name}` is not an RFC 6902 operation")))?;
+            let op = Op::from_name(&name).ok_or_else(|| {
+                Error::at(
+                    &at,
+                    format!(
+                        "`{}` is not an RFC 6902 operation",
+                        pharmakos_proto::json::grammar::quoted(&name)
+                    ),
+                )
+            })?;
             let path = match item.get("path") {
                 Some(Json::String(path)) => path.clone(),
                 _ => return Err(Error::at(at, "an operation needs a string `path`")),
             };
+            split_pointer(&path).map_err(|error| at_operation(error, &at))?;
+            if let Some(written) = item.get("undo") {
+                only_members(members, &["op", "path", "undo"], &at)?;
+                undo.push(Undo {
+                    path,
+                    step: read_undo(op, written, &at)?,
+                });
+                continue;
+            }
+            only_members(members, op.members(), &at)?;
             let from = match item.get("from") {
-                Some(Json::String(from)) => Some(from.clone()),
+                Some(Json::String(from)) => {
+                    split_pointer(from).map_err(|error| at_operation(error, &at))?;
+                    Some(from.clone())
+                }
                 Some(_) => return Err(Error::at(at, "`from` is a string")),
                 None => None,
             };
@@ -220,50 +328,164 @@ impl Patch {
             if matches!(op, Op::Add | Op::Replace | Op::Test) && value.is_none() {
                 return Err(Error::at(at, "`add`, `replace` and `test` need a `value`"));
             }
-            operations.push(Operation {
+            forward.push(Operation {
                 op,
                 path,
                 from,
                 value,
-                position: None,
             });
         }
-        Ok(Self { operations })
+        match (forward.is_empty(), undo.is_empty()) {
+            (_, true) => Ok(Self::new(forward)),
+            (true, false) => Ok(Self::undo(undo)),
+            (false, false) => Err(Error::malformed(
+                Malformed::MixedUndo,
+                "",
+                "a patch is forward operations or the undo of one patch, never both",
+            )),
+        }
     }
 
-    /// The patch as a JSON value: plain RFC 6902, so any fragment's trivia is
-    /// flattened away.
+    /// The patch as a JSON value: RFC 6902 for a forward patch, and the undo
+    /// form of the module docs for an undo.
     #[must_use]
     pub fn to_json(&self) -> Json {
-        Json::Array(
-            self.operations
-                .iter()
-                .map(|operation| {
-                    let mut entries = vec![
-                        (
-                            "op".to_owned(),
-                            Json::String(operation.op.name().to_owned()),
-                        ),
-                        ("path".to_owned(), Json::String(operation.path.clone())),
-                    ];
-                    if let Some(from) = operation.from.as_ref() {
-                        entries.push(("from".to_owned(), Json::String(from.clone())));
-                    }
-                    if let Some(value) = operation.value.as_ref() {
-                        entries.push(("value".to_owned(), value.to_json()));
-                    }
-                    Json::Object(entries)
-                })
-                .collect(),
-        )
+        match &self.steps {
+            Steps::Forward(operations) => Json::Array(
+                operations
+                    .iter()
+                    .map(|operation| {
+                        let mut entries = vec![
+                            (
+                                "op".to_owned(),
+                                Json::String(operation.op.name().to_owned()),
+                            ),
+                            ("path".to_owned(), Json::String(operation.path.clone())),
+                        ];
+                        if let Some(from) = operation.from.as_ref() {
+                            entries.push(("from".to_owned(), Json::String(from.clone())));
+                        }
+                        if let Some(value) = operation.value.as_ref() {
+                            entries.push(("value".to_owned(), value.to_json()));
+                        }
+                        Json::Object(entries)
+                    })
+                    .collect(),
+            ),
+            Steps::Undo(undos) => Json::Array(undos.iter().map(undo_json).collect()),
+        }
     }
 
-    /// The patch as RFC 6902 text, which is what the gateway exchanges.
-    ///
-    /// Comments in a fragment do not survive this: see the module docs.
+    /// The patch as text, which is what the gateway exchanges.
     #[must_use]
     pub fn to_text(&self) -> String {
         write(&self.to_json())
+    }
+}
+
+/// One undo, as the wire writes it.
+fn undo_json(undo: &Undo) -> Json {
+    let (op, written) = match &undo.step {
+        UndoStep::Put { written, at } => (
+            Op::Add,
+            vec![
+                ("at".to_owned(), Json::Number(at.to_string())),
+                ("jsonc".to_owned(), Json::String(written.clone())),
+            ],
+        ),
+        UndoStep::Take => (Op::Remove, Vec::new()),
+        UndoStep::Swap { written } => (
+            Op::Replace,
+            vec![("jsonc".to_owned(), Json::String(written.clone()))],
+        ),
+    };
+    Json::Object(vec![
+        ("op".to_owned(), Json::String(op.name().to_owned())),
+        ("path".to_owned(), Json::String(undo.path.clone())),
+        ("undo".to_owned(), Json::Object(written)),
+    ])
+}
+
+/// An undo's step, read strictly from its `undo` member.
+fn read_undo(op: Op, written: &Json, at: &str) -> Result<UndoStep, Error> {
+    let Json::Object(members) = written else {
+        return Err(Error::malformed(
+            Malformed::UndoText,
+            at,
+            "an operation's `undo` is an object",
+        ));
+    };
+    let text = || match written.get("jsonc") {
+        Some(Json::String(text)) => Ok(text.clone()),
+        _ => Err(Error::malformed(
+            Malformed::UndoText,
+            at,
+            "an undo that puts something back carries it as `jsonc` text",
+        )),
+    };
+    match op {
+        Op::Add => {
+            only_members(members, &["at", "jsonc"], at)?;
+            let bad_slot = || {
+                Error::malformed(
+                    Malformed::UndoText,
+                    at,
+                    "an undo's `at` is the slot it puts back into, a whole number",
+                )
+            };
+            let slot = match written.get("at") {
+                Some(Json::Number(lexeme)) => lexeme.parse::<usize>().map_err(|_| bad_slot()),
+                _ => Err(bad_slot()),
+            }?;
+            Ok(UndoStep::Put {
+                written: text()?,
+                at: slot,
+            })
+        }
+        Op::Remove => {
+            only_members(members, &[], at)?;
+            Ok(UndoStep::Take)
+        }
+        Op::Replace => {
+            only_members(members, &["jsonc"], at)?;
+            Ok(UndoStep::Swap { written: text()? })
+        }
+        Op::Move | Op::Copy | Op::Test => Err(Error::malformed(
+            Malformed::UndoText,
+            at,
+            "an undo puts back (`add`), takes out (`remove`) or swaps back (`replace`)",
+        )),
+    }
+}
+
+/// Refuses any member of an operation, or of its `undo`, not in `allowed`.
+fn only_members(members: &[(String, Json)], allowed: &[&str], at: &str) -> Result<(), Error> {
+    match members
+        .iter()
+        .find(|(key, _)| !allowed.contains(&key.as_str()))
+    {
+        None => Ok(()),
+        Some((key, _)) => Err(Error::malformed(
+            Malformed::UnknownMember,
+            at,
+            format!(
+                "`{}` is not a member of this operation; it has {}",
+                pharmakos_proto::json::grammar::quoted(key),
+                allowed
+                    .iter()
+                    .map(|name| format!("`{name}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        )),
+    }
+}
+
+/// A pointer's refusal, placed at the operation that carried it.
+fn at_operation(error: Error, at: &str) -> Error {
+    Error {
+        pointer: at.to_owned(),
+        ..error
     }
 }
 
@@ -277,59 +499,49 @@ impl Patch {
 /// operation is applied ([`crate::error::Bound::Operations`]).
 pub const MAX_PATCH_OPERATIONS: usize = 64;
 
+fn too_many(found: usize) -> Error {
+    Error::bounded(
+        Bound::Operations,
+        "",
+        format!(
+            "this patch carries {found} operations, and a patch carries at most \
+             {MAX_PATCH_OPERATIONS}"
+        ),
+    )
+}
+
 /// Applies a patch to a document and returns the patch that undoes it.
 ///
-/// The inverse is the reverse-ordered inverse of each operation, so applying
-/// it puts the file back exactly — comments, spacing and member order
-/// included.
+/// The inverse of a forward patch is an undo ([`Undo`]), the reverse-ordered
+/// undo of each operation, so applying it puts the file back exactly —
+/// comments, spacing, key spelling and member order included. The inverse of
+/// an undo is again an undo.
 ///
 /// # Errors
 ///
 /// When a path does not resolve, when `test` does not hold, or when an
-/// operation asks for something the document's shape cannot do. And when the
-/// patched file would write one playbook field under both its names, its
-/// `.proto` name and its camelCase JSON name, in one object where the file
-/// did not ([`WrittenTwice`]; S3's `gwu`, fix pass 1): the decoder refuses
-/// such a file, so a patch that made one would hand back a file that no
-/// longer decodes. An edit at a `snake_case` pointer in a file that writes the
-/// member in its camelCase name is the common way to get there.
+/// operation asks for something the document's shape cannot do; at the
+/// bounds ([`Bound`]); and when a forward patch would write one playbook
+/// field under both its names, its `.proto` name and its camelCase JSON name,
+/// in one object where the file did not ([`WrittenTwice`]; S3's `gwu`, fix
+/// pass 1): the decoder refuses such a file, so a patch that made one would
+/// hand back a file that no longer decodes.
 pub fn apply(document: &Document, patch: &Patch) -> Result<(Document, Patch), Error> {
-    if patch.operations().len() > MAX_PATCH_OPERATIONS {
-        return Err(Error::bounded(
-            Bound::Operations,
-            "",
-            format!(
-                "this patch carries {} operations, and a patch carries at most \
-                 {MAX_PATCH_OPERATIONS}",
-                patch.operations().len()
-            ),
-        ));
+    if patch.len() > MAX_PATCH_OPERATIONS {
+        return Err(too_many(patch.len()));
     }
     let mut working = document.clone();
-    let mut inverse: Vec<Operation> = Vec::new();
+    let mut inverse: Vec<Undo> = Vec::new();
     let mut inverse_chars: usize = 0;
-    for operation in patch.operations() {
-        // A `copy` doubles what it copies: refused before it copies anything
-        // that would take the document past the cap.
-        if operation.op == Op::Copy {
-            let from = as_the_file_spells(&working, from_of(operation)?)?;
-            let copied = resolve(&working, &from)?.measure().chars;
-            let now = working.measure().chars;
-            if now.saturating_add(copied) > MAX_PLAYBOOK_CHARS {
-                return Err(too_long(&operation.path));
-            }
-        }
-        // The last operation is undone first, so each operation's undo goes in
-        // front of everything accumulated so far.
-        let mut next = one(&mut working, operation)?;
+    let mut budget = |working: &Document, path: &str, next: &[Undo]| -> Result<(), Error> {
         let size = working.measure();
         if size.chars > MAX_PLAYBOOK_CHARS {
-            return Err(too_long(&operation.path));
+            return Err(too_long(path));
         }
         if !may_nest(size.depth) {
             return Err(Error::bounded(
                 Bound::Depth,
-                operation.path.clone(),
+                path,
                 format!(
                     "this patch would nest a value inside {} containers, past the {MAX_DEPTH} \
                      a playbook may hold",
@@ -337,33 +549,70 @@ pub fn apply(document: &Document, patch: &Patch) -> Result<(Document, Patch), Er
                 ),
             ));
         }
-        for undo in &next {
+        for undo in next {
             inverse_chars = inverse_chars.saturating_add(undo.path.chars().count());
-            if let Some(value) = &undo.value {
-                inverse_chars = inverse_chars.saturating_add(value.node().measure().chars);
+            if let UndoStep::Put { written, .. } | UndoStep::Swap { written } = &undo.step {
+                inverse_chars = inverse_chars.saturating_add(written.chars().count());
             }
         }
         if inverse_chars > MAX_PLAYBOOK_CHARS {
             return Err(Error::bounded(
                 Bound::Inverse,
-                operation.path.clone(),
+                path,
                 format!(
                     "the patch that undoes this one would run past the playbook's \
                      {MAX_PLAYBOOK_CHARS} characters"
                 ),
             ));
         }
-        next.append(&mut inverse);
-        inverse = next;
+        Ok(())
+    };
+    match &patch.steps {
+        Steps::Undo(undos) => {
+            for undo in undos {
+                let mut next = vec![exact(&mut working, undo)?];
+                budget(&working, &undo.path, &next)?;
+                next.append(&mut inverse);
+                inverse = next;
+            }
+            Ok((working, Patch::undo(inverse)))
+        }
+        Steps::Forward(operations) => {
+            for operation in operations {
+                // A `copy` doubles what it copies: refused before it copies
+                // anything that would take the document past the cap.
+                if operation.op == Op::Copy {
+                    let from = as_the_file_spells(&working, from_of(operation)?)?;
+                    let copied = resolve(&working, &from)?.measure().chars;
+                    let now = working.measure().chars;
+                    if now.saturating_add(copied) > MAX_PLAYBOOK_CHARS {
+                        return Err(too_long(&operation.path));
+                    }
+                }
+                // The last operation is undone first, so each operation's undo
+                // goes in front of everything accumulated so far.
+                let mut next = one(&mut working, operation)?;
+                budget(&working, &operation.path, &next)?;
+                next.append(&mut inverse);
+                inverse = next;
+            }
+            refuse_written_twice(document, &working)?;
+            Ok((working, Patch::undo(inverse)))
+        }
     }
+}
+
+/// Refuses a forward patch whose result writes a field under both its names
+/// in more objects than the original did.
+fn refuse_written_twice(original: &Document, working: &Document) -> Result<(), Error> {
     // One walk for almost every patch: the original is read only when the
     // patched file names a field twice somewhere (S3's `gwu`, fix pass 2: two
     // walks cost every `patch_plan` about 60% more at the text cap).
     let after = written_twice(&working.to_json());
     if after.is_empty() {
-        return Ok((working, Patch::new(inverse)));
+        return Ok(());
     }
-    let original = document.to_json();
+    let original = original.to_json();
     let before = written_twice(&original);
     // What is new is told by the field and its two spellings, and by how many
     // objects write them so, never by an object's pointer, which a patch that
@@ -378,33 +627,33 @@ pub fn apply(document: &Document, patch: &Patch) -> Result<(Document, Patch), Er
         let then = before.iter().filter(|other| same(found, other)).count();
         now > then
     });
-    if let Some(twice) = new {
-        // The file already wrote the first spelling where the patch put the
-        // second; otherwise the patch brought both.
-        let already = matches!(
-            json_at(&original, &twice.pointer),
-            Some(Json::Object(members))
-                if members.iter().any(|(key, _)| *key == twice.written)
-                    && !members.iter().any(|(key, _)| *key == twice.added)
-        );
-        let advice = if already {
-            format!(
-                "edit the member the file already writes, `{}`",
-                twice.written
-            )
-        } else {
-            String::from("the patch itself writes both; write the field once")
-        };
-        return Err(Error::at(
-            twice.pointer.clone(),
-            format!(
-                "this patch would write the field `{}` twice in one object, as `{}` and as \
-                 `{}`, and a playbook writes each field once, under one of its names; {advice}",
-                twice.field, twice.written, twice.added
-            ),
-        ));
-    }
-    Ok((working, Patch::new(inverse)))
+    let Some(twice) = new else {
+        return Ok(());
+    };
+    // The file already wrote the first spelling where the patch put the
+    // second; otherwise the patch brought both.
+    let already = matches!(
+        json_at(&original, &twice.pointer),
+        Some(Json::Object(members))
+            if members.iter().any(|(key, _)| *key == twice.written)
+                && !members.iter().any(|(key, _)| *key == twice.added)
+    );
+    let advice = if already {
+        format!(
+            "edit the member the file already writes, `{}`",
+            twice.written
+        )
+    } else {
+        String::from("the patch itself writes both; write the field once")
+    };
+    Err(Error::at(
+        twice.pointer.clone(),
+        format!(
+            "this patch would write the field `{}` twice in one object, as `{}` and as \
+             `{}`, and a playbook writes each field once, under one of its names; {advice}",
+            twice.field, twice.written, twice.added
+        ),
+    ))
 }
 
 /// The refusal of a patch that would take the document past the playbook's
@@ -515,12 +764,12 @@ fn walk_twice(value: &Json, message: &str, pointer: &str, found: &mut Vec<Writte
     }
 }
 
-/// Applies a patch given as RFC 6902 text and returns the patched file and the
+/// Applies a patch given as text and returns the patched file and the
 /// inverse patch's text.
 ///
 /// This is `patch_plan` (spec section 12): the file comes back with its
 /// comments and formatting, and the inverse comes back as text for the undo
-/// stack.
+/// stack, which gives the file back byte for byte (the module docs).
 ///
 /// # Errors
 ///
@@ -545,7 +794,12 @@ pub fn patch_text(playbook_jsonc: &str, json_patch: &str) -> Result<(String, Str
 /// and stops translating where the document ends (a new member keeps the
 /// pointer's spelling). A token the object already holds under that exact
 /// spelling is left alone, so a file holding both spellings is addressed as
-/// written, and refused as written twice, as before.
+/// written. One pointer buffer, one pass (fix pass 2, item A2).
+///
+/// # Errors
+///
+/// As [`split_pointer`]; and this build's schema not declaring
+/// `gp.v1.Playbook`, which every playbook is read against.
 fn as_the_file_spells(document: &Document, pointer: &str) -> Result<String, Error> {
     /// What the walk is reading: an object of this message, an array of
     /// them, or something the schema says nothing more of.
@@ -555,12 +809,20 @@ fn as_the_file_spells(document: &Document, pointer: &str) -> Result<String, Erro
         Other,
     }
     let schema = pharmakos_proto::descriptor::schema();
-    let mut reading = match schema.message(crate::canonical::PLAYBOOK_MESSAGE) {
-        Some(message) => Reading::Message(message),
-        None => Reading::Other,
-    };
+    let playbook = schema
+        .message(crate::canonical::PLAYBOOK_MESSAGE)
+        .ok_or_else(|| {
+            Error::at(
+                "",
+                format!(
+                    "this build's schema does not declare `{}`",
+                    crate::canonical::PLAYBOOK_MESSAGE
+                ),
+            )
+        })?;
+    let mut reading = Reading::Message(playbook);
     let mut here = Some(document.root());
-    let mut spelled = String::new();
+    let mut spelled = String::with_capacity(pointer.len());
     for token in split_pointer(pointer)? {
         let mut token = token;
         let mut next = Reading::Other;
@@ -598,79 +860,151 @@ fn as_the_file_spells(document: &Document, pointer: &str) -> Result<String, Erro
             Reading::Other => {}
         }
         here = here.and_then(|node| node.child(&token));
-        spelled = push_pointer(&spelled, &token);
+        append_token(&mut spelled, &token);
         reading = next;
     }
     Ok(spelled)
 }
-/// One operation. Returns the operations that undo it, **in the order they
+
+/// Appends one escaped RFC 6901 token to a pointer, in place.
+fn append_token(pointer: &mut String, token: &str) {
+    pointer.push('/');
+    for character in token.chars() {
+        match character {
+            '~' => pointer.push_str("~0"),
+            '/' => pointer.push_str("~1"),
+            other => pointer.push(other),
+        }
+    }
+}
+
+/// One forward operation. Returns the undos that undo it, **in the order they
 /// must be applied**.
-fn one(document: &mut Document, operation: &Operation) -> Result<Vec<Operation>, Error> {
+fn one(document: &mut Document, operation: &Operation) -> Result<Vec<Undo>, Error> {
     // Each pointer addresses the member the file writes, under either of a
-    // field's names (`as_the_file_spells`).
-    let operation = &Operation {
-        path: as_the_file_spells(document, &operation.path)?,
-        from: match operation.from.as_deref() {
-            Some(from) => Some(as_the_file_spells(document, from)?),
-            None => None,
-        },
-        ..operation.clone()
+    // field's names (`as_the_file_spells`); the undos name what was acted on
+    // exactly.
+    let path = as_the_file_spells(document, &operation.path)?;
+    let from = match operation.from.as_deref() {
+        Some(from) => Some(as_the_file_spells(document, from)?),
+        None => None,
     };
     match operation.op {
         Op::Test => {
             let wanted = value_of(operation)?;
-            let found = resolve(document, &operation.path)?;
+            let found = resolve(document, &path)?;
             if found.to_json() == wanted.to_json() {
                 Ok(Vec::new())
             } else {
                 Err(Error::at(
-                    &operation.path,
+                    &path,
                     "the value here is not the one the patch tested for",
                 ))
             }
         }
         Op::Remove => {
-            let (taken, at) = take(document, &operation.path)?;
-            Ok(vec![
-                Operation::with_value(Op::Add, operation.path.clone(), taken).at(at),
-            ])
+            let (taken, at) = take(document, &path)?;
+            Ok(vec![put_back(path, &taken, at)])
         }
-        Op::Add => add(
-            document,
-            &operation.path,
-            value_of(operation)?,
-            operation.position,
-        ),
+        Op::Add => add(document, &path, value_of(operation)?),
         Op::Replace => {
             let fragment = value_of(operation)?;
-            let target = resolve_mut(document, &operation.path)?;
+            let target = resolve_mut(document, &path)?;
             let old = target.set(fragment.into_node());
-            Ok(vec![Operation::with_value(
-                Op::Replace,
-                operation.path.clone(),
-                Fragment::from_node(old),
-            )])
+            Ok(vec![Undo {
+                path,
+                step: UndoStep::Swap {
+                    written: old.written(),
+                },
+            }])
         }
         Op::Move => {
-            let from = from_of(operation)?.to_owned();
+            let from = from.ok_or_else(|| Error::at(&operation.path, "a `move` needs a `from`"))?;
+            // RFC 6902 section 4.4: a move to where it already is changes
+            // nothing, and is not a take and a put at the end.
+            if from == path {
+                resolve(document, &path)?;
+                return Ok(Vec::new());
+            }
             let (taken, at) = take(document, &from)?;
-            // The trivia goes with the member, so the undo has to carry the
-            // same fragment rather than a fresh value: otherwise moving a
-            // commented member and undoing it would lose the comment.
-            let restore = taken.clone();
-            let mut inverse = add(document, &operation.path, taken, operation.position)?;
-            inverse.push(Operation::with_value(Op::Add, from, restore).at(at));
+            // The trivia goes with the member, so the undo carries the same
+            // fragment, as written: otherwise moving a commented member and
+            // undoing it would lose the comment.
+            let restore = put_back(from, &taken, at);
+            let mut inverse = add(document, &path, taken)?;
+            inverse.push(restore);
             Ok(inverse)
         }
         Op::Copy => {
-            let from = from_of(operation)?;
-            let copied = resolve(document, from)?.clone();
-            add(
-                document,
-                &operation.path,
-                Fragment::from_node(copied),
-                operation.position,
-            )
+            let from = from.ok_or_else(|| Error::at(&operation.path, "a `copy` needs a `from`"))?;
+            let copied = resolve(document, &from)?.clone();
+            add(document, &path, Fragment::from_node(copied))
+        }
+    }
+}
+
+/// The undo that puts `taken` back at slot `at` of what `path` names.
+fn put_back(path: String, taken: &Fragment, at: usize) -> Undo {
+    Undo {
+        path,
+        step: UndoStep::Put {
+            written: taken.written(),
+            at,
+        },
+    }
+}
+
+/// One undo, applied exactly: its pointer names the member as the file
+/// spells it, and nothing is translated. Returns the undo that undoes it.
+fn exact(document: &mut Document, undo: &Undo) -> Result<Undo, Error> {
+    let path = undo.path.clone();
+    match &undo.step {
+        UndoStep::Take => {
+            let (taken, at) = take(document, &path)?;
+            Ok(put_back(path, &taken, at))
+        }
+        UndoStep::Swap { written } => {
+            let node = Node::from_written(written).map_err(|error| at_operation(error, &path))?;
+            let target = resolve_mut(document, &path)?;
+            let old = target.set(node);
+            Ok(Undo {
+                path,
+                step: UndoStep::Swap {
+                    written: old.written(),
+                },
+            })
+        }
+        UndoStep::Put { written, at } => {
+            let (parent, last) = parent_of(&path)?;
+            let (is_array, len) = shape(document, parent)?;
+            if *at > len {
+                return Err(Error::at(
+                    &path,
+                    format!("this undo puts back at slot {at}, past the {len} there are"),
+                ));
+            }
+            let container = resolve_mut(document, parent)?;
+            if is_array {
+                let fragment = Fragment::item_from_written(written)
+                    .map_err(|error| at_operation(error, &path))?;
+                container
+                    .put_item(*at, fragment)
+                    .map_err(|error| at_operation(error, &path))?;
+                Ok(Undo {
+                    path: push_pointer(parent, &at.to_string()),
+                    step: UndoStep::Take,
+                })
+            } else {
+                let fragment = Fragment::member_from_written(written, &last)
+                    .map_err(|error| at_operation(error, &path))?;
+                container
+                    .put_member(&last, fragment, *at)
+                    .map_err(|error| at_operation(error, &path))?;
+                Ok(Undo {
+                    path,
+                    step: UndoStep::Take,
+                })
+            }
         }
     }
 }
@@ -687,18 +1021,6 @@ fn from_of(operation: &Operation) -> Result<&str, Error> {
         .from
         .as_deref()
         .ok_or_else(|| Error::at(&operation.path, "this operation needs a `from`"))
-}
-
-/// Splits a pointer into the parent's pointer and the last token.
-fn parent_of(pointer: &str) -> Result<(String, String), Error> {
-    let mut tokens = split_pointer(pointer)?;
-    let last = tokens
-        .pop()
-        .ok_or_else(|| Error::at(pointer, "the document root cannot be added or removed"))?;
-    let parent = tokens
-        .iter()
-        .fold(String::new(), |acc, token| push_pointer(&acc, token));
-    Ok((parent, last))
 }
 
 fn resolve<'a>(document: &'a Document, pointer: &str) -> Result<&'a Node, Error> {
@@ -737,9 +1059,9 @@ fn shape(document: &Document, pointer: &str) -> Result<(bool, usize), Error> {
 /// which slot it came out of so that an undo can put it back there.
 fn take(document: &mut Document, pointer: &str) -> Result<(Fragment, usize), Error> {
     let (parent, last) = parent_of(pointer)?;
-    let (is_array, len) = shape(document, &parent)?;
+    let (is_array, len) = shape(document, parent)?;
     let nothing = || Error::at(pointer, "there is nothing at that path");
-    let container = resolve_mut(document, &parent)?;
+    let container = resolve_mut(document, parent)?;
     if is_array {
         let index =
             array_index(&last, len, false).map_err(|message| Error::at(pointer, message))?;
@@ -753,44 +1075,43 @@ fn take(document: &mut Document, pointer: &str) -> Result<(Fragment, usize), Err
 /// Adds at `pointer`.
 ///
 /// RFC 6902: on an object member that already exists this **replaces** it, so
-/// the inverse is a `replace` carrying the old fragment rather than a
-/// `remove`. On an array it inserts, and `-` means "after the last element".
-fn add(
-    document: &mut Document,
-    pointer: &str,
-    fragment: Fragment,
-    position: Option<usize>,
-) -> Result<Vec<Operation>, Error> {
+/// the undo swaps the old value back rather than taking the member out. On an
+/// array it inserts, and `-` means "after the last element". A new member
+/// goes at the end of its object.
+fn add(document: &mut Document, pointer: &str, fragment: Fragment) -> Result<Vec<Undo>, Error> {
     let (parent, last) = parent_of(pointer)?;
-    let (is_array, len) = shape(document, &parent)?;
+    let (is_array, len) = shape(document, parent)?;
     if is_array {
         let index = array_index(&last, len, true).map_err(|message| Error::at(pointer, message))?;
-        let container = resolve_mut(document, &parent)?;
+        let container = resolve_mut(document, parent)?;
         container.put_item(index, fragment)?;
-        let settled = push_pointer(&parent, &index.to_string());
-        return Ok(vec![Operation::plain(Op::Remove, settled)]);
+        return Ok(vec![Undo {
+            path: push_pointer(parent, &index.to_string()),
+            step: UndoStep::Take,
+        }]);
     }
-    if resolve(document, &parent)?.position_of(&last).is_some() {
+    if resolve(document, parent)?.position_of(&last).is_some() {
         // RFC 6902 section 4.1 makes `add` over an existing member a replace,
         // so take the replace route rather than take-then-put: taking the
         // member out carries its `before` comment, its spacing and its key
         // spelling away with it, and the incoming fragment — which came off
         // the wire with no trivia at all — would be written in their place.
-        // The file's bytes would change around an edit that only changed a
-        // value, and the inverse would not put them back. `set` swaps the
-        // value inside the member and leaves the member alone.
+        // `set` swaps the value inside the member and leaves the member alone.
         let target = resolve_mut(document, pointer)?;
         let old = target.set(fragment.into_node());
-        return Ok(vec![Operation::with_value(
-            Op::Replace,
-            pointer.to_owned(),
-            Fragment::from_node(old),
-        )]);
+        return Ok(vec![Undo {
+            path: pointer.to_owned(),
+            step: UndoStep::Swap {
+                written: old.written(),
+            },
+        }]);
     }
-    let at = position.unwrap_or(len).min(len);
-    let container = resolve_mut(document, &parent)?;
-    container.put_member(&last, fragment, at)?;
-    Ok(vec![Operation::plain(Op::Remove, pointer.to_owned())])
+    let container = resolve_mut(document, parent)?;
+    container.put_member(&last, fragment, len)?;
+    Ok(vec![Undo {
+        path: pointer.to_owned(),
+        step: UndoStep::Take,
+    }])
 }
 
 /// An RFC 6902 array index. `-` means "one past the end", and only `add`

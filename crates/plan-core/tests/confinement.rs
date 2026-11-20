@@ -373,13 +373,6 @@ const KEPT_FALLBACKS: &[(&str, &str, usize, &str)] = &[
          and a note with no first line has no blurb",
     ),
     (
-        "patch.rs",
-        "position.unwrap_or(len).min(len)",
-        1,
-        "no remembered position means a new member, which goes last; a remembered one past the \
-         end goes last as well, which is where the member it followed now ends",
-    ),
-    (
         "render.rs",
         ".unwrap_or(s::UNTITLED);",
         1,
