@@ -2708,3 +2708,279 @@ fn input_new_refuses_bytes_past_the_canonical_backstop() {
     // And the growth it measures is within the declared factor.
     assert!(canonical.len() <= text.len().saturating_mul(CANONICAL_GROWTH));
 }
+
+// ---------------------------------------------------------------------------
+// One quoting door, by type (S3's `vfyq2`, fix pass 2, item B)
+// ---------------------------------------------------------------------------
+
+/// How a code's text can carry player text.
+enum Carries {
+    /// It can: the case that raises it, and the string in that case the
+    /// player wrote and the message quotes. The test writes hostile text in
+    /// that string's place.
+    Player(&'static str, &'static str),
+    /// A text the test writes whole, its `{H}` the hostile text.
+    Written(&'static str),
+    /// It cannot: its arguments are numbers, words of the string table, or
+    /// names that must resolve in the seat's view (a beacon, a feature, a
+    /// blueprint the rules price), which hostile text cannot be.
+    Engine,
+}
+
+/// Every code of the catalogue, classed. A code the catalogue adds that is
+/// not here fails `every_code_quotes_the_player_text_it_carries`.
+const CARRIES: &[(&str, Carries)] = &[
+    (
+        "E0001",
+        Carries::Written(
+            r#"{"schema_version":{"major":1},"meta":{"title":"t","author_kind":{H}},"declarative":{"route":[{"label":"a","hold":{"ms":1000}}]},"on_death":{"on_respawn":"CONTINUE"},"fallback":{"hold":{"at":{"beacon_anchor":{"safest":{}}}}},"kind":"PLAYBOOK"}"#,
+        ),
+    ),
+    (
+        "E0002",
+        Carries::Written(
+            r#"{"schema_version":{"major":1},"meta":{"title":"t","author_kind":"HUMAN"},"declarative":{"route":[{"label":"a","hold":{"ms":1000}}]},"on_death":{"on_respawn":"CONTINUE"},"fallback":{"hold":{"at":{"beacon_anchor":{"safest":{}}}}},"kind":"PLAYBOOK",{H}:1}"#,
+        ),
+    ),
+    ("E0003", Carries::Engine),
+    ("E0004", Carries::Engine),
+    ("E0005", Carries::Engine),
+    ("E0006", Carries::Engine),
+    ("E0007", Carries::Engine),
+    ("E0008", Carries::Engine),
+    ("E0009", Carries::Engine),
+    (
+        "E0010",
+        Carries::Player("e0010_a_blueprint_other_than_the_generator", "relay_pylon"),
+    ),
+    ("E0011", Carries::Engine),
+    ("E0012", Carries::Engine),
+    ("E0013", Carries::Engine),
+    ("E0014", Carries::Engine),
+    ("E0015", Carries::Engine),
+    ("E0016", Carries::Engine),
+    ("E0017", Carries::Engine),
+    ("E0018", Carries::Engine),
+    ("E0019", Carries::Engine),
+    ("E0020", Carries::Engine),
+    ("E0021", Carries::Engine),
+    ("E0022", Carries::Engine),
+    ("E0023", Carries::Engine),
+    ("E0024", Carries::Engine),
+    ("E0025", Carries::Engine),
+    ("E0026", Carries::Engine),
+    ("E0027", Carries::Engine),
+    ("E0028", Carries::Engine),
+    ("E0029", Carries::Engine),
+    ("E0101", Carries::Engine),
+    ("E0102", Carries::Engine),
+    ("E0103", Carries::Engine),
+    ("E0104", Carries::Engine),
+    ("E0105", Carries::Player("e0105_duplicate_label", "s1")),
+    ("E0106", Carries::Engine),
+    ("E0107", Carries::Engine),
+    ("E0108", Carries::Engine),
+    ("E0109", Carries::Engine),
+    ("E0110", Carries::Engine),
+    ("E0111", Carries::Engine),
+    ("E0112", Carries::Engine),
+    ("E0113", Carries::Engine),
+    ("E0201", Carries::Engine),
+    ("E0202", Carries::Engine),
+    ("E0203", Carries::Engine),
+    ("E0204", Carries::Engine),
+    ("E0205", Carries::Engine),
+    ("E0206", Carries::Engine),
+    (
+        "E0207",
+        Carries::Player("e0207_unknown_handler_id", "nobody"),
+    ),
+    (
+        "E0208",
+        Carries::Player("e0208_unknown_step_label", "nowhere"),
+    ),
+    ("E0209", Carries::Engine),
+    ("E0210", Carries::Engine),
+    ("E0301", Carries::Player("e0301_jump_not_forward", "s1")),
+    ("E0302", Carries::Engine),
+    ("E0303", Carries::Engine),
+    ("E0304", Carries::Engine),
+    (
+        "E0305",
+        Carries::Player("e0305_unknown_jump_label", "nowhere"),
+    ),
+    ("E0401", Carries::Player("e0401_unknown_beacon_id", "b_99")),
+    ("E0402", Carries::Engine),
+    ("E0403", Carries::Engine),
+    ("E0404", Carries::Engine),
+    ("E0405", Carries::Engine),
+    ("E0406", Carries::Engine),
+    ("E0407", Carries::Engine),
+    ("E0408", Carries::Engine),
+    ("E0409", Carries::Engine),
+    ("E0410", Carries::Engine),
+    ("E0411", Carries::Engine),
+    (
+        "E0412",
+        Carries::Player("e0412_unknown_feature", "vent_1_1"),
+    ),
+    ("E0413", Carries::Engine),
+    ("E0414", Carries::Engine),
+    ("E0415", Carries::Engine),
+    ("E0416", Carries::Engine),
+    ("E0417", Carries::Engine),
+    ("E0418", Carries::Engine),
+    ("E0419", Carries::Engine),
+    ("E0420", Carries::Engine),
+    ("E0421", Carries::Engine),
+    ("E0501", Carries::Engine),
+    ("E0502", Carries::Engine),
+    ("E0503", Carries::Engine),
+    ("E0504", Carries::Engine),
+    ("E0505", Carries::Engine),
+    (
+        "E0506",
+        Carries::Player("e0506_a_predicate_naming_no_blueprint", "death_ray"),
+    ),
+    ("E0507", Carries::Engine),
+    ("E0508", Carries::Engine),
+    (
+        "E0509",
+        Carries::Player("e0509_a_box_on_a_target_that_is_not_a_wall", "generator"),
+    ),
+    ("E0510", Carries::Engine),
+    ("E0511", Carries::Engine),
+    ("E0512", Carries::Engine),
+    ("E0513", Carries::Engine),
+    ("E0514", Carries::Engine),
+    ("W0501", Carries::Engine),
+    (
+        "W0502",
+        Carries::Written(
+            r#"{"schema_version":{"major":1},"meta":{"title":"case","author_kind":"HUMAN"},"kind":"PLAYBOOK","declarative":{"route":[{"label":"s1","place_beacon":{"at":{"voxel":{"x":96,"y":11,"z":62}},"initial":{"mandate":{"roe":"RETURN_FIRE","defend":{"engagement_radius_pct":50,"pursue":"SPHERE_EDGE","protect":[{"beacon":{"beacon_id":{H}}},{"beacon":{"beacon_id":{H}}}]}}}}}]},"on_death":{"on_respawn":"CONTINUE","max_deaths_before_fallback":1},"fallback":{"hold":{"at":{"beacon_anchor":{"safest":{}}}}}}"#,
+        ),
+    ),
+    ("E0601", Carries::Engine),
+    ("E0602", Carries::Engine),
+    ("E0603", Carries::Engine),
+    ("W0601", Carries::Engine),
+    ("W0602", Carries::Engine),
+    ("W0603", Carries::Engine),
+    ("W0604", Carries::Engine),
+    ("W0701", Carries::Engine),
+    (
+        "W0702",
+        Carries::Player("w0702_a_rule_an_earlier_rule_always_wins", "flee"),
+    ),
+    ("W0703", Carries::Engine),
+    ("W0704", Carries::Engine),
+    ("W0705", Carries::Engine),
+    ("W0706", Carries::Engine),
+    ("W0707", Carries::Engine),
+    ("W0708", Carries::Engine),
+    ("W0709", Carries::Engine),
+    ("I0001", Carries::Engine),
+    ("I0002", Carries::Engine),
+    ("I0003", Carries::Engine),
+    ("I0004", Carries::Engine),
+    ("I0005", Carries::Engine),
+    ("I0006", Carries::Engine),
+    ("I0007", Carries::Engine),
+];
+
+/// ESC, BEL, U+202E RIGHT-TO-LEFT OVERRIDE and 200,000 more characters.
+fn hostile() -> String {
+    format!("\u{1b}]0;x\u{7}\u{202e}{}", "y".repeat(200_000))
+}
+
+/// What a diagnostic shows a player: its message and every Fix title.
+fn shown(diagnostic: &pharmakos_proto::gp::api::v1::Diagnostic) -> Vec<String> {
+    let mut found = vec![diagnostic.message.clone()];
+    found.extend(diagnostic.suggestions.iter().map(|fix| fix.title.clone()));
+    found
+}
+
+#[test]
+fn every_code_quotes_the_player_text_it_carries() {
+    let classed: Vec<&str> = CARRIES.iter().map(|(code, _)| *code).collect();
+    let catalogued: Vec<&str> = CATALOGUE.iter().map(|entry| entry.code).collect();
+    assert_eq!(
+        classed, catalogued,
+        "every code of the catalogue is classed here, in its order"
+    );
+    let hostile = hostile();
+    let quoted_hostile = json::write(&json::Json::String(hostile.clone()))
+        .trim_end()
+        .to_owned();
+    let rules = rules();
+    let mut failures = Vec::new();
+    for (code, carries) in CARRIES {
+        let (case, text) = match carries {
+            Carries::Engine => continue,
+            Carries::Written(template) => ("", template.replace("{H}", &quoted_hostile)),
+            Carries::Player(case, written) => {
+                let text = String::from_utf8(case_bytes(case)).expect("a UTF-8 case");
+                let from = json::write(&json::Json::String((*written).to_owned()))
+                    .trim_end()
+                    .to_owned();
+                assert!(text.contains(&from), "{code}: {case} writes {from}");
+                (*case, text.replace(&from, &quoted_hostile))
+            }
+        };
+        let scope = scope_for(case);
+        let snapshot = snapshot_for(case);
+        let input = Input::new(text.as_bytes(), &snapshot, &scope, &rules)
+            .unwrap_or_else(|error| panic!("{code}: the input: {error}"));
+        let report = verify(&input, Depth::Full);
+        let raised: Vec<_> = report
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.code == *code)
+            .collect();
+        if raised.is_empty() {
+            failures.push(format!(
+                "{code}: not raised with hostile text; raised {:?}",
+                report
+                    .diagnostics
+                    .iter()
+                    .map(|diagnostic| diagnostic.code.as_str())
+                    .collect::<Vec<_>>()
+            ));
+            continue;
+        }
+        for diagnostic in &report.diagnostics {
+            for text in shown(diagnostic) {
+                let raw = text.chars().find(|character| {
+                    character.is_control()
+                        || ('\u{202a}'..='\u{202e}').contains(character)
+                        || ('\u{2066}'..='\u{2069}').contains(character)
+                });
+                if let Some(raw) = raw {
+                    failures.push(format!("{code}: {} shows {raw:?} raw", diagnostic.code));
+                }
+                if text.chars().count() > 600 {
+                    failures.push(format!(
+                        "{code}: {} shows {} characters",
+                        diagnostic.code,
+                        text.chars().count()
+                    ));
+                }
+            }
+        }
+        let carried = raised.iter().any(|diagnostic| {
+            shown(diagnostic)
+                .iter()
+                .any(|text| text.contains("\\u001b") && text.contains("\\u202e"))
+        });
+        if !carried {
+            failures.push(format!(
+                "{code}: its text does not show the hostile text quoted: {:?}",
+                raised
+                    .iter()
+                    .map(|diagnostic| &diagnostic.message)
+                    .collect::<Vec<_>>()
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
