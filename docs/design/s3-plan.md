@@ -1183,12 +1183,7 @@ wait, the canonical text cost of QUICK and the `E0209` Fix), `vcap` (item 160 (6
 report cap) and `deps3` (items 161 (2) and (12): the toolchain and action bumps). The totals below
 predate them.]
 
-[Amended by item 163. A sixth lane the sections of section 3 do not cover, `fixp`: a short client
-lane, in `crates/client-gdext` and `godot/`, that takes the nine findings of P6b's run (the number
-field's selection and Enter, the menu's reopening, the stale Ready line, the third-level menu's place,
-the popup's background, the build target's mark, the two structures' look, and the dormant
-checkbox's second click). It runs after `vfyq2`'s draft and before S3's demo, and is the main
-session's call; the owner can veto it.]
+[Amended by item 163. A sixth lane the sections of section 3 do not cover, `fixp`: a client lane that takes every known client gap, designed properly, and not only the nine findings of P6b's run. It includes the run sheet's "Known gaps to step round" and "What was promised and isn't on this build". It may be split in two lanes by seam. It owns `crates/client-gdext` and `godot/`, with named places in the gateway or the proto where a fix needs the wire, and runs after `vfyq2`'s draft and before S3's demo. It is the main session's call; the owner can veto it.]
 
 **Totals.** 19 tasks, **about 74.5 ad** (65–84), including about 1.5 ad of re-blesses after merges
 of `main`; 73.5 without decision 3's Survey post. **Two critical paths of about 31 working days:**

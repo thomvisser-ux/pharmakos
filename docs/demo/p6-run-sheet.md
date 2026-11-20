@@ -239,7 +239,8 @@ Press "New match". In round 1's Lull:
    number: that is a finding to write down, not a miss; set it right and go on.
    [Since P6b as run: a number typed into the field is not sent by "Set this value" unless Enter
    committed it first, and a click into the field does not select the old number. These are
-   findings 1 and 2 under "P6b as run".]
+   findings 1 and 2 under "P6b as run". The fix is the product's: the `fixp` lane makes "Set this
+   value" take what was typed, after which this step is right as written.]
    Then drag rule 2's line ("regroup") onto rule 1's ("flee"): it lands before it. **Write down**
    your words on the re-check and the redraw after each edit, and on typing into the field.
 4. **The structure names** (check 5). Press "Submit", then "Ready — end the Lull". In the Push the
