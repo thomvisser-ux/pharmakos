@@ -92,9 +92,10 @@ use crate::wire::{
     Reader, Value, Writer, i64_bits_to_u64, u64_bits_to_i64, zigzag_decode, zigzag_encode,
 };
 
-/// Deeper than any message in either package, and shallow enough that a
-/// hostile document cannot exhaust the stack.
-const MAX_DEPTH: usize = 64;
+// Deeper than any message in either package, and shallow enough that a
+// hostile document cannot exhaust the stack: the grammar's one limit
+// ([`super::grammar::MAX_DEPTH`]), a message nesting counted as a value does.
+use super::grammar::may_nest;
 
 fn unknown_message(full_name: &str) -> Error {
     Error::at(
@@ -284,7 +285,7 @@ struct Decoder<'b> {
 }
 
 /// Where a value being written stands: its pointer, its message depth (for
-/// [`MAX_DEPTH`]) and its indentation in the text.
+/// [`super::grammar::MAX_DEPTH`]) and its indentation in the text.
 #[derive(Clone, Copy)]
 struct Place<'p> {
     path: &'p Path<'p>,
@@ -369,7 +370,7 @@ impl<'b> Decoder<'b> {
         path: &Path<'_>,
         depth: usize,
     ) -> Result<Json, Error> {
-        if depth > MAX_DEPTH {
+        if !may_nest(depth) {
             return Err(Error::at(
                 ErrorKind::Depth,
                 &path.render(),
@@ -442,7 +443,7 @@ impl<'b> Decoder<'b> {
         out: &mut String,
     ) -> Result<(), Error> {
         let path = place.path;
-        if place.depth > MAX_DEPTH {
+        if !may_nest(place.depth) {
             return Err(Error::at(
                 ErrorKind::Depth,
                 &path.render(),
@@ -865,7 +866,7 @@ impl<'j> Encoder<'j> {
         path: &Path<'_>,
         depth: usize,
     ) -> Result<Vec<u8>, Error> {
-        if depth > MAX_DEPTH {
+        if !may_nest(depth) {
             return Err(Error::at(
                 ErrorKind::Depth,
                 &path.render(),

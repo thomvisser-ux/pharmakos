@@ -150,8 +150,10 @@ impl JsonReader<'_> {
         }
         loop {
             self.skip_whitespace();
+            let key_at = self.pos;
             let key = self.string()?;
             if entries.iter().any(|(name, _)| *name == key) {
+                self.pos = key_at;
                 return Err(self.error(format!("duplicate key `{key}`")));
             }
             self.skip_whitespace();
@@ -161,7 +163,7 @@ impl JsonReader<'_> {
             entries.push((key, value));
             self.skip_whitespace();
             match self.peek() {
-                Some(b',') => self.bump(),
+                Some(b',') => self.after_comma(b'}')?,
                 Some(b'}') => {
                     self.bump();
                     return Ok(Json::Object(entries));
@@ -184,7 +186,7 @@ impl JsonReader<'_> {
             items.push(self.value(depth.saturating_add(1))?);
             self.skip_whitespace();
             match self.peek() {
-                Some(b',') => self.bump(),
+                Some(b',') => self.after_comma(b']')?,
                 Some(b']') => {
                     self.bump();
                     return Ok(Json::Array(items));
@@ -192,6 +194,17 @@ impl JsonReader<'_> {
                 _ => return Err(self.error("expected `,` or `]`")),
             }
         }
+    }
+
+    /// A comma, read: refused when the close `end` is all that follows it
+    /// (S3's `vfyq2`, the grammar's `TRAILING_COMMA`).
+    fn after_comma(&mut self, end: u8) -> Result<(), Error> {
+        self.bump();
+        self.skip_whitespace();
+        if self.peek() == Some(end) {
+            return Err(self.error(super::grammar::TRAILING_COMMA));
+        }
+        Ok(())
     }
 
     fn string(&mut self) -> Result<String, Error> {

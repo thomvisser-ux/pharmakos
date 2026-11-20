@@ -26,6 +26,7 @@ mod codec;
 #[cfg(test)]
 mod differential;
 mod direct;
+pub mod grammar;
 mod index;
 mod path;
 #[cfg(test)]

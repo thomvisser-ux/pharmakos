@@ -37,13 +37,11 @@
 
 use super::base64;
 use super::codec::{Encoded, Lexeme, is_proto3_default_lexeme};
+use super::grammar;
 use super::index::{Index, Indexed, IndexedField, index};
 use super::value::is_integer_lexeme;
 use crate::descriptor::ScalarKind;
 use crate::wire::{i64_bits_to_u64, zigzag_encode};
-
-/// `read`'s nesting limit, and the codec's.
-const MAX_DEPTH: usize = 64;
 
 /// The wire types this reader writes, as a tag's low three bits.
 const VARINT: u64 = 0;
@@ -140,23 +138,21 @@ impl<'t> Direct<'t> {
     }
 
     fn skip_whitespace(&mut self) {
-        while let Some(b' ' | b'\t' | b'\n' | b'\r') = self.peek() {
-            self.bump();
-        }
+        self.pos = grammar::whitespace_end(self.bytes, self.pos);
     }
 
     fn expect(&mut self, byte: u8) -> Option<()> {
         (self.peek() == Some(byte)).then(|| self.bump())
     }
 
-    fn literal(&mut self, word: &[u8]) -> Option<()> {
-        let end = self.pos.checked_add(word.len())?;
-        (self.bytes.get(self.pos..end)? == word).then(|| self.pos = end)
+    fn literal(&mut self, word: &'static str) -> Option<()> {
+        self.pos = grammar::literal(self.bytes, self.pos, word).ok()?;
+        Some(())
     }
 
     /// One message: an object whose members are this message's fields.
     fn message(&mut self, at: usize, depth: usize, message_depth: usize) -> Option<()> {
-        if depth > MAX_DEPTH || message_depth > MAX_DEPTH {
+        if !grammar::may_nest(depth) || !grammar::may_nest(message_depth) {
             return None;
         }
         let message: &'static Indexed = self.index.get(at)?;
@@ -220,13 +216,13 @@ impl<'t> Direct<'t> {
         depth: usize,
         message_depth: usize,
     ) -> Option<()> {
-        if depth > MAX_DEPTH {
+        if !grammar::may_nest(depth) {
             return None;
         }
         if self.peek() == Some(b'n') {
             // `null` is the default, and is skipped before anything else is
             // asked of the member, as `json_to_message` skips it.
-            return self.literal(b"null");
+            return self.literal("null");
         }
         if let Some(oneof) = field.field.oneof_index {
             if self.oneofs.get(oneof_base..)?.contains(&oneof) {
@@ -279,7 +275,7 @@ impl<'t> Direct<'t> {
         message_depth: usize,
         droppable: bool,
     ) -> Option<()> {
-        if depth > MAX_DEPTH {
+        if !grammar::may_nest(depth) {
             return None;
         }
         let number = field.field.number;
@@ -303,150 +299,30 @@ impl<'t> Direct<'t> {
     fn scalar(&mut self) -> Option<Scalar<'t>> {
         match self.peek()? {
             b'"' => self.string().map(Scalar::String),
-            b't' => self.literal(b"true").map(|()| Scalar::Bool(true)),
-            b'f' => self.literal(b"false").map(|()| Scalar::Bool(false)),
+            b't' => self.literal("true").map(|()| Scalar::Bool(true)),
+            b'f' => self.literal("false").map(|()| Scalar::Bool(false)),
             b'{' | b'[' | b'n' => None,
             _ => self.number().map(Scalar::Number),
         }
     }
 
-    /// `read`'s number grammar, RFC 8259's: `-`? then `0` or a non-zero
-    /// digit and digits, then `.` and digits, then `e` or `E`, a sign and
-    /// digits, each part after the first optional.
+    /// The grammar's number ([`grammar::number`]), as its lexeme.
     fn number(&mut self) -> Option<&'t str> {
         let start = self.pos;
-        if self.peek() == Some(b'-') {
-            self.bump();
-        }
-        match self.peek()? {
-            b'0' => {
-                self.bump();
-                if self.at_digit() {
-                    return None;
-                }
-            }
-            b'1'..=b'9' => self.digits(),
-            _ => return None,
-        }
-        if self.peek() == Some(b'.') {
-            self.bump();
-            if !self.at_digit() {
-                return None;
-            }
-            self.digits();
-        }
-        if matches!(self.peek(), Some(b'e' | b'E')) {
-            self.bump();
-            if matches!(self.peek(), Some(b'+' | b'-')) {
-                self.bump();
-            }
-            if !self.at_digit() {
-                return None;
-            }
-            self.digits();
-        }
+        self.pos = grammar::number(self.bytes, start).ok()?;
         self.text.get(start..self.pos)
     }
 
-    fn at_digit(&self) -> bool {
-        self.peek().is_some_and(|byte| byte.is_ascii_digit())
-    }
-
-    /// Steps over a run of ASCII digits.
-    fn digits(&mut self) {
-        while self.at_digit() {
-            self.bump();
-        }
-    }
-
-    /// `read`'s string grammar, unescaping into `unescaped` only when the
-    /// string holds an escape.
+    /// The grammar's string ([`grammar::string`]), unescaped into
+    /// `unescaped` only when it holds an escape.
     fn string(&mut self) -> Option<Text> {
-        self.expect(b'"')?;
         let start = self.pos;
-        loop {
-            match self.peek()? {
-                b'"' => {
-                    let end = self.pos;
-                    self.bump();
-                    return Some(Text::Slice(start, end));
-                }
-                b'\\' => break,
-                0x00..=0x1f => return None,
-                _ => self.bump(),
-            }
-        }
-        // An escape: copy what came before it, then go on unescaping.
-        self.unescaped.clear();
-        let before = self.text.get(start..self.pos)?;
-        self.unescaped.push_str(before);
-        loop {
-            let run = self.pos;
-            while let Some(byte) = self.peek() {
-                if byte == b'"' || byte == b'\\' || byte < 0x20 {
-                    break;
-                }
-                self.bump();
-            }
-            let plain = self.text.get(run..self.pos)?;
-            self.unescaped.push_str(plain);
-            match self.peek()? {
-                b'"' => {
-                    self.bump();
-                    return Some(Text::Unescaped);
-                }
-                b'\\' => {
-                    self.bump();
-                    self.escape()?;
-                }
-                _ => return None,
-            }
-        }
-    }
-
-    fn escape(&mut self) -> Option<()> {
-        let byte = self.peek()?;
-        self.bump();
-        let character = match byte {
-            b'"' => '"',
-            b'\\' => '\\',
-            b'/' => '/',
-            b'b' => '\u{8}',
-            b'f' => '\u{c}',
-            b'n' => '\n',
-            b'r' => '\r',
-            b't' => '\t',
-            b'u' => {
-                let first = self.hex4()?;
-                let code = if (0xd800..0xdc00).contains(&first) {
-                    self.expect(b'\\')?;
-                    self.expect(b'u')?;
-                    let second = self.hex4()?;
-                    if !(0xdc00..0xe000).contains(&second) {
-                        return None;
-                    }
-                    let high = first.checked_sub(0xd800)? << 10;
-                    let low = second.checked_sub(0xdc00)?;
-                    0x1_0000_u32.checked_add(high | low)?
-                } else {
-                    first
-                };
-                char::from_u32(code)?
-            }
-            _ => return None,
-        };
-        self.unescaped.push(character);
-        Some(())
-    }
-
-    fn hex4(&mut self) -> Option<u32> {
-        let mut value: u32 = 0;
-        for _ in 0..4 {
-            let digit = char::from(self.peek()?).to_digit(16)?;
-            value = value.checked_mul(16)?.checked_add(digit)?;
-            self.bump();
-        }
-        Some(value)
+        let (end, body) = grammar::string(self.text, start, Some(&mut self.unescaped)).ok()?;
+        self.pos = end;
+        Some(match body {
+            grammar::Body::Plain => Text::Slice(start.checked_add(1)?, end.checked_sub(1)?),
+            grammar::Body::Escaped => Text::Unescaped,
+        })
     }
 
     fn text_of(&self, text: Text) -> Option<&str> {
