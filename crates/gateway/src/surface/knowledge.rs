@@ -939,13 +939,27 @@ impl Surface {
         seat: SeatId,
         playbook_jsonc: &str,
     ) -> Result<i32, Unpriced> {
-        let canonical =
-            pharmakos_plan_core::canonicalise_text(playbook_jsonc).map_err(|error| {
-                Unpriced::Gateway(Error::internal(format!(
-                    "a playbook the verifier read has no canonical form: {}",
-                    error.message
-                )))
-            })?;
+        let canonical = pharmakos_plan_core::decode_jsonc(playbook_jsonc).map_err(|error| {
+            Unpriced::Gateway(Error::internal(format!(
+                "a playbook the verifier read has no canonical form: {}",
+                error.message
+            )))
+        })?;
+        self.seal_commitment_of(seat, canonical.decoded().message())
+    }
+
+    /// [`Surface::seal_commitment`], over a playbook already decoded: what
+    /// `submit_plan` prices, the canonical form its report was taken over
+    /// (S3's `vfyq2`, fix pass 1, item 3).
+    ///
+    /// # Errors
+    ///
+    /// As [`Surface::seal_commitment`], less the decode.
+    pub(super) fn seal_commitment_of(
+        &self,
+        seat: SeatId,
+        playbook: &pharmakos_proto::gp::v1::Playbook,
+    ) -> Result<i32, Unpriced> {
         let economy = self.seat_economy(seat).map_err(Unpriced::Gateway)?;
         let rules = self.host().map_err(Unpriced::Gateway)?.rules();
         let prices = pharmakos_verifier::projection::Prices::from_rules(rules).map_err(|gap| {
@@ -953,9 +967,8 @@ impl Surface {
                 "the rules table does not price: {gap}"
             )))
         })?;
-        let projection =
-            pharmakos_verifier::projection::project(&canonical.playbook, economy, &prices)
-                .map_err(|why| Unpriced::Playbook(why.to_string()))?;
+        let projection = pharmakos_verifier::projection::project(playbook, economy, &prices)
+            .map_err(|why| Unpriced::Playbook(why.to_string()))?;
         let spend = projection.spend.raw();
         i32::try_from(spend).map_err(|_| {
             Unpriced::Playbook(format!(

@@ -2827,20 +2827,25 @@ impl Surface {
                 pharmakos_verifier::MAX_PLAYBOOK_CHARS
             )));
         }
-        let report = self.verify_for(seat, playbook_jsonc, Depth::Full)?;
-        if !report.qualifies {
-            return Err(Error::new(
-                crate::error::Code::NoQualifyingPlan,
-                format!(
-                    "seat {}'s advised safe playbook does not qualify ({} diagnostics); the \
-                     gateway's fallback is filed instead",
-                    seat.raw(),
-                    report.diagnostics.len()
-                ),
-            ));
-        }
-        let plan =
-            crate::surface::planning::compile_playbook(playbook_jsonc, self.host()?.rules())?;
+        // One decode, verified then compiled, as `submit_plan` seals (S3's
+        // `vfyq2`, fix pass 1, item 3).
+        let (report, canonical) = match self.verified_for(seat, playbook_jsonc, Depth::Full)? {
+            pharmakos_plan_core::Verified::Canonical { report, canonical } if report.qualifies => {
+                (report, canonical)
+            }
+            refused => {
+                return Err(Error::new(
+                    crate::error::Code::NoQualifyingPlan,
+                    format!(
+                        "seat {}'s advised safe playbook does not qualify ({} diagnostics); the \
+                         gateway's fallback is filed instead",
+                        seat.raw(),
+                        refused.report().diagnostics.len()
+                    ),
+                ));
+            }
+        };
+        let plan = crate::surface::planning::compile_canonical(&canonical, self.host()?.rules())?;
         Ok(Sealed {
             playbook_jsonc: playbook_jsonc.to_owned(),
             report_hash: report.report_hash,
@@ -2930,9 +2935,28 @@ impl Surface {
         playbook_jsonc: &str,
         depth: Depth,
     ) -> Result<VerifyReport, Error> {
+        self.verified_for(seat, playbook_jsonc, depth)
+            .map(pharmakos_plan_core::Verified::into_report)
+    }
+
+    /// [`Surface::verify_for`], answering with the canonical form the report
+    /// was taken over (S3's `vfyq2`, fix pass 1, item 3): what a caller that
+    /// goes on to compile, price and seal the file acts on, so the playbook it
+    /// acts on is the one the report is of, by construction, and the file is
+    /// decoded once from the socket to the seal.
+    ///
+    /// # Errors
+    ///
+    /// As [`Surface::verify_for`].
+    pub(crate) fn verified_for(
+        &self,
+        seat: SeatId,
+        playbook_jsonc: &str,
+        depth: Depth,
+    ) -> Result<pharmakos_plan_core::Verified, Error> {
         let snapshot = self.snapshot_bytes()?;
         let scope = self.verifier_scope(seat)?;
-        pharmakos_plan_core::verify::verify_jsonc(
+        pharmakos_plan_core::verify_jsonc_canonical(
             playbook_jsonc,
             &snapshot,
             &scope,
@@ -3999,13 +4023,13 @@ pub(crate) fn held_values(world: &pharmakos_sim::world::World) -> Vec<(SeatId, O
 /// The arithmetic is the sim's ([`pharmakos_sim::hash::plan_fingerprint`],
 /// beside the state hash since S1's `build` lane, the register's S1-42).
 fn plan_fingerprint(playbook_jsonc: &str) -> Result<u64, Error> {
-    let canonical = pharmakos_plan_core::canonicalise_text(playbook_jsonc).map_err(|error| {
+    let canonical = pharmakos_plan_core::decode_jsonc(playbook_jsonc).map_err(|error| {
         Error::internal(format!(
             "a sealed playbook has no canonical form: {}",
             error.message
         ))
     })?;
-    pharmakos_sim::hash::plan_fingerprint(&canonical.playbook).map_err(|error| {
+    pharmakos_sim::hash::plan_fingerprint(canonical.decoded().message()).map_err(|error| {
         Error::internal(format!(
             "a sealed playbook's canonical form will not encode for its fingerprint: {error}"
         ))

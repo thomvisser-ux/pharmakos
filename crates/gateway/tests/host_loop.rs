@@ -1362,6 +1362,77 @@ impl MatchHeader {
     }
 }
 
+/// One decode from the socket to the seal (S3's `vfyq2`, fix pass 1, item 3).
+///
+/// A commented playbook goes over the socket to `verify_plan` and then to
+/// `submit_plan`, and the Push's beginning writes the seal. The file written
+/// is the text submitted, byte for byte, comments included; its canonical
+/// form is the one the report was taken over, which is why the pre-check's
+/// hash and the seal's are the same; and the plan the match runs is compiled
+/// from that same form, which the replay test's re-hosting holds to the chain.
+#[test]
+fn the_sealed_file_is_the_text_whose_canonical_form_was_verified() {
+    let line = Config {
+        segment_lengths_ms: vec![1_000],
+        ..config("m-vfyq2-one-decode", Some(0))
+    };
+    let mut running = start_in(
+        &data_root("vfyq2-one-decode"),
+        &new_line(line),
+        Box::new(NoOperators),
+    );
+    let seat_token = running.announce.seat_token.clone().expect("a human seat");
+    let mut lobby = Client::open(running.announce.port, &running.announce.admin_token);
+    let mut seat = Client::open(running.announce.port, &seat_token);
+    let submitted = format!(
+        "// sealed as written\n{}\n/* and the end */\n",
+        pharmakos_gateway::host::SAFE_PLAYBOOK
+    );
+    let params = format!(r#"{{"playbook_jsonc":{}}}"#, support::quote(&submitted));
+    let hash_of = |answer: &Json| match answer
+        .get("report")
+        .and_then(|report| report.get("report_hash"))
+    {
+        Some(Json::String(text)) => text.clone(),
+        other => panic!("a report carries a report_hash, and it is {other:?}"),
+    };
+    let checked = result(&seat.call("verify_plan", &params), "verify_plan");
+    let sealed = result(&seat.call("submit_plan", &params), "submit_plan");
+    assert_eq!(
+        sealed.get("accepted"),
+        Some(&Json::Bool(true)),
+        "the submission seals: {sealed:?}"
+    );
+    assert_eq!(
+        hash_of(&checked),
+        hash_of(&sealed),
+        "the pre-check and the seal are one report"
+    );
+    let _ = result(&lobby.call("end_lull", "{}"), "end_lull");
+    let _ = result(&lobby.call("get_status", "{}"), "get_status");
+    running.quit();
+    let path = running
+        .folder()
+        .join("seats")
+        .join("0")
+        .join("sealed")
+        .join("1.jsonc");
+    let written = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+    assert_eq!(written, submitted, "the seal is the text submitted");
+    let canonical = |text: &str| {
+        pharmakos_plan_core::decode_jsonc(text)
+            .expect("a canonical form")
+            .into_text()
+    };
+    let bare = canonical(pharmakos_gateway::host::SAFE_PLAYBOOK);
+    assert_eq!(
+        canonical(&written),
+        bare,
+        "the sealed file's canonical form is the verified one, its comments aside"
+    );
+}
+
 /// The private replay is inputs only (decision C11): `match.json` for the
 /// seed, settings and rules hash, `seats/<seat>/sealed/<round>.jsonc` for
 /// every seat's orders, `replay/<round>.hashes.txt` for every segment's chain.

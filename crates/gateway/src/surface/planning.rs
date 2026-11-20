@@ -479,13 +479,19 @@ impl Surface {
         // file is the normal case -- so it comes back as the sentence that says
         // to verify it, with no rules, and `verify_plan` is where the
         // diagnostics live.
-        let rendering = match pharmakos_plan_core::canonicalise_text(playbook) {
+        //
+        // The prose and the rules' chips read the decoded playbook and nothing
+        // else (`render` takes a `Playbook`; a chip is a pointer into the
+        // canonical tree, not into the file's comments), so the read is the
+        // one decode `verify_plan` takes its report over, `decode_jsonc`, and
+        // no JSONC tree is built (S3's `vfyq2`, fix pass 1, item 3).
+        let rendering = match pharmakos_plan_core::decode_jsonc(playbook) {
             Err(_no_canonical_form) => pharmakos_plan_core::Rendering {
                 prose: String::from(crate::strings::UNRENDERABLE),
                 rules: Vec::new(),
             },
             Ok(canonical) => {
-                pharmakos_plan_core::render(&canonical.playbook, &context, host.rules())
+                pharmakos_plan_core::render(canonical.decoded().message(), &context, host.rules())
                     .map_err(|error| Error::internal(error.message))?
             }
         };
@@ -722,13 +728,14 @@ impl Surface {
             ));
         }
         let playbook = playbook_param(request)?;
-        let canonical = pharmakos_plan_core::canonicalise_text(playbook).map_err(|error| {
+        let canonical = pharmakos_plan_core::decode_jsonc(playbook).map_err(|error| {
             Error::invalid(format!(
                 "this file has no canonical form yet, so it names nothing to resolve: {}",
                 error.message
             ))
         })?;
-        let plan = compile_decoded(&canonical.playbook, host.rules()).map_err(|error| {
+        let playbook = canonical.decoded().message();
+        let plan = compile_decoded(playbook, host.rules()).map_err(|error| {
             Error::invalid(format!(
                 "this build cannot execute this playbook, so none of it reads anything: {error}"
             ))
@@ -737,7 +744,7 @@ impl Surface {
             host.world(),
             host.runner().frozen().snapshot(),
             seat,
-            &canonical.playbook,
+            playbook,
             &plan,
         )?;
         Ok(Json::Object(vec![(
@@ -796,7 +803,7 @@ impl Surface {
             return Ok(None);
         };
         let canonical =
-            pharmakos_plan_core::canonicalise_text(&sealed.playbook_jsonc).map_err(|error| {
+            pharmakos_plan_core::decode_jsonc(&sealed.playbook_jsonc).map_err(|error| {
                 Error::internal(format!(
                     "a playbook this seat sealed has no canonical form: {}",
                     error.message
@@ -806,7 +813,7 @@ impl Surface {
             host.world(),
             host.runner().frozen().snapshot(),
             seat,
-            &canonical.playbook,
+            canonical.decoded().message(),
             &sealed.plan,
         )?;
         let dollars = host
@@ -898,22 +905,32 @@ impl Surface {
         let seat = Surface::seat_of(subject, "a playbook to submit")?;
         let playbook = playbook_param(request)?.to_owned();
         let round = self.host()?.runner().round();
-        let report = self.verify_for(seat, &playbook, Depth::Full)?;
-        let accepted = report.qualifies;
-        if accepted {
+        // One decode from the socket to the seal (S3's `vfyq2`, fix pass 1,
+        // item 3): the report, the compile, the price and the seal all read
+        // the canonical form `verified_for` decoded, so the playbook sealed is
+        // the one the report qualified, by construction, and the file written
+        // is the text that canonical form was decoded from.
+        let verified = self.verified_for(seat, &playbook, Depth::Full)?;
+        let accepted = matches!(
+            &verified,
+            pharmakos_plan_core::Verified::Canonical { report, .. } if report.qualifies
+        );
+        if let pharmakos_plan_core::Verified::Canonical { report, canonical } = &verified
+            && report.qualifies
+        {
             // The second door. A refusal here leaves the previous seal exactly
             // where it is -- `self.seat_state_mut` is not reached at all -- and
             // comes back as a method error rather than as a report, because the
             // verifier has already said this playbook may be sealed and saying
             // `qualifies: false` on the same breath would be the gateway
             // contradicting a hash it has just handed out.
-            let plan = compile_playbook(&playbook, self.host()?.rules())?;
+            let plan = compile_canonical(canonical, self.host()?.rules())?;
             // The third: a seal always prices, so the seat's own forecast can
             // always answer its `committed_dollars` (review A of `econ`). From
             // S2 the verifier refuses a seal that does not price (`E0603`), so
             // no qualifying report reaches this refusal; it stays as defence
             // in depth.
-            self.seal_commitment(seat, &playbook)
+            self.seal_commitment_of(seat, canonical.decoded().message())
                 .map_err(|unpriced| match unpriced {
                     super::knowledge::Unpriced::Gateway(error) => error,
                     super::knowledge::Unpriced::Playbook(why) => Error::invalid(format!(
@@ -931,7 +948,7 @@ impl Surface {
             self.seat_state_mut(subject, seat)?.sealed = Some(sealed);
         }
         Ok(Json::Object(vec![
-            (String::from("report"), report_json(&report)),
+            (String::from("report"), report_json(verified.report())),
             (String::from("accepted"), Json::Bool(accepted)),
         ]))
     }
@@ -975,8 +992,10 @@ impl Surface {
 ///
 /// The one path from a submitted file to something the interpreter can run, so
 /// `submit_plan` and [`crate::surface::Surface`]'s filing of the safe playbook
-/// cannot compile it two different ways. The decode is `plan-core`'s canonical
-/// form, which is the same decode the verifier's report was taken over.
+/// cannot compile it two different ways. The decode is `plan-core`'s
+/// `decode_jsonc`, the same decode the verifier's report is taken over; a
+/// caller holding that decode already compiles it through
+/// [`compile_canonical`] instead.
 ///
 /// # The code, and why it is this one
 ///
@@ -1016,13 +1035,29 @@ impl Surface {
 /// was taken over that same canonical form, and so would mean the two had
 /// drifted apart.
 pub(crate) fn compile_playbook(playbook_jsonc: &str, rules: &RulesTable) -> Result<Plan, Error> {
-    let canonical = pharmakos_plan_core::canonicalise_text(playbook_jsonc).map_err(|error| {
+    let canonical = pharmakos_plan_core::decode_jsonc(playbook_jsonc).map_err(|error| {
         Error::internal(format!(
             "a playbook the verifier read has no canonical form: {}",
             error.message
         ))
     })?;
-    compile_decoded(&canonical.playbook, rules).map_err(|error| {
+    compile_canonical(&canonical, rules)
+}
+
+/// [`compile_playbook`], over a canonical form already decoded: what
+/// `submit_plan` compiles, the one its report was taken over (S3's `vfyq2`,
+/// fix pass 1, item 3).
+///
+/// # Errors
+///
+/// As [`compile_playbook`], for a [`PlanError`].
+///
+/// [`PlanError`]: pharmakos_sim::interpreter::PlanError
+pub(crate) fn compile_canonical(
+    canonical: &pharmakos_proto::json::Canonicalised<pharmakos_proto::gp::v1::Playbook>,
+    rules: &RulesTable,
+) -> Result<Plan, Error> {
+    compile_decoded(canonical.decoded().message(), rules).map_err(|error| {
         Error::invalid(format!(
             "this playbook qualifies and this build cannot execute it: {error}"
         ))
