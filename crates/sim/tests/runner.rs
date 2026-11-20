@@ -1148,6 +1148,8 @@ fn a_tick_left_open_after_its_match_phase_blocks_every_transition() {
     for _ in 1..SHORT_TICKS {
         assert!(runner.step().unwrap().is_some());
     }
+    // A save of the closed world, which no restore may take over the open tick.
+    let saved = runner.capture().expect("a world between ticks");
     {
         let mut tick = runner
             .phased_tick()
@@ -1180,7 +1182,11 @@ fn a_tick_left_open_after_its_match_phase_blocks_every_transition() {
         runner.seal_playbook(SeatId::new(0), a_plan()),
         Err(pharmakos_sim::runner::SealRefused::MidTick)
     );
-    let saved = Snapshot::capture(runner.world()).expect("a world between ticks");
+    assert_eq!(
+        Snapshot::capture(runner.world()).map(|_| ()),
+        Err(SnapshotError::MidTick),
+        "no snapshot is taken over an open tick"
+    );
     assert_eq!(runner.restore(&saved), Err(SnapshotError::MidTick));
     assert!(runner.capture().is_err());
     // Finishing the tick lets the match move on.
