@@ -35,12 +35,6 @@
 //! in whichever shard its unit falls to; the unit list, and so the split, is
 //! the same as before.
 
-#![expect(
-    dead_code,
-    clippy::unnecessary_wraps,
-    reason = "the tests come first: the next commit implements the checks"
-)]
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
@@ -88,13 +82,30 @@ pub(crate) fn config_for(sim: SimLevel) -> Vec<String> {
 /// every unit but [`UNOPTIMISED_TESTS`], then one invocation per unoptimised
 /// test the units hold. Every unit is in exactly one invocation.
 pub(crate) fn invocations(units: &[Unit]) -> Vec<Invocation> {
-    crate::shard::selectors(units)
+    let unoptimised = |unit: &Unit| matches!(unit, Unit::Test(name) if UNOPTIMISED_TESTS.contains(&name.as_str()));
+    let optimised: Vec<Unit> = units
+        .iter()
+        .filter(|unit| !unoptimised(unit))
+        .cloned()
+        .collect();
+    let mut out: Vec<Invocation> = crate::shard::selectors(&optimised)
         .into_iter()
         .map(|selectors| Invocation {
             selectors,
             sim: SimLevel::Optimised,
         })
-        .collect()
+        .collect();
+    for unit in units.iter().filter(|unit| unoptimised(unit)) {
+        out.extend(
+            crate::shard::selectors(std::slice::from_ref(unit))
+                .into_iter()
+                .map(|selectors| Invocation {
+                    selectors,
+                    sim: SimLevel::Unoptimised,
+                }),
+        );
+    }
+    out
 }
 
 /// One unit cargo built, with the profile it resolved for it.
@@ -239,15 +250,140 @@ const REASONS: &[&str] = &[
 /// Every line must be a JSON object with a known `reason`, and every
 /// `compiler-artifact` must carry its package, target and resolved profile.
 pub(crate) fn parse_messages(text: &str) -> Result<Vec<Built>, ProfileFault> {
-    let _ = text;
-    Ok(Vec::new())
+    let mut built: Vec<Built> = Vec::new();
+    for (index, line) in text.lines().enumerate() {
+        let line_number = index.saturating_add(1);
+        let unreadable = |why: String| ProfileFault::Unreadable {
+            line: line_number,
+            why,
+        };
+        if line.trim().is_empty() {
+            continue;
+        }
+        let message = Json::parse(line).map_err(unreadable)?;
+        let reason = string_of(&message, "reason").map_err(unreadable)?;
+        if !REASONS.contains(&reason) {
+            return Err(ProfileFault::UnknownReason {
+                line: line_number,
+                reason: reason.to_owned(),
+            });
+        }
+        if reason != "compiler-artifact" {
+            continue;
+        }
+        let read = || -> Result<Built, String> {
+            let target = member(&message, "target")?;
+            let profile = member(&message, "profile")?;
+            Ok(Built {
+                package_id: string_of(&message, "package_id")?.to_owned(),
+                target: string_of(target, "name")?.to_owned(),
+                opt_level: string_of(profile, "opt_level")?.to_owned(),
+                debug_assertions: bool_of(profile, "debug_assertions")?,
+                overflow_checks: bool_of(profile, "overflow_checks")?,
+            })
+        };
+        built.push(read().map_err(unreadable)?);
+    }
+    Ok(built)
 }
 
 /// The graph [`faults`] needs, from `cargo metadata --format-version 1`
 /// (with its dependencies, so with `resolve`).
 pub(crate) fn graph(metadata: &str) -> Result<Graph, ProfileFault> {
-    let _ = metadata;
-    Ok(Graph::default())
+    let fault = ProfileFault::Metadata;
+    let json = Json::parse(metadata).map_err(fault)?;
+    let mut graph = Graph::default();
+    let packages = member(&json, "packages")
+        .and_then(|value| {
+            value
+                .as_array()
+                .ok_or_else(|| "`packages` is not an array".to_owned())
+        })
+        .map_err(fault)?;
+    for package in packages {
+        let id = string_of(package, "id").map_err(fault)?;
+        let name = string_of(package, "name").map_err(fault)?;
+        if name == SIM {
+            graph.sim = Some(id.to_owned());
+        }
+        graph.names.insert(id.to_owned(), name.to_owned());
+    }
+    let members = member(&json, "workspace_members")
+        .and_then(|value| {
+            value
+                .as_array()
+                .ok_or_else(|| "`workspace_members` is not an array".to_owned())
+        })
+        .map_err(fault)?;
+    for id in members {
+        let id = id
+            .as_str()
+            .ok_or_else(|| "a workspace member is not a string".to_owned())
+            .map_err(fault)?;
+        graph.members.insert(id.to_owned());
+    }
+    let nodes = member(&json, "resolve")
+        .and_then(|resolve| member(resolve, "nodes"))
+        .and_then(|value| {
+            value
+                .as_array()
+                .ok_or_else(|| "`nodes` is not an array".to_owned())
+        })
+        .map_err(fault)?;
+    // Each package's normal dependencies: a `dep_kinds` entry whose `kind` is
+    // null, whatever its platform.
+    let mut normal: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for node in nodes {
+        let id = string_of(node, "id").map_err(fault)?;
+        let deps = member(node, "deps")
+            .and_then(|value| {
+                value
+                    .as_array()
+                    .ok_or_else(|| "`deps` is not an array".to_owned())
+            })
+            .map_err(fault)?;
+        let mut out: Vec<String> = Vec::new();
+        for dep in deps {
+            let pkg = string_of(dep, "pkg").map_err(fault)?;
+            let kinds = member(dep, "dep_kinds")
+                .and_then(|value| {
+                    value
+                        .as_array()
+                        .ok_or_else(|| "`dep_kinds` is not an array".to_owned())
+                })
+                .map_err(fault)?;
+            let mut is_normal = false;
+            for kind in kinds {
+                match member(kind, "kind").map_err(fault)? {
+                    Json::Null => is_normal = true,
+                    Json::Str(_) => {}
+                    _ => {
+                        return Err(ProfileFault::Metadata(
+                            "a dependency kind is neither null nor a string".to_owned(),
+                        ));
+                    }
+                }
+            }
+            if is_normal {
+                out.push(pkg.to_owned());
+            }
+        }
+        normal.insert(id.to_owned(), out);
+    }
+    let Some(sim) = graph.sim.clone() else {
+        return Err(ProfileFault::Metadata(format!(
+            "no package is called {SIM}"
+        )));
+    };
+    let mut queue: Vec<String> = normal.get(&sim).cloned().unwrap_or_default();
+    while let Some(id) = queue.pop() {
+        if graph.sim_closure.insert(id.clone())
+            && let Some(next) = normal.get(&id)
+        {
+            queue.extend(next.iter().cloned());
+        }
+    }
+    Ok(graph)
 }
 
 /// Whether `name` is one of the `godot` crates.
@@ -258,8 +394,58 @@ fn is_godot(name: &str) -> bool {
 /// Every way `built` breaks the profile rule (the module docs), for an
 /// invocation that requires `sim` of the sim. Empty when it keeps it.
 pub(crate) fn faults(built: &[Built], graph: &Graph, sim: SimLevel) -> Vec<ProfileFault> {
-    let _ = (built, graph, sim);
-    Vec::new()
+    let mut faults: Vec<ProfileFault> = Vec::new();
+    for unit in built {
+        let Some(package) = graph.names.get(&unit.package_id) else {
+            faults.push(ProfileFault::UnknownPackage {
+                package_id: unit.package_id.clone(),
+            });
+            continue;
+        };
+        let target = unit.target.clone();
+        let unoptimised = unit.opt_level == "0";
+        if graph.members.contains(&unit.package_id) {
+            for (on, check) in [
+                (unit.debug_assertions, "debug assertions"),
+                (unit.overflow_checks, "overflow checks"),
+            ] {
+                if !on {
+                    faults.push(ProfileFault::CheckOff {
+                        package: package.clone(),
+                        target: target.clone(),
+                        check,
+                    });
+                }
+            }
+        }
+        if graph.sim.as_deref() == Some(unit.package_id.as_str()) {
+            match (sim, unoptimised) {
+                (SimLevel::Optimised, true) => {
+                    faults.push(ProfileFault::SimUnoptimised { target });
+                }
+                (SimLevel::Unoptimised, false) => faults.push(ProfileFault::SimOptimised {
+                    target,
+                    opt_level: unit.opt_level.clone(),
+                }),
+                _ => {}
+            }
+        } else if graph.sim_closure.contains(&unit.package_id)
+            && !graph.members.contains(&unit.package_id)
+            && unoptimised
+        {
+            faults.push(ProfileFault::DependencyUnoptimised {
+                package: package.clone(),
+                target,
+            });
+        } else if is_godot(package) && !unoptimised {
+            faults.push(ProfileFault::GodotOptimised {
+                package: package.clone(),
+                target,
+                opt_level: unit.opt_level.clone(),
+            });
+        }
+    }
+    faults
 }
 
 #[cfg(test)]

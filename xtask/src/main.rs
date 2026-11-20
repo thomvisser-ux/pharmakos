@@ -1357,7 +1357,11 @@ fn step_profiles(ctx: &Ctx) -> Result<Outcome, String> {
 /// to check; a config that is there and cannot be read is a failure, not a
 /// pass.
 fn read_config(path: &Path) -> Result<Option<String>, String> {
-    fs::read_to_string(path).map(Some).or(Ok(None))
+    match fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("cannot read {}: {error}", path.display())),
+    }
 }
 
 /// What [`scan_profiles`] found in one TOML file's `[profile.*]` tables.
@@ -1568,7 +1572,11 @@ fn scan_profiles(text: &str) -> ProfileScan {
     for (index, raw) in text.lines().enumerate() {
         let line = raw.split('#').next().unwrap_or("").trim();
         let unreadable = |scan: &mut ProfileScan| {
-            let _ = (&scan.unreadable, index, raw);
+            scan.unreadable.push(format!(
+                "line {}: `{}`",
+                index.saturating_add(1),
+                raw.trim()
+            ));
         };
         if line.is_empty() {
             continue;
