@@ -103,6 +103,21 @@ const CRT_NEEDLES: &[&str] = &["vcruntime", "msvcp", "ucrtbase", "api-ms-win-crt
 /// `package`'s own two builds and nowhere else.
 const CRT_STATIC_VARIABLE: &str = "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS";
 const CRT_STATIC_FLAGS: &str = "-C target-feature=+crt-static";
+/// [`CRT_STATIC_FLAGS`] in cargo's encoding: one argument.
+#[cfg(test)]
+const CRT_STATIC_ENCODED: &str = "-Ctarget-feature=+crt-static";
+
+/// Stub: the next commit makes the two builds values.
+#[cfg(test)]
+fn build_calls(platform: &Platform, locked: bool) -> [crate::resolved::CargoCall; 2] {
+    let _ = (platform, locked);
+    let empty = || crate::resolved::CargoCall {
+        config: Vec::new(),
+        env: Vec::new(),
+        args: Vec::new(),
+    };
+    [empty(), empty()]
+}
 
 /// The godot-rust crates: MPL-2.0, and shipping no licence file of their own.
 /// The first four are linked into the client library; the last three run at
@@ -1834,6 +1849,47 @@ fn reuse_check(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The two builds carry exactly the flags they pass, by name, in their
+    /// own values: `+crt-static` on Windows and nothing on Linux, through
+    /// `CARGO_ENCODED_RUSTFLAGS`, which cargo reads before every other source
+    /// of rustflags; and each reports itself, so it is checked as it is made.
+    #[test]
+    fn the_two_builds_carry_exactly_their_own_flags() {
+        let encoded = |value: &str| {
+            vec![
+                ("CARGO_ENCODED_RUSTFLAGS".to_owned(), value.to_owned()),
+                ("CARGO_ENCODED_RUSTDOCFLAGS".to_owned(), String::new()),
+            ]
+        };
+        for (platform, flags) in [(&WINDOWS, "-Ctarget-feature=+crt-static"), (&LINUX, "")] {
+            let calls = build_calls(platform, true);
+            for call in &calls {
+                assert_eq!(call.env, encoded(flags), "{}", platform.name);
+                assert!(call.config.is_empty());
+                assert_eq!(
+                    call.args
+                        .iter()
+                        .filter(|arg| *arg == "--message-format=json")
+                        .count(),
+                    1
+                );
+                assert!(call.args.iter().any(|arg| arg == "--locked"));
+                assert!(call.args.iter().any(|arg| arg == platform.triple));
+            }
+            let [client, host] = &calls;
+            assert!(
+                client
+                    .args
+                    .windows(2)
+                    .any(|pair| pair == ["--profile", "release-client"])
+            );
+            assert!(host.args.iter().any(|arg| arg == "--release"));
+        }
+        // The encoded flag is the flag the C runtime check names, as one
+        // argument.
+        assert_eq!(CRT_STATIC_ENCODED, CRT_STATIC_FLAGS.replace(' ', ""));
+    }
 
     #[test]
     fn nothing_outside_the_package_folder_is_ever_emptied() {

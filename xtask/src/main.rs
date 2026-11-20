@@ -1765,7 +1765,7 @@ fn run_shard_units(
 /// running, is checked through `cargo build --profile test --lib` over the same
 /// packages: the libraries a doctest links, the same artefacts.
 fn run_units(ctx: &Ctx, base: &[String], units: &[shard::Unit]) -> Result<(), String> {
-    let runs = resolved::invocations(units);
+    let runs = resolved::invocations(units, true);
     if runs.is_empty() {
         return Ok(());
     }
@@ -1785,7 +1785,16 @@ fn run_units(ctx: &Ctx, base: &[String], units: &[shard::Unit]) -> Result<(), St
         Vec::new()
     };
     for invocation in runs {
-        let config = resolved::config_for(invocation.sim);
+        let config = resolved::TestRun {
+            selection: Vec::new(),
+            invocation: invocation.clone(),
+            locked: false,
+        }
+        .run()
+        .config
+        .into_iter()
+        .flat_map(|value| ["--config".to_owned(), value])
+        .collect::<Vec<_>>();
         let doc = invocation.selectors == ["--doc"];
         let check: Vec<String> = if doc {
             [
@@ -1816,7 +1825,7 @@ fn run_units(ctx: &Ctx, base: &[String], units: &[shard::Unit]) -> Result<(), St
         .concat();
         let messages = capture_stdout(ctx, &ctx.cargo, &check)?;
         let built = resolved::parse_messages(&messages).map_err(|fault| fault.to_string())?;
-        let faults = resolved::faults(&built, &graph, invocation.sim);
+        let faults = resolved::faults(&built, &graph, resolved::Expect::suite(invocation.sim));
         if !faults.is_empty() {
             return Err(faults
                 .iter()
@@ -2458,6 +2467,20 @@ fn step_determinism(ctx: &Ctx) -> Result<Outcome, String> {
             first_difference(golden.as_deref().unwrap_or_default(), &fresh)
         )),
     }
+}
+
+/// Stub: the next commit lists the owners.
+#[cfg(test)]
+fn test_target_owners(workspace: &Workspace, name: &str) -> Vec<String> {
+    let _ = (workspace, name);
+    Vec::new()
+}
+
+/// Stub: the next commit reads the executable from the build's report.
+#[cfg(test)]
+fn determinism_executable(built: &[resolved::Built]) -> Result<String, String> {
+    let _ = built;
+    Err("not yet".to_owned())
 }
 
 /// What the `determinism` step makes of the fresh chain.
@@ -4520,6 +4543,96 @@ mod tests {
         let json = Json::parse(r#"{"a":"b\\c\"d\n","b":"é ok"}"#).expect("parses");
         assert_eq!(json.get("a").and_then(Json::as_str), Some("b\\c\"d\n"));
         assert_eq!(json.get("b").and_then(Json::as_str), Some("é ok"));
+    }
+
+    #[test]
+    fn json_refuses_a_duplicate_key_and_an_unpaired_surrogate() {
+        // A repeated key has no one value.
+        assert!(Json::parse(r#"{"opt_level":"2","opt_level":"0"}"#).is_err());
+        assert!(Json::parse(r#"{"a":{"b":1,"b":1}}"#).is_err());
+        assert!(
+            Json::parse(r#"[{"b":1},{"b":1}]"#).is_ok(),
+            "one key in each object"
+        );
+        // A pair is a character beyond the Basic Multilingual Plane.
+        let pair = Json::parse(r#""\ud83d\ude00""#).expect("a pair");
+        assert_eq!(pair.as_str(), Some("\u{1f600}"));
+        // A surrogate without its other half is not a character.
+        for unpaired in [
+            r#""\ud83d""#,
+            r#""\ud83d x""#,
+            r#""\ud83d\u0041""#,
+            r#""\ude00""#,
+            r#""\u12g4""#,
+            r#""\u+123""#,
+        ] {
+            assert!(Json::parse(unpaired).is_err(), "{unpaired}");
+        }
+    }
+
+    /// The exemption of `resolved::UNOPTIMISED_TESTS` is a set of (package,
+    /// target) pairs: the workspace's owners of each name are exactly the
+    /// table's, and each owner but the sim does not depend on the sim, read
+    /// from the real workspace's graph. A third package gaining such a target
+    /// fails here.
+    #[test]
+    fn the_unoptimised_tests_have_the_owners_the_table_names() {
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let Some(root) = manifest.parent() else {
+            panic!("xtask's manifest directory has no parent");
+        };
+        let workspace = match load_workspace(false, env!("CARGO"), root) {
+            Ok(workspace) => workspace,
+            Err(reason) => panic!("{reason}"),
+        };
+        let output = child_command(
+            false,
+            env!("CARGO"),
+            &["metadata", "--format-version", "1"],
+            root,
+        )
+        .output()
+        .expect("cargo metadata runs");
+        assert!(output.status.success(), "cargo metadata failed");
+        let text = String::from_utf8(output.stdout).expect("UTF-8");
+        let graph = resolved::graph(&text).expect("the graph reads");
+        for name in resolved::UNOPTIMISED_TESTS {
+            let owners = test_target_owners(&workspace, name);
+            assert_eq!(
+                resolved::check_owners(name, &owners, &graph),
+                Ok(()),
+                "{name}: {owners:?}"
+            );
+        }
+        for (name, package, reason) in resolved::UNOPTIMISED_OWNERS {
+            assert!(
+                resolved::UNOPTIMISED_TESTS.contains(name),
+                "{package} is listed for a test that is not unoptimised"
+            );
+            assert!(!reason.is_empty(), "{package} rides with no reason");
+        }
+    }
+
+    #[test]
+    fn the_determinism_binary_is_the_one_its_build_reported() {
+        let unit = |target: &str, kind: &str, executable: Option<&str>| resolved::Built {
+            package_id: "path+file:///w/crates/sim#pharmakos-sim@0.0.0".to_owned(),
+            target: target.to_owned(),
+            kinds: vec![kind.to_owned()],
+            opt_level: resolved::OptLevel::O3,
+            debug_assertions: true,
+            overflow_checks: true,
+            executable: executable.map(str::to_owned),
+        };
+        let lib = unit("pharmakos_sim", "lib", None);
+        let bin = unit(DETERMINISM_BIN, "bin", Some("D:/t/determinism.exe"));
+        assert_eq!(
+            determinism_executable(&[lib.clone(), bin.clone()]),
+            Ok("D:/t/determinism.exe".to_owned())
+        );
+        assert!(determinism_executable(std::slice::from_ref(&lib)).is_err());
+        assert!(determinism_executable(&[bin.clone(), bin]).is_err());
+        assert!(determinism_executable(&[unit(DETERMINISM_BIN, "bin", None)]).is_err());
     }
 
     #[test]
