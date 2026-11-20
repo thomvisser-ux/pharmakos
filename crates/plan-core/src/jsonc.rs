@@ -916,7 +916,7 @@ fn escape(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Anchor, CommentKind, Document};
+    use super::{Anchor, CommentKind, Document, comment_end};
     use pharmakos_proto::json::Json;
 
     fn round_trip(text: &str) {
@@ -1013,6 +1013,35 @@ mod tests {
         assert_eq!(
             (refused.pointer, refused.message),
             (codec.pointer, codec.message)
+        );
+    }
+
+    /// A line comment ends at a line feed, a carriage return alone, or the CR
+    /// of a CRLF, whichever comes first, and leaves it out: a file written
+    /// with CR line endings does not have a comment swallow the rest of it.
+    #[test]
+    fn a_line_comment_ends_at_lf_cr_and_crlf() {
+        for (ending, name) in [("\n", "LF"), ("\r", "CR"), ("\r\n", "CRLF")] {
+            let text = format!("// a note{ending}{{\"a\":1}}");
+            let document = Document::parse(&text)
+                .unwrap_or_else(|error| panic!("{name}: the comment ends: {error:?}"));
+            assert_eq!(document.to_text(), text, "{name}: round trip");
+            let comments = document.comments();
+            assert_eq!(comments.len(), 1, "{name}");
+            assert_eq!(
+                comments.first().map(|comment| comment.text.as_str()),
+                Some("// a note"),
+                "{name}"
+            );
+            assert_eq!(
+                comment_end(text.as_bytes(), 0),
+                Some(("// a note".len(), CommentKind::Line)),
+                "{name}"
+            );
+        }
+        assert_eq!(
+            comment_end(b"// to the end", 0),
+            Some(("// to the end".len(), CommentKind::Line))
         );
     }
 
