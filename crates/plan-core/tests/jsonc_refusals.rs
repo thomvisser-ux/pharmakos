@@ -87,7 +87,7 @@ const ROWS: &[Row] = &[
     row(
         "{\"a\": -}",
         "/byte/7",
-        grammar::EXPECTED_VALUE,
+        grammar::NUMBER_WITHOUT_DIGIT,
         "/byte/7",
         "a number needs at least one digit",
     ),
@@ -152,9 +152,11 @@ const ROWS: &[Row] = &[
         "/byte/7",
         "a raw control character is not allowed in a string",
     ),
+    // An escape that is wrong as a whole is refused at its backslash (fix
+    // pass 2, item D5: it pointed past the escape).
     row(
         "{\"a\": \"\\x\"}",
-        "/byte/9",
+        "/byte/7",
         "unknown escape `\\x`",
         "/byte/9",
         "unknown escape sequence",
@@ -175,14 +177,14 @@ const ROWS: &[Row] = &[
     ),
     row(
         "{\"a\": \"\\ud800\\u0041\"}",
-        "/byte/19",
+        "/byte/13",
         grammar::LONE_HIGH_SURROGATE,
         "/byte/19",
         "a high surrogate needs a low surrogate after it",
     ),
     row(
         "{\"a\": \"\\udc00\"}",
-        "/byte/13",
+        "/byte/7",
         grammar::NOT_A_SCALAR,
         "/byte/13",
         "that escape is not a character",
