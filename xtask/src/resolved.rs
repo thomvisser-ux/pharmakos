@@ -80,12 +80,6 @@
 //! before. The invocation selects every target of that name, so it is exempt
 //! for exactly the packages [`UNOPTIMISED_OWNERS`] names.
 
-#![expect(
-    dead_code,
-    clippy::unnecessary_wraps,
-    reason = "the tests come first: the next commit implements the checks"
-)]
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
@@ -151,8 +145,15 @@ const ENCODED_RUSTDOCFLAGS: &str = "CARGO_ENCODED_RUSTDOCFLAGS";
 /// `case_insensitive` (Windows, where `RustFlags` is `RUSTFLAGS` to every
 /// reader) the name is compared without regard to ASCII case.
 pub(crate) fn is_refused_variable(name: &str, case_insensitive: bool) -> bool {
-    let _ = (name, case_insensitive);
-    false
+    let name = if case_insensitive {
+        name.to_ascii_uppercase()
+    } else {
+        name.to_owned()
+    };
+    REFUSED_VARIABLES.contains(&name.as_str())
+        || name
+            .strip_prefix("CARGO_TARGET_")
+            .is_some_and(|rest| rest.ends_with("_RUSTFLAGS") || rest.ends_with("_RUSTDOCFLAGS"))
 }
 
 /// The refused variables `environment` sets to something other than nothing,
@@ -191,8 +192,13 @@ pub(crate) type EnvChange = (String, Option<String>);
 /// `\x1f`), no rustdocflags, no wrapper and no `RUSTC_BOOTSTRAP`, from any
 /// source.
 pub(crate) fn pinned_env(rustflags: &str) -> Vec<EnvChange> {
-    let _ = rustflags;
-    Vec::new()
+    vec![
+        (ENCODED_RUSTFLAGS.to_owned(), Some(rustflags.to_owned())),
+        (ENCODED_RUSTDOCFLAGS.to_owned(), Some(String::new())),
+        ("RUSTC_WRAPPER".to_owned(), Some(String::new())),
+        ("RUSTC_WORKSPACE_WRAPPER".to_owned(), Some(String::new())),
+        ("RUSTC_BOOTSTRAP".to_owned(), None),
+    ]
 }
 
 /// The `--message-format` a checked build reports with: cargo's JSON, whose
@@ -470,8 +476,9 @@ pub(crate) fn execute(
     cargo: &mut impl Cargo,
     diagnostics: &mut impl FnMut(&str),
 ) -> Result<(), String> {
-    let _ = (test, graph, cargo, diagnostics);
-    Ok(())
+    checked(cargo, &test.check(), graph, test.expect(), diagnostics)?;
+    let run = test.run();
+    cargo.run(&run.command_line(), &run.env)
 }
 
 /// Makes `call`, a build that reports itself, through `cargo`, handing each
@@ -485,8 +492,23 @@ pub(crate) fn checked(
     expect: Expect,
     diagnostics: &mut impl FnMut(&str),
 ) -> Result<Vec<Built>, String> {
-    let _ = (cargo, call, graph, expect, diagnostics);
-    Ok(Vec::new())
+    let (success, stdout) = cargo.report(&call.command_line(), &call.env)?;
+    let built = parse_messages(&stdout, diagnostics).map_err(|fault| fault.to_string())?;
+    if !success {
+        return Err(
+            "cargo failed, and its report ends in a successful `build-finished`".to_owned(),
+        );
+    }
+    let faults = faults(&built, graph, expect);
+    if faults.is_empty() {
+        Ok(built)
+    } else {
+        Err(faults
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("; "))
+    }
 }
 
 /// The check of a doctest run: cargo will not build doctests without running
@@ -902,8 +924,87 @@ pub(crate) fn parse_messages(
     text: &str,
     diagnostics: &mut impl FnMut(&str),
 ) -> Result<Vec<Built>, ProfileFault> {
-    let _ = (text, diagnostics);
-    Ok(Vec::new())
+    let mut built: Vec<Built> = Vec::new();
+    let mut finished = false;
+    let mut any = false;
+    // Numbered from 1 by a range that cannot overflow: a string holds fewer
+    // lines than bytes, and fewer bytes than `usize::MAX`.
+    for (line, text) in (1_usize..).zip(text.lines()) {
+        if text.trim().is_empty() {
+            continue;
+        }
+        any = true;
+        if finished {
+            return Err(ProfileFault::FinishedTwice { line });
+        }
+        let unreadable = |why: String| ProfileFault::Unreadable { line, why };
+        let message = Json::parse(text).map_err(unreadable)?;
+        let reason = string_of(&message, "reason").map_err(unreadable)?;
+        if !REASONS.contains(&reason) {
+            return Err(ProfileFault::UnknownReason {
+                line,
+                reason: reason.to_owned(),
+            });
+        }
+        if reason == "build-finished" {
+            if !bool_of(&message, "success").map_err(unreadable)? {
+                return Err(ProfileFault::BuildFailed);
+            }
+            finished = true;
+            continue;
+        }
+        if reason == "compiler-message" {
+            let diagnostic = member(&message, "message").map_err(unreadable)?;
+            match member(diagnostic, "rendered").map_err(unreadable)? {
+                Json::Str(rendered) => diagnostics(rendered),
+                Json::Null => {}
+                _ => {
+                    return Err(unreadable(
+                        "a diagnostic's `rendered` is neither text nor null".to_owned(),
+                    ));
+                }
+            }
+            continue;
+        }
+        if reason != "compiler-artifact" {
+            continue;
+        }
+        let target = member(&message, "target").map_err(unreadable)?;
+        let profile = member(&message, "profile").map_err(unreadable)?;
+        let level = string_of(profile, "opt_level").map_err(unreadable)?;
+        let opt_level = OptLevel::parse(level).ok_or_else(|| ProfileFault::BadOptLevel {
+            line,
+            value: level.to_owned(),
+        })?;
+        let executable = match member(&message, "executable").map_err(unreadable)? {
+            Json::Null => None,
+            Json::Str(path) => Some(path.clone()),
+            _ => {
+                return Err(unreadable(
+                    "`executable` is neither null nor a string".to_owned(),
+                ));
+            }
+        };
+        built.push(Built {
+            package_id: string_of(&message, "package_id")
+                .map_err(unreadable)?
+                .to_owned(),
+            target: string_of(target, "name").map_err(unreadable)?.to_owned(),
+            kinds: strings_of(target, "kind").map_err(unreadable)?,
+            opt_level,
+            debug_assertions: bool_of(profile, "debug_assertions").map_err(unreadable)?,
+            overflow_checks: bool_of(profile, "overflow_checks").map_err(unreadable)?,
+            filenames: strings_of(&message, "filenames").map_err(unreadable)?,
+            executable,
+        });
+    }
+    if !any {
+        return Err(ProfileFault::NothingBuilt);
+    }
+    if !finished {
+        return Err(ProfileFault::Unfinished);
+    }
+    Ok(built)
 }
 
 /// The graph [`faults`] needs, from `cargo metadata --format-version 1`
@@ -1008,8 +1109,92 @@ pub(crate) fn graph(metadata: &str) -> Result<Graph, ProfileFault> {
 /// Every way `built` breaks `expect` (the module docs). Empty when it keeps
 /// it.
 pub(crate) fn faults(built: &[Built], graph: &Graph, expect: Expect) -> Vec<ProfileFault> {
-    let _ = (built, graph, expect);
-    Vec::new()
+    let mut faults: Vec<ProfileFault> = Vec::new();
+    let mut sim_library = false;
+    for unit in built {
+        let Some(package) = graph.names.get(&unit.package_id) else {
+            faults.push(ProfileFault::UnknownPackage {
+                package_id: unit.package_id.clone(),
+            });
+            continue;
+        };
+        let target = unit.target.clone();
+        let member = graph.members.contains(&unit.package_id);
+        if member {
+            for (on, required, check) in [
+                (
+                    unit.debug_assertions,
+                    expect.debug_assertions,
+                    "debug assertions",
+                ),
+                (unit.overflow_checks, true, "overflow checks"),
+            ] {
+                if required && !on {
+                    faults.push(ProfileFault::CheckOff {
+                        package: package.clone(),
+                        target: target.clone(),
+                        check,
+                    });
+                }
+            }
+            // A build script runs on the host at the build-override's level;
+            // it is not the code the profile's optimisation is promised for.
+            if let Some(promised) = expect.workspace_opt
+                && !unit.is("custom-build")
+                && unit.opt_level != promised
+            {
+                faults.push(ProfileFault::WrongOptLevel {
+                    package: package.clone(),
+                    target: target.clone(),
+                    found: unit.opt_level,
+                    promised,
+                });
+            }
+        }
+        if graph.sim.as_deref() == Some(unit.package_id.as_str()) {
+            if unit.is("lib") || unit.is("rlib") {
+                sim_library = true;
+            }
+            match (expect.sim, unit.opt_level.optimised()) {
+                (SimRule::OptimisedIfBuilt, false) => {
+                    faults.push(ProfileFault::SimUnoptimised { target });
+                }
+                (SimRule::Unoptimised, true) => faults.push(ProfileFault::SimOptimised {
+                    target,
+                    opt_level: unit.opt_level,
+                }),
+                _ => {}
+            }
+        } else if member {
+            // A workspace member other than the sim: its checks are judged
+            // above, and its optimisation is not the suite's to require.
+        } else if expect.closure_optimised
+            && graph.sim_closure.contains(&unit.package_id)
+            && !unit.opt_level.optimised()
+        {
+            faults.push(ProfileFault::DependencyUnoptimised {
+                package: package.clone(),
+                target,
+            });
+        } else if expect.family && graph.godot_family.contains(&unit.package_id) {
+            if unit.opt_level.optimised() {
+                faults.push(ProfileFault::GodotOptimised {
+                    package: package.clone(),
+                    target,
+                    opt_level: unit.opt_level,
+                });
+            }
+        } else if expect.family && !unit.opt_level.optimised() {
+            faults.push(ProfileFault::StrayUnoptimised {
+                package: package.clone(),
+                target,
+            });
+        }
+    }
+    if matches!(expect.sim, SimRule::Unoptimised | SimRule::Built) && !sim_library {
+        faults.push(ProfileFault::SimNotBuilt);
+    }
+    faults
 }
 
 #[cfg(test)]

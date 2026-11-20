@@ -1393,8 +1393,16 @@ struct ProfileScan {
 /// own `opt-level`, or else, for `release-checked`, which inherits `release`,
 /// the release profile's, or else cargo's default for a release profile, 3.
 fn promised_opt_level(scan: &ProfileScan, profile: &str) -> Result<resolved::OptLevel, String> {
-    let _ = (scan, profile);
-    Err("not yet".to_owned())
+    let chain = [format!("profile.{profile}"), "profile.release".to_owned()];
+    let written = chain.iter().find_map(|table| scan.opt_levels.get(table));
+    match written {
+        Some(text) => resolved::OptLevel::parse(text).ok_or_else(|| {
+            format!(
+                "Cargo.toml gives `{profile}` the opt-level `{text}`, which cargo does not take"
+            )
+        }),
+        None => Ok(resolved::OptLevel::O3),
+    }
 }
 
 /// Every way the manifest's `[profile.dev.package.<name>]` tables disagree
@@ -1402,8 +1410,47 @@ fn promised_opt_level(scan: &ProfileScan, profile: &str) -> Result<resolved::Opt
 /// cargo resolves is stale, and a table at opt-level 0 for a package outside
 /// the godot family keeps a crate unoptimised the suite runs optimised.
 fn dev_package_table_failures(scan: &ProfileScan, graph: &resolved::Graph) -> Vec<String> {
-    let _ = (scan, graph);
-    Vec::new()
+    let family = graph.godot_family_names();
+    let mut failures: Vec<String> = Vec::new();
+    for (table, level) in &scan.opt_levels {
+        let Some(spec) = table.strip_prefix("profile.dev.package.") else {
+            continue;
+        };
+        if spec == "*" {
+            continue;
+        }
+        let name = spec.split_once('@').map_or(spec, |(name, _)| name);
+        if !graph.has_package(name) {
+            failures.push(format!(
+                "Cargo.toml's [{table}] names `{name}`, which no package cargo resolves is \
+                 called: remove the table"
+            ));
+        } else if level == "0"
+            && name != resolved::SIM
+            && !family.iter().any(|member| member == name)
+        {
+            failures.push(format!(
+                "Cargo.toml's [{table}] keeps `{name}` at opt-level 0, and `{name}` is not of \
+                 the godot family ({}), the only third-party crates the suite builds \
+                 unoptimised: remove the table",
+                family.join(", ")
+            ));
+        }
+    }
+    for member in &family {
+        if scan
+            .opt_levels
+            .get(&format!("profile.dev.package.{member}"))
+            .map(String::as_str)
+            != Some("0")
+        {
+            failures.push(format!(
+                "`{member}` is of the godot family, and Cargo.toml has no \
+                 `[profile.dev.package.{member}]` with `opt-level = 0`"
+            ));
+        }
+    }
+    failures
 }
 
 /// The tables in `manifest` and `config`, each named with the file it is in.
@@ -2160,12 +2207,16 @@ fn research_test_args(
 /// (`#`, `:`, `/`, `\\`) there; the test steps refuse both, because which
 /// packages one selects is cargo's resolution to make, and a step that judged
 /// it by guessing would run, or skip, the sim's checks on a guess.
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "the tests come first: the next commit refuses a glob"
-)]
 fn package_spec_name(spec: &str) -> Result<&str, String> {
-    Ok(spec)
+    let name = spec.split_once('@').map_or(spec, |(before, _)| before);
+    if spec.contains(['*', '?', '[', '#', ':', '/', '\\']) || name.is_empty() {
+        return Err(format!(
+            "--package `{spec}` is not a package's name or `name@version`; the test steps \
+             take those alone, so which packages they test, and whether the sim is among \
+             them, is exact"
+        ));
+    }
+    Ok(name)
 }
 
 /// `fork` lives behind the `research` feature, and release builds never enable
@@ -4177,13 +4228,55 @@ impl Json {
 /// without its other half is not a character and is refused, never read as
 /// U+FFFD. The one escape decoder in xtask: the JSON reader and the licence
 /// check's quotation reader both read escapes through it.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the tests come first: the next commit uses it")
-)]
 pub(crate) fn json_escape(rest: &str) -> Result<(char, usize), String> {
-    let _ = rest;
-    Err("not yet".to_owned())
+    let hex4 = |at: usize| -> Result<u32, String> {
+        let digits = rest
+            .get(at..at + 4)
+            .ok_or_else(|| "a `\\u` escape ends before its four hex digits".to_owned())?;
+        if !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(format!("bad \\u escape `{digits}`"));
+        }
+        u32::from_str_radix(digits, 16).map_err(|error| format!("bad \\u escape: {error}"))
+    };
+    let simple = match rest.as_bytes().first() {
+        None => return Err("unterminated JSON escape".to_owned()),
+        Some(b'"') => '"',
+        Some(b'\\') => '\\',
+        Some(b'/') => '/',
+        Some(b'b') => '\u{0008}',
+        Some(b'f') => '\u{000c}',
+        Some(b'n') => '\n',
+        Some(b'r') => '\r',
+        Some(b't') => '\t',
+        Some(b'u') => {
+            let code = hex4(1)?;
+            return match code {
+                0xD800..=0xDBFF => {
+                    if rest.get(5..7) != Some("\\u") {
+                        return Err(format!("an unpaired high surrogate \\u{code:04x}"));
+                    }
+                    let low = hex4(7)?;
+                    if !(0xDC00..=0xDFFF).contains(&low) {
+                        return Err(format!(
+                            "the high surrogate \\u{code:04x} is followed by \\u{low:04x}, not a \
+                             low surrogate"
+                        ));
+                    }
+                    char::from_u32(0x1_0000 + ((code - 0xD800) << 10) + (low - 0xDC00))
+                        .map(|character| (character, 11))
+                        .ok_or_else(|| format!("\\u{code:04x}\\u{low:04x} is not a character"))
+                }
+                0xDC00..=0xDFFF => Err(format!("an unpaired low surrogate \\u{code:04x}")),
+                _ => char::from_u32(code)
+                    .map(|character| (character, 5))
+                    .ok_or_else(|| format!("\\u{code:04x} is not a character")),
+            };
+        }
+        Some(other) => {
+            return Err(format!("unknown JSON escape `\\{}`", char::from(*other)));
+        }
+    };
+    Ok((simple, 1))
 }
 
 struct JsonParser<'a> {
@@ -4328,55 +4421,19 @@ impl JsonParser<'_> {
                 }
                 b'\\' => {
                     self.index += 1;
-                    let escape = self
-                        .peek()
-                        .ok_or_else(|| "unterminated JSON escape".to_owned())?;
-                    self.index += 1;
-                    match escape {
-                        b'"' => out.push('"'),
-                        b'\\' => out.push('\\'),
-                        b'/' => out.push('/'),
-                        b'b' => out.push('\u{0008}'),
-                        b'f' => out.push('\u{000c}'),
-                        b'n' => out.push('\n'),
-                        b'r' => out.push('\r'),
-                        b't' => out.push('\t'),
-                        b'u' => {
-                            let code = self.hex4()?;
-                            // A character beyond the Basic Multilingual Plane
-                            // is a surrogate pair; a surrogate without its
-                            // other half is not a character, and is refused
-                            // rather than read as U+FFFD.
-                            let character = match code {
-                                0xD800..=0xDBFF => {
-                                    self.literal("\\u").map_err(|_| {
-                                        format!("an unpaired high surrogate \\u{code:04x}")
-                                    })?;
-                                    let low = self.hex4()?;
-                                    if !(0xDC00..=0xDFFF).contains(&low) {
-                                        return Err(format!(
-                                            "the high surrogate \\u{code:04x} is followed by \
-                                             \\u{low:04x}, not a low surrogate"
-                                        ));
-                                    }
-                                    char::from_u32(
-                                        0x1_0000 + ((code - 0xD800) << 10) + (low - 0xDC00),
-                                    )
-                                }
-                                0xDC00..=0xDFFF => {
-                                    return Err(format!("an unpaired low surrogate \\u{code:04x}"));
-                                }
-                                _ => char::from_u32(code),
-                            };
-                            out.push(
-                                character
-                                    .ok_or_else(|| format!("\\u{code:04x} is not a character"))?,
-                            );
-                        }
-                        other => {
-                            return Err(format!("unknown JSON escape `\\{}`", char::from(other)));
-                        }
-                    }
+                    // One escape is at most 11 bytes after its backslash
+                    // (`uXXXX\uXXXX`), all ASCII: read that much, as text.
+                    let window = self
+                        .bytes
+                        .iter()
+                        .skip(self.index)
+                        .take(11)
+                        .take_while(|byte| byte.is_ascii())
+                        .count();
+                    let text = self.slice(self.index, self.index + window)?;
+                    let (character, used) = json_escape(text)?;
+                    out.push(character);
+                    self.index += used;
                 }
                 // Everything else is copied through in one chunk. Bytes >= 0x80
                 // belong to multi-byte UTF-8 sequences and never collide with
@@ -4396,19 +4453,6 @@ impl JsonParser<'_> {
                 }
             }
         }
-    }
-
-    /// Four hex digits of a `\u` escape, as a code unit.
-    fn hex4(&mut self) -> Result<u32, String> {
-        let end = self.index + 4;
-        let digits = self.slice(self.index, end)?;
-        if !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            return Err(format!("bad \\u escape `{digits}`"));
-        }
-        let code =
-            u32::from_str_radix(digits, 16).map_err(|error| format!("bad \\u escape: {error}"))?;
-        self.index = end;
-        Ok(code)
     }
 
     fn number(&mut self) -> Result<Json, String> {

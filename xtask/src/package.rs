@@ -804,15 +804,47 @@ fn build(ctx: &Ctx, platform: &Platform) -> Result<(PathBuf, PathBuf), String> {
 /// of the one `cdylib` unit of the client package. None, or more than one, is
 /// refused.
 fn reported_library(built: &[resolved::Built], platform: &Platform) -> Result<PathBuf, String> {
-    let _ = (built, platform);
-    Err("not yet".to_owned())
+    let files: Vec<PathBuf> = built
+        .iter()
+        .filter(|unit| unit.is("cdylib"))
+        .flat_map(|unit| unit.filenames.iter())
+        .map(PathBuf::from)
+        .filter(|path| {
+            path.file_name()
+                .is_some_and(|name| name == std::ffi::OsStr::new(platform.library))
+        })
+        .collect();
+    match files.as_slice() {
+        [one] => Ok(one.clone()),
+        [] => Err(format!(
+            "cargo's report of the client build names no `{}`",
+            platform.library
+        )),
+        _ => Err(format!(
+            "cargo's report of the client build names `{}` more than once",
+            platform.library
+        )),
+    }
 }
 
 /// The executable of the one `bin` unit called `name` a build reported. None,
 /// or more than one, is refused.
 fn reported_executable(built: &[resolved::Built], name: &str) -> Result<PathBuf, String> {
-    let _ = (built, name);
-    Err("not yet".to_owned())
+    let found: Vec<&resolved::Built> = built
+        .iter()
+        .filter(|unit| unit.target == name && unit.is("bin"))
+        .collect();
+    match found.as_slice() {
+        [unit] => unit
+            .executable
+            .as_ref()
+            .map(PathBuf::from)
+            .ok_or_else(|| format!("cargo reported the `{name}` binary with no executable")),
+        [] => Err(format!("cargo's report names no `{name}` binary")),
+        _ => Err(format!(
+            "cargo's report names more than one `{name}` binary"
+        )),
+    }
 }
 
 /// Runs a command with its standard output and error both written to `log`.
