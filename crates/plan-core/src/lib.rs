@@ -95,6 +95,7 @@ pub mod patch;
 pub mod projection;
 pub mod render;
 pub mod shape;
+pub mod stack;
 pub mod strings;
 pub mod travel;
 pub mod verify;

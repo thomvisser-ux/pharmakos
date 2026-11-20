@@ -574,6 +574,33 @@ fn no_wildcard_binding_is_written_anywhere() {
     );
 }
 
+/// Every thread the gateway makes is made on a stated stack (S3's `vfyq2`,
+/// fix pass 2, item E): through `pharmakos_plan_core::stack::player_text_thread`,
+/// never `std::thread::spawn` (the platform's default, which `RUST_MIN_STACK`
+/// moves) nor a builder of its own (a second size). The surface thread answers
+/// every method and the connection threads parse every frame, so the depth
+/// bound is a stack bound only on the stack this names.
+const THREADS_ON_A_STATED_STACK: &[(&str, &str)] = &[
+    (
+        "thread::spawn",
+        "a thread on the platform's default stack: use player_text_thread",
+    ),
+    (
+        "thread::Builder",
+        "a thread builder of its own: use player_text_thread",
+    ),
+];
+
+#[test]
+fn every_thread_the_gateway_makes_is_on_the_stated_stack() {
+    let findings = scan(THREADS_ON_A_STATED_STACK);
+    assert!(
+        findings.is_empty(),
+        "every gateway thread is made by player_text_thread:\n{}",
+        findings.join("\n")
+    );
+}
+
 #[test]
 fn the_gateway_never_dials_out() {
     let findings = scan(NO_OUTBOUND);
