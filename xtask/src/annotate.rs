@@ -85,26 +85,39 @@ fn encode(text: &str) -> String {
 }
 
 /// Truncates on a character boundary, never inside a `%0A` escape — a half
-/// escape would be published as literal `%0` and read as corruption.
+/// escape would be published as literal `%0` and read as corruption. `text`
+/// is [`encode`]d, so every `%` in it starts a three-byte escape: the cut is
+/// the last character boundary at or below `cap`, moved back to the `%` of an
+/// escape it would split. Every position is a character's, so no slice can
+/// fall off a boundary.
 fn truncate(text: &str, cap: usize) -> String {
     if text.len() <= cap {
         return text.to_owned();
     }
-    let mut end = cap;
-    while end > 0 && !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    // Back off over a partial escape: at most the two characters after a `%`.
-    for step in 0..3 {
-        let candidate = end.saturating_sub(step);
-        let tail = text
-            .get(candidate.saturating_sub(2)..candidate)
-            .unwrap_or("");
-        if !tail.contains('%') {
-            return format!("{} …", text.get(..candidate).unwrap_or(""));
+    // The characters that fit, with where each starts.
+    let fitting: Vec<(usize, char)> = text
+        .char_indices()
+        .take_while(|(at, character)| at + character.len_utf8() <= cap)
+        .collect();
+    let mut keep = fitting.len();
+    // An escape is `%` and two characters: a `%` among the last two kept
+    // characters starts one the cut would split.
+    for back in 1..=2 {
+        if let Some(index) = keep.checked_sub(back)
+            && fitting
+                .get(index)
+                .is_some_and(|(_, character)| *character == '%')
+        {
+            keep = index;
+            break;
         }
     }
-    format!("{} …", text.get(..end.saturating_sub(3)).unwrap_or(""))
+    let head: String = fitting
+        .iter()
+        .take(keep)
+        .map(|(_, character)| *character)
+        .collect();
+    format!("{head} …")
 }
 
 #[cfg(test)]

@@ -377,6 +377,8 @@ fn check_map(json: &Json, problems: &mut Vec<Problem>) {
 
     match map.get("seed").and_then(Json::as_str) {
         Some(seed) => {
+            // No `0x` leaves no digits, which the check below reports as a
+            // malformed seed: the absence is a reported problem, not a default.
             let digits = seed.strip_prefix("0x").unwrap_or("");
             let well_formed = digits.len() == 16
                 && digits
@@ -446,6 +448,8 @@ fn check_seats(root: &Path, json: &Json, problems: &mut Vec<Problem>) -> usize {
             )),
         }
 
+        // A missing or non-string kind is read as none, which the check below
+        // reports as a problem at `/kind`.
         let kind = seat.get("kind").and_then(Json::as_str).unwrap_or("");
         if !SEAT_KINDS.contains(&kind) {
             problems.push(Problem::new(
@@ -623,6 +627,8 @@ fn check_assertions(root: &Path, json: &Json, nightly: bool, problems: &mut Vec<
             problems.push(Problem::new(&base, "must be an object"));
             continue;
         };
+        // A missing or non-string kind is read as none, which the checks below
+        // report as a problem at `/assert`.
         let kind = assertion.get("assert").and_then(Json::as_str).unwrap_or("");
         if RESERVED_ASSERTIONS.contains(&kind) {
             problems.push(Problem::new(
@@ -861,6 +867,8 @@ fn strip_comments(text: &str) -> String {
             // byte length as the original, which is why comments become spaces
             // rather than disappearing.
             if byte >= 0x80 {
+                // `index` advances a whole character at a time, so it is a
+                // boundary inside `text` and the default is never read.
                 let rest = text.get(index..).unwrap_or("");
                 match rest.chars().next() {
                     Some(character) => {
@@ -927,6 +935,8 @@ fn strip_comments(text: &str) -> String {
             out.push(char::from(byte));
             index += 1;
         } else {
+            // `index` advances a whole character at a time, so it is a
+            // boundary inside `text` and the default is never read.
             let rest = text.get(index..).unwrap_or("");
             match rest.chars().next() {
                 Some(character) => {

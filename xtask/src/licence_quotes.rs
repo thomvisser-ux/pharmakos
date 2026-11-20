@@ -56,7 +56,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
-use std::iter::Peekable;
 use std::path::Path;
 use std::str::Chars;
 
@@ -163,7 +162,7 @@ fn units(text: &str) -> Vec<(String, bool)> {
     };
     for line in text.lines() {
         let whole_line_comment = line.trim_start().starts_with("//");
-        let mut chars = line.chars().peekable();
+        let mut chars = line.chars();
         let mut in_string = false;
         let mut current = String::new();
         let mut comment = String::new();
@@ -185,7 +184,7 @@ fn units(text: &str) -> Vec<(String, bool)> {
                 }
             } else if c == '"' {
                 in_string = true;
-            } else if c == '/' && chars.peek() == Some(&'/') {
+            } else if c == '/' && chars.clone().next() == Some('/') {
                 in_comment = true;
                 chars.next();
             }
@@ -217,56 +216,25 @@ fn collapse(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// The four hex digits of a `\u` escape.
-fn hex4(chars: &mut Peekable<Chars<'_>>) -> Option<u32> {
-    let digits: String = chars.by_ref().take(4).collect();
-    if digits.chars().count() == 4 {
-        u32::from_str_radix(&digits, 16).ok()
+/// One JSON string escape, read after its backslash, as a quotation reads it:
+/// decoded by xtask's one escape decoder ([`crate::json_escape`]), the shared
+/// JSON reader's, so the two never read an escape differently; and `\n \t \r
+/// \b \f` become a space, as all whitespace does here. `None`, with `chars`
+/// untouched, when what follows is not a JSON escape the decoder accepts:
+/// the text scanned here is any tracked file's, where a backslash that starts
+/// no escape (a Rust `\u{...}`, a Windows path, an unpaired surrogate) is
+/// text, and is read as itself.
+fn escape(chars: &mut Chars<'_>) -> Option<String> {
+    let rest = chars.as_str();
+    let (character, used) = crate::json_escape(rest).ok()?;
+    let whitespace = rest.starts_with(['n', 't', 'r', 'b', 'f']);
+    // An escape is ASCII, so its `used` bytes end on a character boundary.
+    *chars = rest.get(used..)?.chars();
+    Some(if whitespace {
+        " ".to_owned()
     } else {
-        None
-    }
-}
-
-/// One JSON string escape, read after its backslash: the whole of JSON's set (`\n \t \r \b
-/// \f` become a space, `\" \\ \/` themselves, `\uXXXX` its character, a surrogate pair the
-/// one character it spells). `None`, with `chars` untouched, when what follows is not one.
-fn escape(chars: &mut Peekable<Chars<'_>>) -> Option<String> {
-    let next = *chars.peek()?;
-    match next {
-        'n' | 't' | 'r' | 'b' | 'f' => {
-            chars.next();
-            Some(" ".to_owned())
-        }
-        '"' | '\\' | '/' => {
-            chars.next();
-            Some(next.to_string())
-        }
-        'u' => {
-            let mut look = chars.clone();
-            look.next();
-            let unit = hex4(&mut look)?;
-            let decoded = match unit {
-                0xD800..=0xDBFF => {
-                    let mut pair = look.clone();
-                    let low = (pair.next() == Some('\\') && pair.next() == Some('u'))
-                        .then(|| hex4(&mut pair))
-                        .flatten()
-                        .filter(|low| (0xDC00..=0xDFFF).contains(low));
-                    match low {
-                        Some(low) => {
-                            look = pair;
-                            char::from_u32(0x10000 + ((unit - 0xD800) << 10) + (low - 0xDC00))
-                        }
-                        None => None,
-                    }
-                }
-                other => char::from_u32(other),
-            };
-            *chars = look;
-            Some(decoded.unwrap_or('\u{fffd}').to_string())
-        }
-        _ => None,
-    }
+        character.to_string()
+    })
 }
 
 /// A file's text in the form quotations are matched against: JSON string escapes undone, the
@@ -275,7 +243,7 @@ fn escape(chars: &mut Peekable<Chars<'_>>) -> Option<String> {
 /// sides cannot read an escape differently.
 fn normalise(text: &str) -> String {
     let mut unescaped = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
+    let mut chars = text.chars();
     while let Some(c) = chars.next() {
         if c == '\\' {
             match escape(&mut chars) {
