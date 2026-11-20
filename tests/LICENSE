@@ -18,6 +18,12 @@ take the game's licence, the same as crates/ and xtask/. Most of them cannot
 carry a header at all — a .txt hash chain, a .png — which is what ../REUSE.toml
 is for.
 
+A golden that reproduces a sentence of a library/ template (the template render
+goldens, the instantiate_template answers and the hold_and_build determinism
+playbook among them) carries the library's licence beside the game's, as one
+expression, `GPL-3.0-or-later AND (MIT OR Apache-2.0)`; ../REUSE.toml records it
+file by file and the `reuse` step checks it (decisions log item 164).
+
 FOUR CARVE-OUTS are `MIT OR Apache-2.0`, for the same reason crates/proto is
 one: a third party writing a playbook tool needs them as the reference they
 are. `tests/golden/proto/**` is canonical gp.v1 JSON and views of the schema —

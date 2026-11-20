@@ -15,7 +15,8 @@ an SPDX header, so a single file taken out of the tree still says what it is.
     godot/**    the Godot project: GDScript views and editor UI
     scenarios/** the headless matches that assert on the goldens
     tests/**    the goldens and test data (four golden areas are the
-                exception — see below)
+                exception — see below; a golden that quotes library/ also
+                carries its licence: GPL-3.0-or-later AND (MIT OR Apache-2.0))
     Full text:  LICENSES/GPL-3.0-or-later.txt
 
 
