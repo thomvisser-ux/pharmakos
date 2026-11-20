@@ -276,3 +276,21 @@ fn a_playbook_at_the_cap_takes_a_shortening_patch_and_refuses_a_lengthening_one(
     let longer = r#"[{"op":"add","path":"/meta/note","value":"n"}]"#;
     assert_eq!(bound_of(&text, longer), Some(Bound::Size));
 }
+
+/// Each operation that can grow a document is refused at the operation that
+/// would take it past the cap (S3's `vfyq2`, fix pass 2, item A4: the
+/// security review's `no_size_check` and `no_copy_precheck` mutants
+/// survived the tests before).
+#[test]
+fn every_growing_operation_past_the_cap_is_refused() {
+    let text = at_the_cap();
+    let longer_title = "x".repeat(MAX_PLAYBOOK_CHARS + 2 - MINIMAL.chars().count());
+    for patch in [
+        r#"[{"op":"add","path":"/meta/note","value":"n"}]"#.to_owned(),
+        format!(r#"[{{"op":"replace","path":"/meta/title","value":"{longer_title}"}}]"#),
+        r#"[{"op":"move","from":"/meta/title","path":"/meta/a_longer_key_than_title"}]"#.to_owned(),
+        r#"[{"op":"copy","from":"/kind","path":"/kind_copy"}]"#.to_owned(),
+    ] {
+        assert_eq!(bound_of(&text, &patch), Some(Bound::Size), "{patch}");
+    }
+}

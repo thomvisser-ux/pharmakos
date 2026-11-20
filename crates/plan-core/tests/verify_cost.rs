@@ -328,3 +328,37 @@ fn a_long_pointer_costs_bytes_linear_in_its_length() {
         );
     }
 }
+
+/// A `copy` that would take the document past the cap is refused before it
+/// copies (S3's `vfyq2`, fix pass 2, item A4): `apply` copies the document
+/// once to work on, and refusing first means nothing more. A copy taken and
+/// then refused asks for the copied subtree again, about the document's size.
+#[test]
+fn a_copy_past_the_cap_is_refused_before_it_copies() {
+    use pharmakos_plan_core::jsonc::Document;
+    use pharmakos_plan_core::patch::{Patch, apply};
+    let title = "x".repeat(pharmakos_verifier::MAX_PLAYBOOK_CHARS >> 1);
+    let text = format!(r#"{{"meta":{{"title":"{title}"}}}}"#);
+    let document = Document::parse(&text).expect("a document");
+    // What `apply` asks for to copy the document and work on it, with nothing
+    // copied: a `remove` of a member that is not there.
+    let baseline_patch =
+        Patch::from_text(r#"[{"op":"remove","path":"/meta/nothing"}]"#).expect("a patch");
+    let before = bytes();
+    let _ = apply(&document, &baseline_patch);
+    let baseline = bytes().saturating_sub(before);
+    let patch =
+        Patch::from_text(r#"[{"op":"copy","from":"/meta","path":"/copy"}]"#).expect("a patch");
+    let before = bytes();
+    let refused = apply(&document, &patch).expect_err("past the cap");
+    let asked = bytes().saturating_sub(before);
+    assert_eq!(refused.bound, Some(pharmakos_plan_core::error::Bound::Size));
+    // Copying `/meta` would ask for its title again, raw and unescaped: about
+    // twice the text's length more than the baseline.
+    let slack = u64::try_from(text.len() >> 2).expect("a length");
+    assert!(
+        asked <= baseline + slack,
+        "a refused copy asked for {asked} bytes against {baseline} with nothing copied: it \
+         copied before it refused"
+    );
+}
