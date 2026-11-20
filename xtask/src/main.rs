@@ -2337,9 +2337,24 @@ impl resolved::Cargo for ProcessCargo {
     fn prepare_run(&mut self) -> Result<(), String> {
         let xtask = env::current_exe()
             .map_err(|error| format!("finding xtask's own executable: {error}"))?;
+        runner_exists(&xtask)?;
         self.runner = Some(runner_spelling(&xtask, &self.root)?);
         Ok(())
     }
+}
+
+/// Whether this xtask's executable, `xtask`, is still there to be named as
+/// the runner.
+fn runner_exists(xtask: &Path) -> Result<(), String> {
+    if !xtask.as_os_str().is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "xtask's own executable {} is no longer there: a build replaced it while it ran, \
+         which happens when a checked build and the `cargo xtask` alias build it with \
+         different settings",
+        xtask.display()
+    ))
 }
 
 /// This xtask, `xtask`, as the runner's `--config` names it to cargo, which
@@ -5765,6 +5780,18 @@ mod tests {
         )
         .expect_err("a header the pins turn off");
         assert!(error.contains("does not guess"), "{error}");
+    }
+
+    /// A runner whose executable a build replaced while it ran (Linux's
+    /// `current_exe` then answers `<path> (deleted)`) is refused with the
+    /// true cause, not as a path with whitespace.
+    #[test]
+    fn a_runner_that_is_gone_is_refused() {
+        let here = env::current_exe().expect("the test knows its executable");
+        assert_eq!(runner_exists(&here), Ok(()));
+        let gone = here.with_file_name("xtask-replaced-while-it-ran (deleted)");
+        let error = runner_exists(&gone).expect_err("gone");
+        assert!(error.contains("replaced"), "{error}");
     }
 
     /// The runner is named relative to cargo's working directory when it

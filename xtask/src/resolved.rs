@@ -3455,6 +3455,44 @@ mod tests {
         }
     }
 
+    /// The repository's `.cargo/config.toml` turns both wrappers off, as the
+    /// checked calls pin them off on their command line: cargo hashes an
+    /// empty wrapper into a unit's metadata unlike no wrapper at all
+    /// (measured, Windows and Linux), so only both sides naming it alike let
+    /// `cargo xtask` and a plain `cargo` share one build.
+    #[test]
+    fn the_repository_config_turns_the_wrappers_off_as_xtask_does() {
+        let config = include_str!("../../.cargo/config.toml");
+        let mut table: Option<&str> = None;
+        let mut wrappers: Vec<String> = Vec::new();
+        for line in config.lines().map(str::trim) {
+            if line.starts_with('[') {
+                table = Some(line);
+                continue;
+            }
+            if table == Some("[build]")
+                && (line.starts_with("rustc-wrapper")
+                    || line.starts_with("rustc-workspace-wrapper"))
+            {
+                wrappers.push(format!("build.{}", line.replace(' ', "")));
+            }
+        }
+        wrappers.sort();
+        let mut pinned: Vec<String> = pinned_config()
+            .into_iter()
+            .filter(|value| value.contains("wrapper"))
+            .collect();
+        pinned.sort();
+        assert_eq!(
+            wrappers,
+            [
+                "build.rustc-workspace-wrapper=\"\"",
+                "build.rustc-wrapper=\"\""
+            ]
+        );
+        assert_eq!(wrappers, pinned);
+    }
+
     /// The repository's `.cargo/config.toml` names the same default linker
     /// for the same hosts as [`DEFAULT_LINKERS`], so `cargo xtask` and a plain
     /// `cargo` resolve one linker and share one build.
