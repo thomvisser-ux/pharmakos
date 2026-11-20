@@ -1537,3 +1537,239 @@ fn a_second_wave_launches_at_the_nearest_known_beacon_left() {
         "at most two waves"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The breach search reads the terrain by the surface's own step rule (lane
+// `settle`, fix pass 2): a wall joined only corner to corner seals the way for
+// walkers, so it seals it for the breach search's wall-free moves too, and a
+// sealed way always crosses a wall.
+// ---------------------------------------------------------------------------
+
+/// `seat`'s wall voxels, `height` high from the ground, on each column of
+/// `columns`, given as offsets from `centre`.
+fn wall_columns(
+    world: &mut World,
+    centre: [Fx; 3],
+    columns: &[(i32, i32)],
+    height: i32,
+    of: SeatId,
+) {
+    let [cx, cy] = column(centre);
+    let wall = Material::wall(of, false).expect("a wall id");
+    for &(dx, dy) in columns {
+        let (x, y) = (cx + dx, cy + dy);
+        let top = world.standing_point([x, y, 0])[2].floor_voxels();
+        for z in top..top + height {
+            world
+                .request_voxel_edit(VoxelEdit::Set {
+                    at: [x, y, z],
+                    material: wall,
+                    by: None,
+                })
+                .expect("a wall voxel is filed");
+        }
+    }
+}
+
+/// A diamond, `|dx| + |dy| == half`: one voxel thick, every column joined to
+/// the next only corner to corner, as any wall drawn along a diagonal is.
+fn diamond(half: i32) -> Vec<(i32, i32)> {
+    let mut columns = Vec::new();
+    for dy in -half..=half {
+        for dx in -half..=half {
+            if dx.abs() + dy.abs() == half {
+                columns.push((dx, dy));
+            }
+        }
+    }
+    columns
+}
+
+/// Four straight wall boxes round a square, their ends meeting only corner to
+/// corner: the square's four corner columns are left open.
+fn corner_to_corner(half: i32) -> Vec<(i32, i32)> {
+    let mut columns = Vec::new();
+    for along in (1 - half)..half {
+        columns.extend([(along, half), (along, -half), (half, along), (-half, along)]);
+    }
+    columns
+}
+
+/// The square ring of [`wall_ring`], as columns.
+fn ring(half: i32) -> Vec<(i32, i32)> {
+    let mut columns = Vec::new();
+    for dy in -half..=half {
+        for dx in -half..=half {
+            if dx.abs() == half || dy.abs() == half {
+                columns.push((dx, dy));
+            }
+        }
+    }
+    columns
+}
+
+/// A world with seat 1's wall on `columns` round a point 24 columns east of
+/// the field, settled: the field, and that point.
+fn enclosed(columns: &[(i32, i32)], height: i32) -> (World, [Fx; 3], [Fx; 3]) {
+    let mut fixture = world();
+    let here = field(&fixture);
+    let inside = ground(&fixture, here, 24, 0);
+    wall_columns(&mut fixture, inside, columns, height, seat(1));
+    fixture.step(&mut Enc::default()).expect("the walls settle");
+    (fixture, here, inside)
+}
+
+/// The breach search from `from` to `to` for seat 0, after the oracle has
+/// called the way sealed.
+fn sealed_breach(
+    world: &World,
+    from: [Fx; 3],
+    to: [Fx; 3],
+) -> Result<pharmakos_sim::attack::Breach, pharmakos_sim::attack::BreachRefused> {
+    let surface = world.surface();
+    let node = |at: [Fx; 3]| {
+        let [x, y] = column(at);
+        surface.node_of(x, y).expect("a column")
+    };
+    let (start, goal) = (node(from), node(to));
+    assert!(
+        !world.clusters().connected(surface, start, goal),
+        "the oracle calls the way sealed"
+    );
+    let mut scratch = BreachScratch::new(surface.node_count());
+    breach_search(world, &mut scratch, seat(0), start, goal)
+}
+
+/// Whether the breach's wall is one of `columns` round `inside`.
+fn on_the_wall(breach: [i32; 3], inside: [Fx; 3], columns: &[(i32, i32)]) -> bool {
+    let [cx, cy] = column(inside);
+    columns.contains(&(breach[0] - cx, breach[1] - cy))
+}
+
+/// A raid with `breach` allowed from the field on the point inside `columns`:
+/// the raider plants a charge, it fires, and the raider gets in; no breach
+/// search is refused.
+fn raid_gets_through(columns: &[(i32, i32)], height: i32, crater: Option<(i32, i32)>) {
+    let mut fixture = world();
+    let here = field(&fixture);
+    let inside = ground(&fixture, here, 24, 0);
+    wall_columns(&mut fixture, inside, columns, height, seat(1));
+    if let Some((dx, dy)) = crater {
+        let [cx, cy] = column(inside);
+        let z = fixture.standing_point([cx + dx, cy + dy, 0])[2].floor_voxels();
+        fixture.step(&mut Enc::default()).expect("the walls settle");
+        fixture
+            .request_voxel_edit(VoxelEdit::Crater {
+                centre: [cx + dx, cy + dy, z + 2],
+                radius: 1,
+                by: None,
+            })
+            .expect("the crater is filed");
+    }
+    let post = attack(
+        &mut fixture,
+        seat(0),
+        here,
+        FREE_FIRE,
+        AttackSettings {
+            breach: true,
+            ..raid(Aim::Voxel(voxel(inside)), 1)
+        },
+    );
+    let raider = unit(&mut fixture, seat(0), post, UnitKind::Raider, here);
+    let mut runner = Runner::new(fixture).expect("a world from `World::new`");
+    runner
+        .world_mut()
+        .step(&mut Enc::default())
+        .expect("the terrain settles");
+    assert_eq!(runner.begin_push(), Ok(true));
+    let mut log = Vec::new();
+    let through = play_until(&mut runner, 6_000, &mut log, |world, _| {
+        within(unit_at(world, raider), inside, 2)
+    });
+    let counts = runner.world().attack_counts();
+    assert_eq!(
+        (counts.breach_exhausted, counts.breach_no_way),
+        (0, 0),
+        "no breach search is refused"
+    );
+    assert!(
+        through,
+        "the raider gets in (planted {}, detonated {}, ended {})",
+        fired(&log, EventKind::ChargePlanted),
+        fired(&log, EventKind::ChargeDetonated),
+        fired(&log, EventKind::AttackEnded),
+    );
+}
+
+#[test]
+fn the_breach_search_breaches_a_diagonal_wall() {
+    let columns = diamond(5);
+    let (world, here, inside) = enclosed(&columns, 3);
+    let breach = sealed_breach(&world, here, inside).expect("a breach of the diamond");
+    assert!(
+        on_the_wall(breach.wall, inside, &columns),
+        "the breach {:?} is on the diamond",
+        breach.wall
+    );
+}
+
+#[test]
+fn the_breach_search_breaches_boxes_joined_corner_to_corner() {
+    let columns = corner_to_corner(5);
+    let (world, here, inside) = enclosed(&columns, 3);
+    let breach = sealed_breach(&world, here, inside).expect("a breach of the boxes");
+    assert!(
+        on_the_wall(breach.wall, inside, &columns),
+        "the breach {:?} is on a box",
+        breach.wall
+    );
+}
+
+#[test]
+fn a_raid_breaches_a_diagonal_wall_and_gets_in() {
+    raid_gets_through(&diamond(5), 3, None);
+}
+
+#[test]
+fn a_raid_breaches_boxes_joined_corner_to_corner_and_gets_in() {
+    raid_gets_through(&corner_to_corner(5), 3, None);
+}
+
+#[test]
+fn a_raid_breaches_a_cratered_ring_and_gets_in() {
+    raid_gets_through(&ring(4), 3, Some((4, 4)));
+}
+
+/// A lead standing on an enemy wall (a one-high stub beside a ring, which a
+/// walker climbs as it climbs any one-voxel step) is read where it stands: the
+/// breach is the ring's wall beside it, planted from the stub's top.
+#[test]
+fn a_lead_on_a_wall_plants_from_where_it_stands() {
+    let mut fixture = world();
+    let here = field(&fixture);
+    let inside = ground(&fixture, here, 24, 0);
+    wall_columns(&mut fixture, inside, &ring(4), 3, seat(1));
+    wall_columns(&mut fixture, inside, &[(-5, 0)], 1, seat(1));
+    fixture.step(&mut Enc::default()).expect("the walls settle");
+    let [cx, cy] = column(inside);
+    let stub = fixture.surface().node_of(cx - 5, cy).expect("the stub");
+    let stub_top = fixture.surface().top(stub);
+    let on_stub = fixture.standing_point([cx - 5, cy, 0]);
+    assert_eq!(
+        on_stub[2].floor_voxels(),
+        stub_top + 1,
+        "a walker on the stub stands on its wall voxel"
+    );
+    let breach = sealed_breach(&fixture, on_stub, inside).expect("a breach from the stub");
+    assert_eq!(
+        breach.plant,
+        [cx - 5, cy, stub_top],
+        "planted from the stub"
+    );
+    assert!(
+        on_the_wall(breach.wall, inside, &ring(4)),
+        "the breach {:?} is on the ring",
+        breach.wall
+    );
+}
