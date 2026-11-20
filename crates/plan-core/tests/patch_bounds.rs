@@ -227,3 +227,54 @@ fn no_seeded_patch_grows_a_document_past_the_cap() {
         "{applied} {refused_by_size}"
     );
 }
+
+/// `measure` counts what `to_text` writes, character for character (S3's
+/// `vfyq2`, fix pass 2, item A3): it counted a separator after every member,
+/// so a playbook at the cap, which the verifier accepts, could not be patched
+/// at all.
+#[test]
+fn a_documents_measure_is_the_length_of_its_text() {
+    let mut texts = playbooks();
+    texts.extend(
+        [
+            "{}",
+            "{ }",
+            "[ /* c */ ]",
+            "{ // c\n}",
+            "{\"a\":1}",
+            "{\"a\":[1, 2 ,3], \"b\" : {\"c\":null} }",
+            " // lead\n[ [], {}, \"é\" ] /* tail */ ",
+        ]
+        .map(str::to_owned),
+    );
+    for text in &texts {
+        let document = Document::parse(text).expect("a document");
+        assert_eq!(
+            document.measure().chars,
+            document.to_text().chars().count(),
+            "{text:?}"
+        );
+    }
+}
+
+/// A playbook of exactly `MAX_PLAYBOOK_CHARS` characters, its title padded.
+fn at_the_cap() -> String {
+    let short = MINIMAL.replace("\"title\":\"t\"", "\"title\":\"\"");
+    let pad = MAX_PLAYBOOK_CHARS - short.chars().count();
+    short.replace(
+        "\"title\":\"\"",
+        &format!("\"title\":\"{}\"", "x".repeat(pad)),
+    )
+}
+
+#[test]
+fn a_playbook_at_the_cap_takes_a_shortening_patch_and_refuses_a_lengthening_one() {
+    let text = at_the_cap();
+    assert_eq!(text.chars().count(), MAX_PLAYBOOK_CHARS);
+    // One character shorter: the verifier accepts the file before and after.
+    let title = "x".repeat(MAX_PLAYBOOK_CHARS - MINIMAL.chars().count());
+    let shorter = format!(r#"[{{"op":"replace","path":"/meta/title","value":"{title}"}}]"#);
+    patch_text(&text, &shorter).expect("a shortening patch applies at the cap");
+    let longer = r#"[{"op":"add","path":"/meta/note","value":"n"}]"#;
+    assert_eq!(bound_of(&text, longer), Some(Bound::Size));
+}
