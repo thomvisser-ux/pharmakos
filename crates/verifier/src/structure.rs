@@ -209,6 +209,12 @@ pub(crate) fn run(playbook: &Playbook, limits: &Limits, out: &mut Builder) {
             },
             Some(fallback::Posture::Patrol(patrol)) => {
                 let at = "/fallback/patrol/waypoints";
+                // A patrol walks its waypoints for ever: with none it walks
+                // nowhere, and the sim's compile refuses it (S3's `vfyq2`,
+                // fix pass 1, item 6).
+                if patrol.waypoints.is_empty() {
+                    out.emit(Diag::new("E0101", at).arg("what", "`waypoints`"));
+                }
                 for (index, waypoint) in patrol.waypoints.iter().enumerate() {
                     check_location(Some(waypoint), &pointer::at(at, index), "`waypoint`", out);
                 }
@@ -380,6 +386,37 @@ fn walk_action(kind: &step::Kind, at: &str, out: &mut Builder) {
                                 Diag::new("E0101", pointer::child(&row_at, "queue_structure"))
                                     .arg("what", "`blueprint_id`"),
                             );
+                        }
+                    }
+                    // A row that adds or removes a Build target names it; the
+                    // sim's compile requires both blocks (S3's `vfyq2`, fix
+                    // pass 1, item 6). The target's own anchor is checked
+                    // where every Build target is ([`Sites::build_target`]).
+                    Some(interface_row::Row::AddBuildTarget(add)) => {
+                        if add.target.is_none() {
+                            out.emit(
+                                Diag::new(
+                                    "E0101",
+                                    pointer::child(
+                                        &pointer::child(&row_at, "add_build_target"),
+                                        "target",
+                                    ),
+                                )
+                                .arg("what", "`target`"),
+                            );
+                        }
+                    }
+                    Some(interface_row::Row::RemoveBuildTarget(remove)) => {
+                        let anchor_at = pointer::child(
+                            &pointer::child(&row_at, "remove_build_target"),
+                            "anchor",
+                        );
+                        match remove.anchor.as_ref() {
+                            None => out.emit(Diag::new("E0101", anchor_at).arg("what", "`anchor`")),
+                            Some(anchor) if anchor.place.is_none() => {
+                                out.emit(Diag::new("E0111", anchor_at).arg("field", "place"));
+                            }
+                            Some(_) => {}
                         }
                     }
                     Some(_) => {}
@@ -595,6 +632,20 @@ impl Visit for Sites<'_> {
     }
 
     fn build_target(&mut self, at: &str, target: &BuildTarget) {
+        // Every Build target, under whichever carrier, stands at an anchor:
+        // the sim's compile requires the block and a place in it (S3's
+        // `vfyq2`, fix pass 1, item 6), and so does every later rule that
+        // reads the target.
+        let anchor_at = pointer::child(at, "anchor");
+        match target.anchor.as_ref() {
+            None => self
+                .out
+                .emit(Diag::new("E0101", anchor_at).arg("what", "`anchor`")),
+            Some(anchor) if anchor.place.is_none() => self
+                .out
+                .emit(Diag::new("E0111", anchor_at).arg("field", "place")),
+            Some(_) => {}
+        }
         // The one blueprint that fills a box (`crate::BLUEPRINT_SLOTS`).
         if crate::blueprints::fills_a_box(&target.blueprint_id) {
             self.wall(at, target);
@@ -755,8 +806,9 @@ impl Sites<'_> {
             .as_ref()
             .and_then(|anchor| anchor.place.as_ref())
         {
-            // A target with no anchor names nothing to remove it by, which is
-            // the same for every blueprint and is not the wall's question.
+            // A target with no anchor, or none naming a place, is refused for
+            // every blueprint by `build_target` above; it is not the wall's
+            // question.
             None => {}
             Some(location::Place::Voxel(voxel)) => {
                 let within = |value: i32, from: i32, to: i32| value >= from && value <= to;
