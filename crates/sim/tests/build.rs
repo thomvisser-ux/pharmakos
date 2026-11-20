@@ -217,7 +217,7 @@ fn targets_build_in_their_order() {
         .map(|(_, (order, turns))| (*order, *turns))
         .collect();
     assert_eq!(rows, vec![(5, 0), (1, 3), (1, 2)], "the list as written");
-    let snapshot = Snapshot::capture(world);
+    let snapshot = Snapshot::capture(world).expect("a world between ticks");
     let mut restored = self::world();
     snapshot
         .restore_into(&mut restored)
@@ -409,7 +409,7 @@ fn an_area_rides_the_snapshot_and_a_value_out_of_range_is_refused_by_name() {
             )
             .is_ok()
     );
-    let snapshot = Snapshot::capture(&fixture);
+    let snapshot = Snapshot::capture(&fixture).expect("a world between ticks");
     let mut restored = world();
     snapshot
         .restore_into(&mut restored)
@@ -952,7 +952,7 @@ fn an_unknown_byte_in_a_coded_column_is_refused_by_name() {
             )
             .is_ok()
     );
-    let mut good = Snapshot::capture(&fixture);
+    let mut good = Snapshot::capture(&fixture).expect("a world between ticks");
     // A sighting row, so the sighting column has a byte to spoil: seat 0
     // remembers seat 1's core.
     good.sighting_seat.push(0);

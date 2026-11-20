@@ -980,7 +980,7 @@ fn a_held_seam_survives_save_and_restore_and_a_vent_is_refused() {
     let mut runner = Runner::new(fixture);
     assert!(runner.begin_push().unwrap());
     play(&mut runner, 600);
-    let saved = Snapshot::capture(runner.world());
+    let saved = Snapshot::capture(runner.world()).expect("a world between ticks");
     let mut resumed = world(&[180_000]);
     saved.restore_into(&mut resumed).expect("the save restores");
     assert_eq!(resumed.state_hash(), runner.world().state_hash());

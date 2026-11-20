@@ -5208,7 +5208,8 @@ mod tests {
                     beside,
                 )
                 .expect("room for a Spire");
-            *snapshot = pharmakos_sim::snapshot::Snapshot::capture(&world);
+            *snapshot =
+                pharmakos_sim::snapshot::Snapshot::capture(&world).expect("a world between ticks");
         });
         let ours = surface.verifier_scope(SeatId::new(0)).expect("a scope");
         assert_eq!(ours.licences(), [Licence::ResonanceSpire]);
@@ -5265,7 +5266,8 @@ mod tests {
                     beside,
                 )
                 .expect("room for a Spire");
-            *snapshot = pharmakos_sim::snapshot::Snapshot::capture(&world);
+            *snapshot =
+                pharmakos_sim::snapshot::Snapshot::capture(&world).expect("a world between ticks");
         })
     }
 

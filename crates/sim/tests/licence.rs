@@ -245,7 +245,10 @@ fn a_licence_held_survives_a_save_and_a_restore() {
     let saved = runner.world().clone();
     assert!(!saved.licences().is_empty(), "a licence is held");
 
-    let bytes = Snapshot::capture(&saved).to_bytes().expect("encoding");
+    let bytes = Snapshot::capture(&saved)
+        .expect("a world between ticks")
+        .to_bytes()
+        .expect("encoding");
     let decoded = Snapshot::from_bytes(&bytes).expect("decoding");
     assert_eq!(decoded.licence_seat, vec![0]);
     assert_eq!(decoded.licence_kind, vec![1]);
@@ -268,7 +271,7 @@ fn a_licence_held_survives_a_save_and_a_restore() {
 fn a_restore_refuses_a_licence_no_run_writes() {
     let mut world = world(2);
     world.award_licence_directly(SeatId::new(1), Licence::ResonanceSpire, 1);
-    let good = Snapshot::capture(&world);
+    let good = Snapshot::capture(&world).expect("a world between ticks");
 
     let mut unknown = good.clone();
     unknown.licence_kind = vec![0];

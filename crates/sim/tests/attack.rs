@@ -634,6 +634,11 @@ fn a_breach_sends_a_charge_to_the_wall_and_resumes() {
         0,
         "a breach cut drops nothing"
     );
+    assert_eq!(
+        runner.world().attack_counts().breach_no_wall,
+        0,
+        "a breach search found a wall-free way the settled oracle called sealed"
+    );
 }
 
 #[test]
@@ -953,7 +958,10 @@ fn an_attack_in_a_breach_survives_save_and_restore() {
     });
     assert!(planted, "state worth saving: a planted charge");
     assert!(row(runner.world(), post).breach.is_some());
-    let bytes = Snapshot::capture(runner.world()).to_bytes().unwrap();
+    let bytes = Snapshot::capture(runner.world())
+        .expect("a world between ticks")
+        .to_bytes()
+        .unwrap();
     let (mut copy, _, _, _) = walled(3);
     Snapshot::from_bytes(&bytes)
         .unwrap()
@@ -968,6 +976,14 @@ fn an_attack_in_a_breach_survives_save_and_restore() {
         runner.clear_events();
         copy.clear_events();
     }
+    assert_eq!(
+        (
+            runner.world().attack_counts().breach_no_wall,
+            copy.world().attack_counts().breach_no_wall
+        ),
+        (0, 0),
+        "a breach search found a wall-free way the settled oracle called sealed"
+    );
 }
 
 #[test]
@@ -1237,7 +1253,10 @@ fn the_nearest_known_beacon_aim_is_hashed_and_survives_save_and_restore() {
         hunt.state_hash(),
         "the aim's tag is hashed apart from the seatless hunt's"
     );
-    let bytes = Snapshot::capture(&beacon_raid).to_bytes().unwrap();
+    let bytes = Snapshot::capture(&beacon_raid)
+        .expect("a world between ticks")
+        .to_bytes()
+        .unwrap();
     let mut copy = settle(Aim::Commander(None));
     Snapshot::from_bytes(&bytes)
         .unwrap()

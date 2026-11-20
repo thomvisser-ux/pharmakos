@@ -1250,3 +1250,203 @@ fn covering_beacon_reads_a_spires_grown_sphere() {
         "the core's grown sphere covers it"
     );
 }
+
+/// The settings of [`a_lull_after_a_last_tick_crater_reads_as_its_save_does`]:
+/// a Push of 200 ticks.
+const SHORT_SEGMENT_MS: i32 = 10_000;
+
+/// The three planning reads that read the hosted world's pathing graph, as
+/// seat 0 makes them, each answer's `result` with its `_status` footer taken
+/// out (the footer is the clock's, which a resume restarts).
+fn graph_reads(surface: &mut Surface, vent: &str) -> Vec<Json> {
+    let token = support::seat_token(surface, 0);
+    let mut left = LULL_MS;
+    let [x, y, z] = support::commander_voxel(surface, 0);
+    let calls = [
+        ("get_map_summary", String::from("{}")),
+        (
+            "resolve_refs",
+            format!(
+                r#"{{"playbook_jsonc":{}}}"#,
+                support::quote(&cover_and_build())
+            ),
+        ),
+        (
+            "estimate_route",
+            format!(
+                r#"{{"waypoints":[{{"voxel":{{"x":{x},"y":{y},"z":{z}}}}},{{"covering":{{"feature_id":"{vent}"}}}}]}}"#
+            ),
+        ),
+    ];
+    calls
+        .iter()
+        .map(|(method, params)| {
+            let answer = call_in_lull(surface, &token, &mut left, method, params);
+            match result(&answer, method) {
+                Json::Object(fields) => Json::Object(
+                    fields
+                        .into_iter()
+                        .filter(|(key, _)| key != "_status")
+                        .collect(),
+                ),
+                other => other,
+            }
+        })
+        .collect()
+}
+
+/// Seat 0's nearest vent by its own `get_map_summary`, and three craters at
+/// the quarters of the route its commander would walk there.
+fn nearest_vent_and_its_way(surface: &mut Surface) -> (String, Vec<[i32; 3]>) {
+    use pharmakos_sim::pathing::{Scratch, route::route};
+    let token = support::seat_token(surface, 0);
+    let mut left = FIRST_LULL_MS;
+    let summary = result(
+        &call_in_lull(surface, &token, &mut left, "get_map_summary", "{}"),
+        "get_map_summary",
+    );
+    let (vent, column) = array_of(&summary, "features")
+        .into_iter()
+        .filter(|feature| text_of(feature, "kind") == "vent")
+        .filter(|feature| feature.get("reachable") == Some(&Json::Bool(true)))
+        .min_by_key(|feature| (number(feature, "travel_ms"), text_of(feature, "feature_id")))
+        .map(|feature| {
+            (
+                text_of(&feature, "feature_id"),
+                [number(&feature, "x"), number(&feature, "y")],
+            )
+        })
+        .expect("seat 0 reaches a vent");
+    let world = surface.host().expect("hosted").world();
+    let [cx, cy, _] = support::commander_voxel(surface, 0);
+    let start = world
+        .surface()
+        .node_of(cx, cy)
+        .expect("the commander's column");
+    let goal = world
+        .surface()
+        .node_of(
+            i32::try_from(column[0]).expect("a column"),
+            i32::try_from(column[1]).expect("a column"),
+        )
+        .expect("the vent's column");
+    let mut scratch =
+        Scratch::for_map(world.surface(), world.clusters().size()).expect("a scratch");
+    let mut walk = Vec::new();
+    route(
+        world.surface(),
+        world.clusters(),
+        &mut scratch,
+        start,
+        goal,
+        &mut walk,
+    )
+    .expect("the commander's way to the vent");
+    let craters = [1_usize, 2, 3]
+        .into_iter()
+        .map(|quarter| {
+            let node = walk
+                .get((walk.len() * quarter).div_euclid(4))
+                .copied()
+                .expect("a column of the way");
+            let (x, y) = world.surface().coord_of(node);
+            [x, y, world.voxels().top_solid_z(x, y).expect("a floor")]
+        })
+        .collect();
+    (vent, craters)
+}
+
+/// The match of [`a_lull_after_a_last_tick_crater_reads_as_its_save_does`],
+/// resumed from `saved` on a fresh surface and host.
+fn resumed_from(saved: &pharmakos_gateway::save::SavedMatch) -> Surface {
+    let host = pharmakos_gateway::host::Host::open(
+        &pharmakos_sim::world::WorldConfig {
+            match_seed: support::SEED,
+            seats: 2,
+            rules: support::rules(),
+            match_settings: pharmakos_sim::runner::MatchSettings {
+                segment_lengths_ms: vec![SHORT_SEGMENT_MS],
+                round_limit: 3,
+            },
+        },
+        None,
+    )
+    .expect("a match");
+    Surface::new(
+        MATCH,
+        support::SEED,
+        support::rules(),
+        FogPolicy::fogged(),
+        &[SeatId::new(0), SeatId::new(1)],
+    )
+    .expect("a surface")
+    .resume(
+        host,
+        saved,
+        pharmakos_gateway::save::Continuation {
+            generation: 1,
+            last_tick: 0,
+        },
+    )
+    .expect("the Lull resumes")
+}
+
+/// A Lull opened after a Push whose last tick cratered seat 0's way to its
+/// nearest vent reads the graph its save restores (lane `settle`). The
+/// graph is settled in the phase that edits the terrain, so the hosted world
+/// the Lull's `get_map_summary`, `resolve_refs` and `estimate_route` read is
+/// the one a resume from that Lull's save rebuilds, and the answers are
+/// byte-equal. Before the lane the last tick's marks waited for the next
+/// Push's Pathing phase: the live Lull read a stale graph over a fresh surface
+/// and the resumed one a fresh graph, and `get_map_summary` priced seat 0's
+/// walk to `seam_348_31` at 13 400 ms live and 12 800 ms resumed.
+#[test]
+fn a_lull_after_a_last_tick_crater_reads_as_its_save_does() {
+    use pharmakos_sim::voxels::VoxelEdit;
+    let mut surface = support::hosted(2, SHORT_SEGMENT_MS, 3);
+    let (vent, craters) = nearest_vent_and_its_way(&mut surface);
+    surface.begin_push().expect("the Push begins");
+    let ticks = surface
+        .host()
+        .expect("hosted")
+        .world()
+        .match_state()
+        .segment_ticks();
+    assert_eq!(
+        support::step(&mut surface, ticks - 1),
+        ticks - 1,
+        "the Push runs to its last tick"
+    );
+    for centre in craters {
+        surface
+            .host_mut()
+            .expect("hosted")
+            .file_voxel_edit(VoxelEdit::Crater {
+                centre,
+                radius: 3,
+                by: None,
+            })
+            .expect("the queue takes a crater");
+    }
+    assert_eq!(support::step(&mut surface, 1), 1, "the last tick craters");
+    assert_eq!(support::step(&mut surface, 1), 0, "the Push has ended");
+    surface.end_recap().expect("the recap ends");
+    surface
+        .set_phase_remaining_ms(Ms::new(LULL_MS))
+        .expect("a custom match takes a countdown");
+    surface.open_lull().expect("round 2's Lull");
+    let live = graph_reads(&mut surface, &vent);
+    let mut resumed = resumed_from(&surface.lull_save().expect("a Lull saves"));
+    let again = graph_reads(&mut resumed, &vent);
+    for ((method, live), again) in ["get_map_summary", "resolve_refs", "estimate_route"]
+        .into_iter()
+        .zip(&live)
+        .zip(&again)
+    {
+        assert_eq!(
+            pharmakos_proto::json::write(live),
+            pharmakos_proto::json::write(again),
+            "{method} reads one graph in the live Lull and another after its save resumes"
+        );
+    }
+}

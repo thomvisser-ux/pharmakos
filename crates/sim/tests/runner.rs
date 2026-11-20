@@ -1180,7 +1180,7 @@ fn a_tick_left_open_after_its_match_phase_blocks_every_transition() {
         runner.seal_playbook(SeatId::new(0), a_plan()),
         Err(pharmakos_sim::runner::SealRefused::MidTick)
     );
-    let saved = Snapshot::capture(runner.world());
+    let saved = Snapshot::capture(runner.world()).expect("a world between ticks");
     assert_eq!(runner.restore(&saved), Err(SnapshotError::MidTick));
     assert!(runner.capture().is_err());
     // Finishing the tick lets the match move on.

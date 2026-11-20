@@ -306,7 +306,7 @@ fn beacons_lost_survives_save_and_restore() {
     );
     assert_eq!(beacons_lost(runner.world(), seat(2)), 1);
 
-    let saved = Snapshot::capture(runner.world());
+    let saved = Snapshot::capture(runner.world()).expect("a world between ticks");
     let mut resumed = world();
     saved.restore_into(&mut resumed).expect("the save restores");
     assert_eq!(

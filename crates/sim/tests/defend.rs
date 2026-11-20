@@ -278,7 +278,7 @@ fn the_most_threatened_beacon_holds_the_most_threat() {
     unit(&mut world, seat(1), enemy_home, UnitKind::Raider, spot_6);
     assert_eq!(resolve_beacon_now(&world, seat(0), spec), Some(quiet));
     // The frozen snapshot answers as the live world does.
-    let snapshot = Snapshot::capture(&world);
+    let snapshot = Snapshot::capture(&world).expect("a world between ticks");
     assert_eq!(
         resolve_beacon_in(&snapshot, world.rules(), seat(0), spec, None),
         Some(quiet)
@@ -534,7 +534,7 @@ fn a_wounded_commander_is_walked_to_a_repair_drone() {
         resolve_beacon_now(runner.world(), seat(0), BeaconSpec::Safest),
         Some(mended)
     );
-    let snapshot = Snapshot::capture(runner.world());
+    let snapshot = Snapshot::capture(runner.world()).expect("a world between ticks");
     assert_eq!(
         resolve_beacon_in(
             &snapshot,
@@ -697,7 +697,7 @@ fn the_frozen_snapshot_ranks_as_the_live_world_does() {
     );
     play(&mut runner, 1);
     let world = runner.world();
-    let snapshot = Snapshot::capture(world);
+    let snapshot = Snapshot::capture(world).expect("a world between ticks");
     for spec in [
         BeaconSpec::Safest,
         BeaconSpec::MostThreatened(Filter::default()),
@@ -747,7 +747,10 @@ fn a_guard_in_pursuit_survives_save_and_restore() {
         row.leg > 0 || row.quarry != NO_QUARRY,
         "state worth saving: {row:?}"
     );
-    let bytes = Snapshot::capture(runner.world()).to_bytes().unwrap();
+    let bytes = Snapshot::capture(runner.world())
+        .expect("a world between ticks")
+        .to_bytes()
+        .unwrap();
     let mut copy = Runner::new(world());
     Snapshot::from_bytes(&bytes)
         .unwrap()
@@ -828,7 +831,10 @@ fn the_explored_table_survives_save_and_restore() {
     let other = beacon(&mut world, seat(0), spot_8, MandateKind::Build, 0);
     assert!(world.set_defend(post, holding(Pursue::WhileInReach, true), &[other]));
     let hash = world.state_hash();
-    let bytes = Snapshot::capture(&world).to_bytes().unwrap();
+    let bytes = Snapshot::capture(&world)
+        .expect("a world between ticks")
+        .to_bytes()
+        .unwrap();
     let mut restored = self::world();
     Snapshot::from_bytes(&bytes)
         .unwrap()

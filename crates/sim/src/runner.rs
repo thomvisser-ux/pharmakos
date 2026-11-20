@@ -704,11 +704,13 @@ pub struct FrozenSnapshot {
 }
 
 impl FrozenSnapshot {
-    /// Freeze `world` as it stands.
+    /// Freeze `world` as it stands, at a closed and settled tick: every
+    /// caller is the runner's own, and each says at the call why its world
+    /// is one ([`Snapshot::capture_closed`]).
     #[must_use]
-    pub fn of(world: &World) -> FrozenSnapshot {
+    pub(crate) fn of(world: &World) -> FrozenSnapshot {
         FrozenSnapshot {
-            snapshot: Snapshot::capture(world),
+            snapshot: Snapshot::capture_closed(world),
             state_hash: world.state_hash(),
         }
     }
@@ -855,6 +857,10 @@ impl Runner {
             tick,
             Emission::of(EventKind::LullOpened).value(i64::from(round)),
         );
+        // Closed and settled: `World::new` returns a world with no tick open
+        // and nothing marked, which is what both of this crate's callers
+        // outside tests hand in (the gateway's `Host::open`, the bench's
+        // fourth seat).
         let frozen = FrozenSnapshot::of(&world);
         Runner {
             world,
@@ -1078,6 +1084,8 @@ impl Runner {
         if segment_ended {
             // Outside the tick, deliberately: a capture allocates, and a tick
             // must not. It happens once a segment.
+            // Closed and settled: `world.step` or `end_tick` returned `Ok`, so
+            // the tick closed and its Voxels phase settled the graph.
             self.frozen = FrozenSnapshot::of(&self.world);
         }
         TickReport {
@@ -1186,6 +1194,8 @@ impl Runner {
             return Err(LayoutRefused::AfterASeal);
         }
         self.world.seed_layout(layout, settings)?;
+        // Closed and settled: the lobby check above refused an open tick, and
+        // a layout places beacons and units and edits no voxel.
         self.frozen = FrozenSnapshot::of(&self.world);
         Ok(())
     }
@@ -1194,14 +1204,12 @@ impl Runner {
     ///
     /// # Errors
     ///
-    /// [`TickError::MidTick`] while a tick is open between phases: a capture
-    /// then would be of half a tick (S2's plan, E30). [`Snapshot::capture`]
-    /// itself stays infallible, because nothing else reaches a world mid-tick.
-    pub fn capture(&self) -> Result<Snapshot, TickError> {
-        if self.world.tick_is_open() {
-            return Err(TickError::MidTick);
-        }
-        Ok(Snapshot::capture(&self.world))
+    /// As [`Snapshot::capture`]: [`SnapshotError::MidTick`] while a tick is
+    /// open between phases, a capture then being of half a tick (S2's plan,
+    /// E30), and [`SnapshotError::Unsettled`] when a cluster is waiting for
+    /// its repair.
+    pub fn capture(&self) -> Result<Snapshot, SnapshotError> {
+        Snapshot::capture(&self.world)
     }
 
     /// Whether a tick is open between two of its phases ([`PhasedTick`]).
@@ -1234,6 +1242,8 @@ impl Runner {
             return Err(SnapshotError::MidTick);
         }
         snapshot.restore_into(&mut self.world)?;
+        // Closed and settled: a restore lands between ticks with its graph
+        // rebuilt fresh from the restored store and nothing marked.
         self.frozen = FrozenSnapshot::of(&self.world);
         Ok(())
     }

@@ -861,7 +861,9 @@ impl Ended {
 pub struct AttackCounts {
     /// A breach search that spent [`BREACH_EXPANSIONS`] and found no way.
     pub breach_exhausted: u64,
-    /// A breach search whose way crossed no wall: the seal is not a wall's.
+    /// A breach search whose way crossed no wall after the oracle called the
+    /// way sealed: the attack ends sealed. Zero on a graph settled in the
+    /// phase that edits the terrain (lane `settle`), and held there by a test.
     pub breach_no_wall: u64,
     /// A breach search that found no way at all, wall or none.
     pub breach_no_way: u64,
@@ -1660,10 +1662,12 @@ fn seal_or_breach(
         world.put_breach_scratch(scratch);
         match found {
             Ok(breach) => row.breach = Some(breach),
-            // A way that crosses no wall is a way a walker takes: the
-            // oracle has not caught up with an edit yet (it is repaired in
-            // the next Pathing phase), so the force walks on.
-            Err(BreachRefused::NoWall) => world.count_breach_refused(BreachRefused::NoWall),
+            // Every refusal ends the attack sealed, counted under its reason.
+            // `NoWall` among them: the graph is settled in the phase that
+            // edits the terrain (lane `settle`), so the oracle that called
+            // the way sealed agrees with the columns the search walked, and a
+            // wall-free way after a "sealed" answer is two readers of one
+            // terrain disagreeing, which `tests/attack.rs` holds at zero.
             Err(refused) => {
                 world.count_breach_refused(refused);
                 end(world, row, post, Ended::Sealed);
@@ -1937,7 +1941,9 @@ pub(crate) fn raid_target(
 pub enum BreachRefused {
     /// It spent [`BREACH_EXPANSIONS`] without reaching the goal.
     Exhausted,
-    /// It reached the goal without crossing a wall: the seal is not a wall's.
+    /// It reached the goal without crossing a wall: the seal is not a wall's,
+    /// and the oracle that called it sealed disagrees with the columns the
+    /// search walked. The attack ends sealed and counts it.
     NoWall,
     /// No way exists even through walls.
     NoWay,

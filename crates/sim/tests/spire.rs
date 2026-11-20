@@ -395,7 +395,10 @@ fn a_grown_sphere_survives_a_save_and_a_restore() {
     );
     let saved = runner.world().clone();
     let core = core(&saved);
-    let bytes = Snapshot::capture(&saved).to_bytes().expect("encoding");
+    let bytes = Snapshot::capture(&saved)
+        .expect("a world between ticks")
+        .to_bytes()
+        .expect("encoding");
     let mut restored = world();
     Snapshot::from_bytes(&bytes)
         .expect("decoding")
@@ -1025,7 +1028,10 @@ fn the_grown_flag_survives_a_save_and_a_restore() {
         .raise_structure(SEAT, core, StructureKind::ResonanceSpire, beside)
         .expect("room for a Spire");
     assert_ne!(world.state_hash(), bare);
-    let bytes = Snapshot::capture(&world).to_bytes().expect("encoding");
+    let bytes = Snapshot::capture(&world)
+        .expect("a world between ticks")
+        .to_bytes()
+        .expect("encoding");
     let mut restored = self::world();
     Snapshot::from_bytes(&bytes)
         .expect("decoding")

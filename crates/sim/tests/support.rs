@@ -1701,7 +1701,7 @@ fn collapse_credits_the_blast() {
                 hashes.push((tick, report.hash));
             }
             if restore && tick == 60 {
-                let saved = Snapshot::capture(runner.world());
+                let saved = Snapshot::capture(runner.world()).expect("a world between ticks");
                 let mut fresh = world(2);
                 saved.restore_into(&mut fresh).expect("restores");
                 assert_eq!(fresh.state_hash(), runner.world().state_hash());

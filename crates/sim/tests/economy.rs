@@ -371,7 +371,8 @@ fn a_restored_match_keeps_the_unbroken_runs_unit_limit() {
         "the unbroken run's ceiling does not move as it fabricates"
     );
 
-    let saved = pharmakos_sim::snapshot::Snapshot::capture(runner.world());
+    let saved =
+        pharmakos_sim::snapshot::Snapshot::capture(runner.world()).expect("a world between ticks");
     let mut resumed = world(&[60_000]);
     saved
         .restore_into(&mut resumed)

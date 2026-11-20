@@ -1441,7 +1441,7 @@ fn a_restored_world_rebuilds_the_graph_it_was_saved_with() {
         tick += 1;
     }
     let fingerprint = world.clusters().fingerprint();
-    let snapshot = pharmakos_sim::Snapshot::capture(&world);
+    let snapshot = pharmakos_sim::Snapshot::capture(&world).expect("a world between ticks");
     let bytes = snapshot.to_bytes().expect("a snapshot encodes");
 
     let mut restored = harness_world(4);
@@ -2585,6 +2585,7 @@ fn file_wall(world: &mut World, wall: &[[i32; 3]], material: Material) {
 /// way: what a resumed match starts from.
 fn resumed_from(world: &World) -> World {
     let bytes = pharmakos_sim::snapshot::Snapshot::capture(world)
+        .expect("a world between ticks")
         .to_bytes()
         .expect("a snapshot encodes");
     let mut resumed = harness_world(0);
@@ -2798,4 +2799,151 @@ fn a_lull_saved_after_a_last_tick_edit_resumes_onto_the_live_chain() {
             "the resumed match left the live chain on tick {tick} of the Push"
         );
     }
+}
+
+/// A coordinate on an axis of `extent` cells, drawn so that cluster borders,
+/// cluster corners and the map's edges come up often: a quarter of draws land
+/// within a cell of a cluster border, a quarter within three cells of an
+/// edge, and half anywhere.
+fn edgy_coordinate(rng: &mut Rng, extent: i32) -> i32 {
+    match rng.below(4) {
+        0 => {
+            let border = rng.below(extent.div_euclid(CLUSTER) + 1) * CLUSTER;
+            (border + rng.below(3) - 1).clamp(0, extent - 1)
+        }
+        1 => {
+            if rng.below(2) == 0 {
+                rng.below(3)
+            } else {
+                extent - 1 - rng.below(3)
+            }
+        }
+        _ => rng.below(extent),
+    }
+}
+
+/// One tick's edits: none on a third of ticks, else one to six around an
+/// anchor or scattered, each a stack of stone up to six high along a row of
+/// up to eight columns, an air hole three deep, a crater or a cut.
+fn mixed_edits(world: &World, rng: &mut Rng) -> Vec<VoxelEdit> {
+    let size = world.voxels().size();
+    let [sx, sy, sz] = size.map(|extent| i32::try_from(extent).expect("a map extent fits an i32"));
+    let mut edits = Vec::new();
+    if rng.below(3) == 0 {
+        return edits;
+    }
+    let anchor = (edgy_coordinate(rng, sx), edgy_coordinate(rng, sy));
+    for _ in 0..=rng.below(6) {
+        let (x, y) = if rng.below(2) == 0 {
+            (
+                (anchor.0 + rng.below(9) - 4).clamp(0, sx - 1),
+                (anchor.1 + rng.below(9) - 4).clamp(0, sy - 1),
+            )
+        } else {
+            (edgy_coordinate(rng, sx), edgy_coordinate(rng, sy))
+        };
+        let Some(top) = world.voxels().top_solid_z(x, y) else {
+            continue;
+        };
+        match rng.below(5) {
+            0 => {
+                let height = 1 + rng.below(6);
+                let along_x = rng.below(2) == 0;
+                for step in 0..=rng.below(8) {
+                    let (px, py) = if along_x {
+                        (x + step, y)
+                    } else {
+                        (x, y + step)
+                    };
+                    if px >= sx || py >= sy {
+                        break;
+                    }
+                    let base = world.voxels().top_solid_z(px, py).unwrap_or(top);
+                    for z in (base + 1)..=(base + height).min(sz - 1) {
+                        edits.push(VoxelEdit::Set {
+                            at: [px, py, z],
+                            material: Material::STONE,
+                            by: None,
+                        });
+                    }
+                }
+            }
+            1 => {
+                for z in (top - 2).max(1)..=top {
+                    edits.push(VoxelEdit::Set {
+                        at: [x, y, z],
+                        material: Material::AIR,
+                        by: None,
+                    });
+                }
+            }
+            2 | 3 => edits.push(VoxelEdit::Crater {
+                centre: [x, y, top],
+                radius: 1 + rng.below(5),
+                by: None,
+            }),
+            _ => edits.push(VoxelEdit::Cut {
+                centre: [x, y, top],
+                radius: 1 + rng.below(4),
+                by: None,
+            }),
+        }
+    }
+    edits
+}
+
+/// After every fifth tick of mixed terrain edits, the repaired graph is the
+/// one a fresh build over the surface makes, compared as whole structures (every
+/// array, the stale tails past each live length and the scratch included),
+/// and the surface is the one a fresh refresh of the store makes. Twenty
+/// raiders walk, re-sent every seventh tick, so routes are served, sealed and
+/// re-armed against the edits. Before lane `settle` a repaired graph left
+/// stale tails behind its live lengths and the graph lagged the surface by a
+/// tick.
+#[test]
+fn the_repaired_graph_is_a_fresh_build_under_mixed_edits() {
+    let mut world = harness_world(20);
+    let mut enc = pharmakos_sim::encoding::Enc::with_capacity(64 * 1024);
+    let mut rng = Rng::new(0x5E77_1E00);
+    let size = world.voxels().size();
+    let [sx, sy, _] = size.map(|extent| i32::try_from(extent).expect("a map extent fits an i32"));
+    let mut edited = 0;
+    for tick in 1..=150_u32 {
+        for edit in mixed_edits(&world, &mut rng) {
+            // A full queue refuses an edit; the tick still runs the rest.
+            let _ = world.request_voxel_edit(edit);
+        }
+        if tick % 7 == 0 {
+            for unit in 0..world.units().len() {
+                let to = world.standing_point([rng.below(sx), rng.below(sy), 0]);
+                world.send_unit_directly(unit, to);
+            }
+        }
+        let _ = world.step(&mut enc).unwrap();
+        if !world.voxels().settled().is_empty() {
+            edited += 1;
+        }
+        // A fresh build is seconds of work in a debug build, so the graph is
+        // compared on every fifth tick: a stale tail a repair left behind
+        // stays until a later rebuild overwrites it, so it is still there to
+        // be seen.
+        if tick % 5 != 0 {
+            continue;
+        }
+        let surface = world.surface().clone();
+        let mut scratch = Scratch::for_map(&surface, world.clusters().size()).expect("a scratch");
+        let fresh =
+            Clusters::new(&surface, world.clusters().shape(), &mut scratch).expect("a graph");
+        assert!(
+            *world.clusters() == fresh,
+            "after tick {tick} the repaired graph is not the one a fresh build makes"
+        );
+        let mut refreshed = surface.clone();
+        refreshed.refresh_all(world.voxels());
+        assert!(
+            refreshed == surface,
+            "after tick {tick} the surface is not the store's"
+        );
+    }
+    assert!(edited >= 75, "the run edited the terrain on {edited} ticks");
 }

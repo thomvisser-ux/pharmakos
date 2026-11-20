@@ -1776,6 +1776,15 @@ impl World {
         !self.repairer.is_dirty()
     }
 
+    /// How many times the graph was repaired in the tick that last ran: one,
+    /// in its Voxels phase ([`World::settle_graph`]), and never a second
+    /// place (lane `settle`).
+    #[must_use]
+    #[cfg(test)]
+    pub(crate) const fn graph_repairs_this_tick(&self) -> u32 {
+        self.repairer.calls()
+    }
+
     /// What the last tick's repath serving did.
     #[must_use]
     pub const fn serve_report(&self) -> ServeReport {
@@ -4608,6 +4617,7 @@ impl World {
         }
         self.tick = self.tick.next().ok_or(TickError::PastTheLast)?;
         self.work.reset();
+        self.repairer.start_tick();
         self.open_phase = Some(0);
         Ok(())
     }
@@ -7480,11 +7490,13 @@ mod tests {
     }
 
     /// Lane `settle`'s invariant: no cluster is waiting for a repair at any
-    /// tick boundary, and the graph there is the one a fresh build over the
-    /// surface makes, on the determinism harness's Push with a crater filed
-    /// every fifth tick on a column that walks the map. Before the lane the
-    /// marks an editing tick left were repaired in the next tick's Pathing
-    /// phase, so the boundary after every editing tick had some pending.
+    /// tick boundary, the graph was repaired exactly once in the tick (in its
+    /// Voxels phase, and nowhere else), and every twentieth tick the graph is
+    /// the one a fresh build over the surface makes, field for field. On the
+    /// determinism harness's Push with a crater filed every fifth tick on a
+    /// column that walks the map. Before the lane the marks an editing tick
+    /// left were repaired in the next tick's Pathing phase, so the boundary
+    /// after every editing tick had some pending.
     #[test]
     fn no_mark_is_pending_at_a_tick_boundary() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -7507,8 +7519,12 @@ mod tests {
             if tick % 5 == 0 {
                 let world = runner.world_mut();
                 let size = world.voxels.size();
-                let x = i32::try_from(tick.wrapping_mul(37) % size[0]).unwrap_or(0);
-                let y = i32::try_from(tick.wrapping_mul(53) % size[1]).unwrap_or(0);
+                // The column walks the map on two coprime strides; 600 × 53
+                // is far inside a `u32`, so the products cannot wrap.
+                let x = i32::try_from(tick * 37 % size[0])
+                    .unwrap_or_else(|error| panic!("a column index: {error}"));
+                let y = i32::try_from(tick * 53 % size[1])
+                    .unwrap_or_else(|error| panic!("a column index: {error}"));
                 if let Some(z) = world.voxels.top_solid_z(x, y) {
                     let filed = world.request_voxel_edit(VoxelEdit::Crater {
                         centre: [x, y, z],
@@ -7523,13 +7539,18 @@ mod tests {
             runner.clear_events();
             let world = runner.world();
             if !world.voxels.settled().is_empty() {
-                edited = edited.saturating_add(1);
+                edited += 1;
             }
             assert!(
                 world.graph_settled(),
                 "a cluster is waiting for a repair after tick {tick}"
             );
-            if tick % 60 == 0 {
+            assert_eq!(
+                world.graph_repairs_this_tick(),
+                1,
+                "tick {tick} repaired the graph in more places than its Voxels phase"
+            );
+            if tick % 20 == 0 {
                 let mut scratch =
                     crate::pathing::Scratch::for_map(&world.surface, world.clusters.size())
                         .unwrap_or_else(|| panic!("a scratch for the map"));
@@ -7539,16 +7560,64 @@ mod tests {
                     &mut scratch,
                 )
                 .unwrap_or_else(|| panic!("a graph for the map"));
-                assert_eq!(
-                    world.clusters.fingerprint(),
-                    fresh.fingerprint(),
-                    "after tick {tick} the graph is not the one the terrain makes"
+                assert!(
+                    world.clusters == fresh,
+                    "after tick {tick} the graph is not the one a fresh build over the terrain makes"
                 );
             }
         }
         assert!(
             edited >= 100,
             "the run edited the terrain on {edited} ticks"
+        );
+    }
+
+    /// The snapshot's door (lane `settle`): a capture refuses a world whose
+    /// tick is open, and one with a cluster waiting for its repair, with a
+    /// typed error each; a closed, settled world captures, and to the very
+    /// bytes the runner's own frozen capture writes.
+    #[test]
+    fn a_snapshot_refuses_an_open_tick_and_an_unsettled_graph() {
+        use crate::snapshot::{Snapshot, SnapshotError};
+        let mut world = world();
+        let mut enc = Enc::with_capacity(64 * 1024);
+        let _ = world
+            .step(&mut enc)
+            .unwrap_or_else(|error| panic!("{error:?}"));
+
+        let captured = Snapshot::capture(&world).unwrap_or_else(|error| panic!("{error}"));
+        let closed = Snapshot::capture_closed(&world);
+        assert_eq!(
+            captured
+                .to_bytes()
+                .unwrap_or_else(|error| panic!("{error}")),
+            closed.to_bytes().unwrap_or_else(|error| panic!("{error}")),
+            "the checked capture writes other bytes than the unchecked one"
+        );
+
+        // A tick opened and not finished: the state a fatal step leaves too.
+        let mut open = world.clone();
+        assert!(open.begin_tick().is_ok());
+        assert_eq!(
+            Snapshot::capture(&open).map(|_| ()),
+            Err(SnapshotError::MidTick)
+        );
+
+        // A cluster marked and not repaired: no tick of a match leaves one.
+        let mut unsettled = world.clone();
+        assert_eq!(
+            super::mark_chunk_clusters(
+                &unsettled.voxels,
+                &unsettled.clusters,
+                &mut unsettled.repairer,
+                0
+            ),
+            Ok(())
+        );
+        assert!(!unsettled.graph_settled());
+        assert_eq!(
+            Snapshot::capture(&unsettled).map(|_| ()),
+            Err(SnapshotError::Unsettled)
         );
     }
 
@@ -8411,7 +8480,9 @@ mod ids_tests {
         let units = big.units().len();
         assert!(units > small.unit_limit, "the fixture is over the ceiling");
         assert_eq!(
-            crate::snapshot::Snapshot::capture(&big).restore_into(&mut small),
+            crate::snapshot::Snapshot::capture(&big)
+                .expect("a world between ticks")
+                .restore_into(&mut small),
             Err(crate::snapshot::SnapshotError::OverCeiling { units, limit: 1 }),
             "a file saved under another configuration is refused, and says why"
         );
@@ -8443,7 +8514,7 @@ mod ids_tests {
         assert_eq!(world.beacons.ordinal(SEAT, 2, placed), Ordinal::Held(row));
         assert_eq!(world.beacons.ordinal(SEAT, 3, placed), Ordinal::NeverPlaced);
 
-        let saved = Snapshot::capture(&world);
+        let saved = Snapshot::capture(&world).expect("a world between ticks");
         let mut resumed = world_of(rules(), 2).must("a world");
         saved.restore_into(&mut resumed).must("the save restores");
         assert_eq!(resumed.seats.placed(), world.seats.placed());
@@ -8617,7 +8688,7 @@ mod ids_tests {
             .must("room");
         kill_unit(&mut world, drone);
         world.free_settled_rows();
-        let good = Snapshot::capture(&world);
+        let good = Snapshot::capture(&world).expect("a world between ticks");
         assert!(
             good.restore_into(&mut world_of(rules(), 2).must("a world"))
                 .is_ok()
@@ -8722,7 +8793,7 @@ mod ids_tests {
         let row = drone.row().must("a row");
         // Take the row to its last generation through a restore, as a long
         // match would.
-        let mut saved = Snapshot::capture(&world);
+        let mut saved = Snapshot::capture(&world).expect("a world between ticks");
         saved.unit_id[row.index()] = UnitId::of(row, Generation::new(u16::MAX)).raw();
         let mut world = world_of(rules(), 2).must("a world");
         saved.restore_into(&mut world).must("the save restores");
