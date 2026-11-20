@@ -45,7 +45,10 @@
 
 use pharmakos_proto::json::{Json, read, write};
 
-use crate::error::{Error, push_pointer, split_pointer};
+use pharmakos_proto::json::grammar::{MAX_DEPTH, may_nest};
+use pharmakos_verifier::MAX_PLAYBOOK_CHARS;
+
+use crate::error::{Bound, Error, push_pointer, split_pointer};
 use crate::jsonc::{Document, Fragment, Node};
 
 /// The six RFC 6902 operations.
@@ -291,12 +294,65 @@ pub const MAX_PATCH_OPERATIONS: usize = 64;
 /// longer decodes. An edit at a `snake_case` pointer in a file that writes the
 /// member in its camelCase name is the common way to get there.
 pub fn apply(document: &Document, patch: &Patch) -> Result<(Document, Patch), Error> {
+    if patch.operations().len() > MAX_PATCH_OPERATIONS {
+        return Err(Error::bounded(
+            Bound::Operations,
+            "",
+            format!(
+                "this patch carries {} operations, and a patch carries at most \
+                 {MAX_PATCH_OPERATIONS}",
+                patch.operations().len()
+            ),
+        ));
+    }
     let mut working = document.clone();
     let mut inverse: Vec<Operation> = Vec::new();
+    let mut inverse_chars: usize = 0;
     for operation in patch.operations() {
+        // A `copy` doubles what it copies: refused before it copies anything
+        // that would take the document past the cap.
+        if operation.op == Op::Copy {
+            let from = as_the_file_spells(&working, from_of(operation)?)?;
+            let copied = resolve(&working, &from)?.measure().chars;
+            let now = working.measure().chars;
+            if now.saturating_add(copied) > MAX_PLAYBOOK_CHARS {
+                return Err(too_long(&operation.path));
+            }
+        }
         // The last operation is undone first, so each operation's undo goes in
         // front of everything accumulated so far.
         let mut next = one(&mut working, operation)?;
+        let size = working.measure();
+        if size.chars > MAX_PLAYBOOK_CHARS {
+            return Err(too_long(&operation.path));
+        }
+        if !may_nest(size.depth) {
+            return Err(Error::bounded(
+                Bound::Depth,
+                operation.path.clone(),
+                format!(
+                    "this patch would nest a value inside {} containers, past the {MAX_DEPTH} \
+                     a playbook may hold",
+                    size.depth
+                ),
+            ));
+        }
+        for undo in &next {
+            inverse_chars = inverse_chars.saturating_add(undo.path.chars().count());
+            if let Some(value) = &undo.value {
+                inverse_chars = inverse_chars.saturating_add(value.node().measure().chars);
+            }
+        }
+        if inverse_chars > MAX_PLAYBOOK_CHARS {
+            return Err(Error::bounded(
+                Bound::Inverse,
+                operation.path.clone(),
+                format!(
+                    "the patch that undoes this one would run past the playbook's \
+                     {MAX_PLAYBOOK_CHARS} characters"
+                ),
+            ));
+        }
         next.append(&mut inverse);
         inverse = next;
     }
@@ -349,6 +405,18 @@ pub fn apply(document: &Document, patch: &Patch) -> Result<(Document, Patch), Er
         ));
     }
     Ok((working, Patch::new(inverse)))
+}
+
+/// The refusal of a patch that would take the document past the playbook's
+/// cap, at the operation that would.
+fn too_long(path: &str) -> Error {
+    Error::bounded(
+        Bound::Size,
+        path,
+        format!(
+            "this patch would make the playbook longer than its {MAX_PLAYBOOK_CHARS} characters"
+        ),
+    )
 }
 
 /// The value at an RFC 6901 pointer in plain JSON: `None` where nothing is

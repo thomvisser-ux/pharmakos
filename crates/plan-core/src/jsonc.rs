@@ -80,6 +80,20 @@ impl Document {
         })
     }
 
+    /// How large the document is as written ([`Node::measure`], with the
+    /// trivia around its root).
+    #[must_use]
+    pub fn measure(&self) -> Measure {
+        let root = self.root.measure();
+        Measure {
+            chars: root
+                .chars
+                .saturating_add(self.prologue.chars().count())
+                .saturating_add(self.epilogue.chars().count()),
+            depth: root.depth,
+        }
+    }
+
     /// Writes the document back out, byte for byte as it was read.
     #[must_use]
     pub fn to_text(&self) -> String {
@@ -230,6 +244,15 @@ impl Fragment {
     pub fn into_node(self) -> Node {
         self.node
     }
+}
+
+/// How large a node is as written ([`Node::measure`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Measure {
+    /// Its characters, counted with room for every separator.
+    pub chars: usize,
+    /// The most containers a value inside it stands in.
+    pub depth: usize,
 }
 
 /// One element of an array, with the trivia around it.
@@ -513,6 +536,65 @@ impl Node {
     #[must_use]
     pub fn set(&mut self, node: Self) -> Self {
         std::mem::replace(self, node)
+    }
+
+    /// How large this node is as written: its characters (counted with room:
+    /// a separator for every member and item), and the most containers a value
+    /// inside it stands in (0 for a scalar or an empty container, 1 for `[1]`),
+    /// the count the grammar's nesting rule reads. One walk, no text built
+    /// (S3's `vfyq2`: `patch`'s budget).
+    #[must_use]
+    pub fn measure(&self) -> Measure {
+        let count = |text: &str| text.chars().count();
+        match &self.value {
+            Value::Null | Value::Bool(true) => Measure { chars: 4, depth: 0 },
+            Value::Bool(false) => Measure { chars: 5, depth: 0 },
+            Value::Number(lexeme) => Measure {
+                chars: count(lexeme),
+                depth: 0,
+            },
+            Value::Str { raw, .. } => Measure {
+                chars: count(raw),
+                depth: 0,
+            },
+            Value::Array(items, inner) => {
+                let mut total = Measure {
+                    chars: count(inner).saturating_add(2),
+                    depth: 0,
+                };
+                for item in items {
+                    let inside = item.node.measure();
+                    total.chars = total
+                        .chars
+                        .saturating_add(count(&item.before))
+                        .saturating_add(inside.chars)
+                        .saturating_add(count(&item.after))
+                        .saturating_add(1);
+                    total.depth = total.depth.max(inside.depth.saturating_add(1));
+                }
+                total
+            }
+            Value::Object(members, inner) => {
+                let mut total = Measure {
+                    chars: count(inner).saturating_add(2),
+                    depth: 0,
+                };
+                for member in members {
+                    let inside = member.node.measure();
+                    total.chars = total
+                        .chars
+                        .saturating_add(count(&member.before))
+                        .saturating_add(count(&member.key_raw))
+                        .saturating_add(count(&member.pre_colon))
+                        .saturating_add(count(&member.post_colon))
+                        .saturating_add(inside.chars)
+                        .saturating_add(count(&member.after))
+                        .saturating_add(2);
+                    total.depth = total.depth.max(inside.depth.saturating_add(1));
+                }
+                total
+            }
+        }
     }
 
     fn write(&self, out: &mut String) {
