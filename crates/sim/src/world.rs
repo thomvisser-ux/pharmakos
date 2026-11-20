@@ -7655,6 +7655,53 @@ mod tests {
         );
     }
 
+    /// The layout's freeze passes the snapshot's door (lane `settle`): a
+    /// match whose graph waits for a repair refuses a layout with a typed
+    /// error and places nothing, and a restore into it hands back a world the
+    /// door would pass, closed and settled by construction.
+    #[test]
+    fn a_layout_refuses_an_unsettled_graph_and_a_restore_settles_it() {
+        use crate::runner::{Layout, LayoutBeacon, LayoutRefused, Runner};
+        let saved = crate::snapshot::Snapshot::capture(&world())
+            .unwrap_or_else(|error| panic!("a world between ticks: {error}"));
+        let mut runner = Runner::new(world())
+            .unwrap_or_else(|error| panic!("a world from `World::new`: {error}"));
+        {
+            let unsettled = runner.world_mut();
+            assert_eq!(
+                super::mark_chunk_clusters(
+                    &unsettled.voxels,
+                    &unsettled.clusters,
+                    &mut unsettled.repairer,
+                    0
+                ),
+                Ok(())
+            );
+        }
+        let layout = Layout {
+            beacons: vec![LayoutBeacon {
+                seat: SeatId::new(0),
+                column: [200, 200],
+                mandate: crate::seams::MandateKind::Build,
+                units: vec![(crate::tables::UnitKind::Raider, 1)],
+            }],
+        };
+        assert_eq!(runner.seed_layout(&layout), Err(LayoutRefused::Unsettled));
+        assert!(
+            !runner.world().is_laid_out(),
+            "a refused layout places nothing"
+        );
+        assert_eq!(runner.restore(&saved), Ok(()));
+        assert!(
+            runner.world().graph_settled() && !runner.world().tick_is_open(),
+            "a restore leaves a world the door passes"
+        );
+        assert!(
+            runner.seed_layout(&layout).is_ok(),
+            "and it takes the layout"
+        );
+    }
+
     fn hit(unit: u32, amount: i64) -> DamageOrder {
         DamageOrder {
             target: DamageTarget::Unit(UnitId::new(unit)),

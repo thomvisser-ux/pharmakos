@@ -869,12 +869,26 @@ impl Default for Snapshot {
     }
 }
 
-/// A world passed [`Snapshot::door`]: between ticks, with its pathing graph
-/// settled. Only the door makes one, and [`Snapshot::through`] spends it, so
-/// every copy of a world names the check it passed (lane `settle`).
+/// A world between ticks, with its pathing graph settled, borrowed: what
+/// [`Snapshot::door`] hands back, and what a restore hands back for the world
+/// it restored. [`Snapshot::through`] copies the world it holds, so every
+/// snapshot names the check its world passed, and the borrow keeps the world
+/// from changing between the check and the copy (lane `settle`).
 #[derive(Debug)]
 #[must_use = "a world that passed the door is copied with `Snapshot::through`"]
-pub(crate) struct Closed(());
+pub(crate) struct Closed<'w>(&'w World);
+
+impl<'w> Closed<'w> {
+    /// The world the token holds.
+    pub(crate) const fn world(&self) -> &'w World {
+        self.0
+    }
+
+    /// The world the token holds, the token spent.
+    const fn spend(self) -> &'w World {
+        self.0
+    }
+}
 
 /// Why a world did not pass [`Snapshot::door`]. Each arm becomes the caller's
 /// own error: [`SnapshotError`] for a capture, a restore or a match's
@@ -1075,8 +1089,7 @@ impl Snapshot {
     /// its repair: the restore would rebuild a graph the live world does not
     /// hold, and the two would play different chains.
     pub fn capture(world: &World) -> Result<Snapshot, SnapshotError> {
-        let closed = Snapshot::door(world)?;
-        Ok(Snapshot::through(world, closed))
+        Ok(Snapshot::through(Snapshot::door(world)?))
     }
 
     /// The snapshot's door, shared by every copy of a world (lane `settle`):
@@ -1088,26 +1101,25 @@ impl Snapshot {
     ///
     /// [`Unclosed::MidTick`] while a tick is open between two of its phases,
     /// [`Unclosed::Unsettled`] when a cluster is waiting for its repair.
-    pub(crate) fn door(world: &World) -> Result<Closed, Unclosed> {
+    pub(crate) fn door(world: &World) -> Result<Closed<'_>, Unclosed> {
         if world.tick_is_open() {
             return Err(Unclosed::MidTick);
         }
         if !world.graph_settled() {
             return Err(Unclosed::Unsettled);
         }
-        Ok(Closed(()))
+        Ok(Closed(world))
     }
 
-    /// Copy `world`, which passed [`Snapshot::door`]: the [`Closed`] it
-    /// handed back is spent here.
+    /// Copy the world `closed` holds, which passed [`Snapshot::door`] or was
+    /// just restored.
     #[must_use]
     #[allow(
         clippy::too_many_lines,
         reason = "one line per column of a flat projection, and the whole point of the projection is that it is one expression: a `Snapshot` cannot be built in halves, so splitting it would mean a second struct whose only job is to be moved into this one"
     )]
-    pub(crate) fn through(world: &World, closed: Closed) -> Snapshot {
-        // Spent: one pass through the door buys one copy.
-        drop(closed);
+    pub(crate) fn through(closed: Closed<'_>) -> Snapshot {
+        let world = closed.spend();
         let units = world.units();
         let seats = world.seats();
         let beacons = world.beacons();
@@ -1449,11 +1461,27 @@ impl Snapshot {
     /// or [`SnapshotError::Unindexable`]
     /// when the receiving world's rules table cannot describe a grid for its
     /// ceiling. Either way the world is left exactly as it was.
+    pub fn restore_into(&self, world: &mut World) -> Result<(), SnapshotError> {
+        self.restore_closed(world).map(|_| ())
+    }
+
+    /// [`Snapshot::restore_into`], handing back the restored world as a
+    /// [`Closed`]: a restore lands between ticks with its graph rebuilt fresh
+    /// and nothing marked (`World::restore_tables` sets no tick open and a new
+    /// `Repairer` over clusters rebuilt from the restored surface), so the
+    /// world it leaves is closed and settled by construction.
+    ///
+    /// # Errors
+    ///
+    /// As [`Snapshot::restore_into`].
     #[allow(
         clippy::too_many_lines,
         reason = "one block per table, and every block must run before the first assignment: a restore either applies in full or changes nothing, so the checks cannot be moved behind the writes"
     )]
-    pub fn restore_into(&self, world: &mut World) -> Result<(), SnapshotError> {
+    pub(crate) fn restore_closed<'w>(
+        &self,
+        world: &'w mut World,
+    ) -> Result<Closed<'w>, SnapshotError> {
         // E7: rule: a capacity only; the seat table's restore checks the columns it is handed
         let seat_count = u32::try_from(self.seat_id.len()).unwrap_or(0);
         let mut seats = SeatTable::with_capacity(seat_count);
@@ -1705,7 +1733,7 @@ impl Snapshot {
         }) {
             return Err(SnapshotError::Unindexable { units: unit_count });
         }
-        Ok(())
+        Ok(Closed(world))
     }
 
     /// Every beacon's list settings, checked before anything is written.

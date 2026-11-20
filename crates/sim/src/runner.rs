@@ -712,16 +712,15 @@ impl FrozenSnapshot {
     /// [`Unclosed`] when the world does not pass the door; each caller turns
     /// it into its own typed error.
     pub(crate) fn of(world: &World) -> Result<FrozenSnapshot, Unclosed> {
-        let closed = Snapshot::door(world)?;
-        Ok(FrozenSnapshot::passed(world, closed))
+        Ok(FrozenSnapshot::passed(Snapshot::door(world)?))
     }
 
-    /// Freeze `world`, which passed the snapshot's door earlier in the
-    /// caller: the [`Closed`] the door handed back is spent here.
-    fn passed(world: &World, closed: Closed) -> FrozenSnapshot {
+    /// Freeze the world `closed` holds.
+    fn passed(closed: Closed<'_>) -> FrozenSnapshot {
+        let state_hash = closed.world().state_hash();
         FrozenSnapshot {
-            snapshot: Snapshot::through(world, closed),
-            state_hash: world.state_hash(),
+            snapshot: Snapshot::through(closed),
+            state_hash,
         }
     }
 
@@ -1174,8 +1173,11 @@ impl Runner {
     ///
     /// # Errors
     ///
-    /// [`LayoutRefused::NotInTheLobby`] outside it, and the world's refusals
-    /// of the layout ([`LayoutRefused`]), which leave the world as it was.
+    /// [`LayoutRefused::NotInTheLobby`] outside it, the world's refusals of
+    /// the layout ([`LayoutRefused`]), which leave the world as it was, and
+    /// [`LayoutRefused::Unsettled`] when the snapshot's door finds a cluster
+    /// waiting for its repair, before anything is placed or at the freeze
+    /// after.
     ///
     /// Whether the match was laid out is read from the world, not remembered
     /// beside it: a beacon or a unit past what the generator placed, which only
@@ -1202,19 +1204,19 @@ impl Runner {
         let lobby = self.phase() == MatchPhase::Lull
             && self.round() == 1
             && self.tick() == Tick::ZERO
+            && !self.world.tick_is_open()
             && !self.world.is_laid_out();
-        // The snapshot's door, passed before the layout: a world with a tick
-        // open or a cluster waiting for its repair has stepped, so it is not
-        // in the lobby. The layout places beacons and units and edits no voxel.
-        let closed = match Snapshot::door(&self.world) {
-            Ok(closed) if lobby => closed,
-            Ok(_) | Err(_) => return Err(LayoutRefused::NotInTheLobby),
-        };
+        if !lobby {
+            return Err(LayoutRefused::NotInTheLobby);
+        }
         if self.world.interpreter().any_sealed() {
             return Err(LayoutRefused::AfterASeal);
         }
+        // The snapshot's door, before anything is placed, so a refusal leaves
+        // the world as it was; and again at the freeze after placement.
+        let _: Closed<'_> = Snapshot::door(&self.world)?;
         self.world.seed_layout(layout, settings)?;
-        self.frozen = FrozenSnapshot::passed(&self.world, closed);
+        self.frozen = FrozenSnapshot::of(&self.world)?;
         Ok(())
     }
 
@@ -1253,18 +1255,14 @@ impl Runner {
     ///
     /// # Errors
     ///
-    /// Whatever [`Snapshot::restore_into`] returns, and the world is then left
-    /// exactly as it was. [`SnapshotError::MidTick`] while a tick is open,
-    /// before anything is restored. And the door's [`SnapshotError::Unsettled`]
-    /// at the freeze of the restored world, which a restore never leaves (it
-    /// rebuilds the graph fresh, between ticks): the world is then the
-    /// restored one, and the frozen snapshot is the one from before.
+    /// [`SnapshotError::MidTick`] while a tick is open, and whatever
+    /// [`Snapshot::restore_into`] returns; the world is then left exactly as
+    /// it was.
     pub fn restore(&mut self, snapshot: &Snapshot) -> Result<(), SnapshotError> {
         if self.world.tick_is_open() {
             return Err(SnapshotError::MidTick);
         }
-        snapshot.restore_into(&mut self.world)?;
-        self.frozen = FrozenSnapshot::of(&self.world)?;
+        self.frozen = FrozenSnapshot::passed(snapshot.restore_closed(&mut self.world)?);
         Ok(())
     }
 }
@@ -1454,6 +1452,20 @@ pub enum LayoutRefused {
         /// Which setting.
         setting: LayoutSetting,
     },
+    /// A cluster of the pathing graph is waiting for its repair, so the
+    /// match's frozen snapshot cannot be taken (lane `settle`): no lobby
+    /// holds one, since only a tick's terrain phase marks a cluster and it
+    /// repairs before it returns.
+    Unsettled,
+}
+
+impl From<Unclosed> for LayoutRefused {
+    fn from(unclosed: Unclosed) -> LayoutRefused {
+        match unclosed {
+            Unclosed::MidTick => LayoutRefused::NotInTheLobby,
+            Unclosed::Unsettled => LayoutRefused::Unsettled,
+        }
+    }
 }
 
 impl core::fmt::Display for LayoutRefused {
@@ -1499,6 +1511,10 @@ impl core::fmt::Display for LayoutRefused {
             LayoutRefused::BadSetting { index, setting } => {
                 write!(f, "beacon {index}'s {} cannot be taken", setting.name())
             }
+            LayoutRefused::Unsettled => write!(
+                f,
+                "a cluster of the pathing graph is waiting for its repair, so the match cannot be frozen"
+            ),
         }
     }
 }

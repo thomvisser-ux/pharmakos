@@ -551,8 +551,10 @@ impl Host {
     ///
     /// # Errors
     ///
-    /// As [`Host::seed_layout`], and [`crate::error::Code::InvalidArgument`]
-    /// for a settings row the world refuses.
+    /// As [`Host::seed_layout`], [`crate::error::Code::InvalidArgument`] for a
+    /// settings row the world refuses, and [`crate::error::Code::Internal`]
+    /// when the match cannot be frozen ([`LayoutRefused::Unsettled`]), which
+    /// no lobby reaches.
     pub fn seed_layout_with_settings(
         &mut self,
         layout: &Layout,
@@ -574,6 +576,9 @@ impl Host {
                 | LayoutRefused::BadSetting { .. } => {
                     Error::invalid(format!("this match would not take the layout: {refused}"))
                 }
+                LayoutRefused::Unsettled => Error::internal(format!(
+                    "this match could not be frozen after its layout: {refused}"
+                )),
             })
     }
 
