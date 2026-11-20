@@ -782,11 +782,15 @@ impl Node {
                 let mut previous: Option<String> = None;
                 for (index, item) in items.iter().enumerate() {
                     let child = push_pointer(pointer, &index.to_string());
-                    let last = index.saturating_add(1) == items.len();
+                    let following = if index.saturating_add(1) == items.len() {
+                        Anchor::Inside(pointer.to_owned())
+                    } else {
+                        Anchor::Before(push_pointer(pointer, &index.saturating_add(1).to_string()))
+                    };
                     opening(&item.before, previous.as_deref(), &child, found);
                     item.node.collect_comments(&child, found);
-                    closing(&item.after, &child, pointer, last, found);
-                    previous = Some(child);
+                    closing(&item.after, &child, &following, found);
+                    previous = on_its_line(&item.after, child);
                 }
             }
             Value::Object(members, inner) => {
@@ -796,18 +800,30 @@ impl Node {
                 let mut previous: Option<String> = None;
                 for (index, member) in members.iter().enumerate() {
                     let child = push_pointer(pointer, &member.key);
-                    let last = index.saturating_add(1) == members.len();
+                    let following = match members.get(index.saturating_add(1)) {
+                        Some(next) => Anchor::Before(push_pointer(pointer, &next.key)),
+                        None => Anchor::Inside(pointer.to_owned()),
+                    };
                     opening(&member.before, previous.as_deref(), &child, found);
                     collect(&member.pre_colon, &Anchor::Before(child.clone()), found);
                     collect(&member.post_colon, &Anchor::Before(child.clone()), found);
                     member.node.collect_comments(&child, found);
-                    closing(&member.after, &child, pointer, last, found);
-                    previous = Some(child);
+                    closing(&member.after, &child, &following, found);
+                    previous = on_its_line(&member.after, child);
                 }
             }
             Value::Null | Value::Bool(_) | Value::Number(_) | Value::Str { .. } => {}
         }
     }
+}
+
+/// The member whose line a comment after the next comma would stand on: the
+/// one just read, unless the trivia before the comma has already broken its
+/// line (fix pass 2, item D4). Then the comma, and whatever follows it on its
+/// line, starts a line of its own, so a comment there is the next member's,
+/// as the canonical writer puts it back.
+fn on_its_line(after: &str, child: String) -> Option<String> {
+    first_line_break(after).is_none().then_some(child)
 }
 
 /// The trivia between the opening bracket (or the preceding comma) and this
@@ -834,18 +850,23 @@ fn opening(trivia: &str, previous: Option<&str>, child: &str, found: &mut Vec<Co
 /// The trivia between this member's value and the comma or closing bracket
 /// after it.
 ///
-/// On the last member, a comment on a line of its own sits at the end of the
-/// container rather than on the member's line, and [`Anchor::Inside`] is where
-/// the canonical writer puts it back.
-fn closing(trivia: &str, child: &str, container: &str, last: bool, found: &mut Vec<Comment>) {
+/// A comment on the member's own line is the member's ([`Anchor::After`]).
+/// A comment on a line of its own after it belongs to what follows: the next
+/// member ([`Anchor::Before`]), or, on the last member, the end of the
+/// container ([`Anchor::Inside`]), which is where the canonical writer puts
+/// each back. One rule whether a comma or a bracket comes next (S3's
+/// `vfyq2`, fix pass 2, item D4): before a comma the whole run was the
+/// member's, so a comment written there moved to another anchor once the
+/// canonical writer had put it on a line of its own.
+fn closing(trivia: &str, child: &str, following: &Anchor, found: &mut Vec<Comment>) {
     match first_line_break(trivia) {
-        Some(at) if last => {
+        Some(at) => {
             let head = trivia.get(..at).unwrap_or_default();
             let tail = trivia.get(at..).unwrap_or_default();
             collect(head, &Anchor::After(child.to_owned()), found);
-            collect(tail, &Anchor::Inside(container.to_owned()), found);
+            collect(tail, following, found);
         }
-        _ => collect(trivia, &Anchor::After(child.to_owned()), found),
+        None => collect(trivia, &Anchor::After(child.to_owned()), found),
     }
 }
 

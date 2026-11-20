@@ -404,12 +404,17 @@ fn boundaries(text: &str) -> Vec<usize> {
 /// The comments injected at a boundary: a line comment and a block comment,
 /// each holding a multi-byte character and the characters a comment reader
 /// could mistake for its end or for a string.
-const COMMENTS: [&str; 5] = [
+const COMMENTS: [&str; 7] = [
     "// a note, \u{e9}t\u{e9} \"quoted\" /* not a block */\n",
     "/* a note, \u{1f4a1} // not a line \"*/",
     "/**/",
     "/* across\n   two lines */",
     "// a line\n/* then a block\n */",
+    // A file with CR line ends (fix pass 2, item D4: `line_break_lf_only`
+    // survived): a line comment ends at the lone CR, and a block comment
+    // spans one.
+    "// a CR-only line\r",
+    "/* across\r a CR */\r",
 ];
 
 fn with_comment(text: &str, at: usize, comment: &str) -> String {
@@ -1081,19 +1086,46 @@ fn a_leading_zero_is_refused_by_both() {
     );
 }
 
-/// Every comment a text holds, by its text, in order of where it stands.
-fn comment_texts(text: &str) -> Vec<String> {
-    let mut texts: Vec<String> = Document::parse(text)
+/// Every comment a text holds, with the anchor it was written against, in
+/// the order it stands in.
+fn comment_texts(text: &str) -> Vec<(String, String)> {
+    Document::parse(text)
         .map(|document| {
             document
                 .comments()
                 .into_iter()
-                .map(|comment| comment.text)
+                .map(|comment| (format!("{:?}", comment.anchor), comment.text))
                 .collect()
         })
-        .unwrap_or_default();
-    texts.sort();
-    texts
+        .expect("the canonical text parses")
+}
+
+/// Whether `out` holds `inn`'s comments (fix pass 2, item D4: the comparison
+/// sorted before, and so could not see a reordering). The canonical writer
+/// puts members in field order, so a comment travels with the node it was
+/// written against; what must hold is that every anchor's comments come out
+/// in the order they went in, and that the only comments to change anchor
+/// are the ones `relocated` names, each exactly once.
+fn same_comments(inn: &[(String, String)], out: &[(String, String)], relocated: &[String]) -> bool {
+    use std::collections::BTreeMap;
+    /// Each anchor's comments in order, and the relocated ones, sorted.
+    type Grouped<'c> = (BTreeMap<&'c str, Vec<&'c str>>, Vec<&'c str>);
+    fn by_anchor<'c>(comments: &'c [(String, String)], relocated: &[String]) -> Grouped<'c> {
+        let mut moved = relocated.to_vec();
+        let mut kept: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+        let mut loose: Vec<&str> = Vec::new();
+        for (anchor, text) in comments {
+            if let Some(found) = moved.iter().position(|one| one == text) {
+                moved.remove(found);
+                loose.push(text);
+            } else {
+                kept.entry(anchor.as_str()).or_default().push(text.as_str());
+            }
+        }
+        loose.sort_unstable();
+        (kept, loose)
+    }
+    by_anchor(inn, relocated) == by_anchor(out, relocated)
 }
 
 /// The two promises the canonical writer makes of every text it writes
@@ -1113,7 +1145,12 @@ impl Kept {
             return;
         };
         self.cases += 1;
-        if comment_texts(text) != comment_texts(&once.text) {
+        let relocated: Vec<String> = once
+            .relocated
+            .iter()
+            .map(|relocation| relocation.comment.clone())
+            .collect();
+        if !same_comments(&comment_texts(text), &comment_texts(&once.text), &relocated) {
             self.lost.push(format!(
                 "{what}: {:?}",
                 text.chars().take(300).collect::<String>()
@@ -1129,6 +1166,10 @@ impl Kept {
     }
 }
 
+/// The largest file spliced at every boundary: every committed playbook is
+/// smaller.
+const EVERY_BOUNDARY_UP_TO: usize = 16 * 1024;
+
 #[test]
 fn every_comment_comes_out_and_canonicalising_twice_is_once() {
     let mut kept = Kept::default();
@@ -1141,9 +1182,24 @@ fn every_comment_comes_out_and_canonicalising_twice_is_once() {
         for (how, mutated) in mutations(&text, &mut rng, 24) {
             kept.check(&format!("{name} (seed {start:#x}), {how}"), &mutated);
         }
+        // Every comment at the first 32 boundaries, and, in a file of a
+        // playbook's size, a comment at every boundary after them, the
+        // comments taken in turn (fix pass 2, item D4: only the first 32 were
+        // spliced at before). A larger file (a report or a response golden)
+        // keeps the first 32.
         let spots = boundaries(&text);
-        for (at_index, at) in spots.iter().enumerate().take(32) {
-            for comment in COMMENTS {
+        let every = text.len() <= EVERY_BOUNDARY_UP_TO;
+        for (at_index, at) in spots.iter().enumerate() {
+            if at_index >= 32 && !every {
+                break;
+            }
+            let pieces: &[&str] = if at_index < 32 {
+                &COMMENTS
+            } else {
+                let turn = at_index.checked_rem(COMMENTS.len()).expect("a comment");
+                COMMENTS.get(turn..=turn).expect("a comment")
+            };
+            for comment in pieces {
                 kept.check(
                     &format!("{name}, {comment:?} at byte {at} ({at_index})"),
                     &with_comment(&text, *at, comment),
