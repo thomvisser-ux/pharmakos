@@ -1212,11 +1212,12 @@ designed properly, and each wire message and golden moves once, in the lane that
 - **`probw`:** gateway and proto only, no client code. It carries the wire needs of `prob`'s watch
   side before `prob` starts: the ring's radius on own beacons' view entities, the recap's sentence
   naming every award that stands, the preset and the fact that this seat holds a seal this round on
-  `get_status`, every `ViewEntity` addition (the radius, construction progress, a per-kind look,
-  walls listed in the view, with another seat's structure in live vision only), the missing
+  `get_status`, every `ViewEntity` addition (the radius, an under-construction flag in the held
+  field, the entity's title in the gateway's words, a per-kind look, walls listed in the view, with
+  another seat's structure in live vision only), the missing
   goldens, the socket-level test of the guided pick and the two stale proto comments.
 - **`fixq`:** the editor's planning wire and the client halves that need it, with named places in
-  `crates/gateway`, `proto/**`, `crates/plan-core` and `crates/gamectl`, and, for
+  `crates/gateway`, `proto/**` and `crates/plan-core`, and, for
   `retreat_hp_pct` as `optional`, in the sim's interpreter and the verifier. It also draws the
   client halves of `probw`'s view additions.
 
@@ -1245,11 +1246,14 @@ What each lane takes, by name, with the lane per item:
 - **The client findings of #192's reviews.** Load sets no folder: `fixp`. An unbounded number field
   lets a value past 2^53 round: `fixp`, the client's own guard on typed digits; its brief says if the
   bound needs the wire. A structure's name shows from 1 hit point: replaced by the ruling that a name
-  shows while the structure is going up, with the gateway's own words, from construction progress
-  (`probw`, one field also serving as the "going up" flag) and drawn by `fixq`.
+  shows while the structure is going up, with the gateway's own words, from the under-construction flag
+  (`probw`, in the held field; the sim has no fraction, and `hp` over `max_hp` says how far) and
+  drawn by `fixq`. The flag is for own assets and no-fog spectators only (item 144 (11)). Whether
+  another seat's structure shows as going up is what a seat may know, which is the owner's question and
+  goes to the owner with the fog question from `p3fix`.
 - **`fixq`'s other planning wire:** the display unit for `ms` values, camelCase pointers, per-row
-  locks, `gamectl verify` for a Probation playbook (`--preset probation`, a named place in
-  `crates/gamectl`), and the carried wire gaps of #183 and #188. `retreat_hp_pct` becomes
+  locks, and the carried wire gaps of #183 and #188. `gamectl verify` for a Probation playbook
+  (`--preset probation`) is not `fixq`'s: it belongs to `nite3`, which owns `crates/gamectl`. `retreat_hp_pct` becomes
   `optional`: this reaches the sim's interpreter lines and the verifier's read of the field, granted
   as named places when `fixq` starts if no open lane owns the sim or the verifier, and otherwise the
   lane's last commit group; it moves plan fingerprints and report goldens once and carries its own
@@ -1273,7 +1277,8 @@ grant start only after `fixq` merges.
 **The order, amending item 162 (5).** Slot A: `settle`, `p3fix`, `opr3`, `nite3`, `vcap`. Slot B:
 `vfyq2` (now whole, its `VERIFIER_VERSION` bump included, before `opr3` starts, which reverses item
 162 (5)'s "bump last, after `opr3`"), `fixp`, `probw`, `fixq`, then `prob`. `probw` starts after
-`p3fix` and `fixp` have merged, `fixq` after `probw` and `vfyq2`, and `prob` after `fixq`.]
+`p3fix` and `fixp` have merged, `fixq` after `probw` and `vfyq2`, and `prob` after `fixq`. `fixq` and `vcap` both edit `crates/gateway` and never run at once: the second to
+start waits for the other's merge.]
 
 **Totals.** 19 tasks, **about 74.5 ad** (65–84), including about 1.5 ad of re-blesses after merges
 of `main`; 73.5 without decision 3's Survey post. **Two critical paths of about 31 working days:**
