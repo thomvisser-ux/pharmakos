@@ -1456,6 +1456,20 @@ impl Report {
                 ));
             }
         };
+        let filenames = strings_of(&message, "filenames").map_err(unreadable)?;
+        // Cargo writes every path absolute, a relative `CARGO_TARGET_DIR`
+        // joined to its working directory; a relative one would be resolved
+        // against xtask's, which is not the root, so it is refused.
+        if let Some(relative) = filenames
+            .iter()
+            .chain(&executable)
+            .find(|path| split_root(&slashed(path)).0.is_empty())
+        {
+            return Err(unreadable(format!(
+                "cargo reported the relative path `{relative}`, and every path it reports is \
+                 absolute"
+            )));
+        }
         self.built.push(Built {
             package_id: string_of(&message, "package_id")
                 .map_err(unreadable)?
@@ -1466,7 +1480,7 @@ impl Report {
             debug_assertions: bool_of(profile, "debug_assertions").map_err(unreadable)?,
             overflow_checks: bool_of(profile, "overflow_checks").map_err(unreadable)?,
             test: bool_of(profile, "test").map_err(unreadable)?,
-            filenames: strings_of(&message, "filenames").map_err(unreadable)?,
+            filenames,
             executable,
         });
         Ok(())
