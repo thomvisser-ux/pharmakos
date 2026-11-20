@@ -67,6 +67,16 @@
 //!   off a config file's `build.rustc-wrapper` and
 //!   `build.rustc-workspace-wrapper`.
 //! * `RUSTC_BOOTSTRAP` is removed.
+//! * `--config 'target.<host>.linker="<the host's default>"'` ([`Host`]): the
+//!   linker rustc uses when none is named, named, so a config file's `linker`
+//!   (for the triple, or for a `cfg(…)` that matches it) never runs. The
+//!   process door adds it to every call (`main.rs`'s `ProcessCargo`), and the
+//!   clippy step's calls carry it too, so the units the two share are not
+//!   rebuilt between them. Measured with cargo and rustc 1.98.1: the
+//!   command line's table wins over the file's for the triple and for a
+//!   `cfg(…)`; on Windows an explicit `link.exe` is found by rustc's own MSVC
+//!   discovery, not on `PATH` (Git's `link.exe`, first on `PATH` there, never
+//!   runs); on Linux `cc` gives the link line the implicit default gives.
 //!
 //! And each variable that would change these, set in the environment, which
 //! the caller meant to reach the build and which this would silently override,
@@ -80,15 +90,28 @@
 //!
 //! # What ran
 //!
-//! A config file's `runner` cannot be pinned empty (cargo refuses `""`), so a
-//! test run proves its tests ran: every test executable the check reported
-//! must be started (cargo's `Running` line) and every start must end in
-//! libtest's `test result:` line, or the run is
-//! [`ProfileFault::TestsDidNotRun`] ([`judge_run`]). A doctest run is held to
-//! its exit status alone: libtest's output does not tie a doctest result to the
-//! crate it came from. A runner that wraps `cargo xtask` itself and fakes its
-//! exit status is outside what xtask can see; CI's clean checkout has no config
-//! file but the repository's.
+//! A test run is started through xtask's own runner (`runner.rs`): the
+//! process door pins `target.<host>.runner` to this xtask, which records each
+//! start and runs it with its exit status passed through. After the run the
+//! set of test executables the check reported must equal the set the runner
+//! started, compared as paths ([`judge_starts`]); a reported executable cargo
+//! did not start, or a start the check never reported, is
+//! [`ProfileFault::TestsDidNotRun`], and cargo's exit status says whether each
+//! passed. Nothing reads what cargo or libtest print, so a test's own output
+//! is passed through as bytes, whatever it holds. A doctest run goes through
+//! the same runner (rustdoc starts each doctest through it, and its records
+//! show it), but how many doctests a run starts cannot be known from the
+//! check, so a doctest run is held to its exit status.
+//!
+//! # The trust boundary
+//!
+//! xtask trusts what cargo's fingerprints call fresh, and the directories
+//! cargo and rustup run from: whoever can write the target directory or
+//! cargo's home can as easily replace xtask itself, and a runner or wrapper
+//! around `cargo xtask` is outside what xtask can see. Within that, what runs,
+//! is hashed or ships is the artefact cargo's report of that build names
+//! ([`reported_artefact`]), never a path xtask composes, so a stale file at a
+//! conventional path is never taken for a build's output.
 //!
 //! # The allocation test runs the sim unoptimised
 //!
@@ -151,6 +174,94 @@ pub(crate) fn pinned_config() -> Vec<String> {
         .iter()
         .map(|value| (*value).to_owned())
         .collect()
+}
+
+/// The linker rustc uses when none is named, by host triple: the hosts CI
+/// builds on (`windows-latest`, `ubuntu-24.04` and `ubuntu-latest`, which WSL
+/// matches, and `macos-latest`). A host not listed is refused, so a new one is
+/// added after its default is checked, never guessed.
+const DEFAULT_LINKERS: &[(&str, &str)] = &[
+    ("x86_64-pc-windows-msvc", "link.exe"),
+    ("x86_64-unknown-linux-gnu", "cc"),
+    ("aarch64-apple-darwin", "cc"),
+];
+
+/// The host cargo builds for, and what the process door pins for it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Host {
+    pub(crate) triple: String,
+    linker: &'static str,
+}
+
+impl Host {
+    /// The host `rustc -vV` names, with its default linker
+    /// ([`DEFAULT_LINKERS`]).
+    pub(crate) fn from_rustc(verbose_version: &str) -> Result<Host, String> {
+        let triple = verbose_version
+            .lines()
+            .find_map(|line| line.strip_prefix("host: "))
+            .map(str::trim)
+            .ok_or_else(|| "`rustc -vV` printed no host line".to_owned())?;
+        let linker = DEFAULT_LINKERS
+            .iter()
+            .find(|(host, _)| *host == triple)
+            .map(|(host, linker)| {
+                if host.contains("apple") {
+                    "ld"
+                } else {
+                    *linker
+                }
+            })
+            .ok_or_else(|| {
+                format!(
+                    "no default linker is recorded for the host `{triple}`, so a config file's \
+                     linker could not be kept from running; add its row to DEFAULT_LINKERS \
+                     once rustc's default for it is checked"
+                )
+            })?;
+        Ok(Host {
+            triple: triple.to_owned(),
+            linker,
+        })
+    }
+
+    /// The `--config` value naming the host's default linker.
+    pub(crate) fn linker_config(&self) -> String {
+        format!("target.{}.linker=\"{}\"", self.triple, self.linker)
+    }
+
+    /// The `--config` value pinning the host's runner to `xtask`'s test
+    /// runner (`runner.rs`): an array, as TOML literal strings, so the path is
+    /// taken as written. A path TOML's literal string cannot hold is refused.
+    pub(crate) fn runner_config(&self, xtask: &str) -> Result<String, String> {
+        if xtask.contains(['\'', '\n', '\r']) {
+            return Err(format!(
+                "xtask's own path `{xtask}` holds a quote or a line break, which cargo's \
+                 `--config` cannot be given as a runner"
+            ));
+        }
+        Ok(format!(
+            "target.{}.runner=['{xtask}', '{}']",
+            self.triple,
+            crate::runner::SUBCOMMAND
+        ))
+    }
+
+    /// `line` as the process door hands it to cargo: the linker pinned, and,
+    /// for a run, the runner, before the call's own arguments.
+    pub(crate) fn door_line(
+        &self,
+        line: &[String],
+        runner: Option<&str>,
+    ) -> Result<Vec<String>, String> {
+        let mut door = vec!["--config".to_owned(), self.linker_config()];
+        if let Some(xtask) = runner {
+            door.push("--config".to_owned());
+            door.push(self.runner_config(xtask)?);
+        }
+        door.extend(line.iter().cloned());
+        Ok(door)
+    }
 }
 
 /// The environment variables that change what rustc or rustdoc compiles, or
@@ -304,19 +415,29 @@ pub(crate) trait Cargo {
         env: &[EnvChange],
         stdout: &mut dyn FnMut(&str),
     ) -> Result<bool, String>;
-    /// Runs cargo with `line` and `env`, handing `stdout` each line of its
-    /// standard output as it arrives, while its standard error is echoed to
-    /// the caller's as it arrives and kept. Answers whether it succeeded and
-    /// the standard error's lines.
+    /// Runs the tests cargo runs with `line` and `env`, every test executable
+    /// started through xtask's own runner (`runner.rs`), its records kept in a
+    /// folder fresh for this run under `target_dir`. Hands `stdout` each line
+    /// of cargo's standard output, as bytes, as it arrives; its standard
+    /// error goes to the caller's. Answers whether cargo succeeded and what
+    /// the runner started.
     fn run(
         &mut self,
         line: &[String],
         env: &[EnvChange],
-        stdout: &mut dyn FnMut(&str),
-    ) -> Result<(bool, Vec<String>), String>;
-    /// The working directory cargo runs in, as cargo itself reads it: the
-    /// directory a relative path cargo prints is relative to.
-    fn working_dir(&self) -> Result<String, String>;
+        target_dir: &str,
+        stdout: &mut dyn FnMut(&[u8]),
+    ) -> Result<RunOutcome, String>;
+}
+
+/// What a test run did.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct RunOutcome {
+    /// Whether cargo succeeded: every test it started passed.
+    pub(crate) success: bool,
+    /// The absolute path of every executable the runner started, one per
+    /// start.
+    pub(crate) started: Vec<String>,
 }
 
 /// What a checked build requires of the sim.
@@ -662,30 +783,30 @@ fn split_root(path: &str) -> (&str, &str) {
     ("", path)
 }
 
-/// A path as the run's `Running` line and the report spell it, made
-/// comparable lexically, and only lexically:
+/// A path as the check's report and the runner's record spell it, made
+/// comparable lexically, and only lexically. Both are absolute by
+/// construction: cargo reports absolute paths ([`Report`] refuses any other),
+/// and the runner records the path it was started with made absolute against
+/// its own working directory, while cargo starts each test executable by the
+/// path it reported. So nothing is joined and nothing is canonicalised (no
+/// link is resolved, so macOS's `/var` is never rewritten to `/private/var`,
+/// and the two sides never differ in it, both coming from the same target
+/// directory as cargo spelled it):
 ///
-/// - one separator and no verbatim prefix ([`slashed`]), on both sides;
-/// - a relative path (what cargo prints for an executable under its working
-///   directory, CI's in-tree `target`) joined to `working_dir`, the directory
-///   cargo ran in, as cargo read it ([`Cargo::working_dir`]);
+/// - one separator and no verbatim prefix ([`slashed`]);
 /// - `.` and empty components dropped and `..` taken back, without reading the
-///   disk: nothing is canonicalised, so no link is resolved (macOS's
-///   `/var` stays `/var`; the working directory is already the one cargo read);
+///   disk;
 /// - on Windows, whose file names are case-insensitive, one case, which also
 ///   covers a drive letter spelled `D:` on one side and `d:` on the other.
-fn comparable_path(path: &str, working_dir: &str, case_insensitive: bool) -> String {
+///
+/// A relative path stays relative, and so matches no absolute one.
+fn comparable_path(path: &str, case_insensitive: bool) -> String {
     let path = slashed(path);
-    let joined = if split_root(&path).0.is_empty() {
-        format!("{}/{path}", slashed(working_dir))
-    } else {
-        path
-    };
-    let (root, rest) = split_root(&joined);
+    let (root, rest) = split_root(&path);
     let mut parts: Vec<&str> = Vec::new();
     for part in rest.split('/') {
         match part {
-            "" | "." => {}
+            "" => {}
             ".." => {
                 if parts.last().is_some_and(|last| *last != "..") {
                     parts.pop();
@@ -705,98 +826,60 @@ fn comparable_path(path: &str, working_dir: &str, case_insensitive: bool) -> Str
     }
 }
 
-/// `text` with ANSI escape sequences (`ESC [ ... letter`) taken out, as cargo
-/// colours its status lines when told to.
-fn without_ansi(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut chars = text.chars();
-    while let Some(character) = chars.next() {
-        if character == '\u{1b}' {
-            for inner in chars.by_ref() {
-                if inner.is_ascii_alphabetic() {
-                    break;
-                }
-            }
-        } else {
-            out.push(character);
-        }
-    }
-    out
-}
-
-/// The executable a cargo `Running` line names: `Running unittests src\lib.rs
-/// (D:/t\debug\deps\x.exe)` names `D:/t\debug\deps\x.exe`.
-fn running_path(line: &str) -> Option<String> {
-    let line = without_ansi(line);
-    let rest = line.trim().strip_prefix("Running ")?;
-    let inner = rest.strip_suffix(')')?;
-    let (_, path) = inner.rsplit_once(" (")?;
-    Some(path.to_owned())
-}
-
-/// Whether the run ran exactly the test executables the check reported: each
-/// named by a `Running` line on the run's standard error, no `Running` line
-/// naming anything else, and as many libtest `test result:` lines on its
-/// standard output as `Running` lines. Both sides are compared as paths
-/// ([`comparable_path`]), a relative `Running` path resolved against
-/// `working_dir`, the directory cargo ran in. A runner that ran nothing (a
-/// config file's `runner` that exits 0) leaves the `Running` lines and no
-/// result, and is [`ProfileFault::TestsDidNotRun`].
-fn judge_run(
+/// Whether the run started exactly the test executables the check reported:
+/// the two sets equal, compared as paths ([`comparable_path`]). A reported
+/// executable cargo did not start, or a start the check never reported, is
+/// [`ProfileFault::TestsDidNotRun`]. Whether each passed is cargo's exit
+/// status.
+fn judge_starts(
     expected: &[String],
-    stderr: &[String],
-    results: usize,
-    working_dir: &str,
+    started: &[String],
     case_insensitive: bool,
 ) -> Result<(), ProfileFault> {
-    let started: Vec<(String, String)> = stderr
-        .iter()
-        .filter_map(|line| running_path(line))
-        .map(|path| {
-            let comparable = comparable_path(&path, working_dir, case_insensitive);
-            (path, comparable)
-        })
-        .collect();
-    let reported: Vec<String> = expected
-        .iter()
-        .map(|path| comparable_path(path, working_dir, case_insensitive))
-        .collect();
+    let comparable = |paths: &[String]| -> BTreeSet<String> {
+        paths
+            .iter()
+            .map(|path| comparable_path(path, case_insensitive))
+            .collect()
+    };
+    let reported = comparable(expected);
+    let ran = comparable(started);
     let missing: Vec<String> = expected
         .iter()
-        .zip(&reported)
-        .filter(|(_, comparable)| !started.iter().any(|(_, ran)| ran == *comparable))
-        .map(|(path, _)| path.clone())
+        .filter(|path| !ran.contains(&comparable_path(path, case_insensitive)))
+        .cloned()
         .collect();
     let unreported: Vec<String> = started
         .iter()
-        .filter(|(_, comparable)| !reported.contains(comparable))
-        .map(|(path, _)| path.clone())
+        .filter(|path| reported.is_empty() && !path.is_empty())
+        .cloned()
         .collect();
-    if !missing.is_empty() || !unreported.is_empty() || results != started.len() {
-        return Err(ProfileFault::TestsDidNotRun {
-            expected: expected.len(),
-            started: started.len(),
-            results,
-            missing,
-            unreported,
-        });
+    if missing.is_empty() && unreported.is_empty() {
+        return Ok(());
     }
-    Ok(())
+    Err(ProfileFault::TestsDidNotRun {
+        expected: reported.len(),
+        started: ran.len(),
+        missing,
+        unreported,
+    })
 }
 
 /// Runs `test`: its check through [`checked`], then, when the check holds,
 /// its run, both through `cargo` and nothing else. Each diagnostic is
-/// written to `diagnostics` once for the two, as it arrives; each line the
-/// tests print goes to `test_output` as it arrives. After the run, every test
-/// executable the check reported must have run and given its result
-/// ([`judge_run`]); a doctest run is held to its exit status alone, because
-/// libtest's output does not tie a doctest result to the crate it came from.
+/// written to `diagnostics` once for the two, as it arrives; each line of
+/// the run's standard output that is not one of cargo's messages goes to
+/// `test_output`, as the bytes the tests wrote, as it arrives. After a run
+/// cargo calls successful, the executables xtask's runner started must be
+/// exactly those the check reported ([`judge_starts`]). A doctest run starts
+/// its doctests through the same runner, but how many it starts cannot be
+/// known from the check, so it is held to cargo's exit status.
 pub(crate) fn execute(
     test: &TestRun,
     graph: &Graph,
     cargo: &mut impl Cargo,
     diagnostics: &mut impl FnMut(&str),
-    test_output: &mut impl FnMut(&str),
+    test_output: &mut impl FnMut(&[u8]) -> Result<(), String>,
 ) -> Result<(), String> {
     let mut seen: BTreeSet<String> = BTreeSet::new();
     let mut once = |rendered: &str| {
@@ -805,40 +888,43 @@ pub(crate) fn execute(
         }
     };
     let built = checked(cargo, &test.check(), graph, test.expect(), &mut once)?;
+    let target_dir = graph.target_dir().map_err(|fault| fault.to_string())?;
     let run = test.run();
-    let mut results: usize = 0;
-    let mut stdout = |line: &str| {
-        if let Some(message) = cargo_message(line) {
-            if let Some(rendered) = message
-                .get("message")
-                .and_then(|diagnostic| diagnostic.get("rendered"))
-                .and_then(Json::as_str)
-            {
-                once(rendered);
+    let mut output_error: Option<String> = None;
+    let mut stdout = |line: &[u8]| {
+        let message = std::str::from_utf8(line)
+            .ok()
+            .and_then(|text| cargo_message(text.trim_end_matches('\r')));
+        match message {
+            Some(message) => {
+                if let Some(rendered) = message
+                    .get("message")
+                    .and_then(|diagnostic| diagnostic.get("rendered"))
+                    .and_then(Json::as_str)
+                {
+                    once(rendered);
+                }
             }
-        } else {
-            if line.trim_start().starts_with("test result: ") {
-                results += 1;
+            None => {
+                if output_error.is_none() && test_output(line).is_err() {
+                    output_error = None;
+                }
             }
-            test_output(line);
         }
     };
-    let (success, stderr) = cargo.run(&run.command_line(), &run.env, &mut stdout)?;
-    if !success {
+    let outcome = cargo.run(&run.command_line(), &run.env, target_dir, &mut stdout)?;
+    if let Some(error) = output_error {
+        return Err(error);
+    }
+    if !outcome.success {
         return Err(format!(
             "`cargo {}` failed; its output is above",
             run.command_line().join(" ")
         ));
     }
     if !test.doc() {
-        judge_run(
-            &test_executables(&built),
-            &stderr,
-            results,
-            &cargo.working_dir()?,
-            cfg!(windows),
-        )
-        .map_err(|fault| fault.to_string())?;
+        judge_starts(&test_executables(&built), &outcome.started, cfg!(windows))
+            .map_err(|fault| fault.to_string())?;
     }
     Ok(())
 }
@@ -984,6 +1070,67 @@ impl Built {
     }
 }
 
+/// What [`reported_artefact`] takes from a build's report.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Wanted<'a> {
+    /// The executable of the one `bin` target of this name.
+    Bin(&'a str),
+    /// The file of this name among the files of the one `cdylib` target.
+    Cdylib(&'a str),
+}
+
+/// The artefact of `package` a build reported, as cargo's report names it:
+/// what runs, is hashed or ships, never a path xtask composes. A test
+/// harness is never it; none, or more than one, is refused; the path is
+/// absolute, because [`Report`] refuses any other.
+pub(crate) fn reported_artefact(
+    built: &[Built],
+    graph: &Graph,
+    package: &str,
+    wanted: Wanted<'_>,
+) -> Result<std::path::PathBuf, String> {
+    let units: Vec<&Built> = built
+        .iter()
+        .filter(|unit| graph.names.contains_key(&unit.package_id))
+        .filter(|unit| match wanted {
+            Wanted::Bin(name) => unit.target == name && unit.is("bin"),
+            Wanted::Cdylib(_) => unit.is("cdylib"),
+        })
+        .collect();
+    let what = match wanted {
+        Wanted::Bin(name) => format!("`{package}`'s `{name}` binary"),
+        Wanted::Cdylib(file) => format!("`{package}`'s `{file}`"),
+    };
+    let unit = match units.as_slice() {
+        [unit] => *unit,
+        [] => return Err(format!("cargo's report names no {what}")),
+        _ => return Err(format!("cargo's report names more than one {what}")),
+    };
+    let path = match wanted {
+        Wanted::Bin(_) => unit
+            .executable
+            .clone()
+            .ok_or_else(|| format!("cargo reported {what} with no executable"))?,
+        Wanted::Cdylib(file) => {
+            let files: Vec<&String> = unit
+                .filenames
+                .iter()
+                .filter(|path| {
+                    std::path::Path::new(path.as_str())
+                        .file_name()
+                        .is_some_and(|name| name == std::ffi::OsStr::new(file))
+                })
+                .collect();
+            match files.as_slice() {
+                [one] => (*one).clone(),
+                [] => return Err(format!("cargo's report names no {what}")),
+                _ => return Err(format!("cargo's report names {what} more than once")),
+            }
+        }
+    };
+    Ok(std::path::PathBuf::from(path))
+}
+
 /// The packages [`faults`] judges by: the workspace's members, every
 /// package's name, the sim, the third-party crates it runs and the godot
 /// family.
@@ -1002,9 +1149,23 @@ pub(crate) struct Graph {
     godot_family: BTreeSet<String>,
     /// Every dependency edge, any kind.
     edges: BTreeMap<String, Vec<String>>,
+    /// Cargo's `target_directory`, where a test run's records go.
+    target_dir: String,
 }
 
 impl Graph {
+    /// Cargo's target directory, as `cargo metadata` names it: absolute, or
+    /// refused.
+    pub(crate) fn target_dir(&self) -> Result<&str, ProfileFault> {
+        if self.target_dir.is_empty() {
+            return Err(ProfileFault::Metadata(format!(
+                "`target_directory` is `{}`, not an absolute path",
+                self.target_dir
+            )));
+        }
+        Ok(&self.target_dir)
+    }
+
     /// The names of the godot family, sorted.
     pub(crate) fn godot_family_names(&self) -> Vec<String> {
         let mut names: Vec<String> = self
@@ -1141,11 +1302,12 @@ pub(crate) enum ProfileFault {
     },
     /// A third-party crate outside the godot family at opt-level 0.
     StrayUnoptimised { package: String, target: String },
-    /// A run that did not run every test executable its check reported.
+    /// A run that did not start exactly the test executables its check
+    /// reported.
     TestsDidNotRun {
         expected: usize,
         started: usize,
-        results: usize,
+        /// Reported executables cargo did not start.
         missing: Vec<String>,
         /// Started executables the check never reported.
         unreported: Vec<String>,
@@ -1268,24 +1430,28 @@ impl fmt::Display for ProfileFault {
             Self::TestsDidNotRun {
                 expected,
                 started,
-                results,
                 missing,
                 unreported,
             } => write!(
                 f,
-                "the check built {expected} test executable(s); cargo started {started} and \
-                 libtest reported {results} result(s){}{}. Something ran in their place (a \
-                 config file's `runner`, say), or the run built and ran something the check \
-                 did not report",
+                "the check reported {expected} test executable(s) and xtask's runner recorded \
+                 {started} distinct one(s) started{}{}",
                 if missing.is_empty() {
                     String::new()
                 } else {
-                    format!("; never started: {}", missing.join(", "))
+                    format!(
+                        "; cargo did not start {}, so its tests did not run",
+                        missing.join(", ")
+                    )
                 },
                 if unreported.is_empty() {
                     String::new()
                 } else {
-                    format!("; started but never reported: {}", unreported.join(", "))
+                    format!(
+                        "; cargo started {}, which the check never reported, so it ran \
+                         something the check did not hold to the profile",
+                        unreported.join(", ")
+                    )
                 }
             ),
             Self::RefusedInEnvironment { variables } => write!(
@@ -1521,7 +1687,12 @@ pub(crate) fn parse_messages(
 pub(crate) fn graph(metadata: &str) -> Result<Graph, ProfileFault> {
     let fault = ProfileFault::Metadata;
     let json = Json::parse(metadata).map_err(fault)?;
-    let mut graph = Graph::default();
+    let mut graph = Graph {
+        target_dir: string_of(&json, "target_directory")
+            .map_err(fault)?
+            .to_owned(),
+        ..Graph::default()
+    };
     let mut proc_macros: BTreeSet<String> = BTreeSet::new();
     for package in array_of(&json, "packages").map_err(fault)? {
         let id = string_of(package, "id").map_err(fault)?;
@@ -1825,6 +1996,7 @@ mod tests {
         format!(
             r#"{{"packages":[{}],
                 "workspace_members":["{SIM_ID}","{PROTO_ID}","{GATEWAY_ID}","{CLIENT_ID}"],
+                "target_directory":"/w/target",
                 "resolve":{{"nodes":[{}],"root":null}}}}"#,
             packages.join(","),
             nodes.join(",")
@@ -2526,14 +2698,14 @@ mod tests {
             &mut self,
             line: &[String],
             env: &[EnvChange],
-            _stdout: &mut dyn FnMut(&str),
-        ) -> Result<(bool, Vec<String>), String> {
+            _target_dir: &str,
+            _stdout: &mut dyn FnMut(&[u8]),
+        ) -> Result<RunOutcome, String> {
             self.asked.push(Asked::Run(line.to_vec(), env.to_vec()));
-            Ok((true, Vec::new()))
-        }
-
-        fn working_dir(&self) -> Result<String, String> {
-            Ok("D:/w".to_owned())
+            Ok(RunOutcome {
+                success: true,
+                started: Vec::new(),
+            })
         }
     }
 
@@ -2551,7 +2723,8 @@ mod tests {
                     "2"
                 },
             };
-            execute(&test, &graph, &mut cargo, &mut |_| {}, &mut |_| {}).expect("the check holds");
+            execute(&test, &graph, &mut cargo, &mut |_| {}, &mut |_| Ok(()))
+                .expect("the check holds");
             let (check, run) = (test.check(), test.run());
             assert_eq!(
                 cargo.asked,
@@ -2576,8 +2749,8 @@ mod tests {
             asked: Vec::new(),
             sim_level: "2",
         };
-        let error =
-            execute(&alloc, &graph, &mut cargo, &mut |_| {}, &mut |_| {}).expect_err("optimised");
+        let error = execute(&alloc, &graph, &mut cargo, &mut |_| {}, &mut |_| Ok(()))
+            .expect_err("optimised");
         assert!(error.contains("opt-level 2"), "{error}");
         assert_eq!(cargo.asked.len(), 1, "the run never started");
     }
@@ -2721,226 +2894,56 @@ mod tests {
         );
     }
 
-    /// A run that ran its test executables: each started (`Running`) and as
-    /// many libtest results as starts. A runner that runs nothing leaves the
-    /// starts and no result.
-    #[test]
-    fn a_run_whose_tests_did_not_run_is_refused() {
-        let expected = vec![
-            "D:\\t\\debug\\deps\\proto-1.exe".to_owned(),
-            "D:\\t\\debug\\deps\\fallbacks-2.exe".to_owned(),
-        ];
-        let stderr = vec![
-            "   Compiling pharmakos-proto v0.0.0".to_owned(),
-            "     Running unittests src\\lib.rs (D:/t\\debug\\deps\\proto-1.exe)".to_owned(),
-            "\u{1b}[1m\u{1b}[92m     Running\u{1b}[0m tests\\fallbacks.rs (D:/t\\debug\\deps\\fallbacks-2.exe)"
-                .to_owned(),
-        ];
-        assert_eq!(judge_run(&expected, &stderr, 2, "D:/w", true), Ok(()));
-        // The runner ran nothing: both started, no result.
-        assert_eq!(
-            judge_run(&expected, &stderr, 0, "D:/w", true),
-            Err(ProfileFault::TestsDidNotRun {
-                expected: 2,
-                started: 2,
-                results: 0,
-                missing: Vec::new(),
-                unreported: Vec::new()
-            })
-        );
-        // An executable never started.
-        let one = stderr.get(..2).map(<[String]>::to_vec).unwrap_or_default();
-        assert!(matches!(
-            judge_run(&expected, &one, 1, "D:/w", true),
-            Err(ProfileFault::TestsDidNotRun { started: 1, ref missing, .. }) if missing.len() == 1
-        ));
-        // Case matters where the file system's names do, and on Windows it
-        // does not: cargo spells the drive one way and the report another.
-        let lower: Vec<String> = expected
-            .iter()
-            .map(|path| path.replace("D:", "d:"))
-            .collect();
-        assert_eq!(judge_run(&lower, &stderr, 2, "D:/w", true), Ok(()));
-        assert!(judge_run(&lower, &stderr, 2, "D:/w", false).is_err());
-        assert_eq!(
-            running_path("     Running unittests src/lib.rs (/t/debug/deps/x-1)"),
-            Some("/t/debug/deps/x-1".to_owned())
-        );
-        assert_eq!(running_path("   Compiling x v1.0.0 (/t/x)"), None);
-        assert_eq!(without_ansi("\u{1b}[1mRunning\u{1b}[0m"), "Running");
+    const EXE_A: &str = "D:/w/target/debug/deps/pharmakos_sim-0123abcd.exe";
+    const EXE_B: &str = "D:/w/target/debug/deps/fallbacks-4567ef01.exe";
+    const EXE_C: &str = "D:/w/target/debug/deps/stray-89ab.exe";
+
+    /// A [`Cargo`] that reports a test executable at each of `reported`, with
+    /// a warning before and after, and whose run writes the warning, then
+    /// `output`, and answers `success` and `started`.
+    struct Scripted {
+        reported: Vec<&'static str>,
+        output: Vec<Vec<u8>>,
+        success: bool,
+        started: Vec<String>,
+        runs: usize,
     }
 
-    /// Lines as cargo writes them when the target directory lies under its
-    /// working directory (CI's in-tree `target`): the executable's path
-    /// relative to that directory, while the check's report names it in full.
-    fn owned(lines: &[&str]) -> Vec<String> {
-        lines.iter().map(|line| (*line).to_owned()).collect()
-    }
-
-    /// Linux's and macOS's relative form, as CI's legs print it.
-    #[test]
-    fn a_relative_running_line_names_a_unix_executable() {
-        let expected = owned(&[
-            "/home/runner/work/pharmakos/pharmakos/target/debug/deps/pharmakos_sim-0123abcd",
-            "/home/runner/work/pharmakos/pharmakos/target/debug/deps/fallbacks-4567ef01",
-        ]);
-        let stderr = owned(&[
-            "   Compiling pharmakos-sim v0.0.0 (/home/runner/work/pharmakos/pharmakos/crates/sim)",
-            "    Finished `test` profile [optimized + debuginfo] target(s) in 1m 02s",
-            "     Running unittests src/lib.rs (target/debug/deps/pharmakos_sim-0123abcd)",
-            "     Running tests/fallbacks.rs (target/debug/deps/fallbacks-4567ef01)",
-            "   Doc-tests pharmakos_sim",
-        ]);
-        assert_eq!(
-            judge_run(
-                &expected,
-                &stderr,
-                2,
-                "/home/runner/work/pharmakos/pharmakos",
-                false
-            ),
-            Ok(())
-        );
-        // The same lines against another working directory name other files.
-        assert!(judge_run(&expected, &stderr, 2, "/home/runner/elsewhere", false).is_err());
-    }
-
-    /// Windows' relative form: backslashes and `.exe`, against a report that
-    /// spells the drive another way.
-    #[test]
-    fn a_relative_running_line_names_a_windows_executable() {
-        let expected = owned(&[
-            "D:\\a\\pharmakos\\pharmakos\\target\\debug\\deps\\pharmakos_sim-0123abcd.exe",
-            "D:\\a\\pharmakos\\pharmakos\\target\\debug\\deps\\fallbacks-4567ef01.exe",
-        ]);
-        let stderr = owned(&[
-            "     Running unittests src\\lib.rs (target\\debug\\deps\\pharmakos_sim-0123abcd.exe)",
-            "\u{1b}[1m\u{1b}[92m     Running\u{1b}[0m tests\\fallbacks.rs (target\\debug\\deps\\fallbacks-4567ef01.exe)",
-            "   Doc-tests pharmakos_sim",
-        ]);
-        assert_eq!(
-            judge_run(&expected, &stderr, 2, "D:\\a\\pharmakos\\pharmakos", true),
-            Ok(())
-        );
-        assert_eq!(
-            judge_run(&expected, &stderr, 2, "d:/a/pharmakos/pharmakos", true),
-            Ok(())
-        );
-    }
-
-    /// An absolute `Running` path, as cargo prints it for a target
-    /// directory outside its working directory, on each operating system.
-    #[test]
-    fn an_absolute_running_line_names_its_executable() {
-        let unix = owned(&["/build/citime/debug/deps/pharmakos_sim-0123abcd"]);
-        let unix_lines = owned(&[
-            "     Running unittests src/lib.rs (/build/citime/debug/deps/pharmakos_sim-0123abcd)",
-        ]);
-        assert_eq!(judge_run(&unix, &unix_lines, 1, "/home/p", false), Ok(()));
-        let windows = owned(&["D:\\build\\citime\\debug\\deps\\pharmakos_sim-0123abcd.exe"]);
-        let windows_lines = owned(&[
-            "     Running unittests src\\lib.rs (D:\\build\\citime\\debug\\deps\\pharmakos_sim-0123abcd.exe)",
-        ]);
-        assert_eq!(
-            judge_run(&windows, &windows_lines, 1, "C:\\Users\\p", true),
-            Ok(())
-        );
-    }
-
-    /// A verbatim prefix and `.` or `..` components are compared lexically,
-    /// on either side.
-    #[test]
-    fn a_verbatim_or_dotted_path_is_compared_lexically() {
-        let expected = owned(&["\\\\?\\D:\\a\\p\\target\\debug\\deps\\x-1.exe"]);
-        let lines = owned(&["     Running unittests src\\lib.rs (target\\debug\\deps\\x-1.exe)"]);
-        assert_eq!(judge_run(&expected, &lines, 1, "D:\\a\\p", true), Ok(()));
-        assert_eq!(
-            judge_run(&expected, &lines, 1, "\\\\?\\D:\\a\\p", true),
-            Ok(())
-        );
-        // A relative `CARGO_TARGET_DIR` reaching out of the working
-        // directory: cargo joins it to the working directory unnormalised.
-        let dotted = owned(&["/w/p/../t/debug/deps/x-1"]);
-        let lines = owned(&["     Running tests/x.rs (/w/t/debug/deps/x-1)"]);
-        assert_eq!(judge_run(&dotted, &lines, 1, "/w/p", false), Ok(()));
-        let lines = owned(&["     Running tests/x.rs (./t/debug/deps/x-1)"]);
-        assert_eq!(
-            judge_run(&owned(&["/w/t/debug/deps/x-1"]), &lines, 1, "/w", false),
-            Ok(())
-        );
-    }
-
-    /// The working directory is joined as cargo read it and never resolved
-    /// through links: macOS's `/var` is `/private/var` only on disk.
-    #[test]
-    fn the_working_directory_is_joined_and_never_resolved() {
-        let expected = owned(&["/private/var/folders/x/p/target/debug/deps/x-1"]);
-        let lines = owned(&["     Running tests/x.rs (target/debug/deps/x-1)"]);
-        assert_eq!(
-            judge_run(&expected, &lines, 1, "/private/var/folders/x/p", false),
-            Ok(())
-        );
-        assert!(judge_run(&expected, &lines, 1, "/var/folders/x/p", false).is_err());
-    }
-
-    /// An executable that started and that the check never reported fails
-    /// the run, whatever else ran.
-    #[test]
-    fn a_start_the_check_never_reported_is_refused() {
-        let expected = owned(&["/w/target/debug/deps/x-1"]);
-        let lines = owned(&[
-            "     Running tests/x.rs (target/debug/deps/x-1)",
-            "     Running tests/y.rs (target/debug/deps/y-2)",
-        ]);
-        assert_eq!(
-            judge_run(&expected, &lines, 2, "/w", false),
-            Err(ProfileFault::TestsDidNotRun {
-                expected: 1,
-                started: 2,
-                results: 2,
-                missing: Vec::new(),
-                unreported: vec!["target/debug/deps/y-2".to_owned()],
-            })
-        );
-    }
-
-    /// A doctest header is not a start: the doctests are held to the run's
-    /// exit status.
-    #[test]
-    fn a_doctest_header_is_not_a_start() {
-        assert_eq!(running_path("   Doc-tests pharmakos_sim"), None);
-        assert_eq!(
-            running_path("\u{1b}[1m\u{1b}[92m   Doc-tests\u{1b}[0m pharmakos_sim"),
-            None
-        );
-    }
-
-    /// A [`Cargo`] whose check and run both carry the same warning, and whose
-    /// run prints a test's result and a cargo message among its output.
-    struct Noisy {
-        printed: Vec<String>,
+    impl Scripted {
+        fn new(reported: &[&'static str], started: &[&str]) -> Scripted {
+            Scripted {
+                reported: reported.to_vec(),
+                output: vec![
+                    b"running 1 test".to_vec(),
+                    b"test result: ok. 1 passed".to_vec(),
+                ],
+                success: true,
+                started: started.iter().map(|path| (*path).to_owned()).collect(),
+                runs: 0,
+            }
+        }
     }
 
     const WARNING: &str = r#"{"reason":"compiler-message","package_id":"x","manifest_path":"m","target":{"kind":["lib"],"name":"x"},"message":{"rendered":"warning: unused variable: `x`\n","message":"unused"}}"#;
 
-    impl Cargo for Noisy {
+    impl Cargo for Scripted {
         fn report(
             &mut self,
             _line: &[String],
             _env: &[EnvChange],
             stdout: &mut dyn FnMut(&str),
         ) -> Result<bool, String> {
-            for line in [
-                WARNING,
-                artifact(SIM_ID, "pharmakos_sim", "2", true, true)
-                    .replace("\"test\":false}", "\"test\":true}")
-                    .replace("\"executable\":null", "\"executable\":\"D:/t/sim-1.exe\"")
-                    .as_str(),
-                WARNING,
-                FINISHED,
-            ] {
-                stdout(line);
+            stdout(WARNING);
+            stdout(&artifact(SIM_ID, "pharmakos_sim", "2", true, true));
+            for (index, path) in self.reported.iter().enumerate() {
+                stdout(
+                    &artifact(SIM_ID, &format!("t{index}"), "2", true, true)
+                        .replace("\"test\":false}", "\"test\":true}")
+                        .replace("\"executable\":null", &format!("\"executable\":\"{path}\"")),
+                );
             }
+            stdout(WARNING);
+            stdout(FINISHED);
             Ok(true)
         }
 
@@ -2948,57 +2951,373 @@ mod tests {
             &mut self,
             _line: &[String],
             _env: &[EnvChange],
-            stdout: &mut dyn FnMut(&str),
-        ) -> Result<(bool, Vec<String>), String> {
-            for line in [
-                WARNING,
-                FINISHED,
-                "running 0 tests",
-                "test result: ok. 0 passed",
-            ] {
+            target_dir: &str,
+            stdout: &mut dyn FnMut(&[u8]),
+        ) -> Result<RunOutcome, String> {
+            assert_eq!(
+                target_dir, "/w/target",
+                "the records go under the target directory"
+            );
+            self.runs += 1;
+            stdout(WARNING.as_bytes());
+            stdout(FINISHED.as_bytes());
+            for line in &self.output {
                 stdout(line);
             }
-            self.printed.push("ran".to_owned());
-            Ok((
-                true,
-                vec!["     Running unittests src/lib.rs (D:/t/sim-1.exe)".to_owned()],
-            ))
-        }
-
-        fn working_dir(&self) -> Result<String, String> {
-            Ok("D:/w".to_owned())
+            Ok(RunOutcome {
+                success: self.success,
+                started: self.started.clone(),
+            })
         }
     }
 
-    /// Each diagnostic is written once for the check and the run together,
-    /// and what the tests print reaches the caller as it comes.
-    #[test]
-    fn a_diagnostic_is_written_once_and_the_tests_output_is_handed_on() {
-        let graph = graph(&metadata()).expect("the graph reads");
-        let test = TestRun::new(
+    fn sim_test(selectors: &[&str]) -> TestRun {
+        TestRun::new(
             vec!["--package".to_owned(), "pharmakos-sim".to_owned()],
             Invocation {
-                selectors: vec!["--lib".to_owned()],
+                selectors: selectors.iter().map(|arg| (*arg).to_owned()).collect(),
                 sim: SimRule::OptimisedIfBuilt,
             },
             false,
             false,
+        )
+    }
+
+    /// Runs `test` through `cargo`, answering the error and what the tests
+    /// printed.
+    fn run_scripted(test: &TestRun, cargo: &mut Scripted) -> (Result<(), String>, Vec<Vec<u8>>) {
+        let graph = graph(&metadata()).expect("the graph reads");
+        let mut output: Vec<Vec<u8>> = Vec::new();
+        let result = execute(test, &graph, cargo, &mut |_| {}, &mut |line| {
+            output.push(line.to_vec());
+            Ok(())
+        });
+        (result, output)
+    }
+
+    /// The run must start exactly the executables the check reported: one
+    /// cargo did not start, or one it started that the check never reported,
+    /// is refused, whatever the run printed and whatever its status.
+    #[test]
+    fn the_run_must_start_exactly_what_the_check_reported() {
+        let test = sim_test(&["--lib", "--tests"]);
+        let (result, _) = run_scripted(&test, &mut Scripted::new(&[EXE_A, EXE_B], &[EXE_B, EXE_A]));
+        assert_eq!(result, Ok(()));
+        // One filtered out of the run.
+        let (result, _) = run_scripted(&test, &mut Scripted::new(&[EXE_A, EXE_B], &[EXE_A]));
+        let error = result.expect_err("one never started");
+        assert!(
+            error.contains("cargo did not start") && error.contains(EXE_B),
+            "{error}"
         );
-        let mut cargo = Noisy {
-            printed: Vec::new(),
-        };
+        // A start the check never reported.
+        let (result, _) = run_scripted(&test, &mut Scripted::new(&[EXE_A], &[EXE_A, EXE_C]));
+        let error = result.expect_err("one never reported");
+        assert!(
+            error.contains("never reported") && error.contains(EXE_C),
+            "{error}"
+        );
+        // A runner that echoes a passing result and runs nothing: cargo says
+        // it succeeded, the tests printed a result, and nothing was started.
+        let mut faked = Scripted::new(&[EXE_A], &[]);
+        faked.output = vec![b"test result: ok. 1 passed; 0 failed".to_vec()];
+        let (result, _) = run_scripted(&test, &mut faked);
+        assert!(
+            result
+                .expect_err("nothing ran")
+                .contains("cargo did not start")
+        );
+    }
+
+    /// What a test prints is passed through as its bytes and judged by
+    /// nothing: a line that reads like libtest's result, or bytes that are
+    /// not UTF-8, change no verdict.
+    #[test]
+    fn a_tests_output_is_passed_through_and_never_judged() {
+        let test = sim_test(&["--lib"]);
+        let mut cargo = Scripted::new(&[EXE_A], &[EXE_A]);
+        cargo.output = vec![
+            b"test result: ok. 9 passed; 0 failed".to_vec(),
+            b"\xff\xfe probe".to_vec(),
+            b"test result: ok. 1 passed".to_vec(),
+        ];
+        let (result, output) = run_scripted(&test, &mut cargo);
+        assert_eq!(result, Ok(()));
+        assert_eq!(output, cargo.output);
+    }
+
+    /// A run cargo calls failed is reported as such, before any start is
+    /// judged.
+    #[test]
+    fn a_failed_run_is_a_failure() {
+        let test = sim_test(&["--lib"]);
+        let mut cargo = Scripted::new(&[EXE_A], &[EXE_A]);
+        cargo.success = false;
+        let (result, _) = run_scripted(&test, &mut cargo);
+        assert!(
+            result
+                .expect_err("it failed")
+                .contains("failed; its output is above")
+        );
+    }
+
+    /// A doctest run is held to its exit status: what it starts goes
+    /// through the runner, but how many cannot be known from the check.
+    #[test]
+    fn a_doctest_run_is_held_to_its_exit_status() {
+        let test = sim_test(&["--doc"]);
+        let (result, _) = run_scripted(
+            &test,
+            &mut Scripted::new(&[], &["C:/Temp/rustdoctest1/rust_out.exe"]),
+        );
+        assert_eq!(result, Ok(()));
+        let mut cargo = Scripted::new(&[], &[]);
+        cargo.success = false;
+        let (result, _) = run_scripted(&test, &mut cargo);
+        assert!(result.is_err());
+    }
+
+    /// Both sides are compared as paths, lexically: one separator, no
+    /// verbatim prefix, `.` and `..` taken out, and on Windows one case.
+    /// Nothing is joined or resolved: a relative path matches no absolute one,
+    /// and macOS's `/var` is not `/private/var`.
+    #[test]
+    fn starts_are_compared_as_paths() {
+        let reported = vec![
+            "D:\\a\\p\\target\\debug\\deps\\x-1.exe".to_owned(),
+            "/home/runner/work/p/p/target/debug/deps/y-2".to_owned(),
+        ];
+        let started = vec![
+            "\\\\?\\d:\\a\\p\\target\\.\\debug\\deps\\x-1.exe".to_owned(),
+            "/home/runner/work/p/p/target/debug/../debug/deps/y-2".to_owned(),
+        ];
+        assert_eq!(judge_starts(&reported, &started, true), Ok(()));
+        // Case matters where the file system's names do.
+        assert!(judge_starts(&reported, &started, false).is_err());
+        let unc = vec!["\\\\?\\UNC\\host\\share\\t\\x.exe".to_owned()];
+        assert_eq!(
+            judge_starts(&["//host/share/t/x.exe".to_owned()], &unc, true),
+            Ok(())
+        );
+        assert!(
+            judge_starts(
+                &["/w/target/debug/deps/y-2".to_owned()],
+                &["target/debug/deps/y-2".to_owned()],
+                false
+            )
+            .is_err()
+        );
+        assert!(
+            judge_starts(
+                &["/private/var/folders/x/t/y-2".to_owned()],
+                &["/var/folders/x/t/y-2".to_owned()],
+                false
+            )
+            .is_err()
+        );
+        assert_eq!(
+            judge_starts(&[], &[], false),
+            Ok(()),
+            "a run of no executables starts none"
+        );
+    }
+
+    /// Each diagnostic is written once for the check and the run together.
+    #[test]
+    fn a_diagnostic_is_written_once() {
+        let graph = graph(&metadata()).expect("the graph reads");
+        let test = sim_test(&["--lib"]);
+        let mut cargo = Scripted::new(&[EXE_A], &[EXE_A]);
         let mut diagnostics: Vec<String> = Vec::new();
-        let mut output: Vec<String> = Vec::new();
         execute(
             &test,
             &graph,
             &mut cargo,
             &mut |text| diagnostics.push(text.to_owned()),
-            &mut |line| output.push(line.to_owned()),
+            &mut |_| Ok(()),
         )
         .expect("it runs");
         assert_eq!(diagnostics, ["warning: unused variable: `x`\n"]);
-        assert_eq!(output, ["running 0 tests", "test result: ok. 0 passed"]);
+        assert_eq!(cargo.runs, 1);
+    }
+
+    /// A failed write of a test's output fails the run, after cargo ends.
+    #[test]
+    fn a_failed_write_of_the_output_fails_the_run() {
+        let graph = graph(&metadata()).expect("the graph reads");
+        let test = sim_test(&["--lib"]);
+        let mut cargo = Scripted::new(&[EXE_A], &[EXE_A]);
+        let result = execute(&test, &graph, &mut cargo, &mut |_| {}, &mut |_| {
+            Err("the pipe closed".to_owned())
+        });
+        assert_eq!(result, Err("the pipe closed".to_owned()));
+    }
+
+    /// The artefact is the one the build reported, of the package named: the
+    /// one `bin` of that name, or the file of that name of the one `cdylib`;
+    /// a test harness, another package's, none or two is refused.
+    #[test]
+    fn the_artefact_is_the_one_its_build_reported() {
+        let graph = graph(&metadata()).expect("the graph reads");
+        let unit =
+            |id: &str, target: &str, kind: &str, files: &[&str], executable: Option<&str>| Built {
+                package_id: id.to_owned(),
+                target: target.to_owned(),
+                kinds: vec![kind.to_owned()],
+                opt_level: OptLevel::O3,
+                debug_assertions: false,
+                overflow_checks: true,
+                test: false,
+                filenames: files.iter().map(|file| (*file).to_owned()).collect(),
+                executable: executable.map(str::to_owned),
+            };
+        let bin = unit(
+            SIM_ID,
+            "determinism",
+            "bin",
+            &[],
+            Some("/t/release-checked/determinism"),
+        );
+        let lib = unit(
+            SIM_ID,
+            "pharmakos_sim",
+            "lib",
+            &["/t/libpharmakos_sim.rlib"],
+            None,
+        );
+        let wanted = Wanted::Bin("determinism");
+        assert_eq!(
+            reported_artefact(&[lib.clone(), bin.clone()], &graph, SIM, wanted),
+            Ok(std::path::PathBuf::from("/t/release-checked/determinism"))
+        );
+        assert!(reported_artefact(std::slice::from_ref(&lib), &graph, SIM, wanted).is_err());
+        assert!(reported_artefact(&[bin.clone(), bin.clone()], &graph, SIM, wanted).is_err());
+        assert!(
+            reported_artefact(
+                std::slice::from_ref(&bin),
+                &graph,
+                "pharmakos-proto",
+                wanted
+            )
+            .is_err()
+        );
+        let mut harness = bin.clone();
+        harness.test = true;
+        assert!(reported_artefact(&[harness], &graph, SIM, wanted).is_err());
+        assert!(
+            reported_artefact(
+                &[unit(SIM_ID, "determinism", "bin", &[], None)],
+                &graph,
+                SIM,
+                wanted
+            )
+            .is_err()
+        );
+        let client = unit(
+            CLIENT_ID,
+            "pharmakos_client_gdext",
+            "cdylib",
+            &[
+                "D:/t/release-client/pharmakos_client_gdext.dll",
+                "D:/t/release-client/pharmakos_client_gdext.dll.lib",
+                "D:/t/release-client/pharmakos_client_gdext.pdb",
+            ],
+            None,
+        );
+        let library = Wanted::Cdylib("pharmakos_client_gdext.dll");
+        let client_package = "pharmakos-client-gdext";
+        assert_eq!(
+            reported_artefact(
+                std::slice::from_ref(&client),
+                &graph,
+                client_package,
+                library
+            ),
+            Ok(std::path::PathBuf::from(
+                "D:/t/release-client/pharmakos_client_gdext.dll"
+            ))
+        );
+        assert!(reported_artefact(&[], &graph, client_package, library).is_err());
+        assert!(
+            reported_artefact(&[client.clone(), client], &graph, client_package, library).is_err()
+        );
+        let rlib = unit(
+            CLIENT_ID,
+            "pharmakos_client_gdext",
+            "rlib",
+            &["D:/t/pharmakos_client_gdext.dll"],
+            None,
+        );
+        assert!(
+            reported_artefact(&[rlib], &graph, client_package, library).is_err(),
+            "only a cdylib"
+        );
+    }
+
+    /// The host's default linker, by triple, and the door's line: the linker
+    /// on every call, the runner on a run, before the call's own arguments.
+    #[test]
+    fn the_door_pins_the_hosts_linker_and_runner() {
+        let rustc = |host: &str| {
+            format!(
+                "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\nhost: {host}\nrelease: 1.98.1\n"
+            )
+        };
+        let windows = Host::from_rustc(&rustc("x86_64-pc-windows-msvc")).expect("windows");
+        assert_eq!(
+            windows.linker_config(),
+            "target.x86_64-pc-windows-msvc.linker=\"link.exe\""
+        );
+        let linux = Host::from_rustc(&rustc("x86_64-unknown-linux-gnu")).expect("linux");
+        assert_eq!(
+            linux.linker_config(),
+            "target.x86_64-unknown-linux-gnu.linker=\"cc\""
+        );
+        let mac = Host::from_rustc(&rustc("aarch64-apple-darwin")).expect("macos");
+        assert_eq!(
+            mac.linker_config(),
+            "target.aarch64-apple-darwin.linker=\"cc\""
+        );
+        assert!(Host::from_rustc(&rustc("riscv64gc-unknown-linux-gnu")).is_err());
+        assert!(Host::from_rustc("rustc 1.98.1\n").is_err());
+        let line = vec!["test".to_owned(), "--lib".to_owned()];
+        assert_eq!(
+            linux.door_line(&line, None),
+            Ok(vec![
+                "--config".to_owned(),
+                "target.x86_64-unknown-linux-gnu.linker=\"cc\"".to_owned(),
+                "test".to_owned(),
+                "--lib".to_owned()
+            ])
+        );
+        assert_eq!(
+            windows.door_line(&line, Some("C:\\w\\target\\debug\\xtask.exe")),
+            Ok(vec![
+                "--config".to_owned(),
+                "target.x86_64-pc-windows-msvc.linker=\"link.exe\"".to_owned(),
+                "--config".to_owned(),
+                "target.x86_64-pc-windows-msvc.runner=['C:\\w\\target\\debug\\xtask.exe', '__run-test']"
+                    .to_owned(),
+                "test".to_owned(),
+                "--lib".to_owned()
+            ])
+        );
+        assert!(linux.door_line(&line, Some("/home/o'brien/xtask")).is_err());
+    }
+
+    /// The graph names cargo's target directory, absolute, or is refused.
+    #[test]
+    fn the_target_directory_is_absolute() {
+        let graph = graph(&metadata()).expect("the graph reads");
+        assert_eq!(graph.target_dir(), Ok("/w/target"));
+        let relative = metadata().replace("\"/w/target\"", "\"target\"");
+        assert!(graph_of(&relative).target_dir().is_err());
+        let missing = metadata().replace("\"target_directory\":\"/w/target\",", "");
+        assert!(super::graph(&missing).is_err());
+    }
+
+    fn graph_of(metadata: &str) -> Graph {
+        graph(metadata).expect("the graph reads")
     }
 
     /// Package specs are matched as cargo matches them: by name, and by

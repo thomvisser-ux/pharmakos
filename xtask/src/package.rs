@@ -74,6 +74,9 @@ pub(crate) const VERSION: &str = "0.1.0-dev+skeleton";
 /// The folder the zip holds, and the zip's only top-level entry.
 const FOLDER: &str = "Pharmakos";
 
+/// The package that builds `gamectl`.
+const GAMECTL_PACKAGE: &str = "pharmakos-gamectl";
+
 /// Everything `package` writes lives under `<target>/package/`.
 const PACKAGE_DIR: &str = "package";
 
@@ -193,7 +196,7 @@ pub(crate) fn run_package(ctx: &Ctx) -> Result<String, String> {
     // set would be overridden in silence: refused by name, on every platform,
     // before any tool runs, the host query below included.
     refuse_codegen_variables()?;
-    let host = host_triple(ctx)?;
+    let host = &crate::host()?.triple;
     if host != platform.triple {
         return Err(format!(
             "the host triple is {host}; `package` builds {} only (item 117 (2): Windows and \
@@ -713,14 +716,6 @@ fn rustc_query(ctx: &Ctx, args: &[&str]) -> Result<String, String> {
         .map_err(|error| format!("`{rendered}` printed something that is not UTF-8: {error}"))
 }
 
-fn host_triple(ctx: &Ctx) -> Result<String, String> {
-    let text = rustc_query(ctx, &["-vV"])?;
-    text.lines()
-        .find_map(|line| line.strip_prefix("host: "))
-        .map(|host| host.trim().to_owned())
-        .ok_or_else(|| "`rustc -vV` printed no host line".to_owned())
-}
-
 fn rustc_version(ctx: &Ctx) -> Result<String, String> {
     let text = rustc_query(ctx, &["-V"])?;
     let version = text.trim();
@@ -774,7 +769,7 @@ fn build_calls(platform: &Platform, locked: bool, colour: bool) -> [resolved::Ca
             "--target",
             platform.triple,
             "--package",
-            "pharmakos-gamectl",
+            GAMECTL_PACKAGE,
             "--bin",
             SCENARIO_BIN,
         ]),
@@ -784,113 +779,29 @@ fn build_calls(platform: &Platform, locked: bool, colour: bool) -> [resolved::Ca
 /// Builds the client library and `gamectl` for the host triple, checked as
 /// they are made: every workspace unit with overflow checks on, which both
 /// release profiles promise ([`resolved::Expect::RELEASE`]). Returns both
-/// paths as cargo's report names them, after a build that produced them: see
-/// [`fresh_artefact`].
+/// paths as cargo's report of each build names them
+/// ([`resolved::reported_artefact`]).
 fn build(ctx: &Ctx, platform: &Platform) -> Result<(PathBuf, PathBuf), String> {
     let graph = sim_graph(ctx)?;
     let mut cargo = ProcessCargo::of(ctx);
     let [client, host] = build_calls(platform, ctx.locked, colour());
-    let library = fresh_artefact(&mut cargo, &client, &graph, |built| {
-        reported_library(built, platform)
-    })?;
-    let gamectl = fresh_artefact(&mut cargo, &host, &graph, |built| {
-        reported_executable(built, SCENARIO_BIN)
-    })?;
+    let mut build = |call: &resolved::CargoCall, package: &str, wanted: resolved::Wanted<'_>| {
+        let built = resolved::checked(
+            &mut cargo,
+            call,
+            &graph,
+            resolved::Expect::RELEASE,
+            &mut print_diagnostic,
+        )?;
+        resolved::reported_artefact(&built, &graph, package, wanted)
+    };
+    let library = build(
+        &client,
+        CLIENT_PACKAGE,
+        resolved::Wanted::Cdylib(platform.library),
+    )?;
+    let gamectl = build(&host, GAMECTL_PACKAGE, resolved::Wanted::Bin(SCENARIO_BIN))?;
     Ok((library, gamectl))
-}
-
-/// The artefact `pick` takes from `call`'s report, as a build just produced
-/// it. Cargo fingerprints a unit's inputs and never its outputs, so a file
-/// planted at the artefact's path survives a build in which every unit is
-/// fresh. So the build runs, the reported artefact is removed, and the build
-/// runs again: cargo re-links what is missing, and the second report must name
-/// the same path, now holding what cargo wrote.
-fn fresh_artefact(
-    cargo: &mut ProcessCargo,
-    call: &resolved::CargoCall,
-    graph: &resolved::Graph,
-    pick: impl Fn(&[resolved::Built]) -> Result<PathBuf, String>,
-) -> Result<PathBuf, String> {
-    let first = pick(&resolved::checked(
-        cargo,
-        call,
-        graph,
-        resolved::Expect::RELEASE,
-        &mut print_diagnostic,
-    )?)?;
-    match fs::remove_file(&first) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(format!("removing {}: {error}", first.display())),
-    }
-    let second = pick(&resolved::checked(
-        cargo,
-        call,
-        graph,
-        resolved::Expect::RELEASE,
-        &mut print_diagnostic,
-    )?)?;
-    if second != first {
-        return Err(format!(
-            "cargo reported {} and then {} for the same build",
-            first.display(),
-            second.display()
-        ));
-    }
-    if !second.is_file() {
-        return Err(format!(
-            "cargo reported {}, and did not write it",
-            second.display()
-        ));
-    }
-    Ok(second)
-}
-
-/// The client library a build reported: the file called `platform.library`
-/// of the one `cdylib` unit of the client package. None, or more than one, is
-/// refused.
-fn reported_library(built: &[resolved::Built], platform: &Platform) -> Result<PathBuf, String> {
-    let files: Vec<PathBuf> = built
-        .iter()
-        .filter(|unit| unit.is("cdylib"))
-        .flat_map(|unit| unit.filenames.iter())
-        .map(PathBuf::from)
-        .filter(|path| {
-            path.file_name()
-                .is_some_and(|name| name == std::ffi::OsStr::new(platform.library))
-        })
-        .collect();
-    match files.as_slice() {
-        [one] => Ok(one.clone()),
-        [] => Err(format!(
-            "cargo's report of the client build names no `{}`",
-            platform.library
-        )),
-        _ => Err(format!(
-            "cargo's report of the client build names `{}` more than once",
-            platform.library
-        )),
-    }
-}
-
-/// The executable of the one `bin` unit called `name` a build reported. None,
-/// or more than one, is refused.
-fn reported_executable(built: &[resolved::Built], name: &str) -> Result<PathBuf, String> {
-    let found: Vec<&resolved::Built> = built
-        .iter()
-        .filter(|unit| unit.target == name && unit.is("bin"))
-        .collect();
-    match found.as_slice() {
-        [unit] => unit
-            .executable
-            .as_ref()
-            .map(PathBuf::from)
-            .ok_or_else(|| format!("cargo reported the `{name}` binary with no executable")),
-        [] => Err(format!("cargo's report names no `{name}` binary")),
-        _ => Err(format!(
-            "cargo's report names more than one `{name}` binary"
-        )),
-    }
 }
 
 /// Runs a command with its standard output and error both written to `log`.
@@ -1990,61 +1901,6 @@ mod tests {
         // The encoded flag is the flag the C runtime check names, as one
         // argument.
         assert_eq!(CRT_STATIC_ENCODED, CRT_STATIC_FLAGS.replace(' ', ""));
-    }
-
-    /// What is zipped is what the checked build reported: the one `cdylib`
-    /// file of the library's name, and the one `gamectl` binary; none, or two,
-    /// is refused.
-    #[test]
-    fn the_package_takes_the_artefacts_cargo_reported() {
-        let unit =
-            |target: &str, kind: &str, files: &[&str], executable: Option<&str>| resolved::Built {
-                package_id: "path+file:///w#x@0.0.0".to_owned(),
-                target: target.to_owned(),
-                kinds: vec![kind.to_owned()],
-                opt_level: resolved::OptLevel::O3,
-                debug_assertions: false,
-                overflow_checks: true,
-                test: false,
-                filenames: files.iter().map(|file| (*file).to_owned()).collect(),
-                executable: executable.map(str::to_owned),
-            };
-        let client = unit(
-            "pharmakos_client_gdext",
-            "cdylib",
-            &[
-                "D:/t/release-client/pharmakos_client_gdext.dll",
-                "D:/t/release-client/pharmakos_client_gdext.dll.lib",
-                "D:/t/release-client/pharmakos_client_gdext.pdb",
-            ],
-            None,
-        );
-        assert_eq!(
-            reported_library(std::slice::from_ref(&client), &WINDOWS),
-            Ok(PathBuf::from(
-                "D:/t/release-client/pharmakos_client_gdext.dll"
-            ))
-        );
-        assert!(reported_library(&[], &WINDOWS).is_err());
-        assert!(reported_library(&[client.clone(), client], &WINDOWS).is_err());
-        let rlib = unit(
-            "pharmakos_client_gdext",
-            "rlib",
-            &["D:/t/pharmakos_client_gdext.dll"],
-            None,
-        );
-        assert!(
-            reported_library(&[rlib], &WINDOWS).is_err(),
-            "only a cdylib"
-        );
-        let gamectl = unit("gamectl", "bin", &[], Some("D:/t/release/gamectl.exe"));
-        assert_eq!(
-            reported_executable(std::slice::from_ref(&gamectl), "gamectl"),
-            Ok(PathBuf::from("D:/t/release/gamectl.exe"))
-        );
-        assert!(reported_executable(&[], "gamectl").is_err());
-        assert!(reported_executable(&[gamectl.clone(), gamectl], "gamectl").is_err());
-        assert!(reported_executable(&[unit("gamectl", "bin", &[], None)], "gamectl").is_err());
     }
 
     #[test]
