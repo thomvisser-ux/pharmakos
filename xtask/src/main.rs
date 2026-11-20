@@ -1322,56 +1322,177 @@ fn scoped_clippy_args(packages: &[String], walled: &[String], locked: bool) -> V
 /// would otherwise turn them off. A wrap that happens on one platform's path
 /// and not another's is exactly the failure this project cannot absorb, so a
 /// profile that switches the check off fails the build.
+///
+/// And the suite runs the sim optimised with its checks on (the `citime`
+/// lane): every slow test builds a hosted match, a map or a route graph, or
+/// plays ticks, and at opt-level 0 the sim's integer code ran 25 to 50 times
+/// slower than the same code optimised, which held CI's shards at 35 to 54
+/// minutes. So the manifest must optimise [`OPTIMISED_UNDER_TEST`] in the dev
+/// profile the tests inherit, nothing in the dev or test family may set it
+/// back to opt-level 0, and nothing there may switch debug assertions off:
+/// the optimisation never takes a check with it.
 fn step_profiles(ctx: &Ctx) -> Result<Outcome, String> {
     let manifest_path = ctx.root.join("Cargo.toml");
     let manifest = fs::read_to_string(&manifest_path)
         .map_err(|error| format!("cannot read {}: {error}", manifest_path.display()))?;
-    let (release_checked, mut offenders) = scan_profiles(&manifest);
+    let manifest = scan_profiles(&manifest);
 
     // A cargo config can override the manifest's profiles, so it is checked too
-    // — otherwise the ban could be lifted in a file nobody reads.
+    // — otherwise the ban could be lifted in a file nobody reads. A clone with
+    // no config has nothing to check; one that cannot be read is a failure,
+    // not a pass.
     let config_path = ctx.root.join(".cargo").join("config.toml");
-    if let Ok(config) = fs::read_to_string(&config_path) {
-        let (_, config_offenders) = scan_profiles(&config);
-        for profile in config_offenders {
-            offenders.push(format!(".cargo/config.toml [{profile}]"));
+    let config = match fs::read_to_string(&config_path) {
+        Ok(text) => Some(scan_profiles(&text)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(format!("cannot read {}: {error}", config_path.display()));
         }
-    }
+    };
 
-    if !offenders.is_empty() {
-        return Err(format!(
+    let failures = profile_failures(&manifest, config.as_ref());
+    if !failures.is_empty() {
+        return Err(failures.join("; "));
+    }
+    Ok(Outcome::Done(format!(
+        "overflow checks on in release, and switched off nowhere; debug assertions on in \
+         every dev and test profile; {OPTIMISED_UNDER_TEST} optimised under test"
+    )))
+}
+
+/// The package the `profiles` step requires optimised under test: the
+/// deterministic sim, whose integer code every slow test runs. Third-party
+/// crates are optimised beside it by `[profile.dev.package."*"]`, which the
+/// step does not require: they are a share of the time, not its cause.
+const OPTIMISED_UNDER_TEST: &str = "pharmakos-sim";
+
+/// What [`scan_profiles`] found in one TOML file's `[profile.*]` tables.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct ProfileScan {
+    /// `[profile.release]` sets `overflow-checks = true`.
+    release_checked: bool,
+    /// Every profile table that sets `overflow-checks = false`.
+    overflow_off: Vec<String>,
+    /// Every table of the dev or test family (the profiles the suite builds
+    /// with, their package and build overrides included) that sets
+    /// `debug-assertions = false`.
+    assertions_off: Vec<String>,
+    /// Every dev- or test-family package table for [`OPTIMISED_UNDER_TEST`]
+    /// that sets its `opt-level` to 0.
+    sim_unoptimised: Vec<String>,
+    /// `[profile.dev.package.pharmakos-sim]` sets an `opt-level` other than 0.
+    sim_optimised: bool,
+}
+
+/// The tables in `manifest` and `config`, each named with the file it is in.
+fn named_tables(manifest: &[String], config: Option<&[String]>) -> Vec<String> {
+    let mut names: Vec<String> = manifest
+        .iter()
+        .map(|table| format!("Cargo.toml [{table}]"))
+        .collect();
+    for table in config.unwrap_or_default() {
+        names.push(format!(".cargo/config.toml [{table}]"));
+    }
+    names
+}
+
+/// Every way `manifest`, and the cargo config beside it, break the
+/// `profiles` rule, one sentence each; empty when they keep it.
+fn profile_failures(manifest: &ProfileScan, config: Option<&ProfileScan>) -> Vec<String> {
+    let mut failures = Vec::new();
+
+    let overflow_off = named_tables(
+        &manifest.overflow_off,
+        config.map(|config| config.overflow_off.as_slice()),
+    );
+    if !overflow_off.is_empty() {
+        failures.push(format!(
             "overflow checks are switched off in {}; they stay on in every profile, release \
              included (spec section 15, Maths) — a silent wrap on one platform and a panic on \
              another is the failure this project cannot absorb",
-            offenders.join(", ")
+            overflow_off.join(", ")
         ));
     }
-    if !release_checked {
-        return Err(format!(
-            "{} must set `overflow-checks = true` under `[profile.release]`",
-            manifest_path.display()
+    if !manifest.release_checked {
+        failures.push(
+            "Cargo.toml must set `overflow-checks = true` under `[profile.release]`".to_owned(),
+        );
+    }
+
+    let assertions_off = named_tables(
+        &manifest.assertions_off,
+        config.map(|config| config.assertions_off.as_slice()),
+    );
+    if !assertions_off.is_empty() {
+        failures.push(format!(
+            "debug assertions are switched off in {}; every dev and test profile keeps them on, \
+             so optimising the suite never takes a check with it",
+            assertions_off.join(", ")
         ));
     }
-    Ok(Outcome::Done(
-        "overflow checks on in release, and switched off nowhere".to_owned(),
-    ))
+
+    let unoptimised = named_tables(
+        &manifest.sim_unoptimised,
+        config.map(|config| config.sim_unoptimised.as_slice()),
+    );
+    if !unoptimised.is_empty() {
+        failures.push(format!(
+            "{} sets {OPTIMISED_UNDER_TEST} back to opt-level 0; the suite runs the sim \
+             optimised, with its checks on",
+            unoptimised.join(", ")
+        ));
+    }
+    if !manifest.sim_optimised {
+        failures.push(format!(
+            "Cargo.toml must optimise {OPTIMISED_UNDER_TEST} under test: \
+             `[profile.dev.package.{OPTIMISED_UNDER_TEST}]` with an `opt-level` other than 0 \
+             (at 0 the suite's time returns)"
+        ));
+    }
+    failures
 }
 
-/// Reads the `[profile.*]` tables out of a TOML file's text. Returns whether
-/// `[profile.release]` sets `overflow-checks = true`, and the names of any
-/// profiles that set it to `false`.
+/// A table header's name with its quotes and spaces taken out, so
+/// `[profile.dev.package."pharmakos-sim"]  # note` reads as
+/// `profile.dev.package.pharmakos-sim`.
+fn table_name(header: &str) -> String {
+    header
+        .split('#')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .chars()
+        .filter(|character| !matches!(character, '"' | '\'') && !character.is_whitespace())
+        .collect()
+}
+
+/// Whether `table` is `profile.<name>` or one of its sub-tables (a package
+/// or build override).
+fn in_profile(table: &str, name: &str) -> bool {
+    table
+        .strip_prefix("profile.")
+        .and_then(|rest| rest.strip_prefix(name))
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
+}
+
+/// Reads the `[profile.*]` tables out of a TOML file's text: overflow checks
+/// switched off anywhere, debug assertions switched off in the dev or test
+/// family, and the sim's optimisation level under test.
 ///
 /// Text scanning rather than a TOML parser, because xtask takes no
-/// dependencies; it copes with comments and whitespace, which is all the two
-/// files in question need.
-fn scan_profiles(text: &str) -> (bool, Vec<String>) {
-    let mut release_checked = false;
-    let mut offenders: Vec<String> = Vec::new();
+/// dependencies; it copes with comments, whitespace and quoted header keys,
+/// which is all the two files in question need.
+fn scan_profiles(text: &str) -> ProfileScan {
+    let mut scan = ProfileScan::default();
     let mut table = String::new();
+    let dev_sim = format!("profile.dev.package.{OPTIMISED_UNDER_TEST}");
+    let test_sim = format!("profile.test.package.{OPTIMISED_UNDER_TEST}");
     for line in text.lines() {
         let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix('[') {
-            rest.trim_end_matches(']').clone_into(&mut table);
+        if trimmed.starts_with('[') {
+            table = table_name(trimmed);
             continue;
         }
         if !table.starts_with("profile.") {
@@ -1384,14 +1505,27 @@ fn scan_profiles(text: &str) -> (bool, Vec<String>) {
             .chars()
             .filter(|character| !character.is_whitespace())
             .collect();
+        let family = in_profile(&table, "dev") || in_profile(&table, "test");
         if compact == "overflow-checks=true" && table == "profile.release" {
-            release_checked = true;
+            scan.release_checked = true;
         }
         if compact == "overflow-checks=false" {
-            offenders.push(table.clone());
+            scan.overflow_off.push(table.clone());
+        }
+        if family && compact == "debug-assertions=false" {
+            scan.assertions_off.push(table.clone());
+        }
+        if let Some(level) = compact.strip_prefix("opt-level=")
+            && (table == dev_sim || table == test_sim)
+        {
+            if level.trim_matches('"') == "0" {
+                scan.sim_unoptimised.push(table.clone());
+            } else if table == dev_sim {
+                scan.sim_optimised = true;
+            }
         }
     }
-    (release_checked, offenders)
+    scan
 }
 
 /// `cargo test --workspace` without `research`, after emptying
@@ -4223,17 +4357,131 @@ lto = \"thin\"\n\
 \n\
 [profile.dev]\n\
 overflow-checks = true\n";
-        assert_eq!(scan_profiles(good), (true, Vec::new()));
+        let scan = scan_profiles(good);
+        assert!(scan.release_checked);
+        assert!(scan.overflow_off.is_empty());
 
         let switched_off = "[profile.release]\noverflow-checks = false\n";
-        assert_eq!(
-            scan_profiles(switched_off),
-            (false, vec!["profile.release".to_owned()])
-        );
+        let scan = scan_profiles(switched_off);
+        assert!(!scan.release_checked);
+        assert_eq!(scan.overflow_off, ["profile.release"]);
 
         // A key outside a profile table must not be mistaken for one.
         let elsewhere = "[workspace.metadata]\noverflow-checks = false\n";
-        assert_eq!(scan_profiles(elsewhere), (false, Vec::new()));
+        assert_eq!(scan_profiles(elsewhere), ProfileScan::default());
+    }
+
+    /// The sim under test is optimised, with its checks on (the `citime`
+    /// lane): the suite's time was the sim at opt-level 0, so the `profiles`
+    /// step holds the optimisation in place and holds it from taking debug
+    /// assertions with it. Each case is a manifest the step must fail.
+    #[test]
+    fn a_profile_that_unchecks_or_unoptimises_the_suite_is_refused() {
+        let base = "[profile.release]\noverflow-checks = true\n\
+                    [profile.dev]\noverflow-checks = true\n\
+                    [profile.dev.package.pharmakos-sim]\nopt-level = 2\n";
+        assert_eq!(
+            profile_failures(&scan_profiles(base), None),
+            Vec::<String>::new()
+        );
+
+        // Debug assertions switched off anywhere in the dev or test family,
+        // a package or build override included, header spelling aside.
+        for table in [
+            "[profile.dev]",
+            "[profile.test]",
+            "[profile.dev.package.pharmakos-sim]",
+            "[profile.dev.package.\"*\"]",
+            "[ profile.test.package.\"pharmakos-gateway\" ]  # a comment",
+            "[profile.dev.build-override]",
+        ] {
+            let text = format!("{base}{table}\ndebug-assertions = false   # off\n");
+            let scan = scan_profiles(&text);
+            assert_eq!(scan.assertions_off.len(), 1, "{table}");
+            let failures = profile_failures(&scan, None);
+            assert_eq!(failures.len(), 1, "{table}: {failures:?}");
+            assert!(
+                failures
+                    .first()
+                    .is_some_and(|failure| failure.contains("debug assertions")),
+                "{failures:?}"
+            );
+        }
+        // The release family may: that is what a release build is.
+        for table in [
+            "[profile.release]",
+            "[profile.release-checked]",
+            "[profile.devx]",
+        ] {
+            let text = format!("{base}{table}\ndebug-assertions = false\n");
+            assert!(scan_profiles(&text).assertions_off.is_empty(), "{table}");
+        }
+
+        // The sim's optimisation is required in the manifest...
+        let missing = "[profile.release]\noverflow-checks = true\n[profile.dev]\n\
+                       overflow-checks = true\n";
+        let failures = profile_failures(&scan_profiles(missing), None);
+        assert_eq!(failures.len(), 1, "{failures:?}");
+        assert!(
+            failures
+                .first()
+                .is_some_and(|failure| failure.contains("pharmakos-sim")),
+            "{failures:?}"
+        );
+        // ... above opt-level 0, under either spelling of the level or the name...
+        for zero in [
+            "[profile.dev.package.pharmakos-sim]\nopt-level = 0\n",
+            "[profile.dev.package.\"pharmakos-sim\"]\nopt-level = \"0\"\n",
+        ] {
+            let text = format!("[profile.release]\noverflow-checks = true\n{zero}");
+            let scan = scan_profiles(&text);
+            assert!(!scan.sim_optimised, "{zero}");
+            assert_eq!(scan.sim_unoptimised.len(), 1, "{zero}");
+        }
+        // ... and no test-family table, nor the cargo config, may take it back.
+        let undone = format!("{base}[profile.test.package.pharmakos-sim]\nopt-level = 0\n");
+        let failures = profile_failures(&scan_profiles(&undone), None);
+        assert_eq!(failures.len(), 1, "{failures:?}");
+        let config = scan_profiles("[profile.dev.package.pharmakos-sim]\nopt-level = 0\n");
+        let failures = profile_failures(&scan_profiles(base), Some(&config));
+        assert_eq!(failures.len(), 1, "{failures:?}");
+        assert!(
+            failures
+                .first()
+                .is_some_and(|failure| failure.contains(".cargo/config.toml")),
+            "{failures:?}"
+        );
+        let config = scan_profiles("[profile.test]\ndebug-assertions = false\n");
+        let failures = profile_failures(&scan_profiles(base), Some(&config));
+        assert_eq!(failures.len(), 1, "{failures:?}");
+        // Another level is fine: the step asks for optimisation, not a number.
+        for level in ["1", "3", "\"s\""] {
+            let text = format!(
+                "[profile.release]\noverflow-checks = true\n\
+                 [profile.dev.package.pharmakos-sim]\nopt-level = {level}\n"
+            );
+            assert_eq!(
+                profile_failures(&scan_profiles(&text), None),
+                Vec::<String>::new()
+            );
+        }
+        // The sim's level read in some other package's table does not count.
+        let elsewhere = "[profile.release]\noverflow-checks = true\n\
+                         [profile.dev.package.pharmakos-sim-extra]\nopt-level = 2\n";
+        assert!(!scan_profiles(elsewhere).sim_optimised);
+    }
+
+    /// The committed manifest and cargo config pass the whole `profiles`
+    /// rule, and the manifest optimises the sim and third-party crates.
+    #[test]
+    fn the_committed_profiles_optimise_the_suite_with_its_checks_on() {
+        let manifest = scan_profiles(include_str!("../../Cargo.toml"));
+        let config = scan_profiles(include_str!("../../.cargo/config.toml"));
+        assert_eq!(
+            profile_failures(&manifest, Some(&config)),
+            Vec::<String>::new()
+        );
+        assert!(manifest.sim_optimised);
     }
 
     #[test]
@@ -5380,7 +5628,9 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
     #[test]
     fn the_release_client_profile_passes_the_profiles_step() {
         let manifest = include_str!("../../Cargo.toml");
-        assert_eq!(scan_profiles(manifest), (true, Vec::new()));
+        let scan = scan_profiles(manifest);
+        assert!(scan.release_checked);
+        assert!(scan.overflow_off.is_empty());
         let block: Vec<&str> = manifest
             .lines()
             .skip_while(|line| line.trim() != "[profile.release-client]")
@@ -5393,10 +5643,9 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
         // And the step would still catch the profile switching them off.
         let broken = "[profile.release]\noverflow-checks = true\n[profile.release-client]\n\
                       inherits = \"release\"\noverflow-checks = false\n";
-        assert_eq!(
-            scan_profiles(broken),
-            (true, vec!["profile.release-client".to_owned()])
-        );
+        let scan = scan_profiles(broken);
+        assert!(scan.release_checked);
+        assert_eq!(scan.overflow_off, ["profile.release-client"]);
     }
 
     #[test]
