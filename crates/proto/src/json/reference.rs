@@ -253,6 +253,9 @@ impl JsonReader<'_> {
     }
 
     fn escape(&mut self, out: &mut String) -> Result<(), Error> {
+        // The backslash, just read: where a refusal of the whole escape
+        // points (fix pass 2, item D5).
+        let backslash = self.pos.saturating_sub(1);
         let byte = self
             .peek()
             .ok_or_else(|| self.error(grammar::ENDED_IN_ESCAPE))?;
@@ -269,22 +272,28 @@ impl JsonReader<'_> {
             b'u' => {
                 let first = self.hex4()?;
                 let code = if (0xd800..0xdc00).contains(&first) {
+                    let second_backslash = self.pos;
                     self.expect(b'\\')?;
                     self.expect(b'u')?;
                     let second = self.hex4()?;
                     if !(0xdc00..0xe000).contains(&second) {
+                        self.pos = second_backslash;
                         return Err(self.error(grammar::LONE_HIGH_SURROGATE));
                     }
                     let high = first.saturating_sub(0xd800) << 10;
                     let low = second.saturating_sub(0xdc00);
-                    0x1_0000u32
-                        .checked_add(high | low)
-                        .ok_or_else(|| self.error(grammar::SURROGATE_OUT_OF_RANGE))?
+                    let Some(code) = 0x1_0000u32.checked_add(high | low) else {
+                        self.pos = backslash;
+                        return Err(self.error(grammar::SURROGATE_OUT_OF_RANGE));
+                    };
+                    code
                 } else {
                     first
                 };
-                let character =
-                    char::from_u32(code).ok_or_else(|| self.error(grammar::NOT_A_SCALAR))?;
+                let Some(character) = char::from_u32(code) else {
+                    self.pos = backslash;
+                    return Err(self.error(grammar::NOT_A_SCALAR));
+                };
                 out.push(character);
             }
             _ => {
@@ -303,7 +312,7 @@ impl JsonReader<'_> {
                     return Err(self.error(grammar::INVALID_UTF8));
                 };
                 let character = character.to_owned();
-                self.pos = end;
+                self.pos = backslash;
                 return Err(self.error(format!(
                     "unknown escape `\\{}`",
                     super::grammar::quoted(&character)
@@ -334,7 +343,8 @@ impl JsonReader<'_> {
     // S3's `vfy6`: RFC 8259's number grammar, as `value.rs`'s reader.
     fn number(&mut self) -> Result<Json, Error> {
         let start = self.pos;
-        if self.peek() == Some(b'-') {
+        let signed = self.peek() == Some(b'-');
+        if signed {
             self.bump();
         }
         let at_digit = |reader: &Self| reader.peek().is_some_and(|byte| byte.is_ascii_digit());
@@ -351,6 +361,7 @@ impl JsonReader<'_> {
                 }
             }
             Some(b'1'..=b'9') => digits(self),
+            _ if signed => return Err(self.error(grammar::NUMBER_WITHOUT_DIGIT)),
             _ => return Err(self.error(grammar::EXPECTED_VALUE)),
         }
         if self.peek() == Some(b'.') {

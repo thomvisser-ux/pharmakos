@@ -164,6 +164,8 @@ pub const EXPECTED_COLON: &str = "expected `:`";
 pub const EXPECTED_COMMA_OR_BRACE: &str = "expected `,` or `}`";
 /// An array item not followed by `,` or `]`.
 pub const EXPECTED_COMMA_OR_BRACKET: &str = "expected `,` or `]`";
+/// A `-` with no digit after it.
+pub const NUMBER_WITHOUT_DIGIT: &str = "a number needs at least one digit";
 /// `01`, which RFC 8259 does not allow.
 pub const LEADING_ZERO: &str = "a number with a leading zero";
 /// `1.` or `1.e3`.
@@ -266,7 +268,8 @@ pub fn number(scan: &Scan<'_>, at: usize) -> Result<usize, Refusal> {
         }
         pos
     };
-    if scan.get(pos) == Some(b'-') {
+    let signed = scan.get(pos) == Some(b'-');
+    if signed {
         pos = pos.saturating_add(1);
     }
     match scan.get(pos) {
@@ -277,6 +280,9 @@ pub fn number(scan: &Scan<'_>, at: usize) -> Result<usize, Refusal> {
             }
         }
         Some(b'1'..=b'9') => pos = digits(pos),
+        // A `-` makes it a number: what it lacks is the digit (fix pass 2,
+        // item D5).
+        _ if signed => return Err(Refusal::grammar(pos, NUMBER_WITHOUT_DIGIT)),
         _ => return Err(Refusal::grammar(pos, EXPECTED_VALUE)),
     }
     if scan.get(pos) == Some(b'.') {
@@ -365,16 +371,20 @@ pub fn string(
                         out.push_str(before);
                     }
                 }
-                pos = escape(scan, pos.saturating_add(1), unescaped.as_deref_mut())?;
+                pos = escape(scan, pos, unescaped.as_deref_mut())?;
             }
             Some(_) => return Err(Refusal::grammar(pos, RAW_CONTROL)),
         }
     }
 }
 
-/// One escape, its backslash read: the byte after it, its character written
-/// to `out` when given.
-fn escape(scan: &Scan<'_>, at: usize, out: Option<&mut String>) -> Result<usize, Refusal> {
+/// One escape, whose backslash is at `backslash`: the byte after it, its
+/// character written to `out` when given. A refusal of the escape points at
+/// the first byte of what is wrong (fix pass 2, item D5): the backslash of an
+/// escape that is wrong as a whole, the backslash of the second escape of a
+/// surrogate pair that is not one.
+fn escape(scan: &Scan<'_>, backslash: usize, out: Option<&mut String>) -> Result<usize, Refusal> {
+    let at = backslash.saturating_add(1);
     let Some(byte) = scan.get(at) else {
         return Err(Refusal::grammar(at, ENDED_IN_ESCAPE));
     };
@@ -392,6 +402,7 @@ fn escape(scan: &Scan<'_>, at: usize, out: Option<&mut String>) -> Result<usize,
             let first;
             (first, pos) = hex4(scan, pos)?;
             let code = if (0xd800..0xdc00).contains(&first) {
+                let second_backslash = pos;
                 if scan.get(pos) != Some(b'\\') {
                     return Err(Refusal::grammar(pos, EXPECTED_BACKSLASH));
                 }
@@ -403,22 +414,22 @@ fn escape(scan: &Scan<'_>, at: usize, out: Option<&mut String>) -> Result<usize,
                 let second;
                 (second, pos) = hex4(scan, pos)?;
                 if !(0xdc00..0xe000).contains(&second) {
-                    return Err(Refusal::grammar(pos, LONE_HIGH_SURROGATE));
+                    return Err(Refusal::grammar(second_backslash, LONE_HIGH_SURROGATE));
                 }
                 let high = first.saturating_sub(0xd800) << 10;
                 let low = second.saturating_sub(0xdc00);
                 0x1_0000_u32
                     .checked_add(high | low)
-                    .ok_or_else(|| Refusal::grammar(pos, SURROGATE_OUT_OF_RANGE))?
+                    .ok_or_else(|| Refusal::grammar(backslash, SURROGATE_OUT_OF_RANGE))?
             } else {
                 first
             };
-            char::from_u32(code).ok_or_else(|| Refusal::grammar(pos, NOT_A_SCALAR))?
+            char::from_u32(code).ok_or_else(|| Refusal::grammar(backslash, NOT_A_SCALAR))?
         }
         _ => {
             // The escaped character as a character, not its first byte: a
-            // multi-byte one is quoted whole and refused after it, at a
-            // character boundary.
+            // multi-byte one is quoted whole; the refusal is at the backslash
+            // the escape begins with.
             let Some(other) = utf8_width(byte)
                 .and_then(|width| scan.slice(at, at.saturating_add(width)))
                 .and_then(|piece| piece.chars().next())
@@ -426,7 +437,7 @@ fn escape(scan: &Scan<'_>, at: usize, out: Option<&mut String>) -> Result<usize,
                 return Err(Refusal::grammar(pos, INVALID_UTF8));
             };
             return Err(Refusal::grammar(
-                at.saturating_add(other.len_utf8()),
+                backslash,
                 format!(
                     "unknown escape `\\{}`",
                     quoted(other.encode_utf8(&mut [0; 4]))
