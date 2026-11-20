@@ -4576,6 +4576,17 @@ fn golden_target_dir(workspace: &Result<Workspace, String>) -> Result<PathBuf, S
 /// on output whose shape changed.
 fn line_enables_research(line: &str) -> Result<bool, String> {
     let Some((package, features)) = line.split_once('|') else {
+        // A feature node: cargo prints it in its own fixed form,
+        // `<name> feature "<feature>"`, an ` (*)` after a node already shown,
+        // and not through `--format`.
+        let node = line.trim_end();
+        let node = node.strip_suffix(" (*)").unwrap_or(node);
+        if let Some((_, feature)) = node.rsplit_once(" feature \"")
+            && let Some(feature) = feature.strip_suffix('"')
+            && !feature.contains('"')
+        {
+            return Ok(feature == RESEARCH_FEATURE);
+        }
         return Err(format!(
             "`cargo tree --format {{p}}|{{f}}` printed a line without its `|`: `{line}`; the \
              research guard reads every line, and does not guess at this one"
@@ -5537,8 +5548,18 @@ mod tests {
         );
         // `researching` must not trip it.
         assert_eq!(line_enables_research("crate v1|researching"), Ok(false));
+        // A feature node, in cargo's own form, with and without ` (*)`.
+        assert_eq!(
+            line_enables_research("│   ├── pharmakos-sim feature \"research\""),
+            Ok(true)
+        );
+        assert_eq!(
+            line_enables_research("│   ├── pharmakos-proto feature \"default\" (*)"),
+            Ok(false)
+        );
         // A line in another shape is a failure, not "no feature".
         assert!(line_enables_research("pharmakos-sim v0.0.0 (research)").is_err());
+        assert!(line_enables_research("pharmakos-sim feature \"rese").is_err());
     }
 
     #[test]
