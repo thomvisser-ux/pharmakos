@@ -3543,8 +3543,12 @@ fn resumed_with(
 ) -> Surface {
     use pharmakos_sim::snapshot::Snapshot;
     let (opening_bytes, opening_world) = opening();
-    let mut snapshot = Snapshot::from_bytes(opening_bytes).expect("it decodes");
-    edit(&mut snapshot, opening_world);
+    // Each test edits its own copy of both: the world holds interior-mutable
+    // counters, so the shared one is never handed out.
+    let world = opening_world.clone();
+    let mut snapshot = Snapshot::from_bytes(opening_bytes)
+        .expect("the once-built opening Lull snapshot (`opening()`) decodes");
+    edit(&mut snapshot, &world);
     let bytes = snapshot.to_bytes().expect("it encodes");
     let mut surface = Surface::new(
         MATCH,

@@ -4856,7 +4856,7 @@ mod tests {
             .host_mut()
             .expect("hosted")
             .resume(bytes)
-            .expect("the remembering snapshot resumes");
+            .expect("the once-built remembering snapshot (`remembered()`) resumes");
         surface
             .set_phase_remaining_ms(Ms::new(300_000))
             .expect("a custom match takes a countdown");
@@ -5410,8 +5410,12 @@ mod tests {
         use pharmakos_sim::snapshot::Snapshot;
         let seats = [SeatId::new(0), SeatId::new(1)];
         let (opening_bytes, opening_world) = opening();
-        let mut snapshot = Snapshot::from_bytes(opening_bytes).expect("it decodes");
-        edit(&mut snapshot, opening_world);
+        // Each test edits its own copy of both: the world holds interior-mutable
+        // counters, so the shared one is never handed out.
+        let world = opening_world.clone();
+        let mut snapshot = Snapshot::from_bytes(opening_bytes)
+            .expect("the once-built opening Lull snapshot (`opening()`) decodes");
+        edit(&mut snapshot, &world);
         let bytes = snapshot.to_bytes().expect("it encodes");
         let mut surface = Surface::new("m-0001", 0x0000_0000_ca5c_aded, rules(), policy, &seats)
             .expect("a match id");
