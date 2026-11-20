@@ -2168,6 +2168,13 @@ impl ProcessCargo {
 }
 
 impl resolved::Cargo for ProcessCargo {
+    fn working_dir(&self) -> Result<String, String> {
+        self.root
+            .to_str()
+            .map(str::to_owned)
+            .ok_or_else(|| format!("the workspace root {} is not Unicode", self.root.display()))
+    }
+
     fn report(
         &mut self,
         line: &[String],

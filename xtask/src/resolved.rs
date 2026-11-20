@@ -314,6 +314,9 @@ pub(crate) trait Cargo {
         env: &[EnvChange],
         stdout: &mut dyn FnMut(&str),
     ) -> Result<(bool, Vec<String>), String>;
+    /// The working directory cargo runs in, as cargo itself reads it: the
+    /// directory a relative path cargo prints is relative to.
+    fn working_dir(&self) -> Result<String, String>;
 }
 
 /// What a checked build requires of the sim.
@@ -676,6 +679,7 @@ fn judge_run(
     expected: &[String],
     stderr: &[String],
     results: usize,
+    _working_dir: &str,
     case_insensitive: bool,
 ) -> Result<(), ProfileFault> {
     let ran: Vec<String> = stderr
@@ -694,6 +698,7 @@ fn judge_run(
             started: ran.len(),
             results,
             missing,
+            unreported: Vec::new(),
         });
     }
     Ok(())
@@ -746,8 +751,14 @@ pub(crate) fn execute(
         ));
     }
     if !test.doc() {
-        judge_run(&test_executables(&built), &stderr, results, cfg!(windows))
-            .map_err(|fault| fault.to_string())?;
+        judge_run(
+            &test_executables(&built),
+            &stderr,
+            results,
+            &cargo.working_dir()?,
+            cfg!(windows),
+        )
+        .map_err(|fault| fault.to_string())?;
     }
     Ok(())
 }
@@ -1056,6 +1067,8 @@ pub(crate) enum ProfileFault {
         started: usize,
         results: usize,
         missing: Vec<String>,
+        /// Started executables the check never reported.
+        unreported: Vec<String>,
     },
     /// Variables set in the environment that change codegen behind the
     /// report.
@@ -1177,15 +1190,22 @@ impl fmt::Display for ProfileFault {
                 started,
                 results,
                 missing,
+                unreported,
             } => write!(
                 f,
                 "the check built {expected} test executable(s); cargo started {started} and \
-                 libtest reported {results} result(s){}. Something ran in their place (a \
-                 config file's `runner`, say) and reported success without running them",
+                 libtest reported {results} result(s){}{}. Something ran in their place (a \
+                 config file's `runner`, say), or the run built and ran something the check \
+                 did not report",
                 if missing.is_empty() {
                     String::new()
                 } else {
                     format!("; never started: {}", missing.join(", "))
+                },
+                if unreported.is_empty() {
+                    String::new()
+                } else {
+                    format!("; started but never reported: {}", unreported.join(", "))
                 }
             ),
             Self::RefusedInEnvironment { variables } => write!(
@@ -2385,6 +2405,10 @@ mod tests {
             self.asked.push(Asked::Run(line.to_vec(), env.to_vec()));
             Ok((true, Vec::new()))
         }
+
+        fn working_dir(&self) -> Result<String, String> {
+            Ok("D:/w".to_owned())
+        }
     }
 
     /// The one door: `execute` hands cargo exactly the check, then exactly
@@ -2586,21 +2610,22 @@ mod tests {
             "\u{1b}[1m\u{1b}[92m     Running\u{1b}[0m tests\\fallbacks.rs (D:/t\\debug\\deps\\fallbacks-2.exe)"
                 .to_owned(),
         ];
-        assert_eq!(judge_run(&expected, &stderr, 2, true), Ok(()));
+        assert_eq!(judge_run(&expected, &stderr, 2, "D:/w", true), Ok(()));
         // The runner ran nothing: both started, no result.
         assert_eq!(
-            judge_run(&expected, &stderr, 0, true),
+            judge_run(&expected, &stderr, 0, "D:/w", true),
             Err(ProfileFault::TestsDidNotRun {
                 expected: 2,
                 started: 2,
                 results: 0,
-                missing: Vec::new()
+                missing: Vec::new(),
+                unreported: Vec::new()
             })
         );
         // An executable never started.
         let one = stderr.get(..2).map(<[String]>::to_vec).unwrap_or_default();
         assert!(matches!(
-            judge_run(&expected, &one, 1, true),
+            judge_run(&expected, &one, 1, "D:/w", true),
             Err(ProfileFault::TestsDidNotRun { started: 1, ref missing, .. }) if missing.len() == 1
         ));
         // Case matters where the file system's names do, and on Windows it
@@ -2609,14 +2634,159 @@ mod tests {
             .iter()
             .map(|path| path.replace("D:", "d:"))
             .collect();
-        assert_eq!(judge_run(&lower, &stderr, 2, true), Ok(()));
-        assert!(judge_run(&lower, &stderr, 2, false).is_err());
+        assert_eq!(judge_run(&lower, &stderr, 2, "D:/w", true), Ok(()));
+        assert!(judge_run(&lower, &stderr, 2, "D:/w", false).is_err());
         assert_eq!(
             running_path("     Running unittests src/lib.rs (/t/debug/deps/x-1)"),
             Some("/t/debug/deps/x-1".to_owned())
         );
         assert_eq!(running_path("   Compiling x v1.0.0 (/t/x)"), None);
         assert_eq!(without_ansi("\u{1b}[1mRunning\u{1b}[0m"), "Running");
+    }
+
+    /// Lines as cargo writes them when the target directory lies under its
+    /// working directory (CI's in-tree `target`): the executable's path
+    /// relative to that directory, while the check's report names it in full.
+    fn owned(lines: &[&str]) -> Vec<String> {
+        lines.iter().map(|line| (*line).to_owned()).collect()
+    }
+
+    /// Linux's and macOS's relative form, as CI's legs print it.
+    #[test]
+    fn a_relative_running_line_names_a_unix_executable() {
+        let expected = owned(&[
+            "/home/runner/work/pharmakos/pharmakos/target/debug/deps/pharmakos_sim-0123abcd",
+            "/home/runner/work/pharmakos/pharmakos/target/debug/deps/fallbacks-4567ef01",
+        ]);
+        let stderr = owned(&[
+            "   Compiling pharmakos-sim v0.0.0 (/home/runner/work/pharmakos/pharmakos/crates/sim)",
+            "    Finished `test` profile [optimized + debuginfo] target(s) in 1m 02s",
+            "     Running unittests src/lib.rs (target/debug/deps/pharmakos_sim-0123abcd)",
+            "     Running tests/fallbacks.rs (target/debug/deps/fallbacks-4567ef01)",
+            "   Doc-tests pharmakos_sim",
+        ]);
+        assert_eq!(
+            judge_run(
+                &expected,
+                &stderr,
+                2,
+                "/home/runner/work/pharmakos/pharmakos",
+                false
+            ),
+            Ok(())
+        );
+        // The same lines against another working directory name other files.
+        assert!(judge_run(&expected, &stderr, 2, "/home/runner/elsewhere", false).is_err());
+    }
+
+    /// Windows' relative form: backslashes and `.exe`, against a report that
+    /// spells the drive another way.
+    #[test]
+    fn a_relative_running_line_names_a_windows_executable() {
+        let expected = owned(&[
+            "D:\\a\\pharmakos\\pharmakos\\target\\debug\\deps\\pharmakos_sim-0123abcd.exe",
+            "D:\\a\\pharmakos\\pharmakos\\target\\debug\\deps\\fallbacks-4567ef01.exe",
+        ]);
+        let stderr = owned(&[
+            "     Running unittests src\\lib.rs (target\\debug\\deps\\pharmakos_sim-0123abcd.exe)",
+            "\u{1b}[1m\u{1b}[92m     Running\u{1b}[0m tests\\fallbacks.rs (target\\debug\\deps\\fallbacks-4567ef01.exe)",
+            "   Doc-tests pharmakos_sim",
+        ]);
+        assert_eq!(
+            judge_run(&expected, &stderr, 2, "D:\\a\\pharmakos\\pharmakos", true),
+            Ok(())
+        );
+        assert_eq!(
+            judge_run(&expected, &stderr, 2, "d:/a/pharmakos/pharmakos", true),
+            Ok(())
+        );
+    }
+
+    /// An absolute `Running` path, as cargo prints it for a target
+    /// directory outside its working directory, on each operating system.
+    #[test]
+    fn an_absolute_running_line_names_its_executable() {
+        let unix = owned(&["/build/citime/debug/deps/pharmakos_sim-0123abcd"]);
+        let unix_lines = owned(&[
+            "     Running unittests src/lib.rs (/build/citime/debug/deps/pharmakos_sim-0123abcd)",
+        ]);
+        assert_eq!(judge_run(&unix, &unix_lines, 1, "/home/p", false), Ok(()));
+        let windows = owned(&["D:\\build\\citime\\debug\\deps\\pharmakos_sim-0123abcd.exe"]);
+        let windows_lines = owned(&[
+            "     Running unittests src\\lib.rs (D:\\build\\citime\\debug\\deps\\pharmakos_sim-0123abcd.exe)",
+        ]);
+        assert_eq!(
+            judge_run(&windows, &windows_lines, 1, "C:\\Users\\p", true),
+            Ok(())
+        );
+    }
+
+    /// A verbatim prefix and `.` or `..` components are compared lexically,
+    /// on either side.
+    #[test]
+    fn a_verbatim_or_dotted_path_is_compared_lexically() {
+        let expected = owned(&["\\\\?\\D:\\a\\p\\target\\debug\\deps\\x-1.exe"]);
+        let lines = owned(&["     Running unittests src\\lib.rs (target\\debug\\deps\\x-1.exe)"]);
+        assert_eq!(judge_run(&expected, &lines, 1, "D:\\a\\p", true), Ok(()));
+        assert_eq!(
+            judge_run(&expected, &lines, 1, "\\\\?\\D:\\a\\p", true),
+            Ok(())
+        );
+        // A relative `CARGO_TARGET_DIR` reaching out of the working
+        // directory: cargo joins it to the working directory unnormalised.
+        let dotted = owned(&["/w/p/../t/debug/deps/x-1"]);
+        let lines = owned(&["     Running tests/x.rs (/w/t/debug/deps/x-1)"]);
+        assert_eq!(judge_run(&dotted, &lines, 1, "/w/p", false), Ok(()));
+        let lines = owned(&["     Running tests/x.rs (./t/debug/deps/x-1)"]);
+        assert_eq!(
+            judge_run(&owned(&["/w/t/debug/deps/x-1"]), &lines, 1, "/w", false),
+            Ok(())
+        );
+    }
+
+    /// The working directory is joined as cargo read it and never resolved
+    /// through links: macOS's `/var` is `/private/var` only on disk.
+    #[test]
+    fn the_working_directory_is_joined_and_never_resolved() {
+        let expected = owned(&["/private/var/folders/x/p/target/debug/deps/x-1"]);
+        let lines = owned(&["     Running tests/x.rs (target/debug/deps/x-1)"]);
+        assert_eq!(
+            judge_run(&expected, &lines, 1, "/private/var/folders/x/p", false),
+            Ok(())
+        );
+        assert!(judge_run(&expected, &lines, 1, "/var/folders/x/p", false).is_err());
+    }
+
+    /// An executable that started and that the check never reported fails
+    /// the run, whatever else ran.
+    #[test]
+    fn a_start_the_check_never_reported_is_refused() {
+        let expected = owned(&["/w/target/debug/deps/x-1"]);
+        let lines = owned(&[
+            "     Running tests/x.rs (target/debug/deps/x-1)",
+            "     Running tests/y.rs (target/debug/deps/y-2)",
+        ]);
+        assert_eq!(
+            judge_run(&expected, &lines, 2, "/w", false),
+            Err(ProfileFault::TestsDidNotRun {
+                expected: 1,
+                started: 2,
+                results: 2,
+                missing: Vec::new(),
+                unreported: vec!["target/debug/deps/y-2".to_owned()],
+            })
+        );
+    }
+
+    /// A doctest header is not a start: the doctests are held to the run's
+    /// exit status.
+    #[test]
+    fn a_doctest_header_is_not_a_start() {
+        assert_eq!(running_path("   Doc-tests pharmakos_sim"), None);
+        assert_eq!(
+            running_path("\u{1b}[1m\u{1b}[92m   Doc-tests\u{1b}[0m pharmakos_sim"),
+            None
+        );
     }
 
     /// A [`Cargo`] whose check and run both carry the same warning, and whose
@@ -2667,6 +2837,10 @@ mod tests {
                 true,
                 vec!["     Running unittests src/lib.rs (D:/t/sim-1.exe)".to_owned()],
             ))
+        }
+
+        fn working_dir(&self) -> Result<String, String> {
+            Ok("D:/w".to_owned())
         }
     }
 
