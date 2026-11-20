@@ -123,8 +123,10 @@ permissive templates, joined them (decisions-log item 113). `docs/` stays in
 the game's tier: three of its four sources are GPL code (decisions-log item
 116 (6)(i)). One file inside a permissive area is GPL, `plan-core/awkward/
 expected.jsonc`, because it carries its GPL fixture's header through the round
-trip; `REUSE.toml`'s override block records it, with the gateway's
-`instantiate_suggested` answer, which embeds a permissive template's header.
+trip; `REUSE.toml`'s override block records it. The gateway's `instantiate_suggested`
+answer, which embeds a permissive template's header, sits in the same override
+blocks, and a golden that quotes `library/` carries its licence too (`docs/LICENSING.md`,
+"A file that quotes `library/`"; decisions-log item 164).
 
 Most of these formats cannot carry an SPDX header at all — a hash chain is
 `<tick>\t<hash>` per line and nothing else, and a PNG has nowhere to put one —
