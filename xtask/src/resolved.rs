@@ -98,10 +98,20 @@
 //! did not start, or a start the check never reported, is
 //! [`ProfileFault::TestsDidNotRun`], and cargo's exit status says whether each
 //! passed. Nothing reads what cargo or libtest print, so a test's own output
-//! is passed through as bytes, whatever it holds. A doctest run goes through
-//! the same runner (rustdoc starts each doctest through it, and its records
-//! show it), but how many doctests a run starts cannot be known from the
-//! check, so a doctest run is held to its exit status.
+//! is passed through as bytes, whatever it holds.
+//!
+//! A doctest run goes through the same runner: rustdoc starts its merged
+//! doctest bundle, and each standalone doctest, through it, and the records
+//! show it. Under any runner rustdoc leaves `RUSTDOC_DOCTEST_BIN_PATH` unset,
+//! and the bundle then runs every doctest in one process, where a doctest
+//! that calls `std::process::exit(0)` would end it green over a failing one.
+//! So the checked doctest call marks the run (`PHARMAKOS_XTASK_DOCTEST_RUN`),
+//! and in such a run the runner sets that variable to each start's own path,
+//! which makes the bundle start each doctest as a process of its own, as plain
+//! cargo does; `xtask/tests/doctest_runner.rs` holds rustdoc to it with a real
+//! failing doctest beside one that exits 0. How many doctests a run starts
+//! cannot be known from the check, so a doctest run is held to cargo's exit
+//! status, not to its records.
 //!
 //! # The trust boundary
 //!
@@ -111,7 +121,18 @@
 //! around `cargo xtask` is outside what xtask can see. Within that, what runs,
 //! is hashed or ships is the artefact cargo's report of that build names
 //! ([`reported_artefact`]), never a path xtask composes, so a stale file at a
-//! conventional path is never taken for a build's output.
+//! conventional path is never taken for a build's output. Three inputs are
+//! trusted rather than pinned, each because pinning it would break a
+//! legitimate run: `PATH`, through which the pinned `rustc` and `rustdoc` and
+//! the host's default linker are found; `RUSTUP_TOOLCHAIN`, which rustup's
+//! cargo proxy sets for every process it starts, and which is held to the
+//! toolchain `rust-toolchain.toml` pins ([`check_toolchain_variable`]), any
+//! other value refused; and a config file's `[env]` table, which can set
+//! variables in rustc's and the tests' environment (`RUSTC_BOOTSTRAP`, or the
+//! runner's record folder, whose redirection fails the run as "no record was
+//! found"), and whose only pin, setting each such variable empty, would make
+//! build scripts that watch it rebuild between `cargo xtask` and a plain
+//! `cargo`.
 //!
 //! # The allocation test runs the sim unoptimised
 //!
@@ -331,6 +352,26 @@ pub(crate) fn refused_variables(
     found
 }
 
+/// Whether `RUSTUP_TOOLCHAIN`, `value`, names the toolchain the repository's
+/// `rust-toolchain.toml` pins (`channel`). Rustup's cargo proxy sets it for
+/// every process it starts (measured: a nested `cargo run` sees
+/// `RUSTUP_TOOLCHAIN=<channel>-<host>`), so it is not refused when it is the
+/// pinned one; and the `rustc` and `rustdoc` the checked calls name are found
+/// through it, so any other value (`cargo +nightly xtask`, or the variable
+/// set by hand) is a run on another toolchain, and is refused. Unset (no
+/// rustup) passes.
+pub(crate) fn check_toolchain_variable(value: Option<&str>, channel: &str) -> Result<(), String> {
+    match value {
+        None => Ok(()),
+        Some(name) if !name.is_empty() || name.starts_with(&format!("{channel}-")) => Ok(()),
+        Some(name) => Err(format!(
+            "RUSTUP_TOOLCHAIN is `{name}`, and rust-toolchain.toml pins `{channel}`: the \
+             checked builds find `rustc` and `rustdoc` through it, so this run would use \
+             another toolchain. Unset it, or run without `+<toolchain>`"
+        )),
+    }
+}
+
 /// The refusal for [`refused_variables`]' answer, or `Ok` when it is empty.
 pub(crate) fn refuse_variables(found: &[String]) -> Result<(), ProfileFault> {
     if found.is_empty() {
@@ -356,6 +397,12 @@ pub(crate) fn pinned_env(rustflags: &str) -> Vec<EnvChange> {
         (ENCODED_RUSTDOCFLAGS.to_owned(), Some(String::new())),
         ("RUSTC_WRAPPER".to_owned(), Some(String::new())),
         ("RUSTC_WORKSPACE_WRAPPER".to_owned(), Some(String::new())),
+        // Removed, not set empty. Set empty, it would also keep a config
+        // file's unforced `[env]` from setting it, but build scripts that
+        // watch it (`proc-macro2`'s, `anyhow`'s) would then see it change
+        // between `cargo xtask` and a plain `cargo` and rebuild each other's
+        // units (measured); so a config file's `[env]` stays on the trusted
+        // side of the boundary the module doc names.
         ("RUSTC_BOOTSTRAP".to_owned(), None),
     ]
 }
@@ -408,6 +455,11 @@ impl CargoCall {
 /// which hand it the final command line and environment, so nothing between
 /// a [`TestRun`] and the process can change what runs.
 pub(crate) trait Cargo {
+    /// Readies a test run before anything builds: whatever the run will need
+    /// that can fail (the runner's spelling on the command line) is settled
+    /// here, so a run that cannot be made fails before its check costs a
+    /// build.
+    fn prepare_run(&mut self) -> Result<(), String>;
     /// Runs cargo with `line` and `env` and hands `stdout` each line of its
     /// standard output as it arrives; its standard error goes to the
     /// caller's. Answers whether it succeeded.
@@ -706,11 +758,17 @@ impl TestRun {
             args.push("--locked".to_owned());
         }
         args.push(message_format(self.colour).to_owned());
-        CargoCall {
-            config,
-            env: pinned_env(""),
-            args,
-        }
+        // Tells xtask's runner whether this run's starts are doctest
+        // executables (`runner.rs`'s `prepare`): set for a doctest run,
+        // removed for any other, so it never comes from the caller. The check
+        // carries it too, as it carries the whole of the run's environment;
+        // it runs nothing.
+        let mut env = pinned_env("");
+        env.push((
+            crate::runner::DOCTEST_RUN_VAR.to_owned(),
+            self.doc().then(|| "1".to_owned()),
+        ));
+        CargoCall { config, env, args }
     }
 
     /// The command that runs the tests: its report, then `--` and the
@@ -889,6 +947,7 @@ pub(crate) fn execute(
             diagnostics(rendered);
         }
     };
+    cargo.prepare_run()?;
     let built = checked(cargo, &test.check(), graph, test.expect(), &mut once)?;
     let target_dir = graph.target_dir().map_err(|fault| fault.to_string())?;
     let run = test.run();
@@ -1446,8 +1505,9 @@ impl fmt::Display for ProfileFault {
                     String::new()
                 } else {
                     format!(
-                        "; cargo did not start {}, so its tests did not run",
-                        missing.join(", ")
+                        "; cargo did not start {}, so its tests did not run ({})",
+                        missing.join(", "),
+                        crate::runner::RECORD_VAR
                     )
                 },
                 if unreported.is_empty() {
@@ -2501,7 +2561,12 @@ mod tests {
             expected.args.push("--no-run".to_owned());
             assert_eq!(check, expected, "{test:?}");
         }
-        assert_eq!(check.env, pinned_env(""), "{test:?}");
+        let mut env = pinned_env("");
+        env.push((
+            crate::runner::DOCTEST_RUN_VAR.to_owned(),
+            test.doc().then(|| "1".to_owned()),
+        ));
+        assert_eq!(check.env, env, "{test:?}");
         assert_eq!(check.config, run.config, "{test:?}");
         assert!(
             pinned_config()
@@ -2680,6 +2745,10 @@ mod tests {
     }
 
     impl Cargo for Recording {
+        fn prepare_run(&mut self) -> Result<(), String> {
+            Ok(())
+        }
+
         fn report(
             &mut self,
             line: &[String],
@@ -2933,6 +3002,10 @@ mod tests {
     const WARNING: &str = r#"{"reason":"compiler-message","package_id":"x","manifest_path":"m","target":{"kind":["lib"],"name":"x"},"message":{"rendered":"warning: unused variable: `x`\n","message":"unused"}}"#;
 
     impl Cargo for Scripted {
+        fn prepare_run(&mut self) -> Result<(), String> {
+            Ok(())
+        }
+
         fn report(
             &mut self,
             _line: &[String],
@@ -3328,6 +3401,84 @@ mod tests {
         assert!(graph_of(&relative).target_dir().is_err());
         let missing = metadata().replace("\"target_directory\":\"/w/target\",", "");
         assert!(super::graph(&missing).is_err());
+    }
+
+    /// Only a doctest run tells the runner its starts are doctests; every
+    /// other run removes the variable, so it never comes from the caller.
+    #[test]
+    fn a_doctest_run_tells_the_runner_and_no_other_does() {
+        for test in every_test_run() {
+            let wanted = (
+                crate::runner::DOCTEST_RUN_VAR.to_owned(),
+                test.doc().then(|| "1".to_owned()),
+            );
+            assert!(test.run().env.contains(&wanted), "{test:?}");
+        }
+        assert!(every_test_run().iter().any(TestRun::doc));
+    }
+
+    /// A reported executable with no record is named with what is known: no
+    /// record was found for it.
+    #[test]
+    fn a_missing_record_names_its_true_cause() {
+        let fault = judge_starts(&[EXE_A.to_owned()], &[], false).expect_err("no record");
+        let text = fault.to_string();
+        assert!(
+            text.contains(&format!("no record was found for {EXE_A}")),
+            "{text}"
+        );
+        assert!(text.contains(crate::runner::RECORD_VAR), "{text}");
+    }
+
+    /// `RUSTUP_TOOLCHAIN` passes unset, as the pinned channel, and as rustup's
+    /// proxy spells it (`<channel>-<host>`); any other toolchain is refused.
+    #[test]
+    fn the_toolchain_variable_must_name_the_pinned_one() {
+        assert_eq!(check_toolchain_variable(None, "1.98.1"), Ok(()));
+        assert_eq!(check_toolchain_variable(Some("1.98.1"), "1.98.1"), Ok(()));
+        assert_eq!(
+            check_toolchain_variable(Some("1.98.1-x86_64-pc-windows-msvc"), "1.98.1"),
+            Ok(())
+        );
+        for other in [
+            "stable-x86_64-pc-windows-msvc",
+            "nightly",
+            "1.98.10",
+            "1.98",
+        ] {
+            assert!(
+                check_toolchain_variable(Some(other), "1.98.1").is_err(),
+                "{other}"
+            );
+        }
+    }
+
+    /// The repository's `.cargo/config.toml` names the same default linker
+    /// for the same hosts as [`DEFAULT_LINKERS`], so `cargo xtask` and a plain
+    /// `cargo` resolve one linker and share one build.
+    #[test]
+    fn the_repository_config_names_the_linkers_xtask_pins() {
+        let config = include_str!("../../.cargo/config.toml");
+        let mut table: Option<&str> = None;
+        let mut named: Vec<(String, String)> = Vec::new();
+        for line in config.lines().map(str::trim) {
+            if line.starts_with('[') {
+                table = line
+                    .strip_prefix("[target.")
+                    .and_then(|rest| rest.strip_suffix(']'));
+                continue;
+            }
+            if let (Some(triple), Some(value)) = (table, line.strip_prefix("linker = ")) {
+                named.push((triple.to_owned(), value.trim_matches('"').to_owned()));
+            }
+        }
+        let mut pinned: Vec<(String, String)> = DEFAULT_LINKERS
+            .iter()
+            .map(|(triple, linker)| ((*triple).to_owned(), (*linker).to_owned()))
+            .collect();
+        named.sort();
+        pinned.sort();
+        assert_eq!(named, pinned);
     }
 
     fn graph_of(metadata: &str) -> Graph {

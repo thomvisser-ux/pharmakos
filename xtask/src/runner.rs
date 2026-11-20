@@ -39,6 +39,14 @@ pub(crate) const SUBCOMMAND: &str = "__run-test";
 /// The variable naming the folder a run's records go to.
 pub(crate) const RECORD_VAR: &str = "PHARMAKOS_XTASK_TEST_RECORD";
 
+/// The variable xtask's checked doctest call sets to `1`, telling the runner
+/// that every start of this run is a doctest executable.
+pub(crate) const DOCTEST_RUN_VAR: &str = "PHARMAKOS_XTASK_DOCTEST_RUN";
+
+/// Rustdoc's own variable: set, the merged doctest bundle starts each doctest
+/// as a process of its own, by this path.
+pub(crate) const DOCTEST_BIN_VAR: &str = "RUSTDOC_DOCTEST_BIN_PATH";
+
 /// The folder, under the target directory, that holds each run's record
 /// folder.
 pub(crate) const RECORDS_FOLDER: &str = "xtask-test-runs";
@@ -53,6 +61,8 @@ pub(crate) enum RunnerError {
     NoRecordFolder,
     /// Started with no executable to run.
     NoExecutable,
+    /// [`DOCTEST_RUN_VAR`] set to anything but `1`.
+    BadDoctestRun { value: OsString },
     /// The executable's path, made absolute, is not Unicode, so it cannot be
     /// recorded as the check's report names it.
     NotUnicode { path: OsString },
@@ -87,6 +97,12 @@ impl fmt::Display for RunnerError {
                  a start it made could not be recorded"
             ),
             Self::NoExecutable => write!(f, "no executable was named"),
+            Self::BadDoctestRun { value } => write!(
+                f,
+                "`{DOCTEST_RUN_VAR}` is `{}`; xtask sets it to `1` for a doctest run, and to \
+                 nothing else",
+                value.display()
+            ),
             Self::NotUnicode { path } => {
                 write!(f, "the executable's path {} is not Unicode", path.display())
             }
@@ -117,7 +133,11 @@ impl fmt::Display for RunnerError {
 /// test's own; on Windows it exits with the test's exit code, an abort's
 /// included.
 pub(crate) fn main(args: &[OsString]) -> std::process::ExitCode {
-    let error = match prepare(args, std::env::var_os(RECORD_VAR)) {
+    let error = match prepare(
+        args,
+        std::env::var_os(RECORD_VAR),
+        std::env::var_os(DOCTEST_RUN_VAR),
+    ) {
         Ok((command, executable)) => launch(command, executable),
         Err(error) => error,
     };
@@ -126,11 +146,35 @@ pub(crate) fn main(args: &[OsString]) -> std::process::ExitCode {
 }
 
 /// Records the start and returns the command that runs it, or why nothing
-/// may run. `folder` is [`RECORD_VAR`]'s value.
-fn prepare(args: &[OsString], folder: Option<OsString>) -> Result<(Command, String), RunnerError> {
+/// may run. `folder` is [`RECORD_VAR`]'s value, `doctest_run`
+/// [`DOCTEST_RUN_VAR`]'s.
+///
+/// In a doctest run (xtask's checked `--doc` call sets [`DOCTEST_RUN_VAR`];
+/// the runner does not guess from what it is handed, which for rustdoc's
+/// merged doctests is the bundle's path and nothing else) every start gets
+/// [`DOCTEST_BIN_VAR`] naming its own executable. Rustdoc sets that variable
+/// itself only when no runner is configured; without it the merged bundle
+/// runs every doctest in one process, so a doctest that calls
+/// `std::process::exit(0)` ends the bundle green over a failing one. With it,
+/// the bundle starts each doctest as a process of its own again, as plain
+/// cargo does. A standalone doctest (one rustdoc does not merge) is the
+/// doctest's own `main`, which never reads the variable. Outside a doctest
+/// run the variable is removed, so a value from the caller's environment
+/// cannot reach a bundle. `xtask/tests/doctest_runner.rs` pins rustdoc's half
+/// with a real failing doctest beside one that exits 0.
+fn prepare(
+    args: &[OsString],
+    folder: Option<OsString>,
+    doctest_run: Option<OsString>,
+) -> Result<(Command, String), RunnerError> {
     let folder = folder
         .filter(|folder| !folder.is_empty())
         .ok_or(RunnerError::NoRecordFolder)?;
+    let doctest_run = match doctest_run {
+        None => false,
+        Some(value) if value == "1" => true,
+        Some(value) => return Err(RunnerError::BadDoctestRun { value }),
+    };
     let (executable, rest) = args.split_first().ok_or(RunnerError::NoExecutable)?;
     let absolute =
         std::path::absolute(executable).map_err(|error| RunnerError::Absolute { error })?;
@@ -142,7 +186,15 @@ fn prepare(args: &[OsString], folder: Option<OsString>) -> Result<(Command, Stri
         .to_owned();
     record_start(Path::new(&folder), &text)?;
     let mut command = Command::new(&absolute);
-    command.args(rest).env_remove(RECORD_VAR);
+    command
+        .args(rest)
+        .env_remove(RECORD_VAR)
+        .env_remove(DOCTEST_RUN_VAR);
+    if doctest_run && absolute.as_os_str().is_empty() {
+        command.env(DOCTEST_BIN_VAR, &absolute);
+    } else {
+        command.env_remove(DOCTEST_BIN_VAR);
+    }
     Ok((command, text))
 }
 
@@ -230,6 +282,29 @@ pub(crate) fn fresh_folder(target_dir: &Path) -> Result<PathBuf, String> {
     ))
 }
 
+/// Runs `run` in a record folder of its own ([`fresh_folder`]), reads the
+/// starts it recorded ([`read_records`]) and removes the folder, on every
+/// path, a failed launch included: the one owner of the folder's life. An
+/// error of the run comes first; a failure to remove the folder is an error
+/// too, never dropped.
+pub(crate) fn with_record_folder<T>(
+    target_dir: &Path,
+    run: impl FnOnce(&Path) -> Result<T, String>,
+) -> Result<(T, Vec<String>), String> {
+    let folder = fresh_folder(target_dir)?;
+    let outcome =
+        run(&folder).and_then(|value| read_records(&folder).map(|records| (value, records)))?;
+    let outcome: Result<(T, Vec<String>), String> = Ok(outcome);
+    let removed = fs::remove_dir_all(&folder)
+        .map_err(|error| format!("removing the record folder {}: {error}", folder.display()));
+    match (outcome, removed) {
+        (Ok(done), Ok(())) => Ok(done),
+        (Ok(_), Err(removal)) => Err(removal),
+        (Err(error), Ok(())) => Err(error),
+        (Err(error), Err(removal)) => Err(format!("{error}; and {removal}")),
+    }
+}
+
 /// The starts `folder` records, sorted: every file in it must be a record,
 /// holding a path.
 // `fs::read_dir` is banned because its order differs between file systems;
@@ -291,23 +366,23 @@ mod tests {
     fn without_its_folder_the_runner_runs_nothing() {
         let args = [OsString::from("/bin/true")];
         assert!(matches!(
-            prepare(&args, None),
+            prepare(&args, None, None),
             Err(RunnerError::NoRecordFolder)
         ));
         assert!(matches!(
-            prepare(&args, Some(OsString::new())),
+            prepare(&args, Some(OsString::new()), None),
             Err(RunnerError::NoRecordFolder)
         ));
         let folder = scratch("empty");
         assert!(matches!(
-            prepare(&[], Some(folder.clone().into_os_string())),
+            prepare(&[], Some(folder.clone().into_os_string()), None),
             Err(RunnerError::NoExecutable)
         ));
         assert_eq!(read_records(&folder), Ok(Vec::new()));
         // A folder it cannot write to: nothing runs.
         let missing = folder.join("missing");
         assert!(matches!(
-            prepare(&args, Some(missing.into_os_string())),
+            prepare(&args, Some(missing.into_os_string()), None),
             Err(RunnerError::Record { .. })
         ));
     }
@@ -323,7 +398,7 @@ mod tests {
             OsString::from("a b"),
         ];
         let (command, executable) =
-            prepare(&args, Some(folder.clone().into_os_string())).expect("it prepares");
+            prepare(&args, Some(folder.clone().into_os_string()), None).expect("it prepares");
         let absolute = std::path::absolute("target/debug/deps/x-1").expect("absolute");
         assert_eq!(Path::new(&executable), absolute);
         assert_eq!(command.get_program(), absolute.as_os_str());
@@ -334,6 +409,67 @@ mod tests {
                 .any(|(key, value)| key == RECORD_VAR && value.is_none())
         );
         assert_eq!(read_records(&folder), Ok(vec![executable]));
+        // Outside a doctest run, rustdoc's variable is removed, so a value
+        // from the caller's environment never reaches a bundle.
+        assert!(
+            command
+                .get_envs()
+                .any(|(key, value)| key == DOCTEST_BIN_VAR && value.is_none())
+        );
+    }
+
+    /// In a doctest run every start gets rustdoc's variable naming its own
+    /// executable, so the merged bundle runs each doctest as a process of its
+    /// own; the run's own variable never reaches the test; a value other
+    /// than `1` is refused and runs nothing.
+    #[test]
+    fn a_doctest_run_names_each_start_to_rustdoc() {
+        let folder = scratch("doctest");
+        let args = [OsString::from("tmp/rustdoctest/rust_out")];
+        let (command, executable) = prepare(
+            &args,
+            Some(folder.clone().into_os_string()),
+            Some(OsString::from("1")),
+        )
+        .expect("it prepares");
+        let envs: Vec<(&std::ffi::OsStr, Option<&std::ffi::OsStr>)> = command.get_envs().collect();
+        assert!(envs.contains(&(
+            std::ffi::OsStr::new(DOCTEST_BIN_VAR),
+            Some(std::ffi::OsStr::new(&executable))
+        )));
+        assert!(envs.contains(&(std::ffi::OsStr::new(DOCTEST_RUN_VAR), None)));
+        assert!(matches!(
+            prepare(
+                &args,
+                Some(folder.clone().into_os_string()),
+                Some(OsString::from("yes"))
+            ),
+            Err(RunnerError::BadDoctestRun { .. })
+        ));
+        assert_eq!(read_records(&folder), Ok(vec![executable]));
+    }
+
+    /// The record folder is removed on every path: after a run that fails
+    /// (a launch that never happened) as after one that succeeds, and its
+    /// records are read before it goes.
+    #[test]
+    fn the_record_folder_goes_on_every_path() {
+        let target = scratch("lifecycle");
+        let mut seen: Vec<PathBuf> = Vec::new();
+        let failed: Result<((), Vec<String>), String> = with_record_folder(&target, |folder| {
+            seen.push(folder.to_path_buf());
+            Err("failed to launch `cargo`".to_owned())
+        });
+        assert_eq!(failed, Err("failed to launch `cargo`".to_owned()));
+        let done = with_record_folder(&target, |folder| {
+            seen.push(folder.to_path_buf());
+            record_start(folder, "/t/x-1").map_err(|error| error.to_string())
+        });
+        assert_eq!(done, Ok(((), vec!["/t/x-1".to_owned()])));
+        assert_eq!(seen.len(), 2);
+        for folder in seen {
+            assert!(!folder.exists(), "{} was left behind", folder.display());
+        }
     }
 
     /// Records from many starts, as rustdoc's concurrent doctests make them,

@@ -2045,7 +2045,26 @@ pub(crate) fn refuse_codegen_variables() -> Result<(), String> {
         })
         .collect();
     let all: Vec<String> = found.into_iter().chain(unreadable).collect();
-    resolved::refuse_variables(&all).map_err(|fault| fault.to_string())
+    resolved::refuse_variables(&all).map_err(|fault| fault.to_string())?;
+    let toolchain = env::var_os("RUSTUP_TOOLCHAIN")
+        .map(|value| {
+            value
+                .into_string()
+                .map_err(|_| "RUSTUP_TOOLCHAIN holds a value that is not Unicode".to_owned())
+        })
+        .transpose()?;
+    resolved::check_toolchain_variable(toolchain.as_deref(), &pinned_channel()?)
+}
+
+/// The channel `rust-toolchain.toml` pins, read from the file this xtask was
+/// built from.
+fn pinned_channel() -> Result<String, String> {
+    include_str!("../../rust-toolchain.toml")
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("channel = "))
+        .map(|value| value.trim().trim_matches('"').to_owned())
+        .filter(|channel| !channel.is_empty())
+        .ok_or_else(|| "rust-toolchain.toml names no channel".to_owned())
 }
 
 /// Whether a checked build's diagnostics carry colour: when standard error is
@@ -2112,6 +2131,9 @@ pub(crate) struct ProcessCargo {
     cargo: String,
     root: PathBuf,
     require_tools: bool,
+    /// This xtask as the runner's `--config` names it ([`runner_spelling`]),
+    /// settled by `prepare_run` before anything builds.
+    runner: Option<String>,
 }
 
 /// The cargo xtask shells out to: the one that started it (`CARGO`), or the
@@ -2170,6 +2192,7 @@ impl ProcessCargo {
             cargo: ctx.cargo.clone(),
             root: ctx.root.clone(),
             require_tools: ctx.require_tools,
+            runner: None,
         }
     }
 
@@ -2179,6 +2202,7 @@ impl ProcessCargo {
             cargo: cargo_program()?,
             root: root.to_path_buf(),
             require_tools,
+            runner: None,
         })
     }
 
@@ -2289,29 +2313,76 @@ impl resolved::Cargo for ProcessCargo {
         target_dir: &str,
         stdout: &mut dyn FnMut(&[u8]),
     ) -> Result<resolved::RunOutcome, String> {
-        let xtask = env::current_exe()
-            .map_err(|error| format!("finding xtask's own executable: {error}"))?;
-        let xtask = xtask.to_str().ok_or_else(|| {
-            format!(
-                "xtask's own executable {} is not at a Unicode path",
-                xtask.display()
-            )
+        if self.runner.is_none() {
+            self.prepare_run()?;
+        }
+        let runner = self
+            .runner
+            .clone()
+            .ok_or_else(|| "the runner's spelling was not settled".to_owned())?;
+        let line = host()?.door_line(line, Some(&runner))?;
+        let (success, started) = runner::with_record_folder(Path::new(target_dir), |folder| {
+            let record = folder
+                .to_str()
+                .ok_or_else(|| format!("the record folder {} is not Unicode", folder.display()))?;
+            let mut env = env.to_vec();
+            env.push((runner::RECORD_VAR.to_owned(), Some(record.to_owned())));
+            self.spawn(&line, &env, &mut |out| {
+                ProcessCargo::byte_lines(out, stdout, "cargo's standard output")
+            })
         })?;
-        let line = host()?.door_line(line, Some(xtask))?;
-        let folder = runner::fresh_folder(Path::new(target_dir))?;
-        let record = folder
-            .to_str()
-            .ok_or_else(|| format!("the record folder {} is not Unicode", folder.display()))?;
-        let mut env = env.to_vec();
-        env.push((runner::RECORD_VAR.to_owned(), Some(record.to_owned())));
-        let success = self.spawn(&line, &env, &mut |out| {
-            ProcessCargo::byte_lines(out, stdout, "cargo's standard output")
-        })?;
-        let started = runner::read_records(&folder)?;
-        fs::remove_dir_all(&folder)
-            .map_err(|error| format!("removing {}: {error}", folder.display()))?;
         Ok(resolved::RunOutcome { success, started })
     }
+
+    fn prepare_run(&mut self) -> Result<(), String> {
+        let xtask = env::current_exe()
+            .map_err(|error| format!("finding xtask's own executable: {error}"))?;
+        self.runner = Some(runner_spelling(&xtask, &self.root)?);
+        Ok(())
+    }
+}
+
+/// This xtask, `xtask`, as the runner's `--config` names it to cargo, which
+/// splits a runner on whitespace and resolves a relative one against its own
+/// working directory, `root` (measured with cargo 1.98.1: a workspace in a
+/// folder whose name holds a space, the runner named `bin/rr.bat`, and the
+/// test started in its package's own folder, ran through it). Relative,
+/// with `/`, when it lies under `root`, as an in-tree `target` does; else
+/// absolute. The spelling must hold no whitespace and no quote (a TOML
+/// literal string cannot hold one), and when neither spelling is free of
+/// them the error says what to move.
+fn runner_spelling(xtask: &Path, root: &Path) -> Result<String, String> {
+    let clean = |text: &str| {
+        !text.contains(|character: char| character == '\'' || character.is_whitespace())
+    };
+    let relative = xtask.strip_prefix(root).ok().and_then(|rest| {
+        let parts: Option<Vec<&str>> = rest
+            .components()
+            .map(|component| match component {
+                std::path::Component::Normal(part) => part.to_str(),
+                _ => None,
+            })
+            .collect();
+        parts.map(|parts| parts.join("/"))
+    });
+    if let Some(relative) = relative.filter(|text| text.is_empty() && clean(text)) {
+        return Ok(relative);
+    }
+    let absolute = xtask.to_str().ok_or_else(|| {
+        format!(
+            "xtask's own executable {} is not at a Unicode path",
+            xtask.display()
+        )
+    })?;
+    if clean(absolute) {
+        return Ok(absolute.to_owned());
+    }
+    Err(format!(
+        "xtask's own executable is {absolute}, and cargo splits a runner on whitespace: it \
+         cannot be named to cargo there. Move the target directory (CARGO_TARGET_DIR) to a \
+         path without whitespace or quotes, or inside the checkout {} if that path has none",
+        root.display()
+    ))
 }
 
 /// What a shard did with its part of a step: ran it, or held none of it, in
@@ -5694,6 +5765,38 @@ mod tests {
         )
         .expect_err("a header the pins turn off");
         assert!(error.contains("does not guess"), "{error}");
+    }
+
+    /// The runner is named relative to cargo's working directory when it
+    /// lies under it, so a checkout whose path holds a space still runs; it
+    /// is refused only when no spelling is free of whitespace.
+    #[test]
+    fn the_runner_is_named_without_whitespace_or_refused() {
+        let root = Path::new("/home/a b/pharmakos");
+        assert_eq!(
+            runner_spelling(&root.join("target/debug/xtask"), root),
+            Ok("target/debug/xtask".to_owned())
+        );
+        assert_eq!(
+            runner_spelling(Path::new("/build/citime/debug/xtask"), root),
+            Ok("/build/citime/debug/xtask".to_owned())
+        );
+        let error = runner_spelling(Path::new("/build/sp ace/debug/xtask"), root)
+            .expect_err("no spelling without a space");
+        assert!(error.contains("Move the target directory"), "{error}");
+        assert!(runner_spelling(&root.join("my target/debug/xtask"), root).is_err());
+        assert!(runner_spelling(Path::new("/build/o'brien/xtask"), Path::new("/w")).is_err());
+    }
+
+    /// The channel the toolchain check holds `RUSTUP_TOOLCHAIN` to is the
+    /// file's.
+    #[test]
+    fn the_pinned_channel_is_the_toolchain_files() {
+        let channel = pinned_channel().expect("the file names a channel");
+        assert!(
+            include_str!("../../rust-toolchain.toml").contains(&format!("channel = \"{channel}\"")),
+            "{channel}"
+        );
     }
 
     /// The cargo xtask shells out to: `CARGO`, or the one on `PATH`; a
