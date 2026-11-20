@@ -630,10 +630,74 @@ fn test_executables(built: &[Built]) -> Vec<String> {
     paths
 }
 
-/// A path as the run's `Running` line and the report spell it, made
-/// comparable: one separator, and on Windows one case.
-fn comparable_path(path: &str, case_insensitive: bool) -> String {
+/// `path` with one separator, `/`, and without Windows' verbatim prefix:
+/// `\\?\D:\a` is `D:/a` and `\\?\UNC\host\share` is `//host/share`.
+fn slashed(path: &str) -> String {
     let path = path.replace('\\', "/");
+    if let Some(rest) = path.strip_prefix("//?/UNC/") {
+        format!("//{rest}")
+    } else if let Some(rest) = path.strip_prefix("//?/") {
+        rest.to_owned()
+    } else {
+        path
+    }
+}
+
+/// The root a slashed path starts with, and the rest: `//` for a UNC path,
+/// `X:/` for a drive's, `/` for a Unix one, and nothing for a relative path
+/// (a drive-relative `X:a` included, which cargo never prints).
+fn split_root(path: &str) -> (&str, &str) {
+    if path.starts_with("//") {
+        return path.split_at(2);
+    }
+    if path.starts_with('/') {
+        return path.split_at(1);
+    }
+    let mut bytes = path.bytes();
+    if let (Some(drive), Some(b':'), Some(b'/')) = (bytes.next(), bytes.next(), bytes.next())
+        && drive.is_ascii_alphabetic()
+    {
+        return path.split_at(3);
+    }
+    ("", path)
+}
+
+/// A path as the run's `Running` line and the report spell it, made
+/// comparable lexically, and only lexically:
+///
+/// - one separator and no verbatim prefix ([`slashed`]), on both sides;
+/// - a relative path (what cargo prints for an executable under its working
+///   directory, CI's in-tree `target`) joined to `working_dir`, the directory
+///   cargo ran in, as cargo read it ([`Cargo::working_dir`]);
+/// - `.` and empty components dropped and `..` taken back, without reading the
+///   disk: nothing is canonicalised, so no link is resolved (macOS's
+///   `/var` stays `/var`; the working directory is already the one cargo read);
+/// - on Windows, whose file names are case-insensitive, one case, which also
+///   covers a drive letter spelled `D:` on one side and `d:` on the other.
+fn comparable_path(path: &str, working_dir: &str, case_insensitive: bool) -> String {
+    let path = slashed(path);
+    let joined = if split_root(&path).0.is_empty() {
+        format!("{}/{path}", slashed(working_dir))
+    } else {
+        path
+    };
+    let (root, rest) = split_root(&joined);
+    let mut parts: Vec<&str> = Vec::new();
+    for part in rest.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                if parts.last().is_some_and(|last| *last != "..") {
+                    parts.pop();
+                } else if root.is_empty() {
+                    parts.push("..");
+                }
+                // `..` at a root is the root.
+            }
+            other => parts.push(other),
+        }
+    }
+    let path = format!("{root}{}", parts.join("/"));
     if case_insensitive {
         path.to_lowercase()
     } else {
@@ -670,35 +734,51 @@ fn running_path(line: &str) -> Option<String> {
     Some(path.to_owned())
 }
 
-/// Whether the run ran every test executable the check reported: each named
-/// by a `Running` line on the run's standard error, and as many libtest
-/// `test result:` lines on its standard output as `Running` lines. A runner
-/// that ran nothing (a config file's `runner` that exits 0) leaves the
-/// `Running` lines and no result, and is [`ProfileFault::TestsDidNotRun`].
+/// Whether the run ran exactly the test executables the check reported: each
+/// named by a `Running` line on the run's standard error, no `Running` line
+/// naming anything else, and as many libtest `test result:` lines on its
+/// standard output as `Running` lines. Both sides are compared as paths
+/// ([`comparable_path`]), a relative `Running` path resolved against
+/// `working_dir`, the directory cargo ran in. A runner that ran nothing (a
+/// config file's `runner` that exits 0) leaves the `Running` lines and no
+/// result, and is [`ProfileFault::TestsDidNotRun`].
 fn judge_run(
     expected: &[String],
     stderr: &[String],
     results: usize,
-    _working_dir: &str,
+    working_dir: &str,
     case_insensitive: bool,
 ) -> Result<(), ProfileFault> {
-    let ran: Vec<String> = stderr
+    let started: Vec<(String, String)> = stderr
         .iter()
         .filter_map(|line| running_path(line))
-        .map(|path| comparable_path(&path, case_insensitive))
+        .map(|path| {
+            let comparable = comparable_path(&path, working_dir, case_insensitive);
+            (path, comparable)
+        })
+        .collect();
+    let reported: Vec<String> = expected
+        .iter()
+        .map(|path| comparable_path(path, working_dir, case_insensitive))
         .collect();
     let missing: Vec<String> = expected
         .iter()
-        .filter(|path| !ran.contains(&comparable_path(path, case_insensitive)))
-        .cloned()
+        .zip(&reported)
+        .filter(|(_, comparable)| !started.iter().any(|(_, ran)| ran == *comparable))
+        .map(|(path, _)| path.clone())
         .collect();
-    if !missing.is_empty() || results != ran.len() {
+    let unreported: Vec<String> = started
+        .iter()
+        .filter(|(_, comparable)| !reported.contains(comparable))
+        .map(|(path, _)| path.clone())
+        .collect();
+    if !missing.is_empty() || !unreported.is_empty() || results != started.len() {
         return Err(ProfileFault::TestsDidNotRun {
             expected: expected.len(),
-            started: ran.len(),
+            started: started.len(),
             results,
             missing,
-            unreported: Vec::new(),
+            unreported,
         });
     }
     Ok(())

@@ -2168,11 +2168,28 @@ impl ProcessCargo {
 }
 
 impl resolved::Cargo for ProcessCargo {
+    /// The directory cargo reads as its working directory when started in
+    /// the root ([`child_command`]), which is what its relative paths are
+    /// relative to. On Unix the child's `getcwd` answers the physical path,
+    /// links resolved (macOS's `/var` is `/private/var`), which is what
+    /// `canonicalize` answers. On Windows the current directory is the path
+    /// it was set to, made absolute and never resolved through a junction,
+    /// so it is the root made absolute, and not canonicalised.
     fn working_dir(&self) -> Result<String, String> {
-        self.root
-            .to_str()
-            .map(str::to_owned)
-            .ok_or_else(|| format!("the workspace root {} is not Unicode", self.root.display()))
+        let dir = if cfg!(unix) {
+            fs::canonicalize(&self.root)
+        } else {
+            std::path::absolute(&self.root)
+        }
+        .map_err(|error| {
+            format!(
+                "reading the working directory {}: {error}",
+                self.root.display()
+            )
+        })?;
+        dir.into_os_string()
+            .into_string()
+            .map_err(|dir| format!("the working directory {} is not Unicode", dir.display()))
     }
 
     fn report(
