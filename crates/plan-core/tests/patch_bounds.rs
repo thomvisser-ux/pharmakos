@@ -16,14 +16,7 @@
 
 #![allow(
     clippy::expect_used,
-    clippy::panic,
-    clippy::indexing_slicing,
-    clippy::arithmetic_side_effects,
-    clippy::as_conversions,
-    clippy::integer_division,
-    clippy::disallowed_methods,
-    reason = "a test: a panic is its failure report, and its arithmetic is on small counts it \
-              made itself"
+    reason = "clippy.toml's allow-expect-in-tests only recognises #[test] functions, not an               integration test's helpers. A panic is this file's failure report."
 )]
 
 use pharmakos_plan_core::error::Bound;
@@ -66,7 +59,7 @@ fn more_operations_than_the_cap_are_refused_before_any_is_applied() {
         .collect();
     let patch = format!("[{}]", operations.join(","));
     assert_eq!(bound_of(MINIMAL, &patch), Some(Bound::Operations));
-    let at_the_cap = format!("[{}]", operations[1..].join(","));
+    let at_the_cap = format!("[{}]", operations.get(1..).expect("operations").join(","));
     assert_eq!(bound_of(MINIMAL, &at_the_cap), None);
 }
 
@@ -89,7 +82,7 @@ fn a_value_nested_past_the_grammars_limit_is_refused() {
 
 #[test]
 fn an_inverse_past_the_cap_is_refused() {
-    let big = "x".repeat(MAX_PLAYBOOK_CHARS / 2);
+    let big = "x".repeat(MAX_PLAYBOOK_CHARS >> 1);
     let text = MINIMAL.replace("\"title\":\"t\"", &format!("\"title\":\"{big}\""));
     let swap = format!(
         r#"[{{"op":"replace","path":"/meta/title","value":"s"}},{{"op":"replace","path":"/meta/title","value":"{big}"}},{{"op":"replace","path":"/meta/title","value":"s"}}]"#
@@ -138,6 +131,10 @@ fn pointers(value: &pharmakos_proto::json::Json, at: &str, out: &mut Vec<String>
     }
 }
 
+#[allow(
+    clippy::disallowed_methods,
+    reason = "clippy.toml's own reason string sanctions read_dir when the listing is collected               and sorted before use, which is what happens below"
+)]
 fn playbooks() -> Vec<String> {
     let root: PathBuf = Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
@@ -191,9 +188,12 @@ fn no_seeded_patch_grows_a_document_past_the_cap() {
                     let from = if rng.below(2) == 0 {
                         ""
                     } else {
-                        all[rng.below(all.len())].as_str()
+                        all.get(rng.below(all.len())).expect("a pointer").as_str()
                     };
-                    let path = format!("{}/x{index}", all[rng.below(all.len())]);
+                    let path = format!(
+                        "{}/x{index}",
+                        all.get(rng.below(all.len())).expect("a pointer")
+                    );
                     match rng.below(6) {
                         0..=2 => {
                             format!(r#"{{"op":"copy","from":"{from}","path":"/x{index}"}}"#)
