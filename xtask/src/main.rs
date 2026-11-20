@@ -2487,21 +2487,7 @@ fn step_research_guard(ctx: &Ctx) -> Result<Outcome, String> {
 
     for package in &present {
         for all_features in [false, true] {
-            let mut args: Vec<String> = vec![
-                "tree".to_owned(),
-                "--package".to_owned(),
-                package.clone(),
-                "--edges".to_owned(),
-                "features".to_owned(),
-                "--format".to_owned(),
-                "{p}|{f}".to_owned(),
-            ];
-            if all_features {
-                args.push("--all-features".to_owned());
-            }
-            if ctx.locked {
-                args.push("--locked".to_owned());
-            }
+            let args = research_tree_args(package, all_features, ctx.locked);
             let tree = capture(ctx, &ctx.cargo, &args)?;
             judge_research_tree(package, all_features, &tree)?;
         }
@@ -2601,20 +2587,34 @@ fn step_wall_guard(ctx: &Ctx) -> Result<Outcome, String> {
 /// that no feature of the package can bring an edge in later; this is a query,
 /// not a build.
 fn dependency_listing(ctx: &Ctx, package: &str) -> Result<String, String> {
-    let mut args: Vec<String> = vec![
-        "tree".to_owned(),
-        "--package".to_owned(),
-        package.to_owned(),
-        "--all-features".to_owned(),
-        "--prefix".to_owned(),
-        "none".to_owned(),
-        "--format".to_owned(),
-        "{p}".to_owned(),
-    ];
-    if ctx.locked {
+    capture(
+        ctx,
+        &ctx.cargo,
+        &dependency_listing_args(package, ctx.locked),
+    )
+}
+
+/// [`dependency_listing`]'s command line, its shape pinned: `--color never`
+/// (CI sets `CARGO_TERM_COLOR=always`, and the flag beats it) and `--prefix
+/// none`, so each line is one package name and nothing else.
+fn dependency_listing_args(package: &str, locked: bool) -> Vec<String> {
+    let mut args: Vec<String> = [
+        "tree",
+        "--package",
+        package,
+        "--all-features",
+        "--prefix",
+        "none",
+        "--format",
+        "{p}",
+    ]
+    .iter()
+    .map(|arg| (*arg).to_owned())
+    .collect();
+    if locked {
         args.push("--locked".to_owned());
     }
-    capture(ctx, &ctx.cargo, &args)
+    args
 }
 
 /// The first name in a `cargo tree --prefix none --format {p}` listing that is
@@ -4570,44 +4570,76 @@ fn judge_research_tree(package: &str, all_features: bool, tree: &str) -> Result<
     Err(report)
 }
 
-/// The section headers `cargo tree` prints above a package's dev- and
-/// build-dependencies, after the tree's drawing.
-const TREE_SECTION_HEADERS: &[&str] = &["[dev-dependencies]", "[build-dependencies]"];
+/// The characters of cargo tree's drawing, which [`research_tree_args`]'s
+/// `--prefix none` turns off: a line holding one is not the shape asked for.
+const TREE_DRAWING: &[char] = &['│', '├', '└', '─'];
 
-/// Whether a `cargo tree -e features --format {p}|{f}` line shows the
-/// research feature enabled — as a feature node, or in a package's feature
-/// list. Three shapes are read: a package line, `{p}|{f}`, with an ` (*)`
-/// after a package already shown; a feature node, which cargo prints in its
-/// own fixed form, `<name> feature "<feature>"`, with the same ` (*)`; and a
-/// section header ([`TREE_SECTION_HEADERS`]) behind the tree's drawing,
-/// which enables nothing, while every line under it is read like any other.
-/// Any other line is a failure: read as "no feature", it would let the guard
-/// pass on output whose shape changed.
+/// The `cargo tree` query the research guard reads: every feature edge of
+/// `package` (normal, build and dev dependencies alike, the tree's default
+/// kinds), its output shape pinned on the command line so that no
+/// environment or config can change it. `--color never`: CI sets
+/// `CARGO_TERM_COLOR=always`, and the flag beats it. `--prefix none`: no tree
+/// drawing and no `[dev-dependencies]` or `[build-dependencies]` headers,
+/// which are part of the drawing, so every line is one node. Deduplication
+/// stays on: cargo prints each node in full where it first meets it and marks
+/// every later meeting ` (*)`, so a feature reached anywhere has a line of its
+/// own, and `--no-dedupe` would only repeat lines (and grows with the graph's
+/// paths, not its nodes).
+fn research_tree_args(package: &str, all_features: bool, locked: bool) -> Vec<String> {
+    let mut args: Vec<String> = [
+        "tree",
+        "--package",
+        package,
+        "--edges",
+        "features",
+        "--format",
+        "{p}|{f}",
+    ]
+    .iter()
+    .map(|arg| (*arg).to_owned())
+    .collect();
+    if all_features {
+        args.push("--all-features".to_owned());
+    }
+    if locked {
+        args.push("--locked".to_owned());
+    }
+    args
+}
+
+/// Whether a line of [`research_tree_args`]'s output shows the research
+/// feature enabled. Its shape is pinned, so exactly two are read, each with
+/// an optional ` (*)` after a node already shown: a package line, `{p}|{f}`,
+/// whose feature list is read; and a feature node, which cargo prints in its
+/// own fixed form, `<name> feature "<feature>"`. Any other line is a failure,
+/// a control character (a colour escape) or the tree's drawing included: read
+/// as "no feature", it would let the guard pass on output whose shape
+/// changed.
 fn line_enables_research(line: &str) -> Result<bool, String> {
-    let Some((package, features)) = line.split_once('|') else {
-        let node = line.trim_end();
-        let header = node.trim_start_matches(['│', ' ']);
-        if TREE_SECTION_HEADERS.contains(&header) {
-            return Ok(false);
-        }
-        let node = node.strip_suffix(" (*)").unwrap_or(node);
+    let refused = || {
+        Err(format!(
+            "`cargo tree --color never --prefix none --format {{p}}|{{f}}` printed a line that \
+             is no package line or feature node: `{}`; the research guard reads every line, and \
+             does not guess at this one",
+            line.escape_debug()
+        ))
+    };
+    if line.is_empty() && line.contains(TREE_DRAWING) {
+        return refused();
+    }
+    let node = line.strip_suffix(" (*)").unwrap_or(line);
+    let Some((package, features)) = node.split_once('|') else {
         if let Some((_, feature)) = node.rsplit_once(" feature \"")
             && let Some(feature) = feature.strip_suffix('"')
             && !feature.contains('"')
         {
             return Ok(feature == RESEARCH_FEATURE);
         }
-        return Err(format!(
-            "`cargo tree --format {{p}}|{{f}}` printed a line that is no package, feature node \
-             or section header: `{line}`; the research guard reads every line, and does not \
-             guess at this one"
-        ));
+        return refused();
     };
     if package.contains(&format!("feature \"{RESEARCH_FEATURE}\"")) {
         return Ok(true);
     }
-    let features = features.trim_end();
-    let features = features.strip_suffix(" (*)").unwrap_or(features);
     Ok(features
         .split(',')
         .any(|feature| feature.trim() == RESEARCH_FEATURE))
@@ -5539,71 +5571,102 @@ mod tests {
         assert_eq!(line_enables_research("crate v1|researching"), Ok(false));
         // A feature node, in cargo's own form, with and without ` (*)`.
         assert_eq!(
-            line_enables_research("│   ├── pharmakos-sim feature \"research\""),
+            line_enables_research("pharmakos-sim feature \"research\""),
             Ok(true)
         );
         assert_eq!(
-            line_enables_research("│   ├── pharmakos-proto feature \"default\" (*)"),
+            line_enables_research("pharmakos-proto feature \"default\" (*)"),
             Ok(false)
+        );
+        // A package line after one already shown, its features before the ` (*)`.
+        assert_eq!(
+            line_enables_research("pharmakos-sim v0.0.0 (/w/crates/sim)|research (*)"),
+            Ok(true)
         );
         // A line in another shape is a failure, not "no feature".
         assert!(line_enables_research("pharmakos-sim v0.0.0 (research)").is_err());
         assert!(line_enables_research("pharmakos-sim feature \"rese").is_err());
-        // A package line after one already shown, its features before the ` (*)`.
-        assert_eq!(
-            line_enables_research("│   └── pharmakos-sim v0.0.0 (/w/crates/sim)|research (*)"),
-            Ok(true)
-        );
-        // Section headers, at the top and nested behind the drawing; nothing
-        // else in that shape.
-        assert_eq!(line_enables_research("[dev-dependencies]"), Ok(false));
-        assert_eq!(
-            line_enables_research("│       [build-dependencies]"),
-            Ok(false)
-        );
-        assert!(line_enables_research("[dependencies]").is_err());
-        assert!(line_enables_research("├── [dev-dependencies]").is_err());
-        assert!(line_enables_research("[dev-dependencies] x").is_err());
     }
 
-    /// A tree as cargo 1.98.1 prints it for a crate with a dev-dependency
-    /// and a build-dependency (recorded from a scratch crate): the headers
-    /// are read, and every line under them is judged.
-    fn tree_with_sections(dev_features: &str, build_features: &str) -> String {
+    /// The query pins `--prefix none` and `--color never`, so a line with
+    /// the tree's drawing, a section header (part of the drawing) or a colour
+    /// escape is not the shape asked for, and is refused, never read: a
+    /// coloured package line would otherwise read `research\u{1b}[0m` as some
+    /// other feature. The first line is CI's, from shard 1 (ubuntu) on
+    /// `d12e9cea`.
+    #[test]
+    fn a_line_out_of_the_pinned_shape_is_refused() {
+        for line in [
+            "\u{1b}[2m│\u{1b}[0m   \u{1b}[2m\u{1b}[35m└──\u{1b}[0m proc-macro2 feature \"proc-macro\" \u{1b}[33m\u{1b}[2m(*)\u{1b}[39m\u{1b}[22m",
+            "pharmakos-sim v0.0.0 (/w/crates/sim)|default,research\u{1b}[0m",
+            "\u{1b}[1mpharmakos-sim\u{1b}[0m v0.0.0|research",
+            "│   ├── pharmakos-sim feature \"research\"",
+            "└── pharmakos-sim v0.0.0 (/w/crates/sim)|research (*)",
+            "    pharmakos-sim feature \"research\"",
+            "[dev-dependencies]",
+            "[build-dependencies]",
+        ] {
+            let error = line_enables_research(line).expect_err(line);
+            assert!(error.contains("does not guess"), "{error}");
+        }
+    }
+
+    /// Both tree queries pin their output's shape on their own command line.
+    #[test]
+    fn the_tree_queries_pin_their_shape() {
+        let pinned = |args: &[String]| {
+            args.windows(2).any(|pair| pair == ["--color", "never"])
+                && args.windows(2).any(|pair| pair == ["--prefix", "none"])
+        };
+        for all_features in [false, true] {
+            for locked in [false, true] {
+                let args = research_tree_args("pharmakos-verifier", all_features, locked);
+                assert!(pinned(&args), "{args:?}");
+                assert!(args.windows(2).any(|pair| pair == ["--format", "{p}|{f}"]));
+                assert_eq!(args.contains(&"--all-features".to_owned()), all_features);
+                assert!(!args.contains(&"--no-dedupe".to_owned()));
+                let listing = dependency_listing_args("pharmakos-sim", locked);
+                assert!(pinned(&listing), "{listing:?}");
+            }
+        }
+    }
+
+    /// A tree as cargo 1.98.1 prints it under the guard's own pins, for a
+    /// crate with a normal, a dev- and a build-dependency (recorded from a
+    /// scratch crate with `--color never --prefix none`): no headers, no
+    /// drawing, every node on a line, and a node met again marked ` (*)`.
+    fn pinned_tree(dev_features: &str, build_features: &str) -> String {
         [
             "pharmakos-verifier v0.0.0 (/w/crates/verifier)|",
-            "└── pharmakos-proto feature \"default\"",
-            "    └── pharmakos-proto v0.0.0 (/w/crates/proto)|",
-            "[build-dependencies]",
-            "└── pharmakos-proto feature \"default\" (*)",
-            &format!("    └── pharmakos-proto v0.0.0 (/w/crates/proto)|{build_features} (*)"),
-            "[dev-dependencies]",
-            "├── pharmakos-sim feature \"default\"",
-            &format!("│   └── pharmakos-sim v0.0.0 (/w/crates/sim)|{dev_features}"),
-            "│       [build-dependencies]",
-            "│       └── pharmakos-proto feature \"default\" (*)",
+            "pharmakos-proto feature \"default\"",
+            "pharmakos-proto v0.0.0 (/w/crates/proto)|",
+            "pharmakos-proto feature \"default\" (*)",
+            &format!("pharmakos-proto v0.0.0 (/w/crates/proto)|{build_features} (*)"),
+            "pharmakos-sim feature \"default\"",
+            &format!("pharmakos-sim v0.0.0 (/w/crates/sim)|{dev_features}"),
+            "pharmakos-proto feature \"default\" (*)",
         ]
         .join("\n")
     }
 
     /// AGENTS.md section 3 rule 3 sanctions a guarded crate's harmless
     /// dev-dependency; `research` reached through a dev- or a
-    /// build-dependency is refused, and for that reason.
+    /// build-dependency, or as a feature node, is refused, and for that
+    /// reason.
     #[test]
     fn the_research_guard_reads_dev_and_build_dependencies() {
         assert_eq!(
             judge_research_tree(
                 "pharmakos-verifier",
                 false,
-                &tree_with_sections("default", "default")
+                &pinned_tree("default", "default")
             ),
             Ok(())
         );
         for tree in [
-            tree_with_sections("default,research", "default"),
-            tree_with_sections("default", "research"),
-            tree_with_sections("default", "default")
-                + "\n│   └── pharmakos-sim feature \"research\"",
+            pinned_tree("default,research", "default"),
+            pinned_tree("default", "research"),
+            pinned_tree("default", "default") + "\npharmakos-sim feature \"research\"",
         ] {
             let error = judge_research_tree("pharmakos-verifier", true, &tree)
                 .expect_err("research is reached");
@@ -5613,15 +5676,14 @@ mod tests {
                 ),
                 "{error}"
             );
-            assert!(error.contains("research"), "{error}");
         }
         // A line of any other shape is not read as "no feature".
         let error = judge_research_tree(
             "pharmakos-verifier",
             false,
-            &(tree_with_sections("default", "default") + "\n[target-dependencies]"),
+            &(pinned_tree("default", "default") + "\n[dev-dependencies]"),
         )
-        .expect_err("an unknown header");
+        .expect_err("a header the pins turn off");
         assert!(error.contains("does not guess"), "{error}");
     }
 
