@@ -99,7 +99,9 @@ jobs:
           key: nightly-scenarios
 
       - name: Build gamectl
-        run: cargo build --locked --release --package pharmakos-gamectl --bin gamectl
+        # Through xtask's checked call: its tools and flags pinned, its build checked
+        # from cargo's own report, at the path the arm reads.
+        run: cargo xtask build-gamectl --release
 
       - name: Play the arm over the seed set
         env:
@@ -126,6 +128,12 @@ jobs:
         run: |
           set -euo pipefail
           result="target/scenario/${ARM}.json"
+          # The result file is the arm's output: its absence is a failure, never the
+          # "field not found" warning below, which the greps' `|| true` would make it.
+          if [ ! -f "$result" ]; then
+            echo "::error::${result} is missing: the arm wrote no result"
+            exit 1
+          fi
           field='"win_rate_percent"[[:space:]]*:[[:space:]]*[0-9][0-9]*'
           match=$( { grep -o "$field" "$result" || true; } | tail -n 1 )
           rate=$( { printf '%s' "$match" | grep -o '[0-9][0-9]*$' || true; } | tail -n 1 )
@@ -182,7 +190,10 @@ jobs:
           key: nightly-fuzz
 
       - name: Ten thousand generated playbooks come back as reports
-        run: cargo test --locked -p pharmakos-verifier --test fuzz -- --ignored --nocapture
+        # Through xtask's checked call and its one door: the build checked from cargo's
+        # own report, the harness's options typed, and every test executable the check
+        # built proven to have run.
+        run: cargo xtask checked-test --package pharmakos-verifier --test fuzz --ignored --nocapture
 
   g4:
     name: G4 chains (${{ matrix.os }})
@@ -211,14 +222,18 @@ jobs:
         with:
           key: nightly-g4-${{ matrix.os }}
 
-      - name: Build the determinism binary
-        run: cargo build --locked --profile release-checked --package pharmakos-sim --bin determinism
-
       - name: Play ten seeded matches of 9 600 ticks
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p target/g4
+          # The seed file must be there to be read: a missing one fails here, not as
+          # "lists 0" below, where the greps' `|| true` (a grep that matches nothing
+          # exits 1) would otherwise hide sed's own failure.
+          if [ ! -r "$SEED_FILE" ]; then
+            echo "::error::${SEED_FILE} is missing or unreadable"
+            exit 1
+          fi
           # The seed file's format (scenarios/nightly/README.md), held as strictly as
           # gamectl's typed decoder holds it, so a file the decoder refuses fails here too:
           # a `#` starts a comment, spaces around a seed and blank lines are skipped, every
@@ -242,8 +257,11 @@ jobs:
             exit 1
           fi
           for seed in $seeds; do
-            cargo run --locked --quiet --profile release-checked --package pharmakos-sim \
-              --bin determinism -- --ticks 9600 --seed "$seed" --out "target/g4/${seed}.hashes.txt"
+            # Built through xtask's checked call, held to what `release-checked`
+            # promises (the `determinism` step's own build), and run from the path its
+            # build reported.
+            cargo xtask determinism-run --seed "$seed" --ticks 9600 \
+              --out "target/g4/${seed}.hashes.txt"
             lines=$(wc -l < "target/g4/${seed}.hashes.txt" | tr -d ' ')
             # A match that ended early writes a shorter chain, which is not G4's bar.
             [ "$lines" -eq 9600 ] || { echo "::error::${seed} wrote ${lines} ticks, not 9600"; exit 1; }

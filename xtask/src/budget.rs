@@ -26,9 +26,7 @@
 //! reads as a pass.
 
 use std::fmt;
-use std::io::{BufRead, BufReader};
 use std::path::Path;
-use std::process::Stdio;
 
 /// One bar a report's figure is held to.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -146,12 +144,9 @@ pub(crate) const BUDGETS: [Budget; 2] = [P3_BUDGET, P1_BUDGET];
 /// Why an alarm gave no verdict. Each one fails the command.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) enum BudgetError {
-    /// cargo could not be started.
-    Launch { cargo: String, reason: String },
-    /// The child's output could not be read.
-    Read(String),
-    /// The measurement exited unsuccessfully.
-    Exited { command: String, status: String },
+    /// The checked run gave no output to read: a refused environment, a build
+    /// that broke its profile's promise, a launch, a read or a failed exit.
+    Run(String),
     /// The output held no report line.
     NoReport(&'static str),
     /// The output held more than one report line.
@@ -174,16 +169,12 @@ pub(crate) enum BudgetError {
         measured: u128,
         planned: u128,
     },
-    /// `CARGO` holds a value that is not Unicode.
-    CargoNotUnicode,
 }
 
 impl fmt::Display for BudgetError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Launch { cargo, reason } => write!(f, "could not launch `{cargo}`: {reason}"),
-            Self::Read(reason) => write!(f, "could not read the measurement's output: {reason}"),
-            Self::Exited { command, status } => write!(f, "`{command}` failed ({status})"),
+            Self::Run(reason) => write!(f, "the measurement did not run: {reason}"),
             Self::NoReport(prefix) => write!(f, "the measurement printed no `{prefix}` line"),
             Self::SeveralReports { prefix, count } => {
                 write!(
@@ -207,7 +198,6 @@ impl fmt::Display for BudgetError {
                 f,
                 "the report's `{field}` is {measured} of the {planned} planned: a short run"
             ),
-            Self::CargoNotUnicode => write!(f, "`CARGO` is set to a value that is not Unicode"),
         }
     }
 }
@@ -351,83 +341,37 @@ pub(crate) fn verdict(
     Ok((lines, passed))
 }
 
-/// The cargo arguments the alarm runs. Pure, so its flags are pinned.
-pub(crate) fn args(budget: &Budget, locked: bool) -> Vec<String> {
-    let mut args: Vec<String> = vec!["test".to_owned(), "--release".to_owned()];
-    if locked {
-        args.push("--locked".to_owned());
-    }
-    for arg in [
-        "--package",
-        "pharmakos-bench",
-        "--test",
-        budget.target,
-        "--",
-        "--ignored",
-        "--nocapture",
-        "--exact",
-        budget.test,
-    ] {
-        args.push(arg.to_owned());
-    }
-    args
+/// The checked run `budget`'s alarm measures: its one released test, by its
+/// exact name, through the one door ([`crate::resolved::execute`]). Pure, so
+/// its command line is pinned.
+pub(crate) fn test_run(budget: &Budget, locked: bool) -> crate::resolved::TestRun {
+    crate::resolved::TestRun::new(
+        vec!["--package".to_owned(), "pharmakos-bench".to_owned()],
+        crate::resolved::Invocation {
+            selectors: vec!["--test".to_owned(), budget.target.to_owned()],
+            sim: crate::resolved::SimRule::OptimisedIfBuilt,
+        },
+        locked,
+        false,
+    )
+    .release()
+    .with_harness(vec![
+        crate::resolved::Harness::Ignored,
+        crate::resolved::Harness::Nocapture,
+        crate::resolved::Harness::Exact(budget.test.to_owned()),
+    ])
 }
 
-/// Run `budget`'s measurement, echoing its output as it comes, and answer
-/// whether the alarm passed.
+/// Run `budget`'s measurement through the checked call, echoing its output
+/// as it comes, and answer whether the alarm passed.
 pub(crate) fn run(
     budget: &Budget,
     root: &Path,
     require_tools: bool,
     locked: bool,
 ) -> Result<bool, BudgetError> {
-    // cargo sets `CARGO` for the commands it runs, `cargo xtask` among them;
-    // unset (xtask run some other way), the one on PATH is the rule.
-    let cargo = match std::env::var_os("CARGO") {
-        None => "cargo".to_owned(),
-        Some(value) => value
-            .into_string()
-            .map_err(|_| BudgetError::CargoNotUnicode)?,
-    };
-    let args = args(budget, locked);
-    let command = crate::render_command(&cargo, &args);
-    println!("   $ {command}");
-    let mut child = crate::child_command(require_tools, &cargo, &args, root)
-        .stdout(Stdio::piped())
-        .spawn()
-        .map_err(|error| BudgetError::Launch {
-            cargo: cargo.clone(),
-            reason: error.to_string(),
-        })?;
-    let mut output = String::new();
-    if let Some(stdout) = child.stdout.take() {
-        for line in BufReader::new(stdout).lines() {
-            match line {
-                Ok(line) => {
-                    println!("{line}");
-                    output.push_str(&line);
-                    output.push('\n');
-                }
-                Err(error) => {
-                    // Never leave the measurement running unattended. The
-                    // read error is the one reported; the kill's and the
-                    // wait's would only repeat that the child is gone.
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(BudgetError::Read(error.to_string()));
-                }
-            }
-        }
-    }
-    let status = child
-        .wait()
-        .map_err(|error| BudgetError::Read(error.to_string()))?;
-    if !status.success() {
-        return Err(BudgetError::Exited {
-            command,
-            status: crate::describe_exit(status),
-        });
-    }
+    let output = crate::run_measurement(root, require_tools, &test_run(budget, locked))
+        .map_err(BudgetError::Run)?;
     let report = parse(budget, &output)?;
     let (lines, passed) = verdict(budget, &report, std::env::consts::OS)?;
     for line in lines {
@@ -615,15 +559,21 @@ mod tests {
 
     #[test]
     fn each_alarm_runs_one_released_test_by_its_exact_name() {
-        assert_eq!(
-            args(&P3_BUDGET, true).join(" "),
-            "test --release --locked --package pharmakos-bench --test p3_alarm -- --ignored \
-             --nocapture --exact p3_budget"
+        let p3 = test_run(&P3_BUDGET, true).run_line().join(" ");
+        assert!(
+            p3.contains(
+                "test --release --package pharmakos-bench --test p3_alarm --locked \
+                 --message-format=json -- --ignored --nocapture --exact p3_budget"
+            ),
+            "{p3}"
         );
-        assert_eq!(
-            args(&P1_BUDGET, false).join(" "),
-            "test --release --package pharmakos-bench --test perf_alarm -- --ignored \
-             --nocapture --exact p1_budget"
+        let p1 = test_run(&P1_BUDGET, false).run_line().join(" ");
+        assert!(
+            p1.contains(
+                "test --release --package pharmakos-bench --test perf_alarm \
+                 --message-format=json -- --ignored --nocapture --exact p1_budget"
+            ),
+            "{p1}"
         );
     }
 
