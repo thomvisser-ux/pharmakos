@@ -605,7 +605,7 @@ impl Node {
 /// member before it, and only a comment on a line of its own belongs to the
 /// member after it.
 fn opening(trivia: &str, previous: Option<&str>, child: &str, found: &mut Vec<Comment>) {
-    match (trivia.find('\n'), previous) {
+    match (first_line_break(trivia), previous) {
         (Some(at), Some(sibling)) => {
             let head = trivia.get(..at).unwrap_or_default();
             let tail = trivia.get(at..).unwrap_or_default();
@@ -624,7 +624,7 @@ fn opening(trivia: &str, previous: Option<&str>, child: &str, found: &mut Vec<Co
 /// container rather than on the member's line, and [`Anchor::Inside`] is where
 /// the canonical writer puts it back.
 fn closing(trivia: &str, child: &str, container: &str, last: bool, found: &mut Vec<Comment>) {
-    match trivia.find('\n') {
+    match first_line_break(trivia) {
         Some(at) if last => {
             let head = trivia.get(..at).unwrap_or_default();
             let tail = trivia.get(at..).unwrap_or_default();
@@ -633,6 +633,28 @@ fn closing(trivia: &str, child: &str, container: &str, last: bool, found: &mut V
         }
         _ => collect(trivia, &Anchor::After(child.to_owned()), found),
     }
+}
+
+/// The first line break in a run of trivia that is not inside a comment: the
+/// byte a member's own line ends at.
+///
+/// A block comment may span lines, and a line break inside one does not end
+/// the member's line: `"a": 1, /* why\n so */` is one comment on `a`'s line.
+/// Splitting at a line break inside it would cut the comment in two, and the
+/// halves are not comments ([`collect`] would find neither).
+fn first_line_break(trivia: &str) -> Option<usize> {
+    let bytes = trivia.as_bytes();
+    let mut pos = 0usize;
+    while let Some(&byte) = bytes.get(pos) {
+        if byte == b'\n' || byte == b'\r' {
+            return Some(pos);
+        }
+        pos = match comment_end(bytes, pos) {
+            Some((end, _)) => end,
+            None => pos.saturating_add(1),
+        };
+    }
+    None
 }
 
 /// An array index token: RFC 6901 spells one as decimal digits with no leading

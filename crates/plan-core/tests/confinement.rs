@@ -351,7 +351,7 @@ const KEPT_FALLBACKS: &[(&str, &str, usize, &str)] = &[
         "jsonc.rs",
         "trivia.get(..at).unwrap_or_default()",
         2,
-        "`at` is where `find` found a newline, so it is a character boundary inside the text",
+        "`at` is where `first_line_break` found a line feed or a carriage return, an ASCII byte, so it is a character boundary inside the text",
     ),
     (
         "jsonc.rs",

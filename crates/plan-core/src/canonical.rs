@@ -242,14 +242,30 @@ fn write_own_line(comment: &Comment, depth: usize, out: &mut String) {
     out.push('\n');
 }
 
-/// Writes one trailing comment, on the line that has just been written.
+/// Writes a member's trailing comments, on the line that has just been
+/// written.
 ///
 /// A line comment swallows the rest of its line, which is why the caller emits
-/// the separating comma *before* calling this and the newline after it.
-fn write_trailing(comment: &Comment, out: &mut String) {
-    out.push(' ');
-    match comment.kind {
-        CommentKind::Line | CommentKind::Block => out.push_str(&comment.text),
+/// the separating comma *before* calling this and the newline after it; and
+/// why a comment after a line comment cannot share its line: it goes on a line
+/// of its own at `depth`, as does every comment after it. Read back, those
+/// own-line comments stand after the member's line break, so they anchor
+/// before the next member or at the end of the container, where the writer
+/// puts such a comment on a line of its own at the same place: canonicalising
+/// twice writes what canonicalising once did.
+fn write_trailing<'c>(comments: impl Iterator<Item = &'c Comment>, depth: usize, out: &mut String) {
+    let mut own_line = false;
+    for comment in comments {
+        if own_line {
+            out.push('\n');
+            indent(depth, out);
+        } else {
+            out.push(' ');
+        }
+        out.push_str(&comment.text);
+        if comment.kind == CommentKind::Line {
+            own_line = true;
+        }
     }
 }
 
@@ -277,9 +293,7 @@ fn write_value(value: &Json, pointer: &str, depth: usize, placed: &Placed<'_>, o
                 if index.saturating_add(1) < items.len() {
                     out.push(',');
                 }
-                for comment in placed.at(&Anchor::After(child)) {
-                    write_trailing(comment, out);
-                }
+                write_trailing(placed.at(&Anchor::After(child)), inner, out);
                 out.push('\n');
             }
             for comment in placed.at(&Anchor::Inside(pointer.to_owned())) {
@@ -307,9 +321,7 @@ fn write_value(value: &Json, pointer: &str, depth: usize, placed: &Placed<'_>, o
                 if index.saturating_add(1) < entries.len() {
                     out.push(',');
                 }
-                for comment in placed.at(&Anchor::After(child)) {
-                    write_trailing(comment, out);
-                }
+                write_trailing(placed.at(&Anchor::After(child)), inner, out);
                 out.push('\n');
             }
             for comment in placed.at(&Anchor::Inside(pointer.to_owned())) {
