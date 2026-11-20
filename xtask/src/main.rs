@@ -17,15 +17,15 @@
 //! |------------------|------------------------------------------------------------------------------|
 //! | `fmt`            | `cargo fmt --all --check`                                                     |
 //! | `clippy`         | `-D warnings` plus the determinism lint set; walled crates linted separately  |
-//! | `profiles`       | overflow checks on in every profile, release included; reads every profile line or fails |
-//! | `test`           | `cargo test --workspace` without `research`, each invocation's resolved profile checked first: debug assertions and overflow checks on, the sim optimised (its allocation test at opt-level 0) |
+//! | `profiles`       | the fast first look at the TOML: overflow checks on in every profile, release included; reads every profile line or fails |
+//! | `test`           | `cargo test --workspace` without `research`, each invocation's resolved profile checked first: debug assertions and overflow checks on, the sim and the crates it runs optimised (its allocation test at opt-level 0), the godot family not, rustflags pinned to none and refused in the environment |
 //! | `test-research`  | `cargo test --package pharmakos-sim --features pharmakos-sim/research`, checked as `test` is |
 //! | `research-guard` | plan-core / verifier / operator / gateway / gamectl / bench never reach `research` |
 //! | `wall-guard`     | `sim` and the deterministic crates never reach a walled crate; the client never the core |
 //! | `deny`           | `cargo deny check` (licences, advisories, banned crates)                      |
 //! | `buf`            | `buf lint` and `buf breaking --against .git#branch=main`                      |
 //! | `golden`         | `tests/golden/**/expected.*` against the fresh `target/golden/**/actual.*`    |
-//! | `determinism`    | runs the determinism binary and compares its per-tick hash chain              |
+//! | `determinism`    | builds the determinism binary at `release-checked`, its resolved profile checked (both checks on, rustflags pinned), runs it and compares its per-tick hash chain |
 //! | `reuse`          | REUSE licence-manifest check, then the library-quotation licence check        |
 //! | `placeholders`   | every `PLACEHOLDER` marker in the tracked tree parses against the grammar     |
 //! | `scenario`     | validates `scenarios/**`, then plays each with `gamectl scenario run`         |
@@ -620,13 +620,13 @@ const STEPS: &[Step] = &[
     },
     Step {
         name: "profiles",
-        about: "overflow checks stay on in every profile; every profile line is read",
+        about: "overflow checks stay on in every profile; every profile line is read (a first look)",
         run: step_profiles,
     },
     Step {
         name: "test",
         about: "cargo test --workspace, without the research feature, its resolved profile checked: \
-                checks on, the sim optimised",
+                checks on, the sim optimised, rustflags pinned",
         run: step_test,
     },
     Step {
@@ -661,7 +661,8 @@ const STEPS: &[Step] = &[
     },
     Step {
         name: "determinism",
-        about: "run the determinism binary and check its hash chain",
+        about: "build the determinism binary, its resolved profile checked; run it and check its \
+                hash chain",
         run: step_determinism,
     },
     Step {
@@ -1326,13 +1327,16 @@ fn scoped_clippy_args(packages: &[String], walled: &[String], locked: bool) -> V
 /// and not another's is exactly the failure this project cannot absorb, so a
 /// profile that switches the check off fails the build.
 ///
-/// This step reads the TOML, because the release family is never built by
-/// the suite, so cargo cannot be asked what it resolves there. The reading
-/// fails closed: a `[profile.*]` line in a form it cannot read (a dotted key,
-/// an inline table, a quoted key, a bare `[profile]` table, an array of
-/// tables) is a failure, never a pass. What the suite builds, the dev and test
-/// profiles with debug assertions on and the sim optimised, is checked from
-/// cargo's own answer by the `test` step ([`resolved`]).
+/// This step is the fast first look: it reads the committed TOML, every
+/// profile in it, release and `release-client` included, before anything
+/// builds, and fails closed: a `[profile.*]` line in a form it cannot read (a
+/// dotted key, an inline table, a quoted key, a bare `[profile]` table, an
+/// array of tables, a multi-line value) is a failure, never a pass. It cannot
+/// see `--config`, a config file outside the repository or rustflags. What
+/// cargo actually resolves is checked from cargo's own answer, on every build
+/// xtask makes to test, to hash or to ship ([`resolved`]): the `test` and
+/// `test-research` steps' invocations, the `determinism` step's
+/// `release-checked` build and `cargo xtask package`'s two release builds.
 fn step_profiles(ctx: &Ctx) -> Result<Outcome, String> {
     let manifest_path = ctx.root.join("Cargo.toml");
     let manifest = fs::read_to_string(&manifest_path)
@@ -1479,13 +1483,9 @@ fn is_bare_key(text: &str) -> bool {
 /// with no quote inside it.
 fn is_plain_value(text: &str) -> bool {
     let quoted = |mark: char| {
-        text.len() >= 2
-            && text.starts_with(mark)
-            && text.ends_with(mark)
-            && !text
-                .get(1..text.len().saturating_sub(1))
-                .unwrap_or("")
-                .contains(['"', '\''])
+        text.strip_prefix(mark)
+            .and_then(|rest| rest.strip_suffix(mark))
+            .is_some_and(|inner| !inner.contains(['"', '\'']))
     };
     text == "true"
         || text == "false"
@@ -1569,14 +1569,13 @@ fn scan_profiles(text: &str) -> ProfileScan {
     // `None` outside a profile table; `Some(None)` in one this cannot read.
     let mut table: Option<Option<String>> = None;
     let mut in_root = true;
-    for (index, raw) in text.lines().enumerate() {
-        let line = raw.split('#').next().unwrap_or("").trim();
+    // Numbered from 1 by a range that cannot overflow: a string holds fewer
+    // lines than bytes, and fewer bytes than `usize::MAX`.
+    for (number, raw) in (1_usize..).zip(text.lines()) {
+        let line = raw.split_once('#').map_or(raw, |(before, _)| before).trim();
         let unreadable = |scan: &mut ProfileScan| {
-            scan.unreadable.push(format!(
-                "line {}: `{}`",
-                index.saturating_add(1),
-                raw.trim()
-            ));
+            scan.unreadable
+                .push(format!("line {number}: `{}`", raw.trim()));
         };
         if line.is_empty() {
             continue;
@@ -1593,7 +1592,7 @@ fn scan_profiles(text: &str) -> ProfileScan {
             };
             continue;
         }
-        let key_part = line.split('=').next().unwrap_or("").trim();
+        let key_part = line.split_once('=').map_or(line, |(key, _)| key).trim();
         if in_root
             && key_part
                 .trim_start_matches(['"', '\''])
@@ -1669,10 +1668,15 @@ fn step_test(ctx: &Ctx) -> Result<Outcome, String> {
         }
     }
     let all = workspace_test_units(metadata(ctx)?, &ctx.packages)?;
+    let sim_selected = ctx.packages.is_empty()
+        || ctx
+            .packages
+            .iter()
+            .any(|spec| package_spec_may_name(spec, resolved::SIM));
     let report = if let Some(shard) = ctx.shard {
-        run_shard_units(ctx, shard, "test", &all, &base)?
+        run_shard_units(ctx, shard, "test", &all, &base, sim_selected)?
     } else {
-        run_units(ctx, &base, &all)?;
+        run_units(ctx, &base, &all, sim_selected)?;
         ShardPart::Ran(format!("{} unit(s)", all.len()))
     };
     Ok(Outcome::Done(match report {
@@ -1729,6 +1733,7 @@ fn run_shard_units(
     step: &str,
     all: &[shard::Unit],
     base: &[String],
+    sim_selected: bool,
 ) -> Result<ShardPart, String> {
     let part = shard_part(shard, step, all);
     let keys: Vec<String> = part.iter().map(shard::Unit::key).collect();
@@ -1742,7 +1747,7 @@ fn run_shard_units(
             keys.join(", ")
         }
     );
-    run_units(ctx, base, &part)?;
+    run_units(ctx, base, &part, sim_selected)?;
     if part.is_empty() {
         return Ok(ShardPart::Empty(format!(
             "none of the step's {} unit(s) falls to shard {shard}, so this shard ran none",
@@ -1758,14 +1763,21 @@ fn run_shard_units(
 
 /// Runs `base` (a `cargo test` command line up to its target selection, its
 /// first argument `test`) over `units`, one invocation per
-/// [`resolved::invocations`] entry. Before each runs, the same invocation is
-/// built with `--no-run --message-format=json` and [`resolved::faults`] reads
-/// the profile cargo resolved for every unit it built; a fault stops the step
-/// before a test runs. A doctest invocation, which cargo will not build without
-/// running, is checked through `cargo build --profile test --lib` over the same
-/// packages: the libraries a doctest links, the same artefacts.
-fn run_units(ctx: &Ctx, base: &[String], units: &[shard::Unit]) -> Result<(), String> {
-    let runs = resolved::invocations(units, true);
+/// [`resolved::invocations`] entry (`sim_selected`: whether the selection
+/// holds the sim's targets). Each invocation is one [`resolved::TestRun`], and
+/// its check and its run are both derived from it: before the tests run, the
+/// check builds the same thing with `--no-run --message-format=json` (a
+/// doctest invocation through [`resolved::doc_check`]) and
+/// [`resolved::faults`] reads the profile cargo resolved for every unit it
+/// built; a fault stops the step before a test runs. A flags variable in the
+/// environment is refused first.
+fn run_units(
+    ctx: &Ctx,
+    base: &[String],
+    units: &[shard::Unit],
+    sim_selected: bool,
+) -> Result<(), String> {
+    let runs = resolved::invocations(units, sim_selected);
     if runs.is_empty() {
         return Ok(());
     }
@@ -1778,70 +1790,102 @@ fn run_units(ctx: &Ctx, base: &[String], units: &[shard::Unit]) -> Result<(), St
             base.join(" ")
         ));
     };
+    refuse_flags_in_environment()?;
     let graph = sim_graph(ctx)?;
-    let locked: Vec<String> = if ctx.locked {
-        vec!["--locked".to_owned()]
-    } else {
-        Vec::new()
-    };
-    for invocation in runs {
-        let config = resolved::TestRun {
-            selection: Vec::new(),
-            invocation: invocation.clone(),
-            locked: false,
+    let workspace = metadata(ctx)?;
+    for invocation in &runs {
+        if invocation.sim != resolved::SimRule::Unoptimised {
+            continue;
         }
-        .run()
-        .config
-        .into_iter()
-        .flat_map(|value| ["--config".to_owned(), value])
-        .collect::<Vec<_>>();
-        let doc = invocation.selectors == ["--doc"];
-        let check: Vec<String> = if doc {
-            [
-                config.as_slice(),
-                &["build".to_owned()],
-                selection,
-                &[
-                    "--profile".to_owned(),
-                    "test".to_owned(),
-                    "--lib".to_owned(),
-                ],
-            ]
-            .concat()
-        } else {
-            [
-                config.as_slice(),
-                base,
-                &invocation.selectors,
-                &["--no-run".to_owned()],
-            ]
-            .concat()
+        let ["--test", name] = invocation
+            .selectors
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()[..]
+        else {
+            return Err(format!(
+                "an unoptimised invocation selects one test target, and this one selects `{}`",
+                invocation.selectors.join(" ")
+            ));
         };
-        let check = [
-            check.as_slice(),
-            &["--message-format=json".to_owned()],
-            &locked,
-        ]
-        .concat();
-        let messages = capture_stdout(ctx, &ctx.cargo, &check)?;
-        let built = resolved::parse_messages(&messages).map_err(|fault| fault.to_string())?;
-        let faults = resolved::faults(&built, &graph, resolved::Expect::suite(invocation.sim));
-        if !faults.is_empty() {
-            return Err(faults
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join("; "));
-        }
-        let args = [config.as_slice(), base, &invocation.selectors, &locked].concat();
-        run(ctx, &ctx.cargo, &args)?;
+        resolved::check_owners(name, &test_target_owners(workspace, name), &graph)
+            .map_err(|fault| fault.to_string())?;
+    }
+    for invocation in runs {
+        let test = resolved::TestRun {
+            selection: selection.to_vec(),
+            invocation,
+            locked: ctx.locked,
+        };
+        checked_build(ctx, &test.check(), &graph, test.expect())?;
+        run_cargo(ctx, &test.run())?;
     }
     Ok(())
 }
 
+/// The workspace packages that own a test target called `name`: the ones
+/// `cargo test --workspace --test <name>` selects.
+fn test_target_owners(workspace: &Workspace, name: &str) -> Vec<String> {
+    workspace
+        .packages
+        .iter()
+        .filter(|package| {
+            package
+                .targets
+                .iter()
+                .any(|target| target.name == name && target.kinds.iter().any(|kind| kind == "test"))
+        })
+        .map(|package| package.name.clone())
+        .collect()
+}
+
+/// Refuses a flags variable set in the environment ([`resolved::flag_variables`]),
+/// before anything builds: a checked build pins its own flags, so it would
+/// override the variable in silence.
+pub(crate) fn refuse_flags_in_environment() -> Result<(), String> {
+    let found =
+        resolved::flag_variables(env::vars_os().filter_map(|(name, value)| {
+            Some((name.into_string().ok()?, value.into_string().ok()?))
+        }));
+    // A variable whose name or value is not Unicode cannot be a flag this
+    // reads, but it can be one cargo reads: refuse it too.
+    let unreadable: Vec<String> = env::vars_os()
+        .filter(|(name, value)| name.to_str().is_none() || value.to_str().is_none())
+        .filter_map(|(name, _)| {
+            let name = name.to_string_lossy().into_owned();
+            resolved::is_flag_variable(&name).then_some(name)
+        })
+        .collect();
+    let all: Vec<String> = found.into_iter().chain(unreadable).collect();
+    resolved::refuse_flag_variables(&all).map_err(|fault| fault.to_string())
+}
+
+/// Makes `call`, a build that reports itself (`--message-format=json`), and
+/// holds every unit it built to `expect` ([`resolved::faults`]). Returns the
+/// units, so a caller can take an executable from them.
+pub(crate) fn checked_build(
+    ctx: &Ctx,
+    call: &resolved::CargoCall,
+    graph: &resolved::Graph,
+    expect: resolved::Expect,
+) -> Result<Vec<resolved::Built>, String> {
+    let messages = capture_cargo(ctx, call)?;
+    let built = resolved::parse_messages(&messages).map_err(|fault| fault.to_string())?;
+    let faults = resolved::faults(&built, graph, expect);
+    if faults.is_empty() {
+        Ok(built)
+    } else {
+        Err(faults
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("; "))
+    }
+}
+
 /// The package graph [`resolved::faults`] judges by, from `cargo metadata`
 /// with its dependencies (the cached metadata has none).
-fn sim_graph(ctx: &Ctx) -> Result<resolved::Graph, String> {
+pub(crate) fn sim_graph(ctx: &Ctx) -> Result<resolved::Graph, String> {
     let mut args: Vec<String> = ["metadata", "--format-version", "1"]
         .map(str::to_owned)
         .to_vec();
@@ -1850,6 +1894,72 @@ fn sim_graph(ctx: &Ctx) -> Result<resolved::Graph, String> {
     }
     let text = capture(ctx, &ctx.cargo, &args)?;
     resolved::graph(&text).map_err(|fault| fault.to_string())
+}
+
+/// The environment of `call`, printed before its command line.
+fn render_call(ctx: &Ctx, call: &resolved::CargoCall) -> String {
+    let mut prefix = String::new();
+    for (key, value) in &call.env {
+        prefix.push_str(key);
+        prefix.push_str("=\"");
+        prefix.push_str(value);
+        prefix.push_str("\" ");
+    }
+    format!(
+        "{prefix}{}",
+        render_command(&ctx.cargo, &call.command_line())
+    )
+}
+
+/// Runs `call` with its environment.
+fn run_cargo(ctx: &Ctx, call: &resolved::CargoCall) -> Result<(), String> {
+    println!("   $ {}", render_call(ctx, call));
+    let mut command = child_command(
+        ctx.require_tools,
+        &ctx.cargo,
+        &call.command_line(),
+        &ctx.root,
+    );
+    command.envs(call.env.iter().map(|(key, value)| (key, value)));
+    let status = command
+        .status()
+        .map_err(|error| format!("failed to launch `{}`: {error}", ctx.cargo))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "`{}` failed ({})",
+            render_call(ctx, call),
+            describe_exit(status)
+        ))
+    }
+}
+
+/// Runs `call` with its environment; its stderr goes to ours (the build's
+/// progress, warnings and errors as they happen) and its stdout, the
+/// machine-readable answer, is returned.
+fn capture_cargo(ctx: &Ctx, call: &resolved::CargoCall) -> Result<String, String> {
+    println!("   $ {}", render_call(ctx, call));
+    let mut command = child_command(
+        ctx.require_tools,
+        &ctx.cargo,
+        &call.command_line(),
+        &ctx.root,
+    );
+    command.envs(call.env.iter().map(|(key, value)| (key, value)));
+    let output = command
+        .stderr(Stdio::inherit())
+        .output()
+        .map_err(|error| format!("failed to launch `{}`: {error}", ctx.cargo))?;
+    if !output.status.success() {
+        return Err(format!(
+            "`{}` failed ({})",
+            render_call(ctx, call),
+            describe_exit(output.status)
+        ));
+    }
+    String::from_utf8(output.stdout)
+        .map_err(|error| format!("`{}` produced non-UTF-8 output: {error}", ctx.cargo))
 }
 
 /// What a shard did with its part of a step: ran it, or held none of it, in
@@ -1909,7 +2019,7 @@ fn step_test_research(ctx: &Ctx) -> Result<Outcome, String> {
     .map_err(|error| error.to_string())?;
     if let Some(shard) = ctx.shard {
         return Ok(Outcome::Done(
-            match run_shard_units(ctx, shard, "test-research", &all, &args)? {
+            match run_shard_units(ctx, shard, "test-research", &all, &args, true)? {
                 ShardPart::Ran(part) => format!(
                     "{part}; tests pass with {feature}, each invocation's resolved profile \
                      checked first"
@@ -1918,7 +2028,7 @@ fn step_test_research(ctx: &Ctx) -> Result<Outcome, String> {
             },
         ));
     }
-    run_units(ctx, &args, &all)?;
+    run_units(ctx, &args, &all, true)?;
     Ok(Outcome::Done(format!(
         "tests pass with {feature}, each invocation's resolved profile checked first; no other \
          crate's code reads the feature, and clippy's research pass compiles every \
@@ -2409,24 +2519,43 @@ fn step_determinism(ctx: &Ctx) -> Result<Outcome, String> {
             .map_err(|error| format!("removing {}: {error}", hash_path.display()))?;
     }
 
+    // The cross-OS hash gate's build, checked as it is made: every workspace
+    // unit with overflow checks and debug assertions on, which
+    // `release-checked` promises ([`resolved::Expect::RELEASE_CHECKED`]), and
+    // its flags pinned to none. The binary is then run from the path the
+    // build reported, so what is checked is what runs.
+    refuse_flags_in_environment()?;
+    let graph = sim_graph(ctx)?;
     let mut args: Vec<String> = vec![
-        "run".to_owned(),
+        "build".to_owned(),
         "--profile".to_owned(),
         DETERMINISM_PROFILE.to_owned(),
         "--package".to_owned(),
         owner,
         "--bin".to_owned(),
         DETERMINISM_BIN.to_owned(),
+        "--message-format=json".to_owned(),
     ];
     if ctx.locked {
         args.push("--locked".to_owned());
     }
-    args.push("--".to_owned());
-    args.push("--ticks".to_owned());
-    args.push(DETERMINISM_TICKS.to_owned());
-    args.push("--out".to_owned());
-    args.push(hash_path.to_string_lossy().into_owned());
-    run(ctx, &ctx.cargo, &args)?;
+    let call = resolved::CargoCall {
+        config: Vec::new(),
+        env: resolved::pinned_flags(""),
+        args,
+    };
+    let built = checked_build(ctx, &call, &graph, resolved::Expect::RELEASE_CHECKED)?;
+    let binary = determinism_executable(&built)?;
+    run(
+        ctx,
+        &binary,
+        &[
+            "--ticks".to_owned(),
+            DETERMINISM_TICKS.to_owned(),
+            "--out".to_owned(),
+            hash_path.to_string_lossy().into_owned(),
+        ],
+    )?;
 
     let ticks = validate_hash_file(&hash_path)?;
 
@@ -2469,18 +2598,25 @@ fn step_determinism(ctx: &Ctx) -> Result<Outcome, String> {
     }
 }
 
-/// Stub: the next commit lists the owners.
-#[cfg(test)]
-fn test_target_owners(workspace: &Workspace, name: &str) -> Vec<String> {
-    let _ = (workspace, name);
-    Vec::new()
-}
-
-/// Stub: the next commit reads the executable from the build's report.
-#[cfg(test)]
+/// The `determinism` binary's path, from the units its build reported: the
+/// one `bin` target of that name with an executable.
 fn determinism_executable(built: &[resolved::Built]) -> Result<String, String> {
-    let _ = built;
-    Err("not yet".to_owned())
+    let mut found = built.iter().filter(|unit| {
+        unit.target == DETERMINISM_BIN && unit.kinds.iter().any(|kind| kind == "bin")
+    });
+    match (found.next(), found.next()) {
+        (Some(unit), None) => unit.executable.clone().ok_or_else(|| {
+            format!("cargo reported the `{DETERMINISM_BIN}` binary with no executable")
+        }),
+        (None, _) => Err(format!(
+            "cargo's report of the `{DETERMINISM_PROFILE}` build names no `{DETERMINISM_BIN}` \
+             binary"
+        )),
+        (Some(_), Some(_)) => Err(format!(
+            "cargo's report of the `{DETERMINISM_PROFILE}` build names more than one \
+             `{DETERMINISM_BIN}` binary"
+        )),
+    }
 }
 
 /// What the `determinism` step makes of the fresh chain.
@@ -4041,7 +4177,15 @@ impl JsonParser<'_> {
         }
         loop {
             self.skip_whitespace();
+            let at = self.index;
             let key = self.string()?;
+            // A repeated key has no one value: refused, never read as the
+            // first or the last.
+            if members.iter().any(|(name, _)| *name == key) {
+                return Err(format!(
+                    "the key `{key}` appears twice in one object, at byte {at}"
+                ));
+            }
             self.skip_whitespace();
             self.expect(b':')?;
             let value = self.value()?;
@@ -4109,17 +4253,36 @@ impl JsonParser<'_> {
                         b'r' => out.push('\r'),
                         b't' => out.push('\t'),
                         b'u' => {
-                            let end = self.index + 4;
-                            let code = {
-                                let digits = self.slice(self.index, end)?;
-                                u32::from_str_radix(digits, 16)
-                                    .map_err(|error| format!("bad \\u escape: {error}"))?
+                            let code = self.hex4()?;
+                            // A character beyond the Basic Multilingual Plane
+                            // is a surrogate pair; a surrogate without its
+                            // other half is not a character, and is refused
+                            // rather than read as U+FFFD.
+                            let character = match code {
+                                0xD800..=0xDBFF => {
+                                    self.literal("\\u").map_err(|_| {
+                                        format!("an unpaired high surrogate \\u{code:04x}")
+                                    })?;
+                                    let low = self.hex4()?;
+                                    if !(0xDC00..=0xDFFF).contains(&low) {
+                                        return Err(format!(
+                                            "the high surrogate \\u{code:04x} is followed by \
+                                             \\u{low:04x}, not a low surrogate"
+                                        ));
+                                    }
+                                    char::from_u32(
+                                        0x1_0000 + ((code - 0xD800) << 10) + (low - 0xDC00),
+                                    )
+                                }
+                                0xDC00..=0xDFFF => {
+                                    return Err(format!("an unpaired low surrogate \\u{code:04x}"));
+                                }
+                                _ => char::from_u32(code),
                             };
-                            self.index = end;
-                            // cargo metadata never emits surrogate pairs; an
-                            // unpaired surrogate becomes U+FFFD rather than
-                            // failing the whole run.
-                            out.push(char::from_u32(code).unwrap_or('\u{fffd}'));
+                            out.push(
+                                character
+                                    .ok_or_else(|| format!("\\u{code:04x} is not a character"))?,
+                            );
                         }
                         other => {
                             return Err(format!("unknown JSON escape `\\{}`", char::from(other)));
@@ -4144,6 +4307,19 @@ impl JsonParser<'_> {
                 }
             }
         }
+    }
+
+    /// Four hex digits of a `\u` escape, as a code unit.
+    fn hex4(&mut self) -> Result<u32, String> {
+        let end = self.index + 4;
+        let digits = self.slice(self.index, end)?;
+        if !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(format!("bad \\u escape `{digits}`"));
+        }
+        let code =
+            u32::from_str_radix(digits, 16).map_err(|error| format!("bad \\u escape: {error}"))?;
+        self.index = end;
+        Ok(code)
     }
 
     fn number(&mut self) -> Result<Json, String> {
@@ -4274,26 +4450,6 @@ fn capture(ctx: &Ctx, program: &str, args: &[String]) -> Result<String, String> 
             render_command(program, args),
             describe_exit(output.status),
             String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    String::from_utf8(output.stdout)
-        .map_err(|error| format!("`{program}` produced non-UTF-8 output: {error}"))
-}
-
-/// Like [`capture`], but the child's stderr goes to ours: for a build whose
-/// progress, warnings and errors the reader should see as they happen, and
-/// whose stdout is the machine-readable answer.
-fn capture_stdout(ctx: &Ctx, program: &str, args: &[String]) -> Result<String, String> {
-    println!("   $ {}", render_command(program, args));
-    let output = child_command(ctx.require_tools, program, args, &ctx.root)
-        .stderr(Stdio::inherit())
-        .output()
-        .map_err(|error| format!("failed to launch `{program}`: {error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "`{}` failed ({})",
-            render_command(program, args),
-            describe_exit(output.status)
         ));
     }
     String::from_utf8(output.stdout)

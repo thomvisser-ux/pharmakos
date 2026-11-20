@@ -18,9 +18,11 @@
 //!    is asserted to have that prefix);
 //! 2. build the client library with `--profile release-client` (item 117 (4))
 //!    and `gamectl` with `--release`, both for the host triple; on Windows with
-//!    `+crt-static` through `CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS`, for
-//!    these two builds only, refusing when `RUSTFLAGS` or
-//!    `CARGO_ENCODED_RUSTFLAGS` would replace it (item 117 (5));
+//!    `+crt-static` (item 117 (5)), carried by `CARGO_ENCODED_RUSTFLAGS` in
+//!    the builds' own values, which no other source of rustflags can add to,
+//!    and with no flags on Linux; refusing when a flags variable is set in the
+//!    environment; each build checked from its own `--message-format=json`:
+//!    every workspace unit with overflow checks on (`crate::resolved`);
 //! 3. on Windows, byte-scan both binaries for the C runtime's DLL names, and
 //!    fail on a hit;
 //! 4. copy `godot/` without `.godot/` and `bin/` into the stage, stage the
@@ -59,9 +61,9 @@ use std::process::{ExitStatus, Stdio};
 
 use crate::{
     CLIENT_PACKAGE, CLIENT_STAGE_DIR, Ctx, ENTRY_SYMBOL, GDEXTENSION_FILE, GODOT_PROJECT_DIR,
-    SCENARIO_BIN, child_command, contains_bytes, describe_exit, find_bytes, first_difference,
-    godot_program, import_project, metadata, render_command, run, scenario, tool_available, walk,
-    zip,
+    SCENARIO_BIN, checked_build, child_command, contains_bytes, describe_exit, find_bytes,
+    first_difference, godot_program, import_project, metadata, refuse_flags_in_environment,
+    render_command, resolved, run, scenario, sim_graph, tool_available, walk, zip,
 };
 
 /// The version string of every zip until the wk-35.5 release (item 117 (2)).
@@ -99,25 +101,15 @@ const GOLDEN_AREA: [&str; 3] = ["tests", "golden", "package"];
 /// and `bcryptprimitives.dll` are the operating system's and are not here.
 const CRT_NEEDLES: &[&str] = &["vcruntime", "msvcp", "ucrtbase", "api-ms-win-crt-"];
 
-/// The Windows target's rustflags variable, which carries `+crt-static` into
-/// `package`'s own two builds and nowhere else.
-const CRT_STATIC_VARIABLE: &str = "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS";
+/// The one flag `package`'s two builds pass, on Windows alone: the static C
+/// runtime (item 117 (5)). It reaches rustc through
+/// [`resolved::ENCODED_RUSTFLAGS`] in the build's own value
+/// ([`build_calls`]), which cargo reads before every other source of
+/// rustflags, so the two builds carry exactly this flag on Windows and none on
+/// Linux, whatever a config file says.
 const CRT_STATIC_FLAGS: &str = "-C target-feature=+crt-static";
 /// [`CRT_STATIC_FLAGS`] in cargo's encoding: one argument.
-#[cfg(test)]
 const CRT_STATIC_ENCODED: &str = "-Ctarget-feature=+crt-static";
-
-/// Stub: the next commit makes the two builds values.
-#[cfg(test)]
-fn build_calls(platform: &Platform, locked: bool) -> [crate::resolved::CargoCall; 2] {
-    let _ = (platform, locked);
-    let empty = || crate::resolved::CargoCall {
-        config: Vec::new(),
-        env: Vec::new(),
-        args: Vec::new(),
-    };
-    [empty(), empty()]
-}
 
 /// The godot-rust crates: MPL-2.0, and shipping no licence file of their own.
 /// The first four are linked into the client library; the last three run at
@@ -204,17 +196,9 @@ pub(crate) fn run_package(ctx: &Ctx) -> Result<String, String> {
             platform.triple
         ));
     }
-    if platform.name == "windows" {
-        for variable in ["RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS"] {
-            if env::var_os(variable).is_some() {
-                return Err(format!(
-                    "{variable} is set, and it would replace {CRT_STATIC_VARIABLE}, which carries \
-                     `{CRT_STATIC_FLAGS}` into this command's two builds (decisions-log item \
-                     117 (5)); unset {variable} and run it again"
-                ));
-            }
-        }
-    }
+    // The two builds pin their own flags, so a flags variable the caller set
+    // would be overridden in silence: refused by name, on every platform.
+    refuse_flags_in_environment()?;
 
     let godot = godot_program();
     if !tool_available(ctx, &godot) {
@@ -725,52 +709,66 @@ fn rustc_version(ctx: &Ctx) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
-/// The environment `package`'s own builds run with: `+crt-static` for the
-/// Windows target, and nothing else.
+/// The environment `package`'s own builds run with: their rustflags pinned to
+/// [`CRT_STATIC_FLAGS`] on Windows and to none on Linux, from every source.
 fn build_env(platform: &Platform) -> Vec<(String, String)> {
-    if platform.name == "windows" {
-        vec![(CRT_STATIC_VARIABLE.to_owned(), CRT_STATIC_FLAGS.to_owned())]
+    resolved::pinned_flags(if platform.name == "windows" {
+        CRT_STATIC_ENCODED
     } else {
-        Vec::new()
-    }
+        ""
+    })
+}
+
+/// The two builds, as values: the client library with `release-client` and
+/// `gamectl` with `--release`, both for the host triple, both reporting
+/// themselves (`--message-format=json`) so they are checked as they are made,
+/// both with [`build_env`]'s flags and nothing else.
+fn build_calls(platform: &Platform, locked: bool) -> [resolved::CargoCall; 2] {
+    let call = |args: &[&str]| {
+        let mut args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
+        args.push("--message-format=json".to_owned());
+        if locked {
+            args.push("--locked".to_owned());
+        }
+        resolved::CargoCall {
+            config: Vec::new(),
+            env: build_env(platform),
+            args,
+        }
+    };
+    [
+        call(&[
+            "build",
+            "--profile",
+            "release-client",
+            "--target",
+            platform.triple,
+            "--package",
+            CLIENT_PACKAGE,
+            "--lib",
+        ]),
+        call(&[
+            "build",
+            "--release",
+            "--target",
+            platform.triple,
+            "--package",
+            "pharmakos-gamectl",
+            "--bin",
+            SCENARIO_BIN,
+        ]),
+    ]
 }
 
 /// Builds the client library and `gamectl` for the host triple; returns both
 /// paths.
 fn build(ctx: &Ctx, platform: &Platform, target: &Path) -> Result<(PathBuf, PathBuf), String> {
-    let environment = build_env(platform);
-    let mut client: Vec<String> = [
-        "build",
-        "--profile",
-        "release-client",
-        "--target",
-        platform.triple,
-        "--package",
-        CLIENT_PACKAGE,
-        "--lib",
-    ]
-    .iter()
-    .map(|arg| (*arg).to_owned())
-    .collect();
-    let mut host: Vec<String> = [
-        "build",
-        "--release",
-        "--target",
-        platform.triple,
-        "--package",
-        "pharmakos-gamectl",
-        "--bin",
-        SCENARIO_BIN,
-    ]
-    .iter()
-    .map(|arg| (*arg).to_owned())
-    .collect();
-    if ctx.locked {
-        client.push("--locked".to_owned());
-        host.push("--locked".to_owned());
+    // Checked as they are made: every workspace unit with overflow checks on,
+    // which both release profiles promise ([`resolved::Expect::RELEASE`]).
+    let graph = sim_graph(ctx)?;
+    for call in build_calls(platform, ctx.locked) {
+        checked_build(ctx, &call, &graph, resolved::Expect::RELEASE)?;
     }
-    run_with_env(ctx, &ctx.cargo, &client, &environment)?;
-    run_with_env(ctx, &ctx.cargo, &host, &environment)?;
     let library = target
         .join(platform.triple)
         .join("release-client")
@@ -789,35 +787,6 @@ fn build(ctx: &Ctx, platform: &Platform, target: &Path) -> Result<(PathBuf, Path
         }
     }
     Ok((library, gamectl))
-}
-
-fn run_with_env(
-    ctx: &Ctx,
-    program: &str,
-    args: &[String],
-    environment: &[(String, String)],
-) -> Result<(), String> {
-    let prefix: Vec<String> = environment
-        .iter()
-        .map(|(key, value)| format!("{key}=\"{value}\" "))
-        .collect();
-    println!("   $ {}{}", prefix.concat(), render_command(program, args));
-    let mut command = child_command(ctx.require_tools, program, args, &ctx.root);
-    for (key, value) in environment {
-        command.env(key, value);
-    }
-    let status = command
-        .status()
-        .map_err(|error| format!("failed to launch `{program}`: {error}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!(
-            "`{}` failed ({})",
-            render_command(program, args),
-            describe_exit(status)
-        ))
-    }
 }
 
 /// Runs a command with its standard output and error both written to `log`.

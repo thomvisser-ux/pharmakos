@@ -54,13 +54,6 @@
 //! before. The invocation selects every target of that name, so it is exempt
 //! for exactly the packages [`UNOPTIMISED_OWNERS`] names.
 
-#![expect(
-    dead_code,
-    clippy::unnecessary_wraps,
-    clippy::unused_self,
-    reason = "the tests come first: the next commit implements the checks"
-)]
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
@@ -130,8 +123,13 @@ pub(crate) fn is_flag_variable(name: &str) -> bool {
 pub(crate) fn flag_variables(
     environment: impl IntoIterator<Item = (String, String)>,
 ) -> Vec<String> {
-    let _ = environment.into_iter().count();
-    Vec::new()
+    let mut found: Vec<String> = environment
+        .into_iter()
+        .filter(|(name, value)| is_flag_variable(name) && !value.is_empty())
+        .map(|(name, _)| name)
+        .collect();
+    found.sort();
+    found
 }
 
 /// The refusal for [`flag_variables`]' answer, or `Ok` when it is empty.
@@ -251,14 +249,33 @@ pub(crate) struct Invocation {
 /// `sim_selected` is false the selection holds no sim target of those names,
 /// so they run with the rest.
 pub(crate) fn invocations(units: &[Unit], sim_selected: bool) -> Vec<Invocation> {
-    let _ = sim_selected;
-    crate::shard::selectors(units)
+    let unoptimised = |unit: &Unit| {
+        sim_selected
+            && matches!(unit, Unit::Test(name) if UNOPTIMISED_TESTS.contains(&name.as_str()))
+    };
+    let optimised: Vec<Unit> = units
+        .iter()
+        .filter(|unit| !unoptimised(unit))
+        .cloned()
+        .collect();
+    let mut out: Vec<Invocation> = crate::shard::selectors(&optimised)
         .into_iter()
         .map(|selectors| Invocation {
             selectors,
             sim: SimRule::OptimisedIfBuilt,
         })
-        .collect()
+        .collect();
+    for unit in units.iter().filter(|unit| unoptimised(unit)) {
+        out.extend(
+            crate::shard::selectors(std::slice::from_ref(unit))
+                .into_iter()
+                .map(|selectors| Invocation {
+                    selectors,
+                    sim: SimRule::Unoptimised,
+                }),
+        );
+    }
+    out
 }
 
 /// Holds `owners`, the packages owning a test target called `test`, to
@@ -269,8 +286,31 @@ pub(crate) fn check_owners(
     owners: &[String],
     graph: &Graph,
 ) -> Result<(), ProfileFault> {
-    let _ = (test, owners, graph);
-    Err(ProfileFault::Metadata("not yet".to_owned()))
+    let mut found: Vec<String> = owners.to_vec();
+    found.sort();
+    found.dedup();
+    let mut table: Vec<String> = UNOPTIMISED_OWNERS
+        .iter()
+        .filter(|(name, _, _)| *name == test)
+        .map(|(_, package, _)| (*package).to_owned())
+        .collect();
+    table.sort();
+    if found != table {
+        return Err(ProfileFault::OwnersChanged {
+            test: test.to_owned(),
+            owners: found,
+            table,
+        });
+    }
+    for package in found.iter().filter(|package| package.as_str() != SIM) {
+        if graph.reaches(package, SIM)? {
+            return Err(ProfileFault::OwnerReachesSim {
+                test: test.to_owned(),
+                package: package.clone(),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// One test invocation, the single description both its check and its run
@@ -446,8 +486,17 @@ impl Graph {
     /// Whether the package called `from` depends on the one called `to`,
     /// through any chain of dependencies of any kind.
     pub(crate) fn reaches(&self, from: &str, to: &str) -> Result<bool, ProfileFault> {
-        let _ = (from, to);
-        Ok(false)
+        let id_of = |name: &str| {
+            self.names
+                .iter()
+                .find(|(_, package)| package.as_str() == name)
+                .map(|(id, _)| id.clone())
+                .ok_or_else(|| ProfileFault::Metadata(format!("no package is called {name}")))
+        };
+        let (from, to) = (id_of(from)?, id_of(to)?);
+        Ok(reach(&self.edges, std::slice::from_ref(&from), None)
+            .into_iter()
+            .any(|id| id == to && id != from))
     }
 }
 
@@ -677,22 +726,253 @@ const REASONS: &[&str] = &[
 /// and the stream must end in exactly one `build-finished` that says the
 /// build succeeded.
 pub(crate) fn parse_messages(text: &str) -> Result<Vec<Built>, ProfileFault> {
-    let _ = text;
-    Ok(Vec::new())
+    let mut built: Vec<Built> = Vec::new();
+    let mut finished = false;
+    let mut any = false;
+    // Numbered from 1 by a range that cannot overflow: a string holds fewer
+    // lines than bytes, and fewer bytes than `usize::MAX`.
+    for (line, text) in (1_usize..).zip(text.lines()) {
+        if text.trim().is_empty() {
+            continue;
+        }
+        any = true;
+        if finished {
+            return Err(ProfileFault::FinishedTwice { line });
+        }
+        let unreadable = |why: String| ProfileFault::Unreadable { line, why };
+        let message = Json::parse(text).map_err(unreadable)?;
+        let reason = string_of(&message, "reason").map_err(unreadable)?;
+        if !REASONS.contains(&reason) {
+            return Err(ProfileFault::UnknownReason {
+                line,
+                reason: reason.to_owned(),
+            });
+        }
+        if reason == "build-finished" {
+            if !bool_of(&message, "success").map_err(unreadable)? {
+                return Err(ProfileFault::BuildFailed);
+            }
+            finished = true;
+            continue;
+        }
+        if reason != "compiler-artifact" {
+            continue;
+        }
+        let target = member(&message, "target").map_err(unreadable)?;
+        let profile = member(&message, "profile").map_err(unreadable)?;
+        let level = string_of(profile, "opt_level").map_err(unreadable)?;
+        let opt_level = OptLevel::parse(level).ok_or_else(|| ProfileFault::BadOptLevel {
+            line,
+            value: level.to_owned(),
+        })?;
+        let kinds = array_of(target, "kind")
+            .and_then(|kinds| {
+                kinds
+                    .iter()
+                    .map(|kind| {
+                        kind.as_str()
+                            .map(str::to_owned)
+                            .ok_or_else(|| "a target kind is not a string".to_owned())
+                    })
+                    .collect::<Result<Vec<String>, String>>()
+            })
+            .map_err(unreadable)?;
+        let executable = match member(&message, "executable").map_err(unreadable)? {
+            Json::Null => None,
+            Json::Str(path) => Some(path.clone()),
+            _ => {
+                return Err(unreadable(
+                    "`executable` is neither null nor a string".to_owned(),
+                ));
+            }
+        };
+        built.push(Built {
+            package_id: string_of(&message, "package_id")
+                .map_err(unreadable)?
+                .to_owned(),
+            target: string_of(target, "name").map_err(unreadable)?.to_owned(),
+            kinds,
+            opt_level,
+            debug_assertions: bool_of(profile, "debug_assertions").map_err(unreadable)?,
+            overflow_checks: bool_of(profile, "overflow_checks").map_err(unreadable)?,
+            executable,
+        });
+    }
+    if !any {
+        return Err(ProfileFault::NothingBuilt);
+    }
+    if !finished {
+        return Err(ProfileFault::Unfinished);
+    }
+    Ok(built)
 }
 
 /// The graph [`faults`] needs, from `cargo metadata --format-version 1`
 /// (with its dependencies, so with `resolve`).
 pub(crate) fn graph(metadata: &str) -> Result<Graph, ProfileFault> {
-    let _ = metadata;
-    Ok(Graph::default())
+    let fault = ProfileFault::Metadata;
+    let json = Json::parse(metadata).map_err(fault)?;
+    let mut graph = Graph::default();
+    let mut proc_macros: BTreeSet<String> = BTreeSet::new();
+    for package in array_of(&json, "packages").map_err(fault)? {
+        let id = string_of(package, "id").map_err(fault)?;
+        let name = string_of(package, "name").map_err(fault)?;
+        if name == SIM {
+            graph.sim = Some(id.to_owned());
+        }
+        for target in array_of(package, "targets").map_err(fault)? {
+            let kinds = array_of(target, "kind").map_err(fault)?;
+            if kinds.iter().any(|kind| kind.as_str() == Some("proc-macro")) {
+                proc_macros.insert(id.to_owned());
+            }
+        }
+        graph.names.insert(id.to_owned(), name.to_owned());
+    }
+    for id in array_of(&json, "workspace_members").map_err(fault)? {
+        let id = id
+            .as_str()
+            .ok_or_else(|| "a workspace member is not a string".to_owned())
+            .map_err(fault)?;
+        graph.members.insert(id.to_owned());
+    }
+    let nodes = member(&json, "resolve")
+        .and_then(|resolve| array_of(resolve, "nodes"))
+        .map_err(fault)?;
+    // Each package's normal dependencies (a `dep_kinds` entry whose `kind` is
+    // null, whatever its platform), and its dependencies of every kind.
+    let mut normal: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for node in nodes {
+        let id = string_of(node, "id").map_err(fault)?;
+        let mut normal_out: Vec<String> = Vec::new();
+        let mut all_out: Vec<String> = Vec::new();
+        for dep in array_of(node, "deps").map_err(fault)? {
+            let pkg = string_of(dep, "pkg").map_err(fault)?;
+            let kinds = array_of(dep, "dep_kinds").map_err(fault)?;
+            if kinds.is_empty() {
+                return Err(ProfileFault::Metadata(format!(
+                    "{id}'s dependency {pkg} has no dependency kind"
+                )));
+            }
+            let mut is_normal = false;
+            for kind in kinds {
+                match member(kind, "kind").map_err(fault)? {
+                    Json::Null => is_normal = true,
+                    Json::Str(_) => {}
+                    _ => {
+                        return Err(ProfileFault::Metadata(
+                            "a dependency kind is neither null nor a string".to_owned(),
+                        ));
+                    }
+                }
+            }
+            all_out.push(pkg.to_owned());
+            // A proc-macro runs in the compiler, not in the sim: neither it
+            // nor what only it reaches is code the sim runs.
+            if is_normal && !proc_macros.contains(pkg) {
+                normal_out.push(pkg.to_owned());
+            }
+        }
+        normal.insert(id.to_owned(), normal_out);
+        graph.edges.insert(id.to_owned(), all_out);
+    }
+    let Some(sim) = graph.sim.clone() else {
+        return Err(ProfileFault::Metadata(format!(
+            "no package is called {SIM}"
+        )));
+    };
+    let Some(first) = normal.get(&sim) else {
+        return Err(ProfileFault::Metadata(format!(
+            "{SIM} has no node in the resolve graph"
+        )));
+    };
+    let mut closure = reach(&normal, first, None);
+    closure.remove(&sim);
+    graph.sim_closure = closure;
+    // The godot family: everything the `godot` package reaches, less what
+    // any workspace member reaches without passing through it.
+    if let Some(godot) = graph
+        .names
+        .iter()
+        .find(|(_, name)| name.as_str() == "godot")
+        .map(|(id, _)| id.clone())
+    {
+        let members: Vec<String> = graph.members.iter().cloned().collect();
+        let elsewhere = reach(&graph.edges, &members, Some(godot.as_str()));
+        graph.godot_family = reach(&graph.edges, &[godot], None)
+            .into_iter()
+            .filter(|id| !elsewhere.contains(id))
+            .collect();
+    }
+    Ok(graph)
 }
 
 /// Every way `built` breaks `expect` (the module docs). Empty when it keeps
 /// it.
 pub(crate) fn faults(built: &[Built], graph: &Graph, expect: Expect) -> Vec<ProfileFault> {
-    let _ = (built, graph, expect);
-    Vec::new()
+    let mut faults: Vec<ProfileFault> = Vec::new();
+    let mut sim_built = false;
+    for unit in built {
+        let Some(package) = graph.names.get(&unit.package_id) else {
+            faults.push(ProfileFault::UnknownPackage {
+                package_id: unit.package_id.clone(),
+            });
+            continue;
+        };
+        let target = unit.target.clone();
+        if graph.members.contains(&unit.package_id) {
+            for (on, required, check) in [
+                (
+                    unit.debug_assertions,
+                    expect.debug_assertions,
+                    "debug assertions",
+                ),
+                (unit.overflow_checks, true, "overflow checks"),
+            ] {
+                if required && !on {
+                    faults.push(ProfileFault::CheckOff {
+                        package: package.clone(),
+                        target: target.clone(),
+                        check,
+                    });
+                }
+            }
+        }
+        if graph.sim.as_deref() == Some(unit.package_id.as_str()) {
+            sim_built = true;
+            match (expect.sim, unit.opt_level.optimised()) {
+                (SimRule::OptimisedIfBuilt, false) => {
+                    faults.push(ProfileFault::SimUnoptimised { target });
+                }
+                (SimRule::Unoptimised, true) => faults.push(ProfileFault::SimOptimised {
+                    target,
+                    opt_level: unit.opt_level,
+                }),
+                _ => {}
+            }
+        } else if expect.closure_optimised
+            && graph.sim_closure.contains(&unit.package_id)
+            && !graph.members.contains(&unit.package_id)
+            && !unit.opt_level.optimised()
+        {
+            faults.push(ProfileFault::DependencyUnoptimised {
+                package: package.clone(),
+                target,
+            });
+        } else if expect.godot_unoptimised
+            && graph.godot_family.contains(&unit.package_id)
+            && unit.opt_level.optimised()
+        {
+            faults.push(ProfileFault::GodotOptimised {
+                package: package.clone(),
+                target,
+                opt_level: unit.opt_level,
+            });
+        }
+    }
+    if expect.sim == SimRule::Unoptimised && !sim_built {
+        faults.push(ProfileFault::SimNotBuilt);
+    }
+    faults
 }
 
 #[cfg(test)]
