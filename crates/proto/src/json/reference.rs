@@ -32,7 +32,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use super::base64;
-use super::grammar::quoted;
+use super::grammar::{self, quoted};
 use super::value::{Error, ErrorKind, Json, is_integer_lexeme, is_misspelt_integer, push_pointer};
 use crate::descriptor::{Field, Message, ScalarKind, Schema, schema};
 use crate::wire::{
@@ -46,7 +46,7 @@ pub(super) fn read(text: &str) -> Result<Json, Error> {
     let value = reader.value(0)?;
     reader.skip_whitespace();
     if reader.pos < bytes.len() {
-        return Err(reader.error("trailing content after the JSON value"));
+        return Err(reader.error(grammar::TRAILING_CONTENT));
     }
     Ok(value)
 }
@@ -137,7 +137,7 @@ impl JsonReader<'_> {
                 Ok(Json::Null)
             }
             Some(_) => self.number(),
-            None => Err(self.error("the document ended where a value was expected")),
+            None => Err(self.error(grammar::ENDED_BEFORE_VALUE)),
         }
     }
 
@@ -169,7 +169,7 @@ impl JsonReader<'_> {
                     self.bump();
                     return Ok(Json::Object(entries));
                 }
-                _ => return Err(self.error("expected `,` or `}`")),
+                _ => return Err(self.error(grammar::EXPECTED_COMMA_OR_BRACE)),
             }
         }
     }
@@ -192,7 +192,7 @@ impl JsonReader<'_> {
                     self.bump();
                     return Ok(Json::Array(items));
                 }
-                _ => return Err(self.error("expected `,` or `]`")),
+                _ => return Err(self.error(grammar::EXPECTED_COMMA_OR_BRACKET)),
             }
         }
     }
@@ -203,7 +203,7 @@ impl JsonReader<'_> {
         self.bump();
         self.skip_whitespace();
         if self.peek() == Some(end) {
-            return Err(self.error(super::grammar::TRAILING_COMMA));
+            return Err(self.error(grammar::TRAILING_COMMA));
         }
         Ok(())
     }
@@ -214,7 +214,7 @@ impl JsonReader<'_> {
         loop {
             let byte = self
                 .peek()
-                .ok_or_else(|| self.error("unterminated string"))?;
+                .ok_or_else(|| self.error(grammar::UNTERMINATED_STRING))?;
             match byte {
                 b'"' => {
                     self.bump();
@@ -225,7 +225,7 @@ impl JsonReader<'_> {
                     self.escape(&mut out)?;
                 }
                 0x00..=0x1f => {
-                    return Err(self.error("a raw control character in a string"));
+                    return Err(self.error(grammar::RAW_CONTROL));
                 }
                 _ => {
                     // Copy one whole UTF-8 sequence, which `str` guarantees is
@@ -245,7 +245,7 @@ impl JsonReader<'_> {
                         .ok_or_else(|| self.error("truncated UTF-8"))?;
                     out.push_str(
                         std::str::from_utf8(slice)
-                            .map_err(|_| self.error("invalid UTF-8 in a string"))?,
+                            .map_err(|_| self.error(grammar::INVALID_UTF8))?,
                     );
                 }
             }
@@ -255,7 +255,7 @@ impl JsonReader<'_> {
     fn escape(&mut self, out: &mut String) -> Result<(), Error> {
         let byte = self
             .peek()
-            .ok_or_else(|| self.error("the document ended inside an escape"))?;
+            .ok_or_else(|| self.error(grammar::ENDED_IN_ESCAPE))?;
         self.bump();
         match byte {
             b'"' => out.push('"'),
@@ -273,18 +273,18 @@ impl JsonReader<'_> {
                     self.expect(b'u')?;
                     let second = self.hex4()?;
                     if !(0xdc00..0xe000).contains(&second) {
-                        return Err(self.error("a high surrogate without a low surrogate"));
+                        return Err(self.error(grammar::LONE_HIGH_SURROGATE));
                     }
                     let high = first.saturating_sub(0xd800) << 10;
                     let low = second.saturating_sub(0xdc00);
                     0x1_0000u32
                         .checked_add(high | low)
-                        .ok_or_else(|| self.error("a surrogate pair out of range"))?
+                        .ok_or_else(|| self.error(grammar::SURROGATE_OUT_OF_RANGE))?
                 } else {
                     first
                 };
                 let character =
-                    char::from_u32(code).ok_or_else(|| self.error("not a Unicode scalar value"))?;
+                    char::from_u32(code).ok_or_else(|| self.error(grammar::NOT_A_SCALAR))?;
                 out.push(character);
             }
             _ => {
@@ -300,7 +300,7 @@ impl JsonReader<'_> {
                 let end = start.saturating_add(width);
                 let Some(Ok(character)) = self.bytes.get(start..end).map(std::str::from_utf8)
                 else {
-                    return Err(self.error("invalid UTF-8 in a string"));
+                    return Err(self.error(grammar::INVALID_UTF8));
                 };
                 let character = character.to_owned();
                 self.pos = end;
@@ -318,14 +318,14 @@ impl JsonReader<'_> {
         for _ in 0..4 {
             let byte = self
                 .peek()
-                .ok_or_else(|| self.error("a short \\u escape"))?;
+                .ok_or_else(|| self.error(grammar::SHORT_U_ESCAPE))?;
             let digit = char::from(byte)
                 .to_digit(16)
-                .ok_or_else(|| self.error("a non-hexadecimal digit in a \\u escape"))?;
+                .ok_or_else(|| self.error(grammar::NON_HEX_DIGIT))?;
             value = value
                 .checked_mul(16)
                 .and_then(|shifted| shifted.checked_add(digit))
-                .ok_or_else(|| self.error("a \\u escape out of range"))?;
+                .ok_or_else(|| self.error(grammar::U_ESCAPE_OUT_OF_RANGE))?;
             self.bump();
         }
         Ok(value)
@@ -347,16 +347,16 @@ impl JsonReader<'_> {
             Some(b'0') => {
                 self.bump();
                 if at_digit(self) {
-                    return Err(self.error("a number with a leading zero"));
+                    return Err(self.error(grammar::LEADING_ZERO));
                 }
             }
             Some(b'1'..=b'9') => digits(self),
-            _ => return Err(self.error("expected a value")),
+            _ => return Err(self.error(grammar::EXPECTED_VALUE)),
         }
         if self.peek() == Some(b'.') {
             self.bump();
             if !at_digit(self) {
-                return Err(self.error("a number's fraction without a digit"));
+                return Err(self.error(grammar::FRACTION_WITHOUT_DIGIT));
             }
             digits(self);
         }
@@ -366,7 +366,7 @@ impl JsonReader<'_> {
                 self.bump();
             }
             if !at_digit(self) {
-                return Err(self.error("a number's exponent without a digit"));
+                return Err(self.error(grammar::EXPONENT_WITHOUT_DIGIT));
             }
             digits(self);
         }

@@ -88,6 +88,58 @@ pub fn whitespace_end(bytes: &[u8], at: usize) -> usize {
 /// The refusal of a comma with no member or item after it.
 pub const TRAILING_COMMA: &str = "a trailing comma: JSON has no member or item after it";
 
+// The grammar's other refusal words (S3's `vfyq2`, fix pass 1, item 13): one
+// table beside `TRAILING_COMMA`, so every reader built on this grammar says one
+// thing for one refusal and a test names a refusal by its constant. The words
+// that carry a value (`expected `true``, an unknown escape, a duplicate key, the
+// depth) are written where the value is known, through `quoted`.
+/// Where a value must start and none does.
+pub const EXPECTED_VALUE: &str = "expected a value";
+/// The text ended where a value must start.
+pub const ENDED_BEFORE_VALUE: &str = "the document ended where a value was expected";
+/// Anything but trivia after the document's one value.
+pub const TRAILING_CONTENT: &str = "trailing content after the JSON value";
+/// A member's key not followed by `:`.
+pub const EXPECTED_COLON: &str = "expected `:`";
+/// An object member not followed by `,` or `}`.
+pub const EXPECTED_COMMA_OR_BRACE: &str = "expected `,` or `}`";
+/// An array item not followed by `,` or `]`.
+pub const EXPECTED_COMMA_OR_BRACKET: &str = "expected `,` or `]`";
+/// `01`, which RFC 8259 does not allow.
+pub const LEADING_ZERO: &str = "a number with a leading zero";
+/// `1.` or `1.e3`.
+pub const FRACTION_WITHOUT_DIGIT: &str = "a number's fraction without a digit";
+/// `1e` or `1e+`.
+pub const EXPONENT_WITHOUT_DIGIT: &str = "a number's exponent without a digit";
+/// Where a string (a key) must start and none does.
+pub const EXPECTED_QUOTE: &str = "expected `\"`";
+/// A string the text ends inside.
+pub const UNTERMINATED_STRING: &str = "unterminated string";
+/// A control character written raw inside a string.
+pub const RAW_CONTROL: &str = "a raw control character in a string";
+/// Bytes inside a string that are not UTF-8.
+pub const INVALID_UTF8: &str = "invalid UTF-8 in a string";
+/// A `\` the text ends after.
+pub const ENDED_IN_ESCAPE: &str = "the document ended inside an escape";
+/// A high surrogate's escape not followed by another escape.
+pub const EXPECTED_BACKSLASH: &str = "expected `\\`";
+/// A high surrogate's escape followed by an escape that is not `\u`.
+pub const EXPECTED_U: &str = "expected `u`";
+/// A high surrogate followed by a `\u` that is not a low one.
+pub const LONE_HIGH_SURROGATE: &str = "a high surrogate without a low surrogate";
+/// A surrogate pair past U+10FFFF.
+pub const SURROGATE_OUT_OF_RANGE: &str = "a surrogate pair out of range";
+/// A `\u` escape naming a lone surrogate or no character.
+pub const NOT_A_SCALAR: &str = "not a Unicode scalar value";
+/// A `\u` with fewer than four digits before the text ends.
+pub const SHORT_U_ESCAPE: &str = "a short \\u escape";
+/// A `\u` escape with a digit that is not hexadecimal.
+pub const NON_HEX_DIGIT: &str = "a non-hexadecimal digit in a \\u escape";
+/// A `\u` escape's four digits not making a UTF-16 unit.
+pub const U_ESCAPE_OUT_OF_RANGE: &str = "a \\u escape out of range";
+/// A token whose end falls inside a character.
+pub const TOKEN_SPLITS_CHARACTER: &str = "a token ended inside a character";
+
 /// What the grammar refused, and where.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Refusal {
@@ -170,16 +222,16 @@ fn number_unmetered(bytes: &[u8], at: usize) -> Result<usize, Refusal> {
         Some(b'0') => {
             pos = pos.saturating_add(1);
             if digit(pos) {
-                return Err(Refusal::grammar(pos, "a number with a leading zero"));
+                return Err(Refusal::grammar(pos, LEADING_ZERO));
             }
         }
         Some(b'1'..=b'9') => pos = digits(pos),
-        _ => return Err(Refusal::grammar(pos, "expected a value")),
+        _ => return Err(Refusal::grammar(pos, EXPECTED_VALUE)),
     }
     if bytes.get(pos) == Some(&b'.') {
         pos = pos.saturating_add(1);
         if !digit(pos) {
-            return Err(Refusal::grammar(pos, "a number's fraction without a digit"));
+            return Err(Refusal::grammar(pos, FRACTION_WITHOUT_DIGIT));
         }
         pos = digits(pos);
     }
@@ -189,7 +241,7 @@ fn number_unmetered(bytes: &[u8], at: usize) -> Result<usize, Refusal> {
             pos = pos.saturating_add(1);
         }
         if !digit(pos) {
-            return Err(Refusal::grammar(pos, "a number's exponent without a digit"));
+            return Err(Refusal::grammar(pos, EXPONENT_WITHOUT_DIGIT));
         }
         pos = digits(pos);
     }
@@ -239,7 +291,7 @@ fn string_unmetered(
 ) -> Result<(usize, Body), Refusal> {
     let bytes = text.as_bytes();
     if bytes.get(at) != Some(&b'"') {
-        return Err(Refusal::grammar(at, "expected `\"`"));
+        return Err(Refusal::grammar(at, EXPECTED_QUOTE));
     }
     let start = at.saturating_add(1);
     let mut pos = start;
@@ -260,11 +312,11 @@ fn string_unmetered(
         {
             let piece = text
                 .get(run..pos)
-                .ok_or_else(|| Refusal::grammar(run, "invalid UTF-8 in a string"))?;
+                .ok_or_else(|| Refusal::grammar(run, INVALID_UTF8))?;
             out.push_str(piece);
         }
         match bytes.get(pos) {
-            None => return Err(Refusal::grammar(pos, "unterminated string")),
+            None => return Err(Refusal::grammar(pos, UNTERMINATED_STRING)),
             Some(b'"') => return Ok((pos.saturating_add(1), body)),
             Some(b'\\') => {
                 if body == Body::Plain {
@@ -273,13 +325,13 @@ fn string_unmetered(
                         out.clear();
                         let before = text
                             .get(start..pos)
-                            .ok_or_else(|| Refusal::grammar(start, "invalid UTF-8 in a string"))?;
+                            .ok_or_else(|| Refusal::grammar(start, INVALID_UTF8))?;
                         out.push_str(before);
                     }
                 }
                 pos = escape(text, pos.saturating_add(1), unescaped.as_deref_mut())?;
             }
-            Some(_) => return Err(Refusal::grammar(pos, "a raw control character in a string")),
+            Some(_) => return Err(Refusal::grammar(pos, RAW_CONTROL)),
         }
     }
 }
@@ -289,7 +341,7 @@ fn string_unmetered(
 fn escape(text: &str, at: usize, out: Option<&mut String>) -> Result<usize, Refusal> {
     let bytes = text.as_bytes();
     let Some(&byte) = bytes.get(at) else {
-        return Err(Refusal::grammar(at, "the document ended inside an escape"));
+        return Err(Refusal::grammar(at, ENDED_IN_ESCAPE));
     };
     let mut pos = at.saturating_add(1);
     let character = match byte {
@@ -306,38 +358,34 @@ fn escape(text: &str, at: usize, out: Option<&mut String>) -> Result<usize, Refu
             (first, pos) = hex4(bytes, pos)?;
             let code = if (0xd800..0xdc00).contains(&first) {
                 if bytes.get(pos) != Some(&b'\\') {
-                    return Err(Refusal::grammar(pos, "expected `\\`"));
+                    return Err(Refusal::grammar(pos, EXPECTED_BACKSLASH));
                 }
                 pos = pos.saturating_add(1);
                 if bytes.get(pos) != Some(&b'u') {
-                    return Err(Refusal::grammar(pos, "expected `u`"));
+                    return Err(Refusal::grammar(pos, EXPECTED_U));
                 }
                 pos = pos.saturating_add(1);
                 let second;
                 (second, pos) = hex4(bytes, pos)?;
                 if !(0xdc00..0xe000).contains(&second) {
-                    return Err(Refusal::grammar(
-                        pos,
-                        "a high surrogate without a low surrogate",
-                    ));
+                    return Err(Refusal::grammar(pos, LONE_HIGH_SURROGATE));
                 }
                 let high = first.saturating_sub(0xd800) << 10;
                 let low = second.saturating_sub(0xdc00);
                 0x1_0000_u32
                     .checked_add(high | low)
-                    .ok_or_else(|| Refusal::grammar(pos, "a surrogate pair out of range"))?
+                    .ok_or_else(|| Refusal::grammar(pos, SURROGATE_OUT_OF_RANGE))?
             } else {
                 first
             };
-            char::from_u32(code)
-                .ok_or_else(|| Refusal::grammar(pos, "not a Unicode scalar value"))?
+            char::from_u32(code).ok_or_else(|| Refusal::grammar(pos, NOT_A_SCALAR))?
         }
         _ => {
             // The escaped character as a character, not its first byte: a
             // multi-byte one is quoted whole and refused after it, at a
             // character boundary.
             let Some(other) = text.get(at..).and_then(|rest| rest.chars().next()) else {
-                return Err(Refusal::grammar(pos, "invalid UTF-8 in a string"));
+                return Err(Refusal::grammar(pos, INVALID_UTF8));
             };
             return Err(Refusal::grammar(
                 at.saturating_add(other.len_utf8()),
@@ -360,15 +408,15 @@ fn hex4(bytes: &[u8], at: usize) -> Result<(u32, usize), Refusal> {
     let mut pos = at;
     for _ in 0..4 {
         let Some(&byte) = bytes.get(pos) else {
-            return Err(Refusal::grammar(pos, "a short \\u escape"));
+            return Err(Refusal::grammar(pos, SHORT_U_ESCAPE));
         };
         let digit = char::from(byte)
             .to_digit(16)
-            .ok_or_else(|| Refusal::grammar(pos, "a non-hexadecimal digit in a \\u escape"))?;
+            .ok_or_else(|| Refusal::grammar(pos, NON_HEX_DIGIT))?;
         value = value
             .checked_mul(16)
             .and_then(|shifted| shifted.checked_add(digit))
-            .ok_or_else(|| Refusal::grammar(pos, "a \\u escape out of range"))?;
+            .ok_or_else(|| Refusal::grammar(pos, U_ESCAPE_OUT_OF_RANGE))?;
         pos = pos.saturating_add(1);
     }
     Ok((value, pos))
@@ -522,7 +570,7 @@ impl<'t, B: Build<'t>, T: Trivia> Reader<'t, '_, B, T> {
     fn slice(&self, from: usize, to: usize) -> Result<&'t str, Refusal> {
         self.text
             .get(from..to)
-            .ok_or_else(|| Refusal::grammar(from, "a token ended inside a character"))
+            .ok_or_else(|| Refusal::grammar(from, TOKEN_SPLITS_CHARACTER))
     }
 
     fn skip(&mut self) -> Result<&'t str, Refusal> {
@@ -548,10 +596,7 @@ impl<'t, B: Build<'t>, T: Trivia> Reader<'t, '_, B, T> {
         let value = self.value(0)?;
         let epilogue = self.skip()?;
         if self.pos < self.bytes.len() {
-            return Err(Refusal::grammar(
-                self.pos,
-                "trailing content after the JSON value",
-            ));
+            return Err(Refusal::grammar(self.pos, TRAILING_CONTENT));
         }
         Ok(Document {
             prologue,
@@ -607,10 +652,7 @@ impl<'t, B: Build<'t>, T: Trivia> Reader<'t, '_, B, T> {
                 let lexeme = self.slice(start, self.pos)?;
                 Ok(self.build.number(lexeme))
             }
-            None => Err(Refusal::grammar(
-                self.pos,
-                "the document ended where a value was expected",
-            )),
+            None => Err(Refusal::grammar(self.pos, ENDED_BEFORE_VALUE)),
         }
     }
 
@@ -658,7 +700,7 @@ impl<'t, B: Build<'t>, T: Trivia> Reader<'t, '_, B, T> {
             }
             let pre_colon = self.skip()?;
             if self.peek() != Some(b':') {
-                return Err(Refusal::grammar(self.pos, "expected `:`"));
+                return Err(Refusal::grammar(self.pos, EXPECTED_COLON));
             }
             self.bump();
             let post_colon = self.skip()?;
@@ -689,7 +731,7 @@ impl<'t, B: Build<'t>, T: Trivia> Reader<'t, '_, B, T> {
                     return Ok(self.build.object(members, ""));
                 }
                 _ => {
-                    return Err(Refusal::grammar(self.pos, "expected `,` or `}`"));
+                    return Err(Refusal::grammar(self.pos, EXPECTED_COMMA_OR_BRACE));
                 }
             }
         }
@@ -720,7 +762,7 @@ impl<'t, B: Build<'t>, T: Trivia> Reader<'t, '_, B, T> {
                     return Ok(self.build.array(items, ""));
                 }
                 _ => {
-                    return Err(Refusal::grammar(self.pos, "expected `,` or `]`"));
+                    return Err(Refusal::grammar(self.pos, EXPECTED_COMMA_OR_BRACKET));
                 }
             }
         }
