@@ -1251,9 +1251,12 @@ fn covering_beacon_reads_a_spires_grown_sphere() {
     );
 }
 
-/// The settings of [`a_lull_after_a_last_tick_crater_reads_as_its_save_does`]:
-/// a Push of 200 ticks.
+/// The settings of [`every_lull_reads_and_plays_on_as_its_save_does`]: a
+/// Push of 200 ticks, three rounds.
 const SHORT_SEGMENT_MS: i32 = 10_000;
+
+/// See [`SHORT_SEGMENT_MS`].
+const SHORT_ROUNDS: u32 = 3;
 
 /// The three planning reads that read the hosted world's pathing graph, as
 /// seat 0 makes them, each answer's `result` with its `_status` footer taken
@@ -1356,8 +1359,8 @@ fn nearest_vent_and_its_way(surface: &mut Surface) -> (String, Vec<[i32; 3]>) {
     (vent, craters)
 }
 
-/// The match of [`a_lull_after_a_last_tick_crater_reads_as_its_save_does`],
-/// resumed from `saved` on a fresh surface and host.
+/// The match of [`every_lull_reads_and_plays_on_as_its_save_does`], resumed
+/// from `saved` on a fresh surface and host.
 fn resumed_from(saved: &pharmakos_gateway::save::SavedMatch) -> Surface {
     let host = pharmakos_gateway::host::Host::open(
         &pharmakos_sim::world::WorldConfig {
@@ -1366,7 +1369,7 @@ fn resumed_from(saved: &pharmakos_gateway::save::SavedMatch) -> Surface {
             rules: support::rules(),
             match_settings: pharmakos_sim::runner::MatchSettings {
                 segment_lengths_ms: vec![SHORT_SEGMENT_MS],
-                round_limit: 3,
+                round_limit: SHORT_ROUNDS,
             },
         },
         None,
@@ -1391,20 +1394,10 @@ fn resumed_from(saved: &pharmakos_gateway::save::SavedMatch) -> Surface {
     .expect("the Lull resumes")
 }
 
-/// A Lull opened after a Push whose last tick cratered seat 0's way to its
-/// nearest vent reads the graph its save restores (lane `settle`). The
-/// graph is settled in the phase that edits the terrain, so the hosted world
-/// the Lull's `get_map_summary`, `resolve_refs` and `estimate_route` read is
-/// the one a resume from that Lull's save rebuilds, and the answers are
-/// byte-equal. Before the lane the last tick's marks waited for the next
-/// Push's Pathing phase: the live Lull read a stale graph over a fresh surface
-/// and the resumed one a fresh graph, and `get_map_summary` priced seat 0's
-/// walk to `seam_348_31` at 13 400 ms live and 12 800 ms resumed.
-#[test]
-fn a_lull_after_a_last_tick_crater_reads_as_its_save_does() {
+/// Play one Push, filing `craters` on its last tick, and return its chain:
+/// each tick and its state hash.
+fn push_cratered_on_its_last_tick(surface: &mut Surface, craters: &[[i32; 3]]) -> Vec<(u32, u64)> {
     use pharmakos_sim::voxels::VoxelEdit;
-    let mut surface = support::hosted(2, SHORT_SEGMENT_MS, 3);
-    let (vent, craters) = nearest_vent_and_its_way(&mut surface);
     surface.begin_push().expect("the Push begins");
     let ticks = surface
         .host()
@@ -1412,41 +1405,74 @@ fn a_lull_after_a_last_tick_crater_reads_as_its_save_does() {
         .world()
         .match_state()
         .segment_ticks();
-    assert_eq!(
-        support::step(&mut surface, ticks - 1),
-        ticks - 1,
-        "the Push runs to its last tick"
-    );
-    for centre in craters {
-        surface
-            .host_mut()
-            .expect("hosted")
-            .file_voxel_edit(VoxelEdit::Crater {
-                centre,
-                radius: 3,
-                by: None,
-            })
-            .expect("the queue takes a crater");
+    let mut chain = Vec::new();
+    for tick in 1..=ticks {
+        if tick == ticks {
+            for &centre in craters {
+                surface
+                    .host_mut()
+                    .expect("hosted")
+                    .file_voxel_edit(VoxelEdit::Crater {
+                        centre,
+                        radius: 3,
+                        by: None,
+                    })
+                    .expect("the queue takes a crater");
+            }
+        }
+        let report = surface
+            .step()
+            .expect("a hosted match")
+            .expect("the tick runs in the Push");
+        chain.push((report.tick.raw(), report.hash));
     }
-    assert_eq!(support::step(&mut surface, 1), 1, "the last tick craters");
-    assert_eq!(support::step(&mut surface, 1), 0, "the Push has ended");
-    surface.end_recap().expect("the recap ends");
-    surface
-        .set_phase_remaining_ms(Ms::new(LULL_MS))
-        .expect("a custom match takes a countdown");
-    surface.open_lull().expect("round 2's Lull");
-    let live = graph_reads(&mut surface, &vent);
-    let mut resumed = resumed_from(&surface.lull_save().expect("a Lull saves"));
-    let again = graph_reads(&mut resumed, &vent);
-    for ((method, live), again) in ["get_map_summary", "resolve_refs", "estimate_route"]
-        .into_iter()
-        .zip(&live)
-        .zip(&again)
-    {
+    assert_eq!(support::step(surface, 1), 0, "the Push has ended");
+    chain
+}
+
+/// Every Lull of a hosted three-round match reads the graph its save
+/// restores, and plays on to the chain its save plays on to (lane `settle`).
+/// Each Push craters seat 0's way to its nearest vent on its last tick, so
+/// every Lull after the first opens on a terrain edit. The graph is settled
+/// in the phase that edits the terrain, so at every Lull the hosted world
+/// that `get_map_summary`, `resolve_refs` and `estimate_route` read is the one
+/// a resume from that Lull's save rebuilds: the answers are byte-equal, and
+/// the next Push's chain is the same tick for tick. Before the lane the last
+/// tick's marks waited for the next Push's Pathing phase: the live Lull read a
+/// stale graph over a fresh surface and the resumed one a fresh graph, and
+/// round 2's `get_map_summary` priced seat 0's walk to `seam_348_31` at
+/// 13 400 ms live and 12 800 ms resumed.
+#[test]
+fn every_lull_reads_and_plays_on_as_its_save_does() {
+    let mut surface = support::hosted(2, SHORT_SEGMENT_MS, SHORT_ROUNDS);
+    let (vent, craters) = nearest_vent_and_its_way(&mut surface);
+    for round in 1..=SHORT_ROUNDS {
+        let live = graph_reads(&mut surface, &vent);
+        let mut resumed = resumed_from(&surface.lull_save().expect("a Lull saves"));
+        let again = graph_reads(&mut resumed, &vent);
+        for ((method, live), again) in ["get_map_summary", "resolve_refs", "estimate_route"]
+            .into_iter()
+            .zip(&live)
+            .zip(&again)
+        {
+            assert_eq!(
+                pharmakos_proto::json::write(live),
+                pharmakos_proto::json::write(again),
+                "round {round}: {method} reads one graph in the live Lull and another after its save resumes"
+            );
+        }
+        let played = push_cratered_on_its_last_tick(&mut surface, &craters);
+        let replayed = push_cratered_on_its_last_tick(&mut resumed, &craters);
         assert_eq!(
-            pharmakos_proto::json::write(live),
-            pharmakos_proto::json::write(again),
-            "{method} reads one graph in the live Lull and another after its save resumes"
+            played, replayed,
+            "round {round}: the Push after the Lull plays one chain live and another after its save resumes"
         );
+        if round < SHORT_ROUNDS {
+            surface.end_recap().expect("the recap ends");
+            surface
+                .set_phase_remaining_ms(Ms::new(LULL_MS))
+                .expect("a custom match takes a countdown");
+            surface.open_lull().expect("the next round's Lull");
+        }
     }
 }
