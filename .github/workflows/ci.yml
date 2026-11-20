@@ -150,12 +150,15 @@ jobs:
     # system's shards plus that operating system's leg job, and no other operating
     # system's shards hold it back (decisions-log item 148, the main session's call). A
     # fourth shard is a change to CI_SHARDS and the three shard matrices. Item 116 (6)(f)'s
-    # `[profile.*]` question was taken at its threshold by the `citime` lane (a leg reached
-    # 90 minutes, shards sat at 35 to 54): the suite runs pharmakos-sim and third-party
-    # crates optimised, debug assertions and overflow checks on, and xtask's `profiles`
-    # step holds both. A further profile change is still a contract change (AGENTS.md
-    # section 5), not a way out of the rule. The legs' measured times, shard by shard, are
-    # in each xtask pull request.
+    # `[profile.*]` question was taken ahead of its 75-minute threshold, by the main
+    # session's ruling, which the owner can veto (no healthy leg had reached 75; shards sat
+    # at 35 to 54 of 90 and one degraded runner hit the limit, so the margin was thin, and
+    # this removes the cost at its cause; the decisions-log item that records this change
+    # says so): the suite runs pharmakos-sim and the third-party crates it runs optimised,
+    # debug assertions and overflow checks on, and xtask's `test` step asks cargo for the
+    # profile it resolved for every unit and refuses anything else. A further profile change
+    # is still a contract change (AGENTS.md section 5), not a way out of the rule. The legs'
+    # measured times, shard by shard, are in each xtask pull request.
     timeout-minutes: 90
     # Each operating system's `xtask_args`, set in its shard job's matrix:
     # The REUSE licence check is platform-independent, so it runs once, on the ubuntu
