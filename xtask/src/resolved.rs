@@ -3294,13 +3294,21 @@ mod tests {
                 "--config".to_owned(),
                 "target.x86_64-pc-windows-msvc.linker=\"link.exe\"".to_owned(),
                 "--config".to_owned(),
-                "target.x86_64-pc-windows-msvc.runner=['C:\\w\\target\\debug\\xtask.exe', '__run-test']"
+                "target.x86_64-pc-windows-msvc.runner='C:\\w\\target\\debug\\xtask.exe __run-test'"
                     .to_owned(),
                 "test".to_owned(),
                 "--lib".to_owned()
             ])
         );
         assert!(linux.door_line(&line, Some("/home/o'brien/xtask")).is_err());
+        // Cargo splits a runner string on whitespace, so a path holding any
+        // is refused rather than split.
+        assert!(linux.door_line(&line, Some("/home/a b/xtask")).is_err());
+        assert!(
+            windows
+                .door_line(&line, Some("C:\\Users\\A\tB\\xtask.exe"))
+                .is_err()
+        );
     }
 
     /// The graph names cargo's target directory, absolute, or is refused.
