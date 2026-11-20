@@ -157,23 +157,53 @@ panic = "abort"
 [profile.dev]
 overflow-checks = true
 
-# The suite runs the sim optimised, its checks on (decisions-log item 116 (6)(f)'s profile
-# question, taken at its 75-minute threshold). Every slow test builds a hosted match, a map
-# or a route graph, or plays ticks, and at opt-level 0 the sim's integer code ran 25 to 50
-# times slower than optimised, which held CI's shards at 35 to 54 of 90 minutes. A package
-# table changes only the optimisation: debug assertions and overflow checks are inherited
-# from [profile.dev], on, and `[profile.test]` inherits all of it. `cargo xtask ci`'s
-# `profiles` step fails if the sim drops to opt-level 0 or any dev or test table switches
-# debug assertions off. Optimisation moves no hash: the sim has no floats, and the same
-# chains are produced at `release-checked`. To step through the sim in a debugger, override
-# it in the environment: CARGO_PROFILE_DEV_PACKAGE_PHARMAKOS_SIM_OPT_LEVEL=0.
+# The suite runs the sim optimised, its checks on. Every slow test builds a hosted match, a
+# map or a route graph, or plays ticks, and at opt-level 0 the sim's integer code ran 25 to
+# 50 times slower than optimised, which held CI's shards at 35 to 54 of 90 minutes. This
+# takes decisions-log item 116 (6)(f)'s profile question ahead of its 75-minute threshold
+# (no healthy leg had reached 75; the margin was thin, and this removes the cost at its
+# cause), by the main session's ruling, which the owner can veto; the decisions-log item
+# that records this change says so. A package table changes only the optimisation: debug
+# assertions and overflow checks are inherited from [profile.dev], on, and [profile.test]
+# inherits all of it. Optimisation moves no hash: the sim has no floats, and the same
+# chains are produced at `release-checked`.
+#
+# `cargo xtask ci`'s `test` step asks cargo for the profile it resolved for every unit
+# before the tests run, and fails if the sim is at opt-level 0, if a crate the sim runs is,
+# if a workspace unit has debug assertions or overflow checks off, or if a godot crate is
+# optimised; it runs only `crates/sim/tests/allocations.rs` with the sim at opt-level 0,
+# because the optimiser deletes allocations whose value is never read, which that test
+# exists to catch. Cargo reads no environment variable for a package table: to step
+# through the sim in a debugger, build with
+#   --config 'profile.dev.package.pharmakos-sim.opt-level=0'
+# which the `test` step sees and refuses, so it is for a local debugging build only.
 [profile.dev.package.pharmakos-sim]
 opt-level = 2
 
-# Third-party crates (imbl, xxh3, prost, postcard, ...): `"*"` matches no workspace member,
-# so the walled float crates and the tests' own code stay unoptimised.
+# Third-party crates (imbl, xxh3, prost, postcard, ...) and their build scripts and proc
+# macros: `"*"` matches no workspace member, so the walled float crates and the tests' own
+# code stay unoptimised.
 [profile.dev.package."*"]
 opt-level = 2
+
+# The godot crates serve the walled client alone, which no test of the sim runs, and
+# optimising them doubled a cold client build. A named table outranks `"*"`; the `test`
+# step fails if any godot crate is optimised, so a new one the lock file gains must be
+# named here too.
+[profile.dev.package.godot]
+opt-level = 0
+[profile.dev.package.godot-bindings]
+opt-level = 0
+[profile.dev.package.godot-cell]
+opt-level = 0
+[profile.dev.package.godot-codegen]
+opt-level = 0
+[profile.dev.package.godot-core]
+opt-level = 0
+[profile.dev.package.godot-ffi]
+opt-level = 0
+[profile.dev.package.godot-macros]
+opt-level = 0
 
 # Determinism CI builds this to compare hashes across operating systems at optimisation
 # levels the release build uses, with debug assertions still on.
