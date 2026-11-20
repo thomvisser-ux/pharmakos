@@ -1985,7 +1985,13 @@ pub(crate) fn sim_graph(ctx: &Ctx) -> Result<resolved::Graph, String> {
     if ctx.locked {
         args.push("--locked".to_owned());
     }
-    let text = capture(ctx, &ctx.cargo, &args)?;
+    // In the checked builds' environment: cargo asks rustc about the target
+    // here, and a config file's wrapper would otherwise run for that too.
+    let (success, text) =
+        resolved::Cargo::report(&mut ProcessCargo { ctx }, &args, &resolved::pinned_env(""))?;
+    if !success {
+        return Err(format!("`{} {}` failed", ctx.cargo, args.join(" ")));
+    }
     resolved::graph(&text).map_err(|fault| fault.to_string())
 }
 
