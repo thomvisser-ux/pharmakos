@@ -1867,6 +1867,201 @@ fn every_one_node_edit_that_qualifies_compiles() {
     );
 }
 
+/// The replacements a seeded edit draws from: the structural ones of
+/// [`one_node_edits`] (`None` removes) and the security review's rich values.
+fn replacements() -> Vec<Option<Json>> {
+    vec![
+        Some(Json::Null),
+        Some(Json::Object(Vec::new())),
+        Some(Json::Array(Vec::new())),
+        Some(Json::Number("0".to_owned())),
+        Some(Json::String(String::new())),
+        None,
+        Some(Json::Number("1".to_owned())),
+        Some(Json::Number("-1".to_owned())),
+        Some(Json::Number("2147483647".to_owned())),
+        Some(Json::Number("-2147483648".to_owned())),
+        Some(Json::Number("4294967295".to_owned())),
+        Some(Json::Bool(true)),
+        Some(Json::String("b_01".to_owned())),
+        Some(Json::String("x".to_owned())),
+    ]
+}
+
+/// Every node's path in `root`, the root left out.
+fn node_paths(node: &Json, path: &mut Vec<usize>, out: &mut Vec<Vec<usize>>) {
+    let children: Vec<&Json> = match node {
+        Json::Object(members) => members.iter().map(|(_, value)| value).collect(),
+        Json::Array(items) => items.iter().collect(),
+        _ => Vec::new(),
+    };
+    for (index, child) in children.into_iter().enumerate() {
+        path.push(index);
+        out.push(path.clone());
+        node_paths(child, path, out);
+        path.pop();
+    }
+}
+
+/// `root` with the node at `path` replaced by `with`, or removed.
+fn edited_at(root: &Json, path: &[usize], with: Option<Json>) -> Json {
+    let mut copy = root.clone();
+    let Some((last, parents)) = path.split_last() else {
+        return copy;
+    };
+    let mut node = &mut copy;
+    for index in parents {
+        node = match node {
+            Json::Object(members) => members.get_mut(*index).map(|(_, value)| value),
+            Json::Array(items) => items.get_mut(*index),
+            _ => None,
+        }
+        .unwrap_or_else(|| panic!("the path {path:?} is in the tree"));
+    }
+    match (node, with) {
+        (Json::Object(members), Some(value)) => {
+            if let Some(member) = members.get_mut(*last) {
+                member.1 = value;
+            }
+        }
+        (Json::Object(members), None) => {
+            members.remove(*last);
+        }
+        (Json::Array(items), Some(value)) => {
+            if let Some(item) = items.get_mut(*last) {
+                *item = value;
+            }
+        }
+        (Json::Array(items), None) => {
+            items.remove(*last);
+        }
+        _ => panic!("the path {path:?} ends under a container"),
+    }
+    copy
+}
+
+/// One seeded edit of `root`: a node drawn from its paths, and a replacement
+/// drawn from [`replacements`].
+fn seeded_edit(root: &Json, rng: &mut StreamRng) -> Json {
+    let mut paths = Vec::new();
+    node_paths(root, &mut Vec::new(), &mut paths);
+    let choices = replacements();
+    let draw = |rng: &mut StreamRng, count: usize| {
+        let most = i32::try_from(count.saturating_sub(1))
+            .unwrap_or_else(|_| panic!("{count} choices do not fit a draw"));
+        usize::try_from(rng.range_i32(0, most))
+            .unwrap_or_else(|_| panic!("a draw below zero from 0..={most}"))
+    };
+    let Some(path) = paths.get(draw(rng, paths.len())) else {
+        return root.clone();
+    };
+    let Some(with) = choices.get(draw(rng, choices.len())).cloned() else {
+        panic!("a draw past the replacements");
+    };
+    edited_at(root, path, with)
+}
+
+/// Two seeded edits of qualifying playbooks, `cases` of them, each that still
+/// qualifies at FULL held to the sim's compile (S3's `vfyq2`, fix pass 2,
+/// item C2: the security review's two-node probe, committed). Counted, not
+/// timed. Answers how many qualified, and every compile refusal by kind with
+/// its smallest text.
+fn two_node_edits(cases: u32) -> (u32, std::collections::BTreeMap<String, String>) {
+    let rules = rules();
+    let widest = rules_at_the_widest_budget(&rules);
+    let scope = scope();
+    let snapshot = snapshot();
+    let qualifies = |text: &str, rules: &RulesTable| {
+        let input = Input::new(text.as_bytes(), &snapshot, &scope, rules)
+            .unwrap_or_else(|error| panic!("assembling the input: {error}"));
+        verify(&input, Depth::Full).qualifies
+    };
+    let mut bases: Vec<(Json, bool)> = Vec::new();
+    for base in EDIT_BASES {
+        bases.push((
+            json::read(base).unwrap_or_else(|error| panic!("an edit base: {error}")),
+            false,
+        ));
+    }
+    for index in 0..EDITED_RUNS {
+        let mut shape = Shape::new(index);
+        let padded = shape.padded;
+        let tree = shape.playbook();
+        if qualifies(&json::write(&tree), if padded { &widest } else { &rules }) {
+            bases.push((tree, padded));
+        }
+    }
+    let mut rng = StreamRng::new(FUZZ_SEED, Stream::Map, u32::MAX, 2, 2);
+    let mut checked = 0_u32;
+    let mut refused: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    for case in 0..cases {
+        let Some((tree, padded)) = usize::try_from(case)
+            .ok()
+            .and_then(|case| case.checked_rem(bases.len()))
+            .and_then(|index| bases.get(index))
+        else {
+            panic!("case {case} names no base of {}", bases.len());
+        };
+        let rules = if *padded { &widest } else { &rules };
+        let first_edit = seeded_edit(tree, &mut rng);
+        let second_edit = seeded_edit(&first_edit, &mut rng);
+        let text = json::write(&second_edit);
+        if !qualifies(&text, rules) {
+            continue;
+        }
+        checked = checked.saturating_add(1);
+        let playbook: Playbook = json::decode(&text)
+            .unwrap_or_else(|error| panic!("qualifies and does not decode: {error}\n{text}"));
+        if let Err(error) = Plan::compile(&playbook, rules) {
+            let flat: String = text.split_whitespace().collect();
+            let slot = refused
+                .entry(format!("{error:?}"))
+                .or_insert_with(|| flat.clone());
+            if flat.len() < slot.len() {
+                *slot = flat;
+            }
+        }
+    }
+    (checked, refused)
+}
+
+/// How many two-node cases every ordinary run tries; the nightly run tries
+/// the review's 240,000.
+const TWO_NODE_CASES: u32 = 12_000;
+
+#[test]
+fn every_two_node_edit_that_qualifies_compiles() {
+    let (qualified, refused) = two_node_edits(TWO_NODE_CASES);
+    println!("{TWO_NODE_CASES} two-node edits: {qualified} qualified");
+    assert!(
+        qualified > 0,
+        "no two-node edit qualified: the property is vacuous"
+    );
+    assert!(
+        refused.is_empty(),
+        "{} kinds of two-node edit qualify at FULL and the sim's compile refuses them:\n{:#?}",
+        refused.len(),
+        refused
+    );
+}
+
+#[test]
+#[ignore = "the security review's 240,000 cases; nightly-scenarios.yml's fuzz job calls it"]
+fn two_hundred_forty_thousand_two_node_edits_that_qualify_compile() {
+    let (qualified, refused) = two_node_edits(240_000);
+    println!("240,000 two-node edits: {qualified} qualified");
+    assert!(
+        qualified > 0,
+        "no two-node edit qualified: the property is vacuous"
+    );
+    assert!(
+        refused.is_empty(),
+        "{} kinds of two-node edit qualify at FULL and the sim's compile refuses them:\n{:#?}",
+        refused.len(),
+        refused
+    );
+}
+
 #[test]
 fn the_generator_still_produces_shapes_the_verifier_reads() {
     let rules = rules();
