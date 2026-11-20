@@ -410,7 +410,7 @@ pub(crate) fn check_toolchain(
     channel: &str,
 ) -> Result<(), String> {
     check_release("rustc", rustc_verbose, channel)?;
-    check_release("cargo", cargo_verbose, channel).or(Ok(()))
+    check_release("cargo", cargo_verbose, channel)
 }
 
 /// The keys `rust-toolchain.toml`'s `[toolchain]` table may hold: the ones
@@ -431,7 +431,7 @@ pub(crate) fn pinned_channel_in(text: &str) -> Result<String, String> {
                 entry.line, entry.key, entry.raw
             ))
         };
-        if entry.table != "toolchain" && !TOOLCHAIN_KEYS.contains(&entry.key.as_str()) {
+        if entry.table != "toolchain" || !TOOLCHAIN_KEYS.contains(&entry.key.as_str()) {
             return refused("not a `[toolchain]` key the committed file has");
         }
         match (entry.key.as_str(), &entry.value) {
@@ -578,7 +578,7 @@ pub(crate) fn strict_toml(text: &str, multiline_arrays: bool) -> Result<Vec<Toml
         } else if let Some(items) = array(value) {
             TomlValue::Array(items)
         } else {
-            TomlValue::Str(value.to_owned())
+            return refused("a value of a shape this reader does not take");
         };
         entries.push(TomlEntry {
             line: number,
