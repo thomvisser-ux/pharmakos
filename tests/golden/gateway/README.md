@@ -462,12 +462,15 @@ What moves a demo case, and what a diff means:
 
 The answers carry no file's text but what the renderer quotes: a report names
 codes, pointers and hashes, and the prose quotes the playbook's own `meta`
-title and summary and its step labels. No licence header or comment reaches
-them. The `_verify` cases and the two scenario cases take this area's
-`GPL-3.0-or-later`; the three template `_render` cases quote `library/`'s
-permissive titles, summaries and labels, so `REUSE.toml` records them as
-`GPL-3.0-or-later AND (MIT OR Apache-2.0)` (decisions-log item 124 (5) (e),
-taken by S1's plan's decision 9).
+title and summary and its step labels. The renderer and the verifier write no licence header or comment into them
+(the producer asserts none). The `_verify` cases and the two scenario cases take this area's
+`GPL-3.0-or-later`; the six template `_render` cases that quote `library/` (every one but
+`demo_deploy_and_visit_render`) quote its permissive titles, summaries and labels, so
+`REUSE.toml` records them as `GPL-3.0-or-later AND (MIT OR Apache-2.0)` (decisions-log
+item 124 (5) (e), taken by S1's plan's decision 9). `instantiate_suggested` is the exception
+to the paragraph's opening: its answer embeds a whole template, header included, in a JSON
+string, so its licence is stated by an `override` entry in `REUSE.toml` (decisions-log
+item 164; `docs/LICENSING.md` states the rule).
 
 ### `map_summary/` and `resolve_refs/`
 
