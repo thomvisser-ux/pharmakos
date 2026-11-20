@@ -2346,7 +2346,7 @@ impl resolved::Cargo for ProcessCargo {
 /// Whether this xtask's executable, `xtask`, is still there to be named as
 /// the runner.
 fn runner_exists(xtask: &Path) -> Result<(), String> {
-    if !xtask.as_os_str().is_empty() {
+    if xtask.is_file() {
         return Ok(());
     }
     Err(format!(

@@ -63,9 +63,13 @@
 //!   empty, is the only source, and every config file's flags are ignored. A
 //!   profile's own `rustflags` key is unstable and needs `RUSTC_BOOTSTRAP` or a
 //!   nightly cargo.
-//! * `RUSTC_WRAPPER` and `RUSTC_WORKSPACE_WRAPPER` are set empty, which turns
-//!   off a config file's `build.rustc-wrapper` and
-//!   `build.rustc-workspace-wrapper`.
+//! * Both wrappers are off: `RUSTC_WRAPPER` and `RUSTC_WORKSPACE_WRAPPER` are
+//!   set empty, and `--config 'build.rustc-wrapper=""'` and
+//!   `--config 'build.rustc-workspace-wrapper=""'` turn off a config file's
+//!   wrappers. The repository's `.cargo/config.toml` sets the same two keys
+//!   empty, because cargo hashes an empty wrapper into a unit's metadata
+//!   unlike no wrapper at all: named alike on both sides, `cargo xtask` and a
+//!   plain `cargo` build one set of units.
 //! * `RUSTC_BOOTSTRAP` is removed.
 //! * `--config 'target.<host>.linker="<the host's default>"'` ([`Host`]): the
 //!   linker rustc uses when none is named, named, so a config file's `linker`
@@ -187,7 +191,18 @@ const SIM_UNOPTIMISED: &str = "profile.dev.package.pharmakos-sim.opt-level=0";
 /// doc compiler by their plain names, so the rustup proxy on `PATH` resolves
 /// the pinned toolchain's, and a config file's `build.rustc` or
 /// `build.rustdoc` (which a command line's `--config` overrides) never runs.
-const PINNED_TOOLS: &[&str] = &["build.rustc=\"rustc\"", "build.rustdoc=\"rustdoc\""];
+///
+/// And both wrappers off, empty, as the repository's `.cargo/config.toml` sets
+/// them: a command line's `--config` beats every config file, and cargo
+/// hashes an empty wrapper into a unit's metadata unlike no wrapper at all,
+/// so naming them alike on both sides is what lets `cargo xtask` and a plain
+/// `cargo` share one build (measured on Windows and Linux).
+const PINNED_TOOLS: &[&str] = &[
+    "build.rustc=\"rustc\"",
+    "build.rustdoc=\"rustdoc\"",
+    "build.rustc-wrapper=\"\"",
+    "build.rustc-workspace-wrapper=\"\"",
+];
 
 /// The `--config` values every checked call carries ([`PINNED_TOOLS`]).
 pub(crate) fn pinned_config() -> Vec<String> {
@@ -2669,6 +2684,10 @@ mod tests {
                 "build.rustc=\"rustc\"",
                 "--config",
                 "build.rustdoc=\"rustdoc\"",
+                "--config",
+                "build.rustc-wrapper=\"\"",
+                "--config",
+                "build.rustc-workspace-wrapper=\"\"",
                 "build",
                 "--workspace",
                 "--locked",
@@ -2694,6 +2713,10 @@ mod tests {
                 "build.rustc=\"rustc\"",
                 "--config",
                 "build.rustdoc=\"rustdoc\"",
+                "--config",
+                "build.rustc-wrapper=\"\"",
+                "--config",
+                "build.rustc-workspace-wrapper=\"\"",
                 "--config",
                 "profile.dev.package.pharmakos-sim.opt-level=0",
                 "test",

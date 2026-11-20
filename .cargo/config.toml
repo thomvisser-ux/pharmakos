@@ -42,6 +42,15 @@ overflow-checks = true
 # own rustflags and rustdocflags and turns off any rustc wrapper, whatever a config file
 # says, and refuses a flags, compiler, wrapper or `RUSTC_BOOTSTRAP` variable set in the
 # environment (xtask/src/resolved.rs).
+#
+# Both wrappers off, here and on the command line of every checked call alike: cargo hashes
+# an empty wrapper into a unit's metadata unlike no wrapper at all, so with the two named
+# alike `cargo xtask` and a plain `cargo` build one set of units rather than two. A compiler
+# cache wrapper is not used for this repository (a ruling the owner can veto); a
+# developer's user-level wrapper is overridden here, and one set in the environment is
+# refused by `cargo xtask`.
+rustc-wrapper = ""
+rustc-workspace-wrapper = ""
 
 # The linker: this repository names each CI host's default linker, the one rustc uses when
 # none is named, so that every build of it, `cargo xtask` (which pins the same value on its
