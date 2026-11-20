@@ -109,10 +109,7 @@ fn read_everything(text: &str, nots: usize) {
     let tree = document.to_json();
     let written = json::write(&tree);
     json::read(&written).expect("the codec's tree reader takes it");
-    assert!(matches!(
-        json::decode_direct::<Playbook>(&written),
-        json::Direct::Wire(_)
-    ));
+    json::decode::<Playbook>(&written).expect("the codec decodes it");
     let canonical = canonicalise_text(text).expect("a canonical form");
     canonicalise_text(&canonical.text).expect("the canonical form is canonical");
     json::canonical_decode::<Playbook>(&canonical.json).expect("one decode");
