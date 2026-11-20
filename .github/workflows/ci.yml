@@ -382,7 +382,34 @@ jobs:
               if [ -f determinism/hashes.txt ]; then echo determinism/hashes.txt; fi
             ) > shard-out/files.txt
             if [ -s shard-out/files.txt ]; then
-              tar -C target -cf - -T shard-out/files.txt | tar -C shard-out/target -xf -
+              # Through one archive file, not a pipe: a pipe's reading half can die and
+              # leave only "tar: Write error" (run 44706396313), while each command here
+              # names itself when it fails. On any failure the step says which, prints
+              # the disk and the listed files' count and size, and stays red: the leg
+              # job needs these outputs. The archive is a relative path because Git
+              # Bash's tar reads `D:\...` as a remote host; it is not under shard-out/,
+              # so it is never uploaded.
+              archive=shard-outputs.tar
+              staging_failed() {
+                echo "::error title=Staging the shard's outputs failed::$1"
+                df -h . || echo "df -h . failed too"
+                listed=$(wc -l < shard-out/files.txt)
+                bytes=0
+                while IFS= read -r file; do
+                  if ! size=$(wc -c < "target/$file"); then
+                    echo "cannot read target/${file}"
+                    size=0
+                  fi
+                  bytes=$((bytes + size))
+                done < shard-out/files.txt
+                echo "listed: ${listed} file(s), ${bytes} byte(s) in all"
+                exit 1
+              }
+              tar -C target -cf "$archive" -T shard-out/files.txt \
+                || staging_failed "writing ${archive} from target/ failed (tar exit $?)"
+              tar -C shard-out/target -xf "$archive" \
+                || staging_failed "extracting ${archive} into shard-out/target failed (tar exit $?)"
+              rm -f "$archive"
             fi
             echo "$(wc -l < shard-out/files.txt) fresh output(s) staged"
           fi
