@@ -120,6 +120,7 @@ use crate::strings;
 use crate::structure::arm_name;
 use crate::walk::{self, AreaOf, BeaconSlot, Carrier, Holder, List, Slot, Visit};
 use pharmakos_proto::gp::v1::OnFail;
+use pharmakos_proto::json::grammar::{Said, quoted};
 
 /// Run the stage.
 pub(crate) fn run(
@@ -507,12 +508,14 @@ impl Visit for Semantics<'_> {
         let removing = matches!(slot, Slot::RemoveAnchor);
         let what = match chosen {
             // A description under remove_build_target is `E0410` already.
-            feature_ref::Ref::Seam(_) if !removing => strings::SEAM_PICK.to_owned(),
-            feature_ref::Ref::FeatureId(id) if self.is_seam(id) => format!("`{id}`"),
+            feature_ref::Ref::Seam(_) if !removing => Said::from(strings::SEAM_PICK),
+            feature_ref::Ref::FeatureId(id) if self.is_seam(id) => {
+                pharmakos_proto::said!("`{}`", quoted(id))
+            }
             feature_ref::Ref::Covered(_)
                 if deploy.is_some_and(|cover| self.names_a_seam(cover)) =>
             {
-                strings::COVERED_SEAM.to_owned()
+                Said::from(strings::COVERED_SEAM)
             }
             _ => return,
         };
@@ -673,10 +676,7 @@ impl Semantics<'_> {
                     ),
                     Some(sighting) if i64::from(sighting.age_ms) > window => self.out.emit(
                         Diag::new("E0418", here)
-                            .arg(
-                                "what",
-                                strings::sighted_ago(&format!("`{id}`"), sighting.age_ms),
-                            )
+                            .arg("what", strings::id_sighted_ago(id, sighting.age_ms))
                             .arg("max", window)
                             .map_ref(sighting.at),
                     ),
@@ -725,8 +725,8 @@ impl Semantics<'_> {
                         strings::seats_commander(seat),
                     ),
                     None => (
-                        strings::NO_COMMANDER_SIGHTED.to_owned(),
-                        strings::THE_ENEMY_COMMANDER.to_owned(),
+                        Said::from(strings::NO_COMMANDER_SIGHTED),
+                        Said::from(strings::THE_ENEMY_COMMANDER),
                     ),
                 };
                 // Set, a seat with no fresh sighting is refused (`E0418`):
@@ -743,7 +743,7 @@ impl Semantics<'_> {
                         .emit(Diag::new(code, here).arg("what", never).arg("max", window)),
                     Some(sighting) if i64::from(sighting.age_ms) > window => self.out.emit(
                         Diag::new(code, here)
-                            .arg("what", strings::sighted_ago(&subject, sighting.age_ms))
+                            .arg("what", strings::sighted_ago(subject, sighting.age_ms))
                             .arg("max", window)
                             .map_ref(sighting.at),
                     ),
@@ -804,7 +804,7 @@ impl Semantics<'_> {
                         .arg(
                             "what",
                             strings::sighted_ago(
-                                &strings::freshest_enemy_beacon(id),
+                                strings::freshest_enemy_beacon(id),
                                 sighting.age_ms,
                             ),
                         )
@@ -957,7 +957,7 @@ impl Semantics<'_> {
                     ),
                 )
                 .arg_text("id", &queue.blueprint_id)
-                .arg("licence", name),
+                .arg("licence", *name),
             );
         }
     }

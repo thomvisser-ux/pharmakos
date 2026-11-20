@@ -570,7 +570,10 @@ impl Visit for Lints<'_> {
                         Diag::new("W0704", here)
                             .arg(
                                 "what",
-                                format!("`{}`", pharmakos_proto::json::grammar::quoted(id)),
+                                pharmakos_proto::said!(
+                                    "`{}`",
+                                    pharmakos_proto::json::grammar::quoted(id)
+                                ),
                             )
                             .arg("why", strings::WHY_LOST),
                     );
@@ -613,7 +616,13 @@ impl Visit for Lints<'_> {
 
 impl Lints<'_> {
     /// `W0704` for a pick: nothing passes its filters.
-    fn matches_nothing(&mut self, at: &str, kind: FeatureKind, uncovered: bool, what: &str) {
+    fn matches_nothing(
+        &mut self,
+        at: &str,
+        kind: FeatureKind,
+        uncovered: bool,
+        what: &'static str,
+    ) {
         let mut live = self
             .scope
             .features()
@@ -675,9 +684,9 @@ impl Lints<'_> {
             Diag::new("W0706", pointer::child(at, "voxel"))
                 .arg(
                     "feature",
-                    format!("{} ({}, {})", strings::VENT_NAME, vent.x, vent.y),
+                    pharmakos_proto::said!("{} ({}, {})", strings::VENT_NAME, vent.x, vent.y),
                 )
-                .arg("beacon", beacon)
+                .arg_text("beacon", beacon)
                 .map_ref(*site)
                 .fix(
                     strings::FIX_COVER_NEAREST_VENT,

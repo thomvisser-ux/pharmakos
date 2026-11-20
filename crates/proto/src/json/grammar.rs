@@ -45,7 +45,7 @@
 use std::borrow::Cow;
 use std::cell::Cell;
 use std::collections::BTreeSet;
-use std::fmt::Write as _;
+use std::fmt::{self, Write as _};
 
 use super::value::{Error, ErrorKind};
 
@@ -876,21 +876,73 @@ const fn utf8_width(lead: u8) -> Option<usize> {
 /// lexeme, and never the whole of a 200 KB one.
 pub const MAX_QUOTED_CHARS: usize = 64;
 
+/// The characters that reorder or hide text without being control
+/// characters (S3's `vfyq2`, fix pass 2, item B), each shown as `\uXXXX`:
+///
+/// * U+061C ARABIC LETTER MARK, U+200E LEFT-TO-RIGHT MARK and U+200F
+///   RIGHT-TO-LEFT MARK: they turn the direction of what follows;
+/// * U+202A to U+202E, the embeddings, overrides and their pop: they reorder
+///   what follows, so `abc` can be shown as `cba`;
+/// * U+2066 to U+2069, the isolates and their pop: the same, scoped;
+/// * U+200B ZERO WIDTH SPACE, U+200C ZERO WIDTH NON-JOINER, U+200D ZERO WIDTH
+///   JOINER and U+FEFF ZERO WIDTH NO-BREAK SPACE: they hide, so two keys that
+///   look the same are told apart;
+/// * U+2028 LINE SEPARATOR and U+2029 PARAGRAPH SEPARATOR: they break a line
+///   the way a line feed does, which a one-line message must not.
+const HIDDEN: [(char, char); 6] = [
+    ('\u{061C}', '\u{061C}'),
+    ('\u{200B}', '\u{200F}'),
+    ('\u{2028}', '\u{2029}'),
+    ('\u{202A}', '\u{202E}'),
+    ('\u{2066}', '\u{2069}'),
+    ('\u{FEFF}', '\u{FEFF}'),
+];
+
+/// Whether `character` is shown escaped rather than as itself: a control
+/// character (DEL included), or one of [`HIDDEN`].
+fn shown_escaped(character: char) -> bool {
+    character.is_control()
+        || HIDDEN
+            .iter()
+            .any(|(low, high)| (*low..=*high).contains(&character))
+}
+
+/// A player's text as a refusal or a diagnostic shows it, made only by
+/// [`quoted`] (S3's `vfyq2`, fix pass 2, item B): what a message builder
+/// takes where player text goes, so a raw string cannot get there.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Quoted(String);
+
+impl Quoted {
+    /// The text, as shown.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for Quoted {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
 /// A player's text, as a refusal or a diagnostic quotes it back: control
-/// characters (and DEL) written as `\u00XX`, so a key holding ESC or BEL
-/// cannot drive the terminal or the client that shows the message, and at
-/// most [`MAX_QUOTED_CHARS`] characters, the rest shown as `…`. Every quote
-/// of player text in the codec's refusals and the verifier's diagnostics
-/// goes through here, so there is one rule.
+/// characters (and DEL) and the characters of [`HIDDEN`] written as
+/// `\uXXXX`, so a key holding ESC or BEL cannot drive the terminal or the
+/// client that shows the message and one holding U+202E cannot reorder it,
+/// and at most [`MAX_QUOTED_CHARS`] characters, the rest shown as `…`. Every
+/// quote of player text in the codec's refusals, the verifier's diagnostics
+/// and plan-core's refusals goes through here, so there is one rule.
 #[must_use]
-pub fn quoted(text: &str) -> String {
+pub fn quoted(text: &str) -> Quoted {
     let mut out = String::with_capacity(text.len().min(MAX_QUOTED_CHARS.saturating_mul(6)));
     for (index, character) in text.chars().enumerate() {
         if index == MAX_QUOTED_CHARS {
             out.push('…');
             break;
         }
-        if character.is_control() {
+        if shown_escaped(character) {
             for unit in character.encode_utf16(&mut [0; 2]) {
                 let _infallible = write!(out, "\\u{unit:04x}");
             }
@@ -898,5 +950,109 @@ pub fn quoted(text: &str) -> String {
             out.push(character);
         }
     }
-    out
+    Quoted(out)
+}
+
+/// One piece of text a player is shown: static words, a number, or player
+/// text [`quoted`] (S3's `vfyq2`, fix pass 2, item B). The verifier's
+/// diagnostic and Fix-title builders and plan-core's refusals take this, and
+/// there is no way to make one from a `String`, so player text that skipped
+/// the quoting rule does not compile. Several pieces are composed with
+/// [`crate::said`], whose every argument is one.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Said(Cow<'static, str>);
+
+impl Said {
+    /// The text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// The text, owned.
+    #[must_use]
+    pub fn into_string(self) -> String {
+        self.0.into_owned()
+    }
+
+    /// An engine error's own words: for the error types of this workspace
+    /// whose `Display` composes static words and numbers (a rules table's
+    /// gap, an input the verifier cannot hash, a file the host cannot read),
+    /// never for text read from a player's file, which [`quoted`] carries.
+    #[must_use]
+    pub fn engine_error(error: &impl std::error::Error) -> Said {
+        Said(Cow::Owned(error.to_string()))
+    }
+
+    /// [`crate::said`]'s own constructor, over text it formatted from pieces
+    /// that are each a [`Said`]. Not for any other caller.
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn composed_by_said(text: String) -> Said {
+        Said(Cow::Owned(text))
+    }
+}
+
+impl fmt::Display for Said {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl From<&'static str> for Said {
+    fn from(text: &'static str) -> Said {
+        Said(Cow::Borrowed(text))
+    }
+}
+
+impl From<Quoted> for Said {
+    fn from(text: Quoted) -> Said {
+        Said(Cow::Owned(text.0))
+    }
+}
+
+impl From<&Quoted> for Said {
+    fn from(text: &Quoted) -> Said {
+        Said(Cow::Owned(text.0.clone()))
+    }
+}
+
+impl From<char> for Said {
+    fn from(character: char) -> Said {
+        Said(Cow::Owned(quoted(character.encode_utf8(&mut [0; 4])).0))
+    }
+}
+
+macro_rules! said_from_numbers {
+    ($($number:ty),*) => {
+        $(
+            impl From<$number> for Said {
+                fn from(number: $number) -> Said {
+                    Said(Cow::Owned(number.to_string()))
+                }
+            }
+        )*
+    };
+}
+
+said_from_numbers!(
+    i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize
+);
+
+/// Text a player is shown, composed of [`json::grammar::Said`] pieces: static
+/// words, numbers and [`json::grammar::quoted`] player text. The format
+/// string goes through `concat!`, so it cannot capture a variable by name,
+/// and every argument converts into a `Said`, so a raw `String` does not
+/// compile.
+///
+/// [`json::grammar::Said`]: crate::json::grammar::Said
+/// [`json::grammar::quoted`]: crate::json::grammar::quoted
+#[macro_export]
+macro_rules! said {
+    ($format:literal $(, $piece:expr)* $(,)?) => {
+        $crate::json::grammar::Said::composed_by_said(::std::format!(
+            ::std::concat!($format)
+            $(, $crate::json::grammar::Said::from($piece))*
+        ))
+    };
 }

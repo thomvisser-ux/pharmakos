@@ -13,6 +13,8 @@
 
 use std::fmt;
 
+use pharmakos_proto::json::grammar::Said;
+
 /// Something a playbook file, a patch, or the schema it is read against did not
 /// allow.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -72,10 +74,10 @@ pub enum Bound {
 impl Error {
     /// An error at a pointer.
     #[must_use]
-    pub fn at(pointer: impl Into<String>, message: impl Into<String>) -> Self {
+    pub fn at(pointer: impl Into<String>, message: impl Into<Said>) -> Self {
         Self {
             pointer: pointer.into(),
-            message: message.into(),
+            message: message.into().into_string(),
             bound: None,
             malformed: None,
         }
@@ -86,11 +88,11 @@ impl Error {
     pub fn malformed(
         malformed: Malformed,
         pointer: impl Into<String>,
-        message: impl Into<String>,
+        message: impl Into<Said>,
     ) -> Self {
         Self {
             pointer: pointer.into(),
-            message: message.into(),
+            message: message.into().into_string(),
             bound: None,
             malformed: Some(malformed),
         }
@@ -98,10 +100,10 @@ impl Error {
 
     /// A refusal by a bound on the work one call may do.
     #[must_use]
-    pub fn bounded(bound: Bound, pointer: impl Into<String>, message: impl Into<String>) -> Self {
+    pub fn bounded(bound: Bound, pointer: impl Into<String>, message: impl Into<Said>) -> Self {
         Self {
             pointer: pointer.into(),
-            message: message.into(),
+            message: message.into().into_string(),
             bound: Some(bound),
             malformed: None,
         }
@@ -109,7 +111,7 @@ impl Error {
 
     /// An error at a byte offset, for a document that did not parse.
     #[must_use]
-    pub fn at_byte(offset: usize, message: impl Into<String>) -> Self {
+    pub fn at_byte(offset: usize, message: impl Into<Said>) -> Self {
         Self::at(format!("/byte/{offset}"), message)
     }
 
@@ -149,7 +151,14 @@ impl From<pharmakos_verifier::RulesGap> for Error {
                 "the rules table holds a value the verifier cannot use"
             }
         };
-        Self::at("", format!("{what}: {gap}"))
+        Self::at(
+            "",
+            pharmakos_proto::said!(
+                "{}: {}",
+                what,
+                pharmakos_proto::json::grammar::Said::engine_error(&gap)
+            ),
+        )
     }
 }
 
@@ -162,18 +171,27 @@ impl From<pharmakos_verifier::InputError> for Error {
             pharmakos_verifier::InputError::Rules(gap) => Self::from(gap),
             pharmakos_verifier::InputError::Unhashable(cause) => Self::at(
                 "",
-                format!("the playbook or the seat's view has no report hash: {cause}"),
+                pharmakos_proto::said!(
+                    "the playbook or the seat's view has no report hash: {}",
+                    pharmakos_proto::json::grammar::Said::engine_error(&cause)
+                ),
             ),
             pharmakos_verifier::InputError::View(cause) => Self::at(
                 "",
-                format!("the seat's view does not hold against the rules table: {cause}"),
+                pharmakos_proto::said!(
+                    "the seat's view does not hold against the rules table: {}",
+                    pharmakos_proto::json::grammar::Said::engine_error(&cause)
+                ),
             ),
             // S3's `vfy6`: the verifier's backstop. `verify_jsonc` refuses a
             // player's text past the cap first, so this answers a canonical
             // text no capped file can make.
             cause @ pharmakos_verifier::InputError::Oversize { .. } => Self::at(
                 "",
-                format!("the playbook is longer than the verifier takes: {cause}"),
+                pharmakos_proto::said!(
+                    "the playbook is longer than the verifier takes: {}",
+                    pharmakos_proto::json::grammar::Said::engine_error(&cause)
+                ),
             ),
         }
     }
@@ -181,7 +199,10 @@ impl From<pharmakos_verifier::InputError> for Error {
 
 impl From<pharmakos_verifier::ProjectionError> for Error {
     fn from(error: pharmakos_verifier::ProjectionError) -> Self {
-        Self::at("", error.to_string())
+        Self::at(
+            "",
+            pharmakos_proto::json::grammar::Said::engine_error(&error),
+        )
     }
 }
 
@@ -262,9 +283,10 @@ pub fn split_pointer(pointer: &str) -> Result<Vec<String>, Error> {
                     return Err(Error::bounded(
                         Bound::PointerTokens,
                         "",
-                        format!(
-                            "a JSON Pointer here names at most {MAX_POINTER_TOKENS} tokens, \
-                             one per container a playbook may nest and one past them"
+                        pharmakos_proto::said!(
+                            "a JSON Pointer here names at most {} tokens, one per container a \
+                             playbook may nest and one past them",
+                            MAX_POINTER_TOKENS
                         ),
                     ));
                 }
@@ -286,9 +308,10 @@ pub fn split_pointer(pointer: &str) -> Result<Vec<String>, Error> {
                         return Err(Error::malformed(
                             Malformed::PointerEscape,
                             "",
-                            format!(
-                                "a JSON Pointer's `~` is followed by `0` or `1` (RFC 6901), \
-                                 and the one at byte {pos} is not"
+                            pharmakos_proto::said!(
+                                "a JSON Pointer's `~` is followed by `0` or `1` (RFC 6901), and \
+                                 the one at byte {} is not",
+                                pos
                             ),
                         ));
                     }

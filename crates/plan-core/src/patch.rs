@@ -293,7 +293,7 @@ impl Patch {
             let op = Op::from_name(&name).ok_or_else(|| {
                 Error::at(
                     &at,
-                    format!(
+                    pharmakos_proto::said!(
                         "`{}` is not an RFC 6902 operation",
                         pharmakos_proto::json::grammar::quoted(&name)
                     ),
@@ -468,14 +468,10 @@ fn only_members(members: &[(String, Json)], allowed: &[&str], at: &str) -> Resul
         Some((key, _)) => Err(Error::malformed(
             Malformed::UnknownMember,
             at,
-            format!(
+            pharmakos_proto::said!(
                 "`{}` is not a member of this operation; it has {}",
                 pharmakos_proto::json::grammar::quoted(key),
-                allowed
-                    .iter()
-                    .map(|name| format!("`{name}`"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                pharmakos_proto::json::grammar::quoted(&allowed.join(", "))
             ),
         )),
     }
@@ -503,9 +499,10 @@ fn too_many(found: usize) -> Error {
     Error::bounded(
         Bound::Operations,
         "",
-        format!(
-            "this patch carries {found} operations, and a patch carries at most \
-             {MAX_PATCH_OPERATIONS}"
+        pharmakos_proto::said!(
+            "this patch carries {} operations, and a patch carries at most {}",
+            found,
+            MAX_PATCH_OPERATIONS
         ),
     )
 }
@@ -542,10 +539,11 @@ pub fn apply(document: &Document, patch: &Patch) -> Result<(Document, Patch), Er
             return Err(Error::bounded(
                 Bound::Depth,
                 path,
-                format!(
-                    "this patch would nest a value inside {} containers, past the {MAX_DEPTH} \
-                     a playbook may hold",
-                    size.depth
+                pharmakos_proto::said!(
+                    "this patch would nest a value inside {} containers, past the {} a \
+                     playbook may hold",
+                    size.depth,
+                    MAX_DEPTH
                 ),
             ));
         }
@@ -559,9 +557,10 @@ pub fn apply(document: &Document, patch: &Patch) -> Result<(Document, Patch), Er
             return Err(Error::bounded(
                 Bound::Inverse,
                 path,
-                format!(
-                    "the patch that undoes this one would run past the playbook's \
-                     {MAX_PLAYBOOK_CHARS} characters"
+                pharmakos_proto::said!(
+                    "the patch that undoes this one would run past the playbook's {} \
+                     characters",
+                    MAX_PLAYBOOK_CHARS
                 ),
             ));
         }
@@ -638,20 +637,24 @@ fn refuse_written_twice(original: &Document, working: &Document) -> Result<(), E
             if members.iter().any(|(key, _)| *key == twice.written)
                 && !members.iter().any(|(key, _)| *key == twice.added)
     );
+    let quoted = pharmakos_proto::json::grammar::quoted;
     let advice = if already {
-        format!(
+        pharmakos_proto::said!(
             "edit the member the file already writes, `{}`",
-            twice.written
+            quoted(&twice.written)
         )
     } else {
-        String::from("the patch itself writes both; write the field once")
+        pharmakos_proto::said!("the patch itself writes both; write the field once")
     };
     Err(Error::at(
         twice.pointer.clone(),
-        format!(
-            "this patch would write the field `{}` twice in one object, as `{}` and as \
-             `{}`, and a playbook writes each field once, under one of its names; {advice}",
-            twice.field, twice.written, twice.added
+        pharmakos_proto::said!(
+            "this patch would write the field `{}` twice in one object, as `{}` and as `{}`, \
+             and a playbook writes each field once, under one of its names; {}",
+            quoted(&twice.field),
+            quoted(&twice.written),
+            quoted(&twice.added),
+            advice
         ),
     ))
 }
@@ -662,8 +665,9 @@ fn too_long(path: &str) -> Error {
     Error::bounded(
         Bound::Size,
         path,
-        format!(
-            "this patch would make the playbook longer than its {MAX_PLAYBOOK_CHARS} characters"
+        pharmakos_proto::said!(
+            "this patch would make the playbook longer than its {} characters",
+            MAX_PLAYBOOK_CHARS
         ),
     )
 }
@@ -814,7 +818,7 @@ fn as_the_file_spells(document: &Document, pointer: &str) -> Result<String, Erro
         .ok_or_else(|| {
             Error::at(
                 "",
-                format!(
+                pharmakos_proto::said!(
                     "this build's schema does not declare `{}`",
                     crate::canonical::PLAYBOOK_MESSAGE
                 ),
@@ -980,7 +984,11 @@ fn exact(document: &mut Document, undo: &Undo) -> Result<Undo, Error> {
             if *at > len {
                 return Err(Error::at(
                     &path,
-                    format!("this undo puts back at slot {at}, past the {len} there are"),
+                    pharmakos_proto::said!(
+                        "this undo puts back at slot {}, past the {} there are",
+                        *at,
+                        len
+                    ),
                 ));
             }
             let container = resolve_mut(document, parent)?;
@@ -1049,7 +1057,7 @@ fn shape(document: &Document, pointer: &str) -> Result<(bool, usize), Error> {
     let len = container.len().ok_or_else(|| {
         Error::at(
             pointer,
-            format!("{} has no members to add to or remove", container.kind()),
+            pharmakos_proto::said!("{} has no members to add to or remove", container.kind()),
         )
     })?;
     Ok((container.kind() == "an array", len))

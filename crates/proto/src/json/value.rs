@@ -121,6 +121,15 @@ impl Error {
             message: message.into(),
         }
     }
+
+    /// The message, as text a player is shown (S3's `vfyq2`, fix pass 2,
+    /// item B): the codec composes every message from its own words and
+    /// player text it has put through [`super::grammar::quoted`], so the
+    /// message is already in the shown form.
+    #[must_use]
+    pub fn said(&self) -> super::grammar::Said {
+        super::grammar::Said::composed_by_said(self.message.clone())
+    }
 }
 
 impl fmt::Display for Error {

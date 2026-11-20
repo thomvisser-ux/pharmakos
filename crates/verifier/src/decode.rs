@@ -55,6 +55,7 @@ use pharmakos_proto::gp::api::v1::patch_suggestion::Applicability;
 use pharmakos_proto::gp::v1::meta::AuthorKind;
 use pharmakos_proto::gp::v1::playbook::Kind;
 use pharmakos_proto::gp::v1::{Playbook, SchemaVersion};
+use pharmakos_proto::json::grammar::quoted;
 use pharmakos_proto::json::{self, Json};
 use pharmakos_proto::{SCHEMA_VERSION, schema_version};
 
@@ -180,10 +181,19 @@ pub(crate) fn run<'a>(bytes: &[u8], handed: Handed<'a>, out: &mut Builder) -> Op
     let text = match core::str::from_utf8(bytes) {
         Ok(text) => text,
         Err(error) => {
-            out.emit(
-                Diag::new("E0001", pointer::ROOT)
-                    .arg("detail", format!("the bytes are not UTF-8 ({error})")),
-            );
+            // `Utf8Error`'s own words, composed from its numbers.
+            let detail = match error.error_len() {
+                Some(length) => pharmakos_proto::said!(
+                    "the bytes are not UTF-8 (invalid utf-8 sequence of {} bytes from index {})",
+                    length,
+                    error.valid_up_to()
+                ),
+                None => pharmakos_proto::said!(
+                    "the bytes are not UTF-8 (incomplete utf-8 byte sequence from index {})",
+                    error.valid_up_to()
+                ),
+            };
+            out.emit(Diag::new("E0001", pointer::ROOT).arg("detail", detail));
             return None;
         }
     };
@@ -262,11 +272,15 @@ fn named_reserved(value: &Json, out: &mut Builder) -> bool {
     let mut reserved: Vec<(String, String)> = Vec::new();
     scan_reserved(value, pointer::ROOT, &mut reserved);
     for (path, name) in &reserved {
-        out.emit(Diag::new("E0003", path.clone()).arg("field", name).fix(
-            format!("Delete `{name}`"),
-            patch_remove(path),
-            Applicability::MaybeIncorrect,
-        ));
+        out.emit(
+            Diag::new("E0003", path.clone())
+                .arg_text("field", name)
+                .fix(
+                    pharmakos_proto::said!("Delete `{}`", quoted(name)),
+                    patch_remove(path),
+                    Applicability::MaybeIncorrect,
+                ),
+        );
     }
     !reserved.is_empty()
 }
@@ -286,13 +300,13 @@ fn refuse(error: &json::Error, out: &mut Builder) {
             Diag::new("E0002", error.pointer.clone())
                 .arg_text("field", &name)
                 .fix(
-                    format!("Delete `{name}`"),
+                    pharmakos_proto::said!("Delete `{}`", quoted(&name)),
                     patch_remove(&error.pointer),
                     Applicability::MaybeIncorrect,
                 ),
         );
     } else {
-        out.emit(Diag::new("E0001", error.pointer.clone()).arg("detail", &error.message));
+        out.emit(Diag::new("E0001", error.pointer.clone()).arg("detail", error.said()));
     }
 }
 
@@ -335,16 +349,16 @@ fn check_version(playbook: &Playbook, out: &mut Builder) {
             if found_major == major && found_minor <= minor {
                 return;
             }
-            format!("{found_major}.{found_minor}")
+            pharmakos_proto::said!("{}.{}", found_major, found_minor)
         }
-        None => "missing".to_owned(),
+        None => pharmakos_proto::said!("missing"),
     };
     out.emit(
         Diag::new("E0004", "/schema_version")
             .arg("found", found)
-            .arg("supported", format!("{major}.{minor}"))
+            .arg("supported", pharmakos_proto::said!("{}.{}", major, minor))
             .fix(
-                format!("Set the schema version to {major}.{minor}"),
+                pharmakos_proto::said!("Set the schema version to {}.{}", major, minor),
                 patch_add("/schema_version", &schema_version_json(schema_version())),
                 Applicability::MaybeIncorrect,
             ),

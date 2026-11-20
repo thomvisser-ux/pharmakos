@@ -307,8 +307,14 @@ pub fn verify_report_hash(hash: &str) -> String {
 }
 
 /// One diagnostic, as a line a person reads.
+///
+/// The path is shown through the quoting rule (S3's `vfyq2`, fix pass 2, item
+/// B): it is exact as data in the report, but a key in it is the player's
+/// text, and a terminal is not the place for its ESC, BEL or U+202E. The
+/// message is the verifier's, already quoted where it carries player text.
 #[must_use]
 pub fn verify_diagnostic(severity: &str, code: &str, path: &str, message: &str) -> String {
+    let path = pharmakos_proto::json::grammar::quoted(path);
     format!("  {severity:<7} {code} {path}\n          {message}")
 }
 

@@ -526,7 +526,13 @@ impl Node {
             return Err(Error::at("", "not an object"));
         };
         if members.iter().any(|member| member.key == key) {
-            return Err(Error::at("", format!("`{key}` is already there")));
+            return Err(Error::at(
+                "",
+                pharmakos_proto::said!(
+                    "`{}` is already there",
+                    pharmakos_proto::json::grammar::quoted(key)
+                ),
+            ));
         }
         let (before, spelled, pre_colon, post_colon, after) = match fragment.trivia {
             Trivia::Member {

@@ -276,8 +276,15 @@ pub fn render(
     rules: &RulesTable,
 ) -> Result<Rendering, Error> {
     let rates = Rates::from_rules(rules)?;
-    let limits = Limits::from_rules(rules)
-        .map_err(|gap| Error::at("", format!("the rules table is incomplete: {gap}")))?;
+    let limits = Limits::from_rules(rules).map_err(|gap| {
+        Error::at(
+            "",
+            pharmakos_proto::said!(
+                "the rules table is incomplete: {}",
+                pharmakos_proto::json::grammar::Said::engine_error(&gap)
+            ),
+        )
+    })?;
 
     let mut out = Out::default();
     // `context` is the frozen snapshot's half of the rendering. Nothing in the
@@ -724,8 +731,12 @@ impl Pending {
                 };
                 let shape = match placed.spec {
                     Spec::Ready(shape) => shape,
-                    Spec::Choice(name) => Shape::choice(name)
-                        .map_err(|error| Error::at(placed.pointer.clone(), error.to_string()))?,
+                    Spec::Choice(name) => Shape::choice(name).map_err(|error| {
+                        Error::at(
+                            placed.pointer.clone(),
+                            pharmakos_proto::json::grammar::Said::engine_error(&error),
+                        )
+                    })?,
                     Spec::Blueprint(slot) => slot.shape(kinds),
                 };
                 Ok(Chip {

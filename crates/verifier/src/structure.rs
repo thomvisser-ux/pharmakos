@@ -113,6 +113,7 @@ use crate::report::{
 use crate::size;
 use crate::strings;
 use crate::walk::{self, AreaOf, Carrier, List, Slot, Visit};
+use pharmakos_proto::json::grammar::Said;
 
 use std::collections::BTreeMap;
 
@@ -467,7 +468,7 @@ fn walk_action(kind: &step::Kind, at: &str, out: &mut Builder) {
 /// `what` names the field for `E0101` when the whole message is absent; the
 /// unset-choice case is `E0111`, pointed at the `Location` itself, because there
 /// is no member under it to point at.
-fn check_location(place: Option<&Location>, at: &str, what: &str, out: &mut Builder) {
+fn check_location(place: Option<&Location>, at: &str, what: &'static str, out: &mut Builder) {
     let Some(place) = place else {
         out.emit(Diag::new("E0101", at.to_owned()).arg("what", what));
         return;
@@ -572,10 +573,11 @@ impl Visit for Sites<'_> {
         }
         for (present, corner) in [(area.min.is_some(), "min"), (area.max.is_some(), "max")] {
             if !present {
-                self.out.emit(
-                    Diag::new("E0101", pointer::child(at, corner))
-                        .arg("what", format!("`{}.{corner}`", of.field())),
-                );
+                self.out
+                    .emit(Diag::new("E0101", pointer::child(at, corner)).arg(
+                        "what",
+                        pharmakos_proto::said!("`{}.{}`", of.field(), corner),
+                    ));
             }
         }
     }
@@ -659,7 +661,7 @@ impl Visit for Sites<'_> {
         let here = pointer::child(at, "wall_box");
         self.out.emit(
             Diag::new("E0509", here.clone())
-                .arg("id", &target.blueprint_id)
+                .arg_text("id", &target.blueprint_id)
                 .fix(
                     strings::FIX_DROP_WALL_BOX,
                     patch_remove(&here),
@@ -778,7 +780,7 @@ impl Sites<'_> {
             if !present {
                 self.out.emit(
                     Diag::new("E0101", pointer::child(&box_at, corner))
-                        .arg("what", format!("`wall_box.{corner}`")),
+                        .arg("what", pharmakos_proto::said!("`wall_box.{}`", corner)),
                 );
             }
         }
@@ -940,7 +942,7 @@ impl Sites<'_> {
                 if !present {
                     self.out.emit(
                         Diag::new("E0101", pointer::child(at, field))
-                            .arg("what", format!("`{field}`")),
+                            .arg("what", pharmakos_proto::said!("`{}`", field)),
                     );
                 }
             }
@@ -1053,7 +1055,7 @@ impl Sites<'_> {
         at: &str,
         field: &'static str,
         found: u32,
-        range: &str,
+        range: &'static str,
         fixed: Option<u32>,
     ) {
         let here = pointer::child(at, field);
@@ -1063,7 +1065,7 @@ impl Sites<'_> {
             .arg("range", range);
         if let Some(value) = fixed {
             diag = diag.fix(
-                format!("Set {field} to {value}"),
+                pharmakos_proto::said!("Set {} to {}", field, value),
                 // `add`: the out-of-range value may be the absent one.
                 patch_add(&here, &number(value)),
                 Applicability::MaybeIncorrect,
@@ -1200,18 +1202,20 @@ fn filter_side(filter: Option<&BeaconFilter>) -> i32 {
 }
 
 /// How `E0105` names a repeated protect-list entry.
-fn asset_name(entry: &ProtectedAsset) -> String {
+fn asset_name(entry: &ProtectedAsset) -> Said {
     match entry.asset.as_ref() {
         Some(protected_asset::Asset::Beacon(beacon)) => match beacon.r#ref.as_ref() {
-            Some(beacon_ref::Ref::BeaconId(id)) => id.clone(),
-            Some(beacon_ref::Ref::Safest(_)) => "safest".to_owned(),
-            Some(beacon_ref::Ref::Nearest(_)) => "nearest".to_owned(),
-            Some(beacon_ref::Ref::Weakest(_)) => "weakest".to_owned(),
-            Some(beacon_ref::Ref::MostThreatened(_)) => "most_threatened".to_owned(),
-            None => "beacon".to_owned(),
+            Some(beacon_ref::Ref::BeaconId(id)) => {
+                Said::from(pharmakos_proto::json::grammar::quoted(id))
+            }
+            Some(beacon_ref::Ref::Safest(_)) => Said::from("safest"),
+            Some(beacon_ref::Ref::Nearest(_)) => Said::from("nearest"),
+            Some(beacon_ref::Ref::Weakest(_)) => Said::from("weakest"),
+            Some(beacon_ref::Ref::MostThreatened(_)) => Said::from("most_threatened"),
+            None => Said::from("beacon"),
         },
-        Some(protected_asset::Asset::MyCommander(_)) => strings::MY_COMMANDER.to_owned(),
-        None => "asset".to_owned(),
+        Some(protected_asset::Asset::MyCommander(_)) => Said::from(strings::MY_COMMANDER),
+        None => Said::from("asset"),
     }
 }
 
@@ -1286,7 +1290,7 @@ fn firing_limits(handler: &Handler, at: &str, limits: &Limits, out: &mut Builder
                 .arg("found", handler.max_fires)
                 .arg("max", ceiling)
                 .fix(
-                    format!("Set max_fires to {clamped}"),
+                    pharmakos_proto::said!("Set max_fires to {}", clamped),
                     // `add`: the out-of-range value may be the *absent* one — a
                     // handler that never wrote `max_fires` reads as zero, which
                     // is below the floor of one and is what fires this.
@@ -1304,7 +1308,7 @@ fn firing_limits(handler: &Handler, at: &str, limits: &Limits, out: &mut Builder
                 .arg("found", handler.cooldown_ms)
                 .arg("min", floor)
                 .fix(
-                    format!("Set the cooldown to {floor} ms"),
+                    pharmakos_proto::said!("Set the cooldown to {} ms", floor),
                     // `add`, and here it matters most: this is the one
                     // `MACHINE_APPLICABLE` fix in the stage, so the editor
                     // applies it unattended — and a handler with no
@@ -1324,7 +1328,7 @@ fn negative(out: &mut Builder, at: &str, field: &'static str, found: i32) {
             .arg("field", field)
             .arg("found", found)
             .fix(
-                format!("Set {field} to 0"),
+                pharmakos_proto::said!("Set {} to 0", field),
                 patch_replace(&pointer::child(at, field), &number(0)),
                 Applicability::MaybeIncorrect,
             ),
@@ -1362,7 +1366,7 @@ fn unique_names<'a>(
         match seen.get(name) {
             Some(first) => out.emit(
                 Diag::new("E0105", pointer::child(&pointer::at(at, index), field))
-                    .arg("name", name)
+                    .arg_text("name", name)
                     .arg("scope", scope)
                     .related(pointer::child(&pointer::at(at, *first), field)),
             ),
@@ -1673,9 +1677,9 @@ fn blueprint(id: &str, at: &str, tail: &[&str], out: &mut Builder) {
         return;
     }
     match crate::blueprints::slots_of(id) {
-        None => out.emit(Diag::new("E0506", pointer::join(at, tail)).arg("id", id)),
+        None => out.emit(Diag::new("E0506", pointer::join(at, tail)).arg_text("id", id)),
         Some(row) if !row.stands_as_a_structure() => {
-            out.emit(Diag::new("E0514", pointer::join(at, tail)).arg("id", id));
+            out.emit(Diag::new("E0514", pointer::join(at, tail)).arg_text("id", id));
         }
         Some(_) => {}
     }
@@ -1837,7 +1841,7 @@ fn compare(
     let Some(comparison) = value else {
         out.emit(
             Diag::new("E0101", pointer::join(at, &[predicate, field]))
-                .arg("what", format!("`{field}`")),
+                .arg("what", pharmakos_proto::said!("`{}`", field)),
         );
         return;
     };
@@ -1865,7 +1869,7 @@ fn percent(out: &mut Builder, at: &str, tail: &[&str], found: i64) {
     let here = pointer::join(at, tail);
     let clamped = found.clamp(0, 100);
     out.emit(Diag::new("E0202", here.as_str()).arg("found", found).fix(
-        format!("Clamp it to {clamped}"),
+        pharmakos_proto::said!("Clamp it to {}", clamped),
         patch_replace(&here, &number(clamped)),
         Applicability::MaybeIncorrect,
     ));

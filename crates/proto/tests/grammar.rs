@@ -184,13 +184,30 @@ fn an_overlong_integer_is_out_of_range() {
 #[test]
 fn a_quote_escapes_controls_and_stops_at_the_cap() {
     use pharmakos_proto::json::grammar::{MAX_QUOTED_CHARS, quoted};
-    assert_eq!(quoted("plain é"), "plain é");
-    assert_eq!(quoted("\u{1b}]0;x\u{7}"), r"\u001b]0;x\u0007");
-    assert_eq!(quoted("a\u{7f}b\nc"), r"a\u007fb\u000ac");
+    let shown = |text: &str| quoted(text).as_str().to_owned();
+    assert_eq!(shown("plain é"), "plain é");
+    assert_eq!(shown("\u{1b}]0;x\u{7}"), r"\u001b]0;x\u0007");
+    assert_eq!(shown("a\u{7f}b\nc"), r"a\u007fb\u000ac");
     let exact = "k".repeat(MAX_QUOTED_CHARS);
-    assert_eq!(quoted(&exact), exact);
+    assert_eq!(shown(&exact), exact);
     let long = "é".repeat(200_000);
-    let shown = quoted(&long);
-    assert_eq!(shown.chars().count(), MAX_QUOTED_CHARS + 1);
-    assert!(shown.ends_with('…'), "{shown}");
+    let capped = shown(&long);
+    assert_eq!(capped.chars().count(), MAX_QUOTED_CHARS + 1);
+    assert!(capped.ends_with('…'), "{capped}");
+    // The characters that reorder or hide text (fix pass 2, item B), each
+    // range at its ends.
+    for character in [
+        '\u{061c}', '\u{200b}', '\u{200f}', '\u{2028}', '\u{2029}', '\u{202a}', '\u{202e}',
+        '\u{2066}', '\u{2069}', '\u{feff}',
+    ] {
+        let written = format!("\\u{:04x}", u32::from(character));
+        assert_eq!(shown(&format!("a{character}b")), format!("a{written}b"));
+    }
+    // Their neighbours are shown as themselves.
+    for character in [
+        '\u{200a}', '\u{2010}', '\u{2027}', '\u{202f}', '\u{2065}', '\u{206a}',
+    ] {
+        let text = format!("a{character}b");
+        assert_eq!(shown(&text), text);
+    }
 }

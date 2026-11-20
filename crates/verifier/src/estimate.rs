@@ -102,6 +102,7 @@ use crate::projection::{self, Tally};
 use crate::report::{Builder, Diag, patch_add};
 use crate::scope::Scope;
 use crate::strings;
+use pharmakos_proto::json::grammar::Said;
 
 /// Where the route's steps are, as a JSON Pointer.
 const ROUTE: &str = "/declarative/route";
@@ -269,9 +270,12 @@ fn seal_price(playbook: &Playbook, body: &Declarative, input: &Input<'_>, out: &
         Diag::new("E0603", at)
             .arg(
                 "found",
-                format!("{} and {} kW", dollars(upper.spend), upper.draw),
+                pharmakos_proto::said!("{} and {} kW", dollars(upper.spend), upper.draw),
             )
-            .arg("most", format!("{} and {int32} kW", dollars(int32))),
+            .arg(
+                "most",
+                pharmakos_proto::said!("{} and {} kW", dollars(int32), int32),
+            ),
     );
 }
 
@@ -296,8 +300,8 @@ fn allow_dormant(body: &Declarative) -> String {
 
 /// A `$` figure as a player reads it: `$ 60`, the spelling the gateway's own
 /// feed lines use.
-fn dollars(money: i128) -> String {
-    format!("$ {money}")
+fn dollars(money: i128) -> Said {
+    pharmakos_proto::said!("$ {}", money)
 }
 
 // ---------------------------------------------------------------------------
@@ -452,7 +456,7 @@ mod tests {
 
     #[test]
     fn a_dollar_figure_reads_as_the_feed_spells_it() {
-        assert_eq!(dollars(220), "$ 220");
-        assert_eq!(dollars(-5), "$ -5");
+        assert_eq!(dollars(220).as_str(), "$ 220");
+        assert_eq!(dollars(-5).as_str(), "$ -5");
     }
 }

@@ -184,7 +184,7 @@ pub fn decode_jsonc(playbook_jsonc: &str) -> Result<json::Canonicalised<Playbook
         return Err(Error::bounded(
             crate::error::Bound::Size,
             "",
-            format!(
+            pharmakos_proto::said!(
                 "the playbook is past {} characters",
                 pharmakos_verifier::MAX_PLAYBOOK_CHARS
             ),
@@ -263,9 +263,10 @@ fn refused_bytes(text: &str, blanked: &str, at: Option<usize>) -> Result<String,
         // would be the codec and this module disagreeing, said as such.
         _ => Err(Error::at(
             "",
-            format!(
-                "the codec refused this text at byte {at}, which is not a character boundary \
-                 of it: this build cannot say what to verify"
+            pharmakos_proto::said!(
+                "the codec refused this text at byte {}, which is not a character boundary of \
+                 it: this build cannot say what to verify",
+                at
             ),
         )),
     }

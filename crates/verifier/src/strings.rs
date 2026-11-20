@@ -34,6 +34,8 @@
 //! sentence, and it says what the rule is for rather than what this file did
 //! wrong — a number in it would make it a second copy of the message.
 
+use pharmakos_proto::json::grammar::Said;
+
 /// One row of the string table: a code and the two strings it shows.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Text {
@@ -898,14 +900,14 @@ pub const SEAT_PAST_ANY_MATCH: &str = "which is past any seat a match holds";
 /// E0418's `{what}` for a named seat whose commander the view holds no
 /// sighting of.
 #[must_use]
-pub fn commander_never_sighted(seat: u32) -> String {
-    format!("the seat has no sighting of seat {seat}'s commander")
+pub fn commander_never_sighted(seat: u32) -> Said {
+    pharmakos_proto::said!("the seat has no sighting of seat {}'s commander", seat)
 }
 
 /// E0418's `{what}` subject for a named seat's commander.
 #[must_use]
-pub fn seats_commander(seat: u32) -> String {
-    format!("seat {seat}'s commander")
+pub fn seats_commander(seat: u32) -> Said {
+    pharmakos_proto::said!("seat {}'s commander", seat)
 }
 /// W0502's `{name}` for a repeated `my_commander`.
 pub const MY_COMMANDER: &str = "my_commander";
@@ -916,8 +918,8 @@ pub const FIX_DROP_ROTATION: &str = "Leave the rotation out";
 
 /// E0418's `{what}` for a beacon the view holds no sighting of.
 #[must_use]
-pub fn never_sighted(beacon_id: &str) -> String {
-    format!(
+pub fn never_sighted(beacon_id: &str) -> Said {
+    pharmakos_proto::said!(
         "the seat has no sighting of `{}`",
         pharmakos_proto::json::grammar::quoted(beacon_id)
     )
@@ -925,8 +927,18 @@ pub fn never_sighted(beacon_id: &str) -> String {
 
 /// E0418's and W0708's `{what}` for a sighting older than the window.
 #[must_use]
-pub fn sighted_ago(what: &str, age_ms: u32) -> String {
-    format!("{what} was last seen {age_ms} ms ago")
+pub fn sighted_ago(what: impl Into<Said>, age_ms: u32) -> Said {
+    pharmakos_proto::said!("{} was last seen {} ms ago", what.into(), age_ms)
+}
+
+/// E0418's `{what}` for a named beacon whose sighting is older than the
+/// window: its id quoted.
+#[must_use]
+pub fn id_sighted_ago(id: &str, age_ms: u32) -> Said {
+    sighted_ago(
+        pharmakos_proto::said!("`{}`", pharmakos_proto::json::grammar::quoted(id)),
+        age_ms,
+    )
 }
 
 /// W0709's `{what}`: no enemy beacon has been sighted.
@@ -935,8 +947,11 @@ pub const NO_BEACON_SIGHTED: &str = "the seat has no sighting of an enemy beacon
 /// W0709's subject for the most recently seen enemy beacon, whose sighting is
 /// older than the window.
 #[must_use]
-pub fn freshest_enemy_beacon(id: &str) -> String {
-    format!("the most recently seen enemy beacon, `{id}`,")
+pub fn freshest_enemy_beacon(id: &str) -> Said {
+    pharmakos_proto::said!(
+        "the most recently seen enemy beacon, `{}`,",
+        pharmakos_proto::json::grammar::quoted(id)
+    )
 }
 
 /// E0507's `{licence}` for `gp.v1.Licence.RESONANCE_SPIRE`.
