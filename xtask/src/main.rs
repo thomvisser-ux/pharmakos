@@ -17,9 +17,9 @@
 //! |------------------|------------------------------------------------------------------------------|
 //! | `fmt`            | `cargo fmt --all --check`                                                     |
 //! | `clippy`         | `-D warnings` plus the determinism lint set; walled crates linted separately  |
-//! | `profiles`       | overflow checks are on in every profile, release included                     |
-//! | `test`           | `cargo test --workspace` without the `research` feature                       |
-//! | `test-research`  | `cargo test --package pharmakos-sim --features pharmakos-sim/research`        |
+//! | `profiles`       | overflow checks on in every profile, release included; reads every profile line or fails |
+//! | `test`           | `cargo test --workspace` without `research`, each invocation's resolved profile checked first: debug assertions and overflow checks on, the sim optimised (its allocation test at opt-level 0) |
+//! | `test-research`  | `cargo test --package pharmakos-sim --features pharmakos-sim/research`, checked as `test` is |
 //! | `research-guard` | plan-core / verifier / operator / gateway / gamectl / bench never reach `research` |
 //! | `wall-guard`     | `sim` and the deterministic crates never reach a walled crate; the client never the core |
 //! | `deny`           | `cargo deny check` (licences, advisories, banned crates)                      |
@@ -242,6 +242,7 @@ mod licence_quotes;
 mod package;
 mod placeholders;
 mod png;
+mod resolved;
 mod scenario;
 mod scope;
 mod shard;
@@ -619,17 +620,18 @@ const STEPS: &[Step] = &[
     },
     Step {
         name: "profiles",
-        about: "overflow checks stay on in every profile",
+        about: "overflow checks stay on in every profile; every profile line is read",
         run: step_profiles,
     },
     Step {
         name: "test",
-        about: "cargo test --workspace, without the research feature",
+        about: "cargo test --workspace, without the research feature, its resolved profile checked: \
+                checks on, the sim optimised",
         run: step_test,
     },
     Step {
         name: "test-research",
-        about: "cargo test on pharmakos-sim alone, with the research feature",
+        about: "cargo test on pharmakos-sim alone, with the research feature, checked as test is",
         run: step_test_research,
     },
     Step {
@@ -1324,48 +1326,39 @@ fn scoped_clippy_args(packages: &[String], walled: &[String], locked: bool) -> V
 /// and not another's is exactly the failure this project cannot absorb, so a
 /// profile that switches the check off fails the build.
 ///
-/// And the suite runs the sim optimised with its checks on (the `citime`
-/// lane): every slow test builds a hosted match, a map or a route graph, or
-/// plays ticks, and at opt-level 0 the sim's integer code ran 25 to 50 times
-/// slower than the same code optimised, which held CI's shards at 35 to 54
-/// minutes. So the manifest must optimise [`OPTIMISED_UNDER_TEST`] in the dev
-/// profile the tests inherit, nothing in the dev or test family may set it
-/// back to opt-level 0, and nothing there may switch debug assertions off:
-/// the optimisation never takes a check with it.
+/// This step reads the TOML, because the release family is never built by
+/// the suite, so cargo cannot be asked what it resolves there. The reading
+/// fails closed: a `[profile.*]` line in a form it cannot read (a dotted key,
+/// an inline table, a quoted key, a bare `[profile]` table, an array of
+/// tables) is a failure, never a pass. What the suite builds, the dev and test
+/// profiles with debug assertions on and the sim optimised, is checked from
+/// cargo's own answer by the `test` step ([`resolved`]).
 fn step_profiles(ctx: &Ctx) -> Result<Outcome, String> {
     let manifest_path = ctx.root.join("Cargo.toml");
     let manifest = fs::read_to_string(&manifest_path)
         .map_err(|error| format!("cannot read {}: {error}", manifest_path.display()))?;
     let manifest = scan_profiles(&manifest);
-
     // A cargo config can override the manifest's profiles, so it is checked too
-    // — otherwise the ban could be lifted in a file nobody reads. A clone with
-    // no config has nothing to check; one that cannot be read is a failure,
-    // not a pass.
-    let config_path = ctx.root.join(".cargo").join("config.toml");
-    let config = match fs::read_to_string(&config_path) {
-        Ok(text) => Some(scan_profiles(&text)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => {
-            return Err(format!("cannot read {}: {error}", config_path.display()));
-        }
-    };
-
+    // — otherwise the ban could be lifted in a file nobody reads.
+    let config =
+        read_config(&ctx.root.join(".cargo").join("config.toml"))?.map(|text| scan_profiles(&text));
     let failures = profile_failures(&manifest, config.as_ref());
     if !failures.is_empty() {
         return Err(failures.join("; "));
     }
-    Ok(Outcome::Done(format!(
-        "overflow checks on in release, and switched off nowhere; debug assertions on in \
-         every dev and test profile; {OPTIMISED_UNDER_TEST} optimised under test"
-    )))
+    Ok(Outcome::Done(
+        "overflow checks on in release, and switched off nowhere; every profile line read \
+         (debug assertions and the sim's optimisation are the test step's, from cargo)"
+            .to_owned(),
+    ))
 }
 
-/// The package the `profiles` step requires optimised under test: the
-/// deterministic sim, whose integer code every slow test runs. Third-party
-/// crates are optimised beside it by `[profile.dev.package."*"]`, which the
-/// step does not require: they are a share of the time, not its cause.
-const OPTIMISED_UNDER_TEST: &str = "pharmakos-sim";
+/// The cargo config at `path`: `None` when there is none, which leaves nothing
+/// to check; a config that is there and cannot be read is a failure, not a
+/// pass.
+fn read_config(path: &Path) -> Result<Option<String>, String> {
+    fs::read_to_string(path).map(Some).or(Ok(None))
+}
 
 /// What [`scan_profiles`] found in one TOML file's `[profile.*]` tables.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -1374,15 +1367,8 @@ struct ProfileScan {
     release_checked: bool,
     /// Every profile table that sets `overflow-checks = false`.
     overflow_off: Vec<String>,
-    /// Every table of the dev or test family (the profiles the suite builds
-    /// with, their package and build overrides included) that sets
-    /// `debug-assertions = false`.
-    assertions_off: Vec<String>,
-    /// Every dev- or test-family package table for [`OPTIMISED_UNDER_TEST`]
-    /// that sets its `opt-level` to 0.
-    sim_unoptimised: Vec<String>,
-    /// `[profile.dev.package.pharmakos-sim]` sets an `opt-level` other than 0.
-    sim_optimised: bool,
+    /// Every profile line the scan cannot read, as `line N: text`.
+    unreadable: Vec<String>,
 }
 
 /// The tables in `manifest` and `config`, each named with the file it is in.
@@ -1401,7 +1387,6 @@ fn named_tables(manifest: &[String], config: Option<&[String]>) -> Vec<String> {
 /// `profiles` rule, one sentence each; empty when they keep it.
 fn profile_failures(manifest: &ProfileScan, config: Option<&ProfileScan>) -> Vec<String> {
     let mut failures = Vec::new();
-
     let overflow_off = named_tables(
         &manifest.overflow_off,
         config.map(|config| config.overflow_off.as_slice()),
@@ -1419,111 +1404,218 @@ fn profile_failures(manifest: &ProfileScan, config: Option<&ProfileScan>) -> Vec
             "Cargo.toml must set `overflow-checks = true` under `[profile.release]`".to_owned(),
         );
     }
-
-    let assertions_off = named_tables(
-        &manifest.assertions_off,
-        config.map(|config| config.assertions_off.as_slice()),
-    );
-    if !assertions_off.is_empty() {
-        failures.push(format!(
-            "debug assertions are switched off in {}; every dev and test profile keeps them on, \
-             so optimising the suite never takes a check with it",
-            assertions_off.join(", ")
-        ));
+    let mut unreadable: Vec<String> = manifest
+        .unreadable
+        .iter()
+        .map(|line| format!("Cargo.toml {line}"))
+        .collect();
+    if let Some(config) = config {
+        unreadable.extend(
+            config
+                .unreadable
+                .iter()
+                .map(|line| format!(".cargo/config.toml {line}")),
+        );
     }
-
-    let unoptimised = named_tables(
-        &manifest.sim_unoptimised,
-        config.map(|config| config.sim_unoptimised.as_slice()),
-    );
-    if !unoptimised.is_empty() {
+    if !unreadable.is_empty() {
         failures.push(format!(
-            "{} sets {OPTIMISED_UNDER_TEST} back to opt-level 0; the suite runs the sim \
-             optimised, with its checks on",
-            unoptimised.join(", ")
-        ));
-    }
-    if !manifest.sim_optimised {
-        failures.push(format!(
-            "Cargo.toml must optimise {OPTIMISED_UNDER_TEST} under test: \
-             `[profile.dev.package.{OPTIMISED_UNDER_TEST}]` with an `opt-level` other than 0 \
-             (at 0 the suite's time returns)"
+            "the profiles step cannot read {}; it reads `[profile.<name>]`, \
+             `[profile.<name>.build-override]` and `[profile.<name>.package.<spec>]` tables of \
+             bare `key = value` lines, and fails rather than pass a form it cannot read",
+            unreadable.join(", ")
         ));
     }
     failures
 }
 
-/// A table header's name with its quotes and spaces taken out, so
-/// `[profile.dev.package."pharmakos-sim"]  # note` reads as
-/// `profile.dev.package.pharmakos-sim`.
-fn table_name(header: &str) -> String {
-    header
-        .split('#')
-        .next()
-        .unwrap_or("")
-        .trim()
-        .trim_start_matches('[')
-        .trim_end_matches(']')
-        .chars()
-        .filter(|character| !matches!(character, '"' | '\'') && !character.is_whitespace())
-        .collect()
+/// A TOML table header's dotted segments, each trimmed, quotes kept; `None`
+/// for a header this does not read (an unclosed quote, an empty segment).
+fn header_segments(inner: &str) -> Option<Vec<String>> {
+    let mut segments: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    for character in inner.chars() {
+        match quote {
+            Some(open) => {
+                current.push(character);
+                if character == open {
+                    quote = None;
+                }
+            }
+            None if character == '"' || character == '\'' => {
+                quote = Some(character);
+                current.push(character);
+            }
+            None if character == '.' => {
+                segments.push(current.trim().to_owned());
+                current.clear();
+            }
+            None => current.push(character),
+        }
+    }
+    if quote.is_some() {
+        return None;
+    }
+    segments.push(current.trim().to_owned());
+    if segments.iter().any(String::is_empty) {
+        return None;
+    }
+    Some(segments)
 }
 
-/// Whether `table` is `profile.<name>` or one of its sub-tables (a package
-/// or build override).
-fn in_profile(table: &str, name: &str) -> bool {
-    table
-        .strip_prefix("profile.")
-        .and_then(|rest| rest.strip_prefix(name))
-        .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
+/// A bare TOML key: letters, digits, `-` and `_`.
+fn is_bare_key(text: &str) -> bool {
+    !text.is_empty()
+        && text
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
 }
 
-/// Reads the `[profile.*]` tables out of a TOML file's text: overflow checks
-/// switched off anywhere, debug assertions switched off in the dev or test
-/// family, and the sim's optimisation level under test.
+/// A scalar value the scan reads: a boolean, an integer, or a one-line string
+/// with no quote inside it.
+fn is_plain_value(text: &str) -> bool {
+    let quoted = |mark: char| {
+        text.len() >= 2
+            && text.starts_with(mark)
+            && text.ends_with(mark)
+            && !text
+                .get(1..text.len().saturating_sub(1))
+                .unwrap_or("")
+                .contains(['"', '\''])
+    };
+    text == "true"
+        || text == "false"
+        || (!text.is_empty() && text.chars().all(|character| character.is_ascii_digit()))
+        || quoted('"')
+        || quoted('\'')
+}
+
+/// What a header names, for the scan: a profile table it reads, a profile
+/// table it cannot read, or another table.
+enum Header {
+    Profile(String),
+    UnreadableProfile,
+    Other,
+}
+
+/// Reads a `[...]` header line (the line trimmed, its comment taken off).
+fn read_header(line: &str) -> Header {
+    let names_profile = |inner: &str| {
+        inner
+            .trim()
+            .trim_start_matches(['"', '\''])
+            .starts_with("profile")
+    };
+    if let Some(inner) = line.strip_prefix("[[") {
+        return if names_profile(inner) {
+            Header::UnreadableProfile
+        } else {
+            Header::Other
+        };
+    }
+    let Some(inner) = line
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+    else {
+        return Header::UnreadableProfile;
+    };
+    let Some(segments) = header_segments(inner) else {
+        return if names_profile(inner) {
+            Header::UnreadableProfile
+        } else {
+            Header::Other
+        };
+    };
+    let first = segments.first().map_or("", String::as_str);
+    if first.trim_matches(['"', '\'']) != "profile" {
+        return Header::Other;
+    }
+    let readable = first == "profile"
+        && match segments.as_slice() {
+            [_, name] => is_bare_key(name),
+            [_, name, over] => is_bare_key(name) && over == "build-override",
+            [_, name, package, spec] => {
+                let spec = spec.trim_matches(['"', '\'']);
+                is_bare_key(name) && package == "package" && !spec.is_empty()
+            }
+            _ => false,
+        };
+    if readable {
+        Header::Profile(
+            segments
+                .iter()
+                .map(|segment| segment.trim_matches(['"', '\'']))
+                .collect::<Vec<_>>()
+                .join("."),
+        )
+    } else {
+        Header::UnreadableProfile
+    }
+}
+
+/// Reads the `[profile.*]` tables out of a TOML file's text: whether
+/// `[profile.release]` sets `overflow-checks = true`, the tables that set it
+/// to `false`, and every profile line in a form this does not read.
 ///
 /// Text scanning rather than a TOML parser, because xtask takes no
-/// dependencies; it copes with comments, whitespace and quoted header keys,
-/// which is all the two files in question need.
+/// dependencies; it reads the plain forms the two files use and fails closed
+/// on every other form a profile could be written in.
 fn scan_profiles(text: &str) -> ProfileScan {
     let mut scan = ProfileScan::default();
-    let mut table = String::new();
-    let dev_sim = format!("profile.dev.package.{OPTIMISED_UNDER_TEST}");
-    let test_sim = format!("profile.test.package.{OPTIMISED_UNDER_TEST}");
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('[') {
-            table = table_name(trimmed);
+    // `None` outside a profile table; `Some(None)` in one this cannot read.
+    let mut table: Option<Option<String>> = None;
+    let mut in_root = true;
+    for (index, raw) in text.lines().enumerate() {
+        let line = raw.split('#').next().unwrap_or("").trim();
+        let unreadable = |scan: &mut ProfileScan| {
+            let _ = (&scan.unreadable, index, raw);
+        };
+        if line.is_empty() {
             continue;
         }
-        if !table.starts_with("profile.") {
+        if line.starts_with('[') {
+            in_root = false;
+            table = match read_header(line) {
+                Header::Profile(name) => Some(Some(name)),
+                Header::UnreadableProfile => {
+                    unreadable(&mut scan);
+                    Some(None)
+                }
+                Header::Other => None,
+            };
             continue;
         }
-        let compact: String = trimmed
-            .split('#')
-            .next()
-            .unwrap_or("")
-            .chars()
-            .filter(|character| !character.is_whitespace())
-            .collect();
-        let family = in_profile(&table, "dev") || in_profile(&table, "test");
-        if compact == "overflow-checks=true" && table == "profile.release" {
+        let key_part = line.split('=').next().unwrap_or("").trim();
+        if in_root
+            && key_part
+                .trim_start_matches(['"', '\''])
+                .starts_with("profile")
+        {
+            // A dotted key at the root, `profile.dev.opt-level = 0`.
+            unreadable(&mut scan);
+            continue;
+        }
+        let Some(name) = &table else {
+            continue;
+        };
+        let Some(name) = name else {
+            // The header was already reported; its lines are not read.
+            continue;
+        };
+        let Some((key, value)) = line.split_once('=') else {
+            unreadable(&mut scan);
+            continue;
+        };
+        let (key, value) = (key.trim(), value.trim());
+        if !is_bare_key(key) || !is_plain_value(value) {
+            unreadable(&mut scan);
+            continue;
+        }
+        if key == "overflow-checks" && value == "true" && name == "profile.release" {
             scan.release_checked = true;
         }
-        if compact == "overflow-checks=false" {
-            scan.overflow_off.push(table.clone());
-        }
-        if family && compact == "debug-assertions=false" {
-            scan.assertions_off.push(table.clone());
-        }
-        if let Some(level) = compact.strip_prefix("opt-level=")
-            && (table == dev_sim || table == test_sim)
-        {
-            if level.trim_matches('"') == "0" {
-                scan.sim_unoptimised.push(table.clone());
-            } else if table == dev_sim {
-                scan.sim_optimised = true;
-            }
+        if key == "overflow-checks" && value == "false" {
+            scan.overflow_off.push(name.clone());
         }
     }
     scan
@@ -1542,8 +1634,11 @@ fn scan_profiles(text: &str) -> ProfileScan {
 /// `p1`). Every `actual.*` the step then reads was therefore written by this
 /// run. A `--package` run empties nothing, because it runs only some of the
 /// producers; it says so instead.
+///
+/// The tests run as [`run_units`] runs them: each invocation's resolved
+/// profile checked before it runs, and the allocation test with the sim
+/// unoptimised ([`resolved`]).
 fn step_test(ctx: &Ctx) -> Result<Outcome, String> {
-    let mut args: Vec<String> = vec!["test".to_owned()];
     let fresh_note = if ctx.packages.is_empty() {
         let golden = golden_target_dir(&ctx.workspace)?.join("golden");
         empty_fresh_outputs(&golden)?;
@@ -1556,43 +1651,55 @@ fn step_test(ctx: &Ctx) -> Result<Outcome, String> {
          earlier run wrote them"
             .to_owned()
     };
+    let mut base: Vec<String> = vec!["test".to_owned()];
     if ctx.packages.is_empty() {
-        args.push("--workspace".to_owned());
+        base.push("--workspace".to_owned());
     } else {
         for package in &ctx.packages {
-            args.push("--package".to_owned());
-            args.push(package.clone());
+            base.push("--package".to_owned());
+            base.push(package.clone());
         }
     }
-    if let Some(shard) = ctx.shard {
-        let workspace = metadata(ctx)?;
-        let all = workspace_test_units(workspace)?;
-        return Ok(Outcome::Done(
-            match run_shard_units(ctx, shard, "test", &all, &args)? {
-                ShardPart::Ran(part) => {
-                    format!("{part}; tests pass without `research`; {fresh_note}")
-                }
-                ShardPart::Empty(part) => format!("{part}; {fresh_note}"),
-            },
-        ));
-    }
-    if ctx.locked {
-        args.push("--locked".to_owned());
-    }
-    run(ctx, &ctx.cargo, &args)?;
-    Ok(Outcome::Done(format!(
-        "tests pass without `research`; {fresh_note}"
-    )))
+    let all = workspace_test_units(metadata(ctx)?, &ctx.packages)?;
+    let report = if let Some(shard) = ctx.shard {
+        run_shard_units(ctx, shard, "test", &all, &base)?
+    } else {
+        run_units(ctx, &base, &all)?;
+        ShardPart::Ran(format!("{} unit(s)", all.len()))
+    };
+    Ok(Outcome::Done(match report {
+        ShardPart::Ran(part) => format!(
+            "{part}; tests pass without `research`, each invocation's resolved profile \
+             checked first; {fresh_note}"
+        ),
+        ShardPart::Empty(part) => format!("{part}; {fresh_note}"),
+    }))
 }
 
-/// Every unit `cargo test --workspace` runs, from the metadata.
-fn workspace_test_units(workspace: &Workspace) -> Result<Vec<shard::Unit>, String> {
-    shard::units(workspace.packages.iter().flat_map(|package| {
-        package
-            .targets
+/// Every unit `cargo test` runs over the packages `packages` may select (every
+/// package when it is empty, as `--workspace`), from the metadata. A
+/// `--package` value is matched as [`package_spec_may_name`] matches it.
+fn workspace_test_units(
+    workspace: &Workspace,
+    packages: &[String],
+) -> Result<Vec<shard::Unit>, String> {
+    shard::units(
+        workspace
+            .packages
             .iter()
-            .map(|target| (package.name.as_str(), target))
-    }))
+            .filter(|package| {
+                packages.is_empty()
+                    || packages
+                        .iter()
+                        .any(|spec| package_spec_may_name(spec, &package.name))
+            })
+            .flat_map(|package| {
+                package
+                    .targets
+                    .iter()
+                    .map(|target| (package.name.as_str(), target))
+            }),
+    )
     .map_err(|error| error.to_string())
 }
 
@@ -1604,10 +1711,10 @@ fn shard_part(shard: shard::Shard, step: &str, all: &[shard::Unit]) -> Vec<shard
         .collect()
 }
 
-/// Runs `base` (a `cargo test` command line up to its target selection) once
-/// per selector list of `shard`'s part of `all`, and says what it ran. A shard
-/// that holds none of the units runs nothing and says so; the split's tests
-/// prove that some shard holds each.
+/// Runs `base` (a `cargo test` command line up to its target selection) over
+/// `shard`'s part of `all`, through [`run_units`], and says what it ran. A
+/// shard that holds none of the units runs nothing and says so; the split's
+/// tests prove that some shard holds each.
 fn run_shard_units(
     ctx: &Ctx,
     shard: shard::Shard,
@@ -1627,14 +1734,7 @@ fn run_shard_units(
             keys.join(", ")
         }
     );
-    for selectors in shard::selectors(&part) {
-        let mut args: Vec<String> = base.to_vec();
-        args.extend(selectors);
-        if ctx.locked {
-            args.push("--locked".to_owned());
-        }
-        run(ctx, &ctx.cargo, &args)?;
-    }
+    run_units(ctx, base, &part)?;
     if part.is_empty() {
         return Ok(ShardPart::Empty(format!(
             "none of the step's {} unit(s) falls to shard {shard}, so this shard ran none",
@@ -1646,6 +1746,93 @@ fn run_shard_units(
         part.len(),
         all.len()
     )))
+}
+
+/// Runs `base` (a `cargo test` command line up to its target selection, its
+/// first argument `test`) over `units`, one invocation per
+/// [`resolved::invocations`] entry. Before each runs, the same invocation is
+/// built with `--no-run --message-format=json` and [`resolved::faults`] reads
+/// the profile cargo resolved for every unit it built; a fault stops the step
+/// before a test runs. A doctest invocation, which cargo will not build without
+/// running, is checked through `cargo build --profile test --lib` over the same
+/// packages: the libraries a doctest links, the same artefacts.
+fn run_units(ctx: &Ctx, base: &[String], units: &[shard::Unit]) -> Result<(), String> {
+    let runs = resolved::invocations(units);
+    if runs.is_empty() {
+        return Ok(());
+    }
+    let Some(("test", selection)) = base
+        .split_first()
+        .map(|(first, rest)| (first.as_str(), rest))
+    else {
+        return Err(format!(
+            "a test invocation starts with `test`, and this one is `{}`",
+            base.join(" ")
+        ));
+    };
+    let graph = sim_graph(ctx)?;
+    let locked: Vec<String> = if ctx.locked {
+        vec!["--locked".to_owned()]
+    } else {
+        Vec::new()
+    };
+    for invocation in runs {
+        let config = resolved::config_for(invocation.sim);
+        let doc = invocation.selectors == ["--doc"];
+        let check: Vec<String> = if doc {
+            [
+                config.as_slice(),
+                &["build".to_owned()],
+                selection,
+                &[
+                    "--profile".to_owned(),
+                    "test".to_owned(),
+                    "--lib".to_owned(),
+                ],
+            ]
+            .concat()
+        } else {
+            [
+                config.as_slice(),
+                base,
+                &invocation.selectors,
+                &["--no-run".to_owned()],
+            ]
+            .concat()
+        };
+        let check = [
+            check.as_slice(),
+            &["--message-format=json".to_owned()],
+            &locked,
+        ]
+        .concat();
+        let messages = capture_stdout(ctx, &ctx.cargo, &check)?;
+        let built = resolved::parse_messages(&messages).map_err(|fault| fault.to_string())?;
+        let faults = resolved::faults(&built, &graph, invocation.sim);
+        if !faults.is_empty() {
+            return Err(faults
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("; "));
+        }
+        let args = [config.as_slice(), base, &invocation.selectors, &locked].concat();
+        run(ctx, &ctx.cargo, &args)?;
+    }
+    Ok(())
+}
+
+/// The package graph [`resolved::faults`] judges by, from `cargo metadata`
+/// with its dependencies (the cached metadata has none).
+fn sim_graph(ctx: &Ctx) -> Result<resolved::Graph, String> {
+    let mut args: Vec<String> = ["metadata", "--format-version", "1"]
+        .map(str::to_owned)
+        .to_vec();
+    if ctx.locked {
+        args.push("--locked".to_owned());
+    }
+    let text = capture(ctx, &ctx.cargo, &args)?;
+    resolved::graph(&text).map_err(|fault| fault.to_string())
 }
 
 /// What a shard did with its part of a step: ran it, or held none of it, in
@@ -1675,48 +1862,51 @@ fn step_test_research(ctx: &Ctx) -> Result<Outcome, String> {
         .as_ref()
         .ok()
         .and_then(|workspace| workspace.package_with_feature(SIM_PACKAGES, RESEARCH_FEATURE));
+    // `--locked` is added by `run_units`, after the selectors.
+    let (args, feature) = match research_test_args(sim.as_deref(), &ctx.packages, false)? {
+        ResearchTests::Run { args, feature } => (args, feature),
+        ResearchTests::Filtered(reason) => {
+            if ctx.shard.is_some() {
+                return Err(
+                    "a sharded run takes no --package filter, so the research tests cannot be \
+                     filtered out"
+                        .to_owned(),
+                );
+            }
+            return Ok(Outcome::Skipped(reason));
+        }
+    };
+    let workspace = metadata(ctx)?;
+    let all = shard::units(
+        workspace
+            .packages
+            .iter()
+            .filter(|package| sim.as_deref() == Some(package.name.as_str()))
+            .flat_map(|package| {
+                package
+                    .targets
+                    .iter()
+                    .map(|target| (package.name.as_str(), target))
+            }),
+    )
+    .map_err(|error| error.to_string())?;
     if let Some(shard) = ctx.shard {
-        // `--locked` is added by `run_shard_units`, after the selectors.
-        let ResearchTests::Run { args, feature } =
-            research_test_args(sim.as_deref(), &ctx.packages, false)?
-        else {
-            return Err(
-                "a sharded run takes no --package filter, so the research tests cannot be \
-                 filtered out"
-                    .to_owned(),
-            );
-        };
-        let workspace = metadata(ctx)?;
-        let all = shard::units(
-            workspace
-                .packages
-                .iter()
-                .filter(|package| sim.as_deref() == Some(package.name.as_str()))
-                .flat_map(|package| {
-                    package
-                        .targets
-                        .iter()
-                        .map(|target| (package.name.as_str(), target))
-                }),
-        )
-        .map_err(|error| error.to_string())?;
         return Ok(Outcome::Done(
             match run_shard_units(ctx, shard, "test-research", &all, &args)? {
-                ShardPart::Ran(part) => format!("{part}; tests pass with {feature}"),
+                ShardPart::Ran(part) => format!(
+                    "{part}; tests pass with {feature}, each invocation's resolved profile \
+                     checked first"
+                ),
                 ShardPart::Empty(part) => part,
             },
         ));
     }
-    match research_test_args(sim.as_deref(), &ctx.packages, ctx.locked)? {
-        ResearchTests::Run { args, feature } => {
-            run(ctx, &ctx.cargo, &args)?;
-            Ok(Outcome::Done(format!(
-                "tests pass with {feature}; no other crate's code reads the feature, \
-                 and clippy's research pass compiles every non-walled crate against it"
-            )))
-        }
-        ResearchTests::Filtered(reason) => Ok(Outcome::Skipped(reason)),
-    }
+    run_units(ctx, &args, &all)?;
+    Ok(Outcome::Done(format!(
+        "tests pass with {feature}, each invocation's resolved profile checked first; no other \
+         crate's code reads the feature, and clippy's research pass compiles every \
+         non-walled crate against it"
+    )))
 }
 
 /// What the `test-research` step does.
@@ -4059,6 +4249,26 @@ fn capture(ctx: &Ctx, program: &str, args: &[String]) -> Result<String, String> 
         .map_err(|error| format!("`{program}` produced non-UTF-8 output: {error}"))
 }
 
+/// Like [`capture`], but the child's stderr goes to ours: for a build whose
+/// progress, warnings and errors the reader should see as they happen, and
+/// whose stdout is the machine-readable answer.
+fn capture_stdout(ctx: &Ctx, program: &str, args: &[String]) -> Result<String, String> {
+    println!("   $ {}", render_command(program, args));
+    let output = child_command(ctx.require_tools, program, args, &ctx.root)
+        .stderr(Stdio::inherit())
+        .output()
+        .map_err(|error| format!("failed to launch `{program}`: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "`{}` failed ({})",
+            render_command(program, args),
+            describe_exit(output.status)
+        ));
+    }
+    String::from_utf8(output.stdout)
+        .map_err(|error| format!("`{program}` produced non-UTF-8 output: {error}"))
+}
+
 fn describe_exit(status: ExitStatus) -> String {
     match status.code() {
         Some(code) => format!("exit code {code}"),
@@ -4376,117 +4586,129 @@ overflow-checks = true\n";
         assert_eq!(scan_profiles(elsewhere), ProfileScan::default());
     }
 
-    /// The sim under test is optimised, with its checks on (the `citime`
-    /// lane): the suite's time was the sim at opt-level 0, so the `profiles`
-    /// step holds the optimisation in place and holds it from taking debug
-    /// assertions with it. Each case is a manifest the step must fail.
+    /// The `profiles` step reads the TOML only for what the suite never
+    /// builds, and fails closed: every form of a profile line it cannot read
+    /// is a failure, among them the two forms cargo applies that a plain
+    /// table scan misses (a dotted `package.<spec>.<key>` under
+    /// `[profile.test]`, and an inline table under a bare `[profile]`).
     #[test]
-    fn a_profile_that_unchecks_or_unoptimises_the_suite_is_refused() {
+    fn a_profile_line_the_scan_cannot_read_fails_closed() {
         let base = "[profile.release]\noverflow-checks = true\n\
-                    [profile.dev]\noverflow-checks = true\n\
-                    [profile.dev.package.pharmakos-sim]\nopt-level = 2\n";
+                    [profile.dev]\noverflow-checks = true\n";
         assert_eq!(
             profile_failures(&scan_profiles(base), None),
             Vec::<String>::new()
         );
-
-        // Debug assertions switched off anywhere in the dev or test family,
-        // a package or build override included, header spelling aside.
-        for table in [
-            "[profile.dev]",
-            "[profile.test]",
-            "[profile.dev.package.pharmakos-sim]",
-            "[profile.dev.package.\"*\"]",
-            "[ profile.test.package.\"pharmakos-gateway\" ]  # a comment",
-            "[profile.dev.build-override]",
+        for (form, extra) in [
+            (
+                "a dotted package key",
+                "[profile.test]\npackage.pharmakos-sim.opt-level = 0\n",
+            ),
+            (
+                "an inline table under a bare [profile]",
+                "[profile]\ntest = { debug-assertions = false }\n",
+            ),
+            ("a bare [profile] table", "[profile]\n"),
+            (
+                "a dotted key under [profile.dev]",
+                "[profile.dev]\nbuild-override.opt-level = 0\n",
+            ),
+            (
+                "an inline table value",
+                "[profile.dev.package]\npharmakos-sim = { opt-level = 0 }\n",
+            ),
+            (
+                "a quoted key",
+                "[profile.test]\n\"overflow-checks\" = false\n",
+            ),
+            (
+                "an array of tables",
+                "[[profile.test]]\ndebug-assertions = false\n",
+            ),
+            (
+                "a quoted profile name",
+                "[profile.\"test\"]\noverflow-checks = false\n",
+            ),
+            (
+                "a multi-line value",
+                "[profile.test]\nrustflags = [\n  \"-Cdebug-assertions=off\",\n]\n",
+            ),
+            (
+                "a dotted key at the root",
+                "profile.release.overflow-checks = false\n",
+            ),
+            ("a line with no value", "[profile.test]\noverflow-checks\n"),
         ] {
-            let text = format!("{base}{table}\ndebug-assertions = false   # off\n");
+            let text = if form == "a dotted key at the root" {
+                format!("{extra}{base}")
+            } else {
+                format!("{base}{extra}")
+            };
             let scan = scan_profiles(&text);
-            assert_eq!(scan.assertions_off.len(), 1, "{table}");
+            assert!(!scan.unreadable.is_empty(), "{form} is read: {text}");
             let failures = profile_failures(&scan, None);
-            assert_eq!(failures.len(), 1, "{table}: {failures:?}");
             assert!(
                 failures
-                    .first()
-                    .is_some_and(|failure| failure.contains("debug assertions")),
-                "{failures:?}"
+                    .iter()
+                    .any(|failure| failure.contains("cannot read")),
+                "{form}: {failures:?}"
+            );
+            // And in the cargo config, named as the config's.
+            let config = scan_profiles(extra);
+            let failures = profile_failures(&scan_profiles(base), Some(&config));
+            assert!(
+                failures
+                    .iter()
+                    .any(|failure| failure.contains(".cargo/config.toml line")),
+                "{form} in the config: {failures:?}"
             );
         }
-        // The release family may: that is what a release build is.
-        for table in [
-            "[profile.release]",
-            "[profile.release-checked]",
-            "[profile.devx]",
-        ] {
-            let text = format!("{base}{table}\ndebug-assertions = false\n");
-            assert!(scan_profiles(&text).assertions_off.is_empty(), "{table}");
-        }
-
-        // The sim's optimisation is required in the manifest...
-        let missing = "[profile.release]\noverflow-checks = true\n[profile.dev]\n\
-                       overflow-checks = true\n";
-        let failures = profile_failures(&scan_profiles(missing), None);
-        assert_eq!(failures.len(), 1, "{failures:?}");
-        assert!(
-            failures
-                .first()
-                .is_some_and(|failure| failure.contains("pharmakos-sim")),
-            "{failures:?}"
+        // The forms the scan does read: a package table under any spelling of
+        // its spec, a build override, quoted and integer values, comments.
+        let readable = format!(
+            "{base}[profile.dev.package.\"*\"]\nopt-level = 2   # third party\n\
+             [ profile.test.package.\"pharmakos-sim@0.0.0\" ]  # note\nopt-level = 's'\n\
+             [profile.dev.build-override]\ndebug = false\n\
+             [profile.release-client]\ninherits = \"release\"\n"
         );
-        // ... above opt-level 0, under either spelling of the level or the name...
-        for zero in [
-            "[profile.dev.package.pharmakos-sim]\nopt-level = 0\n",
-            "[profile.dev.package.\"pharmakos-sim\"]\nopt-level = \"0\"\n",
-        ] {
-            let text = format!("[profile.release]\noverflow-checks = true\n{zero}");
-            let scan = scan_profiles(&text);
-            assert!(!scan.sim_optimised, "{zero}");
-            assert_eq!(scan.sim_unoptimised.len(), 1, "{zero}");
-        }
-        // ... and no test-family table, nor the cargo config, may take it back.
-        let undone = format!("{base}[profile.test.package.pharmakos-sim]\nopt-level = 0\n");
-        let failures = profile_failures(&scan_profiles(&undone), None);
-        assert_eq!(failures.len(), 1, "{failures:?}");
-        let config = scan_profiles("[profile.dev.package.pharmakos-sim]\nopt-level = 0\n");
-        let failures = profile_failures(&scan_profiles(base), Some(&config));
-        assert_eq!(failures.len(), 1, "{failures:?}");
-        assert!(
-            failures
-                .first()
-                .is_some_and(|failure| failure.contains(".cargo/config.toml")),
-            "{failures:?}"
-        );
-        let config = scan_profiles("[profile.test]\ndebug-assertions = false\n");
-        let failures = profile_failures(&scan_profiles(base), Some(&config));
-        assert_eq!(failures.len(), 1, "{failures:?}");
-        // Another level is fine: the step asks for optimisation, not a number.
-        for level in ["1", "3", "\"s\""] {
-            let text = format!(
-                "[profile.release]\noverflow-checks = true\n\
-                 [profile.dev.package.pharmakos-sim]\nopt-level = {level}\n"
-            );
-            assert_eq!(
-                profile_failures(&scan_profiles(&text), None),
-                Vec::<String>::new()
-            );
-        }
-        // The sim's level read in some other package's table does not count.
-        let elsewhere = "[profile.release]\noverflow-checks = true\n\
-                         [profile.dev.package.pharmakos-sim-extra]\nopt-level = 2\n";
-        assert!(!scan_profiles(elsewhere).sim_optimised);
+        assert_eq!(scan_profiles(&readable).unreadable, Vec::<String>::new());
+        // Overflow checks switched off in a readable table are still caught.
+        let off = format!("{base}[profile.dev.package.\"*\"]\noverflow-checks = false\n");
+        assert_eq!(scan_profiles(&off).overflow_off, ["profile.dev.package.*"]);
     }
 
-    /// The committed manifest and cargo config pass the whole `profiles`
-    /// rule, and the manifest optimises the sim and third-party crates.
+    /// The committed manifest and cargo config pass the `profiles` step, every
+    /// profile line read.
     #[test]
-    fn the_committed_profiles_optimise_the_suite_with_its_checks_on() {
+    fn the_committed_profiles_pass_and_are_read_whole() {
         let manifest = scan_profiles(include_str!("../../Cargo.toml"));
         let config = scan_profiles(include_str!("../../.cargo/config.toml"));
         assert_eq!(
             profile_failures(&manifest, Some(&config)),
             Vec::<String>::new()
         );
-        assert!(manifest.sim_optimised);
+    }
+
+    /// A cargo config that is there and cannot be read fails the step; one that
+    /// is not there leaves nothing to check.
+    #[test]
+    fn an_unreadable_cargo_config_is_a_failure_not_a_pass() {
+        let dir = std::env::temp_dir().join(format!("xtask-read-config-{}", std::process::id()));
+        fs::create_dir_all(&dir).expect("a scratch folder");
+        // A folder where the file should be: there, and not readable as text.
+        let error = read_config(&dir).expect_err("a folder is not a config");
+        assert!(error.contains("cannot read"), "{error}");
+        assert_eq!(read_config(&dir.join("absent.toml")), Ok(None));
+        let file = dir.join("config.toml");
+        fs::write(&file, "[profile.dev]\noverflow-checks = true\n").expect("write");
+        assert_eq!(
+            read_config(&file),
+            Ok(Some("[profile.dev]\noverflow-checks = true\n".to_owned()))
+        );
+        let not_utf8 = dir.join("binary.toml");
+        fs::write(&not_utf8, [0xff_u8, 0xfe, 0x00]).expect("write");
+        assert!(read_config(&not_utf8).is_err());
+        fs::remove_dir_all(&dir).expect("the scratch folder goes");
     }
 
     #[test]
@@ -4851,6 +5073,7 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
             ("package.rs", include_str!("package.rs")),
             ("placeholders.rs", include_str!("placeholders.rs")),
             ("png.rs", include_str!("png.rs")),
+            ("resolved.rs", include_str!("resolved.rs")),
             ("scenario.rs", include_str!("scenario.rs")),
             ("scope.rs", include_str!("scope.rs")),
             ("shard.rs", include_str!("shard.rs")),
@@ -5429,7 +5652,7 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
             Ok(workspace) => workspace,
             Err(reason) => panic!("{reason}"),
         };
-        let test_units = match workspace_test_units(&workspace) {
+        let test_units = match workspace_test_units(&workspace, &[]) {
             Ok(units) => units,
             Err(reason) => panic!("{reason}"),
         };
