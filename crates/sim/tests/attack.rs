@@ -21,7 +21,7 @@
 
 use pharmakos_proto::gp;
 use pharmakos_sim::attack::{
-    Aim, AttackSettings, BreachScratch, ChargeState, Phase, TargetSpec, breach_search,
+    Aim, AttackSettings, BreachScratch, ChargeState, Phase, SealedWay, TargetSpec, breach_search,
 };
 use pharmakos_sim::encoding::Enc;
 use pharmakos_sim::events::{Event, EventKind};
@@ -1006,14 +1006,14 @@ fn an_empty_attack_table_hashes_nothing() {
         build,
         "and the empty table hashes nothing"
     );
-    let mut scratch = BreachScratch::new(world.surface().node_count());
     let node = world
         .surface()
         .node_of(column(here)[0], column(here)[1])
         .unwrap();
-    assert!(
-        breach_search(&world, &mut scratch, seat(0), node, node).is_err(),
-        "no wall, no breach"
+    assert_eq!(
+        SealedWay::of(&world, node, node),
+        None,
+        "a way to where it starts is open: no breach is asked of it"
     );
 }
 
@@ -1638,7 +1638,12 @@ fn sealed_breach(
         "the oracle calls the way sealed"
     );
     let mut scratch = BreachScratch::new(surface.node_count());
-    breach_search(world, &mut scratch, seat(0), start, goal)
+    breach_search(
+        world,
+        &mut scratch,
+        seat(0),
+        SealedWay::of(world, start, goal).expect("a sealed way"),
+    )
 }
 
 /// Whether the breach's wall is one of `columns` round `inside`.
@@ -1742,39 +1747,6 @@ fn a_raid_breaches_a_cratered_ring_and_gets_in() {
     raid_gets_through(&ring(4), 3, Some((4, 4)));
 }
 
-/// A lead standing on an enemy wall (a one-high stub beside a ring, which a
-/// walker climbs as it climbs any one-voxel step) is read where it stands: the
-/// breach is the ring's wall beside it, planted from the stub's top.
-#[test]
-fn a_lead_on_a_wall_plants_from_where_it_stands() {
-    let mut fixture = world();
-    let here = field(&fixture);
-    let inside = ground(&fixture, here, 24, 0);
-    wall_columns(&mut fixture, inside, &ring(4), 3, seat(1));
-    wall_columns(&mut fixture, inside, &[(-5, 0)], 1, seat(1));
-    fixture.step(&mut Enc::default()).expect("the walls settle");
-    let [cx, cy] = column(inside);
-    let stub = fixture.surface().node_of(cx - 5, cy).expect("the stub");
-    let stub_top = fixture.surface().top(stub);
-    let on_stub = fixture.standing_point([cx - 5, cy, 0]);
-    assert_eq!(
-        on_stub[2].floor_voxels(),
-        stub_top + 1,
-        "a walker on the stub stands on its wall voxel"
-    );
-    let breach = sealed_breach(&fixture, on_stub, inside).expect("a breach from the stub");
-    assert_eq!(
-        breach.plant,
-        [cx - 5, cy, stub_top],
-        "planted from the stub"
-    );
-    assert!(
-        on_the_wall(breach.wall, inside, &ring(4)),
-        "the breach {:?} is on the ring",
-        breach.wall
-    );
-}
-
 // ---------------------------------------------------------------------------
 // The breach search is the walkers' moves, then one crossing, then the
 // breach's moves (lane `settle`, fix pass 3): a lead on an enemy wall moves
@@ -1797,7 +1769,12 @@ fn search_between(
         "the oracle calls the way sealed"
     );
     let mut scratch = BreachScratch::new(surface.node_count());
-    breach_search(world, &mut scratch, seat(0), start, goal)
+    breach_search(
+        world,
+        &mut scratch,
+        seat(0),
+        SealedWay::of(world, start, goal).expect("a sealed way"),
+    )
 }
 
 /// Whether the column is a wall of another seat or of nobody, read at its
@@ -2083,33 +2060,38 @@ fn footing_or_top(world: &World, node: u32) -> Option<i32> {
         .map(|_| z)
 }
 
-/// An independent reading of "a way through walls": from every column a
-/// walker from `start` reaches, a CARDINAL step onto a breachable column at
-/// its footing, then cardinal steps over every column at its footing or top.
-/// Reaching the goal this way means a breach exists that the search must
-/// find. It shares nothing with the breach search's step rule.
-fn a_cardinal_way_through_walls(world: &World, walker: &[bool], goal: u32) -> bool {
+/// The four cardinal neighbours of `node` on the map.
+fn cardinal(world: &World, node: u32) -> impl Iterator<Item = u32> + '_ {
+    let surface = world.surface();
+    let (x, y) = surface.coord_of(node);
+    [(1, 0), (-1, 0), (0, 1), (0, -1)]
+        .into_iter()
+        .filter_map(move |(dx, dy)| surface.node_of(x + dx, y + dy))
+}
+
+/// An independent reading of "a way through walls", from the columns marked
+/// in `plants` (each a column a walker stands on that is no breachable wall):
+/// a CARDINAL step onto a breachable column at its footing, then cardinal
+/// steps over every column at its footing or top. Reaching the goal this way
+/// means a breach exists that the search must find. It shares nothing with
+/// the breach search's step rule.
+fn a_cardinal_way_through_walls(world: &World, plants: &[bool], goal: u32) -> bool {
     let surface = world.surface();
     let n = usize::try_from(surface.node_count()).unwrap();
     let mut seen = vec![false; n];
     let mut queue = std::collections::VecDeque::new();
-    let cardinal = |node: u32| {
+    for (at, plant) in plants.iter().enumerate() {
+        let node = u32::try_from(at).unwrap();
         let (x, y) = surface.coord_of(node);
-        [(1, 0), (-1, 0), (0, 1), (0, -1)]
-            .into_iter()
-            .filter_map(move |(dx, dy)| surface.node_of(x + dx, y + dy))
-    };
-    for (at, reached) in walker.iter().enumerate() {
-        if !reached {
+        if !plant || breachable(world, x, y) {
             continue;
         }
-        let node = u32::try_from(at).unwrap();
         let Some(stand) = surface.standing(node) else {
             continue;
         };
-        for next in cardinal(node) {
-            let (x, y) = surface.coord_of(next);
-            if !breachable(world, x, y) {
+        for next in cardinal(world, node) {
+            let (nx, ny) = surface.coord_of(next);
+            if !breachable(world, nx, ny) {
                 continue;
             }
             let Some(to) = footing_or_top(world, next) else {
@@ -2129,7 +2111,7 @@ fn a_cardinal_way_through_walls(world: &World, walker: &[bool], goal: u32) -> bo
         let Some(from) = footing_or_top(world, node) else {
             continue;
         };
-        for next in cardinal(node) {
+        for next in cardinal(world, node) {
             let slot = usize::try_from(next).unwrap();
             if seen[slot] {
                 continue;
@@ -2146,52 +2128,170 @@ fn a_cardinal_way_through_walls(world: &World, walker: &[bool], goal: u32) -> bo
     false
 }
 
-/// The review's reading (P1), kept independent of the breach search: from the
-/// start at its own top, CARDINAL steps over every other column, a
-/// breachable wall at its footing and any other column at its top.
-fn a_cardinal_way_from_the_start(world: &World, start: u32, goal: u32) -> bool {
+/// The columns a walker from `start` reaches by CARDINAL steps of at most one
+/// voxel over the tops it stands on: the review's reading (P1) of where the
+/// start may walk, kept independent of `Surface::neighbour` and of the breach
+/// search.
+fn cardinal_walk(world: &World, start: u32) -> Vec<bool> {
     let surface = world.surface();
-    let height = |node: u32| {
-        if node == start {
-            surface.standing(node)
-        } else {
-            footing_or_top(world, node)
-        }
-    };
     let n = usize::try_from(surface.node_count()).unwrap();
     let mut seen = vec![false; n];
     let mut queue = std::collections::VecDeque::new();
-    if height(start).is_none() {
-        return false;
+    if surface.standing(start).is_some() {
+        seen[usize::try_from(start).unwrap()] = true;
+        queue.push_back(start);
     }
-    seen[usize::try_from(start).unwrap()] = true;
-    queue.push_back(start);
     while let Some(node) = queue.pop_front() {
-        if node == goal {
-            return true;
-        }
-        let Some(from) = height(node) else {
+        let Some(from) = surface.standing(node) else {
             continue;
         };
-        let (x, y) = surface.coord_of(node);
-        for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
-            let Some(next) = surface.node_of(x + dx, y + dy) else {
-                continue;
-            };
+        for next in cardinal(world, node) {
             let slot = usize::try_from(next).unwrap();
             if seen[slot] {
                 continue;
             }
-            let Some(to) = height(next) else {
-                continue;
-            };
-            if (to - from).abs() <= 1 {
+            if surface
+                .standing(next)
+                .is_some_and(|to| (to - from).abs() <= 1)
+            {
                 seen[slot] = true;
                 queue.push_back(next);
             }
         }
     }
-    false
+    seen
+}
+
+/// The eight neighbours of `node` on the map.
+fn around(world: &World, node: u32) -> impl Iterator<Item = u32> + '_ {
+    let surface = world.surface();
+    let (x, y) = surface.coord_of(node);
+    [
+        (1, 0),
+        (-1, 0),
+        (0, 1),
+        (0, -1),
+        (1, 1),
+        (1, -1),
+        (-1, 1),
+        (-1, -1),
+    ]
+    .into_iter()
+    .filter_map(move |(dx, dy)| surface.node_of(x + dx, y + dy))
+}
+
+/// The independent reading's step between adjacent columns `a` and `b` read
+/// at heights `ha` and `hb`: at most one voxel up or down, and a diagonal's
+/// two sides walkable and within one voxel of both ends where a walker stands
+/// on them; its price from the map's step costs. Written here, not taken from
+/// the breach search's step rule.
+fn reference_step(world: &World, a: u32, ha: i32, b: u32, hb: i32) -> Option<i32> {
+    let surface = world.surface();
+    let costs = surface.costs();
+    let ((ax, ay), (bx, by)) = (surface.coord_of(a), surface.coord_of(b));
+    let (dx, dy) = (bx - ax, by - ay);
+    if (hb - ha).abs() > 1 {
+        return None;
+    }
+    let climb = if ha == hb { 0 } else { costs.climb() };
+    if dx != 0 && dy != 0 {
+        for (sx, sy) in [(ax + dx, ay), (ax, ay + dy)] {
+            let side = surface.standing(surface.node_of(sx, sy)?)?;
+            if (side - ha).abs() > 1 || (side - hb).abs() > 1 {
+                return None;
+            }
+        }
+        return Some(costs.diagonal() + climb);
+    }
+    Some(costs.cardinal() + climb)
+}
+
+/// Dijkstra over `steps` from `from`: every column's least cost, `i32::MAX`
+/// where none.
+fn least_costs(world: &World, from: u32, steps: impl Fn(u32) -> Vec<(u32, i32)>) -> Vec<i32> {
+    use std::cmp::Reverse;
+    let n = usize::try_from(world.surface().node_count()).unwrap();
+    let mut best = vec![i32::MAX; n];
+    let mut heap = std::collections::BinaryHeap::new();
+    best[usize::try_from(from).unwrap()] = 0;
+    heap.push(Reverse((0, from)));
+    while let Some(Reverse((cost, node))) = heap.pop() {
+        if cost > best[usize::try_from(node).unwrap()] {
+            continue;
+        }
+        for (next, step) in steps(node) {
+            let at = usize::try_from(next).unwrap();
+            if cost + step < best[at] {
+                best[at] = cost + step;
+                heap.push(Reverse((cost + step, next)));
+            }
+        }
+    }
+    best
+}
+
+/// The least cost of a breach way from `start` to `goal`, by the independent
+/// reading: a walker's way to a column that is no breachable wall, the step
+/// onto a breachable wall at its footing ([`BREACH_COLUMN_COST`] more), then
+/// steps over footings and tops (each breachable column entered
+/// [`BREACH_COLUMN_COST`] more). With it, the cost of the way through the one
+/// crossing from `plant` onto `wall`. Both `None` where there is no such way.
+fn least_breach_costs(
+    world: &World,
+    start: u32,
+    goal: u32,
+    plant_and_wall: Option<(u32, u32)>,
+) -> (Option<i32>, Option<i32>) {
+    use pharmakos_sim::attack::BREACH_COLUMN_COST;
+    let surface = world.surface();
+    let is_wall = |node: u32| {
+        let (x, y) = surface.coord_of(node);
+        breachable(world, x, y)
+    };
+    let walk = least_costs(world, start, |node| {
+        (0..8).filter_map(|k| surface.neighbour(node, k)).collect()
+    });
+    // Back from the goal over the crossed layer: the cost of the step from a
+    // column onto the next, the next's demolition included.
+    let back = least_costs(world, goal, |to| {
+        let Some(hto) = footing_or_top(world, to) else {
+            return Vec::new();
+        };
+        let demolish = if is_wall(to) { BREACH_COLUMN_COST } else { 0 };
+        around(world, to)
+            .filter_map(|from| {
+                let hfrom = footing_or_top(world, from)?;
+                Some((
+                    from,
+                    reference_step(world, from, hfrom, to, hto)? + demolish,
+                ))
+            })
+            .collect()
+    });
+    let through = |plant: u32, wall: u32| -> Option<i32> {
+        let before = walk[usize::try_from(plant).unwrap()];
+        let after = back[usize::try_from(wall).unwrap()];
+        if before == i32::MAX || after == i32::MAX || is_wall(plant) || !is_wall(wall) {
+            return None;
+        }
+        let step = reference_step(
+            world,
+            plant,
+            surface.standing(plant)?,
+            wall,
+            footing_or_top(world, wall)?,
+        )?;
+        Some(before + step + BREACH_COLUMN_COST + after)
+    };
+    let n = surface.node_count();
+    let least = (0..n)
+        .flat_map(|plant| around(world, plant).map(move |wall| (plant, wall)))
+        .filter_map(|(plant, wall)| through(plant, wall))
+        .min();
+    (
+        least,
+        plant_and_wall.and_then(|(plant, wall)| through(plant, wall)),
+    )
 }
 
 /// One generated layout round `centre`, settled.
@@ -2353,6 +2453,58 @@ fn layout_start(
     }
 }
 
+/// One sealed case of [`the_breach_search_holds_over_generated_walls`] held to
+/// its invariants 2, 4, 5 and 6: the search's answer handed back, its breach
+/// dropped.
+fn held_to_the_readings(
+    world: &World,
+    case: u32,
+    start: u32,
+    goal: u32,
+    walker: &[bool],
+    found: Result<pharmakos_sim::attack::Breach, pharmakos_sim::attack::BreachRefused>,
+) -> Result<(), pharmakos_sim::attack::BreachRefused> {
+    let surface = world.surface();
+    let (sx, sy) = surface.coord_of(start);
+    match found {
+        Ok(breach) => {
+            assert_a_breach(world, [sx, sy], &breach);
+            let plant = surface.node_of(breach.plant[0], breach.plant[1]).unwrap();
+            let wall = surface.node_of(breach.wall[0], breach.wall[1]).unwrap();
+            let (least, chosen) = least_breach_costs(world, start, goal, Some((plant, wall)));
+            assert!(
+                least.is_some() && chosen == least,
+                "case {case}: the breach's way costs {chosen:?}, the least is {least:?}"
+            );
+            Ok(())
+        }
+        Err(pharmakos_sim::attack::BreachRefused::NoWay) => {
+            assert_eq!(
+                least_breach_costs(world, start, goal, None).0,
+                None,
+                "case {case}: `NoWay` where the independent reading prices a way"
+            );
+            assert!(
+                !a_cardinal_way_through_walls(world, &cardinal_walk(world, start), goal),
+                "case {case}: `NoWay` where a cardinal way from the start through walls reaches the goal"
+            );
+            assert!(
+                !a_cardinal_way_through_walls(world, walker, goal),
+                "case {case}: `NoWay` where a walker reaches a wall whose far side reaches the goal"
+            );
+            Err(pharmakos_sim::attack::BreachRefused::NoWay)
+        }
+        Err(refused) => {
+            assert_eq!(
+                refused,
+                pharmakos_sim::attack::BreachRefused::Exhausted,
+                "case {case}"
+            );
+            Err(refused)
+        }
+    }
+}
+
 /// The property test's seed and its count of generated layouts.
 const LAYOUT_SEED: u64 = 0x5E77_1E3E_0000_0003;
 const LAYOUT_CASES: u32 = 240;
@@ -2371,11 +2523,20 @@ const LAYOUT_CASES: u32 = 240;
 ///    beside the wall;
 /// 3. the search is a function of the world: run again on a used scratch, it
 ///    answers the same;
-/// 4. it never answers `NoWay` where an independent cardinal reading reaches
-///    the goal through walls;
-/// 5. where a walker reaches a column beside a breachable wall whose far side
-///    reaches the goal (the same independent reading), the answer is never
-///    `NoWay`.
+/// 4. it never answers `NoWay` where an independent cardinal reading (P1's:
+///    cardinal steps from the start over the tops it stands on, then a step
+///    from a column that is no breachable wall onto one at its footing, then
+///    cardinal steps over footings and tops) reaches the goal;
+/// 5. where a walker (`Surface::neighbour`) reaches a column, no breachable
+///    wall, beside a breachable wall whose far side reaches the goal (the same
+///    independent reading), the answer is never `NoWay`.
+///
+/// 6. a breach lies on a least-cost way, priced by an independent Dijkstra
+///    (the walkers' moves, the one crossing, then footings and tops, its own
+///    step rule), and `NoWay` is answered only where that reading prices none.
+///
+/// A plant is never a breachable wall, so a lead whose every reachable column
+/// is one has no breach: every reading holds to that rule.
 #[test]
 fn the_breach_search_holds_over_generated_walls() {
     let mut base = world();
@@ -2414,42 +2575,101 @@ fn the_breach_search_holds_over_generated_walls() {
         }
         sealed_cases += 1;
         let mut scratch = BreachScratch::new(surface.node_count());
-        let found = breach_search(&world, &mut scratch, seat(0), start, goal);
-        let again = breach_search(&world, &mut scratch, seat(0), start, goal);
+        let found = breach_search(
+            &world,
+            &mut scratch,
+            seat(0),
+            SealedWay::of(&world, start, goal).expect("a sealed way"),
+        );
+        let again = breach_search(
+            &world,
+            &mut scratch,
+            seat(0),
+            SealedWay::of(&world, start, goal).expect("a sealed way"),
+        );
         assert_eq!(
             found, again,
             "case {case}: the search is a function of the world"
         );
-        let from_the_start = a_cardinal_way_from_the_start(&world, start, goal);
-        let through = a_cardinal_way_through_walls(&world, &walker, goal);
-        let (sx, sy) = surface.coord_of(start);
-        match found {
-            Ok(breach) => {
-                breaches += 1;
-                assert_a_breach(&world, [sx, sy], &breach);
-            }
-            Err(pharmakos_sim::attack::BreachRefused::NoWay) => {
-                no_ways += 1;
-                assert!(
-                    !from_the_start,
-                    "case {case}: `NoWay` where a cardinal way from the start through walls reaches the goal"
-                );
-                assert!(
-                    !through,
-                    "case {case}: `NoWay` where a walker reaches a wall whose far side reaches the goal"
-                );
-            }
-            Err(refused) => {
-                assert_eq!(
-                    refused,
-                    pharmakos_sim::attack::BreachRefused::Exhausted,
-                    "case {case}"
-                );
-            }
+        match held_to_the_readings(&world, case, start, goal, &walker, found) {
+            Ok(()) => breaches += 1,
+            Err(pharmakos_sim::attack::BreachRefused::NoWay) => no_ways += 1,
+            Err(_) => {}
         }
     }
+    eprintln!(
+        "generated layouts: seed {LAYOUT_SEED:#x}, {cases} cases, {sealed_cases} sealed, {breaches} breaches, {no_ways} without a way, on a map of {} columns",
+        base.surface().node_count()
+    );
     assert!(
         cases * 2 >= LAYOUT_CASES && sealed_cases >= 40 && breaches >= 20 && no_ways >= 5,
         "the generator covers its shapes: {cases} cases, {sealed_cases} sealed, {breaches} breaches, {no_ways} without a way"
+    );
+}
+
+/// A breach whose plant the lead no longer reaches is planned again: here the
+/// plant is boxed in by stone after the breach is chosen and before the
+/// charge is planted, so the carrier could never stand within reach of it.
+/// The force names another breach, plants there and gets in. Without the
+/// re-plan the carrier walks at the box for ever and the force never ends.
+#[test]
+fn a_breach_whose_plant_is_walled_off_is_planned_again() {
+    let (mut runner, post, raider, inside) = walled(3);
+    let mut log = Vec::new();
+    let breaching = play_until(&mut runner, 200, &mut log, |world, _| {
+        world
+            .attack()
+            .row_of(post)
+            .is_some_and(|row| row.breach.is_some())
+    });
+    assert!(breaching, "the sealed way finds a breach");
+    let first = row(runner.world(), post).breach.expect("a breach");
+    assert_eq!(
+        fired(&log, EventKind::ChargePlanted),
+        0,
+        "nothing is planted yet"
+    );
+    // A box of stone four high, two and three columns out from the plant, so
+    // no column a walker reaches is within reach of it.
+    let [px, py, _] = first.plant;
+    for dy in -3..=3_i32 {
+        for dx in -3..=3_i32 {
+            if dx.abs().max(dy.abs()) < 2 {
+                continue;
+            }
+            let (x, y) = (px + dx, py + dy);
+            let Some(top) = runner.world().voxels().top_solid_z(x, y) else {
+                continue;
+            };
+            for z in top + 1..=top + 4 {
+                runner
+                    .world_mut()
+                    .request_voxel_edit(VoxelEdit::Set {
+                        at: [x, y, z],
+                        material: Material::STONE,
+                        by: None,
+                    })
+                    .expect("a stone voxel is filed");
+            }
+        }
+    }
+    let through = play_until(&mut runner, 6_000, &mut log, |world, _| {
+        within(unit_at(world, raider), inside, 2)
+    });
+    let planted = log
+        .iter()
+        .find(|event| event.kind == EventKind::ChargePlanted)
+        .map(|event| event.at);
+    assert!(
+        through,
+        "the raider gets in (planted at {planted:?}, ended {}, breach {:?})",
+        fired(&log, EventKind::AttackEnded),
+        row(runner.world(), post)
+            .breach
+            .map(|breach| (breach.wall, breach.plant))
+    );
+    assert!(
+        planted.is_some(),
+        "a charge is planted, at a plant other than the walled-off one"
     );
 }
