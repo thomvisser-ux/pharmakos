@@ -8481,7 +8481,7 @@ mod ids_tests {
         assert!(units > small.unit_limit, "the fixture is over the ceiling");
         assert_eq!(
             crate::snapshot::Snapshot::capture(&big)
-                .expect("a world between ticks")
+                .unwrap_or_else(|error| panic!("a world between ticks: {error}"))
                 .restore_into(&mut small),
             Err(crate::snapshot::SnapshotError::OverCeiling { units, limit: 1 }),
             "a file saved under another configuration is refused, and says why"
@@ -8514,7 +8514,8 @@ mod ids_tests {
         assert_eq!(world.beacons.ordinal(SEAT, 2, placed), Ordinal::Held(row));
         assert_eq!(world.beacons.ordinal(SEAT, 3, placed), Ordinal::NeverPlaced);
 
-        let saved = Snapshot::capture(&world).expect("a world between ticks");
+        let saved = Snapshot::capture(&world)
+            .unwrap_or_else(|error| panic!("a world between ticks: {error}"));
         let mut resumed = world_of(rules(), 2).must("a world");
         saved.restore_into(&mut resumed).must("the save restores");
         assert_eq!(resumed.seats.placed(), world.seats.placed());
@@ -8688,7 +8689,8 @@ mod ids_tests {
             .must("room");
         kill_unit(&mut world, drone);
         world.free_settled_rows();
-        let good = Snapshot::capture(&world).expect("a world between ticks");
+        let good = Snapshot::capture(&world)
+            .unwrap_or_else(|error| panic!("a world between ticks: {error}"));
         assert!(
             good.restore_into(&mut world_of(rules(), 2).must("a world"))
                 .is_ok()
@@ -8793,7 +8795,8 @@ mod ids_tests {
         let row = drone.row().must("a row");
         // Take the row to its last generation through a restore, as a long
         // match would.
-        let mut saved = Snapshot::capture(&world).expect("a world between ticks");
+        let mut saved = Snapshot::capture(&world)
+            .unwrap_or_else(|error| panic!("a world between ticks: {error}"));
         saved.unit_id[row.index()] = UnitId::of(row, Generation::new(u16::MAX)).raw();
         let mut world = world_of(rules(), 2).must("a world");
         saved.restore_into(&mut world).must("the save restores");
