@@ -809,6 +809,9 @@ pub const NO_DEATH_LIMIT: &str = "0, no limit";
 pub const FIX_VISIBLE_NOW: &str = "Ask about what is visible now";
 /// E0209's Fix for an unset kind beside a window.
 pub const FIX_KNOWN_WITHIN: &str = "Ask about what was seen within the window";
+/// E0209's Fix for a `KNOWN_WITHIN` with no window (S3's `vfyq2`): the window
+/// it writes, in the words plan-core's chip says a window in.
+pub const FIX_ADD_WINDOW: &str = "Ask about what was seen in the last 30 seconds";
 /// E0210's Fix.
 pub const FIX_DROP_WINDOW: &str = "Leave the window out";
 /// W0706's Fix: swap the fixed site for the description it should have been.

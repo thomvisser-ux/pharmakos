@@ -1,0 +1,54 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0209",
+      "severity": "ERROR",
+      "path": "/declarative/handlers/0/when/enemy_beacon_known/freshness/known_within_ms",
+      "message": "an enemy predicate must declare its freshness.",
+      "beginner": "Say how recently you must have seen the thing you are asking about.",
+      "suggestions": [
+        {
+          "title": "Ask about what was seen in the last 30 seconds",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/0/when/enemy_beacon_known/freshness/known_within_ms\",\"value\":30000}]",
+          "applicability": "HAS_PLACEHOLDERS"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/0/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/handlers/0/body/0/on_fail",
+      "message": "`on_fail` is omitted and reads as SKIP.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/0/body/0/on_fail\",\"value\":{\"action\":\"SKIP\"}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    }
+  ],
+  "report_hash": "6BPqlOyPtJc=",
+  "rules_hash": "GybFJQaL/2E=",
+  "plan_fingerprint": "uAMnAsI7ac8=",
+  "verifier_version": "0.1.0-s3.4",
+  "size_units": 3,
+  "size_budget": 128
+}
+

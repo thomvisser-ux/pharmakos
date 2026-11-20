@@ -393,3 +393,12 @@ out. One case is new, on the plain fixture: `e0514_a_predicate_about_a_wall`.
 The catalogue moved by the new row; no existing report moved (a new row is not
 one of `report_hash`'s inputs, and `VERIFIER_VERSION` stays `0.1.0-s3.4`,
 which `main` has not seen).
+
+**S3's `vfyq2`, the window `E0209` was missing.** A `KNOWN_WITHIN` with no window
+(left out, or written as 0, one value in proto3) is `E0209` at
+`.../freshness/known_within_ms`, and now offers a Fix: an `add` of the window the
+vocabulary's three enemy skeletons write, 30 000 ms ("Ask about what was seen in
+the last 30 seconds", `HAS_PLACEHOLDERS`); `crates/plan-core/tests/fix_window.rs`
+holds the two numbers together and applies the Fix. One case is new, on the plain
+fixture: `e0209_a_known_within_without_its_window`. No existing report moved: no
+committed case reached that diagnostic.

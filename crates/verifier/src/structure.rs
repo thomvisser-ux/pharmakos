@@ -1656,6 +1656,13 @@ fn radius(found: u32, at: &str, predicate: &str, out: &mut Builder) {
     }
 }
 
+/// The window `E0209`'s Fix writes for a `KNOWN_WITHIN` with none (S3's
+/// `vfyq2`): the one the vocabulary's three enemy skeletons write
+/// (`crates/plan-core/src/vocabulary.rs`'s `enemy_knowledge_family`), so a
+/// picked predicate and a fixed one start alike.
+/// `crates/plan-core/tests/fix_window.rs` holds the two homes to one number.
+const FIX_WINDOW_MS: i32 = 30_000;
+
 /// `E0209`: "enemy predicates must declare freshness (`VISIBLE_NOW` or
 /// `KNOWN_WITHIN` ms)" (spec section 10). A block left out, a kind left unset
 /// and a `KNOWN_WITHIN` with no window each declare none; a negative window is
@@ -1719,9 +1726,15 @@ fn freshness(window: Option<&Freshness>, at: &str, predicate: &str, out: &mut Bu
                     window.known_within_ms,
                 );
             } else if window.known_within_ms == 0 {
-                out.emit(Diag::new(
-                    "E0209",
-                    pointer::join(at, &[predicate, "freshness", "known_within_ms"]),
+                let here = pointer::join(at, &[predicate, "freshness", "known_within_ms"]);
+                out.emit(Diag::new("E0209", here.clone()).fix(
+                    strings::FIX_ADD_WINDOW,
+                    // `add`: a window of 0 is the member left out or written
+                    // as 0, one value in proto3, and an RFC 6902 `add` at an
+                    // object member inserts it or replaces it alike.
+                    patch_add(&here, &number(FIX_WINDOW_MS)),
+                    // A starting window, not one the author wrote.
+                    Applicability::HasPlaceholders,
                 ));
             }
         }
