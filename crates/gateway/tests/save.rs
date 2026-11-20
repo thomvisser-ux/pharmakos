@@ -614,6 +614,86 @@ fn a_damaged_seal_in_a_save_is_refused() {
     assert_eq!(error.code, Code::InvalidArgument, "{}", error.message);
 }
 
+/// A restored seal is decoded once (S3's `vfyq2`, fix pass 2, item F), and
+/// each of its three refusals keeps the code and the words it had when the
+/// text was decoded twice: no canonical form, a fingerprint that does not
+/// match, a text that will not compile.
+#[test]
+fn every_refusal_of_a_restored_seal_keeps_its_code_and_words() {
+    const MATCH_ID: &str = "m-vfyq2-seal-words";
+    let mut surface = new_match(MATCH_ID);
+    plan_round(&mut surface);
+    assert!(surface.begin_push().expect("the Push begins"));
+    let saved = surface
+        .take_persistence()
+        .save
+        .expect("a Push's beginning is saved");
+    let with_seat_zero = |text: &str, fingerprint: Option<u64>| {
+        let mut damaged = saved.clone();
+        let seal = damaged
+            .seats
+            .first_mut()
+            .and_then(|seat| seat.seal.as_mut())
+            .expect("seat 0 sealed");
+        seal.playbook_jsonc = text.to_owned();
+        if let Some(fingerprint) = fingerprint {
+            seal.plan_fingerprint = fingerprint;
+        }
+        resume(MATCH_ID, &damaged).expect_err("refused")
+    };
+
+    // No canonical form: the decode's own words, inside the save's.
+    let error = with_seat_zero("{\"meta\": ", None);
+    assert_eq!(error.code, Code::InvalidArgument);
+    let decoded = pharmakos_plan_core::decode_jsonc("{\"meta\": ")
+        .expect_err("no canonical form")
+        .message;
+    assert_eq!(
+        error.message,
+        format!(
+            "seat 0's sealed playbook in this save has no canonical form (a sealed playbook has \
+             no canonical form: {decoded}): the file is damaged"
+        )
+    );
+
+    // A fingerprint that does not match the text beside it.
+    let text = std::fs::read_to_string(
+        support::workspace_root().join("crates/verifier/tests/cases/e0208_unknown_step_label.json"),
+    )
+    .expect("the committed case")
+    .replace("\r\n", "\n");
+    let canonical = pharmakos_plan_core::decode_jsonc(&text).expect("a canonical form");
+    let fingerprint = pharmakos_sim::hash::plan_fingerprint(canonical.decoded().message())
+        .expect("a fingerprint");
+    let error = with_seat_zero(&text, Some(fingerprint ^ 1));
+    assert_eq!(error.code, Code::InvalidArgument);
+    assert_eq!(
+        error.message,
+        format!(
+            "seat 0's sealed playbook in this save does not match the plan fingerprint saved \
+             beside it ({} against {}): the file is damaged, or this build writes a different \
+             canonical form than the one that saved it",
+            pharmakos_sim::hex(fingerprint),
+            pharmakos_sim::hex(fingerprint ^ 1)
+        )
+    );
+
+    // A text whose fingerprint matches and which will not compile: a
+    // condition on a step label the route does not have.
+    let error = with_seat_zero(&text, Some(fingerprint));
+    assert_eq!(error.code, Code::InvalidArgument);
+    let compiled =
+        pharmakos_sim::interpreter::Plan::compile(canonical.decoded().message(), &support::rules())
+            .expect_err("an unknown label");
+    assert_eq!(
+        error.message,
+        format!(
+            "seat 0's sealed playbook in this save will not compile in this build: this \
+             playbook qualifies and this build cannot execute it: {compiled}"
+        )
+    );
+}
+
 /// The notes' A2 classifies `views` as derived, with "every cursor and handle
 /// from the dead process stale". A resumed process builds a fresh feed and
 /// attaches it once, over the same match id, seed and map as the dead
