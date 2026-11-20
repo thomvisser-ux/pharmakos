@@ -1215,7 +1215,10 @@ designed properly, and each wire message and golden moves once, in the lane that
   `get_status`, every `ViewEntity` addition (the radius, an under-construction flag in the held
   field, the entity's title in the gateway's words, a per-kind look, walls listed in the view, with
   another seat's structure in live vision only), the missing
-  goldens, the socket-level test of the guided pick and the two stale proto comments.
+  goldens, the socket-level test of the guided pick and the two stale proto comments. It also replaces
+  `crates/gateway/src/host.rs`'s hand-kept `SAFE_PLAYBOOK` copy of `library/safe_playbook.jsonc` with
+  the one source (embedded at compile time, instantiated at start-up) and returns that file's header to
+  `GPL-3.0-or-later` alone: the main session's call, recorded in item 164 (3a).
 - **`fixq`:** the editor's planning wire and the client halves that need it, with named places in
   `crates/gateway`, `proto/**` and `crates/plan-core` (which `vfyq2` owns until it merges, one more
   reason `fixq` follows it), and, for `retreat_hp_pct` as `optional`, in the sim's interpreter and the
@@ -1282,7 +1285,7 @@ last commit, comes last"), `fixp`, `probw`, `fixq`, then `prob`. `probw` starts 
 `fixp` have merged, `fixq` after `probw` and `vfyq2`, and `prob` (both its parts) after `fixq` merges. `fixq` and `vcap` both edit `crates/gateway` and never run at once: the second to
 start waits for the other's merge.]
 
-[Amended by item 164. A licensing lane ran outside the plan's sections, `fix/reuse-demo-goldens` (PR #195, merged 2026-11-19 at `56bfe5b0`): the rule that a file reproducing `library/` text carries the library's licence, the `reuse` step's quotation check, and the files it re-licensed. `probw` returns `crates/gateway/src/host.rs`'s header to GPL alone when it replaces the `SAFE_PLAYBOOK` copy with the one source (item 164 (3)).]
+[Amended by item 164. A licensing lane ran outside the plan's sections, `fix/reuse-demo-goldens` (PR #195, merged 2026-11-19 at `56bfe5b0`): the rule that a file reproducing `library/` text carries the library's licence (stated in `docs/LICENSING.md`), the `reuse` step's quotation check, and the files it re-licensed. `probw`'s bullet above carries the clause that returns `host.rs`'s header to GPL alone.]
 
 **Totals.** 19 tasks, **about 74.5 ad** (65–84), including about 1.5 ad of re-blesses after merges
 of `main`; 73.5 without decision 3's Survey post. **Two critical paths of about 31 working days:**
