@@ -13,7 +13,7 @@
 # Three blocks break that rule on purpose, each with precedence = "override":
 # docs/DCO.txt, which is somebody else's document; godot/playbooks/new.jsonc,
 # which is permissive inside the GPL godot/** tree and can carry no header
-# (decisions-log item 161); and the three files whose own bytes quote another
+# (decisions-log item 161); and the four files whose own bytes quote another
 # file's SPDX header (the last block below, decisions log item 116 (6)(i)).
 #
 # ORDER MATTERS. When two blocks match the same path the LAST one wins, so the
@@ -213,8 +213,8 @@ precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Pharmakos contributors"
 SPDX-License-Identifier = "MIT OR Apache-2.0"
 
-# The three templates' render goldens quote library/: the renderer prints each
-# playbook's `meta` title and summary and its step labels, and for these three cases
+# The templates' render goldens quote library/: the renderer prints each
+# playbook's `meta` title and summary and its step labels, and for these cases
 # those strings come from library/'s permissive templates. The answer is the gateway's
 # output, in the game tier like the rest of tests/golden/gateway/, and the quotation is
 # small; T22a judged no override necessary and wrote this block in its pull request for
@@ -222,11 +222,22 @@ SPDX-License-Identifier = "MIT OR Apache-2.0"
 # takes it (item 128), so each file records both licences it carries: the gateway's GPL
 # and the templates' MIT OR Apache-2.0. Aggregate, so a header a file ever states is
 # combined with this, and AFTER the tests/** block, so it wins.
+#
+# The list is by name, so a new golden that quotes library/ could be added without it:
+# S3's defend_the_core, raid_an_enemy_beacon and against-easy render goldens were, and so
+# was the Godot copy of expand_and_mine's. The xtask test `licence_quotes` now reads
+# library/ and fails on any golden, fixture or scenario that quotes it and is licensed
+# GPL-only, so the next one cannot be missed. A render golden that quotes no template
+# (demo_deploy_and_visit_render) is not listed: an entry states what the file carries.
 [[annotations]]
 path = [
     "tests/golden/gateway/demo_hold_and_build_render/**",
     "tests/golden/gateway/demo_expand_and_mine_render/**",
     "tests/golden/gateway/demo_safe_playbook_render/**",
+    "tests/golden/gateway/demo_defend_the_core_render/**",
+    "tests/golden/gateway/demo_raid_an_enemy_beacon_render/**",
+    "tests/golden/gateway/demo_against_easy_render/**",
+    "godot/fixtures/rule_list_render.json",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Pharmakos contributors"
@@ -386,7 +397,7 @@ SPDX-FileCopyrightText = "2004, 2006 The Linux Foundation and its contributors"
 SPDX-License-Identifier = "LicenseRef-DCO-1.1"
 
 # --- Files whose bytes quote another file's header ---------------------------
-# Three files carry, inside their own bytes, text that `reuse` reads as their
+# Four files carry, inside their own bytes, text that `reuse` reads as their
 # own header, and in each case that text is not their licence:
 #   * tests/golden/gateway/instantiate_suggested/expected.response.json and its
 #     byte-identical Godot copy godot/fixtures/instantiate_suggested.json are the
@@ -401,6 +412,11 @@ SPDX-License-Identifier = "LicenseRef-DCO-1.1"
 #     permissive one; the permissive plan-core/ block above would add a second and
 #     third licence to a file that states its own. It is plan-core/'s one GPL file;
 #     awkward/expected.canonical.json has no header and stays permissive (item 100).
+#   * scenarios/skeleton/against-easy.playbook.jsonc is instantiate_template's answer for
+#     library/hold_and_build.jsonc with the operator's suggestion applied, pasted in whole
+#     below its own GPL header: the same kind of file as instantiate_suggested above, and
+#     ruled the same way (item 113 (10)). Listing it here is the recorded ruling that the
+#     `licence_quotes` test asks for when a GPL-only file quotes library/.
 # precedence = "override": the manifest is the last word for exactly these paths.
 # Its downside: an override also stops reading any header these files carry in
 # future, so a change of licence here is an edit to this block. AFTER every block
@@ -411,6 +427,7 @@ path = [
     "godot/fixtures/instantiate_suggested.json",
     "tests/golden/gateway/instantiate_suggested/expected.response.json",
     "tests/golden/plan-core/awkward/expected.jsonc",
+    "scenarios/skeleton/against-easy.playbook.jsonc",
 ]
 precedence = "override"
 SPDX-FileCopyrightText = "2026 Pharmakos contributors"
