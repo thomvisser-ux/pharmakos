@@ -1730,8 +1730,11 @@ fn freshness(window: Option<&Freshness>, at: &str, predicate: &str, out: &mut Bu
                 out.emit(Diag::new("E0209", here.clone()).fix(
                     strings::FIX_ADD_WINDOW,
                     // `add`: a window of 0 is the member left out or written
-                    // as 0, one value in proto3, and an RFC 6902 `add` at an
-                    // object member inserts it or replaces it alike.
+                    // as 0, one value in proto3. RFC 6902's `add` inserts a
+                    // member that is not there and replaces one that is, and
+                    // plan-core's patch addresses the member the file writes
+                    // under either of the field's names, so the Fix applies
+                    // to every spelling (`plan-core/tests/fixes_apply.rs`).
                     patch_add(&here, &number(FIX_WINDOW_MS)),
                     // A starting window, not one the author wrote.
                     Applicability::HasPlaceholders,

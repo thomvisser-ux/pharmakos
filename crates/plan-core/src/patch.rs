@@ -38,9 +38,10 @@
 //! runs no validation of its own (spec section 12).
 //! One exception, because it would leave a file that no longer decodes: a
 //! patch that writes a field under both its names in one object is refused
-//! ([`apply`]; S3's `gwu`). Making a file written in camelCase JSON names
-//! fully editable (pointers in the file's own spelling, or aliases resolved
-//! here) is owed, for chips and condition slots alike.
+//! ([`apply`]; S3's `gwu`). A pointer names a field by either of its names
+//! and addresses the member the file writes, under the file's spelling
+//! (`as_the_file_spells`; S3's `vfyq2`), so an edit to a file written in
+//! camelCase JSON names, a Fix's or a click's, never writes a field twice.
 
 use pharmakos_proto::json::{Json, read, write};
 
@@ -453,9 +454,90 @@ pub fn patch_text(playbook_jsonc: &str, json_patch: &str) -> Result<(String, Str
     Ok((patched.to_text(), inverse.to_text()))
 }
 
+/// `pointer`, each token that names a playbook field spelled as the file
+/// already writes that field (S3's `vfyq2`, fix pass 1, item 9).
+///
+/// A playbook field has two names, its `.proto` name and its camelCase JSON
+/// name, and a file may write either. A pointer from the verifier, a Fix or
+/// the editor names the field by its `.proto` name; in a file that writes the
+/// member under its JSON name, that pointer addresses the member the file
+/// already writes, under the file's own spelling, so `add` replaces it and
+/// `remove` takes it, and no edit writes a field twice. The walk reads the
+/// document beside the schema from `gp.v1.Playbook` down, token by token,
+/// and stops translating where the document ends (a new member keeps the
+/// pointer's spelling). A token the object already holds under that exact
+/// spelling is left alone, so a file holding both spellings is addressed as
+/// written, and refused as written twice, as before.
+fn as_the_file_spells(document: &Document, pointer: &str) -> Result<String, Error> {
+    /// What the walk is reading: an object of this message, an array of
+    /// them, or something the schema says nothing more of.
+    enum Reading<'s> {
+        Message(&'s pharmakos_proto::descriptor::Message),
+        Repeated(&'s pharmakos_proto::descriptor::Message),
+        Other,
+    }
+    let schema = pharmakos_proto::descriptor::schema();
+    let mut reading = match schema.message(crate::canonical::PLAYBOOK_MESSAGE) {
+        Some(message) => Reading::Message(message),
+        None => Reading::Other,
+    };
+    let mut here = Some(document.root());
+    let mut spelled = String::new();
+    for token in split_pointer(pointer)? {
+        let mut token = token;
+        let mut next = Reading::Other;
+        match reading {
+            Reading::Message(message) => {
+                if let Some(field) = message
+                    .fields
+                    .iter()
+                    .find(|field| field.name == token || field.json_name == token)
+                {
+                    if let Some(node) = here
+                        && node.position_of(&token).is_none()
+                    {
+                        let other = if field.name == token {
+                            &field.json_name
+                        } else {
+                            &field.name
+                        };
+                        if node.position_of(other).is_some() {
+                            token.clone_from(other);
+                        }
+                    }
+                    if field.kind == pharmakos_proto::descriptor::ScalarKind::Message
+                        && let Some(nested) = schema.message(&field.type_name)
+                    {
+                        next = if field.repeated {
+                            Reading::Repeated(nested)
+                        } else {
+                            Reading::Message(nested)
+                        };
+                    }
+                }
+            }
+            Reading::Repeated(message) => next = Reading::Message(message),
+            Reading::Other => {}
+        }
+        here = here.and_then(|node| node.child(&token));
+        spelled = push_pointer(&spelled, &token);
+        reading = next;
+    }
+    Ok(spelled)
+}
 /// One operation. Returns the operations that undo it, **in the order they
 /// must be applied**.
 fn one(document: &mut Document, operation: &Operation) -> Result<Vec<Operation>, Error> {
+    // Each pointer addresses the member the file writes, under either of a
+    // field's names (`as_the_file_spells`).
+    let operation = &Operation {
+        path: as_the_file_spells(document, &operation.path)?,
+        from: match operation.from.as_deref() {
+            Some(from) => Some(as_the_file_spells(document, from)?),
+            None => None,
+        },
+        ..operation.clone()
+    };
     match operation.op {
         Op::Test => {
             let wanted = value_of(operation)?;

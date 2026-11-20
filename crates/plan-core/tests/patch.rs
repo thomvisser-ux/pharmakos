@@ -391,28 +391,33 @@ const CAMEL: &str = r#"{"schema_version":{"major":1},"declarative":{"route":[
   {"label":"b","waitUntil":{},"timeoutMs":3000}
 ]}}"#;
 
-/// S3's `gwu`, fix pass 1 (the review's C3, K2): a patch that would leave one
-/// field written under both its names in one object is refused, naming both
-/// spellings, and the file is not touched; the decoder would refuse the
-/// result (`BothNames`), so accepting it would hand back a file that no
-/// longer decodes.
+/// S3's `vfyq2`, fix pass 1 (item 9): a pointer that names a field by either
+/// of its names addresses the member the file already writes, under the
+/// file's spelling. A Fix and the editor build pointers from the decoded
+/// playbook, in `.proto` names; in a file written in camelCase they edit the
+/// camelCase member, and nothing is ever written twice. (Before, S3's `gwu`
+/// refused such an edit as writing the field twice, and a pointer through a
+/// camelCase member found nothing.)
 #[test]
-fn a_patch_that_would_write_a_field_twice_is_refused_naming_both_spellings() {
+fn a_pointer_in_either_spelling_edits_the_member_the_file_writes() {
     let patch = r#"[{"op":"add","path":"/declarative/route/0/skip_if","value":{"treasury":{"dollars":{"op":"GE","value":100}}}}]"#;
-    let error = pharmakos_plan_core::patch_text(CAMEL, patch)
-        .expect_err("a second spelling of skip_if is refused");
-    assert!(
-        error.message.contains("`skipIf`") && error.message.contains("`skip_if`"),
-        "{}",
-        error.message
-    );
-    assert_eq!(error.pointer, "/declarative/route/0");
+    let (patched, inverse) =
+        pharmakos_plan_core::patch_text(CAMEL, patch).expect("the camelCase member is replaced");
+    assert!(patched.contains("\"skipIf\""), "{patched}");
+    assert!(!patched.contains("skip_if"), "{patched}");
+    assert!(patched.contains("\"treasury\""), "{patched}");
+    assert!(!patched.contains("cmdrHpPct"), "{patched}");
+    let (undone, _) = pharmakos_plan_core::patch_text(&patched, &inverse).expect("the undo");
+    assert_eq!(undone, CAMEL, "the undo gives the file back byte for byte");
 
-    // Under a camelCase member a snake_case pointer finds nothing, as before.
+    // Through a camelCase member a snake_case pointer finds what is there.
     let under = r#"[{"op":"add","path":"/declarative/route/1/wait_until/condition","value":{"treasury":{"dollars":{"op":"GE","value":100}}}}]"#;
-    let error = pharmakos_plan_core::patch_text(CAMEL, under)
-        .expect_err("nothing at wait_until in a file that writes waitUntil");
-    assert!(error.message.contains("nothing"), "{}", error.message);
+    let (patched, _) =
+        pharmakos_plan_core::patch_text(CAMEL, under).expect("wait_until reaches waitUntil");
+    assert!(
+        patched.contains("\"waitUntil\":{\"condition\""),
+        "{patched}"
+    );
 
     // The same edit in the camelCase name, and a snake_case file, are taken.
     let camel_edit = r#"[{"op":"replace","path":"/declarative/route/0/skipIf","value":{"treasury":{"dollars":{"op":"GE","value":100}}}}]"#;
@@ -464,11 +469,11 @@ fn a_field_written_twice_is_told_by_field_and_count_not_by_pointer() {
     );
     assert_eq!(error.pointer, "/declarative/handlers/1");
 
-    let patch = r#"[{"op":"add","path":"/declarative/route/0/skip_if","value":{"treasury":{"dollars":{"op":"GE","value":100}}}}]"#;
-    let error = pharmakos_plan_core::patch_text(CAMEL, patch).expect_err("refused");
-    assert!(
-        error.message.contains("already writes"),
-        "{}",
-        error.message
-    );
+    // A file that already writes both spellings is edited as written: the
+    // pointer's own spelling is the member it addresses.
+    let edit_twice =
+        r#"[{"op":"replace","path":"/declarative/handlers/0/cooldownMs","value":7000}]"#;
+    let (patched, _) =
+        pharmakos_plan_core::patch_text(&file, edit_twice).expect("an old pair is not new");
+    assert!(patched.contains("\"cooldownMs\":7000"), "{patched}");
 }
