@@ -104,15 +104,16 @@ unsafe impl GlobalAlloc for Counting {
 #[global_allocator]
 static ALLOCATOR: Counting = Counting;
 
-/// Counts the allocations of the tick **as written**: `cargo xtask ci` runs
-/// this target with the sim at opt-level 0 (`--config
-/// 'profile.dev.package.pharmakos-sim.opt-level=0'`, xtask's `resolved`
-/// module), as an invocation of its own, and refuses the run if the sim was
-/// built optimised there. The suite builds the sim optimised everywhere else,
-/// and the optimiser deletes an allocation whose value is never read (a
-/// `Vec::with_capacity` dropped at once, a `Box` freed where it was made), so
-/// an optimised build would pass a tick that allocates in its source. A plain
-/// `cargo test` builds this target optimised, with that weaker claim.
+/// Counts the allocations of a tick. The optimiser deletes an allocation whose
+/// value is never read (a `Vec::with_capacity` dropped at once, a `Box` freed
+/// where it was made), so what this counts depends on how the sim was built.
+///
+/// `cargo xtask ci` always runs this target with the sim at opt-level 0
+/// (`--config 'profile.dev.package.pharmakos-sim.opt-level=0'`, xtask's
+/// `resolved` module), as an invocation of its own, and checks from cargo's
+/// report that it did, so there it counts the tick as written. A plain
+/// `cargo test` runs it against the optimised sim the dev profile builds, and
+/// there it counts only the allocations the optimiser kept.
 #[test]
 fn a_tick_allocates_nothing() {
     let rules = RulesTable::load(
