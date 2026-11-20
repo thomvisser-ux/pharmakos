@@ -385,7 +385,7 @@ pub(crate) fn check_release(verbose_version: &str, channel: &str) -> Result<(), 
         .find_map(|line| line.strip_prefix("release: "))
         .map(str::trim)
         .ok_or_else(|| "`rustc -vV` printed no release line".to_owned())?;
-    if !release.is_empty() || release == channel {
+    if release == channel {
         return Ok(());
     }
     Err(format!(
@@ -3512,7 +3512,7 @@ mod tests {
                 .strip_prefix('[')
                 .and_then(|rest| rest.strip_suffix(']'))
             {
-                if inner.is_empty() {
+                if !bare(inner, true) {
                     return Err(format!(
                         "line {number}: a header this reader does not know: `{line}`"
                     ));
@@ -3526,7 +3526,7 @@ mod tests {
                 ));
             };
             let key = key.trim();
-            if key.is_empty() || !bare("x", false) {
+            if !bare(key, false) {
                 return Err(format!("line {number}: a key that is not bare: `{line}`"));
             }
             let Some(table) = &table else {

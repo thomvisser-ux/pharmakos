@@ -100,7 +100,8 @@ impl fmt::Display for RunnerError {
             Self::BadDoctestRun { value } => write!(
                 f,
                 "`{DOCTEST_RUN_VAR}` is `{}`; xtask sets it to `1` for a doctest run and to \
-                 nothing else",
+                 nothing else, so this value came from elsewhere (a config file's `[env]` table \
+                 can set it)",
                 value.display()
             ),
             Self::NotUnicode { path } => {

@@ -240,3 +240,10 @@ panic = "unwind"                 # so determinism tests can catch and report a d
 [profile.release-client]
 inherits = "release"
 panic = "unwind"
+
+# The `cargo xtask` alias's own build of xtask (.cargo/config.toml), in target/xtask/, so the
+# running xtask is never a file another build writes: the `test` step builds xtask's binary
+# into target/debug/ for its integration tests, and a build there with other settings would
+# replace the running file. Its checks are dev's, which the profiles step holds it to.
+[profile.xtask]
+inherits = "dev"

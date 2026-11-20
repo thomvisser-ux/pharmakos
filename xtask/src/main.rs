@@ -1900,7 +1900,7 @@ fn profiles_off_the_chain(scan: &ProfileScan) -> Vec<String> {
                 _ => break false,
             }
         };
-        if !reaches && profile.is_empty() {
+        if !reaches {
             off.push(profile.clone());
         }
     }
@@ -5955,8 +5955,7 @@ mod tests {
         assert!(runner_spelling(Path::new("/build/o'brien/xtask"), Path::new("/w")).is_err());
     }
 
-    /// The channel the toolchain check holds `RUSTUP_TOOLCHAIN` to is the
-    /// file's.
+    /// The channel the door holds the compiler's release to is the file's.
     #[test]
     fn the_pinned_channel_is_the_toolchain_files() {
         let channel = pinned_channel().expect("the file names a channel");

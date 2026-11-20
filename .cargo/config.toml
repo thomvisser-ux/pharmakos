@@ -5,9 +5,11 @@
 # determinism settings need owner approval.
 
 [alias]
-# The one command developers, agents and CI run (spec §15, Dev harness).
-xtask = "run --package xtask --quiet --"
-ci = "run --package xtask --quiet -- ci"
+# The one command developers, agents and CI run (spec §15, Dev harness). Built in its own
+# profile, `xtask` (the root Cargo.toml), into target/xtask/: the running xtask is never a
+# file another build writes.
+xtask = "run --package xtask --profile xtask --quiet --"
+ci = "run --package xtask --profile xtask --quiet -- ci"
 
 # Overflow checks stay on in every profile, release included (spec §15, Maths).
 # This mirrors [profile.release] in the workspace Cargo.toml. Cargo config wins over
