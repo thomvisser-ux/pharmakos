@@ -1798,7 +1798,7 @@ impl World {
     /// place (lane `settle`).
     #[must_use]
     #[cfg(test)]
-    pub(crate) const fn graph_repairs_this_tick(&self) -> u32 {
+    pub(crate) const fn graph_repairs_this_tick(&self) -> crate::pathing::repair::Repairs {
         self.repairer.calls()
     }
 
@@ -7565,7 +7565,7 @@ mod tests {
             );
             assert_eq!(
                 world.graph_repairs_this_tick(),
-                1,
+                crate::pathing::repair::Repairs::Once,
                 "tick {tick} repaired the graph in more places than its Voxels phase"
             );
             if tick % 20 == 0 {

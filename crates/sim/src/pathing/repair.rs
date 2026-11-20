@@ -67,7 +67,32 @@ pub struct Repairer {
     /// How many times [`repair`] has run since [`Repairer::start_tick`]:
     /// diagnostic, never hashed. The world settles its graph in one place a
     /// tick (lane `settle`), and this is how a test holds it to that.
-    calls: u32,
+    calls: Repairs,
+}
+
+/// How many times [`repair`] ran since [`Repairer::start_tick`], to the one
+/// distinction a test needs: none, once, or more than once. A state, not a
+/// count, so there is nothing to overflow.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Repairs {
+    /// Not since the tick opened.
+    #[default]
+    None,
+    /// Once: the world's one settle in the Voxels phase.
+    Once,
+    /// More than once: a tick loop that settles in a second place.
+    More,
+}
+
+impl Repairs {
+    /// The state after one more call.
+    #[must_use]
+    pub const fn and_one(self) -> Repairs {
+        match self {
+            Repairs::None => Repairs::Once,
+            Repairs::Once | Repairs::More => Repairs::More,
+        }
+    }
 }
 
 impl Repairer {
@@ -82,7 +107,7 @@ impl Repairer {
             inter: Vec::with_capacity(clusters),
             inter_flag: vec![false; clusters],
             repaired: Vec::with_capacity(clusters),
-            calls: 0,
+            calls: Repairs::None,
         }
     }
 
@@ -120,14 +145,14 @@ impl Repairer {
     /// How many times [`repair`] has run since the last
     /// [`Repairer::start_tick`].
     #[must_use]
-    pub const fn calls(&self) -> u32 {
+    pub const fn calls(&self) -> Repairs {
         self.calls
     }
 
     /// Start counting [`repair`]'s calls afresh: the world calls it as each
     /// tick opens.
     pub const fn start_tick(&mut self) {
-        self.calls = 0;
+        self.calls = Repairs::None;
     }
 }
 
@@ -143,9 +168,7 @@ pub fn repair(
     scratch: &mut Scratch,
     repairer: &mut Repairer,
 ) -> RepairReport {
-    // E7: rule: a count of calls in one tick, which is one, or two in a world
-    // whose tick loop has gone wrong; past `u32` it reads as the most
-    repairer.calls = repairer.calls.saturating_add(1);
+    repairer.calls = repairer.calls.and_one();
     let mut dirty = core::mem::take(&mut repairer.dirty);
     let mut transitions = core::mem::take(&mut repairer.transitions);
     let mut inter = core::mem::take(&mut repairer.inter);

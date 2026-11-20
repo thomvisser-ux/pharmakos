@@ -784,8 +784,6 @@ impl Clusters {
         // the order is total (item 62).
         gather.sort_unstable();
         gather.dedup();
-        // E7: cannot miss: the graph's arrays are sized at construction for every column, cluster and slot the decomposition numbers (`Clusters::new`)
-        let before_len = usize::from(self.trans_len.get(cluster).copied().unwrap_or(0));
         let base = cluster.saturating_mul(self.max_trans);
         let mut written = 0;
         for cell in gather.iter().take(self.max_trans) {
@@ -794,11 +792,11 @@ impl Clusters {
             }
             written = written.saturating_add(1);
         }
-        Clusters::clear_tail(&mut self.trans_cell, base, written, before_len);
         if let Ok(len) = u16::try_from(written)
             && let Some(slot) = self.trans_len.get_mut(cluster)
         {
-            *slot = len;
+            let before = core::mem::replace(slot, len);
+            Clusters::clear_tail(&mut self.trans_cell, base, written, usize::from(before));
         }
         gather.clear();
         self.gather = gather;
@@ -864,7 +862,6 @@ impl Clusters {
         let count = self.trans_cells(cluster).len();
         let row_base = cluster.saturating_mul(self.max_trans.saturating_add(1));
         let edge_base = cluster.saturating_mul(self.max_intra);
-        let before_total = self.row_total(&self.intra_row, row_base);
         let mut written: usize = 0;
         let mut from_slot = 0;
         while from_slot < count {
@@ -902,17 +899,23 @@ impl Clusters {
             }
             from_slot = from_slot.saturating_add(1);
         }
+        // The block's last row holds its total; the write that replaces it
+        // hands back the total an earlier build left, up to which its edges
+        // are cleared.
+        let mut before_total = None;
         let mut tail = count;
         while tail <= self.max_trans {
-            self.set_intra_row(row_base.saturating_add(tail), written);
+            before_total = self.set_intra_row(row_base.saturating_add(tail), written);
             tail = tail.saturating_add(1);
         }
-        Clusters::clear_edges(
-            (&mut self.intra_to, &mut self.intra_cost),
-            edge_base,
-            written,
-            before_total,
-        );
+        if let Some(before) = before_total {
+            Clusters::clear_edges(
+                (&mut self.intra_to, &mut self.intra_cost),
+                edge_base,
+                written,
+                usize::from(before),
+            );
+        }
     }
 
     /// Reset `values[base + from .. base + to]` to the default a fresh build
@@ -921,9 +924,10 @@ impl Clusters {
     /// then the one a fresh build makes, field for field, and not only
     /// through the length-bounded readers (lane `settle`). No allocation.
     fn clear_tail<T: Copy + Default>(values: &mut [T], base: usize, from: usize, to: usize) {
-        let start = base.saturating_add(from);
-        let end = base.saturating_add(to);
-        if let Some(stale) = values.get_mut(start..end) {
+        if let Some(stale) = values
+            .get_mut(base..)
+            .and_then(|block| block.get_mut(from..to))
+        {
             stale.fill(T::default());
         }
     }
@@ -939,21 +943,12 @@ impl Clusters {
         Clusters::clear_tail(cost, base, from, upto);
     }
 
-    /// How many edges a row block of the intra or border table held: its
-    /// last row, which every rebuild writes as the block's total.
-    fn row_total(&self, rows: &[u16], row_base: usize) -> usize {
-        rows.get(row_base.saturating_add(self.max_trans))
-            .copied()
-            // E7: cannot miss: the graph's arrays are sized at construction for every column, cluster and slot the decomposition numbers (`Clusters::new`)
-            .map_or(0, usize::from)
-    }
-
-    fn set_intra_row(&mut self, at: usize, value: usize) {
-        if let Ok(value) = u16::try_from(value)
-            && let Some(slot) = self.intra_row.get_mut(at)
-        {
-            *slot = value;
-        }
+    /// Write one intra row, handing back the value it replaced.
+    fn set_intra_row(&mut self, at: usize, value: usize) -> Option<u16> {
+        let value = u16::try_from(value).ok()?;
+        self.intra_row
+            .get_mut(at)
+            .map(|slot| core::mem::replace(slot, value))
     }
 
     /// One transition slot's intra edges, as `(slot, cost)` pairs.
@@ -1000,7 +995,6 @@ impl Clusters {
         let count = self.trans_cells(cluster).len();
         let row_base = cluster.saturating_mul(self.max_trans.saturating_add(1));
         let edge_base = cluster.saturating_mul(self.max_trans);
-        let before_total = self.row_total(&self.inter_row, row_base);
         // The four borders, in a fixed order: east, west, north, south; each
         // as (border index, whether this cluster is the border's `a` side,
         // the vertical table or the horizontal one, the cluster beyond).
@@ -1073,21 +1067,26 @@ impl Clusters {
             }
             slot = slot.saturating_add(1);
         }
+        // As in `rebuild_intra`: the write of the block's total hands back
+        // the one an earlier build left.
+        let mut before_total = None;
         let mut tail = count;
         while tail <= self.max_trans {
-            if let Some(at) = self.inter_row.get_mut(row_base.saturating_add(tail))
-                && let Ok(value) = u16::try_from(written)
-            {
-                *at = value;
-            }
+            before_total = u16::try_from(written).ok().and_then(|value| {
+                self.inter_row
+                    .get_mut(row_base.saturating_add(tail))
+                    .map(|at| core::mem::replace(at, value))
+            });
             tail = tail.saturating_add(1);
         }
-        Clusters::clear_edges(
-            (&mut self.inter_to, &mut self.inter_cost),
-            edge_base,
-            written,
-            before_total,
-        );
+        if let Some(before) = before_total {
+            Clusters::clear_edges(
+                (&mut self.inter_to, &mut self.inter_cost),
+                edge_base,
+                written,
+                usize::from(before),
+            );
+        }
     }
 
     /// The border edge out of `cell` across one border: the abstract node of
@@ -1160,9 +1159,6 @@ impl Clusters {
     /// which bounds the number of local components.
     pub fn rebuild_components(&mut self) {
         let clusters = self.cluster_count();
-        // E7: cannot miss: the graph's arrays are sized at construction for every column, cluster and slot the decomposition numbers (`Clusters::new`)
-        let before_total =
-            crate::math::index::row(self.comp_offset.get(clusters).copied().unwrap_or(0));
         let mut total: u32 = 0;
         let mut c = 0;
         while c < clusters {
@@ -1173,9 +1169,12 @@ impl Clusters {
             total = total.saturating_add(u32::from(self.comp_count.get(c).copied().unwrap_or(0)));
             c = c.saturating_add(1);
         }
-        if let Some(slot) = self.comp_offset.get_mut(clusters) {
-            *slot = total;
-        }
+        // The offset past the last cluster holds the total; its write hands
+        // back the total an earlier build left.
+        let before_total = self
+            .comp_offset
+            .get_mut(clusters)
+            .map(|slot| crate::math::index::row(core::mem::replace(slot, total)));
         let count = crate::math::index::row(total);
         let mut index = 0;
         while index < count {
@@ -1227,8 +1226,10 @@ impl Clusters {
             }
             index = index.saturating_add(1);
         }
-        Clusters::clear_tail(&mut self.comp_label, 0, count, before_total);
-        Clusters::clear_tail(&mut self.union_find, 0, count, before_total);
+        if let Some(before) = before_total {
+            Clusters::clear_tail(&mut self.comp_label, 0, count, before);
+            Clusters::clear_tail(&mut self.union_find, 0, count, before);
+        }
     }
 
     /// Iterative find with path halving: no recursion (MSVC's 1 MB stack).
