@@ -16,7 +16,7 @@ an SPDX header, so a single file taken out of the tree still says what it is.
     scenarios/** the headless matches that assert on the goldens
     tests/**    the goldens and test data (four golden areas are the
                 exception — see below; a golden that quotes library/ also
-                carries its licence: GPL-3.0-or-later AND (MIT OR Apache-2.0))
+                carries its licence — see docs/LICENSING.md)
     Full text:  LICENSES/GPL-3.0-or-later.txt
 
 

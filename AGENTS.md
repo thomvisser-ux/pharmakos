@@ -683,11 +683,9 @@ of that premise.
   | `proto/`, generated JSON Schema, `docs/`, `llms.txt`, example playbooks, the template library `library/`, `packaging/` (the zips' note and manifest templates; its two licence texts keep their own terms), `CHANGELOG.md` | `MIT OR Apache-2.0` |
   | art and audio assets | `CC-BY-SA-4.0` |
 
-  A file outside `library/` that reproduces a library template's expression (a sentence of at least 8
-  words ending in a full stop, or a run of at least 12 consecutive words of one library string; a
-  title, name or step label is not covered) carries the library's licence beside its own, as one
-  combined expression, `GPL-3.0-or-later AND (MIT OR Apache-2.0)`, or the library's alone where it
-  is purely library text. The `reuse` step checks it (§9 item 9; decisions-log item 164).
+  A file outside `library/` that reproduces a library template's expression carries the library's
+  licence beside its own; `docs/LICENSING.md` ("A file that quotes `library/`") is the standing
+  statement of the rule, and the `reuse` step checks it (§9 item 9).
 
   Third-party assets keep their own SPDX line and their entry in the credits screen (CC-BY
   attribution is a shipping requirement, not a nicety). Audio comes from CC0/CC-BY sources only.
@@ -794,7 +792,8 @@ merge train's local check.
    when there is no local `main` to compare against (decisions-log item 116 (6)(g) and (p)).
 9. **Licensing** — REUSE check: every file has an SPDX header or a `REUSE.toml` entry, and the
    manifest is complete, and every tracked file outside `library/` that reproduces a template's
-   sentences carries the library's licence (§8; `xtask/src/licence_quotes.rs`, decisions-log item 164);
+   expression carries the library's licence (§8; `docs/LICENSING.md` states the rule and
+   `xtask/src/licence_quotes.rs` runs it);
    the `LICENSE` pointers are §8's rule, which no step checks. The
    `placeholders` step, `cargo xtask placeholders --check`, runs after it and fails on any
    `PLACEHOLDER` marker off the register's grammar (below; decisions-log item 137).
