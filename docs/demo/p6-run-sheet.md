@@ -589,8 +589,8 @@ not as the owner's words:
 1. The gate's two timing clauses (template within 2 minutes, scratch within 5) stay open for a
    person. They are read when the owner plays S3's stage demo by hand; no separate sitting is held.
    [Superseded the same evening by the owner's later sentence, "you drive the testing completely
-   until further notice.  let me know when i must be involved". No sitting by the owner is planned,
-   and the owner did not agree to sit. The clauses stay "not shown for a person", neither met nor
+   until further notice.  let me know when i must be involved". The main session reads that as planning
+   no sitting by the owner; the owner did not agree to sit. The clauses stay "not shown for a person", neither met nor
    waived, and section 5.3's closing rule says how the main session reads them.]
 2. The typing clause stays open until findings 1 and 2 (the number field does not select the old
    number; "Set this value" ignores a number not committed with Enter) are fixed in the next client
