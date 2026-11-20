@@ -660,6 +660,131 @@ mod tests {
         assert_eq!(same.map(|o| o.misses.len()), Ok(0));
     }
 
+    const LABEL: &str = "Which heat vent the Build beacon covers: the nearest one you do not cover yet, or one by name";
+
+    fn one_file(
+        library: &[(&str, &str)],
+        file: &str,
+        text: &str,
+        expressions: &[&str],
+    ) -> Result<Outcome, Refusal> {
+        let dir = scratch("one");
+        let mut files = Vec::new();
+        for (name, body) in library {
+            write(&dir, name, body);
+            files.push(s(name));
+        }
+        write(&dir, file, text);
+        files.push(s(file));
+        let mut report: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        report.insert(s(file), expressions.iter().map(|e| s(e)).collect());
+        let outcome = check(&dir, &files, &report);
+        let _ = fs::remove_dir_all(&dir);
+        outcome
+    }
+
+    #[test]
+    fn a_long_description_with_no_full_stop_is_expression_and_a_short_label_is_a_name() {
+        let library = [(
+            "library/t.jsonc",
+            format!(
+                "{{\"label\": \"{LABEL}\", \"name\": \"How long to hold by the new beacon\"}}\n"
+            ),
+        )];
+        let library: Vec<(&str, &str)> = library.iter().map(|(a, b)| (*a, b.as_str())).collect();
+        let long = one_file(
+            &library,
+            "crates/c/tests/a.rs",
+            &format!("assert_eq!(l, \"{LABEL}\");\n"),
+            &[GAME],
+        );
+        assert_eq!(long.map(|o| o.misses.len()), Ok(1));
+        let short = one_file(
+            &library,
+            "crates/c/tests/b.rs",
+            "x(\"How long to hold by the new beacon\");\n",
+            &[GAME],
+        );
+        assert_eq!(short.map(|o| o.misses.len()), Ok(0));
+    }
+
+    #[test]
+    fn json_escapes_are_decoded_on_both_sides() {
+        let library = [(
+            "library/t.jsonc",
+            "{\"note\": \"Le caf\\u00e9 est ouvert, et il y a du th\\u00e9 et du lait pour tous les gens.\"}\n",
+        )];
+        let literal =
+            "Le caf\u{e9} est ouvert, et il y a du th\u{e9} et du lait pour tous les gens.";
+        let escaped = "{\"x\": \"Le caf\\u00e9 est ouvert, et il y a du th\\u00e9 et du lait pour tous les gens.\"}";
+        let slash = "{\"x\": \"Le caf\\u00e9 est ouvert, et il y a du th\\u00e9 et du lait pour tous les gens.\\/\"}";
+        for text in [literal, escaped, slash] {
+            let found = one_file(&library, "docs/x.json", text, &[GAME]);
+            assert_eq!(found.map(|o| o.misses.len()), Ok(1), "{text}");
+        }
+    }
+
+    #[test]
+    fn every_tracked_file_under_library_is_library_text() {
+        let library = [(
+            "library/notes.md",
+            "A note: the guard post covers the nearest scrap seam you do not cover yet, and holds.\n",
+        )];
+        let found = one_file(
+            &library,
+            "docs/x.txt",
+            "the guard post covers the nearest scrap seam you do not cover yet, and holds.",
+            &[GAME],
+        );
+        assert_eq!(found.map(|o| o.misses.len()), Ok(0));
+        let found = one_file(
+            &library,
+            "crates/x/src/a.rs",
+            "// A note: the guard post covers the nearest scrap seam you do not cover yet, and holds.",
+            &[GAME],
+        );
+        assert_eq!(found.map(|o| o.misses.len()), Ok(1));
+    }
+
+    #[test]
+    fn the_library_licence_beside_a_game_one_is_not_the_combined_expression() {
+        let library = [("library/t.jsonc", format!("{{\"note\": \"{SENTENCE}\"}}\n"))];
+        let library: Vec<(&str, &str)> = library.iter().map(|(a, b)| (*a, b.as_str())).collect();
+        let text = format!("// {SENTENCE}\n");
+        for ok in [
+            &[LIBRARY][..],
+            &[COMBINED],
+            &[GAME, COMBINED],
+            &[LIBRARY, LIBRARY],
+        ] {
+            let found = one_file(&library, "docs/a.md", &text, ok);
+            assert_eq!(found.map(|o| o.misses.len()), Ok(0), "{ok:?}");
+        }
+        let pair = one_file(&library, "crates/x/src/a.rs", &text, &[GAME, LIBRARY]);
+        assert_eq!(pair.map(|o| o.misses.len()), Ok(1));
+    }
+
+    #[test]
+    fn the_failure_names_each_expression_once_and_the_exact_combined_form() {
+        let library = [("library/t.jsonc", format!("{{\"note\": \"{SENTENCE}\"}}\n"))];
+        let library: Vec<(&str, &str)> = library.iter().map(|(a, b)| (*a, b.as_str())).collect();
+        let text = format!("// {SENTENCE}\n");
+        let doubled = one_file(&library, "crates/x/src/a.rs", &text, &[GAME, GAME]);
+        let message = doubled.map(|o| o.misses.join("\n")).unwrap_or_default();
+        assert_eq!(message.matches(GAME).count(), 1, "{message}");
+        let reordered = one_file(
+            &library,
+            "crates/x/src/b.rs",
+            &text,
+            &["(MIT OR Apache-2.0) AND GPL-3.0-or-later"],
+        );
+        let message = reordered.map(|o| o.misses.join("\n")).unwrap_or_default();
+        assert!(
+            message.contains(&format!("write `{COMBINED}`")),
+            "{message}"
+        );
+    }
+
     /// The files the manifest and the reviews named as quoting the library; the check has to
     /// find every one, or it is looking at nothing.
     const KNOWN: &[&str] = &[
