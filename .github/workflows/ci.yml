@@ -586,8 +586,19 @@ jobs:
           rm -rf target/golden target/determinism
           status=0
           merged=0
+          # The listing goes through a file, not a process substitution: a `find`
+          # that fails inside `< <(...)` is seen by neither `set -e` nor `pipefail`, and
+          # its outputs would be merged in part with nothing red. Here its failure stops
+          # the step and says which shard's tree it was listing.
+          listing=merge-listing.bin
           for dir in shards/shard-${{ matrix.os }}-*; do
             [ -d "$dir/target" ] || continue
+            find "$dir/target" -type f -print0 > "$listing" || {
+              code=$?
+              echo "::error title=Merging the shards' outputs failed::listing ${dir}/target failed (find exit ${code})"
+              df -h . || echo "df -h . failed too"
+              exit 1
+            }
             while IFS= read -r -d '' file; do
               relative="${file#"$dir/target/"}"
               destination="target/$relative"
@@ -601,8 +612,9 @@ jobs:
               mkdir -p "$(dirname "$destination")"
               cp "$file" "$destination"
               merged=$((merged + 1))
-            done < <(find "$dir/target" -type f -print0)
+            done < "$listing"
           done
+          rm -f "$listing"
           echo "${merged} fresh output(s) merged"
           exit "$status"
 
@@ -1244,10 +1256,12 @@ jobs:
       - name: Build gamectl for the headless watch run
         # The watch run below spawns `gamectl host` as the lobby does (decisions-log
         # item 107 (2), confirmed as item 108 (2)). A debug build, like the staged
-        # client, so a panic in the host is a panic rather than an abort.
+        # client, so a panic in the host is a panic rather than an abort. Built through
+        # xtask's checked call (its tools and flags pinned, its build checked from
+        # cargo's own report), at the path the watch run reads.
         if: steps.scope.outputs.prose_only != 'true'
         shell: bash
-        run: cargo build --package pharmakos-gamectl --bin gamectl
+        run: cargo xtask build-gamectl
 
       - name: Headless watch run against a real gamectl host
         # T16's live acceptance, grown by T19 (docs/design/skeleton-plan-t16a-notes.md
