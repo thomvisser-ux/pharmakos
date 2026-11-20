@@ -327,7 +327,13 @@ pub const fn is_too_long_in_bytes(bytes: usize) -> bool {
 /// eight predicates and `toward` their effect, so this build retires `E0020`
 /// to `E0028` and qualifies each construct the checks `vfy6` built behind
 /// them pass, so its reports are not comparable with `0.1.0-s3.3`'s.
-pub const VERIFIER_VERSION: &str = "0.1.0-s3.4";
+/// `0.1.0-s3.5` from S3's `vfyq2`: this build offers a Fix for `E0209` on a
+/// `KNOWN_WITHIN` with no window, and reads a player's text through one
+/// grammar with the JSONC reader, so a block comment that never closes is
+/// `E0001` where it opens, a value inside exactly 64 containers is read as
+/// the codec reads it, and a key written twice is refused at its own
+/// opening quote; its reports are not comparable with `0.1.0-s3.4`'s.
+pub const VERIFIER_VERSION: &str = "0.1.0-s3.5";
 
 /// Everything one verification is a function of, apart from the depth.
 ///

@@ -402,3 +402,19 @@ the last 30 seconds", `HAS_PLACEHOLDERS`); `crates/plan-core/tests/fix_window.rs
 holds the two numbers together and applies the Fix. One case is new, on the plain
 fixture: `e0209_a_known_within_without_its_window`. No existing report moved: no
 committed case reached that diagnostic.
+
+**S3's `vfyq2` (`VERIFIER_VERSION` 0.1.0-s3.5).** Every `report_hash` moved, for one
+of its five inputs: `VERIFIER_VERSION` went from `0.1.0-s3.4` to `0.1.0-s3.5` (input
+4), because this build's reports differ from `0.1.0-s3.4`'s for the same input in two
+ways. `E0209` on a `KNOWN_WITHIN` with no window now offers a Fix, an `add` of the
+window the vocabulary's enemy skeletons write (30 000 ms, "Ask about what was seen in
+the last 30 seconds", `HAS_PLACEHOLDERS`); one case is new, on the plain fixture,
+`e0209_a_known_within_without_its_window`. And the JSONC reader and the codec read one
+grammar (`crates/proto/src/json/grammar.rs`), so three kinds of text are read
+differently: a block comment that never closes is `E0001` at the byte where it opens
+(it was blanked to the end of the file, and the text before it could qualify); a
+value nested inside exactly 64 containers is canonicalised (it was handed over
+blanked, though the verifier read it); and a key written twice is refused at its own
+opening quote, a trailing comma in words of its own. No committed case holds any of
+those texts, so no report moved for them; every other byte of every report is as
+before the bump, which the commits before it show.
