@@ -4023,12 +4023,26 @@ pub(crate) fn held_values(world: &pharmakos_sim::world::World) -> Vec<(SeatId, O
 /// The arithmetic is the sim's ([`pharmakos_sim::hash::plan_fingerprint`],
 /// beside the state hash since S1's `build` lane, the register's S1-42).
 fn plan_fingerprint(playbook_jsonc: &str) -> Result<u64, Error> {
-    let canonical = pharmakos_plan_core::decode_jsonc(playbook_jsonc).map_err(|error| {
+    fingerprint_of(&sealed_canonical(playbook_jsonc)?)
+}
+
+/// A sealed playbook's canonical form: the one decode a save's seal is read
+/// through.
+fn sealed_canonical(
+    playbook_jsonc: &str,
+) -> Result<pharmakos_proto::json::Canonicalised<pharmakos_proto::gp::v1::Playbook>, Error> {
+    pharmakos_plan_core::decode_jsonc(playbook_jsonc).map_err(|error| {
         Error::internal(format!(
             "a sealed playbook has no canonical form: {}",
             error.message
         ))
-    })?;
+    })
+}
+
+/// [`plan_fingerprint`], over a canonical form already decoded.
+fn fingerprint_of(
+    canonical: &pharmakos_proto::json::Canonicalised<pharmakos_proto::gp::v1::Playbook>,
+) -> Result<u64, Error> {
     pharmakos_sim::hash::plan_fingerprint(canonical.decoded().message()).map_err(|error| {
         Error::internal(format!(
             "a sealed playbook's canonical form will not encode for its fingerprint: {error}"
@@ -4040,15 +4054,20 @@ fn plan_fingerprint(playbook_jsonc: &str) -> Result<u64, Error> {
 /// recompiled.
 ///
 /// The fingerprint first, because it is what says the text is the text that
-/// was saved; a text that compiles and is not is exactly what it catches.
+/// was saved; a text that compiles and is not is exactly what it catches. The
+/// text is decoded once, and the fingerprint and the compile both read that
+/// canonical form (S3's `vfyq2`, fix pass 2, item F): what is checked is what
+/// is compiled. The refusals keep their codes and their words.
 fn restore_seal(held: &SavedSeat, seal: &SavedSeal, rules: &RulesTable) -> Result<Sealed, Error> {
-    let fingerprint = plan_fingerprint(&seal.playbook_jsonc).map_err(|error| {
+    let damaged = |error: Error| {
         Error::invalid(format!(
             "seat {}'s sealed playbook in this save has no canonical form ({}): the file is \
              damaged",
             held.seat, error.message
         ))
-    })?;
+    };
+    let canonical = sealed_canonical(&seal.playbook_jsonc).map_err(damaged)?;
+    let fingerprint = fingerprint_of(&canonical).map_err(damaged)?;
     if fingerprint != seal.plan_fingerprint {
         return Err(Error::invalid(format!(
             "seat {}'s sealed playbook in this save does not match the plan fingerprint saved \
@@ -4059,14 +4078,12 @@ fn restore_seal(held: &SavedSeat, seal: &SavedSeal, rules: &RulesTable) -> Resul
             pharmakos_sim::hex(seal.plan_fingerprint)
         )));
     }
-    let plan = crate::surface::planning::compile_playbook(&seal.playbook_jsonc, rules).map_err(
-        |error| {
-            Error::invalid(format!(
-                "seat {}'s sealed playbook in this save will not compile in this build: {}",
-                held.seat, error.message
-            ))
-        },
-    )?;
+    let plan = crate::surface::planning::compile_canonical(&canonical, rules).map_err(|error| {
+        Error::invalid(format!(
+            "seat {}'s sealed playbook in this save will not compile in this build: {}",
+            held.seat, error.message
+        ))
+    })?;
     Ok(Sealed {
         playbook_jsonc: seal.playbook_jsonc.clone(),
         report_hash: seal.report_hash.clone(),
