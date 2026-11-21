@@ -527,6 +527,7 @@ impl Surface {
             .ok_or_else(|| Error::invalid("`json_patch` is an RFC 6902 patch, as text"))?;
         let (patched, inverse) = pharmakos_plan_core::patch_text(playbook, patch)
             .map_err(|error| Error::invalid(error.shown()))?;
+        undo_travels(&patched, &inverse)?;
         Ok(Json::Object(vec![
             (String::from("playbook_jsonc"), Json::String(patched)),
             (String::from("inverse_json_patch"), Json::String(inverse)),
@@ -1091,6 +1092,39 @@ fn compile_decoded(
     rules: &RulesTable,
 ) -> Result<Plan, Said> {
     Plan::compile(playbook, rules).map_err(|error| super::plan_words::plan_refusal(&error))
+}
+
+/// The undo of a `patch_plan` answer travels back (S3's `vfyq2`, fix pass 6,
+/// item 2): the request that sends the inverse back, `patch_plan` with the
+/// patched file and the inverse, measured as the client writes it
+/// ([`crate::rpc::request_text`], with the widest numeric id a client
+/// counts to, a `u64`'s twenty digits), must be a text the gateway reads
+/// ([`crate::frame::travels`]). The inverse holds the text it takes out as
+/// JSON, and the request writes it as JSON again, so it can be far larger
+/// than the request that made it. Otherwise the forward patch is refused up
+/// front, as an undo that could not be issued, rather than answered with an
+/// undo whose request would close the seat's connection (1009).
+fn undo_travels(patched: &str, inverse: &str) -> Result<(), Error> {
+    let request = crate::rpc::request_text(
+        &Json::Number(u64::MAX.to_string()),
+        "patch_plan",
+        Json::Object(vec![
+            (
+                String::from("playbook_jsonc"),
+                Json::String(patched.to_owned()),
+            ),
+            (String::from("json_patch"), Json::String(inverse.to_owned())),
+        ]),
+    );
+    if crate::frame::travels(request.len()) {
+        return Ok(());
+    }
+    Err(Error::invalid(said!(
+        "this patch is not applied: the patch that would undo it could not be issued (its \
+         request would be {} bytes, past the {} one message carries)",
+        request.len(),
+        crate::frame::MAX_MESSAGE_BYTES
+    )))
 }
 
 /// The `playbook_jsonc` parameter, bounded.

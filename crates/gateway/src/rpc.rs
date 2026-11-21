@@ -294,6 +294,20 @@ pub fn render(response: &Json) -> String {
     write(response)
 }
 
+/// A request as a client writes it: `jsonrpc`, `id`, `method`, `params`, in
+/// the canonical writer the client uses (`client-gdext`'s rig writes its
+/// requests with the same `json::write`). What the gateway measures a
+/// request it hands back to be sent by (S3's `vfyq2`, fix pass 6, item 2).
+#[must_use]
+pub fn request_text(id: &Json, method: &str, params: Json) -> String {
+    write(&Json::Object(vec![
+        (String::from("jsonrpc"), Json::String(String::from(VERSION))),
+        (String::from("id"), id.clone()),
+        (String::from("method"), Json::String(method.to_owned())),
+        (String::from("params"), params),
+    ]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Malformed, failure, malformed_response, parse, success};
