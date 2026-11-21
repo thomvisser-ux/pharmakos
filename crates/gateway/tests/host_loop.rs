@@ -1603,3 +1603,102 @@ fn a_probation_lull_resumed_by_the_host_loop_is_untimed_by_rule_on_its_first_cal
         running.quit();
     }
 }
+
+/// The review's document for the undo's frame (fix pass 6, item 2): `n`
+/// routes of quoted words.
+fn routes_document(n: usize) -> String {
+    let items: Vec<String> = (0..n)
+        .map(|i| format!("{{\"id\": \"b{i}\", \"n\": {i}}}"))
+        .collect();
+    format!(
+        "{{\n  \"meta\": {{\"title\": \"t\"}},\n  \"routes\": [\n    {}\n  ]\n}}\n",
+        items.join(",\n    ")
+    )
+}
+
+/// The largest inverse `patch_plan` hands back goes through a real socket
+/// (S3's `vfyq2`, fix pass 6, item 2). The largest document whose
+/// `remove /routes` the gateway accepts (and whose forward request a client
+/// can send) is found in process; then, over the socket, the forward patch
+/// is applied and its inverse sent back, and the file comes back whole.
+#[test]
+fn the_largest_accepted_inverse_round_trips_through_the_socket() {
+    use pharmakos_gateway::frame::MAX_MESSAGE_BYTES;
+    let remove = r#"[{"op":"remove","path":"/routes"}]"#;
+    let forward_params = |text: &str| {
+        format!(
+            r#"{{"playbook_jsonc":{},"json_patch":{}}}"#,
+            support::quote(text),
+            support::quote(remove)
+        )
+    };
+    // The test client's own request, as it writes it.
+    let request_bytes = |params: &str| {
+        format!(r#"{{"jsonrpc":"2.0","id":4294967295,"method":"patch_plan","params":{params}}}"#)
+            .len()
+    };
+    let mut surface = support::hosted_with(
+        "m-undo-socket-probe",
+        pharmakos_gateway::fog::FogPolicy::fogged(),
+        2,
+        3_000,
+        3,
+        None,
+    );
+    let token = support::seat_token(&mut surface, 0);
+    let mut left = support::FIRST_LULL_MS;
+    let mut accepted = |n: usize| -> bool {
+        let params = forward_params(&routes_document(n));
+        if request_bytes(&params) > MAX_MESSAGE_BYTES {
+            return false;
+        }
+        let answer = support::call_in_lull(&mut surface, &token, &mut left, "patch_plan", &params);
+        answer.get("result").is_some()
+    };
+    let (mut low, mut high) = (1_usize, 9_000_usize);
+    assert!(accepted(low));
+    while high.saturating_sub(low) > 1 {
+        let middle = low.saturating_add(high.saturating_sub(low) >> 1);
+        if accepted(middle) {
+            low = middle;
+        } else {
+            high = middle;
+        }
+    }
+    let text = routes_document(low);
+
+    let line = Config {
+        segment_lengths_ms: vec![1_000],
+        ..config("m-undo-socket", Some(0))
+    };
+    let mut running = start_in(
+        &data_root("undo-socket"),
+        &new_line(line),
+        Box::new(NoOperators),
+    );
+    let seat_token = running.announce.seat_token.clone().expect("a human seat");
+    let mut seat = Client::open(running.announce.port, &seat_token);
+    let forward = result(
+        &seat.call("patch_plan", &forward_params(&text)),
+        "patch_plan",
+    );
+    let (Some(Json::String(patched)), Some(Json::String(inverse))) = (
+        forward.get("playbook_jsonc"),
+        forward.get("inverse_json_patch"),
+    ) else {
+        panic!("a patched file and its inverse: {forward:?}");
+    };
+    let undo_params = format!(
+        r#"{{"playbook_jsonc":{},"json_patch":{}}}"#,
+        support::quote(patched),
+        support::quote(inverse)
+    );
+    let undone = result(&seat.call("patch_plan", &undo_params), "the undo");
+    assert_eq!(
+        undone.get("playbook_jsonc"),
+        Some(&Json::String(text.clone())),
+        "the undo of the largest accepted patch ({} bytes) gives the file back",
+        text.len()
+    );
+    running.quit();
+}
