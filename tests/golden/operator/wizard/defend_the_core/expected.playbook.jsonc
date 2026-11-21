@@ -48,7 +48,7 @@
           "protect": [{"beacon": {"beacon_id": "b_00"}}, {"my_commander": {}}],
           "engagement_radius_pct": 100, "pursue": "SPHERE_EDGE", "picket_scouts": 1}}}},
        "timeout_ms": 60000, "on_fail": {"action": "SKIP"}},
-      {"label": "hold", "hold": {"ms": 94100}}
+      {"label": "hold", "hold": {"ms": 97500}}
     ],
     "handlers": [
       // Why: bravery is an ordinary rule. Hurt and under fire, the commander

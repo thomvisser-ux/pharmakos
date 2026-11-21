@@ -13,6 +13,11 @@
 //! > connectivity oracle before any search … The estimator is the abstract
 //! > search alone: it never refines, never steps, never forks.
 //!
+//! Lane `p3fix` amended the last sentence for a near pair (start and goal in
+//! the same or touching clusters): it is priced at the route the router would
+//! serve, which refines but still never steps and never forks. The signature
+//! is unchanged.
+//!
 //! `world`, `clusters`, `scratch` and `fog` are the estimator's own state, so
 //! what crosses into this crate is [`TravelEstimator`]: the frozen function
 //! with its first four arguments bound, plus the one question the *seat's fog*
@@ -33,16 +38,19 @@
 //!
 //! 1. **A fogged leg is drawn as the upper bound it is, never as an ETA.** Fog
 //!    is priced `cost * 3 / 2` per abstract edge, measured at 48.6 % p90 error
-//!    and capped at +50 % over the clear estimate. So the leg is labelled "at
-//!    most", the route total says how much of it is a bound, and the editor
-//!    draws it dashed (spec section 13).
+//!    and capped at +50 % over the abstract clear estimate. So the leg is
+//!    labelled "at most", the route total says how much of it is a bound, and
+//!    the editor draws it dashed (spec section 13).
 //! 2. **A time shown to the player is rounded generously, in whole seconds.**
 //!    The estimator is *never optimistic* on static terrain — that is part of
 //!    item 61's contract rather than an implementation detail — and the
 //!    rounding depends on it: rounding **up** to the next whole second can only
-//!    ever make the promise safer. The short-route band (≤ 32 cells) has p90
-//!    9.2 % and max 66.6 %, "one second on a two-second route", which is
-//!    exactly the error a whole second absorbs.
+//!    ever make the promise safer. Spike G2 measured the short-route band
+//!    (≤ 32 cells) at p90 9.2 % and max 66.6 %, "one second on a two-second
+//!    route", the error a whole second absorbs; since lane `p3fix` the sim
+//!    prices a pair whose clusters touch at the route the router serves, so a
+//!    route of 32 cells or less is exact on static terrain, counted from the
+//!    tick that serves it.
 //!
 //! Recorded honestly, because item 57 records it: the promise is made on static
 //! terrain and a Push is not static. Under 20 craters/s the same estimate is

@@ -461,8 +461,9 @@ const GROWS: &[&str] = &[
     "sim:interpreter/cond.rs::row_repairs",
     // S3's `pred`: a `toward` stone's candidates are columns within each own
     // beacon's sphere, grown by a Spire as the anchor for the next beacon is
-    // (decision 6).
-    "sim:targeting.rs::stone_site",
+    // (decision 6); since lane `p3fix`'s fix pass 3 they are listed, and the
+    // spheres the directed search heads for added, before any search.
+    "sim:targeting.rs::legal_sites",
     // Build's area and the drones' work reach, every physical-work path.
     "sim:mandate.rs::inside_sphere",
     "sim:mandate.rs::of",

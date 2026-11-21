@@ -562,8 +562,8 @@ impl Router {
                 &mut buffer,
             );
             match outcome {
-                Ok(RouteOutcome { partial, .. }) if buffer.len() > 1 => {
-                    self.write_route(unit, &buffer, partial);
+                Ok(RouteOutcome { rest, .. }) if buffer.len() > 1 => {
+                    self.write_route(unit, &buffer, rest.is_some());
                     self.set_state(unit, WalkState::Walking);
                 }
                 Ok(_) => {

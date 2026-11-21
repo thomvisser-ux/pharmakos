@@ -26,8 +26,8 @@
 //! border edges; it asks the decomposition nothing about geometry. A second
 //! level would be a second [`Clusters`] over a coarser grid and a two-stage
 //! search, with nothing here changing shape — and item 58 bounded what it could
-//! save at 9 %, because the endpoint sweeps it cannot touch are 91 % of a
-//! median query. `tests/pathing.rs` reports that split so S3 inherits the
+//! save at 9 %, because the endpoint sweeps it cannot touch were 91 % of a
+//! median query in the spike, and are nearly all of it on the sim's own map. `tests/pathing.rs` reports that split so S3 inherits the
 //! number rather than the opinion.
 //!
 //! # Smoothing can only remove cost
@@ -36,8 +36,9 @@
 //! is legal at **every** step and costs no more than the sub-path it replaces.
 //! So the smoother can neither introduce an illegal step nor make a route
 //! worse; the only thing it can do is fail to find a shortcut. That is what
-//! makes the estimate never optimistic (item 61): the estimate prices the
-//! unsmoothed refinement, and the walker walks the smoothed one.
+//! makes a far pair's estimate never optimistic (item 61): it prices the
+//! unsmoothed refinement, and the walker walks the smoothed one. A near
+//! pair's estimate prices the smoothed route itself (`route_and_abstract`).
 
 use crate::pathing::MAX_ROUTE_NODES;
 use crate::pathing::clusters::Clusters;
@@ -149,16 +150,27 @@ pub struct RouteOutcome {
     pub cost: i32,
     /// Abstract edges the route was assembled from.
     pub legs: u32,
-    /// Whether the route stops short of the goal because it reached
-    /// [`MAX_ROUTE_NODES`]. The walker asks for the rest when it gets there.
-    pub partial: bool,
+    /// Where the route stops short of the goal because it reached
+    /// [`MAX_ROUTE_NODES`], the column the walker asks for the rest from when
+    /// it gets there; `None` when it reaches the goal. A short route ends on a
+    /// column by construction, so no caller reads an empty buffer for it.
+    pub rest: Option<Node>,
+}
+
+impl RouteOutcome {
+    /// Whether the route stops short of the goal ([`RouteOutcome::rest`]).
+    #[must_use]
+    pub const fn partial(&self) -> bool {
+        self.rest.is_some()
+    }
 }
 
 /// Search the abstract graph from `start` to `goal`.
 ///
-/// **This is the whole of the estimate query**: no refinement, no stepping, no
-/// fork. [`crate::pathing::estimate::estimate`] is a contractual wrapper around
-/// it.
+/// **This is the whole of a far pair's estimate**: no refinement, no stepping,
+/// no fork. [`crate::pathing::estimate::estimate`] is a contractual wrapper
+/// around it, and prices a near pair at [`route_with`]'s route instead (its
+/// module docs' "Near pairs").
 pub fn abstract_search(
     surface: &Surface,
     clusters: &Clusters,
@@ -237,7 +249,6 @@ fn abstract_search_with(
     };
 
     abstract_begin(scratch);
-    scratch.abstract_expansions = 0;
     let h0 = surface.heuristic(start, goal);
     abstract_reach(scratch, temp_start, 0, temp_start);
     scratch.abstract_heap.push(Item {
@@ -252,7 +263,7 @@ fn abstract_search_with(
             continue;
         }
         abstract_close(scratch, item.n);
-        scratch.abstract_expansions = scratch.abstract_expansions.saturating_add(1);
+        scratch.abstract_expansions.bump();
         if item.n == temp_goal {
             found = true;
             break;
@@ -288,6 +299,13 @@ impl Query<'_> {
         } else if node == self.temp_goal {
             self.goal
         } else {
+            // E7: cannot miss: every node a query reaches is a temporary endpoint (above) or the
+            // target of an edge, and the decomposition writes an edge only to a slot its cluster
+            // holds: an intra target is a `to_slot` below the cluster's transition count
+            // (`Clusters::rebuild_intra`), an inter target is `Clusters::abstract_of` of an existing
+            // transition cell (`Clusters::rebuild_inter`), and the start's and goal's own edges are
+            // read off `trans_cells` (`insert_endpoint`). A repair rebuilds the same way, and
+            // `tests/pathing.rs`'s repair tests hold it equal to a from-scratch build.
             clusters.abstract_cell(node).unwrap_or(self.start)
         }
     }
@@ -446,6 +464,16 @@ fn reconstruct(
     let mut guard: u32 = 0;
     loop {
         path.push(current);
+        // E7: cannot miss: the guard never ends the walk. A node's predecessor
+        // is written when it is relaxed from a node being expanded, so it is
+        // a closed node, and a closed node is never relaxed again
+        // (`abstract_relax`), so its own predecessor is fixed from then on and
+        // was closed before it. The walk back from the temporary goal
+        // therefore visits closed nodes in strictly earlier closing order and
+        // reaches the temporary start, whose predecessor is itself, in at most
+        // `capacity + 1` steps (`capacity` graph nodes and two temporary
+        // ones): the guard passes `capacity` at the earliest on the step that
+        // reaches the temporary start anyway.
         if current == query.temp_start || guard > capacity {
             break;
         }
@@ -538,10 +566,6 @@ pub fn route(
 /// # Errors
 ///
 /// As [`route`].
-#[allow(
-    clippy::too_many_lines,
-    reason = "route's body under a surcharge: the abstract search, the leg refinement and the smoother in the order they run"
-)]
 pub fn route_with(
     surface: &Surface,
     clusters: &Clusters,
@@ -550,6 +574,30 @@ pub fn route_with(
     surcharge: Surcharge<'_>,
     out: &mut Vec<Node>,
 ) -> Result<RouteOutcome, NoPath> {
+    route_and_abstract(surface, clusters, scratch, (start, goal), surcharge, out)
+        .map(|(_, outcome)| outcome)
+}
+
+/// [`route_with`], and the abstract search's answer the route was refined
+/// from: the one function both the router ([`route_with`]) and a near pair's
+/// estimate ([`crate::pathing::estimate`]) run, so that what the estimate
+/// prices is what the router serves by construction rather than by agreement.
+///
+/// # Errors
+///
+/// As [`route`].
+#[allow(
+    clippy::too_many_lines,
+    reason = "route's body under a surcharge: the abstract search, the leg refinement and the smoother in the order they run"
+)]
+pub(crate) fn route_and_abstract(
+    surface: &Surface,
+    clusters: &Clusters,
+    scratch: &mut Scratch,
+    (start, goal): (Node, Node),
+    surcharge: Surcharge<'_>,
+    out: &mut Vec<Node>,
+) -> Result<(AbstractResult, RouteOutcome), NoPath> {
     out.clear();
     // A route is walked over terrain the sim can see in full, so nothing on it
     // is priced through fog and the multiplier is never reached. Fog belongs to
@@ -571,11 +619,14 @@ pub fn route_with(
     .ok_or(NoPath::Unreachable)?;
     if result.legs == 0 {
         out.push(start);
-        return Ok(RouteOutcome {
-            cost: 0,
-            legs: 0,
-            partial: false,
-        });
+        return Ok((
+            result,
+            RouteOutcome {
+                cost: 0,
+                legs: 0,
+                rest: None,
+            },
+        ));
     }
 
     let capacity = clusters.abstract_capacity();
@@ -661,11 +712,16 @@ pub fn route_with(
     scratch.line = line;
     scratch.prefix = prefix;
     let cost = crate::pathing::search::route_cost(surface, out).ok_or(NoPath::Unpriced)?;
-    Ok(RouteOutcome {
-        cost,
-        legs: result.legs,
-        partial,
-    })
+    // A route that prices has a column: an empty smoothed walk is no walk.
+    let end = out.last().copied().ok_or(NoPath::Unpriced)?;
+    Ok((
+        result,
+        RouteOutcome {
+            cost,
+            legs: result.legs,
+            rest: partial.then_some(end),
+        },
+    ))
 }
 
 /// Insert one endpoint: a bounded sweep over its cluster, harvested as edges to
@@ -722,6 +778,8 @@ fn abstract_to_cell(
     } else if node == temp_goal {
         goal
     } else {
+        // E7: cannot miss: `node` is on the abstract path a search just reconstructed, so it is
+        // a node that search reached, and `Query::cell_of` says why each of those has a cell.
         clusters.abstract_cell(node).unwrap_or(start)
     }
 }

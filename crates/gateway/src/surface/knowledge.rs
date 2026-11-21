@@ -82,7 +82,8 @@ pub const fn beacon_budget(detail: Detail) -> usize {
 
 /// The most waypoints one `estimate_route` may name.
 ///
-/// A route costs one abstract search per leg and there is no estimate cache
+/// A route costs one estimate per leg (an abstract search, or a route the
+/// router would serve for a near pair) and there is no estimate cache
 /// (decisions-log item 61), so the count is the caller's multiplier on the
 /// gateway's whole single-threaded turn: measured on the shipped 384x384x64
 /// map, 2 000 waypoints between two far corners is a 64 KiB request -- well
@@ -967,7 +968,8 @@ impl Surface {
 
     /// `estimate_route`: item 61's travel estimate, exposed.
     ///
-    /// Abstract search alone -- it never refines, never steps, never forks --
+    /// The abstract search for a far leg and the route the router would serve
+    /// for a near one (lane `p3fix`) -- it never steps, never forks --
     /// through the adapter item 100 (1) puts in this crate. Never optimistic,
     /// and a fogged leg comes back flagged so the editor draws it dashed and
     /// labels it a bound rather than an ETA (item 57).
