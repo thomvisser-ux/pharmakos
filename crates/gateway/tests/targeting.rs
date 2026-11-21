@@ -1359,6 +1359,166 @@ fn nearest_vent_and_its_way(surface: &mut Surface) -> (String, Vec<[i32; 3]>) {
     (vent, craters)
 }
 
+/// A one-step playbook whose `place_beacon` covers the nearest feature of
+/// `kind` (`vent` or `seam`), covered or not: `resolve_refs` lists every
+/// reachable feature of the kind as a candidate, ranked from the commander.
+fn covering_nearest(kind: &str) -> String {
+    format!(
+        r#"{{
+  "schema_version": {{"major": 1, "minor": 0}},
+  "meta": {{"title": "Cover the nearest {kind}", "author_kind": "HUMAN"}},
+  "kind": "PLAYBOOK",
+  "declarative": {{
+    "route": [
+      {{"label": "cover",
+        "place_beacon": {{"at": {{"covering": {{"{kind}": {{"rank": "NEAREST", "coverage": "ANY"}}}}}}}},
+        "timeout_ms": 120000, "on_fail": {{"action": "SKIP"}}}}
+    ],
+    "handlers": []
+  }},
+  "on_death": {{"on_respawn": "CONTINUE", "max_deaths_before_fallback": 2}},
+  "fallback": {{"hold": {{"at": {{"safest": {{}}}}}}}}
+}}"#
+    )
+}
+
+/// Seat 0's commander's voxel, and for each feature `reached` names the
+/// column the sim's ranker measures it at from there (`Ground::measure_to`),
+/// as a voxel on the ground.
+fn measured_goals(
+    surface: &Surface,
+    reached: &[(String, i64)],
+) -> ([i32; 3], Vec<(String, [i32; 3])>) {
+    let world = surface.host().expect("hosted").world();
+    let [cx, cy, cz] = support::commander_voxel(surface, 0);
+    let origin = world
+        .surface()
+        .node_of(cx, cy)
+        .expect("the commander's column");
+    let ground = world.ground();
+    let reads = pharmakos_gateway::targeting::feature_reads(world, Some(SeatId::new(0)));
+    let goals = reached
+        .iter()
+        .map(|(name, _)| {
+            let read = reads
+                .iter()
+                .find(|read| &read.name == name)
+                .expect("a summary feature is in the table");
+            let column = ground
+                .measure_to(read.index, origin)
+                .unwrap_or_else(|| panic!("{name} is reached and measured to nowhere"));
+            let (x, y) = world.surface().coord_of(column);
+            let z = world.voxels().top_solid_z(x, y).expect("a floor");
+            (name.clone(), [x, y, z])
+        })
+        .collect();
+    ([cx, cy, cz], goals)
+}
+
+/// **One measure across the four readers** (S3's `p3fix`, the gateway step):
+/// for seat 0 in this Lull, every reachable feature's `get_map_summary`
+/// `travel_ms`, the `travel_ms` `resolve_refs` lists it at as a `covering`
+/// candidate, and `estimate_route`'s leg from the commander's voxel to the
+/// column the sim's ranker measures it at (`Ground::measure_to`) are one
+/// figure: the walk the router serves, which is what the Push walks. Before
+/// the step `estimate_route` priced a far leg at the abstract graph's
+/// unsmoothed cost, over a second copy of the graph, and the chip and the
+/// route disagreed. Returns how many features it compared.
+fn assert_one_measure(surface: &mut Surface, round: u32, how: &str) -> usize {
+    let token = support::seat_token(surface, 0);
+    let mut left = LULL_MS;
+    let summary = result(
+        &call_in_lull(surface, &token, &mut left, "get_map_summary", "{}"),
+        "get_map_summary",
+    );
+    let reached: Vec<(String, i64)> = array_of(&summary, "features")
+        .iter()
+        .filter(|feature| feature.get("reachable") == Some(&Json::Bool(true)))
+        .map(|feature| (text_of(feature, "feature_id"), number(feature, "travel_ms")))
+        .collect();
+    assert!(
+        !reached.is_empty(),
+        "round {round}, {how}: seat 0 reaches no feature, so nothing is compared"
+    );
+    let summary_ms = |name: &str| -> i64 {
+        reached.iter().find(|(id, _)| id == name).map_or_else(
+            || panic!("round {round}, {how}: {name} is a candidate the summary does not reach"),
+            |(_, ms)| *ms,
+        )
+    };
+
+    // `resolve_refs`: every candidate of a `covering` of each kind.
+    let mut listed = 0_usize;
+    for kind in ["vent", "seam"] {
+        let answer = result(
+            &call_in_lull(
+                surface,
+                &token,
+                &mut left,
+                "resolve_refs",
+                &format!(
+                    r#"{{"playbook_jsonc":{}}}"#,
+                    support::quote(&covering_nearest(kind))
+                ),
+            ),
+            "resolve_refs",
+        );
+        let refs = array_of(&answer, "refs");
+        let [reference] = refs.as_slice() else {
+            panic!("round {round}, {how}: one reference, and this is {refs:?}");
+        };
+        for candidate in array_of(reference, "candidates") {
+            let name = text_of(&candidate, "feature_id");
+            assert_eq!(
+                number(&candidate, "travel_ms"),
+                summary_ms(&name),
+                "round {round}, {how}: resolve_refs binds {name} at another figure than the chip's"
+            );
+            listed += 1;
+        }
+    }
+    assert_eq!(
+        listed,
+        reached.len(),
+        "round {round}, {how}: resolve_refs lists a reachable feature set other than the summary's"
+    );
+
+    // `estimate_route`: the commander out to each feature and back, legs
+    // 0, 2, 4, ... being the walks out.
+    let (start, goals) = measured_goals(surface, &reached);
+    let voxel = |[x, y, z]: [i32; 3]| format!(r#"{{"voxel":{{"x":{x},"y":{y},"z":{z}}}}}"#);
+    // Thirty-one features a call: 63 waypoints, inside `MAX_WAYPOINTS`.
+    for chunk in goals.chunks(31) {
+        let mut waypoints = vec![voxel(start)];
+        for (_, goal) in chunk {
+            waypoints.push(voxel(*goal));
+            waypoints.push(voxel(start));
+        }
+        let answer = result(
+            &call_in_lull(
+                surface,
+                &token,
+                &mut left,
+                "estimate_route",
+                &format!(r#"{{"waypoints":[{}]}}"#, waypoints.join(",")),
+            ),
+            "estimate_route",
+        );
+        let legs = array_of(&answer, "legs");
+        for (index, (name, _)) in chunk.iter().enumerate() {
+            let out = legs
+                .get(2 * index)
+                .unwrap_or_else(|| panic!("round {round}, {how}: no leg out to {name}"));
+            assert_eq!(
+                number(out, "ms"),
+                summary_ms(name),
+                "round {round}, {how}: estimate_route walks to {name} at another figure than the chip's"
+            );
+        }
+    }
+    goals.len()
+}
+
 /// The match of [`every_lull_reads_and_plays_on_as_its_save_does`], resumed
 /// from `saved` on a fresh surface and host.
 fn resumed_from(saved: &pharmakos_gateway::save::SavedMatch) -> Surface {
@@ -1515,6 +1675,11 @@ fn push_cratered_on_its_last_tick(
 /// stale graph over a fresh surface and the resumed one a fresh graph, and
 /// round 2's `get_map_summary` priced seat 0's walk to `seam_348_31` at
 /// 13 400 ms live and 12 800 ms resumed.
+///
+/// At each of those Lulls, live and resumed, the four readers price one walk
+/// ([`assert_one_measure`]; S3's `p3fix`, the gateway step): the chip's
+/// `travel_ms`, `resolve_refs`' candidates and `estimate_route`'s legs, for
+/// every feature seat 0 reaches, are the walk the router serves.
 #[test]
 fn every_lull_reads_and_plays_on_as_its_save_does() {
     let mut surface = support::hosted(2, SHORT_SEGMENT_MS, SHORT_ROUNDS);
@@ -1541,6 +1706,13 @@ fn every_lull_reads_and_plays_on_as_its_save_does() {
         let live = graph_reads(&mut surface, &vent);
         let mut resumed = resumed_from(&surface.lull_save().expect("a Lull saves"));
         let again = graph_reads(&mut resumed, &vent);
+        let compared = assert_one_measure(&mut surface, round, "live");
+        assert_eq!(
+            assert_one_measure(&mut resumed, round, "resumed"),
+            compared,
+            "round {round}: the resumed Lull reaches another set of features"
+        );
+        println!("::notice::round {round}: one measure over {compared} features, live and resumed");
         for ((method, live), again) in ["get_map_summary", "resolve_refs", "estimate_route"]
             .into_iter()
             .zip(&live)

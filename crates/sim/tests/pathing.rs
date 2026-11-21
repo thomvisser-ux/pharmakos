@@ -47,7 +47,7 @@ use pharmakos_sim::math::fixed::Fx;
 use pharmakos_sim::math::quantity::TICK_HZ;
 use pharmakos_sim::pathing::MAX_ROUTE_NODES;
 use pharmakos_sim::pathing::clusters::Clusters;
-use pharmakos_sim::pathing::estimate::{Fog, Speed, estimate, ticks_for_cost};
+use pharmakos_sim::pathing::estimate::{Fog, Speed, ticks_for_cost};
 use pharmakos_sim::pathing::repair::{Repairer, conservative_affected, repair};
 use pharmakos_sim::pathing::route::{abstract_search, route};
 use pharmakos_sim::pathing::router::WalkState;
@@ -56,6 +56,22 @@ use pharmakos_sim::pathing::surface::{DEFAULT_ORDER, Node, StepCosts, Surface};
 use pharmakos_sim::tables::{SeatId, UnitId, UnitKind};
 use pharmakos_sim::voxels::{Material, VoxelEdit, VoxelStore};
 use pharmakos_sim::{MatchSettings, RulesTable, World, WorldConfig, mapgen};
+
+/// The sim's [`pharmakos_sim::pathing::estimate::estimate`], its error a test
+/// failure: every walk this file prices chains to its goal, so an
+/// `EstimateError` is the sim breaking its own chain argument.
+fn estimate(
+    surface: &Surface,
+    clusters: &Clusters,
+    scratch: &mut Scratch,
+    start: Node,
+    goal: Node,
+    fog: Fog<'_>,
+    speed: Speed,
+) -> Option<pharmakos_sim::pathing::estimate::Estimate> {
+    pharmakos_sim::pathing::estimate::estimate(surface, clusters, scratch, start, goal, fog, speed)
+        .unwrap_or_else(|error| panic!("the sim priced no walk: {error}"))
+}
 
 /// The seed every fixture in this file runs on: the determinism harness's own,
 /// so a map that moved shows up in one place rather than two.
@@ -741,21 +757,20 @@ fn the_estimate_is_never_optimistic_at_any_percentile() {
 
 /// Fog never makes a route look cheaper, and item 61's markup caps it.
 ///
-/// Two properties, each against what is true since lane `p3fix` priced a near
-/// pair at its served route (`estimate`'s module docs, "Fog"):
+/// Two properties, each against what is true since lane `p3fix` priced a
+/// clear query at its served walk (`estimate`'s module docs, "Fog"):
 ///
 /// 1. **The name's property, against the clear answer as given:** the fogged
-///    estimate is never below the clear one, which for a near pair is the
-///    served route's cost. A query with a mask takes the abstract path for
+///    estimate is never below the clear one, which is the served route's
+///    cost, near pair or far. A query with a mask takes the abstract path for
 ///    every pair, so this rests on the served route never costing more than
 ///    the abstract answer, asserted here too.
 /// 2. **Item 61's cap, as the markup's own property:** the fogged estimate is
 ///    at most `fog_price` of the **abstract** clear cost. Item 61 capped it
 ///    "over the clear estimate" when the clear estimate was the abstract one;
-///    a near pair's clear answer is now lower than that, and the cap was
-///    always about the ×3/2 markup on the abstract answer. The abstract clear
-///    cost is read with no new interface: a mask that marks nothing unknown
-///    takes the abstract path and prices nothing up.
+///    the clear answer is now the walk, at most the abstract one, and the cap
+///    was always about the ×3/2 markup on the abstract answer. The abstract
+///    clear cost is read from the abstract search itself.
 #[test]
 fn fog_never_makes_a_route_look_cheaper() {
     use pharmakos_sim::pathing::estimate::fog_price;
@@ -765,7 +780,7 @@ fn fog_never_makes_a_route_look_cheaper() {
     let nodes = usize::try_from(fixture.surface.node_count()).expect("fits");
     let unknown = vec![true; nodes];
     let mut buffer: Vec<Node> = Vec::with_capacity(usize::try_from(MAX_ROUTE_NODES).expect("fits"));
-    let mut near = 0;
+    let (mut near, mut far) = (0_u32, 0_u32);
     for (start, goal) in &set {
         let mut ask = |fog: Fog<'_>| {
             estimate(
@@ -781,8 +796,7 @@ fn fog_never_makes_a_route_look_cheaper() {
         };
         let clear = ask(Fog::Clear);
         let fogged = ask(Fog::Unknown(&unknown));
-        // The abstract clear cost, from the abstract search itself: a mask
-        // that hides nothing is a clear query, priced as `clear` is.
+        // The abstract clear cost, from the abstract search itself.
         let abstract_clear = abstract_search(
             &fixture.surface,
             &fixture.clusters,
@@ -802,17 +816,15 @@ fn fog_never_makes_a_route_look_cheaper() {
             &mut buffer,
         )
         .expect("a route");
+        assert!(!served.partial(), "the route fits the buffer");
+        assert_eq!(
+            clear.cost, served.cost,
+            "a clear answer is its served route, near pair or far"
+        );
         if fixture.clusters.touch(*start, *goal) == Ok(true) {
             near += 1;
-            assert_eq!(
-                clear.cost, served.cost,
-                "a near pair's clear answer is its route"
-            );
         } else {
-            assert_eq!(
-                clear.cost, abstract_clear.cost,
-                "a far pair's is the abstract one"
-            );
+            far += 1;
         }
         assert!(
             !abstract_clear.fogged,
@@ -860,8 +872,9 @@ fn fog_never_makes_a_route_look_cheaper() {
         );
     }
     assert!(
-        near > 0,
-        "the draw holds no near pair, so property 1 is untested"
+        near > 0 && far > 0,
+        "the draw must hold both kinds, or property 1 is untested on one ({near} near, {far} \
+         far)"
     );
 }
 
@@ -2623,7 +2636,7 @@ fn p3_holds_on_short_routes() {
 // Near pairs (lane `p3fix`): priced at the route the router serves
 // ---------------------------------------------------------------------------
 
-/// Pairs drawn per seed by [`a_near_pair_is_priced_at_the_route_the_router_serves`].
+/// Pairs drawn per seed by [`a_clear_pair_is_priced_at_the_route_the_router_serves`].
 const NEAR_PAIRS: u32 = 200;
 
 /// `count` connected pairs at most `reach` cells apart on each axis, uniform
@@ -2662,14 +2675,16 @@ fn square_pairs(
     out
 }
 
-/// The estimator's near pairs, on the three seeds of P3's figures: a pair
-/// whose clusters touch is priced at exactly the route the router serves it
-/// (its cost, and the tick the walk integrator arrives on: so never
-/// optimistic, and with no error at all), its `legs` stay the abstract edge
-/// count; a far pair is still the abstract search's answer, unchanged; and
-/// every pair at most one cluster edge apart on both axes is a near pair.
+/// The estimator's clear queries, on the three seeds of P3's figures: a pair,
+/// near or far, is priced at exactly the route the router serves it (its
+/// cost, and the tick the walk integrator arrives on: so never optimistic, and
+/// with no error at all), and its `legs` stay the abstract edge count. Lane
+/// `p3fix` first priced only near pairs so, a far pair keeping the abstract
+/// answer; its gateway step prices every clear query at the served walk, the
+/// measure every "nearest" ranks by. The draw holds both kinds, and every pair
+/// at most one cluster edge apart on both axes is a near pair.
 #[test]
-fn a_near_pair_is_priced_at_the_route_the_router_serves() {
+fn a_clear_pair_is_priced_at_the_route_the_router_serves() {
     for (index, seed) in P3_SEEDS.into_iter().enumerate() {
         let mut fixture = Fixture::build(seed, CLUSTER);
         let speed = fixture.commander_speed();
@@ -2725,17 +2740,16 @@ fn a_near_pair_is_priced_at_the_route_the_router_serves() {
             let walked = walked_ticks(&fixture.surface, &buffer, speed.cost_per_second)
                 .unwrap_or_else(|| panic!("{label}: the route is walkable"));
             assert_eq!(estimated.legs, abstract_answer.legs, "{label}: legs");
-            assert!(estimated.ticks >= walked, "{label}: optimistic");
+            assert_eq!(estimated.cost, served.cost, "{label}: not the served cost");
+            assert_eq!(estimated.ticks, walked, "{label}: not the walked tick");
+            assert!(
+                estimated.cost <= abstract_answer.cost,
+                "{label}: the walk costs more than the abstract answer"
+            );
             if touching {
                 near += 1;
-                assert_eq!(estimated.cost, served.cost, "{label}: not the served cost");
-                assert_eq!(estimated.ticks, walked, "{label}: not the walked tick");
             } else {
                 far += 1;
-                assert_eq!(
-                    estimated.cost, abstract_answer.cost,
-                    "{label}: a far pair moved off the abstract answer"
-                );
             }
         }
         assert!(
@@ -3085,30 +3099,271 @@ fn a_partial_route_chain_spends_its_abstract_cost() {
                 &mut fixture.scratch,
                 (start, goal)
             ),
-            Ok(total),
-            "{folds} folds: walk_cost is the chain"
+            Ok(pharmakos_sim::pathing::estimate::ServedWalk {
+                cost: total,
+                partials: u32::try_from(partials).expect("fits"),
+            }),
+            "{folds} folds: walk_cost is the chain, its cost and its partial routes"
         );
         most = most.max(partials);
     }
     assert!(most >= 2, "a chain of several partial routes: {most}");
 }
 
-/// A near pair whose route does not fit `MAX_ROUTE_NODES` is answered at the
-/// abstract cost (`estimate`'s module docs, "Near pairs"), and that answer is
-/// not below what the walker then walks: the partial route, then each route
-/// the router serves from where the last one stopped, until one reaches the
-/// goal.
+/// [`serpentine`]'s strip, filed into a world's edit queue: levelled to one
+/// height above its highest column, with its walls three voxels higher, gaps
+/// at alternate ends. Returns the two columns it joins.
+fn serpentine_in(
+    world: &mut World,
+    enc: &mut pharmakos_sim::encoding::Enc,
+    folds: i32,
+) -> ([i32; 2], [i32; 2]) {
+    let size = world.surface().size();
+    let (x0, x1) = (3 * CLUSTER, 3 * CLUSTER + 2 + 8 * folds + 5);
+    let mut level = 0;
+    for x in x0..=x1 {
+        for y in 0..size[1] {
+            level = level.max(world.voxels().top_solid_z(x, y).unwrap_or(0));
+        }
+    }
+    level += 1;
+    let wall_top = |x: i32, y: i32| -> Option<i32> {
+        let far_gap = y >= size[1] - 4;
+        let near_gap = y < 4;
+        let offset = x - x0;
+        if offset < 4 || offset > 2 + 8 * folds || offset % 2 != 0 {
+            return None;
+        }
+        match (offset - 4) % 4 {
+            0 if !far_gap => Some(level + 3),
+            2 if !near_gap => Some(level + 3),
+            _ => None,
+        }
+    };
+    for x in x0..=x1 {
+        for y in 0..size[1] {
+            let target = wall_top(x, y).unwrap_or(level);
+            let mut z = world.voxels().top_solid_z(x, y).unwrap_or(-1) + 1;
+            while z <= target {
+                let edit = VoxelEdit::Set {
+                    at: [x, y, z],
+                    material: Material::STONE,
+                    by: None,
+                };
+                if world.request_voxel_edit(edit).is_err() {
+                    let _ = world.step(enc).unwrap();
+                    world
+                        .request_voxel_edit(edit)
+                        .expect("an emptied queue takes the edit");
+                }
+                z += 1;
+            }
+        }
+    }
+    while world.queued_voxel_edits() > 0 {
+        let _ = world.step(enc).unwrap();
+    }
+    let mid = size[1].div_euclid(2);
+    ([x0 + 2, mid], [x0 + 2 + 8 * folds + 2, mid])
+}
+
+/// **Never optimistic, on a walk the router serves in more than one route**
+/// (decisions-log items 57 and 61; lane `p3fix`'s gateway step). A real
+/// commander in a hosted world walks a serpentine whose route does not fit
+/// `MAX_ROUTE_NODES`, so the router serves it a partial route, it walks it,
+/// asks again where it stops and walks the rest. The estimate is
+/// `walk_ticks` of that served walk: its cost rounded up once, and
+/// `RulesTable::link_ticks` for each partial route, the most a re-ask can
+/// cost under any load (one tick of rounding, as the walker banks nothing
+/// from one route into the next, and the repath queue's longest wait). The
+/// walker arrives no later than that, on static terrain with an idle repath
+/// queue; the test prints the signed error.
+///
+/// Under a loaded queue the walker waits longer for its re-ask, but never
+/// past `link_ticks`: the queue is served round-robin from a cursor that only
+/// moves forward, at most the cap a tick, over at most `ids::ROOM_LIMIT` rows
+/// (`RulesTable::link_ticks`' docs). So the promise holds under load too, by
+/// that bound; `the_repath_cap_is_served_round_robin_and_never_exceeded`
+/// holds the serving rule it rests on.
+///
+/// Through serpentines of one to three folds (two to four routes), the signed
+/// error is printed per walk and its largest asserted inside item 61's 15 %.
+#[test]
+fn a_chained_walk_arrives_no_later_than_promised() {
+    let mut errors: Vec<i64> = Vec::new();
+    for folds in 1..=3 {
+        let (routes, promised, ticks) = chained_walk(folds);
+        assert!(
+            ticks <= promised,
+            "{folds} folds: the walker took {ticks} ticks against {promised} promised"
+        );
+        let error = (i64::from(promised - ticks) * 1_000).div_euclid(i64::from(ticks));
+        println!(
+            "::notice::a chained walk of {routes} routes ({folds} folds): promised {promised} \
+             ticks, walked {ticks}, signed error +{error} per mille"
+        );
+        errors.push(error);
+    }
+    let most = errors.iter().copied().max().unwrap_or(0);
+    assert!(
+        most <= 150,
+        "a promise is more than 15 % past its walk: +{most} per mille"
+    );
+}
+
+/// The re-ask's bound, as the estimate prices it (`RulesTable::link_ticks`):
+/// one tick of rounding and the repath queue's longest wait,
+/// `(ids::ROOM_LIMIT - 1) / cap` ticks, 256 at the committed cap of 16; a
+/// cap of nought, under which the wait has no bound, is refused at load; and
+/// `walk_ticks` adds it once per partial route, to the walk's cost rounded
+/// once. At the committed rates a route's walk is a whole number of ticks
+/// and an idle queue serves a re-ask in the tick it is made, so
+/// [`a_chained_walk_arrives_no_later_than_promised`] cannot tell the bound
+/// from nothing: this pins it.
+#[test]
+fn a_re_ask_is_priced_at_the_queues_longest_wait() {
+    use pharmakos_sim::pathing::estimate::{ServedWalk, walk_ticks};
+    let rules = rules();
+    let cap = rules.repath_cap_per_tick();
+    let wait = (pharmakos_sim::ids::ROOM_LIMIT - 1).div_euclid(cap);
+    assert_eq!(
+        rules.link_ticks(),
+        i32::try_from(wait + 1).expect("fits"),
+        "one tick of rounding and the queue's longest wait at a cap of {cap}"
+    );
+    assert_eq!(rules.link_ticks(), 256, "the committed cap of 16");
+    let speed = Speed::commander(&rules);
+    assert_eq!(speed.link_ticks, rules.link_ticks());
+    for partials in [0_u32, 1, 3] {
+        let walk = ServedWalk {
+            cost: 10_235,
+            partials,
+        };
+        let once = ticks_for_cost(10_235, speed.cost_per_second).expect("a speed");
+        assert_eq!(
+            walk_ticks(walk, speed),
+            Ok(Some(
+                once + i32::try_from(partials).expect("fits") * rules.link_ticks()
+            )),
+            "{partials} partial routes"
+        );
+    }
+    let mut message = rules.message().clone();
+    message
+        .locomotion
+        .as_mut()
+        .expect("the locomotion block")
+        .repath_cap_per_tick = 0;
+    assert!(
+        matches!(
+            RulesTable::from_message(&message),
+            Err(pharmakos_sim::rules::RulesError::OutOfRange { ref field, .. })
+                if field == "locomotion.repath_cap_per_tick"
+        ),
+        "a cap of nought is refused at load"
+    );
+}
+
+/// One commander's chained walk through a serpentine of `folds` folds in a
+/// fresh hosted world: how many routes it was served, the ticks the estimate
+/// promised and the ticks it walked. Asserts on the way that the estimate is
+/// `walk_ticks` of the served walk, that the walker never walks past the
+/// promise and that it was served the routes the walk priced.
+fn chained_walk(folds: i32) -> (u32, i32, i32) {
+    use pharmakos_sim::pathing::estimate::{ServedWalk, walk_cost, walk_ticks};
+    let mut world = harness_world(0);
+    let mut enc = pharmakos_sim::encoding::Enc::with_capacity(64 * 1024);
+    let _ = world.step(&mut enc).unwrap();
+    let _ = world.step(&mut enc).unwrap();
+    let ([sx, sy], [gx, gy]) = serpentine_in(&mut world, &mut enc, folds);
+    let commander = world.commander_of(SeatId::new(0)).expect("a commander");
+    let unit = world.units().row_of(commander).expect("in the table").raw();
+    assert!(
+        world.place_unit_directly(commander, world.standing_point([sx, sy, 0])),
+        "the commander stands at the serpentine's start"
+    );
+    let _ = world.step(&mut enc).unwrap();
+    let start = world.surface().node_of(sx, sy).expect("on the map");
+    let goal = world.surface().node_of(gx, gy).expect("on the map");
+    let speed = Speed::commander(world.rules());
+    let mut scratch =
+        Scratch::for_map(world.surface(), world.clusters().size()).expect("a scratch");
+    let walk: ServedWalk = walk_cost(
+        world.surface(),
+        world.clusters(),
+        &mut scratch,
+        (start, goal),
+    )
+    .expect("the serpentine joins the pair");
+    assert!(
+        walk.partials >= 1,
+        "the walk needs a second route: {walk:?}"
+    );
+    let promised = estimate(
+        world.surface(),
+        world.clusters(),
+        &mut scratch,
+        start,
+        goal,
+        Fog::Clear,
+        speed,
+    )
+    .expect("a connected pair has an estimate")
+    .ticks;
+    assert_eq!(
+        Some(promised),
+        walk_ticks(walk, speed).expect("the walk converts"),
+        "the estimate is the served walk's ticks"
+    );
+
+    world.send_unit_directly(unit, world.standing_point([gx, gy, 0]));
+    let _ = world.step(&mut enc).unwrap();
+    assert_eq!(
+        world.router().state(unit),
+        WalkState::Walking,
+        "the commander walks once its route is served"
+    );
+    let mut ticks = 0_i32;
+    let mut asks = 1_u32;
+    while world.router().state(unit) != WalkState::Idle {
+        let _ = world.step(&mut enc).unwrap();
+        ticks += 1;
+        // The idle queue serves a re-ask in the tick it is made, so the
+        // walker is never seen waiting between ticks: a re-ask is a tick
+        // that served it.
+        if world.router().served_this_tick().contains(&unit) {
+            asks += 1;
+        }
+        assert!(
+            ticks <= promised,
+            "the walker is late: {ticks} ticks and walking, against {promised} promised"
+        );
+    }
+    assert_eq!(
+        asks,
+        walk.partials + 1,
+        "the walker was served the routes the walk priced ({ticks} ticks walked, {promised} \
+         promised, {walk:?})"
+    );
+    (asks, promised, ticks)
+}
+
+/// A pair whose route does not fit `MAX_ROUTE_NODES` is answered at exactly
+/// what the walker then walks (`estimate`'s module docs, "A clear query"):
+/// the partial route, then each route the router serves from where the last
+/// one stopped, until one reaches the goal. Before lane `p3fix`'s gateway step
+/// it was answered at the abstract cost, which was not below that walk.
 ///
 /// The fixture builds the case: a strip of the golden map 16 columns wide is
 /// levelled to one height, with sheer edges, and four walls across it, three
 /// voxels high, leave gaps at alternate ends, so two columns of one cluster
 /// eight cells apart are joined only by a serpentine of about 1 500 cells.
 ///
-/// What this does not cover, and the docs say: each further ask waits for its
-/// own serving tick, which no estimate counts, the same as for a far pair's
-/// partial route.
+/// What this does not cover, and the docs say ("A chained walk arrives later
+/// than its cost says"): each further ask waits for its own serving tick,
+/// which no estimate counts.
 #[test]
-fn a_partial_near_route_is_answered_at_no_less_than_its_walk() {
+fn a_partial_near_route_is_answered_at_its_walk() {
     let mut fixture = Fixture::build(SEED, CLUSTER);
     let speed = fixture.commander_speed();
     let (start, goal) = serpentine(&mut fixture, 1);
@@ -3158,15 +3413,18 @@ fn a_partial_near_route_is_answered_at_no_less_than_its_walk() {
         asks > 1,
         "the first route was not partial, so this tests nothing"
     );
-    assert!(
-        estimated.cost >= walked,
-        "the partial near route's answer {} is below the {walked} its walk costs",
-        estimated.cost
+    assert_eq!(
+        estimated.cost, walked,
+        "the partial near route's answer is not the walk its asks cost"
     );
+    // The ticks are the cost's, rounded once, and a re-ask's bound for each
+    // partial route (`walk_ticks`; `RulesTable::link_ticks`).
+    let partials = asks - 1;
     assert_eq!(
         Some(estimated.ticks),
-        ticks_for_cost(estimated.cost, speed.cost_per_second),
-        "ticks are the answered cost's"
+        ticks_for_cost(estimated.cost, speed.cost_per_second)
+            .map(|ticks| ticks + partials * speed.link_ticks),
+        "ticks are the answered walk's, its re-asks' bound included"
     );
     println!(
         "::notice::partial near route: answered {} cost units, walked {walked} in {asks} asks",
@@ -3596,8 +3854,8 @@ fn the_repaired_graph_is_a_fresh_build_under_mixed_edits() {
 /// commander and a column eleven east and ten north of it, and tick t + 1's
 /// Decision phase, the near estimate of that pair is the one a fresh graph
 /// over the cratered surface gives, and it is the cost of the route the
-/// router serves on it. The pair's clusters touch, so the estimate takes the
-/// near branch (`Scratch::near_queries` counts it). Before lane `settle` the
+/// router serves on it. The query is clear, so the estimate takes the served
+/// walk (`Scratch::served_estimates` counts it). Before lane `settle` the
 /// marks waited for tick t + 1's Pathing phase, and a near leg search against
 /// the new columns could answer `None` for a pair the walker reaches (Part 1
 /// of `p3fix-fix1.md`: 16 of 351 probed pairs).
@@ -3625,7 +3883,7 @@ fn a_near_estimate_in_the_tick_after_a_crater_reads_the_repaired_graph() {
     let speed = Speed::commander(world.rules());
     let start = surface.node_of(24, 356).expect("the commander's column");
     let goal = surface.node_of(35, 346).expect("a column past the crater");
-    let before = scratch.near_queries().expect("the count fits a u64");
+    let before = scratch.served_estimates().expect("the count fits a u64");
     let read = estimate(
         &surface,
         world.clusters(),
@@ -3636,7 +3894,7 @@ fn a_near_estimate_in_the_tick_after_a_crater_reads_the_repaired_graph() {
         speed,
     );
     assert_eq!(
-        scratch.near_queries().expect("the count fits a u64"),
+        scratch.served_estimates().expect("the count fits a u64"),
         before + 1,
         "the pair is a near pair"
     );

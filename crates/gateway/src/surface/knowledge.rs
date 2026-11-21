@@ -637,17 +637,20 @@ impl Surface {
     ///
     /// For a seat, `covered` is whether one of its own living beacons' spheres
     /// holds the feature (the opposite of a pick's `UNCOVERED`), and
-    /// `travel_ms` and `reachable` are the estimate "nearest" ranks with, from
-    /// where its commander stands, ranked by the sim's own
-    /// [`pharmakos_sim::targeting::Ranker`] ([`crate::targeting`]). A commander
-    /// that is not standing anywhere (dead, mid-Push) reaches nothing, and the
-    /// answer says so. Nothing is stepped.
+    /// `travel_ms` and `reachable` are the walk the router serves its
+    /// commander from where it stands to the column "nearest" measures to,
+    /// priced by the sim's own [`pharmakos_sim::targeting::Ranker`]
+    /// ([`pharmakos_sim::pathing::estimate::walk_cost`]; [`crate::targeting`]):
+    /// the one measure `resolve_refs` binds by, `estimate_route` answers in
+    /// and the Push walks (S3's `p3fix`). A commander that is not standing
+    /// anywhere (dead, mid-Push) reaches nothing, and the answer says so.
+    /// Nothing is stepped.
     fn map_features(&self, seat: Option<SeatId>) -> Result<Vec<Json>, Error> {
         let host = self.host()?;
         let world = host.world();
         let reads = crate::targeting::feature_reads(world, seat);
         let commander = seat.and_then(|seat| crate::targeting::commander_point(world, seat));
-        let travel: Vec<(usize, i64)> = match commander {
+        let travel: Vec<(usize, pharmakos_sim::pathing::estimate::ServedWalk)> = match commander {
             Some(commander) => {
                 let tally = pharmakos_sim::seams::UnitTally::new();
                 let ground = crate::targeting::lend(world, &tally);
@@ -679,7 +682,7 @@ impl Surface {
                     let reached = match travel.iter().find(|(index, _)| *index == read.index) {
                         // A commander with no speed walks nowhere, so the
                         // feature is not reached.
-                        Some((_, cost)) => crate::targeting::travel_ms(world, *cost)?,
+                        Some((_, walk)) => crate::targeting::travel_ms(world, *walk)?,
                         None => None,
                     };
                     entries.push((
@@ -1053,8 +1056,9 @@ impl Surface {
             places.push(self.place_of(seat, waypoint, index, from, &mut scratch)?);
         }
 
-        let routes = self.host()?.routes();
-        let route = pharmakos_plan_core::travel::Route::estimate(&places, routes);
+        let host = self.host()?;
+        let routes = host.routes();
+        let route = pharmakos_plan_core::travel::Route::estimate(&places, &routes);
         // A fault in a query is raised, never drawn as an unreachable leg
         // (`crate::routes`, "A fault is raised").
         routes.take_fault()?;

@@ -72,7 +72,7 @@
 use pharmakos_sim::features::FeatureKind;
 use pharmakos_sim::interpreter::StepFailure;
 use pharmakos_sim::math::quantity::Ms;
-use pharmakos_sim::pathing::estimate::{Speed, ticks_for_cost, walk_cost};
+use pharmakos_sim::pathing::estimate::{Speed, walk_cost};
 use pharmakos_sim::pathing::search::Scratch;
 use pharmakos_sim::pathing::surface::Node;
 use pharmakos_sim::seams::MandateKind;
@@ -256,12 +256,10 @@ fn world_of(seed: u64, rules: &RulesTable) -> World {
 /// The cost and ticks of the walk the router serves a commander between two
 /// nodes: one leg of clause 4's walk.
 fn walk(ground: &Ground<'_>, scratch: &mut Scratch, from: Node, to: Node) -> Option<(i64, i32)> {
-    let cost = walk_cost(ground.surface, ground.clusters, scratch, (from, to)).ok()?;
-    let ticks = ticks_for_cost(
-        i32::try_from(cost).expect("a leg's walk fits an i32"),
-        Speed::commander(ground.rules).cost_per_second,
-    )?;
-    Some((cost, ticks))
+    let walk = walk_cost(ground.surface, ground.clusters, scratch, (from, to)).ok()?;
+    let ticks = pharmakos_sim::pathing::estimate::walk_ticks(walk, Speed::commander(ground.rules))
+        .expect("a leg's walk converts")?;
+    Some((walk.cost, ticks))
 }
 
 /// The criterion, for one seed.

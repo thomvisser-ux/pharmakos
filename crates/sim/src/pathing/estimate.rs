@@ -13,56 +13,47 @@
 //! and nothing else:
 //!
 //! 1. ask the connectivity oracle whether a route can exist at all;
-//! 2. for a **far** pair, search the **abstract** graph and sum integer edge
-//!    costs; for a **near** pair (below), compute the route the router would
-//!    serve and sum its steps;
+//! 2. under no fog, price the **walk the router serves** ([`walk_cost`], the
+//!    function every "nearest" ranks by); under a fog mask, search the
+//!    **abstract** graph and sum integer edge costs (below, "Fog");
 //! 3. divide by the walker's speed, rounding **up**.
 //!
 //! It never walks a route, never steps or forks the sim and never touches the
 //! stepping API: computing a route is a pure function of the graph, the same
-//! one the router calls, and nothing it computes is kept. The low-level work a
-//! far pair does is the two bounded sweeps that attach the endpoints to their
-//! own clusters' transition nodes, which are cluster-local by construction.
-//! Spike G2 measured them at 91 % of a median query (item 58); on the sim's
-//! generated map they are nearly all of it: a median far query popped about
-//! 2 050 nodes, of which the abstract search's own pops were a handful (lane
-//! `p3fix`'s step 0, `tests/pathing_bench.rs` publishes the share). The sweep is
-//! what S3 attacks if the budget bites, not the abstract graph.
+//! one the router calls, and nothing it computes is kept.
 //!
-//! # Near pairs: the served route's cost
+//! # A clear query: the served walk
 //!
 //! The abstract cost is the cost of the **unsmoothed** refinement exactly. On a
-//! short route that crosses a cluster border, the border's transition node can
-//! lie several cells off the straight line, and the smoother cuts that detour
-//! for the walker while the abstract cost still charges it: before this, the
-//! p90 error was 822 per mille on routes of 4 to 8 cells, with the abstract
-//! cost up to six times the walk. Lane `p3fix`'s step 0 measured where it came
-//! from on 1 080 walks over three seeds: a single border crossing off the line
-//! carried 90 % to 99 % of the excess in every band of 32 cells and under, a
-//! cluster corner under 1 %.
+//! route that crosses a cluster border, the border's transition node can lie
+//! several cells off the straight line, and the smoother cuts that detour for
+//! the walker while the abstract cost still charges it: the p90 error was 822
+//! per mille on routes of 4 to 8 cells, with the abstract cost up to six times
+//! the walk (lane `p3fix`'s step 0, on 1 080 walks over three seeds). Lane
+//! `p3fix` first priced only near pairs (two clusters that touch) at the route
+//! the router serves; its gateway step prices **every** clear query so, near
+//! or far, because the abstract answer and the served walk are two measures,
+//! and a chip's `travel_ms`, `resolve_refs`' binding, `estimate_route`'s
+//! answer and the Push's walk must be one. A clear estimate's cost **is**
+//! [`walk_cost`]'s: the same function the sim's
+//! [`crate::targeting::Ranker`] ranks by, over the same graph, under no
+//! surcharge. `legs` stays the abstract edge count, the first query's.
 //!
-//! So a pair whose two clusters **touch** — the same cluster, or two that share
-//! a border or a corner ([`Clusters::touch`]) — is priced at the route the
-//! router serves it: [`crate::pathing::route::route_with`] under no surcharge,
-//! the router's own function on the same graph, written into the scratch's own
-//! buffer. The radius is the cluster edge and nothing picked: two columns at
-//! most one cluster edge apart on both axes always lie in touching clusters, so
-//! every route of 32 cells or less is priced exactly, which is where one
-//! crossing's detour is a large share of the walk. A far pair keeps the
-//! abstract answer, whose error the map-wide draw holds inside the gate. `legs`
-//! stays the abstract edge count either way.
+//! A walk whose route does not fit [`crate::pathing::MAX_ROUTE_NODES`] is
+//! priced as the walker walks it: the partial route, then the router's next
+//! ask from its end, chained until the goal ([`walk_cost`]'s "The chain
+//! ends"). A route the router could not refine (`NoPath::Unrefinable` or
+//! `NoPath::Unpriced`) answers `None`, as no route: the walker would be sealed
+//! in too. A chain the router broke ([`WalkError::Stalled`]) is
+//! [`EstimateError::Stalled`], never "no route" and never an abstract figure
+//! standing in.
 //!
-//! A near pair whose route does not fit [`crate::pathing::MAX_ROUTE_NODES`]
-//! (a detour longer than any map holds today) is answered at the abstract cost,
-//! the rule a far pair uses: the walker walks the partial route and asks for
-//! the rest from its end, and each of those asks costs no more than the raw
-//! refinement's remainder, so the abstract cost still bounds the walk. Each
-//! further ask also waits for its own serving tick, which no estimate counts,
-//! as for a far pair's partial route. `tests/pathing.rs`'s
-//! `a_partial_near_route_is_answered_at_no_less_than_its_walk` builds one. A route
-//! the router could not refine (`NoPath::Unrefinable` or `NoPath::Unpriced`)
-//! answers `None`, as no route: the walker would be sealed in too, and the
-//! estimate never falls back to the abstract answer for it.
+//! The cost of pricing the walk: a far query now refines and smooths its route
+//! as the router does, where it used to stop at the abstract search, whose
+//! endpoint sweeps were nearly all of a median far query (about 2 050 pops,
+//! item 58 and `tests/pathing_bench.rs`). It runs outside the tick
+//! (`estimate_route` in a Lull), so no budget caps it; the gateway step's PR
+//! states its counted work and its time.
 //!
 //! # The error contract
 //!
@@ -72,14 +63,25 @@
 //! "Walked" counts from the tick that serves the route, as `tests/pathing.rs`'s
 //! P3 gate reads it. Three things make it hold here rather than by luck:
 //!
-//! * a near pair's cost **is** the served route's cost, by construction;
-//! * a far pair's abstract cost is the cost of the unsmoothed refinement
-//!   exactly, because every intra edge is an exact bounded search cost and
-//!   every inter edge is one grid step; the smoother only ever removes cost,
-//!   so the walker is never later than the estimate;
+//! * a clear query's cost **is** the served walk's cost, by construction;
 //! * `ticks` rounds up ([`ticks_for_cost`]), and the walker's own accumulator
 //!   arrives on `ceil(cost * 20 / cost_per_second)` exactly (item 90), so the
-//!   two computations of "when does it get there" agree at the tick.
+//!   two computations of "when does it get there" agree at the tick, for a
+//!   walk the router serves in one route;
+//! * a fogged query's abstract cost is the cost of the unsmoothed refinement
+//!   exactly, because every intra edge is an exact bounded search cost and
+//!   every inter edge is one grid step; the smoother only ever removes cost,
+//!   and fog only adds it.
+//!
+//! **A chained walk arrives later than its cost says.** A walker at the end of
+//! a partial route banks nothing into the next one and waits for the repath
+//! queue to serve its next ask (`crate::pathing::router`), so a walk of more
+//! than [`crate::pathing::MAX_ROUTE_NODES`] columns takes up to a tick more per
+//! ask than `ticks`, plus the queue's wait, which depends on every other
+//! walker's asks: pricing it would be modelling the match, which no estimate
+//! may do (AGENTS.md section 3 rule 2). Before the gateway step the abstract
+//! cost's slack over the walk covered that; it was never counted either.
+//! `tests/pathing.rs`'s serpentine builds such a walk.
 //!
 //! `tests/pathing.rs`'s `the_estimate_is_never_optimistic_at_any_percentile`
 //! asserts the **signed** error, not `|error|`: an estimate that came in under
@@ -100,18 +102,18 @@
 //! section 11's per-cell rule. What the editor may render from a fogged leg is
 //! a dashed leg labelled as an upper bound, never an ETA (item 61).
 //!
-//! A query with a fog mask takes the abstract path for **every** pair, a near
-//! one included: the served route read through fog would tell a seat things
-//! about columns it has not seen that the abstract answer does not, and fog
-//! policy is the gateway's and the owner's (AGENTS.md section 7).
+//! A query with a fog mask takes the abstract path for **every** pair: the
+//! served route read through fog would tell a seat things about columns it has
+//! not seen that the abstract answer does not, and fog policy is the gateway's
+//! and the owner's (AGENTS.md section 7).
 //! `tests/pathing.rs`'s `a_near_route_through_fog_tells_what_the_abstract_one_does_not`
 //! is the evidence: cratering only unseen ground moved the served-route answer
 //! alone on 26 of 50 near pairs, the abstract answer alone on none, and both
 //! on 17.
 //!
-//! **The gap, plainly.** Under a mask a near pair is priced as it was before
-//! the near pairs existed, so the short-route miss the P3 gate measured comes
-//! back for any caller that sets a mask; and both fogged answers read true
+//! **The gap, plainly.** Under a mask a pair is priced as every pair was before
+//! lane `p3fix`, so the short-route miss the P3 gate measured comes back for
+//! any caller that sets a mask; and both fogged answers read true
 //! terrain under the unseen columns (the 17 above), which section 11's
 //! "last-known state" does not allow. Nothing reachable has the gap today: no
 //! production caller sets a mask (the gateway's `RouteAdapter` holds an empty
@@ -289,14 +291,22 @@ pub fn fog_price(cost: i32, numerator: i32, denominator: i32) -> i32 {
 ///    is not one of item 61's three numbers — it is how the caller knows to
 ///    render the leg as a bound rather than an ETA.
 ///
-/// Everything else item 61 fixes is unchanged: `None` from the oracle before
+/// Everything else item 61 fixes is unchanged: no route from the oracle before
 /// any search, `legs` as the abstract-edge count, fog at ×3/2 per abstract edge
-/// as integer `cost * 3 / 2`, never optimistic, and no cache. One sentence of
-/// item 61 is amended: a near pair is priced at the route the router serves
-/// rather than by the abstract search alone (the module docs' "Near pairs").
+/// as integer `cost * 3 / 2`, and no cache. Two sentences of item 61 are
+/// amended: a clear query is priced at the walk the router serves rather than
+/// by the abstract search (the module docs' "A clear query"), and "never
+/// optimistic" holds for a walk served in one route (the module docs' "A
+/// chained walk arrives later than its cost says").
 ///
 /// `fog_numerator` and `fog_denominator` come from the rules table, so the
 /// multiplier is data rather than a constant here (AGENTS.md §12).
+///
+/// # Errors
+///
+/// [`EstimateError`] when the served walk cannot be priced: a chain the router
+/// broke, or a cost past the estimate's `i32`. `Ok(None)` is no route, the
+/// normal answer.
 pub fn estimate(
     world: &Surface,
     clusters: &Clusters,
@@ -305,59 +315,162 @@ pub fn estimate(
     goal: Node,
     fog: Fog<'_>,
     speed: Speed,
-) -> Option<Estimate> {
+) -> Result<Option<Estimate>, EstimateError> {
     // A column off the graph has no route at all, as the router says
-    // (`NoPath::Unplaced`): no estimate, near or far.
-    if clusters.touch(start, goal).ok()? && fog.is_clear() {
-        return near(world, clusters, scratch, (start, goal), speed);
+    // (`NoPath::Unplaced`): no estimate, clear or fogged.
+    if clusters.touch(start, goal).is_err() {
+        return Ok(None);
     }
-    let result = abstract_search(world, clusters, scratch, start, goal, fog, speed)?;
-    let ticks = ticks_for_cost(result.cost, speed.cost_per_second)?;
-    Some(Estimate {
+    if fog.is_clear() {
+        return served(world, clusters, scratch, (start, goal), speed);
+    }
+    let Some(result) = abstract_search(world, clusters, scratch, start, goal, fog, speed) else {
+        return Ok(None);
+    };
+    // The partial routes the walk can chain, bounded by its cost as
+    // `walk_cost`'s chain is ("The chain ends"): at least `PARTIAL_PROGRESS`
+    // cardinal steps a partial route, and the fogged cost is at least the
+    // clear abstract cost the chain starts from.
+    let fall = i64::from(PARTIAL_PROGRESS) * i64::from(world.costs().cheapest().get());
+    let links = i64::from(result.cost).div_euclid(fall);
+    let walk = ServedWalk {
+        cost: i64::from(result.cost),
+        partials: u32::try_from(links).map_err(|_| EstimateError::PastTicks { ticks: links })?,
+    };
+    // A walker with no speed walks nowhere: no estimate.
+    let Some(ticks) = walk_ticks(walk, speed)? else {
+        return Ok(None);
+    };
+    Ok(Some(Estimate {
         cost: result.cost,
         ticks,
         legs: result.legs,
         fogged: result.fogged,
-    })
+    }))
 }
 
-/// A near pair's estimate: the cost of the route the router serves (the
-/// module docs' "Near pairs").
-fn near(
+/// A clear query's estimate: the walk the router serves, priced by
+/// [`walk_cost`]'s own chain (the module docs' "A clear query").
+fn served(
     world: &Surface,
     clusters: &Clusters,
     scratch: &mut Scratch,
-    (start, goal): (Node, Node),
+    pair: (Node, Node),
     speed: Speed,
-) -> Option<Estimate> {
-    scratch.near_queries.bump();
-    let mut served = core::mem::take(&mut scratch.served);
-    let routed = route_and_abstract(
-        world,
-        clusters,
-        scratch,
-        (start, goal),
-        Surcharge::NONE,
-        &mut served,
-    );
-    scratch.served = served;
-    // Any `NoPath` is no route: the walker would be sealed in as well.
-    let (abstract_result, outcome) = routed.ok()?;
-    // A partial route is priced at the abstract cost, which bounds the walk
-    // of a partial route and its later asks (the module docs).
-    let cost = if outcome.rest.is_some() {
-        abstract_result.cost
-    } else {
-        outcome.cost
+) -> Result<Option<Estimate>, EstimateError> {
+    scratch.served_estimates.bump();
+    let walked = match served_walk(world, clusters, scratch, pair) {
+        Ok(walked) => walked,
+        // Any `NoPath` is no route: the walker would be sealed in as well.
+        Err(WalkError::NoPath(_)) => return Ok(None),
+        Err(WalkError::Stalled { partials }) => {
+            return Err(EstimateError::Stalled { partials });
+        }
     };
-    let ticks = ticks_for_cost(cost, speed.cost_per_second)?;
-    Some(Estimate {
+    let cost =
+        i32::try_from(walked.cost).map_err(|_| EstimateError::PastCost { cost: walked.cost })?;
+    // A walker with no speed walks nowhere: no estimate.
+    let Some(ticks) = walk_ticks(walked.walk(), speed)? else {
+        return Ok(None);
+    };
+    Ok(Some(Estimate {
         cost,
         ticks,
-        legs: abstract_result.legs,
+        legs: walked.legs,
         fogged: false,
-    })
+    }))
 }
+
+/// A served walk, as [`walk_cost`] prices it: its summed step costs, and how
+/// many partial routes it chained before the one that reached the goal.
+/// "Nearest" ranks by `cost`; [`walk_ticks`] turns it into the tick the walker
+/// arrives on, at the latest.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct ServedWalk {
+    /// The walk's summed step costs.
+    pub cost: i64,
+    /// The partial routes before the last: each a re-ask the walker makes
+    /// where one stops.
+    pub partials: u32,
+}
+
+/// The tick a walker arrives on, at the latest, walking `walk` at `speed`:
+/// the walk's cost rounded up to the tick once ([`ticks_for_cost`]), and
+/// [`Speed::link_ticks`] for each partial route, the most a re-ask can cost it
+/// under any load ([`crate::rules::RulesTable::link_ticks`]). **Never
+/// optimistic** (decisions-log items 57 and 61): a walk served in one route
+/// arrives on exactly this tick; a chained walk on this tick at the latest,
+/// and earlier by its rounding and the queue's wait as they fall. The one
+/// conversion `estimate_route`, `get_map_summary`'s `travel_ms` and
+/// `resolve_refs`' candidates all read.
+///
+/// `Ok(None)` for a walker with no speed, which walks nowhere.
+///
+/// # Errors
+///
+/// [`EstimateError::PastCost`] for a cost past an `i32`, and
+/// [`EstimateError::PastTicks`] for a tick count past one: the walk's
+/// argument says neither occurs, and each is said rather than truncated.
+pub fn walk_ticks(walk: ServedWalk, speed: Speed) -> Result<Option<i32>, EstimateError> {
+    let cost = i32::try_from(walk.cost).map_err(|_| EstimateError::PastCost { cost: walk.cost })?;
+    let Some(ticks) = ticks_for_cost(cost, speed.cost_per_second) else {
+        return Ok(None);
+    };
+    // A `u32` count times an `i32`, plus an `i32`: inside an `i64`.
+    let total = i64::from(ticks) + i64::from(walk.partials) * i64::from(speed.link_ticks);
+    i32::try_from(total)
+        .map(Some)
+        .map_err(|_| EstimateError::PastTicks { ticks: total })
+}
+
+/// Why [`estimate`] priced no walk for a clear query that has a route.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum EstimateError {
+    /// [`WalkError::Stalled`]: a partial route's next query did not fall, so
+    /// the chain that prices the walk could not be trusted to end.
+    Stalled {
+        /// The partial routes chained before the query that did not fall.
+        partials: u32,
+    },
+    /// The walk's summed cost passes the estimate's `i32`. A chained walk
+    /// costs no more than its first query's abstract cost, an `i32` (each
+    /// partial route costs at most the refinement prefix it smooths, and the
+    /// next query at most the refinement's remainder), so this is the sim
+    /// disagreeing with its own argument, said rather than truncated.
+    PastCost {
+        /// The walk's summed cost.
+        cost: i64,
+    },
+    /// The walk's ticks, its re-asks' bound included, pass a signed 32-bit
+    /// tick count: past any match by orders of magnitude, said rather than
+    /// truncated.
+    PastTicks {
+        /// The ticks.
+        ticks: i64,
+    },
+}
+
+impl core::fmt::Display for EstimateError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            EstimateError::Stalled { partials } => write!(
+                f,
+                "a walk's partial route did not bring its next query closer, after {partials} \
+                 partial routes"
+            ),
+            EstimateError::PastCost { cost } => write!(
+                f,
+                "a walk costs {cost}, past the estimate's signed 32-bit cost"
+            ),
+            EstimateError::PastTicks { ticks } => write!(
+                f,
+                "a walk takes up to {ticks} ticks, past the estimate's signed 32-bit tick count"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for EstimateError {}
 
 /// **The cost of the walk the router serves** from `start` to `goal`, near or
 /// far, under no surcharge (no ranked choice is walked under one: `targeting`'s
@@ -366,9 +479,10 @@ fn near(
 /// [`MAX_ROUTE_NODES`] the rest asked for from its end, as the walker asks
 /// when it gets there. It is what every "nearest" a unit walks to ranks by
 /// (lane `p3fix`): the walk itself, with no estimate standing in for it. The
-/// cost is the walk's step costs ([`crate::pathing::search::route_cost`]). It
-/// steps nothing; like a near pair's estimate it is a pure function of the
-/// graph.
+/// answer is the walk's step costs ([`crate::pathing::search::route_cost`])
+/// and how many partial routes it chained ([`ServedWalk`]), which
+/// [`walk_ticks`] turns into the tick the walker arrives on at the latest. It
+/// steps nothing, and is a pure function of the graph.
 ///
 /// # The chain ends
 ///
@@ -403,11 +517,44 @@ pub fn walk_cost(
     clusters: &Clusters,
     scratch: &mut Scratch,
     (start, goal): (Node, Node),
-) -> Result<i64, WalkError> {
+) -> Result<ServedWalk, WalkError> {
     scratch.walks.bump();
+    served_walk(world, clusters, scratch, (start, goal)).map(Walked::walk)
+}
+
+/// A served walk: its cost, and the abstract edges its first query crossed.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct Walked {
+    /// The walk's summed step costs.
+    pub(crate) cost: i64,
+    /// The abstract edges of the first query's route: what the editor draws
+    /// a leg's polyline from ([`Estimate::legs`]).
+    pub(crate) legs: u32,
+    /// The partial routes chained before the last.
+    pub(crate) partials: u32,
+}
+
+impl Walked {
+    /// The walk as [`walk_cost`] answers it.
+    pub(crate) const fn walk(self) -> ServedWalk {
+        ServedWalk {
+            cost: self.cost,
+            partials: self.partials,
+        }
+    }
+}
+
+/// [`walk_cost`] and a clear [`estimate`]'s one walk: [`walk_chain`] over the
+/// router's own function, in the scratch's own buffer, under no surcharge.
+fn served_walk(
+    world: &Surface,
+    clusters: &Clusters,
+    scratch: &mut Scratch,
+    pair: (Node, Node),
+) -> Result<Walked, WalkError> {
     let mut served = core::mem::take(&mut scratch.served);
     let cheapest = world.costs().cheapest();
-    let walked = walk_chain((start, goal), cheapest, &mut served, |pair, out| {
+    let walked = walk_chain(pair, cheapest, &mut served, |pair, out| {
         route_and_abstract(world, clusters, scratch, pair, Surcharge::NONE, out)
     });
     scratch.served = served;
@@ -471,13 +618,14 @@ pub(crate) fn walk_chain<R>(
     cheapest: core::num::NonZeroI32,
     served: &mut Vec<Node>,
     mut route: R,
-) -> Result<i64, WalkError>
+) -> Result<Walked, WalkError>
 where
     R: FnMut((Node, Node), &mut Vec<Node>) -> Result<(AbstractResult, RouteOutcome), NoPath>,
 {
     // At most `PARTIAL_PROGRESS` (a `u32`) times an `i32`: inside an `i64`.
     let fall = i64::from(PARTIAL_PROGRESS) * i64::from(cheapest.get());
     let (first, mut outcome) = route((start, goal), served)?;
+    let legs = first.legs;
     let mut left = i64::from(first.cost);
     let mut total = i64::from(outcome.cost);
     let mut partials: u32 = 0;
@@ -496,7 +644,11 @@ where
         total += i64::from(then.cost);
         outcome = then;
     }
-    Ok(total)
+    Ok(Walked {
+        cost: total,
+        legs,
+        partials,
+    })
 }
 
 #[cfg(test)]
@@ -574,7 +726,15 @@ mod walk_tests {
             let (a, c, rest) = turns.next().unwrap_or((0, 0, None));
             Ok(answer(a, c, rest))
         });
-        assert_eq!(walked, Ok(30_000));
+        assert_eq!(
+            walked,
+            Ok(super::Walked {
+                cost: 30_000,
+                legs: 1,
+                partials: 2,
+            }),
+            "the three routes' costs, the first query's abstract edges and the two partials"
+        );
         let none = walk_chain((0, 9), TEN, &mut served, |_, _| Err(NoPath::Unreachable));
         assert_eq!(none, Err(WalkError::NoPath(NoPath::Unreachable)));
     }
@@ -594,6 +754,10 @@ pub struct Speed {
     pub fog_numerator: i32,
     /// `locomotion.fog_cost_denominator` (item 61: 2).
     pub fog_denominator: i32,
+    /// The most ticks a re-ask at the end of a partial route can cost the
+    /// walker ([`crate::rules::RulesTable::link_ticks`]), which
+    /// [`walk_ticks`] adds per partial route.
+    pub link_ticks: i32,
 }
 
 impl Speed {
@@ -606,6 +770,7 @@ impl Speed {
             cost_per_second: rules.cost_per_second(kind),
             fog_numerator: rules.fog_cost_numerator(),
             fog_denominator: rules.fog_cost_denominator(),
+            link_ticks: rules.link_ticks(),
         }
     }
 
@@ -617,6 +782,7 @@ impl Speed {
             cost_per_second: rules.commander_cost_per_second(),
             fog_numerator: rules.fog_cost_numerator(),
             fog_denominator: rules.fog_cost_denominator(),
+            link_ticks: rules.link_ticks(),
         }
     }
 }

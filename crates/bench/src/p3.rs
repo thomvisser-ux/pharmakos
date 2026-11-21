@@ -738,13 +738,17 @@ fn measure_seed(rules: &RulesTable, seed: u64, pairs: usize) -> Result<SeedRepor
             walker,
         );
         let ns = started.elapsed().as_nanos();
-        if answer.is_none() {
-            return Err(Error::Drift(format!(
+        match answer {
+            Ok(Some(_)) => Ok(ns),
+            Ok(None) => Err(Error::Drift(format!(
                 "the estimator found no route between two columns of one component on seed \
                  0x{seed:016x}"
-            )));
+            ))),
+            Err(error) => Err(Error::Drift(format!(
+                "the estimator priced no walk between two columns of one component on seed \
+                 0x{seed:016x}: {error}"
+            ))),
         }
-        Ok(ns)
     };
     for (a, b) in pair_list.iter().take(WARMUP) {
         alone(&mut graph, *a, *b)?;

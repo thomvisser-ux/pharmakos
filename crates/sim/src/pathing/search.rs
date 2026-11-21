@@ -191,8 +191,9 @@ pub struct Scratch {
     pub(crate) leg: Vec<u32>,
     pub(crate) line: Vec<u32>,
     pub(crate) prefix: Vec<i32>,
-    /// The route a near pair's estimate prices
-    /// ([`crate::pathing::estimate`]'s "Near pairs"): the router's own route,
+    /// The route a served walk prices, for a clear estimate and for every
+    /// "nearest" ([`crate::pathing::estimate`]'s "A clear query"): the
+    /// router's own route,
     /// written here rather than into a caller's buffer so that an estimate,
     /// inside a tick or out of one, allocates nothing.
     pub(crate) served: Vec<u32>,
@@ -204,7 +205,7 @@ pub struct Scratch {
     pub(crate) expansions: Tally,
     pub(crate) endpoint_expansions: Tally,
     pub(crate) abstract_expansions: Tally,
-    pub(crate) near_queries: Tally,
+    pub(crate) served_estimates: Tally,
     pub(crate) walks: Tally,
     pub(crate) stalled: Tally,
 }
@@ -312,7 +313,7 @@ impl Scratch {
             expansions: Tally::ZERO,
             endpoint_expansions: Tally::ZERO,
             abstract_expansions: Tally::ZERO,
-            near_queries: Tally::ZERO,
+            served_estimates: Tally::ZERO,
             walks: Tally::ZERO,
             stalled: Tally::ZERO,
         }
@@ -402,15 +403,15 @@ impl Scratch {
         self.abstract_expansions.read()
     }
 
-    /// Estimates priced at the served route since the last reset (a near
-    /// pair, [`crate::pathing::estimate`]). Diagnostic: it is how a test
-    /// knows a tick or a draw exercised the near branch at all.
+    /// Estimates priced at the served walk since the last reset (every clear
+    /// query, [`crate::pathing::estimate()`]). Diagnostic: it is how a test
+    /// knows a query took the served walk and not the fogged abstract answer.
     ///
     /// # Errors
     ///
     /// [`TallyOverflow`] once the count passed `u64::MAX`.
-    pub const fn near_queries(&self) -> Result<u64, TallyOverflow> {
-        self.near_queries.read()
+    pub const fn served_estimates(&self) -> Result<u64, TallyOverflow> {
+        self.served_estimates.read()
     }
 
     /// The grid optimum's search as the last `toward` resolve left it: its
@@ -450,7 +451,7 @@ impl Scratch {
         self.expansions = Tally::ZERO;
         self.endpoint_expansions = Tally::ZERO;
         self.abstract_expansions = Tally::ZERO;
-        self.near_queries = Tally::ZERO;
+        self.served_estimates = Tally::ZERO;
         self.walks = Tally::ZERO;
         self.stalled = Tally::ZERO;
     }

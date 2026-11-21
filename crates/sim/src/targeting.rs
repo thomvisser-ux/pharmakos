@@ -108,7 +108,7 @@ use crate::features::{Feature, FeatureKind, FeatureTable, MAX_FEATURES};
 use crate::interpreter::state::{StepFailed, StepFailure};
 use crate::math::fixed::{Fx, Sq};
 use crate::pathing::clusters::Clusters;
-use crate::pathing::estimate::{WalkError, walk_cost};
+use crate::pathing::estimate::{ServedWalk, WalkError, walk_cost};
 use crate::pathing::search::Scratch;
 use crate::pathing::surface::{Node, Surface};
 use crate::rules::RulesTable;
@@ -394,7 +394,11 @@ impl Ground<'_> {
     /// it can be stood on and is connected to the origin, otherwise the first
     /// standable connected footprint column in `(y, x)` order. `None` when no
     /// footprint column is reachable, which makes the feature no candidate.
-    fn measure_to(&self, index: usize, origin: Node) -> Option<Node> {
+    /// Public so that a reader pricing the same walk another way (the
+    /// gateway's `estimate_route`, in its agreement test) names the column
+    /// this rule names rather than restating it.
+    #[must_use]
+    pub fn measure_to(&self, index: usize, origin: Node) -> Option<Node> {
         let feature = self.features.get(index)?;
         let reachable = |x: i32, y: i32| -> Option<Node> {
             let node = self.surface.node_of(x, y)?;
@@ -415,7 +419,7 @@ impl Ground<'_> {
     /// The integer cost of the walk the router serves from `from` to `to`
     /// ([`walk_cost`]): what a choice a unit then walks to ranks by
     /// ([`Ranker`]; the module docs' "Two measures").
-    fn travel(&self, scratch: &mut Scratch, from: Node, to: Node) -> Result<i64, WalkError> {
+    fn travel(&self, scratch: &mut Scratch, from: Node, to: Node) -> Result<ServedWalk, WalkError> {
         self.charge(1);
         walk_cost(self.surface, self.clusters, scratch, (from, to))
     }
@@ -448,6 +452,8 @@ struct Entry {
     bound: i64,
     /// Its served walk's cost, once priced.
     cost: i64,
+    /// Its served walk's partial routes, once priced.
+    partials: u32,
     /// 0 unpriced, 1 priced, 2 emitted or unreachable.
     state: u8,
 }
@@ -506,6 +512,7 @@ impl Ranker {
                     goal,
                     bound: i64::from(ground.surface.heuristic(start, goal)),
                     cost: 0,
+                    partials: 0,
                     state: 0,
                 };
                 ranker.len += 1;
@@ -528,9 +535,14 @@ impl Ranker {
         self.matched
     }
 
-    /// The next candidate, nearest first, with its served walk's cost; `None`
-    /// when every candidate has been emitted or found unreachable.
-    pub fn next(&mut self, ground: &Ground<'_>, scratch: &mut Scratch) -> Option<(usize, i64)> {
+    /// The next candidate, nearest first, with its served walk (ranked by its
+    /// cost); `None` when every candidate has been emitted or found
+    /// unreachable.
+    pub fn next(
+        &mut self,
+        ground: &Ground<'_>,
+        scratch: &mut Scratch,
+    ) -> Option<(usize, ServedWalk)> {
         let origin = self.origin?;
         loop {
             let live = self.entries.get(..self.len)?;
@@ -556,13 +568,18 @@ impl Ranker {
                 (Some((at, key)), bound) if bound.is_none_or(|(_, other)| key < other) => {
                     let entry = self.entries.get_mut(at)?;
                     entry.state = 2;
-                    return Some((entry.feature, entry.cost));
+                    let walk = ServedWalk {
+                        cost: entry.cost,
+                        partials: entry.partials,
+                    };
+                    return Some((entry.feature, walk));
                 }
                 (_, Some((at, _))) => {
                     let entry = self.entries.get_mut(at)?;
                     match ground.travel(scratch, origin, entry.goal) {
-                        Ok(cost) => {
-                            entry.cost = cost;
+                        Ok(walk) => {
+                            entry.cost = walk.cost;
+                            entry.partials = walk.partials;
                             entry.state = 1;
                         }
                         // The router serves no walk to it: no candidate
@@ -1428,7 +1445,8 @@ mod tests {
         };
         let mut ranker = Ranker::new(&ground, origin, |_| true);
         let mut out: Vec<(String, i64)> = Vec::new();
-        while let Some((feature, cost)) = ranker.next(&ground, &mut map.scratch) {
+        while let Some((feature, walk)) = ranker.next(&ground, &mut map.scratch) {
+            let cost = walk.cost;
             let name = map
                 .features
                 .get(feature)

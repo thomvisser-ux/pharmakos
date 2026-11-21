@@ -49,13 +49,29 @@ use std::path::PathBuf;
 use pharmakos_sim::chunks::ChunkDigests;
 use pharmakos_sim::pathing::MAX_ROUTE_NODES;
 use pharmakos_sim::pathing::clusters::Clusters;
-use pharmakos_sim::pathing::estimate::{Fog, Speed, estimate};
+use pharmakos_sim::pathing::estimate::{Fog, Speed};
 use pharmakos_sim::pathing::repair::{Repairer, repair};
 use pharmakos_sim::pathing::route::route;
 use pharmakos_sim::pathing::search::Scratch;
 use pharmakos_sim::pathing::surface::{Node, StepCosts, Surface};
 use pharmakos_sim::voxels::VoxelStore;
 use pharmakos_sim::{RulesTable, mapgen};
+
+/// The sim's [`pharmakos_sim::pathing::estimate::estimate`], its error a test
+/// failure: every walk this file prices chains to its goal, so an
+/// `EstimateError` is the sim breaking its own chain argument.
+fn estimate(
+    surface: &Surface,
+    clusters: &Clusters,
+    scratch: &mut Scratch,
+    start: Node,
+    goal: Node,
+    fog: Fog<'_>,
+    speed: Speed,
+) -> Option<pharmakos_sim::pathing::estimate::Estimate> {
+    pharmakos_sim::pathing::estimate::estimate(surface, clusters, scratch, start, goal, fog, speed)
+        .unwrap_or_else(|error| panic!("the sim priced no walk: {error}"))
+}
 
 /// The seed the bench runs on: the determinism harness's own.
 const SEED: u64 = pharmakos_sim::DETERMINISM_MATCH_SEED;

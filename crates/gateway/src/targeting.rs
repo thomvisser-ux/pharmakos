@@ -17,7 +17,10 @@
 //! true by construction (`crates/sim/src/targeting.rs`'s module docs say the
 //! same from the other side). Nothing here steps, forks or runs a mandate
 //! (AGENTS.md section 3 rule 2): it reads the tables, the voxels and the graph,
-//! and estimates travel over them with a search scratch of its own.
+//! and prices travel over them with a search scratch of its own, at the walk
+//! the router serves ([`pharmakos_sim::pathing::estimate::walk_cost`]): the
+//! measure `estimate_route` answers in too, over the same graph
+//! ([`crate::routes`], "One graph"; S3's `p3fix`).
 //!
 //! The ground this module reads is [`World::ground`] with one field replaced:
 //! the evaluation-unit tally P1 counts a decision's work in. The world's own
@@ -59,7 +62,8 @@ use pharmakos_sim::interpreter::{
 };
 use pharmakos_sim::math::fixed::Fx;
 use pharmakos_sim::math::quantity::Ms;
-use pharmakos_sim::pathing::{Scratch, Speed, ticks_for_cost};
+use pharmakos_sim::pathing::estimate::{ServedWalk, walk_ticks};
+use pharmakos_sim::pathing::{Scratch, Speed};
 use pharmakos_sim::seams::UnitTally;
 use pharmakos_sim::snapshot::Snapshot;
 use pharmakos_sim::tables::{BeaconId, SeatId};
@@ -229,37 +233,40 @@ pub fn ranked<F>(
     scratch: &mut Scratch,
     origin: [i32; 2],
     keep: F,
-) -> Vec<(usize, i64)>
+) -> Vec<(usize, ServedWalk)>
 where
     F: FnMut(usize) -> bool,
 {
     let mut ranker = Ranker::new(ground, origin, keep);
-    let mut out: Vec<(usize, i64)> = Vec::new();
+    let mut out: Vec<(usize, ServedWalk)> = Vec::new();
     while let Some(found) = ranker.next(ground, scratch) {
         out.push(found);
     }
     out
 }
 
-/// An estimator cost as the game milliseconds the commander takes to walk it:
-/// the same `ceil(cost * 20 / cost_per_second)` ticks `estimate_route`'s legs
-/// are in, so a chip's figure and a route's agree. `Ok(None)` when the rules
-/// table gives the commander no speed, so it walks nowhere.
+/// A served walk as the game milliseconds the commander takes to walk it, at
+/// the latest: the sim's own conversion
+/// ([`pharmakos_sim::pathing::estimate::walk_ticks`]), the one
+/// `estimate_route`'s legs are in, of the same walk ([`crate::routes`], "One
+/// graph"), so a chip's figure and a route's agree and neither is ever
+/// optimistic. `Ok(None)` when the rules table gives the commander no speed,
+/// so it walks nowhere.
 ///
 /// # Errors
 ///
-/// [`crate::error::Code::Internal`] for a cost past the estimator's `i32`, a
-/// tick count past it or below zero: the sim's estimator hands out none, so
-/// one is the two disagreeing, and it is said rather than read as "no route".
-pub fn travel_ms(world: &World, cost: i64) -> Result<Option<Ms>, Error> {
+/// [`crate::error::Code::Internal`] for a walk the conversion refuses, or a
+/// tick count below zero: the sim hands out none, so one is the two
+/// disagreeing, and it is said rather than read as "no route".
+pub fn travel_ms(world: &World, walk: ServedWalk) -> Result<Option<Ms>, Error> {
     let speed = Speed::commander(world.rules());
-    let cost = i32::try_from(cost).map_err(|_| {
+    let ticks = walk_ticks(walk, speed).map_err(|error| {
         Error::internal(said!(
-            "an estimate costs {}, past the estimator's i32",
-            cost
+            "a walk has no travel time: {}",
+            crate::error::engine(&error)
         ))
     })?;
-    let Some(ticks) = ticks_for_cost(cost, speed.cost_per_second) else {
+    let Some(ticks) = ticks else {
         return Ok(None);
     };
     let ticks = u32::try_from(ticks)
@@ -300,8 +307,8 @@ pub enum Site {
 pub struct Candidate {
     /// Its name.
     pub feature_id: String,
-    /// Game milliseconds from the origin, by the estimator "nearest" ranks
-    /// with.
+    /// Game milliseconds from the origin: the walk the router serves there,
+    /// which is what "nearest" ranks by.
     pub travel_ms: Ms,
 }
 
@@ -321,10 +328,11 @@ pub struct Resolved {
     pub kind: Option<FeatureKind>,
     /// The feature it reads; empty when it reads nothing.
     pub feature_id: String,
-    /// Travel from the origin to that feature, by the estimator "nearest"
-    /// ranks with. `None` when it reads nothing, and when it reads a feature
-    /// it **names** (a `feature_id`, or `covered {}`) that the origin cannot
-    /// reach: a name is never ranked, so the sim binds it reachable or not.
+    /// Travel from the origin to that feature: the walk the router serves
+    /// there, which is what "nearest" ranks by. `None` when it reads nothing,
+    /// and when it reads a feature it **names** (a `feature_id`, or
+    /// `covered {}`) that the origin cannot reach: a name is never ranked, so
+    /// the sim binds it reachable or not.
     /// The wire says which with `ResolvedRef.reachable` (decisions-log item
     /// 133 (3) (i)), and writes `travel_ms` only beside `reachable: true`.
     pub travel_ms: Option<Ms>,
@@ -478,8 +486,8 @@ impl Reader<'_> {
         let found = ranked(&self.ground, &mut self.scratch, column_of(origin), keep);
         found
             .into_iter()
-            .map(|(index, cost)| {
-                let travel_ms = travel_ms(self.world, cost)?.ok_or_else(|| {
+            .map(|(index, walk)| {
+                let travel_ms = travel_ms(self.world, walk)?.ok_or_else(|| {
                     Error::internal("the rules table gives the commander no speed to rank with")
                 })?;
                 Ok((

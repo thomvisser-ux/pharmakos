@@ -167,10 +167,10 @@ impl RouteOutcome {
 
 /// Search the abstract graph from `start` to `goal`.
 ///
-/// **This is the whole of a far pair's estimate**: no refinement, no stepping,
-/// no fork. [`crate::pathing::estimate::estimate`] is a contractual wrapper
-/// around it, and prices a near pair at [`route_with`]'s route instead (its
-/// module docs' "Near pairs").
+/// **This is the whole of a fogged estimate**: no refinement, no stepping, no
+/// fork. [`crate::pathing::estimate::estimate`] is a contractual wrapper
+/// around it under a fog mask, and prices a clear query at the walk the
+/// router serves instead (its module docs' "A clear query").
 pub fn abstract_search(
     surface: &Surface,
     clusters: &Clusters,
@@ -606,6 +606,8 @@ pub(crate) fn route_and_abstract(
         cost_per_second: 1,
         fog_numerator: 1,
         fog_denominator: 1,
+        // Only the cost is read here; no tick is priced.
+        link_ticks: 0,
     };
     let result = abstract_search_with(
         surface,

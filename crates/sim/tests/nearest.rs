@@ -29,7 +29,7 @@ use pharmakos_sim::encoding::Enc;
 use pharmakos_sim::features::FeatureKind;
 use pharmakos_sim::interpreter::Plan;
 use pharmakos_sim::interpreter::state::{StepFailed, StepFailure};
-use pharmakos_sim::pathing::estimate::{Speed, max_partials, ticks_for_cost, walk_cost};
+use pharmakos_sim::pathing::estimate::{Speed, max_partials, walk_cost};
 use pharmakos_sim::pathing::reach::Reach;
 use pharmakos_sim::pathing::route::{Surcharge, route_with};
 use pharmakos_sim::pathing::search::{Scratch, Tally};
@@ -283,14 +283,18 @@ fn nearest_is_the_least_served_walk() {
             let mut ranker = Ranker::new(&ground, [ox, oy], |_| true);
             for expected in &truth {
                 ranks += 1;
-                let got = ranker.next(&ground, &mut scratch);
+                let got = ranker
+                    .next(&ground, &mut scratch)
+                    .map(|(index, walk)| (index, walk.cost));
                 if got != Some((expected.3, expected.0)) {
                     wrong.push((seed, scarred, [ox, oy], got, (expected.3, expected.0)));
                 }
             }
             stalled += scratch.stalled().unwrap();
             scratch.reset_counters();
-            let extra = ranker.next(&ground, &mut scratch);
+            let extra = ranker
+                .next(&ground, &mut scratch)
+                .map(|(index, walk)| (index, walk.cost));
             if extra.is_some() {
                 wrong.push((seed, scarred, [ox, oy], extra, (usize::MAX, 0)));
             }
@@ -859,11 +863,14 @@ fn a_far_walk_costs_what_the_walker_walks() {
         {
             continue;
         }
-        let Ok(cost) = walk_cost(world.surface(), world.clusters(), &mut scratch, (a, b)) else {
+        let Ok(walk) = walk_cost(world.surface(), world.clusters(), &mut scratch, (a, b)) else {
             continue;
         };
-        let promised =
-            i64::from(ticks_for_cost(i32::try_from(cost).unwrap(), speed.cost_per_second).unwrap());
+        let promised = i64::from(
+            pharmakos_sim::pathing::estimate::walk_ticks(walk, speed)
+                .unwrap()
+                .unwrap(),
+        );
         if !world.place_unit_directly(commander, world.standing_point([ax, ay, 0])) {
             continue;
         }

@@ -503,7 +503,10 @@ fn near_estimates_allocate_nothing(world: &mut World) {
     let before = allocations();
     for (a, b) in &pairs {
         let found = estimate(&surface, &clusters, scratch, *a, *b, Fog::Clear, speed);
-        assert!(found.is_some(), "a connected near pair has an estimate");
+        assert!(
+            matches!(found, Ok(Some(_))),
+            "a connected near pair has an estimate"
+        );
     }
     for (a, b) in pairs.iter().chain(&far) {
         let walked = walk_cost(&surface, &clusters, scratch, (*a, *b));
@@ -519,9 +522,9 @@ fn near_estimates_allocate_nothing(world: &mut World) {
         pairs.len() + far.len()
     );
     assert_eq!(
-        scratch.near_queries().expect("the count fits a u64"),
+        scratch.served_estimates().expect("the count fits a u64"),
         u64::try_from(pairs.len()).expect("fits"),
-        "every pair drawn went through the near branch"
+        "every pair drawn was priced at its served walk"
     );
 }
 
@@ -681,7 +684,10 @@ fn a_near_estimate_allocates_nothing_from_a_fresh_scratch_or_after_a_refusal() {
     let before = allocations();
     let first = estimate(&surface, &clusters, scratch, a, b, Fog::Clear, speed);
     let after_first = allocations() - before;
-    assert!(first.is_some(), "the long near pair has an estimate");
+    assert!(
+        matches!(first, Ok(Some(_))),
+        "the long near pair has an estimate"
+    );
     assert_eq!(
         after_first, 0,
         "a near estimate on a fresh scratch allocated {after_first} times: the served route's \
@@ -691,7 +697,7 @@ fn a_near_estimate_allocates_nothing_from_a_fresh_scratch_or_after_a_refusal() {
     let none = estimate(&surface, &clusters, scratch, c, d, Fog::Clear, speed);
     let again = estimate(&surface, &clusters, scratch, a, b, Fog::Clear, speed);
     let after_refusal = allocations() - before;
-    assert_eq!(none, None, "the router refuses the pair");
+    assert_eq!(none, Ok(None), "the router refuses the pair");
     assert_eq!(again, first, "the long pair answers as before");
     assert_eq!(
         after_refusal, 0,

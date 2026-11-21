@@ -1511,7 +1511,6 @@ impl Surface {
     /// frozen snapshot will not encode.
     pub fn open_lull(&mut self) -> Result<(), Error> {
         self.absorb_events()?;
-        self.host_mut()?.refresh_routes()?;
         self.sync_time();
         let round = self.host()?.runner().round();
         // Before anything is verified against this Lull's snapshot: the

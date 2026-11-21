@@ -296,6 +296,11 @@ impl pharmakos_proto::json::grammar::EngineWords
 impl pharmakos_proto::json::grammar::EngineWords for Engine<'_, pharmakos_sim::world::TickError> {}
 /// The power grid's refusal: figures.
 impl pharmakos_proto::json::grammar::EngineWords for Engine<'_, pharmakos_sim::power::PowerError> {}
+/// The travel estimate's refusal: a count of partial routes, a cost.
+impl pharmakos_proto::json::grammar::EngineWords
+    for Engine<'_, pharmakos_sim::pathing::estimate::EstimateError>
+{
+}
 /// A fingerprint's refusal: the codec's own message, composed from words and
 /// quoted text.
 impl pharmakos_proto::json::grammar::EngineWords
