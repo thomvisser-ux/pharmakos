@@ -1463,8 +1463,11 @@ message PatchSuggestion {
   // What the button says.
   string title = 1;
 
-  // RFC 6902 JSON Patch, as text, so it round-trips through the same JSONC
-  // layer the playbook does.
+  // A JSON Patch in this gateway's dialect, as text, so it round-trips
+  // through the same JSONC layer the playbook does. The dialect is RFC 6902's
+  // six operations, read more strictly than the RFC: a member an operation
+  // does not have is refused, and so is a `~` in a pointer that is not
+  // followed by `0` or `1`.
   string json_patch = 2;
 
   Applicability applicability = 3;
@@ -1640,7 +1643,12 @@ message Chip {
 message PatchPlanRequest {
   string playbook_jsonc = 1;
 
-  // RFC 6902 JSON Patch.
+  // A JSON Patch, as text: either a forward patch in this gateway's dialect
+  // (RFC 6902's six operations, read more strictly than the RFC: a member an
+  // operation does not have is refused, array indices are RFC 6901's, and
+  // the patch is bounded in operations, size and depth), or the
+  // `inverse_json_patch` an earlier answer handed back, sent unchanged. A
+  // patch is all forward operations or all undo operations, never both.
   string json_patch = 2;
 }
 
@@ -1648,7 +1656,13 @@ message PatchPlanResponse {
   // The patched file, comments and formatting preserved.
   string playbook_jsonc = 1;
 
-  // The patch that undoes this one, for the editor's undo stack.
+  // The patch that undoes this one, for the editor's undo stack, as text.
+  // Each of its operations is an `add`, `remove` or `replace` (the one that
+  // puts back, takes out or swaps) plus an `undo` member that carries exactly
+  // what was written, so applying it gives back the bytes of the file the
+  // forward patch was applied to: comments, the member's slot and its key's
+  // spelling included. It is valid only against the text this answer's
+  // `playbook_jsonc` holds, and is sent back as it was received.
   string inverse_json_patch = 2;
 }
 
