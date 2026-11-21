@@ -62,6 +62,7 @@ fn runner() -> Runner {
         })
         .expect("the golden seed makes a world"),
     )
+    .unwrap_or_else(|error| panic!("{error}"))
 }
 
 /// `seat`'s core: its one beacon before anything is placed.

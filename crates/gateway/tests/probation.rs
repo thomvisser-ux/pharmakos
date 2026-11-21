@@ -1298,6 +1298,7 @@ fn a_licence_earned_at_a_settlement_reaches_the_recap_the_feed_the_briefing_and_
             .expect("room for a Generator");
     }
     let bytes = pharmakos_sim::snapshot::Snapshot::capture(&world)
+        .expect("a world between ticks")
         .to_bytes()
         .expect("it encodes");
     let mut host = Host::open(&config, Some(library_folder())).expect("a match");

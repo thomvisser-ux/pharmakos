@@ -118,7 +118,7 @@ fn set_treasury(world: &mut World, dollars: i64) {
 /// events.
 fn play(world: World, route: &str, ticks: u32) -> (Runner, Vec<Event>) {
     let plan = Plan::compile(&playbook(route), &rules()).expect("compiles");
-    let mut runner = Runner::new(world);
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
     runner
         .seal_playbook(SEAT, plan)
         .expect("a Lull takes a seal");
@@ -261,7 +261,7 @@ fn the_draw_starts_with_the_queue() {
         &rules,
     )
     .expect("compiles");
-    let mut replay = Runner::new(world);
+    let mut replay = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
     replay.seal_playbook(SEAT, plan).expect("sealed");
     assert!(replay.begin_push().unwrap());
     let mut before = None;
@@ -395,7 +395,10 @@ fn a_grown_sphere_survives_a_save_and_a_restore() {
     );
     let saved = runner.world().clone();
     let core = core(&saved);
-    let bytes = Snapshot::capture(&saved).to_bytes().expect("encoding");
+    let bytes = Snapshot::capture(&saved)
+        .expect("a world between ticks")
+        .to_bytes()
+        .expect("encoding");
     let mut restored = world();
     Snapshot::from_bytes(&bytes)
         .expect("decoding")
@@ -732,7 +735,7 @@ fn a_target_a_fallen_spire_left_outside_waits_for_a_spire() {
     world
         .add_target(core, StructureKind::Autocannon.id(), ring)
         .expect("room for a target");
-    let mut runner = Runner::new(world);
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
     assert!(runner.begin_push().unwrap());
     // The Spire falls before anything is bought.
     runner
@@ -897,7 +900,7 @@ fn a_wall_in_the_grown_ring_stands_owned_and_unworked_until_a_spire_is_rebuilt()
             terraform: pharmakos_sim::site::Terraform::None,
         },
     );
-    let mut runner = Runner::new(world);
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
     assert!(runner.begin_push().unwrap());
     runner.step().unwrap();
     assert_eq!(
@@ -987,7 +990,7 @@ fn a_wall_of_a_grown_beacon_goes_neutral_when_the_beacon_dies() {
             by: None,
         })
         .expect("room for an edit");
-    let mut runner = Runner::new(world);
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
     assert!(runner.begin_push().unwrap());
     runner.step().unwrap();
     assert_eq!(runner.world().wall_owner(voxel), Some(SEAT));
@@ -1025,7 +1028,10 @@ fn the_grown_flag_survives_a_save_and_a_restore() {
         .raise_structure(SEAT, core, StructureKind::ResonanceSpire, beside)
         .expect("room for a Spire");
     assert_ne!(world.state_hash(), bare);
-    let bytes = Snapshot::capture(&world).to_bytes().expect("encoding");
+    let bytes = Snapshot::capture(&world)
+        .expect("a world between ticks")
+        .to_bytes()
+        .expect("encoding");
     let mut restored = self::world();
     Snapshot::from_bytes(&bytes)
         .expect("decoding")

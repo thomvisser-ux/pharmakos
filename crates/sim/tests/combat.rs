@@ -186,7 +186,7 @@ fn hit(target: DamageTarget, amount: i64, by: SeatId, source: Option<AssetId>) -
 
 /// A runner in its first Push.
 fn pushing(world: World) -> Runner {
-    let mut runner = Runner::new(world);
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(runner.begin_push(), Ok(true), "the Push begins");
     runner
 }
@@ -908,7 +908,7 @@ fn the_shell_table_survives_save_and_restore() {
     assert!(runner.world_mut().order_shell(mortar, spot_16).is_ok());
     play(&mut runner, 3, &mut feed);
     assert_eq!(runner.world().shells().len(), 1, "in flight");
-    let saved = Snapshot::capture(runner.world());
+    let saved = Snapshot::capture(runner.world()).expect("a world between ticks");
     let bytes = saved.to_bytes().expect("encodes");
     let mut restored = world_of(rules(), 2);
     Snapshot::from_bytes(&bytes)
@@ -993,7 +993,7 @@ fn the_attacker_memory_survives_save_and_restore() {
             .any(|common| common.retreat_hp_pct == 90),
         "and a Common setting"
     );
-    let saved = Snapshot::capture(runner.world());
+    let saved = Snapshot::capture(runner.world()).expect("a world between ticks");
     let mut restored = world_of(rules(), 2);
     saved.restore_into(&mut restored).expect("restores");
     assert_eq!(restored.units().arms(), runner.world().units().arms());
@@ -1768,7 +1768,7 @@ fn three_ways(
                 hashes.push((tick, report.hash));
             }
             if restore && tick == save_at {
-                let saved = Snapshot::capture(runner.world());
+                let saved = Snapshot::capture(runner.world()).expect("a world between ticks");
                 let mut fresh = world_of(rules(), 2);
                 saved.restore_into(&mut fresh).expect("restores");
                 assert_eq!(fresh.state_hash(), runner.world().state_hash());

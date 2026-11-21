@@ -159,7 +159,7 @@ fn mining_core(segments: &[i32], settings: MineSettings) -> (World, BeaconId) {
 /// The starting seam of seat 0's core: the seam it holds after its first
 /// decision.
 fn starting_seam(fixture: &World, core: BeaconId) -> usize {
-    let mut runner = Runner::new(fixture.clone());
+    let mut runner = Runner::new(fixture.clone()).unwrap_or_else(|error| panic!("{error}"));
     assert!(runner.begin_push().unwrap());
     play(&mut runner, 1);
     let seam = runner
@@ -196,7 +196,7 @@ fn digging_stops_at_the_max_depth() {
     let (fixture, core) = mining_core(&[180_000, 180_000], settings);
     let pristine = fixture.clone();
     let seam = starting_seam(&fixture, core);
-    let mut runner = Runner::new(fixture);
+    let mut runner = Runner::new(fixture).unwrap_or_else(|error| panic!("{error}"));
     play_match(&mut runner);
     let after = runner.world();
     let feature = pristine.features().get(seam).expect("the seam");
@@ -229,7 +229,7 @@ fn pillars_stand_at_their_spacing() {
     let (fixture, core) = mining_core(&[180_000, 180_000], settings);
     let pristine = fixture.clone();
     let seam = starting_seam(&fixture, core);
-    let mut runner = Runner::new(fixture);
+    let mut runner = Runner::new(fixture).unwrap_or_else(|error| panic!("{error}"));
     play_match(&mut runner);
     let after = runner.world();
     let feature = pristine.features().get(seam).expect("the seam");
@@ -286,7 +286,7 @@ fn no_voxel_under_a_structure_is_dug() {
         .place_beacon_directly(SeatId::new(1), far_at, MandateKind::Build, PRIORITY_NORMAL)
         .expect("room for a beacon");
     let pristine = fixture.clone();
-    let mut runner = Runner::new(fixture);
+    let mut runner = Runner::new(fixture).unwrap_or_else(|error| panic!("{error}"));
     play_match(&mut runner);
     let after = runner.world();
     let mut kept: u32 = 0;
@@ -340,7 +340,7 @@ fn midpoint(choice: SeamChoice, carved: &[(&str, Option<usize>)]) -> (Runner, Be
     })
     .expect("the rules table describes a map");
     fixture.set_treasury(SEAT, Money::ZERO);
-    let mut runner = Runner::new(fixture);
+    let mut runner = Runner::new(fixture).unwrap_or_else(|error| panic!("{error}"));
     assert!(runner.begin_push().unwrap());
     for (name, count) in carved {
         let (seam, _) = seam_named(runner.world(), name);
@@ -576,7 +576,7 @@ fn a_seam_choice_counts_its_estimates_and_a_held_seam_costs_none() {
     // for it (one unit).
     let fixture = world(&[180_000]);
     let features = u32::try_from(fixture.features().len()).expect("a few");
-    let mut runner = Runner::new(fixture);
+    let mut runner = Runner::new(fixture).unwrap_or_else(|error| panic!("{error}"));
     assert!(runner.begin_push().unwrap());
     play(&mut runner, 1);
     let first = runner.world().decision_work(0).expect("seat 0").spent();
@@ -601,7 +601,7 @@ fn a_spent_beacon_charges_no_ranking() {
     let fixture = world(&[180_000]);
     let core = core(&fixture);
     let seam = starting_seam(&fixture, core);
-    let mut runner = Runner::new(fixture);
+    let mut runner = Runner::new(fixture).unwrap_or_else(|error| panic!("{error}"));
     assert!(runner.begin_push().unwrap());
     play(&mut runner, 1);
     carve(&mut runner, seam, None);
@@ -645,7 +645,7 @@ fn a_second_dig_in_one_seam_box_waits_for_the_first_to_land() {
     // tick another has already queued an edit in the same box waits one tick
     // and is judged with that edit taken out.
     let (fixture, core) = mining_core(&[180_000], MineSettings::default());
-    let mut runner = Runner::new(fixture);
+    let mut runner = Runner::new(fixture).unwrap_or_else(|error| panic!("{error}"));
     assert!(runner.begin_push().unwrap());
     let drone = drone_of(runner.world(), core);
     // Play until the drone is one tick from finishing a dig.
@@ -764,7 +764,7 @@ fn playbook(route: &str) -> gp::v1::Playbook {
 /// Seal `route` for seat 0 and play until its visit ends, returning the world.
 fn visit(route: &str) -> World {
     let plan = Plan::compile(&playbook(route), &rules()).expect("compiles");
-    let mut runner = Runner::new(world(&[180_000]));
+    let mut runner = Runner::new(world(&[180_000])).unwrap_or_else(|error| panic!("{error}"));
     runner
         .seal_playbook(SEAT, plan)
         .expect("a Lull takes a seal");
@@ -977,10 +977,10 @@ fn a_held_seam_survives_save_and_restore_and_a_vent_is_refused() {
             flee_on_threat: true,
         },
     );
-    let mut runner = Runner::new(fixture);
+    let mut runner = Runner::new(fixture).unwrap_or_else(|error| panic!("{error}"));
     assert!(runner.begin_push().unwrap());
     play(&mut runner, 600);
-    let saved = Snapshot::capture(runner.world());
+    let saved = Snapshot::capture(runner.world()).expect("a world between ticks");
     let mut resumed = world(&[180_000]);
     saved.restore_into(&mut resumed).expect("the save restores");
     assert_eq!(resumed.state_hash(), runner.world().state_hash());

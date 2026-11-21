@@ -20,13 +20,14 @@
 //! fails here, in itself, rather than in a budget measurement three stages
 //! later.
 //!
-//! **One test in this file, on purpose**, and the counter is **per thread**.
-//! Both halves matter. A process-wide counter charges this test for every
-//! allocation any other thread makes, and one of those threads is libtest's
-//! own: it prints "has been running for over 60 seconds" from the main thread,
-//! which allocates, and a test long enough to earn that line then fails for a
-//! reason that has nothing to do with the sim. Counting on the allocating
-//! thread makes the assertion say what it means.
+//! The counter is **per thread**. A process-wide counter charges a test for
+//! every allocation any other thread makes, and one of those threads is
+//! libtest's own: it prints "has been running for over 60 seconds" from the
+//! main thread, which allocates, and a test long enough to earn that line then
+//! fails for a reason that has nothing to do with the sim. Counting on the
+//! allocating thread makes each assertion say what it means, so the file's
+//! two tests (the tick, and the breach search at its most work and from a
+//! cloned scratch) each count only their own allocations.
 
 #![allow(
     clippy::expect_used,
@@ -151,7 +152,7 @@ fn a_tick_allocates_nothing() {
     // deaths, elimination, the respawns, the one-tick match-end rule, the
     // segment's end and every event they emit — would sit outside the counted
     // loop.
-    let mut runner = Runner::new(world);
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
     // Every seat seals the harness playbook, for the same reason: the decision
     // phase returns immediately for a seat that sealed nothing, so without this
     // the whole interpreter — the `covering` resolver with its "nearest"
@@ -444,4 +445,117 @@ fn collapse_at(world: &mut World, step: u32) {
             "the edit queue is full at step {step}"
         );
     }
+}
+
+/// File one `Set` of `material` at `at`, stepping the world to drain the edit
+/// queue when it is full. Outside any counted window.
+fn file_or_flush(world: &mut World, at: [i32; 3], material: pharmakos_sim::voxels::Material) {
+    let edit = VoxelEdit::Set {
+        at,
+        material,
+        by: None,
+    };
+    if world.request_voxel_edit(edit).is_err() {
+        world.step(&mut Enc::default()).expect("the edits settle");
+        world
+            .request_voxel_edit(edit)
+            .expect("an emptied queue takes the edit");
+    }
+}
+
+/// A breach search allocates nothing, at its most work and on a cloned
+/// scratch (lane `settle`). The field round the start is the densest the
+/// search meets: a one-high enemy stub on three columns in four, so an
+/// uncrossed state on open ground pushes a walk and a crossing to each of its
+/// eight neighbours. The goal is inside a ring of the seat's own walls, which
+/// it may not demolish, so the search spends its whole budget of states
+/// (`Exhausted`). Its buffers are reserved with the scratch, before the
+/// count; a clone of the scratch (as a cloned or forked world's) keeps the
+/// heap's reservation, so its first search allocates nothing either.
+#[test]
+fn a_breach_search_allocates_nothing_at_its_most_work_or_from_a_clone() {
+    use pharmakos_sim::attack::{BreachRefused, BreachScratch, SealedWay, breach_search};
+    use pharmakos_sim::tables::{PRIORITY_NORMAL, SeatId};
+    use pharmakos_sim::voxels::Material;
+    let rules = RulesTable::load(
+        &std::path::Path::new("..")
+            .join("..")
+            .join("rules")
+            .join("rules.v1.json"),
+    )
+    .expect("the committed rules table loads");
+    let mut world = World::new(&WorldConfig {
+        match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED,
+        seats: pharmakos_sim::DETERMINISM_SEATS,
+        rules,
+        match_settings: MatchSettings::default(),
+    })
+    .expect("the rules table describes a map and a broadphase grid");
+    let (start, goal) = ([192_i32, 192_i32], [216_i32, 192_i32]);
+    let goal_at = world.standing_point([goal[0], goal[1], 0]);
+    world
+        .place_beacon_directly(
+            SeatId::new(0),
+            goal_at,
+            pharmakos_sim::seams::MandateKind::Defend,
+            PRIORITY_NORMAL,
+        )
+        .expect("a beacon of the seat's own by the goal");
+    let own = Material::wall(SeatId::new(0), false).expect("a wall id");
+    let enemy = Material::wall(SeatId::new(1), false).expect("a wall id");
+    for dy in -4..=4_i32 {
+        for dx in -4..=4_i32 {
+            if dx.abs() != 4 && dy.abs() != 4 {
+                continue;
+            }
+            let (x, y) = (goal[0] + dx, goal[1] + dy);
+            let top = world.standing_point([x, y, 0])[2].floor_voxels();
+            for z in top..top + 3 {
+                file_or_flush(&mut world, [x, y, z], own);
+            }
+        }
+    }
+    for dy in -60..=60_i32 {
+        for dx in -60..=60_i32 {
+            let (x, y) = (start[0] + dx, start[1] + dy);
+            let ground = x % 2 == 0 && y % 2 == 0;
+            let near_goal = (x - goal[0]).abs() <= 4 && (y - goal[1]).abs() <= 4;
+            if ground || near_goal || (dx, dy) == (0, 0) {
+                continue;
+            }
+            let top = world.standing_point([x, y, 0])[2].floor_voxels();
+            file_or_flush(&mut world, [x, y, top], enemy);
+        }
+    }
+    world.step(&mut Enc::default()).expect("the walls settle");
+    let surface = world.surface();
+    let (from, to) = (
+        surface.node_of(start[0], start[1]).expect("a column"),
+        surface.node_of(goal[0], goal[1]).expect("a column"),
+    );
+    let way = SealedWay::of(&world, from, to).expect("the seat's own ring seals the goal");
+    let mut scratch = BreachScratch::new(surface.node_count());
+    let before = allocations();
+    let found = breach_search(&world, &mut scratch, SeatId::new(0), way);
+    let searching = allocations() - before;
+    assert_eq!(
+        found.map(|breach| breach.wall),
+        Err(BreachRefused::Exhausted)
+    );
+    assert_eq!(
+        searching, 0,
+        "the search at its most work allocated {searching} times"
+    );
+    let mut cloned = scratch.clone();
+    let before = allocations();
+    let again = breach_search(&world, &mut cloned, SeatId::new(0), way);
+    let from_clone = allocations() - before;
+    assert_eq!(
+        again.map(|breach| breach.wall),
+        Err(BreachRefused::Exhausted)
+    );
+    assert_eq!(
+        from_clone, 0,
+        "the first search on a cloned scratch allocated {from_clone} times"
+    );
 }

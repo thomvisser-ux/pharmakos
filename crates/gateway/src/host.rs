@@ -200,8 +200,9 @@ impl Host {
     /// [`crate::error::Code::InvalidArgument`] for a seat count
     /// [`Host::check_seats`] refuses and a lobby setting
     /// [`Host::check_settings`] refuses, and [`crate::error::Code::Internal`]
-    /// when the map generator or the search graph will not build — neither is
-    /// something a caller did.
+    /// when the map generator or the search graph will not build, or the
+    /// match will not open on the generated world (the snapshot's door,
+    /// [`Runner::new`]) — none is something a caller did.
     pub fn open(config: &WorldConfig, library: Option<PathBuf>) -> Result<Host, Error> {
         Host::check_seats(config.seats)?;
         Host::check_settings(&config.match_settings)?;
@@ -212,8 +213,14 @@ impl Host {
             ))
         })?;
         let routes = RouteAdapter::new(world.voxels(), world.rules())?;
+        let runner = Runner::new(world).map_err(|error| {
+            Error::internal(said!(
+                "this match could not be opened on its world: {}",
+                crate::error::engine(&error)
+            ))
+        })?;
         Ok(Host {
-            runner: Runner::new(world),
+            runner,
             routes,
             library,
             safe_playbook: String::from(SAFE_PLAYBOOK),
@@ -567,8 +574,10 @@ impl Host {
     ///
     /// # Errors
     ///
-    /// As [`Host::seed_layout`], and [`crate::error::Code::InvalidArgument`]
-    /// for a settings row the world refuses.
+    /// As [`Host::seed_layout`], [`crate::error::Code::InvalidArgument`] for a
+    /// settings row the world refuses, and [`crate::error::Code::Internal`]
+    /// when the match cannot be frozen ([`LayoutRefused::Unsettled`]), which
+    /// no lobby reaches.
     pub fn seed_layout_with_settings(
         &mut self,
         layout: &Layout,
@@ -592,6 +601,10 @@ impl Host {
                 | LayoutRefused::SettingsTwice { .. }
                 | LayoutRefused::BadSetting { .. } => Error::invalid(said!(
                     "this match would not take the layout: {}",
+                    crate::error::engine(&refused)
+                )),
+                LayoutRefused::Unsettled => Error::internal(said!(
+                    "this match could not be frozen after its layout: {}",
                     crate::error::engine(&refused)
                 )),
             })

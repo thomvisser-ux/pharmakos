@@ -69,6 +69,8 @@ const SCENARIOS: &[&str] = &[
     SPIRE_LOST,
     "scenarios/s3/toward-stepping-stone.scenario.jsonc",
     "scenarios/s3/enemy-known-rule.scenario.jsonc",
+    "scenarios/s3/breach-at-a-corner.scenario.jsonc",
+    "scenarios/s3/breach-at-a-slant.scenario.jsonc",
 ];
 
 /// The scenario against the built-in operator: seat 1 is `builtin`, played by
@@ -364,7 +366,15 @@ fn the_committed_list_is_the_whole_set() {
                 "terraform-levels-a-footprint",
             ][..],
         ),
-        ("s3", &["resonance-spire", "spire-lost"][..]),
+        (
+            "s3",
+            &[
+                "breach-at-a-corner",
+                "breach-at-a-slant",
+                "resonance-spire",
+                "spire-lost",
+            ][..],
+        ),
     ] {
         let dir = root().join("scenarios").join(stage);
         for name in names {

@@ -147,7 +147,7 @@ fn world_of(rules: RulesTable, movers: u32) -> World {
 /// for byte. The host's part — opening a Push the moment a Lull is reached and
 /// closing a recap the moment one opens — is the same one the binary plays.
 fn chain(world: World, ticks: u32) -> String {
-    let mut runner = Runner::new(world);
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
     let mut out = String::with_capacity(usize::try_from(ticks).unwrap_or(0).saturating_mul(24));
     for tick in 0..ticks {
         let hash = if tick == 0 {
@@ -282,6 +282,7 @@ fn save_and_restore_round_trips_hash_identically() {
         }
         let before = world.state_hash();
         let bytes = Snapshot::capture(&world)
+            .expect("a world between ticks")
             .to_bytes()
             .expect("encoding a snapshot");
         let decoded = Snapshot::from_bytes(&bytes).expect("decoding a snapshot");
@@ -305,7 +306,10 @@ fn save_and_restore_round_trips_hash_identically() {
             "round {round}: the restored world diverges on the next tick"
         );
         assert_eq!(
-            Snapshot::capture(&world).to_bytes().expect("re-encoding"),
+            Snapshot::capture(&world)
+                .expect("a world between ticks")
+                .to_bytes()
+                .expect("re-encoding"),
             bytes,
             "round {round}: capture is not stable"
         );
@@ -399,6 +403,7 @@ fn a_restore_resizes_the_derived_index_to_the_restored_world() {
     let mut small = world_of(powered(&rules()), 0);
     assert!(small.units().len() < expected_units);
     Snapshot::capture(&big)
+        .expect("a world between ticks")
         .restore_into(&mut small)
         .expect("restoring a larger world");
     assert_eq!(small.state_hash(), big.state_hash());
@@ -529,7 +534,7 @@ fn the_sighting_order_is_total() {
 #[test]
 fn a_snapshot_from_another_version_refuses_to_load() {
     let world = world_with(rules());
-    let mut snapshot = Snapshot::capture(&world);
+    let mut snapshot = Snapshot::capture(&world).expect("a world between ticks");
     snapshot.version = SNAPSHOT_VERSION + 1;
     let bytes = snapshot.to_bytes().expect("encoding a snapshot");
     match Snapshot::from_bytes(&bytes) {
@@ -544,7 +549,7 @@ fn a_snapshot_from_another_version_refuses_to_load() {
 #[test]
 fn a_ragged_snapshot_is_refused_rather_than_half_applied() {
     let world = world_with(rules());
-    let mut snapshot = Snapshot::capture(&world);
+    let mut snapshot = Snapshot::capture(&world).expect("a world between ticks");
     snapshot.unit_pos.pop();
     let mut into = world_with(rules());
     let before = into.state_hash();
@@ -1223,7 +1228,7 @@ fn a_restore_refuses_a_route_digest_that_does_not_describe_its_nodes() {
         tick += 1;
     }
 
-    let good = Snapshot::capture(&world);
+    let good = Snapshot::capture(&world).expect("a world between ticks");
     let walker = good
         .unit_route_len
         .iter()
@@ -1284,7 +1289,7 @@ fn a_restore_refuses_a_digest_column_that_does_not_describe_its_store() {
     );
     let _ = world.step(&mut enc).unwrap();
 
-    let good = Snapshot::capture(&world);
+    let good = Snapshot::capture(&world).expect("a world between ticks");
     let mut fresh = world_with(rules());
     good.restore_into(&mut fresh)
         .expect("the unedited snapshot restores");
@@ -1355,6 +1360,7 @@ fn save_and_restore_round_trips_with_modified_chunks() {
 
     let before = world.state_hash();
     let bytes = Snapshot::capture(&world)
+        .expect("a world between ticks")
         .to_bytes()
         .expect("encoding a snapshot");
     let decoded = Snapshot::from_bytes(&bytes).expect("decoding a snapshot");
@@ -1394,6 +1400,7 @@ fn save_and_restore_round_trips_with_modified_chunks() {
     // correctly and then save a map the next restore could not rebuild.
     assert_eq!(
         Snapshot::capture(&restored)
+            .expect("a world between ticks")
             .to_bytes()
             .expect("re-encoding the restored world"),
         bytes,
@@ -1409,7 +1416,7 @@ fn save_and_restore_round_trips_with_modified_chunks() {
 
     // A snapshot with no edits carries no chunk bytes at all — which is the
     // whole point of regenerating the pristine layer from the seed.
-    let fresh = Snapshot::capture(&world_with(rules()));
+    let fresh = Snapshot::capture(&world_with(rules())).expect("a world between ticks");
     assert!(fresh.modified_chunk.is_empty());
     assert!(fresh.modified_chunk_bytes.is_empty());
 }

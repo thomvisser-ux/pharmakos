@@ -69,10 +69,7 @@ use crate::pathing::router::{Router, ServeReport, WalkState};
 use crate::pathing::search::Scratch;
 use crate::pathing::surface::{StepCosts, Surface};
 use crate::rules::RulesTable;
-use crate::runner::{
-    Layout, LayoutMandateSettings, LayoutRefused, LayoutSetting, LayoutSettings, MatchEndReason,
-    MatchPhase, MatchSettings, MatchState,
-};
+use crate::runner::{MatchEndReason, MatchPhase, MatchSettings, MatchState};
 use crate::seams::{BeaconMandate, MandateKind, ProgramId, WorkCounter};
 use crate::tables::{
     AreaKind, BeaconId, BeaconStart, BeaconTable, BuildOrder, ColumnBox, CreditTable, Csr,
@@ -106,9 +103,12 @@ pub enum Phase {
     /// The playbook interpreter's decision tick, every 250 ms of game time
     /// (T11).
     Decision,
-    /// Serve the per-tick repath cap and repair the abstract graph (T7).
+    /// Serve the per-tick repath cap (T7) on the graph the last Voxels phase
+    /// settled.
     Pathing,
-    /// Apply this tick's voxel edits and refresh the chunks they touched (T5).
+    /// Apply this tick's voxel edits, refresh the chunks they touched (T5), and
+    /// settle the pathing graph: repair the clusters they marked and re-arm the
+    /// units the repair freed (lane `settle`).
     Voxels,
     /// Settle the match: respawns, local elimination, seat elimination, the
     /// one-tick match-end rule and the segment's end (T10).
@@ -921,6 +921,22 @@ pub enum TickError {
     /// [`TickError::Collapse`] is: a cluster left unmarked would keep a stale
     /// graph that a replay would not, so the world refuses every later step.
     Marking(MarkError),
+    /// A tick closed with a cluster of the pathing graph waiting for its
+    /// repair, so the segment's frozen snapshot cannot be taken (lane
+    /// `settle`): the Voxels phase settles the graph before it returns, so no
+    /// tick that returned `Ok` from its phases holds one. Refused at the
+    /// freeze rather than copied into a snapshot whose restore would rebuild a
+    /// graph the live world does not hold.
+    Unsettled,
+}
+
+impl From<crate::snapshot::Unclosed> for TickError {
+    fn from(unclosed: crate::snapshot::Unclosed) -> TickError {
+        match unclosed {
+            crate::snapshot::Unclosed::MidTick => TickError::MidTick,
+            crate::snapshot::Unclosed::Unsettled => TickError::Unsettled,
+        }
+    }
 }
 
 /// Why the Voxels phase could not mark a settled chunk's clusters for repair
@@ -985,6 +1001,10 @@ impl core::fmt::Display for TickError {
                     "the voxel phase could not mark a chunk's clusters: {error}"
                 )
             }
+            TickError::Unsettled => write!(
+                f,
+                "a tick closed with a cluster of the pathing graph waiting for its repair"
+            ),
         }
     }
 }
@@ -1546,9 +1566,6 @@ impl World {
             crate::attack::BreachRefused::Exhausted => {
                 counts.breach_exhausted = counts.breach_exhausted.saturating_add(1);
             }
-            crate::attack::BreachRefused::NoWall => {
-                counts.breach_no_wall = counts.breach_no_wall.saturating_add(1);
-            }
             crate::attack::BreachRefused::NoWay => {
                 counts.breach_no_way = counts.breach_no_way.saturating_add(1);
             }
@@ -1758,10 +1775,28 @@ impl World {
         &mut self.scratch
     }
 
-    /// What the last tick's graph repair did.
+    /// What the last tick's graph repair did, in its Voxels phase.
     #[must_use]
     pub const fn repair_report(&self) -> RepairReport {
         self.repair_report
+    }
+
+    /// Whether no cluster is waiting for a repair: the graph agrees with the
+    /// surface. True at every tick boundary (lane `settle`: the graph is
+    /// settled in the phase that edits the terrain), which is what a snapshot
+    /// relies on to carry no pending set.
+    #[must_use]
+    pub(crate) fn graph_settled(&self) -> bool {
+        !self.repairer.is_dirty()
+    }
+
+    /// How many times the graph was repaired in the tick that last ran: one,
+    /// in its Voxels phase ([`World::settle_graph`]), and never a second
+    /// place (lane `settle`).
+    #[must_use]
+    #[cfg(test)]
+    pub(crate) const fn graph_repairs_this_tick(&self) -> crate::pathing::repair::Repairs {
+        self.repairer.calls()
     }
 
     /// What the last tick's repath serving did.
@@ -2526,13 +2561,13 @@ impl World {
     /// How many unit rows `seat` holds: its live units, and its dead ones
     /// whose death has not settled yet (S2's plan, E1). A freed row is
     /// nobody's, so a seat that lost its units holds fewer and can field again.
-    fn units_held_by(&self, seat: SeatId) -> u32 {
+    pub(crate) fn units_held_by(&self, seat: SeatId) -> u32 {
         count_seat(self.units.seats(), seat)
     }
 
     /// How many units `seat` may hold at once: its starting force and its
     /// share of [`UNIT_TABLE_ROOM`].
-    fn unit_room_of(&self, seat: SeatId) -> u32 {
+    pub(crate) fn unit_room_of(&self, seat: SeatId) -> u32 {
         self.unit_start_of
             .get(usize::from(seat.raw()))
             .copied()
@@ -2938,7 +2973,7 @@ impl World {
     // half is S2's.
     //
     // They are **not game actions**, and nothing outside a test, a scenario
-    // fixture or the host's lobby layout ([`World::seed_layout`], S3's plan,
+    // fixture or the host's lobby layout ([`crate::layout::place`], S3's plan,
     // E13, which no seat reaches) may call them: the only way a player changes
     // a beacon is to walk the commander to it and interface on site (AGENTS.md
     // §1).
@@ -2960,207 +2995,19 @@ impl World {
         Some(id)
     }
 
-    /// Place a lobby layout: every beacon of it, with its mandate, its settings
-    /// rows (S3's plan, E13) and its starting units fabricated at it, or
-    /// nothing (S2's plan, E30). The runner is the caller, and checks the lobby
-    /// ([`crate::runner::Runner::seed_layout_with_settings`]).
-    ///
-    /// Through the constructors play uses -- [`World::place_beacon`] and
-    /// [`World::fabricate`] -- so a layout's beacons and units are rows like
-    /// any other, inside each seat's shares of the world totals. Everything is
-    /// checked before the first row is written, so a refused layout leaves the
-    /// world as it was.
-    ///
-    /// # Errors
-    ///
-    /// [`LayoutRefused`]'s world refusals: a seat this match has not got, a
-    /// column with no ground to stand on, a share that cannot hold it, and a
-    /// settings row it cannot take ([`World::check_layout_settings`]).
-    pub(crate) fn seed_layout(
-        &mut self,
-        layout: &Layout,
-        settings: &[LayoutSettings],
-    ) -> Result<(), LayoutRefused> {
-        self.check_layout_settings(layout, settings)?;
-        let seats = self.seats.len();
-        let beacon_share = room_per_seat(BEACON_TABLE_ROOM, seats);
-        let no_room = |what: &'static str| LayoutRefused::NoRoom { what };
-        if layout.beacons.iter().any(|beacon| {
-            beacon
-                .units
-                .iter()
-                .any(|(kind, _)| *kind == UnitKind::Commander)
-        }) {
-            return Err(LayoutRefused::Commander);
-        }
-        let mut sites: Vec<[Fx; 3]> = Vec::with_capacity(layout.beacons.len());
-        for (index, beacon) in layout.beacons.iter().enumerate() {
-            if u32::from(beacon.seat.raw()) >= seats {
-                return Err(LayoutRefused::NoSuchSeat { seat: beacon.seat });
-            }
-            let [x, y] = beacon.column;
-            let site = self
-                .ground()
-                .standing(x, y)
-                .ok_or(LayoutRefused::OffTheMap {
-                    column: beacon.column,
-                })?;
-            sites.push(site);
-            // This seat's beacons and units in the layout up to and including
-            // this one, on top of what it holds already.
-            let of_seat = || {
-                layout
-                    .beacons
-                    .iter()
-                    .take(index.saturating_add(1))
-                    .filter(|other| other.seat == beacon.seat)
-            };
-            let placed = u32::try_from(of_seat().count())
-                .ok()
-                .and_then(|count| {
-                    self.beacons
-                        .count_of(beacon.seat)
-                        .checked_sub(1)
-                        .and_then(|held| held.checked_add(count))
-                })
-                .ok_or(no_room("beacon"))?;
-            if placed > beacon_share {
-                return Err(no_room("beacon"));
-            }
-            let mut units: u32 = self.units_held_by(beacon.seat);
-            for other in of_seat() {
-                for (_, count) in &other.units {
-                    units = units.checked_add(*count).ok_or(no_room("unit"))?;
-                }
-            }
-            if units > self.unit_room_of(beacon.seat) {
-                return Err(no_room("unit"));
-            }
-        }
-        let beacons = u32::try_from(layout.beacons.len())
-            .ok()
-            .and_then(|count| self.beacons.len().checked_add(count))
-            .ok_or(no_room("beacon"))?;
-        if beacons > self.beacon_limit {
-            return Err(no_room("beacon"));
-        }
-        for (index, (beacon, site)) in layout.beacons.iter().zip(sites).enumerate() {
-            let id = self
-                .place_beacon(beacon.seat, site, beacon.mandate)
-                .map_err(|_| no_room("beacon"))?;
-            if let Some(row) = settings.iter().find(|row| row.beacon == index) {
-                let LayoutMandateSettings::Attack(attack) = row.settings;
-                if !self.set_attack(id, attack, &[]) {
-                    return Err(LayoutRefused::WrongWrit { index });
-                }
-            }
-            for (kind, count) in &beacon.units {
-                for _ in 0..*count {
-                    self.fabricate(beacon.seat, id, *kind)
-                        .ok_or(no_room("unit"))?;
-                }
-            }
-        }
-        Ok(())
+    /// Each seat's share of the world's beacon rows, by the seats this match
+    /// has.
+    pub(crate) const fn beacon_share(&self) -> u32 {
+        room_per_seat(BEACON_TABLE_ROOM, self.seats.len())
     }
 
-    /// Every settings row of a layout checked against the layout and this
-    /// world, before anything is placed. The target a row names is a beacon the
-    /// world already holds, a core for a lobby layout: another row's beacon has
-    /// no id until it is placed.
-    ///
-    /// # Errors
-    ///
-    /// [`LayoutRefused::NoSuchLayoutBeacon`], [`LayoutRefused::SettingsTwice`],
-    /// [`LayoutRefused::WrongWrit`] and [`LayoutRefused::BadSetting`].
-    fn check_layout_settings(
-        &self,
-        layout: &Layout,
-        settings: &[LayoutSettings],
-    ) -> Result<(), LayoutRefused> {
-        for (at, row) in settings.iter().enumerate() {
-            let index = row.beacon;
-            let beacon = layout
-                .beacons
-                .get(index)
-                .ok_or(LayoutRefused::NoSuchLayoutBeacon { index })?;
-            if settings.iter().take(at).any(|other| other.beacon == index) {
-                return Err(LayoutRefused::SettingsTwice { index });
-            }
-            let LayoutMandateSettings::Attack(attack) = row.settings;
-            if beacon.mandate != MandateKind::Attack {
-                return Err(LayoutRefused::WrongWrit { index });
-            }
-            self.check_layout_attack(beacon.seat, attack)
-                .map_err(|setting| LayoutRefused::BadSetting { index, setting })?;
-        }
-        Ok(())
-    }
-
-    /// What the compile refuses of a playbook's Attack row
-    /// (`compile_attack_settings`), asked of a layout's, with its target read
-    /// against this world. A playbook's empty Attack arm is legal, and a
-    /// layout's is not: a row exists to make a force raid, so one with no target
-    /// or no launch condition is refused.
-    fn check_layout_attack(
-        &self,
-        seat: SeatId,
-        attack: crate::attack::AttackSettings,
-    ) -> Result<(), LayoutSetting> {
-        use crate::attack::Aim;
-        let last = self.rules.map_last_voxel();
-        let on_the_map = |at: [i16; 3]| {
-            at.iter()
-                .zip(last)
-                .all(|(axis, limit)| (0..=limit).contains(axis))
-        };
-        let seats = self.seats.len();
-        let aimed = match attack.aim {
-            Aim::Unset => false,
-            Aim::Commander(None) | Aim::NearestKnownBeacon => true,
-            Aim::Commander(Some(target)) => target != seat.raw() && u32::from(target) < seats,
-            Aim::Voxel(at) => on_the_map(at),
-            Aim::Beacon(target) => self.beacons.row_of(target).is_ok_and(|row| {
-                let index = row.index();
-                let enemy = self
-                    .beacons
-                    .seats()
-                    .get(index)
-                    .is_some_and(|owner| *owner != seat.raw());
-                let alive = self
-                    .beacons
-                    .hit_points()
-                    .get(index)
-                    .is_some_and(|hp| hp.is_alive());
-                enemy && alive
-            }),
-        };
-        if !aimed {
-            return Err(LayoutSetting::Aim);
-        }
-        if attack.force_size.is_none() && attack.launch_ms.is_none() {
-            return Err(LayoutSetting::Launch);
-        }
-        if attack.staging.is_some_and(|at| !on_the_map(at)) {
-            return Err(LayoutSetting::Staging);
-        }
-        if attack.launch_ms.is_some_and(|ms| ms < 0) {
-            return Err(LayoutSetting::LaunchMs);
-        }
-        if attack
-            .retreat_pct
-            .is_some_and(|pct| !(1..=100).contains(&pct))
-        {
-            return Err(LayoutSetting::RetreatPct);
-        }
-        if attack.retreat_ms.is_some_and(|ms| ms < 0) {
-            return Err(LayoutSetting::RetreatMs);
-        }
-        Ok(())
+    /// The most beacons the world holds.
+    pub(crate) const fn beacon_limit(&self) -> u32 {
+        self.beacon_limit
     }
 
     /// Whether a lobby layout was placed: a beacon or a unit past what the
-    /// generator placed, which nothing but [`World::seed_layout`] adds at
+    /// generator placed, which nothing but [`crate::layout::place`] adds at
     /// round 1 tick 0 (S2's plan, E30).
     #[must_use]
     pub fn is_laid_out(&self) -> bool {
@@ -4596,6 +4443,7 @@ impl World {
         }
         self.tick = self.tick.next().ok_or(TickError::PastTheLast)?;
         self.work.reset();
+        self.repairer.start_tick();
         self.open_phase = Some(0);
         Ok(())
     }
@@ -5012,33 +4860,16 @@ impl World {
             .max(1)
     }
 
-    /// Repair the abstract graph, re-arm the units it may have freed, and serve
-    /// the repath cap round-robin by `(seat, beacon, unit)`.
+    /// Serve the repath cap round-robin by `(seat, beacon, unit)`.
     ///
-    /// The order is item 60's, and it is the reason a route is never planned
-    /// over terrain that has moved: the repair runs **before** any repath this
-    /// tick, and the columns the search reads were refreshed in the same tick
-    /// the voxels changed (see [`World::phase_voxels`]). The one lag that does
-    /// exist is a cluster's *entrances*, which are repaired here on the tick
-    /// after the edit because [`PHASE_ORDER`] puts `Pathing` before `Voxels` —
-    /// and that lag can only withhold routes, never invent one, because every
-    /// step of a route is validated against the live columns as it is walked.
+    /// A route is never planned over terrain that has moved: the graph the
+    /// search reads was settled, columns and clusters both, in the Voxels
+    /// phase of the tick that moved it ([`World::settle_graph`]; lane
+    /// `settle`), so the repair item 60 orders before any repath has always
+    /// run by the time this phase does, and nothing is left for it here.
+    /// Every step of a route is still validated against the live columns as
+    /// it is walked.
     fn phase_pathing(&mut self) {
-        let report = repair(
-            &self.surface,
-            &mut self.clusters,
-            &mut self.scratch,
-            &mut self.repairer,
-        );
-        if report.dirty > 0 {
-            self.router.rearm_sealed(
-                &self.surface,
-                &self.clusters,
-                self.repairer.repaired(),
-                self.units.positions(),
-                self.units.destinations(),
-            );
-        }
         self.gather_route_zones();
         let zones = &self.route_zones;
         let spans = &self.route_spans;
@@ -5062,6 +4893,39 @@ impl World {
                 crate::pathing::route::Surcharge::new(zones, multiplier)
             },
         );
+    }
+
+    /// Repair the clusters this tick's edits marked and re-arm the units the
+    /// repair may have freed: the end of the Voxels phase, the phase that
+    /// edits the terrain (lane `settle`).
+    ///
+    /// Item 60's order, repair then the oracle asked again about every sealed
+    /// unit, unchanged; what moved is the tick it happens on. It used to run
+    /// in the next tick's Pathing phase, so the Programs, Quartermaster and
+    /// Decision phases in between, a recap, a whole Lull and the gateway's
+    /// reads of the hosted world saw a fresh surface against a stale graph;
+    /// and a world saved in that window restored with its graph rebuilt
+    /// fresh and nothing marked, so it repaired and re-armed nothing where the
+    /// live world did, and the two played different chains. Settled here, the
+    /// graph agrees with the surface at every tick boundary
+    /// ([`World::graph_settled`]), which is what lets a snapshot carry no
+    /// pending set. The repair is the same work it was, one phase earlier.
+    fn settle_graph(&mut self) {
+        let report = repair(
+            &self.surface,
+            &mut self.clusters,
+            &mut self.scratch,
+            &mut self.repairer,
+        );
+        if report.dirty > 0 {
+            self.router.rearm_sealed(
+                &self.surface,
+                &self.clusters,
+                self.repairer.repaired(),
+                self.units.positions(),
+                self.units.destinations(),
+            );
+        }
         self.repair_report = report;
     }
 
@@ -5231,11 +5095,13 @@ impl World {
             return Err(TickError::Collapse(error));
         }
         self.voxels.settle(&mut self.chunks);
-        // The pathing graph's columns are refreshed in the same phase that
-        // changed the bytes, so a walker's next step is validated against the
-        // terrain as it is; the *clusters* the edit dirtied are repaired at the
-        // next tick's `Pathing` phase, which is where the entrance rescan and
-        // the one connectivity rebuild live (item 60).
+        // The pathing graph is settled in the phase that changed the bytes
+        // (lane `settle`): the columns are refreshed and the clusters the edit
+        // dirtied are marked here, then repaired, and the walkers they sealed
+        // in re-armed, below, before the phase ends. So no later phase, no
+        // next tick, no recap, no Lull and no restore reads a cluster graph
+        // that disagrees with the surface, and no mark is pending at a tick
+        // boundary (`World::graph_settled`).
         let mut at = 0;
         while at < self.voxels.settled().len() {
             let Some(chunk) = self.voxels.settled().get(at).copied() else {
@@ -5254,6 +5120,7 @@ impl World {
                 return Err(TickError::Marking(error));
             }
         }
+        self.settle_graph();
         touched.clear();
         self.touched = touched;
         self.edits = edits;
@@ -7448,6 +7315,244 @@ mod tests {
         );
     }
 
+    /// Lane `settle`'s invariant: no cluster is waiting for a repair at any
+    /// tick boundary, the graph was repaired exactly once in the tick (in its
+    /// Voxels phase, and nowhere else), and every twentieth tick the graph is
+    /// the one a fresh build over the surface makes, field for field. On the
+    /// determinism harness's Push with a crater filed every fifth tick on a
+    /// column that walks the map. Before the lane the marks an editing tick
+    /// left were repaired in the next tick's Pathing phase, so the boundary
+    /// after every editing tick had some pending.
+    #[test]
+    fn no_mark_is_pending_at_a_tick_boundary() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..");
+        let world = crate::determinism_world(
+            &root.join("rules").join("rules.v1.json"),
+            &root.join(crate::DETERMINISM_PLAYBOOK_PATH),
+        )
+        .unwrap_or_else(|error| panic!("the harness world builds: {error}"));
+        let mut runner = crate::runner::Runner::new(world)
+            .unwrap_or_else(|error| panic!("a world from `World::new`: {error}"));
+        assert!(
+            runner
+                .begin_push()
+                .unwrap_or_else(|error| panic!("{error:?}")),
+            "the Push opens"
+        );
+        let mut edited: u32 = 0;
+        for tick in 1..=600_u32 {
+            if tick % 5 == 0 {
+                let world = runner.world_mut();
+                let size = world.voxels.size();
+                // The column walks the map on two coprime strides; 600 × 53
+                // is far inside a `u32`, so the products cannot wrap.
+                let x = i32::try_from(tick * 37 % size[0])
+                    .unwrap_or_else(|error| panic!("a column index: {error}"));
+                let y = i32::try_from(tick * 53 % size[1])
+                    .unwrap_or_else(|error| panic!("a column index: {error}"));
+                if let Some(z) = world.voxels.top_solid_z(x, y) {
+                    let filed = world.request_voxel_edit(VoxelEdit::Crater {
+                        centre: [x, y, z],
+                        radius: 3,
+                        by: None,
+                    });
+                    assert!(filed.is_ok(), "the edit queue has room");
+                }
+            }
+            let stepped = runner.step().unwrap_or_else(|error| panic!("{error:?}"));
+            assert!(stepped.is_some(), "the Push outlasts the run");
+            runner.clear_events();
+            let world = runner.world();
+            if !world.voxels.settled().is_empty() {
+                edited += 1;
+            }
+            assert!(
+                world.graph_settled(),
+                "a cluster is waiting for a repair after tick {tick}"
+            );
+            assert_eq!(
+                world.graph_repairs_this_tick(),
+                crate::pathing::repair::Repairs::Once,
+                "tick {tick} repaired the graph in more places than its Voxels phase"
+            );
+            if tick % 20 == 0 {
+                let mut scratch =
+                    crate::pathing::Scratch::for_map(&world.surface, world.clusters.size())
+                        .unwrap_or_else(|| panic!("a scratch for the map"));
+                let fresh = crate::pathing::Clusters::new(
+                    &world.surface,
+                    world.clusters.shape(),
+                    &mut scratch,
+                )
+                .unwrap_or_else(|| panic!("a graph for the map"));
+                assert!(
+                    world.clusters == fresh,
+                    "after tick {tick} the graph is not the one a fresh build over the terrain makes"
+                );
+            }
+        }
+        assert!(
+            edited >= 100,
+            "the run edited the terrain on {edited} ticks"
+        );
+    }
+
+    /// The snapshot's door (lane `settle`): a capture refuses a world whose
+    /// tick is open, and one with a cluster waiting for its repair, with a
+    /// typed error each, and so does a match opened on either
+    /// ([`crate::runner::Runner::new`]); a closed, settled world captures, and
+    /// to the very bytes the runner opened on it freezes.
+    #[test]
+    fn a_snapshot_and_a_match_refuse_an_open_tick_and_an_unsettled_graph() {
+        use crate::runner::Runner;
+        use crate::snapshot::{Snapshot, SnapshotError};
+        let mut world = world();
+        let mut enc = Enc::with_capacity(64 * 1024);
+        let _ = world
+            .step(&mut enc)
+            .unwrap_or_else(|error| panic!("{error:?}"));
+
+        let captured = Snapshot::capture(&world).unwrap_or_else(|error| panic!("{error}"));
+        let runner = Runner::new(world.clone()).unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(
+            captured
+                .to_bytes()
+                .unwrap_or_else(|error| panic!("{error}")),
+            runner
+                .frozen()
+                .snapshot()
+                .to_bytes()
+                .unwrap_or_else(|error| panic!("{error}")),
+            "the capture writes other bytes than the runner's freeze"
+        );
+
+        // A tick opened and not finished: the state a fatal step leaves too.
+        let mut open = world.clone();
+        assert!(open.begin_tick().is_ok());
+        assert_eq!(
+            Snapshot::capture(&open).map(|_| ()),
+            Err(SnapshotError::MidTick)
+        );
+        assert_eq!(
+            Runner::new(open).map(|_| ()),
+            Err(SnapshotError::MidTick),
+            "a match opened over an open tick"
+        );
+
+        // A cluster marked and not repaired: no tick of a match leaves one.
+        let mut unsettled = world.clone();
+        assert_eq!(
+            super::mark_chunk_clusters(
+                &unsettled.voxels,
+                &unsettled.clusters,
+                &mut unsettled.repairer,
+                0
+            ),
+            Ok(())
+        );
+        assert!(!unsettled.graph_settled());
+        assert_eq!(
+            Snapshot::capture(&unsettled).map(|_| ()),
+            Err(SnapshotError::Unsettled)
+        );
+        assert_eq!(
+            Runner::new(unsettled).map(|_| ()),
+            Err(SnapshotError::Unsettled),
+            "a match opened over an unsettled graph"
+        );
+    }
+
+    /// The layout's freeze passes the snapshot's door (lane `settle`): a
+    /// match whose graph waits for a repair refuses a layout with a typed
+    /// error and places nothing, and a restore into it hands back a world the
+    /// door would pass, closed and settled by construction.
+    #[test]
+    fn a_layout_refuses_an_unsettled_graph_and_a_restore_settles_it() {
+        use crate::runner::{Layout, LayoutBeacon, LayoutRefused, Runner};
+        let saved = crate::snapshot::Snapshot::capture(&world())
+            .unwrap_or_else(|error| panic!("a world between ticks: {error}"));
+        let mut runner = Runner::new(world())
+            .unwrap_or_else(|error| panic!("a world from `World::new`: {error}"));
+        {
+            let unsettled = runner.world_mut();
+            assert_eq!(
+                super::mark_chunk_clusters(
+                    &unsettled.voxels,
+                    &unsettled.clusters,
+                    &mut unsettled.repairer,
+                    0
+                ),
+                Ok(())
+            );
+        }
+        let layout = Layout {
+            beacons: vec![LayoutBeacon {
+                seat: SeatId::new(0),
+                column: [200, 200],
+                mandate: crate::seams::MandateKind::Build,
+                units: vec![(crate::tables::UnitKind::Raider, 1)],
+            }],
+        };
+        assert_eq!(runner.seed_layout(&layout), Err(LayoutRefused::Unsettled));
+        assert!(
+            !runner.world().is_laid_out(),
+            "a refused layout places nothing"
+        );
+        assert_eq!(runner.restore(&saved), Ok(()));
+        assert!(
+            runner.world().graph_settled() && !runner.world().tick_is_open(),
+            "a restore leaves a world the door passes"
+        );
+        assert!(
+            runner.seed_layout(&layout).is_ok(),
+            "and it takes the layout"
+        );
+    }
+
+    /// A layout's placement hands back the closed world the door passed
+    /// before it (lane `settle`): no tick open, the graph settled, and the
+    /// match's frozen snapshot the very bytes a capture of it writes. The
+    /// door is not asked again after the placement: the placement reaches the
+    /// world only through `crate::layout::Placement`, whose world is a private
+    /// field, so it cannot name the state the door reads; this test is the
+    /// played check of that.
+    #[test]
+    fn a_layout_leaves_the_world_the_door_passed() {
+        use crate::runner::{Layout, LayoutBeacon, Runner};
+        let mut runner = Runner::new(world())
+            .unwrap_or_else(|error| panic!("a world from `World::new`: {error}"));
+        let layout = Layout {
+            beacons: vec![LayoutBeacon {
+                seat: SeatId::new(0),
+                column: [200, 200],
+                mandate: crate::seams::MandateKind::Build,
+                units: vec![(crate::tables::UnitKind::Raider, 1)],
+            }],
+        };
+        assert_eq!(runner.seed_layout(&layout), Ok(()));
+        assert!(runner.world().is_laid_out(), "the layout is placed");
+        assert!(
+            runner.world().graph_settled() && !runner.world().tick_is_open(),
+            "the placement leaves the world the door passed"
+        );
+        let captured = runner
+            .capture()
+            .unwrap_or_else(|error| panic!("a laid-out lobby captures: {error}"));
+        assert_eq!(
+            runner
+                .frozen()
+                .snapshot()
+                .to_bytes()
+                .unwrap_or_else(|error| panic!("{error}")),
+            captured
+                .to_bytes()
+                .unwrap_or_else(|error| panic!("{error}")),
+            "the frozen snapshot is the laid-out world"
+        );
+    }
+
     fn hit(unit: u32, amount: i64) -> DamageOrder {
         DamageOrder {
             target: DamageTarget::Unit(UnitId::new(unit)),
@@ -7623,7 +7728,8 @@ mod tests {
             crate::power::core_of(&world, seat).unwrap_or_else(|| panic!("seat 0 has a core"));
         world.set_writ(core, crate::seams::MandateKind::Mine);
         world.set_mine_settings(core, crate::mining::MineSettings::default());
-        let mut runner = crate::runner::Runner::new(world);
+        let mut runner = crate::runner::Runner::new(world)
+            .unwrap_or_else(|error| panic!("a world from `World::new`: {error}"));
         assert_eq!(runner.begin_push(), Ok(true));
         let mut found: Vec<Option<SeatId>> = Vec::new();
         for _ in 0..4_000 {
@@ -8189,7 +8295,8 @@ mod ids_tests {
             pharmakos_proto::json::decode(text).must("a canonical playbook");
         let plan = crate::interpreter::Plan::compile(&playbook, world.rules()).must("compiles");
         assert!(world.seal_playbook(SEAT, plan));
-        let mut runner = Runner::new(world);
+        let mut runner =
+            Runner::new(world).unwrap_or_else(|error| panic!("a world from `World::new`: {error}"));
         assert_eq!(runner.begin_push(), Ok(true));
         // Tick 1 is the first decision: the visit to b_01 begins.
         assert!(runner.step().must("a value").is_some());
@@ -8307,7 +8414,9 @@ mod ids_tests {
         let units = big.units().len();
         assert!(units > small.unit_limit, "the fixture is over the ceiling");
         assert_eq!(
-            crate::snapshot::Snapshot::capture(&big).restore_into(&mut small),
+            crate::snapshot::Snapshot::capture(&big)
+                .unwrap_or_else(|error| panic!("a world between ticks: {error}"))
+                .restore_into(&mut small),
             Err(crate::snapshot::SnapshotError::OverCeiling { units, limit: 1 }),
             "a file saved under another configuration is refused, and says why"
         );
@@ -8339,7 +8448,8 @@ mod ids_tests {
         assert_eq!(world.beacons.ordinal(SEAT, 2, placed), Ordinal::Held(row));
         assert_eq!(world.beacons.ordinal(SEAT, 3, placed), Ordinal::NeverPlaced);
 
-        let saved = Snapshot::capture(&world);
+        let saved = Snapshot::capture(&world)
+            .unwrap_or_else(|error| panic!("a world between ticks: {error}"));
         let mut resumed = world_of(rules(), 2).must("a world");
         saved.restore_into(&mut resumed).must("the save restores");
         assert_eq!(resumed.seats.placed(), world.seats.placed());
@@ -8513,7 +8623,8 @@ mod ids_tests {
             .must("room");
         kill_unit(&mut world, drone);
         world.free_settled_rows();
-        let good = Snapshot::capture(&world);
+        let good = Snapshot::capture(&world)
+            .unwrap_or_else(|error| panic!("a world between ticks: {error}"));
         assert!(
             good.restore_into(&mut world_of(rules(), 2).must("a world"))
                 .is_ok()
@@ -8618,7 +8729,8 @@ mod ids_tests {
         let row = drone.row().must("a row");
         // Take the row to its last generation through a restore, as a long
         // match would.
-        let mut saved = Snapshot::capture(&world);
+        let mut saved = Snapshot::capture(&world)
+            .unwrap_or_else(|error| panic!("a world between ticks: {error}"));
         saved.unit_id[row.index()] = UnitId::of(row, Generation::new(u16::MAX)).raw();
         let mut world = world_of(rules(), 2).must("a world");
         saved.restore_into(&mut world).must("the save restores");

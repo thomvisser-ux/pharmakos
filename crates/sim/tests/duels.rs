@@ -198,7 +198,7 @@ fn structure_hp(world: &World, id: StructureId) -> i32 {
 }
 
 fn pushing(world: World) -> Runner {
-    let mut runner = Runner::new(world);
+    let mut runner = Runner::new(world).unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(runner.begin_push(), Ok(true), "the Push begins");
     runner
 }
