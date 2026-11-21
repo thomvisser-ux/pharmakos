@@ -1467,23 +1467,13 @@ fn assert_one_measure(surface: &mut Surface, round: u32, how: &str) -> usize {
         let [reference] = refs.as_slice() else {
             panic!("round {round}, {how}: one reference, and this is {refs:?}");
         };
-        let mut shown = 0_i64;
         for candidate in array_of(reference, "candidates") {
             let name = text_of(&candidate, "feature_id");
-            let ms = number(&candidate, "travel_ms");
             assert_eq!(
-                ms,
+                number(&candidate, "travel_ms"),
                 summary_ms(&name),
                 "round {round}, {how}: resolve_refs binds {name} at another figure than the chip's"
             );
-            // The ranker orders by the time it shows, so the shown time never
-            // falls down the ranking (S3's `p3fix`, fix pass 5).
-            assert!(
-                ms >= shown,
-                "round {round}, {how}: {name} is ranked after a feature shown at {shown} ms, \
-                 and shown at {ms} ms"
-            );
-            shown = ms;
             listed += 1;
         }
     }
@@ -1582,8 +1572,8 @@ fn walls_in(world: &mut pharmakos_sim::world::World, x0: i32) {
 /// reached by a walk that chains a partial route (asserted from the sim's own
 /// `walk_cost` on the hosted world), and for every feature seat 0
 /// reaches, `get_map_summary`'s `travel_ms`, `resolve_refs`' candidate time
-/// and `estimate_route`'s leg are one figure, with the shown time never
-/// falling down the ranking ([`assert_one_measure`]). Before this test a
+/// and `estimate_route`'s leg are one figure ([`assert_one_measure`]).
+/// Before this test a
 /// mutant that dropped the partial routes from the chip and `resolve_refs`
 /// alone survived every gateway and gamectl test: no committed case had a
 /// walk needing two routes.

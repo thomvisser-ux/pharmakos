@@ -208,7 +208,6 @@ pub struct Scratch {
     pub(crate) served_estimates: Tally,
     pub(crate) walks: Tally,
     pub(crate) stalled: Tally,
-    pub(crate) untimed: Tally,
     pub(crate) reach_faults: Tally,
 }
 
@@ -318,7 +317,6 @@ impl Scratch {
             served_estimates: Tally::ZERO,
             walks: Tally::ZERO,
             stalled: Tally::ZERO,
-            untimed: Tally::ZERO,
             reach_faults: Tally::ZERO,
         }
     }
@@ -450,18 +448,6 @@ impl Scratch {
         self.stalled.read()
     }
 
-    /// Served walks the ranker could not turn into a travel time since the
-    /// last reset (`pathing::estimate::walk_ticks` refused them: a time past a
-    /// signed 32-bit tick count), each dropped as no candidate and counted
-    /// here rather than ranked by a figure nobody is shown.
-    ///
-    /// # Errors
-    ///
-    /// [`TallyOverflow`] once the count passed `u64::MAX`.
-    pub const fn untimed(&self) -> Result<u64, TallyOverflow> {
-        self.untimed.read()
-    }
-
     /// Grid-optimum searches that met a [`crate::pathing::reach::ReachError`]
     /// since the last reset: a `toward` with no stone for it, counted here so
     /// the miss is read, never silent. Nothing hands the search a column it
@@ -482,7 +468,6 @@ impl Scratch {
         self.served_estimates = Tally::ZERO;
         self.walks = Tally::ZERO;
         self.stalled = Tally::ZERO;
-        self.untimed = Tally::ZERO;
         self.reach_faults = Tally::ZERO;
     }
 

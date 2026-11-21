@@ -1710,7 +1710,6 @@ impl World {
             rules: &self.rules,
             spiral: &self.spiral,
             work: &self.decision_units,
-            link_ticks: self.link_ticks,
         }
     }
 
@@ -1729,7 +1728,6 @@ impl World {
                 rules: &self.rules,
                 spiral: &self.spiral,
                 work: &self.decision_units,
-                link_ticks: self.link_ticks,
             },
             &mut self.scratch,
         )

@@ -126,8 +126,8 @@ const _: () = assert!(
     "the sphere list holds every beacon row"
 );
 
-/// Why a [`Reach`] search cannot go on: each a column or a sphere the search
-/// was handed that it has no room for. Typed rather than read as "no more
+/// Why a [`Reach`] search cannot go on: a column the search was handed that
+/// it has no room for. Typed rather than read as "no more
 /// columns" or "no direction": a caller that meets one counts it (the
 /// targeting module's `Scratch::reach_faults`) and its tests hold the count
 /// at zero.
@@ -138,12 +138,6 @@ pub enum ReachError {
     OffMap {
         /// The column.
         node: Node,
-    },
-    /// A sphere past the room the list was reserved for, one a beacon row
-    /// ([`crate::ids::ROOM_LIMIT`]).
-    SpheresFull {
-        /// The room.
-        room: usize,
     },
 }
 
@@ -273,18 +267,15 @@ impl Reach {
     /// listed. Every listed site must lie within the reach of a sphere added,
     /// or the heuristic is not admissible (the module docs, "Directed").
     ///
-    /// # Errors
-    ///
-    /// [`ReachError::SpheresFull`] past the room reserved, one a beacon row:
-    /// a sphere dropped would leave its sites outside every reach, so the
-    /// search would not be admissible, and the caller is told rather than
-    /// handed a search that is wrong.
-    pub fn add_sphere(&mut self, centre: [i32; 2], reach: i64) -> Result<(), ReachError> {
-        if self.spheres.len() >= SPHERE_ROOM {
-            return Err(ReachError::SpheresFull { room: SPHERE_ROOM });
-        }
+    /// Never refused and never dropped: a dropped sphere would leave its sites
+    /// outside every reach, and the search would not be admissible. The list
+    /// is reserved for `SPHERE_ROOM` spheres, one a beacon row, and a caller
+    /// adds at most one a beacon row of a table the world refuses past
+    /// [`crate::ids::ROOM_LIMIT`] rows, so it never grows past the
+    /// reservation (`tests/allocations.rs` holds a `toward` tick to no
+    /// allocation).
+    pub fn add_sphere(&mut self, centre: [i32; 2], reach: i64) {
         self.spheres.push((centre, reach));
-        Ok(())
     }
 
     /// The spheres a directed search heads for: each one's centre column and

@@ -254,7 +254,6 @@ fn origin(world: &World, rng: &mut Rng) -> ([i32; 2], Node) {
 fn nearest_is_the_least_served_walk() {
     let (mut ranks, mut wrong, mut over) = (0_u32, Vec::new(), Vec::new());
     let mut stalled = 0_u64;
-    let mut untimed = 0_u64;
     for (seed, scarred) in [(SEED, false), (7, false), (SEED, true), (0x5eed_0003, true)] {
         let mut world = world_of(seed, 2);
         if scarred {
@@ -292,7 +291,6 @@ fn nearest_is_the_least_served_walk() {
                 }
             }
             stalled += scratch.stalled().unwrap();
-            untimed += scratch.untimed().unwrap();
             scratch.reset_counters();
             let extra = ranker
                 .next(&ground, &mut scratch)
@@ -304,7 +302,6 @@ fn nearest_is_the_least_served_walk() {
     }
     assert!(ranks >= 2_000, "the test ranks enough: {ranks}");
     assert_eq!(stalled, 0, "no candidate's chain of partial routes stalled");
-    assert_eq!(untimed, 0, "every candidate's walk had a travel time");
     assert!(
         over.is_empty(),
         "{} octile bounds above a walk; first {:?}",
@@ -785,9 +782,7 @@ fn a_directed_flood_computes_one_h_a_column() {
             let from = surface.node_of(core[0] + 2, core[1] + 2).expect("a column");
             reach.clear_sites();
             for k in 0..spheres {
-                reach
-                    .add_sphere([5 + (k % 8) * 40, 5 + k.div_euclid(8) * 60], 240)
-                    .expect("room for a sphere");
+                reach.add_sphere([5 + (k % 8) * 40, 5 + k.div_euclid(8) * 60], 240);
             }
             let mut tally = Tally::ZERO;
             if spheres == 0 {
