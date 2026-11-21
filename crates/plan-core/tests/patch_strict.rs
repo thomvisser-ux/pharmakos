@@ -217,6 +217,62 @@ fn an_array_index_is_spelled_as_rfc_6901_spells_one() {
     assert_eq!(forged(undo).malformation(), Some(Malformed::PointerIndex));
 }
 
+/// One typed index reader on every path (fix pass 5, item L1): `replace`,
+/// `test`, a `move`'s `from`, `add`, `remove` and every undo answer
+/// `Malformed::PointerIndex` for a token RFC 6901 does not spell as an index;
+/// a well-formed index past the end, or past any `usize`, answers "past the
+/// end", with a sentence true of that token.
+#[test]
+fn every_path_reads_an_array_index_one_way() {
+    let shapes = [
+        r#"[{"op":"replace","path":"/b/TOKEN","value":9}]"#,
+        r#"[{"op":"test","path":"/b/TOKEN","value":1}]"#,
+        r#"[{"op":"move","from":"/b/TOKEN","path":"/meta/x"}]"#,
+        r#"[{"op":"copy","from":"/b/TOKEN","path":"/meta/x"}]"#,
+        r#"[{"op":"add","path":"/b/TOKEN","value":9}]"#,
+        r#"[{"op":"remove","path":"/b/TOKEN"}]"#,
+        r#"[{"op":"remove","path":"/b/TOKEN","undo":{}}]"#,
+        r#"[{"op":"replace","path":"/b/TOKEN","undo":{"jsonc":"9"}}]"#,
+        r#"[{"op":"add","path":"/b/TOKEN","undo":{"at":1,"jsonc":"9"}}]"#,
+    ];
+    for shape in shapes {
+        for token in ["+1", "01", "-1", "", "1e0", " 1"] {
+            let patch = shape.replace("TOKEN", token);
+            let refused = forged(&patch);
+            assert_eq!(
+                refused.malformation(),
+                Some(Malformed::PointerIndex),
+                "{patch}: {}",
+                refused.message()
+            );
+        }
+        // Past the end: the array holds two; and past any `usize`. A put
+        // undo whose path and slot disagree is `UndoSlot`'s, not this.
+        if shape.contains(r#""at":1"#) {
+            continue;
+        }
+        for token in ["3", "123456789012345678901234567890"] {
+            let patch = shape.replace("TOKEN", token);
+            let refused = forged(&patch);
+            assert_ne!(
+                refused.malformation(),
+                Some(Malformed::PointerIndex),
+                "{patch}"
+            );
+            assert!(
+                refused.message().contains("past the end"),
+                "{patch}: {}",
+                refused.message()
+            );
+            assert!(
+                refused.message().contains(token),
+                "the sentence names the token: {patch}: {}",
+                refused.message()
+            );
+        }
+    }
+}
+
 /// An undo's text past the nesting limit is refused as a depth refusal, not
 /// as an undo text that is not one value (fix pass 4, item L-e).
 #[test]
