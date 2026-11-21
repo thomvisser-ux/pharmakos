@@ -71,7 +71,7 @@ stage demo the delegation returns to the owner, who says then whether it runs on
 
 - The main assistant session may **merge** any PR while the delegation runs, whatever stage first
   planned its work (stage lanes, carries from earlier stages, docs and harness PRs, Dependabot's),
-  contract PRs included,
+  contract PRs included (except as the paragraph after this list limits it),
   once CI's checks are green on the branch — or, for a lane that `scripts/merge-train.sh --local-verify` checks
   locally (its base moved by more than prose, and it touches none of the paths the script sends back
   to the three-OS matrix), once CI's checks are green on its pushed head and the script's
@@ -94,9 +94,11 @@ stage demo the delegation returns to the owner, who says then whether it runs on
   open a PR and stop; for them the contract-file rule is held by the lane's brief, the two adversarial
   reviews and the main session's reading of every PR before it merges, rather than by prompts. The
   ban above stays in force for any session or agent that touches a real seat.
-- The merge delegation never reaches a point the decisions log reserves to the owner, or a change to
-  something the owner ruled: the main session holds that piece for the owner, merges nothing of it
-  on its own word, and brings the question in a batched interview (decisions-log item 168).
+
+A standing limit on both, which is not a relaxation and does not expire at S3's demo: the main
+session never merges, on its own word, a change to a point the decisions log reserves to the owner
+or to something the owner ruled; it keeps building everything else, holds that piece, and brings
+the questions to the owner as a batch (decisions-log item 168 (12)).
 
 ## Commands
 
