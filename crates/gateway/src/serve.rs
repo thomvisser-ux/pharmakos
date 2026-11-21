@@ -808,6 +808,9 @@ pub fn run_in<C: Read, A: Write>(
     let line = read_config(&mut lines)?;
     let config = line.config.clone();
     let rules_hash = RulesHash::of(&setup.rules_json)?;
+    // The rules check before anything is written (S3's `vfyq2`, fix pass 6,
+    // item 3): a table the verifier refuses leaves no match folder behind.
+    Host::check_rules_text(&setup.rules_json)?;
     let mut operators = setup.operators;
 
     // The save is read before the surface is opened (the wave-6 notes, H16),

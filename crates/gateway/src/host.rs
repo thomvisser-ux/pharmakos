@@ -207,15 +207,7 @@ impl Host {
     pub fn open(config: &WorldConfig, library: Option<PathBuf>) -> Result<Host, Error> {
         Host::check_seats(config.seats)?;
         Host::check_settings(&config.match_settings)?;
-        // The verifier's own rules checks, once, before anything is built
-        // (S3's `vfyq2`, fix pass 5, item L8): under a table it refuses,
-        // every plan's check would be a refusal, so no match opens on one.
-        pharmakos_verifier::read_rules(&config.rules).map_err(|gap| {
-            Error::invalid(said!(
-                "this rules table hosts no match, because the verifier refuses it: {}",
-                pharmakos_proto::json::grammar::Said::engine_error(&gap)
-            ))
-        })?;
+        Host::check_rules(&config.rules)?;
         let world = World::new(config).map_err(|error| {
             Error::internal(said!(
                 "this match's map could not be generated: {}",
@@ -276,6 +268,43 @@ impl Host {
             },
         };
         Host::open(&config, library)
+    }
+
+    /// The verifier's own rules checks, once (S3's `vfyq2`, fix pass 5, item
+    /// L8): under a table it refuses, every plan's check would be a refusal,
+    /// so no match opens on one. [`Host::open`] calls it before anything is
+    /// built, and `serve::run_in` before anything is written (fix pass 6,
+    /// item 3).
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::InvalidArgument`], naming the gap.
+    pub fn check_rules(rules: &RulesTable) -> Result<(), Error> {
+        pharmakos_verifier::read_rules(rules)
+            .map(|_| ())
+            .map_err(|gap| {
+                Error::invalid(said!(
+                    "this rules table hosts no match, because the verifier refuses it: {}",
+                    pharmakos_proto::json::grammar::Said::engine_error(&gap)
+                ))
+            })
+    }
+
+    /// [`Host::check_rules`] over the rules table's canonical JSON, as a
+    /// binary holds it.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::InvalidArgument`] for a rules table this build
+    /// will not read, or one the verifier refuses.
+    pub fn check_rules_text(rules_json: &str) -> Result<(), Error> {
+        let rules = RulesTable::from_canonical_json(rules_json).map_err(|error| {
+            Error::invalid(said!(
+                "this is not a rules table this build reads: {}",
+                crate::error::engine(&error)
+            ))
+        })?;
+        Host::check_rules(&rules)
     }
 
     /// Refuse a seat count v1 does not play: none, or more than
