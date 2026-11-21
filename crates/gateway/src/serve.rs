@@ -198,38 +198,66 @@ pub enum DropReason {
 }
 
 impl DropReason {
-    /// Its counter.
-    fn counter(self) -> &'static AtomicU64 {
+    /// Every reason, in the order the audit log closes with them.
+    pub const ALL: [DropReason; 2] = [DropReason::OverCapacity, DropReason::NoConnectionThread];
+
+    /// Its name in the audit log.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
         match self {
-            DropReason::OverCapacity => &DROPPED.over_capacity,
-            DropReason::NoConnectionThread => &DROPPED.no_connection_thread,
+            DropReason::OverCapacity => "over_capacity",
+            DropReason::NoConnectionThread => "no_connection_thread",
         }
     }
 }
 
-/// Every connection dropped, by reason: counted whether or not the audit
-/// queue had room for the refusal's line, so a flood that fills the queue is
-/// still counted (AGENTS.md: every drop is counted under an enumerated
-/// reason code).
+/// Every connection one host dropped, by reason: counted whether or not the
+/// audit queue had room for the refusal's own line, so a flood that fills the
+/// queue is still counted (AGENTS.md: every drop is counted under an
+/// enumerated reason code). The dispatcher counts; the surface thread writes
+/// the counts into the audit log it closes, one line per reason, which is
+/// what an operator of the host reads (S3's `vfyq2`, fix pass 4, item L-f).
+#[derive(Default, Debug)]
 struct Drops {
     over_capacity: AtomicU64,
     no_connection_thread: AtomicU64,
 }
 
-static DROPPED: Drops = Drops {
-    over_capacity: AtomicU64::new(0),
-    no_connection_thread: AtomicU64::new(0),
-};
+impl Drops {
+    /// The counter for `reason`.
+    const fn counter(&self, reason: DropReason) -> &AtomicU64 {
+        match reason {
+            DropReason::OverCapacity => &self.over_capacity,
+            DropReason::NoConnectionThread => &self.no_connection_thread,
+        }
+    }
 
-/// Counts one connection dropped for `reason`.
-fn count_drop(reason: DropReason) {
-    reason.counter().fetch_add(1, Ordering::SeqCst);
-}
+    /// Counts one connection dropped for `reason`. A host that drops
+    /// `u64::MAX` connections wraps rather than panics in the accept loop;
+    /// at one a nanosecond that is five centuries.
+    fn count(&self, reason: DropReason) {
+        self.counter(reason).fetch_add(1, Ordering::SeqCst);
+    }
 
-/// How many connections this process has dropped for `reason`.
-#[must_use]
-pub fn dropped(reason: DropReason) -> u64 {
-    reason.counter().load(Ordering::SeqCst)
+    /// How many connections this host has dropped for `reason`.
+    fn of(&self, reason: DropReason) -> u64 {
+        self.counter(reason).load(Ordering::SeqCst)
+    }
+
+    /// One audit line per reason, zero included, so a log that says nothing
+    /// was dropped says so rather than leaving it to be inferred.
+    fn record(&self, surface: &mut Surface) {
+        let tick = surface.time().tick;
+        for reason in DropReason::ALL {
+            surface.audit().record(
+                tick,
+                None,
+                None,
+                format!("connections dropped {}: {}", reason.name(), self.of(reason)),
+                crate::audit::Outcome::Ok,
+            );
+        }
+    }
 }
 
 /// How many requests may wait in front of the surface thread.
@@ -853,10 +881,12 @@ pub fn run_in<C: Read, A: Write>(
     // item E). It and the threads that accept are made before the announce
     // line goes out: a host that cannot serve does not announce.
     let (jobs, work) = sync_channel::<Job>(QUEUE_DEPTH);
+    let drops = Arc::new(Drops::default());
     let writer = Writer {
         cache,
         config,
         rules_hash: rules_hash.0,
+        drops: Arc::clone(&drops),
     };
     let surface_thread = pharmakos_plan_core::stack::player_text_thread("gateway surface")
         .spawn(move || {
@@ -868,7 +898,7 @@ pub fn run_in<C: Read, A: Write>(
                 crate::error::engine(&error)
             ))
         })?;
-    let dispatcher = spawn_dispatcher(listener.accept()?, policy, jobs.clone())?;
+    let dispatcher = spawn_dispatcher(listener.accept()?, policy, jobs.clone(), drops)?;
     announce
         .write_all(written.as_bytes())
         .and_then(|()| announce.flush())
@@ -1292,6 +1322,7 @@ fn spawn_dispatcher(
     accepting: crate::net::Accepting,
     policy: crate::handshake::Policy,
     jobs: SyncSender<Job>,
+    drops: Arc<Drops>,
 ) -> Result<std::thread::JoinHandle<()>, Error> {
     let live = Arc::new(AtomicUsize::new(0));
     pharmakos_plan_core::stack::player_text_thread("gateway dispatcher")
@@ -1302,7 +1333,7 @@ fn spawn_dispatcher(
                     live.fetch_sub(1, Ordering::SeqCst);
                     // Refused before the upgrade, and audited: a connection the
                     // host would not serve is still a connection somebody made.
-                    count_drop(DropReason::OverCapacity);
+                    drops.count(DropReason::OverCapacity);
                     let mut stream = connection.stream;
                     let _ = stream.write_all(OVER_CAPACITY.as_bytes());
                     // `try_send`, and not `send`: this is the accept loop, the
@@ -1334,7 +1365,7 @@ fn spawn_dispatcher(
                         mine.fetch_sub(1, Ordering::SeqCst);
                     });
                 if let Err(error) = started {
-                    count_drop(DropReason::NoConnectionThread);
+                    drops.count(DropReason::NoConnectionThread);
                     // The closure, and the socket with it, was dropped unrun: the
                     // peer is hung up on. Its slot is given back, and the refusal
                     // is audited as an over-capacity one is (`try_send`, for the
@@ -1363,6 +1394,9 @@ struct Writer {
     cache: MatchCache,
     config: Config,
     rules_hash: u64,
+    /// The dispatcher's counts of the connections it dropped, written into
+    /// the audit log as it closes.
+    drops: Arc<Drops>,
 }
 
 impl Writer {
@@ -1432,6 +1466,7 @@ impl Writer {
                     .refused(tick, None, None, "save lull", &error),
             };
         }
+        self.drops.record(surface);
         self.flush(surface);
     }
 }
