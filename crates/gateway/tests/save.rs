@@ -549,11 +549,11 @@ fn a_handle_table_naming_the_seats_own_beacon_is_refused() {
         seat.handles = vec![(core.raw(), String::from("e_01"))];
     }
     let error = resume(MATCH_ID, &damaged).expect_err("its own beacon");
-    assert_eq!(error.code, Code::InvalidArgument);
+    assert_eq!(error.code(), Code::InvalidArgument);
     assert!(
-        error.message.contains("its own beacon"),
+        error.message().contains("its own beacon"),
         "{}",
-        error.message
+        error.message()
     );
     assert!(
         resume(MATCH_ID, &saved).is_ok(),
@@ -590,8 +590,12 @@ fn a_damaged_seal_in_a_save_is_refused() {
     assert_ne!(text, seal.playbook_jsonc, "the text was damaged");
     seal.playbook_jsonc = text;
     let error = resume(MATCH_ID, &damaged).expect_err("a damaged seal");
-    assert_eq!(error.code, Code::InvalidArgument);
-    assert!(error.message.contains("fingerprint"), "{}", error.message);
+    assert_eq!(error.code(), Code::InvalidArgument);
+    assert!(
+        error.message().contains("fingerprint"),
+        "{}",
+        error.message()
+    );
 
     // The fingerprint damaged instead.
     let mut damaged = saved.clone();
@@ -602,8 +606,8 @@ fn a_damaged_seal_in_a_save_is_refused() {
         .expect("seat 1 sealed");
     seal.plan_fingerprint ^= 1;
     let error = resume(MATCH_ID, &damaged).expect_err("a damaged fingerprint");
-    assert_eq!(error.code, Code::InvalidArgument);
-    assert!(error.message.contains("seat 1"), "{}", error.message);
+    assert_eq!(error.code(), Code::InvalidArgument);
+    assert!(error.message().contains("seat 1"), "{}", error.message());
 
     // And a planning snapshot that is not the saved one does not resume.
     let mut damaged = saved;
@@ -611,7 +615,130 @@ fn a_damaged_seal_in_a_save_is_refused() {
         *byte ^= 0xff;
     }
     let error = resume(MATCH_ID, &damaged).expect_err("a damaged snapshot");
-    assert_eq!(error.code, Code::InvalidArgument, "{}", error.message);
+    assert_eq!(error.code(), Code::InvalidArgument, "{}", error.message());
+}
+
+/// A restored seal is decoded once (S3's `vfyq2`, fix pass 2, item F), and
+/// each of its three refusals keeps the code and the words it had when the
+/// text was decoded twice: no canonical form, a fingerprint that does not
+/// match, a text that will not compile.
+#[test]
+fn every_refusal_of_a_restored_seal_keeps_its_code_and_words() {
+    const MATCH_ID: &str = "m-vfyq2-seal-words";
+    let mut surface = new_match(MATCH_ID);
+    plan_round(&mut surface);
+    assert!(surface.begin_push().expect("the Push begins"));
+    let saved = surface
+        .take_persistence()
+        .save
+        .expect("a Push's beginning is saved");
+    let with_seat_zero = |text: &str, fingerprint: Option<u64>| {
+        let mut damaged = saved.clone();
+        let seal = damaged
+            .seats
+            .first_mut()
+            .and_then(|seat| seat.seal.as_mut())
+            .expect("seat 0 sealed");
+        seal.playbook_jsonc = text.to_owned();
+        if let Some(fingerprint) = fingerprint {
+            seal.plan_fingerprint = fingerprint;
+        }
+        resume(MATCH_ID, &damaged).expect_err("refused")
+    };
+
+    // No canonical form: the decode's own words, inside the save's.
+    let error = with_seat_zero("{\"meta\": ", None);
+    assert_eq!(error.code(), Code::InvalidArgument);
+    let decoded = pharmakos_plan_core::decode_jsonc("{\"meta\": ")
+        .expect_err("no canonical form")
+        .message()
+        .to_owned();
+    assert_eq!(
+        error.message(),
+        format!(
+            "seat 0's sealed playbook in this save has no canonical form (a sealed playbook has \
+             no canonical form: {decoded}): the file is damaged"
+        )
+    );
+
+    // A fingerprint that does not match the text beside it.
+    let text = std::fs::read_to_string(
+        support::workspace_root().join("crates/verifier/tests/cases/e0208_unknown_step_label.json"),
+    )
+    .expect("the committed case")
+    .replace("\r\n", "\n");
+    let canonical = pharmakos_plan_core::decode_jsonc(&text).expect("a canonical form");
+    let fingerprint = pharmakos_sim::hash::plan_fingerprint(canonical.decoded().message())
+        .expect("a fingerprint");
+    let error = with_seat_zero(&text, Some(fingerprint ^ 1));
+    assert_eq!(error.code(), Code::InvalidArgument);
+    assert_eq!(
+        error.message(),
+        format!(
+            "seat 0's sealed playbook in this save does not match the plan fingerprint saved \
+             beside it ({} against {}): the file is damaged, or this build writes a different \
+             canonical form than the one that saved it",
+            pharmakos_sim::hex(fingerprint),
+            pharmakos_sim::hex(fingerprint ^ 1)
+        )
+    );
+
+    // A text whose fingerprint matches and which will not compile: a
+    // condition on a step label the route does not have.
+    let error = with_seat_zero(&text, Some(fingerprint));
+    assert_eq!(error.code(), Code::InvalidArgument);
+    let compiled =
+        pharmakos_sim::interpreter::Plan::compile(canonical.decoded().message(), &support::rules())
+            .expect_err("an unknown label");
+    assert_eq!(
+        error.message(),
+        format!(
+            "seat 0's sealed playbook in this save will not compile in this build: this \
+             playbook qualifies and this build cannot execute it: {compiled}"
+        )
+    );
+}
+
+/// A restored seal's compile refusal names the label the text wrote quoted
+/// (S3's `vfyq2`, fix pass 3, item M2 (a)): ESC, BEL and a right-to-left
+/// override in a label come back escaped, never raw.
+#[test]
+fn a_restored_seals_compile_refusal_quotes_the_label() {
+    const MATCH_ID: &str = "m-vfyq2-seal-quoted";
+    let mut surface = new_match(MATCH_ID);
+    plan_round(&mut surface);
+    assert!(surface.begin_push().expect("the Push begins"));
+    let saved = surface
+        .take_persistence()
+        .save
+        .expect("a Push's beginning is saved");
+    let label = "\u{1b}]0;owned\u{7}\u{202e}zz";
+    let text = std::fs::read_to_string(
+        support::workspace_root().join("crates/verifier/tests/cases/e0208_unknown_step_label.json"),
+    )
+    .expect("the committed case")
+    .replace("\r\n", "\n")
+    .replace(
+        "\"nowhere\"",
+        &pharmakos_proto::json::write(&Json::String(label.to_owned())),
+    );
+    let canonical = pharmakos_plan_core::decode_jsonc(&text).expect("a canonical form");
+    let fingerprint = pharmakos_sim::hash::plan_fingerprint(canonical.decoded().message())
+        .expect("a fingerprint");
+    let mut damaged = saved;
+    let seal = damaged
+        .seats
+        .first_mut()
+        .and_then(|seat| seat.seal.as_mut())
+        .expect("seat 0 sealed");
+    seal.playbook_jsonc = text;
+    seal.plan_fingerprint = fingerprint;
+    let error = resume(MATCH_ID, &damaged).expect_err("refused");
+    assert_eq!(error.code(), Code::InvalidArgument);
+    for raw in ['\u{1b}', '\u{7}', '\u{202e}'] {
+        assert!(!error.message().contains(raw), "{:?}", error.message());
+    }
+    assert!(error.message().contains("\\u001b"), "{:?}", error.message());
 }
 
 /// The notes' A2 classifies `views` as derived, with "every cursor and handle
@@ -673,7 +800,7 @@ fn a_fourth_seat_is_refused() {
     for seats in [0_u32, 4, 99] {
         let line = format!("m-t17-seats\t0x1\t{seats}\t-\t-\t2\tcustom\n");
         let error = Config::parse(&line).expect_err("refused");
-        assert_eq!(error.code, Code::InvalidArgument, "{seats} seats");
+        assert_eq!(error.code(), Code::InvalidArgument, "{seats} seats");
         let error = Host::open_from(
             &rules_json(),
             SEED,
@@ -685,11 +812,11 @@ fn a_fourth_seat_is_refused() {
             None,
         )
         .expect_err("refused");
-        assert_eq!(error.code, Code::InvalidArgument, "{seats} seats");
+        assert_eq!(error.code(), Code::InvalidArgument, "{seats} seats");
         assert!(
-            error.message.contains("between 1 and 3"),
+            error.message().contains("between 1 and 3"),
             "{}",
-            error.message
+            error.message()
         );
         // And the door `gamectl scenario run` and `seat doctor` take, which
         // is handed a world config rather than a lobby's numbers.
@@ -703,11 +830,11 @@ fn a_fourth_seat_is_refused() {
             },
         };
         let error = Host::open(&world, None).expect_err("refused by Host::open too");
-        assert_eq!(error.code, Code::InvalidArgument, "{seats} seats");
+        assert_eq!(error.code(), Code::InvalidArgument, "{seats} seats");
         assert!(
-            error.message.contains("between 1 and 3"),
+            error.message().contains("between 1 and 3"),
             "{}",
-            error.message
+            error.message()
         );
     }
     let three =

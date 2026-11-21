@@ -92,6 +92,8 @@
 //! third input, the event **log**, is not written.
 //! PLACEHOLDER: the replay's log, reader, scrub and recap use — owner, at S7, with the recordings.
 
+use pharmakos_proto::json::grammar::Said;
+use pharmakos_proto::said;
 use std::fmt::Write as _;
 
 use pharmakos_proto::json::{self, Json};
@@ -392,27 +394,31 @@ impl Save {
     /// before anything else is read, so a save from a later build is refused
     /// by its version rather than by whichever field it renamed.
     pub fn parse(text: &str) -> Result<Save, Error> {
-        let root =
-            json::read(text).map_err(|error| damaged(&format!("it is not JSON ({error})")))?;
+        let root = json::read(text)
+            .map_err(|error| damaged(said!("it is not JSON ({})", error.said())))?;
         if string_at(&root, "format")? != SAVE_FORMAT {
             return Err(damaged("it does not say it is a Pharmakos save"));
         }
         let stamp_json = member(&root, "stamp")?;
         let format_version = u32_at(stamp_json, "format_version")?;
         if format_version <= PRE_S1_SAVE {
-            return Err(Error::invalid(format!(
-                "this save is format version {format_version}, written before S1 made beacon \
+            return Err(Error::invalid(said!(
+                "this save is format version {}, written before S1 made beacon \
                  names per seat: its playbooks and its snapshot name beacons by numbers that \
-                 counted every seat's, so this build (format version {SAVE_FORMAT_VERSION}) \
+                 counted every seat's, so this build (format version {}) \
                  refuses it rather than resume orders that would reach other beacons; start a \
-                 new match"
+                 new match",
+                format_version,
+                SAVE_FORMAT_VERSION
             )));
         }
         if format_version != SAVE_FORMAT_VERSION {
-            return Err(Error::invalid(format!(
-                "this save is format version {format_version} and this build reads version \
-                 {SAVE_FORMAT_VERSION}; a save from another build is refused rather than \
-                 converted: start a new match"
+            return Err(Error::invalid(said!(
+                "this save is format version {} and this build reads version \
+                 {}; a save from another build is refused rather than \
+                 converted: start a new match",
+                format_version,
+                SAVE_FORMAT_VERSION
             )));
         }
         let stamp = Stamp {
@@ -450,7 +456,7 @@ impl Save {
             segment_lengths_ms,
             round_limit: u32_at(config_json, "round_limit")?,
             preset: Preset::parse(string_at(config_json, "preset")?)
-                .map_err(|error| damaged(&error.message))?,
+                .map_err(|error| damaged(error.said()))?,
         };
 
         let boundary = Boundary::from_name(string_at(&root, "boundary")?)
@@ -488,33 +494,52 @@ impl Save {
     ///
     /// [`crate::error::Code::InvalidArgument`], naming what differs.
     pub fn check(&self, config: &Config, rules_hash: u64) -> Result<(), Error> {
+        self.check_stamp(rules_hash)?;
+        self.check_config(config)
+    }
+
+    /// The stamp's half of [`SavedMatch::check`]: the rules table, the
+    /// verifier and the snapshot format this build runs.
+    fn check_stamp(&self, rules_hash: u64) -> Result<(), Error> {
         let here = Stamp::current(rules_hash);
         if self.stamp.rules_hash != here.rules_hash {
-            return Err(Error::invalid(format!(
+            return Err(Error::invalid(said!(
                 "this save was made under the rules table {} and this build runs {}: a save \
                  does not load under another rules table (spec section 3)",
-                pharmakos_sim::hex(self.stamp.rules_hash),
-                pharmakos_sim::hex(here.rules_hash)
+                pharmakos_proto::json::grammar::quoted(&pharmakos_sim::hex(self.stamp.rules_hash)),
+                pharmakos_proto::json::grammar::quoted(&pharmakos_sim::hex(here.rules_hash))
             )));
         }
         if self.stamp.verifier_version != here.verifier_version {
-            return Err(Error::invalid(format!(
+            return Err(Error::invalid(said!(
                 "this save was verified by verifier {} and this build's is {}: a save does not \
                  load under another verifier (spec section 3)",
-                self.stamp.verifier_version, here.verifier_version
+                pharmakos_proto::json::grammar::quoted(&self.stamp.verifier_version),
+                pharmakos_proto::json::grammar::quoted(&here.verifier_version)
             )));
         }
         if self.stamp.snapshot_version != here.snapshot_version {
-            return Err(Error::invalid(format!(
+            return Err(Error::invalid(said!(
                 "this save's snapshot is version {} and this build reads version {}",
-                self.stamp.snapshot_version, here.snapshot_version
+                self.stamp.snapshot_version,
+                here.snapshot_version
             )));
         }
+        Ok(())
+    }
+
+    /// The config's half of [`SavedMatch::check`]: the resume line repeats
+    /// the saved match's config, and the memos are where a Probation match
+    /// puts them.
+    fn check_config(&self, config: &Config) -> Result<(), Error> {
         let saved = &self.config;
         let differs = |field: &str, was: String, now: String| {
-            Error::invalid(format!(
-                "the resume line asks for {field} {now} and the saved match has {was}: a resume \
-                 line repeats the saved match's config exactly"
+            Error::invalid(said!(
+                "the resume line asks for {} {} and the saved match has {}: a resume \
+                 line repeats the saved match's config exactly",
+                pharmakos_proto::json::grammar::quoted(field),
+                pharmakos_proto::json::grammar::quoted(&now),
+                pharmakos_proto::json::grammar::quoted(&was)
             ))
         };
         if saved.match_id != config.match_id {
@@ -576,14 +601,14 @@ impl Save {
                 continue;
             }
             if saved.preset != Preset::Probation {
-                return Err(damaged(&format!(
+                return Err(damaged(said!(
                     "seat {} holds the Ledger's memos in a `{}` match, which issues none",
                     seat.seat,
                     saved.preset.name()
                 )));
             }
             if saved.human_seat != Some(seat.seat) {
-                return Err(damaged(&format!(
+                return Err(damaged(said!(
                     "seat {} holds the Ledger's memos and is not the person's seat",
                     seat.seat
                 )));
@@ -671,8 +696,9 @@ fn parse_seat(value: &Json) -> Result<SavedSeat, Error> {
     };
     let listed = array_at(value, "handles")?;
     if listed.len() > crate::viewfeed::MAX_FOREIGN_HANDLES {
-        return Err(damaged(&format!(
-            "seat {seat}'s handle table holds {} handles, past the {} a seat may",
+        return Err(damaged(said!(
+            "seat {}'s handle table holds {} handles, past the {} a seat may",
+            seat,
             listed.len(),
             crate::viewfeed::MAX_FOREIGN_HANDLES
         )));
@@ -689,8 +715,9 @@ fn parse_seat(value: &Json) -> Result<SavedSeat, Error> {
             .and_then(|held| held.checked_add(1))
             .ok_or_else(|| damaged("its handle table is longer than a u32 counts"))?;
         if handle != pharmakos_sim::tables::foreign_beacon_name(number) || !seen.insert(beacon) {
-            return Err(damaged(&format!(
-                "seat {seat}'s handle table is not `e_01` up, one handle a beacon"
+            return Err(damaged(said!(
+                "seat {}'s handle table is not `e_01` up, one handle a beacon",
+                seat
             )));
         }
         handles.push((beacon, handle));
@@ -700,10 +727,11 @@ fn parse_seat(value: &Json) -> Result<SavedSeat, Error> {
         let Json::String(name) = memo else {
             return Err(damaged("a memo is not a string"));
         };
-        let memo = Memo::parse(name).map_err(|error| damaged(&error.message))?;
+        let memo = Memo::parse(name).map_err(|error| damaged(error.said()))?;
         if memos.contains(&memo) {
-            return Err(damaged(&format!(
-                "seat {seat}'s memo `{}` is issued twice, and a memo is issued once a match",
+            return Err(damaged(said!(
+                "seat {}'s memo `{}` is issued twice, and a memo is issued once a match",
+                seat,
                 memo.name()
             )));
         }
@@ -720,8 +748,11 @@ fn parse_seat(value: &Json) -> Result<SavedSeat, Error> {
 }
 
 /// The refusal for a file that is not a save this build reads.
-fn damaged(why: &str) -> Error {
-    Error::invalid(format!("this is not a save this build can resume: {why}"))
+fn damaged(why: impl Into<Said>) -> Error {
+    Error::invalid(said!(
+        "this is not a save this build can resume: {}",
+        why.into()
+    ))
 }
 
 fn object(entries: Vec<(&str, Json)>) -> Json {
@@ -764,45 +795,72 @@ fn bytes_of_hex(text: &str) -> Option<Vec<u8>> {
 }
 
 fn member<'a>(value: &'a Json, key: &str) -> Result<&'a Json, Error> {
-    value
-        .get(key)
-        .ok_or_else(|| damaged(&format!("it has no `{key}`")))
+    value.get(key).ok_or_else(|| {
+        damaged(said!(
+            "it has no `{}`",
+            pharmakos_proto::json::grammar::quoted(key)
+        ))
+    })
 }
 
 fn string_at<'a>(value: &'a Json, key: &str) -> Result<&'a str, Error> {
     match member(value, key)? {
         Json::String(text) => Ok(text.as_str()),
-        _ => Err(damaged(&format!("`{key}` is not a string"))),
+        _ => Err(damaged(said!(
+            "`{}` is not a string",
+            pharmakos_proto::json::grammar::quoted(key)
+        ))),
     }
 }
 
 fn array_at<'a>(value: &'a Json, key: &str) -> Result<&'a [Json], Error> {
     match member(value, key)? {
         Json::Array(items) => Ok(items.as_slice()),
-        _ => Err(damaged(&format!("`{key}` is not an array"))),
+        _ => Err(damaged(said!(
+            "`{}` is not an array",
+            pharmakos_proto::json::grammar::quoted(key)
+        ))),
     }
 }
 
 fn integer(value: &Json, key: &str) -> Result<i64, Error> {
     match value {
-        Json::Number(lexeme) => lexeme
-            .parse::<i64>()
-            .map_err(|_| damaged(&format!("`{key}` is not a whole number"))),
-        _ => Err(damaged(&format!("`{key}` is not a number"))),
+        Json::Number(lexeme) => lexeme.parse::<i64>().map_err(|_| {
+            damaged(said!(
+                "`{}` is not a whole number",
+                pharmakos_proto::json::grammar::quoted(key)
+            ))
+        }),
+        _ => Err(damaged(said!(
+            "`{}` is not a number",
+            pharmakos_proto::json::grammar::quoted(key)
+        ))),
     }
 }
 
 fn u32_at(value: &Json, key: &str) -> Result<u32, Error> {
-    u32::try_from(integer(member(value, key)?, key)?)
-        .map_err(|_| damaged(&format!("`{key}` does not fit")))
+    u32::try_from(integer(member(value, key)?, key)?).map_err(|_| {
+        damaged(said!(
+            "`{}` does not fit",
+            pharmakos_proto::json::grammar::quoted(key)
+        ))
+    })
 }
 
 fn hex64_at(value: &Json, key: &str) -> Result<u64, Error> {
     let text = string_at(value, key)?;
     if text.len() != 16 {
-        return Err(damaged(&format!("`{key}` is not 16 hex digits")));
+        return Err(damaged(said!(
+            "`{}` is not 16 hex digits",
+            pharmakos_proto::json::grammar::quoted(key)
+        )));
     }
-    u64::from_str_radix(text, 16).map_err(|_| damaged(&format!("`{key}` is not hex")))
+    u64::from_str_radix(text, 16).map_err(|_| {
+        damaged(said!(
+            "`{}` is not hex",
+            pharmakos_proto::json::grammar::quoted(key)
+        ))
+    })
 }
 
 #[cfg(test)]
@@ -892,13 +950,13 @@ mod tests {
                 &format!("\"format_version\": {other}"),
             );
             let error = Save::parse(&text).expect_err("another version");
-            assert_eq!(error.code, Code::InvalidArgument);
+            assert_eq!(error.code(), Code::InvalidArgument);
             assert!(
-                error.message.contains(&format!("format version {other}"))
-                    && error.message.contains("reads version 3")
-                    && error.message.contains("start a new match"),
+                error.message().contains(&format!("format version {other}"))
+                    && error.message().contains("reads version 3")
+                    && error.message().contains("start a new match"),
                 "{}",
-                error.message
+                error.message()
             );
         }
     }
@@ -931,8 +989,8 @@ mod tests {
             seat.handles = table(most.saturating_add(1));
         }
         let error = Save::parse(&written.render()).expect_err("past the bound");
-        assert_eq!(error.code, Code::InvalidArgument);
-        assert!(error.message.contains("handles"), "{}", error.message);
+        assert_eq!(error.code(), Code::InvalidArgument);
+        assert!(error.message().contains("handles"), "{}", error.message());
     }
 
     /// The Ledger's memos are the person's seat's in a Probation match: a save
@@ -947,8 +1005,8 @@ mod tests {
         let error = elsewhere
             .check(&config(), hash)
             .expect_err("seat 1 is no one's");
-        assert_eq!(error.code, Code::InvalidArgument);
-        assert!(error.message.contains("seat 1"), "{}", error.message);
+        assert_eq!(error.code(), Code::InvalidArgument);
+        assert!(error.message().contains("seat 1"), "{}", error.message());
 
         let mut custom = save();
         custom.config.preset = Preset::Custom;
@@ -959,8 +1017,8 @@ mod tests {
         let error = custom
             .check(&asked, hash)
             .expect_err("a custom match issues none");
-        assert_eq!(error.code, Code::InvalidArgument);
-        assert!(error.message.contains("custom"), "{}", error.message);
+        assert_eq!(error.code(), Code::InvalidArgument);
+        assert!(error.message().contains("custom"), "{}", error.message());
 
         let mut quiet = save();
         quiet.config.preset = Preset::Custom;
@@ -1003,7 +1061,7 @@ mod tests {
         ] {
             assert_ne!(damaged, text, "{what}: the fixture holds what is damaged");
             let error = Save::parse(&damaged).expect_err(what);
-            assert_eq!(error.code, Code::InvalidArgument, "{what}");
+            assert_eq!(error.code(), Code::InvalidArgument, "{what}");
         }
     }
 
@@ -1013,13 +1071,13 @@ mod tests {
             .render()
             .replace("\"format_version\": 3", "\"format_version\": 1");
         let error = Save::parse(&text).expect_err("a pre-S1 save");
-        assert_eq!(error.code, Code::InvalidArgument);
+        assert_eq!(error.code(), Code::InvalidArgument);
         assert!(
-            error.message.contains("format version 1")
-                && error.message.contains("per seat")
-                && error.message.contains("start a new match"),
+            error.message().contains("format version 1")
+                && error.message().contains("per seat")
+                && error.message().contains("start a new match"),
             "{}",
-            error.message
+            error.message()
         );
     }
 
@@ -1027,7 +1085,7 @@ mod tests {
     fn text_that_is_not_a_save_is_refused_as_an_argument() {
         for text in ["", "{}", "[]", "{\"format\": \"something else\"}"] {
             let error = Save::parse(text).expect_err("not a save");
-            assert_eq!(error.code, Code::InvalidArgument, "{text}");
+            assert_eq!(error.code(), Code::InvalidArgument, "{text}");
         }
     }
 
@@ -1088,8 +1146,12 @@ mod tests {
         ];
         for (field, asked) in variants {
             let error = saved.check(&asked, 0x0123_4567_89ab_cdef).expect_err(field);
-            assert_eq!(error.code, Code::InvalidArgument, "{field}");
-            assert!(error.message.contains(field), "{field}: {}", error.message);
+            assert_eq!(error.code(), Code::InvalidArgument, "{field}");
+            assert!(
+                error.message().contains(field),
+                "{field}: {}",
+                error.message()
+            );
         }
     }
 

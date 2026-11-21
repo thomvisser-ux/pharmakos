@@ -49,10 +49,13 @@
 //! (decisions-log item 74, skeleton plan T8); nothing here accepts a comment,
 //! and nothing here rewrites the input.
 
+use std::borrow::Cow;
+
 use pharmakos_proto::gp::api::v1::patch_suggestion::Applicability;
 use pharmakos_proto::gp::v1::meta::AuthorKind;
 use pharmakos_proto::gp::v1::playbook::Kind;
 use pharmakos_proto::gp::v1::{Playbook, SchemaVersion};
+use pharmakos_proto::json::grammar::quoted;
 use pharmakos_proto::json::{self, Json};
 use pharmakos_proto::{SCHEMA_VERSION, schema_version};
 
@@ -109,11 +112,25 @@ const RESERVED_NAMES: &[&str] = &[
     "probe_directions",
 ];
 
+/// What the caller handed the decode stage beside the bytes (S3's `vfyq2`):
+/// nothing, so it decodes them; the message decoded from exactly them; or the
+/// refusal the one decode of them found.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Handed<'a> {
+    /// The bytes alone ([`crate::Input::new`]).
+    Bytes,
+    /// Their message ([`crate::Input::canonical`]).
+    Decoded(&'a json::Decoded<Playbook>),
+    /// Their refusal ([`crate::Input::refused`]).
+    Refused(&'a json::Refused),
+}
+
 /// What the decode stage hands the later stages: the playbook, and its plan
 /// fingerprint, computed once here from the bytes it was decoded from.
-pub(crate) struct Decoded {
-    /// The playbook.
-    pub(crate) playbook: Playbook,
+pub(crate) struct Decoded<'a> {
+    /// The playbook: the caller's, when it handed one in already decoded
+    /// ([`crate::Input::canonical`]), or the one decoded here.
+    pub(crate) playbook: Cow<'a, Playbook>,
     /// Its plan fingerprint, or `None` when it has none
     /// ([`hash::plan_fingerprint`] says when).
     pub(crate) fingerprint: Option<u64>,
@@ -140,14 +157,43 @@ pub(crate) struct Decoded {
 /// message declares, and no message in the schema declares a reserved name
 /// (`no_message_declares_a_reserved_name` below), so the scan would find
 /// nothing.
-pub(crate) fn run(bytes: &[u8], out: &mut Builder) -> Option<Decoded> {
+pub(crate) fn run<'a>(bytes: &[u8], handed: Handed<'a>, out: &mut Builder) -> Option<Decoded<'a>> {
+    let handed = match handed {
+        Handed::Bytes => None,
+        Handed::Decoded(decoded) => Some(decoded),
+        Handed::Refused(refused) => {
+            diagnose_refused(refused, out);
+            return None;
+        }
+    };
+    if let Some(decoded) = handed {
+        // Decoded from exactly `bytes` by the codec (`Input::canonical`):
+        // what the first path below would answer, without reading them again.
+        let fingerprint = pharmakos_sim::hash::plan_fingerprint_of(decoded).ok();
+        return Some(checked(
+            Decoded {
+                playbook: Cow::Borrowed(decoded.message()),
+                fingerprint,
+            },
+            out,
+        ));
+    }
     let text = match core::str::from_utf8(bytes) {
         Ok(text) => text,
         Err(error) => {
-            out.emit(
-                Diag::new("E0001", pointer::ROOT)
-                    .arg("detail", format!("the bytes are not UTF-8 ({error})")),
-            );
+            // `Utf8Error`'s own words, composed from its numbers.
+            let detail = match error.error_len() {
+                Some(length) => pharmakos_proto::said!(
+                    "the bytes are not UTF-8 (invalid utf-8 sequence of {} bytes from index {})",
+                    length,
+                    error.valid_up_to()
+                ),
+                None => pharmakos_proto::said!(
+                    "the bytes are not UTF-8 (incomplete utf-8 byte sequence from index {})",
+                    error.valid_up_to()
+                ),
+            };
+            out.emit(Diag::new("E0001", pointer::ROOT).arg("detail", detail));
             return None;
         }
     };
@@ -156,47 +202,38 @@ pub(crate) fn run(bytes: &[u8], out: &mut Builder) -> Option<Decoded> {
         json::Direct::Wire(decoded) => {
             let fingerprint = pharmakos_sim::hash::plan_fingerprint_of(&decoded).ok();
             Decoded {
-                playbook: decoded.into_message(),
+                playbook: Cow::Owned(decoded.into_message()),
                 fingerprint,
             }
         }
         json::Direct::NeedsExactPath(_) => diagnose(text, out)?,
     };
+    Some(checked(decoded, out))
+}
 
+/// The checks the decode stage makes of every playbook it hands on.
+fn checked<'a>(decoded: Decoded<'a>, out: &mut Builder) -> Decoded<'a> {
     check_version(&decoded.playbook, out);
     check_kind(&decoded.playbook, out);
     check_author(&decoded.playbook, out);
     check_fingerprint(&decoded.playbook, decoded.fingerprint, out);
     crate::enums::run(&decoded.playbook, out);
-    Some(decoded)
+    decoded
 }
 
 /// The diagnostic path: the tree, the reserved names, then the codec's own
 /// refusal, each reported as the first that applies.
-fn diagnose(text: &str, out: &mut Builder) -> Option<Decoded> {
+fn diagnose(text: &str, out: &mut Builder) -> Option<Decoded<'static>> {
     let value = match json::read(text) {
         Ok(value) => value,
         Err(error) => {
-            out.emit(Diag::new("E0001", error.pointer.clone()).arg("detail", &error.message));
+            refuse(&error, out);
             return None;
         }
     };
-
-    // Reserved names first, so a held-back construct is named as one rather than
-    // reported as an unknown field by the codec that reaches it first.
-    let mut reserved: Vec<(String, String)> = Vec::new();
-    scan_reserved(&value, pointer::ROOT, &mut reserved);
-    if !reserved.is_empty() {
-        for (path, name) in &reserved {
-            out.emit(Diag::new("E0003", path.clone()).arg("field", name).fix(
-                format!("Delete `{name}`"),
-                patch_remove(path),
-                Applicability::MaybeIncorrect,
-            ));
-        }
+    if named_reserved(&value, out) {
         return None;
     }
-
     match json::decode_json::<Playbook>(&value) {
         // The direct reader answers for every document the codec accepts, so
         // this arm is reached only if the two disagree; it answers as the
@@ -204,35 +241,72 @@ fn diagnose(text: &str, out: &mut Builder) -> Option<Decoded> {
         Ok(playbook) => {
             let fingerprint = hash::plan_fingerprint(&playbook);
             Some(Decoded {
-                playbook,
+                playbook: Cow::Owned(playbook),
                 fingerprint,
             })
         }
         Err(error) => {
-            // The codec's kind says which (S3's `vfy6`, the review of PR #179):
-            // the message is for the player and never read here, so author
-            // text quoted back in it (an enum value it does not know) cannot
-            // talk this into the wrong code. A pointer with no last token is
-            // the document itself, which no unknown field can be: that error
-            // is `E0001`'s.
-            let unknown = (error.kind == json::ErrorKind::UnknownField)
-                .then(|| pointer::last_token(&error.pointer))
-                .flatten();
-            if let Some(name) = unknown {
-                out.emit(
-                    Diag::new("E0002", error.pointer.clone())
-                        .arg("field", &name)
-                        .fix(
-                            format!("Delete `{name}`"),
-                            patch_remove(&error.pointer),
-                            Applicability::MaybeIncorrect,
-                        ),
-                );
-            } else {
-                out.emit(Diag::new("E0001", error.pointer.clone()).arg("detail", &error.message));
-            }
+            refuse(&error, out);
             None
         }
+    }
+}
+
+/// The diagnostic path for a text whose one decode already refused it
+/// ([`crate::Input::refused`]; S3's `vfyq2`): what [`diagnose`] reports for
+/// the same bytes, from the refusal and the tree that decode kept, without
+/// reading the text again.
+fn diagnose_refused(refused: &json::Refused, out: &mut Builder) {
+    if let Some(tree) = refused.tree()
+        && named_reserved(tree, out)
+    {
+        return;
+    }
+    refuse(refused.error(), out);
+}
+
+/// Reserved names first, so a held-back construct is named as one rather than
+/// reported as an unknown field by the codec that reaches it first: each one
+/// `E0003`, and whether there was any.
+fn named_reserved(value: &Json, out: &mut Builder) -> bool {
+    let mut reserved: Vec<(String, String)> = Vec::new();
+    scan_reserved(value, pointer::ROOT, &mut reserved);
+    for (path, name) in &reserved {
+        out.emit(
+            Diag::new("E0003", path.clone())
+                .arg_text("field", name)
+                .fix(
+                    pharmakos_proto::said!("Delete `{}`", quoted(name)),
+                    patch_remove(path),
+                    Applicability::MaybeIncorrect,
+                ),
+        );
+    }
+    !reserved.is_empty()
+}
+
+/// The codec's refusal as the catalogue names it. The codec's kind says which
+/// (S3's `vfy6`, the review of PR #179): the message is for the player and
+/// never read here, so author text quoted back in it (an enum value it does
+/// not know) cannot talk this into the wrong code. A pointer with no last
+/// token is the document itself, which no unknown field can be: that error is
+/// `E0001`'s.
+fn refuse(error: &json::Error, out: &mut Builder) {
+    let unknown = (error.kind() == json::ErrorKind::UnknownField)
+        .then(|| pointer::last_token(error.pointer()))
+        .flatten();
+    if let Some(name) = unknown {
+        out.emit(
+            Diag::new("E0002", error.pointer().to_owned())
+                .arg_text("field", &name)
+                .fix(
+                    pharmakos_proto::said!("Delete `{}`", quoted(&name)),
+                    patch_remove(error.pointer()),
+                    Applicability::MaybeIncorrect,
+                ),
+        );
+    } else {
+        out.emit(Diag::new("E0001", error.pointer().to_owned()).arg("detail", error.said()));
     }
 }
 
@@ -275,16 +349,16 @@ fn check_version(playbook: &Playbook, out: &mut Builder) {
             if found_major == major && found_minor <= minor {
                 return;
             }
-            format!("{found_major}.{found_minor}")
+            pharmakos_proto::said!("{}.{}", found_major, found_minor)
         }
-        None => "missing".to_owned(),
+        None => pharmakos_proto::said!("missing"),
     };
     out.emit(
         Diag::new("E0004", "/schema_version")
             .arg("found", found)
-            .arg("supported", format!("{major}.{minor}"))
+            .arg("supported", pharmakos_proto::said!("{}.{}", major, minor))
             .fix(
-                format!("Set the schema version to {major}.{minor}"),
+                pharmakos_proto::said!("Set the schema version to {}.{}", major, minor),
                 patch_add("/schema_version", &schema_version_json(schema_version())),
                 Applicability::MaybeIncorrect,
             ),
@@ -471,15 +545,15 @@ mod tests {
         // Its kind is still `Value`, and only `UnknownField` is `E0002`.
         let unknown = json::decode::<pharmakos_proto::gp::v1::Meta>(r#"{"wombat":1}"#)
             .expect_err("an unknown field is refused");
-        assert_eq!(unknown.kind, ErrorKind::UnknownField);
+        assert_eq!(unknown.kind(), ErrorKind::UnknownField);
         let quoted =
             json::decode::<pharmakos_proto::gp::v1::Meta>(r#"{"author_kind":"is not a field"}"#)
                 .expect_err("an unknown enum value is refused");
-        assert_eq!(quoted.kind, ErrorKind::Value);
+        assert_eq!(quoted.kind(), ErrorKind::Value);
         assert!(
-            quoted.message.contains("is not a field"),
+            quoted.message().contains("is not a field"),
             "{}",
-            quoted.message
+            quoted.message()
         );
     }
 }

@@ -436,15 +436,15 @@ fn the_two_lines_are_read_exactly_as_they_were_written() {
     for seventh in ["again", "RESUME", "resume please"] {
         let line = format!("{}\t{seventh}\n", plain.render().trim_end());
         let error = ConfigLine::parse(&line).expect_err("not an eighth field");
-        assert_eq!(error.code, Code::InvalidArgument, "`{seventh}`");
+        assert_eq!(error.code(), Code::InvalidArgument, "`{seventh}`");
     }
     // And nothing after the eighth: a ninth field is refused, not ignored,
     // whether the eighth asks for a resume or not.
     for tail in ["resume\tgarbage", "-\tgarbage", "\t"] {
         let line = format!("{}\t{tail}\n", plain.render().trim_end());
         let error = ConfigLine::parse(&line).expect_err("a ninth field");
-        assert_eq!(error.code, Code::InvalidArgument, "`{tail}`");
-        assert!(error.message.contains("at most"), "{}", error.message);
+        assert_eq!(error.code(), Code::InvalidArgument, "`{tail}`");
+        assert!(error.message().contains("at most"), "{}", error.message());
     }
 
     let announce = Announce {
@@ -753,6 +753,30 @@ fn a_flood_of_silent_connections_cannot_disturb_a_live_session() {
     );
     drop(silent);
     running.quit();
+
+    // Every refusal is counted under its reason, whether or not the audit
+    // queue had room for its own line (fix pass 3, item L6), and the host's
+    // counts are in the audit log it closes, which is what an operator reads
+    // (fix pass 4, item L-f): one line per reason, this host's own.
+    let log = std::fs::read_to_string(running.folder().join("audit.log")).expect("an audit log");
+    let count_of = |reason: &str| -> u64 {
+        let wanted = format!("connections dropped {reason}: ");
+        let counts: Vec<u64> = log
+            .lines()
+            .filter_map(|line| {
+                let action = line.split('\t').nth(4)?;
+                action.strip_prefix(wanted.as_str())?.parse().ok()
+            })
+            .collect();
+        assert_eq!(counts.len(), 1, "one closing line for {reason}: {log}");
+        counts.first().copied().unwrap_or_default()
+    };
+    let counted = count_of("over_capacity");
+    assert!(
+        counted >= u64::from(refused),
+        "{refused} refused and {counted} counted under over_capacity: {log}"
+    );
+    assert_eq!(count_of("no_connection_thread"), 0, "{log}");
 }
 
 /// End of file on the control pipe ends the host. There is no other shutdown.
@@ -1094,8 +1118,8 @@ fn a_new_match_cannot_overwrite_a_saved_one() {
     let header = std::fs::read(folder.join("match.json")).expect("a header");
 
     let error = host_and_quit(&root, &line).expect_err("a second new match under the same id");
-    assert_eq!(error.code, Code::InvalidArgument);
-    assert!(error.message.contains("resume"), "{}", error.message);
+    assert_eq!(error.code(), Code::InvalidArgument);
+    assert!(error.message().contains("resume"), "{}", error.message());
     assert_eq!(
         std::fs::read(folder.join("save.json")).expect("a save"),
         save
@@ -1197,17 +1221,17 @@ fn a_resume_line_that_disagrees_with_the_save_is_refused() {
     for (field, asked) in variants {
         let error = host_and_quit(&root, &resume_line(asked)).expect_err(field);
         assert_eq!(
-            error.code,
+            error.code(),
             Code::InvalidArgument,
             "{field}: {}",
-            error.message
+            error.message()
         );
         assert!(
             error
-                .message
+                .message()
                 .contains(&format!("the resume line asks for {field} ")),
             "the refusal names the field that differs, {field}: {}",
-            error.message
+            error.message()
         );
     }
     host_and_quit(&root, &resume_line(saved_config)).expect("the line that agrees resumes");
@@ -1238,8 +1262,12 @@ fn a_save_from_a_different_rules_table_or_verifier_is_refused() {
     assert_ne!(other_rules, original, "the rules hash was changed");
     std::fs::write(folder.join("save.json"), &other_rules).expect("rewritten");
     let error = host_and_quit(&root, &resume_line(line.clone())).expect_err("another rules table");
-    assert_eq!(error.code, Code::InvalidArgument);
-    assert!(error.message.contains("rules table"), "{}", error.message);
+    assert_eq!(error.code(), Code::InvalidArgument);
+    assert!(
+        error.message().contains("rules table"),
+        "{}",
+        error.message()
+    );
 
     let other_verifier = original.replace(
         &format!("\"verifier_version\": \"{}\"", stamp.verifier_version),
@@ -1248,8 +1276,8 @@ fn a_save_from_a_different_rules_table_or_verifier_is_refused() {
     assert_ne!(other_verifier, original, "the verifier version was changed");
     std::fs::write(folder.join("save.json"), &other_verifier).expect("rewritten");
     let error = host_and_quit(&root, &resume_line(line.clone())).expect_err("another verifier");
-    assert_eq!(error.code, Code::InvalidArgument);
-    assert!(error.message.contains("verifier"), "{}", error.message);
+    assert_eq!(error.code(), Code::InvalidArgument);
+    assert!(error.message().contains("verifier"), "{}", error.message());
 
     std::fs::write(folder.join("save.json"), &original).expect("put back");
     host_and_quit(&root, &resume_line(line)).expect("the save as written resumes");
@@ -1360,6 +1388,77 @@ impl MatchHeader {
             rules_hash: text("rules_hash"),
         }
     }
+}
+
+/// One decode from the socket to the seal (S3's `vfyq2`, fix pass 1, item 3).
+///
+/// A commented playbook goes over the socket to `verify_plan` and then to
+/// `submit_plan`, and the Push's beginning writes the seal. The file written
+/// is the text submitted, byte for byte, comments included; its canonical
+/// form is the one the report was taken over, which is why the pre-check's
+/// hash and the seal's are the same; and the plan the match runs is compiled
+/// from that same form, which the replay test's re-hosting holds to the chain.
+#[test]
+fn the_sealed_file_is_the_text_whose_canonical_form_was_verified() {
+    let line = Config {
+        segment_lengths_ms: vec![1_000],
+        ..config("m-vfyq2-one-decode", Some(0))
+    };
+    let mut running = start_in(
+        &data_root("vfyq2-one-decode"),
+        &new_line(line),
+        Box::new(NoOperators),
+    );
+    let seat_token = running.announce.seat_token.clone().expect("a human seat");
+    let mut lobby = Client::open(running.announce.port, &running.announce.admin_token);
+    let mut seat = Client::open(running.announce.port, &seat_token);
+    let submitted = format!(
+        "// sealed as written\n{}\n/* and the end */\n",
+        pharmakos_gateway::host::SAFE_PLAYBOOK
+    );
+    let params = format!(r#"{{"playbook_jsonc":{}}}"#, support::quote(&submitted));
+    let hash_of = |answer: &Json| match answer
+        .get("report")
+        .and_then(|report| report.get("report_hash"))
+    {
+        Some(Json::String(text)) => text.clone(),
+        other => panic!("a report carries a report_hash, and it is {other:?}"),
+    };
+    let checked = result(&seat.call("verify_plan", &params), "verify_plan");
+    let sealed = result(&seat.call("submit_plan", &params), "submit_plan");
+    assert_eq!(
+        sealed.get("accepted"),
+        Some(&Json::Bool(true)),
+        "the submission seals: {sealed:?}"
+    );
+    assert_eq!(
+        hash_of(&checked),
+        hash_of(&sealed),
+        "the pre-check and the seal are one report"
+    );
+    let _ = result(&lobby.call("end_lull", "{}"), "end_lull");
+    let _ = result(&lobby.call("get_status", "{}"), "get_status");
+    running.quit();
+    let path = running
+        .folder()
+        .join("seats")
+        .join("0")
+        .join("sealed")
+        .join("1.jsonc");
+    let written = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+    assert_eq!(written, submitted, "the seal is the text submitted");
+    let canonical = |text: &str| {
+        pharmakos_plan_core::decode_jsonc(text)
+            .expect("a canonical form")
+            .into_text()
+    };
+    let bare = canonical(pharmakos_gateway::host::SAFE_PLAYBOOK);
+    assert_eq!(
+        canonical(&written),
+        bare,
+        "the sealed file's canonical form is the verified one, its comments aside"
+    );
 }
 
 /// The private replay is inputs only (decision C11): `match.json` for the
@@ -1503,4 +1602,103 @@ fn a_probation_lull_resumed_by_the_host_loop_is_untimed_by_rule_on_its_first_cal
         assert_eq!(footer.get("untimed"), Some(&Json::Bool(true)), "{preset:?}");
         running.quit();
     }
+}
+
+/// The review's document for the undo's frame (fix pass 6, item 2): `n`
+/// routes of quoted words.
+fn routes_document(n: usize) -> String {
+    let items: Vec<String> = (0..n)
+        .map(|i| format!("{{\"id\": \"b{i}\", \"n\": {i}}}"))
+        .collect();
+    format!(
+        "{{\n  \"meta\": {{\"title\": \"t\"}},\n  \"routes\": [\n    {}\n  ]\n}}\n",
+        items.join(",\n    ")
+    )
+}
+
+/// The largest inverse `patch_plan` hands back goes through a real socket
+/// (S3's `vfyq2`, fix pass 6, item 2). The largest document whose
+/// `remove /routes` the gateway accepts (and whose forward request a client
+/// can send) is found in process; then, over the socket, the forward patch
+/// is applied and its inverse sent back, and the file comes back whole.
+#[test]
+fn the_largest_accepted_inverse_round_trips_through_the_socket() {
+    use pharmakos_gateway::frame::MAX_MESSAGE_BYTES;
+    let remove = r#"[{"op":"remove","path":"/routes"}]"#;
+    let forward_params = |text: &str| {
+        format!(
+            r#"{{"playbook_jsonc":{},"json_patch":{}}}"#,
+            support::quote(text),
+            support::quote(remove)
+        )
+    };
+    // The test client's own request, as it writes it.
+    let request_bytes = |params: &str| {
+        format!(r#"{{"jsonrpc":"2.0","id":4294967295,"method":"patch_plan","params":{params}}}"#)
+            .len()
+    };
+    let mut surface = support::hosted_with(
+        "m-undo-socket-probe",
+        pharmakos_gateway::fog::FogPolicy::fogged(),
+        2,
+        3_000,
+        3,
+        None,
+    );
+    let token = support::seat_token(&mut surface, 0);
+    let mut left = support::FIRST_LULL_MS;
+    let mut accepted = |n: usize| -> bool {
+        let params = forward_params(&routes_document(n));
+        if request_bytes(&params) > MAX_MESSAGE_BYTES {
+            return false;
+        }
+        let answer = support::call_in_lull(&mut surface, &token, &mut left, "patch_plan", &params);
+        answer.get("result").is_some()
+    };
+    let (mut low, mut high) = (1_usize, 9_000_usize);
+    assert!(accepted(low));
+    while high.saturating_sub(low) > 1 {
+        let middle = low.saturating_add(high.saturating_sub(low) >> 1);
+        if accepted(middle) {
+            low = middle;
+        } else {
+            high = middle;
+        }
+    }
+    let text = routes_document(low);
+
+    let line = Config {
+        segment_lengths_ms: vec![1_000],
+        ..config("m-undo-socket", Some(0))
+    };
+    let mut running = start_in(
+        &data_root("undo-socket"),
+        &new_line(line),
+        Box::new(NoOperators),
+    );
+    let seat_token = running.announce.seat_token.clone().expect("a human seat");
+    let mut seat = Client::open(running.announce.port, &seat_token);
+    let forward = result(
+        &seat.call("patch_plan", &forward_params(&text)),
+        "patch_plan",
+    );
+    let (Some(Json::String(patched)), Some(Json::String(inverse))) = (
+        forward.get("playbook_jsonc"),
+        forward.get("inverse_json_patch"),
+    ) else {
+        panic!("a patched file and its inverse: {forward:?}");
+    };
+    let undo_params = format!(
+        r#"{{"playbook_jsonc":{},"json_patch":{}}}"#,
+        support::quote(patched),
+        support::quote(inverse)
+    );
+    let undone = result(&seat.call("patch_plan", &undo_params), "the undo");
+    assert_eq!(
+        undone.get("playbook_jsonc"),
+        Some(&Json::String(text.clone())),
+        "the undo of the largest accepted patch ({} bytes) gives the file back",
+        text.len()
+    );
+    running.quit();
 }

@@ -265,6 +265,12 @@ impl Schema {
 /// checked-in `descriptor.binpb` is corrupt, which the regeneration test in
 /// `tests/` is there to catch.
 #[must_use]
+#[allow(
+    clippy::panic,
+    reason = "the descriptor set is `include_bytes!`'d into this build, not read from \
+              any input: it parses or the build is corrupt, and every codec test reaches \
+              this function and parses the same bytes"
+)]
 pub fn schema() -> &'static Schema {
     static SCHEMA: OnceLock<Schema> = OnceLock::new();
     SCHEMA.get_or_init(|| {
@@ -553,7 +559,8 @@ fn join(scope: &str, name: &str) -> String {
     if scope.is_empty() {
         name.to_owned()
     } else {
-        let mut joined = String::with_capacity(scope.len().saturating_add(name.len()) + 1);
+        let mut joined =
+            String::with_capacity(scope.len().saturating_add(name.len()).saturating_add(1));
         joined.push_str(scope);
         joined.push('.');
         joined.push_str(name);

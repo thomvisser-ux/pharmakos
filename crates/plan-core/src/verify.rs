@@ -13,20 +13,27 @@
 //! comments produce the same `report_hash` — a player can annotate a playbook
 //! without moving its hash, and the pre-check at edit time and the check at
 //! submit compare, which is what spec section 11's "byte-identical" promise is
-//! for. That promise is **conditional on there being a canonical form**: for a
-//! file the paragraph below covers there is none, and adding a comment to such
-//! a file does move its `report_hash`. Such a report never qualifies, and the
-//! pre-check and submit take the same path, so the two still agree with each
-//! other.
+//! for. A file with no canonical form keeps a narrower promise, by the rule
+//! below: rewording a comment before the byte the grammar refuses, at its
+//! length, does not move its `report_hash`; rewording one after that byte
+//! does, and so does any change of length, since every offset is the file's.
 //!
 //! **A file with no canonical form is handed over as it stands.** That is a
 //! file that does not parse, and equally a well-formed file the schema refuses
 //! — an unknown field, two oneof arms set, a value that does not fit its
 //! field. There is no canonical form of either, and this crate must not invent
-//! a diagnostic of its own: the verifier owns the catalogue. So the raw bytes
-//! go through and come back as a diagnostic — `E0001` with a `/byte/<offset>`
-//! pointer for a syntax error, which is the shape decisions-log item 96 (2)
-//! settled for exactly this case.
+//! a diagnostic of its own: the verifier owns the catalogue. So the codec's
+//! one decode hands its typed refusal to the verifier (`Input::refused`),
+//! which names it — `E0001` with a `/byte/<offset>` pointer for a syntax
+//! error, the shape decisions-log item 96 (2) settled for exactly this case —
+//! without reading the text a second time.
+//!
+//! **What such a report's `report_hash` covers is one rule**: the file's
+//! comments blanked up to the byte the grammar refuses it at, and everything
+//! from that byte on exactly as written ([`refused_bytes`]). Past a refusal
+//! there is no lexical structure to trust, so nothing there is read as a
+//! comment. A file the schema refuses is JSON throughout, so all of its
+//! comments are blanked.
 //!
 //! **Its comments are blanked first, byte for byte.** The verifier reads
 //! JSON, not JSONC, so a commented file handed over raw failed at its first
@@ -40,17 +47,20 @@
 
 use pharmakos_proto::gp::api::v1::VerifyReport;
 use pharmakos_proto::gp::api::v1::verify_plan::Depth;
+use pharmakos_proto::gp::v1::Playbook;
+use pharmakos_proto::json::{self, grammar};
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_verifier::{Input, Scope};
 
-use crate::canonical::canonicalise_text;
 use crate::error::Error;
+use crate::jsonc::comment_end;
 
 /// Verifies a JSONC playbook file.
 ///
 /// `snapshot` is the seat's frozen planning snapshot as postcard bytes, and
 /// `scope` is the seat's view of it — both opaque here and both hashed inputs
-/// of the report.
+/// of the report. [`verify_jsonc_canonical`] answers the same report with the
+/// playbook it was taken over.
 ///
 /// # Errors
 ///
@@ -66,114 +76,288 @@ pub fn verify_jsonc(
     rules: &RulesTable,
     depth: Depth,
 ) -> Result<VerifyReport, Error> {
+    verify_jsonc_canonical(playbook_jsonc, snapshot, scope, rules, depth).map(Verified::into_report)
+}
+
+/// What [`verify_jsonc_canonical`] answers: the report, and the one decode it
+/// was taken over when the file has a canonical form (S3's `vfyq2`, fix pass
+/// 1, item 3).
+///
+/// A caller that goes on to act on a qualifying file (the gateway's
+/// `submit_plan` compiles, prices and seals it) acts on
+/// [`Verified::Canonical`]'s `canonical`, so the playbook it acts on is the
+/// one the report was taken over, by construction, and the file is decoded
+/// once from the socket to the seal.
+#[derive(Clone, PartialEq, Debug)]
+pub enum Verified {
+    /// The file has a canonical form: the report taken over it, and it.
+    Canonical {
+        /// The verifier's report.
+        report: VerifyReport,
+        /// The canonical form the report's bytes are, with the message they
+        /// were decoded to.
+        canonical: Box<json::Canonicalised<Playbook>>,
+    },
+    /// The file has no canonical form, or is past the cap: a report that
+    /// never qualifies, and nothing to act on.
+    Refused {
+        /// The verifier's report.
+        report: VerifyReport,
+    },
+}
+
+impl Verified {
+    /// The report, either way.
+    #[must_use]
+    pub const fn report(&self) -> &VerifyReport {
+        match self {
+            Self::Canonical { report, .. } | Self::Refused { report } => report,
+        }
+    }
+
+    /// The report, either way, by value.
+    #[must_use]
+    pub fn into_report(self) -> VerifyReport {
+        match self {
+            Self::Canonical { report, .. } | Self::Refused { report } => report,
+        }
+    }
+}
+
+/// [`verify_jsonc`], answering the canonical form beside the report.
+///
+/// # Errors
+///
+/// As [`verify_jsonc`].
+pub fn verify_jsonc_canonical(
+    playbook_jsonc: &str,
+    snapshot: &[u8],
+    scope: &Scope,
+    rules: &RulesTable,
+    depth: Depth,
+) -> Result<Verified, Error> {
     // The cap is on the text the player wrote, here where it enters, and
     // never on the canonical text below, which runs to several times its
     // length (`pharmakos_verifier::MAX_PLAYBOOK_CHARS`). A text past it is not
     // canonicalised, blanked or copied: it is `E0029`, at once.
     if pharmakos_verifier::is_too_long(playbook_jsonc) {
         let input = Input::too_long(snapshot, scope, rules).map_err(Error::from)?;
-        return Ok(pharmakos_verifier::verify(&input, depth));
+        return Ok(Verified::Refused {
+            report: pharmakos_verifier::verify(&input, depth),
+        });
     }
-    let canonical = canonicalise_text(playbook_jsonc).map(|canonical| canonical.json);
-    let blanked: String;
-    let bytes: &[u8] = match canonical.as_ref() {
-        Ok(json) => json.as_bytes(),
-        // Any file with no canonical form, syntax error or schema refusal
-        // alike: see the module doc for why the comment-invariance promise is
-        // conditional on this branch not being taken.
-        Err(_no_canonical_form) => {
-            blanked = blank_comments(playbook_jsonc);
-            blanked.as_bytes()
+    // The one decode's answer goes to the verifier whole: a canonical form
+    // with the message it was decoded to, or the refusal with the tree it
+    // kept, so the verifier hashes the bytes and reads nothing a second time.
+    Ok(match hand_over(playbook_jsonc)? {
+        HandedOver::Canonical(canonical) => {
+            let input =
+                Input::canonical(&canonical, snapshot, scope, rules).map_err(Error::from)?;
+            let report = pharmakos_verifier::verify(&input, depth);
+            Verified::Canonical { report, canonical }
         }
-    };
-    let input = Input::new(bytes, snapshot, scope, rules).map_err(Error::from)?;
-    Ok(pharmakos_verifier::verify(&input, depth))
+        HandedOver::Refused { bytes, refused } => {
+            let input = Input::refused(bytes.as_bytes(), &refused, snapshot, scope, rules)
+                .map_err(Error::from)?;
+            Verified::Refused {
+                report: pharmakos_verifier::verify(&input, depth),
+            }
+        }
+    })
 }
 
-/// The file with every `//` and `/* */` comment blanked to spaces, line
-/// breaks kept, so every byte offset is the offset in `text`.
+/// A JSONC playbook file's canonical form, decoded once: the decode
+/// [`verify_jsonc`] takes its report over, for a reader that needs the
+/// playbook and not a report (the gateway's `render_plan`, `resolve_refs`,
+/// its compile of a file it holds) and no comment (S3's `vfyq2`, fix pass 1,
+/// item 3). [`crate::canonical::canonicalise_text`] reads the same file to the
+/// same message and keeps its comments, for a reader that writes the file
+/// back.
 ///
-/// A comment is recognised outside a string only, the same rule the JSONC
-/// layer reads comments by; a `//` inside a string value is text. An
-/// unterminated block comment is blanked to the end of the file, which leaves
-/// the verifier to report whatever the file then lacks. A comment's bytes are
-/// replaced one for one, so a multi-byte character inside one becomes as many
-/// spaces as it had bytes and the result is still UTF-8.
-fn blank_comments(text: &str) -> String {
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    enum At {
-        Code,
-        Text,
-        Escape,
-        Line,
-        Block,
+/// # Errors
+///
+/// A text past `pharmakos_verifier::MAX_PLAYBOOK_CHARS` is refused by
+/// [`crate::error::Bound::Size`]; a text with no canonical form is refused at
+/// the codec's pointer, in its words, which are the JSONC reader's.
+pub fn decode_jsonc(playbook_jsonc: &str) -> Result<json::Canonicalised<Playbook>, Error> {
+    if pharmakos_verifier::is_too_long(playbook_jsonc) {
+        return Err(Error::bounded(
+            crate::error::Bound::Size,
+            "",
+            pharmakos_proto::said!(
+                "the playbook is past {} characters",
+                pharmakos_verifier::MAX_PLAYBOOK_CHARS
+            ),
+        ));
     }
-    // Read by character, so a blanked character becomes exactly as many spaces
-    // as it had bytes and the result is a `String` by construction: there is
-    // no byte buffer to convert back, and so no conversion that could fail.
-    let blank = |out: &mut String, character: char| {
-        for _ in 0..character.len_utf8() {
-            out.push(' ');
-        }
-    };
-    let mut out = String::with_capacity(text.len());
-    let mut at = At::Code;
-    let mut characters = text.chars().peekable();
-    while let Some(byte) = characters.next() {
-        match at {
-            At::Code => {
-                if byte == '/' && characters.peek() == Some(&'/') {
-                    let _ = characters.next();
-                    out.push_str("  ");
-                    at = At::Line;
-                } else if byte == '/' && characters.peek() == Some(&'*') {
-                    let _ = characters.next();
-                    out.push_str("  ");
-                    at = At::Block;
-                } else {
-                    if byte == '"' {
-                        at = At::Text;
-                    }
-                    out.push(byte);
-                }
-            }
-            At::Text => {
-                if byte == '\\' {
-                    at = At::Escape;
-                } else if byte == '"' {
-                    at = At::Code;
-                }
-                out.push(byte);
-            }
-            At::Escape => {
-                at = At::Text;
-                out.push(byte);
-            }
-            At::Line => {
-                if byte == '\n' {
-                    at = At::Code;
-                    out.push(byte);
-                } else if byte == '\r' {
-                    out.push(byte);
-                } else {
-                    blank(&mut out, byte);
-                }
-            }
-            At::Block => {
-                if byte == '*' && characters.peek() == Some(&'/') {
-                    let _ = characters.next();
-                    out.push_str("  ");
-                    at = At::Code;
-                } else if byte == '\n' || byte == '\r' {
-                    out.push(byte);
-                } else {
-                    blank(&mut out, byte);
-                }
-            }
-        }
-    }
-    out
+    json::canonical_decode::<Playbook>(&blank_comments(playbook_jsonc)?)
+        .map_err(|refused| Error::from(refused.error().clone()))
 }
+
+/// The bytes [`verify_jsonc`] hands the verifier, and which they are.
+#[derive(Clone, PartialEq, Debug)]
+enum HandedOver {
+    /// The file's canonical JSON, comments discarded, with its message.
+    Canonical(Box<json::Canonicalised<Playbook>>),
+    /// A file with no canonical form, syntax error or schema refusal alike:
+    /// its bytes by the module's rule ([`refused_bytes`]), and the refusal its
+    /// one decode found.
+    Refused {
+        /// The bytes `report_hash` is taken over.
+        bytes: String,
+        /// Why it has no canonical form.
+        refused: Box<json::Refused>,
+    },
+}
+
+/// The bytes the verifier is handed for a player's text (S3's `vfyq2`): the
+/// comments blanked ([`blank_comments`]), the blanked text decoded through the
+/// codec once ([`json::canonical_decode`], which reads it in one pass when it
+/// can), and the canonical form written from the message; or, when it has
+/// none, the text by [`refused_bytes`]'s rule with the refusal.
+///
+/// **It answers what [`crate::canonical::canonicalise_text`] answers**, and
+/// nothing is sent another way. The JSONC reader and the codec's reader are
+/// one grammar (`pharmakos_proto::json::grammar`), the one reading its
+/// comments as trivia and the other reading their blanks as whitespace, and
+/// both recognise a comment by one scanner ([`crate::jsonc`]'s
+/// `comment_end`). So a text one accepts the other accepts, as the same tree,
+/// and a text one refuses the other refuses at the same byte in the same
+/// words. The `differential` tests (`the_readers_agree_*`) hold the two to the
+/// same bytes over every committed file, their mutations, the edge cases and
+/// arbitrary text, with no exception.
+fn hand_over(text: &str) -> Result<HandedOver, Error> {
+    let blanked = blank_comments(text)?;
+    Ok(match json::canonical_decode::<Playbook>(&blanked) {
+        Ok(canonical) => HandedOver::Canonical(Box::new(canonical)),
+        Err(refused) => HandedOver::Refused {
+            bytes: refused_bytes(text, &blanked, refused.at())?,
+            refused: Box::new(refused),
+        },
+    })
+}
+
+/// The bytes a text with no canonical form is hashed as: **its comments
+/// blanked up to the byte the grammar refuses it at, and everything from
+/// that byte on as written** (S3's `vfyq2`, fix pass 1, item 10). Past a
+/// refusal there is no lexical structure to trust, so nothing there is read
+/// as a comment; a text the schema refuses is JSON throughout, so all of its
+/// comments are blanked. Every byte offset is the file's, and rewording a
+/// comment before the refusal, at its length, does not move the report.
+fn refused_bytes(text: &str, blanked: &str, at: Option<usize>) -> Result<String, Error> {
+    let Some(at) = at else {
+        return Ok(blanked.to_owned());
+    };
+    // `at` is a byte the reader stopped at in the blanked text: never inside a
+    // blanked comment (its spaces are whitespace the reader passes, and its
+    // first byte, the comment's `/`, is where a refusal inside one lands), so
+    // it is a character boundary of both texts.
+    match (blanked.get(..at), text.get(at..)) {
+        (Some(head), Some(tail)) => {
+            let mut bytes = String::with_capacity(text.len());
+            bytes.push_str(head);
+            bytes.push_str(tail);
+            Ok(bytes)
+        }
+        // The reader never stops past the end or inside a character: this
+        // would be the codec and this module disagreeing, said as such.
+        _ => Err(Error::at(
+            "",
+            pharmakos_proto::said!(
+                "the codec refused this text at byte {}, which is not a character boundary of \
+                 it: this build cannot say what to verify",
+                at
+            ),
+        )),
+    }
+}
+
+/// The file with every closed `//` and `/* */` comment blanked to spaces,
+/// line breaks kept, so every byte offset is the offset in `text`.
+///
+/// A comment is what [`crate::jsonc`]'s `comment_end` says is one, outside a
+/// string, where the string is what the grammar reads as one: the JSONC
+/// reader's own rules, so a comment this blanks is one that reader reads as
+/// trivia. A block comment that never closes is not one, and its `/` is left
+/// in place for the codec to refuse at that byte, as the JSONC reader does; so
+/// is the rest of a text once a string in it breaks the grammar, where both
+/// readers stop. A comment's bytes are replaced one for one, so a multi-byte
+/// character inside one becomes as many spaces as it had bytes and the result
+/// is still UTF-8.
+fn blank_comments(text: &str) -> Result<String, Error> {
+    // Every byte is read through the grammar's scan, so the meter counts what
+    // the blanker reads, as it does every other reader (fix pass 2, item D3).
+    let scan = grammar::Scan::new(text);
+    let mut out = String::with_capacity(text.len());
+    // A cut at `at` falls on `"`, `/` or the text's end, each a character
+    // boundary, so a copy between two of them is always one.
+    let copy = |out: &mut String, from: usize, to: usize| -> Result<(), Error> {
+        let piece = scan.slice(from, to).ok_or_else(|| {
+            Error::at(
+                "",
+                pharmakos_proto::said!(
+                    "the blanker cut the text at bytes {} and {}, not at characters",
+                    from,
+                    to
+                ),
+            )
+        })?;
+        out.push_str(piece);
+        Ok(())
+    };
+    let mut at = 0usize;
+    while let Some(byte) = scan.get(at) {
+        match byte {
+            b'"' => {
+                let end = match grammar::string(&scan, at, None) {
+                    Ok((end, _)) => end,
+                    // A string that breaks the grammar: both readers stop
+                    // there, so the rest is copied as written.
+                    Err(_breaks_the_grammar) => scan.len(),
+                };
+                copy(&mut out, at, end)?;
+                at = end;
+            }
+            b'/' => {
+                if let Some((end, _)) = comment_end(&scan, at) {
+                    // A comment's bytes become spaces one for one, its line
+                    // breaks kept, so every offset is the file's.
+                    for inside in at..end {
+                        if let Some(break_byte @ (b'\n' | b'\r')) = scan.get(inside) {
+                            out.push(char::from(break_byte));
+                        } else {
+                            out.push(' ');
+                        }
+                    }
+                    at = end;
+                } else {
+                    // A `/` that opens no closed comment: the grammar refuses
+                    // the text at or before it, so nothing after it is read as
+                    // code or comment, and the blanker stops looking: one scan
+                    // to the end, never one for each `/*` after it.
+                    copy(&mut out, at, scan.len())?;
+                    at = scan.len();
+                }
+            }
+            _ => {
+                let from = at;
+                while let Some(byte) = scan.get(at) {
+                    if byte == b'"' || byte == b'/' {
+                        break;
+                    }
+                    at = at.saturating_add(1);
+                }
+                copy(&mut out, from, at)?;
+            }
+        }
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod differential;
+#[cfg(test)]
+mod linearity;
 
 #[cfg(test)]
 mod tests {
@@ -278,12 +462,90 @@ mod tests {
     #[test]
     fn blanking_keeps_every_byte_offset_and_every_string() {
         let text = "{\"a\": \"// not a comment\", /* \u{e9} */ \"b\": 1 // end\n}\r\n";
-        let blanked = blank_comments(text);
+        let blanked = blank_comments(text).expect("blanked");
         assert_eq!(blanked.len(), text.len());
         assert_eq!(
             blanked,
             "{\"a\": \"// not a comment\",          \"b\": 1       \n}\r\n"
         );
+    }
+
+    /// A line break inside a blanked comment stays a line break, so a line
+    /// number the verifier reports is the line in the file the author wrote.
+    #[test]
+    fn blanking_keeps_every_line_break_inside_a_comment() {
+        let text = "{ /* one\ntwo\r\nthree */ \"a\" // x\n: 1 }";
+        let blanked = blank_comments(text).expect("blanked");
+        assert_eq!(blanked.len(), text.len());
+        let breaks = |of: &str| -> Vec<(usize, char)> {
+            of.char_indices()
+                .filter(|(_, character)| *character == '\n' || *character == '\r')
+                .collect()
+        };
+        assert_eq!(breaks(&blanked), breaks(text));
+        assert_eq!(blanked, "{       \n   \r\n         \"a\"     \n: 1 }");
+    }
+
+    /// `/*/` does not close itself: a block comment closes at the first `*/`
+    /// that starts after its `/*`.
+    #[test]
+    fn a_block_comment_does_not_close_on_its_own_slash() {
+        assert_eq!(blank_comments("/*/ x */1").expect("blanked"), "        1");
+        let unclosed = "1 /*/";
+        assert_eq!(blank_comments(unclosed).expect("blanked"), unclosed);
+    }
+
+    /// A text past `MAX_PLAYBOOK_CHARS` is `E0029` and nothing else: it is not
+    /// blanked, decoded or hashed.
+    #[test]
+    fn a_text_past_the_cap_is_refused_whole() {
+        let past = format!(
+            "{MINIMAL}{}",
+            " ".repeat(pharmakos_verifier::MAX_PLAYBOOK_CHARS)
+        );
+        let report = verify_jsonc(&past, &[], &scope(), &rules(), Depth::Quick).expect("a report");
+        let codes: Vec<&str> = report
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect();
+        assert_eq!(codes, ["E0029"]);
+        assert!(!report.qualifies);
+        assert!(report.plan_fingerprint.is_empty());
+    }
+
+    /// What a refused text's `report_hash` covers (S3's `vfyq2`, fix pass 1,
+    /// item 10, the correctness review's 97-byte case, one key renamed at its
+    /// length for `tests/confinement.rs`'s word list): its comments blanked
+    /// up to the byte the grammar refuses, and everything from there exactly
+    /// as written. `main` blanked every comment of such a text, past the
+    /// refusal too, so a `// c` after it did not move the hash.
+    #[test]
+    fn a_refused_text_is_hashed_blanked_up_to_its_refusal_and_verbatim_after() {
+        const TEXT: &str = "// header\n{\"status\":{ \"phase\":\n\"LULL\",\"clock_remaining_ms\" : // c\n90000 // c\n,\"roun\0d\" // c\n:1 }}";
+        const HASHED: &str = "         \n{\"status\":{ \"phase\":\n\"LULL\",\"clock_remaining_ms\" :     \n90000     \n,\"roun\0d\" // c\n:1 }}";
+        assert_eq!(TEXT.len(), 97);
+        assert_eq!(HASHED.len(), TEXT.len());
+        let report_of = |text: &str| {
+            verify_jsonc(text, &[], &scope(), &rules(), Depth::Quick).expect("a report")
+        };
+        let report = report_of(TEXT);
+        assert!(!report.qualifies);
+        let rules = rules();
+        let scope = scope();
+        let input = pharmakos_verifier::Input::new(HASHED.as_bytes(), &[], &scope, &rules)
+            .expect("an input");
+        let expected = pharmakos_verifier::verify(&input, Depth::Quick);
+        assert_eq!(report.report_hash, expected.report_hash);
+        assert_eq!(report.diagnostics, expected.diagnostics);
+        // Rewording a comment before the refusal does not move the report;
+        // rewording one after it does, because past a refusal nothing is read
+        // as a comment. (A comment's length is kept, as every byte offset is
+        // the file's, so a longer one moves the report wherever it is.)
+        let before = TEXT.replace("// header", "// HEADER");
+        assert_eq!(report_of(&before).report_hash, report.report_hash);
+        let after = TEXT.replace("\"roun\0d\" // c", "\"roun\0d\" // d");
+        assert_ne!(report_of(&after).report_hash, report.report_hash);
     }
 
     #[test]

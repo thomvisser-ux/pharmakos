@@ -103,7 +103,7 @@ impl Error {
     pub fn gateway(during: &'static str, error: &pharmakos_gateway::Error) -> Error {
         Error::Gateway {
             during,
-            message: error.message.clone(),
+            message: error.message().to_owned(),
         }
     }
 }

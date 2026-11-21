@@ -312,8 +312,8 @@ pub fn load(root: &Path, source: &Path) -> Result<Scenario, Failure> {
             Failure::input(strings::scenario_invalid(
                 &display,
                 &[(
-                    error.pointer.clone(),
-                    format!("not valid JSONC: {}", error.message),
+                    error.pointer().to_owned(),
+                    format!("not valid JSONC: {}", error.message()),
                 )],
             ))
         })?;
@@ -391,8 +391,9 @@ fn read(
         Some(found) => problems.at(
             "/format",
             format!(
-                "must be exactly `{FORMAT}`, and is `{found}`: a new format is a new string, so \
-                 an old runner refuses a new file rather than half-understanding it"
+                "must be exactly `{FORMAT}`, and is `{}`: a new format is a new string, so \
+                 an old runner refuses a new file rather than half-understanding it",
+                pharmakos_proto::json::grammar::escaped(&found)
             ),
         ),
         None => {}
@@ -572,7 +573,10 @@ fn read_seats(root: &Path, json: &Json, problems: &mut Problems) -> Vec<Seat> {
                 if seat.get("playbook").is_some() {
                     problems.at(
                         &format!("{base}/playbook"),
-                        format!("a `{other}` seat does not seal a file, so it takes no `playbook`"),
+                        format!(
+                            "a `{}` seat does not seal a file, so it takes no `playbook`",
+                            pharmakos_proto::json::grammar::escaped(other)
+                        ),
                     );
                 }
                 if other == "safe" {
@@ -584,7 +588,10 @@ fn read_seats(root: &Path, json: &Json, problems: &mut Problems) -> Vec<Seat> {
             other => {
                 problems.at(
                     &format!("{base}/kind"),
-                    format!("`{other}` must be one of playbook, safe, builtin"),
+                    format!(
+                        "`{}` must be one of playbook, safe, builtin",
+                        pharmakos_proto::json::grammar::escaped(other)
+                    ),
                 );
                 continue;
             }
@@ -738,9 +745,10 @@ fn read_assertions(
             problems.at(
                 &format!("{base}/assert"),
                 format!(
-                    "`{kind}` is reserved for the vocabulary extension decisions-log item 97 \
+                    "`{}` is reserved for the vocabulary extension decisions-log item 97 \
                      authorises (plan §7 decision 16); T15 took none of the three, and the owner \
-                     confirmed none is taken now (decisions-log item 128). It is not in {FORMAT}."
+                     confirmed none is taken now (decisions-log item 128). It is not in {FORMAT}.",
+                    pharmakos_proto::json::grammar::escaped(kind)
                 ),
             );
             continue;
@@ -769,7 +777,8 @@ fn read_assertions(
             other => problems.at(
                 &format!("{base}/assert"),
                 format!(
-                    "`{other}` is not in the assertion vocabulary; {FORMAT} has exactly {}",
+                    "`{}` is not in the assertion vocabulary; {FORMAT} has exactly {}",
+                    pharmakos_proto::json::grammar::escaped(other),
                     ASSERTIONS.join(" and ")
                 ),
             ),
@@ -872,9 +881,10 @@ fn read_event_fired(assertion: &Json, base: &str, problems: &mut Problems) -> Op
         problems.at(
             &format!("{base}/event"),
             format!(
-                "`{event}` is not an event this build's sim reports. A misspelled name would \
+                "`{}` is not an event this build's sim reports. A misspelled name would \
                  otherwise play the whole match and then fail for never having fired, which is \
                  a typo reported as a behaviour change. Known: {}",
+                pharmakos_proto::json::grammar::escaped(event),
                 known.join(", ")
             ),
         );
@@ -995,7 +1005,10 @@ fn check_path(
     if must_exist && !root.join(relative).is_file() {
         problems.at(
             pointer,
-            format!("`{relative}` is not a file in this repository"),
+            format!(
+                "`{}` is not a file in this repository",
+                pharmakos_proto::json::grammar::escaped(relative)
+            ),
         );
     }
 }

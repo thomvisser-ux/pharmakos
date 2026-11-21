@@ -85,7 +85,7 @@ pub struct Summary {
 )]
 pub fn list(folder: &Path) -> Result<Vec<Summary>, Error> {
     let entries = std::fs::read_dir(folder)
-        .map_err(|error| Error::at("", format!("reading {}: {error}", folder.display())))?;
+        .map_err(|error| reading(&folder.display().to_string(), &error))?;
     // An entry the folder cannot read is refused with the folder, as an
     // unreadable folder is (E22): skipping it would list a library short of a
     // template without saying so.
@@ -93,7 +93,7 @@ pub fn list(folder: &Path) -> Result<Vec<Summary>, Error> {
         .map(|entry| {
             entry
                 .map(|entry| entry.path())
-                .map_err(|error| Error::at("", format!("reading {}: {error}", folder.display())))
+                .map_err(|error| reading(&folder.display().to_string(), &error))
         })
         .collect::<Result<Vec<PathBuf>, Error>>()?;
     let mut ids: Vec<String> = paths
@@ -130,8 +130,7 @@ pub fn list(folder: &Path) -> Result<Vec<Summary>, Error> {
 /// When `template_id` is not a plain name, or the file cannot be read.
 pub fn read(folder: &Path, template_id: &str) -> Result<String, Error> {
     let path = resolve(folder, template_id)?;
-    std::fs::read_to_string(&path)
-        .map_err(|error| Error::at("", format!("reading {}: {error}", path.display())))
+    std::fs::read_to_string(&path).map_err(|error| reading(&path.display().to_string(), &error))
 }
 
 /// The Win32 device names. `<dir>\CON.jsonc` resolves to the console device on
@@ -157,7 +156,10 @@ fn resolve(folder: &Path, template_id: &str) -> Result<PathBuf, Error> {
     let refuse = || {
         Error::at(
             "",
-            format!("`{template_id}` is not a template name; a template id is a plain file stem"),
+            pharmakos_proto::said!(
+                "`{}` is not a template name; a template id is a plain file stem",
+                pharmakos_proto::json::grammar::quoted(template_id)
+            ),
         )
     };
     if template_id.is_empty() || template_id == "." || template_id == ".." {
@@ -289,12 +291,12 @@ fn declared_in(template: &Json) -> Result<Vec<Declared>, Error> {
     let mut found: Vec<Declared> = Vec::with_capacity(items.len());
     for (index, item) in items.iter().enumerate() {
         let at = format!("{PARAMETERS_POINTER}/{index}");
-        let text = |member: &str| -> Result<String, Error> {
+        let text = |member: &'static str| -> Result<String, Error> {
             match item.get(member) {
                 Some(Json::String(text)) => Ok(text.clone()),
                 _ => Err(Error::at(
                     format!("{at}/{member}"),
-                    format!("a declared parameter's `{member}` is a string"),
+                    pharmakos_proto::said!("a declared parameter's `{}` is a string", member),
                 )),
             }
         };
@@ -303,7 +305,10 @@ fn declared_in(template: &Json) -> Result<Vec<Declared>, Error> {
         if value_at(template, &pointer)?.is_none() {
             return Err(Error::at(
                 format!("{at}/pointer"),
-                format!("`{pointer}` names nothing in this template"),
+                pharmakos_proto::said!(
+                    "`{}` names nothing in this template",
+                    pharmakos_proto::json::grammar::quoted(&pointer)
+                ),
             ));
         }
         found.push(Declared { pointer, label });
@@ -385,14 +390,28 @@ fn compact_into(value: &Json, out: &mut String) {
     }
 }
 
+/// A file or folder the host could not read, as a refusal: its name quoted,
+/// the system's words beside it.
+fn reading(name: &str, error: &std::io::Error) -> Error {
+    Error::at(
+        "",
+        pharmakos_proto::said!(
+            "reading {}: {}",
+            pharmakos_proto::json::grammar::quoted(name),
+            pharmakos_proto::json::grammar::Said::engine_error(error)
+        ),
+    )
+}
+
 /// One parameter's text as JSON, or the refusal that names it.
 fn parse_value(parameter: &Parameter) -> Result<Json, Error> {
     pharmakos_proto::json::read(&parameter.value).map_err(|error| {
         Error::at(
             &parameter.name,
-            format!(
+            pharmakos_proto::said!(
                 "`{}` is not a JSON value: {}",
-                parameter.value, error.message
+                pharmakos_proto::json::grammar::quoted(&parameter.value),
+                error.said()
             ),
         )
     })
@@ -458,6 +477,25 @@ pub fn instantiate(
     explicit: &[Parameter],
     suggested: &[Parameter],
 ) -> Result<Instance, Error> {
+    // Bounded before anything is read (S3's `vfyq2`, fix pass 2, item A2):
+    // each parameter becomes at most one operation of one patch, and each
+    // name is a pointer, read as one.
+    for list in [explicit, suggested] {
+        if list.len() > crate::patch::MAX_PATCH_OPERATIONS {
+            return Err(Error::bounded(
+                crate::error::Bound::Operations,
+                "",
+                pharmakos_proto::said!(
+                    "{} parameters, and an instantiation applies at most {}",
+                    list.len(),
+                    crate::patch::MAX_PATCH_OPERATIONS
+                ),
+            ));
+        }
+        for parameter in list {
+            crate::error::split_pointer(&parameter.name)?;
+        }
+    }
     let document = Document::parse(template_jsonc)?;
     let template = document.to_json();
     let declarations = declared_in(&template)?;
@@ -616,7 +654,7 @@ mod tests {
             }],
         )
         .expect_err("there is no ninth step");
-        assert!(!error.pointer.is_empty());
+        assert!(!error.pointer().is_empty());
     }
 
     #[test]
@@ -677,7 +715,7 @@ mod tests {
     fn a_declaration_that_points_at_nothing_is_refused() {
         let broken = DECLARING.replace("/fallback/hold/at", "/fallback/shadow");
         let error = super::declared(&broken).expect_err("points at nothing");
-        assert_eq!(error.pointer, "/meta/parameters/1/pointer");
+        assert_eq!(error.pointer(), "/meta/parameters/1/pointer");
     }
 
     #[test]

@@ -64,6 +64,10 @@ const fn sextets(first: u8, second: u8, third: u8) -> [u8; 4] {
 /// The standard alphabet's symbol for a six-bit value, by arithmetic rather
 /// than a table lookup, so no index can miss: every value a mask leaves,
 /// 0 to 63, has its arm, and the last arm is `/`'s.
+#[allow(
+    clippy::arithmetic_side_effects,
+    reason = "each arm's range bounds its sum below 128: `A` + 25, `a` + 25, `0` + 9"
+)]
 fn symbol(sextet: u8) -> char {
     char::from(match sextet & 0x3f {
         value @ 0..=25 => b'A' + value,

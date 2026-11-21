@@ -57,6 +57,7 @@
 //! [`crate::error::Code::InvalidArgument`] before a world is built, naming the
 //! setting the lobby typed.
 
+use pharmakos_proto::said;
 use std::path::{Path, PathBuf};
 
 use pharmakos_proto::gp::v1::Voxel;
@@ -197,21 +198,27 @@ impl Host {
     /// # Errors
     ///
     /// [`crate::error::Code::InvalidArgument`] for a seat count
-    /// [`Host::check_seats`] refuses and a lobby setting
-    /// [`Host::check_settings`] refuses, and [`crate::error::Code::Internal`]
+    /// [`Host::check_seats`] refuses, a lobby setting
+    /// [`Host::check_settings`] refuses and a rules table the verifier refuses
+    /// ([`pharmakos_verifier::read_rules`]), and [`crate::error::Code::Internal`]
     /// when the map generator or the search graph will not build, or the
     /// match will not open on the generated world (the snapshot's door,
     /// [`Runner::new`]) — none is something a caller did.
     pub fn open(config: &WorldConfig, library: Option<PathBuf>) -> Result<Host, Error> {
         Host::check_seats(config.seats)?;
         Host::check_settings(&config.match_settings)?;
+        Host::check_rules(&config.rules)?;
         let world = World::new(config).map_err(|error| {
-            Error::internal(format!("this match's map could not be generated: {error}"))
+            Error::internal(said!(
+                "this match's map could not be generated: {}",
+                crate::error::engine(&error)
+            ))
         })?;
         let routes = RouteAdapter::new(world.voxels(), world.rules())?;
         let runner = Runner::new(world).map_err(|error| {
-            Error::internal(format!(
-                "this match could not be opened on its world: {error}"
+            Error::internal(said!(
+                "this match could not be opened on its world: {}",
+                crate::error::engine(&error)
             ))
         })?;
         Ok(Host {
@@ -246,8 +253,9 @@ impl Host {
     ) -> Result<Host, Error> {
         Host::check_seats(seats)?;
         let rules = RulesTable::from_canonical_json(rules_json).map_err(|error| {
-            Error::invalid(format!(
-                "this is not a rules table this build reads: {error}"
+            Error::invalid(said!(
+                "this is not a rules table this build reads: {}",
+                crate::error::engine(&error)
             ))
         })?;
         let config = WorldConfig {
@@ -262,6 +270,43 @@ impl Host {
         Host::open(&config, library)
     }
 
+    /// The verifier's own rules checks, once (S3's `vfyq2`, fix pass 5, item
+    /// L8): under a table it refuses, every plan's check would be a refusal,
+    /// so no match opens on one. [`Host::open`] calls it before anything is
+    /// built, and `serve::run_in` before anything is written (fix pass 6,
+    /// item 3).
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::InvalidArgument`], naming the gap.
+    pub fn check_rules(rules: &RulesTable) -> Result<(), Error> {
+        pharmakos_verifier::read_rules(rules)
+            .map(|_| ())
+            .map_err(|gap| {
+                Error::invalid(said!(
+                    "this rules table hosts no match, because the verifier refuses it: {}",
+                    pharmakos_proto::json::grammar::Said::engine_error(&gap)
+                ))
+            })
+    }
+
+    /// [`Host::check_rules`] over the rules table's canonical JSON, as a
+    /// binary holds it.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::InvalidArgument`] for a rules table this build
+    /// will not read, or one the verifier refuses.
+    pub fn check_rules_text(rules_json: &str) -> Result<(), Error> {
+        let rules = RulesTable::from_canonical_json(rules_json).map_err(|error| {
+            Error::invalid(said!(
+                "this is not a rules table this build reads: {}",
+                crate::error::engine(&error)
+            ))
+        })?;
+        Host::check_rules(&rules)
+    }
+
     /// Refuse a seat count v1 does not play: none, or more than
     /// [`MAX_SEATS`].
     ///
@@ -272,8 +317,10 @@ impl Host {
         if (1..=MAX_SEATS).contains(&seats) {
             return Ok(());
         }
-        Err(Error::invalid(format!(
-            "a match has between 1 and {MAX_SEATS} seats, and this asks for {seats}"
+        Err(Error::invalid(said!(
+            "a match has between 1 and {} seats, and this asks for {}",
+            MAX_SEATS,
+            seats
         )))
     }
 
@@ -301,7 +348,7 @@ impl Host {
             ));
         }
         if settings.segment_lengths_ms.len() > pharmakos_sim::rules::MAX_SEGMENT_LENGTHS {
-            return Err(Error::invalid(format!(
+            return Err(Error::invalid(said!(
                 "the segment ladder has {} entries, past the {} a match carries",
                 settings.segment_lengths_ms.len(),
                 pharmakos_sim::rules::MAX_SEGMENT_LENGTHS
@@ -309,15 +356,20 @@ impl Host {
         }
         for (index, length) in settings.segment_lengths_ms.iter().enumerate() {
             if *length <= 0 {
-                return Err(Error::invalid(format!(
-                    "segment length {index} is {length} ms: a Push runs for a positive length of \
-                     game time"
+                return Err(Error::invalid(said!(
+                    "segment length {} is {} ms: a Push runs for a positive length of \
+                     game time",
+                    index,
+                    length
                 )));
             }
             if *length < MS_PER_TICK {
-                return Err(Error::invalid(format!(
-                    "segment length {index} is {length} ms and a tick is {MS_PER_TICK} ms: a \
-                     segment shorter than one tick is a segment nothing happens in"
+                return Err(Error::invalid(said!(
+                    "segment length {} is {} ms and a tick is {} ms: a \
+                     segment shorter than one tick is a segment nothing happens in",
+                    index,
+                    length,
+                    MS_PER_TICK
                 )));
             }
         }
@@ -432,7 +484,7 @@ impl Host {
     pub fn seal_plans(&mut self, plans: Vec<(SeatId, Plan)>) -> Result<(), Error> {
         let phase = self.runner.phase();
         if phase != MatchPhase::Lull && !plans.is_empty() {
-            return Err(Error::internal(format!(
+            return Err(Error::internal(said!(
                 "this match would take no sealed playbook: a playbook is sealed during a Lull and \
                  this match is in its {}",
                 phase.name()
@@ -441,7 +493,7 @@ impl Host {
         let in_world = self.runner.world().seats().len();
         for (seat, _) in &plans {
             if u32::from(seat.raw()) >= in_world {
-                return Err(Error::internal(format!(
+                return Err(Error::internal(said!(
                     "this match would not take seat {}'s sealed playbook: this match has no seat \
                      {}",
                     seat.raw(),
@@ -451,9 +503,10 @@ impl Host {
         }
         for (seat, plan) in plans {
             self.runner.seal_playbook(seat, plan).map_err(|refused| {
-                Error::internal(format!(
-                    "this match would not take seat {}'s sealed playbook: {refused}",
-                    seat.raw()
+                Error::internal(said!(
+                    "this match would not take seat {}'s sealed playbook: {}",
+                    seat.raw(),
+                    crate::error::engine(&refused)
                 ))
             })?;
         }
@@ -472,7 +525,10 @@ impl Host {
     /// have avoided.
     pub fn begin_push(&mut self) -> Result<bool, Error> {
         self.runner.begin_push().map_err(|refused| {
-            Error::internal(format!("this match would not open its Push: {refused}"))
+            Error::internal(said!(
+                "this match would not open its Push: {}",
+                crate::error::engine(&refused)
+            ))
         })
     }
 
@@ -487,7 +543,10 @@ impl Host {
     /// has no tick after this one: both are the host's to have avoided.
     pub fn step(&mut self) -> Result<Option<TickReport>, Error> {
         self.runner.step().map_err(|refused| {
-            Error::internal(format!("this match would not step a whole tick: {refused}"))
+            Error::internal(said!(
+                "this match would not step a whole tick: {}",
+                crate::error::engine(&refused)
+            ))
         })
     }
 
@@ -513,7 +572,10 @@ impl Host {
     /// one.
     pub fn phased_tick(&mut self) -> Result<Option<PhasedTick<'_>>, Error> {
         self.runner.phased_tick().map_err(|refused| {
-            Error::internal(format!("this match would not open a tick: {refused}"))
+            Error::internal(said!(
+                "this match would not open a tick: {}",
+                crate::error::engine(&refused)
+            ))
         })
     }
 
@@ -563,9 +625,12 @@ impl Host {
         self.runner
             .seed_layout_with_settings(layout, settings)
             .map_err(|refused| match refused {
-                LayoutRefused::NotInTheLobby | LayoutRefused::AfterASeal => Error::phase_closed(format!(
-                    "a layout is placed in the lobby, before the first Lull is planned: {refused}"
-                )),
+                LayoutRefused::NotInTheLobby | LayoutRefused::AfterASeal => {
+                    Error::phase_closed(said!(
+                        "a layout is placed in the lobby, before the first Lull is planned: {}",
+                        crate::error::engine(&refused)
+                    ))
+                }
                 LayoutRefused::Commander
                 | LayoutRefused::NoSuchSeat { .. }
                 | LayoutRefused::OffTheMap { .. }
@@ -573,11 +638,13 @@ impl Host {
                 | LayoutRefused::NoSuchLayoutBeacon { .. }
                 | LayoutRefused::WrongWrit { .. }
                 | LayoutRefused::SettingsTwice { .. }
-                | LayoutRefused::BadSetting { .. } => {
-                    Error::invalid(format!("this match would not take the layout: {refused}"))
-                }
-                LayoutRefused::Unsettled => Error::internal(format!(
-                    "this match could not be frozen after its layout: {refused}"
+                | LayoutRefused::BadSetting { .. } => Error::invalid(said!(
+                    "this match would not take the layout: {}",
+                    crate::error::engine(&refused)
+                )),
+                LayoutRefused::Unsettled => Error::internal(said!(
+                    "this match could not be frozen after its layout: {}",
+                    crate::error::engine(&refused)
                 )),
             })
     }
@@ -602,9 +669,10 @@ impl Host {
         }
         let pending = world.pending_orders();
         if pending > 0 {
-            return Err(Error::internal(format!(
-                "a save holds no queued order, and {pending} the host filed are still waiting for \
-                 the next tick"
+            return Err(Error::internal(said!(
+                "a save holds no queued order, and {} the host filed are still waiting for \
+                 the next tick",
+                pending
             )));
         }
         Ok(())
@@ -620,7 +688,10 @@ impl Host {
     /// As [`Host::begin_push`], while a phased tick is open.
     pub fn end_recap(&mut self) -> Result<bool, Error> {
         self.runner.end_recap().map_err(|refused| {
-            Error::internal(format!("this match would not close its recap: {refused}"))
+            Error::internal(said!(
+                "this match would not close its recap: {}",
+                crate::error::engine(&refused)
+            ))
         })
     }
 
@@ -687,23 +758,28 @@ impl Host {
             ));
         }
         let snapshot = Snapshot::from_bytes(snapshot_bytes).map_err(|error| {
-            Error::invalid(format!(
-                "this save's planning snapshot will not decode: {error}"
+            Error::invalid(said!(
+                "this save's planning snapshot will not decode: {}",
+                crate::error::engine(&error)
             ))
         })?;
         self.runner.restore(&snapshot).map_err(|error| {
-            Error::invalid(format!(
+            Error::invalid(said!(
                 "this save's planning snapshot will not restore into the match its config line \
-                 describes: {error}"
+                 describes: {}",
+                crate::error::engine(&error)
             ))
         })?;
         if self.runner.phase() == MatchPhase::Recap {
             self.runner.end_recap().map_err(|refused| {
-                Error::internal(format!("this save's recap would not close: {refused}"))
+                Error::internal(said!(
+                    "this save's recap would not close: {}",
+                    crate::error::engine(&refused)
+                ))
             })?;
         }
         if self.runner.phase() != MatchPhase::Lull {
-            return Err(Error::invalid(format!(
+            return Err(Error::invalid(said!(
                 "a save is made in a Lull, and this one's planning snapshot lands in the match's \
                  {}",
                 self.runner.phase().name()
@@ -715,8 +791,9 @@ impl Host {
             .snapshot()
             .to_bytes()
             .map_err(|error| {
-                Error::internal(format!(
-                    "the restored planning snapshot would not encode: {error}"
+                Error::internal(said!(
+                    "the restored planning snapshot would not encode: {}",
+                    crate::error::engine(&error)
                 ))
             })?;
         if again != snapshot_bytes {
@@ -954,8 +1031,8 @@ mod tests {
             ),
         ] {
             let error = Host::check_settings(&settings).expect_err("refused");
-            assert_eq!(error.code, Code::InvalidArgument);
-            assert!(error.message.contains(expected), "{}", error.message);
+            assert_eq!(error.code(), Code::InvalidArgument);
+            assert!(error.message().contains(expected), "{}", error.message());
         }
     }
 
@@ -1033,11 +1110,11 @@ mod tests {
             .seal_plans(vec![(SeatId::new(0), plan.clone())])
             .expect_err("a Push does not");
         assert_eq!(
-            error.code,
+            error.code(),
             Code::Internal,
             "a host that seals late is a bug"
         );
-        assert!(error.message.contains("its push"), "{}", error.message);
+        assert!(error.message().contains("its push"), "{}", error.message());
     }
 
     /// A refusal is all of them or none of them.
@@ -1067,8 +1144,8 @@ mod tests {
                 (SeatId::new(2), plan),
             ])
             .expect_err("a seat this match has not got");
-        assert_eq!(error.code, Code::Internal);
-        assert!(error.message.contains("no seat 2"), "{}", error.message);
+        assert_eq!(error.code(), Code::Internal);
+        assert!(error.message().contains("no seat 2"), "{}", error.message());
         assert!(
             host.world().interpreter().plan(0).is_none(),
             "seat 0 came before the refusal in the list and is still unsealed"
@@ -1205,7 +1282,7 @@ mod seams {
         }
         assert!(host.runner().tick_is_open());
         assert_eq!(
-            host.step().map_err(|error| error.code),
+            host.step().map_err(|error| error.code()),
             Err(Code::Internal),
             "no whole-tick step over an open tick"
         );
@@ -1214,7 +1291,7 @@ mod seams {
             "no capture of half a tick"
         );
         assert_eq!(
-            host.check_savable().map_err(|error| error.code),
+            host.check_savable().map_err(|error| error.code()),
             Err(Code::Internal),
             "no save of half a tick"
         );
@@ -1235,7 +1312,7 @@ mod seams {
         assert!(host.check_savable().is_ok(), "a quiet Lull saves");
         assert!(host.file_damage(hit()).is_ok());
         assert_eq!(
-            host.check_savable().map_err(|error| error.code),
+            host.check_savable().map_err(|error| error.code()),
             Err(Code::Internal),
             "a save would lose the order the host filed"
         );
@@ -1254,7 +1331,7 @@ mod seams {
             round_limit: 1,
         };
         assert_eq!(
-            Host::check_settings(&settings).map_err(|error| error.code),
+            Host::check_settings(&settings).map_err(|error| error.code()),
             Err(Code::InvalidArgument)
         );
     }
@@ -1273,7 +1350,7 @@ mod seams {
         let beacons = lobby.world().beacons().len();
         let units = lobby.world().units().len();
         assert_eq!(
-            lobby.seed_layout(&layout(7)).map_err(|error| error.code),
+            lobby.seed_layout(&layout(7)).map_err(|error| error.code()),
             Err(Code::InvalidArgument),
             "a seat the match has not got"
         );
@@ -1284,7 +1361,7 @@ mod seams {
         assert_eq!(lobby.world().beacons().len(), beacons + 1);
         assert_eq!(lobby.world().units().len(), units + 2);
         assert_eq!(
-            lobby.seed_layout(&layout(0)).map_err(|error| error.code),
+            lobby.seed_layout(&layout(0)).map_err(|error| error.code()),
             Err(Code::PhaseClosed),
             "once"
         );
@@ -1292,7 +1369,9 @@ mod seams {
         assert!(playing.begin_push().expect("the host answers"));
         assert!(playing.step().expect("a tick").is_some());
         assert_eq!(
-            playing.seed_layout(&layout(0)).map_err(|error| error.code),
+            playing
+                .seed_layout(&layout(0))
+                .map_err(|error| error.code()),
             Err(Code::PhaseClosed),
             "and never once the match has moved"
         );
@@ -1329,7 +1408,7 @@ mod seams {
         assert_eq!(
             lobby
                 .seed_layout_with_settings(&layout, &[raid(Some(0))])
-                .map_err(|error| error.code),
+                .map_err(|error| error.code()),
             Err(Code::InvalidArgument),
             "a percentage of nothing"
         );
@@ -1347,7 +1426,7 @@ mod seams {
         assert_eq!(
             lobby
                 .seed_layout_with_settings(&layout, &[raid(None)])
-                .map_err(|error| error.code),
+                .map_err(|error| error.code()),
             Err(Code::PhaseClosed),
             "once"
         );

@@ -56,6 +56,7 @@
 
 use crate::error::Error;
 use crate::fog::{Audience, FogFilter, FogPolicy, Viewer, Vision};
+use pharmakos_proto::said;
 use pharmakos_sim::math::quantity::Ms;
 use pharmakos_sim::tables::SeatId;
 use std::collections::BTreeMap;
@@ -96,8 +97,9 @@ impl Kind {
             return Err(Error::invalid("an event kind cannot be empty"));
         }
         if name.chars().count() > MAX_KIND_CHARS {
-            return Err(Error::invalid(format!(
-                "an event kind is at most {MAX_KIND_CHARS} characters"
+            return Err(Error::invalid(said!(
+                "an event kind is at most {} characters",
+                MAX_KIND_CHARS
             )));
         }
         let first_is_letter = name
@@ -105,16 +107,18 @@ impl Kind {
             .next()
             .is_some_and(|character| character.is_ascii_lowercase());
         if !first_is_letter {
-            return Err(Error::invalid(format!(
-                "`{name}` does not start with a lower-case ASCII letter, so a scenario file \
-                 could not name it"
+            return Err(Error::invalid(said!(
+                "`{}` does not start with a lower-case ASCII letter, so a scenario file \
+                 could not name it",
+                pharmakos_proto::json::grammar::quoted(name)
             )));
         }
         if !name.chars().all(|character| {
             character.is_ascii_lowercase() || character.is_ascii_digit() || character == '_'
         }) {
-            return Err(Error::invalid(format!(
-                "`{name}` is not lower_snake_case, so a scenario file could not name it"
+            return Err(Error::invalid(said!(
+                "`{}` is not lower_snake_case, so a scenario file could not name it",
+                pharmakos_proto::json::grammar::quoted(name)
             )));
         }
         Ok(Kind(name.to_owned()))
@@ -192,7 +196,7 @@ impl Witnesses {
         for seat in seats {
             if *owner != Some(seat) && vision.sees(seat, at) {
                 bits |= Witnesses::bit(seat).ok_or_else(|| {
-                    Error::internal(format!(
+                    Error::internal(said!(
                         "seat {} is past the eight seats a feed's witness set holds",
                         seat.raw()
                     ))
@@ -428,7 +432,7 @@ impl Cursor {
             // A cursor of the other listing fails here, which is the point of
             // the tag: it is a place in something else, and resuming a beacon
             // page at an event count is a place nobody meant.
-            return Err(Error::invalid(format!(
+            return Err(Error::invalid(said!(
                 "that is not a cursor {} issued",
                 listing.name()
             )));
@@ -791,7 +795,7 @@ impl SegmentFeed {
             ));
         }
         let shown = usize::try_from(from.index()).map_err(|_| {
-            Error::invalid(format!(
+            Error::invalid(said!(
                 "this cursor points at event {}, past any listing",
                 from.index()
             ))
@@ -838,7 +842,7 @@ impl SegmentFeed {
             snapshot: self.snapshot,
             listing: Listing::Feed,
             index: u32::try_from(index).map_err(|_| {
-                Error::internal(format!("a feed listing of {index} does not fit a cursor"))
+                Error::internal(said!("a feed listing of {} does not fit a cursor", index))
             })?,
             lifted,
         };
@@ -1024,7 +1028,7 @@ mod tests {
             "beacon.placed",
         ] {
             assert_eq!(
-                Kind::new(bad).expect_err("refused").code,
+                Kind::new(bad).expect_err("refused").code(),
                 Code::InvalidArgument,
                 "`{bad}` should not be a kind"
             );
@@ -1039,10 +1043,10 @@ mod tests {
         put(&mut feed, event(2_000, "beacon_placed", Audience::Public)).expect("later");
         let error = put(&mut feed, event(1_500, "beacon_placed", Audience::Public))
             .expect_err("out of order");
-        assert_eq!(error.code, Code::InvalidArgument);
+        assert_eq!(error.code(), Code::InvalidArgument);
         let error =
             put(&mut feed, event(-1, "beacon_placed", Audience::Public)).expect_err("negative");
-        assert_eq!(error.code, Code::InvalidArgument);
+        assert_eq!(error.code(), Code::InvalidArgument);
         assert_eq!(feed.len(), 2);
         assert!(!feed.is_empty());
     }
@@ -1262,7 +1266,7 @@ mod tests {
                 8,
             )
             .expect_err("refused");
-        assert_eq!(error.code, Code::StaleSnapshot);
+        assert_eq!(error.code(), Code::StaleSnapshot);
     }
 
     #[test]
@@ -1271,11 +1275,11 @@ mod tests {
         let mut text = Cursor::start(current).render();
         text.replace_range(20..21, "f");
         let error = Cursor::parse(&text, current, Listing::Feed).expect_err("refused");
-        assert_eq!(error.code, Code::InvalidArgument);
+        assert_eq!(error.code(), Code::InvalidArgument);
         assert_eq!(
             Cursor::parse("nonsense", current, Listing::Feed)
                 .expect_err("refused")
-                .code,
+                .code(),
             Code::InvalidArgument
         );
         // A spelling this gateway never issues is not a cursor this gateway
@@ -1284,7 +1288,7 @@ mod tests {
         assert_eq!(
             Cursor::parse(&issued.to_uppercase(), current, Listing::Feed)
                 .expect_err("refused")
-                .code,
+                .code(),
             Code::InvalidArgument,
             "upper-case hex is not the rendering"
         );
@@ -1306,13 +1310,13 @@ mod tests {
         assert_eq!(
             Cursor::parse(&feed, current, Listing::Beacons)
                 .expect_err("an event index is not a beacon offset")
-                .code,
+                .code(),
             Code::InvalidArgument
         );
         assert_eq!(
             Cursor::parse(&beacons, current, Listing::Feed)
                 .expect_err("and not the other way round either")
-                .code,
+                .code(),
             Code::InvalidArgument
         );
         assert_eq!(
@@ -1376,24 +1380,28 @@ mod tests {
         };
         let text = cursor.render();
         assert_eq!(
-            ViewCursor::parse(&text, 10).expect_err("another view").code,
+            ViewCursor::parse(&text, 10)
+                .expect_err("another view")
+                .code(),
             Code::StaleSnapshot,
             "a restore mints a new view and the client asks for a keyframe"
         );
         let mut damaged = text.clone();
         damaged.replace_range(20..21, "f");
         assert_eq!(
-            ViewCursor::parse(&damaged, 9).expect_err("refused").code,
+            ViewCursor::parse(&damaged, 9).expect_err("refused").code(),
             Code::InvalidArgument
         );
         assert_eq!(
-            ViewCursor::parse("nonsense", 9).expect_err("refused").code,
+            ViewCursor::parse("nonsense", 9)
+                .expect_err("refused")
+                .code(),
             Code::InvalidArgument
         );
         assert_eq!(
             ViewCursor::parse(&text.to_uppercase(), 9)
                 .expect_err("refused")
-                .code,
+                .code(),
             Code::InvalidArgument,
             "upper-case hex is not the rendering"
         );
@@ -1408,7 +1416,7 @@ mod tests {
         assert_eq!(
             ViewCursor::parse(&feed, snapshot.raw())
                 .expect_err("an event index is not a place in a view")
-                .code,
+                .code(),
             Code::InvalidArgument
         );
         let view = ViewCursor {
@@ -1421,7 +1429,7 @@ mod tests {
         assert_eq!(
             Cursor::parse(&view, snapshot, Listing::Feed)
                 .expect_err("and not the other way round")
-                .code,
+                .code(),
             Code::InvalidArgument
         );
     }
@@ -1572,7 +1580,7 @@ mod tests {
                 64,
             )
             .expect_err("seat 1's fog has not lifted");
-        assert_eq!(error.code, Code::InvalidArgument);
+        assert_eq!(error.code(), Code::InvalidArgument);
     }
 
     /// The sweep's oracle for one sequence: `given` is `(bus index, at_ms,

@@ -805,7 +805,7 @@ fn a_second_seats_token_sees_neither_playbook_nor_draft_nor_notebook_nor_replay(
         let refused = surface
             .seat_state(subject, SeatId::new(0))
             .expect_err("refused");
-        assert_eq!(refused.code, Code::ForbiddenScope, "{who}");
+        assert_eq!(refused.code(), Code::ForbiddenScope, "{who}");
     }
 
     // The sealed playbook -- the private replay's other half -- is the same
@@ -814,11 +814,11 @@ fn a_second_seats_token_sees_neither_playbook_nor_draft_nor_notebook_nor_replay(
     let error = surface
         .sealed_plan(Subject::Seat(SeatId::new(1)), SeatId::new(0))
         .expect_err("refused");
-    assert_eq!(error.code, Code::ForbiddenScope);
+    assert_eq!(error.code(), Code::ForbiddenScope);
     let error = surface
         .sealed_plan(Subject::Seat(SeatId::new(1)), SeatId::new(1))
         .expect_err("nothing sealed");
-    assert_eq!(error.code, Code::NoQualifyingPlan);
+    assert_eq!(error.code(), Code::NoQualifyingPlan);
 }
 
 // ---------------------------------------------------------------------------
@@ -3905,12 +3905,16 @@ fn a_writs_settings_rows_show_what_the_sim_reads() {
     }
 }
 
-/// S3's `gwu`, fix pass 1 (the review's C3, K2): in a file that writes a
-/// step's `skip_if` in its camelCase name, a pick at the slot's `snake_case`
-/// pointer is refused by `patch_plan` with `INVALID_ARGUMENT`, naming both
-/// spellings, rather than handed back as a file that no longer decodes.
+/// S3's `gwu`, fix pass 1 (the review's C3, K2), as `vfyq2`'s fix pass 1,
+/// item 9, re-ruled it: in a file that writes a step's `skip_if` in its
+/// camelCase name, a pick at the slot's `snake_case` pointer addresses the
+/// member the file writes, under the file's spelling, so a patch never makes
+/// the file hold the field twice. A file that already holds both spellings is
+/// edited as written (S3's `gwu`, fix pass 2: plan-core's
+/// `a_field_written_twice_is_told_by_field_and_count_not_by_pointer`), and
+/// stays refused where it always was: `verify_plan` names both spellings.
 #[test]
-fn patch_plan_refuses_a_second_spelling_of_a_field() {
+fn patch_plan_addresses_a_field_under_the_spelling_the_file_writes() {
     let mut surface = hosted();
     let token = seat_token(&mut surface, 0);
     let mut left = FIRST_LULL_MS;
@@ -3921,26 +3925,60 @@ fn patch_plan_refuses_a_second_spelling_of_a_field() {
     );
     assert_ne!(camel, worked_example(), "the example has the step");
     let patch = r#"[{"op":"add","path":"/declarative/handlers/0/body/0/skip_if","value":{"treasury":{"dollars":{"op":"GE","value":100}}}}]"#;
-    let answer = call(
-        &mut surface,
-        &token,
-        &mut left,
-        "patch_plan",
-        &format!(
-            r#"{{"playbook_jsonc":{},"json_patch":{}}}"#,
-            quote(&camel),
-            quote(patch)
-        ),
-    );
-    let error = answer.get("error").expect("refused");
-    let message = text_of(error, "message");
+    let mut ask = |text: &str| {
+        call(
+            &mut surface,
+            &token,
+            &mut left,
+            "patch_plan",
+            &format!(
+                r#"{{"playbook_jsonc":{},"json_patch":{}}}"#,
+                quote(text),
+                quote(patch)
+            ),
+        )
+    };
+    let patched = result(&ask(&camel), "patch_plan");
+    let text = text_of(&patched, "playbook_jsonc");
     assert!(
-        message.contains("`skipIf`") && message.contains("`skip_if`"),
-        "{message}"
+        text.contains(r#""skipIf":{"treasury""#) && !text.contains("skip_if"),
+        "the pick replaces the member the file writes, under its spelling: {text}"
     );
+    assert!(
+        !text.contains("cmdrHpPct"),
+        "and nothing of the old value stays: {text}"
+    );
+
+    let both = camel.replacen(
+        r#""skipIf":"#,
+        r#""skip_if":{"cmdr_hp_pct":{"cmp":"LE","pct":20}},"skipIf":"#,
+        1,
+    );
+    let patched = result(&ask(&both), "patch_plan");
+    let text = text_of(&patched, "playbook_jsonc");
+    assert!(
+        text.contains(r#""skip_if":{"treasury""#) && text.contains(r#""skipIf":"#),
+        "an old pair is edited as written: {text}"
+    );
+    let report = result(
+        &call(
+            &mut surface,
+            &token,
+            &mut left,
+            "verify_plan",
+            &format!(r#"{{"playbook_jsonc":{}}}"#, quote(&text)),
+        ),
+        "verify_plan",
+    );
+    let report = report.get("report").expect("a report");
     assert_eq!(
-        error.get("data").and_then(|data| data.get("code")),
-        Some(&Json::String(String::from("INVALID_ARGUMENT"))),
-        "{error:?}"
+        report.get("qualifies"),
+        Some(&Json::Bool(false)),
+        "{report:?}"
+    );
+    let shown = format!("{report:?}");
+    assert!(
+        shown.contains("skipIf") && shown.contains("skip_if"),
+        "the verifier names both spellings: {shown}"
     );
 }

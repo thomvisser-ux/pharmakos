@@ -50,6 +50,7 @@
 use crate::error::Error;
 use crate::rpc::Request;
 pub use pharmakos_proto::gp::api::v1::read_options::Detail;
+use pharmakos_proto::said;
 use pharmakos_proto::scope as annotation;
 
 /// The full name of the detail enum in the descriptor set.
@@ -105,11 +106,13 @@ pub fn of(request: &Request) -> Result<Detail, Error> {
         return Ok(DEFAULT);
     };
     from_wire(text).ok_or_else(|| {
-        Error::invalid(format!(
-            "`{PARAM}` is `{}`, `{}` or `{}`, and this is `{text}`",
-            wire_name(Detail::Brief),
-            wire_name(Detail::Standard),
-            wire_name(Detail::Full)
+        Error::invalid(said!(
+            "`{}` is `{}`, `{}` or `{}`, and this is `{}`",
+            PARAM,
+            pharmakos_proto::json::grammar::quoted(&wire_name(Detail::Brief)),
+            pharmakos_proto::json::grammar::quoted(&wire_name(Detail::Standard)),
+            pharmakos_proto::json::grammar::quoted(&wire_name(Detail::Full)),
+            pharmakos_proto::json::grammar::quoted(text)
         ))
     })
 }
@@ -189,12 +192,12 @@ mod tests {
         assert_eq!(
             of(&request(r#"{"detail":"verbose"}"#))
                 .expect_err("refused")
-                .code,
+                .code(),
             Code::InvalidArgument,
             "a budget the gateway ignored would be read as a complete answer"
         );
         assert_eq!(
-            of(&request(r#"{"detail":3}"#)).expect_err("refused").code,
+            of(&request(r#"{"detail":3}"#)).expect_err("refused").code(),
             Code::InvalidArgument
         );
     }

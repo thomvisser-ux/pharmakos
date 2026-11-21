@@ -44,6 +44,7 @@
 
 use crate::error::Error;
 use crate::scopes::{NEVER_ON_A_SEAT, Scope, ScopeSet};
+use pharmakos_proto::said;
 use pharmakos_sim::math::quantity::Tick;
 use pharmakos_sim::tables::SeatId;
 
@@ -140,8 +141,9 @@ impl Token {
     pub fn mint() -> Result<Token, Error> {
         let mut bytes = [0_u8; TOKEN_BYTES];
         getrandom::fill(&mut bytes).map_err(|error| {
-            Error::internal(format!(
-                "the operating system would not provide entropy for a seat token: {error}"
+            Error::internal(said!(
+                "the operating system would not provide entropy for a seat token: {}",
+                crate::error::engine(&error)
             ))
         })?;
         Ok(Token(bytes))
@@ -437,10 +439,12 @@ fn check_scopes(subject: Subject, scopes: ScopeSet) -> Result<(), Error> {
     if subject.seat().is_some() {
         for banned in NEVER_ON_A_SEAT {
             if scopes.holds(*banned) {
-                return Err(Error::forbidden(format!(
+                return Err(Error::forbidden(said!(
                     "a seat token can never hold `{}` (spec section 12); only a separate \
                      spectator token can",
-                    crate::scopes::scope_wire_name(*banned)
+                    pharmakos_proto::json::grammar::quoted(&crate::scopes::scope_wire_name(
+                        *banned
+                    ))
                 )));
             }
         }
@@ -556,7 +560,7 @@ mod tests {
         let error = store
             .authenticate(&token, "m0000000000000002", Tick::ZERO)
             .expect_err("refused");
-        assert_eq!(error.code, Code::Unauthenticated);
+        assert_eq!(error.code(), Code::Unauthenticated);
     }
 
     #[test]
@@ -569,7 +573,7 @@ mod tests {
         let error = store
             .authenticate(&token, MATCH, Tick::ZERO)
             .expect_err("refused");
-        assert_eq!(error.code, Code::Unauthenticated);
+        assert_eq!(error.code(), Code::Unauthenticated);
         assert!(store.grant(handle).is_some(), "the log can still name it");
         assert!(!store.revoke(Handle(9_999)), "no such handle");
     }
@@ -592,7 +596,7 @@ mod tests {
         let error = store
             .authenticate(&token, MATCH, Tick::new(expires.raw().saturating_add(1)))
             .expect_err("refused");
-        assert_eq!(error.code, Code::Unauthenticated);
+        assert_eq!(error.code(), Code::Unauthenticated);
     }
 
     #[test]
@@ -610,7 +614,7 @@ mod tests {
             store
                 .authenticate(&unknown, MATCH, Tick::ZERO)
                 .expect_err("refused")
-                .code,
+                .code(),
             Code::Unauthenticated
         );
     }
@@ -629,7 +633,7 @@ mod tests {
                 Tick::ZERO,
             )
             .expect_err("refused");
-        assert_eq!(error.code, Code::ForbiddenScope);
+        assert_eq!(error.code(), Code::ForbiddenScope);
         assert!(store.is_empty(), "a refused mint stores nothing");
     }
 
@@ -652,7 +656,7 @@ mod tests {
                 Tick::ZERO,
             )
             .expect_err("refused");
-        assert_eq!(error.code, Code::ForbiddenScope);
+        assert_eq!(error.code(), Code::ForbiddenScope);
     }
 
     /// `admin` is lobby and match control, and it gates no method today -- which
@@ -669,7 +673,7 @@ mod tests {
                     Tick::ZERO,
                 )
                 .expect_err("refused");
-            assert_eq!(error.code, Code::ForbiddenScope, "{subject:?}");
+            assert_eq!(error.code(), Code::ForbiddenScope, "{subject:?}");
         }
         store
             .mint(
@@ -689,7 +693,7 @@ mod tests {
                 let error = store
                     .mint(subject, MATCH, ScopeSet::of(&[scope]), Tick::ZERO)
                     .expect_err("refused");
-                assert_eq!(error.code, Code::ForbiddenScope, "{subject:?} {scope:?}");
+                assert_eq!(error.code(), Code::ForbiddenScope, "{subject:?} {scope:?}");
             }
         }
         assert_eq!(store.len(), 0);

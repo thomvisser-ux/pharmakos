@@ -56,6 +56,12 @@
 //! headroom carries `E0601` or `W0603`, however large the count, against a
 //! reference sum written apart from the verifier's.
 
+#[allow(
+    dead_code,
+    reason = "the table is shared with plan_errors.rs, which reads the rest of it"
+)]
+mod plan_error_table;
+
 use pharmakos_proto::gp::api::v1::VerifyReport;
 use pharmakos_proto::gp::api::v1::diagnostic::Severity;
 use pharmakos_proto::gp::api::v1::verify_plan::Depth;
@@ -1692,6 +1698,648 @@ fn each_s3_construct_qualifies_once_lifted(counts: &[u32], runs: u32) {
     assert!(failures.is_empty(), "{}", failures.join("; "));
 }
 
+/// Hand-written bases for [`every_one_node_edit_that_qualifies_compiles`]:
+/// each qualifies in [`scope`] and carries a construct the generator does not
+/// write qualifying (a patrolling fallback; a Build target under each of its
+/// three carriers; a removal), so the edits reach every block those
+/// constructs require.
+const EDIT_BASES: [&str; 2] = [
+    concat!(
+        r#"{"schema_version":{"major":1},"meta":{"title":"patrol","author_kind":"HUMAN"},"#,
+        r#""kind":"PLAYBOOK","declarative":{"route":[{"label":"s1","hold":{"ms":1000}}]},"#,
+        r#""on_death":{"on_respawn":"CONTINUE","max_deaths_before_fallback":1},"#,
+        r#""fallback":{"patrol":{"waypoints":[{"voxel":{"x":80,"y":12,"z":55}},"#,
+        r#"{"beacon_anchor":{"beacon_id":"b_01"}}]}}}"#
+    ),
+    concat!(
+        r#"{"schema_version":{"major":1},"meta":{"title":"targets","author_kind":"HUMAN"},"#,
+        r#""kind":"PLAYBOOK","declarative":{"route":[{"label":"s1","on_fail":{"action":"SKIP"},"#,
+        r#""interface":{"beacon":{"beacon_id":"b_01"},"rows":["#,
+        r#"{"set_mandate_settings":{"build":{"targets":[{"blueprint_id":"generator","#,
+        r#""anchor":{"voxel":{"x":82,"y":12,"z":55}}}]}}},"#,
+        r#"{"add_build_target":{"target":{"blueprint_id":"generator","#,
+        r#""anchor":{"voxel":{"x":78,"y":10,"z":55}}}}},"#,
+        r#"{"remove_build_target":{"anchor":{"voxel":{"x":82,"y":12,"z":55}}}}]}}],"#,
+        r#""options":{"allow_dormant_beacons":true}},"#,
+        r#""on_death":{"on_respawn":"CONTINUE","max_deaths_before_fallback":1},"#,
+        r#""fallback":{"hold":{"at":{"beacon_anchor":{"safest":{}}}}}}"#
+    ),
+];
+
+/// How many of the generator's runs [`every_one_node_edit_that_qualifies_compiles`]
+/// edits, beside [`EDIT_BASES`].
+const EDITED_RUNS: u32 = 96;
+
+/// Every copy of `root` with one node replaced by `null`, `{}`, `[]`, `0` or
+/// `""`, or removed: the population of "a block written empty or left out"
+/// that the sim's compile reads as required, one node at a time.
+fn one_node_edits(root: &Json) -> Vec<Json> {
+    fn walk(node: &Json, path: &mut Vec<usize>, root: &Json, out: &mut Vec<Json>) {
+        let children: Vec<&Json> = match node {
+            Json::Object(members) => members.iter().map(|(_, value)| value).collect(),
+            Json::Array(items) => items.iter().collect(),
+            _ => Vec::new(),
+        };
+        for (index, child) in children.into_iter().enumerate() {
+            path.push(index);
+            for with in [
+                Some(Json::Null),
+                Some(Json::Object(Vec::new())),
+                Some(Json::Array(Vec::new())),
+                Some(Json::Number("0".to_owned())),
+                Some(Json::String(String::new())),
+                None,
+            ] {
+                out.push(edited(root, path, with));
+            }
+            walk(child, path, root, out);
+            path.pop();
+        }
+    }
+    fn edited(root: &Json, path: &[usize], with: Option<Json>) -> Json {
+        let mut copy = root.clone();
+        let Some((last, parents)) = path.split_last() else {
+            return copy;
+        };
+        let mut node = &mut copy;
+        for index in parents {
+            node = match node {
+                Json::Object(members) => members.get_mut(*index).map(|(_, value)| value),
+                Json::Array(items) => items.get_mut(*index),
+                _ => None,
+            }
+            .unwrap_or_else(|| panic!("the walk's path {path:?} is in the tree"));
+        }
+        match (node, with) {
+            (Json::Object(members), Some(value)) => {
+                if let Some(member) = members.get_mut(*last) {
+                    member.1 = value;
+                }
+            }
+            (Json::Object(members), None) => {
+                members.remove(*last);
+            }
+            (Json::Array(items), Some(value)) => {
+                if let Some(item) = items.get_mut(*last) {
+                    *item = value;
+                }
+            }
+            (Json::Array(items), None) => {
+                items.remove(*last);
+            }
+            _ => panic!("the walk's path {path:?} ends under a container"),
+        }
+        copy
+    }
+    let mut out = Vec::new();
+    walk(root, &mut Vec::new(), root, &mut out);
+    out
+}
+
+/// What qualifies at FULL, the sim compiles (S3's `vfyq2`, fix pass 1, item
+/// 6). The security review's generator found 16 of 240,000 playbooks the
+/// verifier qualified and `Plan::compile` refused, every one a block the
+/// compile requires and the structure stage never asked for: a patrol with no
+/// waypoint, an `add_build_target` with no target, a Build target with no
+/// anchor or an anchor naming no place. This edits every node of qualifying
+/// playbooks, one at a time, and holds every edit that still qualifies to the
+/// sim's compile, so a required block the verifier does not require goes red
+/// here, by the error the compile names.
+#[test]
+fn every_one_node_edit_that_qualifies_compiles() {
+    let rules = rules();
+    let widest = rules_at_the_widest_budget(&rules);
+    let scope = scope();
+    let snapshot = snapshot();
+    let qualifies = |text: &str, rules: &RulesTable| {
+        let input = Input::new(text.as_bytes(), &snapshot, &scope, rules)
+            .unwrap_or_else(|error| panic!("assembling the input: {error}"));
+        verify(&input, Depth::Full).qualifies
+    };
+    let mut bases: Vec<(Json, bool)> = Vec::new();
+    for base in EDIT_BASES {
+        let tree = json::read(base).unwrap_or_else(|error| panic!("an edit base: {error}"));
+        assert!(
+            qualifies(base, &rules),
+            "an edit base does not qualify: {base}"
+        );
+        bases.push((tree, false));
+    }
+    for index in 0..EDITED_RUNS {
+        let mut shape = Shape::new(index);
+        let padded = shape.padded;
+        let tree = shape.playbook();
+        if qualifies(&json::write(&tree), if padded { &widest } else { &rules }) {
+            bases.push((tree, padded));
+        }
+    }
+    let mut refused: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    let mut checked = 0_u32;
+    for (tree, padded) in &bases {
+        let rules = if *padded { &widest } else { &rules };
+        for edit in one_node_edits(tree) {
+            let text = json::write(&edit);
+            if !qualifies(&text, rules) {
+                continue;
+            }
+            checked = checked.saturating_add(1);
+            let playbook: Playbook = json::decode(&text)
+                .unwrap_or_else(|error| panic!("qualifies and does not decode: {error}\n{text}"));
+            if let Err(error) = Plan::compile(&playbook, rules) {
+                let flat: String = text.split_whitespace().collect();
+                let slot = refused
+                    .entry(format!("{error:?}"))
+                    .or_insert_with(|| flat.clone());
+                if flat.len() < slot.len() {
+                    *slot = flat;
+                }
+            }
+        }
+    }
+    assert!(
+        bases.len() > EDIT_BASES.len() && checked > 0,
+        "the property was never tested: {} bases, {checked} qualifying edits",
+        bases.len()
+    );
+    let report: Vec<String> = refused
+        .iter()
+        .map(|(error, text)| format!("{error}, the smallest: {text}"))
+        .collect();
+    assert!(
+        report.is_empty(),
+        "{} kinds of edit qualify at FULL and the sim's compile refuses them:\n{}",
+        report.len(),
+        report.join("\n")
+    );
+}
+
+/// The replacements a seeded edit draws from: the structural ones of
+/// [`one_node_edits`] (`None` removes) and the security review's rich values.
+fn replacements() -> Vec<Option<Json>> {
+    vec![
+        Some(Json::Null),
+        Some(Json::Object(Vec::new())),
+        Some(Json::Array(Vec::new())),
+        Some(Json::Number("0".to_owned())),
+        Some(Json::String(String::new())),
+        None,
+        Some(Json::Number("1".to_owned())),
+        Some(Json::Number("-1".to_owned())),
+        Some(Json::Number("2147483647".to_owned())),
+        Some(Json::Number("-2147483648".to_owned())),
+        Some(Json::Number("4294967295".to_owned())),
+        Some(Json::Bool(true)),
+        Some(Json::String("b_01".to_owned())),
+        Some(Json::String("x".to_owned())),
+    ]
+}
+
+/// Every node's path in `root`, the root left out.
+fn node_paths(node: &Json, path: &mut Vec<usize>, out: &mut Vec<Vec<usize>>) {
+    let children: Vec<&Json> = match node {
+        Json::Object(members) => members.iter().map(|(_, value)| value).collect(),
+        Json::Array(items) => items.iter().collect(),
+        _ => Vec::new(),
+    };
+    for (index, child) in children.into_iter().enumerate() {
+        path.push(index);
+        out.push(path.clone());
+        node_paths(child, path, out);
+        path.pop();
+    }
+}
+
+/// `root` with the node at `path` replaced by `with`, or removed.
+fn edited_at(root: &Json, path: &[usize], with: Option<Json>) -> Json {
+    let mut copy = root.clone();
+    let Some((last, parents)) = path.split_last() else {
+        return copy;
+    };
+    let mut node = &mut copy;
+    for index in parents {
+        node = match node {
+            Json::Object(members) => members.get_mut(*index).map(|(_, value)| value),
+            Json::Array(items) => items.get_mut(*index),
+            _ => None,
+        }
+        .unwrap_or_else(|| panic!("the path {path:?} is in the tree"));
+    }
+    match (node, with) {
+        (Json::Object(members), Some(value)) => {
+            if let Some(member) = members.get_mut(*last) {
+                member.1 = value;
+            }
+        }
+        (Json::Object(members), None) => {
+            members.remove(*last);
+        }
+        (Json::Array(items), Some(value)) => {
+            if let Some(item) = items.get_mut(*last) {
+                *item = value;
+            }
+        }
+        (Json::Array(items), None) => {
+            items.remove(*last);
+        }
+        _ => panic!("the path {path:?} ends under a container"),
+    }
+    copy
+}
+
+/// One seeded edit of `root`: a node drawn from its paths, and a replacement
+/// drawn from [`replacements`].
+fn seeded_edit(root: &Json, rng: &mut StreamRng) -> Json {
+    let mut paths = Vec::new();
+    node_paths(root, &mut Vec::new(), &mut paths);
+    let choices = replacements();
+    let draw = |rng: &mut StreamRng, count: usize| {
+        let most = i32::try_from(count.saturating_sub(1))
+            .unwrap_or_else(|_| panic!("{count} choices do not fit a draw"));
+        usize::try_from(rng.range_i32(0, most))
+            .unwrap_or_else(|_| panic!("a draw below zero from 0..={most}"))
+    };
+    let Some(path) = paths.get(draw(rng, paths.len())) else {
+        return root.clone();
+    };
+    let Some(with) = choices.get(draw(rng, choices.len())).cloned() else {
+        panic!("a draw past the replacements");
+    };
+    edited_at(root, path, with)
+}
+
+/// What [`two_node_edits`] found.
+struct TwoNode {
+    /// How many cases qualified at FULL.
+    qualified: u32,
+    /// Every compile refusal of a qualifying case, by kind, with its smallest
+    /// text: each one a defect.
+    refused: std::collections::BTreeMap<String, String>,
+    /// For every `PlanError` variant, how many generated cases the compile
+    /// refused with it, the verifier bypassed (S3's `vfyq2`, fix pass 3, item
+    /// M5): what the probe reaches at all.
+    reached: std::collections::BTreeMap<&'static str, u32>,
+}
+
+/// Two seeded edits of qualifying playbooks, `cases` of them, each that still
+/// qualifies at FULL held to the sim's compile (S3's `vfyq2`, fix pass 2,
+/// item C2: the security review's two-node probe, committed). Counted, not
+/// timed.
+fn two_node_edits(cases: u32) -> TwoNode {
+    two_node_edits_under(cases, &[])
+}
+
+/// [`two_node_edits`], each case judged and compiled under `tables` in turn
+/// when there are any (fix pass 3, item M4), or under the committed rules
+/// (and the widest budget for a padded base) when there are none.
+fn two_node_edits_under(cases: u32, tables: &[RulesTable]) -> TwoNode {
+    let rules = rules();
+    let widest = rules_at_the_widest_budget(&rules);
+    let scope = scope();
+    let snapshot = snapshot();
+    // A rules table the verifier refuses (fix pass 4, item 1) qualifies
+    // nothing: `Input::new` is the door, and the implication holds through it.
+    let qualifies = |text: &str, rules: &RulesTable| {
+        Input::new(text.as_bytes(), &snapshot, &scope, rules)
+            .is_ok_and(|input| verify(&input, Depth::Full).qualifies)
+    };
+    let mut bases: Vec<(Json, bool)> = Vec::new();
+    for base in EDIT_BASES {
+        bases.push((
+            json::read(base).unwrap_or_else(|error| panic!("an edit base: {error}")),
+            false,
+        ));
+    }
+    for index in 0..EDITED_RUNS {
+        let mut shape = Shape::new(index);
+        let padded = shape.padded;
+        let tree = shape.playbook();
+        if qualifies(&json::write(&tree), if padded { &widest } else { &rules }) {
+            bases.push((tree, padded));
+        }
+    }
+    // The PlanError table's texts, one per reachable variant (fix pass 3,
+    // item M5): a probe seeded only with qualifying playbooks reached 16 of
+    // the 38. Each is refused as it stands; an edit of it is a near miss of
+    // that shape, which is where a gap between the verifier and the compile
+    // would be.
+    for (name, text) in plan_error_table::texts() {
+        bases.push((
+            json::read(&text).unwrap_or_else(|error| panic!("{name}: {error}")),
+            false,
+        ));
+    }
+    let mut rng = StreamRng::new(FUZZ_SEED, Stream::Map, u32::MAX, 2, 2);
+    let mut checked = 0_u32;
+    let mut refused: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    let mut reached: std::collections::BTreeMap<&'static str, u32> =
+        std::collections::BTreeMap::new();
+    // Every base as it stands, under every table: no edit at all.
+    for (tree, _) in &bases {
+        let text = json::write(tree);
+        for table in tables {
+            if !qualifies(&text, table) {
+                continue;
+            }
+            checked = checked.saturating_add(1);
+            let playbook: Playbook = json::decode(&text)
+                .unwrap_or_else(|error| panic!("qualifies and does not decode: {error}\n{text}"));
+            if let Err(error) = Plan::compile(&playbook, table) {
+                let flat: String = text.split_whitespace().collect();
+                refused.entry(format!("{error:?}")).or_insert(flat);
+            }
+        }
+    }
+    for case in 0..cases {
+        let Some((tree, padded)) = usize::try_from(case)
+            .ok()
+            .and_then(|case| case.checked_rem(bases.len()))
+            .and_then(|index| bases.get(index))
+        else {
+            panic!("case {case} names no base of {}", bases.len());
+        };
+        // Each base meets every table in turn: the table turns once the
+        // cases have been round every base.
+        let table = usize::try_from(case)
+            .ok()
+            .and_then(|case| case.checked_div(bases.len()))
+            .and_then(|round| round.checked_rem(tables.len()))
+            .and_then(|index| tables.get(index));
+        let rules = match table {
+            Some(table) => table,
+            None if *padded => &widest,
+            None => &rules,
+        };
+        let first_edit = seeded_edit(tree, &mut rng);
+        let second_edit = seeded_edit(&first_edit, &mut rng);
+        let text = json::write(&second_edit);
+        // The verifier bypassed: what the compile alone says of the case.
+        if let Ok(playbook) = json::decode::<Playbook>(&text)
+            && let Err(error) = Plan::compile(&playbook, rules)
+        {
+            let (variant, _) = plan_error_table::classify(&error);
+            let count = reached.entry(variant).or_insert(0);
+            *count = count.saturating_add(1);
+        }
+        if !qualifies(&text, rules) {
+            continue;
+        }
+        checked = checked.saturating_add(1);
+        let playbook: Playbook = json::decode(&text)
+            .unwrap_or_else(|error| panic!("qualifies and does not decode: {error}\n{text}"));
+        if let Err(error) = Plan::compile(&playbook, rules) {
+            let flat: String = text.split_whitespace().collect();
+            let slot = refused
+                .entry(format!("{error:?}"))
+                .or_insert_with(|| flat.clone());
+            if flat.len() < slot.len() {
+                *slot = flat;
+            }
+        }
+    }
+    TwoNode {
+        qualified: checked,
+        refused,
+        reached,
+    }
+}
+
+/// How many two-node cases every ordinary run tries; the nightly run tries
+/// the review's 240,000.
+const TWO_NODE_CASES: u32 = 12_000;
+
+#[test]
+fn every_two_node_edit_that_qualifies_compiles() {
+    let TwoNode {
+        qualified,
+        refused,
+        reached,
+    } = two_node_edits(TWO_NODE_CASES);
+    // Every variant the verifier must refuse first is reached by the probe,
+    // the verifier bypassed, or the probe could not find the verifier missing
+    // it (fix pass 3, item M5).
+    let mut table: Vec<String> = Vec::new();
+    let mut unreached: Vec<&'static str> = Vec::new();
+    for sample in plan_error_table::every_variant() {
+        let (variant, row) = plan_error_table::classify(&sample);
+        let count = reached.get(variant).copied().unwrap_or(0);
+        table.push(format!("{variant}: {count}"));
+        if matches!(row, plan_error_table::Row::Refused(_)) && count == 0 {
+            unreached.push(variant);
+        }
+    }
+    println!(
+        "two-node probe, cases reaching each PlanError with the verifier bypassed:\n{}",
+        table.join("\n")
+    );
+    assert!(
+        unreached.is_empty(),
+        "the two-node probe never reaches {} reachable PlanError variant(s): {unreached:?}",
+        unreached.len()
+    );
+    println!("{TWO_NODE_CASES} two-node edits: {qualified} qualified");
+    assert!(
+        qualified > 0,
+        "no two-node edit qualified: the property is vacuous"
+    );
+    assert!(
+        refused.is_empty(),
+        "{} kinds of two-node edit qualify at FULL and the sim's compile refuses them:\n{:#?}",
+        refused.len(),
+        refused
+    );
+}
+
+/// The committed table with every interface rate at `rate` and the size
+/// budget at `budget`.
+fn every_rate(
+    committed: &RulesTable,
+    rate: i32,
+    budget: u32,
+) -> pharmakos_proto::gp::v1::RulesTable {
+    let mut message = committed.message().clone();
+    let times = message
+        .interface_times
+        .as_mut()
+        .unwrap_or_else(|| panic!("the committed rules carry the interface rates"));
+    times.visit_handshake_ms = rate;
+    times.set_priority_ms = rate;
+    times.edit_settings_base_ms = rate;
+    times.edit_settings_per_field_ms = rate;
+    times.edit_settings_max_ms = rate;
+    times.build_target_ms = rate;
+    times.queue_structure_ms = rate;
+    times.switch_mandate_ms = rate;
+    times.recycle_ms = rate;
+    times.place_beacon_deploy_ms = rate;
+    let verifier = message
+        .verifier
+        .as_mut()
+        .unwrap_or_else(|| panic!("the committed rules carry the verifier's block"));
+    verifier.size_budget_units = budget;
+    message
+}
+
+/// Rules tables a probe judges and compiles under (fix pass 3, item M4): the
+/// committed table with its verifier block's size budget, handler cooldown
+/// floor and `max_fires` ceiling moved across what `RulesTable::from_message`
+/// takes, a budget past the sim's route and handler ceilings among them.
+fn generated_rules_tables() -> Vec<RulesTable> {
+    let committed = rules();
+    let mut tables = Vec::new();
+    for (budget, cooldown, fires) in [
+        (1, 0, 1),
+        (64, 1_000, 3),
+        (128, 30_000, 50),
+        (400, 0, 1),
+        (1_024, 5_000, 10),
+        (4_096, 60_000, 100),
+        (65_536, 1, 1_000),
+        (u32::MAX, 0, u32::MAX),
+    ] {
+        let mut message = committed.message().clone();
+        let verifier = message
+            .verifier
+            .as_mut()
+            .unwrap_or_else(|| panic!("the committed rules carry the verifier's block"));
+        verifier.size_budget_units = budget;
+        verifier.handler_cooldown_min_ms = cooldown;
+        verifier.max_fires_max = fires;
+        tables.push(
+            RulesTable::from_message(&message)
+                .unwrap_or_else(|error| panic!("budget {budget}: {error}")),
+        );
+    }
+    // The extremes (fix pass 4, item 1): every interface rate at its minimum
+    // (zero), at 2^30 and at `i32::MAX`, each with the widest budget; the
+    // verifier block at zero and at its maximum; and the map at its smallest
+    // and a large size. A table the sim's loader refuses is not a table the
+    // build accepts and is left out; one the verifier refuses stays in, and
+    // qualifies nothing.
+    let mut extremes: Vec<pharmakos_proto::gp::v1::RulesTable> = Vec::new();
+    for (budget, cooldown, fires) in [
+        (0_u32, 0_i32, 0_u32),
+        (u32::MAX, i32::MAX, u32::MAX),
+        (128, i32::MIN, 8),
+    ] {
+        let mut message = committed.message().clone();
+        let verifier = message
+            .verifier
+            .as_mut()
+            .unwrap_or_else(|| panic!("the committed rules carry the verifier's block"));
+        verifier.size_budget_units = budget;
+        verifier.handler_cooldown_min_ms = cooldown;
+        verifier.max_fires_max = fires;
+        extremes.push(message);
+    }
+    for (rate, budget) in [
+        (0_i32, u32::MAX),
+        (1 << 30, u32::MAX),
+        (i32::MAX, u32::MAX),
+        (i32::MAX, 128),
+        (1 << 24, 128),
+    ] {
+        extremes.push(every_rate(&committed, rate, budget));
+    }
+    for size in [(32_u32, 32_u32, 32_u32), (1 << 20, 1 << 20, 1 << 12)] {
+        let mut message = committed.message().clone();
+        let map = message
+            .map
+            .as_mut()
+            .unwrap_or_else(|| panic!("the committed rules carry the map"));
+        (map.size_x, map.size_y, map.size_z) = size;
+        extremes.push(message);
+    }
+    // At the door's bound (fix pass 5, item L7): every rate the same, so the
+    // worst row is (2 + budget) times it; at the largest rate the door
+    // takes, one below it and one above it at a budget of 128, and at it for
+    // budgets of 400 and 1, so the implication is tried where it is tightest
+    // on tables that are accepted.
+    let at_the_bound = |budget: u32| -> i32 {
+        let rows = i64::from(budget).saturating_add(2);
+        i32::try_from(i64::from(i32::MAX).checked_div(rows).unwrap_or(0)).unwrap_or(i32::MAX)
+    };
+    for (budget, rate) in [
+        (128, at_the_bound(128)),
+        (128, at_the_bound(128).saturating_sub(1)),
+        (128, at_the_bound(128).saturating_add(1)),
+        (400, at_the_bound(400)),
+        (1, at_the_bound(1)),
+    ] {
+        extremes.push(every_rate(&committed, rate, budget));
+    }
+    tables.extend(
+        extremes
+            .iter()
+            .filter_map(|message| RulesTable::from_message(message).ok()),
+    );
+    tables
+}
+
+/// "Qualifies implies compiles" under every generated rules table, crossed
+/// with the two-node probe (fix pass 3, item M4): a verifier refusal that
+/// reads a rules value the compile does not read (the size budget against
+/// the sim's route ceiling was one) fails here.
+#[test]
+fn every_two_node_edit_that_qualifies_compiles_under_every_rules_table() {
+    let tables = generated_rules_tables();
+    assert!(
+        tables.len() > 12,
+        "the extremes the sim's loader takes are in the probe: {}",
+        tables.len()
+    );
+    // The implication is tried on tables the door accepts (fix pass 5, item
+    // L7): a table it refuses qualifies nothing, so a probe of mostly refused
+    // tables would pass vacuously.
+    let accepted = tables
+        .iter()
+        .filter(|table| Input::new(b"{}", &snapshot(), &scope(), table).is_ok())
+        .count();
+    let refused_tables = tables.len().saturating_sub(accepted);
+    println!("rules tables: {accepted} accepted, {refused_tables} refused");
+    assert!(
+        accepted.saturating_mul(2) >= tables.len(),
+        "only {accepted} of {} tables are accepted",
+        tables.len()
+    );
+    let TwoNode {
+        qualified, refused, ..
+    } = two_node_edits_under(TWO_NODE_CASES, &tables);
+    println!(
+        "{TWO_NODE_CASES} two-node edits across {} rules tables: {qualified} qualified",
+        tables.len()
+    );
+    assert!(
+        qualified > 0,
+        "no two-node edit qualified: the property is vacuous"
+    );
+    assert!(
+        refused.is_empty(),
+        "{} kinds of two-node edit qualify at FULL under some rules table and the sim's \
+         compile refuses them:\n{:#?}",
+        refused.len(),
+        refused
+    );
+}
+
+#[test]
+#[ignore = "the security review's 240,000 cases; nightly-scenarios.yml's fuzz job calls it"]
+fn two_hundred_forty_thousand_two_node_edits_that_qualify_compile() {
+    let TwoNode {
+        qualified, refused, ..
+    } = two_node_edits(240_000);
+    println!("240,000 two-node edits: {qualified} qualified");
+    assert!(
+        qualified > 0,
+        "no two-node edit qualified: the property is vacuous"
+    );
+    assert!(
+        refused.is_empty(),
+        "{} kinds of two-node edit qualify at FULL and the sim's compile refuses them:\n{:#?}",
+        refused.len(),
+        refused
+    );
+}
+
 #[test]
 fn the_generator_still_produces_shapes_the_verifier_reads() {
     let rules = rules();
@@ -1851,4 +2499,68 @@ fn ten_thousand_playbooks_come_back_as_reports() {
         ["W0704", "W0705", "W0706"],
         "the lints the run reached"
     );
+}
+
+/// The verifier is the door that holds (fix pass 4, item 1): a rules table
+/// under which a row a playbook within the size budget can write would pass
+/// the sim's `i32` of milliseconds is refused by `Input::new`, naming the rate,
+/// so nothing qualifies under it; the committed table is not refused.
+#[test]
+fn a_table_whose_rows_could_pass_the_sims_i32_is_refused() {
+    let committed = rules();
+    let mut message = committed.message().clone();
+    let times = message
+        .interface_times
+        .as_mut()
+        .unwrap_or_else(|| panic!("the committed rules carry the interface rates"));
+    times.build_target_ms = i32::MAX;
+    let table = RulesTable::from_message(&message).unwrap_or_else(|error| panic!("{error}"));
+    let refused = Input::new(b"{}", &snapshot(), &scope(), &table)
+        .err()
+        .unwrap_or_else(|| panic!("the table is refused"));
+    assert!(
+        refused
+            .to_string()
+            .contains("interface_times.build_target_ms"),
+        "the refusal names the rate: {refused}"
+    );
+    assert!(Input::new(b"{}", &snapshot(), &scope(), &committed).is_ok());
+}
+
+/// The table's refusal names the row as the sim sums it (fix pass 5, item
+/// L6): all three rates with their values, the budget, and the sum.
+#[test]
+fn a_table_refusal_names_the_row_as_the_sim_sums_it() {
+    let committed = rules();
+    let mut message = committed.message().clone();
+    let times = message
+        .interface_times
+        .as_mut()
+        .unwrap_or_else(|| panic!("the committed rules carry the interface rates"));
+    times.switch_mandate_ms = 7_000;
+    times.edit_settings_max_ms = 9_000;
+    times.build_target_ms = 20_000_000;
+    let verifier = message
+        .verifier
+        .as_mut()
+        .unwrap_or_else(|| panic!("the committed rules carry the verifier's block"));
+    verifier.size_budget_units = 128;
+    let table = RulesTable::from_message(&message).unwrap_or_else(|error| panic!("{error}"));
+    let refused = Input::new(b"{}", &snapshot(), &scope(), &table)
+        .err()
+        .unwrap_or_else(|| panic!("the table is refused"))
+        .to_string();
+    let worst = 7_000_i64 + 9_000 + 20_000_000 * 128;
+    for part in [
+        "interface_times.switch_mandate_ms",
+        "7000",
+        "interface_times.edit_settings_max_ms",
+        "9000",
+        "interface_times.build_target_ms",
+        "20000000",
+        "128",
+        &worst.to_string(),
+    ] {
+        assert!(refused.contains(part), "`{part}` is not in: {refused}");
+    }
 }

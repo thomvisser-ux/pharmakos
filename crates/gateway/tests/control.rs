@@ -247,7 +247,10 @@ fn only_an_admin_token_can_end_a_lull_advance_a_push_or_end_a_recap() {
             Tick::ZERO,
         )
         .expect_err("refused");
-    assert_eq!(refused.code, pharmakos_gateway::error::Code::ForbiddenScope);
+    assert_eq!(
+        refused.code(),
+        pharmakos_gateway::error::Code::ForbiddenScope
+    );
 }
 
 /// Out of phase is `PHASE_CLOSED`, and the match does not move.
@@ -713,7 +716,7 @@ fn a_control_suite_never_prints_a_token() {
 #[test]
 fn a_transition_mid_tick_is_refused_as_internal_and_audited() {
     let mut surface = hosted(2, SEGMENT_MS, 1);
-    assert_eq!(surface.begin_push().map_err(|e| e.code), Ok(true));
+    assert_eq!(surface.begin_push().map_err(|e| e.code()), Ok(true));
     {
         let mut tick = surface
             .phased_step()
@@ -726,8 +729,8 @@ fn a_transition_mid_tick_is_refused_as_internal_and_audited() {
         // Dropped half-finished: the runner's tick stays open.
     }
     for (action, refused) in [
-        ("open push", surface.begin_push().map_err(|e| e.code)),
-        ("end recap", surface.end_recap().map_err(|e| e.code)),
+        ("open push", surface.begin_push().map_err(|e| e.code())),
+        ("end recap", surface.end_recap().map_err(|e| e.code())),
     ] {
         assert_eq!(refused, Err(Code::Internal), "{action} is refused mid-tick");
         let last = surface

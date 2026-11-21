@@ -153,6 +153,17 @@
 //! # }
 //! ```
 
+// A crate that reads a player's text, or a socket's, may not panic on it or
+// wrap silently (S3's `vfyq2`, fix pass 1, item 4): the workspace's
+// `[lints]` deny `unwrap_used` and `indexing_slicing`, and the crates that
+// parse untrusted input deny these three as well, in the code they ship. A
+// test's panic is its failure report, so the `lib` target is held to them
+// and the test build is not. Each `#[allow]` of one carries its reason.
+#![cfg_attr(
+    not(test),
+    deny(clippy::panic, clippy::arithmetic_side_effects, clippy::expect_used)
+)]
+
 mod blueprints;
 pub mod catalogue;
 pub mod hash;
@@ -178,12 +189,47 @@ mod walk;
 
 use pharmakos_proto::gp::api::v1::VerifyReport;
 use pharmakos_proto::gp::api::v1::verify_plan::Depth;
+use pharmakos_proto::gp::v1::Playbook;
+use pharmakos_proto::json;
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::snapshot::{Snapshot, SnapshotError};
 
 pub use blueprints::{Anchor, BLUEPRINT_SLOTS, BlueprintSlots, slots_for, slots_of};
 pub use hash::{HashError, REPORT_HASH_DOMAIN, TOO_LONG_REPORT_DOMAIN, too_long_report_hash};
 pub use interface::Rates;
+
+/// A rules table, read and checked by every rules check the verifier makes
+/// (S3's `vfyq2`, fix pass 5, item L8): its limits, its interface rates
+/// (checked against the size budget: [`RulesGap::RowPastTheSim`]), its
+/// prices and its walking rows. [`Input`] reads its table through
+/// [`read_rules`], and a host checks its table with the same call when it
+/// starts, so a table the verifier refuses hosts no match.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct RulesRead {
+    limits: Limits,
+    rates: Rates,
+    prices: Prices,
+    walk: Walk,
+}
+
+/// Every rules check the verifier makes, in one call.
+///
+/// # Errors
+///
+/// The first [`RulesGap`] the table has.
+pub fn read_rules(rules: &RulesTable) -> Result<RulesRead, RulesGap> {
+    let limits = Limits::from_rules(rules)?;
+    // The table is the door (fix pass 4, item 1): one whose rows could pass
+    // the sim's `i32` is refused here, so nothing qualifies under it.
+    let rates = Rates::from_rules(rules)?;
+    rates.check_rows(limits.size_budget_units())?;
+    Ok(RulesRead {
+        limits,
+        rates,
+        prices: Prices::from_rules(rules)?,
+        walk: Walk::from_rules(rules)?,
+    })
+}
 pub use limits::{CONDITION_MAX_DEPTH, CONDITION_MAX_NODES, Limits, RulesGap};
 pub use projection::{Prices, Projection, ProjectionError};
 pub use refusals::{REFUSED_CONSTRUCTS, code_for_construct};
@@ -325,7 +371,17 @@ pub const fn is_too_long_in_bytes(bytes: usize) -> bool {
 /// eight predicates and `toward` their effect, so this build retires `E0020`
 /// to `E0028` and qualifies each construct the checks `vfy6` built behind
 /// them pass, so its reports are not comparable with `0.1.0-s3.3`'s.
-pub const VERIFIER_VERSION: &str = "0.1.0-s3.4";
+/// `0.1.0-s3.5` from S3's `vfyq2`: this build offers a Fix for `E0209` on a
+/// `KNOWN_WITHIN` with no window, and reads a player's text through one
+/// grammar with the JSONC reader, so a block comment that never closes is
+/// `E0001` where it opens, a value inside exactly 64 containers is read as
+/// the codec reads it, and a key written twice is refused at its own
+/// opening quote; its reports are not comparable with `0.1.0-s3.4`'s. The
+/// same unreleased bump carries the rest of the lane's fix passes: `E0114`, a
+/// route past the sim's own step ceiling (fix pass 3b), and the rules table's
+/// door, `RulesGap::RowPastTheSim`, which refuses a table whose interface
+/// rates let a row run past the sim's `i32` (fix pass 4); one bump per lane.
+pub const VERIFIER_VERSION: &str = "0.1.0-s3.5";
 
 /// Everything one verification is a function of, apart from the depth.
 ///
@@ -337,6 +393,10 @@ pub const VERIFIER_VERSION: &str = "0.1.0-s3.4";
 #[derive(Clone, Copy, Debug)]
 pub struct Input<'a> {
     playbook: &'a [u8],
+    /// What the caller handed beside `playbook`: nothing, the message decoded
+    /// from exactly it, or the refusal its one decode found; so the decode
+    /// stage reads it at most once.
+    handed: decode::Handed<'a>,
     snapshot: &'a [u8],
     scope: &'a Scope,
     rules: &'a RulesTable,
@@ -374,6 +434,12 @@ pub enum InputError {
         max: usize,
     },
 }
+
+/// An input refusal's words are a size, a rules gap, a hash refusal or a
+/// view's refusal, each engine words (S3's `vfyq2`, fix pass 3, item M2
+/// (d)); none reads the playbook's text.
+impl pharmakos_proto::json::grammar::EngineWords for InputError {}
+impl pharmakos_proto::json::grammar::door::EngineSeal for InputError {}
 
 impl core::fmt::Display for InputError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -436,7 +502,68 @@ impl<'a> Input<'a> {
         scope: &'a Scope,
         rules: &'a RulesTable,
     ) -> Result<Input<'a>, InputError> {
-        Input::assemble(playbook, snapshot, scope, rules, false)
+        Input::assemble(
+            playbook,
+            decode::Handed::Bytes,
+            snapshot,
+            scope,
+            rules,
+            false,
+        )
+    }
+
+    /// [`Input::new`] for a playbook already canonicalised (S3's `vfyq2`):
+    /// the bytes handed over, and `report_hash` taken over, are its canonical
+    /// text, exactly as [`Input::new`] given that text; and the decode stage
+    /// reads the message canonicalising decoded, rather than decoding the text
+    /// a second time. A [`json::Canonicalised`] is made only by decoding, so
+    /// its text and its message cannot disagree.
+    ///
+    /// # Errors
+    ///
+    /// As [`Input::new`].
+    pub fn canonical(
+        playbook: &'a json::Canonicalised<Playbook>,
+        snapshot: &'a [u8],
+        scope: &'a Scope,
+        rules: &'a RulesTable,
+    ) -> Result<Input<'a>, InputError> {
+        Input::assemble(
+            playbook.text().as_bytes(),
+            decode::Handed::Decoded(playbook.decoded()),
+            snapshot,
+            scope,
+            rules,
+            false,
+        )
+    }
+
+    /// [`Input::new`] for a text whose one decode refused it (S3's `vfyq2`):
+    /// the bytes handed over, and `report_hash` taken over, are `playbook`,
+    /// exactly as [`Input::new`] given them; and the decode stage reports the
+    /// refusal it is handed, with the tree that decode kept, rather than
+    /// reading the bytes again. `refused` must be the refusal of exactly
+    /// `playbook`: `plan-core`'s `verify_jsonc` makes both from one decode,
+    /// and its differential tests hold the report to [`Input::new`]'s.
+    ///
+    /// # Errors
+    ///
+    /// As [`Input::new`].
+    pub fn refused(
+        playbook: &'a [u8],
+        refused: &'a json::Refused,
+        snapshot: &'a [u8],
+        scope: &'a Scope,
+        rules: &'a RulesTable,
+    ) -> Result<Input<'a>, InputError> {
+        Input::assemble(
+            playbook,
+            decode::Handed::Refused(refused),
+            snapshot,
+            scope,
+            rules,
+            false,
+        )
     }
 
     /// The input for a player's text past [`MAX_PLAYBOOK_CHARS`] (S3's `vfy6`):
@@ -457,11 +584,12 @@ impl<'a> Input<'a> {
         scope: &'a Scope,
         rules: &'a RulesTable,
     ) -> Result<Input<'a>, InputError> {
-        Input::assemble(&[], snapshot, scope, rules, true)
+        Input::assemble(&[], decode::Handed::Bytes, snapshot, scope, rules, true)
     }
 
     fn assemble(
         playbook: &'a [u8],
+        handed: decode::Handed<'a>,
         snapshot: &'a [u8],
         scope: &'a Scope,
         rules: &'a RulesTable,
@@ -474,20 +602,26 @@ impl<'a> Input<'a> {
             });
         }
         let rules_hash = rules.rules_hash();
-        let limits = Limits::from_rules(rules)?;
+        let RulesRead {
+            limits,
+            rates,
+            prices,
+            walk,
+        } = read_rules(rules)?;
         scope
             .check(limits.beacon_sphere_radius_voxels())
             .map_err(InputError::View)?;
         Ok(Input {
             playbook,
+            handed,
             snapshot,
             scope,
             rules,
             rules_hash,
             limits,
-            rates: Rates::from_rules(rules)?,
-            prices: Prices::from_rules(rules)?,
-            walk: Walk::from_rules(rules)?,
+            rates,
+            prices,
+            walk,
             report_hashes: hash::ReportHashes::new(
                 if too_long {
                     hash::Subject::TooLong
@@ -602,7 +736,7 @@ pub fn verify(input: &Input<'_>, depth: Depth) -> VerifyReport {
 
     if input.too_long {
         out.emit(report::Diag::new("E0029", pointer::ROOT).arg("max", MAX_PLAYBOOK_CHARS));
-    } else if let Some(decoded) = decode::run(input.playbook, &mut out) {
+    } else if let Some(decoded) = decode::run(input.playbook, input.handed, &mut out) {
         let playbook = &decoded.playbook;
         units = size::size_units(playbook);
         if let Some(digest) = decoded.fingerprint {

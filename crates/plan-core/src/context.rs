@@ -80,13 +80,13 @@ impl PlanContext {
             .ok_or_else(|| {
                 Error::at(
                     "",
-                    format!("the frozen snapshot does not carry seat {seat}"),
+                    pharmakos_proto::said!("the frozen snapshot does not carry seat {}", seat),
                 )
             })?;
-        let ragged = |what: &str| {
+        let ragged = |what: &'static str| {
             Error::at(
                 "",
-                format!("the frozen snapshot has no {what} for seat {seat}"),
+                pharmakos_proto::said!("the frozen snapshot has no {} for seat {}", what, seat),
             )
         };
         Ok(Self {

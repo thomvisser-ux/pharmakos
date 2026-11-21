@@ -175,7 +175,7 @@ fn check_schema(lines: &mut Vec<(State, String)>) {
             "schema",
             "the checked-in descriptor set carries no gp.v1 messages",
         ),
-        Err(error) => note(lines, State::Fail, "schema", &error.message),
+        Err(error) => note(lines, State::Fail, "schema", error.message()),
     }
 }
 
@@ -271,7 +271,7 @@ fn check_plan_core(
                     "plan-core",
                     &format!(
                         "the safe playbook canonicalises and its comments do not parse: {}",
-                        error.message
+                        error.message()
                     ),
                 ),
                 (false, _) => note(
@@ -346,7 +346,7 @@ fn check_match(table: Option<&pharmakos_sim::rules::RulesTable>, lines: &mut Vec
     let host = match host {
         Ok(host) => host,
         Err(error) => {
-            note(lines, State::Fail, "host a match", &error.message);
+            note(lines, State::Fail, "host a match", error.message());
             return;
         }
     };
@@ -379,7 +379,7 @@ fn check_match(table: Option<&pharmakos_sim::rules::RulesTable>, lines: &mut Vec
             return;
         }
         Err(error) => {
-            note(lines, State::Fail, "host a match", &error.message);
+            note(lines, State::Fail, "host a match", error.message());
             return;
         }
     }
@@ -401,7 +401,7 @@ fn check_match(table: Option<&pharmakos_sim::rules::RulesTable>, lines: &mut Vec
             "host a match",
             "a Push that had just opened produced no tick",
         ),
-        Err(error) => note(lines, State::Fail, "host a match", &error.message),
+        Err(error) => note(lines, State::Fail, "host a match", error.message()),
     }
 }
 
@@ -425,22 +425,26 @@ fn surface_for(
         pharmakos_gateway::fog::FogPolicy::fogged(),
         &seats,
     )
-    .map_err(|error| error.message)?;
-    surface.attach(host).map_err(|error| error.message)?;
+    .map_err(|error| error.message().to_owned())?;
+    surface
+        .attach(host)
+        .map_err(|error| error.message().to_owned())?;
     // The opening Lull's whole length, which the check spends no host time
     // in (AGENTS.md section 4.5): round 1's `rules.match.first_lull_ms`,
     // through the gateway's own typed read, which refused a table with no
     // usable Lull row when the surface was made (S1's plan, task `econ`).
     let round = surface
         .host()
-        .map_err(|error| error.message.clone())?
+        .map_err(|error| error.message().to_owned())?
         .runner()
         .round();
     let lull = surface.lull_length(round);
     surface
         .set_phase_remaining_ms(lull)
-        .map_err(|error| error.message.clone())?;
-    surface.open_lull().map_err(|error| error.message)?;
+        .map_err(|error| error.message().to_owned())?;
+    surface
+        .open_lull()
+        .map_err(|error| error.message().to_owned())?;
     Ok(surface)
 }
 

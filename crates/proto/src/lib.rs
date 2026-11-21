@@ -71,6 +71,17 @@
 //! `Playbook.kind` was the one held field number that this crate's walking-
 //! skeleton pass discharges: item 47 reserved field 7, item 76 defines it.
 
+// A crate that reads a player's text, or a socket's, may not panic on it or
+// wrap silently (S3's `vfyq2`, fix pass 1, item 4): the workspace's
+// `[lints]` deny `unwrap_used` and `indexing_slicing`, and the crates that
+// parse untrusted input deny these three as well, in the code they ship. A
+// test's panic is its failure report, so the `lib` target is held to them
+// and the test build is not. Each `#[allow]` of one carries its reason.
+#![cfg_attr(
+    not(test),
+    deny(clippy::panic, clippy::arithmetic_side_effects, clippy::expect_used)
+)]
+
 /// The generated prost types.
 ///
 /// Everything under here is written by `protoc-gen-prost` from the `.proto`

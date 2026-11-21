@@ -35,6 +35,8 @@
 
 use pharmakos_proto::gp::api::v1::gateway_error;
 use pharmakos_proto::json::Json;
+use pharmakos_proto::json::grammar::Said;
+use pharmakos_proto::said;
 
 /// The closed set, straight from the schema.
 pub type Code = gateway_error::Code;
@@ -43,71 +45,112 @@ pub type Code = gateway_error::Code;
 ///
 /// The message is for a person; every client branches on the code. Messages are
 /// English because v1 has one string table and translation is roadmap.
+///
+/// **Every message is a [`Said`]** (S3's `vfyq2`, fix pass 3, item M2 (b)):
+/// every constructor takes one, so text a seat sent reaches a message only
+/// [`quoted`](pharmakos_proto::json::grammar::quoted), and a raw `String`
+/// does not compile; the `said` field is the crate's, so no other crate can
+/// make an `Error` around one.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Error {
-    /// Which of the closed set this is.
-    pub code: Code,
-    /// English, precise, and safe to show whoever is at the keyboard.
-    pub message: String,
+    /// Which of the closed set this is. Private, as every field is (S3's
+    /// `vfyq2`, fix pass 4b, item L-b): read through [`Error::code`].
+    code: Code,
+    /// The message as it was said: English, precise, and safe to show
+    /// whoever is at the keyboard. Private (S3's `vfyq2`, fix pass 4, item
+    /// L-b): read through [`Error::message`] or [`Error::said`], and the wire
+    /// sends it as it was said.
+    said: Said,
 }
 
 impl Error {
     /// An error with a code and a message.
     #[must_use]
-    pub fn new(code: Code, message: impl Into<String>) -> Error {
+    pub fn new(code: Code, message: impl Into<Said>) -> Error {
         Error {
             code,
-            message: message.into(),
+            said: message.into(),
         }
+    }
+
+    /// Which of the closed set this is: every client branches on it.
+    #[must_use]
+    pub const fn code(&self) -> Code {
+        self.code
+    }
+
+    /// The message, as text.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        self.said.as_str()
+    }
+
+    /// The message as it was said, taken out of the error: what a caller
+    /// that owns the error composes another sentence from.
+    #[must_use]
+    pub fn into_said(self) -> Said {
+        self.said
+    }
+
+    /// The message, as it was said: what another refusal that carries this
+    /// one composes it from.
+    #[must_use]
+    pub fn said(&self) -> Said {
+        self.said.clone()
     }
 
     /// The token is missing, malformed, expired, revoked, or the transport's own
     /// checks refused the connection.
     #[must_use]
-    pub fn unauthenticated(message: impl Into<String>) -> Error {
+    pub fn unauthenticated(message: impl Into<Said>) -> Error {
         Error::new(Code::Unauthenticated, message)
     }
 
     /// The token is valid and does not carry the scope this method needs.
     #[must_use]
-    pub fn forbidden(message: impl Into<String>) -> Error {
+    pub fn forbidden(message: impl Into<Said>) -> Error {
         Error::new(Code::ForbiddenScope, message)
     }
 
     /// The request is malformed: an unknown method, a missing param, a param out
     /// of range.
+    ///
+    /// The message is a [`Said`] (S3's `vfyq2`, fix pass 3, item M2 (b)):
+    /// these two refusals are the ones that answer what a seat sent, so a
+    /// raw echo of it does not compile; what the seat sent goes in quoted.
     #[must_use]
-    pub fn invalid(message: impl Into<String>) -> Error {
+    pub fn invalid(message: impl Into<Said>) -> Error {
         Error::new(Code::InvalidArgument, message)
     }
 
-    /// A name that does not exist, or is not this seat's.
+    /// A name that does not exist, or is not this seat's. The message is a
+    /// [`Said`], as [`Error::invalid`]'s is.
     #[must_use]
-    pub fn not_found(message: impl Into<String>) -> Error {
+    pub fn not_found(message: impl Into<Said>) -> Error {
         Error::new(Code::NotFound, message)
     }
 
     /// The method is not available in this phase.
     #[must_use]
-    pub fn phase_closed(message: impl Into<String>) -> Error {
+    pub fn phase_closed(message: impl Into<Said>) -> Error {
         Error::new(Code::PhaseClosed, message)
     }
 
     /// A cursor or a request pinned to a snapshot that is no longer current.
     #[must_use]
-    pub fn stale_snapshot(message: impl Into<String>) -> Error {
+    pub fn stale_snapshot(message: impl Into<Said>) -> Error {
         Error::new(Code::StaleSnapshot, message)
     }
 
     /// Over the rate limit.
     #[must_use]
-    pub fn rate_limited(message: impl Into<String>) -> Error {
+    pub fn rate_limited(message: impl Into<Said>) -> Error {
         Error::new(Code::RateLimited, message)
     }
 
     /// The gateway failed at something the caller could not have avoided.
     #[must_use]
-    pub fn internal(message: impl Into<String>) -> Error {
+    pub fn internal(message: impl Into<Said>) -> Error {
         Error::new(Code::Internal, message)
     }
 
@@ -140,7 +183,10 @@ impl Error {
                 String::from("code"),
                 Json::Number(self.rpc_number().to_string()),
             ),
-            (String::from("message"), Json::String(self.message.clone())),
+            (
+                String::from("message"),
+                Json::String(self.said.as_str().to_owned()),
+            ),
             (
                 String::from("data"),
                 Json::Object(vec![(
@@ -154,7 +200,7 @@ impl Error {
 
 impl std::fmt::Display for Error {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "{}: {}", self.name(), self.message)
+        write!(formatter, "{}: {}", self.name(), self.said)
     }
 }
 
@@ -166,8 +212,95 @@ impl std::error::Error for Error {}
 pub fn unknown_method(name: &str) -> Error {
     Error::new(
         Code::InvalidArgument,
-        format!("`{name}` is not a Seat Gateway method"),
+        said!(
+            "`{}` is not a Seat Gateway method",
+            pharmakos_proto::json::grammar::quoted(name)
+        ),
     )
+}
+
+/// A path on the host, as a refusal shows it: escaped by the grammar's rule
+/// and never cut (S3's `vfyq2`, fix pass 3, item M2 (b)). A path is the
+/// host's, not a seat's, and a refusal that names one is about the host's
+/// own disk.
+pub(crate) fn shown_path(path: &std::path::Path) -> Said {
+    pharmakos_proto::json::grammar::escaped(&path.display().to_string()).into()
+}
+
+/// An engine error of the sim's or this crate's, said in its own words.
+///
+/// [`Engine`] declares, type by type, that the error's words carry no text a
+/// seat wrote (S3's `vfyq2`, fix pass 3, item M2 (d)); a type not declared
+/// below does not compile here. The sim's `PlanError`, whose words carry a
+/// playbook's labels and ids, is not declared: the planning handlers say it
+/// through `plan_refusal`.
+pub(crate) fn engine<T: std::fmt::Display>(error: &T) -> Said
+where
+    for<'a> Engine<'a, T>: pharmakos_proto::json::grammar::EngineWords,
+{
+    Said::engine_error(&Engine(error))
+}
+
+/// [`engine`]'s declaration of an error type whose words are the engine's.
+pub(crate) struct Engine<'a, T>(&'a T);
+
+/// The seal on every [`Engine`]: which of them carries the engine's words is
+/// the [`pharmakos_proto::json::grammar::EngineWords`] declarations below,
+/// one by one.
+impl<T> pharmakos_proto::json::grammar::door::EngineSeal for Engine<'_, T> {}
+
+impl<T: std::fmt::Display> std::fmt::Display for Engine<'_, T> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+/// The operating system's words for a file or a socket.
+impl pharmakos_proto::json::grammar::EngineWords for Engine<'_, std::io::Error> {}
+/// The map generator's refusal: a seed and the rules table's map rows.
+impl pharmakos_proto::json::grammar::EngineWords for Engine<'_, pharmakos_sim::MapError> {}
+/// A rules table's refusal: the host's table, a field and a value.
+impl pharmakos_proto::json::grammar::EngineWords for Engine<'_, pharmakos_sim::rules::RulesError> {}
+/// A snapshot's refusal: the save's bytes, read from the host's own disk.
+impl pharmakos_proto::json::grammar::EngineWords
+    for Engine<'_, pharmakos_sim::snapshot::SnapshotError>
+{
+}
+/// The audit's rank refusal: a count.
+impl pharmakos_proto::json::grammar::EngineWords
+    for Engine<'_, pharmakos_sim::audit::AuditRankError>
+{
+}
+/// The settlement ladder's refusal: seat indices and ranks.
+impl pharmakos_proto::json::grammar::EngineWords
+    for Engine<'_, pharmakos_sim::economy::SettlementReadError>
+{
+}
+/// An id's refusal: the id's own layout.
+impl pharmakos_proto::json::grammar::EngineWords for Engine<'_, pharmakos_sim::ids::IdError> {}
+/// A seat token's entropy refusal: the operating system's words.
+impl pharmakos_proto::json::grammar::EngineWords for Engine<'_, getrandom::Error> {}
+/// A Lull-length row's refusal: the rules table's own rows.
+impl pharmakos_proto::json::grammar::EngineWords for Engine<'_, crate::time::LullRowError> {}
+/// A seal's refusal: a phase, a seat number, a tick in flight.
+impl pharmakos_proto::json::grammar::EngineWords
+    for Engine<'_, pharmakos_sim::runner::SealRefused>
+{
+}
+/// A layout's refusal: the host's own lobby layout, by index, column and seat.
+impl pharmakos_proto::json::grammar::EngineWords
+    for Engine<'_, pharmakos_sim::runner::LayoutRefused>
+{
+}
+/// A tick's refusal: the sim's own phases and chunk errors.
+impl pharmakos_proto::json::grammar::EngineWords for Engine<'_, pharmakos_sim::world::TickError> {}
+/// The power grid's refusal: figures.
+impl pharmakos_proto::json::grammar::EngineWords for Engine<'_, pharmakos_sim::power::PowerError> {}
+/// A fingerprint's refusal: the codec's own message, composed from words and
+/// quoted text.
+impl pharmakos_proto::json::grammar::EngineWords
+    for Engine<'_, pharmakos_sim::hash::FingerprintError>
+{
 }
 
 #[cfg(test)]
@@ -180,6 +313,32 @@ mod tests {
         assert_eq!(Error::phase_closed("x").name(), "PHASE_CLOSED");
         assert_eq!(Error::rate_limited("x").name(), "RATE_LIMITED");
         assert_eq!(Error::forbidden("x").name(), "FORBIDDEN_SCOPE");
+    }
+
+    /// The wire sends what was said, and nothing else can stand in for it
+    /// (S3's `vfyq2`, fix pass 4, item L-b): the message, the `said`, the
+    /// `Display` and the JSON's `message` are one text, and a seat's text in
+    /// it reaches the wire quoted.
+    #[test]
+    fn the_wire_sends_what_was_said() {
+        use pharmakos_proto::json::grammar::quoted;
+        let seat_wrote = "a\u{202E}b";
+        let error = Error::invalid(pharmakos_proto::said!(
+            "no step named {}",
+            quoted(seat_wrote)
+        ));
+        let said = error.said();
+        assert_eq!(error.message(), said.as_str());
+        assert_eq!(
+            error.to_json().get("message"),
+            Some(&Json::String(said.as_str().to_owned()))
+        );
+        assert_eq!(
+            error.to_string(),
+            format!("{}: {}", error.name(), said.as_str())
+        );
+        assert!(!said.as_str().contains('\u{202E}'), "{}", said.as_str());
+        assert_eq!(error.clone().into_said().as_str(), said.as_str());
     }
 
     #[test]
@@ -201,5 +360,86 @@ mod tests {
     fn the_standard_numbers_are_used_where_the_standard_has_a_word() {
         assert_eq!(Error::invalid("x").rpc_number(), -32602);
         assert_eq!(Error::internal("x").rpc_number(), -32603);
+    }
+}
+
+#[cfg(test)]
+mod engine_words {
+    use super::engine;
+    use pharmakos_proto::json::grammar::{HIDDEN, Said};
+
+    /// ESC, an OSC sequence, BEL, a right-to-left override, a tag character
+    /// and a variation selector.
+    const HOSTILE: &str = "\u{1b}]0;x\u{7}\u{202e}z\u{e0041}\u{fe0f}";
+
+    fn clean(said: &Said, what: &str) {
+        let raw: Vec<String> = said
+            .as_str()
+            .chars()
+            .filter(|character| {
+                HIDDEN
+                    .iter()
+                    .any(|(low, high)| *low <= *character && *character <= *high)
+            })
+            .map(|character| format!("U+{:04X}", u32::from(character)))
+            .collect();
+        assert!(raw.is_empty(), "{what}: raw {raw:?} in {:?}", said.as_str());
+    }
+
+    /// Every declared engine-words type that has a text field, with hostile
+    /// text in it, comes back escaped (S3's `vfyq2`, fix pass 4, item L-a):
+    /// `Said::engine_error` escapes whatever a declared type's words carry.
+    /// The types with no text field (numbers, `&'static str`, enums) carry
+    /// none to escape.
+    #[test]
+    fn every_declared_engine_type_with_text_says_it_escaped() {
+        use pharmakos_sim::MapError;
+        use pharmakos_sim::rules::RulesError;
+        use pharmakos_sim::snapshot::SnapshotError;
+        clean(
+            &engine(&RulesError::Io {
+                path: HOSTILE.to_owned(),
+                message: HOSTILE.to_owned(),
+            }),
+            "RulesError::Io",
+        );
+        clean(
+            &engine(&RulesError::OutOfRange {
+                field: HOSTILE.to_owned(),
+                value: HOSTILE.to_owned(),
+            }),
+            "RulesError::OutOfRange",
+        );
+        clean(
+            &engine(&MapError::OutOfRange {
+                field: "x",
+                why: HOSTILE.to_owned(),
+            }),
+            "MapError::OutOfRange",
+        );
+        clean(
+            &engine(&MapError::Codec(HOSTILE.to_owned())),
+            "MapError::Codec",
+        );
+        clean(
+            &engine(&SnapshotError::Decode(HOSTILE.to_owned())),
+            "SnapshotError::Decode",
+        );
+        clean(
+            &Said::engine_error(&pharmakos_verifier::ScopeError::UnknownBeacon(
+                HOSTILE.to_owned(),
+            )),
+            "ScopeError::UnknownBeacon",
+        );
+        clean(
+            &Said::engine_error(&pharmakos_verifier::ScopeError::NotOwnBeacon(
+                HOSTILE.to_owned(),
+            )),
+            "ScopeError::NotOwnBeacon",
+        );
+        clean(
+            &engine(&std::io::Error::other(HOSTILE.to_owned())),
+            "io::Error",
+        );
     }
 }

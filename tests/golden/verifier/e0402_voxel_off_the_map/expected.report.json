@@ -42,10 +42,10 @@
       ]
     }
   ],
-  "report_hash": "Ob2CNxwPfHs=",
+  "report_hash": "0BXeO8FaE7I=",
   "rules_hash": "GybFJQaL/2E=",
   "plan_fingerprint": "DiFymx5QiqY=",
-  "verifier_version": "0.1.0-s3.4",
+  "verifier_version": "0.1.0-s3.5",
   "size_units": 1,
   "size_budget": 128
 }

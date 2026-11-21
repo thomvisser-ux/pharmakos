@@ -255,3 +255,48 @@ fn a_file_under_the_cap_whose_canonical_text_is_over_it_still_verifies() {
     assert!(!said.contains("E0029"), "{said}");
     assert!(said.contains("report_hash"), "{said}");
 }
+
+/// A diagnostic's pointer is printed whole (S3's `vfyq2`, fix pass 2b): the
+/// headless watch check, and anyone who reads the line, takes the pointer from
+/// it, so a pointer the verifier builds from the schema's own names is printed
+/// exactly, however long. Fix pass 2 printed it through the 64-character
+/// quote, and this pointer, 70 characters, lost its tail to `…`.
+#[test]
+fn a_long_pointer_is_printed_whole() {
+    let text = r#"{
+  "schema_version": {"major": 1},
+  "meta": {"title": "t", "author_kind": "HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {"route": [
+    {"label": "guard", "place_beacon": {"at": {"covering": {"feature_id": "seam_1_1"}},
+      "initial": {"priority": "NORMAL", "mandate": {"roe": "FREE_FIRE", "defend": {
+        "protect": [{"beacon": {"beacon_id": "b_77"}}]}}}}}
+  ]},
+  "on_death": {"on_respawn": "CONTINUE"},
+  "fallback": {"hold": {"at": {"beacon_anchor": {"safest": {}}}}}
+}"#;
+    let path = scratch_file("a_long_pointer.jsonc", text.as_bytes());
+    let outcome = verify_file(&path);
+    let pointer =
+        "/declarative/route/0/place_beacon/initial/mandate/defend/protect/0/beacon/beacon_id";
+    assert!(
+        pointer.chars().count() > 64,
+        "the case needs a pointer past the quote's cap"
+    );
+    let said = format!("{}{}", outcome.out, outcome.err);
+    let printed: Vec<&str> = said
+        .lines()
+        .filter_map(|line| {
+            let words: Vec<&str> = line.split_whitespace().collect();
+            (words.first() == Some(&"error"))
+                .then(|| words.get(2).copied())
+                .flatten()
+        })
+        .collect();
+    assert!(
+        printed.contains(&pointer),
+        "the pointer is printed whole: {printed:?}\n{}{}",
+        outcome.out,
+        outcome.err
+    );
+}

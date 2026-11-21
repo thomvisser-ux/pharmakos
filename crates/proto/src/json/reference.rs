@@ -32,6 +32,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use super::base64;
+use super::grammar::{self, quoted};
 use super::value::{Error, ErrorKind, Json, is_integer_lexeme, is_misspelt_integer, push_pointer};
 use crate::descriptor::{Field, Message, ScalarKind, Schema, schema};
 use crate::wire::{
@@ -45,7 +46,7 @@ pub(super) fn read(text: &str) -> Result<Json, Error> {
     let value = reader.value(0)?;
     reader.skip_whitespace();
     if reader.pos < bytes.len() {
-        return Err(reader.error("trailing content after the JSON value"));
+        return Err(reader.error(grammar::TRAILING_CONTENT));
     }
     Ok(value)
 }
@@ -71,11 +72,7 @@ impl JsonReader<'_> {
         } else {
             ErrorKind::Grammar
         };
-        Error {
-            kind,
-            pointer: format!("/byte/{}", self.pos),
-            message,
-        }
+        Error::from_reference(kind, format!("/byte/{}", self.pos), message)
     }
 
     fn peek(&self) -> Option<u8> {
@@ -136,7 +133,7 @@ impl JsonReader<'_> {
                 Ok(Json::Null)
             }
             Some(_) => self.number(),
-            None => Err(self.error("the document ended where a value was expected")),
+            None => Err(self.error(grammar::ENDED_BEFORE_VALUE)),
         }
     }
 
@@ -150,9 +147,11 @@ impl JsonReader<'_> {
         }
         loop {
             self.skip_whitespace();
+            let key_at = self.pos;
             let key = self.string()?;
             if entries.iter().any(|(name, _)| *name == key) {
-                return Err(self.error(format!("duplicate key `{key}`")));
+                self.pos = key_at;
+                return Err(self.error(format!("duplicate key `{}`", super::grammar::quoted(&key))));
             }
             self.skip_whitespace();
             self.expect(b':')?;
@@ -161,12 +160,12 @@ impl JsonReader<'_> {
             entries.push((key, value));
             self.skip_whitespace();
             match self.peek() {
-                Some(b',') => self.bump(),
+                Some(b',') => self.after_comma(b'}')?,
                 Some(b'}') => {
                     self.bump();
                     return Ok(Json::Object(entries));
                 }
-                _ => return Err(self.error("expected `,` or `}`")),
+                _ => return Err(self.error(grammar::EXPECTED_COMMA_OR_BRACE)),
             }
         }
     }
@@ -184,14 +183,25 @@ impl JsonReader<'_> {
             items.push(self.value(depth.saturating_add(1))?);
             self.skip_whitespace();
             match self.peek() {
-                Some(b',') => self.bump(),
+                Some(b',') => self.after_comma(b']')?,
                 Some(b']') => {
                     self.bump();
                     return Ok(Json::Array(items));
                 }
-                _ => return Err(self.error("expected `,` or `]`")),
+                _ => return Err(self.error(grammar::EXPECTED_COMMA_OR_BRACKET)),
             }
         }
+    }
+
+    /// A comma, read: refused when the close `end` is all that follows it
+    /// (S3's `vfyq2`, the grammar's `TRAILING_COMMA`).
+    fn after_comma(&mut self, end: u8) -> Result<(), Error> {
+        self.bump();
+        self.skip_whitespace();
+        if self.peek() == Some(end) {
+            return Err(self.error(grammar::TRAILING_COMMA));
+        }
+        Ok(())
     }
 
     fn string(&mut self) -> Result<String, Error> {
@@ -200,7 +210,7 @@ impl JsonReader<'_> {
         loop {
             let byte = self
                 .peek()
-                .ok_or_else(|| self.error("unterminated string"))?;
+                .ok_or_else(|| self.error(grammar::UNTERMINATED_STRING))?;
             match byte {
                 b'"' => {
                     self.bump();
@@ -211,7 +221,7 @@ impl JsonReader<'_> {
                     self.escape(&mut out)?;
                 }
                 0x00..=0x1f => {
-                    return Err(self.error("a raw control character in a string"));
+                    return Err(self.error(grammar::RAW_CONTROL));
                 }
                 _ => {
                     // Copy one whole UTF-8 sequence, which `str` guarantees is
@@ -231,7 +241,7 @@ impl JsonReader<'_> {
                         .ok_or_else(|| self.error("truncated UTF-8"))?;
                     out.push_str(
                         std::str::from_utf8(slice)
-                            .map_err(|_| self.error("invalid UTF-8 in a string"))?,
+                            .map_err(|_| self.error(grammar::INVALID_UTF8))?,
                     );
                 }
             }
@@ -239,9 +249,12 @@ impl JsonReader<'_> {
     }
 
     fn escape(&mut self, out: &mut String) -> Result<(), Error> {
+        // The backslash, just read: where a refusal of the whole escape
+        // points (fix pass 2, item D5).
+        let backslash = self.pos.saturating_sub(1);
         let byte = self
             .peek()
-            .ok_or_else(|| self.error("the document ended inside an escape"))?;
+            .ok_or_else(|| self.error(grammar::ENDED_IN_ESCAPE))?;
         self.bump();
         match byte {
             b'"' => out.push('"'),
@@ -255,26 +268,51 @@ impl JsonReader<'_> {
             b'u' => {
                 let first = self.hex4()?;
                 let code = if (0xd800..0xdc00).contains(&first) {
+                    let second_backslash = self.pos;
                     self.expect(b'\\')?;
                     self.expect(b'u')?;
                     let second = self.hex4()?;
                     if !(0xdc00..0xe000).contains(&second) {
-                        return Err(self.error("a high surrogate without a low surrogate"));
+                        self.pos = second_backslash;
+                        return Err(self.error(grammar::LONE_HIGH_SURROGATE));
                     }
                     let high = first.saturating_sub(0xd800) << 10;
                     let low = second.saturating_sub(0xdc00);
-                    0x1_0000u32
-                        .checked_add(high | low)
-                        .ok_or_else(|| self.error("a surrogate pair out of range"))?
+                    let Some(code) = 0x1_0000u32.checked_add(high | low) else {
+                        self.pos = backslash;
+                        return Err(self.error(grammar::SURROGATE_OUT_OF_RANGE));
+                    };
+                    code
                 } else {
                     first
                 };
-                let character =
-                    char::from_u32(code).ok_or_else(|| self.error("not a Unicode scalar value"))?;
+                let Some(character) = char::from_u32(code) else {
+                    self.pos = backslash;
+                    return Err(self.error(grammar::NOT_A_SCALAR));
+                };
                 out.push(character);
             }
-            other => {
-                return Err(self.error(format!("unknown escape `\\{}`", char::from(other))));
+            _ => {
+                // S3's `vfyq2`, fix pass 1: the escaped character whole, quoted,
+                // and the refusal after it, at a character boundary.
+                let start = self.pos.saturating_sub(1);
+                let width = match self.bytes.get(start) {
+                    Some(lead) if *lead >= 0xf0 => 4,
+                    Some(lead) if *lead >= 0xe0 => 3,
+                    Some(lead) if *lead >= 0xc0 => 2,
+                    _ => 1,
+                };
+                let end = start.saturating_add(width);
+                let Some(Ok(character)) = self.bytes.get(start..end).map(std::str::from_utf8)
+                else {
+                    return Err(self.error(grammar::INVALID_UTF8));
+                };
+                let character = character.to_owned();
+                self.pos = backslash;
+                return Err(self.error(format!(
+                    "unknown escape `\\{}`",
+                    super::grammar::quoted(&character)
+                )));
             }
         }
         Ok(())
@@ -285,14 +323,14 @@ impl JsonReader<'_> {
         for _ in 0..4 {
             let byte = self
                 .peek()
-                .ok_or_else(|| self.error("a short \\u escape"))?;
+                .ok_or_else(|| self.error(grammar::SHORT_U_ESCAPE))?;
             let digit = char::from(byte)
                 .to_digit(16)
-                .ok_or_else(|| self.error("a non-hexadecimal digit in a \\u escape"))?;
+                .ok_or_else(|| self.error(grammar::NON_HEX_DIGIT))?;
             value = value
                 .checked_mul(16)
                 .and_then(|shifted| shifted.checked_add(digit))
-                .ok_or_else(|| self.error("a \\u escape out of range"))?;
+                .ok_or_else(|| self.error(grammar::U_ESCAPE_OUT_OF_RANGE))?;
             self.bump();
         }
         Ok(value)
@@ -301,7 +339,8 @@ impl JsonReader<'_> {
     // S3's `vfy6`: RFC 8259's number grammar, as `value.rs`'s reader.
     fn number(&mut self) -> Result<Json, Error> {
         let start = self.pos;
-        if self.peek() == Some(b'-') {
+        let signed = self.peek() == Some(b'-');
+        if signed {
             self.bump();
         }
         let at_digit = |reader: &Self| reader.peek().is_some_and(|byte| byte.is_ascii_digit());
@@ -314,16 +353,17 @@ impl JsonReader<'_> {
             Some(b'0') => {
                 self.bump();
                 if at_digit(self) {
-                    return Err(self.error("a number with a leading zero"));
+                    return Err(self.error(grammar::LEADING_ZERO));
                 }
             }
             Some(b'1'..=b'9') => digits(self),
-            _ => return Err(self.error("expected a value")),
+            _ if signed => return Err(self.error(grammar::NUMBER_WITHOUT_DIGIT)),
+            _ => return Err(self.error(grammar::EXPECTED_VALUE)),
         }
         if self.peek() == Some(b'.') {
             self.bump();
             if !at_digit(self) {
-                return Err(self.error("a number's fraction without a digit"));
+                return Err(self.error(grammar::FRACTION_WITHOUT_DIGIT));
             }
             digits(self);
         }
@@ -333,7 +373,7 @@ impl JsonReader<'_> {
                 self.bump();
             }
             if !at_digit(self) {
-                return Err(self.error("a number's exponent without a digit"));
+                return Err(self.error(grammar::EXPONENT_WITHOUT_DIGIT));
             }
             digits(self);
         }
@@ -741,7 +781,8 @@ fn json_to_message(
             classified(
                 &key_pointer,
                 format!(
-                    "`{key}` is not a field of `{}`. Unknown fields are rejected, never stripped.",
+                    "`{}` is not a field of `{}`. Unknown fields are rejected, never stripped.",
+                    quoted(key),
                     message.full_name
                 ),
             )
@@ -751,8 +792,10 @@ fn json_to_message(
             return Err(classified(
                 &key_pointer,
                 format!(
-                    "`{first}` and `{key}` both name the field `{}`. A field is written once, \
+                    "`{}` and `{}` both name the field `{}`. A field is written once, \
                      under one of its names.",
+                    quoted(first),
+                    quoted(key),
                     field.name
                 ),
             ));
@@ -769,7 +812,9 @@ fn json_to_message(
                 return Err(classified(
                     &key_pointer,
                     format!(
-                        "`{key}` and `{previous}` are both set, but only one member of a oneof may be"
+                        "`{}` and `{}` are both set, but only one member of a oneof may be",
+                        quoted(key),
+                        quoted(previous)
                     ),
                 ));
             }
@@ -895,15 +940,16 @@ fn is_zero(lexeme: &str) -> bool {
 fn integer_refusal(lexeme: &str, otherwise: &str, signed: bool) -> String {
     if is_misspelt_integer(lexeme) {
         format!(
-            "`{lexeme}` is not an integer as JSON writes one: RFC 8259 has no `+` and no \
-             leading zero"
+            "`{}` is not an integer as JSON writes one: RFC 8259 has no `+` and no \
+             leading zero",
+            quoted(lexeme)
         )
     } else if is_integer_lexeme(lexeme) && (signed || !lexeme.starts_with('-')) {
         // A whole number too large for the field's 64 bits (the review of
         // PR #179): out of range, not a fraction.
-        format!("`{lexeme}` is out of range for a 64-bit integer")
+        format!("`{}` is out of range for a 64-bit integer", quoted(lexeme))
     } else {
-        format!("`{lexeme}` {otherwise}")
+        format!("`{}` {otherwise}", quoted(lexeme))
     }
 }
 
@@ -1028,7 +1074,11 @@ fn write_scalar(
                         .ok_or_else(|| {
                             classified(
                                 pointer,
-                                format!("`{name}` is not a value of `{}`", field.type_name),
+                                format!(
+                                    "`{}` is not a value of `{}`",
+                                    quoted(name),
+                                    field.type_name
+                                ),
                             )
                         })?
                         .number
@@ -1153,5 +1203,5 @@ fn classified(pointer: &str, message: impl Into<String>) -> Error {
         .iter()
         .find(|(words, _)| message.contains(words))
         .map_or(ErrorKind::Wire, |(_, kind)| *kind);
-    Error::at(kind, pointer, message)
+    Error::from_reference(kind, pointer.to_owned(), message)
 }

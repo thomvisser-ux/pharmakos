@@ -72,6 +72,8 @@
 use pharmakos_proto::gp::api::v1::VerifyReport;
 use pharmakos_proto::gp::api::v1::verify_plan::Depth;
 use pharmakos_proto::json::Json;
+use pharmakos_proto::json::grammar::Said;
+use pharmakos_proto::said;
 use pharmakos_sim::interpreter::Plan;
 use pharmakos_sim::rules::RulesTable;
 
@@ -144,18 +146,23 @@ impl Surface {
                 .filter(|row| row.seat == seat.raw())
                 .map(|row| {
                     pharmakos_sim::licence::licence_of(row.licence).ok_or_else(|| {
-                        Error::internal(format!(
+                        Error::internal(said!(
                             "the licence table holds licence {} for seat {}, which this build \
                              does not define",
-                            row.licence, row.seat
+                            row.licence,
+                            row.seat
                         ))
                     })
                 })
                 .collect::<Result<Vec<_>, Error>>()?,
             None => Vec::new(),
         };
-        let words = pharmakos_plan_core::vocabulary::vocabulary(&held)
-            .map_err(|error| Error::internal(format!("the vocabulary: {error}")))?;
+        let words = pharmakos_plan_core::vocabulary::vocabulary(&held).map_err(|error| {
+            Error::internal(said!(
+                "the vocabulary: {}",
+                pharmakos_proto::json::grammar::Said::engine_error(&error)
+            ))
+        })?;
         let entries = |entries: &[pharmakos_plan_core::vocabulary::Entry]| {
             Json::Array(entries.iter().map(vocabulary_entry).collect())
         };
@@ -213,9 +220,9 @@ impl Surface {
             ]));
         };
         let found = pharmakos_plan_core::library::list(folder).map_err(|error| {
-            Error::internal(format!(
+            Error::internal(said!(
                 "the template folder could not be read: {}",
-                error.message
+                error.said()
             ))
         })?;
         let templates: Vec<Json> = found
@@ -347,8 +354,9 @@ impl Surface {
         // out an absolute directory would hand every seat the layout of the
         // machine it is playing on for the price of one bad id.
         let text = pharmakos_plan_core::library::read(folder, template_id).map_err(|_| {
-            Error::not_found(format!(
-                "no template `{template_id}` in this gateway's library"
+            Error::not_found(said!(
+                "no template `{}` in this gateway's library",
+                pharmakos_proto::json::grammar::quoted(template_id)
             ))
         })?;
 
@@ -361,13 +369,13 @@ impl Surface {
                 let name = match item.get("name") {
                     Some(Json::String(name)) => name.clone(),
                     _ => {
-                        return Err(Error::invalid(format!("parameter {index} has no `name`")));
+                        return Err(Error::invalid(said!("parameter {} has no `name`", index)));
                     }
                 };
                 let value = match item.get("value") {
                     Some(Json::String(value)) => value.clone(),
                     _ => {
-                        return Err(Error::invalid(format!("parameter {index} has no `value`")));
+                        return Err(Error::invalid(said!("parameter {} has no `value`", index)));
                     }
                 };
                 parameters.push(pharmakos_plan_core::library::Parameter { name, value });
@@ -398,7 +406,7 @@ impl Surface {
         let why = suggestion.map_or_else(String::new, |suggestion| suggestion.why.clone());
 
         let made = pharmakos_plan_core::instantiate(&text, &parameters, &offered)
-            .map_err(|error| Error::invalid(error.message))?;
+            .map_err(|error| Error::invalid(error.shown()))?;
         let filled: Vec<Json> = made
             .parameters
             .iter()
@@ -472,21 +480,27 @@ impl Surface {
             host.runner().frozen().snapshot(),
             seat.raw(),
         )
-        .map_err(|error| Error::internal(error.message))?;
+        .map_err(|error| Error::internal(error.shown()))?;
 
         // A file with no canonical form has no rendering. That is not an error
         // -- the editor asks for a rendering on every keystroke and a half-typed
         // file is the normal case -- so it comes back as the sentence that says
         // to verify it, with no rules, and `verify_plan` is where the
         // diagnostics live.
-        let rendering = match pharmakos_plan_core::canonicalise_text(playbook) {
+        //
+        // The prose and the rules' chips read the decoded playbook and nothing
+        // else (`render` takes a `Playbook`; a chip is a pointer into the
+        // canonical tree, not into the file's comments), so the read is the
+        // one decode `verify_plan` takes its report over, `decode_jsonc`, and
+        // no JSONC tree is built (S3's `vfyq2`, fix pass 1, item 3).
+        let rendering = match pharmakos_plan_core::decode_jsonc(playbook) {
             Err(_no_canonical_form) => pharmakos_plan_core::Rendering {
                 prose: String::from(crate::strings::UNRENDERABLE),
                 rules: Vec::new(),
             },
             Ok(canonical) => {
-                pharmakos_plan_core::render(&canonical.playbook, &context, host.rules())
-                    .map_err(|error| Error::internal(error.message))?
+                pharmakos_plan_core::render(canonical.decoded().message(), &context, host.rules())
+                    .map_err(|error| Error::internal(error.shown()))?
             }
         };
         let mut entries = vec![(String::from("prose"), Json::String(rendering.prose))];
@@ -512,7 +526,8 @@ impl Surface {
             .string_param("json_patch")?
             .ok_or_else(|| Error::invalid("`json_patch` is an RFC 6902 patch, as text"))?;
         let (patched, inverse) = pharmakos_plan_core::patch_text(playbook, patch)
-            .map_err(|error| Error::invalid(error.message))?;
+            .map_err(|error| Error::invalid(error.shown()))?;
+        undo_travels(&patched, &inverse)?;
         Ok(Json::Object(vec![
             (String::from("playbook_jsonc"), Json::String(patched)),
             (String::from("inverse_json_patch"), Json::String(inverse)),
@@ -537,8 +552,9 @@ impl Surface {
             None => String::new(),
         };
         if label.chars().count() > MAX_DRAFT_LABEL_CHARS {
-            return Err(Error::invalid(format!(
-                "a draft's label is at most {MAX_DRAFT_LABEL_CHARS} characters"
+            return Err(Error::invalid(said!(
+                "a draft's label is at most {} characters",
+                MAX_DRAFT_LABEL_CHARS
             )));
         }
         let round = self.host()?.runner().round();
@@ -548,18 +564,20 @@ impl Surface {
             None => format!("d{round}-{}", self.next_draft_number(seat, round)?),
         };
         if !is_draft_id(&draft_id) {
-            return Err(Error::invalid(format!(
-                "`{draft_id}` is not a draft id: lower-case ASCII letters, digits, `-` and `_`, \
-                 starting with a letter"
+            return Err(Error::invalid(said!(
+                "`{}` is not a draft id: lower-case ASCII letters, digits, `-` and `_`, \
+                 starting with a letter",
+                pharmakos_proto::json::grammar::quoted(&draft_id)
             )));
         }
 
         let state = self.seat_state_mut(subject, seat)?;
         let replacing = state.draft(&draft_id).is_some();
         if !replacing && state.drafts.len() >= MAX_DRAFTS {
-            return Err(Error::invalid(format!(
-                "this seat holds {MAX_DRAFTS} drafts, which is as many as it may; delete one by \
-                 saving over it"
+            return Err(Error::invalid(said!(
+                "this seat holds {} drafts, which is as many as it may; delete one by \
+                 saving over it",
+                MAX_DRAFTS
             )));
         }
         state.drafts.retain(|draft| draft.draft_id != draft_id);
@@ -722,22 +740,24 @@ impl Surface {
             ));
         }
         let playbook = playbook_param(request)?;
-        let canonical = pharmakos_plan_core::canonicalise_text(playbook).map_err(|error| {
-            Error::invalid(format!(
+        let canonical = pharmakos_plan_core::decode_jsonc(playbook).map_err(|error| {
+            Error::invalid(said!(
                 "this file has no canonical form yet, so it names nothing to resolve: {}",
-                error.message
+                error.said()
             ))
         })?;
-        let plan = compile_decoded(&canonical.playbook, host.rules()).map_err(|error| {
-            Error::invalid(format!(
-                "this build cannot execute this playbook, so none of it reads anything: {error}"
+        let playbook = canonical.decoded().message();
+        let plan = compile_decoded(playbook, host.rules()).map_err(|why| {
+            Error::invalid(said!(
+                "this build cannot execute this playbook, so none of it reads anything: {}",
+                why
             ))
         })?;
         let resolved = crate::targeting::resolve_playbook(
             host.world(),
             host.runner().frozen().snapshot(),
             seat,
-            &canonical.playbook,
+            playbook,
             &plan,
         )?;
         Ok(Json::Object(vec![(
@@ -796,17 +816,17 @@ impl Surface {
             return Ok(None);
         };
         let canonical =
-            pharmakos_plan_core::canonicalise_text(&sealed.playbook_jsonc).map_err(|error| {
-                Error::internal(format!(
+            pharmakos_plan_core::decode_jsonc(&sealed.playbook_jsonc).map_err(|error| {
+                Error::internal(said!(
                     "a playbook this seat sealed has no canonical form: {}",
-                    error.message
+                    error.said()
                 ))
             })?;
         let reads = crate::targeting::resolve_playbook(
             host.world(),
             host.runner().frozen().snapshot(),
             seat,
-            &canonical.playbook,
+            canonical.decoded().message(),
             &sealed.plan,
         )?;
         let dollars = host
@@ -898,27 +918,38 @@ impl Surface {
         let seat = Surface::seat_of(subject, "a playbook to submit")?;
         let playbook = playbook_param(request)?.to_owned();
         let round = self.host()?.runner().round();
-        let report = self.verify_for(seat, &playbook, Depth::Full)?;
-        let accepted = report.qualifies;
-        if accepted {
+        // One decode from the socket to the seal (S3's `vfyq2`, fix pass 1,
+        // item 3): the report, the compile, the price and the seal all read
+        // the canonical form `verified_for` decoded, so the playbook sealed is
+        // the one the report qualified, by construction, and the file written
+        // is the text that canonical form was decoded from.
+        let verified = self.verified_for(seat, &playbook, Depth::Full)?;
+        let accepted = matches!(
+            &verified,
+            pharmakos_plan_core::Verified::Canonical { report, .. } if report.qualifies
+        );
+        if let pharmakos_plan_core::Verified::Canonical { report, canonical } = &verified
+            && report.qualifies
+        {
             // The second door. A refusal here leaves the previous seal exactly
             // where it is -- `self.seat_state_mut` is not reached at all -- and
             // comes back as a method error rather than as a report, because the
             // verifier has already said this playbook may be sealed and saying
             // `qualifies: false` on the same breath would be the gateway
             // contradicting a hash it has just handed out.
-            let plan = compile_playbook(&playbook, self.host()?.rules())?;
+            let plan = compile_canonical(canonical, self.host()?.rules())?;
             // The third: a seal always prices, so the seat's own forecast can
             // always answer its `committed_dollars` (review A of `econ`). From
             // S2 the verifier refuses a seal that does not price (`E0603`), so
             // no qualifying report reaches this refusal; it stays as defence
             // in depth.
-            self.seal_commitment(seat, &playbook)
+            self.seal_commitment_of(seat, canonical.decoded().message())
                 .map_err(|unpriced| match unpriced {
                     super::knowledge::Unpriced::Gateway(error) => error,
-                    super::knowledge::Unpriced::Playbook(why) => Error::invalid(format!(
-                        "this playbook qualifies and the Ledger cannot price its seal: {why}. \
-                         Order less in one step"
+                    super::knowledge::Unpriced::Playbook(why) => Error::invalid(said!(
+                        "this playbook qualifies and the Ledger cannot price its seal: {}. \
+                         Order less in one step",
+                        why
                     )),
                 })?;
             let sealed = Sealed {
@@ -931,7 +962,7 @@ impl Surface {
             self.seat_state_mut(subject, seat)?.sealed = Some(sealed);
         }
         Ok(Json::Object(vec![
-            (String::from("report"), report_json(&report)),
+            (String::from("report"), report_json(verified.report())),
             (String::from("accepted"), Json::Bool(accepted)),
         ]))
     }
@@ -962,9 +993,11 @@ impl Surface {
         (1..=MAX_DRAFTS.saturating_add(1))
             .find(|number| state.draft(&format!("d{round}-{number}")).is_none())
             .ok_or_else(|| {
-                Error::internal(format!(
-                    "seat {} holds more than {MAX_DRAFTS} drafts of round {round}",
-                    seat.raw()
+                Error::internal(said!(
+                    "seat {} holds more than {} drafts of round {}",
+                    seat.raw(),
+                    MAX_DRAFTS,
+                    round
                 ))
             })
     }
@@ -975,8 +1008,10 @@ impl Surface {
 ///
 /// The one path from a submitted file to something the interpreter can run, so
 /// `submit_plan` and [`crate::surface::Surface`]'s filing of the safe playbook
-/// cannot compile it two different ways. The decode is `plan-core`'s canonical
-/// form, which is the same decode the verifier's report was taken over.
+/// cannot compile it two different ways. The decode is `plan-core`'s
+/// `decode_jsonc`, the same decode the verifier's report is taken over; a
+/// caller holding that decode already compiles it through
+/// [`compile_canonical`] instead.
 ///
 /// # The code, and why it is this one
 ///
@@ -1016,15 +1051,32 @@ impl Surface {
 /// was taken over that same canonical form, and so would mean the two had
 /// drifted apart.
 pub(crate) fn compile_playbook(playbook_jsonc: &str, rules: &RulesTable) -> Result<Plan, Error> {
-    let canonical = pharmakos_plan_core::canonicalise_text(playbook_jsonc).map_err(|error| {
-        Error::internal(format!(
+    let canonical = pharmakos_plan_core::decode_jsonc(playbook_jsonc).map_err(|error| {
+        Error::internal(said!(
             "a playbook the verifier read has no canonical form: {}",
-            error.message
+            error.said()
         ))
     })?;
-    compile_decoded(&canonical.playbook, rules).map_err(|error| {
-        Error::invalid(format!(
-            "this playbook qualifies and this build cannot execute it: {error}"
+    compile_canonical(&canonical, rules)
+}
+
+/// [`compile_playbook`], over a canonical form already decoded: what
+/// `submit_plan` compiles, the one its report was taken over (S3's `vfyq2`,
+/// fix pass 1, item 3).
+///
+/// # Errors
+///
+/// As [`compile_playbook`], for a [`PlanError`].
+///
+/// [`PlanError`]: pharmakos_sim::interpreter::PlanError
+pub(crate) fn compile_canonical(
+    canonical: &pharmakos_proto::json::Canonicalised<pharmakos_proto::gp::v1::Playbook>,
+    rules: &RulesTable,
+) -> Result<Plan, Error> {
+    compile_decoded(canonical.decoded().message(), rules).map_err(|why| {
+        Error::invalid(said!(
+            "this playbook qualifies and this build cannot execute it: {}",
+            why
         ))
     })
 }
@@ -1032,12 +1084,47 @@ pub(crate) fn compile_playbook(playbook_jsonc: &str, rules: &RulesTable) -> Resu
 /// The sim's own door, over a playbook already decoded: the **one** call of
 /// `Plan::compile` in the handler modules (`tests/confinement.rs`), which
 /// [`compile_playbook`] and `resolve_refs` both go through, so the playbook
-/// `resolve_refs` reads is the one a submission would seal.
+/// `resolve_refs` reads is the one a submission would seal. A refusal comes
+/// back as the gateway's own sentence for it ([`plan_refusal`]), never as
+/// the sim's error, so no handler can say a `PlanError` any other way.
 fn compile_decoded(
     playbook: &pharmakos_proto::gp::v1::Playbook,
     rules: &RulesTable,
-) -> Result<Plan, pharmakos_sim::interpreter::PlanError> {
-    Plan::compile(playbook, rules)
+) -> Result<Plan, Said> {
+    Plan::compile(playbook, rules).map_err(|error| super::plan_words::plan_refusal(&error))
+}
+
+/// The undo of a `patch_plan` answer travels back (S3's `vfyq2`, fix pass 6,
+/// item 2): the request that sends the inverse back, `patch_plan` with the
+/// patched file and the inverse, measured as the client writes it
+/// ([`crate::rpc::request_text`], with the widest numeric id a client
+/// counts to, a `u64`'s twenty digits), must be a text the gateway reads
+/// ([`crate::frame::travels`]). The inverse holds the text it takes out as
+/// JSON, and the request writes it as JSON again, so it can be far larger
+/// than the request that made it. Otherwise the forward patch is refused up
+/// front, as an undo that could not be issued, rather than answered with an
+/// undo whose request would close the seat's connection (1009).
+fn undo_travels(patched: &str, inverse: &str) -> Result<(), Error> {
+    let request = crate::rpc::request_text(
+        &Json::Number(u64::MAX.to_string()),
+        "patch_plan",
+        Json::Object(vec![
+            (
+                String::from("playbook_jsonc"),
+                Json::String(patched.to_owned()),
+            ),
+            (String::from("json_patch"), Json::String(inverse.to_owned())),
+        ]),
+    );
+    if crate::frame::travels(request.len()) {
+        return Ok(());
+    }
+    Err(Error::invalid(said!(
+        "this patch is not applied: the patch that would undo it could not be issued (its \
+         request would be {} bytes, past the {} one message carries)",
+        request.len(),
+        crate::frame::MAX_MESSAGE_BYTES
+    )))
 }
 
 /// The `playbook_jsonc` parameter, bounded.
@@ -1046,8 +1133,9 @@ fn playbook_param(request: &Request) -> Result<&str, Error> {
         .string_param("playbook_jsonc")?
         .ok_or_else(|| Error::invalid("`playbook_jsonc` is the playbook, as JSONC text"))?;
     if pharmakos_verifier::is_too_long(text) {
-        return Err(Error::invalid(format!(
-            "a playbook is at most {MAX_PLAYBOOK_CHARS} characters and this is {}",
+        return Err(Error::invalid(said!(
+            "a playbook is at most {} characters and this is {}",
+            MAX_PLAYBOOK_CHARS,
             text.chars().count()
         )));
     }
@@ -1063,8 +1151,9 @@ fn depth_of(request: &Request) -> Result<Depth, Error> {
         // gets the report a submit would produce.
         None | Some("full") => Ok(Depth::Full),
         Some("quick") => Ok(Depth::Quick),
-        Some(other) => Err(Error::invalid(format!(
-            "`depth` is `quick` or `full`, and this is `{other}`"
+        Some(other) => Err(Error::invalid(said!(
+            "`depth` is `quick` or `full`, and this is `{}`",
+            pharmakos_proto::json::grammar::quoted(other)
         ))),
     }
 }

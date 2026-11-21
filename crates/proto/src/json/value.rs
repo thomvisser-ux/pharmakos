@@ -15,7 +15,6 @@
 //!   field-number order and the reader can report the position of a duplicate
 //!   key rather than silently keeping the last one.
 
-use std::collections::BTreeSet;
 use std::fmt;
 use std::fmt::Write as _;
 
@@ -105,31 +104,94 @@ pub enum ErrorKind {
 /// can be reported at the place in the file that caused it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Error {
+    // Every field is private (S3's `vfyq2`, fix pass 4b, item L-b): only
+    // this crate makes an error, from a [`super::grammar::Said`], and a
+    // public field could be written afterwards, so a caller reads through
+    // [`Error::kind`], [`Error::pointer`], [`Error::message`] and
+    // [`Error::said`], and [`Error::said`] is the codec's own words.
     /// What kind of thing it is.
-    pub kind: ErrorKind,
+    kind: ErrorKind,
     /// Where in the document the problem is, as an RFC 6901 JSON Pointer. A
     /// syntax error, which has no place in the tree yet, reports `/byte/NNN`.
-    pub pointer: String,
+    pointer: String,
     /// English, precise, and safe to show a player beside the pointer.
-    pub message: String,
+    message: String,
 }
 
 impl Error {
-    pub(crate) fn at(kind: ErrorKind, pointer: &str, message: impl Into<String>) -> Self {
+    pub(crate) fn at(
+        kind: ErrorKind,
+        pointer: &str,
+        message: impl Into<super::grammar::Said>,
+    ) -> Self {
         Self {
             kind,
             pointer: pointer.to_owned(),
-            message: message.into(),
+            message: message.into().into_string(),
         }
+    }
+
+    /// The reference reader's error (test-only: the old codec, kept to hold
+    /// the fast one to it): its words are its own `String`s, and nothing
+    /// shipped reads them.
+    #[cfg(test)]
+    pub(crate) fn from_reference(kind: ErrorKind, pointer: String, message: String) -> Self {
+        Self {
+            kind,
+            pointer,
+            message,
+        }
+    }
+
+    /// The message, as text a player is shown (S3's `vfyq2`, fix pass 2,
+    /// item B): every message is made by [`Error::at`] from a
+    /// [`super::grammar::Said`], and no other crate can make an `Error`, so
+    /// the message is already in the shown form.
+    #[must_use]
+    pub fn said(&self) -> super::grammar::Said {
+        super::grammar::Said::made_here(self.message.clone())
+    }
+
+    /// What kind of thing it is: a caller branches on this, never on the
+    /// message.
+    #[must_use]
+    pub const fn kind(&self) -> ErrorKind {
+        self.kind
+    }
+
+    /// Where in the document the problem is, as an RFC 6901 JSON Pointer;
+    /// `/byte/NNN` for a syntax error.
+    #[must_use]
+    pub fn pointer(&self) -> &str {
+        &self.pointer
+    }
+
+    /// The message, as text: English, precise, and safe to show a player
+    /// beside the pointer.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
     }
 }
 
+/// A codec error's words are its message, which [`Error::at`] took as a
+/// [`super::grammar::Said`].
+impl super::grammar::EngineWords for Error {}
+impl super::grammar::door::EngineSeal for Error {}
+
 impl fmt::Display for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // The pointer token by token (S3's `vfyq2`, fix pass 4, item L-a): a
+        // token can be the player's key.
         if self.pointer.is_empty() {
             write!(formatter, "{}", self.message)
         } else {
-            write!(formatter, "{}: {}", self.pointer, self.message)
+            write!(
+                formatter,
+                "{}: {}",
+                super::grammar::quoted_pointer(&self.pointer),
+                self.message
+            )
         }
     }
 }
@@ -141,7 +203,8 @@ impl std::error::Error for Error {}
 /// reference's, and the tests'.
 #[cfg(test)]
 pub(crate) fn push_pointer(base: &str, token: &str) -> String {
-    let mut pointer = String::with_capacity(base.len().saturating_add(token.len()) + 1);
+    let mut pointer =
+        String::with_capacity(base.len().saturating_add(token.len()).saturating_add(1));
     pointer.push_str(base);
     pointer.push('/');
     for character in token.chars() {
@@ -171,342 +234,56 @@ pub(crate) fn push_pointer(base: &str, token: &str) -> String {
 /// of the form `/byte/NNN`, because a syntax error has no place in the
 /// document tree yet.
 pub fn read(text: &str) -> Result<Json, Error> {
-    let bytes = text.as_bytes();
-    let mut reader = JsonReader {
-        text,
-        bytes,
-        pos: 0,
-        #[cfg(test)]
-        comparisons: 0,
-    };
-    reader.skip_whitespace();
-    let value = reader.value(0)?;
-    reader.skip_whitespace();
-    if reader.pos < bytes.len() {
-        return Err(reader.error("trailing content after the JSON value"));
-    }
-    Ok(value)
+    let mut trivia = super::grammar::Whitespace;
+    super::grammar::parse(text, &mut Tree, &mut trivia).map(|document| document.value)
 }
 
-/// The deepest nesting a document may have. Generous for a playbook, whose
-/// condition trees are capped at depth 4 by the vocabulary, and low enough
-/// that a hostile file cannot exhaust the stack — the verifier's fuzz target
-/// throws 10,000 generated playbooks at this path.
-const MAX_DEPTH: usize = 64;
+/// What [`read`] builds: a plain tree, trivia discarded.
+pub(crate) struct Tree;
 
-struct JsonReader<'a> {
-    text: &'a str,
-    bytes: &'a [u8],
-    pos: usize,
-    /// How many keys the duplicate-key check has compared one by one, for
-    /// the test that holds it below quadratic.
-    #[cfg(test)]
-    comparisons: u64,
-}
+impl<'t> super::grammar::Build<'t> for Tree {
+    type Value = Json;
+    type Members = Vec<(String, Json)>;
+    type Items = Vec<Json>;
 
-/// How many members an object holds before its duplicate-key check keeps a
-/// sorted set rather than scanning the members one by one.
-const LINEAR_KEYS: usize = 16;
-
-impl JsonReader<'_> {
-    /// A grammar error at the current byte.
-    fn error(&self, message: impl Into<String>) -> Error {
-        self.error_of(ErrorKind::Grammar, message)
+    fn members(&mut self) -> Self::Members {
+        Vec::new()
     }
 
-    /// An error of `kind` at the current byte.
-    fn error_of(&self, kind: ErrorKind, message: impl Into<String>) -> Error {
-        Error {
-            kind,
-            pointer: format!("/byte/{}", self.pos),
-            message: message.into(),
-        }
+    fn items(&mut self) -> Self::Items {
+        Vec::new()
     }
 
-    fn peek(&self) -> Option<u8> {
-        self.bytes.get(self.pos).copied()
+    fn null(&mut self) -> Json {
+        Json::Null
     }
 
-    fn bump(&mut self) {
-        self.pos = self.pos.saturating_add(1);
+    fn boolean(&mut self, value: bool) -> Json {
+        Json::Bool(value)
     }
 
-    /// Steps over a run of ASCII digits.
-    fn digits(&mut self) {
-        while self.peek().is_some_and(|byte| byte.is_ascii_digit()) {
-            self.bump();
-        }
+    fn number(&mut self, lexeme: &'t str) -> Json {
+        Json::Number(lexeme.to_owned())
     }
 
-    fn skip_whitespace(&mut self) {
-        while let Some(byte) = self.peek() {
-            if matches!(byte, b' ' | b'\t' | b'\n' | b'\r') {
-                self.bump();
-            } else {
-                return;
-            }
-        }
+    fn string(&mut self, _raw: &'t str, text: String) -> Json {
+        Json::String(text)
     }
 
-    fn expect(&mut self, byte: u8) -> Result<(), Error> {
-        if self.peek() == Some(byte) {
-            self.bump();
-            Ok(())
-        } else {
-            Err(self.error(format!("expected `{}`", char::from(byte))))
-        }
+    fn member(&mut self, members: &mut Self::Members, member: super::grammar::Member<'t, Json>) {
+        members.push((member.key, member.value));
     }
 
-    fn literal(&mut self, word: &str) -> Result<(), Error> {
-        for expected in word.bytes() {
-            if self.peek() != Some(expected) {
-                return Err(self.error(format!("expected `{word}`")));
-            }
-            self.bump();
-        }
-        Ok(())
+    fn item(&mut self, items: &mut Self::Items, _before: &'t str, value: Json, _after: &'t str) {
+        items.push(value);
     }
 
-    fn value(&mut self, depth: usize) -> Result<Json, Error> {
-        if depth > MAX_DEPTH {
-            return Err(self.error_of(ErrorKind::Depth, "JSON nested deeper than 64 levels"));
-        }
-        match self.peek() {
-            Some(b'{') => self.object(depth),
-            Some(b'[') => self.array(depth),
-            Some(b'"') => self.string().map(Json::String),
-            Some(b't') => {
-                self.literal("true")?;
-                Ok(Json::Bool(true))
-            }
-            Some(b'f') => {
-                self.literal("false")?;
-                Ok(Json::Bool(false))
-            }
-            Some(b'n') => {
-                self.literal("null")?;
-                Ok(Json::Null)
-            }
-            Some(_) => self.number(),
-            None => Err(self.error("the document ended where a value was expected")),
-        }
+    fn object(&mut self, members: Self::Members, _inner: &'t str) -> Json {
+        Json::Object(members)
     }
 
-    fn object(&mut self, depth: usize) -> Result<Json, Error> {
-        self.expect(b'{')?;
-        let mut entries: Vec<(String, Json)> = Vec::new();
-        // Past `LINEAR_KEYS` members, the keys so far as a sorted set: an
-        // object of n members then costs O(n log n) comparisons, not the
-        // O(n²) of comparing every key with every key before it.
-        let mut sorted: Option<BTreeSet<String>> = None;
-        self.skip_whitespace();
-        if self.peek() == Some(b'}') {
-            self.bump();
-            return Ok(Json::Object(entries));
-        }
-        loop {
-            self.skip_whitespace();
-            let key = self.string()?;
-            let (seen, compared) = seen_before(&entries, &mut sorted, &key);
-            // Counted for the test that holds the check below quadratic, and
-            // nothing else.
-            #[cfg(test)]
-            {
-                self.comparisons = self.comparisons.saturating_add(compared);
-            }
-            #[cfg(not(test))]
-            let _: u64 = compared;
-            if seen {
-                return Err(
-                    self.error_of(ErrorKind::DuplicateField, format!("duplicate key `{key}`"))
-                );
-            }
-            self.skip_whitespace();
-            self.expect(b':')?;
-            self.skip_whitespace();
-            let value = self.value(depth.saturating_add(1))?;
-            entries.push((key, value));
-            self.skip_whitespace();
-            match self.peek() {
-                Some(b',') => self.bump(),
-                Some(b'}') => {
-                    self.bump();
-                    return Ok(Json::Object(entries));
-                }
-                _ => return Err(self.error("expected `,` or `}`")),
-            }
-        }
-    }
-
-    fn array(&mut self, depth: usize) -> Result<Json, Error> {
-        self.expect(b'[')?;
-        let mut items: Vec<Json> = Vec::new();
-        self.skip_whitespace();
-        if self.peek() == Some(b']') {
-            self.bump();
-            return Ok(Json::Array(items));
-        }
-        loop {
-            self.skip_whitespace();
-            items.push(self.value(depth.saturating_add(1))?);
-            self.skip_whitespace();
-            match self.peek() {
-                Some(b',') => self.bump(),
-                Some(b']') => {
-                    self.bump();
-                    return Ok(Json::Array(items));
-                }
-                _ => return Err(self.error("expected `,` or `]`")),
-            }
-        }
-    }
-
-    fn string(&mut self) -> Result<String, Error> {
-        self.expect(b'"')?;
-        let mut out = String::new();
-        loop {
-            // Copy the run of bytes up to the next quote, backslash or control
-            // character in one piece. Each of those is ASCII, so a run never
-            // ends inside a UTF-8 sequence, and the input is a `&str`, so the
-            // run is well formed.
-            let start = self.pos;
-            while let Some(byte) = self.peek() {
-                if byte == b'"' || byte == b'\\' || byte < 0x20 {
-                    break;
-                }
-                self.bump();
-            }
-            if self.pos > start {
-                let run = self
-                    .text
-                    .get(start..self.pos)
-                    .ok_or_else(|| self.error("invalid UTF-8 in a string"))?;
-                out.push_str(run);
-            }
-            let byte = self
-                .peek()
-                .ok_or_else(|| self.error("unterminated string"))?;
-            match byte {
-                b'"' => {
-                    self.bump();
-                    return Ok(out);
-                }
-                b'\\' => {
-                    self.bump();
-                    self.escape(&mut out)?;
-                }
-                _ => {
-                    return Err(self.error("a raw control character in a string"));
-                }
-            }
-        }
-    }
-
-    fn escape(&mut self, out: &mut String) -> Result<(), Error> {
-        let byte = self
-            .peek()
-            .ok_or_else(|| self.error("the document ended inside an escape"))?;
-        self.bump();
-        match byte {
-            b'"' => out.push('"'),
-            b'\\' => out.push('\\'),
-            b'/' => out.push('/'),
-            b'b' => out.push('\u{8}'),
-            b'f' => out.push('\u{c}'),
-            b'n' => out.push('\n'),
-            b'r' => out.push('\r'),
-            b't' => out.push('\t'),
-            b'u' => {
-                let first = self.hex4()?;
-                let code = if (0xd800..0xdc00).contains(&first) {
-                    self.expect(b'\\')?;
-                    self.expect(b'u')?;
-                    let second = self.hex4()?;
-                    if !(0xdc00..0xe000).contains(&second) {
-                        return Err(self.error("a high surrogate without a low surrogate"));
-                    }
-                    let high = first.saturating_sub(0xd800) << 10;
-                    let low = second.saturating_sub(0xdc00);
-                    0x1_0000u32
-                        .checked_add(high | low)
-                        .ok_or_else(|| self.error("a surrogate pair out of range"))?
-                } else {
-                    first
-                };
-                let character =
-                    char::from_u32(code).ok_or_else(|| self.error("not a Unicode scalar value"))?;
-                out.push(character);
-            }
-            other => {
-                return Err(self.error(format!("unknown escape `\\{}`", char::from(other))));
-            }
-        }
-        Ok(())
-    }
-
-    fn hex4(&mut self) -> Result<u32, Error> {
-        let mut value: u32 = 0;
-        for _ in 0..4 {
-            let byte = self
-                .peek()
-                .ok_or_else(|| self.error("a short \\u escape"))?;
-            let digit = char::from(byte)
-                .to_digit(16)
-                .ok_or_else(|| self.error("a non-hexadecimal digit in a \\u escape"))?;
-            value = value
-                .checked_mul(16)
-                .and_then(|shifted| shifted.checked_add(digit))
-                .ok_or_else(|| self.error("a \\u escape out of range"))?;
-            self.bump();
-        }
-        Ok(value)
-    }
-
-    /// RFC 8259's `number`: `-`? then `0` or a non-zero digit and digits,
-    /// then `.` and digits, then `e` or `E`, a sign and digits, each part
-    /// after the first optional (S3's `vfy6`). A fraction or an exponent is
-    /// kept in the lexeme and refused by whichever field asks for it: there
-    /// is no floating-point field in this schema to accept one.
-    fn number(&mut self) -> Result<Json, Error> {
-        let start = self.pos;
-        if self.peek() == Some(b'-') {
-            self.bump();
-        }
-        match self.peek() {
-            Some(b'0') => {
-                self.bump();
-                if self.peek().is_some_and(|byte| byte.is_ascii_digit()) {
-                    return Err(self.error("a number with a leading zero"));
-                }
-            }
-            Some(b'1'..=b'9') => self.digits(),
-            _ => return Err(self.error("expected a value")),
-        }
-        if self.peek() == Some(b'.') {
-            self.bump();
-            if !self.peek().is_some_and(|byte| byte.is_ascii_digit()) {
-                return Err(self.error("a number's fraction without a digit"));
-            }
-            self.digits();
-        }
-        if matches!(self.peek(), Some(b'e' | b'E')) {
-            self.bump();
-            if matches!(self.peek(), Some(b'+' | b'-')) {
-                self.bump();
-            }
-            if !self.peek().is_some_and(|byte| byte.is_ascii_digit()) {
-                return Err(self.error("a number's exponent without a digit"));
-            }
-            self.digits();
-        }
-        let slice = self
-            .bytes
-            .get(start..self.pos)
-            .ok_or_else(|| self.error("a truncated number"))?;
-        let lexeme = std::str::from_utf8(slice)
-            .map_err(|_| self.error("invalid UTF-8 in a number"))?
-            .to_owned();
-        Ok(Json::Number(lexeme))
+    fn array(&mut self, items: Self::Items, _inner: &'t str) -> Json {
+        Json::Array(items)
     }
 }
 
@@ -535,30 +312,6 @@ pub(crate) fn is_misspelt_integer(lexeme: &str) -> bool {
     !digits.is_empty()
         && digits.bytes().all(|byte| byte.is_ascii_digit())
         && !is_integer_lexeme(lexeme)
-}
-
-/// Whether an object already holds `key`, its members so far being
-/// `entries`, and how many keys were compared one by one to say so.
-///
-/// They are scanned one by one while there are fewer than [`LINEAR_KEYS`], as
-/// in almost every object a playbook has, and looked up in `sorted` once there
-/// are more, which this builds the first time and keeps up to date. Either way
-/// the answer is the same.
-fn seen_before(
-    entries: &[(String, Json)],
-    sorted: &mut Option<BTreeSet<String>>,
-    key: &str,
-) -> (bool, u64) {
-    if sorted.is_none() && entries.len() < LINEAR_KEYS {
-        let mut compared: u64 = 0;
-        let seen = entries.iter().any(|(name, _)| {
-            compared = compared.saturating_add(1);
-            name == key
-        });
-        return (seen, compared);
-    }
-    let set = sorted.get_or_insert_with(|| entries.iter().map(|(name, _)| name.clone()).collect());
-    (!set.insert(key.to_owned()), 0)
 }
 
 // ---------------------------------------------------------------------------
@@ -672,18 +425,13 @@ const fn needs_escape(character: char) -> bool {
 mod tests {
     use std::fmt::Write as _;
 
-    use super::{Error, JsonReader, LINEAR_KEYS, read};
+    use super::super::grammar::{LINEAR_KEYS, parse_counting};
+    use super::{Error, Tree, read};
 
     /// `read`, with how many key comparisons its duplicate-key check made.
     fn read_counting(text: &str) -> (Result<super::Json, Error>, u64) {
-        let mut reader = JsonReader {
-            text,
-            bytes: text.as_bytes(),
-            pos: 0,
-            comparisons: 0,
-        };
-        let value = reader.value(0);
-        (value, reader.comparisons)
+        let (value, comparisons, _steps) = parse_counting(text, &mut Tree);
+        (value, comparisons)
     }
 
     /// One object of `n` distinct keys of one length, and optionally the key

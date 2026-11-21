@@ -574,6 +574,246 @@ fn no_wildcard_binding_is_written_anywhere() {
     );
 }
 
+/// Every thread the gateway makes is made on a stated stack (S3's `vfyq2`,
+/// fix pass 2, item E): through `pharmakos_plan_core::stack::player_text_thread`,
+/// never `std::thread::spawn` (the platform's default, which `RUST_MIN_STACK`
+/// moves) nor a builder of its own (a second size). The surface thread answers
+/// every method and the connection threads parse every frame, so the depth
+/// bound is a stack bound only on the stack this names.
+const THREADS_ON_A_STATED_STACK: &[(&str, &str)] = &[
+    (
+        "thread::spawn",
+        "a thread on the platform's default stack: use player_text_thread",
+    ),
+    (
+        "thread::Builder",
+        "a thread builder of its own: use player_text_thread",
+    ),
+];
+
+#[test]
+fn every_thread_the_gateway_makes_is_on_the_stated_stack() {
+    let findings = scan(THREADS_ON_A_STATED_STACK);
+    assert!(
+        findings.is_empty(),
+        "every gateway thread is made by player_text_thread:\n{}",
+        findings.join("\n")
+    );
+}
+
+/// The one file of the gateway that names the sim's `PlanError` (S3's
+/// `vfyq2`, fix pass 5, item L3).
+const PLAN_WORDS: &str = "src/surface/plan_words.rs";
+
+/// What [`PLAN_WORDS`] may not write: every way to say a value through its
+/// `Display` or `Debug` rather than through `said!`.
+const PLAN_WORDS_BANNED: &[&str] = &[
+    "format!(",
+    "format_args!(",
+    "write!(",
+    "writeln!(",
+    "print!(",
+    "println!(",
+    "eprint!(",
+    "eprintln!(",
+    "to_string(",
+    "{:?}",
+    "{error}",
+    "{self}",
+    "Debug",
+    "Display",
+    "fmt::",
+];
+
+/// Every sim function that refuses with a `PlanError`, as the identifier a
+/// caller must write to reach it (S3's `vfyq2`, fix pass 6, item 5): its
+/// own name, or, for a name the sim gives many functions (`from_rules`,
+/// `new`), its owner's. Read from the sim's sources, so a new one is held
+/// without this test changing. An alias (`use … as X`) still names it once.
+fn plan_error_producers() -> Vec<String> {
+    let files = sources_of("sim");
+    let mut found = Vec::new();
+    for file in files {
+        let Ok(text) = std::fs::read_to_string(&file) else {
+            continue;
+        };
+        let mut owner: Option<String> = None;
+        let lines: Vec<&str> = text.lines().collect();
+        for (index, line) in lines.iter().enumerate() {
+            let trimmed = line.trim_start();
+            if let Some(rest) = trimmed.strip_prefix("impl ")
+                && !line.starts_with(' ')
+            {
+                let name = rest.split(" for ").last().unwrap_or(rest);
+                owner = name
+                    .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                    .find(|word| !word.is_empty())
+                    .map(str::to_owned);
+            } else if !line.starts_with(' ')
+                && !trimmed.is_empty()
+                && !trimmed.starts_with('}')
+                && !trimmed.starts_with("//")
+                && !trimmed.starts_with('#')
+            {
+                owner = None;
+            }
+            let Some(after) = trimmed.strip_prefix("pub fn ") else {
+                continue;
+            };
+            let name: String = after
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            let signature: String = lines
+                .iter()
+                .skip(index)
+                .take(8)
+                .copied()
+                .collect::<Vec<_>>()
+                .join(" ");
+            let signature = signature.split('{').next().unwrap_or_default();
+            if !signature.contains("PlanError>") {
+                continue;
+            }
+            let shared = matches!(name.as_str(), "from_rules" | "new" | "default");
+            found.push(match (&owner, shared) {
+                (Some(owner), true) => owner.clone(),
+                _ => name,
+            });
+        }
+    }
+    found.sort();
+    found.dedup();
+    found
+}
+
+/// The one line outside [`PLAN_WORDS`] that may name a producer: the sim's
+/// own door, `compile_decoded`'s compile in `src/surface/planning.rs`, whose
+/// refusal goes straight to `plan_refusal`.
+const COMPILE_SITE: (&str, &str) = (
+    "src/surface/planning.rs",
+    "Plan::compile(playbook, rules).map_err(|error| super::plan_words::plan_refusal(&error))",
+);
+
+/// A file's code, line by line: its string literals' contents (a string
+/// that runs over several lines included) and its `//` comments dropped, so
+/// a word in a message or a comment is not taken for code.
+fn code_of(text: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut in_string = false;
+    let mut escaped = false;
+    for line in text.lines() {
+        let mut out = String::with_capacity(line.len());
+        let mut previous = ' ';
+        for character in line.chars() {
+            if in_string {
+                if escaped {
+                    escaped = false;
+                } else if character == '\\' {
+                    escaped = true;
+                } else if character == '"' {
+                    in_string = false;
+                    out.push('"');
+                }
+            } else if character == '"' && previous != '\'' {
+                in_string = true;
+                out.push('"');
+            } else if character == '/' && previous == '/' {
+                out.pop();
+                break;
+            } else {
+                out.push(character);
+            }
+            previous = character;
+        }
+        // A `\` at a line's end continues the string onto the next.
+        escaped = false;
+        lines.push(out);
+    }
+    lines
+}
+
+/// The identifiers on a line of code.
+fn identifiers_of(code: &str) -> Vec<&str> {
+    code.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .filter(|word| !word.is_empty())
+        .collect()
+}
+
+/// A `PlanError` reaches a seat only through the gateway's own sentence for
+/// it (S3's `vfyq2`, fix pass 3, item M2 (a)), held file by file (fix pass 5,
+/// item L3) and token by token (fix pass 6, item 5). The sim's `Display` for
+/// it writes ids and labels raw. So the type, and the identifier of every
+/// sim function that refuses with one, is named in [`PLAN_WORDS`] alone, and
+/// at [`COMPILE_SITE`]. A call, a function value (`let f = Plan::compile`),
+/// an alias, a function of any form and a statement that also says `.ok()`
+/// or `plan_refusal(` are all found, because the rule is the token in the
+/// file, not the statement. [`PLAN_WORDS`] says the type with `said!` and
+/// nothing that formats a value. Every line is read, a unit test's included.
+#[test]
+fn a_plan_error_reaches_a_seat_only_through_the_gateways_own_sentence() {
+    let mut tokens = plan_error_producers();
+    assert!(
+        tokens.iter().any(|token| token == "compile"),
+        "the producers are read from the sim: {tokens:?}"
+    );
+    tokens.push(String::from("PlanError"));
+    let mut stray: Vec<String> = Vec::new();
+    let mut named_in_words = false;
+    let mut compile_sites = 0_usize;
+    for path in sources() {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let words = path.ends_with(PLAN_WORDS);
+        let site = path.ends_with(COMPILE_SITE.0);
+        let codes = code_of(&text);
+        for (index, (line, code)) in text.lines().zip(&codes).enumerate() {
+            let number = index.saturating_add(1);
+            let identifiers = identifiers_of(code);
+            let named: Vec<&String> = tokens
+                .iter()
+                .filter(|token| identifiers.contains(&token.as_str()))
+                .collect();
+            if words {
+                named_in_words |= identifiers.contains(&"PlanError");
+                for banned in PLAN_WORDS_BANNED {
+                    if code.contains(banned) {
+                        stray.push(format!(
+                            "{}:{number}: `{banned}` in the PlanError words: {}",
+                            path.display(),
+                            line.trim()
+                        ));
+                    }
+                }
+                continue;
+            }
+            if named.is_empty() {
+                continue;
+            }
+            if site && line.trim() == COMPILE_SITE.1 {
+                compile_sites = compile_sites.saturating_add(1);
+                continue;
+            }
+            stray.push(format!(
+                "{}:{number}: names {named:?} outside {PLAN_WORDS}: {}",
+                path.display(),
+                line.trim()
+            ));
+        }
+    }
+    assert!(
+        named_in_words,
+        "{PLAN_WORDS} names PlanError and says every one"
+    );
+    assert_eq!(compile_sites, 1, "the one compile site, as written");
+    assert!(
+        stray.is_empty(),
+        "a PlanError is said only by {PLAN_WORDS}:\n{}",
+        stray.join("\n")
+    );
+}
+
 #[test]
 fn the_gateway_never_dials_out() {
     let findings = scan(NO_OUTBOUND);
@@ -1701,12 +1941,12 @@ const KEPT_FALLBACKS: &[(&str, &str, &str)] = &[
     ),
     (
         "targeting.rs",
-        "Place::BeaconAnchor(reference) => beacon_spec_of(reference, reader.world.rules()).ok()?,",
+        "crate::surface::plan_words::beacon_spec(reference, reader.world.rules()).ok()?",
         "a beacon reference the sim's compile refuses places nothing, and `compile_playbook` says why at the door",
     ),
     (
         "targeting.rs",
-        "let spec = beacon_spec_of(reference?, reader.world.rules()).ok()?;",
+        "let spec = crate::surface::plan_words::beacon_spec(reference?, reader.world.rules()).ok()?;",
         "as the placement above: a refused reference visits nothing, and the compile door names it",
     ),
     (

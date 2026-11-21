@@ -393,3 +393,42 @@ out. One case is new, on the plain fixture: `e0514_a_predicate_about_a_wall`.
 The catalogue moved by the new row; no existing report moved (a new row is not
 one of `report_hash`'s inputs, and `VERIFIER_VERSION` stays `0.1.0-s3.4`,
 which `main` has not seen).
+
+**S3's `vfyq2`, the window `E0209` was missing.** A `KNOWN_WITHIN` with no window
+(left out, or written as 0, one value in proto3) is `E0209` at
+`.../freshness/known_within_ms`, and now offers a Fix: an `add` of the window the
+vocabulary's three enemy skeletons write, 30 000 ms ("Ask about what was seen in
+the last 30 seconds", `HAS_PLACEHOLDERS`); `crates/plan-core/tests/fix_window.rs`
+holds the two numbers together and applies the Fix. One case is new, on the plain
+fixture: `e0209_a_known_within_without_its_window`. No existing report moved: no
+committed case reached that diagnostic.
+
+**S3's `vfyq2` (`VERIFIER_VERSION` 0.1.0-s3.5).** Every `report_hash` moved, for one
+of its five inputs: `VERIFIER_VERSION` went from `0.1.0-s3.4` to `0.1.0-s3.5` (input
+4), because this build's reports differ from `0.1.0-s3.4`'s for the same input in two
+ways. `E0209` on a `KNOWN_WITHIN` with no window now offers a Fix, an `add` of the
+window the vocabulary's enemy skeletons write (30 000 ms, "Ask about what was seen in
+the last 30 seconds", `HAS_PLACEHOLDERS`); one case is new, on the plain fixture,
+`e0209_a_known_within_without_its_window`. And the JSONC reader and the codec read one
+grammar (`crates/proto/src/json/grammar.rs`), so three kinds of text are read
+differently: a block comment that never closes is `E0001` at the byte where it opens
+(it was blanked to the end of the file, and the text before it could qualify); a
+value nested inside exactly 64 containers is canonicalised (it was handed over
+blanked, though the verifier read it); and a key written twice is refused at its own
+opening quote, a trailing comma in words of its own. No committed case holds any of
+those texts, so no report moved for them; every other byte of every report is as
+before the bump, which the commits before it show.
+
+**S3's `vfyq2`, fix pass 2.** Six cases are new, each on the plain fixture, one for
+each shape the structure stage now refuses because the sim's compile requires it:
+`e0101_a_patrol_with_no_waypoint`, `e0101_an_added_build_target_with_no_target`,
+`e0101_a_build_target_with_no_anchor`, `e0101_a_removal_with_no_anchor`,
+`e0111_a_build_target_anchor_naming_no_place` and
+`e0111_a_removal_anchor_naming_no_place`. Each pins its code and its pointer. No
+existing report moved.
+
+**S3's `vfyq2`, fix pass 3b.** One case is new, on the plain fixture:
+`e0114_more_route_steps_than_this_build_compiles`, 257 route steps, one past the sim's
+`MAX_ROUTE_STEPS`, which `E0114` (new, at the end of the E01xx family) refuses at the
+257th step; the committed table's size budget refuses it as `E0110` too. No existing
+report moved.

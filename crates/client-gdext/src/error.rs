@@ -168,8 +168,8 @@ impl From<MeshError> for BridgeError {
 impl From<pharmakos_proto::json::Error> for BridgeError {
     fn from(error: pharmakos_proto::json::Error) -> Self {
         Self::Schema {
-            pointer: error.pointer.clone(),
-            message: error.message.clone(),
+            pointer: error.pointer().to_owned(),
+            message: error.message().to_owned(),
         }
     }
 }

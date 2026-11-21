@@ -743,7 +743,7 @@ fn naming(name: &str) -> String {
 /// breaks and tabs among words, a string the player wrote never breaks the
 /// prose: no line of it holds a control character, and every chip whose
 /// value is a string shows that string on its own line, at its span, as the
-/// prose shows player text ([`pharmakos_plan_core::render::shown_text`]).
+/// prose shows player text ([`pharmakos_proto::json::grammar::escaped`]).
 #[test]
 fn a_string_the_player_wrote_never_breaks_a_line_or_moves_a_chip() {
     let mut names: Vec<String> = (0_u32..0x20)
@@ -788,12 +788,12 @@ fn a_string_the_player_wrote_never_breaks_a_line_or_moves_a_chip() {
                         .unwrap_or_else(|error| panic!("{error}")),
                 )
                 .collect();
-            let shown = pharmakos_plan_core::render::shown_text(&value);
+            let shown = pharmakos_proto::json::grammar::escaped(&value);
             assert_eq!(
                 span.strip_prefix('"')
                     .and_then(|inner| inner.strip_suffix('"'))
                     .unwrap_or(&span),
-                shown.as_ref(),
+                shown.as_str(),
                 "{name:?}: {}'s span is not its value",
                 chip.pointer
             );

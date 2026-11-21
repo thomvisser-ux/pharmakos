@@ -336,6 +336,14 @@
     "beginner": "A playbook can carry only so many rules, however small each one is. Take some out."
   },
   {
+    "code": "E0114",
+    "family": "limits and required blocks",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "the route has {found} steps; this build compiles at most {max}.",
+    "beginner": "A route can hold only so many steps, however small each one is. Take some out."
+  },
+  {
     "code": "E0201",
     "family": "conditions",
     "severity": "ERROR",
