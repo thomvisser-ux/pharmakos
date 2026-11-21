@@ -232,3 +232,29 @@ fn a_pointer_is_quoted_token_by_token() {
     );
     assert_eq!(shown.as_str(), expected);
 }
+
+/// Every format character, line and paragraph separator, control character
+/// and noncharacter is escaped (S3's `vfyq2`, fix pass 3, item M3). The
+/// review's twenty, which the hand-picked table let through raw, are named:
+/// tag characters among them, which can spell a hidden message.
+#[test]
+fn the_reviews_unlisted_format_characters_are_escaped() {
+    use pharmakos_proto::json::grammar::quoted;
+    let unlisted: [u32; 22] = [
+        0x00AD, 0x0600, 0x06DD, 0x070F, 0x08E2, 0x180E, 0x2060, 0x2061, 0x2064, 0x206A, 0x206F,
+        0xFFF9, 0xFFFB, 0x1_10BD, 0x1_3430, 0x1_BCA0, 0x1_D173, 0xE_0001, 0xE_0041, 0xE_007F,
+        // Two noncharacters.
+        0xFDD0, 0x10_FFFF,
+    ];
+    let mut raw: Vec<String> = Vec::new();
+    for point in unlisted {
+        let character = char::from_u32(point).expect("a scalar value");
+        if quoted(&format!("a{character}b"))
+            .as_str()
+            .contains(character)
+        {
+            raw.push(format!("U+{point:04X}"));
+        }
+    }
+    assert!(raw.is_empty(), "shown raw: {raw:?}");
+}
