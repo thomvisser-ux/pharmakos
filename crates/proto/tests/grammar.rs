@@ -355,3 +355,21 @@ fn the_default_ignorables_are_escaped() {
         .collect();
     assert!(raw.is_empty(), "shown raw: {raw:?}");
 }
+
+/// `json::Error`'s `Display` shows its pointer token by token, so a key the
+/// player wrote with a hidden character reaches a person escaped (S3's
+/// `vfyq2`, fix pass 5, item L2: the raw-pointer mutant survived without
+/// this pin).
+#[test]
+fn a_codec_refusal_shows_a_hostile_key_escaped() {
+    let text = "{\"meta\": {\"ti\u{202E}tle\": \"t\"}}";
+    let error = json::decode::<Playbook>(text).expect_err("an unknown field");
+    assert!(
+        error.pointer().contains('\u{202E}'),
+        "the pointer keeps the key as written: {:?}",
+        error.pointer()
+    );
+    let shown = error.to_string();
+    assert!(!shown.contains('\u{202E}'), "shown raw: {shown:?}");
+    assert!(shown.contains("\\u202e"), "{shown:?}");
+}
