@@ -393,10 +393,13 @@ fn a_patch_text_past_its_cap_is_refused_unread() {
 /// The bytes `patch_text` asks for are linear in its patch's bytes, at the
 /// largest patches that act on a file (fix pass 3, item L4): sixty-four
 /// operations, each replacing a value with a long string, at two sizes
-/// sixteen times apart.
+/// sixteen times apart. The bound is a constant per byte: since fix pass 5
+/// (MEDIUM 1) `apply` also applies the inverse once, to hand back only an
+/// inverse the door takes, which is a second pass over the same bytes (50
+/// measured, where one pass measured under 48).
 #[test]
 fn a_patch_asks_for_bytes_linear_in_its_text() {
-    const BOUND: u64 = 48;
+    const BOUND: u64 = 64;
     let document = "{\"meta\":{\"title\":\"t\",\"note\":\"n\"}}";
     for length in [256, 4_096] {
         let value = "v".repeat(length);

@@ -276,9 +276,11 @@ impl Patch {
         let Json::Array(items) = value else {
             return Err(Error::at("", "a JSON Patch is an array of operations"));
         };
-        if items.len() > MAX_PATCH_OPERATIONS {
-            return Err(too_many(items.len()));
-        }
+        // Counted before anything is read: an undo patch (its first
+        // operation carries `undo`) against its own bound, a forward one
+        // against the forward cap (fix pass 5, MEDIUM 1).
+        let undoing = items.first().is_some_and(|item| item.get("undo").is_some());
+        refuse_count(items.len(), undoing)?;
         let mut forward: Vec<Operation> = Vec::new();
         let mut undo: Vec<Undo> = Vec::new();
         for (index, item) in items.iter().enumerate() {
@@ -336,7 +338,10 @@ impl Patch {
             });
         }
         match (forward.is_empty(), undo.is_empty()) {
-            (_, true) => Ok(Self::new(forward)),
+            (_, true) => {
+                refuse_count(forward.len(), false)?;
+                Ok(Self::new(forward))
+            }
             (true, false) => Ok(Self::undo(undo)),
             (false, false) => Err(Error::malformed(
                 Malformed::MixedUndo,
@@ -503,8 +508,37 @@ fn at_operation(error: Error, at: &str) -> Error {
 /// operation is applied ([`crate::error::Bound::Operations`]).
 pub const MAX_PATCH_OPERATIONS: usize = 64;
 
-/// The most undo operations one undo patch may carry (fix pass 5, MEDIUM 1).
-pub const MAX_UNDO_OPERATIONS: usize = MAX_PATCH_OPERATIONS;
+/// The most undos one forward operation yields: a `move` yields two (the
+/// put at its `path` and the put back at its `from`), every other operation
+/// one or none. It is [`Undos`]'s widest variant, so the type that carries
+/// one operation's undos holds the bound (S3's `vfyq2`, fix pass 5, MEDIUM 1).
+pub const MAX_UNDOS_PER_OPERATION: usize = Undos::MOST;
+
+/// The most undo operations one undo patch may carry: the most a forward
+/// patch the door accepts can yield, so the inverse of every accepted
+/// forward patch is itself accepted (fix pass 5, MEDIUM 1;
+/// [`crate::error::Bound::UndoOperations`]). The inverse of an undo patch has
+/// one undo per undo, so the bound closes.
+pub const MAX_UNDO_OPERATIONS: usize = MAX_UNDOS_PER_OPERATION * MAX_PATCH_OPERATIONS;
+
+/// The most characters the JSON writer spends on one character of a string:
+/// a C0 control written `\u00XX`. Every other character is one or two.
+const WRITER_WORST_ESCAPE: usize = 6;
+
+/// The most characters one undo adds to an inverse's text around its path
+/// and its text: the writer's indented `{"op": "replace", "path": "",
+/// "undo": {"at": , "jsonc": ""}}`, the comma between two, and an `at` of
+/// twenty digits, a `usize`'s widest (114 measured, by the test below).
+const UNDO_SYNTAX_CHARS: usize = 128;
+
+// The inverse of every accepted patch fits the patch text's cap: an inverse
+// holds at most `MAX_PLAYBOOK_CHARS` characters of paths and text (the
+// `Bound::Inverse` refusal), each written in at most `WRITER_WORST_ESCAPE`,
+// around at most `MAX_UNDO_OPERATIONS` undos' syntax.
+const _: () = assert!(
+    MAX_PLAYBOOK_CHARS * WRITER_WORST_ESCAPE + MAX_UNDO_OPERATIONS * UNDO_SYNTAX_CHARS
+        <= MAX_PATCH_TEXT_CHARS
+);
 
 /// The longest patch text `patch_text` reads, in characters, refused before
 /// it is parsed: **a bound on the work one call does** (S3's `vfyq2`, fix
@@ -530,6 +564,29 @@ const WORST_ESCAPE: usize = 12;
 /// The syntax one operation writes around its path and value:
 /// `{"op":"replace","path":"","undo":{"at":,"jsonc":""}},` and an index.
 const PATCH_SYNTAX_CHARS: usize = 64;
+
+/// Refuses a patch of more operations than its kind may carry: an undo
+/// patch [`MAX_UNDO_OPERATIONS`], a forward one [`MAX_PATCH_OPERATIONS`].
+fn refuse_count(found: usize, undoing: bool) -> Result<(), Error> {
+    if undoing {
+        if found > MAX_UNDO_OPERATIONS {
+            return Err(Error::bounded(
+                Bound::UndoOperations,
+                "",
+                pharmakos_proto::said!(
+                    "this undo carries {} operations, and an undo carries at most {}, the most \
+                     a patch of {} operations yields",
+                    found,
+                    MAX_UNDO_OPERATIONS,
+                    MAX_PATCH_OPERATIONS
+                ),
+            ));
+        }
+    } else if found > MAX_PATCH_OPERATIONS {
+        return Err(too_many(found));
+    }
+    Ok(())
+}
 
 fn too_many(found: usize) -> Error {
     Error::bounded(
@@ -560,9 +617,42 @@ fn too_many(found: usize) -> Error {
 /// pass 1): the decoder refuses such a file, so a patch that made one would
 /// hand back a file that no longer decodes.
 pub fn apply(document: &Document, patch: &Patch) -> Result<(Document, Patch), Error> {
-    if patch.len() > MAX_PATCH_OPERATIONS {
-        return Err(too_many(patch.len()));
+    let (patched, inverse) = apply_once(document, patch)?;
+    // The inverse is handed back only when the door takes it (fix pass 5,
+    // MEDIUM 1): applied here, under every bound the door holds it to, it
+    // must give the document back exactly. Otherwise this patch is refused
+    // up front, rather than applied with an undo that would not work. The
+    // inverse of the inverse is this patch's effect again, whose bounds this
+    // call has already met, so the closure holds both ways.
+    let undone = apply_once(&patched, &inverse).map_err(|error| {
+        Error::bounded(
+            Bound::Inverse,
+            "",
+            pharmakos_proto::said!(
+                "this patch is not applied: the patch that would undo it could not be issued \
+                 ({})",
+                error.said()
+            ),
+        )
+    })?;
+    // The same tree writes the same bytes, so the text is compared only
+    // when the trees differ (trivia can sit on either side of a node and
+    // write the same bytes).
+    if undone.0 != *document && undone.0.to_text() != document.to_text() {
+        return Err(Error::bounded(
+            Bound::Inverse,
+            "",
+            "this patch is not applied: the patch that would undo it does not give the file \
+             back as it was",
+        ));
     }
+    Ok((patched, inverse))
+}
+
+/// [`apply`]'s one pass: the patch applied and its inverse made, under every
+/// bound.
+fn apply_once(document: &Document, patch: &Patch) -> Result<(Document, Patch), Error> {
+    refuse_count(patch.len(), matches!(patch.steps, Steps::Undo(_)))?;
     let mut working = document.clone();
     let mut inverse: Vec<Undo> = Vec::new();
     let mut inverse_chars: usize = 0;
@@ -583,13 +673,18 @@ pub fn apply(document: &Document, patch: &Patch) -> Result<(Document, Patch), Er
                 ),
             ));
         }
+        // Checked, and a sum past `usize` is past the cap: the same refusal.
+        let mut held = Some(inverse_chars);
         for undo in next {
-            inverse_chars = inverse_chars.saturating_add(undo.path.chars().count());
+            held = held.and_then(|sum| sum.checked_add(undo.path.chars().count()));
             if let UndoStep::Put { written, .. } | UndoStep::Swap { written } = &undo.step {
-                inverse_chars = inverse_chars.saturating_add(written.chars().count());
+                held = held.and_then(|sum| sum.checked_add(written.chars().count()));
             }
         }
-        if inverse_chars > MAX_PLAYBOOK_CHARS {
+        let within = held.filter(|sum| *sum <= MAX_PLAYBOOK_CHARS);
+        if let Some(sum) = within {
+            inverse_chars = sum;
+        } else {
             return Err(Error::bounded(
                 Bound::Inverse,
                 path,
@@ -633,13 +728,16 @@ pub fn apply(document: &Document, patch: &Patch) -> Result<(Document, Patch), Er
                     let from = as_the_file_spells(&working, from_of(operation)?)?;
                     let copied = resolve(&working, &from)?.measure().chars;
                     let now = working.measure().chars;
-                    if now.saturating_add(copied) > MAX_PLAYBOOK_CHARS {
+                    if now
+                        .checked_add(copied)
+                        .is_none_or(|sum| sum > MAX_PLAYBOOK_CHARS)
+                    {
                         return Err(too_long(&operation.path));
                     }
                 }
                 // The last operation is undone first, so each operation's undo
                 // goes in front of everything accumulated so far.
-                let mut next = one(&mut working, operation)?;
+                let mut next = one(&mut working, operation)?.into_vec();
                 budget(&working, &operation.path, &next)?;
                 next.append(&mut inverse);
                 inverse = next;
@@ -950,7 +1048,7 @@ fn append_token(pointer: &mut String, token: &str) {
 
 /// One forward operation. Returns the undos that undo it, **in the order they
 /// must be applied**.
-fn one(document: &mut Document, operation: &Operation) -> Result<Vec<Undo>, Error> {
+fn one(document: &mut Document, operation: &Operation) -> Result<Undos, Error> {
     // Each pointer addresses the member the file writes, under either of a
     // field's names (`as_the_file_spells`); the undos name what was acted on
     // exactly.
@@ -964,7 +1062,7 @@ fn one(document: &mut Document, operation: &Operation) -> Result<Vec<Undo>, Erro
             let wanted = value_of(operation)?;
             let found = resolve(document, &path)?;
             if found.to_json() == wanted.to_json() {
-                Ok(Vec::new())
+                Ok(Undos::None)
             } else {
                 Err(Error::at(
                     &path,
@@ -974,19 +1072,19 @@ fn one(document: &mut Document, operation: &Operation) -> Result<Vec<Undo>, Erro
         }
         Op::Remove => {
             let (taken, at) = take(document, &path)?;
-            Ok(vec![put_back(path, &taken, at)])
+            Ok(Undos::One(put_back(path, &taken, at)))
         }
-        Op::Add => add(document, &path, value_of(operation)?),
+        Op::Add => Ok(Undos::One(add(document, &path, value_of(operation)?)?)),
         Op::Replace => {
             let fragment = value_of(operation)?;
             let target = resolve_mut(document, &path)?;
             let old = target.set(fragment.into_node());
-            Ok(vec![Undo {
+            Ok(Undos::One(Undo {
                 path,
                 step: UndoStep::Swap {
                     written: old.written(),
                 },
-            }])
+            }))
         }
         Op::Move => {
             let from = from.ok_or_else(|| Error::at(&operation.path, "a `move` needs a `from`"))?;
@@ -994,21 +1092,46 @@ fn one(document: &mut Document, operation: &Operation) -> Result<Vec<Undo>, Erro
             // nothing, and is not a take and a put at the end.
             if from == path {
                 resolve(document, &path)?;
-                return Ok(Vec::new());
+                return Ok(Undos::None);
             }
             let (taken, at) = take(document, &from)?;
             // The trivia goes with the member, so the undo carries the same
             // fragment, as written: otherwise moving a commented member and
             // undoing it would lose the comment.
             let restore = put_back(from, &taken, at);
-            let mut inverse = add(document, &path, taken)?;
-            inverse.push(restore);
-            Ok(inverse)
+            let put = add(document, &path, taken)?;
+            // Undone last first: the put taken out, then the member put back.
+            Ok(Undos::Two(put, restore))
         }
         Op::Copy => {
             let from = from.ok_or_else(|| Error::at(&operation.path, "a `copy` needs a `from`"))?;
             let copied = resolve(document, &from)?.clone();
-            add(document, &path, Fragment::from_node(copied))
+            Ok(Undos::One(add(
+                document,
+                &path,
+                Fragment::from_node(copied),
+            )?))
+        }
+    }
+}
+
+/// One forward operation's undos, in the order they are applied: none, one,
+/// or two (a `move`'s). Its widest variant is [`MAX_UNDOS_PER_OPERATION`].
+enum Undos {
+    None,
+    One(Undo),
+    Two(Undo, Undo),
+}
+
+impl Undos {
+    /// The most undos one variant holds.
+    const MOST: usize = 2;
+
+    fn into_vec(self) -> Vec<Undo> {
+        match self {
+            Undos::None => Vec::new(),
+            Undos::One(undo) => vec![undo],
+            Undos::Two(first, second) => vec![first, second],
         }
     }
 }
@@ -1168,7 +1291,7 @@ fn take(document: &mut Document, pointer: &str) -> Result<(Fragment, usize), Err
 /// the undo swaps the old value back rather than taking the member out. On an
 /// array it inserts, and `-` means "after the last element". A new member
 /// goes at the end of its object.
-fn add(document: &mut Document, pointer: &str, fragment: Fragment) -> Result<Vec<Undo>, Error> {
+fn add(document: &mut Document, pointer: &str, fragment: Fragment) -> Result<Undo, Error> {
     let (parent, last) = parent_of(pointer)?;
     let (is_array, len) = shape(document, parent)?;
     // The first put into an empty container with trivia inside carries that
@@ -1180,10 +1303,7 @@ fn add(document: &mut Document, pointer: &str, fragment: Fragment) -> Result<Vec
         let index = array_index(&last, len, true, pointer)?;
         let container = resolve_mut(document, parent)?;
         container.put_item(index, fragment)?;
-        return Ok(vec![put_undo(
-            whole,
-            push_pointer(parent, &index.to_string()),
-        )]);
+        return Ok(put_undo(whole, push_pointer(parent, &index.to_string())));
     }
     if resolve(document, parent)?.position_of(&last).is_some() {
         // RFC 6902 section 4.1 makes `add` over an existing member a replace,
@@ -1194,16 +1314,16 @@ fn add(document: &mut Document, pointer: &str, fragment: Fragment) -> Result<Vec
         // `set` swaps the value inside the member and leaves the member alone.
         let target = resolve_mut(document, pointer)?;
         let old = target.set(fragment.into_node());
-        return Ok(vec![Undo {
+        return Ok(Undo {
             path: pointer.to_owned(),
             step: UndoStep::Swap {
                 written: old.written(),
             },
-        }]);
+        });
     }
     let container = resolve_mut(document, parent)?;
     container.put_member(&last, fragment, len)?;
-    Ok(vec![put_undo(whole, pointer.to_owned())])
+    Ok(put_undo(whole, pointer.to_owned()))
 }
 
 /// The undo of one put: the container swapped back whole when
@@ -1268,6 +1388,46 @@ fn array_index(token: &str, len: usize, appending: bool, pointer: &str) -> Resul
 mod tests {
     use super::{Patch, apply, patch_text};
     use crate::jsonc::Document;
+
+    /// The two constants the inverse's text bound is built from hold for
+    /// the writer and the undo form as they are (fix pass 5, MEDIUM 1).
+    #[test]
+    fn the_inverse_text_bound_s_constants_hold() {
+        use super::{UNDO_SYNTAX_CHARS, Undo, UndoStep, WRITER_WORST_ESCAPE, undo_json};
+        use pharmakos_proto::json::{Json, write};
+        let mut widest = 0_usize;
+        for character in (0..=0x0010_FFFF_u32).filter_map(char::from_u32) {
+            let written = write(&Json::String(character.to_string())).chars().count();
+            // Less its quotes and the writer's closing newline.
+            widest = widest.max(written.saturating_sub(3));
+        }
+        assert_eq!(widest, WRITER_WORST_ESCAPE);
+        for step in [
+            UndoStep::Put {
+                written: String::new(),
+                at: usize::MAX,
+            },
+            UndoStep::Swap {
+                written: String::new(),
+            },
+            UndoStep::Take,
+        ] {
+            let undo = Json::Array(vec![undo_json(&Undo {
+                path: String::new(),
+                step,
+            })]);
+            // What one more undo adds to an inverse's text, indentation and
+            // the comma between two included.
+            let one = write(&undo).chars().count();
+            let Json::Array(mut items) = undo else {
+                unreachable!("built as an array above")
+            };
+            items.extend(items.clone());
+            let two = write(&Json::Array(items)).chars().count();
+            let syntax = two.saturating_sub(one);
+            assert!(syntax <= UNDO_SYNTAX_CHARS, "{syntax}");
+        }
+    }
 
     const FILE: &str = "{\n  // why\n  \"a\": 1,\n  \"b\": [1, 2],\n  \"c\": {\"d\": true}\n}";
 
