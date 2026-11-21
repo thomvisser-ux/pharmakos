@@ -3041,6 +3041,12 @@ fn a_partial_route_chain_spends_its_abstract_cost() {
             )
             .expect("the serpentine joins the pair");
             let now = i64::from(priced.cost);
+            if left.is_none() {
+                assert!(
+                    now <= fixture.surface.max_path_cost(),
+                    "{folds} folds: the first abstract cost {now} is past the map's bound"
+                );
+            }
             if let Some(last) = left {
                 assert!(
                     now <= last - fall,

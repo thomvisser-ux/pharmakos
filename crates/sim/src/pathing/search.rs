@@ -206,6 +206,7 @@ pub struct Scratch {
     pub(crate) abstract_expansions: Tally,
     pub(crate) near_queries: Tally,
     pub(crate) walks: Tally,
+    pub(crate) stalled: Tally,
 }
 
 /// A diagnostic count that never reads wrong: it counts up by a checked add,
@@ -313,6 +314,7 @@ impl Scratch {
             abstract_expansions: Tally::ZERO,
             near_queries: Tally::ZERO,
             walks: Tally::ZERO,
+            stalled: Tally::ZERO,
         }
     }
 
@@ -411,6 +413,14 @@ impl Scratch {
         self.near_queries.read()
     }
 
+    /// The grid optimum's search as the last `toward` resolve left it: its
+    /// spheres and their reach, and its counted `h` evaluations
+    /// ([`crate::pathing::reach`]).
+    #[must_use]
+    pub const fn reach(&self) -> &crate::pathing::reach::Reach {
+        &self.reach
+    }
+
     /// Walks priced at the router's served routes since the last reset
     /// ([`crate::pathing::estimate::walk_cost`], what "nearest" ranks by).
     /// Diagnostic: it is how a test knows a tick ranked by the served walk.
@@ -422,13 +432,27 @@ impl Scratch {
         self.walks.read()
     }
 
-    /// Zero the five counters.
+    /// Walks a ranker met whose chain of partial routes stalled
+    /// ([`crate::pathing::estimate::WalkError::Stalled`]) since the last
+    /// reset: candidates dropped as walks no walker finishes, counted here so
+    /// the drop is read, never silent. The chain's own argument says none
+    /// occurs; `tests/nearest.rs` holds it at zero.
+    ///
+    /// # Errors
+    ///
+    /// [`TallyOverflow`] once the count passed `u64::MAX`.
+    pub const fn stalled(&self) -> Result<u64, TallyOverflow> {
+        self.stalled.read()
+    }
+
+    /// Zero the six counters.
     pub const fn reset_counters(&mut self) {
         self.expansions = Tally::ZERO;
         self.endpoint_expansions = Tally::ZERO;
         self.abstract_expansions = Tally::ZERO;
         self.near_queries = Tally::ZERO;
         self.walks = Tally::ZERO;
+        self.stalled = Tally::ZERO;
     }
 
     /// The largest the low-level heap has grown. Diagnostic: it is what the

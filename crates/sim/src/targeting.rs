@@ -567,12 +567,17 @@ impl Ranker {
                         }
                         // The router serves no walk to it: no candidate
                         // (targeting.md, "Nearest": unreachable candidates
-                        // are skipped). A chain whose queries stop falling is
-                        // a walk the walker never finishes either (the router
-                        // serves it the same chain), so it is no candidate;
-                        // the chain's own argument says no router does this
+                        // are skipped).
+                        Err(WalkError::NoPath(_)) => entry.state = 2,
+                        // A chain whose queries stop falling is a walk no
+                        // walker finishes: no candidate, and counted under
+                        // its own reason (`Scratch::stalled`), never read as
+                        // unreachable. The chain's argument says none occurs
                         // (`walk_cost`, "The chain ends").
-                        Err(WalkError::NoPath(_) | WalkError::Stalled { .. }) => entry.state = 2,
+                        Err(WalkError::Stalled { .. }) => {
+                            entry.state = 2;
+                            scratch.stalled.bump();
+                        }
                     }
                 }
                 // Nothing priced is waiting and nothing is left to price (a
@@ -821,10 +826,13 @@ pub struct Stone {
 /// site** (inside one of the seat's own spheres, not on the column of one of
 /// its own live beacons), standable, walkable, outside every feature's
 /// footprint and connected to the commander's column, exactly as
-/// [`covering_site`] admits a column. One search outward from the feature
-/// ([`crate::pathing::reach`]) settles columns cheapest first, and the first
-/// legal site it settles is the answer, so a resolve pops only the columns
-/// cheaper than the stone, and at most the map's.
+/// [`covering_site`] admits a column. One search outward from the feature,
+/// directed at the spheres that listed a site ([`crate::pathing::reach`],
+/// "Directed"), settles columns in ascending `cost + h`, and
+/// [`closest_site`] takes the least `(cost, y, x)` among the sites settled
+/// until the key passes the least cost: a resolve pops only the columns whose
+/// key is under the stone's cost, at most the map's, and computes one `h` a
+/// column it reaches, each costing one octile a sphere that listed a site.
 ///
 /// **The terrain is the live world's, unfogged** (`Fog::Clear`): E23's "the
 /// terrain the seat knows" reads every column until S3-05's terrain mask
@@ -847,32 +855,45 @@ fn stone_site(
     let Some(goal) = ground.measure_to(feature, start) else {
         return Sited::Unreached(weighed);
     };
-    // The grid optimum from the feature outward, directed at the seat's
-    // spheres ([`crate::pathing::reach`], "Directed"): every column settles
-    // at its least cost, in ascending key `cost + h`, and a site's key is its
-    // cost. So the first site settled is at the least cost `c`, and every
-    // site at `c` settles before a key past `c`: once the search passes `c`,
-    // the lowest `(y, x)` among them is the stone.
-    scratch.reach.begin_toward(ground.surface, goal);
+    match closest_site(scratch, ground.surface, goal) {
+        Some(site) => Sited::Stone(site, weighed),
+        // E7: cannot miss: every site is in the commander's component and so is the goal, so the search settles a site before it runs out
+        None => Sited::Unreached(weighed),
+    }
+}
+
+/// **The stone's rule, its one home**: of the sites marked in the scratch's
+/// search, the one closest to `goal` over the terrain, ties to the lowest
+/// `(y, x)`; `None` when the search reaches none.
+///
+/// The grid optimum from the goal outward, directed at the spheres added
+/// ([`crate::pathing::reach`], "Directed"): every column settles at its least
+/// cost, in ascending key `cost + h`, and a site's key is its cost. So the
+/// first site settled is at the least cost `c`, and every site at `c` settles
+/// before a key past `c`; the search promises no order among equal keys, so
+/// the least `(cost, y, x)` is taken here, over every site settled until the
+/// key passes `c`.
+pub(crate) fn closest_site(
+    scratch: &mut Scratch,
+    surface: &Surface,
+    goal: Node,
+) -> Option<[i32; 2]> {
+    scratch.reach.begin_toward(surface, goal);
     let mut best: Option<(i64, i32, i32)> = None;
-    while let Some((node, cost)) = scratch.reach.next(ground.surface, &mut scratch.expansions) {
+    while let Some((node, cost)) = scratch.reach.next(surface, &mut scratch.expansions) {
         if let Some((least, y, x)) = best
             && scratch.reach.reached() > least
         {
-            return Sited::Stone([x, y], weighed);
+            return Some([x, y]);
         }
         if scratch.reach.is_site(node) {
-            let (x, y) = ground.surface.coord_of(node);
+            let (x, y) = surface.coord_of(node);
             if best.is_none_or(|held| (cost, y, x) < held) {
                 best = Some((cost, y, x));
             }
         }
     }
-    match best {
-        Some((_, y, x)) => Sited::Stone([x, y], weighed),
-        // E7: cannot miss: every site is in the commander's component and so is the goal, so the search settles a site before it runs out
-        None => Sited::Unreached(weighed),
-    }
+    best.map(|(_, y, x)| [x, y])
 }
 
 /// Every legal site of a `toward` for `seat`'s commander at `commander`
@@ -910,9 +931,11 @@ fn legal_sites(
         let radius = ground.radius_of(Some(BeaconId::new(*id))).floor_voxels();
         let limit = i64::from(radius) * i64::from(radius);
         let [bx, by] = column_of(*centre);
-        scratch
-            .reach
-            .add_sphere(ground.surface.costs(), [bx, by], radius);
+        // This sphere's own sites: how many, and the most octile cost from
+        // its centre to any of them, its reach for the directed search.
+        let mut listed = false;
+        let mut reach: i64 = 0;
+        let costs = ground.surface.costs();
         for dy in -radius..=radius {
             for dx in -radius..=radius {
                 if i64::from(dx) * i64::from(dx) + i64::from(dy) * i64::from(dy) > limit {
@@ -939,7 +962,13 @@ fn legal_sites(
                 }
                 candidates.push(StoneCandidate { y, x, node });
                 weighed += 1;
+                listed = true;
+                reach = reach.max(i64::from(costs.octile(dx, dy)));
             }
+        }
+        // A sphere that listed no site heads the directed search nowhere.
+        if listed {
+            scratch.reach.add_sphere([bx, by], reach);
         }
     }
     Some((start, weighed))
@@ -1334,7 +1363,8 @@ mod tests {
                 footprint,
             ));
         }
-        let surface = Surface::new(&voxels, StepCosts::new(10, 14, 4, 2))
+        let ten = core::num::NonZeroI32::new(10).unwrap_or_else(|| panic!("ten"));
+        let surface = Surface::new(&voxels, StepCosts::new(ten, 14, 4, 2))
             .unwrap_or_else(|| panic!("a surface"));
         let mut scratch = Scratch::for_map(&surface, 32).unwrap_or_else(|| panic!("a scratch"));
         let clusters = Clusters::new(
@@ -1474,6 +1504,83 @@ mod tests {
         // "1 matched, none reachable" a `no_target` carries.
         let mut map = synthetic(walled_in, &[[22, 22]]);
         assert_eq!(ranked_all(&mut map, [5, 5]), (Vec::new(), 1));
+    }
+
+    /// The stone's tie-break lives in [`super::closest_site`] alone: on
+    /// flat ground, two sites at one least cost where the directed queue
+    /// settles the one with the higher `(y, x)` first (a column can join the
+    /// bucket being settled, and buckets keep no order within a key), the
+    /// stone is still the lower. The pair is found by search over the map's
+    /// columns, and some pair must exist, so the case is real.
+    #[test]
+    fn the_stone_tie_goes_to_the_lowest_site_whatever_the_queue_settles_first() {
+        use crate::pathing::search::Tally;
+        let mut map = synthetic(|_, _| false, &[]);
+        let surface = &map.surface;
+        let costs = surface.costs();
+        let goal = surface
+            .node_of(40, 40)
+            .unwrap_or_else(|| panic!("the goal"));
+        let centre = [20, 20];
+        let radius = 9;
+        let mut cases = 0;
+        let mut first_wrong = 0;
+        // Every pair of columns of the sphere at one least cost from the goal.
+        let mut disk: Vec<(i64, [i32; 2])> = Vec::new();
+        for dy in -radius..=radius {
+            for dx in -radius..=radius {
+                if dx * dx + dy * dy > radius * radius {
+                    continue;
+                }
+                let (x, y) = (centre[0] + dx, centre[1] + dy);
+                let cost = i64::from(costs.octile(40 - x, 40 - y));
+                disk.push((cost, [x, y]));
+            }
+        }
+        for (i, (cost_a, a)) in disk.iter().enumerate() {
+            for (cost_b, b) in disk.iter().skip(i + 1) {
+                if cost_a != cost_b {
+                    continue;
+                }
+                let (node_a, node_b) = (
+                    map.surface
+                        .node_of(a[0], a[1])
+                        .unwrap_or_else(|| panic!("a")),
+                    map.surface
+                        .node_of(b[0], b[1])
+                        .unwrap_or_else(|| panic!("b")),
+                );
+                // Only these two are sites; the sphere reaches both.
+                let reach = i64::from(costs.octile(a[0] - centre[0], a[1] - centre[1]))
+                    .max(i64::from(costs.octile(b[0] - centre[0], b[1] - centre[1])));
+                map.scratch.reach.clear_sites();
+                map.scratch.reach.mark_site(node_a);
+                map.scratch.reach.mark_site(node_b);
+                map.scratch.reach.add_sphere(centre, reach);
+                // Which the queue settles first.
+                map.scratch.reach.begin_toward(&map.surface, goal);
+                let mut tally = Tally::ZERO;
+                let mut first = None;
+                while let Some((node, _)) = map.scratch.reach.next(&map.surface, &mut tally) {
+                    if map.scratch.reach.is_site(node) {
+                        first = Some(map.surface.coord_of(node));
+                        break;
+                    }
+                }
+                let lower = if (a[1], a[0]) < (b[1], b[0]) { *a } else { *b };
+                let stone = super::closest_site(&mut map.scratch, &map.surface, goal);
+                assert_eq!(stone, Some(lower), "sites {a:?} and {b:?} at {cost_a}");
+                cases += 1;
+                if first.map(|(x, y)| [x, y]) != Some(lower) {
+                    first_wrong += 1;
+                }
+            }
+        }
+        assert!(cases > 10, "pairs at one cost: {cases}");
+        assert!(
+            first_wrong > 0,
+            "no pair where the queue settles the higher site first: the case is not built"
+        );
     }
 
     #[test]

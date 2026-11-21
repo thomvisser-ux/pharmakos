@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The grid optimum from one column to every column: Dijkstra over the
-//! surface graph (lane `p3fix`).
+//! surface graph, undirected or directed at a set of spheres (lane `p3fix`).
 //!
 //! # What it is for
 //!
@@ -10,10 +10,14 @@
 //! spheres closest to the feature over the terrain ([`crate::targeting`]'s
 //! "Two measures"): the least cost of any walk from the site to the feature,
 //! over [`Surface::neighbour`], the walkers' own step rule at the rules' step
-//! costs. One Dijkstra outward from the feature gives every column that cost
-//! exactly, settling them cheapest first in `(cost, column)` order, so the
-//! first legal site it settles is the stone and the search stops there. Its
-//! work is the columns cheaper than the stone, and at most the map's.
+//! costs. One search outward from the feature gives every column it settles
+//! that cost exactly. Directed at the seat's spheres ("Directed", below), it
+//! settles columns in ascending `cost + h`; `targeting`'s `stone_site` stops
+//! once the key passes the least cost a site settled at, and takes the lowest
+//! `(y, x)` among the sites at that cost. Its pops are at most the map's
+//! columns; its work a pop is a constant (eight neighbours) and one `h` a
+//! column reached, each `h` costing one octile a sphere, and a sphere is
+//! only one that listed a site.
 //!
 //! The first measure the stone had, the walk the router would serve from each
 //! site, needed a lower bound to prune by and priced every site whose bound
@@ -36,57 +40,69 @@
 //! # The queue, and its order
 //!
 //! Step costs are small integers (a cardinal or diagonal step and a climb,
-//! the rules' `locomotion` rows), so the frontier is a bucket queue (Dial's):
-//! a ring of `max step + 1` buckets holds every cost the frontier can hold at
-//! once, since a column waits at most one step's cost above the cost the
-//! search has reached. A column sits in at most one bucket, linked through two
-//! arrays and unlinked when its cost is lowered. When the search reaches a
-//! bucket it sorts the bucket's columns and settles them in that order, so
-//! columns settle in ascending `(cost, column)`, the order a binary heap over
-//! that key gives: a step costs at least one unit (the rules refuse a free
-//! step), so nothing joins a bucket once it is reached. Measured against such
-//! a heap on full floods of generated and scarred maps (lane `p3fix`, fix pass
-//! 2), the order was identical and the queue about 1.6 times faster (a full
-//! flood of the shipped map: 23.6 ms against 37.3 ms, release, on a machine
-//! that was not idle); `tests/nearest.rs`'s
-//! `the_grid_optimum_settles_in_cost_then_column_order` holds the order to a
-//! Dijkstra of its own.
+//! the rules' `locomotion` rows, bounded at load so a path's cost fits an
+//! `i32`), so the frontier is a bucket queue (Dial's): a ring of buckets
+//! holds every key the frontier holds at once (below). A column sits in at
+//! most one bucket, linked through two arrays and unlinked when its key is
+//! lowered.
+//!
+//! **Undirected** ([`Reach::begin`]), keys are costs, and a step raises a
+//! cost by at least one unit (the rules refuse a free step), so nothing joins
+//! a bucket once it is reached: the queue sorts each bucket's columns when it
+//! reaches it, and columns settle in ascending `(cost, column)`, the order a
+//! binary heap over that key gives. That order is this API's promise;
+//! `tests/nearest.rs`'s `the_grid_optimum_settles_in_cost_then_column_order`
+//! holds it to a Dijkstra of its own. Measured against such a heap on full
+//! floods of generated and scarred maps (fix pass 2), the order was identical
+//! and the queue about 1.6 times faster (a full flood of the shipped map:
+//! 23.6 ms against 37.3 ms, release, on a machine that was not idle).
+//!
+//! **Directed** ([`Reach::begin_toward`]), keys are `cost + h`, and a step
+//! can keep a key, so a column can join the bucket being settled; the queue
+//! reads that bucket again before it moves on. Columns settle in ascending
+//! key, in the order each bucket's columns were linked: no order within a
+//! key is promised, and the caller decides among equal keys by its own rule
+//! (`stone_site`'s least `(cost, y, x)`, the one home of the stone's
+//! tie-break).
 //!
 //! # Directed
 //!
-//! A `toward` search knows where the sites are: inside the seat's own
-//! spheres. So it can run best-first, keyed `cost + h`, where `h` is a lower
-//! bound on the cost from a column to the nearest site: over the seat's
-//! spheres, the octile cost from the column to the sphere's centre less the
-//! sphere's reach, the most octile cost from its centre to any of its
-//! columns ([`sphere_reach`]), floored at zero, and the least over spheres.
+//! A `toward` search knows where the sites are: in the spheres that listed
+//! them. So it runs best-first, keyed `cost + h`, where `h` is a lower bound
+//! on the cost from a column to the nearest site: over the spheres that
+//! listed at least one site, the octile cost from the column to the sphere's
+//! centre less the sphere's reach, the most octile cost from its centre to
+//! any site **it** listed (each site is listed by one sphere, the first that
+//! holds it), floored at zero, and the least over spheres. A column's `h` is
+//! computed once a search, when the search first reaches it, and read from
+//! then on.
 //!
 //! - **Admissible.** The octile cost is a metric, and every step costs at
 //!   least its octile length (a climb only adds), so a walk from `n` to a
-//!   site `s` in sphere `b` costs at least `octile(n, s) ≥ octile(n, b) −
-//!   octile(s, b) ≥ octile(n, b) − reach(b)`.
+//!   site `s` listed by sphere `b` costs at least `octile(n, s) ≥ octile(n,
+//!   b) − octile(s, b) ≥ octile(n, b) − reach(b)`.
 //! - **Consistent.** Each term changes across one step by at most that
 //!   step's octile length, so `h(n) ≤ step(n, m) + h(m)`, and a key never
 //!   falls along a step: a column settles at its least cost, once.
 //!
-//! A key rises by at most twice the dearest step across one step (its cost,
-//! and the heuristic's rise), so the ring has `2 · max step + 1` buckets, and
-//! a step that keeps the key puts its column in the bucket being settled,
-//! which the queue reads again before it moves on. Every site settles at
-//! `cost + 0` (a site lies in a sphere, where `h` is zero), so the first site
-//! settled is at the least cost; `targeting`'s `stone_site` then settles every
-//! column whose key is no higher, and takes the lowest `(y, x)` among the
-//! sites at that cost. `tests/nearest.rs` holds `h` to the true cost to the
-//! nearest site on generated and scarred maps, and the stone to brute force.
+//! A key rises across one step by at most that step's cost and its octile
+//! length, so by less than twice the dearest step, and the ring has `2 · max
+//! step + 1` buckets (a ring of `2 · max step` is enough whenever the climb
+//! surcharge is above zero, since a step's octile length is then below the
+//! dearest step; the committed table's is). Every site settles at `cost + 0`
+//! (a site's own sphere reaches it), so the first site settled is at the
+//! least cost. `tests/nearest.rs` holds `h`, as the production sphere list
+//! gives it, to the true cost to the nearest site on generated and scarred
+//! maps, and the stone to brute force.
 //!
 //! # No allocation
 //!
-//! Every buffer is one entry per column, or one per bucket, reserved where the
-//! scratch is made; a reached bucket's columns are sorted in a buffer of one
-//! entry per column.
+//! Every buffer is one entry per column, or one per bucket, or one per beacon
+//! row for the spheres, reserved where the scratch is made; a reached bucket's
+//! columns are read from a buffer of one entry per column.
 
 use crate::pathing::search::Tally;
-use crate::pathing::surface::{NEIGHBOURS, Node, StepCosts, Surface};
+use crate::pathing::surface::{NEIGHBOURS, Node, Surface};
 
 /// No column: an empty link.
 const NONE: u32 = u32::MAX;
@@ -133,6 +149,13 @@ pub struct Reach {
     /// The spheres a directed search heads for: each one's centre column and
     /// the most octile cost from it to any column of the sphere.
     spheres: Vec<([i32; 2], i64)>,
+    /// Each column's `h` in this search, computed once when the search first
+    /// reaches it; valid while `heur_stamp` holds the search's epoch.
+    heur: Vec<i64>,
+    heur_stamp: Vec<u32>,
+    /// How many `h` this search computed: one a column reached, each costing
+    /// one octile a sphere. Counted work, never hashed.
+    evaluations: Tally,
     /// Whether the search in progress is directed by [`Reach::spheres`].
     directed: bool,
 }
@@ -166,8 +189,17 @@ impl Reach {
             site_epoch: 0,
             sites: vec![0; n],
             spheres: Vec::with_capacity(SPHERE_ROOM),
+            heur: vec![0; n],
+            heur_stamp: vec![0; n],
+            evaluations: Tally::ZERO,
             directed: false,
         }
+    }
+
+    /// The ring's length: `2 × max step + 1` buckets (the module docs).
+    #[must_use]
+    pub fn ring_len(&self) -> usize {
+        self.heads.len()
     }
 
     /// Forget every mark and every sphere.
@@ -205,14 +237,32 @@ impl Reach {
             .is_some_and(|mark| *mark == self.site_epoch)
     }
 
-    /// Add a sphere every site lies in, for a directed search: its centre
-    /// column and its radius in whole columns (a site's column within
-    /// `radius` of `centre`, squared).
-    pub fn add_sphere(&mut self, costs: StepCosts, centre: [i32; 2], radius: i32) {
+    /// Add a sphere for a directed search: its centre column and its
+    /// reach, the most octile cost from the centre to any site the sphere
+    /// listed. Every listed site must lie within the reach of a sphere added,
+    /// or the heuristic is not admissible (the module docs, "Directed").
+    pub fn add_sphere(&mut self, centre: [i32; 2], reach: i64) {
         // E7: cannot miss: one sphere a beacon row, and no table holds more than `SPHERE_ROOM` rows (the assertion above), the room reserved
         if self.spheres.len() < SPHERE_ROOM {
-            self.spheres.push((centre, sphere_reach(costs, radius)));
+            self.spheres.push((centre, reach));
         }
+    }
+
+    /// The spheres a directed search heads for: each one's centre column and
+    /// its reach.
+    #[must_use]
+    pub fn spheres(&self) -> &[([i32; 2], i64)] {
+        &self.spheres
+    }
+
+    /// How many `h` the last search computed: one a column it reached.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::pathing::search::TallyOverflow`] once the count passed
+    /// `u64::MAX`.
+    pub const fn evaluations(&self) -> Result<u64, crate::pathing::search::TallyOverflow> {
+        self.evaluations.read()
     }
 
     /// Start a search from `from`, undirected: columns settle in ascending
@@ -228,8 +278,15 @@ impl Reach {
     /// module docs, "Directed").
     pub fn begin_toward(&mut self, surface: &Surface, from: Node) {
         self.directed = !self.spheres.is_empty();
-        let first = self.heuristic(surface, from);
-        self.start(from, first);
+        self.start(from, 0);
+        let first = self.cached_heuristic(surface, from);
+        self.at = first;
+        if let Some(slot) = usize::try_from(from)
+            .ok()
+            .and_then(|index| self.key.get_mut(index))
+        {
+            *slot = first;
+        }
     }
 
     fn start(&mut self, from: Node, key: i64) {
@@ -237,9 +294,11 @@ impl Reach {
             self.stamp.fill(0);
             self.settled.fill(0);
             self.listed.fill(0);
+            self.heur_stamp.fill(0);
             self.epoch = 0;
         }
         self.epoch += 1;
+        self.evaluations = Tally::ZERO;
         self.heads.fill(NONE);
         self.sorted.clear();
         self.cursor = 0;
@@ -280,8 +339,30 @@ impl Reach {
             .flatten()
     }
 
+    /// `h` of `node` in this search, computed the first time the search
+    /// reaches the column and read from then on.
+    fn cached_heuristic(&mut self, surface: &Surface, node: Node) -> i64 {
+        let Ok(index) = usize::try_from(node) else {
+            return 0;
+        };
+        if self.heur_stamp.get(index).copied() == Some(self.epoch) {
+            // E7: cannot miss: a stamped column holds its `h`
+            return self.heur.get(index).copied().unwrap_or(0);
+        }
+        let h = self.heuristic(surface, node);
+        self.evaluations.bump();
+        if let Some(slot) = self.heur.get_mut(index) {
+            *slot = h;
+        }
+        if let Some(slot) = self.heur_stamp.get_mut(index) {
+            *slot = self.epoch;
+        }
+        h
+    }
+
     /// The directed search's lower bound on the cost from `node` to any
-    /// site: zero for an undirected search.
+    /// site, computed from the spheres (uncached): zero for an undirected
+    /// search.
     #[must_use]
     pub fn heuristic(&self, surface: &Surface, node: Node) -> i64 {
         if !self.directed {
@@ -299,9 +380,11 @@ impl Reach {
             .unwrap_or(0)
     }
 
-    /// Settle the next column, in ascending `(key, column)` (the key is the
-    /// cost when undirected), and lower its neighbours' costs; each column
-    /// popped is counted in `popped`.
+    /// Settle the next column and lower its neighbours' costs, computing each
+    /// neighbour's `h` the first time the search reaches it; each column
+    /// popped is counted in `popped`. Undirected, columns settle in ascending
+    /// `(cost, column)`; directed, in ascending key, in no promised order
+    /// within a key (the module docs, "The queue, and its order").
     pub fn next(&mut self, surface: &Surface, popped: &mut Tally) -> Option<(Node, i64)> {
         let node = loop {
             if let Some(node) = self.sorted.get(self.cursor).copied() {
@@ -330,7 +413,11 @@ impl Reach {
             // is a `u32`, so a cost of `u32::MAX` steps of at most
             // `i32::MAX` each stays below `i64::MAX`.
             let cost = here + i64::from(step);
-            let key = cost + self.heuristic(surface, other);
+            let key = if self.directed {
+                cost + self.cached_heuristic(surface, other)
+            } else {
+                cost
+            };
             self.lower(other, cost, key);
         }
         Some((node, here))
@@ -374,7 +461,14 @@ impl Reach {
                 node = self.next.get(index).copied().unwrap_or(NONE);
             }
             self.waiting -= self.sorted.len();
-            self.sorted.sort_unstable();
+            // The undirected API's order: `(cost, column)`, which its callers
+            // read (`tests/nearest.rs`'s order test). A directed search's
+            // caller decides by its own key (`targeting`'s `stone_site` takes
+            // the least `(cost, y, x)` itself), so its buckets settle in the
+            // order they were linked.
+            if !self.directed {
+                self.sorted.sort_unstable();
+            }
             return;
         }
     }
@@ -452,22 +546,4 @@ impl Reach {
         }
         self.waiting -= 1;
     }
-}
-
-/// The most octile cost from a sphere's centre to any column within
-/// `radius` of it (the column's offset `(dx, dy)` with `dx² + dy² ≤
-/// radius²`): `c·max + (d − c)·min ≤ sqrt(c² + (d − c)²)·radius` by
-/// Cauchy-Schwarz, since the rules hold `c ≤ d` (`c` and `d` a cardinal and
-/// a diagonal step), rounded up in integers.
-#[must_use]
-pub fn sphere_reach(costs: StepCosts, radius: i32) -> i64 {
-    let c = u128::from(costs.cardinal().unsigned_abs());
-    let d = u128::from(costs.diagonal().unsigned_abs());
-    let r = u128::from(radius.unsigned_abs());
-    let rise = d.saturating_sub(c);
-    let square = (c * c + rise * rise) * r * r;
-    let root = square.isqrt();
-    let up = if root * root < square { root + 1 } else { root };
-    // E7: rule: a reach past `i64` is past every cost a walk on a map can have, so it heads for nothing
-    i64::try_from(up).unwrap_or(i64::MAX)
 }

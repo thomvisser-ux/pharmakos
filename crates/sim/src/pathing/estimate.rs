@@ -382,9 +382,13 @@ fn near(
 /// at most the last one less the [`PARTIAL_PROGRESS`] steps just walked,
 /// each costing at least a cardinal step (the rules hold a diagonal no
 /// cheaper). The chain carries that falling cost and holds every query to the
-/// fall, so it holds at most [`max_partials`] partial routes on its map,
-/// `max_path_cost / (PARTIAL_PROGRESS × cardinal)` (259 on the shipped map);
-/// a query that does not fall is [`WalkError::Stalled`], never a missing
+/// fall, so it holds at most the first query's abstract cost divided by
+/// `PARTIAL_PROGRESS × cardinal` partial routes: the loop cannot run past it.
+/// When that first cost is at most the map's `max_path_cost` (the dearest
+/// step times the map's columns, the most any simple walk costs, which an
+/// optimal refinement is), the count is at most [`max_partials`] (259 on the
+/// shipped map); the chain test asserts the first cost's bound on its chains.
+/// A query that does not fall is [`WalkError::Stalled`], never a missing
 /// route. `tests/pathing.rs`'s `a_partial_route_chain_spends_its_abstract_cost`
 /// holds real chains to the fall, and this module's tests reach `Stalled`
 /// with a router that does not progress.
@@ -402,7 +406,7 @@ pub fn walk_cost(
 ) -> Result<i64, WalkError> {
     scratch.walks.bump();
     let mut served = core::mem::take(&mut scratch.served);
-    let cheapest = i64::from(world.costs().cardinal());
+    let cheapest = world.costs().cheapest();
     let walked = walk_chain((start, goal), cheapest, &mut served, |pair, out| {
         route_and_abstract(world, clusters, scratch, pair, Surcharge::NONE, out)
     });
@@ -441,9 +445,12 @@ const _: () = assert!(PARTIAL_PROGRESS > 0, "a partial route makes progress");
 /// cardinal steps a partial route.
 #[must_use]
 pub fn max_partials(surface: &Surface) -> u64 {
-    let fall = i64::from(PARTIAL_PROGRESS).saturating_mul(i64::from(surface.costs().cardinal()));
-    // E7: cannot miss: a cardinal step costs at least one unit (the rules refuse a free one), so the fall is positive, and a path cost is never negative
-    u64::try_from(surface.max_path_cost().checked_div(fall).unwrap_or(0)).unwrap_or(0)
+    let costs = surface.costs();
+    let fall = u64::from(PARTIAL_PROGRESS) * u64::from(costs.cheapest().get().unsigned_abs());
+    let most = u64::from(surface.node_count()) * u64::from(costs.max_step().unsigned_abs());
+    // `fall` is a positive count of cost units: `PARTIAL_PROGRESS` is
+    // positive (asserted above) and the cheapest step is never zero by type.
+    most.div_euclid(fall)
 }
 
 /// [`walk_cost`]'s chain over `route` (the router, or a test's double), with
@@ -453,14 +460,15 @@ pub fn max_partials(surface: &Surface) -> u64 {
 /// fall: an `i32` cost, at least `PARTIAL_PROGRESS` units a partial route.
 pub(crate) fn walk_chain<R>(
     (start, goal): (Node, Node),
-    cheapest: i64,
+    cheapest: core::num::NonZeroI32,
     served: &mut Vec<Node>,
     mut route: R,
 ) -> Result<i64, WalkError>
 where
     R: FnMut((Node, Node), &mut Vec<Node>) -> Result<(AbstractResult, RouteOutcome), NoPath>,
 {
-    let fall = i64::from(PARTIAL_PROGRESS).saturating_mul(cheapest.max(1));
+    // At most `PARTIAL_PROGRESS` (a `u32`) times an `i32`: inside an `i64`.
+    let fall = i64::from(PARTIAL_PROGRESS) * i64::from(cheapest.get());
     let (first, mut outcome) = route((start, goal), served)?;
     let mut left = i64::from(first.cost);
     let mut total = i64::from(outcome.cost);
@@ -488,6 +496,12 @@ mod walk_tests {
     use super::{AbstractResult, RouteOutcome, WalkError, walk_chain};
     use crate::pathing::route::NoPath;
 
+    /// A cardinal step of ten units, the committed table's.
+    const TEN: core::num::NonZeroI32 = match core::num::NonZeroI32::new(10) {
+        Some(ten) => ten,
+        None => core::num::NonZeroI32::MIN,
+    };
+
     fn answer(abstract_cost: i32, cost: i32, rest: Option<u32>) -> (AbstractResult, RouteOutcome) {
         (
             AbstractResult {
@@ -510,7 +524,7 @@ mod walk_tests {
     fn a_router_that_does_not_progress_is_stalled_not_unreachable() {
         let mut served = Vec::new();
         let mut asked = 0_u32;
-        let answer_of = walk_chain((0, 9), 10, &mut served, |_, _| {
+        let answer_of = walk_chain((0, 9), TEN, &mut served, |_, _| {
             asked += 1;
             Ok(answer(50_000, 10_230, Some(5)))
         });
@@ -518,10 +532,23 @@ mod walk_tests {
         assert_eq!(asked, 2, "the first query, then the one that did not fall");
         // One that falls once, then stops falling.
         let mut costs = [60_000, 49_000, 48_999].into_iter();
-        let falls_once = walk_chain((0, 9), 10, &mut served, |_, _| {
+        let falls_once = walk_chain((0, 9), TEN, &mut served, |_, _| {
             Ok(answer(costs.next().unwrap_or(0), 10_230, Some(5)))
         });
         assert_eq!(falls_once, Err(WalkError::Stalled { partials: 1 }));
+    }
+
+    /// The fall the chain holds a query to is `PARTIAL_PROGRESS` steps of the
+    /// cheapest step's cost, not `PARTIAL_PROGRESS` units: a query that falls
+    /// by more than the steps but less than their cost is stalled.
+    #[test]
+    fn the_fall_is_counted_in_cardinal_steps() {
+        let mut served = Vec::new();
+        let mut costs = [60_000, 60_000 - 5_000].into_iter();
+        let short = walk_chain((0, 9), TEN, &mut served, |_, _| {
+            Ok(answer(costs.next().unwrap_or(0), 10_230, Some(5)))
+        });
+        assert_eq!(short, Err(WalkError::Stalled { partials: 0 }));
     }
 
     /// A router double whose partial routes fall as the argument says: the
@@ -535,12 +562,12 @@ mod walk_tests {
             (9_540, 9_540, None),
         ]
         .into_iter();
-        let walked = walk_chain((0, 9), 10, &mut served, |_, _| {
+        let walked = walk_chain((0, 9), TEN, &mut served, |_, _| {
             let (a, c, rest) = turns.next().unwrap_or((0, 0, None));
             Ok(answer(a, c, rest))
         });
         assert_eq!(walked, Ok(30_000));
-        let none = walk_chain((0, 9), 10, &mut served, |_, _| Err(NoPath::Unreachable));
+        let none = walk_chain((0, 9), TEN, &mut served, |_, _| Err(NoPath::Unreachable));
         assert_eq!(none, Err(WalkError::NoPath(NoPath::Unreachable)));
     }
 }

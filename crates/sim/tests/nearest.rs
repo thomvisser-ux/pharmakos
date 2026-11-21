@@ -253,6 +253,7 @@ fn origin(world: &World, rng: &mut Rng) -> ([i32; 2], Node) {
 #[test]
 fn nearest_is_the_least_served_walk() {
     let (mut ranks, mut wrong, mut over) = (0_u32, Vec::new(), Vec::new());
+    let mut stalled = 0_u64;
     for (seed, scarred) in [(SEED, false), (7, false), (SEED, true), (0x5eed_0003, true)] {
         let mut world = world_of(seed, 2);
         if scarred {
@@ -287,6 +288,8 @@ fn nearest_is_the_least_served_walk() {
                     wrong.push((seed, scarred, [ox, oy], got, (expected.3, expected.0)));
                 }
             }
+            stalled += scratch.stalled().unwrap();
+            scratch.reset_counters();
             let extra = ranker.next(&ground, &mut scratch);
             if extra.is_some() {
                 wrong.push((seed, scarred, [ox, oy], extra, (usize::MAX, 0)));
@@ -294,6 +297,7 @@ fn nearest_is_the_least_served_walk() {
         }
     }
     assert!(ranks >= 2_000, "the test ranks enough: {ranks}");
+    assert_eq!(stalled, 0, "no candidate's chain of partial routes stalled");
     assert!(
         over.is_empty(),
         "{} octile bounds above a walk; first {:?}",
@@ -537,14 +541,22 @@ fn a_toward_is_the_closest_site_over_the_terrain() {
 #[test]
 fn a_toward_resolve_pops_only_what_is_closer_than_the_stone() {
     let mut measured = Vec::new();
-    for (label, spire, far, radius) in [
-        ("open", false, false, 0),
-        ("ring 10", false, false, 10),
-        ("ring 18", false, false, 18),
-        ("ring 26", false, false, 26),
-        ("farthest", false, true, 0),
-        ("pinned, Spire", true, false, 0),
-        ("farthest, Spire, ring 26", true, true, 26),
+    for (label, spire, far, terrain) in [
+        ("open", false, false, Terrain::Open),
+        ("ring 10", false, false, Terrain::Ring(10)),
+        ("ring 18", false, false, Terrain::Ring(18)),
+        ("ring 26", false, false, Terrain::Ring(26)),
+        ("farthest", false, true, Terrain::Open),
+        ("pinned, Spire", true, false, Terrain::Open),
+        ("farthest, Spire, ring 26", true, true, Terrain::Ring(26)),
+        (
+            "farthest, 18 decoy spheres",
+            false,
+            true,
+            Terrain::Decoys(18),
+        ),
+        ("farthest, long wall", false, true, Terrain::LongWall),
+        ("farthest, cup", false, true, Terrain::Cup(60)),
     ] {
         let mut world = world_of(PROBATION, 2);
         let seat = SeatId::new(0);
@@ -554,24 +566,14 @@ fn a_toward_resolve_pops_only_what_is_closer_than_the_stone() {
             .iter()
             .position(|owner| *owner == seat.raw())
             .expect("a core");
-        let core = pharmakos_sim::targeting::column_of(world.beacons().positions()[core_row]);
+        let core = column_of(world.beacons().positions()[core_row]);
         let vent = if far {
-            world
-                .features()
-                .features()
-                .iter()
-                .filter(|feature| feature.kind == FeatureKind::Vent)
-                .map(|feature| feature.anchor)
-                .max_by_key(|a| {
-                    let (dx, dy) = (i64::from(a[0] - core[0]), i64::from(a[1] - core[1]));
-                    (dx * dx + dy * dy, a[1], a[0])
-                })
-                .expect("a vent")
+            farthest_vent(&world, core)
         } else {
             PROBATION_VENT
         };
         if spire {
-            let id = pharmakos_sim::tables::BeaconId::new(world.beacons().ids()[core_row]);
+            let id = BeaconId::new(world.beacons().ids()[core_row]);
             let beside = world
                 .ground()
                 .standing(core[0] + 3, core[1])
@@ -585,14 +587,7 @@ fn a_toward_resolve_pops_only_what_is_closer_than_the_stone() {
                 )
                 .expect("room for a Spire");
         }
-        if radius > 0 {
-            ring(
-                &mut world,
-                vent,
-                radius,
-                [vent[0] - core[0], vent[1] - core[1]],
-            );
-        }
+        terrain.build(&mut world, core, vent);
         let commander = world.commander_of(seat).expect("a commander");
         let row = world.units().row_of(commander).expect("a live commander");
         let start = world.units().positions()[row.index()];
@@ -616,33 +611,211 @@ fn a_toward_resolve_pops_only_what_is_closer_than_the_stone() {
             "{label}: a stone prices no walk"
         );
         let pops = popped(&scratch);
+        let evaluations = scratch.reach().evaluations().unwrap();
         println!(
-            "{label}: vent {vent:?}, stone {:?}, {} sites, {pops} nodes popped",
+            "{label}: vent {vent:?}, stone {:?}, {} sites, {} spheres, {pops} nodes popped, {evaluations} h",
             found.site,
-            stones.len()
+            stones.len(),
+            scratch.reach().spheres().len()
         );
-        measured.push((label, found.site, pops));
+        measured.push((label, found.site, pops, evaluations));
     }
     assert_eq!(measured, PINNED_RESOLVES.to_vec());
 }
 
-/// [`a_toward_resolve_pops_only_what_is_closer_than_the_stone`]'s pins,
-/// measured at this lane's fix pass 3, where the search came to be directed
-/// at the seat's spheres; undirected (fix pass 2) the same stones cost
-/// 10 020, 16 699, 23 054, 32 401, 106 531, 6 026 and 105 410 nodes. While the
-/// stone was the least served walk, the same
-/// search bounding the walks priced 82, 11, 45 and 9 walks on probe B's four
-/// terrains and 814 (2.9 M nodes) on the farthest vent with a Spire and a
-/// ring; with the octile bound before that, probe B priced 140, 1 261, 1 753 and
-/// 1 753 walks and popped 0.3 M, 3.1 M, 4.5 M and 4.5 M nodes.
-const PINNED_RESOLVES: [(&str, [i32; 2], u64); 7] = [
-    ("open", [197, 50], 968),
-    ("ring 10", [201, 48], 1_142),
-    ("ring 18", [208, 41], 1_906),
-    ("ring 26", [208, 41], 4_540),
-    ("farthest", [179, 50], 24_778),
-    ("pinned, Spire", [202, 61], 568),
-    ("farthest, Spire, ring 26", [179, 62], 27_240),
+/// A terrain for [`a_toward_resolve_pops_only_what_is_closer_than_the_stone`].
+#[derive(Clone, Copy)]
+enum Terrain {
+    /// As generated.
+    Open,
+    /// A ring of stone three high round the vent, its gap facing away from
+    /// the core (review probe B).
+    Ring(i32),
+    /// That many beacons of seat 0 scattered over the map, each sealed in a
+    /// ring of stone three high, so their spheres list no site (re-review 4's
+    /// decoys).
+    Decoys(u32),
+    /// A wall of stone across the line from the core to the vent, open only
+    /// far to one side (re-review 4).
+    LongWall,
+    /// Half a ring round the vent, the half facing the core, open away from
+    /// it (re-review 4's cup).
+    Cup(i32),
+}
+
+impl Terrain {
+    fn build(self, world: &mut World, core: [i32; 2], vent: [i32; 2]) {
+        let mut enc = Enc::with_capacity(64 * 1024);
+        let [sx, sy, _] = world.surface().size();
+        match self {
+            Terrain::Open => {}
+            Terrain::Ring(radius) => {
+                ring(world, vent, radius, [vent[0] - core[0], vent[1] - core[1]]);
+            }
+            Terrain::Decoys(count) => {
+                let radius = i32::from(world.rules().sphere_radius_voxels()) + 3;
+                let (mut placed, mut tries) = (0, 0);
+                let mut rng = Rng(0xdec0);
+                while placed < count && tries < 2_000 {
+                    tries += 1;
+                    let (x, y) = (
+                        radius + 2 + rng.below(sx - 2 * radius - 4),
+                        radius + 2 + rng.below(sy - 2 * radius - 4),
+                    );
+                    if (x - core[0]).abs() < 3 * radius && (y - core[1]).abs() < 3 * radius {
+                        continue;
+                    }
+                    if place(world, SeatId::new(0), x, y) {
+                        ring(world, [x, y], radius, [0, 0]);
+                        placed += 1;
+                    }
+                }
+                assert_eq!(placed, count, "the decoys are placed");
+            }
+            Terrain::LongWall => {
+                let (mx, my) = (
+                    (core[0] + vent[0]).div_euclid(2),
+                    (core[1] + vent[1]).div_euclid(2),
+                );
+                let (dx, dy) = (vent[0] - core[0], vent[1] - core[1]);
+                let (px, py) = if dx.abs() > dy.abs() { (0, 1) } else { (1, 0) };
+                for i in -400..=150 {
+                    let (x, y) = (mx + px * i, my + py * i);
+                    if x < 0 || y < 0 || x >= sx || y >= sy {
+                        continue;
+                    }
+                    for t in 0..2 {
+                        wall_column(world, &mut enc, x + py * t, y + px * t, 3);
+                    }
+                }
+                settle(world, &mut enc);
+            }
+            Terrain::Cup(radius) => {
+                let away = [vent[0] - core[0], vent[1] - core[1]];
+                for dy in -radius..=radius {
+                    for dx in -radius..=radius {
+                        let d2 = dx * dx + dy * dy;
+                        if d2 < (radius - 2) * (radius - 2)
+                            || d2 > radius * radius
+                            || dx * away[0] + dy * away[1] > 0
+                        {
+                            continue;
+                        }
+                        wall_column(world, &mut enc, vent[0] + dx, vent[1] + dy, 3);
+                    }
+                }
+                settle(world, &mut enc);
+            }
+        }
+    }
+}
+
+/// Place a beacon of `seat` at `(x, y)` or a column beside it.
+fn place(world: &mut World, seat: SeatId, x: i32, y: i32) -> bool {
+    for (ox, oy) in [(0, 0), (1, 0), (0, 1), (-1, 0), (0, -1), (2, 2), (-2, -2)] {
+        if let Some(at) = world.ground().standing(x + ox, y + oy)
+            && world
+                .place_beacon_directly(
+                    seat,
+                    at,
+                    pharmakos_sim::seams::MandateKind::Build,
+                    pharmakos_sim::tables::PRIORITY_NORMAL,
+                )
+                .is_some()
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// The live vent farthest from `core`, ties to the lowest `(y, x)`.
+fn farthest_vent(world: &World, core: [i32; 2]) -> [i32; 2] {
+    world
+        .features()
+        .features()
+        .iter()
+        .filter(|feature| feature.kind == FeatureKind::Vent)
+        .map(|feature| feature.anchor)
+        .max_by_key(|a| {
+            let (dx, dy) = (i64::from(a[0] - core[0]), i64::from(a[1] - core[1]));
+            (dx * dx + dy * dy, a[1], a[0])
+        })
+        .expect("a vent")
+}
+
+/// A full flood of the map from each of three seats' cores, directed at
+/// 1, 18 and 40 spheres no column reaches, against the undirected flood:
+/// the directed flood pops the same columns, and computes one `h` a column
+/// and no more, whatever the spheres. Counted work, pinned.
+#[test]
+fn a_directed_flood_computes_one_h_a_column() {
+    let world = world_of(PROBATION, 3);
+    let surface = world.surface();
+    let mut reach = Reach::new(surface.node_count(), surface.costs().max_step());
+    let mut measured = Vec::new();
+    for spheres in [0_i32, 1, 18, 40] {
+        let (mut pops, mut evaluations) = (0, 0);
+        for seat in 0..3_u8 {
+            let row = world
+                .beacons()
+                .seats()
+                .iter()
+                .position(|owner| *owner == seat)
+                .expect("a core");
+            let core = column_of(world.beacons().positions()[row]);
+            let from = surface.node_of(core[0] + 2, core[1] + 2).expect("a column");
+            reach.clear_sites();
+            for k in 0..spheres {
+                reach.add_sphere([5 + (k % 8) * 40, 5 + k.div_euclid(8) * 60], 240);
+            }
+            let mut tally = Tally::ZERO;
+            if spheres == 0 {
+                reach.begin(from);
+            } else {
+                reach.begin_toward(surface, from);
+            }
+            while reach.next(surface, &mut tally).is_some() {}
+            pops += tally.read().unwrap();
+            evaluations += reach.evaluations().unwrap();
+        }
+        measured.push((spheres, pops, evaluations));
+    }
+    let columns = u64::from(surface.node_count()) * 3;
+    assert_eq!(
+        measured,
+        [
+            (0, columns, 0),
+            (1, columns, columns),
+            (18, columns, columns),
+            (40, columns, columns),
+        ]
+    );
+}
+
+/// [`a_toward_resolve_pops_only_what_is_closer_than_the_stone`]'s pins:
+/// nodes popped and `h` computed, measured at this lane's fix pass 4, where
+/// `h` came to be computed once a column and only spheres that listed a
+/// site, each with the reach of its own sites, to be headed for. Fix pass 3
+/// popped 968, 1 142, 1 906, 4 540, 24 778, 568 and 27 240 nodes on the first
+/// seven; undirected (fix pass 2) the same stones cost 10 020, 16 699,
+/// 23 054, 32 401, 106 531, 6 026 and 105 410. While the stone was the least
+/// served walk, the same search bounding the walks priced 82, 11, 45 and 9
+/// walks on probe B's four terrains and 814 (2.9 M nodes) on the farthest
+/// vent with a Spire and a ring; with the octile bound before that, probe B
+/// priced 140, 1 261, 1 753 and 1 753 walks and popped 0.3 M, 3.1 M, 4.5 M
+/// and 4.5 M nodes.
+const PINNED_RESOLVES: [(&str, [i32; 2], u64, u64); 10] = [
+    ("open", [197, 50], 937, 1_130),
+    ("ring 10", [201, 48], 1_109, 1_329),
+    ("ring 18", [208, 41], 1_879, 2_126),
+    ("ring 26", [208, 41], 4_365, 4_842),
+    ("farthest", [179, 50], 24_654, 25_597),
+    ("pinned, Spire", [202, 61], 556, 744),
+    ("farthest, Spire, ring 26", [179, 62], 27_038, 27_986),
+    ("farthest, 18 decoy spheres", [179, 50], 12_626, 13_297),
+    ("farthest, long wall", [197, 50], 46_791, 47_714),
+    ("farthest, cup", [179, 50], 28_941, 29_974),
 ];
 
 /// A commander sent along far pairs on scarred terrain arrives on the tick
@@ -777,11 +950,13 @@ fn least_to_any(world: &World, sites: &[Node]) -> Vec<Option<i64>> {
     cost
 }
 
-/// The directed search's heuristic (`pathing::reach`, "Directed") is
-/// admissible and consistent on generated and scarred terrain: for every
-/// column, never above the true least cost to the nearest legal site (by the
-/// test's own multi-source Dijkstra), and across every legal step never
-/// falling by more than that step's cost.
+/// The directed search's heuristic (`pathing::reach`, "Directed"), read from
+/// the sphere list a real resolve built, is admissible and consistent on
+/// generated and scarred terrain: for every column, never above the true
+/// least cost to the nearest legal site (by the test's own multi-source
+/// Dijkstra), and across every legal step never falling by more than that
+/// step's cost. A sphere's reach taken short of its farthest own site, or a
+/// sphere left out, fails it.
 #[test]
 fn the_directed_search_heuristic_is_admissible_and_consistent() {
     let mut checked = 0_u64;
@@ -833,26 +1008,14 @@ fn the_directed_search_heuristic_is_admissible_and_consistent() {
         assert!(!stones.is_empty(), "seed {seed:#x}: the seat has sites");
         let sites: Vec<Node> = stones.iter().map(StoneCandidate::node).collect();
         let truth = least_to_any(&world, &sites);
-        // The heuristic as the resolve builds it: every living own sphere.
-        let mut reach = Reach::new(surface.node_count(), surface.costs().max_step());
-        reach.clear_sites();
-        let beacons = world.beacons();
-        for (((owner, hp), centre), id) in beacons
-            .seats()
-            .iter()
-            .zip(beacons.hit_points())
-            .zip(beacons.positions())
-            .zip(beacons.ids())
-        {
-            if *owner == seat.raw() && hp.is_alive() {
-                let radius = world
-                    .ground()
-                    .radius_of(Some(BeaconId::new(*id)))
-                    .floor_voxels();
-                reach.add_sphere(surface.costs(), column_of(*centre), radius);
-            }
-        }
-        reach.begin_toward(surface, sites[0]);
+        // The heuristic as the resolve left it: the production sphere list,
+        // each sphere that listed a site with its reach over its own sites,
+        // the search directed at them.
+        let reach = scratch.reach();
+        assert!(
+            !reach.spheres().is_empty(),
+            "seed {seed:#x}: the resolve heads for spheres"
+        );
         for node in 0..surface.node_count() {
             let h = reach.heuristic(surface, node);
             assert!(h >= 0);
@@ -970,7 +1133,9 @@ fn a_toward_that_finds_no_stone_searches_nothing() {
 /// "Two measures"): no walker of a ranked choice is served one. A commander's
 /// route is surcharged only while a `move` walks at `AVOID_KNOWN_THREATS`, and
 /// the compile refuses `covering` and `toward` in a `move`, so a ranked site
-/// is walked to by a `place_beacon`, under which the seat avoids nothing.
+/// is walked to by a `place_beacon`: the route the pathing phase serves it,
+/// with an armed enemy the seat sees standing on the way, is the route under
+/// no surcharge.
 /// Whoever lets a `move` take a description meets this test, and the ranker's
 /// measure with it.
 #[test]
@@ -984,9 +1149,91 @@ fn ranked_choices_are_walked_without_a_surcharge() {
         );
         assert!(compile(&route).is_err(), "a move to {to} compiles");
     }
-    // In play: a `place_beacon` walking in to its ranked site avoids nothing.
+    // In play: the route the pathing phase serves a `place_beacon` walking
+    // in to its ranked site is the unsurcharged route, with an armed enemy
+    // the seat sees standing on it, where a surcharge round that enemy would
+    // have served another.
+    let first = served_walk_in(None).expect("the commander walks in to its site");
+    let on_it = first[first.len().min(14)..]
+        .first()
+        .copied()
+        .expect("a column out");
+    let served = served_walk_in(Some(on_it)).expect("the commander walks in past the raider");
     let world = world_of(PROBATION, 2);
+    let surface = world.surface();
+    let mut scratch = Scratch::for_map(surface, world.clusters().size()).unwrap();
+    let (from, to) = (served[0], *served.last().unwrap());
+    let mut straight = Vec::new();
+    route_with(
+        surface,
+        world.clusters(),
+        &mut scratch,
+        (from, to),
+        Surcharge::NONE,
+        &mut straight,
+    )
+    .unwrap();
+    assert_eq!(
+        served, straight,
+        "the walk-in is served the unsurcharged route"
+    );
+    let (x, y) = surface.coord_of(on_it);
+    let zone = [pharmakos_sim::pathing::route::Zone::Disc {
+        centre: [
+            pharmakos_sim::math::fixed::Fx::from_voxels(i16::try_from(x).unwrap()),
+            pharmakos_sim::math::fixed::Fx::from_voxels(i16::try_from(y).unwrap()),
+            pharmakos_sim::math::fixed::Fx::from_raw(0),
+        ],
+        limit: pharmakos_sim::math::fixed::Sq::of_radius(
+            pharmakos_sim::math::fixed::Fx::from_voxels(6),
+        ),
+    }];
+    let mut round = Vec::new();
+    route_with(
+        surface,
+        world.clusters(),
+        &mut scratch,
+        (from, to),
+        Surcharge::new(&zone, world.rules().attack().step_multiplier),
+        &mut round,
+    )
+    .unwrap();
+    assert_ne!(
+        round, straight,
+        "a surcharge round the raider would serve another route"
+    );
+}
+
+/// Seat 0 seals a `place_beacon` covering its nearest uncovered vent; with
+/// `raider_at`, an armed raider of seat 1 holding fire stands on that column
+/// first. The route the pathing phase serves the commander's walk-in, the
+/// tick it is served; `None` when none is in 200 ticks.
+fn served_walk_in(raider_at: Option<Node>) -> Option<Vec<Node>> {
+    let mut world = world_of(PROBATION, 2);
     let seat = SeatId::new(0);
+    if let Some(column) = raider_at {
+        let (x, y) = world.surface().coord_of(column);
+        let at = world.standing_point([x, y, 0]);
+        let enemy = SeatId::new(1);
+        let home = world
+            .place_beacon_directly(
+                enemy,
+                at,
+                pharmakos_sim::seams::MandateKind::Build,
+                pharmakos_sim::tables::PRIORITY_NORMAL,
+            )
+            .expect("room for the enemy's beacon");
+        world.set_common(
+            home,
+            pharmakos_sim::tables::Common {
+                roe: 1,
+                retreat_hp_pct: 0,
+            },
+        );
+        world
+            .field_unit(enemy, home, pharmakos_sim::tables::UnitKind::Raider, at)
+            .expect("room for the raider");
+    }
     let unit = world
         .units()
         .row_of(world.commander_of(seat).expect("a commander"))
@@ -998,22 +1245,17 @@ fn ranked_choices_are_walked_without_a_surcharge() {
         .seal_playbook(seat, compile(route).expect("the route compiles"))
         .expect("a Lull takes a seal");
     assert!(runner.begin_push().unwrap());
-    let mut walking = 0;
     for _ in 0..200 {
         runner
             .step()
             .unwrap()
             .expect("the segment outlasts this test");
-        let world = runner.world();
-        if world.router().route(unit).len() > 1 {
-            walking += 1;
-            assert!(
-                !world.interpreter().avoids_threats(usize::from(seat.raw())),
-                "a walk-in to a ranked site is served avoiding threats"
-            );
+        let served = runner.world().router().route(unit);
+        if served.len() > 1 {
+            return Some(served.to_vec());
         }
     }
-    assert!(walking > 0, "the commander walked in to its site");
+    None
 }
 
 /// A whole playbook around `route`, compiled.

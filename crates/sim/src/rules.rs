@@ -153,7 +153,7 @@ pub struct RulesTable {
     mesher_drain_bytes: u32,
     /// Cost of a cardinal step. `10` (item 59). From
     /// `locomotion.step_cost_cardinal`.
-    step_cardinal: i32,
+    step_cardinal: core::num::NonZeroI32,
     /// Cost of a diagonal step. `14` (item 59). From
     /// `locomotion.step_cost_diagonal`.
     step_diagonal: i32,
@@ -533,6 +533,14 @@ impl RulesTable {
     /// Cost of a cardinal step (`locomotion.step_cost_cardinal`).
     #[must_use]
     pub const fn step_cardinal(&self) -> i32 {
+        self.step_cardinal.get()
+    }
+
+    /// The cardinal step's cost, never zero: the rules refuse a free step at
+    /// load, and this carries it by type for the arithmetic that divides by
+    /// it.
+    #[must_use]
+    pub const fn step_cardinal_nonzero(&self) -> core::num::NonZeroI32 {
         self.step_cardinal
     }
 
@@ -973,6 +981,7 @@ impl RulesTable {
         let segment_lengths_ms = segment_lengths_of(matched)?;
 
         let query_pad_voxels = query_pad_of(locomotion, &kinds)?;
+        path_cost_fits(locomotion, map)?;
         let canonical = pharmakos_proto::json::encode(message).map_err(RulesError::Json)?;
 
         Ok(RulesTable {
@@ -982,10 +991,15 @@ impl RulesTable {
             canonical,
             mesher_drain_surfaces: mesher.surfaces_per_frame,
             mesher_drain_bytes: mesher.bytes_per_frame,
-            step_cardinal: signed(
+            step_cardinal: core::num::NonZeroI32::new(signed(
                 "locomotion.step_cost_cardinal",
                 locomotion.step_cost_cardinal,
-            )?,
+            )?)
+            .ok_or_else(|| RulesError::OutOfRange {
+                field: "locomotion.step_cost_cardinal".to_owned(),
+                value: "0; a step that costs nothing lets a walker cross the map in a tick"
+                    .to_owned(),
+            })?,
             step_diagonal: signed(
                 "locomotion.step_cost_diagonal",
                 locomotion.step_cost_diagonal,
@@ -1056,6 +1070,49 @@ impl RulesTable {
         })?;
         RulesTable::from_canonical_json(&text)
     }
+}
+
+/// The step costs' bound by what the arithmetic needs (lane `p3fix`, fix
+/// pass 4): a path's cost is an `i32`, and a simple path on the map takes at
+/// most `columns − 1` steps, each costing at most the dearest step, a diagonal
+/// with a climb. So the rules must hold
+///
+/// `(step_cost_diagonal + climb_surcharge) × (size_x × size_y − 1) ≤ i32::MAX`
+///
+/// and the grid optimum's bucket ring, `2 × max step + 1` buckets
+/// ([`crate::pathing::reach`]), is small by consequence: on the committed
+/// 384-by-384 map at most 29 127 buckets.
+///
+/// # Errors
+///
+/// [`RulesError::OutOfRange`] naming `locomotion.climb_surcharge` when the
+/// dearest step times the map's steps passes `i32::MAX` (or
+/// `locomotion.step_cost_diagonal` when the diagonal alone does).
+fn path_cost_fits(
+    locomotion: &gp::v1::rules_table::Locomotion,
+    map: &gp::v1::rules_table::Map,
+) -> Result<(), RulesError> {
+    let steps = u64::from(map.size_x)
+        .saturating_mul(u64::from(map.size_y))
+        .saturating_sub(1);
+    let diagonal = u64::from(locomotion.step_cost_diagonal);
+    let dearest = diagonal.saturating_add(u64::from(locomotion.climb_surcharge));
+    let most = u64::from(i32::MAX.unsigned_abs());
+    if dearest.saturating_mul(steps) <= most {
+        return Ok(());
+    }
+    let field = if diagonal.saturating_mul(steps) > most {
+        "locomotion.step_cost_diagonal"
+    } else {
+        "locomotion.climb_surcharge"
+    };
+    Err(RulesError::OutOfRange {
+        field: field.to_owned(),
+        value: format!(
+            "a dearest step of {dearest} over the {steps} steps a path can take on the map passes \
+             i32::MAX, the most a path's cost holds"
+        ),
+    })
 }
 
 /// The broadphase pad (S2's plan, E11): the most any unit can move in one

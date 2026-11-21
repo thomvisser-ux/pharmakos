@@ -8886,7 +8886,12 @@ mod ids_tests {
                 locomotion.climb_surcharge = climb;
             }
             match RulesTable::from_message(&message) {
-                Ok(_) => assert!(loads, "a climb of {climb} loaded"),
+                Ok(table) => {
+                    assert!(loads, "a climb of {climb} loaded");
+                    let surface_steps = table.step_diagonal() + table.climb_surcharge();
+                    let ring = crate::pathing::reach::Reach::new(1, surface_steps);
+                    assert_eq!(ring.ring_len(), 29_127, "the ring at the bound");
+                }
                 Err(crate::rules::RulesError::OutOfRange { field, .. }) => {
                     assert!(!loads, "a climb of {climb} was refused");
                     assert_eq!(field, "locomotion.climb_surcharge");
