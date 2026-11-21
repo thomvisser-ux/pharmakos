@@ -1467,13 +1467,23 @@ fn assert_one_measure(surface: &mut Surface, round: u32, how: &str) -> usize {
         let [reference] = refs.as_slice() else {
             panic!("round {round}, {how}: one reference, and this is {refs:?}");
         };
+        let mut shown = 0_i64;
         for candidate in array_of(reference, "candidates") {
             let name = text_of(&candidate, "feature_id");
+            let ms = number(&candidate, "travel_ms");
             assert_eq!(
-                number(&candidate, "travel_ms"),
+                ms,
                 summary_ms(&name),
                 "round {round}, {how}: resolve_refs binds {name} at another figure than the chip's"
             );
+            // The ranker orders by the time it shows, so the shown time never
+            // falls down the ranking (S3's `p3fix`, fix pass 5).
+            assert!(
+                ms >= shown,
+                "round {round}, {how}: {name} is ranked after a feature shown at {shown} ms, \
+                 and shown at {ms} ms"
+            );
+            shown = ms;
             listed += 1;
         }
     }
@@ -1517,6 +1527,155 @@ fn assert_one_measure(surface: &mut Surface, round: u32, how: &str) -> usize {
         }
     }
     goals.len()
+}
+
+/// Four walls six voxels above the ground they stand on, across the whole map
+/// but four rows at alternate ends, at x `x0 + 4`, `+ 6`, `+ 8` and `+ 10`
+/// (`crates/sim/tests/pathing.rs`'s serpentine, one fold, on the natural
+/// terrain rather than a levelled strip, so the ground either side stays
+/// joined to the map), filed into `world`'s edit queue and settled. A walk
+/// from west of the walls to east of them winds up and down the corridors
+/// between them: more than `MAX_ROUTE_NODES` columns, so the router serves it
+/// in more than one route.
+fn walls_in(world: &mut pharmakos_sim::world::World, x0: i32) {
+    use pharmakos_sim::voxels::{Material, VoxelEdit};
+    let mut enc = pharmakos_sim::encoding::Enc::with_capacity(64 * 1024);
+    let size = world.surface().size();
+    for offset in [4, 6, 8, 10] {
+        let x = x0 + offset;
+        for y in 0..size[1] {
+            let far_gap = y >= size[1] - 4;
+            let near_gap = y < 4;
+            let open = if (offset - 4) % 4 == 0 {
+                far_gap
+            } else {
+                near_gap
+            };
+            if open {
+                continue;
+            }
+            let ground = world.voxels().top_solid_z(x, y).unwrap_or(-1);
+            for z in ground + 1..=ground + 6 {
+                let edit = VoxelEdit::Set {
+                    at: [x, y, z],
+                    material: Material::STONE,
+                    by: None,
+                };
+                if world.request_voxel_edit(edit).is_err() {
+                    world.step(&mut enc).expect("the edits settle");
+                    world
+                        .request_voxel_edit(edit)
+                        .expect("an emptied queue takes the edit");
+                }
+            }
+        }
+    }
+    while world.queued_voxel_edits() > 0 {
+        world.step(&mut enc).expect("the edits settle");
+    }
+}
+
+/// **One figure for a walk the router serves in two routes** (S3's `p3fix`,
+/// fix pass 5, item 3): a two-seat casual match whose world has four walls
+/// in a serpentine beside seat 0's commander ([`walls_in`]), resumed into a
+/// fresh host through the save's one restore. A feature beyond the walls is
+/// reached by a walk that chains a partial route (asserted from the sim's own
+/// `walk_cost` on the hosted world), and for every feature seat 0
+/// reaches, `get_map_summary`'s `travel_ms`, `resolve_refs`' candidate time
+/// and `estimate_route`'s leg are one figure, with the shown time never
+/// falling down the ranking ([`assert_one_measure`]). Before this test a
+/// mutant that dropped the partial routes from the chip and `resolve_refs`
+/// alone survived every gateway and gamectl test: no committed case had a
+/// walk needing two routes.
+#[test]
+fn a_walk_in_two_routes_reads_one_figure_everywhere() {
+    use pharmakos_sim::pathing::estimate::walk_cost;
+    let config = pharmakos_sim::world::WorldConfig {
+        match_seed: support::SEED,
+        seats: 2,
+        rules: support::rules(),
+        match_settings: pharmakos_sim::runner::MatchSettings {
+            segment_lengths_ms: vec![SEGMENT_MS],
+            round_limit: 3,
+        },
+    };
+    let mut world = pharmakos_sim::world::World::new(&config).expect("the world generates");
+    let commander = world.commander_of(SeatId::new(0)).expect("a commander");
+    let [sx, sy, _] = {
+        let row = world.units().row_of(commander).expect("in the table");
+        let at = world
+            .units()
+            .positions()
+            .get(row.index())
+            .copied()
+            .expect("a place");
+        [at[0].floor_voxels(), at[1].floor_voxels(), 0]
+    };
+    // The walls just east of the commander, or just west of it when the map
+    // has more room that side (mirrored by walling from x0 = sx - 16).
+    let width = world.surface().size()[0];
+    let x0 = if sx + 20 < width - sx {
+        sx + 2
+    } else {
+        sx - 16
+    };
+    walls_in(&mut world, x0);
+    let bytes = pharmakos_sim::snapshot::Snapshot::capture(&world)
+        .expect("a world between ticks")
+        .to_bytes()
+        .expect("it encodes");
+    let mut host = pharmakos_gateway::host::Host::open(&config, None).expect("a match");
+    host.resume(&bytes).expect("the walled world resumes");
+    let mut surface = Surface::new(
+        MATCH,
+        support::SEED,
+        support::rules(),
+        FogPolicy::casual(),
+        &[SeatId::new(0), SeatId::new(1)],
+    )
+    .expect("a match id");
+    surface.attach(host).expect("attached");
+    surface
+        .set_phase_remaining_ms(Ms::new(FIRST_LULL_MS))
+        .expect("a custom match takes a countdown");
+    surface.open_lull().expect("the opening Lull");
+
+    // The sim's own walks on the hosted world: at least one chains.
+    let chained = {
+        let world = surface.host().expect("hosted").world();
+        let origin = world
+            .surface()
+            .node_of(sx, sy)
+            .expect("the commander's column");
+        let ground = world.ground();
+        let mut scratch = pharmakos_sim::pathing::Scratch::for_map(
+            world.surface(),
+            world.rules().hpa_cluster_voxels(),
+        )
+        .expect("a scratch");
+        let walks: Vec<_> = (0..world.features().features().len())
+            .filter_map(|index| ground.measure_to(index, origin))
+            .filter_map(|goal| {
+                walk_cost(
+                    world.surface(),
+                    world.clusters(),
+                    &mut scratch,
+                    (origin, goal),
+                )
+                .ok()
+            })
+            .collect();
+        walks.iter().filter(|walk| walk.partials >= 1).count()
+    };
+    assert!(
+        chained >= 1,
+        "a feature's walk needs a second route, or this tests nothing"
+    );
+    let compared = assert_one_measure(&mut surface, 1, "the serpentine");
+    println!(
+        "::notice::the serpentine: {compared} features compared, {chained} of them walked in more \
+         than one route"
+    );
 }
 
 /// The match of [`every_lull_reads_and_plays_on_as_its_save_does`], resumed
