@@ -3472,3 +3472,82 @@ fn the_repaired_graph_is_a_fresh_build_under_mixed_edits() {
     }
     assert!(edited >= 75, "the run edited the terrain on {edited} ticks");
 }
+
+/// The stale window, for a near pair (lane `p3fix` on lane `settle`'s tick):
+/// between tick t, whose Voxels phase craters the ground between seat 0's
+/// commander and a column eleven east and ten north of it, and tick t + 1's
+/// Decision phase, the near estimate of that pair is the one a fresh graph
+/// over the cratered surface gives, and it is the cost of the route the
+/// router serves on it. The pair's clusters touch, so the estimate takes the
+/// near branch (`Scratch::near_queries` counts it). Before lane `settle` the
+/// marks waited for tick t + 1's Pathing phase, and a near leg search against
+/// the new columns could answer `None` for a pair the walker reaches (Part 1
+/// of `p3fix-fix1.md`: 16 of 351 probed pairs).
+#[test]
+fn a_near_estimate_in_the_tick_after_a_crater_reads_the_repaired_graph() {
+    let mut world = harness_world(0);
+    let mut enc = pharmakos_sim::encoding::Enc::with_capacity(64 * 1024);
+    let _ = world.step(&mut enc).unwrap();
+    let _ = world.step(&mut enc).unwrap();
+    let z = world.voxels().top_solid_z(30, 350).expect("a column");
+    assert!(
+        world
+            .request_voxel_edit(VoxelEdit::Crater {
+                centre: [30, 350, z],
+                radius: 3,
+                by: None,
+            })
+            .is_ok()
+    );
+    // Tick t.
+    let _ = world.step(&mut enc).unwrap();
+    let surface = world.surface().clone();
+    let mut scratch = Scratch::for_map(&surface, world.clusters().size()).expect("a scratch");
+    let fresh = Clusters::new(&surface, world.clusters().shape(), &mut scratch).expect("a graph");
+    let speed = Speed::commander(world.rules());
+    let start = surface.node_of(24, 356).expect("the commander's column");
+    let goal = surface.node_of(35, 346).expect("a column past the crater");
+    let before = scratch.near_queries();
+    let read = estimate(
+        &surface,
+        world.clusters(),
+        &mut scratch,
+        start,
+        goal,
+        Fog::Clear,
+        speed,
+    );
+    assert_eq!(
+        scratch.near_queries(),
+        before + 1,
+        "the pair is a near pair"
+    );
+    let settled = estimate(
+        &surface,
+        &fresh,
+        &mut scratch,
+        start,
+        goal,
+        Fog::Clear,
+        speed,
+    );
+    assert!(
+        read.is_some(),
+        "the walker reaches the column past the crater"
+    );
+    assert_eq!(
+        read, settled,
+        "the near estimate read in the window is not the settled one"
+    );
+    let mut walk = Vec::new();
+    route(&surface, &fresh, &mut scratch, start, goal, &mut walk).expect("the served route");
+    let served = walk
+        .windows(2)
+        .map(|pair| surface.step_cost_between(pair[0], pair[1]).expect("a step"))
+        .sum::<i32>();
+    assert_eq!(
+        read.map(|estimate| estimate.cost),
+        Some(served),
+        "the near estimate is the served route's cost"
+    );
+}
