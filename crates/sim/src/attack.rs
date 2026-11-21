@@ -2215,7 +2215,7 @@ pub fn breach_search(
         return Err(BreachRefused::NoWay);
     };
     scratch.reach(start, 0, start);
-    let h0 = surface.heuristic(way.start, way.goal);
+    let h0 = remaining(surface, start, way.goal);
     scratch.heap.push(Item {
         f: h0,
         h: h0,
@@ -2294,7 +2294,7 @@ pub fn breach_search(
                 return Err(BreachRefused::Exhausted);
             }
             scratch.reach(next, cost, item.n);
-            let h = surface.heuristic(column_of(next).0, way.goal);
+            let h = remaining(surface, next, way.goal);
             scratch.heap.push(Item {
                 f: cost.saturating_add(h),
                 h,
@@ -2307,6 +2307,23 @@ pub fn breach_search(
     }
     // E7: cannot miss: the goal's state is crossed, a crossed state is reached only from a crossed state or by the one crossing from an uncrossed state, and every reached state holds the state it was reached from
     crossing_of(world, scratch, seat, goal).ok_or(BreachRefused::NoWay)
+}
+
+/// The search's heuristic for `state`: the octile distance from its column to
+/// the goal, and, before a wall is crossed, the crossing's
+/// [`BREACH_COLUMN_COST`], which every way to the goal still pays. It never
+/// overestimates (a way from an uncrossed state crosses once at least) and is
+/// consistent (the crossing step costs that much more than the drop it makes),
+/// so the answer is unchanged, and the uncrossed states within that cost of
+/// the best way are no longer all expanded.
+fn remaining(surface: &Surface, state: u32, goal: Node) -> i32 {
+    let (node, crossed) = column_of(state);
+    let octile = surface.heuristic(node, goal);
+    if crossed {
+        octile
+    } else {
+        octile.saturating_add(BREACH_COLUMN_COST)
+    }
 }
 
 /// The breach a found way makes: walking its states back from `goal` to the
