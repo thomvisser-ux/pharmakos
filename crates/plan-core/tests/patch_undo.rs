@@ -127,7 +127,7 @@ const KEYS: [&str; 8] = [
     "a/b",
 ];
 
-const TRIVIA: [&str; 7] = [
+const TRIVIA: [&str; 11] = [
     "",
     " ",
     "\n  ",
@@ -135,6 +135,12 @@ const TRIVIA: [&str; 7] = [
     "/* b */",
     "\r\n",
     "\n/* x\n y */ ",
+    // CR-only line ends, a line comment ended by a lone CR, and one by a
+    // CRLF (fix pass 3, item M1: the empty containers' insides hold these).
+    "\r",
+    " // cr\r",
+    " // crlf\r\n",
+    " /* in */ ",
 ];
 
 fn generated_value(rng: &mut Rng, depth: usize, out: &mut String) {
@@ -142,6 +148,10 @@ fn generated_value(rng: &mut Rng, depth: usize, out: &mut String) {
         0 => {
             out.push('{');
             let count = rng.below(4);
+            if count == 0 {
+                // An empty object's inside, which a put into it must keep.
+                out.push_str(TRIVIA.get(rng.below(TRIVIA.len())).expect("trivia"));
+            }
             let mut used: Vec<&str> = Vec::new();
             for index in 0..count {
                 let key = KEYS.get(rng.below(KEYS.len())).expect("a key");
@@ -163,7 +173,12 @@ fn generated_value(rng: &mut Rng, depth: usize, out: &mut String) {
         }
         1 => {
             out.push('[');
-            for index in 0..rng.below(4) {
+            let count = rng.below(4);
+            if count == 0 {
+                // An empty array's inside, which a put into it must keep.
+                out.push_str(TRIVIA.get(rng.below(TRIVIA.len())).expect("trivia"));
+            }
+            for index in 0..count {
                 if index > 0 {
                     out.push(',');
                 }
@@ -272,6 +287,29 @@ fn patches_at(pointer: &str, value: &Json, siblings: &[String]) -> Vec<String> {
         format!(r#"[{{"op":"move","from":{quoted},"path":{quoted}}}]"#),
         format!(r#"[{{"op":"copy","from":{quoted},"path":{quoted_new}}}]"#),
     ];
+    // A put into the value itself, when it is a container: the first put
+    // into an empty one is where its inside's trivia was lost (fix pass 3,
+    // item M1).
+    match value {
+        Json::Object(_) => {
+            let inside = write(&Json::String(push_pointer(pointer, "zz_in")));
+            found.push(format!(
+                r#"[{{"op":"add","path":{inside},"value":{sentinel}}}]"#
+            ));
+            found.push(format!(
+                r#"[{{"op":"copy","from":{quoted},"path":{inside}}}]"#
+            ));
+        }
+        Json::Array(_) => {
+            for token in ["-", "0"] {
+                let inside = write(&Json::String(push_pointer(pointer, token)));
+                found.push(format!(
+                    r#"[{{"op":"add","path":{inside},"value":{sentinel}}}]"#
+                ));
+            }
+        }
+        _ => {}
+    }
     for sibling in siblings
         .iter()
         .filter(|sibling| sibling.as_str() != pointer)
@@ -303,6 +341,15 @@ fn at<'a>(value: &'a Json, pointer: &str) -> Option<&'a Json> {
     Some(here)
 }
 
+/// Every comment's text in a document, in order.
+fn comment_texts(document: &Document) -> Vec<String> {
+    document
+        .comments()
+        .into_iter()
+        .map(|comment| comment.text)
+        .collect()
+}
+
 #[derive(Default)]
 struct Tally {
     applied: u64,
@@ -319,11 +366,41 @@ impl Tally {
             return;
         };
         self.applied = self.applied.saturating_add(1);
+        // A put that removes nothing keeps every comment (fix pass 3, item
+        // M1): an `add` of a new member or element, or a `copy` to one.
+        let puts_only = (patch_text.contains(r#""op":"add""#)
+            || patch_text.contains(r#""op":"copy""#))
+            && (patch_text.contains("zz_")
+                || patch_text.contains("/-\"")
+                || patch_text.contains("/0\""));
+        if puts_only {
+            let mut kept = comment_texts(&document);
+            for comment in comment_texts(&patched) {
+                if let Some(found) = kept.iter().position(|one| *one == comment) {
+                    kept.remove(found);
+                }
+            }
+            if !kept.is_empty() {
+                self.wrong.push(format!(
+                    "{name}: {patch_text}: the put dropped {kept:?}\n  was: {text:?}\n  now: {:?}",
+                    patched.to_text()
+                ));
+                return;
+            }
+        }
+        // The undo is applied to the patched TEXT, read again, as the client
+        // holds it and the gateway reads it (fix pass 3, item M1): never to
+        // the document still in memory.
         let wire = inverse.to_text();
-        let back = Patch::from_text(&wire)
-            .map_err(|error| format!("the inverse's text does not read: {error:?}"))
-            .and_then(|undo| {
-                apply(&patched, &undo)
+        let back = Document::parse(&patched.to_text())
+            .map_err(|error| format!("the patched text does not read: {error:?}"))
+            .and_then(|reread| {
+                Patch::from_text(&wire)
+                    .map_err(|error| format!("the inverse's text does not read: {error:?}"))
+                    .map(|undo| (reread, undo))
+            })
+            .and_then(|(reread, undo)| {
+                apply(&reread, &undo)
                     .map_err(|error| format!("the inverse does not apply: {error:?}"))
             })
             .map(|(back, _)| back.to_text());
@@ -376,10 +453,11 @@ fn every_undo_through_its_text_gives_the_same_bytes() {
         }
     }
     println!(
-        "{} documents ({committed} committed): {} applied, {} refused",
+        "undo property: {} documents ({committed} committed): {} applied, {} refused, {} differ",
         documents.len(),
         tally.applied,
-        tally.refused
+        tally.refused,
+        tally.wrong.len()
     );
     assert!(tally.applied > 10_000, "only {} applied", tally.applied);
     assert!(
@@ -436,5 +514,27 @@ fn a_tilde_not_followed_by_zero_or_one_is_refused() {
                 "{patch}: {refused:?}"
             );
         }
+    }
+}
+
+/// The review's case (fix pass 3, item M1): the first put into an empty
+/// container keeps the comment inside it, and the undo, applied to the patched
+/// text read again, gives the file back byte for byte.
+#[test]
+fn a_put_into_an_empty_container_keeps_its_inside_and_undoes_exactly() {
+    let text = "{\"a\": { /* keep */ }, \"b\": [ // keep too\n ]}";
+    for patch in [
+        r#"[{"op":"add","path":"/a/x","value":1}]"#,
+        r#"[{"op":"add","path":"/b/-","value":1}]"#,
+        r#"[{"op":"add","path":"/b/0","value":1}]"#,
+        r#"[{"op":"copy","from":"/b","path":"/a/x"}]"#,
+    ] {
+        let (patched, inverse) =
+            pharmakos_plan_core::patch::patch_text(text, patch).expect("it applies");
+        assert!(patched.contains("/* keep */"), "{patch}: {patched:?}");
+        assert!(patched.contains("// keep too"), "{patch}: {patched:?}");
+        let (back, _) =
+            pharmakos_plan_core::patch::patch_text(&patched, &inverse).expect("the undo applies");
+        assert_eq!(back, text, "{patch}: inverse {inverse}");
     }
 }
