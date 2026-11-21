@@ -1996,10 +1996,11 @@ fn two_node_edits_under(cases: u32, tables: &[RulesTable]) -> TwoNode {
     let widest = rules_at_the_widest_budget(&rules);
     let scope = scope();
     let snapshot = snapshot();
+    // A rules table the verifier refuses (fix pass 4, item 1) qualifies
+    // nothing: `Input::new` is the door, and the implication holds through it.
     let qualifies = |text: &str, rules: &RulesTable| {
-        let input = Input::new(text.as_bytes(), &snapshot, &scope, rules)
-            .unwrap_or_else(|error| panic!("assembling the input: {error}"));
-        verify(&input, Depth::Full).qualifies
+        Input::new(text.as_bytes(), &snapshot, &scope, rules)
+            .is_ok_and(|input| verify(&input, Depth::Full).qualifies)
     };
     let mut bases: Vec<(Json, bool)> = Vec::new();
     for base in EDIT_BASES {
@@ -2178,6 +2179,71 @@ fn generated_rules_tables() -> Vec<RulesTable> {
                 .unwrap_or_else(|error| panic!("budget {budget}: {error}")),
         );
     }
+    // The extremes (fix pass 4, item 1): every interface rate at its minimum
+    // (zero), at 2^30 and at `i32::MAX`, each with the widest budget; the
+    // verifier block at zero and at its maximum; and the map at its smallest
+    // and a large size. A table the sim's loader refuses is not a table the
+    // build accepts and is left out; one the verifier refuses stays in, and
+    // qualifies nothing.
+    let mut extremes: Vec<pharmakos_proto::gp::v1::RulesTable> = Vec::new();
+    for (budget, cooldown, fires) in [
+        (0_u32, 0_i32, 0_u32),
+        (u32::MAX, i32::MAX, u32::MAX),
+        (128, i32::MIN, 8),
+    ] {
+        let mut message = committed.message().clone();
+        let verifier = message
+            .verifier
+            .as_mut()
+            .unwrap_or_else(|| panic!("the committed rules carry the verifier's block"));
+        verifier.size_budget_units = budget;
+        verifier.handler_cooldown_min_ms = cooldown;
+        verifier.max_fires_max = fires;
+        extremes.push(message);
+    }
+    for (rate, budget) in [
+        (0_i32, u32::MAX),
+        (1 << 30, u32::MAX),
+        (i32::MAX, u32::MAX),
+        (i32::MAX, 128),
+        (1 << 24, 128),
+    ] {
+        let mut message = committed.message().clone();
+        let times = message
+            .interface_times
+            .as_mut()
+            .unwrap_or_else(|| panic!("the committed rules carry the interface rates"));
+        times.visit_handshake_ms = rate;
+        times.set_priority_ms = rate;
+        times.edit_settings_base_ms = rate;
+        times.edit_settings_per_field_ms = rate;
+        times.edit_settings_max_ms = rate;
+        times.build_target_ms = rate;
+        times.queue_structure_ms = rate;
+        times.switch_mandate_ms = rate;
+        times.recycle_ms = rate;
+        times.place_beacon_deploy_ms = rate;
+        let verifier = message
+            .verifier
+            .as_mut()
+            .unwrap_or_else(|| panic!("the committed rules carry the verifier's block"));
+        verifier.size_budget_units = budget;
+        extremes.push(message);
+    }
+    for size in [(32_u32, 32_u32, 32_u32), (1 << 20, 1 << 20, 1 << 12)] {
+        let mut message = committed.message().clone();
+        let map = message
+            .map
+            .as_mut()
+            .unwrap_or_else(|| panic!("the committed rules carry the map"));
+        (map.size_x, map.size_y, map.size_z) = size;
+        extremes.push(message);
+    }
+    tables.extend(
+        extremes
+            .iter()
+            .filter_map(|message| RulesTable::from_message(message).ok()),
+    );
     tables
 }
 
@@ -2188,6 +2254,11 @@ fn generated_rules_tables() -> Vec<RulesTable> {
 #[test]
 fn every_two_node_edit_that_qualifies_compiles_under_every_rules_table() {
     let tables = generated_rules_tables();
+    assert!(
+        tables.len() > 12,
+        "the extremes the sim's loader takes are in the probe: {}",
+        tables.len()
+    );
     let TwoNode {
         qualified, refused, ..
     } = two_node_edits_under(TWO_NODE_CASES, &tables);
@@ -2386,4 +2457,30 @@ fn ten_thousand_playbooks_come_back_as_reports() {
         ["W0704", "W0705", "W0706"],
         "the lints the run reached"
     );
+}
+
+/// The verifier is the door that holds (fix pass 4, item 1): a rules table
+/// under which a row a playbook within the size budget can write would pass
+/// the sim's `i32` of milliseconds is refused by `Input::new`, naming the rate,
+/// so nothing qualifies under it; the committed table is not refused.
+#[test]
+fn a_table_whose_rows_could_pass_the_sims_i32_is_refused() {
+    let committed = rules();
+    let mut message = committed.message().clone();
+    let times = message
+        .interface_times
+        .as_mut()
+        .unwrap_or_else(|| panic!("the committed rules carry the interface rates"));
+    times.build_target_ms = i32::MAX;
+    let table = RulesTable::from_message(&message).unwrap_or_else(|error| panic!("{error}"));
+    let refused = Input::new(b"{}", &snapshot(), &scope(), &table)
+        .err()
+        .unwrap_or_else(|| panic!("the table is refused"));
+    assert!(
+        refused
+            .to_string()
+            .contains("interface_times.build_target_ms"),
+        "the refusal names the rate: {refused}"
+    );
+    assert!(Input::new(b"{}", &snapshot(), &scope(), &committed).is_ok());
 }
