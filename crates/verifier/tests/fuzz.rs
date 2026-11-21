@@ -2149,6 +2149,36 @@ fn every_two_node_edit_that_qualifies_compiles() {
     );
 }
 
+/// The committed table with every interface rate at `rate` and the size
+/// budget at `budget`.
+fn every_rate(
+    committed: &RulesTable,
+    rate: i32,
+    budget: u32,
+) -> pharmakos_proto::gp::v1::RulesTable {
+    let mut message = committed.message().clone();
+    let times = message
+        .interface_times
+        .as_mut()
+        .unwrap_or_else(|| panic!("the committed rules carry the interface rates"));
+    times.visit_handshake_ms = rate;
+    times.set_priority_ms = rate;
+    times.edit_settings_base_ms = rate;
+    times.edit_settings_per_field_ms = rate;
+    times.edit_settings_max_ms = rate;
+    times.build_target_ms = rate;
+    times.queue_structure_ms = rate;
+    times.switch_mandate_ms = rate;
+    times.recycle_ms = rate;
+    times.place_beacon_deploy_ms = rate;
+    let verifier = message
+        .verifier
+        .as_mut()
+        .unwrap_or_else(|| panic!("the committed rules carry the verifier's block"));
+    verifier.size_budget_units = budget;
+    message
+}
+
 /// Rules tables a probe judges and compiles under (fix pass 3, item M4): the
 /// committed table with its verifier block's size budget, handler cooldown
 /// floor and `max_fires` ceiling moved across what `RulesTable::from_message`
@@ -2208,27 +2238,7 @@ fn generated_rules_tables() -> Vec<RulesTable> {
         (i32::MAX, 128),
         (1 << 24, 128),
     ] {
-        let mut message = committed.message().clone();
-        let times = message
-            .interface_times
-            .as_mut()
-            .unwrap_or_else(|| panic!("the committed rules carry the interface rates"));
-        times.visit_handshake_ms = rate;
-        times.set_priority_ms = rate;
-        times.edit_settings_base_ms = rate;
-        times.edit_settings_per_field_ms = rate;
-        times.edit_settings_max_ms = rate;
-        times.build_target_ms = rate;
-        times.queue_structure_ms = rate;
-        times.switch_mandate_ms = rate;
-        times.recycle_ms = rate;
-        times.place_beacon_deploy_ms = rate;
-        let verifier = message
-            .verifier
-            .as_mut()
-            .unwrap_or_else(|| panic!("the committed rules carry the verifier's block"));
-        verifier.size_budget_units = budget;
-        extremes.push(message);
+        extremes.push(every_rate(&committed, rate, budget));
     }
     for size in [(32_u32, 32_u32, 32_u32), (1 << 20, 1 << 20, 1 << 12)] {
         let mut message = committed.message().clone();
@@ -2238,6 +2248,24 @@ fn generated_rules_tables() -> Vec<RulesTable> {
             .unwrap_or_else(|| panic!("the committed rules carry the map"));
         (map.size_x, map.size_y, map.size_z) = size;
         extremes.push(message);
+    }
+    // At the door's bound (fix pass 5, item L7): every rate the same, so the
+    // worst row is (2 + budget) times it; at the largest rate the door
+    // takes, one below it and one above it at a budget of 128, and at it for
+    // budgets of 400 and 1, so the implication is tried where it is tightest
+    // on tables that are accepted.
+    let at_the_bound = |budget: u32| -> i32 {
+        let rows = i64::from(budget).saturating_add(2);
+        i32::try_from(i64::from(i32::MAX).checked_div(rows).unwrap_or(0)).unwrap_or(i32::MAX)
+    };
+    for (budget, rate) in [
+        (128, at_the_bound(128)),
+        (128, at_the_bound(128).saturating_sub(1)),
+        (128, at_the_bound(128).saturating_add(1)),
+        (400, at_the_bound(400)),
+        (1, at_the_bound(1)),
+    ] {
+        extremes.push(every_rate(&committed, rate, budget));
     }
     tables.extend(
         extremes
@@ -2257,6 +2285,20 @@ fn every_two_node_edit_that_qualifies_compiles_under_every_rules_table() {
     assert!(
         tables.len() > 12,
         "the extremes the sim's loader takes are in the probe: {}",
+        tables.len()
+    );
+    // The implication is tried on tables the door accepts (fix pass 5, item
+    // L7): a table it refuses qualifies nothing, so a probe of mostly refused
+    // tables would pass vacuously.
+    let accepted = tables
+        .iter()
+        .filter(|table| Input::new(b"{}", &snapshot(), &scope(), table).is_ok())
+        .count();
+    let refused_tables = tables.len().saturating_sub(accepted);
+    println!("rules tables: {accepted} accepted, {refused_tables} refused");
+    assert!(
+        accepted.saturating_mul(2) >= tables.len(),
+        "only {accepted} of {} tables are accepted",
         tables.len()
     );
     let TwoNode {
@@ -2483,4 +2525,42 @@ fn a_table_whose_rows_could_pass_the_sims_i32_is_refused() {
         "the refusal names the rate: {refused}"
     );
     assert!(Input::new(b"{}", &snapshot(), &scope(), &committed).is_ok());
+}
+
+/// The table's refusal names the row as the sim sums it (fix pass 5, item
+/// L6): all three rates with their values, the budget, and the sum.
+#[test]
+fn a_table_refusal_names_the_row_as_the_sim_sums_it() {
+    let committed = rules();
+    let mut message = committed.message().clone();
+    let times = message
+        .interface_times
+        .as_mut()
+        .unwrap_or_else(|| panic!("the committed rules carry the interface rates"));
+    times.switch_mandate_ms = 7_000;
+    times.edit_settings_max_ms = 9_000;
+    times.build_target_ms = 20_000_000;
+    let verifier = message
+        .verifier
+        .as_mut()
+        .unwrap_or_else(|| panic!("the committed rules carry the verifier's block"));
+    verifier.size_budget_units = 128;
+    let table = RulesTable::from_message(&message).unwrap_or_else(|error| panic!("{error}"));
+    let refused = Input::new(b"{}", &snapshot(), &scope(), &table)
+        .err()
+        .unwrap_or_else(|| panic!("the table is refused"))
+        .to_string();
+    let worst = 7_000_i64 + 9_000 + 20_000_000 * 128;
+    for part in [
+        "interface_times.switch_mandate_ms",
+        "7000",
+        "interface_times.edit_settings_max_ms",
+        "9000",
+        "interface_times.build_target_ms",
+        "20000000",
+        "128",
+        &worst.to_string(),
+    ] {
+        assert!(refused.contains(part), "`{part}` is not in: {refused}");
+    }
 }
