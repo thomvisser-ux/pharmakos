@@ -363,7 +363,21 @@ charge at tick 5826, the charge fires at 5926, the raiders destroy the beacon
 at 6300, and the attack ends at 6450. Before the lane's second fix pass the
 breach search read a diagonal's sides at their footing, walked through an open
 corner, reached the target across no wall, and the attack ended sealed at
-tick 3120 with nothing planted. The chain is that rule, played.
+tick 3120 with nothing planted. The chain is that rule, played. It pins
+the second fix pass's corner rule: its chain is byte-identical at that pass's
+head (`d303fd40`) and this lane's later ones.
+
+**S3's `settle` added `breach-at-a-slant`** (`scenarios/s3/`):
+`breach-and-raze` with seat 0's force staged off a corner of seat 1's ring
+(x 372, y 322), so its raiders come at the ring on a slant. The breach search
+steps onto a wall column only by a step a walker's rule allows, cardinally, or
+diagonally where neither side is a wall. It names the wall column [360, 332]
+and plants at [360, 331]: planted at tick 6138, fired at 6238, the beacon
+destroyed at 6805, the attack ended at 6978. Before the lane's second fix pass
+the search read a wall side at its footing and stepped onto the wall
+diagonally: wall [361, 332], plant [362, 331], planted at 6114, fired at 6214,
+the beacon destroyed at 6805, ended at 6920. The chain pins which wall column
+is chosen and from where.
 
 `expand-east-segment` carries one more thing worth knowing before its chain is
 read. The playbook it seals **does not qualify against either seat's own frozen
