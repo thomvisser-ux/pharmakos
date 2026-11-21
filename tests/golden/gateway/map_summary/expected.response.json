@@ -17,7 +17,7 @@
         "y": 212,
         "live": true,
         "covered": false,
-        "travel_ms": 309000,
+        "travel_ms": 305400,
         "reachable": true
       },
       {
@@ -28,7 +28,7 @@
         "y": 131,
         "live": true,
         "covered": false,
-        "travel_ms": 173800,
+        "travel_ms": 171600,
         "reachable": true
       },
       {
@@ -39,7 +39,7 @@
         "y": 272,
         "live": true,
         "covered": false,
-        "travel_ms": 305400,
+        "travel_ms": 304200,
         "reachable": true
       },
       {
@@ -50,7 +50,7 @@
         "y": 346,
         "live": true,
         "covered": false,
-        "travel_ms": 346200,
+        "travel_ms": 345600,
         "reachable": true
       },
       {
@@ -72,7 +72,7 @@
         "y": 111,
         "live": true,
         "covered": false,
-        "travel_ms": 313400,
+        "travel_ms": 309800,
         "reachable": true
       },
       {
@@ -83,7 +83,7 @@
         "y": 117,
         "live": true,
         "covered": false,
-        "travel_ms": 270400,
+        "travel_ms": 267800,
         "reachable": true
       },
       {
@@ -94,7 +94,7 @@
         "y": 356,
         "live": true,
         "covered": false,
-        "travel_ms": 371400,
+        "travel_ms": 369200,
         "reachable": true
       },
       {
@@ -116,7 +116,7 @@
         "y": 135,
         "live": true,
         "covered": false,
-        "travel_ms": 324200,
+        "travel_ms": 321800,
         "reachable": true
       }
     ],

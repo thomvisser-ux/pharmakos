@@ -20,20 +20,27 @@
 //!
 //! # Nearest
 //!
-//! **The least estimated travel from the origin to the feature. Unreachable
-//! candidates are skipped. Ties go to the lowest anchor y, then x.** The metric
-//! is the item-61 estimator's integer `cost` ([`crate::pathing::estimate`]),
-//! from which the editor's ETA is derived, so what a chip says and what the sim
-//! picks agree. It measures to the feature's anchor column, or, when that
-//! column cannot be stood on or is not connected to the origin, to the first
-//! standable connected footprint column in `(y, x)` order.
+//! **The least travel from the origin to the feature. Unreachable candidates
+//! are skipped. Ties go to the lowest anchor y, then x.** The metric is the
+//! integer cost of the walk the router serves
+//! ([`crate::pathing::estimate::walk_cost`]), near or far, so "nearest" is
+//! the feature the walker reaches soonest, by construction and not by an
+//! estimate's agreement with the walk (lane `p3fix`; before it, a far pair was
+//! ranked at the abstract estimate, which charges the unsmoothed refinement,
+//! and the order stepped where the near and far pricing met). It measures to
+//! the feature's anchor column, or, when that column cannot be stood on or is
+//! not connected to the origin, to the first standable connected footprint
+//! column in `(y, x)` order.
 //!
-//! [`Ranker`] runs at most **one estimate per candidate**, and only for a
+//! [`Ranker`] prices **at most one walk per candidate**, and only for a
 //! candidate the octile lower bound has not already ruled out: a candidate is
-//! emitted once its key `(cost, y, x)` is below every unestimated candidate's
-//! `(bound, y, x)`, and because a bound never exceeds its cost, that is the
-//! candidate's true place in the order. Six or fewer candidates per kind on an
-//! S1 map, so the budget S1 measures is small.
+//! emitted once its key `(cost, y, x)` is below every unpriced candidate's
+//! `(bound, y, x)`, and because the octile bound never exceeds a served walk's
+//! cost (`tests/targeting.rs` pins it), that is the candidate's true place in
+//! the order. Candidates are opened in octile order, which opens exactly the
+//! candidates whose bound is under the emitted cost: no order that prunes by
+//! the octile bound alone opens fewer. Nothing is capped; what bounds the work
+//! is the candidate count ([`MAX_FEATURES`]) and the router's own search.
 //!
 //! In S1 liveness and reachability read the **live** world, unfogged, as the
 //! adopted design accepts for this stage (targeting.md, "Descriptions";
@@ -76,7 +83,7 @@ use crate::features::{Feature, FeatureKind, FeatureTable, MAX_FEATURES};
 use crate::interpreter::state::{StepFailed, StepFailure};
 use crate::math::fixed::{Fx, Sq};
 use crate::pathing::clusters::Clusters;
-use crate::pathing::estimate::{Fog, Speed, estimate};
+use crate::pathing::estimate::{Fog, NoWalk, Speed, estimate, walk_cost};
 use crate::pathing::search::Scratch;
 use crate::pathing::surface::{Node, Surface};
 use crate::rules::RulesTable;
@@ -381,8 +388,9 @@ impl Ground<'_> {
     }
 
     /// The item-61 estimate's integer cost from `from` to `to`, or `None` when
-    /// no route exists.
-    fn travel(&self, scratch: &mut Scratch, from: Node, to: Node) -> Option<i64> {
+    /// no route exists: what a stepping-stone site is weighed by
+    /// ([`stone_site`]).
+    fn estimated(&self, scratch: &mut Scratch, from: Node, to: Node) -> Option<i64> {
         self.charge(1);
         estimate(
             self.surface,
@@ -394,6 +402,13 @@ impl Ground<'_> {
             Speed::commander(self.rules),
         )
         .map(|found| i64::from(found.cost))
+    }
+
+    /// The integer cost of the walk the router serves from `from` to `to`
+    /// ([`walk_cost`]): what "nearest" ranks by.
+    fn travel(&self, scratch: &mut Scratch, from: Node, to: Node) -> Result<i64, NoWalk> {
+        self.charge(1);
+        walk_cost(self.surface, self.clusters, scratch, from, to)
     }
 }
 
@@ -422,16 +437,16 @@ struct Entry {
     goal: Node,
     /// The octile lower bound on its cost.
     bound: i64,
-    /// Its estimated cost, once estimated.
+    /// Its served walk's cost, once priced.
     cost: i64,
-    /// 0 unestimated, 1 estimated, 2 emitted or unreachable.
+    /// 0 unpriced, 1 priced, 2 emitted or unreachable.
     state: u8,
 }
 
 /// "Nearest", one candidate at a time, in `(cost, anchor y, anchor x)` order.
 ///
-/// Each candidate costs at most one estimate, and only when the bounds of the
-/// others cannot already place it (the module docs).
+/// Each candidate costs at most one priced walk, and only when the bounds of
+/// the others cannot already place it (the module docs).
 #[derive(Clone, Debug)]
 pub struct Ranker {
     entries: [Entry; MAX_FEATURES],
@@ -441,7 +456,16 @@ pub struct Ranker {
     origin: Option<Node>,
     /// How many features `keep` admitted, before reachability was asked.
     matched: u32,
+    /// How many candidates the router's chained partial routes overran
+    /// ([`NoWalk::Overrun`]): dropped as unreachable, and counted so the drop
+    /// is never silent. At most [`MAX_FEATURES`].
+    overruns: u8,
 }
+
+const _: () = assert!(
+    MAX_FEATURES <= 255,
+    "a ranker's overrun count, a u8, holds every candidate"
+);
 
 impl Ranker {
     /// The candidates `keep` admits, ranked from the column `origin`.
@@ -463,6 +487,7 @@ impl Ranker {
             len: 0,
             origin: start,
             matched: 0,
+            overruns: 0,
         };
         for (index, feature) in ground.features.features().iter().enumerate() {
             ground.charge(1);
@@ -497,15 +522,23 @@ impl Ranker {
         self.matched
     }
 
-    /// The next candidate, nearest first, with its estimated cost; `None` when
-    /// every candidate has been emitted or found unreachable.
+    /// How many candidates were dropped because the router's chained partial
+    /// routes overran the map ([`NoWalk::Overrun`]). `tests/targeting.rs`
+    /// pins it at zero on generated maps.
+    #[must_use]
+    pub const fn overruns(&self) -> u8 {
+        self.overruns
+    }
+
+    /// The next candidate, nearest first, with its served walk's cost; `None`
+    /// when every candidate has been emitted or found unreachable.
     pub fn next(&mut self, ground: &Ground<'_>, scratch: &mut Scratch) -> Option<(usize, i64)> {
         let origin = self.origin?;
         loop {
             let live = self.entries.get(..self.len)?;
             // item 62: anchors are unique per feature, so both keys below end
             // in a unique `(y, x)`.
-            let best_estimated = live
+            let best_priced = live
                 .iter()
                 .enumerate()
                 .filter(|(_, entry)| entry.state == 1)
@@ -519,9 +552,9 @@ impl Ranker {
                 // item 62: `(y, x)` is a unique anchor.
                 .min_by_key(|(_, entry)| (entry.bound, entry.y, entry.x))
                 .map(|(at, entry)| (at, (entry.bound, entry.y, entry.x)));
-            match (best_estimated, best_bound) {
-                // The best estimated candidate is ahead of every bound still
-                // unestimated, so its place in the order is final.
+            match (best_priced, best_bound) {
+                // The best priced candidate is ahead of every bound still
+                // unpriced, so its place in the order is final.
                 (Some((at, key)), bound) if bound.is_none_or(|(_, other)| key < other) => {
                     let entry = self.entries.get_mut(at)?;
                     entry.state = 2;
@@ -530,16 +563,21 @@ impl Ranker {
                 (_, Some((at, _))) => {
                     let entry = self.entries.get_mut(at)?;
                     match ground.travel(scratch, origin, entry.goal) {
-                        Some(cost) => {
+                        Ok(cost) => {
                             entry.cost = cost;
                             entry.state = 1;
                         }
-                        None => entry.state = 2,
+                        Err(NoWalk::NoPath(_)) => entry.state = 2,
+                        Err(NoWalk::Overrun) => {
+                            entry.state = 2;
+                            // E7: cannot miss: one per candidate, at most `MAX_FEATURES`, which the assertion above holds under `u8::MAX`
+                            self.overruns = self.overruns.checked_add(1)?;
+                        }
                     }
                 }
-                // Nothing estimated is waiting and nothing is left to
-                // estimate (an estimated candidate with no bound left is
-                // emitted by the first arm).
+                // Nothing priced is waiting and nothing is left to price (a
+                // priced candidate with no bound left is emitted by the first
+                // arm).
                 (_, None) => return None,
             }
         }
@@ -868,7 +906,7 @@ fn stone_site(
         if best.is_some_and(|(cost, _, _)| entry.bound > cost) {
             break;
         }
-        let Some(cost) = ground.travel(scratch, entry.node, entry.goal) else {
+        let Some(cost) = ground.estimated(scratch, entry.node, entry.goal) else {
             continue;
         };
         if best.is_none_or(|held| (cost, entry.y, entry.x) < held) {

@@ -150,8 +150,9 @@
 //! host's is that the answer is about the match that is actually running.
 
 use crate::math::quantity::TICK_HZ;
+use crate::pathing::MAX_ROUTE_NODES;
 use crate::pathing::clusters::Clusters;
-use crate::pathing::route::{Surcharge, abstract_search, route_and_abstract};
+use crate::pathing::route::{NoPath, Surcharge, abstract_search, route_and_abstract};
 use crate::pathing::search::Scratch;
 use crate::pathing::surface::{Node, Surface};
 
@@ -183,11 +184,16 @@ impl Fog<'_> {
         }
     }
 
-    /// Whether anything at all is hidden. A query with a clear mask prices
-    /// nothing at ×3/2 and can say so to the caller that renders the leg.
+    /// Whether nothing at all is hidden: [`Fog::Clear`], or a mask with no
+    /// unknown column. Such a query prices nothing at ×3/2, and a near pair
+    /// under it is priced at the served route like any clear query (lane
+    /// `p3fix`): a mask that hides nothing is a clear query, whoever built it.
     #[must_use]
-    pub const fn is_clear(self) -> bool {
-        matches!(self, Fog::Clear)
+    pub fn is_clear(self) -> bool {
+        match self {
+            Fog::Clear => true,
+            Fog::Unknown(mask) => !mask.contains(&true),
+        }
     }
 }
 
@@ -298,7 +304,7 @@ pub fn estimate(
     fog: Fog<'_>,
     speed: Speed,
 ) -> Option<Estimate> {
-    if fog.is_clear() && clusters.touch(start, goal) {
+    if clusters.touch(start, goal) && fog.is_clear() {
         return near(world, clusters, scratch, (start, goal), speed);
     }
     let result = abstract_search(world, clusters, scratch, start, goal, fog, speed)?;
@@ -320,7 +326,7 @@ fn near(
     (start, goal): (Node, Node),
     speed: Speed,
 ) -> Option<Estimate> {
-    scratch.near_queries = scratch.near_queries.saturating_add(1);
+    scratch.near_queries.bump();
     let mut served = core::mem::take(&mut scratch.served);
     let routed = route_and_abstract(
         world,
@@ -347,6 +353,93 @@ fn near(
         legs: abstract_result.legs,
         fogged: false,
     })
+}
+
+/// Why [`walk_cost`] priced no walk.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum NoWalk {
+    /// The router serves no route from where the walk stands: its typed
+    /// reason.
+    NoPath(NoPath),
+    /// The router's partial routes, chained, walked more columns than the map
+    /// holds without arriving. Each partial route is [`MAX_ROUTE_NODES`]
+    /// columns of a refined walk, so a walk that arrives in a simple path
+    /// never needs more of them than the map's columns divided by that; a
+    /// chain past it revisits columns, which no route the router refines
+    /// does. `tests/targeting.rs` pins it unreached on generated maps.
+    Overrun,
+}
+
+/// **The cost of the walk the router serves** from `start` to `goal`, near or
+/// far: [`route_and_abstract`] under no surcharge, the router's own function,
+/// written into the scratch's own buffer, and when the route stops short at
+/// [`MAX_ROUTE_NODES`] the rest asked for from its end, as the walker asks
+/// when it gets there. It is what a "nearest" ranks by (lane `p3fix`): exact,
+/// with no estimate standing in for the walk. It steps nothing; like a near
+/// pair's estimate it is a pure function of the graph.
+///
+/// # Errors
+///
+/// [`NoWalk::NoPath`] when the router serves no route, and
+/// [`NoWalk::Overrun`] when chained partial routes pass the map's columns.
+pub fn walk_cost(
+    world: &Surface,
+    clusters: &Clusters,
+    scratch: &mut Scratch,
+    start: Node,
+    goal: Node,
+) -> Result<i64, NoWalk> {
+    scratch.walks.bump();
+    let mut served = core::mem::take(&mut scratch.served);
+    let walked = walk_into(world, clusters, scratch, (start, goal), &mut served);
+    scratch.served = served;
+    walked
+}
+
+/// The new columns a partial route adds to a walk: all of its
+/// [`MAX_ROUTE_NODES`] but the one it starts on.
+const PARTIAL_PROGRESS: u32 = MAX_ROUTE_NODES - 1;
+const _: () = assert!(PARTIAL_PROGRESS > 0, "a partial route makes progress");
+
+/// [`walk_cost`]'s chain, with the served buffer taken out of the scratch so
+/// that every return hands it back.
+fn walk_into(
+    world: &Surface,
+    clusters: &Clusters,
+    scratch: &mut Scratch,
+    (start, goal): (Node, Node),
+    served: &mut Vec<Node>,
+) -> Result<i64, NoWalk> {
+    // A partial route adds `MAX_ROUTE_NODES - 1` new columns to the walk, so a
+    // walk over at most every column of the map takes at most this many
+    // partial routes before the whole one.
+    let partials = world.node_count().div_ceil(PARTIAL_PROGRESS);
+    let mut from = start;
+    let mut total = 0_i64;
+    let mut asked = 0_u32;
+    loop {
+        let (_, outcome) = route_and_abstract(
+            world,
+            clusters,
+            scratch,
+            (from, goal),
+            Surcharge::NONE,
+            served,
+        )
+        .map_err(NoWalk::NoPath)?;
+        total = total
+            .checked_add(i64::from(outcome.cost))
+            .ok_or(NoWalk::Overrun)?;
+        if !outcome.partial {
+            return Ok(total);
+        }
+        if asked >= partials {
+            return Err(NoWalk::Overrun);
+        }
+        asked += 1;
+        // E7: cannot miss: a partial route holds `MAX_ROUTE_NODES` columns
+        from = served.last().copied().ok_or(NoWalk::Overrun)?;
+    }
 }
 
 /// The walker's speed and the fog multiplier, which are the two rules-table

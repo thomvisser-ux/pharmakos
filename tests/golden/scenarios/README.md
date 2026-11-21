@@ -232,8 +232,9 @@ seat 0's beacon lands at 721 (was 691), its initial Build target commits at 771
 seat 1 at 1671 (was 1787), its core's drone digging from the start, and seat
 0's carried deploy fails as round 2's step starts, at tick 3601 (was 4056): the
 step no longer walks before it reads its site, and the vent it names is
-covered by its own round-1 beacon. Seat 0's derived hold is 9 900 ms: Easy
-costs the suggested vent from the core. `against-easy.scenario.jsonc`'s seat 1
+covered by its own round-1 beacon. Seat 0's derived hold was 9 900 ms then,
+and is 16 100 ms since S3's `p3fix` (below): Easy costs the suggested vent
+from the core. `against-easy.scenario.jsonc`'s seat 1
 deadline moved with it, from 550 to 800, and every other deadline holds. The
 determinism chain did not move.
 
@@ -378,6 +379,28 @@ the search read a wall side at its footing and stepped onto the wall
 diagonally: wall [361, 332], plant [362, 331], planted at 6114, fired at 6214,
 the beacon destroyed at 6805, ended at 6920. The chain pins which wall column
 is chosen and from where.
+
+**S3's `p3fix` moved the two `against-easy` chains, and no other.** The rule:
+a near pair's estimate (two columns in touching clusters) is priced at the
+route the router serves, not at the abstract graph's unsmoothed refinement
+(`crates/sim/src/pathing/estimate.rs`, "Near pairs"). Two causes move them,
+told apart by playing each chain again with seat 0's hold set back to 9 900 ms:
+
+* **The input, from line 1016 in both.** Seat 0's pinned playbook
+  (`scenarios/skeleton/against-easy.playbook.jsonc`) holds what is left of
+  Easy's 42 s share once its route, costed from the core, is paid. Easy's
+  route to `vent_324_16` is 6.2 s cheaper at the served prices, so the hold
+  rose from 9 900 to 16 100 ms. With the old hold, each chain matches the new
+  one up to line 1016 and no further.
+* **Everything else: line 966 in `against-easy`, line 2366 in
+  `against-easy-three-rounds`.** With the old hold each chain still leaves
+  the old one there. Seat 1 is a `builtin` seat, and Easy prices its goals
+  with the same estimate, so its seal moved with the prices; the run does not
+  tell its seal apart from the near estimate's reads inside a tick.
+
+The ranker's exact pricing (lane `p3fix`'s second part: "nearest" ranks by
+the served walk, `walk_cost`) moved no chain, and the determinism chain did
+not move.
 
 `expand-east-segment` carries one more thing worth knowing before its chain is
 read. The playbook it seals **does not qualify against either seat's own frozen

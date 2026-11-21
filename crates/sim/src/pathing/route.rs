@@ -239,7 +239,7 @@ fn abstract_search_with(
     };
 
     abstract_begin(scratch);
-    scratch.abstract_expansions = 0;
+    scratch.abstract_expansions = crate::pathing::search::Tally::ZERO;
     let h0 = surface.heuristic(start, goal);
     abstract_reach(scratch, temp_start, 0, temp_start);
     scratch.abstract_heap.push(Item {
@@ -254,7 +254,7 @@ fn abstract_search_with(
             continue;
         }
         abstract_close(scratch, item.n);
-        scratch.abstract_expansions = scratch.abstract_expansions.saturating_add(1);
+        scratch.abstract_expansions.bump();
         if item.n == temp_goal {
             found = true;
             break;

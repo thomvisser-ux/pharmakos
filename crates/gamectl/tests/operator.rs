@@ -916,19 +916,20 @@ fn the_safe_playbook_raises_only_what_is_at_risk_unforced() {
 }
 
 /// The corpus rows on the committed rules whose seat's supply shows a
-/// Generator: seed `0102...` seats 0 and 2, which seal Hold & Build in
-/// round 1 (`tests/golden/operator/seed-0102030405060708/expected.seat-0.jsonc`
-/// and `expected.seat-2.jsonc`) and show the Generator on their vents --
-/// lean ones -- by round 3. Seat 2's route, 42 s to `vent_171_51` from its
-/// core, fills Easy's 42 s share exactly: it fits since the core's
-/// `deepen_core` step is paid out of the hold rather than out of the visit
-/// goals' share, and its hold, with nothing left for it, is taken out.
+/// Generator. At seed `0102...` every seat seals Hold & Build in round 1
+/// (`tests/golden/operator/seed-0102030405060708/expected.seat-0.jsonc`,
+/// `expected.seat-1.jsonc` and `expected.seat-2.jsonc`): a Build beacon on a
+/// lean vent with a Generator as its first target, `vent_52_335`,
+/// `vent_351_323` and `vent_171_51`, at 40 s, 40 s and 41 s of route from the
+/// core, each inside Easy's 42 s share (70 % of the 60 s segment). Each fits
+/// since the core's `deepen_core` step is paid out of the hold rather than out
+/// of the visit goals' share, and each hold, with nothing left for it, is
+/// taken out. Seats 0 and 2 show the Generator on their vents by round 3, and
+/// seat 1 from round 2.
 ///
-/// Seat 1 shows one from round 2 since lane `p3fix` (near pairs are priced at
-/// the served route): in round 1 Easy now seals Hold & Build for it, a Build
-/// beacon on the lean vent `vent_351_323` with a Generator as its first
-/// target, 40 s of route inside its 42 s share; on the abstract prices the
-/// route did not fit and the seat sealed the safe playbook in every round.
+/// Seat 1's Hold & Build is lane `p3fix`'s (near pairs are priced at the
+/// served route): on the abstract prices its route did not fit the share and
+/// the seat sealed the safe playbook in every round.
 const GENERATOR_ROWS: &[(&str, u8)] = &[
     ("three-rounds/round-2", 1),
     ("three-rounds/round-3", 0),

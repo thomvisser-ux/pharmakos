@@ -1617,11 +1617,17 @@ const EXACT_ORIGINS: u32 = 120;
 /// (ties to the lower anchor `(y, x)`). Before this lane's ranker priced the
 /// near pairs at the served route and the far ones at the abstract estimate,
 /// so the order stepped at the touching-cluster boundary.
+///
+/// It also pins what the ranker's exactness rests on: the octile bound it
+/// prunes by is never above a served walk's cost, for every candidate of every
+/// origin, and no candidate's chained partial routes overran the map.
 #[test]
 fn nearest_is_the_least_served_walk() {
     use pharmakos_sim::features::FeatureKind;
     use pharmakos_sim::targeting::Ranker;
     let mut wrong = Vec::new();
+    let mut over_bound = Vec::new();
+    let mut overruns = 0_u32;
     let mut ranks = 0_u32;
     for seed in EXACT_SEEDS {
         let world = world_at(seed, 2, &[180_000]);
@@ -1660,6 +1666,10 @@ fn nearest_is_the_least_served_walk() {
                     let feature = ground.features.features().get(index)?;
                     let goal = measured_to(&world, feature, origin)?;
                     let cost = served_walk(&world, &mut scratch, origin, goal)?;
+                    let bound = i64::from(surface.heuristic(origin, goal));
+                    if bound > cost {
+                        over_bound.push((seed, [ox, oy], index, bound, cost));
+                    }
                     Some((cost, feature.anchor[1], feature.anchor[0], index))
                 })
                 .collect();
@@ -1673,9 +1683,20 @@ fn nearest_is_the_least_served_walk() {
                     break;
                 }
             }
+            overruns += u32::from(ranker.overruns());
         }
     }
     assert!(ranks >= 900, "the test ranks enough: {ranks}");
+    assert!(
+        over_bound.is_empty(),
+        "{} octile bounds were above the served walk; first: {:?}",
+        over_bound.len(),
+        over_bound.first()
+    );
+    assert_eq!(
+        overruns, 0,
+        "no candidate's chained partial routes overran the map"
+    );
     assert!(
         wrong.is_empty(),
         "{} of {ranks} ranks were not the least served walk; first: {:?}",

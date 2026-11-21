@@ -448,23 +448,22 @@ fn collapse_at(world: &mut World, step: u32) {
     }
 }
 
-/// The estimator's near pairs (lane `p3fix`): a pair whose clusters touch is
-/// priced at the route the router serves, built in the scratch's own buffer,
-/// so an estimate allocates nothing, inside a tick or out of one.
+/// The served walk "nearest" ranks by, and the estimator's near pairs (lane
+/// `p3fix`): both price the route the router serves, built in the scratch's
+/// own buffer, so neither allocates, inside a tick or out of one.
 ///
-/// The tick reaches the near branch: the harness playbook's `covering`
-/// resolver ranks "nearest" by estimate, and its nearest vents are near pairs.
-/// It does so in the opening ticks, before the counted windows above (the
-/// first decision of each seat), so this half asserts the zero per call
-/// instead, on **the world's own scratch**, the buffer those ticks use, after
-/// checking that they did use the branch.
+/// The tick reaches the served walk: the harness playbook's `covering`
+/// resolver ranks "nearest" by it. It does so in the opening ticks, before the
+/// counted windows above (the first decision of each seat), so this half
+/// asserts the zero per call instead, on **the world's own scratch**, the
+/// buffer those ticks use, after checking that they did price walks; near
+/// pairs and far ones both, since the ranker prices either.
 fn near_estimates_allocate_nothing(world: &mut World) {
-    use pharmakos_sim::pathing::estimate::{Fog, Speed, estimate};
-    let in_ticks = world.scratch_mut().near_queries();
+    use pharmakos_sim::pathing::estimate::{Fog, Speed, estimate, walk_cost};
+    let in_ticks = world.scratch_mut().walks().expect("the count fits a u64");
     assert!(
         in_ticks > 0,
-        "no near estimate ran inside a tick, so nothing here shows the tick reaches the near \
-         branch"
+        "no served walk was priced inside a tick, so nothing here shows the tick ranks by it"
     );
     // The graph, copied out before counting so that the world's scratch can
     // be borrowed beside it; the copy is the only allocation and it is not
@@ -476,6 +475,7 @@ fn near_estimates_allocate_nothing(world: &mut World) {
     // diagonal, each paired with the column 20 cells east and 9 north.
     let [sx, sy, _] = surface.size();
     let mut pairs: Vec<(u32, u32)> = Vec::new();
+    let mut far: Vec<(u32, u32)> = Vec::new();
     let mut x = 5;
     while x + 20 < sx && x + 9 < sy {
         if let (Some(a), Some(b)) = (surface.node_of(x, x), surface.node_of(x + 20, x + 9))
@@ -484,8 +484,15 @@ fn near_estimates_allocate_nothing(world: &mut World) {
         {
             pairs.push((a, b));
         }
+        if let (Some(a), Some(b)) = (surface.node_of(x, x), surface.node_of(sx - 1 - x, x))
+            && !clusters.touch(a, b)
+            && clusters.connected(&surface, a, b)
+        {
+            far.push((a, b));
+        }
         x += 37;
     }
+    assert!(far.len() >= 3, "too few far pairs drawn: {}", far.len());
     assert!(
         pairs.len() >= 3,
         "too few near pairs drawn: {}",
@@ -498,16 +505,21 @@ fn near_estimates_allocate_nothing(world: &mut World) {
         let found = estimate(&surface, &clusters, scratch, *a, *b, Fog::Clear, speed);
         assert!(found.is_some(), "a connected near pair has an estimate");
     }
+    for (a, b) in pairs.iter().chain(&far) {
+        let walked = walk_cost(&surface, &clusters, scratch, *a, *b);
+        assert!(walked.is_ok(), "a connected pair has a served walk");
+    }
     let during = allocations() - before;
     assert_eq!(
         during,
         0,
-        "{} near estimates allocated {during} times; the route they price is built in the \
-         scratch's own buffer so that none does",
-        pairs.len()
+        "{} near estimates and {} served walks allocated {during} times; the route they price \
+         is built in the scratch's own buffer so that none does",
+        pairs.len(),
+        pairs.len() + far.len()
     );
     assert_eq!(
-        scratch.near_queries(),
+        scratch.near_queries().expect("the count fits a u64"),
         u64::try_from(pairs.len()).expect("fits"),
         "every pair drawn went through the near branch"
     );

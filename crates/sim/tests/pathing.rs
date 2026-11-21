@@ -929,14 +929,17 @@ fn no_path_is_answered_by_the_oracle() {
     );
     assert_eq!(refused, None, "a sealed-in walker has no estimate");
     assert_eq!(
-        fixture.scratch.expansions(),
+        fixture.scratch.expansions().expect("the count fits a u64"),
         0,
         "the refusal expanded {} nodes; 'no path' must be two array reads, not a search that \
          exhausts the map (item 60)",
-        fixture.scratch.expansions()
+        fixture.scratch.expansions().expect("the count fits a u64")
     );
     assert_eq!(
-        fixture.scratch.endpoint_expansions(),
+        fixture
+            .scratch
+            .endpoint_expansions()
+            .expect("the count fits a u64"),
         0,
         "the refusal ran an endpoint sweep; the oracle answers before any search"
     );
@@ -3517,7 +3520,7 @@ fn a_near_estimate_in_the_tick_after_a_crater_reads_the_repaired_graph() {
     let speed = Speed::commander(world.rules());
     let start = surface.node_of(24, 356).expect("the commander's column");
     let goal = surface.node_of(35, 346).expect("a column past the crater");
-    let before = scratch.near_queries();
+    let before = scratch.near_queries().expect("the count fits a u64");
     let read = estimate(
         &surface,
         world.clusters(),
@@ -3528,7 +3531,7 @@ fn a_near_estimate_in_the_tick_after_a_crater_reads_the_repaired_graph() {
         speed,
     );
     assert_eq!(
-        scratch.near_queries(),
+        scratch.near_queries().expect("the count fits a u64"),
         before + 1,
         "the pair is a near pair"
     );

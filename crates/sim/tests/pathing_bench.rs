@@ -204,9 +204,25 @@ fn bench_estimates(bench: &mut Bench) -> u64 {
         ) else {
             continue;
         };
-        totals.push(bench.scratch.expansions() + bench.scratch.abstract_expansions());
-        endpoints.push(bench.scratch.endpoint_expansions());
-        abstracts.push(bench.scratch.abstract_expansions());
+        totals.push(
+            bench.scratch.expansions().expect("the count fits a u64")
+                + bench
+                    .scratch
+                    .abstract_expansions()
+                    .expect("the count fits a u64"),
+        );
+        endpoints.push(
+            bench
+                .scratch
+                .endpoint_expansions()
+                .expect("the count fits a u64"),
+        );
+        abstracts.push(
+            bench
+                .scratch
+                .abstract_expansions()
+                .expect("the count fits a u64"),
+        );
         legs.push(u64::from(answer.legs));
         taken += 1;
     }
@@ -264,7 +280,13 @@ fn bench_repaths(bench: &mut Bench) {
         {
             continue;
         }
-        repaths.push(bench.scratch.expansions() + bench.scratch.abstract_expansions());
+        repaths.push(
+            bench.scratch.expansions().expect("the count fits a u64")
+                + bench
+                    .scratch
+                    .abstract_expansions()
+                    .expect("the count fits a u64"),
+        );
         nodes.push(u64::try_from(buffer.len()).expect("fits"));
         taken += 1;
     }
@@ -312,7 +334,7 @@ fn bench_repairs(bench: &mut Bench) {
             &mut bench.scratch,
             &mut bench.repairer,
         );
-        repairs.push(bench.scratch.expansions());
+        repairs.push(bench.scratch.expansions().expect("the count fits a u64"));
         dirty_total += u64::from(report.dirty);
         n += 1;
     }
