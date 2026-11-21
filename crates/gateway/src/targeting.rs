@@ -54,8 +54,8 @@ use pharmakos_proto::json::grammar::Said;
 use pharmakos_proto::said;
 use pharmakos_sim::features::{Feature, FeatureKind};
 use pharmakos_sim::interpreter::{
-    Action, BeaconSpec, Place as PlanPlace, Plan, StepFailed, StepFailure, beacon_spec_of,
-    binding_slots, resolve_beacon_in,
+    Action, BeaconSpec, Place as PlanPlace, Plan, StepFailed, StepFailure, binding_slots,
+    resolve_beacon_in,
 };
 use pharmakos_sim::math::fixed::Fx;
 use pharmakos_sim::math::quantity::Ms;
@@ -1290,7 +1290,11 @@ fn beacon_place(
     placement: Option<&Place>,
 ) -> Option<[Fx; 3]> {
     let spec = match placement? {
-        Place::BeaconAnchor(reference) => beacon_spec_of(reference, reader.world.rules()).ok()?,
+        // A reference the sim cannot read binds nothing here, and its
+        // refusal is the step's own, said where the step is checked.
+        Place::BeaconAnchor(reference) => {
+            crate::surface::plan_words::beacon_spec(reference, reader.world.rules()).ok()?
+        }
         Place::Safest(_) => BeaconSpec::Safest,
         Place::Voxel(_) | Place::On(_) | Place::Covering(_) | Place::Toward(_) => return None,
     };
@@ -1307,7 +1311,7 @@ fn interface_beacon(
     snapshot: &Snapshot,
     reference: Option<&BeaconRef>,
 ) -> Option<(BeaconId, [Fx; 3])> {
-    let spec = beacon_spec_of(reference?, reader.world.rules()).ok()?;
+    let spec = crate::surface::plan_words::beacon_spec(reference?, reader.world.rules()).ok()?;
     let id = resolve_beacon_in(snapshot, reader.world.rules(), reader.seat, spec, None)?;
     Some((id, beacon_point(reader.world, id)?))
 }

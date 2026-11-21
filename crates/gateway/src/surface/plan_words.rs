@@ -14,6 +14,22 @@
 use pharmakos_proto::json::grammar::{Said, quoted};
 use pharmakos_proto::said;
 
+/// The sim's reading of a beacon reference, its refusal in the gateway's
+/// own sentence (S3's `vfyq2`, fix pass 6, item 5): the one place the
+/// gateway reaches `beacon_spec_of`, so its `PlanError` is never held
+/// anywhere else.
+///
+/// # Errors
+///
+/// [`plan_refusal`]'s sentence for the sim's refusal.
+pub(crate) fn beacon_spec(
+    reference: &pharmakos_proto::gp::v1::BeaconRef,
+    rules: &pharmakos_sim::rules::RulesTable,
+) -> Result<pharmakos_sim::interpreter::BeaconSpec, Said> {
+    pharmakos_sim::interpreter::beacon_spec_of(reference, rules)
+        .map_err(|error| plan_refusal(&error))
+}
+
 /// A `PlanError` as a seat reads it (S3's `vfyq2`, fix pass 3, item M2 (a)):
 /// one sentence per variant, matched with no wildcard, so a variant the sim
 /// adds does not compile here until it has one. The words are the sim's own

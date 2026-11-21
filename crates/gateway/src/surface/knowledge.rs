@@ -1133,7 +1133,7 @@ impl Surface {
         from: Option<Voxel>,
         scratch: &mut Option<pharmakos_sim::pathing::Scratch>,
     ) -> Result<Voxel, Error> {
-        use pharmakos_sim::interpreter::{BeaconSpec, beacon_spec_of, resolve_beacon_in};
+        use pharmakos_sim::interpreter::{BeaconSpec, resolve_beacon_in};
         let at = format!("waypoint {index}");
         if let Some(voxel) = waypoint.get("voxel") {
             return read_voxel(voxel, &at);
@@ -1154,13 +1154,15 @@ impl Surface {
                         error.said()
                     ))
                 })?;
-            beacon_spec_of(&reference, host.rules()).map_err(|error| {
-                Error::invalid(said!(
-                    "{}: {}",
-                    pharmakos_proto::json::grammar::quoted_pointer(&at),
-                    crate::surface::plan_words::plan_refusal(&error)
-                ))
-            })?
+            crate::surface::plan_words::beacon_spec(&reference, host.rules()).map_err(
+                |refusal| {
+                    Error::invalid(said!(
+                        "{}: {}",
+                        pharmakos_proto::json::grammar::quoted_pointer(&at),
+                        refusal
+                    ))
+                },
+            )?
         } else if waypoint.get("safest").is_some() {
             BeaconSpec::Safest
         } else {

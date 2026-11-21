@@ -1941,12 +1941,12 @@ const KEPT_FALLBACKS: &[(&str, &str, &str)] = &[
     ),
     (
         "targeting.rs",
-        "Place::BeaconAnchor(reference) => beacon_spec_of(reference, reader.world.rules()).ok()?,",
+        "crate::surface::plan_words::beacon_spec(reference, reader.world.rules()).ok()?",
         "a beacon reference the sim's compile refuses places nothing, and `compile_playbook` says why at the door",
     ),
     (
         "targeting.rs",
-        "let spec = beacon_spec_of(reference?, reader.world.rules()).ok()?;",
+        "let spec = crate::surface::plan_words::beacon_spec(reference?, reader.world.rules()).ok()?;",
         "as the placement above: a refused reference visits nothing, and the compile door names it",
     ),
     (
