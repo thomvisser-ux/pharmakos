@@ -180,10 +180,9 @@ impl Cost {
 /// stops there as it does at an unpriced blueprint, while the seal's price
 /// check (`E0603`) refuses it.
 ///
-/// The additions saturate, which by the argument above never happens; were it
-/// to, every term is non-negative, so a saturated figure would still exceed
-/// every room and treasury it is compared with, and the comparison would still
-/// come out the way the exact sum would.
+/// The additions are checked, and a sum that leaves `i128` is refused as
+/// [`ProjectionError::Overflow`] like a wall's term (S3's `vfyq2`, fix pass 4,
+/// item 1: they saturated).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct Tally {
     /// `$`.
@@ -211,20 +210,33 @@ impl Tally {
         let count = i128::from(count);
         Tally {
             // |i64| x u32 and |i32| x u32 are both below 2^96: the products
-            // are exact in `i128`, and saturation (see the type's doc) is
-            // never reached.
-            spend: i128::from(price.spend.raw()).saturating_mul(count),
-            draw: i128::from(price.draw.raw()).saturating_mul(count),
+            // are exact in `i128` by their types, so they never wrap (S3's
+            // `vfyq2`, fix pass 4, item 1: they saturated, which they never
+            // reached).
+            spend: i128::from(price.spend.raw()).wrapping_mul(count),
+            draw: i128::from(price.draw.raw()).wrapping_mul(count),
         }
     }
 
-    /// Two tallies added (see the type's doc for why this saturates).
-    #[must_use]
-    pub fn plus(self, other: Tally) -> Tally {
-        Tally {
-            spend: self.spend.saturating_add(other.spend),
-            draw: self.draw.saturating_add(other.draw),
-        }
+    /// Two tallies added, checked (S3's `vfyq2`, fix pass 4, item 1): a
+    /// wall's term alone can come near `i128` (the type's doc), so a sum of
+    /// them can leave it, and is refused as [`ProjectionError::Overflow`]
+    /// like the term itself, never saturated.
+    ///
+    /// # Errors
+    ///
+    /// [`ProjectionError::Overflow`] when the sum leaves `i128`.
+    pub fn plus(self, other: Tally) -> Result<Tally, ProjectionError> {
+        Ok(Tally {
+            spend: self
+                .spend
+                .checked_add(other.spend)
+                .ok_or(ProjectionError::Overflow)?,
+            draw: self
+                .draw
+                .checked_add(other.draw)
+                .ok_or(ProjectionError::Overflow)?,
+        })
     }
 
     /// The tally as a [`Cost`].
@@ -253,8 +265,11 @@ pub struct Orders {
 
 impl Orders {
     /// Both piles, as one upper bound.
-    #[must_use]
-    pub fn upper(self) -> Tally {
+    ///
+    /// # Errors
+    ///
+    /// [`ProjectionError::Overflow`] when the sum leaves `i128`.
+    pub fn upper(self) -> Result<Tally, ProjectionError> {
         self.adds.plus(self.at_most)
     }
 }
@@ -449,7 +464,7 @@ impl Prices {
 /// As [`Prices::blueprint`], and [`ProjectionError::Overflow`] when the step's
 /// orders leave the sim's `$` or `kW` type.
 pub fn step_cost(entry: &Step, prices: &Prices) -> Result<Cost, ProjectionError> {
-    orders(entry, prices, None)?.upper().narrow()
+    orders(entry, prices, None)?.upper()?.narrow()
 }
 
 /// What one route step orders, sorted into what it adds and what it may add
@@ -489,7 +504,7 @@ fn orders(entry: &Step, prices: &Prices, scope: Option<&Scope>) -> Result<Orders
                 None => Orders::default(),
             };
             Ok(Orders {
-                adds: Tally::of(prices.beacon()).plus(initial.adds),
+                adds: Tally::of(prices.beacon()).plus(initial.adds)?,
                 at_most: initial.at_most,
             })
         }
@@ -500,26 +515,26 @@ fn orders(entry: &Step, prices: &Prices, scope: Option<&Scope>) -> Result<Orders
                     Some(interface_row::Row::SetMandate(settings)) => {
                         let ordered = settings_tally(settings, prices)?;
                         if is_a_switch(visit, settings, scope) {
-                            found.adds = found.adds.plus(ordered.adds);
-                            found.at_most = found.at_most.plus(ordered.at_most);
+                            found.adds = found.adds.plus(ordered.adds)?;
+                            found.at_most = found.at_most.plus(ordered.at_most)?;
                         } else {
-                            found.at_most = found.at_most.plus(ordered.upper());
+                            found.at_most = found.at_most.plus(ordered.upper()?)?;
                         }
                     }
                     Some(interface_row::Row::SetMandateSettings(settings)) => {
                         found.at_most = found
                             .at_most
-                            .plus(settings_tally(settings, prices)?.upper());
+                            .plus(settings_tally(settings, prices)?.upper()?)?;
                     }
                     Some(interface_row::Row::AddBuildTarget(add)) => {
                         if let Some(target) = add.target.as_ref() {
-                            found.adds = found.adds.plus(target_tally(target, prices)?);
+                            found.adds = found.adds.plus(target_tally(target, prices)?)?;
                         }
                     }
                     Some(interface_row::Row::QueueStructure(queue)) => {
                         found.adds = found
                             .adds
-                            .plus(Tally::of(prices.blueprint(&queue.blueprint_id)?));
+                            .plus(Tally::of(prices.blueprint(&queue.blueprint_id)?))?;
                     }
                     Some(
                         interface_row::Row::SetPriority(_)
@@ -578,7 +593,7 @@ fn settings_tally(settings: &MandateSettings, prices: &Prices) -> Result<Orders,
         Some(mandate_settings::Mandate::Build(build)) => {
             let mut total = Tally::ZERO;
             for target in &build.targets {
-                total = total.plus(target_tally(target, prices)?);
+                total = total.plus(target_tally(target, prices)?)?;
             }
             Ok(ordered(total))
         }
@@ -701,7 +716,7 @@ pub fn project(
     let mut wide = Tally::ZERO;
     if let Some(body) = playbook.declarative.as_ref() {
         for entry in &body.route {
-            wide = wide.plus(orders(entry, prices, None)?.upper());
+            wide = wide.plus(orders(entry, prices, None)?.upper()?)?;
         }
     }
     let total = wide.narrow()?;

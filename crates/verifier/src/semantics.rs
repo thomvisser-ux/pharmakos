@@ -424,7 +424,7 @@ impl Visit for Semantics<'_> {
             return;
         }
         let inside = self.scope.own_beacons().any(|beacon| {
-            i128::from(squared_distance(&beacon.at, voxel)) <= squared(self.radius_of(Some(beacon)))
+            squared_distance(&beacon.at, voxel) <= squared(self.radius_of(Some(beacon)))
         });
         if !inside {
             self.out.emit(
@@ -1179,7 +1179,9 @@ fn squared(radius: Radius) -> i128 {
         Radius::Base(base) => i128::from(base),
         Radius::Grown(grown) => i128::from(grown),
     };
-    radius.saturating_mul(radius)
+    // A radius is at most a `u32` (2^32), so its square is under 2^64:
+    // exact in `i128` by the type (fix pass 4, item 1).
+    radius.wrapping_mul(radius)
 }
 
 /// Whether a column lies wholly outside the sphere of `radius` about
@@ -1187,24 +1189,24 @@ fn squared(radius: Radius) -> i128 {
 /// it at any height is inside.
 fn column_outside(centre: &Voxel, radius: Radius, x: i32, y: i32) -> bool {
     let column = Voxel { x, y, z: centre.z };
-    i128::from(squared_distance(centre, &column)) > squared(radius)
+    squared_distance(centre, &column) > squared(radius)
 }
 
 /// Squared distance between two voxels, in whole voxels squared.
 ///
-/// `i64` and squared, never a square root: a range check is `d2 <= r2` and there
-/// is no float anywhere near it (AGENTS.md section 4.2). The map is 384 voxels
-/// on its longest side, so the product cannot come close to the type's range —
-/// and it saturates rather than wrapping, because overflow checks are on and a
-/// panic inside the verifier would turn a silly playbook into a crash.
-fn squared_distance(a: &Voxel, b: &Voxel) -> i64 {
+/// Squared, never a square root: a range check is `d2 <= r2` and there is no
+/// float anywhere near it (AGENTS.md section 4.2). In `i128` (fix pass 4, item
+/// 1: it was an `i64` that saturated, which a playbook's `i32` coordinates at
+/// their extremes reached): two `i32`s differ by under 2^32, a square is under
+/// 2^64 and three of them under 2^66, exact by the type, so nothing wraps.
+fn squared_distance(a: &Voxel, b: &Voxel) -> i128 {
     let axis = |one: i32, other: i32| {
-        let delta = i64::from(one).saturating_sub(i64::from(other));
-        delta.saturating_mul(delta)
+        let delta = i128::from(one).wrapping_sub(i128::from(other));
+        delta.wrapping_mul(delta)
     };
     axis(a.x, b.x)
-        .saturating_add(axis(a.y, b.y))
-        .saturating_add(axis(a.z, b.z))
+        .wrapping_add(axis(a.y, b.y))
+        .wrapping_add(axis(a.z, b.z))
 }
 
 #[cfg(test)]

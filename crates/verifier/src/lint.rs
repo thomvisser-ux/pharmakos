@@ -657,8 +657,10 @@ impl Lints<'_> {
     /// `W0706`: every live vent within a sphere's reach of a fixed site's
     /// column is already covered by one of the seat's own beacons.
     fn already_covered(&mut self, at: &str, site: &Voxel) {
-        let radius = i64::from(self.limits.beacon_sphere_radius_voxels());
-        let reach = radius.saturating_mul(radius);
+        // A radius is an `i32`, so its square is exact in `i128` (fix pass
+        // 4, item 1).
+        let radius = i128::from(self.limits.beacon_sphere_radius_voxels());
+        let reach = radius.wrapping_mul(radius);
         let mut first: Option<&KnownFeature> = None;
         for vent in self.scope.features().iter().filter(|feature| {
             feature.kind == FeatureKind::Vent
@@ -714,13 +716,14 @@ const fn describe(kind: FeatureKind, uncovered: bool) -> &'static str {
 }
 
 /// Squared distance in x and y between a feature's anchor column and a voxel,
-/// in whole voxels squared, saturating as `crate::semantics` does.
-fn column_distance(feature: &KnownFeature, site: &Voxel) -> i64 {
+/// in whole voxels squared, in `i128` as `crate::semantics` does: two `i32`s
+/// differ by under 2^32, so two squares are under 2^65, exact by the type.
+fn column_distance(feature: &KnownFeature, site: &Voxel) -> i128 {
     let axis = |one: i32, other: i32| {
-        let delta = i64::from(one).saturating_sub(i64::from(other));
-        delta.saturating_mul(delta)
+        let delta = i128::from(one).wrapping_sub(i128::from(other));
+        delta.wrapping_mul(delta)
     };
-    axis(feature.x, site.x).saturating_add(axis(feature.y, site.y))
+    axis(feature.x, site.x).wrapping_add(axis(feature.y, site.y))
 }
 
 /// `{"covering":{"vent":{"rank":"NEAREST","coverage":"UNCOVERED"}}}`: the

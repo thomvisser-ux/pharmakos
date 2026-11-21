@@ -882,7 +882,7 @@ fn step_body(entry: &Step, here: &str, ctx: &Ctx<'_>) -> Text {
                 beacon_chip(visit.beacon.as_ref(), at(&visit_at, "beacon"), &BEACON_ARMS),
                 what,
                 " (",
-                duration(spent),
+                wide_duration(spent),
                 " on site)"
             )
         }
@@ -926,7 +926,7 @@ fn step_body(entry: &Step, here: &str, ctx: &Ctx<'_>) -> Text {
                     ));
                 }
             }
-            sentence.push(cat!(" (", duration(spent), " on site)"));
+            sentence.push(cat!(" (", wide_duration(spent), " on site)"));
             sentence
         }
         Some(step::Kind::WaitUntil(wait)) => {
@@ -2254,7 +2254,7 @@ fn budget(book: &Playbook, rates: &Rates, size_budget: u32, out: &mut Out) {
         1,
         cat!(format!(
             "{} standing at a beacon along the route.",
-            duration(interface::route_ms(book, rates))
+            wide_duration(interface::route_ms(book, rates))
         )),
         out,
     );
@@ -2346,7 +2346,18 @@ fn separated(parts: Vec<Text>, separator: &str) -> Text {
 /// it is.
 #[must_use]
 pub fn duration(ms: Ms) -> String {
-    let total = i64::from(ms.raw().unsigned_abs());
+    let total = u128::from(ms.raw().unsigned_abs());
+    if ms.raw() < 0 {
+        return format!("minus {}", magnitude(total));
+    }
+    magnitude(total)
+}
+
+/// [`duration`] of an interface sum, which is wide (`interface`'s module doc,
+/// S3's `vfyq2`, fix pass 4, item 1): the same words, never cut.
+#[must_use]
+pub fn wide_duration(ms: interface::WideMs) -> String {
+    let total = ms.raw().unsigned_abs();
     if ms.raw() < 0 {
         return format!("minus {}", magnitude(total));
     }
@@ -2354,7 +2365,7 @@ pub fn duration(ms: Ms) -> String {
 }
 
 /// [`duration`] of a time at or above zero.
-fn magnitude(total: i64) -> String {
+fn magnitude(total: u128) -> String {
     let seconds = total.div_euclid(1000);
     let rest = total.rem_euclid(1000);
     if rest == 0 && seconds >= 60 {

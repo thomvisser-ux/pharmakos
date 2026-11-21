@@ -194,6 +194,9 @@ impl From<pharmakos_verifier::RulesGap> for Error {
             | pharmakos_verifier::RulesGap::NotPositive { .. } => {
                 "the rules table holds a value the verifier cannot use"
             }
+            pharmakos_verifier::RulesGap::RowPastTheSim { .. } => {
+                "the rules table's interface rates let a row run past what the sim compiles"
+            }
         };
         Self::at(
             "",

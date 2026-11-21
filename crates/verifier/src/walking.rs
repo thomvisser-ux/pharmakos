@@ -53,10 +53,12 @@
 //! reduced by the radius at the far end, and by the radius the commander may
 //! have stopped short of the near end by, before the octile sum.
 
-use core::num::NonZeroU64;
+use core::num::{NonZeroU64, NonZeroU128};
 
 use pharmakos_proto::gp::v1::Voxel;
 use pharmakos_sim::math::quantity::{Ms, TICK_HZ};
+
+use crate::interface::WideMs;
 use pharmakos_sim::rules::RulesTable;
 
 use crate::limits::RulesGap;
@@ -137,57 +139,59 @@ impl Walk {
     /// may have stopped up to `slack` voxels short, to within `radius` voxels
     /// of `to`.
     ///
-    /// Saturating upwards only, past any segment: a figure that large is a
-    /// leg off the map, which the placement checks name, and here it still
-    /// reads as "longer than the segment".
+    /// In `u128`, exact by the types (S3's `vfyq2`, fix pass 4, item 1: it
+    /// saturated, and lowered a leg past `u32::MAX` ticks to it). `slack` and
+    /// `radius` are `i64`s, so `reach` is under 2^64; an axis is two `i32`s
+    /// apart, under 2^33; a step cost is an `i64`, its double under 2^64; so
+    /// the cost is under 2^98, times `TICK_HZ` under 2^103, and the leg in
+    /// milliseconds under 2^110. Nothing wraps.
     #[must_use]
-    pub fn leg(&self, from: Voxel, slack: i64, to: Voxel, radius: i64) -> Ms {
-        let reach = slack.saturating_add(radius).max(0);
-        let axis = |a: i32, b: i32| -> i64 {
-            i64::from(b)
-                .saturating_sub(i64::from(a))
-                .saturating_abs()
-                .saturating_sub(reach)
-                .max(0)
+    pub fn leg(&self, from: Voxel, slack: i64, to: Voxel, radius: i64) -> WideMs {
+        let reach = i128::from(slack).wrapping_add(i128::from(radius)).max(0);
+        let axis = |a: i32, b: i32| -> u128 {
+            let apart = i128::from(b).wrapping_sub(i128::from(a)).unsigned_abs();
+            // What is left past the reach, floored at none: the leg ends
+            // anywhere within it. `reach` is at least zero, so its magnitude
+            // is itself.
+            let reach = reach.unsigned_abs();
+            if apart > reach {
+                apart.wrapping_sub(reach)
+            } else {
+                0
+            }
         };
         let (dx, dy) = (axis(from.x, to.x), axis(from.y, to.y));
         let (low, high) = if dx < dy { (dx, dy) } else { (dy, dx) };
         // Whatever the rows say, a diagonal step is never charged more than
         // two cardinal ones, nor a straight voxel of progress less than the
         // cheaper step, so the sum stays a bound for any table that passes
-        // `from_rules`. With the committed rows (10 and 14) it is the octile
-        // distance exactly.
-        let per_diagonal = self.diagonal.min(self.cardinal.saturating_mul(2));
-        let per_straight = self.cardinal.min(self.diagonal);
+        // `from_rules` (which refuses a negative step cost). With the
+        // committed rows (10 and 14) it is the octile distance exactly.
+        let cardinal = self.cardinal.unsigned_abs();
+        let diagonal = self.diagonal.unsigned_abs();
+        let per_diagonal = u128::from(diagonal).min(u128::from(cardinal).wrapping_mul(2));
+        let per_straight = u128::from(cardinal.min(diagonal));
         let cost = per_diagonal
-            .saturating_mul(low)
-            .saturating_add(per_straight.saturating_mul(high.saturating_sub(low)));
-        // The sim's walker adds its speed to an accumulator each tick and may
-        // carry less than one tick's speed in from the leg before, so it
-        // arrives no sooner than tick `floor(cost * TICK_HZ / speed)` (the
-        // module doc, "Why down").
-        //
-        // Every term above is non-negative (each axis is floored at zero and
-        // `from_rules` refuses a negative step cost), so `unsigned_abs` is the
-        // value itself, and the division is by a speed that cannot be zero.
-        // The floor is the point ("Why down"), and the standard library's
-        // division by a `NonZeroU64` is the one that cannot panic, so it is
-        // named rather than written with `/`.
+            .wrapping_mul(low)
+            .wrapping_add(per_straight.wrapping_mul(high.wrapping_sub(low)));
+        // The sim's walker arrives no sooner than tick
+        // `floor(cost * TICK_HZ / speed)` (the module doc, "Why down"), and
+        // the division is by a speed that cannot be zero, named rather than
+        // written with `/`.
         let ticks = core::ops::Div::div(
-            cost.unsigned_abs().saturating_mul(u64::from(TICK_HZ)),
-            self.cost_per_second,
+            cost.wrapping_mul(u128::from(TICK_HZ)),
+            NonZeroU128::from(self.cost_per_second),
         );
-        // A bound past `u32::MAX` ticks (about seven years of game time) is
-        // lowered to it, and a lower bound lowered is still a lower bound: the
-        // one direction this figure may ever err in (the module doc, "Why
-        // down"). No leg on a map reaches it.
-        Ms::from_ticks(u32::try_from(ticks).unwrap_or(u32::MAX))
+        // A tick's milliseconds, the sim's own conversion.
+        let per_tick = Ms::from_ticks(1).raw().unsigned_abs();
+        WideMs::of_millis(ticks.wrapping_mul(u128::from(per_tick)))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::Walk;
+    use crate::interface::WideMs;
     use crate::limits::RulesGap;
     use pharmakos_proto::gp::v1::Voxel;
     use pharmakos_sim::math::quantity::Ms;
@@ -210,8 +214,14 @@ mod tests {
     #[test]
     fn a_straight_leg_is_a_second_a_voxel_at_the_committed_rows() {
         let walk = walk();
-        assert_eq!(walk.leg(voxel(0, 0), 0, voxel(16, 0), 0), Ms::new(16_000));
-        assert_eq!(walk.leg(voxel(0, 0), 0, voxel(0, -16), 0), Ms::new(16_000));
+        assert_eq!(
+            walk.leg(voxel(0, 0), 0, voxel(16, 0), 0),
+            WideMs::of(Ms::new(16_000))
+        );
+        assert_eq!(
+            walk.leg(voxel(0, 0), 0, voxel(0, -16), 0),
+            WideMs::of(Ms::new(16_000))
+        );
     }
 
     /// Octile: fourteen a diagonal, ten a straight voxel.
@@ -220,7 +230,7 @@ mod tests {
         // 10 diagonals and 5 straight: 140 + 50 = 190 cost units, 19 s.
         assert_eq!(
             walk().leg(voxel(0, 0), 0, voxel(15, 10), 0),
-            Ms::new(19_000)
+            WideMs::of(Ms::new(19_000))
         );
     }
 
@@ -231,9 +241,15 @@ mod tests {
         assert_eq!(walk.arrive_radius(), 2);
         assert_eq!(walk.interface_range(), 4);
         // 16 voxels, less 2 of slack and 4 of range: 10 s.
-        assert_eq!(walk.leg(voxel(0, 0), 2, voxel(16, 0), 4), Ms::new(10_000));
+        assert_eq!(
+            walk.leg(voxel(0, 0), 2, voxel(16, 0), 4),
+            WideMs::of(Ms::new(10_000))
+        );
         // Already within range: no walking at all.
-        assert_eq!(walk.leg(voxel(0, 0), 0, voxel(3, 3), 4), Ms::new(0));
+        assert_eq!(
+            walk.leg(voxel(0, 0), 0, voxel(3, 3), 4),
+            WideMs::of(Ms::new(0))
+        );
     }
 
     /// Height is never charged: a climb only adds, so leaving it out keeps the
@@ -242,7 +258,7 @@ mod tests {
     fn height_is_never_charged() {
         let low = Voxel { x: 0, y: 0, z: 0 };
         let high = Voxel { x: 8, y: 0, z: 60 };
-        assert_eq!(walk().leg(low, 0, high, 0), Ms::new(8_000));
+        assert_eq!(walk().leg(low, 0, high, 0), WideMs::of(Ms::new(8_000)));
     }
 
     /// A speed that does not divide a step's price rounds down: the sim's
@@ -257,13 +273,25 @@ mod tests {
         let table = RulesTable::from_message(&message).expect("the sim's view builds");
         let walk = Walk::from_rules(&table).expect("a positive speed walks");
         // One cardinal voxel: 10 x 20 / 3 = 66.7 ticks, so 66 ticks, 3.3 s.
-        assert_eq!(walk.leg(voxel(0, 0), 0, voxel(1, 0), 0), Ms::new(3_300));
+        assert_eq!(
+            walk.leg(voxel(0, 0), 0, voxel(1, 0), 0),
+            WideMs::of(Ms::new(3_300))
+        );
     }
 
+    /// Exact, not saturated (fix pass 4, item 1): the far corner is
+    /// 2^32 - 1 diagonal steps away, at the diagonal's cost, in ticks at the
+    /// committed speed, in milliseconds; past `i32::MAX`, as it is.
     #[test]
-    fn a_leg_off_any_map_saturates_rather_than_wraps() {
-        let far = walk().leg(voxel(i32::MIN, i32::MIN), 0, voxel(i32::MAX, i32::MAX), 0);
-        assert_eq!(far, Ms::new(i32::MAX));
+    fn a_leg_off_any_map_is_exact_rather_than_saturated() {
+        let walk = walk();
+        let far = walk.leg(voxel(i32::MIN, i32::MIN), 0, voxel(i32::MAX, i32::MAX), 0);
+        let one = walk.leg(voxel(0, 0), 0, voxel(1, 1), 0);
+        assert!(far > WideMs::of(Ms::new(i32::MAX)), "{far:?}");
+        // Ticks floor per leg, so the far leg is at least the one-step leg
+        // times the steps, and less than a step's tick more each.
+        let steps = i128::from(u32::MAX);
+        assert!(far.raw() >= one.raw() * steps, "{far:?} against {one:?}");
     }
 
     #[test]

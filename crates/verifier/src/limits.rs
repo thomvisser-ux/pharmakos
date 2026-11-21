@@ -79,6 +79,17 @@ pub enum RulesGap {
         /// What the table said.
         value: i64,
     },
+    /// The interface rates let a row a playbook within the size budget can
+    /// write take longer than the sim's `i32` of milliseconds, which its
+    /// compile refuses (S3's `vfyq2`, fix pass 4, item 1).
+    RowPastTheSim {
+        /// The rate that carries the worst row past it.
+        field: &'static str,
+        /// The worst row, in milliseconds.
+        worst_ms: i128,
+        /// The size budget it was priced at.
+        budget: u32,
+    },
 }
 
 /// A rules gap names a rules-table field and its value: the shipped table's
@@ -107,6 +118,16 @@ impl fmt::Display for RulesGap {
                 formatter,
                 "the rules table's `{field}` is {value}; the verifier divides by it and needs it \
                  above zero"
+            ),
+            RulesGap::RowPastTheSim {
+                field,
+                worst_ms,
+                budget,
+            } => write!(
+                formatter,
+                "the rules table's `{field}` lets one interface row a playbook of {budget} size \
+                 units can write take {worst_ms} ms, past the {} ms the sim compiles a row in",
+                i32::MAX
             ),
         }
     }

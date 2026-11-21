@@ -576,7 +576,14 @@ impl<'a> Input<'a> {
             rules,
             rules_hash,
             limits,
-            rates: Rates::from_rules(rules)?,
+            rates: {
+                // The table is the door (fix pass 4, item 1): one whose rows
+                // could pass the sim's `i32` is refused here, so nothing
+                // qualifies under it.
+                let rates = Rates::from_rules(rules)?;
+                rates.check_rows(limits.size_budget_units())?;
+                rates
+            },
             prices: Prices::from_rules(rules)?,
             walk: Walk::from_rules(rules)?,
             report_hashes: hash::ReportHashes::new(
