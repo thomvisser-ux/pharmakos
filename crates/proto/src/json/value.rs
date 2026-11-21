@@ -165,10 +165,17 @@ impl super::grammar::EngineWords for Error {}
 
 impl fmt::Display for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // The pointer token by token (S3's `vfyq2`, fix pass 4, item L-a): a
+        // token can be the player's key.
         if self.pointer.is_empty() {
             write!(formatter, "{}", self.message)
         } else {
-            write!(formatter, "{}: {}", self.pointer, self.message)
+            write!(
+                formatter,
+                "{}: {}",
+                super::grammar::quoted_pointer(&self.pointer),
+                self.message
+            )
         }
     }
 }

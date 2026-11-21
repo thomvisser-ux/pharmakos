@@ -309,3 +309,84 @@ mod tests {
         assert_eq!(Error::internal("x").rpc_number(), -32603);
     }
 }
+
+#[cfg(test)]
+mod engine_words {
+    use super::engine;
+    use pharmakos_proto::json::grammar::{HIDDEN, Said};
+
+    /// ESC, an OSC sequence, BEL, a right-to-left override, a tag character
+    /// and a variation selector.
+    const HOSTILE: &str = "\u{1b}]0;x\u{7}\u{202e}z\u{e0041}\u{fe0f}";
+
+    fn clean(said: &Said, what: &str) {
+        let raw: Vec<String> = said
+            .as_str()
+            .chars()
+            .filter(|character| {
+                HIDDEN
+                    .iter()
+                    .any(|(low, high)| *low <= *character && *character <= *high)
+            })
+            .map(|character| format!("U+{:04X}", u32::from(character)))
+            .collect();
+        assert!(raw.is_empty(), "{what}: raw {raw:?} in {:?}", said.as_str());
+    }
+
+    /// Every declared engine-words type that has a text field, with hostile
+    /// text in it, comes back escaped (S3's `vfyq2`, fix pass 4, item L-a):
+    /// `Said::engine_error` escapes whatever a declared type's words carry.
+    /// The types with no text field (numbers, `&'static str`, enums) carry
+    /// none to escape.
+    #[test]
+    fn every_declared_engine_type_with_text_says_it_escaped() {
+        use pharmakos_sim::MapError;
+        use pharmakos_sim::rules::RulesError;
+        use pharmakos_sim::snapshot::SnapshotError;
+        clean(
+            &engine(&RulesError::Io {
+                path: HOSTILE.to_owned(),
+                message: HOSTILE.to_owned(),
+            }),
+            "RulesError::Io",
+        );
+        clean(
+            &engine(&RulesError::OutOfRange {
+                field: HOSTILE.to_owned(),
+                value: HOSTILE.to_owned(),
+            }),
+            "RulesError::OutOfRange",
+        );
+        clean(
+            &engine(&MapError::OutOfRange {
+                field: "x",
+                why: HOSTILE.to_owned(),
+            }),
+            "MapError::OutOfRange",
+        );
+        clean(
+            &engine(&MapError::Codec(HOSTILE.to_owned())),
+            "MapError::Codec",
+        );
+        clean(
+            &engine(&SnapshotError::Decode(HOSTILE.to_owned())),
+            "SnapshotError::Decode",
+        );
+        clean(
+            &Said::engine_error(&pharmakos_verifier::ScopeError::UnknownBeacon(
+                HOSTILE.to_owned(),
+            )),
+            "ScopeError::UnknownBeacon",
+        );
+        clean(
+            &Said::engine_error(&pharmakos_verifier::ScopeError::NotOwnBeacon(
+                HOSTILE.to_owned(),
+            )),
+            "ScopeError::NotOwnBeacon",
+        );
+        clean(
+            &engine(&std::io::Error::other(HOSTILE.to_owned())),
+            "io::Error",
+        );
+    }
+}

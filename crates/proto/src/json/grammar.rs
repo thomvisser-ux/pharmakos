@@ -1131,7 +1131,11 @@ impl Said {
     /// this workspace made, never text read from a player's file.
     #[must_use]
     pub fn engine_error(error: &impl EngineWords) -> Said {
-        Said(Cow::Owned(error.to_string()))
+        // Escaped by the one rule, uncapped (S3's `vfyq2`, fix pass 4, item
+        // L-a): a declared type's words are the engine's, but some carry a
+        // `String` (a rules file's path, a codec's message), and no character
+        // of `HIDDEN` reaches a person through any of them.
+        Said(Cow::Owned(escaped(&error.to_string()).0))
     }
 
     /// [`crate::said`]'s substitution: `template`'s `{}` in turn, each

@@ -343,7 +343,11 @@ pub const fn is_too_long_in_bytes(bytes: usize) -> bool {
 /// grammar with the JSONC reader, so a block comment that never closes is
 /// `E0001` where it opens, a value inside exactly 64 containers is read as
 /// the codec reads it, and a key written twice is refused at its own
-/// opening quote; its reports are not comparable with `0.1.0-s3.4`'s.
+/// opening quote; its reports are not comparable with `0.1.0-s3.4`'s. The
+/// same unreleased bump carries the rest of the lane's fix passes: `E0114`, a
+/// route past the sim's own step ceiling (fix pass 3b), and the rules table's
+/// door, `RulesGap::RowPastTheSim`, which refuses a table whose interface
+/// rates let a row run past the sim's `i32` (fix pass 4); one bump per lane.
 pub const VERIFIER_VERSION: &str = "0.1.0-s3.5";
 
 /// Everything one verification is a function of, apart from the depth.

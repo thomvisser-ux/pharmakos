@@ -799,11 +799,17 @@ fn seal(
             &format!("it has no canonical form: {}", error.message),
         ))
     })?;
+    // The sim's refusal in the gateway's own sentence for it, one mapping
+    // (S3's `vfyq2`, fix pass 4, item L-g): its `Display` writes a label raw.
     let plan = pharmakos_sim::Plan::compile(&canonical.playbook, &rules).map_err(|error| {
         Failure::input(strings::scenario_playbook_refused(
             seat,
             relative,
-            &format!("this build cannot execute it: {error}"),
+            pharmakos_proto::said!(
+                "this build cannot execute it: {}",
+                pharmakos_gateway::plan_refusal(&error)
+            )
+            .as_str(),
         ))
     })?;
     let state = surface

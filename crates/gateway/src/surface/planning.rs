@@ -1106,7 +1106,8 @@ fn compile_decoded(
     reason = "one arm per PlanError variant, each the sentence a seat reads; split, the \
               sentences would be spelled in two places"
 )]
-pub(crate) fn plan_refusal(error: &pharmakos_sim::interpreter::PlanError) -> Said {
+#[must_use]
+pub fn plan_refusal(error: &pharmakos_sim::interpreter::PlanError) -> Said {
     use pharmakos_sim::interpreter::PlanError as E;
     match error {
         E::MissingBlock(name) => said!(

@@ -161,6 +161,9 @@ pub mod viewfeed;
 
 pub use error::{Code, Error};
 pub use surface::Surface;
+/// A `PlanError` in the gateway's own sentence: what `gamectl scenario run` says
+/// too (S3's `vfyq2`, fix pass 4, item L-g).
+pub use surface::planning::plan_refusal;
 pub use time::MatchTime;
 pub use token::{Subject, Token, TokenStore};
 
