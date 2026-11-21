@@ -1290,6 +1290,8 @@ start waits for the other's merge.]
 
 [Amended by item 164. A licensing lane ran outside the plan's sections, `fix/reuse-demo-goldens` (PR #195, merged 2026-11-19 at `56bfe5b0`): the rule that a file reproducing `library/` text carries the library's licence (stated in `docs/LICENSING.md`), the `reuse` step's quotation check, and the files it re-licensed. `probw`'s bullet above carries the clause that returns `host.rs`'s header to GPL alone.]
 
+[Amended by item 167. `vfyq2` (PR #198, `perf/verify-plan-wait`) is whole in its one pull request, its `VERIFIER_VERSION` bump (0.1.0-s3.5, commit `aadea8ba`) included, as the order paragraph of the amendment of item 163 set it, which reverses item 162 (5)'s "`opr3` merges first and `vfyq2`'s bump comes last"; the bump is the lane's one (every later fix pass rides it), and `vcap`'s own bump is another lane's. The lane grew past the three things item 160 (6) named: one JSON grammar and one quoting door for a player's text, a stricter patch dialect with an exact `undo`, `E0114`, the rules table's door (`RulesGap::RowPastTheSim`, checked by the host at its start), and a stated stack for every thread that reads player text. Carried, by item 167 (9): the client's lax reader's stack bound and the watch check's reading of `gamectl verify`'s human line, to the next client lane; the sim's rules loader bounding the interface rates, to the next sim lane; the save writer's per-save fingerprint recompute and the fingerprint's cost, to a small sim lane after `p3fix` (fingerprint streaming); P1's certification, with QUICK at 5 ms and the end-to-end wait at 50 ms, to `cert3`.]
+
 **Totals.** 19 tasks, **about 74.5 ad** (65–84), including about 1.5 ad of re-blesses after merges
 of `main`; 73.5 without decision 3's Survey post. **Two critical paths of about 31 working days:**
 the client's `con5` → `con6` → `gwp` → `gwr` → `ed3b` → (`opr3`'s merge) → `prob` → `demo3`, and
@@ -1334,6 +1336,8 @@ pointer and state on a rendered rule or step; `get_vocabulary` and `get_beacon`,
 output: `instantiate_suggested` and the `demo_*` goldens, already in its row). Where two of these
 lanes move one set, item 162 (5) fixes the merge order: `opr3` first, `vfyq2`'s
 version bump last.]
+
+[Amended by item 167. `vfyq2`'s row of the ledger, as built: `VERIFIER_VERSION` 0.1.0-s3.5, in one commit (`aadea8ba`) that moved `report_hash` and `verifier_version` and nothing else in 133 goldens (the verifier's 120, the gateway's 8 `*_verify` answers and the operator's 5 wizard reports); no scenario chain, determinism chain or snapshot moved (`crates/sim` is untouched). `E0114` (a route past the sim's `MAX_ROUTE_STEPS`) adds one entry to the diagnostic catalogue and one to the docs reference, whose count reads 118 codes. Eight cases are new, each with its report golden: six for the required blocks the sim's compile needs (four `E0101`, two `E0111`), `e0114_more_route_steps_than_this_build_compiles` and `e0209_a_known_within_without_its_window`. No other report moved for behaviour: the lane's behaviour changes (an unclosed block comment, a value inside exactly 64 containers, a key written twice) reach no committed case. Every save written under 0.1.0-s3.4 refuses to resume. It is one of the eight `report_hash` moves the amendment above counts (`vcap`'s is the other new one).]
 
 ### 4.3 Honest size
 
