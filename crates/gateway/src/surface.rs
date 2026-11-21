@@ -136,6 +136,7 @@
 
 pub mod control;
 pub mod knowledge;
+pub mod plan_words;
 pub mod planning;
 pub mod watch;
 

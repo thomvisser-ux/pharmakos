@@ -1158,7 +1158,7 @@ impl Surface {
                 Error::invalid(said!(
                     "{}: {}",
                     pharmakos_proto::json::grammar::quoted_pointer(&at),
-                    crate::surface::planning::plan_refusal(&error)
+                    crate::surface::plan_words::plan_refusal(&error)
                 ))
             })?
         } else if waypoint.get("safest").is_some() {

@@ -710,7 +710,15 @@ fn a_plan_error_reaches_a_seat_only_through_the_gateways_own_sentence() {
             continue;
         };
         let words = path.ends_with(PLAN_WORDS);
-        let lines = code_lines(&text);
+        // Every line, a unit test's included: code after a `#[cfg(test)]`
+        // module is still shipped, and a test has no reason to name the type
+        // either.
+        let lines: Vec<(usize, String)> = text
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| !line.trim_start().starts_with("//"))
+            .map(|(number, line)| (number.saturating_add(1), line.to_owned()))
+            .collect();
         for (position, (number, line)) in lines.iter().enumerate() {
             let names = uses(line, "PlanError");
             if words {
