@@ -8811,4 +8811,42 @@ mod ids_tests {
             Err(crate::rules::RulesError::OutOfRange { .. })
         ));
     }
+
+    /// Lane `p3fix`: the step costs' shape the octile bound and the searches'
+    /// admissibility rest on is refused at load, at each edge, naming the
+    /// diagonal's row; a table inside it loads, and validation moves no valid
+    /// table's rules hash.
+    #[test]
+    fn a_step_cost_shape_no_bound_can_price_is_refused_at_load() {
+        let committed = rules();
+        for (cardinal, diagonal, loads) in [
+            (10, 9, false),
+            (10, 10, true),
+            (10, 14, true),
+            (10, 20, true),
+            (10, 21, false),
+        ] {
+            let mut message = committed.message().clone();
+            if let Some(locomotion) = message.locomotion.as_mut() {
+                locomotion.step_cost_cardinal = cardinal;
+                locomotion.step_cost_diagonal = diagonal;
+            }
+            match RulesTable::from_message(&message) {
+                Ok(_) => assert!(loads, "{cardinal} and {diagonal} loaded"),
+                Err(crate::rules::RulesError::OutOfRange { field, .. }) => {
+                    assert!(!loads, "{cardinal} and {diagonal} were refused");
+                    assert_eq!(field, "locomotion.step_cost_diagonal");
+                }
+                Err(other) => panic!("{cardinal} and {diagonal}: {other:?}"),
+            }
+        }
+        let reloaded = RulesTable::from_message(committed.message())
+            .unwrap_or_else(|error| panic!("the committed table: {error:?}"));
+        assert_eq!(reloaded.rules_hash(), committed.rules_hash());
+        assert_eq!(
+            format!("{:016x}", committed.rules_hash()),
+            "1b26c525068bff61",
+            "the committed table's rules hash is the one every golden names"
+        );
+    }
 }
