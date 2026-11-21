@@ -625,3 +625,126 @@ fn a_breach_search_allocates_nothing_at_its_most_work_or_from_a_clone() {
         "the first search on a cloned scratch allocated {from_clone} times"
     );
 }
+
+/// A near estimate allocates nothing from a fresh world's scratch, on a route
+/// longer than any buffer an opening tick could have grown, and after a near
+/// query the router refuses (lane `p3fix`). The served route is built in the
+/// scratch's own buffer, reserved at `Scratch::for_map` for
+/// `MAX_ROUTE_NODES`, and the buffer is handed back on every path, the
+/// refusal's included: a buffer left behind on the error path would be grown
+/// again by the next query.
+#[test]
+fn a_near_estimate_allocates_nothing_from_a_fresh_scratch_or_after_a_refusal() {
+    use pharmakos_sim::pathing::estimate::{Fog, Speed, estimate};
+    let rules = RulesTable::load(
+        &std::path::Path::new("..")
+            .join("..")
+            .join("rules")
+            .join("rules.v1.json"),
+    )
+    .expect("the committed rules table loads");
+    let mut world = World::new(&WorldConfig {
+        match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED,
+        seats: pharmakos_sim::DETERMINISM_SEATS,
+        rules,
+        match_settings: MatchSettings::default(),
+    })
+    .expect("the rules table describes a map and a broadphase grid");
+    // A near pair whose served route is long, and a near pair the router
+    // refuses: a column six east of the long pair's start, walled in by stone
+    // five high, settled.
+    let (a, b) = long_near_pair(&world);
+    let (ax, ay) = world.surface().coord_of(a);
+    let (cx, cy) = (ax + 6, ay);
+    wall_in(&mut world, cx, cy);
+    let surface = world.surface().clone();
+    let clusters = world.clusters().clone();
+    let speed = Speed::commander(world.rules());
+    let (c, d) = (a, surface.node_of(cx, cy).expect("the walled column"));
+    assert!(
+        clusters.touch(c, d) && !clusters.connected(&surface, c, d),
+        "the walled column is a near pair no walker reaches"
+    );
+    let scratch = world.scratch_mut();
+    let before = allocations();
+    let first = estimate(&surface, &clusters, scratch, a, b, Fog::Clear, speed);
+    let after_first = allocations() - before;
+    assert!(first.is_some(), "the long near pair has an estimate");
+    assert_eq!(
+        after_first, 0,
+        "a near estimate on a fresh scratch allocated {after_first} times: the served route's \
+         buffer is not reserved for MAX_ROUTE_NODES where the scratch is made"
+    );
+    let before = allocations();
+    let none = estimate(&surface, &clusters, scratch, c, d, Fog::Clear, speed);
+    let again = estimate(&surface, &clusters, scratch, a, b, Fog::Clear, speed);
+    let after_refusal = allocations() - before;
+    assert_eq!(none, None, "the router refuses the pair");
+    assert_eq!(again, first, "the long pair answers as before");
+    assert_eq!(
+        after_refusal, 0,
+        "a refused near estimate and the next one allocated {after_refusal} times: the served \
+         route's buffer was not handed back on the refusal's path"
+    );
+}
+
+/// A near pair on `world` whose served route is whole and longer than 16
+/// columns.
+fn long_near_pair(world: &World) -> (u32, u32) {
+    use pharmakos_sim::pathing::route::route;
+    let surface = world.surface();
+    let clusters = world.clusters();
+    let [sx, sy, _] = surface.size();
+    let mut buffer = Vec::with_capacity(4096);
+    let mut scratch = pharmakos_sim::pathing::search::Scratch::for_map(surface, clusters.size())
+        .expect("a scratch");
+    for y in (8..sy - 8).step_by(11) {
+        for x in (8..sx - 8).step_by(13) {
+            let Some(a) = surface.node_of(x, y) else {
+                continue;
+            };
+            for (dx, dy) in [(28, 3), (3, 28), (20, 20)] {
+                let Some(b) = surface.node_of(x + dx, y + dy) else {
+                    continue;
+                };
+                if clusters.touch(a, b)
+                    && clusters.connected(surface, a, b)
+                    && route(surface, clusters, &mut scratch, a, b, &mut buffer)
+                        .is_ok_and(|served| !served.partial)
+                    && buffer.len() > 16
+                {
+                    return (a, b);
+                }
+            }
+        }
+    }
+    panic!("no long near pair on the determinism map");
+}
+
+/// Walls the column `(cx, cy)` in with stone five high on its eight
+/// neighbours, and steps `world` once so the graph settles over it.
+fn wall_in(world: &mut World, cx: i32, cy: i32) {
+    for dy in -1..=1_i32 {
+        for dx in -1..=1_i32 {
+            if (dx, dy) == (0, 0) {
+                continue;
+            }
+            let top = world
+                .voxels()
+                .top_solid_z(cx + dx, cy + dy)
+                .expect("a column");
+            for z in top + 1..=top + 5 {
+                world
+                    .request_voxel_edit(pharmakos_sim::voxels::VoxelEdit::Set {
+                        at: [cx + dx, cy + dy, z],
+                        material: pharmakos_sim::voxels::Material::STONE,
+                        by: None,
+                    })
+                    .expect("the edit is filed");
+            }
+        }
+    }
+    world
+        .step(&mut pharmakos_sim::encoding::Enc::with_capacity(64 * 1024))
+        .expect("the wall settles");
+}

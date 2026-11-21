@@ -764,7 +764,6 @@ fn fog_never_makes_a_route_look_cheaper() {
     let set = pairs(&fixture, 40, 0x5EED_0003);
     let nodes = usize::try_from(fixture.surface.node_count()).expect("fits");
     let unknown = vec![true; nodes];
-    let nothing_unknown = vec![false; nodes];
     let mut buffer: Vec<Node> = Vec::with_capacity(usize::try_from(MAX_ROUTE_NODES).expect("fits"));
     let mut near = 0;
     for (start, goal) in &set {
@@ -781,8 +780,19 @@ fn fog_never_makes_a_route_look_cheaper() {
             .expect("an estimate")
         };
         let clear = ask(Fog::Clear);
-        let abstract_clear = ask(Fog::Unknown(&nothing_unknown));
         let fogged = ask(Fog::Unknown(&unknown));
+        // The abstract clear cost, from the abstract search itself: a mask
+        // that hides nothing is a clear query, priced as `clear` is.
+        let abstract_clear = abstract_search(
+            &fixture.surface,
+            &fixture.clusters,
+            &mut fixture.scratch,
+            *start,
+            *goal,
+            Fog::Clear,
+            speed,
+        )
+        .expect("an abstract answer");
         let served = route(
             &fixture.surface,
             &fixture.clusters,
@@ -3550,4 +3560,39 @@ fn a_near_estimate_in_the_tick_after_a_crater_reads_the_repaired_graph() {
         Some(served),
         "the near estimate is the served route's cost"
     );
+}
+
+/// A fog mask that marks no column unknown is a clear query (Part 2 of
+/// `p3fix-fix1.md`, decided in code): a near pair is priced at the served
+/// route, and nothing is priced through fog, exactly as `Fog::Clear` asks.
+#[test]
+fn a_mask_that_hides_nothing_is_a_clear_query() {
+    let mut fixture = Fixture::build(SEED, CLUSTER);
+    let speed = fixture.commander_speed();
+    let set = pairs(&fixture, 40, 0x5EED_0004);
+    let nodes = usize::try_from(fixture.surface.node_count()).expect("fits");
+    let nothing_unknown = vec![false; nodes];
+    let mut near = 0;
+    for (start, goal) in &set {
+        if fixture.clusters.touch(*start, *goal) {
+            near += 1;
+        }
+        let mut ask = |fog: Fog<'_>| {
+            estimate(
+                &fixture.surface,
+                &fixture.clusters,
+                &mut fixture.scratch,
+                *start,
+                *goal,
+                fog,
+                speed,
+            )
+        };
+        assert_eq!(
+            ask(Fog::Unknown(&nothing_unknown)),
+            ask(Fog::Clear),
+            "a mask that hides nothing answers otherwise than a clear query"
+        );
+    }
+    assert!(near > 0, "the set holds near pairs");
 }
