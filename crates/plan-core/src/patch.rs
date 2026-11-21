@@ -62,7 +62,7 @@ use pharmakos_proto::json::grammar::{MAX_DEPTH, may_nest};
 use pharmakos_verifier::MAX_PLAYBOOK_CHARS;
 
 use crate::error::{Bound, Error, Malformed, parent_of, push_pointer, split_pointer};
-use crate::jsonc::{Document, Fragment, Node};
+use crate::jsonc::{Document, Fragment, Index, Missing, Node, rfc6901_index};
 
 /// The six RFC 6902 operations.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1027,7 +1027,20 @@ fn as_the_file_spells(document: &Document, pointer: &str) -> Result<String, Erro
             Reading::Repeated(message) => next = Reading::Message(message),
             Reading::Other => {}
         }
-        here = here.and_then(|node| node.child(&token));
+        // Past where the document ends, nothing is translated: a new member
+        // keeps the pointer's spelling, and whatever the pointer's token
+        // meets there is the operation's own refusal (`resolve`), in its
+        // typed form (fix pass 5, item L1).
+        here = match here.map(|node| node.lookup(&token)) {
+            Some(Ok(child)) => Some(child),
+            Some(Err(
+                Missing::NoMember
+                | Missing::NotAnIndex
+                | Missing::PastTheEnd { .. }
+                | Missing::NotAContainer,
+            ))
+            | None => None,
+        };
         append_token(&mut spelled, &token);
         reading = next;
     }
@@ -1184,14 +1197,8 @@ fn exact(document: &mut Document, undo: &Undo) -> Result<Undo, Error> {
             // An array undo's path ends in the index it puts back at (fix
             // pass 3, item L2): a path and a slot that disagree are not an
             // inverse anything wrote.
-            if is_array && crate::jsonc::rfc6901_index(&last).is_none() {
-                return Err(Error::malformed(
-                    Malformed::PointerIndex,
-                    &path,
-                    "an array index is `0` or digits with no leading zero and no sign (RFC 6901)",
-                ));
-            }
-            if is_array && crate::jsonc::rfc6901_index(&last) != Some(*at) {
+            if is_array && rfc6901_index(&last).map_err(|_| not_an_index(&path))? != Index::At(*at)
+            {
                 return Err(Error::malformed(
                     Malformed::UndoSlot,
                     &path,
@@ -1241,8 +1248,8 @@ fn resolve<'a>(document: &'a Document, pointer: &str) -> Result<&'a Node, Error>
     let mut here = document.root();
     for token in split_pointer(pointer)? {
         here = here
-            .child(&token)
-            .ok_or_else(|| Error::at(pointer, "there is nothing at that path"))?;
+            .lookup(&token)
+            .map_err(|missing| missing_at(pointer, &token, missing))?;
     }
     Ok(here)
 }
@@ -1251,10 +1258,57 @@ fn resolve_mut<'a>(document: &'a mut Document, pointer: &str) -> Result<&'a mut 
     let mut here = document.root_mut();
     for token in split_pointer(pointer)? {
         here = here
-            .child_mut(&token)
-            .ok_or_else(|| Error::at(pointer, "there is nothing at that path"))?;
+            .lookup_mut(&token)
+            .map_err(|missing| missing_at(pointer, &token, missing))?;
     }
     Ok(here)
+}
+
+/// Why `pointer` names nothing, at the token that met it (S3's `vfyq2`, fix
+/// pass 5, item L1): a misspelt index is `Malformed::PointerIndex`, a
+/// well-formed one past the end says so, with the token.
+fn missing_at(pointer: &str, token: &str, missing: Missing) -> Error {
+    let quoted = pharmakos_proto::json::grammar::quoted;
+    match missing {
+        Missing::NotAnIndex => not_an_index(pointer),
+        Missing::PastTheEnd { len } => past_the_end(pointer, token, len),
+        Missing::NoMember => Error::at(
+            pointer,
+            pharmakos_proto::said!(
+                "there is nothing at that path: no member `{}`",
+                quoted(token)
+            ),
+        ),
+        Missing::NotAContainer => Error::at(
+            pointer,
+            pharmakos_proto::said!(
+                "there is nothing at that path: `{}` is under a value that is neither an \
+                 object nor an array",
+                quoted(token)
+            ),
+        ),
+    }
+}
+
+/// A token RFC 6901 does not spell as an array index.
+fn not_an_index(pointer: &str) -> Error {
+    Error::malformed(
+        Malformed::PointerIndex,
+        pointer,
+        "an array index is `0` or digits with no leading zero and no sign (RFC 6901)",
+    )
+}
+
+/// A well-formed index at or past the end of an array of `len`.
+fn past_the_end(pointer: &str, token: &str, len: usize) -> Error {
+    Error::at(
+        pointer,
+        pharmakos_proto::said!(
+            "index `{}` is past the end of the array, which holds {}",
+            pharmakos_proto::json::grammar::quoted(token),
+            len
+        ),
+    )
 }
 
 /// How long the container at `pointer` is, and whether it is an array.
@@ -1366,20 +1420,15 @@ fn array_index(token: &str, len: usize, appending: bool, pointer: &str) -> Resul
             ))
         };
     }
-    // RFC 6901's spelling and nothing else (fix pass 4, item L-d).
-    let index = crate::jsonc::rfc6901_index(token).ok_or_else(|| {
-        Error::malformed(
-            Malformed::PointerIndex,
-            pointer,
-            "an array index is `0` or digits with no leading zero and no sign (RFC 6901)",
-        )
-    })?;
+    // RFC 6901's spelling and nothing else, by the one reader (fix pass 4,
+    // item L-d, and fix pass 5, item L1).
+    let index = match rfc6901_index(token).map_err(|_| not_an_index(pointer))? {
+        Index::At(index) => index,
+        Index::Beyond => return Err(past_the_end(pointer, token, len)),
+    };
     let past = if appending { index > len } else { index >= len };
     if past {
-        return Err(Error::at(
-            pointer,
-            "that index is past the end of the array",
-        ));
+        return Err(past_the_end(pointer, token, len));
     }
     Ok(index)
 }

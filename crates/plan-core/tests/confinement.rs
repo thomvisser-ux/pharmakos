@@ -405,12 +405,6 @@ const KEPT_FALLBACKS: &[(&str, &str, usize, &str)] = &[
         "as canonical.rs': a token that is not an array index names no item, and the caller says the pointer names nothing",
     ),
     (
-        "jsonc.rs",
-        "token.parse::<usize>().ok()",
-        1,
-        "`index_of` answers whether a token is an RFC 6901 array index; a token that is not one is `None`, its documented answer",
-    ),
-    (
         "render.rs",
         "let parsed = (x.parse::<i32>().ok()?, y.parse::<i32>().ok()?);",
         1,

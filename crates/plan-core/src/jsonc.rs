@@ -431,31 +431,52 @@ impl Node {
         }
     }
 
-    /// The child under one RFC 6901 token, if this node has one.
-    #[must_use]
-    pub fn child(&self, token: &str) -> Option<&Self> {
+    /// The child under one RFC 6901 token, or why there is none: an array's
+    /// token is read by [`rfc6901_index`], the one index reader (S3's
+    /// `vfyq2`, fix pass 5, item L1).
+    ///
+    /// # Errors
+    ///
+    /// [`Missing`], by what the token met.
+    pub fn lookup(&self, token: &str) -> Result<&Self, Missing> {
         match &self.value {
             Value::Object(members, _) => members
                 .iter()
                 .find(|member| member.key == token)
-                .map(|member| &member.node),
-            Value::Array(items, _) => items.get(index_of(token)?).map(|item| &item.node),
-            _ => None,
+                .map(|member| &member.node)
+                .ok_or(Missing::NoMember),
+            Value::Array(items, _) => {
+                let index = element(token, items.len())?;
+                items
+                    .get(index)
+                    .map(|item| &item.node)
+                    .ok_or(Missing::PastTheEnd { len: items.len() })
+            }
+            _ => Err(Missing::NotAContainer),
         }
     }
 
-    /// The child under one RFC 6901 token, for editing.
-    pub fn child_mut(&mut self, token: &str) -> Option<&mut Self> {
+    /// [`Node::lookup`], for editing.
+    ///
+    /// # Errors
+    ///
+    /// As [`Node::lookup`].
+    pub fn lookup_mut(&mut self, token: &str) -> Result<&mut Self, Missing> {
         match &mut self.value {
             Value::Object(members, _) => members
                 .iter_mut()
                 .find(|member| member.key == token)
-                .map(|member| &mut member.node),
+                .map(|member| &mut member.node)
+                .ok_or(Missing::NoMember),
             Value::Array(items, _) => {
-                let index = index_of(token)?;
-                items.get_mut(index).map(|item| &mut item.node)
+                let len = items.len();
+                let index = element(token, len)?;
+                items
+                    .get_mut(index)
+                    .map(|item| &mut item.node)
+                    .ok_or(Missing::PastTheEnd { len })
             }
-            _ => None,
+            _ => Err(Missing::NotAContainer),
         }
     }
 
@@ -941,21 +962,62 @@ fn first_line_break(trivia: &str) -> Option<usize> {
     None
 }
 
-/// An array index token: RFC 6901 spells one as decimal digits with no leading
-/// zero (except `0` itself).
-fn index_of(token: &str) -> Option<usize> {
-    rfc6901_index(token)
+/// Why a token names no child of a node (S3's `vfyq2`, fix pass 5, item L1).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Missing {
+    /// An object holds no member under the token.
+    NoMember,
+    /// An array's token is not an index as RFC 6901 spells one.
+    NotAnIndex,
+    /// An array's token is a well-formed index at or past its end; `len` is
+    /// how many elements it holds.
+    PastTheEnd {
+        /// The array's length.
+        len: usize,
+    },
+    /// The node is neither an object nor an array.
+    NotAContainer,
+}
+
+/// An array index token as RFC 6901 reads it (S3's `vfyq2`, fix pass 5,
+/// item L1).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Index {
+    /// `0|[1-9][0-9]*`, which a `usize` holds.
+    At(usize),
+    /// Well-formed digits past any `usize`: past the end of every array.
+    Beyond,
 }
 
 /// An array index as RFC 6901 spells one, `0|[1-9][0-9]*`, and nothing else
-/// (S3's `vfyq2`, fix pass 4, item L-d): `str::parse` also takes a `+` sign,
-/// so the digits are checked first.
-pub(crate) fn rfc6901_index(token: &str) -> Option<usize> {
+/// (S3's `vfyq2`, fix pass 4, item L-d, and fix pass 5, item L1): a sign, a
+/// leading zero, an empty token or anything but ASCII digits is not one; a
+/// well-formed one past any `usize` is [`Index::Beyond`], never refused as
+/// misspelt. The one index reader: every path that names an element reads
+/// its token here.
+///
+/// # Errors
+///
+/// [`Missing::NotAnIndex`] for a token RFC 6901 does not spell as an index.
+pub fn rfc6901_index(token: &str) -> Result<Index, Missing> {
     let digits = !token.is_empty() && token.bytes().all(|byte| byte.is_ascii_digit());
     if !digits || (token.len() > 1 && token.starts_with('0')) {
-        return None;
+        return Err(Missing::NotAnIndex);
     }
-    token.parse::<usize>().ok()
+    // Only digits, so the one way the parse fails is a value past `usize`.
+    match token.parse::<usize>() {
+        Ok(index) => Ok(Index::At(index)),
+        Err(error) if *error.kind() == core::num::IntErrorKind::PosOverflow => Ok(Index::Beyond),
+        Err(_) => Err(Missing::NotAnIndex),
+    }
+}
+
+/// The element a token names in an array of `len`.
+fn element(token: &str, len: usize) -> Result<usize, Missing> {
+    match rfc6901_index(token)? {
+        Index::At(index) => Ok(index),
+        Index::Beyond => Err(Missing::PastTheEnd { len }),
+    }
 }
 
 /// A refusal reading an undo's text: the reader's own when it is a bound (a
