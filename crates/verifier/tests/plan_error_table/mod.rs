@@ -101,7 +101,10 @@ pub(crate) fn classify(error: &PlanError) -> (&'static str, Row) {
         PlanError::FiresOutOfRange { .. } => ("FiresOutOfRange", Row::Refused(&["E0107"])),
         PlanError::ConditionTooDeep { .. } => ("ConditionTooDeep", Row::Refused(&["E0204"])),
         PlanError::ConditionTooBig { .. } => ("ConditionTooBig", Row::Refused(&["E0205"])),
-        PlanError::TooManySteps { .. } => ("TooManySteps", Row::Refused(&["E0110"])),
+        // The sim's own `MAX_ROUTE_STEPS`, read by the verifier (fix pass 3,
+        // item M4): the size budget (E0110) is a rules value, and a table with
+        // a budget past the ceiling let a 257-step route qualify.
+        PlanError::TooManySteps { .. } => ("TooManySteps", Row::Refused(&["E0114"])),
         PlanError::TooManyHandlers { .. } => ("TooManyHandlers", Row::Refused(&["E0113"])),
         PlanError::NotAtThisStage { .. } => (
             "NotAtThisStage",
@@ -296,4 +299,65 @@ pub(crate) fn every_variant() -> Vec<PlanError> {
     ];
     all.extend(unreachable_samples());
     all
+}
+
+/// Where a variant's limit comes from, for the verifier's refusal and the
+/// compile's alike (S3's `vfyq2`, fix pass 3, item M4): the C1 table's column
+/// on the rules table.
+pub(crate) enum Rules {
+    /// Neither the verifier's refusal nor the compile's reads the rules table:
+    /// the playbook's shape, a spec number or one of the sim's own ceilings,
+    /// which the verifier reads from the sim.
+    Independent,
+    /// Both read this one rules-table value, so they agree under any table.
+    SameValue(&'static str),
+}
+
+/// Every variant's rules column. No wildcard: a variant the sim adds does not
+/// compile here until it is classed.
+pub(crate) fn rules_of(error: &PlanError) -> Rules {
+    match error {
+        PlanError::MissingBlock(_)
+        | PlanError::UnsetEnum(_)
+        | PlanError::UnknownEnum { .. }
+        | PlanError::StepWithoutAction
+        | PlanError::UnknownBlueprint(_)
+        | PlanError::BlueprintNeverStands(_)
+        | PlanError::NoRadius(_)
+        | PlanError::WindowUnderVisibleNow { .. }
+        | PlanError::NegativeDuration(_)
+        | PlanError::WaitWithoutTimeout
+        | PlanError::BackwardJump { .. }
+        | PlanError::VoxelOutOfRange { .. }
+        | PlanError::AttackTargetNotEnemy
+        | PlanError::CommanderSeatOutOfRange { .. }
+        | PlanError::ForceBelowOutOfRange { .. }
+        | PlanError::EngagementOutOfRange { .. }
+        | PlanError::ScoutsOutOfRange { .. }
+        | PlanError::RetreatOutOfRange { .. }
+        | PlanError::RotationOutOfRange { .. }
+        | PlanError::WallBoxOffAWall { .. }
+        | PlanError::AreaInsideOut
+        | PlanError::RepairThresholdOutOfRange { .. }
+        | PlanError::WallWithoutBox
+        | PlanError::WallBoxInsideOut
+        | PlanError::WallTurned { .. }
+        | PlanError::WallAnchorOutsideBox
+        | PlanError::UnknownLabel(_)
+        | PlanError::UnknownHandler(_)
+        | PlanError::UnknownBeacon(_)
+        | PlanError::UnknownFeature(_)
+        | PlanError::MisplacedTarget(_)
+        | PlanError::ConditionTooDeep { .. }
+        | PlanError::ConditionTooBig { .. }
+        | PlanError::TooManySteps { .. }
+        | PlanError::TooManyHandlers { .. }
+        | PlanError::NotAtThisStage { .. } => Rules::Independent,
+        PlanError::VoxelOutOfMap { .. } => Rules::SameValue("map.size_x, size_y, size_z"),
+        PlanError::NegativeRate(_) | PlanError::RowTooLong => {
+            Rules::SameValue("the interface rates")
+        }
+        PlanError::CooldownTooShort { .. } => Rules::SameValue("verifier.handler_cooldown_min_ms"),
+        PlanError::FiresOutOfRange { .. } => Rules::SameValue("verifier.max_fires_max"),
+    }
 }

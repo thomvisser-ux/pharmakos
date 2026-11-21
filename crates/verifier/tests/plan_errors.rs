@@ -93,6 +93,18 @@ fn every_plan_error_the_compile_raises_the_verifier_refuses_first() {
         covered.insert(variant);
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+    // The rules column (fix pass 3, item M4): every reachable variant whose
+    // limit is a rules value has the verifier and the compile read the same
+    // one; the rest read none. Exhaustive by `rules_of`'s match.
+    for sample in every_variant() {
+        let (variant, _) = classify(&sample);
+        match plan_error_table::rules_of(&sample) {
+            plan_error_table::Rules::Independent => {}
+            plan_error_table::Rules::SameValue(value) => {
+                assert!(!value.is_empty(), "{variant} names the value it reads");
+            }
+        }
+    }
     // The instance list a count by variant walks names every variant once.
     let named: BTreeSet<&'static str> = every_variant()
         .iter()

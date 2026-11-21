@@ -1985,6 +1985,13 @@ struct TwoNode {
 /// item C2: the security review's two-node probe, committed). Counted, not
 /// timed.
 fn two_node_edits(cases: u32) -> TwoNode {
+    two_node_edits_under(cases, &[])
+}
+
+/// [`two_node_edits`], each case judged and compiled under `tables` in turn
+/// when there are any (fix pass 3, item M4), or under the committed rules
+/// (and the widest budget for a padded base) when there are none.
+fn two_node_edits_under(cases: u32, tables: &[RulesTable]) -> TwoNode {
     let rules = rules();
     let widest = rules_at_the_widest_budget(&rules);
     let scope = scope();
@@ -2025,6 +2032,22 @@ fn two_node_edits(cases: u32) -> TwoNode {
     let mut refused: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
     let mut reached: std::collections::BTreeMap<&'static str, u32> =
         std::collections::BTreeMap::new();
+    // Every base as it stands, under every table: no edit at all.
+    for (tree, _) in &bases {
+        let text = json::write(tree);
+        for table in tables {
+            if !qualifies(&text, table) {
+                continue;
+            }
+            checked = checked.saturating_add(1);
+            let playbook: Playbook = json::decode(&text)
+                .unwrap_or_else(|error| panic!("qualifies and does not decode: {error}\n{text}"));
+            if let Err(error) = Plan::compile(&playbook, table) {
+                let flat: String = text.split_whitespace().collect();
+                refused.entry(format!("{error:?}")).or_insert(flat);
+            }
+        }
+    }
     for case in 0..cases {
         let Some((tree, padded)) = usize::try_from(case)
             .ok()
@@ -2033,7 +2056,18 @@ fn two_node_edits(cases: u32) -> TwoNode {
         else {
             panic!("case {case} names no base of {}", bases.len());
         };
-        let rules = if *padded { &widest } else { &rules };
+        // Each base meets every table in turn: the table turns once the
+        // cases have been round every base.
+        let table = usize::try_from(case)
+            .ok()
+            .and_then(|case| case.checked_div(bases.len()))
+            .and_then(|round| round.checked_rem(tables.len()))
+            .and_then(|index| tables.get(index));
+        let rules = match table {
+            Some(table) => table,
+            None if *padded => &widest,
+            None => &rules,
+        };
         let first_edit = seeded_edit(tree, &mut rng);
         let second_edit = seeded_edit(&first_edit, &mut rng);
         let text = json::write(&second_edit);
@@ -2109,6 +2143,66 @@ fn every_two_node_edit_that_qualifies_compiles() {
     assert!(
         refused.is_empty(),
         "{} kinds of two-node edit qualify at FULL and the sim's compile refuses them:\n{:#?}",
+        refused.len(),
+        refused
+    );
+}
+
+/// Rules tables a probe judges and compiles under (fix pass 3, item M4): the
+/// committed table with its verifier block's size budget, handler cooldown
+/// floor and `max_fires` ceiling moved across what `RulesTable::from_message`
+/// takes, a budget past the sim's route and handler ceilings among them.
+fn generated_rules_tables() -> Vec<RulesTable> {
+    let committed = rules();
+    let mut tables = Vec::new();
+    for (budget, cooldown, fires) in [
+        (1, 0, 1),
+        (64, 1_000, 3),
+        (128, 30_000, 50),
+        (400, 0, 1),
+        (1_024, 5_000, 10),
+        (4_096, 60_000, 100),
+        (65_536, 1, 1_000),
+        (u32::MAX, 0, u32::MAX),
+    ] {
+        let mut message = committed.message().clone();
+        let verifier = message
+            .verifier
+            .as_mut()
+            .unwrap_or_else(|| panic!("the committed rules carry the verifier's block"));
+        verifier.size_budget_units = budget;
+        verifier.handler_cooldown_min_ms = cooldown;
+        verifier.max_fires_max = fires;
+        tables.push(
+            RulesTable::from_message(&message)
+                .unwrap_or_else(|error| panic!("budget {budget}: {error}")),
+        );
+    }
+    tables
+}
+
+/// "Qualifies implies compiles" under every generated rules table, crossed
+/// with the two-node probe (fix pass 3, item M4): a verifier refusal that
+/// reads a rules value the compile does not read (the size budget against
+/// the sim's route ceiling was one) fails here.
+#[test]
+fn every_two_node_edit_that_qualifies_compiles_under_every_rules_table() {
+    let tables = generated_rules_tables();
+    let TwoNode {
+        qualified, refused, ..
+    } = two_node_edits_under(TWO_NODE_CASES, &tables);
+    println!(
+        "{TWO_NODE_CASES} two-node edits across {} rules tables: {qualified} qualified",
+        tables.len()
+    );
+    assert!(
+        qualified > 0,
+        "no two-node edit qualified: the property is vacuous"
+    );
+    assert!(
+        refused.is_empty(),
+        "{} kinds of two-node edit qualify at FULL under some rules table and the sim's \
+         compile refuses them:\n{:#?}",
         refused.len(),
         refused
     );
