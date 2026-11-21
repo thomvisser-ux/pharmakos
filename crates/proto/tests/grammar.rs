@@ -203,9 +203,10 @@ fn a_quote_escapes_controls_and_stops_at_the_cap() {
         let written = format!("\\u{:04x}", u32::from(character));
         assert_eq!(shown(&format!("a{character}b")), format!("a{written}b"));
     }
-    // Their neighbours are shown as themselves.
+    // Their neighbours are shown as themselves (U+206A, a neighbour before
+    // fix pass 3's item M3, is a format character and is in the table now).
     for character in [
-        '\u{200a}', '\u{2010}', '\u{2027}', '\u{202f}', '\u{2065}', '\u{206a}',
+        '\u{200a}', '\u{2010}', '\u{2027}', '\u{202f}', '\u{2065}', '\u{2070}',
     ] {
         let text = format!("a{character}b");
         assert_eq!(shown(&text), text);
@@ -257,4 +258,75 @@ fn the_reviews_unlisted_format_characters_are_escaped() {
         }
     }
     assert!(raw.is_empty(), "shown raw: {raw:?}");
+}
+
+/// Every code point of every committed range is escaped, and a sample of
+/// code points outside them comes back as itself (fix pass 3, item M3).
+#[test]
+fn every_hidden_range_is_escaped_and_its_neighbours_are_not() {
+    use pharmakos_proto::json::grammar::{HIDDEN, quoted};
+    let mut previous: Option<char> = None;
+    for (low, high) in HIDDEN {
+        assert!(low <= high, "{low:?} to {high:?}");
+        if let Some(previous) = previous {
+            assert!(
+                u32::from(*low) > u32::from(previous).saturating_add(1),
+                "ranges are ascending, disjoint and merged: {low:?}"
+            );
+        }
+        previous = Some(*high);
+        for point in u32::from(*low)..=u32::from(*high) {
+            let character = char::from_u32(point).expect("a scalar value");
+            assert!(
+                !quoted(&character.to_string()).as_str().contains(character),
+                "U+{point:04X} is shown raw"
+            );
+        }
+    }
+    for character in [
+        'a', 'é', ' ', '~', '€', '\u{2027}', '\u{2030}', '\u{2070}', '\u{FFFD}', '😀',
+    ] {
+        let inside = HIDDEN
+            .iter()
+            .any(|(low, high)| (*low..=*high).contains(&character));
+        assert!(!inside, "{character:?} is a neighbour, not a member");
+        assert_eq!(
+            quoted(&character.to_string()).as_str(),
+            character.to_string(),
+            "{character:?}"
+        );
+    }
+}
+
+/// The table and the quoting function agree on every `char` (fix pass 3, item
+/// M3): the table is searched here by a plain scan, independently of the
+/// binary search the quoting function uses.
+#[test]
+fn the_table_and_the_quote_agree_on_every_char() {
+    use pharmakos_proto::json::grammar::{HIDDEN, quoted};
+    let mut disagree: Vec<String> = Vec::new();
+    let mut walked: u32 = 0;
+    for point in 0..=0x10_FFFF_u32 {
+        let Some(character) = char::from_u32(point) else {
+            continue;
+        };
+        walked = walked.saturating_add(1);
+        let listed = HIDDEN
+            .iter()
+            .any(|(low, high)| *low <= character && character <= *high);
+        let mut one = [0_u8; 4];
+        let shown_raw = quoted(character.encode_utf8(&mut one))
+            .as_str()
+            .contains(character);
+        if listed == shown_raw {
+            disagree.push(format!("U+{point:04X}"));
+        }
+    }
+    assert_eq!(walked, 1_112_064, "every scalar value");
+    assert!(
+        disagree.is_empty(),
+        "{} disagree: {:?}",
+        disagree.len(),
+        disagree.iter().take(20).collect::<Vec<_>>()
+    );
 }

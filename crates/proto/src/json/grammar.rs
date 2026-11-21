@@ -918,35 +918,88 @@ const fn utf8_width(lead: u8) -> Option<usize> {
 /// lexeme, and never the whole of a 200 KB one.
 pub const MAX_QUOTED_CHARS: usize = 64;
 
-/// The characters that reorder or hide text without being control
-/// characters (S3's `vfyq2`, fix pass 2, item B), each shown as `\uXXXX`:
+/// The Unicode version [`HIDDEN`] was taken from.
+pub const HIDDEN_UNICODE_VERSION: &str = "16.0.0";
+
+/// Every character a player's text is never shown raw in (S3's `vfyq2`, fix
+/// pass 3, item M3), as data: the ranges of General Category Cc (the C0 and
+/// C1 control characters, DEL among them), Cf (format characters: the
+/// direction marks, embeddings, overrides and isolates that reorder text, the
+/// zero-width characters that hide it, the tag characters that can spell a
+/// message nobody sees), Zl and Zp (the line and paragraph separators, which
+/// break a one-line message), and the noncharacters (U+FDD0 to U+FDEF and
+/// the last two code points of every plane), in Unicode
+/// [`HIDDEN_UNICODE_VERSION`], ascending and disjoint, adjacent ranges
+/// merged; each row's comment names the categories in it.
 ///
-/// * U+061C ARABIC LETTER MARK, U+200E LEFT-TO-RIGHT MARK and U+200F
-///   RIGHT-TO-LEFT MARK: they turn the direction of what follows;
-/// * U+202A to U+202E, the embeddings, overrides and their pop: they reorder
-///   what follows, so `abc` can be shown as `cba`;
-/// * U+2066 to U+2069, the isolates and their pop: the same, scoped;
-/// * U+200B ZERO WIDTH SPACE, U+200C ZERO WIDTH NON-JOINER, U+200D ZERO WIDTH
-///   JOINER and U+FEFF ZERO WIDTH NO-BREAK SPACE: they hide, so two keys that
-///   look the same are told apart;
-/// * U+2028 LINE SEPARATOR and U+2029 PARAGRAPH SEPARATOR: they break a line
-///   the way a line feed does, which a one-line message must not.
-const HIDDEN: [(char, char); 6] = [
-    ('\u{061C}', '\u{061C}'),
-    ('\u{200B}', '\u{200F}'),
-    ('\u{2028}', '\u{2029}'),
-    ('\u{202A}', '\u{202E}'),
-    ('\u{2066}', '\u{2069}'),
-    ('\u{FEFF}', '\u{FEFF}'),
+/// Derived from the Unicode Character Database as Python's `unicodedata`
+/// carries it (Python 3.14.4 under WSL2 Ubuntu on the machine that made
+/// this, `unicodedata.unidata_version` 16.0.0), by walking every code point
+/// and keeping those whose category is Cc, Cf, Zl or Zp, or that are
+/// noncharacters by definition. Only the ranges are committed, which are
+/// facts, not the data file's text. That module does not carry the
+/// `Default_Ignorable_Code_Point` property, so the unassigned default-ignorable
+/// code points (among them U+2065, U+FFF0 to U+FFF8, U+E0000 and U+E0002 to
+/// U+E001F) and the variation selectors (Mn) are not in it.
+/// `tests/grammar.rs` holds [`quoted`] to this table over every `char`.
+pub const HIDDEN: &[(char, char)] = &[
+    ('\u{0000}', '\u{001F}'),     // Cc
+    ('\u{007F}', '\u{009F}'),     // Cc
+    ('\u{00AD}', '\u{00AD}'),     // Cf
+    ('\u{0600}', '\u{0605}'),     // Cf
+    ('\u{061C}', '\u{061C}'),     // Cf
+    ('\u{06DD}', '\u{06DD}'),     // Cf
+    ('\u{070F}', '\u{070F}'),     // Cf
+    ('\u{0890}', '\u{0891}'),     // Cf
+    ('\u{08E2}', '\u{08E2}'),     // Cf
+    ('\u{180E}', '\u{180E}'),     // Cf
+    ('\u{200B}', '\u{200F}'),     // Cf
+    ('\u{2028}', '\u{202E}'),     // Cf, Zl, Zp
+    ('\u{2060}', '\u{2064}'),     // Cf
+    ('\u{2066}', '\u{206F}'),     // Cf
+    ('\u{FDD0}', '\u{FDEF}'),     // noncharacter
+    ('\u{FEFF}', '\u{FEFF}'),     // Cf
+    ('\u{FFF9}', '\u{FFFB}'),     // Cf
+    ('\u{FFFE}', '\u{FFFF}'),     // noncharacter
+    ('\u{110BD}', '\u{110BD}'),   // Cf
+    ('\u{110CD}', '\u{110CD}'),   // Cf
+    ('\u{13430}', '\u{1343F}'),   // Cf
+    ('\u{1BCA0}', '\u{1BCA3}'),   // Cf
+    ('\u{1D173}', '\u{1D17A}'),   // Cf
+    ('\u{1FFFE}', '\u{1FFFF}'),   // noncharacter
+    ('\u{2FFFE}', '\u{2FFFF}'),   // noncharacter
+    ('\u{3FFFE}', '\u{3FFFF}'),   // noncharacter
+    ('\u{4FFFE}', '\u{4FFFF}'),   // noncharacter
+    ('\u{5FFFE}', '\u{5FFFF}'),   // noncharacter
+    ('\u{6FFFE}', '\u{6FFFF}'),   // noncharacter
+    ('\u{7FFFE}', '\u{7FFFF}'),   // noncharacter
+    ('\u{8FFFE}', '\u{8FFFF}'),   // noncharacter
+    ('\u{9FFFE}', '\u{9FFFF}'),   // noncharacter
+    ('\u{AFFFE}', '\u{AFFFF}'),   // noncharacter
+    ('\u{BFFFE}', '\u{BFFFF}'),   // noncharacter
+    ('\u{CFFFE}', '\u{CFFFF}'),   // noncharacter
+    ('\u{DFFFE}', '\u{DFFFF}'),   // noncharacter
+    ('\u{E0001}', '\u{E0001}'),   // Cf
+    ('\u{E0020}', '\u{E007F}'),   // Cf
+    ('\u{EFFFE}', '\u{EFFFF}'),   // noncharacter
+    ('\u{FFFFE}', '\u{FFFFF}'),   // noncharacter
+    ('\u{10FFFE}', '\u{10FFFF}'), // noncharacter
 ];
 
-/// Whether `character` is shown escaped rather than as itself: a control
-/// character (DEL included), or one of [`HIDDEN`].
+/// Whether `character` is shown escaped rather than as itself: in
+/// [`HIDDEN`], by binary search over its ascending ranges.
 fn shown_escaped(character: char) -> bool {
-    character.is_control()
-        || HIDDEN
-            .iter()
-            .any(|(low, high)| (*low..=*high).contains(&character))
+    HIDDEN
+        .binary_search_by(|(low, high)| {
+            if *high < character {
+                std::cmp::Ordering::Less
+            } else if *low > character {
+                std::cmp::Ordering::Greater
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        })
+        .is_ok()
 }
 
 /// A player's text as a refusal or a diagnostic shows it, made only by
