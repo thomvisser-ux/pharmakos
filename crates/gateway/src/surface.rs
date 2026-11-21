@@ -4552,6 +4552,34 @@ mod tests {
         }
     }
 
+    /// `estimate_route` answers in a Lull only (the owner's answer of
+    /// 2026-11-21, "Refuse in a Push"): a Push, a recap, the lobby and an
+    /// ended match are `PHASE_CLOSED`, for a route of plain voxel legs as for
+    /// any other, and before the waypoints are read (a request with none is
+    /// refused for its phase, not for its shape); the Lull answers.
+    #[test]
+    fn estimate_route_answers_in_a_lull_only() {
+        let mut surface = hosted();
+        let token = seat_token(&mut surface, 0);
+        let route =
+            r#"{"waypoints":[{"voxel":{"x":20,"y":20,"z":0}},{"voxel":{"x":24,"y":20,"z":0}}]}"#;
+        let response = surface.call(Some(&token), &request("estimate_route", route), &Blind);
+        assert!(
+            response.get("result").is_some(),
+            "the Lull answers: {response:?}"
+        );
+        for phase in [Phase::Push, Phase::Recap, Phase::Lobby, Phase::Ended] {
+            let mut time = surface.time();
+            time.phase = phase;
+            surface.set_time(time);
+            for params in [route, "{}"] {
+                let response =
+                    surface.call(Some(&token), &request("estimate_route", params), &Blind);
+                assert_eq!(code(&response), "PHASE_CLOSED", "{phase:?}, {params}");
+            }
+        }
+    }
+
     #[test]
     fn the_notebooks_size_comes_from_the_rules_table() {
         let mut surface = surface();
