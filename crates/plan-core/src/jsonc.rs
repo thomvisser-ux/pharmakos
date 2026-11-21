@@ -977,6 +977,9 @@ pub enum Missing {
     },
     /// The node is neither an object nor an array.
     NotAContainer,
+    /// An array's token is `-`, which names no element (S3's `vfyq2`, fix
+    /// pass 6, item 4).
+    End,
 }
 
 /// An array index token as RFC 6901 reads it (S3's `vfyq2`, fix pass 5,
@@ -987,6 +990,10 @@ pub enum Index {
     At(usize),
     /// Well-formed digits past any `usize`: past the end of every array.
     Beyond,
+    /// `-`: the end of the array, the slot past its last element (RFC 6901
+    /// section 4), which only a put may name (S3's `vfyq2`, fix pass 6,
+    /// item 4).
+    End,
 }
 
 /// An array index as RFC 6901 spells one, `0|[1-9][0-9]*`, and nothing else
@@ -1000,6 +1007,9 @@ pub enum Index {
 ///
 /// [`Missing::NotAnIndex`] for a token RFC 6901 does not spell as an index.
 pub fn rfc6901_index(token: &str) -> Result<Index, Missing> {
+    if token == "-" {
+        return Ok(Index::End);
+    }
     let digits = !token.is_empty() && token.bytes().all(|byte| byte.is_ascii_digit());
     if !digits || (token.len() > 1 && token.starts_with('0')) {
         return Err(Missing::NotAnIndex);
@@ -1017,6 +1027,7 @@ fn element(token: &str, len: usize) -> Result<usize, Missing> {
     match rfc6901_index(token)? {
         Index::At(index) => Ok(index),
         Index::Beyond => Err(Missing::PastTheEnd { len }),
+        Index::End => Err(Missing::End),
     }
 }
 

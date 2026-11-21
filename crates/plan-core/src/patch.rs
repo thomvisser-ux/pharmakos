@@ -1037,7 +1037,8 @@ fn as_the_file_spells(document: &Document, pointer: &str) -> Result<String, Erro
                 Missing::NoMember
                 | Missing::NotAnIndex
                 | Missing::PastTheEnd { .. }
-                | Missing::NotAContainer,
+                | Missing::NotAContainer
+                | Missing::End,
             ))
             | None => None,
         };
@@ -1197,8 +1198,16 @@ fn exact(document: &mut Document, undo: &Undo) -> Result<Undo, Error> {
             // An array undo's path ends in the index it puts back at (fix
             // pass 3, item L2): a path and a slot that disagree are not an
             // inverse anything wrote.
-            if is_array && rfc6901_index(&last).map_err(|_| not_an_index(&path))? != Index::At(*at)
-            {
+            let slot = if is_array {
+                match rfc6901_index(&last) {
+                    Err(_) => return Err(not_an_index(&path)),
+                    Ok(Index::End) => return Err(end_of_array(&path)),
+                    Ok(index) => Some(index),
+                }
+            } else {
+                None
+            };
+            if slot.is_some_and(|index| index != Index::At(*at)) {
                 return Err(Error::malformed(
                     Malformed::UndoSlot,
                     &path,
@@ -1271,6 +1280,7 @@ fn missing_at(pointer: &str, token: &str, missing: Missing) -> Error {
     let quoted = pharmakos_proto::json::grammar::quoted;
     match missing {
         Missing::NotAnIndex => not_an_index(pointer),
+        Missing::End => end_of_array(pointer),
         Missing::PastTheEnd { len } => past_the_end(pointer, token, len),
         Missing::NoMember => Error::at(
             pointer,
@@ -1296,6 +1306,17 @@ fn not_an_index(pointer: &str) -> Error {
         Malformed::PointerIndex,
         pointer,
         "an array index is `0` or digits with no leading zero and no sign (RFC 6901)",
+    )
+}
+
+/// `-`, the end of an array, where the operation may not name it: the one
+/// refusal for it (S3's `vfyq2`, fix pass 6, item 4).
+fn end_of_array(pointer: &str) -> Error {
+    Error::malformed(
+        Malformed::EndOfArray,
+        pointer,
+        "`-` names the end of an array, which only an `add`, or a `move` or `copy`'s \
+         destination, may name",
     )
 }
 
@@ -1410,21 +1431,13 @@ fn container_undo(document: &Document, parent: &str) -> Result<Option<Undo>, Err
 /// An RFC 6902 array index. `-` means "one past the end", and only `add`
 /// accepts it.
 fn array_index(token: &str, len: usize, appending: bool, pointer: &str) -> Result<usize, Error> {
-    if token == "-" {
-        return if appending {
-            Ok(len)
-        } else {
-            Err(Error::at(
-                pointer,
-                "`-` names the end of an array and only `add` may use it",
-            ))
-        };
-    }
     // RFC 6901's spelling and nothing else, by the one reader (fix pass 4,
-    // item L-d, and fix pass 5, item L1).
+    // item L-d, fix pass 5, item L1, and fix pass 6, item 4).
     let index = match rfc6901_index(token).map_err(|_| not_an_index(pointer))? {
         Index::At(index) => index,
         Index::Beyond => return Err(past_the_end(pointer, token, len)),
+        Index::End if appending => return Ok(len),
+        Index::End => return Err(end_of_array(pointer)),
     };
     let past = if appending { index > len } else { index >= len };
     if past {
