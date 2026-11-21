@@ -23,8 +23,7 @@ pub struct Error {
     /// `/declarative/route/0/move` for a step's move, `/byte/412` for a syntax
     /// error that has no place in the tree.
     pub pointer: String,
-    /// English, precise, and safe to show a player beside the pointer.
-    pub message: String,
+
     /// The bound that refused it, when one did: a caller tells a refusal by
     /// its bound, never by reading the message.
     pub bound: Option<Bound>,
@@ -97,7 +96,6 @@ impl Error {
         let said = message.into();
         Self {
             pointer: pointer.into(),
-            message: said.as_str().to_owned(),
             bound: None,
             malformed: None,
             said,
@@ -114,7 +112,6 @@ impl Error {
         let said = message.into();
         Self {
             pointer: pointer.into(),
-            message: said.as_str().to_owned(),
             bound: None,
             malformed: Some(malformed),
             said,
@@ -127,7 +124,6 @@ impl Error {
         let said = message.into();
         Self {
             pointer: pointer.into(),
-            message: said.as_str().to_owned(),
             bound: Some(bound),
             malformed: None,
             said,
@@ -138,6 +134,14 @@ impl Error {
     #[must_use]
     pub fn at_byte(offset: usize, message: impl Into<Said>) -> Self {
         Self::at(format!("/byte/{offset}"), message)
+    }
+
+    /// The message, as text: English, precise, and safe to show a player
+    /// beside the pointer. The field is private (S3's `vfyq2`, fix pass 4,
+    /// item L-b): it is what was said.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        self.said.as_str()
     }
 
     /// The message, as text a person is shown.
@@ -176,9 +180,9 @@ impl Error {
 impl fmt::Display for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.pointer.is_empty() {
-            write!(formatter, "{}", self.message)
+            write!(formatter, "{}", self.said)
         } else {
-            write!(formatter, "{}: {}", self.pointer, self.message)
+            write!(formatter, "{}: {}", self.pointer, self.said)
         }
     }
 }
@@ -457,7 +461,7 @@ mod tests {
         let missing: Error = InputError::Rules(RulesGap::MissingBlock("verifier")).into();
         assert!(
             missing
-                .message
+                .message()
                 .starts_with("the rules table is incomplete: ")
         );
         let range: Error = InputError::Rules(RulesGap::OutOfRange {
@@ -467,10 +471,10 @@ mod tests {
         .into();
         assert!(
             range
-                .message
+                .message()
                 .starts_with("the rules table holds a value the verifier cannot use: "),
             "{}",
-            range.message
+            range.message()
         );
         let unhashable: Error = InputError::Unhashable(HashError::TooLong {
             what: "the playbook",
@@ -479,21 +483,21 @@ mod tests {
         .into();
         assert!(
             unhashable
-                .message
+                .message()
                 .starts_with("the playbook or the seat's view has no report hash"),
             "{}",
-            unhashable.message
+            unhashable.message()
         );
-        assert!(!unhashable.message.contains("rules table"));
+        assert!(!unhashable.message().contains("rules table"));
         let view: Error = InputError::View(pharmakos_verifier::ScopeError::NotOwnBeacon(
             "b_02".to_owned(),
         ))
         .into();
         assert!(
-            view.message
+            view.message()
                 .starts_with("the seat's view does not hold against the rules table: "),
             "{}",
-            view.message
+            view.message()
         );
     }
 

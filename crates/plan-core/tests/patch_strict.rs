@@ -148,13 +148,18 @@ fn every_undo_refusal_is_coded_and_points_at_its_operation() {
         ),
     ] {
         let refused = forged(undo);
-        assert_eq!(refused.malformed, Some(code), "{undo}: {}", refused.message);
-        assert_eq!(refused.pointer, "/0", "{undo}: {}", refused.message);
-        assert!(
-            !refused.message.contains("it has ``")
-                && !refused.message.trim_end().ends_with("it has"),
+        assert_eq!(
+            refused.malformed,
+            Some(code),
             "{undo}: {}",
-            refused.message
+            refused.message()
+        );
+        assert_eq!(refused.pointer, "/0", "{undo}: {}", refused.message());
+        assert!(
+            !refused.message().contains("it has ``")
+                && !refused.message().trim_end().ends_with("it has"),
+            "{undo}: {}",
+            refused.message()
         );
     }
 }
@@ -197,7 +202,7 @@ fn an_array_index_is_spelled_as_rfc_6901_spells_one() {
             refused.malformed,
             Some(Malformed::PointerIndex),
             "{token}: {}",
-            refused.message
+            refused.message()
         );
     }
     let undo = r#"[{"op":"add","path":"/b/+1","undo":{"at":1,"jsonc":"9"}}]"#;
@@ -214,5 +219,5 @@ fn an_undo_too_deep_is_a_depth_refusal() {
         pharmakos_proto::json::write(&pharmakos_proto::json::Json::String(deep))
     );
     let refused = forged(&undo);
-    assert_eq!(refused.bound, Some(Bound::Depth), "{}", refused.message);
+    assert_eq!(refused.bound, Some(Bound::Depth), "{}", refused.message());
 }

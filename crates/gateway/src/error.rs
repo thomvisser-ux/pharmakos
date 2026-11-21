@@ -55,22 +55,33 @@ pub type Code = gateway_error::Code;
 pub struct Error {
     /// Which of the closed set this is.
     pub code: Code,
-    /// English, precise, and safe to show whoever is at the keyboard.
-    pub message: String,
-    /// The message as it was said.
-    pub(crate) said: Said,
+    /// The message as it was said: English, precise, and safe to show
+    /// whoever is at the keyboard. Private (S3's `vfyq2`, fix pass 4, item
+    /// L-b): read through [`Error::message`] or [`Error::said`], and the wire
+    /// sends it as it was said.
+    said: Said,
 }
 
 impl Error {
     /// An error with a code and a message.
     #[must_use]
     pub fn new(code: Code, message: impl Into<Said>) -> Error {
-        let said = message.into();
         Error {
             code,
-            message: said.as_str().to_owned(),
-            said,
+            said: message.into(),
         }
+    }
+
+    /// The message, as text.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        self.said.as_str()
+    }
+
+    /// The message, as text, taken out of the error.
+    #[must_use]
+    pub fn into_message(self) -> String {
+        self.said.into_string()
     }
 
     /// The message, as it was said: what another refusal that carries this
@@ -164,7 +175,10 @@ impl Error {
                 String::from("code"),
                 Json::Number(self.rpc_number().to_string()),
             ),
-            (String::from("message"), Json::String(self.message.clone())),
+            (
+                String::from("message"),
+                Json::String(self.said.as_str().to_owned()),
+            ),
             (
                 String::from("data"),
                 Json::Object(vec![(
@@ -178,7 +192,7 @@ impl Error {
 
 impl std::fmt::Display for Error {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "{}: {}", self.name(), self.message)
+        write!(formatter, "{}: {}", self.name(), self.said)
     }
 }
 
@@ -286,6 +300,32 @@ mod tests {
         assert_eq!(Error::phase_closed("x").name(), "PHASE_CLOSED");
         assert_eq!(Error::rate_limited("x").name(), "RATE_LIMITED");
         assert_eq!(Error::forbidden("x").name(), "FORBIDDEN_SCOPE");
+    }
+
+    /// The wire sends what was said, and nothing else can stand in for it
+    /// (S3's `vfyq2`, fix pass 4, item L-b): the message, the `said`, the
+    /// `Display` and the JSON's `message` are one text, and a seat's text in
+    /// it reaches the wire quoted.
+    #[test]
+    fn the_wire_sends_what_was_said() {
+        use pharmakos_proto::json::grammar::quoted;
+        let seat_wrote = "a\u{202E}b";
+        let error = Error::invalid(pharmakos_proto::said!(
+            "no step named {}",
+            quoted(seat_wrote)
+        ));
+        let said = error.said();
+        assert_eq!(error.message(), said.as_str());
+        assert_eq!(
+            error.to_json().get("message"),
+            Some(&Json::String(said.as_str().to_owned()))
+        );
+        assert_eq!(
+            error.to_string(),
+            format!("{}: {}", error.name(), said.as_str())
+        );
+        assert!(!said.as_str().contains('\u{202E}'), "{}", said.as_str());
+        assert_eq!(error.clone().into_message(), said.as_str());
     }
 
     #[test]

@@ -455,14 +455,14 @@ fn a_field_written_twice_is_told_by_field_and_count_not_by_pointer() {
     let error = pharmakos_plan_core::patch_text(&clean, &brings_both)
         .expect_err("the patch writes cooldown twice");
     assert!(
-        error.message.contains("the patch itself"),
+        error.message().contains("the patch itself"),
         "{}",
-        error.message
+        error.message()
     );
     assert!(
-        !error.message.contains("already writes"),
+        !error.message().contains("already writes"),
         "{}",
-        error.message
+        error.message()
     );
     assert_eq!(error.pointer, "/declarative/handlers/1");
 

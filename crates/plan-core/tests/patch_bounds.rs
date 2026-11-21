@@ -366,7 +366,7 @@ fn a_refusal_names_the_limit_it_met() {
     let past = format!("[{}]", " ".repeat(MAX_PATCH_TEXT_CHARS));
     let refused = patch_text(document, &past).expect_err("past the work bound");
     assert_eq!(refused.bound, Some(Bound::PatchText));
-    assert!(refused.message.contains("work"), "{}", refused.message);
+    assert!(refused.message().contains("work"), "{}", refused.message());
     let tests: Vec<&str> = (0..=MAX_PATCH_OPERATIONS)
         .map(|_| r#"{"op":"test","path":"/meta/title","value":"t"}"#)
         .collect();

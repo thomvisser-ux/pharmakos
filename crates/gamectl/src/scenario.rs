@@ -313,7 +313,7 @@ pub fn load(root: &Path, source: &Path) -> Result<Scenario, Failure> {
                 &display,
                 &[(
                     error.pointer.clone(),
-                    format!("not valid JSONC: {}", error.message),
+                    format!("not valid JSONC: {}", error.message()),
                 )],
             ))
         })?;

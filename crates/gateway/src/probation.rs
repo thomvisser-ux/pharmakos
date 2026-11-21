@@ -209,7 +209,7 @@ mod tests {
         for other in ["", "Probation", "casual", "resume", "-"] {
             let error = Preset::parse(other).expect_err("not a preset");
             assert_eq!(error.code, Code::InvalidArgument, "{other}");
-            assert!(error.message.contains("probation"), "{}", error.message);
+            assert!(error.message().contains("probation"), "{}", error.message());
         }
         assert!(Preset::Probation.untimed_lulls());
         assert!(!Preset::Custom.untimed_lulls());

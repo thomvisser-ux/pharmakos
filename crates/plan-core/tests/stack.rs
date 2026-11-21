@@ -128,9 +128,9 @@ fn the_deepest_playbook_is_read_on_half_the_stated_stack() {
     assert!(Document::parse(&nested(deepest, false)).is_ok());
     let past = Document::parse(&nested(deepest + 1, false)).expect_err("past MAX_DEPTH");
     assert!(
-        past.message.contains(&grammar::MAX_DEPTH.to_string()),
+        past.message().contains(&grammar::MAX_DEPTH.to_string()),
         "{}",
-        past.message
+        past.message()
     );
     for commented in [false, true] {
         let text = nested(deepest, commented);

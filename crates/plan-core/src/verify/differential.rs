@@ -96,7 +96,7 @@ fn lean_hand_over(text: &str) -> Handed {
 fn readers_agree(what: &str, text: &str) {
     let jsonc = Document::parse(text)
         .map(|_| ())
-        .map_err(|error| (error.pointer, error.message));
+        .map_err(|error| (error.pointer.clone(), error.message().to_owned()));
     let codec = json::read(&blank_comments(text).expect("blanked"))
         .map(|_| ())
         .map_err(|error| (error.pointer, error.message));
@@ -173,8 +173,8 @@ fn decode_agrees(what: &str, text: &str) {
             );
         }
         (Err(lean), Err(chain)) => assert_eq!(
-            (&lean.pointer, &lean.message),
-            (&chain.pointer, &chain.message),
+            (&lean.pointer, lean.message()),
+            (&chain.pointer, chain.message()),
             "{what}: the refusal"
         ),
         _ => panic!("{what}: decode_jsonc answers {lean:?}, the JSONC chain {chain:?}"),
@@ -1021,7 +1021,7 @@ fn an_unclosed_block_comment_is_refused_where_it_opens() {
         let pointer = format!("/byte/{open}");
         let refused = Document::parse(&text).expect_err(what);
         assert_eq!(
-            (refused.pointer.as_str(), refused.message.as_str()),
+            (refused.pointer.as_str(), refused.message()),
             (pointer.as_str(), message),
             "{what}"
         );
@@ -1056,7 +1056,7 @@ fn a_value_inside_max_depth_containers_is_read_by_both() {
     for text in [past.as_str(), too_deep.as_str()] {
         let refused = Document::parse(text).expect_err("past the limit");
         assert!(
-            refused.message.contains("nested deeper than 64"),
+            refused.message().contains("nested deeper than 64"),
             "{refused:?}"
         );
         readers_agree("past the limit", text);
@@ -1073,7 +1073,7 @@ fn a_leading_zero_is_refused_by_both() {
     let at = MINIMAL.find("\"ms\":1000").expect("a hold") + "\"ms\":0".len();
     let refused = Document::parse(&text).expect_err("a leading zero");
     assert_eq!(
-        (refused.pointer, refused.message),
+        (refused.pointer.clone(), refused.message().to_owned()),
         (
             format!("/byte/{at}"),
             "a number with a leading zero".to_owned()

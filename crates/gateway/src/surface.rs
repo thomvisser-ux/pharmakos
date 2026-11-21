@@ -4869,7 +4869,7 @@ mod tests {
             .resume(host(), &saved, continuation)
             .expect_err("already hosting");
         assert_eq!(error.code, Code::Internal);
-        assert!(error.message.contains("once"), "{}", error.message);
+        assert!(error.message().contains("once"), "{}", error.message());
 
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("..")
@@ -4892,7 +4892,7 @@ mod tests {
         .expect_err("another rules table");
         assert_eq!(error.code, Code::Internal);
         assert_eq!(
-            error.message,
+            error.message(),
             "this surface was made with a rules table other than the one the save's host \
              regenerated its world under",
             "one line, no stray line break"
@@ -5462,7 +5462,11 @@ mod tests {
         event.at = None;
         let refused = Surface::audience_of(&event).expect_err("refused");
         assert_eq!(refused.code, Code::Internal);
-        assert!(refused.message.contains("no place"), "{}", refused.message);
+        assert!(
+            refused.message().contains("no place"),
+            "{}",
+            refused.message()
+        );
     }
 
     /// The short-config match's opening Lull, hosted once per test binary: its
@@ -6600,9 +6604,9 @@ mod tests {
             .expect_err("a preview of the frozen world in a Push");
         assert_eq!(error.code, Code::PhaseClosed);
         assert!(
-            error.message.contains("reads the frozen world"),
+            error.message().contains("reads the frozen world"),
             "the handler's own refusal: {}",
-            error.message
+            error.message()
         );
     }
 

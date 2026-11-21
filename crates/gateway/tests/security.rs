@@ -268,9 +268,9 @@ fn a_seat_token_can_never_hold_spectate_nofog() {
             .expect_err("refused");
         assert_eq!(error.code, Code::ForbiddenScope);
         assert!(
-            error.message.contains("spectate.nofog"),
+            error.message().contains("spectate.nofog"),
             "{}",
-            error.message
+            error.message()
         );
     }
     assert!(
@@ -327,7 +327,7 @@ fn admin_cannot_read_another_seats_draft() {
         .seat_state(Subject::Admin, SeatId::new(0))
         .expect_err("refused");
     assert_eq!(error.code, Code::ForbiddenScope);
-    assert!(error.message.contains("drafts"), "{}", error.message);
+    assert!(error.message().contains("drafts"), "{}", error.message());
 
     // 2. Another seat, by the same gate.
     let error = surface

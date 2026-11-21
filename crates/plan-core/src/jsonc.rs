@@ -1289,7 +1289,7 @@ mod tests {
     fn a_trailing_comma_is_refused() {
         let error = Document::parse("{\"a\":1,}").expect_err("a trailing comma");
         assert!(error.is_syntax());
-        assert!(error.message.contains("trailing comma"));
+        assert!(error.message().contains("trailing comma"));
     }
 
     #[test]
@@ -1314,7 +1314,7 @@ mod tests {
         let refused = Document::parse(&deeper).expect_err("65 containers");
         let codec = pharmakos_proto::json::read(&deeper).expect_err("65 containers");
         assert_eq!(
-            (refused.pointer, refused.message),
+            (refused.pointer.clone(), refused.message().to_owned()),
             (codec.pointer, codec.message)
         );
     }
@@ -1328,7 +1328,7 @@ mod tests {
         let codec = pharmakos_proto::json::read(text).expect_err("a leading zero");
         assert_eq!(refused.pointer, "/byte/6");
         assert_eq!(
-            (refused.pointer, refused.message),
+            (refused.pointer.clone(), refused.message().to_owned()),
             (codec.pointer, codec.message)
         );
     }

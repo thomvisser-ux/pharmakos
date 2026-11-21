@@ -732,9 +732,9 @@ mod tests {
             let error = data_root(env(&[]), os).expect_err("no variable");
             assert_eq!(error.code, Code::Internal);
             assert!(
-                error.message.contains("beside its own executable"),
+                error.message().contains("beside its own executable"),
                 "{}",
-                error.message
+                error.message()
             );
         }
     }
@@ -778,7 +778,7 @@ mod tests {
 
         let error = MatchCache::open(&root, "m-0004", &header(4)).expect_err("saved");
         assert_eq!(error.code, Code::InvalidArgument);
-        assert!(error.message.contains("resume"), "{}", error.message);
+        assert!(error.message().contains("resume"), "{}", error.message());
 
         let again = MatchCache::reopen(&root, "m-0004").expect("reopened");
         assert_eq!(again.read_save().expect("read"), "second\n");
@@ -924,7 +924,11 @@ mod tests {
         std::fs::write(&path, text).expect("damaged");
         let refused = cache.continuation().expect_err("refused");
         assert_eq!(refused.code, crate::error::Code::Internal);
-        assert!(refused.message.contains("line 3"), "{}", refused.message);
+        assert!(
+            refused.message().contains("line 3"),
+            "{}",
+            refused.message()
+        );
         assert!(
             cache.last_audit_seq().is_err(),
             "and so is the sequence number"

@@ -229,7 +229,11 @@ mod tests {
         }
         let error = limiter.admit(Tick::new(10)).expect_err("over the tick cap");
         assert_eq!(error.code, Code::RateLimited);
-        assert!(error.message.contains("in one tick"), "{}", error.message);
+        assert!(
+            error.message().contains("in one tick"),
+            "{}",
+            error.message()
+        );
         limiter
             .admit(Tick::new(11))
             .expect("a new tick, a new budget");
@@ -261,7 +265,7 @@ mod tests {
             .admit(Tick::new(4))
             .expect_err("over the window cap");
         assert_eq!(error.code, Code::RateLimited);
-        assert!(error.message.contains("ticks"), "{}", error.message);
+        assert!(error.message().contains("ticks"), "{}", error.message());
         limiter
             .admit(Tick::new(100))
             .expect("a new window, a new budget");

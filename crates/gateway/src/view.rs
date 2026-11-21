@@ -266,7 +266,11 @@ mod tests {
         assert_eq!(hp_wire(Hp::ZERO).expect("fits"), 0);
         let below = hp_wire(Hp::new(-1)).expect_err("refused");
         assert_eq!(below.code, Code::Internal);
-        assert!(below.message.contains("-1 hit points"), "{}", below.message);
+        assert!(
+            below.message().contains("-1 hit points"),
+            "{}",
+            below.message()
+        );
 
         assert_eq!(
             dollars_wire(Money::new(-40), "a treasury").expect("fits"),
@@ -280,9 +284,10 @@ mod tests {
             .expect_err("refused");
         assert_eq!(past.code, Code::Internal);
         assert!(
-            past.message.starts_with("value destroyed is $ 2147483648"),
+            past.message()
+                .starts_with("value destroyed is $ 2147483648"),
             "{}",
-            past.message
+            past.message()
         );
     }
     use pharmakos_proto::gp::v1::beacon_filter::MandateKind as WireMandate;

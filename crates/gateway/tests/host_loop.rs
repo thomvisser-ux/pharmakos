@@ -444,7 +444,7 @@ fn the_two_lines_are_read_exactly_as_they_were_written() {
         let line = format!("{}\t{tail}\n", plain.render().trim_end());
         let error = ConfigLine::parse(&line).expect_err("a ninth field");
         assert_eq!(error.code, Code::InvalidArgument, "`{tail}`");
-        assert!(error.message.contains("at most"), "{}", error.message);
+        assert!(error.message().contains("at most"), "{}", error.message());
     }
 
     let announce = Announce {
@@ -1106,7 +1106,7 @@ fn a_new_match_cannot_overwrite_a_saved_one() {
 
     let error = host_and_quit(&root, &line).expect_err("a second new match under the same id");
     assert_eq!(error.code, Code::InvalidArgument);
-    assert!(error.message.contains("resume"), "{}", error.message);
+    assert!(error.message().contains("resume"), "{}", error.message());
     assert_eq!(
         std::fs::read(folder.join("save.json")).expect("a save"),
         save
@@ -1211,14 +1211,14 @@ fn a_resume_line_that_disagrees_with_the_save_is_refused() {
             error.code,
             Code::InvalidArgument,
             "{field}: {}",
-            error.message
+            error.message()
         );
         assert!(
             error
-                .message
+                .message()
                 .contains(&format!("the resume line asks for {field} ")),
             "the refusal names the field that differs, {field}: {}",
-            error.message
+            error.message()
         );
     }
     host_and_quit(&root, &resume_line(saved_config)).expect("the line that agrees resumes");
@@ -1250,7 +1250,11 @@ fn a_save_from_a_different_rules_table_or_verifier_is_refused() {
     std::fs::write(folder.join("save.json"), &other_rules).expect("rewritten");
     let error = host_and_quit(&root, &resume_line(line.clone())).expect_err("another rules table");
     assert_eq!(error.code, Code::InvalidArgument);
-    assert!(error.message.contains("rules table"), "{}", error.message);
+    assert!(
+        error.message().contains("rules table"),
+        "{}",
+        error.message()
+    );
 
     let other_verifier = original.replace(
         &format!("\"verifier_version\": \"{}\"", stamp.verifier_version),
@@ -1260,7 +1264,7 @@ fn a_save_from_a_different_rules_table_or_verifier_is_refused() {
     std::fs::write(folder.join("save.json"), &other_verifier).expect("rewritten");
     let error = host_and_quit(&root, &resume_line(line.clone())).expect_err("another verifier");
     assert_eq!(error.code, Code::InvalidArgument);
-    assert!(error.message.contains("verifier"), "{}", error.message);
+    assert!(error.message().contains("verifier"), "{}", error.message());
 
     std::fs::write(folder.join("save.json"), &original).expect("put back");
     host_and_quit(&root, &resume_line(line)).expect("the save as written resumes");

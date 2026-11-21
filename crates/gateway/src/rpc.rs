@@ -374,7 +374,11 @@ mod tests {
             call(r#"{"jsonrpc":"2.0","id":1,"method":"wait_for","params":{"timeout_ms":1.5}}"#)
                 .expect("well formed JSON-RPC");
         let error = request.integer_param("timeout_ms").expect_err("refused");
-        assert!(error.message.contains("whole number"), "{}", error.message);
+        assert!(
+            error.message().contains("whole number"),
+            "{}",
+            error.message()
+        );
     }
 
     #[test]
@@ -383,7 +387,7 @@ mod tests {
             call(r#"{"jsonrpc":"2.0","id":1,"method":"set_ready","params":{"ready":"yes"}}"#)
                 .expect("well formed JSON-RPC");
         let error = request.bool_param("ready").expect_err("refused");
-        assert!(error.message.contains("boolean"), "{}", error.message);
+        assert!(error.message().contains("boolean"), "{}", error.message());
     }
 
     #[test]

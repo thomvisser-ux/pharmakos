@@ -256,16 +256,16 @@ fn the_config_line_carries_the_preset_and_a_line_without_one_is_refused_naming_i
         let error = ConfigLine::parse(old).expect_err("no preset");
         assert_eq!(error.name(), "INVALID_ARGUMENT", "{old:?}");
         assert!(
-            error.message.contains("`preset`") && error.message.contains("start a new match"),
+            error.message().contains("`preset`") && error.message().contains("start a new match"),
             "{}",
-            error.message
+            error.message()
         );
     }
     let error = ConfigLine::parse("m-x\t20\t2\t0\t-\t3\tcasual\n").expect_err("not a preset");
-    assert!(error.message.contains("probation"), "{}", error.message);
+    assert!(error.message().contains("probation"), "{}", error.message());
     let error = ConfigLine::parse("m-x\t20\t2\t0\t-\t3\tcustom\tresume\textra\n")
         .expect_err("a ninth field");
-    assert!(error.message.contains("eight"), "{}", error.message);
+    assert!(error.message().contains("eight"), "{}", error.message());
 }
 
 /// **The lobby's line and the gateway's reader agree** (E6's same-PR rule):
@@ -1114,7 +1114,7 @@ fn a_host_side_countdown_is_refused_in_a_probation_match() {
         .set_phase_remaining_ms(pharmakos_sim::math::quantity::Ms::new(60_000))
         .expect_err("untimed by preset");
     assert_eq!(error.name(), "INVALID_ARGUMENT");
-    assert!(error.message.contains("probation"), "{}", error.message);
+    assert!(error.message().contains("probation"), "{}", error.message());
     assert!(probation.time().untimed, "nothing of it was kept");
     let mut custom = hosted_under("m-host-clock-c", Preset::Custom, Some(0), 1_000, 1);
     custom

@@ -952,11 +952,11 @@ mod tests {
             let error = Save::parse(&text).expect_err("another version");
             assert_eq!(error.code, Code::InvalidArgument);
             assert!(
-                error.message.contains(&format!("format version {other}"))
-                    && error.message.contains("reads version 3")
-                    && error.message.contains("start a new match"),
+                error.message().contains(&format!("format version {other}"))
+                    && error.message().contains("reads version 3")
+                    && error.message().contains("start a new match"),
                 "{}",
-                error.message
+                error.message()
             );
         }
     }
@@ -990,7 +990,7 @@ mod tests {
         }
         let error = Save::parse(&written.render()).expect_err("past the bound");
         assert_eq!(error.code, Code::InvalidArgument);
-        assert!(error.message.contains("handles"), "{}", error.message);
+        assert!(error.message().contains("handles"), "{}", error.message());
     }
 
     /// The Ledger's memos are the person's seat's in a Probation match: a save
@@ -1006,7 +1006,7 @@ mod tests {
             .check(&config(), hash)
             .expect_err("seat 1 is no one's");
         assert_eq!(error.code, Code::InvalidArgument);
-        assert!(error.message.contains("seat 1"), "{}", error.message);
+        assert!(error.message().contains("seat 1"), "{}", error.message());
 
         let mut custom = save();
         custom.config.preset = Preset::Custom;
@@ -1018,7 +1018,7 @@ mod tests {
             .check(&asked, hash)
             .expect_err("a custom match issues none");
         assert_eq!(error.code, Code::InvalidArgument);
-        assert!(error.message.contains("custom"), "{}", error.message);
+        assert!(error.message().contains("custom"), "{}", error.message());
 
         let mut quiet = save();
         quiet.config.preset = Preset::Custom;
@@ -1073,11 +1073,11 @@ mod tests {
         let error = Save::parse(&text).expect_err("a pre-S1 save");
         assert_eq!(error.code, Code::InvalidArgument);
         assert!(
-            error.message.contains("format version 1")
-                && error.message.contains("per seat")
-                && error.message.contains("start a new match"),
+            error.message().contains("format version 1")
+                && error.message().contains("per seat")
+                && error.message().contains("start a new match"),
             "{}",
-            error.message
+            error.message()
         );
     }
 
@@ -1147,7 +1147,11 @@ mod tests {
         for (field, asked) in variants {
             let error = saved.check(&asked, 0x0123_4567_89ab_cdef).expect_err(field);
             assert_eq!(error.code, Code::InvalidArgument, "{field}");
-            assert!(error.message.contains(field), "{field}: {}", error.message);
+            assert!(
+                error.message().contains(field),
+                "{field}: {}",
+                error.message()
+            );
         }
     }
 

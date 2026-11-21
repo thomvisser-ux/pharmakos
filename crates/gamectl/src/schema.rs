@@ -41,8 +41,8 @@ pub fn run(part: &str) -> Result<String, Failure> {
     match pharmakos_gateway::schema::text(part) {
         Ok(text) => Ok(text),
         Err(error) if error.code == Code::NotFound || error.code == Code::InvalidArgument => Err(
-            Failure::new(Exit::Usage, strings::unknown_part(&error.message)),
+            Failure::new(Exit::Usage, strings::unknown_part(error.message())),
         ),
-        Err(error) => Err(Failure::internal(strings::unknown_part(&error.message))),
+        Err(error) => Err(Failure::internal(strings::unknown_part(error.message()))),
     }
 }

@@ -993,7 +993,7 @@ mod tests {
         ] {
             let error = Host::check_settings(&settings).expect_err("refused");
             assert_eq!(error.code, Code::InvalidArgument);
-            assert!(error.message.contains(expected), "{}", error.message);
+            assert!(error.message().contains(expected), "{}", error.message());
         }
     }
 
@@ -1075,7 +1075,7 @@ mod tests {
             Code::Internal,
             "a host that seals late is a bug"
         );
-        assert!(error.message.contains("its push"), "{}", error.message);
+        assert!(error.message().contains("its push"), "{}", error.message());
     }
 
     /// A refusal is all of them or none of them.
@@ -1106,7 +1106,7 @@ mod tests {
             ])
             .expect_err("a seat this match has not got");
         assert_eq!(error.code, Code::Internal);
-        assert!(error.message.contains("no seat 2"), "{}", error.message);
+        assert!(error.message().contains("no seat 2"), "{}", error.message());
         assert!(
             host.world().interpreter().plan(0).is_none(),
             "seat 0 came before the refusal in the list and is still unsealed"

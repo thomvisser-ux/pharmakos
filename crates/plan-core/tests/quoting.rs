@@ -74,23 +74,23 @@ fn every_planning_refusal_quotes_the_player_text_it_carries() {
         ),
     ] {
         let refused = patch_text(MINIMAL, &patch).expect_err(what);
-        holds(what, &refused.message);
+        holds(what, refused.message());
     }
     let duplicated = MINIMAL.replace(
         "\"kind\":\"PLAYBOOK\"}",
         &format!("\"kind\":\"PLAYBOOK\",{hostile_json}:1,{hostile_json}:2}}"),
     );
     let refused = Document::parse(&duplicated).expect_err("a key written twice");
-    holds("a key written twice", &refused.message);
+    holds("a key written twice", refused.message());
     let unknown = MINIMAL.replace(
         "\"kind\":\"PLAYBOOK\"}",
         &format!("\"kind\":\"PLAYBOOK\",{hostile_json}:1}}"),
     );
     let refused = canonicalise_text(&unknown).expect_err("an unknown field");
-    holds("an unknown field", &refused.message);
+    holds("an unknown field", refused.message());
     let enum_value = MINIMAL.replace("\"HUMAN\"", &hostile_json);
     let refused = canonicalise_text(&enum_value).expect_err("an enum value");
-    holds("an enum value", &refused.message);
+    holds("an enum value", refused.message());
     let refused = instantiate(
         MINIMAL,
         &[Parameter {
@@ -100,7 +100,7 @@ fn every_planning_refusal_quotes_the_player_text_it_carries() {
         &[],
     )
     .expect_err("a parameter that is not JSON");
-    holds("a parameter's value", &refused.message);
+    holds("a parameter's value", refused.message());
 }
 
 /// The prose shows a player's text through the grammar's one rule (S3's

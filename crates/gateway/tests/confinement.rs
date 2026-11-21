@@ -624,6 +624,7 @@ fn a_plan_error_reaches_a_seat_only_through_the_gateways_own_sentence() {
                 .strip_prefix("fn ")
                 .or_else(|| line.trim_start().strip_prefix("pub(crate) fn "))
                 .or_else(|| line.trim_start().strip_prefix("pub(super) fn "))
+                .or_else(|| line.trim_start().strip_prefix("pub fn "))
             {
                 function = name
                     .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
