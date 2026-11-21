@@ -197,6 +197,39 @@ use pharmakos_sim::snapshot::{Snapshot, SnapshotError};
 pub use blueprints::{Anchor, BLUEPRINT_SLOTS, BlueprintSlots, slots_for, slots_of};
 pub use hash::{HashError, REPORT_HASH_DOMAIN, TOO_LONG_REPORT_DOMAIN, too_long_report_hash};
 pub use interface::Rates;
+
+/// A rules table, read and checked by every rules check the verifier makes
+/// (S3's `vfyq2`, fix pass 5, item L8): its limits, its interface rates
+/// (checked against the size budget: [`RulesGap::RowPastTheSim`]), its
+/// prices and its walking rows. [`Input`] reads its table through
+/// [`read_rules`], and a host checks its table with the same call when it
+/// starts, so a table the verifier refuses hosts no match.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct RulesRead {
+    limits: Limits,
+    rates: Rates,
+    prices: Prices,
+    walk: Walk,
+}
+
+/// Every rules check the verifier makes, in one call.
+///
+/// # Errors
+///
+/// The first [`RulesGap`] the table has.
+pub fn read_rules(rules: &RulesTable) -> Result<RulesRead, RulesGap> {
+    let limits = Limits::from_rules(rules)?;
+    // The table is the door (fix pass 4, item 1): one whose rows could pass
+    // the sim's `i32` is refused here, so nothing qualifies under it.
+    let rates = Rates::from_rules(rules)?;
+    rates.check_rows(limits.size_budget_units())?;
+    Ok(RulesRead {
+        limits,
+        rates,
+        prices: Prices::from_rules(rules)?,
+        walk: Walk::from_rules(rules)?,
+    })
+}
 pub use limits::{CONDITION_MAX_DEPTH, CONDITION_MAX_NODES, Limits, RulesGap};
 pub use projection::{Prices, Projection, ProjectionError};
 pub use refusals::{REFUSED_CONSTRUCTS, code_for_construct};
@@ -569,7 +602,12 @@ impl<'a> Input<'a> {
             });
         }
         let rules_hash = rules.rules_hash();
-        let limits = Limits::from_rules(rules)?;
+        let RulesRead {
+            limits,
+            rates,
+            prices,
+            walk,
+        } = read_rules(rules)?;
         scope
             .check(limits.beacon_sphere_radius_voxels())
             .map_err(InputError::View)?;
@@ -581,16 +619,9 @@ impl<'a> Input<'a> {
             rules,
             rules_hash,
             limits,
-            rates: {
-                // The table is the door (fix pass 4, item 1): one whose rows
-                // could pass the sim's `i32` is refused here, so nothing
-                // qualifies under it.
-                let rates = Rates::from_rules(rules)?;
-                rates.check_rows(limits.size_budget_units())?;
-                rates
-            },
-            prices: Prices::from_rules(rules)?,
-            walk: Walk::from_rules(rules)?,
+            rates,
+            prices,
+            walk,
             report_hashes: hash::ReportHashes::new(
                 if too_long {
                     hash::Subject::TooLong

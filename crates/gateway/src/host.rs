@@ -198,14 +198,24 @@ impl Host {
     /// # Errors
     ///
     /// [`crate::error::Code::InvalidArgument`] for a seat count
-    /// [`Host::check_seats`] refuses and a lobby setting
-    /// [`Host::check_settings`] refuses, and [`crate::error::Code::Internal`]
+    /// [`Host::check_seats`] refuses, a lobby setting
+    /// [`Host::check_settings`] refuses and a rules table the verifier refuses
+    /// ([`pharmakos_verifier::read_rules`]), and [`crate::error::Code::Internal`]
     /// when the map generator or the search graph will not build, or the
     /// match will not open on the generated world (the snapshot's door,
     /// [`Runner::new`]) — none is something a caller did.
     pub fn open(config: &WorldConfig, library: Option<PathBuf>) -> Result<Host, Error> {
         Host::check_seats(config.seats)?;
         Host::check_settings(&config.match_settings)?;
+        // The verifier's own rules checks, once, before anything is built
+        // (S3's `vfyq2`, fix pass 5, item L8): under a table it refuses,
+        // every plan's check would be a refusal, so no match opens on one.
+        pharmakos_verifier::read_rules(&config.rules).map_err(|gap| {
+            Error::invalid(said!(
+                "this rules table hosts no match, because the verifier refuses it: {}",
+                pharmakos_proto::json::grammar::Said::engine_error(&gap)
+            ))
+        })?;
         let world = World::new(config).map_err(|error| {
             Error::internal(said!(
                 "this match's map could not be generated: {}",
