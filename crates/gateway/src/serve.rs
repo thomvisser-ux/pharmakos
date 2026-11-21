@@ -142,7 +142,7 @@ use pharmakos_proto::said;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, SyncSender, channel, sync_channel};
 
 use pharmakos_proto::json::Json;
@@ -197,11 +197,39 @@ pub enum DropReason {
     NoConnectionThread,
 }
 
+impl DropReason {
+    /// Its counter.
+    fn counter(self) -> &'static AtomicU64 {
+        match self {
+            DropReason::OverCapacity => &DROPPED.over_capacity,
+            DropReason::NoConnectionThread => &DROPPED.no_connection_thread,
+        }
+    }
+}
+
+/// Every connection dropped, by reason: counted whether or not the audit
+/// queue had room for the refusal's line, so a flood that fills the queue is
+/// still counted (AGENTS.md: every drop is counted under an enumerated
+/// reason code).
+struct Drops {
+    over_capacity: AtomicU64,
+    no_connection_thread: AtomicU64,
+}
+
+static DROPPED: Drops = Drops {
+    over_capacity: AtomicU64::new(0),
+    no_connection_thread: AtomicU64::new(0),
+};
+
+/// Counts one connection dropped for `reason`.
+fn count_drop(reason: DropReason) {
+    reason.counter().fetch_add(1, Ordering::SeqCst);
+}
+
 /// How many connections this process has dropped for `reason`.
 #[must_use]
 pub fn dropped(reason: DropReason) -> u64 {
-    let _ = reason;
-    0
+    reason.counter().load(Ordering::SeqCst)
 }
 
 /// How many requests may wait in front of the surface thread.
@@ -1274,6 +1302,7 @@ fn spawn_dispatcher(
                     live.fetch_sub(1, Ordering::SeqCst);
                     // Refused before the upgrade, and audited: a connection the
                     // host would not serve is still a connection somebody made.
+                    count_drop(DropReason::OverCapacity);
                     let mut stream = connection.stream;
                     let _ = stream.write_all(OVER_CAPACITY.as_bytes());
                     // `try_send`, and not `send`: this is the accept loop, the
@@ -1305,6 +1334,7 @@ fn spawn_dispatcher(
                         mine.fetch_sub(1, Ordering::SeqCst);
                     });
                 if let Err(error) = started {
+                    count_drop(DropReason::NoConnectionThread);
                     // The closure, and the socket with it, was dropped unrun: the
                     // peer is hung up on. Its slot is given back, and the refusal
                     // is audited as an over-capacity one is (`try_send`, for the

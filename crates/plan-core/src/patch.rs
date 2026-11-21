@@ -465,6 +465,14 @@ fn only_members(members: &[(String, Json)], allowed: &[&str], at: &str) -> Resul
         .find(|(key, _)| !allowed.contains(&key.as_str()))
     {
         None => Ok(()),
+        Some((key, _)) if allowed.is_empty() => Err(Error::malformed(
+            Malformed::UnknownMember,
+            at,
+            pharmakos_proto::said!(
+                "`{}` is not a member of this undo; an undo that takes out has no members",
+                pharmakos_proto::json::grammar::quoted(key)
+            ),
+        )),
         Some((key, _)) => Err(Error::malformed(
             Malformed::UnknownMember,
             at,
@@ -496,8 +504,21 @@ fn at_operation(error: Error, at: &str) -> Error {
 pub const MAX_PATCH_OPERATIONS: usize = 64;
 
 /// The longest patch text `patch_text` reads (S3's `vfyq2`, fix pass 3, item
-/// L4), in characters.
-pub const MAX_PATCH_TEXT_CHARS: usize = usize::MAX;
+/// L4), in characters, refused before it is parsed.
+///
+/// The largest patch that can act on a file at the size cap is the inverse
+/// of one: its paths and written text are held to the playbook's
+/// [`MAX_PLAYBOOK_CHARS`] characters ([`Bound::Inverse`]), and as JSON text a
+/// character is at most six (`\uXXXX`), so six times the cap, and a sentence
+/// of syntax for each of [`MAX_PATCH_OPERATIONS`] operations, holds every
+/// patch that can act on a playbook. A forward patch past it would write more
+/// than any playbook holds.
+pub const MAX_PATCH_TEXT_CHARS: usize =
+    MAX_PLAYBOOK_CHARS * 6 + MAX_PATCH_OPERATIONS * PATCH_SYNTAX_CHARS;
+
+/// The syntax one operation of an inverse writes around its path and text:
+/// `{"op":"replace","path":"","undo":{"at":,"jsonc":""}},` and an index.
+const PATCH_SYNTAX_CHARS: usize = 64;
 
 fn too_many(found: usize) -> Error {
     Error::bounded(
@@ -572,9 +593,22 @@ pub fn apply(document: &Document, patch: &Patch) -> Result<(Document, Patch), Er
     };
     match &patch.steps {
         Steps::Undo(undos) => {
-            for undo in undos {
-                let mut next = vec![exact(&mut working, undo)?];
-                budget(&working, &undo.path, &next)?;
+            // Every undo refusal points at its operation in the patch,
+            // `/<index>`, the space `Patch::from_json` reads it in, and
+            // carries a `Malformed` code (fix pass 3, item L5); a bound's
+            // refusal keeps its bound.
+            for (index, undo) in undos.iter().enumerate() {
+                let operation = format!("/{index}");
+                let mut next = vec![exact(&mut working, undo).map_err(|error| {
+                    let coded = if error.malformed.is_none() && error.bound.is_none() {
+                        Error::malformed(Malformed::UndoTarget, "", error.said())
+                    } else {
+                        error
+                    };
+                    at_operation(coded, &operation)
+                })?];
+                budget(&working, &undo.path, &next)
+                    .map_err(|error| at_operation(error, &operation))?;
                 next.append(&mut inverse);
                 inverse = next;
             }
@@ -783,6 +817,21 @@ fn walk_twice(value: &Json, message: &str, pointer: &str, found: &mut Vec<Writte
 ///
 /// As [`apply`], plus a syntax error in either text.
 pub fn patch_text(playbook_jsonc: &str, json_patch: &str) -> Result<(String, String), Error> {
+    // The patch's length first, before a byte of it is parsed (fix pass 3,
+    // item L4): its bytes bound its characters, and only a text whose bytes
+    // pass the cap is counted.
+    if json_patch.len() > MAX_PATCH_TEXT_CHARS && json_patch.chars().count() > MAX_PATCH_TEXT_CHARS
+    {
+        return Err(Error::bounded(
+            Bound::PatchText,
+            "",
+            pharmakos_proto::said!(
+                "a patch is at most {} characters, which holds every patch that can act on a \
+                 playbook",
+                MAX_PATCH_TEXT_CHARS
+            ),
+        ));
+    }
     let document = Document::parse(playbook_jsonc)?;
     let patch = Patch::from_text(json_patch)?;
     let (patched, inverse) = apply(&document, &patch)?;
@@ -986,12 +1035,27 @@ fn exact(document: &mut Document, undo: &Undo) -> Result<Undo, Error> {
             let (parent, last) = parent_of(&path)?;
             let (is_array, len) = shape(document, parent)?;
             if *at > len {
-                return Err(Error::at(
+                return Err(Error::malformed(
+                    Malformed::UndoSlot,
                     &path,
                     pharmakos_proto::said!(
                         "this undo puts back at slot {}, past the {} there are",
                         *at,
                         len
+                    ),
+                ));
+            }
+            // An array undo's path ends in the index it puts back at (fix
+            // pass 3, item L2): a path and a slot that disagree are not an
+            // inverse anything wrote.
+            if is_array && !matches!(last.parse::<usize>(), Ok(index) if index == *at) {
+                return Err(Error::malformed(
+                    Malformed::UndoSlot,
+                    &path,
+                    pharmakos_proto::said!(
+                        "this undo puts an element back at slot {}, and its path ends in `{}`",
+                        *at,
+                        pharmakos_proto::json::grammar::quoted(&last)
                     ),
                 ));
             }

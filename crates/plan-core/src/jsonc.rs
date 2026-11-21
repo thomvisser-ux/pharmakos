@@ -298,7 +298,13 @@ impl Fragment {
         wrapped.push_str(written);
         wrapped.push('}');
         let mut document = Document::parse(&wrapped).map_err(|_| not_one())?;
-        if document.root.len() != Some(1) {
+        // The wrapper's bracket closes the document: a `jsonc` that ran past
+        // its member (a line comment that would swallow the bracket, text
+        // after it) leaves an epilogue, and is refused (fix pass 3, L1).
+        if document.root.len() != Some(1)
+            || !document.prologue.is_empty()
+            || !document.epilogue.is_empty()
+        {
             return Err(not_one());
         }
         document.root.take_member(key).ok_or_else(not_one)
@@ -324,7 +330,10 @@ impl Fragment {
         wrapped.push_str(written);
         wrapped.push(']');
         let mut document = Document::parse(&wrapped).map_err(|_| not_one())?;
-        if document.root.len() != Some(1) {
+        if document.root.len() != Some(1)
+            || !document.prologue.is_empty()
+            || !document.epilogue.is_empty()
+        {
             return Err(not_one());
         }
         document.root.take_item(0).ok_or_else(not_one)

@@ -1088,16 +1088,37 @@ fn a_leading_zero_is_refused_by_both() {
 
 /// Every comment a text holds, with the anchor it was written against, in
 /// the order it stands in.
-fn comment_texts(text: &str) -> Vec<(String, String)> {
+fn comment_texts(text: &str) -> Vec<Spotted> {
     Document::parse(text)
         .map(|document| {
             document
                 .comments()
                 .into_iter()
-                .map(|comment| (format!("{:?}", comment.anchor), comment.text))
+                .map(|comment| Spotted {
+                    anchor: format!("{:?}", comment.anchor),
+                    pointer: comment.anchor.pointer().map(str::to_owned),
+                    text: comment.text,
+                })
                 .collect()
         })
         .expect("the canonical text parses")
+}
+
+/// One comment as a text holds it: its anchor, the pointer the anchor names
+/// (none for the prologue and the epilogue) and its text.
+struct Spotted {
+    anchor: String,
+    pointer: Option<String>,
+    text: String,
+}
+
+/// One relocation, by identity (fix pass 3, item L9): the comment's text and
+/// the pointer it was written against and moved to, so two comments with one
+/// text are never mistaken for each other.
+struct Moved {
+    text: String,
+    from: String,
+    to: String,
 }
 
 /// Whether `out` holds `inn`'s comments (fix pass 2, item D4: the comparison
@@ -1105,27 +1126,40 @@ fn comment_texts(text: &str) -> Vec<(String, String)> {
 /// puts members in field order, so a comment travels with the node it was
 /// written against; what must hold is that every anchor's comments come out
 /// in the order they went in, and that the only comments to change anchor
-/// are the ones `relocated` names, each exactly once.
-fn same_comments(inn: &[(String, String)], out: &[(String, String)], relocated: &[String]) -> bool {
+/// are the ones `relocated` names, each exactly once: in `inn` at the pointer
+/// it was moved from, in `out` at the pointer it was moved to (the prologue
+/// when that is the root).
+fn same_comments(inn: &[Spotted], out: &[Spotted], relocated: &[Moved]) -> bool {
     use std::collections::BTreeMap;
-    /// Each anchor's comments in order, and the relocated ones, sorted.
-    type Grouped<'c> = (BTreeMap<&'c str, Vec<&'c str>>, Vec<&'c str>);
-    fn by_anchor<'c>(comments: &'c [(String, String)], relocated: &[String]) -> Grouped<'c> {
-        let mut moved = relocated.to_vec();
+    /// Each anchor's comments in order, and the relocated ones by identity.
+    type Grouped<'c> = (BTreeMap<&'c str, Vec<&'c str>>, Vec<(&'c str, usize)>);
+    fn by_anchor<'c>(comments: &'c [Spotted], relocated: &[Moved], before: bool) -> Grouped<'c> {
+        let mut taken = vec![false; relocated.len()];
         let mut kept: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-        let mut loose: Vec<&str> = Vec::new();
-        for (anchor, text) in comments {
-            if let Some(found) = moved.iter().position(|one| one == text) {
-                moved.remove(found);
-                loose.push(text);
+        let mut loose: Vec<(&str, usize)> = Vec::new();
+        for seen in comments {
+            let here = seen.pointer.as_deref().unwrap_or_default();
+            let found = relocated.iter().enumerate().position(|(index, moved)| {
+                let place = if before { &moved.from } else { &moved.to };
+                !taken.get(index).copied().unwrap_or(true)
+                    && moved.text == seen.text
+                    && here == place.as_str()
+            });
+            if let Some(index) = found {
+                if let Some(slot) = taken.get_mut(index) {
+                    *slot = true;
+                }
+                loose.push((seen.text.as_str(), index));
             } else {
-                kept.entry(anchor.as_str()).or_default().push(text.as_str());
+                kept.entry(seen.anchor.as_str())
+                    .or_default()
+                    .push(seen.text.as_str());
             }
         }
         loose.sort_unstable();
         (kept, loose)
     }
-    by_anchor(inn, relocated) == by_anchor(out, relocated)
+    by_anchor(inn, relocated, true) == by_anchor(out, relocated, false)
 }
 
 /// The two promises the canonical writer makes of every text it writes
@@ -1145,10 +1179,14 @@ impl Kept {
             return;
         };
         self.cases += 1;
-        let relocated: Vec<String> = once
+        let relocated: Vec<Moved> = once
             .relocated
             .iter()
-            .map(|relocation| relocation.comment.clone())
+            .map(|relocation| Moved {
+                text: relocation.comment.clone(),
+                from: relocation.from.clone(),
+                to: relocation.to.clone(),
+            })
             .collect();
         if !same_comments(&comment_texts(text), &comment_texts(&once.text), &relocated) {
             self.lost.push(format!(

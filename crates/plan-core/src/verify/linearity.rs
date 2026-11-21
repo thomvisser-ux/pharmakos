@@ -178,9 +178,9 @@ fn shapes() -> Vec<(&'static str, Shape)> {
 
 /// The bytes one call examines on `text`.
 fn work_of(text: &str, call: &dyn Fn(&str)) -> u64 {
-    work::take().expect("the meter counts");
+    let _ = work::take();
     call(text);
-    u64::try_from(work::take().expect("the meter counts")).expect("a count")
+    u64::try_from(work::take()).expect("a count")
 }
 
 /// The work one call does on `text`, per byte of it.
@@ -360,7 +360,7 @@ fn patching_by_a_long_pointer_is_linear_in_its_bytes() {
             );
         }
         for (name, pointer) in pointers(size) {
-            work::take().expect("the meter counts");
+            let _ = work::take();
             let _ = crate::library::instantiate(
                 MINIMAL,
                 &[crate::library::Parameter {
@@ -370,8 +370,7 @@ fn patching_by_a_long_pointer_is_linear_in_its_bytes() {
                 &[],
             );
             let input = u64::try_from(pointer.len() + MINIMAL.len()).expect("a length");
-            let per =
-                u64::try_from(work::take().expect("the meter counts")).expect("a count") / input;
+            let per = u64::try_from(work::take()).expect("a count") / input;
             assert!(
                 per <= WORK_PER_BYTE,
                 "instantiate by {name} at {input} bytes examined {per} bytes per byte"

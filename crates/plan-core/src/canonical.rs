@@ -453,9 +453,9 @@ mod tests {
         let mut examined = Vec::new();
         for steps in [200, 400] {
             let text = commented_route(steps);
-            work::take().expect("the meter counts");
+            let _ = work::take();
             let canonical = canonicalise_text(&text).expect("a commented route");
-            examined.push(work::take().expect("the meter counts"));
+            examined.push(work::take());
             assert_eq!(
                 canonical.text.matches("// step ").count(),
                 steps,

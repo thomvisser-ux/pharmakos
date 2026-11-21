@@ -16,37 +16,46 @@
 //! (`plan-core`'s `verify::linearity`).
 //!
 //! The meter is per thread and only ever added to; it reads nothing back into
-//! any answer. It cannot fail to count (fix pass 2, item D2): the key is
-//! `const`-initialised and holds a type with no destructor, so reading it
-//! never fails, and a count past `usize::MAX` is not saturated but remembered
-//! as overflowed, which [`take`] answers as a typed error.
+//! any answer. It cannot fail to count, and it cannot overflow by its type
+//! (S3's `vfyq2`, fix pass 3, item L8): the count is a `u128`, an add is at
+//! most `usize::MAX`, which is at most 2^64 - 1 (asserted at compile time
+//! below), so the count passes `u128::MAX` only after more than 2^64 adds
+//! since the last [`take`], and an add is one read of the text: 2^64 of them,
+//! at one a nanosecond, take over five hundred years. Every test takes the
+//! meter around the one call it measures. So the add wraps explicitly
+//! (`wrapping_add`, which by the bound never does), and [`take`] answers the
+//! count with no error to report.
 
 use std::cell::Cell;
 
+// The bound the doc above rests on: an add is at most 2^64 - 1.
+const _: () = assert!(
+    usize::BITS <= 64,
+    "an add must fit 64 bits for the meter's bound"
+);
+
 thread_local! {
-    /// The bytes examined on this thread since the last [`take`], or `None`
-    /// once the count has passed `usize::MAX`.
-    static EXAMINED: Cell<Option<usize>> = const { Cell::new(Some(0)) };
+    /// The bytes examined on this thread since the last [`take`].
+    static EXAMINED: Cell<u128> = const { Cell::new(0) };
 }
 
-/// The meter's count passed `usize::MAX` since the last [`take`]: a measure
-/// that large is no measure, and a test reads it as a failure.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Overflowed;
+/// `bytes`, widened to the count's width: its little-endian bytes in the low
+/// half of a `u128`'s (no cast; `usize::BITS <= 64` is asserted above).
+fn wide(bytes: usize) -> u128 {
+    let mut low = [0_u8; 16];
+    let (head, _) = low.split_at_mut(core::mem::size_of::<usize>());
+    head.copy_from_slice(&bytes.to_le_bytes());
+    u128::from_le_bytes(low)
+}
 
 /// Count `bytes` examined.
 pub fn add(bytes: usize) {
-    EXAMINED.with(|examined| {
-        examined.set(examined.get().and_then(|count| count.checked_add(bytes)));
-    });
+    EXAMINED.with(|examined| examined.set(examined.get().wrapping_add(wide(bytes))));
 }
 
 /// The bytes examined on this thread since the last call, and the meter set
 /// back to zero.
-///
-/// # Errors
-///
-/// [`Overflowed`] when the count passed `usize::MAX`.
-pub fn take() -> Result<usize, Overflowed> {
-    EXAMINED.with(|examined| examined.replace(Some(0)).ok_or(Overflowed))
+#[must_use]
+pub fn take() -> u128 {
+    EXAMINED.with(|examined| examined.replace(0))
 }
