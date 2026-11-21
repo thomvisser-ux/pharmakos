@@ -131,7 +131,7 @@ fn binding_is_localhost_only() {
     }
 
     // The socket is reachable from loopback.
-    let accepting = listener.accept();
+    let accepting = listener.accept().expect("accepting");
     let mut client = TcpStream::connect(("127.0.0.1", port)).expect("loopback connects");
     client.write_all(b"GET /seat HTTP/1.1\r\n").expect("wrote");
     let connection = accepting.recv().expect("accepted");
@@ -266,11 +266,11 @@ fn a_seat_token_can_never_hold_spectate_nofog() {
             .tokens()
             .mint(Subject::Seat(SeatId::new(0)), MATCH, extra, Tick::ZERO)
             .expect_err("refused");
-        assert_eq!(error.code, Code::ForbiddenScope);
+        assert_eq!(error.code(), Code::ForbiddenScope);
         assert!(
-            error.message.contains("spectate.nofog"),
+            error.message().contains("spectate.nofog"),
             "{}",
-            error.message
+            error.message()
         );
     }
     assert!(
@@ -326,21 +326,21 @@ fn admin_cannot_read_another_seats_draft() {
     let error = surface
         .seat_state(Subject::Admin, SeatId::new(0))
         .expect_err("refused");
-    assert_eq!(error.code, Code::ForbiddenScope);
-    assert!(error.message.contains("drafts"), "{}", error.message);
+    assert_eq!(error.code(), Code::ForbiddenScope);
+    assert!(error.message().contains("drafts"), "{}", error.message());
 
     // 2. Another seat, by the same gate.
     let error = surface
         .seat_state(Subject::Seat(SeatId::new(1)), SeatId::new(0))
         .expect_err("refused");
-    assert_eq!(error.code, Code::ForbiddenScope);
+    assert_eq!(error.code(), Code::ForbiddenScope);
 
     // 3. A spectator, for completeness: `spectate.nofog` lifts fog, not secrecy.
     assert_eq!(
         surface
             .seat_state(Subject::Spectator, SeatId::new(0))
             .expect_err("refused")
-            .code,
+            .code(),
         Code::ForbiddenScope
     );
 
@@ -355,7 +355,7 @@ fn admin_cannot_read_another_seats_draft() {
             Tick::ZERO,
         )
         .expect_err("refused");
-    assert_eq!(error.code, Code::ForbiddenScope);
+    assert_eq!(error.code(), Code::ForbiddenScope);
 
     let (admin, _) = surface
         .tokens()

@@ -130,13 +130,28 @@ fn sources() -> Vec<PathBuf> {
         for path in here {
             if path.is_dir() {
                 stack.push(path);
-            } else if path.extension().is_some_and(|extension| extension == "rs") {
+            } else if path.extension().is_some_and(|extension| extension == "rs")
+                && !is_test_only(&path)
+            {
                 found.push(path);
             }
         }
     }
     found.sort();
     found
+}
+
+/// Whether a file under `src/` is a unit-test module and nothing else: it
+/// opens with `#![cfg(test)]` (S3's `vfyq2`, `src/verify/differential.rs`), so
+/// none of it is compiled into the game, as a `#[cfg(test)]` module inside a
+/// file is not.
+fn is_test_only(path: &std::path::Path) -> bool {
+    std::fs::read_to_string(path).is_ok_and(|text| {
+        text.lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty() && !line.starts_with("//"))
+            == Some("#![cfg(test)]")
+    })
 }
 
 /// The file's shipped code: comment-only lines removed, so prose about a
@@ -336,27 +351,13 @@ const KEPT_FALLBACKS: &[(&str, &str, usize, &str)] = &[
         "jsonc.rs",
         "trivia.get(..at).unwrap_or_default()",
         2,
-        "`at` is where `find` found a newline, so it is a character boundary inside the text",
+        "`at` is where `first_line_break` found a line feed or a carriage return, an ASCII byte, so it is a character boundary inside the text",
     ),
     (
         "jsonc.rs",
         "trivia.get(at..).unwrap_or_default()",
         2,
         "as the head, above",
-    ),
-    (
-        "jsonc.rs",
-        ".map_or(trivia.len(), |offset|",
-        2,
-        "a comment with no end runs to the end of its trivia, which is how the reader reads an \
-         unterminated one",
-    ),
-    (
-        "jsonc.rs",
-        "self.text.get(self.pos..).unwrap_or_default()",
-        1,
-        "`pos` is a character boundary the reader advanced to, and an empty rest is refused on \
-         the next line as a string that ended inside a character",
     ),
     (
         "jsonc.rs",
@@ -370,13 +371,6 @@ const KEPT_FALLBACKS: &[(&str, &str, usize, &str)] = &[
         2,
         "a template with no `meta` has no title to list (the verifier names the missing block), \
          and a note with no first line has no blurb",
-    ),
-    (
-        "patch.rs",
-        "position.unwrap_or(len).min(len)",
-        1,
-        "no remembered position means a new member, which goes last; a remembered one past the \
-         end goes last as well, which is where the member it followed now ends",
     ),
     (
         "render.rs",
@@ -409,24 +403,6 @@ const KEPT_FALLBACKS: &[(&str, &str, usize, &str)] = &[
         ".ok()",
         1,
         "as canonical.rs': a token that is not an array index names no item, and the caller says the pointer names nothing",
-    ),
-    (
-        "jsonc.rs",
-        "token.parse::<usize>().ok()",
-        1,
-        "`index_of` answers whether a token is an RFC 6901 array index; a token that is not one is `None`, its documented answer",
-    ),
-    (
-        "jsonc.rs",
-        "reader.string().ok().map(|(_raw, text)| text)",
-        1,
-        "a key spelling that does not read back is not the same key, so the canonical spelling is written, the module's stated rule",
-    ),
-    (
-        "jsonc.rs",
-        "let at = at.min(members.len());",
-        1,
-        "`put_member`'s documented contract: a position past the end puts the member at the end, as `patch.rs`' caller asks",
     ),
     (
         "render.rs",

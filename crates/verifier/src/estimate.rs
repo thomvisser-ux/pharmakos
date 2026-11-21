@@ -96,12 +96,13 @@ use pharmakos_proto::json::Json;
 use pharmakos_sim::math::quantity::Ms;
 
 use crate::Input;
-use crate::interface;
+use crate::interface::{self, WideMs};
 use crate::pointer;
 use crate::projection::{self, Tally};
 use crate::report::{Builder, Diag, patch_add};
 use crate::scope::Scope;
 use crate::strings;
+use pharmakos_proto::json::grammar::Said;
 
 /// Where the route's steps are, as a JSON Pointer.
 const ROUTE: &str = "/declarative/route";
@@ -144,9 +145,11 @@ fn economy(body: &Declarative, input: &Input<'_>, out: &mut Builder) {
     let economy = scope.economy();
     let supply = i64::from(economy.supply.raw());
     let draw = i64::from(economy.draw.raw());
-    let headroom = supply.saturating_sub(draw);
+    // Two `i32`s widened to `i64`: their difference and its negation are
+    // exact, so neither wraps (fix pass 4, item 1: they saturated).
+    let headroom = supply.wrapping_sub(draw);
     if headroom < 0 {
-        out.emit(Diag::new("W0601", pointer::ROOT).arg("found", headroom.saturating_neg()));
+        out.emit(Diag::new("W0601", pointer::ROOT).arg("found", headroom.wrapping_neg()));
     }
 
     let prices = input.prices();
@@ -165,8 +168,16 @@ fn economy(body: &Declarative, input: &Input<'_>, out: &mut Builder) {
         let Ok(orders) = projection::step_orders(entry, prices, scope) else {
             break;
         };
-        adds = adds.plus(orders.adds);
-        upper = upper.plus(orders.upper());
+        // A sum that leaves `i128` stops the tally as an unpriced step does
+        // (fix pass 4, item 1); the seal's price check, E0603, refuses it.
+        let (Ok(more), Ok(most)) = (
+            adds.plus(orders.adds),
+            orders.upper().and_then(|ordered| upper.plus(ordered)),
+        ) else {
+            break;
+        };
+        adds = more;
+        upper = most;
         let at = pointer::at(ROUTE, index);
         if first_short.is_none() && adds.draw > room {
             first_short = Some(at.clone());
@@ -180,7 +191,9 @@ fn economy(body: &Declarative, input: &Input<'_>, out: &mut Builder) {
     }
 
     if let Some(at) = first_short {
-        let beyond = adds.draw.saturating_sub(room);
+        // `adds.draw` is past `room`, which is at least zero: the difference
+        // is positive and smaller than `adds.draw`, so it never wraps.
+        let beyond = adds.draw.wrapping_sub(room);
         let allowed = body
             .options
             .as_ref()
@@ -198,7 +211,9 @@ fn economy(body: &Declarative, input: &Input<'_>, out: &mut Builder) {
         // Only the upper bound crosses the line: the route may add the draw,
         // and the view cannot say whether it does, so this is a warning and
         // never spec section 11's error.
-        out.emit(Diag::new("W0604", at).arg("found", upper.draw.saturating_sub(room)));
+        // As `beyond` above: `upper.draw` is past `room`, which is at least
+        // zero, so this never wraps.
+        out.emit(Diag::new("W0604", at).arg("found", upper.draw.wrapping_sub(room)));
     }
     if let Some(at) = first_over {
         out.emit(
@@ -245,7 +260,8 @@ fn seal_price(playbook: &Playbook, body: &Declarative, input: &Input<'_>, out: &
     // The door's lines, in the projection's order: spend past `int32` (which
     // is inside the sim's `$` type, so it is the line spend crosses first),
     // draw past the sim's `kW` type, and the headroom left past it.
-    let headroom = i128::from(economy.supply.raw()).saturating_sub(i128::from(economy.draw.raw()));
+    // Two `i32`s apart: exact in `i128`, never wraps.
+    let headroom = i128::from(economy.supply.raw()).wrapping_sub(i128::from(economy.draw.raw()));
     let floor = i128::from(i32::MIN);
     let mut upper = Tally::ZERO;
     let mut first: Option<String> = None;
@@ -253,9 +269,15 @@ fn seal_price(playbook: &Playbook, body: &Declarative, input: &Input<'_>, out: &
         let Ok(orders) = projection::step_orders(entry, prices, scope) else {
             break;
         };
-        upper = upper.plus(orders.upper());
-        if upper.spend > int32 || upper.draw > int32 || headroom.saturating_sub(upper.draw) < floor
-        {
+        // A sum past `i128` is past every line here: this step is the first.
+        let Ok(most) = orders.upper().and_then(|ordered| upper.plus(ordered)) else {
+            first = Some(pointer::at(ROUTE, index));
+            break;
+        };
+        upper = most;
+        // `headroom` is two `i32`s' difference and `upper.draw` is above
+        // zero, so the difference is far inside `i128` and never wraps.
+        if upper.spend > int32 || upper.draw > int32 || headroom.wrapping_sub(upper.draw) < floor {
             first = Some(pointer::at(ROUTE, index));
             break;
         }
@@ -269,9 +291,12 @@ fn seal_price(playbook: &Playbook, body: &Declarative, input: &Input<'_>, out: &
         Diag::new("E0603", at)
             .arg(
                 "found",
-                format!("{} and {} kW", dollars(upper.spend), upper.draw),
+                pharmakos_proto::said!("{} and {} kW", dollars(upper.spend), upper.draw),
             )
-            .arg("most", format!("{} and {int32} kW", dollars(int32))),
+            .arg(
+                "most",
+                pharmakos_proto::said!("{} and {} kW", dollars(int32), int32),
+            ),
     );
 }
 
@@ -296,8 +321,8 @@ fn allow_dormant(body: &Declarative) -> String {
 
 /// A `$` figure as a player reads it: `$ 60`, the spelling the gateway's own
 /// feed lines use.
-fn dollars(money: i128) -> String {
-    format!("$ {money}")
+fn dollars(money: i128) -> Said {
+    pharmakos_proto::said!("$ {}", money)
 }
 
 // ---------------------------------------------------------------------------
@@ -313,9 +338,12 @@ fn schedule(body: &Declarative, input: &Input<'_>, out: &mut Builder) {
     // Where the commander is known to stand, and how far short of that point
     // it may have stopped. The view's commander position, when it carries
     // one, is where the route starts.
-    let mut here: Option<(Voxel, i64)> = scope.commander().map(|at| (at, 0));
-    let mut walking = Ms::ZERO;
-    let mut elapsed = Ms::ZERO;
+    let mut here: Option<(Voxel, u32)> = scope.commander().map(|at| (at, 0));
+    // Wide sums (fix pass 4, item 1, and fix pass 5, item L5): see
+    // the const assertion above `Segment` for the bound by which these
+    // never wrap.
+    let mut walking = WideMs::ZERO;
+    let mut elapsed = WideMs::ZERO;
     let mut first_late: Option<String> = None;
     let segment = match segment(input) {
         Segment::Coming(length) => Some(length),
@@ -333,7 +361,7 @@ fn schedule(body: &Declarative, input: &Input<'_>, out: &mut Builder) {
         let (leg, on_site) = match entry.kind.as_ref() {
             Some(step::Kind::Move(walk_to)) => (
                 Some((place(walk_to.to.as_ref(), scope), walk.arrive_radius())),
-                Ms::ZERO,
+                WideMs::ZERO,
             ),
             Some(step::Kind::PlaceBeacon(deploy)) => (
                 Some((place(deploy.at.as_ref(), scope), walk.interface_range())),
@@ -345,26 +373,28 @@ fn schedule(body: &Declarative, input: &Input<'_>, out: &mut Builder) {
             ),
             // A hold is exactly its duration; a negative one is `E0109`'s and
             // counts nothing here.
-            Some(step::Kind::Hold(hold)) => (None, Ms::new(hold.ms.max(0))),
+            Some(step::Kind::Hold(hold)) => (None, WideMs::of(Ms::new(hold.ms.max(0)))),
             // A wait ends when its condition comes true, which is the future;
             // a broadcast is radio's (S4). Neither moves the commander.
-            Some(step::Kind::WaitUntil(_) | step::Kind::Broadcast(_)) | None => (None, Ms::ZERO),
+            Some(step::Kind::WaitUntil(_) | step::Kind::Broadcast(_)) | None => {
+                (None, WideMs::ZERO)
+            }
         };
         if let Some((target, radius)) = leg {
             let walked = match (here, target) {
                 (Some((from, slack)), Some(to)) => walk.leg(from, slack, to, radius),
                 // A leg with an end the view does not name is not counted:
                 // the bound stays a bound.
-                _ => Ms::ZERO,
+                _ => WideMs::ZERO,
             };
-            walking = plus(walking, walked);
-            elapsed = plus(elapsed, walked);
+            walking = walking.plus(walked);
+            elapsed = elapsed.plus(walked);
             here = target.map(|to| (to, radius));
         }
-        elapsed = plus(elapsed, on_site);
+        elapsed = elapsed.plus(on_site);
         if let Some(length) = segment
             && first_late.is_none()
-            && elapsed > length
+            && elapsed > WideMs::of(length)
         {
             first_late = Some(pointer::at(ROUTE, index));
         }
@@ -377,10 +407,29 @@ fn schedule(body: &Declarative, input: &Input<'_>, out: &mut Builder) {
                 .arg("segment", length.raw()),
         );
     }
-    if walking > Ms::ZERO {
+    if walking > WideMs::ZERO {
         out.emit(Diag::new("I0001", ROUTE).arg("found", walking.raw()));
     }
 }
+
+/// The route's sums never wrap (S3's `vfyq2`, fix pass 5, item L5: the
+/// proof that stood here was false, counting a walked leg as one `i32`).
+/// Each route step adds at most a walked leg, under 2^`LEG_MS_BITS`
+/// (`walking`), and its time on site, a row under 2^`ROW_MS_BITS`
+/// (`interface`'s module doc), or a hold, an `i32`. A route of the playbook
+/// `Input` holds has fewer steps than the playbook has bytes, at most
+/// `MAX_CANONICAL_BYTES` (`Input` refuses more: `InputError::Oversize`), so
+/// both sums are under 2^(max(`LEG_MS_BITS`, `ROW_MS_BITS`) + 1 + the bytes'
+/// bits), which this asserts is inside `i128`.
+const _: () = {
+    let step_bits = usize::BITS - crate::MAX_CANONICAL_BYTES.leading_zeros();
+    let per_step = if crate::walking::LEG_MS_BITS > crate::interface::ROW_MS_BITS {
+        crate::walking::LEG_MS_BITS
+    } else {
+        crate::interface::ROW_MS_BITS
+    };
+    assert!(per_step + 1 + step_bits < i128::BITS - 1);
+};
 
 /// What the snapshot says about the coming segment (see the module doc).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -428,12 +477,6 @@ fn beacon(reference: Option<&BeaconRef>, scope: &Scope) -> Option<Voxel> {
     }
 }
 
-/// Two durations added, saturating upwards: past `i32` is past every segment,
-/// and that is all the figure is compared with.
-fn plus(left: Ms, right: Ms) -> Ms {
-    Ms::new(left.raw().saturating_add(right.raw()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::dollars;
@@ -452,7 +495,7 @@ mod tests {
 
     #[test]
     fn a_dollar_figure_reads_as_the_feed_spells_it() {
-        assert_eq!(dollars(220), "$ 220");
-        assert_eq!(dollars(-5), "$ -5");
+        assert_eq!(dollars(220).as_str(), "$ 220");
+        assert_eq!(dollars(-5).as_str(), "$ -5");
     }
 }

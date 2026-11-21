@@ -84,6 +84,20 @@ pub(crate) enum WireError {
     NotUtf8,
 }
 
+impl WireError {
+    /// The fault's name, as a refusal says it.
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            WireError::Truncated => "Truncated",
+            WireError::VarintTooLong => "VarintTooLong",
+            WireError::BadWireType => "BadWireType",
+            WireError::BadFieldNumber => "BadFieldNumber",
+            WireError::OutOfRange => "OutOfRange",
+            WireError::NotUtf8 => "NotUtf8",
+        }
+    }
+}
+
 /// Reads fields out of a buffer, one at a time, in the order they appear.
 #[derive(Debug)]
 pub(crate) struct Reader<'a> {

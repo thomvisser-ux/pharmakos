@@ -24,10 +24,10 @@
       "beginner": "Unless the map changes before this step starts, it finds nothing and fails."
     }
   ],
-  "report_hash": "PgI/NrWIS5I=",
+  "report_hash": "wjpnhIP3YCk=",
   "rules_hash": "GybFJQaL/2E=",
   "plan_fingerprint": "q0gWYzv5jLg=",
-  "verifier_version": "0.1.0-s3.4",
+  "verifier_version": "0.1.0-s3.5",
   "size_units": 1,
   "size_budget": 128
 }

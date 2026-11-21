@@ -75,6 +75,11 @@ pub enum TravelError {
     Negative(Ms),
 }
 
+/// Its words are figures and the schema's own names (S3's `vfyq2`, fix pass
+/// 3, item M2 (d)).
+impl pharmakos_proto::json::grammar::EngineWords for TravelError {}
+impl pharmakos_proto::json::grammar::door::EngineSeal for TravelError {}
+
 impl core::fmt::Display for TravelError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -262,19 +267,17 @@ impl Route {
 ///
 /// Up, always: the estimator is never optimistic, and rounding up is the only
 /// direction that keeps that true of what the player reads (item 57). The
-/// arithmetic is in `i64`, where a rounded `i32` of milliseconds cannot
-/// overflow, so every travel time has its rendering.
+/// arithmetic is `u64::div_ceil` over the non-negative milliseconds, which
+/// cannot overflow, so every travel time has its rendering.
 ///
 /// # Errors
 ///
 /// [`TravelError::Negative`] for a time below zero, which no estimate is.
 pub fn whole_seconds(ms: Ms) -> Result<String, TravelError> {
-    let raw = i64::from(ms.raw());
-    if raw < 0 {
+    let Ok(raw) = u64::try_from(ms.raw()) else {
         return Err(TravelError::Negative(ms));
-    }
-    // `raw` is at most `i32::MAX`, so the sum is far inside `i64`.
-    let seconds = (raw + 999).div_euclid(1000);
+    };
+    let seconds = raw.div_ceil(1000);
     if seconds < 60 {
         return Ok(format!("{seconds} s"));
     }

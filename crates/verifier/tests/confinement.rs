@@ -418,31 +418,13 @@ const KEPT_FALLBACKS: &[(&str, &str, &str)] = &[
     ),
     (
         "interface.rs",
-        "let extra = i32::try_from(fields.saturating_sub(1)).unwrap_or(i32::MAX);",
-        "spec section 5's cap: the edit is min(base + per-field x extra, max), so an extra \
-         past i32 prices at the cap, exactly as the true count would",
-    ),
-    (
-        "interface.rs",
         ".unwrap_or_default(),",
         "an absent `initial` is proto3's empty message: it writes no row, which is what an \
          empty row list says",
     ),
     (
         "interface.rs",
-        "let targets = Ms::new(i32::try_from(targets).unwrap_or(i32::MAX));",
-        "a visit's figure saturates upwards past every segment, the module doc's rule; no \
-         playbook inside the size budget comes near it",
-    ),
-    (
-        "interface.rs",
-        "u32::try_from(list.len()).unwrap_or(u32::MAX)",
-        "a list's elements are priced under the edit's cap or saturate past every segment, so \
-         a count past u32 prices the same",
-    ),
-    (
-        "interface.rs",
-        "playbook.declarative.as_ref().map_or(Ms::ZERO, |body| {",
+        "playbook.declarative.as_ref().map_or(WideMs::ZERO, |body| {",
         "a playbook with no declarative block has no route, so it stands at no beacon; the \
          block's absence is E0101's",
     ),
@@ -484,12 +466,6 @@ const KEPT_FALLBACKS: &[(&str, &str, &str)] = &[
         "structure.rs",
         "Some(condition::Node::Not(not)) => not.item.as_deref().map_or(0, tree_nodes),",
         "a `not` with no item holds no node below it; the missing item is E0101's",
-    ),
-    (
-        "walking.rs",
-        "Ms::from_ticks(u32::try_from(ticks).unwrap_or(u32::MAX))",
-        "a lower bound lowered is still a lower bound, the one direction the walking bound may \
-         err in",
     ),
 ];
 
@@ -564,8 +540,8 @@ fn the_fallback_scan_finds_what_it_looks_for() {
         KEPT_FALLBACKS.len()
     );
     assert!(
-        found.iter().any(|(file, _)| file == "walking.rs"),
-        "the fallback scan no longer sees walking.rs' kept conversion"
+        found.iter().any(|(file, _)| file == "estimate.rs"),
+        "the fallback scan no longer sees estimate.rs' kept pointer "
     );
 }
 

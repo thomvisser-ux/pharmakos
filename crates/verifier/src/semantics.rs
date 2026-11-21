@@ -120,6 +120,7 @@ use crate::strings;
 use crate::structure::arm_name;
 use crate::walk::{self, AreaOf, BeaconSlot, Carrier, Holder, List, Slot, Visit};
 use pharmakos_proto::gp::v1::OnFail;
+use pharmakos_proto::json::grammar::{Said, quoted};
 
 /// Run the stage.
 pub(crate) fn run(
@@ -336,7 +337,7 @@ impl Visit for Semantics<'_> {
         {
             self.out.emit(
                 Diag::new("E0421", pointer::child(at, "beacon_id"))
-                    .arg("id", id)
+                    .arg_text("id", id)
                     .arg_word("role", role),
             );
         }
@@ -375,7 +376,7 @@ impl Visit for Semantics<'_> {
                     "E0405",
                     pointer::child(&pointer::child(at, "beacon"), "beacon_id"),
                 )
-                .arg("id", id),
+                .arg_text("id", id),
             );
             return;
         }
@@ -387,7 +388,7 @@ impl Visit for Semantics<'_> {
                 Some(interface_row::Row::Recycle(_)) if known.is_core => {
                     self.out.emit(
                         Diag::new("E0504", pointer::child(&row_at, "recycle"))
-                            .arg("id", id)
+                            .arg_text("id", id)
                             .related(pointer::child(&pointer::child(at, "beacon"), "beacon_id")),
                     );
                 }
@@ -396,7 +397,7 @@ impl Visit for Semantics<'_> {
                 {
                     self.out.emit(
                         Diag::new("E0503", pointer::child(&row_at, "add_build_target"))
-                            .arg("id", id)
+                            .arg_text("id", id)
                             .arg("mandate", known.mandate.as_str_name())
                             .related(pointer::child(&pointer::child(at, "beacon"), "beacon_id")),
                     );
@@ -507,12 +508,14 @@ impl Visit for Semantics<'_> {
         let removing = matches!(slot, Slot::RemoveAnchor);
         let what = match chosen {
             // A description under remove_build_target is `E0410` already.
-            feature_ref::Ref::Seam(_) if !removing => strings::SEAM_PICK.to_owned(),
-            feature_ref::Ref::FeatureId(id) if self.is_seam(id) => format!("`{id}`"),
+            feature_ref::Ref::Seam(_) if !removing => Said::from(strings::SEAM_PICK),
+            feature_ref::Ref::FeatureId(id) if self.is_seam(id) => {
+                pharmakos_proto::said!("`{}`", quoted(id))
+            }
             feature_ref::Ref::Covered(_)
                 if deploy.is_some_and(|cover| self.names_a_seam(cover)) =>
             {
-                strings::COVERED_SEAM.to_owned()
+                Said::from(strings::COVERED_SEAM)
             }
             _ => return,
         };
@@ -604,7 +607,7 @@ impl Semantics<'_> {
                             "beacon_id",
                         ),
                     )
-                    .arg("id", id)
+                    .arg_text("id", id)
                     .arg("side", strings::SIDE_ENEMY)
                     .arg("role", strings::ROLE_PROTECT)
                     .arg("wanted", strings::WANTED_OWN),
@@ -657,7 +660,7 @@ impl Semantics<'_> {
                 if known.side == Ownership::Own {
                     self.out.emit(
                         Diag::new("E0414", here)
-                            .arg("id", id)
+                            .arg_text("id", id)
                             .arg("side", strings::SIDE_OWN)
                             .arg("role", strings::ROLE_ATTACK_TARGET)
                             .arg("wanted", strings::WANTED_ENEMY),
@@ -673,10 +676,7 @@ impl Semantics<'_> {
                     ),
                     Some(sighting) if i64::from(sighting.age_ms) > window => self.out.emit(
                         Diag::new("E0418", here)
-                            .arg(
-                                "what",
-                                strings::sighted_ago(&format!("`{id}`"), sighting.age_ms),
-                            )
+                            .arg("what", strings::id_sighted_ago(id, sighting.age_ms))
                             .arg("max", window)
                             .map_ref(sighting.at),
                     ),
@@ -725,8 +725,8 @@ impl Semantics<'_> {
                         strings::seats_commander(seat),
                     ),
                     None => (
-                        strings::NO_COMMANDER_SIGHTED.to_owned(),
-                        strings::THE_ENEMY_COMMANDER.to_owned(),
+                        Said::from(strings::NO_COMMANDER_SIGHTED),
+                        Said::from(strings::THE_ENEMY_COMMANDER),
                     ),
                 };
                 // Set, a seat with no fresh sighting is refused (`E0418`):
@@ -743,7 +743,7 @@ impl Semantics<'_> {
                         .emit(Diag::new(code, here).arg("what", never).arg("max", window)),
                     Some(sighting) if i64::from(sighting.age_ms) > window => self.out.emit(
                         Diag::new(code, here)
-                            .arg("what", strings::sighted_ago(&subject, sighting.age_ms))
+                            .arg("what", strings::sighted_ago(subject, sighting.age_ms))
                             .arg("max", window)
                             .map_ref(sighting.at),
                     ),
@@ -804,7 +804,7 @@ impl Semantics<'_> {
                         .arg(
                             "what",
                             strings::sighted_ago(
-                                &strings::freshest_enemy_beacon(id),
+                                strings::freshest_enemy_beacon(id),
                                 sighting.age_ms,
                             ),
                         )
@@ -956,8 +956,8 @@ impl Semantics<'_> {
                         "blueprint_id",
                     ),
                 )
-                .arg("id", &queue.blueprint_id)
-                .arg("licence", name),
+                .arg_text("id", &queue.blueprint_id)
+                .arg("licence", *name),
             );
         }
     }
@@ -1000,14 +1000,14 @@ impl Semantics<'_> {
             if let Some(first) = earlier {
                 self.out.emit(
                     Diag::new("E0513", here.clone())
-                        .arg("id", id)
+                        .arg_text("id", id)
                         .arg("why", strings::SPIRE_QUEUED_EARLIER)
                         .related(first.at.clone()),
                 );
             } else if list == List::Route && !step.guarded && self.scope.spire_at(id) {
                 self.out.emit(
                     Diag::new("E0513", here.clone())
-                        .arg("id", id)
+                        .arg_text("id", id)
                         .arg("why", strings::SPIRE_STANDS)
                         .related(beacon_at.clone())
                         .map_ref(known.at),
@@ -1044,7 +1044,7 @@ impl Semantics<'_> {
         if target <= index {
             self.out.emit(
                 Diag::new("E0301", pointer::child(&here, "jump_to_label"))
-                    .arg("label", &on_fail.jump_to_label)
+                    .arg_text("label", &on_fail.jump_to_label)
                     .related(list_entry(list, target)),
             );
         }
@@ -1169,17 +1169,19 @@ enum Radius {
     Grown(u32),
 }
 
-/// A radius squared, in whole voxels squared. Neither arm can overflow: an
-/// `i32` squared is at most `2^62`, inside an `i64`, and a grown radius is at
-/// most `i16::MAX`, which `Scope::set_sphere_radius` holds it to, so no
-/// saturation is needed
-/// and none is written.
-fn squared(radius: Radius) -> i64 {
+/// A radius squared, in whole voxels squared, as an `i128`: both arms are
+/// 32-bit, so the square is below `2^64`, far inside an `i128`, whatever
+/// bound a caller holds the radius to. `saturating_mul` is how the product is
+/// written without an operator the crate's lints refuse; by the type, it
+/// never saturates.
+fn squared(radius: Radius) -> i128 {
     let radius = match radius {
-        Radius::Base(base) => i64::from(base),
-        Radius::Grown(grown) => i64::from(grown),
+        Radius::Base(base) => i128::from(base),
+        Radius::Grown(grown) => i128::from(grown),
     };
-    radius * radius
+    // A radius is at most a `u32` (2^32), so its square is under 2^64:
+    // exact in `i128` by the type (fix pass 4, item 1).
+    radius.wrapping_mul(radius)
 }
 
 /// Whether a column lies wholly outside the sphere of `radius` about
@@ -1192,19 +1194,19 @@ fn column_outside(centre: &Voxel, radius: Radius, x: i32, y: i32) -> bool {
 
 /// Squared distance between two voxels, in whole voxels squared.
 ///
-/// `i64` and squared, never a square root: a range check is `d2 <= r2` and there
-/// is no float anywhere near it (AGENTS.md section 4.2). The map is 384 voxels
-/// on its longest side, so the product cannot come close to the type's range —
-/// and it saturates rather than wrapping, because overflow checks are on and a
-/// panic inside the verifier would turn a silly playbook into a crash.
-fn squared_distance(a: &Voxel, b: &Voxel) -> i64 {
+/// Squared, never a square root: a range check is `d2 <= r2` and there is no
+/// float anywhere near it (AGENTS.md section 4.2). In `i128` (fix pass 4, item
+/// 1: it was an `i64` that saturated, which a playbook's `i32` coordinates at
+/// their extremes reached): two `i32`s differ by under 2^32, a square is under
+/// 2^64 and three of them under 2^66, exact by the type, so nothing wraps.
+fn squared_distance(a: &Voxel, b: &Voxel) -> i128 {
     let axis = |one: i32, other: i32| {
-        let delta = i64::from(one).saturating_sub(i64::from(other));
-        delta.saturating_mul(delta)
+        let delta = i128::from(one).wrapping_sub(i128::from(other));
+        delta.wrapping_mul(delta)
     };
     axis(a.x, b.x)
-        .saturating_add(axis(a.y, b.y))
-        .saturating_add(axis(a.z, b.z))
+        .wrapping_add(axis(a.y, b.y))
+        .wrapping_add(axis(a.z, b.z))
 }
 
 #[cfg(test)]

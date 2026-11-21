@@ -34,6 +34,8 @@
 //! sentence, and it says what the rule is for rather than what this file did
 //! wrong — a number in it would make it a second copy of the message.
 
+use pharmakos_proto::json::grammar::Said;
+
 /// One row of the string table: a code and the two strings it shows.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Text {
@@ -306,6 +308,12 @@ pub const VERIFIER_STRINGS: &[Text] = &[
         message: "the playbook has {found} handlers; this build compiles at most {max}.",
         beginner: "A playbook can carry only so many rules, however small each one is. Take \
                    some out.",
+    },
+    Text {
+        code: "E0114",
+        message: "the route has {found} steps; this build compiles at most {max}.",
+        beginner: "A route can hold only so many steps, however small each one is. Take some \
+                   out.",
     },
     // --- E02xx: conditions ---------------------------------------------------
     Text {
@@ -809,6 +817,25 @@ pub const NO_DEATH_LIMIT: &str = "0, no limit";
 pub const FIX_VISIBLE_NOW: &str = "Ask about what is visible now";
 /// E0209's Fix for an unset kind beside a window.
 pub const FIX_KNOWN_WITHIN: &str = "Ask about what was seen within the window";
+/// The window, in whole seconds, that E0209's Fix writes for a `KNOWN_WITHIN`
+/// with none: a literal token, so the Fix's title ([`FIX_ADD_WINDOW`]) and
+/// the number its patch writes (`structure.rs`'s `FIX_WINDOW_MS`) are both
+/// made from it and cannot say different windows (S3's `vfyq2`, fix pass 1,
+/// item 13).
+macro_rules! fix_window_seconds {
+    () => {
+        30
+    };
+}
+pub(crate) use fix_window_seconds;
+
+/// E0209's Fix for a `KNOWN_WITHIN` with no window (S3's `vfyq2`): the window
+/// it writes, in the words plan-core's chip says a window in.
+pub const FIX_ADD_WINDOW: &str = concat!(
+    "Ask about what was seen in the last ",
+    fix_window_seconds!(),
+    " seconds"
+);
 /// E0210's Fix.
 pub const FIX_DROP_WINDOW: &str = "Leave the window out";
 /// W0706's Fix: swap the fixed site for the description it should have been.
@@ -879,14 +906,14 @@ pub const SEAT_PAST_ANY_MATCH: &str = "which is past any seat a match holds";
 /// E0418's `{what}` for a named seat whose commander the view holds no
 /// sighting of.
 #[must_use]
-pub fn commander_never_sighted(seat: u32) -> String {
-    format!("the seat has no sighting of seat {seat}'s commander")
+pub fn commander_never_sighted(seat: u32) -> Said {
+    pharmakos_proto::said!("the seat has no sighting of seat {}'s commander", seat)
 }
 
 /// E0418's `{what}` subject for a named seat's commander.
 #[must_use]
-pub fn seats_commander(seat: u32) -> String {
-    format!("seat {seat}'s commander")
+pub fn seats_commander(seat: u32) -> Said {
+    pharmakos_proto::said!("seat {}'s commander", seat)
 }
 /// W0502's `{name}` for a repeated `my_commander`.
 pub const MY_COMMANDER: &str = "my_commander";
@@ -897,14 +924,27 @@ pub const FIX_DROP_ROTATION: &str = "Leave the rotation out";
 
 /// E0418's `{what}` for a beacon the view holds no sighting of.
 #[must_use]
-pub fn never_sighted(beacon_id: &str) -> String {
-    format!("the seat has no sighting of `{beacon_id}`")
+pub fn never_sighted(beacon_id: &str) -> Said {
+    pharmakos_proto::said!(
+        "the seat has no sighting of `{}`",
+        pharmakos_proto::json::grammar::quoted(beacon_id)
+    )
 }
 
 /// E0418's and W0708's `{what}` for a sighting older than the window.
 #[must_use]
-pub fn sighted_ago(what: &str, age_ms: u32) -> String {
-    format!("{what} was last seen {age_ms} ms ago")
+pub fn sighted_ago(what: impl Into<Said>, age_ms: u32) -> Said {
+    pharmakos_proto::said!("{} was last seen {} ms ago", what.into(), age_ms)
+}
+
+/// E0418's `{what}` for a named beacon whose sighting is older than the
+/// window: its id quoted.
+#[must_use]
+pub fn id_sighted_ago(id: &str, age_ms: u32) -> Said {
+    sighted_ago(
+        pharmakos_proto::said!("`{}`", pharmakos_proto::json::grammar::quoted(id)),
+        age_ms,
+    )
 }
 
 /// W0709's `{what}`: no enemy beacon has been sighted.
@@ -913,8 +953,11 @@ pub const NO_BEACON_SIGHTED: &str = "the seat has no sighting of an enemy beacon
 /// W0709's subject for the most recently seen enemy beacon, whose sighting is
 /// older than the window.
 #[must_use]
-pub fn freshest_enemy_beacon(id: &str) -> String {
-    format!("the most recently seen enemy beacon, `{id}`,")
+pub fn freshest_enemy_beacon(id: &str) -> Said {
+    pharmakos_proto::said!(
+        "the most recently seen enemy beacon, `{}`,",
+        pharmakos_proto::json::grammar::quoted(id)
+    )
 }
 
 /// E0507's `{licence}` for `gp.v1.Licence.RESONANCE_SPIRE`.

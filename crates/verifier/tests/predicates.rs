@@ -527,3 +527,59 @@ fn decision_eights_readings_are_noted_where_they_are_omitted() {
         )]
     );
 }
+
+/// S3's `vfyq2`: a `KNOWN_WITHIN` with no window is offered one, the window
+/// the vocabulary's enemy skeletons write, by an RFC 6902 `add` at the
+/// window's pointer, which inserts it when it is absent and replaces it when it
+/// is written as 0 (one value in proto3, which the canonical form leaves out).
+/// `crates/plan-core/tests/plan_core.rs` holds the value to plan-core's three
+/// skeletons and applies the patch.
+#[test]
+fn a_known_within_with_no_window_is_offered_one() {
+    use pharmakos_proto::gp::api::v1::patch_suggestion::Applicability;
+
+    let rules = rules();
+    let snapshot = Snapshot {
+        version: SNAPSHOT_VERSION,
+        ..Snapshot::default()
+    }
+    .to_bytes()
+    .expect("an empty snapshot encodes");
+    let scope = scope();
+    let at = format!("{WHEN}/enemy_beacon_known/freshness/known_within_ms");
+    for window in ["", r#","known_within_ms":0"#] {
+        let text = ruled(&format!(
+            r#"{{"enemy_beacon_known":{{"freshness":{{"kind":"KNOWN_WITHIN"{window}}}}}}}"#
+        ));
+        let input = Input::new(text.as_bytes(), &snapshot, &scope, &rules).expect("an input");
+        let report = verify(&input, Depth::Quick);
+        let found: Vec<_> = report
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.code == "E0209")
+            .collect();
+        assert_eq!(found.len(), 1, "{window:?}: one E0209: {report:?}");
+        let diagnostic = found.first().expect("one E0209");
+        assert_eq!(diagnostic.path, at, "{window:?}");
+        let fixes: Vec<(String, String, Applicability)> = diagnostic
+            .suggestions
+            .iter()
+            .map(|fix| {
+                (
+                    fix.title.clone(),
+                    fix.json_patch.clone(),
+                    fix.applicability(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            fixes,
+            [(
+                pharmakos_verifier::strings::FIX_ADD_WINDOW.to_owned(),
+                format!(r#"[{{"op":"add","path":"{at}","value":30000}}]"#),
+                Applicability::HasPlaceholders,
+            )],
+            "{window:?}"
+        );
+    }
+}

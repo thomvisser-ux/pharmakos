@@ -42,6 +42,30 @@ pub const MAX_MESSAGE_BYTES: usize = 256 * 1024;
 /// Equal to it today, so an unfragmented message of the maximum size is legal.
 pub const MAX_FRAME_BYTES: usize = MAX_MESSAGE_BYTES;
 
+/// Whether a message of `bytes` bytes is one this gateway reads, its
+/// fragments summed: the [`Assembler`]'s own limit, in one place (S3's
+/// `vfyq2`, fix pass 6, item 2).
+#[must_use]
+pub const fn message_fits(bytes: usize) -> bool {
+    bytes <= MAX_MESSAGE_BYTES
+}
+
+/// Whether a frame of `bytes` bytes is one this gateway reads: [`decode`]'s
+/// own limit, in one place.
+#[must_use]
+pub const fn frame_fits(bytes: usize) -> bool {
+    bytes <= MAX_FRAME_BYTES
+}
+
+/// Whether a text of `bytes` bytes reaches this gateway however a client
+/// sends it, whole in one frame or in fragments: what a text the gateway
+/// hands a client to send back must fit (S3's `vfyq2`, fix pass 6, item 2:
+/// an undo request).
+#[must_use]
+pub const fn travels(bytes: usize) -> bool {
+    message_fits(bytes) && frame_fits(bytes)
+}
+
 /// The frame opcodes v1 speaks.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Opcode {
@@ -209,7 +233,7 @@ pub fn decode(bytes: &[u8]) -> Result<Option<(Frame, usize)>, Error> {
     // A length that does not fit `usize` cannot fit the cap either, so it is
     // over the cap rather than an arithmetic surprise.
     let length = usize::try_from(length).map_err(|_| Error::TooLarge)?;
-    if length > MAX_FRAME_BYTES {
+    if !frame_fits(length) {
         return Err(Error::TooLarge);
     }
 
@@ -358,7 +382,7 @@ impl Assembler {
         let Some(buffer) = self.partial.as_mut() else {
             return Err(Error::Fragmentation);
         };
-        if buffer.len().saturating_add(frame.payload.len()) > MAX_MESSAGE_BYTES {
+        if !message_fits(buffer.len().saturating_add(frame.payload.len())) {
             self.partial = None;
             return Err(Error::TooLarge);
         }

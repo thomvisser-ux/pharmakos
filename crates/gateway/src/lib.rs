@@ -120,6 +120,16 @@
 //!   plus deterministic template prose, pagination uses opaque cursors tied to the
 //!   snapshot, and every result carries a `_status` footer with the phase and timer.
 
+// The gateway reads frames and JSON-RPC from a socket, so like the crates that
+// parse a player's text it may not panic on its input or wrap silently (S3's
+// `vfyq2`, fix pass 1, item 4): beside the workspace's `unwrap_used` and
+// `indexing_slicing`, these three are denied in the code it ships. A test's
+// panic is its failure report, so the test build is not held to them.
+#![cfg_attr(
+    not(test),
+    deny(clippy::panic, clippy::arithmetic_side_effects, clippy::expect_used)
+)]
+
 pub mod advice;
 pub mod audit;
 pub mod cache;
@@ -151,6 +161,9 @@ pub mod viewfeed;
 
 pub use error::{Code, Error};
 pub use surface::Surface;
+/// A `PlanError` in the gateway's own sentence: what `gamectl scenario run` says
+/// too (S3's `vfyq2`, fix pass 4, item L-g).
+pub use surface::plan_words::plan_refusal;
 pub use time::MatchTime;
 pub use token::{Subject, Token, TokenStore};
 

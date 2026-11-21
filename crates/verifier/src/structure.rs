@@ -113,6 +113,7 @@ use crate::report::{
 use crate::size;
 use crate::strings;
 use crate::walk::{self, AreaOf, Carrier, List, Slot, Visit};
+use pharmakos_proto::json::grammar::Said;
 
 use std::collections::BTreeMap;
 
@@ -125,6 +126,7 @@ pub(crate) fn run(playbook: &Playbook, limits: &Limits, out: &mut Builder) {
         if declarative.route.is_empty() {
             out.emit(Diag::new("E0102", "/declarative/route"));
         }
+        route_ceiling(declarative.route.len(), out);
         for (index, entry) in declarative.route.iter().enumerate() {
             walk_route_entry(entry, &pointer::at("/declarative/route", index), out);
         }
@@ -209,6 +211,12 @@ pub(crate) fn run(playbook: &Playbook, limits: &Limits, out: &mut Builder) {
             },
             Some(fallback::Posture::Patrol(patrol)) => {
                 let at = "/fallback/patrol/waypoints";
+                // A patrol walks its waypoints for ever: with none it walks
+                // nowhere, and the sim's compile refuses it (S3's `vfyq2`,
+                // fix pass 1, item 6).
+                if patrol.waypoints.is_empty() {
+                    out.emit(Diag::new("E0101", at).arg("what", "`waypoints`"));
+                }
                 for (index, waypoint) in patrol.waypoints.iter().enumerate() {
                     check_location(Some(waypoint), &pointer::at(at, index), "`waypoint`", out);
                 }
@@ -314,6 +322,26 @@ fn handler_ceiling(found: usize, out: &mut Builder) {
     );
 }
 
+/// `E0114`: more route steps than the sim compiles (S3's `vfyq2`, fix pass
+/// 3b).
+///
+/// The ceiling is the sim's own `MAX_ROUTE_STEPS`, read here and never
+/// written a second time, as [`handler_ceiling`] reads `MAX_HANDLERS`. The
+/// size budget (E0110) is a rules value, so a table whose budget passes the
+/// ceiling would let a route the sim refuses qualify. The diagnostic points
+/// at the first step past it.
+fn route_ceiling(found: usize, out: &mut Builder) {
+    let max = pharmakos_sim::interpreter::MAX_ROUTE_STEPS;
+    if found <= max {
+        return;
+    }
+    out.emit(
+        Diag::new("E0114", pointer::at("/declarative/route", max))
+            .arg("found", found)
+            .arg("max", max),
+    );
+}
+
 /// One route step.
 fn walk_route_entry(entry: &Step, at: &str, out: &mut Builder) {
     if entry.label.is_empty() {
@@ -382,6 +410,37 @@ fn walk_action(kind: &step::Kind, at: &str, out: &mut Builder) {
                             );
                         }
                     }
+                    // A row that adds or removes a Build target names it; the
+                    // sim's compile requires both blocks (S3's `vfyq2`, fix
+                    // pass 1, item 6). The target's own anchor is checked
+                    // where every Build target is ([`Sites::build_target`]).
+                    Some(interface_row::Row::AddBuildTarget(add)) => {
+                        if add.target.is_none() {
+                            out.emit(
+                                Diag::new(
+                                    "E0101",
+                                    pointer::child(
+                                        &pointer::child(&row_at, "add_build_target"),
+                                        "target",
+                                    ),
+                                )
+                                .arg("what", "`target`"),
+                            );
+                        }
+                    }
+                    Some(interface_row::Row::RemoveBuildTarget(remove)) => {
+                        let anchor_at = pointer::child(
+                            &pointer::child(&row_at, "remove_build_target"),
+                            "anchor",
+                        );
+                        match remove.anchor.as_ref() {
+                            None => out.emit(Diag::new("E0101", anchor_at).arg("what", "`anchor`")),
+                            Some(anchor) if anchor.place.is_none() => {
+                                out.emit(Diag::new("E0111", anchor_at).arg("field", "place"));
+                            }
+                            Some(_) => {}
+                        }
+                    }
                     Some(_) => {}
                 }
             }
@@ -430,7 +489,7 @@ fn walk_action(kind: &step::Kind, at: &str, out: &mut Builder) {
 /// `what` names the field for `E0101` when the whole message is absent; the
 /// unset-choice case is `E0111`, pointed at the `Location` itself, because there
 /// is no member under it to point at.
-fn check_location(place: Option<&Location>, at: &str, what: &str, out: &mut Builder) {
+fn check_location(place: Option<&Location>, at: &str, what: &'static str, out: &mut Builder) {
     let Some(place) = place else {
         out.emit(Diag::new("E0101", at.to_owned()).arg("what", what));
         return;
@@ -535,10 +594,11 @@ impl Visit for Sites<'_> {
         }
         for (present, corner) in [(area.min.is_some(), "min"), (area.max.is_some(), "max")] {
             if !present {
-                self.out.emit(
-                    Diag::new("E0101", pointer::child(at, corner))
-                        .arg("what", format!("`{}.{corner}`", of.field())),
-                );
+                self.out
+                    .emit(Diag::new("E0101", pointer::child(at, corner)).arg(
+                        "what",
+                        pharmakos_proto::said!("`{}.{}`", of.field(), corner),
+                    ));
             }
         }
     }
@@ -595,6 +655,20 @@ impl Visit for Sites<'_> {
     }
 
     fn build_target(&mut self, at: &str, target: &BuildTarget) {
+        // Every Build target, under whichever carrier, stands at an anchor:
+        // the sim's compile requires the block and a place in it (S3's
+        // `vfyq2`, fix pass 1, item 6), and so does every later rule that
+        // reads the target.
+        let anchor_at = pointer::child(at, "anchor");
+        match target.anchor.as_ref() {
+            None => self
+                .out
+                .emit(Diag::new("E0101", anchor_at).arg("what", "`anchor`")),
+            Some(anchor) if anchor.place.is_none() => self
+                .out
+                .emit(Diag::new("E0111", anchor_at).arg("field", "place")),
+            Some(_) => {}
+        }
         // The one blueprint that fills a box (`crate::BLUEPRINT_SLOTS`).
         if crate::blueprints::fills_a_box(&target.blueprint_id) {
             self.wall(at, target);
@@ -608,7 +682,7 @@ impl Visit for Sites<'_> {
         let here = pointer::child(at, "wall_box");
         self.out.emit(
             Diag::new("E0509", here.clone())
-                .arg("id", &target.blueprint_id)
+                .arg_text("id", &target.blueprint_id)
                 .fix(
                     strings::FIX_DROP_WALL_BOX,
                     patch_remove(&here),
@@ -727,7 +801,7 @@ impl Sites<'_> {
             if !present {
                 self.out.emit(
                     Diag::new("E0101", pointer::child(&box_at, corner))
-                        .arg("what", format!("`wall_box.{corner}`")),
+                        .arg("what", pharmakos_proto::said!("`wall_box.{}`", corner)),
                 );
             }
         }
@@ -755,8 +829,9 @@ impl Sites<'_> {
             .as_ref()
             .and_then(|anchor| anchor.place.as_ref())
         {
-            // A target with no anchor names nothing to remove it by, which is
-            // the same for every blueprint and is not the wall's question.
+            // A target with no anchor, or none naming a place, is refused for
+            // every blueprint by `build_target` above; it is not the wall's
+            // question.
             None => {}
             Some(location::Place::Voxel(voxel)) => {
                 let within = |value: i32, from: i32, to: i32| value >= from && value <= to;
@@ -888,7 +963,7 @@ impl Sites<'_> {
                 if !present {
                     self.out.emit(
                         Diag::new("E0101", pointer::child(at, field))
-                            .arg("what", format!("`{field}`")),
+                            .arg("what", pharmakos_proto::said!("`{}`", field)),
                     );
                 }
             }
@@ -1001,7 +1076,7 @@ impl Sites<'_> {
         at: &str,
         field: &'static str,
         found: u32,
-        range: &str,
+        range: &'static str,
         fixed: Option<u32>,
     ) {
         let here = pointer::child(at, field);
@@ -1011,7 +1086,7 @@ impl Sites<'_> {
             .arg("range", range);
         if let Some(value) = fixed {
             diag = diag.fix(
-                format!("Set {field} to {value}"),
+                pharmakos_proto::said!("Set {} to {}", field, value),
                 // `add`: the out-of-range value may be the absent one.
                 patch_add(&here, &number(value)),
                 Applicability::MaybeIncorrect,
@@ -1148,18 +1223,20 @@ fn filter_side(filter: Option<&BeaconFilter>) -> i32 {
 }
 
 /// How `E0105` names a repeated protect-list entry.
-fn asset_name(entry: &ProtectedAsset) -> String {
+fn asset_name(entry: &ProtectedAsset) -> Said {
     match entry.asset.as_ref() {
         Some(protected_asset::Asset::Beacon(beacon)) => match beacon.r#ref.as_ref() {
-            Some(beacon_ref::Ref::BeaconId(id)) => id.clone(),
-            Some(beacon_ref::Ref::Safest(_)) => "safest".to_owned(),
-            Some(beacon_ref::Ref::Nearest(_)) => "nearest".to_owned(),
-            Some(beacon_ref::Ref::Weakest(_)) => "weakest".to_owned(),
-            Some(beacon_ref::Ref::MostThreatened(_)) => "most_threatened".to_owned(),
-            None => "beacon".to_owned(),
+            Some(beacon_ref::Ref::BeaconId(id)) => {
+                Said::from(pharmakos_proto::json::grammar::quoted(id))
+            }
+            Some(beacon_ref::Ref::Safest(_)) => Said::from("safest"),
+            Some(beacon_ref::Ref::Nearest(_)) => Said::from("nearest"),
+            Some(beacon_ref::Ref::Weakest(_)) => Said::from("weakest"),
+            Some(beacon_ref::Ref::MostThreatened(_)) => Said::from("most_threatened"),
+            None => Said::from("beacon"),
         },
-        Some(protected_asset::Asset::MyCommander(_)) => strings::MY_COMMANDER.to_owned(),
-        None => "asset".to_owned(),
+        Some(protected_asset::Asset::MyCommander(_)) => Said::from(strings::MY_COMMANDER),
+        None => Said::from("asset"),
     }
 }
 
@@ -1234,7 +1311,7 @@ fn firing_limits(handler: &Handler, at: &str, limits: &Limits, out: &mut Builder
                 .arg("found", handler.max_fires)
                 .arg("max", ceiling)
                 .fix(
-                    format!("Set max_fires to {clamped}"),
+                    pharmakos_proto::said!("Set max_fires to {}", clamped),
                     // `add`: the out-of-range value may be the *absent* one — a
                     // handler that never wrote `max_fires` reads as zero, which
                     // is below the floor of one and is what fires this.
@@ -1252,7 +1329,7 @@ fn firing_limits(handler: &Handler, at: &str, limits: &Limits, out: &mut Builder
                 .arg("found", handler.cooldown_ms)
                 .arg("min", floor)
                 .fix(
-                    format!("Set the cooldown to {floor} ms"),
+                    pharmakos_proto::said!("Set the cooldown to {} ms", floor),
                     // `add`, and here it matters most: this is the one
                     // `MACHINE_APPLICABLE` fix in the stage, so the editor
                     // applies it unattended — and a handler with no
@@ -1272,7 +1349,7 @@ fn negative(out: &mut Builder, at: &str, field: &'static str, found: i32) {
             .arg("field", field)
             .arg("found", found)
             .fix(
-                format!("Set {field} to 0"),
+                pharmakos_proto::said!("Set {} to 0", field),
                 patch_replace(&pointer::child(at, field), &number(0)),
                 Applicability::MaybeIncorrect,
             ),
@@ -1310,7 +1387,7 @@ fn unique_names<'a>(
         match seen.get(name) {
             Some(first) => out.emit(
                 Diag::new("E0105", pointer::child(&pointer::at(at, index), field))
-                    .arg("name", name)
+                    .arg_text("name", name)
                     .arg("scope", scope)
                     .related(pointer::child(&pointer::at(at, *first), field)),
             ),
@@ -1621,9 +1698,9 @@ fn blueprint(id: &str, at: &str, tail: &[&str], out: &mut Builder) {
         return;
     }
     match crate::blueprints::slots_of(id) {
-        None => out.emit(Diag::new("E0506", pointer::join(at, tail)).arg("id", id)),
+        None => out.emit(Diag::new("E0506", pointer::join(at, tail)).arg_text("id", id)),
         Some(row) if !row.stands_as_a_structure() => {
-            out.emit(Diag::new("E0514", pointer::join(at, tail)).arg("id", id));
+            out.emit(Diag::new("E0514", pointer::join(at, tail)).arg_text("id", id));
         }
         Some(_) => {}
     }
@@ -1655,6 +1732,15 @@ fn radius(found: u32, at: &str, predicate: &str, out: &mut Builder) {
         );
     }
 }
+
+/// The window `E0209`'s Fix writes for a `KNOWN_WITHIN` with none (S3's
+/// `vfyq2`): the one the vocabulary's three enemy skeletons write
+/// (`crates/plan-core/src/vocabulary.rs`'s `enemy_knowledge_family`), so a
+/// picked predicate and a fixed one start alike.
+/// `crates/plan-core/tests/fix_window.rs` holds the two homes to one number.
+/// The seconds are `strings::fix_window_seconds!`, which the Fix's title is
+/// written from too.
+const FIX_WINDOW_MS: i32 = strings::fix_window_seconds!() * 1_000;
 
 /// `E0209`: "enemy predicates must declare freshness (`VISIBLE_NOW` or
 /// `KNOWN_WITHIN` ms)" (spec section 10). A block left out, a kind left unset
@@ -1719,9 +1805,18 @@ fn freshness(window: Option<&Freshness>, at: &str, predicate: &str, out: &mut Bu
                     window.known_within_ms,
                 );
             } else if window.known_within_ms == 0 {
-                out.emit(Diag::new(
-                    "E0209",
-                    pointer::join(at, &[predicate, "freshness", "known_within_ms"]),
+                let here = pointer::join(at, &[predicate, "freshness", "known_within_ms"]);
+                out.emit(Diag::new("E0209", here.clone()).fix(
+                    strings::FIX_ADD_WINDOW,
+                    // `add`: a window of 0 is the member left out or written
+                    // as 0, one value in proto3. RFC 6902's `add` inserts a
+                    // member that is not there and replaces one that is, and
+                    // plan-core's patch addresses the member the file writes
+                    // under either of the field's names, so the Fix applies
+                    // to every spelling (`plan-core/tests/fixes_apply.rs`).
+                    patch_add(&here, &number(FIX_WINDOW_MS)),
+                    // A starting window, not one the author wrote.
+                    Applicability::HasPlaceholders,
                 ));
             }
         }
@@ -1767,7 +1862,7 @@ fn compare(
     let Some(comparison) = value else {
         out.emit(
             Diag::new("E0101", pointer::join(at, &[predicate, field]))
-                .arg("what", format!("`{field}`")),
+                .arg("what", pharmakos_proto::said!("`{}`", field)),
         );
         return;
     };
@@ -1795,7 +1890,7 @@ fn percent(out: &mut Builder, at: &str, tail: &[&str], found: i64) {
     let here = pointer::join(at, tail);
     let clamped = found.clamp(0, 100);
     out.emit(Diag::new("E0202", here.as_str()).arg("found", found).fix(
-        format!("Clamp it to {clamped}"),
+        pharmakos_proto::said!("Clamp it to {}", clamped),
         patch_replace(&here, &number(clamped)),
         Applicability::MaybeIncorrect,
     ));

@@ -53,7 +53,7 @@
 //! |---|---|
 //! | 0 | the parent closed standard input and the match was put down |
 //! | 1 | standard output is a terminal, so nothing was started |
-//! | 2 | the rules table could not be read, or the config line was one this host refuses |
+//! | 2 | the rules table could not be read, the rules table is one the verifier refuses (S3's `vfyq2`, fix pass 5, item L8), or the config line was one this host refuses |
 //! | 4 | the host could not start: no loopback bind, no entropy for a token, no private match cache |
 //!
 //! Standard output belongs to the announce line alone. Everything else this
@@ -227,7 +227,7 @@ pub fn run(root: &Path) -> Result<String, Failure> {
     };
     serve::run(setup, std::io::stdin().lock(), std::io::stdout().lock()).map_err(|error| {
         let message = strings::host_refused(&error.to_string());
-        if error.code == Code::InvalidArgument {
+        if error.code() == Code::InvalidArgument {
             Failure::input(message)
         } else {
             Failure::internal(message)

@@ -30,6 +30,7 @@ use pharmakos_proto::gp::api::v1::patch_suggestion::Applicability;
 use pharmakos_proto::gp::api::v1::{Diagnostic, PatchSuggestion};
 use pharmakos_proto::gp::v1::Voxel;
 use pharmakos_proto::json::Json;
+use pharmakos_proto::json::grammar::Said;
 
 use crate::catalogue;
 use crate::strings;
@@ -61,9 +62,30 @@ impl Diag {
         }
     }
 
-    /// One substitution for the message template.
-    pub(crate) fn arg(mut self, name: &'static str, value: impl core::fmt::Display) -> Diag {
-        self.args.push((name, Cow::Owned(value.to_string())));
+    /// One substitution for the message template: static words, a number,
+    /// or player text quoted (`pharmakos_proto::json::grammar::Said`; S3's
+    /// `vfyq2`, fix pass 2, item B). A `String` is not one, so text read from
+    /// the file cannot reach a message without the quoting rule.
+    pub(crate) fn arg(mut self, name: &'static str, value: impl Into<Said>) -> Diag {
+        self.args
+            .push((name, Cow::Owned(value.into().into_string())));
+        self
+    }
+
+    /// One substitution that is the player's own text (a label, an id, a
+    /// key), quoted through the codec's one rule
+    /// (`pharmakos_proto::json::grammar::quoted`; S3's `vfyq2`): control
+    /// characters escaped and the length capped, so a report never carries a
+    /// terminal control sequence or the whole of a 200 KB name.
+    pub(crate) fn arg_text(mut self, name: &'static str, value: impl AsRef<str>) -> Diag {
+        self.args.push((
+            name,
+            Cow::Owned(
+                pharmakos_proto::json::grammar::quoted(value.as_ref())
+                    .as_str()
+                    .to_owned(),
+            ),
+        ));
         self
     }
 
@@ -86,15 +108,17 @@ impl Diag {
         self
     }
 
-    /// A fix the editor can offer, labelled by how safely it applies.
+    /// A fix the editor can offer, labelled by how safely it applies. Its
+    /// title is shown to the player, so it is a `Said` as a message argument
+    /// is.
     pub(crate) fn fix(
         mut self,
-        title: impl Into<String>,
+        title: impl Into<Said>,
         json_patch: String,
         applicability: Applicability,
     ) -> Diag {
         self.suggestions.push(PatchSuggestion {
-            title: title.into(),
+            title: title.into().into_string(),
             json_patch,
             applicability: i32::from(applicability),
         });

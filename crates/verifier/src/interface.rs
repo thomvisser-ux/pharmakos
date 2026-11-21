@@ -53,14 +53,29 @@
 //! running total after each row — the tick marks on the editor's clock — and
 //! not merely a sum.
 //!
-//! # Sums saturate, and only upwards
+//! # Sums are wide, and cannot overflow by their type
 //!
-//! A visit's total is a sum of non-negative rows ([`Rates::from_rules`]
-//! refuses a negative rate), so the only way a sum can leave `i32` is upwards,
-//! past twenty-four days of game time. It saturates at [`i32::MAX`] there
-//! rather than failing: every consumer compares the figure against a segment
-//! of minutes, and a saturated figure still exceeds it, so saturation can make
-//! the schedule check fire and can never make it fall silent.
+//! S3's `vfyq2`, fix pass 4, item 1: the sums used to saturate at `i32::MAX`,
+//! where the sim's compile refuses the same row (`PlanError::RowTooLong`), so
+//! under a rules table with extreme rates a playbook qualified and then did
+//! not compile. Now two things hold.
+//!
+//! * **The table is the door.** [`Rates::check_rows`], which `Input::new`
+//!   calls, refuses a rules table under which a row a playbook within the size
+//!   budget can write passes the sim's `i32` of milliseconds: the worst row is
+//!   the switch, the edit at its cap and one Build target per unit of the
+//!   budget (a target is one size unit, `crate::size`), exactly the sum the
+//!   sim's `Row::duration_ms` makes. Under every table that passes, no row the
+//!   verifier qualifies is a row the compile refuses.
+//! * **The arithmetic is [`WideMs`]**, an `i128` of milliseconds. A rate is
+//!   an `i32` and a count a `u64` (`usize::BITS <= 64`, asserted below). A
+//!   row is its fixed rates (under 2^33) plus the build-target rate times its
+//!   own targets; a sum adds rows, and every row and every target it prices
+//!   is a distinct element of one decoded playbook, of which memory holds
+//!   fewer than 2^64. So any sum here is under 2^64 * 2^33 + 2^31 * 2^64 <
+//!   2^98, far inside `i128`, and [`WideMs::plus`] adds with `wrapping_add`,
+//!   which by that bound never wraps: nothing here saturates. A row is under
+//!   2^[`ROW_MS_BITS`].
 
 use pharmakos_proto::gp::v1::{
     AttackLaunch, AttackRetreat, AttackSettings, BuildSettings, DefendSettings, InitialSettings,
@@ -71,6 +86,66 @@ use pharmakos_sim::math::quantity::Ms;
 use pharmakos_sim::rules::RulesTable;
 
 use crate::limits::RulesGap;
+
+// The bound the module doc rests on: a count is at most 64 bits.
+const _: () = assert!(
+    usize::BITS <= 64,
+    "a count must fit 64 bits for the sums' bound"
+);
+
+/// A duration in game milliseconds, as wide as any sum of interface rows a
+/// playbook can write (the module doc, "Sums are wide").
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
+pub struct WideMs(i128);
+
+/// Every row sum this module makes is under 2^`ROW_MS_BITS` milliseconds
+/// (the module doc, "Sums are wide": under 2^64 * 2^33 + 2^31 * 2^64).
+pub const ROW_MS_BITS: u32 = 98;
+
+impl WideMs {
+    /// No time at all.
+    pub const ZERO: WideMs = WideMs(0);
+
+    /// The milliseconds.
+    #[must_use]
+    pub const fn raw(self) -> i128 {
+        self.0
+    }
+
+    /// One rules-table duration, or any `Ms`.
+    #[must_use]
+    pub fn of(ms: Ms) -> WideMs {
+        WideMs(i128::from(ms.raw()))
+    }
+
+    /// Two durations added: never wraps, by the module doc's bound.
+    #[must_use]
+    pub const fn plus(self, other: WideMs) -> WideMs {
+        WideMs(self.0.wrapping_add(other.0))
+    }
+
+    /// A count of milliseconds under 2^127, which every figure this crate
+    /// builds is (the bound is its caller's, stated there): its bits, kept.
+    #[must_use]
+    pub const fn of_millis(millis: u128) -> WideMs {
+        WideMs(millis.cast_signed())
+    }
+
+    /// A rate times a count: never wraps (2^31 * 2^64 < 2^127).
+    #[must_use]
+    pub fn times(rate: Ms, count: u64) -> WideMs {
+        WideMs(i128::from(rate.raw()).wrapping_mul(i128::from(count)))
+    }
+}
+
+/// A list's length as a count: `usize` is at most 64 bits (asserted above),
+/// so its little-endian bytes are the low half of a `u64`'s; no cast.
+fn length<T>(list: &[T]) -> u64 {
+    let mut low = [0_u8; 8];
+    let (head, _) = low.split_at_mut(core::mem::size_of::<usize>());
+    head.copy_from_slice(&list.len().to_le_bytes());
+    u64::from_le_bytes(low)
+}
 
 /// Spec section 5's rate card, read out of the rules table once.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -135,6 +210,39 @@ impl Rates {
         })
     }
 
+    /// Refuses a rules table under which a row a playbook within `budget`
+    /// size units can write would take longer than the sim's `i32` of
+    /// milliseconds (S3's `vfyq2`, fix pass 4, item 1): the sim's compile
+    /// refuses such a row (`PlanError::RowTooLong`), so with the table
+    /// refused nothing qualifies that the compile would refuse.
+    ///
+    /// The worst row is a `set_mandate` row: the switch, the settings edit at
+    /// its cap, and a Build target per size unit of the budget (each target
+    /// is one unit). Every other row is one rate, an `i32` already.
+    ///
+    /// # Errors
+    ///
+    /// [`RulesGap::RowPastTheSim`], naming the row as the sim sums it: the
+    /// three rates with their values, the budget and the sum (fix pass 5,
+    /// item L6).
+    pub fn check_rows(&self, budget: u32) -> Result<(), RulesGap> {
+        let room = WideMs(i128::from(i32::MAX));
+        let targets = WideMs::times(self.build_target, u64::from(budget));
+        let worst = WideMs::of(self.switch_mandate)
+            .plus(WideMs::of(self.edit_settings_max))
+            .plus(targets);
+        if worst <= room {
+            return Ok(());
+        }
+        Err(RulesGap::RowPastTheSim {
+            switch_ms: self.switch_mandate.raw(),
+            edit_max_ms: self.edit_settings_max.raw(),
+            build_target_ms: self.build_target.raw(),
+            budget,
+            worst_ms: worst.raw(),
+        })
+    }
+
     /// The visit handshake, paid once per visit to a beacon that is already
     /// there.
     #[must_use]
@@ -163,19 +271,13 @@ impl Rates {
     /// Editing mandate settings: base, plus one step per **extra** field,
     /// capped.
     #[must_use]
-    pub fn edit_settings(&self, fields: u32) -> Ms {
-        if fields == 0 {
-            return Ms::ZERO;
-        }
-        // Every rate is non-negative (`from_rules`), so the uncapped figure can
-        // only grow; saturating it before the cap is exact, because the cap is
-        // itself an `i32` and the smaller of the two is what is charged.
-        let extra = i32::try_from(fields.saturating_sub(1)).unwrap_or(i32::MAX);
-        let uncapped = self
-            .edit_settings_base
-            .raw()
-            .saturating_add(self.edit_settings_per_field.raw().saturating_mul(extra));
-        Ms::new(uncapped.min(self.edit_settings_max.raw()))
+    pub fn edit_settings(&self, fields: u64) -> WideMs {
+        let Some(extra) = fields.checked_sub(1) else {
+            return WideMs::ZERO;
+        };
+        let uncapped = WideMs::of(self.edit_settings_base)
+            .plus(WideMs::times(self.edit_settings_per_field, extra));
+        uncapped.min(WideMs::of(self.edit_settings_max))
     }
 }
 
@@ -190,31 +292,26 @@ fn rate(field: &'static str, value: i32) -> Result<Ms, RulesGap> {
     Ok(Ms::new(value))
 }
 
-/// Two durations added, saturating upwards (see the module doc).
-fn plus(left: Ms, right: Ms) -> Ms {
-    Ms::new(left.raw().saturating_add(right.raw()))
-}
-
 /// One visit, priced row by row.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Visit {
     /// The running total after each row commits, in the order the rows are
     /// written. Spec section 5: a row "commits at the end of its own
     /// duration", so these are the tick marks the editor draws.
-    pub commits: Vec<Ms>,
+    pub commits: Vec<WideMs>,
     /// The whole visit.
-    pub total: Ms,
+    pub total: WideMs,
 }
 
 impl Visit {
-    fn from_rows(first: Ms, rows: impl IntoIterator<Item = Ms>) -> Visit {
-        let mut running = first;
+    fn from_rows(first: Ms, rows: impl IntoIterator<Item = WideMs>) -> Visit {
+        let mut running = WideMs::of(first);
         let mut commits = Vec::new();
         if first.raw() != 0 {
             commits.push(running);
         }
         for row in rows {
-            running = plus(running, row);
+            running = running.plus(row);
             commits.push(running);
         }
         Visit {
@@ -226,22 +323,22 @@ impl Visit {
 
 /// What one interface row costs.
 #[must_use]
-pub fn row_ms(row: &InterfaceRow, rates: &Rates) -> Ms {
+pub fn row_ms(row: &InterfaceRow, rates: &Rates) -> WideMs {
     match row.row.as_ref() {
         Some(interface_row::Row::SetMandate(settings)) => {
             // Switching the type, then the settings that came with it. The
             // switch clears the old settings, so everything written here is a
             // new edit (spec section 5, "Mandate switch").
-            plus(rates.switch_mandate, settings_ms(settings, rates))
+            WideMs::of(rates.switch_mandate).plus(settings_ms(settings, rates))
         }
         Some(interface_row::Row::SetMandateSettings(settings)) => settings_ms(settings, rates),
-        Some(interface_row::Row::SetPriority(_)) => rates.set_priority,
-        Some(interface_row::Row::Recycle(_)) => rates.recycle,
+        Some(interface_row::Row::SetPriority(_)) => WideMs::of(rates.set_priority),
+        Some(interface_row::Row::Recycle(_)) => WideMs::of(rates.recycle),
         Some(interface_row::Row::AddBuildTarget(_) | interface_row::Row::RemoveBuildTarget(_)) => {
-            rates.build_target
+            WideMs::of(rates.build_target)
         }
-        Some(interface_row::Row::QueueStructure(_)) => rates.queue_structure,
-        None => Ms::ZERO,
+        Some(interface_row::Row::QueueStructure(_)) => WideMs::of(rates.queue_structure),
+        None => WideMs::ZERO,
     }
 }
 
@@ -288,31 +385,27 @@ pub fn place_beacon_ms(place: &PlaceBeaconStep, rates: &Rates) -> Visit {
 /// (`crates/sim/src/interpreter.rs`, the `place_beacon` arm of its compile),
 /// so the editor's tick marks follow it. The total is the same either way, so
 /// `W0701` was never affected; until S2 the marks were drawn priority first.
-fn initial_rows(initial: &InitialSettings, rates: &Rates) -> Vec<Ms> {
+fn initial_rows(initial: &InitialSettings, rates: &Rates) -> Vec<WideMs> {
     let mut rows = Vec::new();
     if let Some(settings) = initial.mandate.as_ref() {
         let priced = settings_ms(settings, rates);
-        if priced.raw() != 0 {
+        if priced != WideMs::ZERO {
             rows.push(priced);
         }
     }
     if initial.priority != 0 {
-        rows.push(rates.set_priority);
+        rows.push(WideMs::of(rates.set_priority));
     }
     rows
 }
 
 /// An edit of mandate settings: the settings fields at the edit rate, and each
 /// build target at the build-target rate.
-fn settings_ms(settings: &MandateSettings, rates: &Rates) -> Ms {
+fn settings_ms(settings: &MandateSettings, rates: &Rates) -> WideMs {
     let counted = count(settings);
-    let edit = rates.edit_settings(counted.fields);
-    let each = i64::from(rates.build_target.raw());
-    let targets = each.saturating_mul(i64::from(counted.targets));
-    // Saturating upwards, as the module doc says: a figure past `i32` is past
-    // every segment, and saying so is the only thing it is used for.
-    let targets = Ms::new(i32::try_from(targets).unwrap_or(i32::MAX));
-    plus(edit, targets)
+    rates
+        .edit_settings(counted.fields)
+        .plus(WideMs::times(rates.build_target, counted.targets))
 }
 
 /// What a settings message contains, for pricing.
@@ -320,27 +413,30 @@ fn settings_ms(settings: &MandateSettings, rates: &Rates) -> Ms {
 pub struct Counted {
     /// Settings fields the edit writes. The mandate *type* is not one of
     /// them, and each element of a list setting is one.
-    pub fields: u32,
+    pub fields: u64,
     /// Build targets, which are their own row at their own rate.
-    pub targets: u32,
+    pub targets: u64,
 }
 
 /// One for a field written at a non-default value, which is what proto3's
 /// canonical JSON keeps and what the author therefore set.
-fn set(written: bool) -> u32 {
-    u32::from(written)
+fn set(written: bool) -> u64 {
+    u64::from(written)
 }
 
-/// The elements of a list, each one field.
-///
-/// A list past `u32::MAX` elements counts as `u32::MAX`, and the price is
-/// exact anyway: every element is a field or a target, the edit is capped
-/// (spec section 5's "max 6 s") and the targets' figure saturates upwards
-/// past every segment (the module doc, "Sums saturate, and only upwards"), so
-/// any count that large prices the same. No playbook inside the size budget
-/// comes within nine orders of magnitude of it.
-fn each<T>(list: &[T]) -> u32 {
-    u32::try_from(list.len()).unwrap_or(u32::MAX)
+/// Field counts added: every count is a list's length or a single field,
+/// all of them elements of one decoded playbook, fewer than 2^64 together
+/// (the module doc), so the sum never wraps.
+fn add(parts: &[u64]) -> u64 {
+    parts
+        .iter()
+        .fold(0, |total, part| total.wrapping_add(*part))
+}
+
+/// The elements of a list, each one field: its length, which no count can
+/// pass (the module doc).
+fn each<T>(list: &[T]) -> u64 {
+    length(list)
 }
 
 /// Counts what an edit of `settings` writes.
@@ -378,7 +474,7 @@ pub fn count(settings: &MandateSettings) -> Counted {
         mandate,
     } = settings;
     let mut counted = Counted {
-        fields: set(*roe != 0).saturating_add(set(*retreat_hp_pct != 0)),
+        fields: add(&[set(*roe != 0), set(*retreat_hp_pct != 0)]),
         targets: 0,
     };
     let (fields, targets) = match mandate {
@@ -391,10 +487,12 @@ pub fn count(settings: &MandateSettings) -> Counted {
                 protected_areas,
             } = build;
             (
-                set(repair_threshold_pct.is_some())
-                    .saturating_add(set(rebuild_destroyed.is_some()))
-                    .saturating_add(set(*terraform != 0))
-                    .saturating_add(each(protected_areas)),
+                add(&[
+                    set(repair_threshold_pct.is_some()),
+                    set(rebuild_destroyed.is_some()),
+                    set(*terraform != 0),
+                    each(protected_areas),
+                ]),
                 each(targets),
             )
         }
@@ -403,7 +501,7 @@ pub fn count(settings: &MandateSettings) -> Counted {
                 probe_areas,
                 scout_count,
             } = survey;
-            (each(probe_areas).saturating_add(set(*scout_count != 0)), 0)
+            (add(&[each(probe_areas), set(*scout_count != 0)]), 0)
         }
         Some(mandate_settings::Mandate::Mine(mine)) => {
             let MineSettings {
@@ -413,10 +511,12 @@ pub fn count(settings: &MandateSettings) -> Counted {
                 pillar_spacing,
             } = mine;
             (
-                set(*dig_max_depth != 0)
-                    .saturating_add(set(flee_on_threat.is_some()))
-                    .saturating_add(set(*seam_choice != 0))
-                    .saturating_add(set(*pillar_spacing != 0)),
+                add(&[
+                    set(*dig_max_depth != 0),
+                    set(flee_on_threat.is_some()),
+                    set(*seam_choice != 0),
+                    set(*pillar_spacing != 0),
+                ]),
                 0,
             )
         }
@@ -435,27 +535,29 @@ pub fn count(settings: &MandateSettings) -> Counted {
         Some(mandate_settings::Mandate::Attack(attack)) => (attack_fields(attack), 0),
         None => (0, 0),
     };
-    counted.fields = counted.fields.saturating_add(fields);
+    counted.fields = add(&[counted.fields, fields]);
     counted.targets = targets;
     counted
 }
 
 /// The fields a Defend arm writes (see [`count`]).
-fn defend_fields(defend: &DefendSettings) -> u32 {
+fn defend_fields(defend: &DefendSettings) -> u64 {
     let DefendSettings {
         protect,
         engagement_radius_pct,
         pursue,
         picket_scouts,
     } = defend;
-    each(protect)
-        .saturating_add(set(*engagement_radius_pct != 0))
-        .saturating_add(set(*pursue != 0))
-        .saturating_add(set(picket_scouts.is_some()))
+    add(&[
+        each(protect),
+        set(*engagement_radius_pct != 0),
+        set(*pursue != 0),
+        set(picket_scouts.is_some()),
+    ])
 }
 
 /// The fields an Attack arm writes (see [`count`]).
-fn attack_fields(attack: &AttackSettings) -> u32 {
+fn attack_fields(attack: &AttackSettings) -> u64 {
     let AttackSettings {
         target,
         retarget,
@@ -471,35 +573,40 @@ fn attack_fields(attack: &AttackSettings) -> u32 {
         Some(AttackLaunch {
             force_size,
             segment_ms,
-        }) => set(force_size.is_some()).saturating_add(set(segment_ms.is_some())),
+        }) => add(&[set(force_size.is_some()), set(segment_ms.is_some())]),
         None => 0,
     };
     let retreat_fields = match retreat {
         Some(AttackRetreat {
             force_below_pct,
             after_launch_ms,
-        }) => set(force_below_pct.is_some()).saturating_add(set(after_launch_ms.is_some())),
+        }) => add(&[
+            set(force_below_pct.is_some()),
+            set(after_launch_ms.is_some()),
+        ]),
         None => 0,
     };
-    set(target.is_some())
-        .saturating_add(set(*retarget != 0))
-        .saturating_add(set(staging.is_some()))
-        .saturating_add(launch_fields)
-        .saturating_add(retreat_fields)
-        .saturating_add(set(*after_action != 0))
-        .saturating_add(each(avoid_areas))
-        .saturating_add(set(breach_allowed.is_some()))
-        .saturating_add(set(*waves != 0))
+    add(&[
+        set(target.is_some()),
+        set(*retarget != 0),
+        set(staging.is_some()),
+        launch_fields,
+        retreat_fields,
+        set(*after_action != 0),
+        each(avoid_areas),
+        set(breach_allowed.is_some()),
+        set(*waves != 0),
+    ])
 }
 
 /// What one route step costs on site: nothing unless it is a visit or a
 /// deploy.
 #[must_use]
-pub fn step_ms(entry: &Step, rates: &Rates) -> Ms {
+pub fn step_ms(entry: &Step, rates: &Rates) -> WideMs {
     match entry.kind.as_ref() {
         Some(step::Kind::Interface(visit)) => interface_ms(visit, rates).total,
         Some(step::Kind::PlaceBeacon(place)) => place_beacon_ms(place, rates).total,
-        _ => Ms::ZERO,
+        _ => WideMs::ZERO,
     }
 }
 
@@ -511,17 +618,17 @@ pub fn step_ms(entry: &Step, rates: &Rates) -> Ms {
 /// worst-case handler detours in a second lane (spec section 13), which is the
 /// place for it.
 #[must_use]
-pub fn route_ms(playbook: &Playbook, rates: &Rates) -> Ms {
-    playbook.declarative.as_ref().map_or(Ms::ZERO, |body| {
-        body.route
-            .iter()
-            .fold(Ms::ZERO, |total, entry| plus(total, step_ms(entry, rates)))
+pub fn route_ms(playbook: &Playbook, rates: &Rates) -> WideMs {
+    playbook.declarative.as_ref().map_or(WideMs::ZERO, |body| {
+        body.route.iter().fold(WideMs::ZERO, |total, entry| {
+            total.plus(step_ms(entry, rates))
+        })
     })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Counted, Rates, count, place_beacon_ms, route_ms, row_ms};
+    use super::{Counted, Rates, WideMs, count, place_beacon_ms, route_ms, row_ms};
     use crate::limits::RulesGap;
     use pharmakos_proto::gp::v1::{
         Area, BuildSettings, BuildTarget, InitialSettings, InterfaceRow, MandateSettings,
@@ -582,11 +689,11 @@ mod tests {
     #[test]
     fn editing_settings_is_base_plus_a_step_per_extra_field_and_is_capped() {
         let rates = rates();
-        assert_eq!(rates.edit_settings(0), Ms::new(0));
-        assert_eq!(rates.edit_settings(1), Ms::new(2000));
-        assert_eq!(rates.edit_settings(3), Ms::new(3000));
-        assert_eq!(rates.edit_settings(99), Ms::new(6000));
-        assert_eq!(rates.edit_settings(u32::MAX), Ms::new(6000));
+        assert_eq!(rates.edit_settings(0), WideMs::of(Ms::new(0)));
+        assert_eq!(rates.edit_settings(1), WideMs::of(Ms::new(2000)));
+        assert_eq!(rates.edit_settings(3), WideMs::of(Ms::new(3000)));
+        assert_eq!(rates.edit_settings(99), WideMs::of(Ms::new(6000)));
+        assert_eq!(rates.edit_settings(u64::MAX), WideMs::of(Ms::new(6000)));
     }
 
     #[test]
@@ -596,7 +703,7 @@ mod tests {
                 pharmakos_proto::gp::v1::RecycleRow {},
             )),
         };
-        assert_eq!(row_ms(&row, &rates()), Ms::new(10000));
+        assert_eq!(row_ms(&row, &rates()), WideMs::of(Ms::new(10000)));
     }
 
     /// The worked example's `place_east` step: 12 s of deploy, three settings
@@ -623,10 +730,14 @@ mod tests {
             }),
         };
         let visit = place_beacon_ms(&place, &rates());
-        assert_eq!(visit.total, Ms::new(16_500));
+        assert_eq!(visit.total, WideMs::of(Ms::new(16_500)));
         assert_eq!(
             visit.commits,
-            vec![Ms::new(12_000), Ms::new(15_000), Ms::new(16_500)]
+            vec![
+                WideMs::of(Ms::new(12_000)),
+                WideMs::of(Ms::new(15_000)),
+                WideMs::of(Ms::new(16_500))
+            ]
         );
     }
 
@@ -653,10 +764,19 @@ mod tests {
             row: Some(interface_row::Row::SetMandateSettings(settings)),
         };
         // One area: 2 s. Three areas and a count: 2 s + 3 x 0.5 s.
-        assert_eq!(row_ms(&row(survey(1, 0)), &rates()), Ms::new(2000));
-        assert_eq!(row_ms(&row(survey(3, 2)), &rates()), Ms::new(3500));
+        assert_eq!(
+            row_ms(&row(survey(1, 0)), &rates()),
+            WideMs::of(Ms::new(2000))
+        );
+        assert_eq!(
+            row_ms(&row(survey(3, 2)), &rates()),
+            WideMs::of(Ms::new(3500))
+        );
         // Twenty areas would be 11.5 s uncapped; the cap is 6 s.
-        assert_eq!(row_ms(&row(survey(20, 0)), &rates()), Ms::new(6000));
+        assert_eq!(
+            row_ms(&row(survey(20, 0)), &rates()),
+            WideMs::of(Ms::new(6000))
+        );
     }
 
     /// A Build target is its own row at its own rate, outside the edit's cap,
@@ -692,7 +812,7 @@ mod tests {
             row: Some(interface_row::Row::SetMandateSettings(settings)),
         };
         // 2 s + 0.5 s for the two areas, then 3 x 2.5 s for the targets.
-        assert_eq!(row_ms(&row, &rates()), Ms::new(10_000));
+        assert_eq!(row_ms(&row, &rates()), WideMs::of(Ms::new(10_000)));
     }
 
     /// S3's plan, task `con5b`: `repair_threshold_pct`, `rebuild_destroyed`
@@ -795,12 +915,16 @@ mod tests {
         let row = InterfaceRow {
             row: Some(interface_row::Row::SetMandateSettings(attack)),
         };
-        assert_eq!(row_ms(&row, &rates()), Ms::new(6000), "the cap bounds it");
+        assert_eq!(
+            row_ms(&row, &rates()),
+            WideMs::of(Ms::new(6000)),
+            "the cap bounds it"
+        );
     }
 
     #[test]
     fn a_playbook_with_no_route_costs_nothing() {
         let playbook = pharmakos_proto::gp::v1::Playbook::default();
-        assert_eq!(route_ms(&playbook, &rates()), Ms::new(0));
+        assert_eq!(route_ms(&playbook, &rates()), WideMs::of(Ms::new(0)));
     }
 }

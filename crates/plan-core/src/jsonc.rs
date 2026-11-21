@@ -46,7 +46,7 @@
 //! playbook at all is [`crate::canonical`]'s question, and whether it is a
 //! *valid* one is the verifier's.
 
-use pharmakos_proto::json::Json;
+use pharmakos_proto::json::{Json, grammar};
 
 use crate::error::{Error, push_pointer};
 
@@ -72,23 +72,26 @@ impl Document {
     /// The first byte that does not belong, reported at `/byte/NNN` because a
     /// syntax error has no place in the document tree yet.
     pub fn parse(text: &str) -> Result<Self, Error> {
-        let mut reader = Reader {
-            bytes: text.as_bytes(),
-            text,
-            pos: 0,
-            depth: 0,
-        };
-        let prologue = reader.trivia()?;
-        let root = reader.value()?;
-        let epilogue = reader.trivia()?;
-        if reader.pos < reader.bytes.len() {
-            return Err(reader.error("trailing content after the JSON value"));
-        }
+        let document = grammar::parse(text, &mut Nodes, &mut Comments)?;
         Ok(Self {
-            prologue,
-            root,
-            epilogue,
+            prologue: document.prologue.to_owned(),
+            root: document.value,
+            epilogue: document.epilogue.to_owned(),
         })
+    }
+
+    /// How large the document is as written ([`Node::measure`], with the
+    /// trivia around its root).
+    #[must_use]
+    pub fn measure(&self) -> Measure {
+        let root = self.root.measure();
+        Measure {
+            chars: root
+                .chars
+                .saturating_add(self.prologue.chars().count())
+                .saturating_add(self.epilogue.chars().count()),
+            depth: root.depth,
+        }
     }
 
     /// Writes the document back out, byte for byte as it was read.
@@ -241,6 +244,109 @@ impl Fragment {
     pub fn into_node(self) -> Node {
         self.node
     }
+
+    /// The fragment exactly as it was written where it was cut out: a member
+    /// as its leading trivia, key, colon, value and trailing trivia; an
+    /// element as its trivia and value; a plain value as its text (S3's
+    /// `vfyq2`, fix pass 2: what an undo carries on the wire).
+    #[must_use]
+    pub fn written(&self) -> String {
+        let mut out = String::new();
+        match &self.trivia {
+            Trivia::None => self.node.write(&mut out),
+            Trivia::Member {
+                before,
+                key_raw,
+                pre_colon,
+                post_colon,
+                after,
+            } => {
+                out.push_str(before);
+                out.push_str(key_raw);
+                out.push_str(pre_colon);
+                out.push(':');
+                out.push_str(post_colon);
+                self.node.write(&mut out);
+                out.push_str(after);
+            }
+            Trivia::Item { before, after } => {
+                out.push_str(before);
+                self.node.write(&mut out);
+                out.push_str(after);
+            }
+        }
+        out
+    }
+
+    /// The one member `written` writes, read as the JSONC reader reads a
+    /// member, trivia and key spelling kept; its key must be `key`.
+    ///
+    /// # Errors
+    ///
+    /// When `written` is not exactly one member named `key`
+    /// ([`crate::error::Malformed::UndoText`]).
+    pub fn member_from_written(written: &str, key: &str) -> Result<Self, Error> {
+        let not_one = || {
+            Error::malformed(
+                crate::error::Malformed::UndoText,
+                "",
+                "an undo's `jsonc` is exactly the one member it puts back, as it was written",
+            )
+        };
+        let mut wrapped = String::with_capacity(written.len().saturating_add(2));
+        wrapped.push('{');
+        wrapped.push_str(written);
+        wrapped.push('}');
+        let mut document = Document::parse(&wrapped).map_err(|error| keep_bound(error, not_one))?;
+        // The wrapper's bracket closes the document: a `jsonc` that ran past
+        // its member (a line comment that would swallow the bracket, text
+        // after it) leaves an epilogue, and is refused (fix pass 3, L1).
+        if document.root.len() != Some(1)
+            || !document.prologue.is_empty()
+            || !document.epilogue.is_empty()
+        {
+            return Err(not_one());
+        }
+        document.root.take_member(key).ok_or_else(not_one)
+    }
+
+    /// The one array element `written` writes, read as the JSONC reader reads
+    /// an element, trivia kept.
+    ///
+    /// # Errors
+    ///
+    /// When `written` is not exactly one element
+    /// ([`crate::error::Malformed::UndoText`]).
+    pub fn item_from_written(written: &str) -> Result<Self, Error> {
+        let not_one = || {
+            Error::malformed(
+                crate::error::Malformed::UndoText,
+                "",
+                "an undo's `jsonc` is exactly the one element it puts back, as it was written",
+            )
+        };
+        let mut wrapped = String::with_capacity(written.len().saturating_add(2));
+        wrapped.push('[');
+        wrapped.push_str(written);
+        wrapped.push(']');
+        let mut document = Document::parse(&wrapped).map_err(|error| keep_bound(error, not_one))?;
+        if document.root.len() != Some(1)
+            || !document.prologue.is_empty()
+            || !document.epilogue.is_empty()
+        {
+            return Err(not_one());
+        }
+        document.root.take_item(0).ok_or_else(not_one)
+    }
+}
+
+/// How large a node is as written ([`Node::measure`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Measure {
+    /// Its characters, exactly as written.
+    pub chars: usize,
+    /// The most containers a value inside it stands in.
+    pub depth: usize,
 }
 
 /// One element of an array, with the trivia around it.
@@ -325,31 +431,52 @@ impl Node {
         }
     }
 
-    /// The child under one RFC 6901 token, if this node has one.
-    #[must_use]
-    pub fn child(&self, token: &str) -> Option<&Self> {
+    /// The child under one RFC 6901 token, or why there is none: an array's
+    /// token is read by [`rfc6901_index`], the one index reader (S3's
+    /// `vfyq2`, fix pass 5, item L1).
+    ///
+    /// # Errors
+    ///
+    /// [`Missing`], by what the token met.
+    pub fn lookup(&self, token: &str) -> Result<&Self, Missing> {
         match &self.value {
             Value::Object(members, _) => members
                 .iter()
                 .find(|member| member.key == token)
-                .map(|member| &member.node),
-            Value::Array(items, _) => items.get(index_of(token)?).map(|item| &item.node),
-            _ => None,
+                .map(|member| &member.node)
+                .ok_or(Missing::NoMember),
+            Value::Array(items, _) => {
+                let index = element(token, items.len())?;
+                items
+                    .get(index)
+                    .map(|item| &item.node)
+                    .ok_or(Missing::PastTheEnd { len: items.len() })
+            }
+            _ => Err(Missing::NotAContainer),
         }
     }
 
-    /// The child under one RFC 6901 token, for editing.
-    pub fn child_mut(&mut self, token: &str) -> Option<&mut Self> {
+    /// [`Node::lookup`], for editing.
+    ///
+    /// # Errors
+    ///
+    /// As [`Node::lookup`].
+    pub fn lookup_mut(&mut self, token: &str) -> Result<&mut Self, Missing> {
         match &mut self.value {
             Value::Object(members, _) => members
                 .iter_mut()
                 .find(|member| member.key == token)
-                .map(|member| &mut member.node),
+                .map(|member| &mut member.node)
+                .ok_or(Missing::NoMember),
             Value::Array(items, _) => {
-                let index = index_of(token)?;
-                items.get_mut(index).map(|item| &mut item.node)
+                let len = items.len();
+                let index = element(token, len)?;
+                items
+                    .get_mut(index)
+                    .map(|item| &mut item.node)
+                    .ok_or(Missing::PastTheEnd { len })
             }
-            _ => None,
+            _ => Err(Missing::NotAContainer),
         }
     }
 
@@ -418,20 +545,56 @@ impl Node {
         })
     }
 
-    /// Puts a member into an object at `at`, or at the end when `at` is past
-    /// it.
+    /// Whether this is an empty container with trivia inside it: what the
+    /// first put into it carries into the member or element it puts (S3's
+    /// `vfyq2`, fix pass 3, item M1), so a patch that puts into it changes
+    /// its bytes in a way only a swap of the whole container undoes.
+    #[must_use]
+    pub fn holds_inside_trivia(&self) -> bool {
+        match &self.value {
+            Value::Object(members, inner) => members.is_empty() && !inner.is_empty(),
+            Value::Array(items, inner) => items.is_empty() && !inner.is_empty(),
+            Value::Null | Value::Bool(_) | Value::Number(_) | Value::Str { .. } => false,
+        }
+    }
+
+    /// Puts a member into an object at slot `at`, which may be one past its
+    /// last member.
+    ///
+    /// The first member put into an empty object takes the object's inside
+    /// trivia in front of it (S3's `vfyq2`, fix pass 3, item M1): the
+    /// comment in `{ /* keep */ }` survives, as the member's leading trivia,
+    /// which is exactly what the reader makes of the text written, so a
+    /// re-read gives the same anchors.
     ///
     /// # Errors
     ///
-    /// When this node is not an object, or the key is already there.
+    /// When this node is not an object, the key is already there, or `at` is
+    /// past the end (S3's `vfyq2`, fix pass 3, item L10: it was clamped).
     pub fn put_member(&mut self, key: &str, fragment: Fragment, at: usize) -> Result<(), Error> {
-        let Value::Object(members, _) = &mut self.value else {
+        let Value::Object(members, inner) = &mut self.value else {
             return Err(Error::at("", "not an object"));
         };
-        if members.iter().any(|member| member.key == key) {
-            return Err(Error::at("", format!("`{key}` is already there")));
+        if at > members.len() {
+            return Err(Error::at(
+                "",
+                pharmakos_proto::said!(
+                    "slot {} is past the {} members there are",
+                    at,
+                    members.len()
+                ),
+            ));
         }
-        let (before, spelled, pre_colon, post_colon, after) = match fragment.trivia {
+        if members.iter().any(|member| member.key == key) {
+            return Err(Error::at(
+                "",
+                pharmakos_proto::said!(
+                    "`{}` is already there",
+                    pharmakos_proto::json::grammar::quoted(key)
+                ),
+            ));
+        }
+        let (mut before, spelled, pre_colon, post_colon, after) = match fragment.trivia {
             Trivia::Member {
                 before,
                 key_raw,
@@ -454,6 +617,10 @@ impl Node {
         let key_raw = spelled
             .filter(|raw| unescaped(raw).as_deref() == Some(key))
             .unwrap_or_else(|| escape(key));
+        if members.is_empty() && !inner.is_empty() {
+            before.insert_str(0, inner);
+            inner.clear();
+        }
         let member = Member {
             before,
             key_raw,
@@ -463,7 +630,6 @@ impl Node {
             node: fragment.node,
             after,
         };
-        let at = at.min(members.len());
         members.insert(at, member);
         Ok(())
     }
@@ -491,14 +657,17 @@ impl Node {
     /// # Errors
     ///
     /// When this node is not an array, or the index is past its end.
+    ///
+    /// The first element put into an empty array takes the array's inside
+    /// trivia in front of it, as [`Node::put_member`] does.
     pub fn put_item(&mut self, index: usize, fragment: Fragment) -> Result<(), Error> {
-        let Value::Array(items, _) = &mut self.value else {
+        let Value::Array(items, inner) = &mut self.value else {
             return Err(Error::at("", "not an array"));
         };
         if index > items.len() {
             return Err(Error::at("", "that index is past the end of the array"));
         }
-        let (before, after) = match fragment.trivia {
+        let (mut before, after) = match fragment.trivia {
             Trivia::Item { before, after }
             | Trivia::Member {
                 before,
@@ -509,6 +678,10 @@ impl Node {
             } => (before, after),
             Trivia::None => (String::new(), String::new()),
         };
+        if items.is_empty() && !inner.is_empty() {
+            before.insert_str(0, inner);
+            inner.clear();
+        }
         items.insert(
             index,
             Item {
@@ -524,6 +697,106 @@ impl Node {
     #[must_use]
     pub fn set(&mut self, node: Self) -> Self {
         std::mem::replace(self, node)
+    }
+
+    /// The node exactly as it is written, its inner trivia included.
+    #[must_use]
+    pub fn written(&self) -> String {
+        let mut out = String::new();
+        self.write(&mut out);
+        out
+    }
+
+    /// The one value `written` writes, read as the JSONC reader reads it, its
+    /// inner trivia kept, with no trivia around it.
+    ///
+    /// # Errors
+    ///
+    /// When `written` is not exactly one value with nothing around it
+    /// ([`crate::error::Malformed::UndoText`]).
+    pub fn from_written(written: &str) -> Result<Self, Error> {
+        let not_one = || {
+            Error::malformed(
+                crate::error::Malformed::UndoText,
+                "",
+                "an undo's `jsonc` is exactly the value it puts back, as it was written, with \
+                 nothing around it",
+            )
+        };
+        let document = Document::parse(written).map_err(|error| keep_bound(error, not_one))?;
+        if !document.prologue.is_empty() || !document.epilogue.is_empty() {
+            return Err(not_one());
+        }
+        Ok(document.root)
+    }
+
+    /// How large this node is as written: its characters, exactly as many as
+    /// [`Node::written`] writes (S3's `vfyq2`, fix pass 2, item A3: it used to
+    /// count a separator after every member, so a playbook at the cap could
+    /// not be patched), and the most containers a value inside it stands in
+    /// (0 for a scalar or an empty container, 1 for `[1]`), the count the
+    /// grammar's nesting rule reads. One walk, no text built (`patch`'s
+    /// budget).
+    #[must_use]
+    pub fn measure(&self) -> Measure {
+        let count = |text: &str| text.chars().count();
+        // A container writes its brackets, its inner trivia only when it is
+        // empty, and a comma between each two of its members or items.
+        let shell = |inner: &str, len: usize| {
+            if len == 0 {
+                count(inner).saturating_add(2)
+            } else {
+                len.saturating_add(1)
+            }
+        };
+        match &self.value {
+            Value::Null | Value::Bool(true) => Measure { chars: 4, depth: 0 },
+            Value::Bool(false) => Measure { chars: 5, depth: 0 },
+            Value::Number(lexeme) => Measure {
+                chars: count(lexeme),
+                depth: 0,
+            },
+            Value::Str { raw, .. } => Measure {
+                chars: count(raw),
+                depth: 0,
+            },
+            Value::Array(items, inner) => {
+                let mut total = Measure {
+                    chars: shell(inner, items.len()),
+                    depth: 0,
+                };
+                for item in items {
+                    let inside = item.node.measure();
+                    total.chars = total
+                        .chars
+                        .saturating_add(count(&item.before))
+                        .saturating_add(inside.chars)
+                        .saturating_add(count(&item.after));
+                    total.depth = total.depth.max(inside.depth.saturating_add(1));
+                }
+                total
+            }
+            Value::Object(members, inner) => {
+                let mut total = Measure {
+                    chars: shell(inner, members.len()),
+                    depth: 0,
+                };
+                for member in members {
+                    let inside = member.node.measure();
+                    total.chars = total
+                        .chars
+                        .saturating_add(count(&member.before))
+                        .saturating_add(count(&member.key_raw))
+                        .saturating_add(count(&member.pre_colon))
+                        .saturating_add(1)
+                        .saturating_add(count(&member.post_colon))
+                        .saturating_add(inside.chars)
+                        .saturating_add(count(&member.after));
+                    total.depth = total.depth.max(inside.depth.saturating_add(1));
+                }
+                total
+            }
+        }
     }
 
     fn write(&self, out: &mut String) {
@@ -579,11 +852,15 @@ impl Node {
                 let mut previous: Option<String> = None;
                 for (index, item) in items.iter().enumerate() {
                     let child = push_pointer(pointer, &index.to_string());
-                    let last = index.saturating_add(1) == items.len();
+                    let following = if index.saturating_add(1) == items.len() {
+                        Anchor::Inside(pointer.to_owned())
+                    } else {
+                        Anchor::Before(push_pointer(pointer, &index.saturating_add(1).to_string()))
+                    };
                     opening(&item.before, previous.as_deref(), &child, found);
                     item.node.collect_comments(&child, found);
-                    closing(&item.after, &child, pointer, last, found);
-                    previous = Some(child);
+                    closing(&item.after, &child, &following, found);
+                    previous = on_its_line(&item.after, child);
                 }
             }
             Value::Object(members, inner) => {
@@ -593,18 +870,30 @@ impl Node {
                 let mut previous: Option<String> = None;
                 for (index, member) in members.iter().enumerate() {
                     let child = push_pointer(pointer, &member.key);
-                    let last = index.saturating_add(1) == members.len();
+                    let following = match members.get(index.saturating_add(1)) {
+                        Some(next) => Anchor::Before(push_pointer(pointer, &next.key)),
+                        None => Anchor::Inside(pointer.to_owned()),
+                    };
                     opening(&member.before, previous.as_deref(), &child, found);
                     collect(&member.pre_colon, &Anchor::Before(child.clone()), found);
                     collect(&member.post_colon, &Anchor::Before(child.clone()), found);
                     member.node.collect_comments(&child, found);
-                    closing(&member.after, &child, pointer, last, found);
-                    previous = Some(child);
+                    closing(&member.after, &child, &following, found);
+                    previous = on_its_line(&member.after, child);
                 }
             }
             Value::Null | Value::Bool(_) | Value::Number(_) | Value::Str { .. } => {}
         }
     }
+}
+
+/// The member whose line a comment after the next comma would stand on: the
+/// one just read, unless the trivia before the comma has already broken its
+/// line (fix pass 2, item D4). Then the comma, and whatever follows it on its
+/// line, starts a line of its own, so a comment there is the next member's,
+/// as the canonical writer puts it back.
+fn on_its_line(after: &str, child: String) -> Option<String> {
+    first_line_break(after).is_none().then_some(child)
 }
 
 /// The trivia between the opening bracket (or the preceding comma) and this
@@ -616,7 +905,7 @@ impl Node {
 /// member before it, and only a comment on a line of its own belongs to the
 /// member after it.
 fn opening(trivia: &str, previous: Option<&str>, child: &str, found: &mut Vec<Comment>) {
-    match (trivia.find('\n'), previous) {
+    match (first_line_break(trivia), previous) {
         (Some(at), Some(sibling)) => {
             let head = trivia.get(..at).unwrap_or_default();
             let tail = trivia.get(at..).unwrap_or_default();
@@ -631,28 +920,126 @@ fn opening(trivia: &str, previous: Option<&str>, child: &str, found: &mut Vec<Co
 /// The trivia between this member's value and the comma or closing bracket
 /// after it.
 ///
-/// On the last member, a comment on a line of its own sits at the end of the
-/// container rather than on the member's line, and [`Anchor::Inside`] is where
-/// the canonical writer puts it back.
-fn closing(trivia: &str, child: &str, container: &str, last: bool, found: &mut Vec<Comment>) {
-    match trivia.find('\n') {
-        Some(at) if last => {
+/// A comment on the member's own line is the member's ([`Anchor::After`]).
+/// A comment on a line of its own after it belongs to what follows: the next
+/// member ([`Anchor::Before`]), or, on the last member, the end of the
+/// container ([`Anchor::Inside`]), which is where the canonical writer puts
+/// each back. One rule whether a comma or a bracket comes next (S3's
+/// `vfyq2`, fix pass 2, item D4): before a comma the whole run was the
+/// member's, so a comment written there moved to another anchor once the
+/// canonical writer had put it on a line of its own.
+fn closing(trivia: &str, child: &str, following: &Anchor, found: &mut Vec<Comment>) {
+    match first_line_break(trivia) {
+        Some(at) => {
             let head = trivia.get(..at).unwrap_or_default();
             let tail = trivia.get(at..).unwrap_or_default();
             collect(head, &Anchor::After(child.to_owned()), found);
-            collect(tail, &Anchor::Inside(container.to_owned()), found);
+            collect(tail, following, found);
         }
-        _ => collect(trivia, &Anchor::After(child.to_owned()), found),
+        None => collect(trivia, &Anchor::After(child.to_owned()), found),
     }
 }
 
-/// An array index token: RFC 6901 spells one as decimal digits with no leading
-/// zero (except `0` itself).
-fn index_of(token: &str) -> Option<usize> {
-    if token != "0" && token.starts_with('0') {
-        return None;
+/// The first line break in a run of trivia that is not inside a comment: the
+/// byte a member's own line ends at.
+///
+/// A block comment may span lines, and a line break inside one does not end
+/// the member's line: `"a": 1, /* why\n so */` is one comment on `a`'s line.
+/// Splitting at a line break inside it would cut the comment in two, and the
+/// halves are not comments ([`collect`] would find neither).
+fn first_line_break(trivia: &str) -> Option<usize> {
+    let scan = grammar::Scan::new(trivia);
+    let mut pos = 0usize;
+    while let Some(byte) = scan.get(pos) {
+        if byte == b'\n' || byte == b'\r' {
+            return Some(pos);
+        }
+        pos = match comment_end(&scan, pos) {
+            Some((end, _)) => end,
+            None => pos.saturating_add(1),
+        };
     }
-    token.parse::<usize>().ok()
+    None
+}
+
+/// Why a token names no child of a node (S3's `vfyq2`, fix pass 5, item L1).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Missing {
+    /// An object holds no member under the token.
+    NoMember,
+    /// An array's token is not an index as RFC 6901 spells one.
+    NotAnIndex,
+    /// An array's token is a well-formed index at or past its end; `len` is
+    /// how many elements it holds.
+    PastTheEnd {
+        /// The array's length.
+        len: usize,
+    },
+    /// The node is neither an object nor an array.
+    NotAContainer,
+    /// An array's token is `-`, which names no element (S3's `vfyq2`, fix
+    /// pass 6, item 4).
+    End,
+}
+
+/// An array index token as RFC 6901 reads it (S3's `vfyq2`, fix pass 5,
+/// item L1).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Index {
+    /// `0|[1-9][0-9]*`, which a `usize` holds.
+    At(usize),
+    /// Well-formed digits past any `usize`: past the end of every array.
+    Beyond,
+    /// `-`: the end of the array, the slot past its last element (RFC 6901
+    /// section 4), which only a put may name (S3's `vfyq2`, fix pass 6,
+    /// item 4).
+    End,
+}
+
+/// An array index as RFC 6901 spells one, `0|[1-9][0-9]*`, and nothing else
+/// (S3's `vfyq2`, fix pass 4, item L-d, and fix pass 5, item L1): a sign, a
+/// leading zero, an empty token or anything but ASCII digits is not one; a
+/// well-formed one past any `usize` is [`Index::Beyond`], never refused as
+/// misspelt. The one index reader: every path that names an element reads
+/// its token here.
+///
+/// # Errors
+///
+/// [`Missing::NotAnIndex`] for a token RFC 6901 does not spell as an index.
+pub fn rfc6901_index(token: &str) -> Result<Index, Missing> {
+    if token == "-" {
+        return Ok(Index::End);
+    }
+    let digits = !token.is_empty() && token.bytes().all(|byte| byte.is_ascii_digit());
+    if !digits || (token.len() > 1 && token.starts_with('0')) {
+        return Err(Missing::NotAnIndex);
+    }
+    // Only digits, so the one way the parse fails is a value past `usize`.
+    match token.parse::<usize>() {
+        Ok(index) => Ok(Index::At(index)),
+        Err(error) if *error.kind() == core::num::IntErrorKind::PosOverflow => Ok(Index::Beyond),
+        Err(_) => Err(Missing::NotAnIndex),
+    }
+}
+
+/// The element a token names in an array of `len`.
+fn element(token: &str, len: usize) -> Result<usize, Missing> {
+    match rfc6901_index(token)? {
+        Index::At(index) => Ok(index),
+        Index::Beyond => Err(Missing::PastTheEnd { len }),
+        Index::End => Err(Missing::End),
+    }
+}
+
+/// A refusal reading an undo's text: the reader's own when it is a bound (a
+/// nesting past the limit is a depth refusal, fix pass 4, item L-e), else
+/// `not_one`'s.
+fn keep_bound(error: Error, not_one: impl Fn() -> Error) -> Error {
+    if error.bound().is_some() {
+        error
+    } else {
+        not_one()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -660,7 +1047,7 @@ fn index_of(token: &str) -> Option<usize> {
 // ---------------------------------------------------------------------------
 
 /// Where a comment was written, relative to the node it belongs to.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Anchor {
     /// Before the root value: a file header.
     Prologue,
@@ -712,42 +1099,24 @@ pub struct Comment {
 
 /// Pulls the comments out of one trivia slot, in order.
 fn collect(trivia: &str, anchor: &Anchor, found: &mut Vec<Comment>) {
-    let bytes = trivia.as_bytes();
+    let scan = grammar::Scan::new(trivia);
     let mut pos = 0usize;
-    while pos < bytes.len() {
-        match (bytes.get(pos), bytes.get(pos.saturating_add(1))) {
-            (Some(b'/'), Some(b'/')) => {
-                let end = trivia
-                    .get(pos..)
-                    .and_then(|rest| rest.find('\n'))
-                    .map_or(trivia.len(), |offset| pos.saturating_add(offset));
-                if let Some(text) = trivia.get(pos..end) {
-                    found.push(Comment {
-                        anchor: anchor.clone(),
-                        kind: CommentKind::Line,
-                        text: text.trim_end().to_owned(),
-                    });
-                }
-                pos = end;
-            }
-            (Some(b'/'), Some(b'*')) => {
-                let end = trivia
-                    .get(pos..)
-                    .and_then(|rest| rest.find("*/"))
-                    .map_or(trivia.len(), |offset| {
-                        pos.saturating_add(offset).saturating_add(2)
-                    });
-                if let Some(text) = trivia.get(pos..end) {
-                    found.push(Comment {
-                        anchor: anchor.clone(),
-                        kind: CommentKind::Block,
-                        text: text.to_owned(),
-                    });
-                }
-                pos = end;
-            }
-            _ => pos = pos.saturating_add(1),
+    while pos < scan.len() {
+        let Some((end, kind)) = comment_end(&scan, pos) else {
+            pos = pos.saturating_add(1);
+            continue;
+        };
+        if let Some(text) = trivia.get(pos..end) {
+            found.push(Comment {
+                anchor: anchor.clone(),
+                kind,
+                text: match kind {
+                    CommentKind::Line => text.trim_end().to_owned(),
+                    CommentKind::Block => text.to_owned(),
+                },
+            });
         }
+        pos = end;
     }
 }
 
@@ -755,350 +1124,154 @@ fn collect(trivia: &str, anchor: &Anchor, found: &mut Vec<Comment>) {
 // Reading
 // ---------------------------------------------------------------------------
 
-/// The deepest nesting a document may have, matching the codec's own cap: low
-/// enough that a hostile file cannot exhaust the stack, generous for a
-/// playbook whose condition trees the vocabulary caps at depth 4.
-const MAX_DEPTH: usize = 64;
-
-struct Reader<'a> {
-    bytes: &'a [u8],
-    text: &'a str,
-    pos: usize,
-    depth: usize,
+/// The comment that starts at `at`, if one does and is closed: the byte after
+/// it, and its kind.
+///
+/// **The one place a comment is recognised** (S3's `vfyq2`): the JSONC
+/// reader's trivia, the comments it collects and `verify::blank_comments` all
+/// ask this, so they cannot part on where a comment ends.
+///
+/// - A line comment runs to the first line terminator, which it leaves out, or
+///   to the end of the text. The terminators are a line feed and a carriage
+///   return, each alone (so a CRLF ends at its CR, and the LF is whitespace
+///   after it): a file written with CR line endings has every line comment end
+///   where its line does, rather than swallow the rest of the file.
+/// - A block comment runs to the first `*/` that starts after its `/*` (so
+///   `/*/` does not close itself). One that never closes is no comment at all:
+///   its `/` is left to the grammar, which refuses it there, at the byte where
+///   the comment opens.
+///
+/// It reads the text through the grammar's [`grammar::Scan`], so every byte
+/// it looks at is counted on the work meter (`pharmakos_proto::json::work`).
+#[must_use]
+pub(crate) fn comment_end(scan: &grammar::Scan<'_>, at: usize) -> Option<(usize, CommentKind)> {
+    if scan.get(at) != Some(b'/') {
+        return None;
+    }
+    let mut pos = at.checked_add(2)?;
+    match scan.get(at.checked_add(1)?)? {
+        b'/' => loop {
+            match scan.get(pos) {
+                // No terminator: the comment is the rest of the text.
+                None => return Some((scan.len(), CommentKind::Line)),
+                Some(b'\n' | b'\r') => return Some((pos, CommentKind::Line)),
+                Some(_) => pos = pos.saturating_add(1),
+            }
+        },
+        b'*' => loop {
+            match scan.get(pos)? {
+                b'*' if scan.get(pos.saturating_add(1)) == Some(b'/') => {
+                    return Some((pos.saturating_add(2), CommentKind::Block));
+                }
+                _ => pos = pos.saturating_add(1),
+            }
+        },
+        _ => None,
+    }
 }
 
-impl Reader<'_> {
-    fn error(&self, message: impl Into<String>) -> Error {
-        Error::at_byte(self.pos, message)
-    }
+/// The JSONC reader's trivia: whitespace and closed comments, in any order.
+struct Comments;
 
-    fn peek(&self) -> Option<u8> {
-        self.bytes.get(self.pos).copied()
-    }
-
-    fn peek_at(&self, offset: usize) -> Option<u8> {
-        self.bytes.get(self.pos.saturating_add(offset)).copied()
-    }
-
-    /// Whitespace and comments, returned verbatim.
-    fn trivia(&mut self) -> Result<String, Error> {
-        let start = self.pos;
+impl grammar::Trivia for Comments {
+    fn skip(&mut self, scan: &grammar::Scan<'_>, at: usize) -> usize {
+        let mut pos = at;
         loop {
-            match self.peek() {
-                Some(b' ' | b'\t' | b'\r' | b'\n') => self.pos = self.pos.saturating_add(1),
-                Some(b'/') => match self.peek_at(1) {
-                    Some(b'/') => {
-                        while !matches!(self.peek(), None | Some(b'\n')) {
-                            self.pos = self.pos.saturating_add(1);
-                        }
-                    }
-                    Some(b'*') => {
-                        self.pos = self.pos.saturating_add(2);
-                        loop {
-                            match (self.peek(), self.peek_at(1)) {
-                                (Some(b'*'), Some(b'/')) => {
-                                    self.pos = self.pos.saturating_add(2);
-                                    break;
-                                }
-                                (None, _) => {
-                                    return Err(self.error("a block comment was never closed"));
-                                }
-                                _ => self.pos = self.pos.saturating_add(1),
-                            }
-                        }
-                    }
-                    _ => return Err(self.error("a lone `/` is neither a comment nor a value")),
-                },
-                _ => break,
-            }
-        }
-        Ok(self.slice(start, self.pos)?.to_owned())
-    }
-
-    fn slice(&self, from: usize, to: usize) -> Result<&str, Error> {
-        self.text
-            .get(from..to)
-            .ok_or_else(|| Error::at_byte(from, "a token ended inside a character"))
-    }
-
-    /// Consumes one expected byte, or reports where it was wanted.
-    fn require(&mut self, byte: u8, what: &str) -> Result<(), Error> {
-        if self.peek() == Some(byte) {
-            self.pos = self.pos.saturating_add(1);
-            Ok(())
-        } else {
-            Err(self.error(format!("expected {what}")))
-        }
-    }
-
-    fn value(&mut self) -> Result<Node, Error> {
-        if self.depth >= MAX_DEPTH {
-            return Err(self.error(format!("nested deeper than {MAX_DEPTH} levels")));
-        }
-        let value = match self.peek() {
-            Some(b'{') => self.object()?,
-            Some(b'[') => self.array()?,
-            Some(b'"') => {
-                let (raw, text) = self.string()?;
-                Value::Str { raw, text }
-            }
-            Some(b't') => {
-                self.literal("true")?;
-                Value::Bool(true)
-            }
-            Some(b'f') => {
-                self.literal("false")?;
-                Value::Bool(false)
-            }
-            Some(b'n') => {
-                self.literal("null")?;
-                Value::Null
-            }
-            Some(byte) if byte == b'-' || byte.is_ascii_digit() => Value::Number(self.number()?),
-            Some(_) => return Err(self.error("expected a JSON value")),
-            None => return Err(self.error("the document ended where a value was expected")),
-        };
-        Ok(Node { value })
-    }
-
-    fn literal(&mut self, word: &str) -> Result<(), Error> {
-        let end = self.pos.saturating_add(word.len());
-        if self.text.get(self.pos..end) == Some(word) {
-            self.pos = end;
-            Ok(())
-        } else {
-            Err(self.error(format!("expected `{word}`")))
-        }
-    }
-
-    fn number(&mut self) -> Result<String, Error> {
-        let start = self.pos;
-        if self.peek() == Some(b'-') {
-            self.pos = self.pos.saturating_add(1);
-        }
-        let digits_from = self.pos;
-        while self.peek().is_some_and(|byte| byte.is_ascii_digit()) {
-            self.pos = self.pos.saturating_add(1);
-        }
-        if self.pos == digits_from {
-            return Err(self.error("a number needs at least one digit"));
-        }
-        // RFC 8259's grammar wants at least one digit after the point and at
-        // least one after the exponent's optional sign. Accepting `1.` or `1e`
-        // would not stay inside this crate: the number is kept as its source
-        // lexeme and written straight back out, so a malformed one reaches
-        // `gp.api.v1.PatchPlanResponse.inverse_json_patch` as text that is not
-        // JSON at all, and whoever reads it there is not this reader.
-        if self.peek() == Some(b'.') {
-            self.pos = self.pos.saturating_add(1);
-            let fraction_from = self.pos;
-            while self.peek().is_some_and(|byte| byte.is_ascii_digit()) {
-                self.pos = self.pos.saturating_add(1);
-            }
-            if self.pos == fraction_from {
-                return Err(self.error("a number needs at least one digit after the point"));
-            }
-        }
-        if matches!(self.peek(), Some(b'e' | b'E')) {
-            self.pos = self.pos.saturating_add(1);
-            if matches!(self.peek(), Some(b'+' | b'-')) {
-                self.pos = self.pos.saturating_add(1);
-            }
-            let exponent_from = self.pos;
-            while self.peek().is_some_and(|byte| byte.is_ascii_digit()) {
-                self.pos = self.pos.saturating_add(1);
-            }
-            if self.pos == exponent_from {
-                return Err(self.error("a number needs at least one digit in its exponent"));
-            }
-        }
-        Ok(self.slice(start, self.pos)?.to_owned())
-    }
-
-    /// A string: the raw source including quotes, and the unescaped text.
-    fn string(&mut self) -> Result<(String, String), Error> {
-        let start = self.pos;
-        self.require(b'"', "a string")?;
-        let mut text = String::new();
-        loop {
-            match self.peek() {
-                None => return Err(self.error("a string was never closed")),
-                Some(b'"') => {
-                    self.pos = self.pos.saturating_add(1);
-                    let raw = self.slice(start, self.pos)?.to_owned();
-                    return Ok((raw, text));
-                }
-                Some(b'\\') => {
-                    self.pos = self.pos.saturating_add(1);
-                    let escape = self
-                        .peek()
-                        .ok_or_else(|| self.error("an escape ran off the end of the document"))?;
-                    self.pos = self.pos.saturating_add(1);
-                    match escape {
-                        b'"' => text.push('"'),
-                        b'\\' => text.push('\\'),
-                        b'/' => text.push('/'),
-                        b'b' => text.push('\u{8}'),
-                        b'f' => text.push('\u{c}'),
-                        b'n' => text.push('\n'),
-                        b'r' => text.push('\r'),
-                        b't' => text.push('\t'),
-                        b'u' => text.push(self.unicode_escape()?),
-                        _ => return Err(self.error("unknown escape sequence")),
-                    }
-                }
-                Some(byte) if byte < 0x20 => {
-                    return Err(self.error("a raw control character is not allowed in a string"));
-                }
-                Some(_) => {
-                    let rest = self.text.get(self.pos..).unwrap_or_default();
-                    let character = rest
-                        .chars()
-                        .next()
-                        .ok_or_else(|| self.error("a string ended inside a character"))?;
-                    text.push(character);
-                    self.pos = self.pos.saturating_add(character.len_utf8());
-                }
+            pos = grammar::whitespace_end(scan, pos);
+            match comment_end(scan, pos) {
+                Some((end, _)) => pos = end,
+                None => return pos,
             }
         }
     }
+}
 
-    /// The four hex digits after `\u`, with the surrogate pair that may follow.
-    fn unicode_escape(&mut self) -> Result<char, Error> {
-        let first = self.hex4()?;
-        if (0xD800..0xDC00).contains(&first) {
-            if self.peek() != Some(b'\\') || self.peek_at(1) != Some(b'u') {
-                return Err(self.error("a high surrogate needs a low surrogate after it"));
-            }
-            self.pos = self.pos.saturating_add(2);
-            let second = self.hex4()?;
-            if !(0xDC00..0xE000).contains(&second) {
-                return Err(self.error("a high surrogate needs a low surrogate after it"));
-            }
-            let combined = 0x1_0000u32
-                .saturating_add(first.saturating_sub(0xD800).saturating_mul(0x400))
-                .saturating_add(second.saturating_sub(0xDC00));
-            return char::from_u32(combined)
-                .ok_or_else(|| self.error("that surrogate pair is not a character"));
-        }
-        char::from_u32(first).ok_or_else(|| self.error("that escape is not a character"))
+/// What the JSONC reader builds: nodes that keep every byte of trivia.
+struct Nodes;
+
+impl<'t> grammar::Build<'t> for Nodes {
+    type Value = Node;
+    type Members = Vec<Member>;
+    type Items = Vec<Item>;
+
+    fn members(&mut self) -> Vec<Member> {
+        Vec::new()
     }
 
-    fn hex4(&mut self) -> Result<u32, Error> {
-        let end = self.pos.saturating_add(4);
-        let digits = self
-            .text
-            .get(self.pos..end)
-            .ok_or_else(|| self.error("`\\u` needs four hex digits"))?;
-        // `from_str_radix` accepts a leading `+` or `-`, so `\u+041` would
-        // parse as `\u41` and the reader would take a lexeme RFC 8259 rejects.
-        if !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            return Err(self.error("`\\u` needs four hex digits"));
-        }
-        let value = u32::from_str_radix(digits, 16)
-            .map_err(|_ignored| self.error("`\\u` needs four hex digits"))?;
-        self.pos = end;
-        Ok(value)
+    fn items(&mut self) -> Vec<Item> {
+        Vec::new()
     }
 
-    fn array(&mut self) -> Result<Value, Error> {
-        self.require(b'[', "`[`")?;
-        self.depth = self.depth.saturating_add(1);
-        let mut items: Vec<Item> = Vec::new();
-        let mut inner = String::new();
-        loop {
-            let before = self.trivia()?;
-            if self.peek() == Some(b']') {
-                if items.is_empty() {
-                    inner = before;
-                } else {
-                    return Err(self.error("a trailing comma is not canonical JSON"));
-                }
-                self.pos = self.pos.saturating_add(1);
-                break;
-            }
-            let node = self.value()?;
-            let after = self.trivia()?;
-            items.push(Item {
-                before,
-                node,
-                after,
-            });
-            match self.peek() {
-                Some(b',') => self.pos = self.pos.saturating_add(1),
-                Some(b']') => {
-                    self.pos = self.pos.saturating_add(1);
-                    break;
-                }
-                _ => return Err(self.error("expected `,` or `]`")),
-            }
-        }
-        self.depth = self.depth.saturating_sub(1);
-        Ok(Value::Array(items, inner))
+    fn null(&mut self) -> Node {
+        Node { value: Value::Null }
     }
 
-    fn object(&mut self) -> Result<Value, Error> {
-        self.require(b'{', "`{`")?;
-        self.depth = self.depth.saturating_add(1);
-        let mut members: Vec<Member> = Vec::new();
-        let mut inner = String::new();
-        loop {
-            let before = self.trivia()?;
-            if self.peek() == Some(b'}') {
-                if members.is_empty() {
-                    inner = before;
-                } else {
-                    return Err(self.error("a trailing comma is not canonical JSON"));
-                }
-                self.pos = self.pos.saturating_add(1);
-                break;
-            }
-            let key_at = self.pos;
-            let (key_raw, key) = self.string()?;
-            if members.iter().any(|member| member.key == key) {
-                return Err(Error::at_byte(
-                    key_at,
-                    format!("`{key}` is written twice in the same object"),
-                ));
-            }
-            let pre_colon = self.trivia()?;
-            self.require(b':', "`:` after a key")?;
-            let post_colon = self.trivia()?;
-            let node = self.value()?;
-            let after = self.trivia()?;
-            members.push(Member {
-                before,
-                key_raw,
-                key,
-                pre_colon,
-                post_colon,
-                node,
-                after,
-            });
-            match self.peek() {
-                Some(b',') => self.pos = self.pos.saturating_add(1),
-                Some(b'}') => {
-                    self.pos = self.pos.saturating_add(1);
-                    break;
-                }
-                _ => return Err(self.error("expected `,` or `}`")),
-            }
+    fn boolean(&mut self, value: bool) -> Node {
+        Node {
+            value: Value::Bool(value),
         }
-        self.depth = self.depth.saturating_sub(1);
-        Ok(Value::Object(members, inner))
+    }
+
+    fn number(&mut self, lexeme: &'t str) -> Node {
+        Node {
+            value: Value::Number(lexeme.to_owned()),
+        }
+    }
+
+    fn string(&mut self, raw: &'t str, text: String) -> Node {
+        Node {
+            value: Value::Str {
+                raw: raw.to_owned(),
+                text,
+            },
+        }
+    }
+
+    fn member(&mut self, members: &mut Vec<Member>, member: grammar::Member<'t, Node>) {
+        members.push(Member {
+            before: member.before.to_owned(),
+            key_raw: member.key_raw.to_owned(),
+            key: member.key,
+            pre_colon: member.pre_colon.to_owned(),
+            post_colon: member.post_colon.to_owned(),
+            node: member.value,
+            after: member.after.to_owned(),
+        });
+    }
+
+    fn item(&mut self, items: &mut Vec<Item>, before: &'t str, value: Node, after: &'t str) {
+        items.push(Item {
+            before: before.to_owned(),
+            node: value,
+            after: after.to_owned(),
+        });
+    }
+
+    fn object(&mut self, members: Vec<Member>, inner: &'t str) -> Node {
+        Node {
+            value: Value::Object(members, inner.to_owned()),
+        }
+    }
+
+    fn array(&mut self, items: Vec<Item>, inner: &'t str) -> Node {
+        Node {
+            value: Value::Array(items, inner.to_owned()),
+        }
     }
 }
 
 /// Reads a JSON string lexeme back, so a key's source spelling can be checked
-/// against the key it is being put back under.
+/// against the key it is being put back under: its text when `raw` is exactly
+/// one string token, and `None` when it is not one.
 fn unescaped(raw: &str) -> Option<String> {
-    let mut reader = Reader {
-        bytes: raw.as_bytes(),
-        text: raw,
-        pos: 0,
-        depth: 0,
-    };
-    reader.string().ok().map(|(_raw, text)| text)
+    let mut escaped = String::new();
+    match grammar::string(&grammar::Scan::new(raw), 0, Some(&mut escaped)) {
+        Ok((end, body)) if end == raw.len() => match body {
+            grammar::Body::Plain => raw.get(1..end.checked_sub(1)?).map(str::to_owned),
+            grammar::Body::Escaped => Some(escaped),
+        },
+        Ok(_) | Err(_) => None,
+    }
 }
 
 /// Escapes a string into its JSON source form, quotes included.
@@ -1133,8 +1306,8 @@ fn escape(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Anchor, CommentKind, Document};
-    use pharmakos_proto::json::Json;
+    use super::{Anchor, CommentKind, Document, comment_end};
+    use pharmakos_proto::json::{Json, grammar};
 
     fn round_trip(text: &str) {
         let document = Document::parse(text).expect("a document the reader accepts");
@@ -1189,18 +1362,77 @@ mod tests {
     fn a_trailing_comma_is_refused() {
         let error = Document::parse("{\"a\":1,}").expect_err("a trailing comma");
         assert!(error.is_syntax());
-        assert!(error.message.contains("trailing comma"));
+        assert!(error.message().contains("trailing comma"));
     }
 
     #[test]
     fn a_duplicate_key_is_refused_at_its_own_byte() {
         let error = Document::parse("{\"a\":1,\"a\":2}").expect_err("a duplicate key");
-        assert_eq!(error.pointer, "/byte/7");
+        assert_eq!(error.pointer(), "/byte/7");
     }
 
     #[test]
     fn an_unclosed_block_comment_is_refused() {
         assert!(Document::parse("{} /* forever").is_err());
+    }
+
+    /// S3's `vfyq2`: the JSONC reader reads the codec's grammar, so it takes a
+    /// value inside exactly 64 containers, as the codec does, where it once
+    /// refused one, and refuses a 65th at the same byte the codec does.
+    #[test]
+    fn a_value_inside_64_containers_is_read_and_a_65th_is_refused_as_the_codec_does() {
+        let nest = |depth: usize| format!("{}1{}", "[".repeat(depth), "]".repeat(depth));
+        assert!(Document::parse(&nest(64)).is_ok());
+        let deeper = nest(65);
+        let refused = Document::parse(&deeper).expect_err("65 containers");
+        let codec = pharmakos_proto::json::read(&deeper).expect_err("65 containers");
+        assert_eq!(
+            (refused.pointer().to_owned(), refused.message().to_owned()),
+            (codec.pointer().to_owned(), codec.message().to_owned())
+        );
+    }
+
+    /// S3's `vfyq2`: a number with a leading zero is refused where it is
+    /// written, as the codec refuses it, where the JSONC reader once took it.
+    #[test]
+    fn a_leading_zero_is_refused_as_the_codec_refuses_it() {
+        let text = "{\"a\":012}";
+        let refused = Document::parse(text).expect_err("a leading zero");
+        let codec = pharmakos_proto::json::read(text).expect_err("a leading zero");
+        assert_eq!(refused.pointer(), "/byte/6");
+        assert_eq!(
+            (refused.pointer().to_owned(), refused.message().to_owned()),
+            (codec.pointer().to_owned(), codec.message().to_owned())
+        );
+    }
+
+    /// A line comment ends at a line feed, a carriage return alone, or the CR
+    /// of a CRLF, whichever comes first, and leaves it out: a file written
+    /// with CR line endings does not have a comment swallow the rest of it.
+    #[test]
+    fn a_line_comment_ends_at_lf_cr_and_crlf() {
+        for (ending, name) in [("\n", "LF"), ("\r", "CR"), ("\r\n", "CRLF")] {
+            let text = format!("// a note{ending}{{\"a\":1}}");
+            let document = Document::parse(&text)
+                .unwrap_or_else(|error| panic!("{name}: the comment ends: {error:?}"));
+            assert_eq!(document.to_text(), text, "{name}: round trip");
+            let comments = document.comments();
+            assert_eq!(comments.len(), 1, "{name}");
+            assert_eq!(
+                comments.first().map(|comment| comment.text.as_str()),
+                Some("// a note"),
+                "{name}"
+            );
+            assert_eq!(
+                comment_end(&grammar::Scan::new(&text), 0),
+                Some(("// a note".len(), CommentKind::Line)),
+                "{name}"
+            );
+        }
+        assert_eq!(
+            comment_end(&grammar::Scan::new("// to the end"), 0),
+            Some(("// to the end".len(), CommentKind::Line))
+        );
     }
 
     /// Comments are the only extension over RFC 8259, and the module doc says
@@ -1221,7 +1453,7 @@ mod tests {
             let error = Document::parse(source)
                 .map(|document| document.to_text())
                 .expect_err(source);
-            assert!(error.is_syntax(), "{source}: {}", error.pointer);
+            assert!(error.is_syntax(), "{source}: {}", error.pointer());
         }
         // The well-formed spellings next to them still parse, so the rule is
         // the grammar's and not a blanket refusal of exponents.

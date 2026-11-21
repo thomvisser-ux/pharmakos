@@ -47,6 +47,7 @@
 
 use pharmakos_proto::gp::api::v1::status::Phase;
 use pharmakos_proto::json::Json;
+use pharmakos_proto::said;
 use pharmakos_sim::math::quantity::Ms;
 
 use crate::error::Error;
@@ -110,10 +111,12 @@ impl Surface {
             .integer_param("ms")?
             .ok_or_else(|| Error::invalid("`ms` is how much game time to run, in milliseconds"))?;
         if asked < 1 || asked > i64::from(MAX_ADVANCE_MS) {
-            return Err(Error::invalid(format!(
-                "`ms` is between 1 and {MAX_ADVANCE_MS} game milliseconds and this is {asked}; a \
+            return Err(Error::invalid(said!(
+                "`ms` is between 1 and {} game milliseconds and this is {}; a \
                  request out of range is refused rather than clamped, because a client told \
-                 `fine` would read the answer as the time it asked for"
+                 `fine` would read the answer as the time it asked for",
+                MAX_ADVANCE_MS,
+                asked
             )));
         }
         if self.time().phase != Phase::Push {
@@ -127,8 +130,10 @@ impl Surface {
         // `asked` is already capped at `MAX_ADVANCE_MS` above, so it is an
         // `i32`; one that is not is a refusal, never the cap.
         let asked = i32::try_from(asked).map_err(|_| {
-            Error::invalid(format!(
-                "`ms` asks for {asked}, and one call advances at most {MAX_ADVANCE_MS}"
+            Error::invalid(said!(
+                "`ms` asks for {}, and one call advances at most {}",
+                asked,
+                MAX_ADVANCE_MS
             ))
         })?;
         let ticks = Ms::new(asked).to_ticks_floor();
@@ -192,8 +197,9 @@ impl Surface {
             Error::invalid("`elapsed_ms` is host time spent in this phase, in milliseconds")
         })?;
         let elapsed = i32::try_from(elapsed).map_err(|_| {
-            Error::invalid(format!(
-                "`elapsed_ms` is game milliseconds and this is {elapsed}"
+            Error::invalid(said!(
+                "`elapsed_ms` is game milliseconds and this is {}",
+                elapsed
             ))
         })?;
         // An absent countdown is no countdown, not a countdown at 0: a Lull a
@@ -201,8 +207,9 @@ impl Surface {
         let remaining = match request.integer_param("remaining_ms")? {
             None => None,
             Some(remaining) => Some(i32::try_from(remaining).map_err(|_| {
-                Error::invalid(format!(
-                    "`remaining_ms` is game milliseconds and this is {remaining}"
+                Error::invalid(said!(
+                    "`remaining_ms` is game milliseconds and this is {}",
+                    remaining
                 ))
             })?),
         };

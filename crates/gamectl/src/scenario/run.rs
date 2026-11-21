@@ -581,7 +581,7 @@ fn open(root: &Path, scenario: &Scenario, rules: RulesTable) -> Result<Surface, 
     .map_err(|error| {
         Failure::input(format!(
             "this scenario's match would not open: {}",
-            error.message
+            error.message()
         ))
     })?;
 
@@ -796,14 +796,20 @@ fn seal(
         Failure::input(strings::scenario_playbook_refused(
             seat,
             relative,
-            &format!("it has no canonical form: {}", error.message),
+            &format!("it has no canonical form: {}", error.message()),
         ))
     })?;
+    // The sim's refusal in the gateway's own sentence for it, one mapping
+    // (S3's `vfyq2`, fix pass 4, item L-g): its `Display` writes a label raw.
     let plan = pharmakos_sim::Plan::compile(&canonical.playbook, &rules).map_err(|error| {
         Failure::input(strings::scenario_playbook_refused(
             seat,
             relative,
-            &format!("this build cannot execute it: {error}"),
+            pharmakos_proto::said!(
+                "this build cannot execute it: {}",
+                pharmakos_gateway::plan_refusal(&error)
+            )
+            .as_str(),
         ))
     })?;
     let state = surface
@@ -952,14 +958,21 @@ fn whole_lull(surface: &Surface) -> Result<Ms, Failure> {
     Ok(surface.lull_length(round))
 }
 
-fn internal(mut error: pharmakos_gateway::Error) -> Failure {
+fn internal(error: pharmakos_gateway::Error) -> Failure {
     // The gateway's own sentence, with this runner's frame around it: a host
     // that drove its own surface wrongly is not something a scenario author
-    // did, and the message has to say whose mistake it is.
-    error
-        .message
-        .insert_str(0, "the gateway refused a host's own call: ");
-    Failure::new(Exit::Internal, error.message)
+    // did, and the message has to say whose mistake it is. Composed through
+    // `said!` from a literal and the gateway's `Said` (fix pass 4b): every
+    // gateway refusal is made from a `Said`, so player text in it is already
+    // quoted, and nothing else reaches this sentence.
+    Failure::new(
+        Exit::Internal,
+        pharmakos_proto::said!(
+            "the gateway refused a host's own call: {}",
+            error.into_said()
+        )
+        .into_string(),
+    )
 }
 
 fn message_of(error: &Json) -> String {

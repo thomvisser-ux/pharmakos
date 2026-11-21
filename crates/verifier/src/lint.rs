@@ -141,8 +141,8 @@ fn shadowed(playbook: &Playbook, out: &mut Builder) {
         };
         out.emit(
             Diag::new("W0702", at(later_index))
-                .arg("id", &later.id)
-                .arg("winner", &earlier.id)
+                .arg_text("id", &later.id)
+                .arg_text("winner", &earlier.id)
                 .related(at(earlier_index)),
         );
     }
@@ -568,7 +568,13 @@ impl Visit for Lints<'_> {
                 if self.scope.feature(id).is_some_and(|known| !known.live) {
                     self.out.emit(
                         Diag::new("W0704", here)
-                            .arg("what", format!("`{id}`"))
+                            .arg(
+                                "what",
+                                pharmakos_proto::said!(
+                                    "`{}`",
+                                    pharmakos_proto::json::grammar::quoted(id)
+                                ),
+                            )
                             .arg("why", strings::WHY_LOST),
                     );
                 }
@@ -610,7 +616,13 @@ impl Visit for Lints<'_> {
 
 impl Lints<'_> {
     /// `W0704` for a pick: nothing passes its filters.
-    fn matches_nothing(&mut self, at: &str, kind: FeatureKind, uncovered: bool, what: &str) {
+    fn matches_nothing(
+        &mut self,
+        at: &str,
+        kind: FeatureKind,
+        uncovered: bool,
+        what: &'static str,
+    ) {
         let mut live = self
             .scope
             .features()
@@ -645,8 +657,10 @@ impl Lints<'_> {
     /// `W0706`: every live vent within a sphere's reach of a fixed site's
     /// column is already covered by one of the seat's own beacons.
     fn already_covered(&mut self, at: &str, site: &Voxel) {
-        let radius = i64::from(self.limits.beacon_sphere_radius_voxels());
-        let reach = radius.saturating_mul(radius);
+        // A radius is an `i32`, so its square is exact in `i128` (fix pass
+        // 4, item 1).
+        let radius = i128::from(self.limits.beacon_sphere_radius_voxels());
+        let reach = radius.wrapping_mul(radius);
         let mut first: Option<&KnownFeature> = None;
         for vent in self.scope.features().iter().filter(|feature| {
             feature.kind == FeatureKind::Vent
@@ -672,9 +686,9 @@ impl Lints<'_> {
             Diag::new("W0706", pointer::child(at, "voxel"))
                 .arg(
                     "feature",
-                    format!("{} ({}, {})", strings::VENT_NAME, vent.x, vent.y),
+                    pharmakos_proto::said!("{} ({}, {})", strings::VENT_NAME, vent.x, vent.y),
                 )
-                .arg("beacon", beacon)
+                .arg_text("beacon", beacon)
                 .map_ref(*site)
                 .fix(
                     strings::FIX_COVER_NEAREST_VENT,
@@ -702,13 +716,14 @@ const fn describe(kind: FeatureKind, uncovered: bool) -> &'static str {
 }
 
 /// Squared distance in x and y between a feature's anchor column and a voxel,
-/// in whole voxels squared, saturating as `crate::semantics` does.
-fn column_distance(feature: &KnownFeature, site: &Voxel) -> i64 {
+/// in whole voxels squared, in `i128` as `crate::semantics` does: two `i32`s
+/// differ by under 2^32, so two squares are under 2^65, exact by the type.
+fn column_distance(feature: &KnownFeature, site: &Voxel) -> i128 {
     let axis = |one: i32, other: i32| {
-        let delta = i64::from(one).saturating_sub(i64::from(other));
-        delta.saturating_mul(delta)
+        let delta = i128::from(one).wrapping_sub(i128::from(other));
+        delta.wrapping_mul(delta)
     };
-    axis(feature.x, site.x).saturating_add(axis(feature.y, site.y))
+    axis(feature.x, site.x).wrapping_add(axis(feature.y, site.y))
 }
 
 /// `{"covering":{"vent":{"rank":"NEAREST","coverage":"UNCOVERED"}}}`: the

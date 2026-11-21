@@ -13,32 +13,186 @@
 
 use std::fmt;
 
+use pharmakos_proto::json::grammar::Said;
+
 /// Something a playbook file, a patch, or the schema it is read against did not
 /// allow.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Error {
     /// Where the problem is, as an RFC 6901 JSON Pointer — `""` for the root,
     /// `/declarative/route/0/move` for a step's move, `/byte/412` for a syntax
-    /// error that has no place in the tree.
-    pub pointer: String,
-    /// English, precise, and safe to show a player beside the pointer.
-    pub message: String,
+    /// error that has no place in the tree. Every field is private (S3's
+    /// `vfyq2`, fix pass 4b, item L-b): a public one could be written after
+    /// the constructor, so a caller reads through the getters.
+    pub(crate) pointer: String,
+
+    /// The bound that refused it, when one did: a caller tells a refusal by
+    /// its bound, never by reading the message.
+    pub(crate) bound: Option<Bound>,
+    /// What was malformed in a patch or a pointer, when that is why: a caller
+    /// tells it by this, never by reading the message.
+    pub(crate) malformed: Option<Malformed>,
+    /// The message as it was said: only this crate's constructors, which
+    /// take a [`Said`], make an `Error` (the field is the crate's, so no other
+    /// crate can write one), so [`Error::said`] is never a caller's raw text
+    /// (S3's `vfyq2`, fix pass 3, item M2 (d)).
+    pub(crate) said: Said,
+}
+
+/// Something a patch or a pointer wrote that its grammar does not have
+/// (S3's `vfyq2`, fix pass 2).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Malformed {
+    /// A `~` in a JSON Pointer not followed by `0` or `1` (RFC 6901 section
+    /// 3 has no other escape).
+    PointerEscape,
+    /// A member of a patch operation that its operation does not have, or a
+    /// member of an undo it does not have.
+    UnknownMember,
+    /// A patch that mixes forward operations and undo operations: an undo is
+    /// the whole inverse of one patch, applied as it was handed back.
+    MixedUndo,
+    /// An undo operation whose written member, item or value is not exactly
+    /// one of them, as the JSONC reader reads it.
+    UndoText,
+    /// An undo whose slot is past the end of what it puts into, or, in an
+    /// array, is not the index its path ends in (S3's `vfyq2`, fix pass 3,
+    /// items L2 and L5).
+    UndoSlot,
+    /// An undo that names what the document does not hold, or puts back a
+    /// member already there (S3's `vfyq2`, fix pass 3, item L5).
+    UndoTarget,
+    /// An array index not spelled as RFC 6901 spells one, `0|[1-9][0-9]*`:
+    /// a sign, a leading zero, anything but digits (S3's `vfyq2`, fix pass 4,
+    /// item L-d).
+    PointerIndex,
+    /// `-`, the end of an array, where only an `add` (or a `move` or `copy`'s
+    /// destination) may name it (S3's `vfyq2`, fix pass 6, item 4).
+    EndOfArray,
+}
+
+/// A bound on the work one call may do (S3's `vfyq2`, fix pass 1): what a
+/// refusal that is not about the playbook's meaning was refused by.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Bound {
+    /// More operations in one patch than [`crate::patch::MAX_PATCH_OPERATIONS`].
+    Operations,
+    /// A patch's text longer than [`crate::patch::MAX_PATCH_TEXT_CHARS`],
+    /// refused before it is read (S3's `vfyq2`, fix pass 3, item L4).
+    PatchText,
+    /// A JSON Pointer with more tokens than any node of a playbook can have:
+    /// `pharmakos_proto::json::grammar::MAX_DEPTH` containers, and one token
+    /// past the last of them ([`MAX_POINTER_TOKENS`]).
+    PointerTokens,
+    /// A patched document longer than the playbook's cap,
+    /// `pharmakos_verifier::MAX_PLAYBOOK_CHARS` characters.
+    Size,
+    /// A patched document nested past the grammar's
+    /// `pharmakos_proto::json::grammar::MAX_DEPTH`.
+    Depth,
+    /// An inverse patch longer than the playbook's cap.
+    Inverse,
+    /// More undo operations in one patch than
+    /// [`crate::patch::MAX_UNDO_OPERATIONS`] (S3's `vfyq2`, fix pass 5).
+    UndoOperations,
 }
 
 impl Error {
     /// An error at a pointer.
     #[must_use]
-    pub fn at(pointer: impl Into<String>, message: impl Into<String>) -> Self {
+    pub fn at(pointer: impl Into<String>, message: impl Into<Said>) -> Self {
+        let said = message.into();
         Self {
             pointer: pointer.into(),
-            message: message.into(),
+            bound: None,
+            malformed: None,
+            said,
+        }
+    }
+
+    /// A refusal of something malformed in a patch or a pointer.
+    #[must_use]
+    pub fn malformed(
+        malformed: Malformed,
+        pointer: impl Into<String>,
+        message: impl Into<Said>,
+    ) -> Self {
+        let said = message.into();
+        Self {
+            pointer: pointer.into(),
+            bound: None,
+            malformed: Some(malformed),
+            said,
+        }
+    }
+
+    /// A refusal by a bound on the work one call may do.
+    #[must_use]
+    pub fn bounded(bound: Bound, pointer: impl Into<String>, message: impl Into<Said>) -> Self {
+        let said = message.into();
+        Self {
+            pointer: pointer.into(),
+            bound: Some(bound),
+            malformed: None,
+            said,
         }
     }
 
     /// An error at a byte offset, for a document that did not parse.
     #[must_use]
-    pub fn at_byte(offset: usize, message: impl Into<String>) -> Self {
+    pub fn at_byte(offset: usize, message: impl Into<Said>) -> Self {
         Self::at(format!("/byte/{offset}"), message)
+    }
+
+    /// The message, as text: English, precise, and safe to show a player
+    /// beside the pointer. The field is private (S3's `vfyq2`, fix pass 4,
+    /// item L-b): it is what was said.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        self.said.as_str()
+    }
+
+    /// Where the problem is, as an RFC 6901 JSON Pointer: `""` for the root,
+    /// `/byte/NNN` for a syntax error.
+    #[must_use]
+    pub fn pointer(&self) -> &str {
+        &self.pointer
+    }
+
+    /// The bound that refused it, when one did: a caller tells a refusal by
+    /// this, never by reading the message.
+    #[must_use]
+    pub const fn bound(&self) -> Option<Bound> {
+        self.bound
+    }
+
+    /// What was malformed in a patch or a pointer, when that is why.
+    #[must_use]
+    pub const fn malformation(&self) -> Option<Malformed> {
+        self.malformed
+    }
+
+    /// The message, as text a person is shown.
+    #[must_use]
+    pub fn said(&self) -> Said {
+        self.said.clone()
+    }
+
+    /// The refusal as a person reads it: the pointer, shown token by token
+    /// ([`pharmakos_proto::json::grammar::quoted_pointer`], so one of the
+    /// schema's names comes back whole), then the message; the message alone
+    /// when the error is at the root.
+    #[must_use]
+    pub fn shown(&self) -> Said {
+        if self.pointer.is_empty() {
+            self.said()
+        } else {
+            pharmakos_proto::said!(
+                "at {}: {}",
+                pharmakos_proto::json::grammar::quoted_pointer(&self.pointer),
+                self.said()
+            )
+        }
     }
 
     /// True when this error points at a byte offset rather than at a node.
@@ -54,9 +208,16 @@ impl Error {
 impl fmt::Display for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.pointer.is_empty() {
-            write!(formatter, "{}", self.message)
+            write!(formatter, "{}", self.said)
         } else {
-            write!(formatter, "{}: {}", self.pointer, self.message)
+            // The pointer token by token (S3's `vfyq2`, fix pass 5, item L9):
+            // a token can be the player's key.
+            write!(
+                formatter,
+                "{}: {}",
+                pharmakos_proto::json::grammar::quoted_pointer(&self.pointer),
+                self.said
+            )
         }
     }
 }
@@ -76,8 +237,18 @@ impl From<pharmakos_verifier::RulesGap> for Error {
             | pharmakos_verifier::RulesGap::NotPositive { .. } => {
                 "the rules table holds a value the verifier cannot use"
             }
+            pharmakos_verifier::RulesGap::RowPastTheSim { .. } => {
+                "the rules table's interface rates let a row run past what the sim compiles"
+            }
         };
-        Self::at("", format!("{what}: {gap}"))
+        Self::at(
+            "",
+            pharmakos_proto::said!(
+                "{}: {}",
+                what,
+                pharmakos_proto::json::grammar::Said::engine_error(&gap)
+            ),
+        )
     }
 }
 
@@ -90,35 +261,63 @@ impl From<pharmakos_verifier::InputError> for Error {
             pharmakos_verifier::InputError::Rules(gap) => Self::from(gap),
             pharmakos_verifier::InputError::Unhashable(cause) => Self::at(
                 "",
-                format!("the playbook or the seat's view has no report hash: {cause}"),
+                pharmakos_proto::said!(
+                    "the playbook or the seat's view has no report hash: {}",
+                    pharmakos_proto::json::grammar::Said::engine_error(&cause)
+                ),
             ),
             pharmakos_verifier::InputError::View(cause) => Self::at(
                 "",
-                format!("the seat's view does not hold against the rules table: {cause}"),
+                pharmakos_proto::said!(
+                    "the seat's view does not hold against the rules table: {}",
+                    pharmakos_proto::json::grammar::Said::engine_error(&cause)
+                ),
             ),
             // S3's `vfy6`: the verifier's backstop. `verify_jsonc` refuses a
             // player's text past the cap first, so this answers a canonical
             // text no capped file can make.
             cause @ pharmakos_verifier::InputError::Oversize { .. } => Self::at(
                 "",
-                format!("the playbook is longer than the verifier takes: {cause}"),
+                pharmakos_proto::said!(
+                    "the playbook is longer than the verifier takes: {}",
+                    pharmakos_proto::json::grammar::Said::engine_error(&cause)
+                ),
             ),
         }
     }
 }
 
 impl From<pharmakos_verifier::ProjectionError> for Error {
+    /// The projection's refusal, said here from its fields (S3's `vfyq2`,
+    /// fix pass 3, item M2 (d)): `UnknownBlueprint` carries the blueprint id
+    /// the playbook wrote, so it is quoted, and the type does not declare
+    /// its `Display` engine words.
     fn from(error: pharmakos_verifier::ProjectionError) -> Self {
-        Self::at("", error.to_string())
+        use pharmakos_verifier::ProjectionError;
+        let said = match &error {
+            ProjectionError::UnknownBlueprint(id) => pharmakos_proto::said!(
+                "`{}` is not a blueprint the rules table prices",
+                pharmakos_proto::json::grammar::quoted(id)
+            ),
+            ProjectionError::Overflow => {
+                "the projection does not fit in a `$` or `kW` figure".into()
+            }
+            ProjectionError::UnpricedWall => "a `wall` target with no whole box (none, a corner \
+                                              missing, or inside out) has no voxels to price"
+                .into(),
+        };
+        Self::at("", said)
     }
 }
 
 impl From<pharmakos_proto::json::Error> for Error {
     fn from(error: pharmakos_proto::json::Error) -> Self {
-        Self {
-            pointer: error.pointer,
-            message: error.message,
+        // A nesting refusal keeps its kind as a bound (S3's `vfyq2`, fix pass
+        // 4, item L-e), so a caller tells it by the bound.
+        if error.kind() == pharmakos_proto::json::ErrorKind::Depth {
+            return Self::bounded(Bound::Depth, error.pointer().to_owned(), error.said());
         }
+        Self::at(error.pointer().to_owned(), error.said())
     }
 }
 
@@ -144,26 +343,110 @@ pub fn push_pointer(base: &str, token: &str) -> String {
     pointer
 }
 
-/// Splits an RFC 6901 pointer into its unescaped tokens.
+/// The most tokens a JSON Pointer into a playbook can have: a value inside
+/// `pharmakos_proto::json::grammar::MAX_DEPTH` containers is named by one
+/// token per container, and an `add` names one slot past the last of them.
+pub const MAX_POINTER_TOKENS: usize = pharmakos_proto::json::grammar::MAX_DEPTH + 1;
+
+/// Splits an RFC 6901 pointer into its unescaped tokens, in one pass over its
+/// text, read through the grammar's [`pharmakos_proto::json::grammar::Scan`]
+/// so the work is on the meter (S3's `vfyq2`, fix pass 2, item A2).
 ///
 /// # Errors
 ///
 /// When the pointer is neither empty nor starts with `/`, which RFC 6901
-/// requires of every non-root pointer.
+/// requires of every non-root pointer; when a `~` is followed by anything
+/// but `0` or `1` ([`Malformed::PointerEscape`]); and when it has more than
+/// [`MAX_POINTER_TOKENS`] tokens ([`Bound::PointerTokens`]), which no node of
+/// a playbook has.
 pub fn split_pointer(pointer: &str) -> Result<Vec<String>, Error> {
-    if pointer.is_empty() {
-        return Ok(Vec::new());
+    let scan = pharmakos_proto::json::grammar::Scan::new(pointer);
+    match scan.get(0) {
+        None => return Ok(Vec::new()),
+        Some(b'/') => {}
+        Some(_) => {
+            return Err(Error::at(
+                pointer,
+                "a JSON Pointer is empty or starts with `/` (RFC 6901)",
+            ));
+        }
     }
-    let Some(body) = pointer.strip_prefix('/') else {
-        return Err(Error::at(
-            pointer,
-            "a JSON Pointer is empty or starts with `/` (RFC 6901)",
-        ));
-    };
-    Ok(body
-        .split('/')
-        .map(|token| token.replace("~1", "/").replace("~0", "~"))
-        .collect())
+    let mut tokens: Vec<String> = Vec::new();
+    let mut token = String::new();
+    // Bytes from `run` up to the next `/` or `~` are copied as one piece;
+    // both are ASCII, so a run never ends inside a character.
+    let mut pos: usize = 1;
+    let mut run: usize = 1;
+    loop {
+        match scan.get(pos) {
+            None | Some(b'/') => {
+                token.push_str(scan.slice(run, pos).ok_or_else(|| {
+                    Error::at(pointer, "a JSON Pointer token ended inside a character")
+                })?);
+                if tokens.len() == MAX_POINTER_TOKENS {
+                    return Err(Error::bounded(
+                        Bound::PointerTokens,
+                        "",
+                        pharmakos_proto::said!(
+                            "a JSON Pointer here names at most {} tokens, one per container a \
+                             playbook may nest and one past them",
+                            MAX_POINTER_TOKENS
+                        ),
+                    ));
+                }
+                tokens.push(std::mem::take(&mut token));
+                if scan.get(pos).is_none() {
+                    return Ok(tokens);
+                }
+                pos = pos.saturating_add(1);
+                run = pos;
+            }
+            Some(b'~') => {
+                token.push_str(scan.slice(run, pos).ok_or_else(|| {
+                    Error::at(pointer, "a JSON Pointer token ended inside a character")
+                })?);
+                let escaped = match scan.get(pos.saturating_add(1)) {
+                    Some(b'0') => '~',
+                    Some(b'1') => '/',
+                    _ => {
+                        return Err(Error::malformed(
+                            Malformed::PointerEscape,
+                            "",
+                            pharmakos_proto::said!(
+                                "a JSON Pointer's `~` is followed by `0` or `1` (RFC 6901), and \
+                                 the one at byte {} is not",
+                                pos
+                            ),
+                        ));
+                    }
+                };
+                token.push(escaped);
+                pos = pos.saturating_add(2);
+                run = pos;
+            }
+            Some(_) => pos = pos.saturating_add(1),
+        }
+    }
+}
+
+/// The parent's pointer and the last token's text, unescaped: the pointer
+/// cut at its last `/`, with no tokens rebuilt (S3's `vfyq2`, fix pass 2,
+/// item A2).
+///
+/// # Errors
+///
+/// As [`split_pointer`] over the last token, and the root, which has no
+/// parent.
+pub fn parent_of(pointer: &str) -> Result<(&str, String), Error> {
+    let cut = pointer
+        .rfind('/')
+        .ok_or_else(|| Error::at(pointer, "the document root cannot be added or removed"))?;
+    let (parent, last) = pointer.split_at(cut);
+    let mut tokens = split_pointer(last)?;
+    let token = tokens
+        .pop()
+        .ok_or_else(|| Error::at(pointer, "the document root cannot be added or removed"))?;
+    Ok((parent, token))
 }
 
 #[cfg(test)]
@@ -201,8 +484,8 @@ mod tests {
             pharmakos_proto::json::decode::<pharmakos_proto::gp::v1::Playbook>("{\"a/b~c\":1}")
                 .map(|_decoded| ())
                 .expect_err("`a/b~c` is not a field of gp.v1.Playbook");
-        assert_eq!(error.pointer, push_pointer("", "a/b~c"));
-        assert_eq!(error.pointer, "/a~1b~0c");
+        assert_eq!(error.pointer(), push_pointer("", "a/b~c"));
+        assert_eq!(error.pointer(), "/a~1b~0c");
     }
 
     /// Decisions-log item 145 (5): every `Input::new` error used to read "the
@@ -213,7 +496,7 @@ mod tests {
         let missing: Error = InputError::Rules(RulesGap::MissingBlock("verifier")).into();
         assert!(
             missing
-                .message
+                .message()
                 .starts_with("the rules table is incomplete: ")
         );
         let range: Error = InputError::Rules(RulesGap::OutOfRange {
@@ -223,10 +506,10 @@ mod tests {
         .into();
         assert!(
             range
-                .message
+                .message()
                 .starts_with("the rules table holds a value the verifier cannot use: "),
             "{}",
-            range.message
+            range.message()
         );
         let unhashable: Error = InputError::Unhashable(HashError::TooLong {
             what: "the playbook",
@@ -235,21 +518,21 @@ mod tests {
         .into();
         assert!(
             unhashable
-                .message
+                .message()
                 .starts_with("the playbook or the seat's view has no report hash"),
             "{}",
-            unhashable.message
+            unhashable.message()
         );
-        assert!(!unhashable.message.contains("rules table"));
+        assert!(!unhashable.message().contains("rules table"));
         let view: Error = InputError::View(pharmakos_verifier::ScopeError::NotOwnBeacon(
             "b_02".to_owned(),
         ))
         .into();
         assert!(
-            view.message
+            view.message()
                 .starts_with("the seat's view does not hold against the rules table: "),
             "{}",
-            view.message
+            view.message()
         );
     }
 

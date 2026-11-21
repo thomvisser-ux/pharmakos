@@ -33,6 +33,7 @@
 
 use crate::error::Error;
 use pharmakos_proto::json::{Json, read, write};
+use pharmakos_proto::said;
 
 /// The version string every request and response carries.
 pub const VERSION: &str = "2.0";
@@ -71,8 +72,9 @@ impl Request {
         match self.param(name) {
             None => Ok(None),
             Some(Json::String(text)) => Ok(Some(text.as_str())),
-            Some(other) => Err(Error::invalid(format!(
-                "`{name}` is a string, and this is {}",
+            Some(other) => Err(Error::invalid(said!(
+                "`{}` is a string, and this is {}",
+                pharmakos_proto::json::grammar::quoted(name),
                 other.kind()
             ))),
         }
@@ -88,8 +90,9 @@ impl Request {
         match self.param(name) {
             None => Ok(None),
             Some(Json::Bool(value)) => Ok(Some(*value)),
-            Some(other) => Err(Error::invalid(format!(
-                "`{name}` is a boolean, and this is {}",
+            Some(other) => Err(Error::invalid(said!(
+                "`{}` is a boolean, and this is {}",
+                pharmakos_proto::json::grammar::quoted(name),
                 other.kind()
             ))),
         }
@@ -107,10 +110,15 @@ impl Request {
         match self.param(name) {
             None => Ok(None),
             Some(Json::Number(lexeme)) => lexeme.parse::<i64>().map(Some).map_err(|_| {
-                Error::invalid(format!("`{name}` is a whole number, and `{lexeme}` is not"))
+                Error::invalid(said!(
+                    "`{}` is a whole number, and `{}` is not",
+                    pharmakos_proto::json::grammar::quoted(name),
+                    pharmakos_proto::json::grammar::quoted(lexeme)
+                ))
             }),
-            Some(other) => Err(Error::invalid(format!(
-                "`{name}` is a whole number, and this is {}",
+            Some(other) => Err(Error::invalid(said!(
+                "`{}` is a whole number, and this is {}",
+                pharmakos_proto::json::grammar::quoted(name),
                 other.kind()
             ))),
         }
@@ -286,6 +294,20 @@ pub fn render(response: &Json) -> String {
     write(response)
 }
 
+/// A request as a client writes it: `jsonrpc`, `id`, `method`, `params`, in
+/// the canonical writer the client uses (`client-gdext`'s rig writes its
+/// requests with the same `json::write`). What the gateway measures a
+/// request it hands back to be sent by (S3's `vfyq2`, fix pass 6, item 2).
+#[must_use]
+pub fn request_text(id: &Json, method: &str, params: Json) -> String {
+    write(&Json::Object(vec![
+        (String::from("jsonrpc"), Json::String(String::from(VERSION))),
+        (String::from("id"), id.clone()),
+        (String::from("method"), Json::String(method.to_owned())),
+        (String::from("params"), params),
+    ]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Malformed, failure, malformed_response, parse, success};
@@ -366,7 +388,11 @@ mod tests {
             call(r#"{"jsonrpc":"2.0","id":1,"method":"wait_for","params":{"timeout_ms":1.5}}"#)
                 .expect("well formed JSON-RPC");
         let error = request.integer_param("timeout_ms").expect_err("refused");
-        assert!(error.message.contains("whole number"), "{}", error.message);
+        assert!(
+            error.message().contains("whole number"),
+            "{}",
+            error.message()
+        );
     }
 
     #[test]
@@ -375,7 +401,7 @@ mod tests {
             call(r#"{"jsonrpc":"2.0","id":1,"method":"set_ready","params":{"ready":"yes"}}"#)
                 .expect("well formed JSON-RPC");
         let error = request.bool_param("ready").expect_err("refused");
-        assert!(error.message.contains("boolean"), "{}", error.message);
+        assert!(error.message().contains("boolean"), "{}", error.message());
     }
 
     #[test]

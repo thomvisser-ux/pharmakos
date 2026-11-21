@@ -999,9 +999,9 @@ fn a_field_under_both_names_and_padding_alone_are_refused() {
         &read(r#"{"on_death":{},"onDeath":{}}"#).unwrap(),
     )
     .unwrap_err();
-    assert_eq!(error.pointer, "/onDeath");
+    assert_eq!(error.pointer(), "/onDeath");
     assert_eq!(
-        error.message,
+        error.message(),
         "`on_death` and `onDeath` both name the field `on_death`. A field is written once, \
          under one of its names."
     );
@@ -1013,5 +1013,89 @@ fn a_field_under_both_names_and_padding_alone_are_refused() {
     ] {
         let value = read(text).unwrap();
         assert_eq!(agree_on_playbook(&value).is_some(), accepted, "{text}");
+    }
+}
+
+/// Pieces arbitrary text is drawn from: JSON's own characters, a comment's,
+/// whitespace JSON does not have, multi-byte characters, escapes and names
+/// the schema knows (S3's `vfyq2`, the grammar's security test).
+const ARBITRARY: &[&str] = &[
+    "{",
+    "}",
+    "[",
+    "]",
+    ":",
+    ",",
+    "\"",
+    "\\",
+    "/",
+    "*",
+    "0",
+    "1",
+    "9",
+    "-",
+    "+",
+    ".",
+    "e",
+    "E",
+    "true",
+    "false",
+    "null",
+    " ",
+    "\n",
+    "\r",
+    "\t",
+    "\u{c}",
+    "\u{b}",
+    "\u{feff}",
+    "\u{e9}",
+    "\u{1f4a1}",
+    r"\u",
+    "d83d",
+    "dca1",
+    "00",
+    "\"kind\"",
+    "\"PLAYBOOK\"",
+    "\"schema_version\"",
+    "\"major\"",
+    "\"meta\"",
+    "\"title\"",
+    "\"declarative\"",
+    "\"route\"",
+    "x",
+    "\u{0}",
+    "\u{1f}",
+];
+
+/// Over arbitrary text, nothing but the typed refusal leaves the codec's two
+/// readers (a panic fails the test), they agree on what they accept and with
+/// the reference reader on every refusal, and the grammar's work is bounded
+/// by a constant per byte.
+#[test]
+fn arbitrary_text_is_read_alike_and_in_bounded_work() {
+    let mut rng = Rng(0x6a3d_1f0e);
+    for index in 0..40_000 {
+        let length = rng.below(64);
+        let mut text = String::new();
+        for _ in 0..length {
+            text.push_str(rng.pick(ARBITRARY));
+        }
+        let _bytes = agree_on_text("gp.v1.Playbook", &text);
+        let (value, _comparisons, steps) =
+            super::grammar::parse_counting(&text, &mut super::value::Tree);
+        assert_eq!(
+            value,
+            read(&text),
+            "text {index} (seed 0x6a3d1f0e): {text:?}"
+        );
+        let bound = u64::try_from(text.len())
+            .unwrap()
+            .saturating_mul(4)
+            .saturating_add(4);
+        assert!(
+            steps <= bound,
+            "text {index} (seed 0x6a3d1f0e) took {steps} steps for {} bytes: {text:?}",
+            text.len()
+        );
     }
 }

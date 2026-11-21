@@ -1,0 +1,376 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+//! A patch cannot grow a document without bound (S3's `vfyq2`, fix pass 1,
+//! item 2).
+//!
+//! `patch_plan` takes a JSON Patch from a socket. RFC 6902's `copy` copies a
+//! subtree, the root included, so each `copy` of the root into a member
+//! doubles the document: the security review of PR #198 measured 66 MB from
+//! 18 operations (675 bytes of patch) and an aborted process from about 40.
+//! The budget is an invariant of `apply`: at most
+//! [`MAX_PATCH_OPERATIONS`] operations; the document, after each operation,
+//! within the playbook's cap in characters and the grammar's nesting limit;
+//! a `copy` refused before it copies what would pass the cap; and the inverse
+//! patch within the same cap. Each refusal is typed by its [`Bound`].
+
+#![allow(
+    clippy::expect_used,
+    reason = "clippy.toml's allow-expect-in-tests only recognises #[test] functions, not an               integration test's helpers. A panic is this file's failure report."
+)]
+
+use pharmakos_plan_core::error::Bound;
+use pharmakos_plan_core::jsonc::Document;
+
+use pharmakos_plan_core::patch::{MAX_PATCH_OPERATIONS, patch_text};
+use pharmakos_proto::json::grammar::MAX_DEPTH;
+use pharmakos_verifier::MAX_PLAYBOOK_CHARS;
+use std::path::{Path, PathBuf};
+
+const MINIMAL: &str = concat!(
+    "{\"schema_version\":{\"major\":1},",
+    "\"meta\":{\"title\":\"t\",\"author_kind\":\"HUMAN\"},",
+    "\"declarative\":{\"route\":[{\"label\":\"a\",\"hold\":{\"ms\":1000}}]},",
+    "\"on_death\":{\"on_respawn\":\"CONTINUE\"},",
+    "\"fallback\":{\"hold\":{\"at\":{\"beacon_anchor\":{\"safest\":{}}}}},",
+    "\"kind\":\"PLAYBOOK\"}"
+);
+
+fn bound_of(text: &str, patch: &str) -> Option<Bound> {
+    match patch_text(text, patch) {
+        Ok(_) => None,
+        Err(error) => error.bound(),
+    }
+}
+
+#[test]
+fn copying_the_root_into_itself_is_refused_before_it_passes_the_cap() {
+    let operations: Vec<String> = (0..18)
+        .map(|index| format!(r#"{{"op":"copy","from":"","path":"/x{index}"}}"#))
+        .collect();
+    let patch = format!("[{}]", operations.join(","));
+    assert_eq!(bound_of(MINIMAL, &patch), Some(Bound::Size));
+}
+
+#[test]
+fn more_operations_than_the_cap_are_refused_before_any_is_applied() {
+    let operations: Vec<String> = (0..=MAX_PATCH_OPERATIONS)
+        .map(|_| r#"{"op":"test","path":"/kind","value":"PLAYBOOK"}"#.to_owned())
+        .collect();
+    let patch = format!("[{}]", operations.join(","));
+    assert_eq!(bound_of(MINIMAL, &patch), Some(Bound::Operations));
+    let at_the_cap = format!("[{}]", operations.get(1..).expect("operations").join(","));
+    assert_eq!(bound_of(MINIMAL, &at_the_cap), None);
+}
+
+#[test]
+fn a_value_nested_past_the_grammars_limit_is_refused() {
+    // The title holds `MAX_DEPTH - 2` nested arrays around a number, so the
+    // number stands inside exactly `MAX_DEPTH` containers with the root and
+    // `meta`: the most the grammar reads. A patch's own value cannot be that
+    // deep (the patch's array and object hold it), so the depth comes from
+    // copying the title into itself.
+    let arrays = MAX_DEPTH - 2;
+    let title = format!("{}1{}", "[".repeat(arrays), "]".repeat(arrays));
+    let text = MINIMAL.replace("\"title\":\"t\"", &format!("\"title\":{title}"));
+    assert!(Document::parse(&text).is_ok(), "the file is at the limit");
+    let level = r#"[{"op":"copy","from":"/meta/title/0","path":"/meta/title/-"}]"#;
+    assert!(patch_text(&text, level).is_ok(), "a copy at the same depth");
+    let deeper = r#"[{"op":"copy","from":"/meta/title","path":"/meta/title/0"}]"#;
+    assert_eq!(bound_of(&text, deeper), Some(Bound::Depth));
+}
+
+#[test]
+fn an_inverse_past_the_cap_is_refused() {
+    let big = "x".repeat(MAX_PLAYBOOK_CHARS >> 1);
+    let text = MINIMAL.replace("\"title\":\"t\"", &format!("\"title\":\"{big}\""));
+    let swap = format!(
+        r#"[{{"op":"replace","path":"/meta/title","value":"s"}},{{"op":"replace","path":"/meta/title","value":"{big}"}},{{"op":"replace","path":"/meta/title","value":"s"}}]"#
+    );
+    assert_eq!(bound_of(&text, &swap), Some(Bound::Inverse));
+}
+/// splitmix64.
+struct Rng(u64);
+
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    fn below(&mut self, n: usize) -> usize {
+        if n == 0 {
+            0
+        } else {
+            usize::try_from(self.next() % u64::try_from(n).expect("a count"))
+                .expect("below a usize")
+        }
+    }
+}
+
+/// Every pointer to a node in `value`.
+fn pointers(value: &pharmakos_proto::json::Json, at: &str, out: &mut Vec<String>) {
+    use pharmakos_proto::json::Json;
+    out.push(at.to_owned());
+    match value {
+        Json::Object(members) => {
+            for (key, inner) in members {
+                let key = key.replace('~', "~0").replace('/', "~1");
+                pointers(inner, &format!("{at}/{key}"), out);
+            }
+        }
+        Json::Array(items) => {
+            for (index, inner) in items.iter().enumerate() {
+                pointers(inner, &format!("{at}/{index}"), out);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[allow(
+    clippy::disallowed_methods,
+    reason = "clippy.toml's own reason string sanctions read_dir when the listing is collected               and sorted before use, which is what happens below"
+)]
+fn playbooks() -> Vec<String> {
+    let root: PathBuf = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .expect("the workspace root")
+        .to_path_buf();
+    let mut found = Vec::new();
+    for dir in [
+        "library",
+        "examples/playbooks",
+        "crates/plan-core/tests/cases",
+    ] {
+        let Ok(entries) = std::fs::read_dir(root.join(dir)) else {
+            continue;
+        };
+        let mut paths: Vec<PathBuf> = entries
+            .map(|entry| entry.expect("an entry").path())
+            .filter(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == "jsonc")
+            })
+            .collect();
+        paths.sort();
+        for path in paths {
+            found.push(std::fs::read_to_string(&path).expect("a committed playbook"));
+        }
+    }
+    found.push(MINIMAL.to_owned());
+    found
+}
+
+/// Over seeded patches of every operation, aimed at every node of committed
+/// playbooks, many of them copies that double the document: only the typed
+/// error ever escapes, and no document or inverse handed back passes the cap.
+#[test]
+fn no_seeded_patch_grows_a_document_past_the_cap() {
+    let mut rng = Rng(0x0b0a_7c4f);
+    let mut refused_by_size = 0;
+    let mut applied = 0;
+    for text in playbooks() {
+        let tree = Document::parse(&text)
+            .expect("a committed playbook")
+            .to_json();
+        let mut all = Vec::new();
+        pointers(&tree, "", &mut all);
+        for _ in 0..200 {
+            let count = 1 + rng.below(40);
+            let operations: Vec<String> = (0..count)
+                .map(|index| {
+                    // Half the copies are of the root: each doubles the document.
+                    let from = if rng.below(2) == 0 {
+                        ""
+                    } else {
+                        all.get(rng.below(all.len())).expect("a pointer").as_str()
+                    };
+                    let path = format!(
+                        "{}/x{index}",
+                        all.get(rng.below(all.len())).expect("a pointer")
+                    );
+                    match rng.below(6) {
+                        0..=2 => {
+                            format!(r#"{{"op":"copy","from":"{from}","path":"/x{index}"}}"#)
+                        }
+                        3 => format!(r#"{{"op":"copy","from":"{from}","path":"{path}"}}"#),
+                        4 => format!(r#"{{"op":"move","from":"{from}","path":"/m{index}"}}"#),
+                        _ => format!(r#"{{"op":"remove","path":"{from}"}}"#),
+                    }
+                })
+                .collect();
+            let patch = format!("[{}]", operations.join(","));
+            match patch_text(&text, &patch) {
+                Ok((patched, inverse)) => {
+                    applied += 1;
+                    assert!(patched.chars().count() <= MAX_PLAYBOOK_CHARS);
+                    assert!(inverse.chars().count() <= 2 * MAX_PLAYBOOK_CHARS);
+                }
+                Err(error) => {
+                    if error.bound() == Some(Bound::Size) {
+                        refused_by_size += 1;
+                    }
+                }
+            }
+        }
+    }
+    println!("{applied} applied, {refused_by_size} refused at the cap");
+    assert!(
+        refused_by_size > 0 && applied > 0,
+        "{applied} {refused_by_size}"
+    );
+}
+
+/// `measure` counts what `to_text` writes, character for character (S3's
+/// `vfyq2`, fix pass 2, item A3): it counted a separator after every member,
+/// so a playbook at the cap, which the verifier accepts, could not be patched
+/// at all.
+#[test]
+fn a_documents_measure_is_the_length_of_its_text() {
+    let mut texts = playbooks();
+    texts.extend(
+        [
+            "{}",
+            "{ }",
+            "[ /* c */ ]",
+            "{ // c\n}",
+            "{\"a\":1}",
+            "{\"a\":[1, 2 ,3], \"b\" : {\"c\":null} }",
+            " // lead\n[ [], {}, \"é\" ] /* tail */ ",
+        ]
+        .map(str::to_owned),
+    );
+    for text in &texts {
+        let document = Document::parse(text).expect("a document");
+        assert_eq!(
+            document.measure().chars,
+            document.to_text().chars().count(),
+            "{text:?}"
+        );
+    }
+}
+
+/// A playbook of exactly `MAX_PLAYBOOK_CHARS` characters, its title padded.
+fn at_the_cap() -> String {
+    let short = MINIMAL.replace("\"title\":\"t\"", "\"title\":\"\"");
+    let pad = MAX_PLAYBOOK_CHARS - short.chars().count();
+    short.replace(
+        "\"title\":\"\"",
+        &format!("\"title\":\"{}\"", "x".repeat(pad)),
+    )
+}
+
+#[test]
+fn a_playbook_at_the_cap_takes_a_shortening_patch_and_refuses_a_lengthening_one() {
+    let text = at_the_cap();
+    assert_eq!(text.chars().count(), MAX_PLAYBOOK_CHARS);
+    // One character shorter: the verifier accepts the file before and after.
+    let title = "x".repeat(MAX_PLAYBOOK_CHARS - MINIMAL.chars().count());
+    let shorter = format!(r#"[{{"op":"replace","path":"/meta/title","value":"{title}"}}]"#);
+    patch_text(&text, &shorter).expect("a shortening patch applies at the cap");
+    let longer = r#"[{"op":"add","path":"/meta/note","value":"n"}]"#;
+    assert_eq!(bound_of(&text, longer), Some(Bound::Size));
+}
+
+/// Each operation that can grow a document is refused at the operation that
+/// would take it past the cap (S3's `vfyq2`, fix pass 2, item A4: the
+/// security review's `no_size_check` and `no_copy_precheck` mutants
+/// survived the tests before).
+#[test]
+fn every_growing_operation_past_the_cap_is_refused() {
+    let text = at_the_cap();
+    let longer_title = "x".repeat(MAX_PLAYBOOK_CHARS + 2 - MINIMAL.chars().count());
+    for patch in [
+        r#"[{"op":"add","path":"/meta/note","value":"n"}]"#.to_owned(),
+        format!(r#"[{{"op":"replace","path":"/meta/title","value":"{longer_title}"}}]"#),
+        r#"[{"op":"move","from":"/meta/title","path":"/meta/a_longer_key_than_title"}]"#.to_owned(),
+        r#"[{"op":"copy","from":"/kind","path":"/kind_copy"}]"#.to_owned(),
+    ] {
+        assert_eq!(bound_of(&text, &patch), Some(Bound::Size), "{patch}");
+    }
+}
+
+/// The patch-text cap is a bound on the work one call does, sized so one
+/// operation whose value fits the playbook's cap is never refused for its
+/// escapes (fix pass 4, item 3). The review's three counterexamples, each with
+/// its outcome:
+///
+/// 1. one `replace` whose value is 300,000 astral characters, each written as
+///    a twelve-character surrogate pair escape (3.6 M characters of text):
+///    applies;
+/// 2. 64 `test` operations, each of a 100,000-character member: applies (the
+///    work is the cap's, and the operation count is its own bound);
+/// 3. 32 `add` / `remove` pairs of a 100,000-character value: refused, by
+///    the inverse's own bound (`Bound::Inverse`): its undo would hold the
+///    value thirty-two times. The text cap does not refuse it.
+#[test]
+fn the_reviews_legal_patches_apply_and_the_cap_is_on_the_work() {
+    use pharmakos_plan_core::patch::{MAX_PATCH_TEXT_CHARS, patch_text};
+    let document = "{\"meta\":{\"title\":\"t\",\"note\":\"n\"}}";
+
+    let astral = "\\uD83D\\uDE00".repeat(300_000);
+    let one = format!(r#"[{{"op":"replace","path":"/meta/note","value":"{astral}"}}]"#);
+    assert!(one.chars().count() > 3_600_000);
+    let (patched, _) = patch_text(document, &one).expect("one astral value applies");
+    // Six times the playbook's cap would have refused it for its escapes.
+    assert_eq!(
+        patched.chars().count(),
+        document.chars().count() + 300_000 - 1
+    );
+
+    let long = "v".repeat(100_000);
+    let member = format!("{{\"meta\":{{\"title\":\"t\",\"note\":\"{long}\"}}}}");
+    let tests: Vec<String> = (0..64)
+        .map(|_| format!(r#"{{"op":"test","path":"/meta/note","value":"{long}"}}"#))
+        .collect();
+    let repeated = format!("[{}]", tests.join(","));
+    let (same, _) = patch_text(&member, &repeated).expect("64 tests of one member apply");
+    assert_eq!(same, member);
+
+    let pairs: Vec<String> = (0..32)
+        .flat_map(|_| {
+            [
+                format!(r#"{{"op":"add","path":"/meta/extra","value":"{long}"}}"#),
+                r#"{"op":"remove","path":"/meta/extra"}"#.to_owned(),
+            ]
+        })
+        .collect();
+    let churn = format!("[{}]", pairs.join(","));
+    // Refused, by a named bound of its own: the undo of these pairs would
+    // carry the value thirty-two times, past what an inverse may hold.
+    let refused = patch_text(document, &churn).expect_err("32 add/remove pairs");
+    assert_eq!(
+        refused.bound(),
+        Some(pharmakos_plan_core::error::Bound::Inverse)
+    );
+
+    assert!(
+        one.chars().count() <= MAX_PATCH_TEXT_CHARS
+            && repeated.chars().count() <= MAX_PATCH_TEXT_CHARS
+            && churn.chars().count() <= MAX_PATCH_TEXT_CHARS
+    );
+}
+
+/// A refusal says which limit was met (fix pass 4, item 3): the work bound on
+/// the text, or the operation count, each its own `Bound`.
+#[test]
+fn a_refusal_names_the_limit_it_met() {
+    use pharmakos_plan_core::error::Bound;
+    use pharmakos_plan_core::patch::{MAX_PATCH_OPERATIONS, MAX_PATCH_TEXT_CHARS, patch_text};
+    let document = "{\"meta\":{\"title\":\"t\"}}";
+    let past = format!("[{}]", " ".repeat(MAX_PATCH_TEXT_CHARS));
+    let refused = patch_text(document, &past).expect_err("past the work bound");
+    assert_eq!(refused.bound(), Some(Bound::PatchText));
+    assert!(refused.message().contains("work"), "{}", refused.message());
+    let tests: Vec<&str> = (0..=MAX_PATCH_OPERATIONS)
+        .map(|_| r#"{"op":"test","path":"/meta/title","value":"t"}"#)
+        .collect();
+    let many = format!("[{}]", tests.join(","));
+    let refused = patch_text(document, &many).expect_err("past the operation count");
+    assert_eq!(refused.bound(), Some(Bound::Operations));
+}

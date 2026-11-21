@@ -40,6 +40,7 @@
 //! hardening, with the numbers.
 
 use crate::error::Error;
+use pharmakos_proto::said;
 use pharmakos_sim::math::quantity::Tick;
 
 /// Calls one token may make in a single tick.
@@ -167,15 +168,16 @@ impl RateLimiter {
         }
 
         if self.in_tick >= self.limits.per_tick {
-            return Err(Error::rate_limited(format!(
+            return Err(Error::rate_limited(said!(
                 "over {} calls in one tick",
                 self.limits.per_tick
             )));
         }
         if self.in_window >= self.limits.per_window {
-            return Err(Error::rate_limited(format!(
+            return Err(Error::rate_limited(said!(
                 "over {} calls in {} ticks",
-                self.limits.per_window, self.limits.window_ticks
+                self.limits.per_window,
+                self.limits.window_ticks
             )));
         }
 
@@ -226,8 +228,12 @@ mod tests {
             });
         }
         let error = limiter.admit(Tick::new(10)).expect_err("over the tick cap");
-        assert_eq!(error.code, Code::RateLimited);
-        assert!(error.message.contains("in one tick"), "{}", error.message);
+        assert_eq!(error.code(), Code::RateLimited);
+        assert!(
+            error.message().contains("in one tick"),
+            "{}",
+            error.message()
+        );
         limiter
             .admit(Tick::new(11))
             .expect("a new tick, a new budget");
@@ -258,8 +264,8 @@ mod tests {
         let error = limiter
             .admit(Tick::new(4))
             .expect_err("over the window cap");
-        assert_eq!(error.code, Code::RateLimited);
-        assert!(error.message.contains("ticks"), "{}", error.message);
+        assert_eq!(error.code(), Code::RateLimited);
+        assert!(error.message().contains("ticks"), "{}", error.message());
         limiter
             .admit(Tick::new(100))
             .expect("a new window, a new budget");

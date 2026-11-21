@@ -192,6 +192,29 @@ fn nothing_here_drives_a_match_except_through_the_gateway() {
     }
 }
 
+/// `gamectl`'s command runs on a stated stack (S3's `vfyq2`, fix pass 2, item
+/// E): `main` starts it on `pharmakos_plan_core::stack::player_text_thread`,
+/// so neither the platform's main-thread size (1 MiB on Windows) nor
+/// `RUST_MIN_STACK` decides how deep a player's text may be read, and no
+/// other source makes a thread any other way.
+#[test]
+fn the_command_runs_on_the_stated_stack() {
+    let main = source("src/main.rs");
+    assert!(
+        main.contains("player_text_thread("),
+        "src/main.rs starts the command on player_text_thread"
+    );
+    for relative in SOURCES {
+        let text = source(relative);
+        for needle in ["thread::spawn", "thread::Builder"] {
+            assert!(
+                !text.contains(needle),
+                "{relative} names `{needle}`: a thread on a stack this crate did not state"
+            );
+        }
+    }
+}
+
 /// `gamectl` is not a walled crate (AGENTS.md §4.9), so it reads no clock and
 /// contains no float. The lints deny most of this; a `Duration` on a socket
 /// option would not be denied and is not here either.

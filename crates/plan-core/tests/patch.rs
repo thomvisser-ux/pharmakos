@@ -241,7 +241,6 @@ fn move_and_copy_then_undo_are_the_identity() {
                         path: target.to_owned(),
                         from: Some(pointer.clone()),
                         value: None,
-                        position: None,
                     }]);
                     applied += usize::from(round_trip(
                         name,
@@ -349,40 +348,38 @@ fn add_over_an_existing_member_keeps_its_comment_and_its_spacing() {
     }
 }
 
-/// The one place the wire form is lossy, asserted rather than left to be
-/// discovered: an inverse patch serialised to RFC 6902 text carries a value,
-/// and a value has no comments.
+/// The inverse's text is as exact as the inverse (S3's `vfyq2`, fix pass 2,
+/// item A1; before, the wire form flattened it to RFC 6902 values and lost
+/// the comment and the member's slot): read back from its text, it gives the
+/// file back byte for byte, comment and slot included.
 #[test]
-fn the_wire_form_of_an_inverse_loses_the_trivia_it_carried() {
+fn the_wire_form_of_an_inverse_keeps_the_trivia_and_the_slot() {
     let text = "{\n  // why\n  \"a\": 1,\n  \"b\": 2\n}";
     let document = Document::parse(text).expect("a document");
     let patch = Patch::from_text(r#"[{"op":"remove","path":"/a"}]"#).expect("a patch");
     let (patched, inverse) = apply(&document, &patch).expect("it applies");
-
-    // In memory: byte-exact.
     let (back, _again) = apply(&patched, &inverse).expect("the inverse applies");
     assert_eq!(back.to_text(), text);
-
-    // Through the wire: the value comes back, the comment does not.
-    let on_the_wire = Patch::from_text(&inverse.to_text()).expect("its own text");
-    let (flattened, _again) = apply(&patched, &on_the_wire).expect("the wire inverse applies");
-    assert_ne!(flattened.to_text(), text);
-    assert!(!flattened.to_text().contains("// why"));
-    // The *value* is intact; only the trivia and the member's slot are gone,
-    // and a member's slot is not semantic JSON — which is exactly why RFC 6902
-    // does not carry one and why an in-memory inverse does.
-    let mut restored = match flattened.to_json() {
-        Json::Object(entries) => entries,
-        other => panic!("the patched document is still an object, not {other:?}"),
-    };
-    restored.sort_by(|left, right| left.0.cmp(&right.0));
+    let wire = inverse.to_text();
+    let undo = Json::Object(vec![
+        ("at".to_owned(), Json::Number("0".to_owned())),
+        (
+            "jsonc".to_owned(),
+            Json::String("\n  // why\n  \"a\": 1".to_owned()),
+        ),
+    ]);
     assert_eq!(
-        restored,
-        vec![
-            ("a".to_owned(), Json::Number("1".to_owned())),
-            ("b".to_owned(), Json::Number("2".to_owned())),
-        ]
+        pharmakos_proto::json::read(&wire).expect("JSON"),
+        Json::Array(vec![Json::Object(vec![
+            ("op".to_owned(), Json::String("add".to_owned())),
+            ("path".to_owned(), Json::String("/a".to_owned())),
+            ("undo".to_owned(), undo),
+        ])])
     );
+    let on_the_wire = Patch::from_text(&wire).expect("its own text");
+    assert_eq!(on_the_wire, inverse);
+    let (again, _) = apply(&patched, &on_the_wire).expect("the wire inverse applies");
+    assert_eq!(again.to_text(), text);
 }
 
 /// A file that writes a step's `skip_if` in its camelCase JSON name.
@@ -391,28 +388,33 @@ const CAMEL: &str = r#"{"schema_version":{"major":1},"declarative":{"route":[
   {"label":"b","waitUntil":{},"timeoutMs":3000}
 ]}}"#;
 
-/// S3's `gwu`, fix pass 1 (the review's C3, K2): a patch that would leave one
-/// field written under both its names in one object is refused, naming both
-/// spellings, and the file is not touched; the decoder would refuse the
-/// result (`BothNames`), so accepting it would hand back a file that no
-/// longer decodes.
+/// S3's `vfyq2`, fix pass 1 (item 9): a pointer that names a field by either
+/// of its names addresses the member the file already writes, under the
+/// file's spelling. A Fix and the editor build pointers from the decoded
+/// playbook, in `.proto` names; in a file written in camelCase they edit the
+/// camelCase member, and nothing is ever written twice. (Before, S3's `gwu`
+/// refused such an edit as writing the field twice, and a pointer through a
+/// camelCase member found nothing.)
 #[test]
-fn a_patch_that_would_write_a_field_twice_is_refused_naming_both_spellings() {
+fn a_pointer_in_either_spelling_edits_the_member_the_file_writes() {
     let patch = r#"[{"op":"add","path":"/declarative/route/0/skip_if","value":{"treasury":{"dollars":{"op":"GE","value":100}}}}]"#;
-    let error = pharmakos_plan_core::patch_text(CAMEL, patch)
-        .expect_err("a second spelling of skip_if is refused");
-    assert!(
-        error.message.contains("`skipIf`") && error.message.contains("`skip_if`"),
-        "{}",
-        error.message
-    );
-    assert_eq!(error.pointer, "/declarative/route/0");
+    let (patched, inverse) =
+        pharmakos_plan_core::patch_text(CAMEL, patch).expect("the camelCase member is replaced");
+    assert!(patched.contains("\"skipIf\""), "{patched}");
+    assert!(!patched.contains("skip_if"), "{patched}");
+    assert!(patched.contains("\"treasury\""), "{patched}");
+    assert!(!patched.contains("cmdrHpPct"), "{patched}");
+    let (undone, _) = pharmakos_plan_core::patch_text(&patched, &inverse).expect("the undo");
+    assert_eq!(undone, CAMEL, "the undo gives the file back byte for byte");
 
-    // Under a camelCase member a snake_case pointer finds nothing, as before.
+    // Through a camelCase member a snake_case pointer finds what is there.
     let under = r#"[{"op":"add","path":"/declarative/route/1/wait_until/condition","value":{"treasury":{"dollars":{"op":"GE","value":100}}}}]"#;
-    let error = pharmakos_plan_core::patch_text(CAMEL, under)
-        .expect_err("nothing at wait_until in a file that writes waitUntil");
-    assert!(error.message.contains("nothing"), "{}", error.message);
+    let (patched, _) =
+        pharmakos_plan_core::patch_text(CAMEL, under).expect("wait_until reaches waitUntil");
+    assert!(
+        patched.contains("\"waitUntil\":{\"condition\""),
+        "{patched}"
+    );
 
     // The same edit in the camelCase name, and a snake_case file, are taken.
     let camel_edit = r#"[{"op":"replace","path":"/declarative/route/0/skipIf","value":{"treasury":{"dollars":{"op":"GE","value":100}}}}]"#;
@@ -453,22 +455,52 @@ fn a_field_written_twice_is_told_by_field_and_count_not_by_pointer() {
     let error = pharmakos_plan_core::patch_text(&clean, &brings_both)
         .expect_err("the patch writes cooldown twice");
     assert!(
-        error.message.contains("the patch itself"),
+        error.message().contains("the patch itself"),
         "{}",
-        error.message
+        error.message()
     );
     assert!(
-        !error.message.contains("already writes"),
+        !error.message().contains("already writes"),
         "{}",
-        error.message
+        error.message()
     );
-    assert_eq!(error.pointer, "/declarative/handlers/1");
+    assert_eq!(error.pointer(), "/declarative/handlers/1");
 
-    let patch = r#"[{"op":"add","path":"/declarative/route/0/skip_if","value":{"treasury":{"dollars":{"op":"GE","value":100}}}}]"#;
-    let error = pharmakos_plan_core::patch_text(CAMEL, patch).expect_err("refused");
-    assert!(
-        error.message.contains("already writes"),
-        "{}",
-        error.message
-    );
+    // A file that already writes both spellings is edited as written: the
+    // pointer's own spelling is the member it addresses.
+    let edit_twice =
+        r#"[{"op":"replace","path":"/declarative/handlers/0/cooldownMs","value":7000}]"#;
+    let (patched, _) =
+        pharmakos_plan_core::patch_text(&file, edit_twice).expect("an old pair is not new");
+    assert!(patched.contains("\"cooldownMs\":7000"), "{patched}");
+}
+
+/// A `move` and a `copy` whose `from` names a field in the other spelling
+/// take the member the file writes (S3's `vfyq2`, fix pass 2, item A6: the
+/// `from_untranslated` mutant survived before).
+#[test]
+fn a_from_in_either_spelling_takes_the_member_the_file_writes() {
+    for (op, keeps) in [("move", false), ("copy", true)] {
+        let patch = format!(
+            r#"[{{"op":"{op}","from":"/declarative/route/0/skip_if","path":"/declarative/route/1/skip_if"}}]"#
+        );
+        let (patched, inverse) = pharmakos_plan_core::patch_text(CAMEL, &patch)
+            .unwrap_or_else(|error| panic!("{op}: {error}"));
+        let document = Document::parse(&patched).expect("a document");
+        let json = document.to_json();
+        let route = json
+            .get("declarative")
+            .and_then(|declarative| declarative.get("route"))
+            .expect("a route");
+        let Json::Array(steps) = route else {
+            panic!("{op}: the route is an array");
+        };
+        let first = steps.first().expect("a first step");
+        let second = steps.get(1).expect("a second step");
+        assert!(second.get("skip_if").is_some(), "{op}: {patched}");
+        assert_eq!(first.get("skipIf").is_some(), keeps, "{op}: {patched}");
+        let (back, _) = pharmakos_plan_core::patch_text(&patched, &inverse)
+            .unwrap_or_else(|error| panic!("{op}: undo: {error}"));
+        assert_eq!(back, CAMEL, "{op}: undo");
+    }
 }

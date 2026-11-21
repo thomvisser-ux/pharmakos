@@ -48,6 +48,7 @@
 
 use pharmakos_proto::descriptor::{Field, Message, ScalarKind, Schema, schema};
 use pharmakos_proto::json::Json;
+use pharmakos_proto::said;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::error::Error;
@@ -86,7 +87,10 @@ pub fn document(part: &str) -> Result<Json, Error> {
     let schema = schema();
     let root = root_of(schema, part)?;
     let message = schema.message(&root).ok_or_else(|| {
-        Error::internal(format!("`{root}` is not in the checked-in descriptor set"))
+        Error::internal(said!(
+            "`{}` is not in the checked-in descriptor set",
+            pharmakos_proto::json::grammar::quoted(&root)
+        ))
     })?;
 
     // Ordered, and ordered twice over: the walk is breadth-first from the root
@@ -115,8 +119,9 @@ pub fn document(part: &str) -> Result<Json, Error> {
         // checks when it is built; one that is not would leave the document
         // describing a type it never defines.
         let nested = schema.message(&name).ok_or_else(|| {
-            Error::internal(format!(
-                "`{name}` is named by a field and is not in the checked-in descriptor set"
+            Error::internal(said!(
+                "`{}` is named by a field and is not in the checked-in descriptor set",
+                pharmakos_proto::json::grammar::quoted(&name)
             ))
         })?;
         for field in &nested.fields {
@@ -134,8 +139,9 @@ pub fn document(part: &str) -> Result<Json, Error> {
     for name in &enums {
         {
             let declared = schema.enumeration(name).ok_or_else(|| {
-                Error::internal(format!(
-                    "`{name}` is named by a field and is not in the checked-in descriptor set"
+                Error::internal(said!(
+                    "`{}` is named by a field and is not in the checked-in descriptor set",
+                    pharmakos_proto::json::grammar::quoted(name)
                 ))
             })?;
             claim(&mut source, name)?;
@@ -198,9 +204,10 @@ fn root_of(schema: &Schema, part: &str) -> Result<String, Error> {
         .bytes()
         .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
     {
-        return Err(Error::invalid(format!(
-            "`{part}` is not a schema part: a part is the lower_snake_case name of a `gp.v1` \
-             message, as in `get_schema{{part:\"step\"}}`"
+        return Err(Error::invalid(said!(
+            "`{}` is not a schema part: a part is the lower_snake_case name of a `gp.v1` \
+             message, as in `get_schema{{part:\"step\"}}`",
+            pharmakos_proto::json::grammar::quoted(part)
         )));
     }
     let mut found: Vec<&str> = schema
@@ -211,8 +218,9 @@ fn root_of(schema: &Schema, part: &str) -> Result<String, Error> {
     found.sort_unstable();
     match found.first() {
         Some(name) => Ok((*name).to_owned()),
-        None => Err(Error::not_found(format!(
-            "`{part}` is not a part of the playbook schema"
+        None => Err(Error::not_found(said!(
+            "`{}` is not a part of the playbook schema",
+            pharmakos_proto::json::grammar::quoted(part)
         ))),
     }
 }
@@ -260,9 +268,10 @@ fn oneof_exclusions(message: &Message) -> Result<Vec<Json>, Error> {
     let mut out: Vec<Json> = Vec::new();
     for (index, _) in message.oneofs.iter().enumerate() {
         let index = i32::try_from(index).map_err(|_| {
-            Error::internal(format!(
-                "`{}` declares a oneof at index {index}, past the descriptor's int32",
-                message.full_name
+            Error::internal(said!(
+                "`{}` declares a oneof at index {}, past the descriptor's int32",
+                pharmakos_proto::json::grammar::quoted(&message.full_name),
+                index
             ))
         })?;
         let arms: Vec<&str> = message
@@ -356,10 +365,12 @@ fn scalar_schema(_schema: &Schema, field: &Field) -> Json {
 /// a document whose `$ref`s point at the wrong type.
 fn claim(source: &mut BTreeMap<String, String>, full_name: &str) -> Result<(), Error> {
     match source.insert(def_key(full_name), full_name.to_owned()) {
-        Some(held) if held != full_name => Err(Error::internal(format!(
-            "`{held}` and `{full_name}` would both be written as `$defs/{}`, so one would \
+        Some(held) if held != full_name => Err(Error::internal(said!(
+            "`{}` and `{}` would both be written as `$defs/{}`, so one would \
              overwrite the other and every reference to it would name the wrong type",
-            def_key(full_name)
+            pharmakos_proto::json::grammar::quoted(&held),
+            pharmakos_proto::json::grammar::quoted(full_name),
+            pharmakos_proto::json::grammar::quoted(&def_key(full_name))
         ))),
         _ => Ok(()),
     }
@@ -443,12 +454,12 @@ mod tests {
         let whole = defs(&document("").expect("a document")).len();
         assert!(defs(&slice).len() < whole, "a slice is smaller");
         assert_eq!(
-            document("STEP").expect_err("refused").code,
+            document("STEP").expect_err("refused").code(),
             Code::InvalidArgument,
             "a part is lower case"
         );
         assert_eq!(
-            document("no_such_message").expect_err("refused").code,
+            document("no_such_message").expect_err("refused").code(),
             Code::NotFound
         );
     }
