@@ -189,3 +189,13 @@ fn quoting_never_rewrites_the_files_bytes() {
         "the decoded label is the label"
     );
 }
+
+/// A plan-core refusal's `Display` shows its pointer token by token (S3's
+/// `vfyq2`, fix pass 5, item L9): a token can be the player's key.
+#[test]
+fn a_refusal_s_display_shows_a_hostile_pointer_escaped() {
+    let error = pharmakos_plan_core::Error::at("/meta/ti\u{202E}tle", "there is nothing there");
+    let shown = error.to_string();
+    assert!(!shown.contains('\u{202E}'), "shown raw: {shown:?}");
+    assert!(shown.starts_with("/meta/ti"), "{shown:?}");
+}
