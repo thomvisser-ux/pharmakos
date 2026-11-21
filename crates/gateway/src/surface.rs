@@ -4572,6 +4572,8 @@ mod tests {
             let mut time = surface.time();
             time.phase = phase;
             surface.set_time(time);
+            // A fresh token a phase, so the rate limit is not what answers.
+            let token = seat_token(&mut surface, 0);
             for params in [route, "{}"] {
                 let response =
                     surface.call(Some(&token), &request("estimate_route", params), &Blind);

@@ -1004,11 +1004,23 @@ impl Surface {
 
     /// `estimate_route`: item 61's travel estimate, exposed.
     ///
-    /// The abstract search for a far leg and the route the router would serve
-    /// for a near one (lane `p3fix`) -- it never steps, never forks --
-    /// through the adapter item 100 (1) puts in this crate. Never optimistic,
-    /// and a fogged leg comes back flagged so the editor draws it dashed and
-    /// labels it a bound rather than an ETA (item 57).
+    /// Each leg is the walk the router serves, near or far, with the
+    /// allowance per extra route (lane `p3fix`;
+    /// [`pharmakos_sim::pathing::estimate::walk_ticks`]) -- it never steps,
+    /// never forks -- through the adapter item 100 (1) puts in this crate,
+    /// over the hosted world's own graph. Never optimistic from the tick the
+    /// route is served (the owner's reading of item 57, 2026-11-21), and a
+    /// fogged leg comes back flagged so the editor draws it dashed and labels
+    /// it a bound rather than an ETA (item 57).
+    ///
+    /// **Only in a Lull** (the owner's answer of 2026-11-21: "Refuse in a
+    /// Push"): every other phase -- a Push, a recap, the lobby, an ended
+    /// match -- answers `PHASE_CLOSED` before anything is parsed, as the
+    /// planning door closes the `plan`-scoped methods. The method stays
+    /// `observe`-scoped; the gate is its own. In a Push the hosted world is
+    /// the live one and the snapshot its beacon legs read is the frozen one,
+    /// so an answer would mix two worlds; outside the Lull there is nothing
+    /// to plan.
     ///
     /// From S3 each leg that reaches, and the whole route when every leg
     /// does, carries `travel_text`, the figure as the player reads it (the
@@ -1027,6 +1039,12 @@ impl Surface {
         subject: crate::token::Subject,
         request: &Request,
     ) -> Result<Json, Error> {
+        if !self.time.planning_open() {
+            return Err(Error::phase_closed(said!(
+                "`estimate_route` prices a route over the frozen planning world, which is open \
+                 only in a Lull: ask in a Lull"
+            )));
+        }
         let seat = Surface::seat_of(subject, "a route to estimate")?;
         let Some(Json::Array(waypoints)) = request.param("waypoints") else {
             return Err(Error::invalid(
@@ -1241,13 +1259,11 @@ impl Surface {
     /// A `covering` waypoint's site: where the beacon would stand, as the sim
     /// chooses it ([`Surface::place_of`] says why this is here).
     ///
-    /// **Outside a Push only.** The site is read off the hosted world, the
-    /// beacons' spheres and the commander included, and the route's beacon
-    /// and `safest` legs are read off the frozen snapshot; the two are the
-    /// same world in a Lull, a recap and an ended match, and not in a Push,
-    /// where one answer would mix two worlds. So a `covering` waypoint in a
-    /// Push is `PHASE_CLOSED`, as a planning method is -- it is a planning
-    /// question, asked in the phase that plans.
+    /// The site is read off the hosted world, the beacons' spheres and the
+    /// commander included, and the route's beacon and `safest` legs are read
+    /// off the frozen snapshot; the two are the same world in a Lull, which
+    /// is the only phase [`Surface::estimate_route`] answers in, so no
+    /// answer mixes two worlds.
     fn covering_site(
         &self,
         seat: SeatId,
@@ -1257,13 +1273,6 @@ impl Surface {
         scratch: &mut Option<pharmakos_sim::pathing::Scratch>,
     ) -> Result<Voxel, Error> {
         use crate::targeting::Site;
-        if self.host()?.runner().phase() == pharmakos_sim::runner::MatchPhase::Push {
-            return Err(Error::phase_closed(said!(
-                "{} is a `covering`, which is read off the frozen world, and in a Push the \
-                 world has moved on from it: ask outside a Push",
-                pharmakos_proto::json::grammar::quoted_pointer(at)
-            )));
-        }
         let reference: pharmakos_proto::gp::v1::FeatureRef =
             pharmakos_proto::json::decode_json(reference).map_err(|error| {
                 Error::invalid(said!(
@@ -1316,9 +1325,9 @@ impl Surface {
 
     /// A `toward` waypoint's site: where the stepping stone would stand, as the
     /// sim chooses it (S3's `pred`, E23), ranked from `from` (or from the
-    /// commander, for the first waypoint) as `covering`'s is. **Outside a Push
-    /// only**, for [`Surface::covering_site`]'s reason. A `toward` that finds
-    /// no site is `NOT_FOUND` naming the step failure it would be.
+    /// commander, for the first waypoint) as `covering`'s is, in the Lull
+    /// [`Surface::estimate_route`] answers in. A `toward` that finds no site
+    /// is `NOT_FOUND` naming the step failure it would be.
     fn toward_site(
         &self,
         seat: SeatId,
@@ -1328,13 +1337,6 @@ impl Surface {
         scratch: &mut Option<pharmakos_sim::pathing::Scratch>,
     ) -> Result<Voxel, Error> {
         use crate::targeting::Site;
-        if self.host()?.runner().phase() == pharmakos_sim::runner::MatchPhase::Push {
-            return Err(Error::phase_closed(said!(
-                "{} is a `toward`, which is read off the frozen world, and in a Push the \
-                 world has moved on from it: ask outside a Push",
-                pharmakos_proto::json::grammar::quoted_pointer(at)
-            )));
-        }
         let toward: pharmakos_proto::gp::v1::Toward = pharmakos_proto::json::decode_json(toward)
             .map_err(|error| {
                 Error::invalid(said!(
