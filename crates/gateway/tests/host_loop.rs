@@ -720,8 +720,6 @@ fn a_flood_of_silent_connections_cannot_disturb_a_live_session() {
     let _ = result(&live.call("get_status", "{}"), "get_status");
 
     // Twice the cap, and not a byte from any of them.
-    let counted_before =
-        pharmakos_gateway::serve::dropped(pharmakos_gateway::serve::DropReason::OverCapacity);
     let mut silent: Vec<TcpStream> = Vec::new();
     let mut refused = 0_u32;
     for _ in 0..MAX_CONNECTIONS.saturating_mul(2) {
@@ -743,15 +741,6 @@ fn a_flood_of_silent_connections_cannot_disturb_a_live_session() {
         "past the connection cap the host answers an audited 503 rather than growing a \
          thread for every socket"
     );
-    // Every refusal is counted under its reason, whether or not the audit
-    // queue had room for its line (fix pass 3, item L6).
-    let counted =
-        pharmakos_gateway::serve::dropped(pharmakos_gateway::serve::DropReason::OverCapacity)
-            .saturating_sub(counted_before);
-    assert!(
-        counted >= u64::from(refused),
-        "{refused} refused and {counted} counted under OverCapacity"
-    );
 
     // And the session that authenticated before the flood is untouched.
     let status = result(&live.call("get_status", "{}"), "get_status");
@@ -764,6 +753,30 @@ fn a_flood_of_silent_connections_cannot_disturb_a_live_session() {
     );
     drop(silent);
     running.quit();
+
+    // Every refusal is counted under its reason, whether or not the audit
+    // queue had room for its own line (fix pass 3, item L6), and the host's
+    // counts are in the audit log it closes, which is what an operator reads
+    // (fix pass 4, item L-f): one line per reason, this host's own.
+    let log = std::fs::read_to_string(running.folder().join("audit.log")).expect("an audit log");
+    let count_of = |reason: &str| -> u64 {
+        let wanted = format!("connections dropped {reason}: ");
+        let counts: Vec<u64> = log
+            .lines()
+            .filter_map(|line| {
+                let action = line.split('\t').nth(4)?;
+                action.strip_prefix(wanted.as_str())?.parse().ok()
+            })
+            .collect();
+        assert_eq!(counts.len(), 1, "one closing line for {reason}: {log}");
+        counts.first().copied().unwrap_or_default()
+    };
+    let counted = count_of("over_capacity");
+    assert!(
+        counted >= u64::from(refused),
+        "{refused} refused and {counted} counted under over_capacity: {log}"
+    );
+    assert_eq!(count_of("no_connection_thread"), 0, "{log}");
 }
 
 /// End of file on the control pipe ends the host. There is no other shutdown.
