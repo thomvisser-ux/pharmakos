@@ -28,7 +28,19 @@ fn a_path_an_operand_or_a_name_the_user_typed_is_printed_escaped() {
         strings::rules_gap(HOSTILE, "a gap"),
         strings::verify_heading(HOSTILE, "quick"),
         strings::verify_diagnostic("error", "E0001", HOSTILE, "a message"),
-        strings::scenario_invalid(HOSTILE, &[(format!("/{HOSTILE}"), HOSTILE.to_owned())]),
+        // A problem's message is a sentence the reader composed, its leaves
+        // escaped where it wrote them (fix pass 6, item 1); the path and the
+        // pointer are leaves.
+        strings::scenario_invalid(
+            HOSTILE,
+            &[(
+                format!("/{HOSTILE}"),
+                format!(
+                    "`{}` must be one of playbook, safe, builtin",
+                    pharmakos_proto::json::grammar::escaped(HOSTILE)
+                ),
+            )],
+        ),
         strings::scenario_heading(HOSTILE, 2, 10, "0"),
         strings::scenario_playbook_refused(0, HOSTILE, "why"),
         strings::scenario_event_missing(HOSTILE, None, &[HOSTILE.to_owned()]),
@@ -92,4 +104,35 @@ fn a_doctor_line_keeps_its_columns_and_lines() {
         strings::verify_diagnostic("error", "E0001", "/meta", "a message"),
         "  error   E0001 /meta\n          a message"
     );
+}
+
+/// A scenario file's own words are escaped where the reader composes them
+/// into a problem (fix pass 6, item 1): a seat kind, an assertion kind, an
+/// event name, a format string and a path the file wrote.
+#[test]
+fn a_scenario_file_s_words_are_escaped_where_the_reader_composes_them() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .expect("the workspace root")
+        .to_path_buf();
+    let scratch = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("shown-scenario");
+    std::fs::create_dir_all(&scratch).expect("a scratch folder");
+    let file = scratch.join("hostile.scenario.jsonc");
+    // The hostile text as JSON writes it, `` and all.
+    let h = pharmakos_proto::json::write(&pharmakos_proto::json::Json::String(HOSTILE.to_owned()));
+    let h = h.trim_end().trim_matches('"');
+    let text = format!(
+        r#"{{"format":"{h}","name":"n","seed":"0000000000000001","seats":[{{"seat":0,"kind":"{h}"}}],"segments":[{{"index":0,"length_ms":3000}}],"assertions":[{{"assert":"{h}"}},{{"assert":"event_fired","event":"{h}","by_tick":1}}]}}"#,
+    );
+    std::fs::write(&file, text).expect("the file");
+    let Err(failure) = pharmakos_gamectl::scenario::load(&root, &file) else {
+        panic!("the file is refused");
+    };
+    assert!(
+        !failure.message.contains('\u{202E}') && !failure.message.contains('\u{1b}'),
+        "printed raw: {}",
+        failure.message
+    );
+    assert!(failure.message.lines().count() > 3, "{}", failure.message);
 }

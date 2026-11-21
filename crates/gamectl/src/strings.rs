@@ -50,13 +50,14 @@
 
 use std::fmt::Write as _;
 
-// Every text a sentence here carries is shown escaped (S3's `vfyq2`, fix
-// pass 5, item L9): a path, an operand or a name the user typed, a scenario
-// file's names and pointers, and another error's words. Each function's text
-// parameters are shadowed at its top by `escaped` (whole), `quoted` (an
-// operand, capped) or `quoted_pointer` (a pointer, token by token): every
-// character of `HIDDEN` reaches a terminal as `\uXXXX`, and text with none is
-// shown as it is.
+// The leaves are shown escaped, and never a sentence (S3's `vfyq2`, fix
+// pass 5, item L9, and fix pass 6, item 1): a path, an operand or a name the
+// user typed, a scenario file's names, pointers and lines, each shadowed at
+// its function's top by `escaped` (whole), `quoted` (an operand, capped) or
+// `quoted_pointer` (a pointer, token by token), or escaped where it is
+// composed into a message (`scenario.rs`). A sentence gamectl composes, a
+// `why` or a `detail`, is passed whole: escaping it would flatten its lines
+// (`\u000a`) and an escaped `Quoted` ignores a column's width.
 
 use crate::cli::{COMMANDS, OPTIONS};
 use crate::exit::Exit;
@@ -164,14 +165,12 @@ pub fn host_on_a_terminal() -> String {
 /// `gamectl host` could not start or keep its match.
 #[must_use]
 pub fn host_refused(why: &str) -> String {
-    let why = pharmakos_proto::json::grammar::escaped(why);
     format!("{BINARY} host: the match could not be hosted: {why}")
 }
 
 /// A subcommand of a command this build does not have.
 #[must_use]
 pub fn unknown_subcommand(command: &str, given: &str) -> String {
-    let command = pharmakos_proto::json::grammar::escaped(command);
     let given = pharmakos_proto::json::grammar::quoted(given);
     format!("{BINARY} {command}: `{given}` is not a subcommand of `{command}`.")
 }
@@ -179,15 +178,12 @@ pub fn unknown_subcommand(command: &str, given: &str) -> String {
 /// A command that needs an operand and was given none.
 #[must_use]
 pub fn missing_operand(command: &str, operand: &str) -> String {
-    let command = pharmakos_proto::json::grammar::escaped(command);
-    let operand = pharmakos_proto::json::grammar::escaped(operand);
     format!("{BINARY} {command}: no {operand} given.")
 }
 
 /// A second operand where one was expected.
 #[must_use]
 pub fn extra_operand(command: &str, given: &str) -> String {
-    let command = pharmakos_proto::json::grammar::escaped(command);
     let given = pharmakos_proto::json::grammar::quoted(given);
     format!("{BINARY} {command}: `{given}` is one operand too many.")
 }
@@ -211,9 +207,6 @@ pub fn bad_depth(given: &str) -> String {
 /// the third way of typing something that will not happen.
 #[must_use]
 pub fn flag_elsewhere(command: &str, flag: &str, owner: &str) -> String {
-    let command = pharmakos_proto::json::grammar::escaped(command);
-    let flag = pharmakos_proto::json::grammar::escaped(flag);
-    let owner = pharmakos_proto::json::grammar::escaped(owner);
     format!(
         "{BINARY} {command}: `{flag}` is `{owner}`'s option and does nothing here. It is refused \
          rather than ignored, so that a command line that reads as though it asked for something \
@@ -224,7 +217,6 @@ pub fn flag_elsewhere(command: &str, flag: &str, owner: &str) -> String {
 /// The working directory could not be read, so no relative path can be.
 #[must_use]
 pub fn no_working_directory(why: &str) -> String {
-    let why = pharmakos_proto::json::grammar::escaped(why);
     format!(
         "{BINARY}: the working directory cannot be read ({why}), and every path is read against it."
     )
@@ -233,7 +225,6 @@ pub fn no_working_directory(why: &str) -> String {
 /// The operating system would not make the thread a command runs on.
 #[must_use]
 pub fn no_command_thread(why: &str) -> String {
-    let why = pharmakos_proto::json::grammar::escaped(why);
     format!("{BINARY}: the command's thread could not be started ({why}), so nothing ran.")
 }
 
@@ -246,7 +237,6 @@ pub fn command_panicked() -> String {
 /// A flag's value that is none of the values it takes, naming them.
 #[must_use]
 pub fn bad_value(flag: &str, given: &str, values: &[&str]) -> String {
-    let flag = pharmakos_proto::json::grammar::escaped(flag);
     let given = pharmakos_proto::json::grammar::quoted(given);
     let named: Vec<String> = values.iter().map(|value| format!("`{value}`")).collect();
     format!(
@@ -258,9 +248,6 @@ pub fn bad_value(flag: &str, given: &str, values: &[&str]) -> String {
 /// A flag that only means something beside another one, given without it.
 #[must_use]
 pub fn flag_needs(command: &str, flag: &str, needs: &str) -> String {
-    let command = pharmakos_proto::json::grammar::escaped(command);
-    let flag = pharmakos_proto::json::grammar::escaped(flag);
-    let needs = pharmakos_proto::json::grammar::escaped(needs);
     format!(
         "{BINARY} {command}: `{flag}` shapes the result a run over `{needs}` writes, and there is \
          no `{needs}` here. It is refused rather than ignored."
@@ -285,7 +272,6 @@ pub fn bad_argument(error: &lexopt::Error) -> String {
 /// distrust.
 #[must_use]
 pub fn unwritable_output(why: &str) -> String {
-    let why = pharmakos_proto::json::grammar::escaped(why);
     format!(
         "{BINARY}: standard output could not be written, so what it printed is incomplete: {why}"
     )
@@ -294,9 +280,7 @@ pub fn unwritable_output(why: &str) -> String {
 /// A file that could not be read.
 #[must_use]
 pub fn unreadable(what: &str, path: &str, why: &str) -> String {
-    let what = pharmakos_proto::json::grammar::escaped(what);
     let path = pharmakos_proto::json::grammar::escaped(path);
-    let why = pharmakos_proto::json::grammar::escaped(why);
     format!("{BINARY}: the {what} at `{path}` could not be read: {why}")
 }
 
@@ -315,7 +299,6 @@ pub fn path_escapes(path: &str) -> String {
 #[must_use]
 pub fn rules_gap(path: &str, why: &str) -> String {
     let path = pharmakos_proto::json::grammar::escaped(path);
-    let why = pharmakos_proto::json::grammar::escaped(why);
     format!(
         "{BINARY}: the rules table at `{path}` does not carry a block every check reads: {why}. \
          Tuning values are data (AGENTS.md §12), so this is a table to fix rather than a default \
@@ -331,7 +314,6 @@ pub fn rules_gap(path: &str, why: &str) -> String {
 #[must_use]
 pub fn verify_heading(path: &str, depth: &str) -> String {
     let path = pharmakos_proto::json::grammar::escaped(path);
-    let depth = pharmakos_proto::json::grammar::escaped(depth);
     format!("{path}\n  depth        {depth}")
 }
 
@@ -352,7 +334,6 @@ pub fn verify_refuses(errors: usize) -> String {
 /// compare on (spec §11).
 #[must_use]
 pub fn verify_report_hash(hash: &str) -> String {
-    let hash = pharmakos_proto::json::grammar::escaped(hash);
     format!("  report_hash  {hash}")
 }
 
@@ -367,9 +348,6 @@ pub fn verify_report_hash(hash: &str) -> String {
 /// quoted where it carries player text.
 #[must_use]
 pub fn verify_diagnostic(severity: &str, code: &str, path: &str, message: &str) -> String {
-    let severity = pharmakos_proto::json::grammar::escaped(severity);
-    let code = pharmakos_proto::json::grammar::escaped(code);
-    let message = pharmakos_proto::json::grammar::escaped(message);
     let path = pharmakos_proto::json::grammar::quoted_pointer(path);
     format!("  {severity:<7} {code} {path}\n          {message}")
 }
@@ -396,7 +374,6 @@ pub fn verify_footer() -> String {
 /// the playbook schema", and the draft this replaces said it twice.
 #[must_use]
 pub fn unknown_part(why: &str) -> String {
-    let why = pharmakos_proto::json::grammar::escaped(why);
     format!("{BINARY} schema: {why}")
 }
 
@@ -407,9 +384,6 @@ pub fn unknown_part(why: &str) -> String {
 /// One check's line.
 #[must_use]
 pub fn doctor_line(state: &str, name: &str, detail: &str) -> String {
-    let state = pharmakos_proto::json::grammar::escaped(state);
-    let name = pharmakos_proto::json::grammar::escaped(name);
-    let detail = pharmakos_proto::json::grammar::escaped(detail);
     format!("{state:<5} {name:<22} {detail}")
 }
 
@@ -455,7 +429,6 @@ pub fn scenario_invalid(path: &str, problems: &[(String, String)]) -> String {
         } else {
             pharmakos_proto::json::grammar::quoted_pointer(pointer).to_string()
         };
-        let message = pharmakos_proto::json::grammar::escaped(message);
         let _ = writeln!(text, "  {place} — {message}");
     }
     text.push_str("scenarios/README.md documents the format.");
@@ -466,22 +439,18 @@ pub fn scenario_invalid(path: &str, problems: &[(String, String)]) -> String {
 #[must_use]
 pub fn scenario_heading(name: &str, seats: usize, ticks: u32, rules_hash: &str) -> String {
     let name = pharmakos_proto::json::grammar::escaped(name);
-    let rules_hash = pharmakos_proto::json::grammar::escaped(rules_hash);
     format!("{name}: {seats} seats, {ticks} ticks played, rules_hash {rules_hash}")
 }
 
 /// One assertion that held.
 #[must_use]
 pub fn scenario_assertion_ok(index: usize, what: &str) -> String {
-    let what = pharmakos_proto::json::grammar::escaped(what);
     format!("  ok    /assertions/{index}  {what}")
 }
 
 /// One assertion that did not.
 #[must_use]
 pub fn scenario_assertion_failed(index: usize, what: &str, why: &str) -> String {
-    let what = pharmakos_proto::json::grammar::escaped(what);
-    let why = pharmakos_proto::json::grammar::escaped(why);
     format!("  FAIL  /assertions/{index}  {what}\n        {why}")
 }
 
@@ -551,6 +520,9 @@ pub fn scenario_chain_moved(
     expected_lines: usize,
     actual_lines: usize,
 ) -> String {
+    let golden = pharmakos_proto::json::grammar::escaped(golden);
+    let expected = pharmakos_proto::json::grammar::escaped(expected);
+    let actual = pharmakos_proto::json::grammar::escaped(actual);
     format!(
         "the chain moved. `{golden}` line {line} is\n          {expected}\n        and this run's \
          is\n          {actual}\n        ({expected_lines} committed lines against \
@@ -566,7 +538,6 @@ pub fn scenario_chain_moved(
 pub fn scenario_builtin_unseated(pointer: &str, rules: &str, why: &str) -> String {
     let pointer = pharmakos_proto::json::grammar::quoted_pointer(pointer);
     let rules = pharmakos_proto::json::grammar::escaped(rules);
-    let why = pharmakos_proto::json::grammar::escaped(why);
     format!(
         "{pointer}: a `builtin` seat plays the built-in operator, Easy, which cannot score with \
          the rules table `{rules}` this scenario names: {why}. Name a rules table with the rows \
@@ -578,7 +549,6 @@ pub fn scenario_builtin_unseated(pointer: &str, rules: &str, why: &str) -> Strin
 #[must_use]
 pub fn scenario_playbook_refused(seat: u8, path: &str, why: &str) -> String {
     let path = pharmakos_proto::json::grammar::escaped(path);
-    let why = pharmakos_proto::json::grammar::escaped(why);
     format!("seat {seat}'s playbook `{path}` cannot be sealed: {why}")
 }
 
@@ -618,7 +588,6 @@ pub fn scenario_failed(name: &str, failed: usize, assertions: usize) -> String {
 #[must_use]
 pub fn scenario_harness_seal(seat: u8, path: &str, codes: &str) -> String {
     let path = pharmakos_proto::json::grammar::escaped(path);
-    let codes = pharmakos_proto::json::grammar::escaped(codes);
     format!(
         "  note  seat {seat} sealed `{path}` through the HARNESS door, not `submit_plan`: it \
          does not qualify against seat {seat}'s own frozen snapshot on this map ({codes}). The \
@@ -637,7 +606,6 @@ pub fn scenario_harness_seal(seat: u8, path: &str, codes: &str) -> String {
 #[must_use]
 pub fn nightly_arm_refused(seat: u8, path: &str, round: u32, codes: &str) -> String {
     let path = pharmakos_proto::json::grammar::escaped(path);
-    let codes = pharmakos_proto::json::grammar::escaped(codes);
     format!(
         "seat {seat}'s playbook `{path}` was refused by `submit_plan` in round {round} ({codes}). \
          A run over a seed file plays every playbook through the verifier's door and never the \
@@ -671,7 +639,6 @@ pub fn operator_unused(path: &str) -> String {
 #[must_use]
 pub fn seeds_refused(path: &str, why: &str) -> String {
     let path = pharmakos_proto::json::grammar::escaped(path);
-    let why = pharmakos_proto::json::grammar::escaped(why);
     format!("the seed file `{path}` cannot be read as one: {why}.")
 }
 
@@ -679,7 +646,6 @@ pub fn seeds_refused(path: &str, why: &str) -> String {
 #[must_use]
 pub fn result_unwritable(path: &str, why: &str) -> String {
     let path = pharmakos_proto::json::grammar::escaped(path);
-    let why = pharmakos_proto::json::grammar::escaped(why);
     format!("the result could not be written to `{path}`: {why}")
 }
 
