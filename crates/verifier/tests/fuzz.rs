@@ -56,6 +56,12 @@
 //! headroom carries `E0601` or `W0603`, however large the count, against a
 //! reference sum written apart from the verifier's.
 
+#[allow(
+    dead_code,
+    reason = "the table is shared with plan_errors.rs, which reads the rest of it"
+)]
+mod plan_error_table;
+
 use pharmakos_proto::gp::api::v1::VerifyReport;
 use pharmakos_proto::gp::api::v1::diagnostic::Severity;
 use pharmakos_proto::gp::api::v1::verify_plan::Depth;
@@ -1961,12 +1967,24 @@ fn seeded_edit(root: &Json, rng: &mut StreamRng) -> Json {
     edited_at(root, path, with)
 }
 
+/// What [`two_node_edits`] found.
+struct TwoNode {
+    /// How many cases qualified at FULL.
+    qualified: u32,
+    /// Every compile refusal of a qualifying case, by kind, with its smallest
+    /// text: each one a defect.
+    refused: std::collections::BTreeMap<String, String>,
+    /// For every `PlanError` variant, how many generated cases the compile
+    /// refused with it, the verifier bypassed (S3's `vfyq2`, fix pass 3, item
+    /// M5): what the probe reaches at all.
+    reached: std::collections::BTreeMap<&'static str, u32>,
+}
+
 /// Two seeded edits of qualifying playbooks, `cases` of them, each that still
 /// qualifies at FULL held to the sim's compile (S3's `vfyq2`, fix pass 2,
 /// item C2: the security review's two-node probe, committed). Counted, not
-/// timed. Answers how many qualified, and every compile refusal by kind with
-/// its smallest text.
-fn two_node_edits(cases: u32) -> (u32, std::collections::BTreeMap<String, String>) {
+/// timed.
+fn two_node_edits(cases: u32) -> TwoNode {
     let rules = rules();
     let widest = rules_at_the_widest_budget(&rules);
     let scope = scope();
@@ -1994,6 +2012,8 @@ fn two_node_edits(cases: u32) -> (u32, std::collections::BTreeMap<String, String
     let mut rng = StreamRng::new(FUZZ_SEED, Stream::Map, u32::MAX, 2, 2);
     let mut checked = 0_u32;
     let mut refused: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    let mut reached: std::collections::BTreeMap<&'static str, u32> =
+        std::collections::BTreeMap::new();
     for case in 0..cases {
         let Some((tree, padded)) = usize::try_from(case)
             .ok()
@@ -2006,6 +2026,14 @@ fn two_node_edits(cases: u32) -> (u32, std::collections::BTreeMap<String, String
         let first_edit = seeded_edit(tree, &mut rng);
         let second_edit = seeded_edit(&first_edit, &mut rng);
         let text = json::write(&second_edit);
+        // The verifier bypassed: what the compile alone says of the case.
+        if let Ok(playbook) = json::decode::<Playbook>(&text)
+            && let Err(error) = Plan::compile(&playbook, rules)
+        {
+            let (variant, _) = plan_error_table::classify(&error);
+            let count = reached.entry(variant).or_insert(0);
+            *count = count.saturating_add(1);
+        }
         if !qualifies(&text, rules) {
             continue;
         }
@@ -2022,7 +2050,11 @@ fn two_node_edits(cases: u32) -> (u32, std::collections::BTreeMap<String, String
             }
         }
     }
-    (checked, refused)
+    TwoNode {
+        qualified: checked,
+        refused,
+        reached,
+    }
 }
 
 /// How many two-node cases every ordinary run tries; the nightly run tries
@@ -2031,7 +2063,33 @@ const TWO_NODE_CASES: u32 = 12_000;
 
 #[test]
 fn every_two_node_edit_that_qualifies_compiles() {
-    let (qualified, refused) = two_node_edits(TWO_NODE_CASES);
+    let TwoNode {
+        qualified,
+        refused,
+        reached,
+    } = two_node_edits(TWO_NODE_CASES);
+    // Every variant the verifier must refuse first is reached by the probe,
+    // the verifier bypassed, or the probe could not find the verifier missing
+    // it (fix pass 3, item M5).
+    let mut table: Vec<String> = Vec::new();
+    let mut unreached: Vec<&'static str> = Vec::new();
+    for sample in plan_error_table::every_variant() {
+        let (variant, row) = plan_error_table::classify(&sample);
+        let count = reached.get(variant).copied().unwrap_or(0);
+        table.push(format!("{variant}: {count}"));
+        if matches!(row, plan_error_table::Row::Refused(_)) && count == 0 {
+            unreached.push(variant);
+        }
+    }
+    println!(
+        "two-node probe, cases reaching each PlanError with the verifier bypassed:\n{}",
+        table.join("\n")
+    );
+    assert!(
+        unreached.is_empty(),
+        "the two-node probe never reaches {} reachable PlanError variant(s): {unreached:?}",
+        unreached.len()
+    );
     println!("{TWO_NODE_CASES} two-node edits: {qualified} qualified");
     assert!(
         qualified > 0,
@@ -2048,7 +2106,9 @@ fn every_two_node_edit_that_qualifies_compiles() {
 #[test]
 #[ignore = "the security review's 240,000 cases; nightly-scenarios.yml's fuzz job calls it"]
 fn two_hundred_forty_thousand_two_node_edits_that_qualify_compile() {
-    let (qualified, refused) = two_node_edits(240_000);
+    let TwoNode {
+        qualified, refused, ..
+    } = two_node_edits(240_000);
     println!("240,000 two-node edits: {qualified} qualified");
     assert!(
         qualified > 0,
