@@ -384,12 +384,18 @@ fn least_costs(world: &World, goal: Node) -> Vec<Option<i64>> {
     cost
 }
 
-/// The grid optimum's bucket queue settles every column it reaches exactly
-/// once, at the least cost the test's own Dijkstra finds, in strictly
-/// ascending `(cost, column)`: the total order a binary heap over that key
-/// gives, which `toward`'s tie-break rests on (`pathing::reach`, "The queue,
-/// and its order"). Full floods from seeded columns of generated and scarred
-/// maps.
+/// The grid optimum's bucket queue, undirected, settles every column it
+/// reaches exactly once, at the least cost the test's own Dijkstra finds, in
+/// strictly ascending `(cost, column)`: the total order a binary heap over
+/// that key gives, the undirected API's promise (`pathing::reach`, "The
+/// queue, and its order"). Full floods from seeded columns of generated and
+/// scarred maps.
+///
+/// A ring of `2 · max step` buckets instead of `2 · max step + 1` (re-review
+/// 4's mutant H8) passes this and every test: it is equivalent whenever the
+/// climb surcharge is above zero, as on the committed table, since a key
+/// then rises across one step by its cost plus its octile length, below
+/// twice the dearest step. The `+ 1` keeps tables with no climb correct.
 #[test]
 fn the_grid_optimum_settles_in_cost_then_column_order() {
     let mut floods = 0;
@@ -1273,4 +1279,61 @@ fn compile(route: &str) -> Result<Plan, pharmakos_sim::interpreter::PlanError> {
     );
     let playbook: gp::v1::Playbook = json::decode(&text).expect("the playbook decodes");
     Plan::compile(&playbook, &rules())
+}
+
+/// The site listing's own cost, part of every `toward` resolve, directed or
+/// not: seat 0 at the most beacons the rules let a seat place
+/// (`room_per_seat` of the 40-beacon world total, 20 at two seats, beside its
+/// core: 21 spheres), spread so their spheres overlap as little as the map
+/// allows. Pinned: the columns scanned (one decision unit each), the sites
+/// listed, the spheres that listed one, and the nodes the search then pops.
+#[test]
+fn the_site_listing_at_a_seats_most_beacons() {
+    let mut world = world_of(PROBATION, 2);
+    let seat = SeatId::new(0);
+    let room = pharmakos_sim::world::room_per_seat(40, 2);
+    let [sx, sy, _] = world.surface().size();
+    let mut placed = 0;
+    'grid: for gy in 0..6 {
+        for gx in 0..6 {
+            if placed == room {
+                break 'grid;
+            }
+            let (x, y) = (30 + gx * 64, 30 + gy * 64);
+            if x < sx - 8 && y < sy - 8 && place(&mut world, seat, x, y) {
+                placed += 1;
+            }
+        }
+    }
+    assert_eq!(placed, room, "the seat holds its most beacons");
+    let commander = world.commander_of(seat).expect("a commander");
+    let row = world.units().row_of(commander).expect("a live commander");
+    let start = world.units().positions()[row.index()];
+    let tally = pharmakos_sim::seams::UnitTally::new();
+    let ground = pharmakos_sim::targeting::Ground {
+        work: &tally,
+        ..world.ground()
+    };
+    let mut scratch = Scratch::for_map(world.surface(), world.clusters().size()).unwrap();
+    let mut stones: Vec<StoneCandidate> = Vec::new();
+    let found = toward_counted(
+        &ground,
+        &mut scratch,
+        &mut stones,
+        seat,
+        start,
+        FeatureSpec::Name {
+            kind: FeatureKind::Vent,
+            anchor: PROBATION_VENT,
+        },
+    );
+    let measured = (
+        found.ok().map(|stone| stone.site),
+        tally.get(),
+        stones.len(),
+        scratch.reach().spheres().len(),
+        popped(&scratch),
+    );
+    println!("the most beacons: {measured:?}");
+    assert_eq!(measured, (Some([232, 94]), 37_653, 36_513, 21, 14));
 }

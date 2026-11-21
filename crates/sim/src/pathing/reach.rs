@@ -14,10 +14,21 @@
 //! that cost exactly. Directed at the seat's spheres ("Directed", below), it
 //! settles columns in ascending `cost + h`; `targeting`'s `stone_site` stops
 //! once the key passes the least cost a site settled at, and takes the lowest
-//! `(y, x)` among the sites at that cost. Its pops are at most the map's
-//! columns; its work a pop is a constant (eight neighbours) and one `h` a
-//! column reached, each `h` costing one octile a sphere, and a sphere is
-//! only one that listed a site.
+//! `(y, x)` among the sites at that cost.
+//!
+//! **The bound.** A search pops at most the map's columns; its work a pop is
+//! a constant (eight neighbours) and one `h` a column reached, each `h`
+//! costing one octile a sphere, and a sphere is only one that listed a site,
+//! at most a seat's beacons (`room_per_seat` of the world's 40, 20 at two
+//! seats, and its core: 21). So a resolve costs at most a full directed
+//! flood: 147 456 pops and as many `h`, measured at 74, 103 and 148 ms for
+//! three seats at 1, 18 and 40 spheres (release, a machine not idle), against
+//! 64 ms undirected. That bound is not reached: a resolve with no listed site
+//! searches nothing, every listed site is in the target's component, and
+//! the search stops at the first site; the largest resolve built (the
+//! farthest vent behind a long wall) popped 46 791 nodes in 7.5 ms. Every
+//! resolve also lists its sites first, directed or not: 36 513 sites over
+//! 37 653 columns at a seat's most beacons, 2.5 ms.
 //!
 //! The first measure the stone had, the walk the router would serve from each
 //! site, needed a lower bound to prune by and priced every site whose bound

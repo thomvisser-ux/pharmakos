@@ -453,6 +453,14 @@ pub fn max_partials(surface: &Surface) -> u64 {
     most.div_euclid(fall)
 }
 
+/// The fall check guards this loop's end: pricing chains every partial route
+/// to the goal in one call, so it must know the chain ends. The walker runs
+/// no such loop: the router serves it one partial route, it walks it and asks
+/// again, bounded by play itself, so it carries no falling cost and no
+/// per-unit state guards it. A `Stalled` chain is therefore the pricing's
+/// outcome alone, counted where the ranker meets it (`Scratch::stalled`) and
+/// held at zero by `tests/nearest.rs`'s oracle.
+///
 /// [`walk_cost`]'s chain over `route` (the router, or a test's double), with
 /// the served buffer the caller took out of the scratch. The loop carries the
 /// last query's abstract cost and refuses a query that does not fall below it
