@@ -206,7 +206,7 @@ fn a_quote_escapes_controls_and_stops_at_the_cap() {
     // Their neighbours are shown as themselves (U+206A, a neighbour before
     // fix pass 3's item M3, is a format character and is in the table now).
     for character in [
-        '\u{200a}', '\u{2010}', '\u{2027}', '\u{202f}', '\u{2065}', '\u{2070}',
+        '\u{200a}', '\u{2010}', '\u{2027}', '\u{202f}', '\u{2070}', '\u{2071}',
     ] {
         let text = format!("a{character}b");
         assert_eq!(shown(&text), text);

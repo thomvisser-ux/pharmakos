@@ -920,54 +920,68 @@ const fn utf8_width(lead: u8) -> Option<usize> {
 /// lexeme, and never the whole of a 200 KB one.
 pub const MAX_QUOTED_CHARS: usize = 64;
 
-/// The Unicode version [`HIDDEN`] was taken from.
+/// The Unicode version [`HIDDEN`]'s general categories were taken from.
 pub const HIDDEN_UNICODE_VERSION: &str = "16.0.0";
 
+/// The Unicode version [`HIDDEN`]'s `Default_Ignorable_Code_Point` ranges were
+/// taken from.
+pub const HIDDEN_DEFAULT_IGNORABLE_VERSION: &str = "15.0.0";
+
 /// Every character a player's text is never shown raw in (S3's `vfyq2`, fix
-/// pass 3, item M3), as data: the ranges of General Category Cc (the C0 and
-/// C1 control characters, DEL among them), Cf (format characters: the
-/// direction marks, embeddings, overrides and isolates that reorder text, the
-/// zero-width characters that hide it, the tag characters that can spell a
-/// message nobody sees), Zl and Zp (the line and paragraph separators, which
-/// break a one-line message), and the noncharacters (U+FDD0 to U+FDEF and
-/// the last two code points of every plane), in Unicode
-/// [`HIDDEN_UNICODE_VERSION`], ascending and disjoint, adjacent ranges
-/// merged; each row's comment names the categories in it.
+/// pass 3, item M3, and fix pass 4, item 2), as data: the union of
 ///
-/// Derived from the Unicode Character Database as Python's `unicodedata`
-/// carries it (Python 3.14.4 under WSL2 Ubuntu on the machine that made
-/// this, `unicodedata.unidata_version` 16.0.0), by walking every code point
-/// and keeping those whose category is Cc, Cf, Zl or Zp, or that are
-/// noncharacters by definition. Only the ranges are committed, which are
-/// facts, not the data file's text. That module does not carry the
-/// `Default_Ignorable_Code_Point` property, so the unassigned default-ignorable
-/// code points (among them U+2065, U+FFF0 to U+FFF8, U+E0000 and U+E0002 to
-/// U+E001F) and the variation selectors (Mn) are not in it.
+/// * General Category Cc (the C0 and C1 control characters, DEL among them),
+///   Cf (format characters: the direction marks, embeddings, overrides and
+///   isolates that reorder text, the zero-width characters that hide it, the
+///   tag characters that can spell a message nobody sees), Zl and Zp (the line
+///   and paragraph separators, which break a one-line message), in Unicode
+///   [`HIDDEN_UNICODE_VERSION`], from Python 3.14.4's `unicodedata`
+///   (`unidata_version` 16.0.0) under WSL2 on the machine that made this;
+/// * the noncharacters (U+FDD0 to U+FDEF and the last two code points of
+///   every plane), by the standard's definition;
+/// * `Default_Ignorable_Code_Point` (the variation selectors, the Hangul
+///   fillers, U+034F, the Mongolian free variation selectors and the
+///   unassigned code points the standard reserves as ignorable, among them),
+///   in Unicode [`HIDDEN_DEFAULT_IGNORABLE_VERSION`], from Perl 5.40.1's
+///   `unicore/lib/DI/Y.pl` under WSL2 on the same machine, read offline.
+///   The property's reserved ranges are stable by the standard's policy (a
+///   code point reserved as default-ignorable stays so); no data on this
+///   machine carries the property for 16.0, so a change 16.0 made, if any, is
+///   not shown here.
+///
+/// 44 ranges, ascending, disjoint and merged, 4339 code points; each row's
+/// comment names what puts it in (`DI` for the property). Only the ranges are
+/// committed, which are facts, not either data file's text.
 /// `tests/grammar.rs` holds [`quoted`] to this table over every `char`.
 pub const HIDDEN: &[(char, char)] = &[
     ('\u{0000}', '\u{001F}'),     // Cc
     ('\u{007F}', '\u{009F}'),     // Cc
-    ('\u{00AD}', '\u{00AD}'),     // Cf
+    ('\u{00AD}', '\u{00AD}'),     // Cf, DI
+    ('\u{034F}', '\u{034F}'),     // DI
     ('\u{0600}', '\u{0605}'),     // Cf
-    ('\u{061C}', '\u{061C}'),     // Cf
+    ('\u{061C}', '\u{061C}'),     // Cf, DI
     ('\u{06DD}', '\u{06DD}'),     // Cf
     ('\u{070F}', '\u{070F}'),     // Cf
     ('\u{0890}', '\u{0891}'),     // Cf
     ('\u{08E2}', '\u{08E2}'),     // Cf
-    ('\u{180E}', '\u{180E}'),     // Cf
-    ('\u{200B}', '\u{200F}'),     // Cf
-    ('\u{2028}', '\u{202E}'),     // Cf, Zl, Zp
-    ('\u{2060}', '\u{2064}'),     // Cf
-    ('\u{2066}', '\u{206F}'),     // Cf
+    ('\u{115F}', '\u{1160}'),     // DI
+    ('\u{17B4}', '\u{17B5}'),     // DI
+    ('\u{180B}', '\u{180F}'),     // Cf, DI
+    ('\u{200B}', '\u{200F}'),     // Cf, DI
+    ('\u{2028}', '\u{202E}'),     // Cf, DI, Zl, Zp
+    ('\u{2060}', '\u{206F}'),     // Cf, DI
+    ('\u{3164}', '\u{3164}'),     // DI
     ('\u{FDD0}', '\u{FDEF}'),     // noncharacter
-    ('\u{FEFF}', '\u{FEFF}'),     // Cf
-    ('\u{FFF9}', '\u{FFFB}'),     // Cf
+    ('\u{FE00}', '\u{FE0F}'),     // DI
+    ('\u{FEFF}', '\u{FEFF}'),     // Cf, DI
+    ('\u{FFA0}', '\u{FFA0}'),     // DI
+    ('\u{FFF0}', '\u{FFFB}'),     // Cf, DI
     ('\u{FFFE}', '\u{FFFF}'),     // noncharacter
     ('\u{110BD}', '\u{110BD}'),   // Cf
     ('\u{110CD}', '\u{110CD}'),   // Cf
     ('\u{13430}', '\u{1343F}'),   // Cf
-    ('\u{1BCA0}', '\u{1BCA3}'),   // Cf
-    ('\u{1D173}', '\u{1D17A}'),   // Cf
+    ('\u{1BCA0}', '\u{1BCA3}'),   // Cf, DI
+    ('\u{1D173}', '\u{1D17A}'),   // Cf, DI
     ('\u{1FFFE}', '\u{1FFFF}'),   // noncharacter
     ('\u{2FFFE}', '\u{2FFFF}'),   // noncharacter
     ('\u{3FFFE}', '\u{3FFFF}'),   // noncharacter
@@ -980,9 +994,7 @@ pub const HIDDEN: &[(char, char)] = &[
     ('\u{AFFFE}', '\u{AFFFF}'),   // noncharacter
     ('\u{BFFFE}', '\u{BFFFF}'),   // noncharacter
     ('\u{CFFFE}', '\u{CFFFF}'),   // noncharacter
-    ('\u{DFFFE}', '\u{DFFFF}'),   // noncharacter
-    ('\u{E0001}', '\u{E0001}'),   // Cf
-    ('\u{E0020}', '\u{E007F}'),   // Cf
+    ('\u{DFFFE}', '\u{E0FFF}'),   // Cf, DI, noncharacter
     ('\u{EFFFE}', '\u{EFFFF}'),   // noncharacter
     ('\u{FFFFE}', '\u{FFFFF}'),   // noncharacter
     ('\u{10FFFE}', '\u{10FFFF}'), // noncharacter
