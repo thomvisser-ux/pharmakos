@@ -184,3 +184,35 @@ fn a_member_put_past_the_end_is_refused() {
     assert!(document.root_mut().put_member("b", fragment, 2).is_err());
     assert_eq!(document.to_text(), "{\"a\":1}");
 }
+
+/// An array index is spelled as RFC 6901 spells one, `0|[1-9][0-9]*`, and
+/// nothing else is read as one (fix pass 4, item L-d): `+0`, `+1` and `01`
+/// are refused, typed, in a forward patch and in an undo's path.
+#[test]
+fn an_array_index_is_spelled_as_rfc_6901_spells_one() {
+    for token in ["+0", "+1", "01", "1_0", " 1"] {
+        let patch = format!(r#"[{{"op":"remove","path":"/b/{token}"}}]"#);
+        let refused = forged(&patch);
+        assert_eq!(
+            refused.malformed,
+            Some(Malformed::PointerIndex),
+            "{token}: {}",
+            refused.message
+        );
+    }
+    let undo = r#"[{"op":"add","path":"/b/+1","undo":{"at":1,"jsonc":"9"}}]"#;
+    assert_eq!(forged(undo).malformed, Some(Malformed::PointerIndex));
+}
+
+/// An undo's text past the nesting limit is refused as a depth refusal, not
+/// as an undo text that is not one value (fix pass 4, item L-e).
+#[test]
+fn an_undo_too_deep_is_a_depth_refusal() {
+    let deep = format!("{}1{}", "[".repeat(80), "]".repeat(80));
+    let undo = format!(
+        r#"[{{"op":"replace","path":"/meta/author_kind","undo":{{"jsonc":{}}}}}]"#,
+        pharmakos_proto::json::write(&pharmakos_proto::json::Json::String(deep))
+    );
+    let refused = forged(&undo);
+    assert_eq!(refused.bound, Some(Bound::Depth), "{}", refused.message);
+}

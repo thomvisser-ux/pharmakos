@@ -61,6 +61,10 @@ pub enum Malformed {
     /// An undo that names what the document does not hold, or puts back a
     /// member already there (S3's `vfyq2`, fix pass 3, item L5).
     UndoTarget,
+    /// An array index not spelled as RFC 6901 spells one, `0|[1-9][0-9]*`:
+    /// a sign, a leading zero, anything but digits (S3's `vfyq2`, fix pass 4,
+    /// item L-d).
+    PointerIndex,
 }
 
 /// A bound on the work one call may do (S3's `vfyq2`, fix pass 1): what a
