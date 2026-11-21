@@ -152,3 +152,40 @@ fn the_prose_escapes_every_hidden_character_and_cuts_nothing() {
     assert!(prose.contains(&long), "the title is not cut:\n{prose}");
     assert!(prose.contains("\\u202e"), "{prose}");
 }
+
+/// Quoting never rewrites the file's bytes (fix pass 4, item 2): a label
+/// holding a zero-width joiner, a zero-width non-joiner, a soft hyphen and a
+/// variation selector survives a patch, the canonical form (what a save
+/// writes) and the file the editor holds byte for byte; only refusals and
+/// prose escape it.
+#[test]
+fn quoting_never_rewrites_the_files_bytes() {
+    let label = "a\u{200d}b\u{200c}c\u{ad}d\u{fe0f}e";
+    let text = MINIMAL.replace("\"label\":\"a\"", &format!("\"label\":{}", as_json(label)));
+    let (patched, inverse) = patch_text(
+        &text,
+        r#"[{"op":"replace","path":"/meta/title","value":"edited"}]"#,
+    )
+    .expect("the patch applies");
+    assert!(patched.contains(label), "the patch keeps the label's bytes");
+    let (back, _) = patch_text(&patched, &inverse).expect("the undo applies");
+    assert_eq!(back, text, "the undo gives the file back byte for byte");
+    let canonical = canonicalise_text(&text).expect("a canonical form");
+    assert!(
+        canonical.text.contains(label),
+        "the canonical form keeps the label's bytes"
+    );
+    let decoded = pharmakos_plan_core::decode_jsonc(&text).expect("it decodes");
+    let route = decoded
+        .decoded()
+        .message()
+        .declarative
+        .as_ref()
+        .and_then(|body| body.route.first())
+        .map(|step| step.label.clone());
+    assert_eq!(
+        route.as_deref(),
+        Some(label),
+        "the decoded label is the label"
+    );
+}

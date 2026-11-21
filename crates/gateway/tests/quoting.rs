@@ -174,3 +174,56 @@ fn a_patch_refusal_carries_its_pointer_whole() {
     assert_clean(&message, "patch_plan");
     assert!(message.contains(path), "the pointer whole: {message:?}");
 }
+
+/// The review's end-to-end probe (fix pass 4, item 2): default-ignorable code
+/// points (a variation selector, U+E0100, the Hangul filler, U+034F) sent as a
+/// template id, a depth and a patch pointer come back escaped in every
+/// refusal.
+#[test]
+fn a_default_ignorable_is_escaped_through_every_planning_refusal() {
+    const IGNORABLE: &str = "a\u{fe0f}\u{e0100}\u{3164}\u{34f}b";
+    let mut surface = hosted_with(
+        "m-vfyq2-ignorable",
+        pharmakos_gateway::fog::FogPolicy::fogged(),
+        2,
+        SEGMENT_MS,
+        3,
+        Some(library_folder()),
+    );
+    let token = support::seat_token(&mut surface, 0);
+    let mut left = FIRST_LULL_MS;
+    let quoted_text = json::write(&Json::String(IGNORABLE.to_owned()));
+    let pointer = json::write(&Json::String(format!("/meta/{IGNORABLE}")));
+    let patch = format!(r#"[{{"op":"remove","path":{pointer}}}]"#);
+    for (method, params) in [
+        (
+            "instantiate_template",
+            format!(r#"{{"template_id":{quoted_text}}}"#),
+        ),
+        (
+            "verify_plan",
+            format!(
+                r#"{{"playbook_jsonc":{},"depth":{quoted_text}}}"#,
+                quote(&walking_to("b_00"))
+            ),
+        ),
+        (
+            "patch_plan",
+            format!(
+                r#"{{"playbook_jsonc":{},"json_patch":{}}}"#,
+                quote(&walking_to("b_00")),
+                quote(&patch)
+            ),
+        ),
+    ] {
+        let answer = call_in_lull(&mut surface, &token, &mut left, method, &params);
+        let message = refusal_message(&answer, method);
+        for invisible in ['\u{fe0f}', '\u{e0100}', '\u{3164}', '\u{34f}'] {
+            assert!(
+                !message.contains(invisible),
+                "{method}: raw U+{:04X} in {message:?}",
+                u32::from(invisible)
+            );
+        }
+    }
+}

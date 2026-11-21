@@ -330,3 +330,26 @@ fn the_table_and_the_quote_agree_on_every_char() {
         disagree.iter().take(20).collect::<Vec<_>>()
     );
 }
+
+/// The default-ignorable code points are escaped too (S3's `vfyq2`, fix pass
+/// 4, item 2): the review's 4,036 invisible code points the categories alone
+/// let through, sampled at each range's ends.
+#[test]
+fn the_default_ignorables_are_escaped() {
+    use pharmakos_proto::json::grammar::quoted;
+    let ignorable: [u32; 21] = [
+        0x034F, 0x115F, 0x1160, 0x17B4, 0x17B5, 0x180B, 0x180D, 0x180F, 0x2065, 0x3164, 0xFE00,
+        0xFE0F, 0xFFA0, 0xFFF0, 0xFFF8, 0xE_0000, 0xE_0002, 0xE_001F, 0xE_0080, 0xE_0100, 0xE_0FFF,
+    ];
+    let raw: Vec<String> = ignorable
+        .iter()
+        .filter_map(|point| char::from_u32(*point))
+        .filter(|character| {
+            quoted(&format!("a{character}b"))
+                .as_str()
+                .contains(*character)
+        })
+        .map(|character| format!("U+{:04X}", u32::from(character)))
+        .collect();
+    assert!(raw.is_empty(), "shown raw: {raw:?}");
+}
