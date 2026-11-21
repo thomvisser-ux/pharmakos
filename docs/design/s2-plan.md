@@ -393,7 +393,9 @@ and names the decision that puts that reading to the owner.
   Nothing the sim files is pending at a tick's end, so the queue is never state. The host's
   `file_damage` and `file_voxel_edit` seams (`crates/gateway/src/host.rs` ~598–609, test seams no
   handler reaches) file between ticks and land at the next Combat and Voxels; `Snapshot::capture`
-  stays infallible (the runner captures only at tick boundaries, before a host can file), and the
+  returns a `Result` (`SnapshotError::MidTick` for a world with a tick open, `SnapshotError::Unsettled`
+  for one with a cluster waiting for its repair; every snapshot passes the one door, `Snapshot::door`,
+  and `Runner::new` returns a `Result` too; item 166), and the
   host's save path refuses, with a typed error, while either queue holds an order the host filed,
   rather than saving a pending order. `base` builds that refusal in its named place in `host.rs`.
 - **E3. Damage and repair are types that cannot hold a wrong sign.** `Hp::damaged_by` heals on a
@@ -654,7 +656,16 @@ and names the decision that puts that reading to the owner.
   a step is legal only when the two tops differ by one voxel at most (`pathing/surface.rs` ~298,
   ~313), which is why a wall must be two voxels high and how a charge's cut reopens a route
   (decision 40). Breach is a second cost mode over that graph (section 3, `atk`): a column whose top
-  is wall material is passable at a demolition cost for the breach query only. Tunnels are not
+  is wall material is passable at a demolition cost for the breach query only. As built (item 166),
+  the search runs over (column, crossed): before a crossing its moves are exactly a walker's
+  (`Surface::neighbour`, enemy wall tops included); the one crossing is a step by the surface's own
+  rule (`Surface::step_over`, a diagonal's sides read where a walker stands, so a wall side closes
+  it) from a column a walker stands on onto a breachable wall column at its footing, naming the wall
+  and the plant; after it the moves are that rule over footings and tops, each breachable column
+  costing the demolition cost more. The goal is taken only crossed, and the search is handed only a
+  way the oracle called sealed (`SealedWay`). It refuses with `Exhausted` (its budget ran out) or
+  `NoWay` (it finished and no way crosses a wall to the goal); a refusal ends the attack `Sealed`.
+  Tunnels are not
   modelled, which Mine's "never undermines" (item 144 (3)) and the absence of tunnelling in v1 make
   safe.
 - **E24. The S2 `get_view` entity fields and any new message shapes are the smallest that serve
@@ -1782,7 +1793,8 @@ re-stages `collapse_credits_the_blast`.
     pathing graph through the existing path.
   - **The HPA\* cluster cache.** Collapse adds no invalidation path of its own: every voxel it moves
     goes through `set`, its chunk is settled, and `mark_chunk_clusters` marks that chunk's clusters
-    for the next tick's Pathing repair (`pathing/repair.rs`), with the one-tick lag every edit has.
+    for the repair that ends the same tick's Voxels phase (`World::settle_graph`, `pathing/repair.rs`),
+    so there is no lag: the graph agrees with the surface at every tick boundary (item 166).
     A region spanning chunks marks each. A unit whose route crosses a changed column repaths through
     the router's existing check, under the cap of 16.
   - **Allocations.** None in the tick: a one-bit-per-voxel visited set and a label set over the
