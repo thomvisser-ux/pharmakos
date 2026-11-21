@@ -49,31 +49,42 @@ fn sources(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// The refusals a person is shown keep their words private (S3's `vfyq2`,
-/// fix pass 4, item L-b): a caller reads them through `message()` or
-/// `said()`, and no crate writes one after it is made. `json::Error`'s field
-/// is the one still public, because `client-gdext`, which this lane may not
-/// edit, reads it; it is built only by its crate's constructors, which take a
-/// `Said`.
+/// The three refusals a person is shown have no public field (S3's `vfyq2`,
+/// fix pass 4, item L-b, and 4b): `json::Error`, plan-core's `Error` and the
+/// gateway's `Error`. A public field is a writable one, so a caller holding
+/// an error could put raw text in its words, or move its pointer, after the
+/// constructor that took a `Said`; with every field private, only the
+/// owning crate's constructors make one, and a caller reads through getters
+/// (`message()`, `said()`, `pointer()`, and the codes). The repository has
+/// no compile-fail harness, so the reviewer's bypass probe (`error.message =
+/// raw`) is pinned here by the declaration it needs.
 #[test]
-fn the_refusals_words_are_read_through_a_getter() {
+fn the_refusals_have_no_public_field() {
     let crates = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("the crates folder")
         .to_path_buf();
-    for (file, item) in [
-        ("plan-core/src/error.rs", "pub struct Error {"),
-        ("gateway/src/error.rs", "pub struct Error {"),
+    for file in [
+        "proto/src/json/value.rs",
+        "plan-core/src/error.rs",
+        "gateway/src/error.rs",
     ] {
         let text = std::fs::read_to_string(crates.join(file)).expect("a source file");
-        let start = text.find(item).expect("the error type");
+        let start = text.find("pub struct Error {").expect("the error type");
         let body = text
             .get(start..)
             .and_then(|rest| rest.find("\n}").and_then(|end| rest.get(..end)))
             .expect("the struct's body");
+        let public: Vec<&str> = body
+            .lines()
+            .skip(1)
+            .map(str::trim)
+            .filter(|line| line.starts_with("pub ") || line.starts_with("pub("))
+            .filter(|line| !line.starts_with("pub(crate)") && !line.starts_with("pub(super)"))
+            .collect();
         assert!(
-            !body.contains("pub message") && !body.contains("pub said"),
-            "{file}: the words are a public field:\n{body}"
+            public.is_empty(),
+            "{file}: a public field on a refusal: {public:?}"
         );
         assert!(
             text.contains("pub fn message(&self) -> &str"),
