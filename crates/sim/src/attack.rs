@@ -1197,7 +1197,7 @@ fn gather(world: &mut World, row: &mut AttackRow, post: &Post) {
     row.launched_at = tick.raw();
     row.launch_force = force;
     row.waves_used = row.waves_used.saturating_add(1);
-    row.breach = None;
+    drop_breach(world, row, post);
     if let Ok(subject) = AssetId::of_beacon(row.beacon) {
         world.emit(
             tick,
@@ -1461,11 +1461,12 @@ fn asset_at(world: &World, asset: u32) -> Option<[Fx; 3]> {
     }
 }
 
-/// End the attack: announce why and apply the after-action.
+/// End the attack: announce why and apply the after-action. A charge in
+/// hand goes with the breach, announced lost ([`drop_breach`]).
 fn end(world: &mut World, row: &mut AttackRow, post: &Post, why: Ended) {
     row.target = NO_TARGET;
     row.mark = NO_TARGET;
-    row.breach = None;
+    drop_breach(world, row, post);
     row.launched_at = NEVER;
     row.phase = match row.settings.after_reading() {
         AfterAction::ReturnHome => Phase::Returning,
@@ -1479,6 +1480,28 @@ fn end(world: &mut World, row: &mut AttackRow, post: &Post, why: Ended) {
                 .subject(subject)
                 .at(Position::from_array(row.aim_at))
                 .value(i64::from(why.id())),
+        );
+    }
+}
+
+/// Let the breach go. A charge bought and carried for it ([`ChargeState::Loaded`])
+/// goes with it and is announced lost (`charge_lost`), once, with no refund:
+/// no charge vanishes unannounced. A charge planted is in the world and fires
+/// on its own; one wanted or fired was never in hand.
+fn drop_breach(world: &mut World, row: &mut AttackRow, post: &Post) {
+    let Some(breach) = row.breach.take() else {
+        return;
+    };
+    if breach.charge != ChargeState::Loaded {
+        return;
+    }
+    if let Ok(subject) = AssetId::of_beacon(row.beacon) {
+        world.emit(
+            world.tick(),
+            Emission::of(EventKind::ChargeLost)
+                .seat(post.seat)
+                .subject(subject)
+                .at(Position::from_array(voxel_centre(breach.plant))),
         );
     }
 }
@@ -1566,7 +1589,7 @@ fn press(world: &mut World, row: &mut AttackRow, post: &Post) {
         };
         row.target = target;
         row.aim_at = at;
-        row.breach = None;
+        drop_breach(world, row, post);
         if let Some(mark) = weak_point(
             world,
             post.seat,
@@ -1646,7 +1669,7 @@ fn seal_or_breach(
     let Some(way) = SealedWay::of(world, from, to) else {
         // The way is open: a breach in hand is over, whatever opened it. A
         // planted charge still fires; it is in the world.
-        row.breach = None;
+        drop_breach(world, row, post);
         return;
     };
     if !row.settings.breach {
@@ -1658,9 +1681,14 @@ fn seal_or_breach(
         return;
     };
     if !wall_stands(world, breach.wall) {
-        // The wall at the breach is gone: the next tick searches again if the
-        // way is still sealed.
-        row.breach = None;
+        // The wall at the breach is gone and the way is still sealed. A charge
+        // carried for it is planned again now, kept for the new breach;
+        // otherwise the next tick searches again.
+        if breach.charge == ChargeState::Loaded {
+            plan_breach(world, row, post, way, Some(breach));
+        } else {
+            row.breach = None;
+        }
         return;
     }
     match breach.charge {
@@ -1687,8 +1715,9 @@ fn seal_or_breach(
 }
 
 /// Search for a breach of `way` and hold it, or end the attack sealed with the
-/// refusal counted. A breach planned again (`held`) keeps its charge and its
-/// carrier.
+/// refusal counted. A breach planned again (`held`) keeps a charge in hand
+/// and its carrier; on a refusal that charge is announced lost as the attack
+/// ends ([`drop_breach`]).
 fn plan_breach(
     world: &mut World,
     row: &mut AttackRow,
@@ -1710,6 +1739,9 @@ fn plan_breach(
         // Every refusal ends the attack sealed, counted under its reason.
         Err(refused) => {
             world.count_breach_refused(refused);
+            if held.is_some() {
+                row.breach = held;
+            }
             end(world, row, post, Ended::Sealed);
         }
     }
