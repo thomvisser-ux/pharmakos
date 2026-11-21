@@ -320,13 +320,16 @@ pub fn verify_report_hash(hash: &str) -> String {
 
 /// One diagnostic, as a line a person reads.
 ///
-/// The path is shown through the quoting rule (S3's `vfyq2`, fix pass 2, item
-/// B): it is exact as data in the report, but a key in it is the player's
-/// text, and a terminal is not the place for its ESC, BEL or U+202E. The
-/// message is the verifier's, already quoted where it carries player text.
+/// The path is shown through the quoting rule token by token (S3's `vfyq2`,
+/// fix pass 2, item B, and 2b): it is exact as data in the report, and a
+/// pointer of the schema's names is printed exactly, however long, because a
+/// reader takes it back off this line; only a token that is the player's own
+/// text (an unknown key) is escaped and capped, since a terminal is not the
+/// place for its ESC, BEL or U+202E. The message is the verifier's, already
+/// quoted where it carries player text.
 #[must_use]
 pub fn verify_diagnostic(severity: &str, code: &str, path: &str, message: &str) -> String {
-    let path = pharmakos_proto::json::grammar::quoted(path);
+    let path = pharmakos_proto::json::grammar::quoted_pointer(path);
     format!("  {severity:<7} {code} {path}\n          {message}")
 }
 

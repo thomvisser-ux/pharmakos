@@ -211,3 +211,24 @@ fn a_quote_escapes_controls_and_stops_at_the_cap() {
         assert_eq!(shown(&text), text);
     }
 }
+
+/// A pointer is quoted token by token (S3's `vfyq2`, fix pass 2b): one of the
+/// schema's names, however deep, comes back exactly; a token that is the
+/// player's own text is escaped and capped alone, the rest of the pointer kept.
+#[test]
+fn a_pointer_is_quoted_token_by_token() {
+    use pharmakos_proto::json::grammar::{MAX_QUOTED_CHARS, quoted_pointer};
+    let long =
+        "/declarative/route/0/place_beacon/initial/mandate/defend/protect/0/beacon/beacon_id";
+    assert!(long.chars().count() > MAX_QUOTED_CHARS);
+    assert_eq!(quoted_pointer(long).as_str(), long);
+    assert_eq!(quoted_pointer("").as_str(), "");
+    assert_eq!(quoted_pointer("/a~1b/~0").as_str(), "/a~1b/~0");
+    let key = format!("{}{}", char::from(0x1b), "k".repeat(200));
+    let shown = quoted_pointer(&format!("/meta/{key}/x"));
+    let expected = format!(
+        "/meta/\\u001b{}\u{2026}/x",
+        "k".repeat(MAX_QUOTED_CHARS - 1)
+    );
+    assert_eq!(shown.as_str(), expected);
+}

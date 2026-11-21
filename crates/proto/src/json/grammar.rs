@@ -995,6 +995,31 @@ pub fn quoted(text: &str) -> Quoted {
     Quoted(out)
 }
 
+/// A JSON Pointer as a line shows it (S3's `vfyq2`, fix pass 2b): each
+/// reference token [`quoted`] on its own, joined by `/`.
+///
+/// A pointer is data a reader takes back off the line (the headless watch
+/// check, a person searching the file for the field), and every token the
+/// verifier builds from the schema's names and array indices is far shorter
+/// than [`MAX_QUOTED_CHARS`] and holds no character [`quoted`] escapes, so
+/// such a pointer is shown exactly, however deep it is. Only a token that is
+/// the player's own text (an unknown key) can hold a control character, a
+/// character of [`HIDDEN`] or 200 KB, and that token alone is escaped and
+/// capped. A pointer has at most `MAX_DEPTH` + 1 tokens, so the line is
+/// bounded too. Quoting the pointer whole, as fix pass 2 did, cut every
+/// pointer past 64 characters, schema names and all.
+#[must_use]
+pub fn quoted_pointer(pointer: &str) -> Quoted {
+    let mut out = String::with_capacity(pointer.len().min(MAX_QUOTED_CHARS.saturating_mul(6)));
+    for (index, token) in pointer.split('/').enumerate() {
+        if index > 0 {
+            out.push('/');
+        }
+        out.push_str(quoted(token).as_str());
+    }
+    Quoted(out)
+}
+
 /// One piece of text a player is shown: static words, a number, or player
 /// text [`quoted`] (S3's `vfyq2`, fix pass 2, item B). The verifier's
 /// diagnostic and Fix-title builders and plan-core's refusals take this, and
